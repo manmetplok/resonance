@@ -108,6 +108,16 @@ pub(super) fn render_arrangement(
     // Flush instrument voices at the seam.
     panic_instrument_tracks(inputs.tracks, inputs.plugins, scratch.midi_stash);
 
+    // The output stays continuous across the wrap: the PDC lines carry
+    // their pre-seam tail into the post-wrap sub-block instead of reading
+    // the wrap as a seek (code review MIX-03). Before the tail sub-block
+    // even when it is zero frames long (the aligned case), so the next
+    // buffer, starting at `loop_in`, is continuous too.
+    let loop_out = inputs.playhead + seam.head_frames as u64;
+    inputs
+        .latency_comp
+        .continue_across_loop_wrap(loop_out, seam.loop_in);
+
     // ---- Post-wrap sub-block (plays from `loop_in`) -----------------------
     let tail_monitor_start = head_monitor_frames * stride;
     let tail_monitor_avail = monitor.frames.saturating_sub(head_monitor_frames);

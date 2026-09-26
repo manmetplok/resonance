@@ -101,15 +101,21 @@ fn render_sub_track_tap(
         AutomationTarget::TrackMute(sub_track.id),
         ctx.evals.gain_start,
     );
-    let Some((sub_gain_l, sub_gain_r)) = strategy.sub_track_disposition(
+    // A silenced tap that keys something still runs its chain for the
+    // capture, and stops there (code review MIX-05).
+    let sub_tap = SendSource::Track(sub_track.id);
+    let ((sub_gain_l, sub_gain_r), key_only) = match strategy.sub_track_disposition(
         sub_track,
-        ctx.inputs.any_solo,
         parent_silenced,
         sub_auto_gain,
         sub_auto_mute,
         parent_volume,
-    ) else {
-        return;
+    ) {
+        Some(gains) => (gains, false),
+        None if strategy.renders(sub_track.id) && scratch.sidechain.is_tapped(sub_tap) => {
+            (((0.0, 0.0), (0.0, 0.0)), true)
+        }
+        None => return,
     };
 
     // Run the sub-track's own effect chain in place on its port buffer,
@@ -135,7 +141,6 @@ fn render_sub_track_tap(
     // kick" on a multi-output kit means keying off the kick TAP, which is
     // the only place that piece exists as its own signal. Captured
     // post-FX, pre-fader, exactly like the top-level tracks.
-    let sub_tap = SendSource::Track(sub_track.id);
     if scratch.sidechain.is_tapped(sub_tap) {
         let (pl, pr) = &scratch.port_scratch[port_idx];
         scratch
@@ -147,7 +152,7 @@ fn render_sub_track_tap(
     // drum-tap case the field report hit: keying a compressor from the
     // kick TAP while measuring the ducked track, which is how the routing
     // gets verified.
-    if strategy.is_key_only(sub_track.id) {
+    if key_only || strategy.is_key_only(sub_track.id) {
         return;
     }
 

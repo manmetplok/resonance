@@ -88,6 +88,12 @@ pub struct ClapInstance {
     /// Pre-allocated buffer for CLAP note events (carried + pending, so
     /// sized for two full queues).
     pub(super) note_event_buf: Vec<clap_event_note>,
+    /// Frames this instrument still wants processing for while the
+    /// transport is stopped: re-armed to `limits::IDLE_HOLD_SECS` by
+    /// every live note (so a preview / controller note's release tail
+    /// plays out), counted down by `process()`. See
+    /// [`ClapInstance::wants_idle_process`] (code review MIX-08).
+    pub(super) idle_hold_frames: u32,
     /// Pre-allocated scratch for the CLAP audio output buffer array,
     /// one entry per output port. Reused across every `process_multi`
     /// call so the audio thread never allocates.
@@ -147,6 +153,7 @@ impl ClapInstance {
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             carried_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
             note_event_buf: Vec::with_capacity(2 * crate::limits::MAX_PENDING_NOTES),
+            idle_hold_frames: 0,
             audio_out_buffers,
             audio_out_ptrs,
             transport_bpm: 120.0,
@@ -480,6 +487,8 @@ impl ClapInstance {
     }
 
     /// Queue a note-on event to be sent during the next process() call.
+    /// Dropped when the queue is full — a lost note-on is a missed note,
+    /// never a stuck one.
     pub fn queue_note_on(&mut self, key: u8, velocity: f32, sample_offset: u32) {
         if self.pending_notes.len() < crate::limits::MAX_PENDING_NOTES {
             self.pending_notes
@@ -488,10 +497,46 @@ impl ClapInstance {
     }
 
     /// Queue a note-off event to be sent during the next process() call.
+    ///
+    /// A note-off is never the one dropped at the cap (code review
+    /// MIX-08): a full queue evicts its oldest queued note-on instead,
+    /// because a dropped note-off leaves a voice sounding forever while a
+    /// dropped note-on only loses a note. Only a queue holding nothing but
+    /// note-offs drops this one — every key it could release is already
+    /// being released. Allocation-free (`Vec::remove` shifts in place).
     pub fn queue_note_off(&mut self, key: u8, sample_offset: u32) {
-        if self.pending_notes.len() < crate::limits::MAX_PENDING_NOTES {
-            self.pending_notes.push((false, key, 0.0, sample_offset));
+        if self.pending_notes.len() >= crate::limits::MAX_PENDING_NOTES {
+            let Some(oldest_on) = self.pending_notes.iter().position(|n| n.0) else {
+                return;
+            };
+            self.pending_notes.remove(oldest_on);
         }
+        self.pending_notes.push((false, key, 0.0, sample_offset));
+    }
+
+    /// Re-arm the stopped-transport processing window (see
+    /// [`ClapInstance::wants_idle_process`]) for a LIVE note — a
+    /// piano-roll preview or a controller key, delivered through
+    /// `NoteSink`. Timeline and offline-render notes deliberately don't
+    /// arm it: stopping (or finishing an export) must not leave the
+    /// song's last voices ringing out of the speakers.
+    pub fn arm_idle_hold(&mut self) {
+        self.idle_hold_frames = self.sample_rate.saturating_mul(crate::limits::IDLE_HOLD_SECS);
+    }
+
+    /// Whether this instrument should be processed although the transport
+    /// is stopped and nothing monitors its track (code review MIX-08):
+    /// note events are waiting, or a live note arrived within the last
+    /// `limits::IDLE_HOLD_SECS`, so its voices are still releasing.
+    /// Piano-roll preview notes and live MIDI played while stopped used
+    /// to sit in the queue unheard, pile up to the cap, and burst on the
+    /// next Play.
+    /// The hold bounds the cost: an idle instrument stops being processed
+    /// a few seconds after its last note.
+    pub fn wants_idle_process(&self) -> bool {
+        self.idle_hold_frames > 0
+            || !self.pending_notes.is_empty()
+            || !self.carried_notes.is_empty()
     }
 
     /// Queue note-off for all 128 MIDI notes (to clear stuck notes).

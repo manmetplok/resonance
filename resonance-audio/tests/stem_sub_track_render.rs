@@ -280,3 +280,43 @@ fn unfreezing_the_parent_makes_the_tap_renderable_again() {
         peak(&stem)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Solo resolution in the mixdown (code review MIX-07)
+// ---------------------------------------------------------------------------
+
+/// Soloing a multi-output kit and exporting the mix. Sub-tracks follow
+/// their parent's solo (`any_top_level_solo` ignores their own flag), and
+/// the live mixer honours that — but the bounce arm used to demand each
+/// sub-track's OWN solo flag, so the export dropped every tap and carried
+/// only the parent's (silent) port 0 while playback had the whole kit.
+#[test]
+fn a_soloed_kits_taps_are_in_the_mixdown() {
+    let state = EngineState::new();
+    state.tracks.read().get(&PARENT).unwrap().set_soloed(true);
+
+    let mix = peak(&state.render(StemSource::Master));
+    assert!(
+        (mix - at_master(BOTH_TAPS)).abs() < 1e-6,
+        "the soloed kit exports with both taps ({}), got {mix}",
+        at_master(BOTH_TAPS)
+    );
+}
+
+/// The other half of the same rule: the solo still suppresses a kit that
+/// is NOT soloed — its taps follow their (silenced) parent out — and a
+/// tap's own mute still applies under its soloed parent.
+#[test]
+fn solo_still_suppresses_other_kits_and_a_muted_tap() {
+    let state = EngineState::new();
+    state.add_unfrozen_sibling(SIBLING, SIBLING_TAP);
+    state.tracks.read().get(&PARENT).unwrap().set_soloed(true);
+    state.tracks.read().get(&TAP_B).unwrap().set_muted(true);
+
+    let mix = peak(&state.render(StemSource::Master));
+    assert!(
+        (mix - at_master(PORT_LEVELS[1])).abs() < 1e-6,
+        "only the soloed kit's unmuted tap A ({}) is exported, got {mix}",
+        at_master(PORT_LEVELS[1])
+    );
+}

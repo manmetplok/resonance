@@ -69,9 +69,18 @@ fn render_one_track(
         AutomationTarget::TrackMute(track.id),
         ctx.evals.gain_start,
     );
-    let Some(disp) = strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
-    else {
-        return;
+    // A silenced track still renders when a key is tapped from it (code
+    // review MIX-05): the ghost kick keys the bass compressor while muted.
+    let disp = match strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
+    {
+        Some(d) if d.discard_after_instrument && keys_from(track, ctx, scratch.sidechain) => {
+            TrackDisposition::key_only()
+        }
+        Some(d) => d,
+        None if strategy.renders(track.id) && keys_from(track, ctx, scratch.sidechain) => {
+            TrackDisposition::key_only()
+        }
+        None => return,
     };
     let (gain_l, gain_r) = (disp.gain_l, disp.gain_r);
 
@@ -98,6 +107,17 @@ fn render_one_track(
             &scratch.track_buf_r[..frames],
             frames,
         );
+    }
+
+    // Silenced, rendered only for a key (code review MIX-05): its own
+    // key is captured above; its taps may carry one too, so the fan-out
+    // still runs (each tap then stops at its own capture). Nothing of it
+    // reaches PDC, the fader or the mix.
+    if disp.key_only {
+        if extra_ports_filled > 1 {
+            fan_out_to_sub_tracks(track, &disp, extra_ports_filled, ctx, scratch, strategy);
+        }
+        return;
     }
 
     // Present only as a key source: its audio has just been captured,
@@ -163,6 +183,20 @@ fn render_one_track(
     if extra_ports_filled > 1 {
         fan_out_to_sub_tracks(track, &disp, extra_ports_filled, ctx, scratch, strategy);
     }
+}
+
+/// Whether a sidechain key is tapped from `track` or from one of its
+/// sub-tracks — the taps a silenced track must still render for. Only
+/// consulted for silenced tracks, so the sub-track scan costs nothing on
+/// the audible path.
+fn keys_from(track: &Track, ctx: &BlockCtx<'_>, sidechain: &SidechainTaps) -> bool {
+    if sidechain.is_tapped(SendSource::Track(track.id)) {
+        return true;
+    }
+    ctx.inputs.tracks.values().any(|t| {
+        matches!(t.sub_track_of, Some((parent, _)) if parent == track.id)
+            && sidechain.is_tapped(SendSource::Track(t.id))
+    })
 }
 
 /// Fill the track buffers with the track's source signal: the frozen

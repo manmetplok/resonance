@@ -121,7 +121,7 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
     } else if inputs.shared.count_in_active.load(Ordering::Relaxed) {
         count_in::render_count_in_block(&inputs, scratch, &timing, monitor, frames);
     } else if !inputs.shared.playing.load(Ordering::Relaxed) {
-        stopped::render_stopped_block(&inputs, scratch, &timing, monitor);
+        stopped::render_stopped_block(&inputs, scratch, &timing, monitor, frames);
     } else {
         play::render_playing_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     }

@@ -277,7 +277,9 @@ fn input_block(seed: u32) -> Vec<f32> {
 /// master pass, the metronome and the mix meter all run.
 #[test]
 fn playing_blocks_with_loop_seam_are_bit_identical() {
-    const EXPECTED: u64 = 0x975c_0c83_58cd_64c1;
+    // Re-blessed for code review MIX-03: the PDC lines now carry their
+    // tail across the loop seam instead of warming up from silence.
+    const EXPECTED: u64 = 0x17d0_3079_dca4_3989;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(true);
@@ -489,7 +491,9 @@ fn reference_monitor_blocks_are_bit_identical() {
 /// audible. Also drives the live-MIDI pickup pass.
 #[test]
 fn contended_and_audition_blocks_are_bit_identical() {
-    const EXPECTED: u64 = 0x1b60_1a95_61c4_49aa;
+    // Re-blessed for code review MIX-03 (the last uncontended block
+    // crosses the loop seam, where the PDC lines now stay continuous).
+    const EXPECTED: u64 = 0xa3e4_6b05_c99f_d6f4;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);

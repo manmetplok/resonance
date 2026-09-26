@@ -3,6 +3,7 @@
 use ringbuf::traits::{Consumer, Observer};
 use std::sync::atomic::Ordering;
 
+use crate::limits::MAX_INPUT_CHANNELS;
 use crate::mixer::monitor::{monitor_catchup_skip, monitor_read_len};
 
 use super::context::{CallbackInputs, CallbackScratch, MonitorRead};
@@ -23,6 +24,21 @@ pub(super) fn read_monitor_input(
     let shared = inputs.shared;
     let input_channels = shared.input_channels.load(Ordering::Relaxed) as usize;
     let frame_stride = input_channels.max(1);
+
+    // Defensive bound (code review MIX-09): the scratch is sized for
+    // `MAX_INPUT_CHANNELS` and the stream builders refuse anything wider,
+    // but a channel count past that must never index out of bounds on the
+    // realtime thread. Discard the backlog in whole frames (so the ring
+    // doesn't fill and the interleave never rotates) and monitor nothing.
+    if input_channels > MAX_INPUT_CHANNELS {
+        let occupied = scratch.monitor_cons.occupied_len();
+        scratch.monitor_cons.skip(occupied / frame_stride * frame_stride);
+        return MonitorRead {
+            frames: 0,
+            input_channels: 0,
+            frame_stride: 1,
+        };
+    }
     let needed = frames * frame_stride;
 
     let available = scratch.monitor_cons.occupied_len();
@@ -41,7 +57,10 @@ pub(super) fn read_monitor_input(
     if extra > 0 {
         scratch.monitor_cons.skip(extra);
     }
-    let to_read = monitor_read_len(needed, scratch.monitor_cons.occupied_len(), frame_stride);
+    // Never more than the scratch holds, rounded to whole frames.
+    let scratch_cap = scratch.monitor_temp.len() / frame_stride * frame_stride;
+    let to_read = monitor_read_len(needed, scratch.monitor_cons.occupied_len(), frame_stride)
+        .min(scratch_cap);
     let monitor_samples = scratch
         .monitor_cons
         .pop_slice(&mut scratch.monitor_temp[..to_read]);

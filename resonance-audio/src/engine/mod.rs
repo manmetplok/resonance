@@ -721,6 +721,9 @@ impl AudioEngine {
             // Dry staging for the bypass crossfades, sized for the widest
             // block so toggling a bypass never allocates in the callback.
             let mut fx_dry = crate::bypass::FxDryScratch::new(audio_buf_frames);
+            // Transport continuity for the voice flush on a playhead jump
+            // (code review MIX-06).
+            let mut continuity = mixer::TransportContinuity::default();
             // Native backend: the monitor ring may adaptively drain its
             // sticky startup backlog (same graph clock); the cpal
             // fallback keeps the standing margin (doc #260 finding #12).
@@ -794,6 +797,7 @@ impl AudioEngine {
                             ab_meters: &mut ab_meters,
                             sidechain: &mut sidechain,
                             fx_dry: &mut fx_dry,
+                            continuity: &mut continuity,
                         },
                     );
                     let mix_end = std::time::Instant::now();

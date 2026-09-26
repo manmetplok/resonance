@@ -647,6 +647,13 @@ pub(crate) fn build_input_stream(
     // changed: this runs on the engine thread, and record start
     // rebuilds the input stream on the same device.
     reassert_graph_force(source_name);
+    // The monitor scratch and ring are sized for `MAX_INPUT_CHANNELS`
+    // (code review MIX-09): never ask for more, and refuse a stream that
+    // negotiates more rather than hand the callback a frame wider than
+    // its scratch. Ports past the cap read the last channel, like any
+    // port past a stream's channel count.
+    let max_channels = crate::limits::MAX_INPUT_CHANNELS as u16;
+    let desired_channels = desired_channels.min(max_channels);
     #[cfg(target_os = "linux")]
     {
         match crate::input_pipewire::build(
@@ -659,8 +666,13 @@ pub(crate) fn build_input_stream(
             desired_channels,
             capture_gate.clone(),
         ) {
-            Ok((handle, sr, ch)) => {
+            Ok((handle, sr, ch)) if ch <= max_channels => {
                 return Ok((crate::input_handle::InputHandle::PipeWire(handle), sr, ch));
+            }
+            Ok((_handle, _, ch)) => {
+                eprintln!(
+                    "[input] PipeWire negotiated {ch} channels (max {max_channels}); falling back to cpal"
+                );
             }
             Err(e) => {
                 eprintln!("[input] PipeWire backend failed ({e}); falling back to cpal");
@@ -932,7 +944,11 @@ fn build_input_stream_cpal(
         )
     };
 
-    let primary_channels = desired_channels.max(default_channels);
+    // Capped at the monitor scratch width (code review MIX-09): a device
+    // whose default is wider (MADI / Dante) is asked for the cap instead,
+    // and its default is only a fallback when it fits.
+    let max_channels = crate::limits::MAX_INPUT_CHANNELS as u16;
+    let primary_channels = desired_channels.max(default_channels).min(max_channels);
     let (stream, channels) = match attempt(
         primary_channels,
         Arc::clone(&shared),
@@ -950,6 +966,12 @@ fn build_input_stream_cpal(
                 "[input] {} channels rejected ({}); falling back to {} channels",
                 primary_channels, primary_err, default_channels
             );
+            if default_channels > max_channels {
+                return Err(format!(
+                    "Failed to build input stream (requested {primary_channels}ch: {primary_err}; \
+                     the device default of {default_channels}ch exceeds the supported {max_channels})"
+                ));
+            }
             match attempt(default_channels, shared, mon_producer, rec_producer, capture_gate) {
                 Ok(s) => (s, default_channels),
                 Err(e) => {
