@@ -236,9 +236,8 @@ pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
         r.io.loading = false;
-        // If this clear/replay came from an undo or redo, apply the
-        // runtime-only state that replay can't recover (currently: the
-        // compose derived-clip cache).
+        // If this clear/replay came from an undo or redo, finish it
+        // (nothing left to apply since A-6; A-7 removes the hook).
         if let Some(extras) = r.io.pending_undo_extras.take() {
             r.finalize_undo_restore(extras);
         } else {

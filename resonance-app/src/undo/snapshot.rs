@@ -20,27 +20,22 @@ use resonance_common::{AutomationLane, AutomationTarget};
 use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
-/// State an undo snapshot carries beside its `ProjectFile`, re-applied
-/// after the replay by both restore paths (`try_diff_replay` and
-/// `finalize_undo_restore`).
-///
-/// Most of it is *already* in the `ProjectFile` too, and the full replay
-/// restores it from there; the diff replay still reads it from here. It
-/// is being folded away field by field (ARCH-01 A1-2): a field leaves
-/// once both paths restore it from the file, guarded by
-/// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
+/// State an undo snapshot used to carry beside its `ProjectFile`. Empty:
+/// every field was folded into the file (ARCH-01 A1-2, guarded by
+/// `tests/io/undo_snapshot_fixed_point.rs`) — clip fade/gain, the drum
 /// arrangements, the chord track, the external-instrument config, the
-/// vocal lyrics, the automation lanes, the track freeze status and the
-/// reference A/B content already went — `ProjectClip`,
-/// `ProjectSectionDefinition::arrangement`, `ProjectFile::chord_track`,
-/// `ProjectTrack::external_instrument`, `ProjectMidiClip::vocal_lyrics`,
-/// `ProjectFile::automation_lanes`, `ProjectTrack::freeze` and
-/// `ProjectFile::references` / `reference_settings` carry them.
+/// vocal lyrics, the automation lanes, the track freeze status, the
+/// reference A/B content and the compose derived-clip map now travel as
+/// `ProjectClip`, `ProjectSectionDefinition::arrangement`,
+/// `ProjectFile::chord_track`, `ProjectTrack::external_instrument`,
+/// `ProjectMidiClip::vocal_lyrics`, `ProjectFile::automation_lanes`,
+/// `ProjectTrack::freeze`, `ProjectFile::references` /
+/// `reference_settings` and `ProjectFile::derived_clips`. The derived-clip
+/// id counter is not undo state at all (A-6). The type survives only as
+/// the "this replay is an undo" marker in `pending_undo_extras`, which
+/// A-7 replaces with an explicit flag and deletes.
 #[derive(Debug, Clone, Default)]
-pub struct UndoExtras {
-    pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
-    pub compose_next_derived_clip_id: u64,
-}
+pub struct UndoExtras {}
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
 /// so snapshots can be fed straight into the existing
@@ -64,8 +59,9 @@ impl UndoSnapshot {
     /// the project file by its derived `PartialEq` (ARCH-01 A-8 — the whole
     /// tree derives it now, so this is a plain struct compare; map-valued
     /// fields compare order-independently the same way the old
-    /// `serde_json` compare did through its key-sorted objects), notes
-    /// field by field, and the extras directly.
+    /// `serde_json` compare did through its key-sorted objects), and notes
+    /// field by field. The extras are empty (A-6), so there is nothing
+    /// else to compare.
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
@@ -75,15 +71,8 @@ impl UndoSnapshot {
                     .get(id)
                     .is_some_and(|o| crate::update::project_io::replay_diff::midi_notes_equal(notes, o))
             });
-        notes_equal
-            && extras_equal(&self.extras, &other.extras)
-            && self.project.file == other.project.file
+        notes_equal && self.project.file == other.project.file
     }
-}
-
-fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
-    a.compose_derived_clips == b.compose_derived_clips
-        && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
 }
 
 /// Identifies a continuous-edit source so that a stream of messages
@@ -144,7 +133,6 @@ impl crate::Resonance {
             .iter()
             .map(|mc| (mc.id, mc.notes.clone()))
             .collect();
-        let extras = self.undo_extras();
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
         // never consumed anyway. Each entry is a refcount bump on the
@@ -178,7 +166,7 @@ impl crate::Resonance {
                 midi_notes,
                 plugin_states,
             },
-            extras,
+            extras: UndoExtras::default(),
         }
     }
 
@@ -186,10 +174,9 @@ impl crate::Resonance {
     /// gesture opened with — the question `commit_undo_gesture` asks
     /// (code review STATE-07). Answered without building a second full
     /// snapshot: the notes are compared in place against `midi_clips`,
-    /// the extras against a fresh (small) capture, and only the
-    /// `ProjectFile` is rebuilt for the struct comparison — no note
-    /// vectors, plugin blobs or project path are copied. Same verdict as
-    /// `before.same_state(&self.snapshot_for_undo())`, cheaper.
+    /// and only the `ProjectFile` is rebuilt for the struct comparison —
+    /// no note vectors, plugin blobs or project path are copied. Same
+    /// verdict as `before.same_state(&self.snapshot_for_undo())`, cheaper.
     pub(crate) fn gesture_changed_since(&self, before: &UndoSnapshot) -> bool {
         let notes_equal = before.project.midi_notes.len() == self.midi_clips.len()
             && self.midi_clips.iter().all(|mc| {
@@ -197,7 +184,7 @@ impl crate::Resonance {
                     crate::update::project_io::replay_diff::midi_notes_equal(&mc.notes, o)
                 })
             });
-        if !notes_equal || !extras_equal(&before.extras, &self.undo_extras()) {
+        if !notes_equal {
             return true;
         }
         before.project.file != self.undo_project_file()
@@ -211,15 +198,6 @@ impl crate::Resonance {
         let mut file = crate::update::build_project_file(self);
         file.reference_settings.clear_monitor_state();
         file
-    }
-
-    /// The runtime-only state an undo snapshot carries beside its
-    /// `ProjectFile`; see [`UndoExtras`].
-    fn undo_extras(&self) -> UndoExtras {
-        UndoExtras {
-            compose_derived_clips: self.compose.derived_clips.clone(),
-            compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-        }
     }
 
     /// True when the app is in a state where recording a new undo
@@ -311,54 +289,77 @@ impl crate::Resonance {
         let _ = self.engine.send(AudioCommand::ClearAll);
     }
 
-    /// Apply the extras captured in the snapshot. Called from the
-    /// `AllCleared` engine-event handler immediately after
-    /// `replay_loaded_project` runs, only when the pending load came
-    /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
-    /// Clip fade/gain, the drum arrangements, the chord track, the
-    /// external-instrument config, the vocal lyrics, the automation
-    /// lanes, the track freeze status and the reference A/B content need
-    /// nothing here: the replay restores them from the snapshot's
-    /// `ProjectFile`.
-    pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
-        // `ClearAll` wiped any clip whose echo was still pending at
-        // snapshot time; nothing will re-create it.
-        self.restore_derived_clips(
-            extras.compose_derived_clips,
-            extras.compose_next_derived_clip_id,
-            false,
-        );
+    /// Finish an undo/redo's full replay. Called from the `AllCleared`
+    /// engine-event handler immediately after `replay_loaded_project`
+    /// runs, only when the pending load came from an undo/redo
+    /// (distinguished by `pending_undo_extras.is_some()`). Nothing is left
+    /// to apply: the replay restores everything from the snapshot's
+    /// `ProjectFile` (the compose derived-clip map too, since A-6). A-7
+    /// deletes this together with `UndoExtras`.
+    pub(crate) fn finalize_undo_restore(&mut self, _extras: UndoExtras) {
         // Take lanes are *not* reconciled here. `replay_loaded_project`
         // runs immediately before this and ends in `replay_take_groups`,
         // which sends `RestoreTakeGroups` — see the note on the fast path
         // in `begin_restore_from_snapshot`.
     }
 
-    /// Restore the compose section→clip map and its id counter from a
-    /// snapshot — the one rule both restore paths share (FU-H2a).
+    /// Restore the compose section→clip map from `file` and reserve the
+    /// derived-clip counter past everything restored — the one rule a
+    /// disk load and both undo paths share (FU-H2a, ARCH-01 A-6). Runs
+    /// after the MIDI and audio clips are restored.
     ///
-    /// The map is the snapshot's, not a rebuild from the mirror: a
-    /// snapshot taken while a re-derived clip's `MidiClipCreated` echo was
-    /// in flight holds that clip's entry but not the clip, and on the
-    /// diff replay (`echoes_in_flight`) the engine still has the clip and
-    /// the echo will land — dropping the entry would orphan it. After a
-    /// full replay the engine holds only the replayed clips, so there an
-    /// entry whose clip is not mirrored can never be satisfied and is
+    /// The map is the file's (`ProjectFile::derived_clips`), not a
+    /// rebuild from the mirror: a snapshot taken while a re-derived clip's
+    /// `MidiClipCreated` echo was in flight holds that clip's entry but
+    /// not the clip, and on the diff replay (`echoes_in_flight`) the
+    /// engine still has the clip and the echo will land — dropping the
+    /// entry would orphan it. After a full replay (a disk load or a
+    /// slow-path undo) the engine holds only the replayed clips, so there
+    /// an entry whose clip is not mirrored can never be satisfied and is
     /// dropped (left in, it would also suspend the UPD-05 freeze check on
-    /// its track forever, see `revalidate_frozen_content`).
+    /// its track forever, see `revalidate_frozen_content`). A file saved
+    /// before the field existed gets the positional rebuild.
+    ///
+    /// The counter is not snapshot state. `counter_floor` is the live
+    /// counter an undo started from (`None` for a disk load): an undo
+    /// never lowers it, so an id the redo stack still names — a vocal
+    /// render's `clip_<id>.wav` among them — is never re-issued (the
+    /// derived-range twin of STATE-08). The counter also clears every
+    /// restored MIDI clip, audio clip and map value, the last covering a
+    /// pending clip whose echo lands after the restore.
     pub(crate) fn restore_derived_clips(
         &mut self,
-        mut derived: HashMap<(u64, u64, TrackId), ClipId>,
-        next_derived_clip_id: u64,
+        file: &crate::project::ProjectFile,
         echoes_in_flight: bool,
+        counter_floor: Option<u64>,
     ) {
-        if !echoes_in_flight {
-            derived.retain(|_, id| self.midi_clips.iter().any(|mc| mc.id == *id));
+        match &file.derived_clips {
+            Some(entries) => {
+                let midi_clips = &self.midi_clips;
+                self.compose.derived_clips = entries
+                    .iter()
+                    .filter(|e| echoes_in_flight || midi_clips.iter().any(|mc| mc.id == e.clip_id))
+                    .map(|e| ((e.definition_id, e.placement_id, e.track_id), e.clip_id))
+                    .collect();
+            }
+            None => {
+                let drum_track_ids =
+                    crate::compose::ComposeState::drum_track_ids(&self.registry.tracks);
+                self.compose
+                    .rebuild_derived_clips(&self.midi_clips, &self.tempo_map, &drum_track_ids);
+            }
         }
-        self.compose.derived_clips = derived;
-        self.compose.next_derived_clip_id = next_derived_clip_id;
-        self.compose
-            .reserve_derived_clip_ids(self.midi_clips.iter().map(|mc| mc.id));
+        if let Some(floor) = counter_floor {
+            self.compose.next_derived_clip_id = self.compose.next_derived_clip_id.max(floor);
+        }
+        let map_ids: Vec<ClipId> = self.compose.derived_clips.values().copied().collect();
+        self.compose.reserve_derived_clip_ids(
+            self.midi_clips
+                .iter()
+                .map(|mc| mc.id)
+                .chain(self.clips.iter().map(|c| c.id))
+                .chain(map_ids),
+        );
     }
 
     /// Drive the engine + GUI external-instrument state back to `target`'s

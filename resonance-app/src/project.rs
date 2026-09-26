@@ -39,8 +39,8 @@ pub mod clip_gc;
 
 // Re-export section types (existing public surface).
 pub use sections::{
-    ProjectEntryLength, ProjectPatternEntry, ProjectSectionChord, ProjectSectionDefinition,
-    ProjectSectionPlacement,
+    ProjectDerivedClip, ProjectEntryLength, ProjectPatternEntry, ProjectSectionChord,
+    ProjectSectionDefinition, ProjectSectionPlacement,
 };
 
 // Re-export model: format constants, all serde structs, and tag helpers.

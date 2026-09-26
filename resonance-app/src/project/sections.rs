@@ -170,6 +170,17 @@ impl From<&ProjectPatternEntry> for crate::compose::PatternEntry {
     }
 }
 
+/// One entry of the compose section→clip map: the clip the compose model
+/// generated for `track_id`'s lane of `placement_id` (a placement of
+/// `definition_id`). See [`crate::project::ProjectFile::derived_clips`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectDerivedClip {
+    pub definition_id: u64,
+    pub placement_id: u64,
+    pub track_id: TrackId,
+    pub clip_id: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectSectionPlacement {
     pub id: u64,
