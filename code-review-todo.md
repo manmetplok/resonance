@@ -26,7 +26,7 @@ master and updates this table. Agents do **not** edit this file.
 | G3 resampler | LIB-01 | opus | merged | ac640b82 |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planned → `arch-migration-plan.md`; NOW-steps queued behind M3 (audio) and M4 (undo) to avoid conflicts | |
 | M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | merged | e996ad33 |
-| M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
+| M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | merged | c28a8a5c |
 | M3 mixer (medium) | MIX-03, MIX-05, MIX-06, MIX-07, MIX-08, MIX-09 | opus | merged | f7ad84e2 |
 | M4 app state (medium) | STATE-05, -06, -07, -09, -13, CTL-03, UPD-03, UPD-04, UPD-05 | opus | in progress | |
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | in progress | |
@@ -1408,7 +1408,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Select levels so that both blended levels are alias-free. Use `octave_f = log2(f/MIP_BASE_HZ)` and blend levels `ceil(octave_f)` and `ceil(octave_f)+1`. Alternatively, generate level `k` for the top of its octave (`max_harmonic = sr / (2·f_k·2)`) and keep the floor selection. Scale by the runtime sample rate: add `log2(44100/sample_rate)` to `octave_f` so 96 kHz does not over-darken and 48 kHz stays safe.
 - **Verification:** Test module rendering one sustained saw at 784 Hz, 44.1 kHz. FFT the output and assert the energy in bins that are not multiples of 784 Hz is < −60 dB relative to the fundamental. Assert non-silence.
 
-### [ ] DSP-04 — `DcBlocker` pole is a fixed `R = 0.995`: bass loss grows with sample rate (amp, mastering saturator, granular feedback)
+### [x] DSP-04 — `DcBlocker` pole is a fixed `R = 0.995`: bass loss grows with sample rate (amp, mastering saturator, granular feedback) — fixed @3e36274c (5 Hz amp/mastering, 20 Hz granular fb)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
@@ -1421,7 +1421,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Give `DcBlocker` a `set_cutoff(hz, sr)` / `new(sr)` with `R = exp(−2π·fc/fs)`. Use fc ≈ 5 Hz for amp and mastering (the corner lands near 5 Hz, with < 0.1 dB loss at 30 Hz) and keep a higher value for the feedback loop if that is intended. Call it from each plugin's `initialize`.
 - **Verification:** `resonance-dsp/tests/dc_blocker.rs`: at 44.1, 48, 96 and 192 kHz, a 40 Hz sine passes within 0.1 dB and DC decays. Add an amp/mastering test asserting the 40 Hz level through the saturator is independent of SR within 0.2 dB. Use a non-silent input and assert the output RMS is > 0.
 
-### [ ] DSP-05 — Mastering whole-plugin un-bypass replays ~0.3 s of stale pre-bypass audio
+### [x] DSP-05 — Mastering whole-plugin un-bypass replays ~0.3 s of stale pre-bypass audio — fixed @b0a8664f
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -1431,7 +1431,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Either keep running the chain while bypassed and discard its output (simplest and consistent with the "warm delay" intent), or call `chain.reset()` on the un-bypass edge and crossfade from the bypass delay line into the chain output over ~10 ms. A reset alone still steps from bypass-delayed audio to zeros-then-audio.
 - **Verification:** Test module: feed a 1 kHz tone for 1 s, bypass, feed silence for 1 s, un-bypass, feed silence. Assert the output is silent (< −120 dBFS) after un-bypass. Currently the tone reappears. Also assert the tone is present before bypass (non-silence guard).
 
-### [ ] DSP-06 — Linear-phase EQ FIR is 4097 taps at any sample rate: low-frequency bands collapse at 96/192 kHz
+### [x] DSP-06 — Linear-phase EQ FIR is 4097 taps at any sample rate: low-frequency bands collapse at 96/192 kHz — fixed @38a84f7e
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
@@ -1446,7 +1446,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Scale `FIR_LENGTH`/`FFT_SIZE`/`HOP_SIZE` with the sample rate, rounded to the next power of two (e.g. 8192 taps at 96 k, 16384 at 192 k). The latency grows in samples but stays constant in ms, and `latency()` already reports it. Alternatively, use a minimum-phase or IIR low band.
 - **Verification:** Test module designing the HP30 FIR at 48/96/192 kHz and evaluating its DTFT at 10/20/60 Hz. Assert it is within 2 dB of the biquad target at every rate.
 
-### [ ] DSP-07 — `SwapFader::begin_swap` restarts the fade-out at full gain: gain jumps, and the granular Fade mode never lands under automation
+### [x] DSP-07 — `SwapFader::begin_swap` restarts the fade-out at full gain: gain jumps, and the granular Fade mode never lands under automation — fixed @c430306a
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
@@ -1462,7 +1462,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   - If fading in, start the fade-out from the current gain: `fade_out_remaining = (fade_samples − fade_in_remaining)`, then set `fade_in_remaining = 0`.
 - **Verification:** `resonance-dsp/tests/swap_fader.rs`: call `begin_swap` every 64 `next()` calls for 4096 samples and assert `|gain[n] − gain[n−1]| ≤ fade_step + ε` for all n, and that the swap eventually lands. For granular, add a Fade-mode test with a per-block ramped target that asserts no wet-gain step > 1/fade_leg.
 
-### [ ] DSP-08 — Granular Wet→Buffer / Ping-pong feedback adds one host block per repeat (block-size dependent)
+### [x] DSP-08 — Granular Wet→Buffer / Ping-pong feedback adds one host block per repeat (block-size dependent) — fixed @043c780b
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
@@ -1472,7 +1472,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Subtract the block latency on the read side: grains on this route read at `delay − block_len` (clamped ≥ the head margin). Alternatively, render the feedback at sample rate by writing `wet[i]` into the ring at `write_pos + i + 1` inside the grain loop. That needs per-sample interleaving, but it is the only block-size-independent option.
 - **Verification:** Test module: an impulse into Wet→Buffer at 250 ms with feedback 0.9, rendered once at block 128 and once at block 1024. Assert the second repeat's onset is at 500 ms ± 1 ms in both runs and that the outputs match. Assert the repeats are non-silent.
 
-### [ ] DSP-09 — Granular "anti-alias" one-pole runs after the resampling read, so it cannot remove aliasing
+### [x] DSP-09 — Granular "anti-alias" one-pole runs after the resampling read, so it cannot remove aliasing — fixed @648a81ff
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** dsp
