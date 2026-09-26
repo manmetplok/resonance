@@ -994,11 +994,9 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, RecordingError> {
 /// file's header could not be repaired (FU-F2b), otherwise the mapped
 /// file.
 fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<ClipSource, String> {
-    // NOTE: types::clip::ClipSource::open_wav still returns Result<_, String>
-    // (converted separately in C-3); kept as String here until that lands.
     match salvaged.take() {
         Some(samples) => Ok(ClipSource::Memory(samples)),
-        None => ClipSource::open_wav(path),
+        None => ClipSource::open_wav(path).map_err(|e| e.to_string()),
     }
 }
 

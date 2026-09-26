@@ -85,7 +85,7 @@ pub fn load_take_peaks(
     clip_ref: ClipId,
 ) -> Result<Vec<(f32, f32)>, String> {
     let path = project_dir.join(super::clip_audio_file(clip_ref));
-    let source = ClipSource::open_wav(&path)?;
+    let source = ClipSource::open_wav(&path).map_err(|e| e.to_string())?;
     let peaks = compute_waveform_peaks(source.as_frames());
     if peaks.is_empty() {
         return Err(format!("{} holds no audio frames", path.display()));
