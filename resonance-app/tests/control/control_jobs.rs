@@ -496,6 +496,7 @@ fn vocal_audio_ready(definition_id: u64, track_id: u64, render_epoch: u64) -> Me
             clip_name: "Vocal".to_owned(),
             trim_start_frames: 0,
             trim_end_frames: 0,
+            lead_ticks: 0,
             render_epoch,
         },
     )))

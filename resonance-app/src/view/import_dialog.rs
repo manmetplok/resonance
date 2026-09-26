@@ -111,10 +111,20 @@ fn stage_placeholder<'a>(dialog: &'a ImportDialogState) -> Element<'a, Message> 
         ImportStage::Error => "Import failed.",
         ImportStage::Imported => "Import complete.",
     };
-    text(dialog.error.as_deref().unwrap_or(stage_label))
+    let label = text(dialog.error.as_deref().unwrap_or(stage_label))
         .size(13)
-        .color(theme::TEXT_2)
-        .into()
+        .color(theme::TEXT_2);
+    // The Drop prompt says "or choose one" — and a failed parse needs a
+    // way to pick another file — so both carry the chooser (VIEW-25).
+    if matches!(dialog.stage, ImportStage::Drop | ImportStage::Error) {
+        let choose = button(text("Choose file\u{2026}").size(13).color(theme::TEXT_1))
+            .on_press(Message::Import(ImportMessage::Choose))
+            .padding([8, 18])
+            .style(|_theme, status| theme::ghost_button_style(status));
+        column![label, Space::new().height(12), choose].into()
+    } else {
+        label.into()
+    }
 }
 
 // ---------------------------------------------------------------------------

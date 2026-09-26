@@ -139,6 +139,7 @@ pub(super) fn removed(r: &mut Resonance, track_id: TrackId) {
             .unwrap_or(true)
     });
     r.compose.refresh_track_count(&r.registry.tracks);
+    crate::update::compose::forget_track(r, track_id);
 }
 
 /// Drop everything besides the track row that names a removed track (code

@@ -1,8 +1,25 @@
 use super::{ChordState, SectionDefinitionState, SectionPlacementState};
 
+/// Largest bar extent a section may reach: a section's length, and the
+/// bar a placement ends on, never pass the control API's
+/// [`resonance_control::MAX_BARS`]. Bar arithmetic is plain `u32` and the
+/// views loop over every bar each frame, so an unbounded length hung the
+/// UI and overflowed the invariants below (code review VIEW-17).
+pub const MAX_SECTION_BARS: u32 = resonance_control::MAX_BARS;
+
+/// Whether a section of `length_bars` placed at 0-based `start_bar` stays
+/// inside [`MAX_SECTION_BARS`] (and is at least one bar long).
+pub fn section_span_in_bounds(start_bar: u32, length_bars: u32) -> bool {
+    length_bars >= 1
+        && start_bar
+            .checked_add(length_bars)
+            .is_some_and(|end| end <= MAX_SECTION_BARS)
+}
+
 /// Returns true if a new placement at `[start_bar, start_bar + length_bars)`
 /// would overlap any existing placement (given the length of each definition).
 /// `ignore_placement_id` lets the caller exclude the placement being moved.
+/// Ends are computed in `u64`, so no input overflows.
 pub fn placement_overlaps(
     placements: &[SectionPlacementState],
     definitions: &[SectionDefinitionState],
@@ -10,7 +27,8 @@ pub fn placement_overlaps(
     length_bars: u32,
     ignore_placement_id: Option<u64>,
 ) -> bool {
-    let new_end = start_bar + length_bars;
+    let start = u64::from(start_bar);
+    let new_end = start + u64::from(length_bars);
     for p in placements {
         if Some(p.id) == ignore_placement_id {
             continue;
@@ -18,8 +36,9 @@ pub fn placement_overlaps(
         let Some(def) = definitions.iter().find(|d| d.id == p.definition_id) else {
             continue;
         };
-        let p_end = p.start_bar + def.length_bars;
-        if start_bar < p_end && p.start_bar < new_end {
+        let p_start = u64::from(p.start_bar);
+        let p_end = p_start + u64::from(def.length_bars);
+        if start < p_end && p_start < new_end {
             return true;
         }
     }
@@ -28,20 +47,22 @@ pub fn placement_overlaps(
 
 /// Returns true if a chord slot `[start_beat, start_beat + duration_beats)`
 /// would overlap any existing chord in the section, excluding the one being
-/// moved.
+/// moved. Ends are computed in `u64`, so no input overflows.
 pub fn chord_overlaps(
     chords: &[ChordState],
     start_beat: u32,
     duration_beats: u32,
     ignore_chord_id: Option<u64>,
 ) -> bool {
-    let new_end = start_beat + duration_beats;
+    let start = u64::from(start_beat);
+    let new_end = start + u64::from(duration_beats);
     for c in chords {
         if Some(c.id) == ignore_chord_id {
             continue;
         }
-        let c_end = c.start_beat + c.duration_beats;
-        if start_beat < c_end && c.start_beat < new_end {
+        let c_start = u64::from(c.start_beat);
+        let c_end = c_start + u64::from(c.duration_beats);
+        if start < c_end && c_start < new_end {
             return true;
         }
     }
@@ -49,14 +70,15 @@ pub fn chord_overlaps(
 }
 
 /// Returns true if the chord slot stays within the section's total beat span.
+/// Computed in `u64`: a slot whose end overflows `u32` does not fit.
 pub fn chord_fits_in_section(
     start_beat: u32,
     duration_beats: u32,
     section_length_bars: u32,
     time_sig_num: u8,
 ) -> bool {
-    let section_beats = section_length_bars * time_sig_num as u32;
-    duration_beats >= 1 && start_beat + duration_beats <= section_beats
+    let section_beats = u64::from(section_length_bars) * u64::from(time_sig_num);
+    duration_beats >= 1 && u64::from(start_beat) + u64::from(duration_beats) <= section_beats
 }
 
 // Inline tests: `resonance-app` is a binary crate with no `lib.rs`, so an

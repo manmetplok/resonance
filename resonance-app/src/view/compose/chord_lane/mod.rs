@@ -66,20 +66,24 @@ pub struct ChordLaneState {
     cache_fingerprint: std::cell::Cell<ChordLaneFingerprint>,
 }
 
+/// Cheap content fingerprint of everything the cached layer draws.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ChordLaneFingerprint {
+pub struct ChordLaneFingerprint {
     chord_count: usize,
     chord_layout_hash: u64,
     selected_chord_id: Option<u64>,
     chords_selected: bool,
-    drag_active: bool,
+    /// The whole drag, not just whether one is active: `draw_into`
+    /// renders the dragged chord at its pending start / duration, so the
+    /// cache must repaint as those change (code review VIEW-20).
+    drag: Option<ChordDrag>,
     start_bar: u32,
     length_bars: u32,
     tempo_points: usize,
     sig_points: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChordDrag {
     /// Moving a chord: `grab_beat` is the beat offset inside the chord where
     /// the mouse grabbed it, so the chord sticks to the cursor naturally.
@@ -106,19 +110,7 @@ impl<'a> canvas::Program<Message> for ChordLaneCanvas<'a> {
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let drag_active = state.drag.is_some();
-        let layout_hash = chord_layout_hash(self.definition);
-        let fp = ChordLaneFingerprint {
-            chord_count: self.definition.chords.len(),
-            chord_layout_hash: layout_hash,
-            selected_chord_id: self.selected_chord_id,
-            chords_selected: self.chords_selected,
-            drag_active,
-            start_bar: self.start_bar,
-            length_bars: self.definition.length_bars,
-            tempo_points: self.tempo_map.tempo_points.len(),
-            sig_points: self.tempo_map.signature_points.len(),
-        };
+        let fp = self.fingerprint(state);
         if state.cache_fingerprint.get() != fp {
             state.cache.clear();
             state.cache_fingerprint.set(fp);
@@ -163,6 +155,21 @@ fn chord_layout_hash(def: &SectionDefinitionState) -> u64 {
 }
 
 impl<'a> ChordLaneCanvas<'a> {
+    /// Fingerprint the cached layer's content for `state`'s drag.
+    pub fn fingerprint(&self, state: &ChordLaneState) -> ChordLaneFingerprint {
+        ChordLaneFingerprint {
+            chord_count: self.definition.chords.len(),
+            chord_layout_hash: chord_layout_hash(self.definition),
+            selected_chord_id: self.selected_chord_id,
+            chords_selected: self.chords_selected,
+            drag: state.drag,
+            start_bar: self.start_bar,
+            length_bars: self.definition.length_bars,
+            tempo_points: self.tempo_map.tempo_points.len(),
+            sig_points: self.tempo_map.signature_points.len(),
+        }
+    }
+
     /// Total beats in the section, summing per-bar numerators.
     pub(super) fn total_beats(&self) -> u32 {
         (0..self.definition.length_bars)

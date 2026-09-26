@@ -102,7 +102,7 @@ pub struct VocalRollCanvas<'a> {
     pub snap_ticks: u64,
     pub selected_note: Option<usize>,
     pub time_sig_num: u8,
-    /// Section BPM at the playhead. Plumbed in so the pitch-curve
+    /// The section's BPM (from the tempo map at the section). Plumbed in so the pitch-curve
     /// preview's portamento + vibrato match what the SVS pipeline
     /// will produce at the same tempo.
     pub bpm: f32,
@@ -126,6 +126,8 @@ pub fn build_canvas<'a>(
     let definition = find_definition_for_clip(app, clip)?;
     let params = find_vocal_params(definition, clip.track_id)?;
     let voice_label = params.voice.as_str();
+    // The section's meter, not the one under the playhead (VIEW-13).
+    let meter = crate::update::compose::section_meter(app, definition.id);
     // Side-table lookup — falls back to an empty slice when the clip
     // has never had lyrics installed (e.g. a vocal clip created
     // through the engine without going through the generator). Callers
@@ -144,7 +146,7 @@ pub fn build_canvas<'a>(
         track_id: editor_state.track_id,
         params,
         chords: &definition.chords,
-        section_beats: definition.length_bars * app.transport.time_sig_num as u32,
+        section_beats: definition.length_bars * meter.numerator as u32,
         scroll_y: editor_state.scroll_y,
         zoom_x: editor_state.zoom_x,
         zoom_y: editor_state.zoom_y,
@@ -152,8 +154,8 @@ pub fn build_canvas<'a>(
         // The vocal roll still works one note at a time; take the single
         // representative from the piano-roll multi-selection set.
         selected_note: editor_state.primary_selected(),
-        time_sig_num: app.transport.time_sig_num,
-        bpm: app.transport.bpm,
+        time_sig_num: meter.numerator,
+        bpm: meter.bpm,
         voice_label,
         lyrics,
     })

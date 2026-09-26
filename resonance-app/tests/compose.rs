@@ -17,6 +17,8 @@ mod common;
 mod builtin_templates;
 #[path = "compose/chord_box_layout.rs"]
 mod chord_box_layout;
+#[path = "compose/chord_lane_drag_preview.rs"]
+mod chord_lane_drag_preview;
 #[path = "compose/chord_generator_modes.rs"]
 mod chord_generator_modes;
 #[path = "compose/chord_schema_inspector.rs"]
@@ -65,6 +67,8 @@ mod compose_tracks_ignore_arrange_scroll;
 mod compose_vocal_placeholder;
 #[path = "compose/compose_workspace_collapse.rs"]
 mod compose_workspace_collapse;
+#[path = "compose/drum_grid_tuplet_drift.rs"]
+mod drum_grid_tuplet_drift;
 #[path = "compose/drum_kit_pads.rs"]
 mod drum_kit_pads;
 #[path = "compose/drum_pattern_library.rs"]
@@ -73,6 +77,8 @@ mod drum_pattern_library;
 mod drum_cell_click_phase;
 #[path = "compose/drum_section_coverage.rs"]
 mod drum_section_coverage;
+#[path = "compose/expanded_editor_clip_offset.rs"]
+mod expanded_editor_clip_offset;
 #[path = "compose/fresh_project_tempo_map.rs"]
 mod fresh_project_tempo_map;
 #[path = "compose/generator_section.rs"]
@@ -81,8 +87,12 @@ mod generator_section;
 mod global_tracks_edit_cycle;
 #[path = "compose/global_tracks_shelf.rs"]
 mod global_tracks_shelf;
+#[path = "compose/section_bounds.rs"]
+mod section_bounds;
 #[path = "compose/section_delete_cleanup.rs"]
 mod section_delete_cleanup;
+#[path = "compose/section_meter_from_tempo_map.rs"]
+mod section_meter_from_tempo_map;
 #[path = "compose/section_resize_rederive.rs"]
 mod section_resize_rederive;
 #[path = "compose/seed_markers_from_sections.rs"]
@@ -93,5 +103,9 @@ mod template_instantiate;
 mod templates_save;
 #[path = "compose/templates_scan.rs"]
 mod templates_scan;
+#[path = "compose/track_delete_lane_cleanup.rs"]
+mod track_delete_lane_cleanup;
+#[path = "compose/vocal_render_inflight_placement.rs"]
+mod vocal_render_inflight_placement;
 #[path = "compose/vocal_roll_key_focus.rs"]
 mod vocal_roll_key_focus;

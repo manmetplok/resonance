@@ -81,6 +81,9 @@ pub(super) fn roll_vocal_melody(
 ) -> Task<Message> {
     use resonance_audio::types::{MidiNote, TICKS_PER_QUARTER_NOTE};
 
+    if !super::track_exists(r, track_id) {
+        return Task::none();
+    }
     let Some(mut def) = r.compose.find_definition(definition_id).cloned() else {
         return Task::none();
     };
@@ -104,7 +107,8 @@ pub(super) fn roll_vocal_melody(
     super::regenerate::apply_chord_track_harmony(r, definition_id, &mut def);
 
     let timed = crate::compose::generate::to_timed_chords(&def.chords);
-    let beats_per_bar = r.transport.time_sig_num.max(1) as u32;
+    let meter = super::section_meter(r, definition_id);
+    let beats_per_bar = meter.numerator as u32;
     let motif_intervals: Vec<i8> = timed
         .first()
         .map(|first| {
@@ -127,8 +131,7 @@ pub(super) fn roll_vocal_melody(
         return Task::none();
     }
 
-    let time_sig_num = r.transport.time_sig_num;
-    let duration_ticks = def.length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
+    let duration_ticks = def.length_bars as u64 * meter.numerator as u64 * TICKS_PER_QUARTER_NOTE;
 
     let track_name = r
         .registry
@@ -244,7 +247,8 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
             .expression_curves(req.definition_id, req.track_id)
             .cloned()
             .unwrap_or_default(),
-        bpm: r.transport.bpm,
+        // The section's tempo, not the one under the playhead (VIEW-13).
+        bpm: super::section_meter(r, req.definition_id).bpm,
         engine_sample_rate: r.sample_rate,
         dest_dir: vocal_audio_io::vocal_audio_dir(r.io.project_path.as_deref()),
         render_cache: render_cache_for(r, req.definition_id, req.track_id),
@@ -257,6 +261,7 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
         req.track_id,
         req.clip_name,
         plan.audio_starts,
+        plan.lead_ticks,
         render_epoch,
     )
 }
@@ -294,13 +299,20 @@ fn bump_render_epoch(
     definition_id: u64,
     track_id: TrackId,
 ) -> u64 {
+    // Epochs come from a process-wide counter as well as the lane's own:
+    // a full replay (undo, project load) clears the per-lane map back to
+    // nothing, and a render queued before it would otherwise carry the
+    // same epoch as the first one queued after it and install over it
+    // (code review VIEW-19).
+    static LAST_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let global = LAST_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let entry = r
         .compose
         .vocal_audio
         .render_epoch
         .entry((definition_id, track_id))
         .or_insert(0);
-    *entry = plan::next_render_epoch(Some(*entry));
+    *entry = plan::next_render_epoch(Some(*entry)).max(global);
     *entry
 }
 
@@ -329,6 +341,7 @@ fn spawn_render(
     track_id: TrackId,
     clip_name: String,
     audio_starts: Vec<(u64, u64)>,
+    lead_ticks: u64,
     render_epoch: u64,
 ) -> Task<Message> {
     use crate::compose::messages::VocalAudioReadyData;
@@ -349,6 +362,7 @@ fn spawn_render(
                     clip_name: clip_name.clone(),
                     trim_start_frames: trim_start,
                     trim_end_frames: trim_end,
+                    lead_ticks,
                     render_epoch,
                 })),
             ),
@@ -374,6 +388,9 @@ pub(super) fn rerender_vocal_audio(
 ) -> Task<Message> {
     use resonance_audio::types::MidiNote;
 
+    if !super::track_exists(r, track_id) {
+        return Task::none();
+    }
     let Some(def) = r.compose.find_definition(definition_id).cloned() else {
         return Task::none();
     };

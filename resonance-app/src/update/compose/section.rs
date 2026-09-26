@@ -11,7 +11,9 @@ use iced::Task;
 
 use super::handle as dispatch;
 use crate::message::Message;
-use crate::compose::invariants::{chord_fits_in_section, placement_overlaps};
+use crate::compose::invariants::{
+    chord_fits_in_section, placement_overlaps, section_span_in_bounds, MAX_SECTION_BARS,
+};
 use crate::util::seed_from_id;
 use crate::compose::{
     ComposeMessage, ComposeState, EditSectionForm, NewSectionForm, SectionDefinitionState,
@@ -52,25 +54,34 @@ pub(crate) fn next_default_color(state: &ComposeState) -> [u8; 3] {
 }
 
 /// Lowest start_bar at which a section of `length_bars` would not overlap
-/// any existing placement. Capped at 10_000 to stop the search if the
-/// timeline is somehow saturated.
-pub(super) fn first_free_bar(state: &ComposeState, length_bars: u32) -> u32 {
+/// any existing placement, or `None` when no such bar keeps the section
+/// inside [`MAX_SECTION_BARS`]. Jumps past each overlapping placement, so
+/// the search is bounded by the placement count (code review VIEW-17: it
+/// used to give up at bar 10_001 and return that bar even if it overlapped).
+pub(super) fn first_free_bar(state: &ComposeState, length_bars: u32) -> Option<u32> {
     let mut candidate = 0u32;
-    loop {
-        if !placement_overlaps(
-            &state.placements,
-            &state.definitions,
-            candidate,
-            length_bars,
-            None,
-        ) {
-            return candidate;
+    for _ in 0..=state.placements.len() {
+        if !section_span_in_bounds(candidate, length_bars) {
+            return None;
         }
-        candidate += 1;
-        if candidate > 10_000 {
-            return candidate;
+        let blocker = state.placements.iter().find_map(|p| {
+            let len = state.find_definition(p.definition_id)?.length_bars;
+            let end = u64::from(p.start_bar) + u64::from(len);
+            let overlaps = u64::from(candidate) < end
+                && u64::from(p.start_bar) < u64::from(candidate) + u64::from(length_bars);
+            overlaps.then_some(end)
+        });
+        match blocker {
+            None => return Some(candidate),
+            Some(end) => candidate = u32::try_from(end).ok()?,
         }
     }
+    None
+}
+
+/// The "too long" error shared by the dialogs and the CRUD handlers.
+fn too_long_error() -> String {
+    format!("Section length must be at most {MAX_SECTION_BARS} bars")
 }
 
 pub(super) fn handle_create_midi_clip(
@@ -78,8 +89,9 @@ pub(super) fn handle_create_midi_clip(
     track_id: resonance_audio::types::TrackId,
     start_sample: u64,
     length_bars: u32,
-    time_sig_num: u8,
 ) {
+    let (bar, _) = r.tempo_map.sample_to_bar(start_sample, r.sample_rate);
+    let time_sig_num = super::meter_at_bar(r, bar).numerator;
     let duration_ticks = length_bars as u64 * time_sig_num as u64 * TICKS_PER_QUARTER_NOTE;
     let _ = r.engine.send(AudioCommand::CreateMidiClip {
         track_id,
@@ -137,6 +149,10 @@ pub(super) fn handle_confirm_create(r: &mut crate::Resonance) {
             return;
         }
     };
+    if length_bars > MAX_SECTION_BARS {
+        r.compose.last_error = Some(too_long_error());
+        return;
+    }
     r.compose.new_section_form = None;
     // These re-entrant dispatches never produce a real task — section
     // CRUD is fully synchronous — so dropping the returned Task is safe.
@@ -258,6 +274,22 @@ pub(super) fn handle_create(
         r.compose.last_error = Some("Section length must be at least 1 bar".into());
         return;
     }
+    if length_bars > MAX_SECTION_BARS {
+        r.compose.last_error = Some(too_long_error());
+        return;
+    }
+    let start_bar = if place {
+        match first_free_bar(&r.compose, length_bars) {
+            Some(bar) => Some(bar),
+            None => {
+                r.compose.last_error =
+                    Some(format!("No room to place the section within {MAX_SECTION_BARS} bars"));
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let id = r.compose.fresh_id();
     r.compose.definitions.push(SectionDefinitionState {
         id,
@@ -282,8 +314,7 @@ pub(super) fn handle_create(
         ),
         arrangement: Vec::new(),
     });
-    if place {
-        let start_bar = first_free_bar(&r.compose, length_bars);
+    if let Some(start_bar) = start_bar {
         let placement_id = r.compose.fresh_id();
         r.compose.placements.push(SectionPlacementState {
             id: placement_id,
@@ -311,6 +342,16 @@ pub(super) fn handle_resize(
 ) -> Task<Message> {
     if length_bars == 0 {
         r.compose.last_error = Some("Section length must be at least 1 bar".into());
+        return Task::none();
+    }
+    let out_of_bounds = r
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .any(|p| !section_span_in_bounds(p.start_bar, length_bars));
+    if length_bars > MAX_SECTION_BARS || out_of_bounds {
+        r.compose.last_error = Some(too_long_error());
         return Task::none();
     }
     let old_length = match r.compose.find_definition(definition_id) {
@@ -550,6 +591,11 @@ pub(super) fn handle_place(r: &mut crate::Resonance, definition_id: u64, start_b
         Some(d) => d.length_bars,
         None => return,
     };
+    if !section_span_in_bounds(start_bar, length_bars) {
+        r.compose.last_error =
+            Some(format!("A placement must end by bar {MAX_SECTION_BARS}"));
+        return;
+    }
     if placement_overlaps(
         &r.compose.placements,
         &r.compose.definitions,

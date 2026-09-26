@@ -144,8 +144,105 @@ pub(crate) fn install_derived_midi_clip(
     clip_id
 }
 
+/// The meter a section is composed in: the signature numerator and the
+/// BPM the tempo map has at the section's earliest placement (bar 0 when
+/// it is not placed). Compose never reads `transport.time_sig_num` /
+/// `transport.bpm` — those follow the playhead during playback, so an
+/// edit's clip lengths, chord-fit checks and vocal render tempo would
+/// depend on where the song happens to be playing (code review VIEW-13).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SectionMeter {
+    /// Beats per bar.
+    pub numerator: u8,
+    pub bpm: f32,
+}
+
+/// [`SectionMeter`] at 0-based `bar`.
+pub(crate) fn meter_at_bar(r: &crate::Resonance, bar: u32) -> SectionMeter {
+    let sample = r.tempo_map.bar_to_sample(bar);
+    SectionMeter {
+        numerator: r.tempo_map.numerator_at_bar(bar).max(1),
+        bpm: r.tempo_map.bpm_at(sample, r.sample_rate),
+    }
+}
+
+/// [`SectionMeter`] of a section definition — see the type docs.
+pub(crate) fn section_meter(r: &crate::Resonance, definition_id: u64) -> SectionMeter {
+    let bar = r
+        .compose
+        .placements
+        .iter()
+        .filter(|p| p.definition_id == definition_id)
+        .map(|p| p.start_bar)
+        .min()
+        .unwrap_or(0);
+    meter_at_bar(r, bar)
+}
+
+/// Whether `track_id` is a live track. Lane derivation checks this so a
+/// generator left pointing at a removed track never loads a clip onto it
+/// (the engine accepts any track id) — code review VIEW-12.
+pub(crate) fn track_exists(r: &crate::Resonance, track_id: resonance_audio::types::TrackId) -> bool {
+    r.registry.tracks.iter().any(|t| t.id == track_id)
+}
+
+/// Drop every Compose lane of a removed track (code review VIEW-12):
+/// its generator in each section, its derived MIDI clips (engine + app
+/// mirror — the engine's `RemoveTrack` only drops audio clips), its
+/// installed vocal audio, and the per-lane side tables. The render epoch
+/// is bumped rather than removed so a render still in flight for the
+/// lane is discarded on completion. Called from the track-removal echo;
+/// an undo of the delete restores the generators from the project
+/// snapshot.
+pub(crate) fn forget_track(r: &mut crate::Resonance, track_id: resonance_audio::types::TrackId) {
+    use resonance_audio::types::AudioCommand;
+
+    for def in r.compose.definitions.iter_mut() {
+        def.lane_generators.remove(&track_id);
+    }
+    let midi: Vec<_> = r
+        .compose
+        .derived_clips
+        .iter()
+        .filter(|((_, _, t), _)| *t == track_id)
+        .map(|(_, id)| *id)
+        .collect();
+    r.compose.derived_clips.retain(|(_, _, t), _| *t != track_id);
+    for clip_id in midi {
+        let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id });
+        r.midi_clips.retain(|c| c.id != clip_id);
+        r.compose.vocal_audio.clip_lyrics.remove(&clip_id);
+    }
+    let audio = &mut r.compose.vocal_audio;
+    let audio_ids: Vec<_> = audio
+        .clips
+        .iter()
+        .filter(|((_, _, t), _)| *t == track_id)
+        .map(|(_, (id, _))| *id)
+        .collect();
+    audio.clips.retain(|(_, _, t), _| *t != track_id);
+    for ((_, t), epoch) in audio.render_epoch.iter_mut() {
+        if *t == track_id {
+            *epoch += 1;
+        }
+    }
+    audio.render_cache.retain(|(_, t), _| *t != track_id);
+    for clip_id in audio_ids {
+        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
+        r.clips.retain(|c| c.id != clip_id);
+    }
+    r.compose.vocal_bulk_lyrics.retain(|(_, t), _| *t != track_id);
+    r.compose.expression_curves.retain(|(_, t), _| *t != track_id);
+    if r.compose.expanded_track_id == Some(track_id) {
+        r.compose.expanded_track_id = None;
+    }
+    if r.compose.details_track_id() == Some(track_id) {
+        r.compose.selected_lane = crate::compose::SelectedLane::Chords;
+    }
+}
+
 pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
-    let time_sig_num = r.transport.time_sig_num;
+    let num = |r: &crate::Resonance, definition_id: u64| section_meter(r, definition_id).numerator;
 
     match msg {
         ComposeMessage::DrumGroups(m) => return drum_groups::handle(r, m),
@@ -161,7 +258,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             track_id,
             start_sample,
             length_bars,
-        } => section::handle_create_midi_clip(r, track_id, start_sample, length_bars, time_sig_num),
+        } => section::handle_create_midi_clip(r, track_id, start_sample, length_bars),
 
         // Create-section dialog
         ComposeMessage::OpenCreateSectionDialog => section::handle_open_create_dialog(r),
@@ -196,7 +293,10 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::ResizeSection {
             definition_id,
             length_bars,
-        } => return section::handle_resize(r, definition_id, length_bars, time_sig_num),
+        } => {
+            let time_sig_num = num(r, definition_id);
+            return section::handle_resize(r, definition_id, length_bars, time_sig_num);
+        }
         ComposeMessage::SetSectionScale {
             definition_id,
             scale,
@@ -327,7 +427,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             duration_beats,
             root,
             quality,
-            time_sig_num,
+            num(r, definition_id),
         ),
         ComposeMessage::EditChord {
             definition_id,
@@ -338,16 +438,25 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             definition_id,
             chord_id,
             start_beat,
-        } => chord::handle_move(r, definition_id, chord_id, start_beat, time_sig_num),
+        } => {
+            let time_sig_num = num(r, definition_id);
+            chord::handle_move(r, definition_id, chord_id, start_beat, time_sig_num)
+        }
         ComposeMessage::ResizeChord {
             definition_id,
             chord_id,
             duration_beats,
-        } => chord::handle_resize(r, definition_id, chord_id, duration_beats, time_sig_num),
+        } => {
+            let time_sig_num = num(r, definition_id);
+            chord::handle_resize(r, definition_id, chord_id, duration_beats, time_sig_num)
+        }
         ComposeMessage::ReplaceSectionChords {
             definition_id,
             chords,
-        } => chord::handle_replace(r, definition_id, chords, time_sig_num),
+        } => {
+            let time_sig_num = num(r, definition_id);
+            chord::handle_replace(r, definition_id, chords, time_sig_num)
+        }
         ComposeMessage::DeleteChord {
             definition_id,
             chord_id,

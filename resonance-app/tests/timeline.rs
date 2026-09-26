@@ -111,6 +111,8 @@ mod track_header_alignment;
 mod track_header_automation_lane_rows;
 #[path = "timeline/track_header_freeze_button.rs"]
 mod track_header_freeze_button;
+#[path = "timeline/tempo_drag_selection.rs"]
+mod tempo_drag_selection;
 #[path = "timeline/undo_coalesce.rs"]
 mod undo_coalesce;
 #[path = "timeline/undo_history.rs"]

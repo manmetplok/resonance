@@ -176,8 +176,9 @@ impl<'a> ExpandedEditorCanvas<'a> {
                 continue;
             }
 
+            let offset = self.clip_offset_ticks(clip);
             for n in &clip.notes {
-                let rect = self.note_rect(layout, viewport, n);
+                let rect = self.note_rect(layout, viewport, n, offset);
 
                 if rect.x + rect.width < grid_x
                     || rect.y + rect.height < layout.grid_top

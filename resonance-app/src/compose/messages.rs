@@ -345,8 +345,9 @@ pub struct VocalAudioReadyData {
     pub wav_path: std::path::PathBuf,
     /// `(placement_id, start_sample)` snapshot taken when the render was
     /// queued. The render task is fire-and-forget — by the time it
-    /// finishes the user may have edited placements, but the snapshot
-    /// keeps that drift from blowing up the install step.
+    /// finishes the user may have edited placements, so the install
+    /// re-resolves each id: a deleted placement is skipped and a moved
+    /// one gets its audio at its current start (VIEW-04, VIEW-19).
     pub placements: Vec<(u64, u64)>,
     pub clip_name: String,
     /// Leading frames to skip on playback. The renderer adds a short
@@ -355,6 +356,10 @@ pub struct VocalAudioReadyData {
     pub trim_start_frames: u64,
     /// Trailing frames to skip on playback, mirroring `trim_start`.
     pub trim_end_frames: u64,
+    /// The lane's lead-in (tick of its first note) the audio is offset
+    /// by from the section start. Kept so the install can re-place the
+    /// audio at a placement that moved while the render ran (VIEW-19).
+    pub lead_ticks: u64,
     /// Snapshot of `compose.vocal_audio.render_epoch[(def, track)]` taken
     /// when the render was queued. The completion handler compares
     /// this to the current epoch and drops stale renders so the user

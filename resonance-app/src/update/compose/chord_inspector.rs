@@ -359,7 +359,7 @@ fn manual_notes_mut(
 /// Generate a chord progression from the section's `GeneratorSpec`
 /// (Markov table or pop schema; defaults to the "pop" Markov table).
 fn generate_chord_lane(r: &mut crate::Resonance, definition_id: u64, respect_locks: bool) {
-    let time_sig_num = r.transport.time_sig_num;
+    let time_sig_num = super::section_meter(r, definition_id).numerator;
     let def = match r.compose.find_definition(definition_id) {
         Some(d) => d.clone(),
         None => return,
