@@ -63,6 +63,7 @@ master and updates this table. Agents do **not** edit this file.
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
 | refactor-intent A-1 (ARCH-01) | A1-2 (3) external_instruments + devices from ProjectFile; slow-path double restore removed | opus | merged | 37ae683a |
 | refactor-intent E (ARCH-07) | A7-3 `model`/`decode` features in resonance-common; plugins set `default-features = false` (invariant) | sonnet | merged | 38d66942 |
+| refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
