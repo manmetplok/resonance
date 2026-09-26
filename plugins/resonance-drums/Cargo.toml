@@ -23,7 +23,9 @@ editor = [
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
-resonance-common = { path = "../../resonance-common" }
+resonance-common = { path = "../../resonance-common", default-features = false, features = [
+    "decode",
+] }
 resonance-dsp = { path = "../../resonance-dsp" }
 
 serde.workspace = true

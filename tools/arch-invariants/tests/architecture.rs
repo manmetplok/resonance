@@ -40,6 +40,9 @@ struct Dep {
     kind: String,
     /// The `cfg(...)` the dependency is gated on, if any.
     target: Option<String>,
+    /// Whether the manifest leaves this dependency's default features on
+    /// (i.e. no `default-features = false`).
+    uses_default_features: bool,
 }
 
 #[derive(Debug)]
@@ -106,6 +109,7 @@ fn packages() -> Vec<Package> {
                         name: d["name"].as_str().expect("dep name").to_owned(),
                         kind: d["kind"].as_str().unwrap_or("normal").to_owned(),
                         target: d["target"].as_str().map(str::to_owned),
+                        uses_default_features: d["uses_default_features"].as_bool().unwrap_or(true),
                     })
                     .collect(),
                 crate_types: p["targets"]
@@ -553,6 +557,46 @@ fn only_listed_plugins_depend_on_resonance_common() {
     }
     report(
         "ARCH-07: only the plugins in `PLUGINS_ON_COMMON` depend on resonance-common",
+        &violations,
+    );
+}
+
+/// ARCH-07 A7-3: `resonance-common`'s nine DAW-model modules (`take`,
+/// `midi_map`, `device_definition`, `automation`, `freeze`,
+/// `device_registry`, `group_identity`, `external_instrument`,
+/// `track_group`) live behind its `model` feature (on by default). A plugin
+/// that leaves default features on gets the model compiled in regardless of
+/// what `plugins_reach_only_common_utilities` allows it to *name* — this is
+/// the type-level half of that guard. Every crate in `PLUGINS_ON_COMMON`,
+/// plus `resonance-plugin` itself (the SDK; it reaches common only for
+/// `scan_directory`/`factory_presets`), must set `default-features = false`
+/// on its `resonance-common` dependency.
+///
+/// Exercised 2026-09-26: dropped `default-features = false` from
+/// `plugins/resonance-drums/Cargo.toml`'s `resonance-common` dependency ->
+/// failed on that line; restored.
+#[test]
+fn plugins_disable_default_features_on_resonance_common() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for p in packages()
+        .iter()
+        .filter(|p| PLUGINS_ON_COMMON.contains(&p.name.as_str()) || p.name == "resonance-plugin")
+    {
+        for d in p.deps.iter().filter(|d| d.name == "resonance-common") {
+            if d.uses_default_features {
+                violations.push(format!(
+                    "{}/Cargo.toml: resonance-common dependency must set `default-features = \
+                     false` — otherwise the `model` feature (Take, MidiBinding, DeviceDefinition, \
+                     ...) is compiled in regardless of the source-level allow-list",
+                    p.rel_dir(&root).display()
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH-07 A7-3: resonance-common's model is feature-gated; resonance-plugin and its \
+         plugins disable its default features",
         &violations,
     );
 }

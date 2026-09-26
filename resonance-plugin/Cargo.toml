@@ -19,7 +19,7 @@ editor-widgets = [
 [dependencies]
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
-resonance-common = { path = "../resonance-common" }
+resonance-common = { path = "../resonance-common", default-features = false }
 # User-preset directory resolution ($XDG_DATA_HOME/resonance/plugin-presets).
 dirs.workspace = true
 parking_lot.workspace = true
