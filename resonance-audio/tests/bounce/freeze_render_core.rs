@@ -25,7 +25,6 @@ struct EngineState {
     busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
@@ -37,7 +36,6 @@ fn empty_engine_state() -> EngineState {
         busses: Arc::new(RwLock::new(IndexMap::new())),
         master: Arc::new(RwLock::new(MasterBus::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
-        midi_clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
@@ -125,7 +123,6 @@ fn known_track_renders_non_silent_wav() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -183,7 +180,6 @@ fn freeze_does_not_mutate_source_clips() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -221,7 +217,7 @@ fn fingerprint_changes_when_notes_change() {
             .clips
             .write()
             .push(audio_clip(1, 1, 0, tone(SR as usize)));
-        state.midi_clips.write().push(MidiClip {
+        let clip = MidiClip {
             id: 1,
             track_id: 1,
             start_sample: 0,
@@ -235,7 +231,8 @@ fn fingerprint_changes_when_notes_change() {
             name: "m".into(),
             trim_start_ticks: 0,
             trim_end_ticks: 0,
-        });
+        };
+        state.shared.edit_midi_clips(|clips| clips.push(Arc::new(clip)));
         let path = tmp_path(&format!("fp_{pitch}"));
         let _ = std::fs::remove_file(&path);
         let cache = to_freeze_cache(
@@ -247,7 +244,6 @@ fn fingerprint_changes_when_notes_change() {
             &state.busses,
             &state.master,
             &state.clips,
-            &state.midi_clips,
             &state.plugins,
             &state.tempo_map,
             &AutomationSnapshot::default(),
@@ -287,7 +283,6 @@ fn cancel_aborts_and_removes_partial_file() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -325,7 +320,6 @@ fn cancelling_another_renders_token_does_not_abort_the_freeze() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -368,7 +362,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -395,7 +388,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -424,7 +416,6 @@ fn freeze_refuses_while_transport_playing() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
@@ -453,7 +444,6 @@ fn missing_source_track_errors() {
         &state.busses,
         &state.master,
         &state.clips,
-        &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),

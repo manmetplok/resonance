@@ -131,7 +131,7 @@ pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
 /// collision here means a caller bug, not a race to recover from.
 pub(crate) fn reject_if_clip_id_in_use(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
     let taken = ctx.clips.read().iter().any(|c| c.id == clip_id)
-        || ctx.midi_clips.read().iter().any(|c| c.id == clip_id);
+        || ctx.shared.graph.load().midi_clip(clip_id).is_some();
     if taken {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "clip id {clip_id} is already in use; refusing the create rather than replacing the live clip"

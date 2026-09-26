@@ -55,7 +55,6 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) busses: &'a RwLock<IndexMap<BusId, Bus>>,
     pub(crate) master: &'a RwLock<MasterBus>,
     pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
-    pub(crate) midi_clips: &'a RwLock<Vec<MidiClip>>,
     pub(crate) plugins: &'a RwLock<PluginMap>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,
     pub(crate) latency_comp: &'a arc_swap::ArcSwap<LatencyComp>,

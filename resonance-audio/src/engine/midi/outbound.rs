@@ -181,9 +181,9 @@ struct PendingMsg {
 ///    for "no take exists here"), and `gate_recorded: false` tracks are
 ///    byte-identical to the pre-mode behaviour.
 #[allow(clippy::too_many_arguments)]
-pub fn emit_outbound_notes<S: OutboundNoteSink>(
+pub fn emit_outbound_notes<S: OutboundNoteSink, C: std::borrow::Borrow<MidiClip>>(
     output_tracks: &[OutboundTrack],
-    midi_clips: &[MidiClip],
+    midi_clips: &[C],
     audio_clips: &[AudioClip],
     tempo: &TempoMap,
     sample_rate: u32,
@@ -227,7 +227,8 @@ pub fn emit_outbound_notes<S: OutboundNoteSink>(
 
     // 3) NoteOn for any timeline note that starts in `[last, curr)`.
     for ot in output_tracks {
-        for clip in midi_clips.iter().filter(|c| c.track_id == ot.track_id) {
+        let clips = midi_clips.iter().map(std::borrow::Borrow::<MidiClip>::borrow);
+        for clip in clips.filter(|c| c.track_id == ot.track_id) {
             // Trim is in tick space relative to the clip; the
             // visible portion is `[trim_start, duration - trim_end]`.
             let visible_end_tick = clip.duration_ticks.saturating_sub(clip.trim_end_ticks);
@@ -414,11 +415,11 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
     }
 
     let tempo = ctx.tempo_map.load();
-    let midi_clips = ctx.midi_clips.read();
+    let graph = ctx.shared.graph.load();
     let audio_clips = ctx.clips.read();
     emit_outbound_notes(
         &output_tracks,
-        &midi_clips,
+        &graph.midi_clips,
         &audio_clips,
         &tempo,
         ctx.sample_rate,

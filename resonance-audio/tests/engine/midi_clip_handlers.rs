@@ -16,10 +16,17 @@
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
 
+use resonance_audio::test_support::SharedState;
 use resonance_audio::types::{AudioEvent, MidiClip, MidiNote};
 use resonance_audio::{move_midi_clip_in_place, trim_midi_clip_in_place};
+
+/// Engine state holding `clip` in its published render graph.
+fn shared_with(clip: MidiClip) -> SharedState {
+    let shared = SharedState::default();
+    shared.edit_midi_clips(|clips| clips.push(Arc::new(clip)));
+    shared
+}
 
 fn sample_clip(id: u64, track_id: u64, start_sample: u64) -> MidiClip {
     MidiClip {
@@ -41,8 +48,7 @@ fn sample_clip(id: u64, track_id: u64, start_sample: u64) -> MidiClip {
 
 #[test]
 fn move_missing_clip_emits_no_event() {
-    let midi_clips: Arc<RwLock<Vec<MidiClip>>> =
-        Arc::new(RwLock::new(vec![sample_clip(1, 100, 0)]));
+    let midi_clips = shared_with(sample_clip(1, 100, 0));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     // Clip id 999 does not exist — the handler must be a no-op and emit
@@ -60,7 +66,7 @@ fn move_missing_clip_emits_no_event() {
         "MidiClipMoved must not be emitted when the clip lookup misses"
     );
     // The existing clip must be untouched.
-    let clips = midi_clips.read();
+    let clips = midi_clips.graph.load().midi_clips.clone();
     assert_eq!(clips.len(), 1);
     assert_eq!(clips[0].id, 1);
     assert_eq!(clips[0].start_sample, 0);
@@ -69,8 +75,7 @@ fn move_missing_clip_emits_no_event() {
 
 #[test]
 fn trim_missing_clip_emits_no_event() {
-    let midi_clips: Arc<RwLock<Vec<MidiClip>>> =
-        Arc::new(RwLock::new(vec![sample_clip(1, 100, 0)]));
+    let midi_clips = shared_with(sample_clip(1, 100, 0));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     trim_midi_clip_in_place(
@@ -86,7 +91,7 @@ fn trim_missing_clip_emits_no_event() {
         event_rx.try_recv().is_err(),
         "MidiClipTrimmed must not be emitted when the clip lookup misses"
     );
-    let clips = midi_clips.read();
+    let clips = midi_clips.graph.load().midi_clips.clone();
     assert_eq!(clips.len(), 1);
     assert_eq!(clips[0].start_sample, 0);
     assert_eq!(clips[0].trim_start_ticks, 0);
@@ -97,8 +102,7 @@ fn trim_missing_clip_emits_no_event() {
 fn move_existing_clip_mutates_and_emits_event() {
     // Happy path companion to the missing-clip cases: prove the fix
     // didn't accidentally suppress the event for the real lookup hit.
-    let midi_clips: Arc<RwLock<Vec<MidiClip>>> =
-        Arc::new(RwLock::new(vec![sample_clip(7, 100, 0)]));
+    let midi_clips = shared_with(sample_clip(7, 100, 0));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     move_midi_clip_in_place(
@@ -126,15 +130,14 @@ fn move_existing_clip_mutates_and_emits_event() {
         "exactly one event should be emitted"
     );
 
-    let clips = midi_clips.read();
+    let clips = midi_clips.graph.load().midi_clips.clone();
     assert_eq!(clips[0].start_sample, 96_000);
     assert_eq!(clips[0].track_id, 200);
 }
 
 #[test]
 fn trim_existing_clip_mutates_and_emits_event() {
-    let midi_clips: Arc<RwLock<Vec<MidiClip>>> =
-        Arc::new(RwLock::new(vec![sample_clip(7, 100, 0)]));
+    let midi_clips = shared_with(sample_clip(7, 100, 0));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     trim_midi_clip_in_place(
@@ -165,7 +168,7 @@ fn trim_existing_clip_mutates_and_emits_event() {
         "exactly one event should be emitted"
     );
 
-    let clips = midi_clips.read();
+    let clips = midi_clips.graph.load().midi_clips.clone();
     assert_eq!(clips[0].start_sample, 24_000);
     assert_eq!(clips[0].trim_start_ticks, 240);
     assert_eq!(clips[0].trim_end_ticks, 120);

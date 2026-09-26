@@ -42,7 +42,6 @@ macro_rules! run_callback {
                 busses: &$h.busses,
                 master: &$h.master,
                 clips: &$h.clips,
-                midi_clips: &$h.midi_clips,
                 plugins: &$h.plugins,
                 tempo_map: &$h.tempo_map,
                 latency_comp: &$h.latency_comp,
@@ -94,7 +93,6 @@ pub struct MixAudioHarness {
     busses: RwLock<IndexMap<BusId, Bus>>,
     master: RwLock<MasterBus>,
     clips: RwLock<Vec<AudioClip>>,
-    midi_clips: RwLock<Vec<MidiClip>>,
     plugins: RwLock<PluginMap>,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
     latency_comp: arc_swap::ArcSwap<crate::latency::LatencyComp>,
@@ -146,6 +144,7 @@ impl MixAudioHarness {
         let bus_count = busses.len().max(1);
         let shared = Arc::new(SharedState::default());
         shared.aux_sends.store(Arc::new(aux_sends));
+        shared.edit_midi_clips(|v| v.extend(midi_clips.into_iter().map(Arc::new)));
         // Room for a few blocks of the widest input we drive, matching the
         // engine's ring sizing policy.
         let ring = ringbuf::HeapRb::<f32>::new(frames * MAX_MONITOR_CHANNELS * 4);
@@ -160,7 +159,6 @@ impl MixAudioHarness {
             busses: RwLock::new(busses),
             master: RwLock::new(MasterBus::default()),
             clips: RwLock::new(clips),
-            midi_clips: RwLock::new(midi_clips),
             plugins: RwLock::new(IndexMap::new()),
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
             latency_comp: arc_swap::ArcSwap::from_pointee(crate::latency::LatencyComp::empty()),
@@ -234,6 +232,18 @@ impl MixAudioHarness {
             std::sync::Arc::new(snapshot),
             &self.shared.retired,
         );
+    }
+
+    /// Edit the MIDI clip `clip_id` and publish the new render graph, as
+    /// a MIDI note / clip handler on the engine thread does. Callable
+    /// from a second thread while blocks render (`shared_arc`'s
+    /// `edit_midi_clip` is the same path). `None` if there is no such clip.
+    pub fn edit_midi_clip<R>(
+        &self,
+        clip_id: ClipId,
+        f: impl FnOnce(&mut MidiClip) -> R,
+    ) -> Option<R> {
+        self.shared.edit_midi_clip(clip_id, f)
     }
 
     /// Publish a new plugin-delay-compensation table.
@@ -360,7 +370,6 @@ impl MixAudioHarness {
             StateMap::Busses => with_map!(self.busses),
             StateMap::Master => with_map!(self.master),
             StateMap::Clips => with_map!(self.clips),
-            StateMap::MidiClips => with_map!(self.midi_clips),
             StateMap::Plugins => with_map!(self.plugins),
         }
         &self.data

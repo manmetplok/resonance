@@ -7,8 +7,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use super::SharedState;
 use crate::types::*;
 
@@ -45,7 +43,6 @@ pub(crate) fn offline_tail_frames(sample_rate: u32) -> u64 {
 /// `pub` (not `pub(crate)`) only so `test_support` can re-export it
 /// for integration tests.
 pub fn midi_render_range(
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     shared: &Arc<SharedState>,
     source_track_id: TrackId,
@@ -62,7 +59,8 @@ pub fn midi_render_range(
     }
 
     let tail_samples = sample_rate as u64 * BOUNCE_TAIL_SECONDS as u64;
-    let midi_guard = midi_clips.read();
+    let graph = shared.graph.load();
+    let midi_guard = &graph.midi_clips;
     let tm = tempo_map.load();
 
     let mut start: Option<u64> = None;

@@ -75,7 +75,7 @@ pub fn move_note_resorted(
 }
 
 /// A MIDI clip containing note data, placed on the timeline.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MidiClip {
     pub id: ClipId,
     pub track_id: TrackId,

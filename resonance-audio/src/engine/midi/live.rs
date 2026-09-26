@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use resonance_common::TakeNote;
@@ -313,7 +314,7 @@ pub(crate) fn handle_record_midi_event(
                 trim_start_ticks: 0,
                 trim_end_ticks: 0,
             };
-            ctx.midi_clips.write().push(clip);
+            ctx.shared.edit_midi_clips(|clips| clips.push(Arc::new(clip)));
             let _ = ctx.event_tx.send(AudioEvent::MidiClipCreated {
                 clip_id,
                 track_id,
@@ -344,19 +345,23 @@ pub(crate) fn handle_record_midi_event(
         // matching NoteOff would later close the wrong note.
         let prior_open_idx = rec.open_notes.remove(&note);
         if let Some(prior_idx) = prior_open_idx {
-            let mut clips = ctx.midi_clips.write();
-            if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
-                if let Some(prev) = clip.notes.get_mut(prior_idx) {
+            let closed = ctx
+                .shared
+                .edit_midi_clip(clip_id, |clip| {
+                    let prev = clip.notes.get_mut(prior_idx)?;
                     let prev_dur = start_tick.saturating_sub(prev.start_tick);
                     prev.duration_ticks = prev_dur;
                     let new_clip_dur = clip.duration_ticks.max(prev.start_tick + prev_dur);
                     clip.duration_ticks = new_clip_dur;
-                    let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
-                        clip_id,
-                        note_index: prior_idx,
-                        new_duration_ticks: prev_dur,
-                    });
-                }
+                    Some(prev_dur)
+                })
+                .flatten();
+            if let Some(prev_dur) = closed {
+                let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
+                    clip_id,
+                    note_index: prior_idx,
+                    new_duration_ticks: prev_dur,
+                });
             }
         }
 
@@ -366,8 +371,7 @@ pub(crate) fn handle_record_midi_event(
             start_tick,
             duration_ticks: 0,
         };
-        let mut clips = ctx.midi_clips.write();
-        if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+        let added = ctx.shared.edit_midi_clip(clip_id, |clip| {
             // Recording always appends in time order, but a stale
             // out-of-order event from a midir thread could land
             // after a later one. Insert sorted so playback stays
@@ -376,6 +380,13 @@ pub(crate) fn handle_record_midi_event(
                 .notes
                 .partition_point(|n| n.start_tick <= start_tick);
             clip.notes.insert(pos, new_note.clone());
+            // Grow the clip's logical duration so the timeline
+            // keeps drawing it — the user sees the clip extend in
+            // real time as they play.
+            clip.duration_ticks = clip.duration_ticks.max(start_tick + 1);
+            pos
+        });
+        if let Some(pos) = added {
             // Track open notes by index. partition_point inserted
             // at `pos`, so any prior open-note indices ≥ pos shift up.
             for idx in rec.open_notes.values_mut() {
@@ -384,10 +395,6 @@ pub(crate) fn handle_record_midi_event(
                 }
             }
             rec.open_notes.insert(note, pos);
-            // Grow the clip's logical duration so the timeline
-            // keeps drawing it — the user sees the clip extend in
-            // real time as they play.
-            clip.duration_ticks = clip.duration_ticks.max(start_tick + 1);
             let _ = ctx
                 .event_tx
                 .send(AudioEvent::MidiNoteAdded { clip_id, note: new_note });
@@ -403,22 +410,26 @@ pub(crate) fn handle_record_midi_event(
             return;
         };
         let clip_id = rec.clip_id;
-        let mut clips = ctx.midi_clips.write();
-        if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
-            if let Some(n) = clip.notes.get_mut(idx) {
+        let clip_start_tick = rec.clip_start_tick;
+        let closed = ctx
+            .shared
+            .edit_midi_clip(clip_id, |clip| {
+                let n = clip.notes.get_mut(idx)?;
                 let duration = abs_tick
-                    .saturating_sub(rec.clip_start_tick)
+                    .saturating_sub(clip_start_tick)
                     .saturating_sub(n.start_tick);
                 n.duration_ticks = duration;
-                let dur = n.duration_ticks;
-                let note_index = idx;
-                let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
-                    clip_id,
-                    note_index,
-                    new_duration_ticks: dur,
-                });
-                clip.duration_ticks = clip.duration_ticks.max(n.start_tick + dur);
-            }
+                let end = n.start_tick + duration;
+                clip.duration_ticks = clip.duration_ticks.max(end);
+                Some(duration)
+            })
+            .flatten();
+        if let Some(dur) = closed {
+            let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
+                clip_id,
+                note_index: idx,
+                new_duration_ticks: dur,
+            });
         }
     }
 }
@@ -437,30 +448,39 @@ pub(crate) fn close_open_recordings(
         return;
     }
     let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), close_sample, ctx.sample_rate);
-    let mut clips = ctx.midi_clips.write();
-    for rec in state.midi_recording.values() {
-        let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
-            continue;
-        };
-        for (_note, idx) in rec.open_notes.iter() {
-            if let Some(n) = clip.notes.get_mut(*idx) {
-                let duration = abs_tick
-                    .saturating_sub(rec.clip_start_tick)
-                    .saturating_sub(n.start_tick);
-                n.duration_ticks = duration;
-                let end = n.start_tick + duration;
-                clip.duration_ticks = clip.duration_ticks.max(end);
-                // Echo it like a NoteOff would: the app mirror only saw
-                // the zero-length NoteOn (code review FU-A2c).
-                let _ = ctx.event_tx.send(AudioEvent::MidiNoteResized {
-                    clip_id: rec.clip_id,
-                    note_index: *idx,
-                    new_duration_ticks: duration,
-                });
+    let echoes = ctx.shared.edit_midi_clips(|clips| {
+        let mut echoes = Vec::new();
+        for rec in state.midi_recording.values() {
+            if rec.open_notes.is_empty() {
+                continue;
+            }
+            let Some(slot) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
+                continue;
+            };
+            let clip = Arc::make_mut(slot);
+            for (_note, idx) in rec.open_notes.iter() {
+                if let Some(n) = clip.notes.get_mut(*idx) {
+                    let duration = abs_tick
+                        .saturating_sub(rec.clip_start_tick)
+                        .saturating_sub(n.start_tick);
+                    n.duration_ticks = duration;
+                    let end = n.start_tick + duration;
+                    clip.duration_ticks = clip.duration_ticks.max(end);
+                    // Echo it like a NoteOff would: the app mirror only
+                    // saw the zero-length NoteOn (code review FU-A2c).
+                    echoes.push(AudioEvent::MidiNoteResized {
+                        clip_id: rec.clip_id,
+                        note_index: *idx,
+                        new_duration_ticks: duration,
+                    });
+                }
             }
         }
+        echoes
+    });
+    for echo in echoes {
+        let _ = ctx.event_tx.send(echo);
     }
-    drop(clips);
     state.midi_recording.clear();
     // Send All Notes Off on every output port so a hardware synth
     // doesn't sustain anything we'd lose on the engine side.
@@ -484,22 +504,25 @@ pub(crate) fn capture_loop_record_midi_pass(
     }
     let close_tick = sample_to_abs_tick(&ctx.tempo_map.load(), close_sample, ctx.sample_rate);
     let mut takes: Vec<(TrackId, Vec<TakeNote>)> = Vec::new();
-    {
-        let mut clips = ctx.midi_clips.write();
+    ctx.shared.edit_midi_clips(|clips| {
         for (track_id, rec) in state.midi_recording.iter() {
-            let Some(clip) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
+            let Some(slot) = clips.iter_mut().find(|c| c.id == rec.clip_id) else {
                 continue;
             };
             // Close still-open notes at the loop boundary so the take has
             // complete durations rather than zero-length tails.
-            for idx in rec.open_notes.values() {
-                if let Some(n) = clip.notes.get_mut(*idx) {
-                    let dur = close_tick
-                        .saturating_sub(rec.clip_start_tick)
-                        .saturating_sub(n.start_tick);
-                    n.duration_ticks = n.duration_ticks.max(dur);
+            if !rec.open_notes.is_empty() {
+                let clip = Arc::make_mut(slot);
+                for idx in rec.open_notes.values() {
+                    if let Some(n) = clip.notes.get_mut(*idx) {
+                        let dur = close_tick
+                            .saturating_sub(rec.clip_start_tick)
+                            .saturating_sub(n.start_tick);
+                        n.duration_ticks = n.duration_ticks.max(dur);
+                    }
                 }
             }
+            let clip: &MidiClip = slot;
             let notes: Vec<TakeNote> = clip
                 .notes
                 .iter()
@@ -514,7 +537,7 @@ pub(crate) fn capture_loop_record_midi_pass(
                 takes.push((*track_id, notes));
             }
         }
-    }
+    });
     state.midi_recording.clear();
     takes
 }

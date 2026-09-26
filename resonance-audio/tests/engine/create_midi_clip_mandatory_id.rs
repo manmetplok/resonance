@@ -6,8 +6,8 @@
 //! as `bus_id_duplicate_rejected.rs` (ARCH-04 D-3) and
 //! `clap_host/plugin_id_duplicate_rejected.rs` (D-1). Drives the real
 //! `handle_create_midi_clip` via `EngineHandlerHarness`, so what's proven
-//! is the actual `ctx.midi_clips` list and the actual `AudioEvent::Error`
-//! — not a description of the rule.
+//! is the actual published MIDI clip list (`shared.graph`) and the actual
+//! `AudioEvent::Error` — not a description of the rule.
 
 use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::{AudioClip, AudioEvent, ClipId, ClipSource, EngineErrorKind, FadeCurve, TrackId};

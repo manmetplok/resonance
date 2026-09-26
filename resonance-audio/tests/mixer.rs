@@ -67,6 +67,8 @@ mod recording_start_latch;
 mod recording_whole_frame_push;
 #[path = "mixer/reference_monitor.rs"]
 mod reference_monitor;
+#[path = "mixer/render_graph_publish.rs"]
+mod render_graph_publish;
 #[path = "mixer/render_block_parity.rs"]
 mod render_block_parity;
 #[path = "mixer/sidechain_key_delivery.rs"]

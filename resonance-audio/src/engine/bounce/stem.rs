@@ -487,12 +487,12 @@ fn add_sub_tracks(parent: TrackId, tracks: &IndexMap<TrackId, Track>, set: &mut 
 /// Returns `None` when there is nothing to render.
 pub fn stem_project_range(
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    midi_clips: &[Arc<MidiClip>],
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
 ) -> Option<(SamplePos, SamplePos)> {
     let clips_guard = clips.read();
-    let midi_guard = midi_clips.read();
+    let midi_guard = midi_clips;
     let tm = tempo_map.load();
 
     if clips_guard.is_empty() && midi_guard.is_empty() {
@@ -541,7 +541,6 @@ pub fn render_stem(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
@@ -608,7 +607,6 @@ pub fn render_stem(
         busses,
         master,
         clips,
-        midi_clips,
         plugins,
         tempo_map: &bounce_tm,
         automation: &automation,

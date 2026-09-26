@@ -6,6 +6,8 @@
 //! live-strategy render loop `benches/render_path.rs` measures. Both keep
 //! the `indexmap` / scratch-buffer plumbing out of the `tests/` crate.
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 
 use crate::clap_host::PluginMap;
@@ -65,7 +67,7 @@ pub fn render_aux_with_comp_for_test(
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
     let busses_guard: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
     let plugins_guard: PluginMap = IndexMap::new();
-    let midi_clips: Vec<MidiClip> = Vec::new();
+    let midi_clips: Vec<Arc<MidiClip>> = Vec::new();
     let tempo_map = TempoMap::default();
     let active_busses = busses_guard.len();
 
@@ -142,7 +144,7 @@ pub struct RenderBenchHarness {
     tracks: IndexMap<TrackId, Track>,
     busses: IndexMap<BusId, Bus>,
     clips: Vec<AudioClip>,
-    midi_clips: Vec<MidiClip>,
+    midi_clips: Vec<Arc<MidiClip>>,
     plugins: PluginMap,
     tempo_map: TempoMap,
     aux_sends: Vec<AuxSend>,
@@ -181,7 +183,7 @@ impl RenderBenchHarness {
             tracks,
             busses,
             clips,
-            midi_clips,
+            midi_clips: midi_clips.into_iter().map(Arc::new).collect(),
             plugins: IndexMap::new(),
             tempo_map,
             aux_sends,
@@ -314,7 +316,7 @@ pub fn render_take_comp_borrowed_for_test(
     let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
     let busses_guard: IndexMap<BusId, Bus> = IndexMap::new();
     let plugins_guard: PluginMap = IndexMap::new();
-    let midi_clips: Vec<MidiClip> = Vec::new();
+    let midi_clips: Vec<Arc<MidiClip>> = Vec::new();
     let tempo_map = TempoMap::default();
     let latency = crate::latency::LatencyComp::empty();
     let automation = AutomationSnapshot::default();

@@ -13,6 +13,8 @@
 //! them once per block, so a helper never recomputes the comp-delayed
 //! automation frames.
 
+use std::sync::Arc;
+
 use indexmap::IndexMap;
 
 use crate::bypass::{run_faded, BypassFade, FadeStage, FxDryScratch};
@@ -48,7 +50,7 @@ pub(crate) struct BlockInputs<'a> {
     pub(crate) tracks: &'a IndexMap<TrackId, Track>,
     pub(crate) busses: &'a IndexMap<BusId, Bus>,
     pub(crate) clips: &'a [AudioClip],
-    pub(crate) midi_clips: &'a [MidiClip],
+    pub(crate) midi_clips: &'a [Arc<MidiClip>],
     pub(crate) plugins: &'a PluginMap,
     pub(crate) tempo_map: &'a TempoMap,
     pub(crate) sample_rate: u32,

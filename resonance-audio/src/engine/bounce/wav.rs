@@ -341,7 +341,6 @@ pub(crate) fn run_export(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
@@ -368,7 +367,8 @@ pub(crate) fn run_export(
     // Compute project range from audio clips + MIDI clips.
     let (render_start, render_end) = {
         let clips_guard = clips.read();
-        let midi_guard = midi_clips.read();
+        let graph = shared.graph.load();
+        let midi_guard = &graph.midi_clips;
         let tm = tempo_map.load();
 
         if clips_guard.is_empty() && midi_guard.is_empty() {
@@ -449,7 +449,6 @@ pub(crate) fn run_export(
         busses,
         master,
         clips,
-        midi_clips,
         plugins,
         tempo_map: &bounce_tm,
         sample_rate,

@@ -23,6 +23,8 @@
 //! event list is byte-identical.
 
 pub(crate) use crate::limits::MAX_MIDI_EVENTS_PER_BUFFER;
+use std::borrow::Borrow;
+
 use crate::types::*;
 
 /// Ticks of slack applied to the inverse (sample→tick) estimate before it
@@ -97,8 +99,11 @@ fn clip_tick_window(
 /// `out` must be pre-allocated and is cleared before use. Never grows past
 /// `MAX_MIDI_EVENTS_PER_BUFFER` (no allocation on the real-time thread);
 /// at the cap note-offs take priority over note-ons — see [`push_capped`].
-pub(super) fn collect_midi_events(
-    midi_clips: &[MidiClip],
+///
+/// Generic over the element so the render graph's `&[Arc<MidiClip>]` and a
+/// test's plain `&[MidiClip]` share one implementation.
+pub(super) fn collect_midi_events<C: Borrow<MidiClip>>(
+    midi_clips: &[C],
     track_id: TrackId,
     playhead: u64,
     frames: usize,
@@ -112,7 +117,8 @@ pub(super) fn collect_midi_events(
     // without a scan whether there is anything left to evict.
     let mut note_ons_queued: usize = 0;
 
-    for clip in midi_clips.iter().filter(|c| c.track_id == track_id) {
+    let clips = midi_clips.iter().map(Borrow::<MidiClip>::borrow);
+    for clip in clips.filter(|c| c.track_id == track_id) {
         let visible_start = clip.trim_start_ticks;
         let visible_end = clip.duration_ticks.saturating_sub(clip.trim_end_ticks);
         if visible_end <= visible_start {
@@ -295,8 +301,8 @@ fn push_capped(out: &mut Vec<PendingNoteEvent>, note_ons: &mut usize, event: Pen
 /// Public version of collect_midi_events for the bounce path. Exposed
 /// outside the crate for integration-test access — production callers
 /// stay inside `resonance-audio`.
-pub fn collect_midi_events_bounce(
-    midi_clips: &[MidiClip],
+pub fn collect_midi_events_bounce<C: Borrow<MidiClip>>(
+    midi_clips: &[C],
     track_id: TrackId,
     playhead: u64,
     frames: usize,

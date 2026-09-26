@@ -129,7 +129,7 @@ pub mod test_support {
     /// publish helpers, so `tests/retire_queue.rs` can pin the primitive
     /// against a drop-tracking payload.
     pub use crate::engine::retire::{publish as publish_retiring, publish_opt as publish_opt_retiring};
-    pub use crate::engine::Retired;
+    pub use crate::engine::{RenderGraph, RenderGraphSlot, Retired};
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     /// The take-id allocator behind every captured cycle-record pass

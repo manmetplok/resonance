@@ -60,7 +60,6 @@ pub fn export_stems(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
@@ -82,7 +81,7 @@ pub fn export_stems(
         )));
         return;
     }
-    let Some((start, end)) = range.or_else(|| stem_project_range(clips, midi_clips, tempo_map, engine_rate))
+    let Some((start, end)) = range.or_else(|| stem_project_range(clips, &shared.graph.load().midi_clips, tempo_map, engine_rate))
     else {
         let _ = event_tx.send(AudioEvent::StemExportError(EngineError::unsupported(
             "No audio to export",
@@ -134,7 +133,6 @@ pub fn export_stems(
             busses,
             master,
             clips,
-            midi_clips,
             plugins,
             tempo_map,
             engine_rate,
@@ -183,7 +181,6 @@ pub(crate) fn export_stems_spawn(
     busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
@@ -215,7 +212,6 @@ pub(crate) fn export_stems_spawn(
                         &busses,
                         &master,
                         &clips,
-                        &midi_clips,
                         &plugins,
                         &tempo_map,
                         engine_rate,

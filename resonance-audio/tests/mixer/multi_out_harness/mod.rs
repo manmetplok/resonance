@@ -235,7 +235,6 @@ pub struct EngineState {
     pub busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     pub master: Arc<RwLock<MasterBus>>,
     pub clips: Arc<RwLock<Vec<AudioClip>>>,
-    pub midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     pub plugins: Arc<RwLock<PluginMap>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
@@ -258,7 +257,6 @@ impl EngineState {
             busses: Arc::new(RwLock::new(IndexMap::new())),
             master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
-            midi_clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
@@ -352,7 +350,6 @@ impl EngineState {
             &self.busses,
             &self.master,
             &self.clips,
-            &self.midi_clips,
             &self.plugins,
             &self.tempo_map,
             SR,

@@ -550,8 +550,9 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     let removed_clips: Vec<_> = ctx.clips.write().drain(..).collect();
     drop(removed_clips);
 
-    // Clear MIDI clips
-    ctx.midi_clips.write().clear();
+    // Clear MIDI clips. The old graph (and the clips only it held) is
+    // retired and dropped by the engine loop's sweep.
+    ctx.shared.edit_midi_clips(|clips| clips.clear());
 
     // Clear bundles
     state.bundles.clear();

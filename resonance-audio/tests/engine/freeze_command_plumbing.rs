@@ -28,7 +28,6 @@ struct EngineState {
     busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
@@ -40,7 +39,6 @@ fn empty_engine_state() -> EngineState {
         busses: Arc::new(RwLock::new(IndexMap::new())),
         master: Arc::new(RwLock::new(MasterBus::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
-        midi_clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
@@ -113,7 +111,6 @@ fn drive_freeze(
         Arc::clone(&state.busses),
         Arc::clone(&state.master),
         Arc::clone(&state.clips),
-        Arc::clone(&state.midi_clips),
         Arc::clone(&state.plugins),
         Arc::clone(&state.tempo_map),
         Arc::new(AutomationSnapshot::default()),
