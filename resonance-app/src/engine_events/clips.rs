@@ -15,9 +15,11 @@ pub(super) fn imported(
     waveform_peaks: Vec<(f32, f32)>,
 ) {
     // The load of a clip whose deletion echo is still owed (ARCH-01
-    // A-13i): the engine deletes it right after this (the delete waited
-    // for the load to land), and the mirror already dropped it — or holds
-    // the instance a later restore re-added, whose own load echoes after.
+    // A-13i): FIFO puts it before that delete, so it announces the
+    // instance being deleted — the mirror already dropped it, or holds the
+    // instance a later restore re-added, whose own load echoes after the
+    // delete. (A load still in flight when its delete arrives is cancelled
+    // and never echoes at all, FU-A13e.)
     if r.io.restore_echoes.clip_deletion_owed(clip_id) {
         return;
     }
@@ -232,12 +234,14 @@ pub(super) fn pitch_detected(
 
 /// Send `DeleteClip` for a clip the caller drops from the mirror itself,
 /// right now (STATE-10), and owe its `ClipDeleted` echo (ARCH-01 A-13i):
-/// an undo may re-add the clip under this id before the echo lands. Call
-/// it while the clip is still mirrored — only a mirrored clip is owed, as
-/// the engine answers a delete of an id it never loaded with no echo.
+/// an undo may re-add the clip under this id before the echo lands.
+///
+/// Owed whether or not the mirror holds the clip: the engine answers every
+/// `DeleteClip` with exactly one `ClipDeleted` — a clip still loading has
+/// its load cancelled, and an id it never loaded (missing media) echoes
+/// too (code review FU-A13e/f). An unowed echo would delete a clip an undo
+/// put back under the id in between.
 pub(crate) fn send_mirrored_delete(r: &mut Resonance, clip_id: ClipId) {
     let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
-    if r.clips.iter().any(|c| c.id == clip_id) {
-        r.io.restore_echoes.expect_clip_deleted(clip_id);
-    }
+    r.io.restore_echoes.expect_clip_deleted(clip_id);
 }

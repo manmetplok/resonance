@@ -70,6 +70,7 @@ pub use automation::{
 };
 mod bounce_realtime;
 mod busses;
+pub(crate) mod clip_loads;
 mod clips;
 mod external_instrument;
 mod external_instrument_ping;

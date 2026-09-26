@@ -149,6 +149,14 @@ pub(crate) fn poll_deferred_clip_commands(ctx: &HandlerCtx, state: &mut HandlerS
     if state.deferred_clip_commands.is_empty() {
         return;
     }
+    // A parked delete waits for a split, not for a load, so it neither
+    // runs when its clip lands nor expires: it is resolved below, once no
+    // split that would create its clip is parked any more.
+    let (parked_deletes, rest): (Vec<_>, Vec<_>) =
+        std::mem::take(&mut state.deferred_clip_commands)
+            .into_iter()
+            .partition(|d| matches!(d.command, AudioCommand::DeleteClip { .. }));
+    state.deferred_clip_commands = rest;
     let (ready, expired) = {
         let clips = ctx.clips.read();
         let landed = |clip_id: ClipId| clips.iter().any(|c| c.id == clip_id);
@@ -165,8 +173,10 @@ pub(crate) fn poll_deferred_clip_commands(ctx: &HandlerCtx, state: &mut HandlerS
         ))));
     }
     for command in ready {
-        apply_clip_command(ctx, command);
+        apply_clip_command(ctx, state, command);
     }
+    state.deferred_clip_commands.extend(parked_deletes);
+    resolve_orphaned_deletes(ctx, state);
 }
 
 /// Split the parked queue into commands whose clip has landed (to run
@@ -201,7 +211,7 @@ pub fn partition_deferred_clip_commands(
 ///
 /// Only the commands `dispatch_clips` can park are listed; anything else
 /// reaching here would be a parking bug rather than a client error.
-fn apply_clip_command(ctx: &HandlerCtx, command: AudioCommand) {
+fn apply_clip_command(ctx: &HandlerCtx, state: &mut HandlerState, command: AudioCommand) {
     match command {
         AudioCommand::MoveClip {
             clip_id,
@@ -225,7 +235,7 @@ fn apply_clip_command(ctx: &HandlerCtx, command: AudioCommand) {
             new_clip_id,
             at_sample,
         } => handle_split_clip(ctx, clip_id, new_clip_id, at_sample),
-        AudioCommand::DeleteClip { clip_id } => handle_delete_clip(ctx, clip_id),
+        AudioCommand::DeleteClip { clip_id } => handle_delete_clip(ctx, state, clip_id),
         AudioCommand::SetClipFade {
             clip_id,
             fade_in_frames,
@@ -346,9 +356,72 @@ pub(crate) fn handle_split_clip(
     });
 }
 
-pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, clip_id: ClipId) {
-    ctx.clips.write().retain(|c| c.id != clip_id);
+/// `DeleteClip`: remove the clip, cancel every load of its id still in
+/// flight, and echo `ClipDeleted` — at once, whether or not the clip ever
+/// landed (code review FU-A13e, FU-A13f).
+///
+/// It used to be parked like any other edit of a clip not in the list yet
+/// (ba doc #276 BUG 1), which is wrong for a delete twice over:
+///
+/// * **FU-A13e.** An undo/redo burst over a clip add sends
+///   `LoadClipFromWav(id)`, `DeleteClip(id)`, `LoadClipFromWav(id)` inside
+///   one load's latency. The parked delete ran against whichever load
+///   landed first — possibly the *second* one — and the first load, if it
+///   landed later, survived it or was dropped by the second's duplicate
+///   check. The engine ended with no clip, or with the wrong load's. Now
+///   the delete withdraws the id's load ticket
+///   ([`ClipLoadTickets`](super::clip_loads::ClipLoadTickets)) under the
+///   same `ctx.clips.write()` the workers publish under, so every load
+///   submitted before it is cancelled and every load after it is not.
+/// * **FU-A13f.** A clip whose load never succeeds (missing media) never
+///   lands, so its parked delete timed out without an echo, and the app's
+///   `RestoreEchoes` ledger kept owing it forever. Now a delete of an id
+///   the engine does not hold — never loaded, failed, or cancelled — still
+///   echoes, exactly once per `DeleteClip`.
+///
+/// Edits parked for the id are dropped: they were aimed at the instance
+/// being deleted, and replaying them onto a re-load under the same id
+/// would edit the wrong clip. The one delete that still waits is one of a
+/// clip a parked `SplitClip` is about to create — it runs after the split,
+/// in order, as before.
+pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_id: ClipId) {
+    if split_parked_for(state, clip_id) {
+        defer_clip_command(state, clip_id, AudioCommand::DeleteClip { clip_id });
+        return;
+    }
+    state.deferred_clip_commands.retain(|d| d.clip_id != clip_id);
+    {
+        let mut clips = ctx.clips.write();
+        state.clip_load_tickets.withdraw(clip_id);
+        clips.retain(|c| c.id != clip_id);
+    }
     let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
+    // A delete parked behind a split of this clip lost its split with the
+    // retain above.
+    resolve_orphaned_deletes(ctx, state);
+}
+
+/// Run every parked delete whose split is no longer parked — it ran and
+/// created the clip, it expired, or its parent was deleted — so a delete
+/// never waits on a split that is not coming and always echoes.
+fn resolve_orphaned_deletes(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let orphaned: Vec<ClipId> = state
+        .deferred_clip_commands
+        .iter()
+        .filter(|d| matches!(d.command, AudioCommand::DeleteClip { .. }))
+        .map(|d| d.clip_id)
+        .filter(|&id| !split_parked_for(state, id))
+        .collect();
+    for id in orphaned {
+        handle_delete_clip(ctx, state, id);
+    }
+}
+
+/// A parked `SplitClip` will create `clip_id` once its parent lands.
+fn split_parked_for(state: &HandlerState, clip_id: ClipId) -> bool {
+    state.deferred_clip_commands.iter().any(|d| {
+        matches!(d.command, AudioCommand::SplitClip { new_clip_id, .. } if new_clip_id == clip_id)
+    })
 }
 
 /// Sane bounds for per-clip gain, in decibels. `-60` dB is effectively
@@ -709,6 +782,11 @@ fn submit_clip_load(
     // load was issued against.
     let clear_generation = Arc::clone(&state.clear_generation);
     let generation = clear_generation.load(Ordering::SeqCst);
+    // This load's ticket (FU-A13e): superseded by a later load of the
+    // id, withdrawn by a `DeleteClip` — either way it must not publish.
+    // Redeemed under the same write lock the delete withdraws under.
+    let tickets = Arc::clone(&state.clip_load_tickets);
+    let ticket = tickets.issue(clip_id);
 
     let submit_result = state.imports.submit(move || {
         // `open_wav_at_rate` resamples to the engine rate when the
@@ -756,17 +834,19 @@ fn submit_clip_load(
                     // which dispatches twice with no wait between — the
                     // case the submit-time early return cannot see.
                     //
-                    // **This also changes the timeline path**, which shares
-                    // this worker: a duplicate `LoadClipFromWav` is now
-                    // dropped, and drops its `ClipImported` echo with it.
-                    // Unreachable today — `ClearAll` drains the clip list
-                    // before a project load replays it, and no other caller
-                    // issues two loads for one id — but it is a real
-                    // behaviour change to a path this todo is not about, so
-                    // it is called out rather than left in the diff. If a
-                    // caller ever does need "reload this clip in place",
-                    // it wants an explicit replace, not a second load.
+                    // The timeline path shares this worker: a duplicate
+                    // `LoadClipFromWav` is dropped, and drops its
+                    // `ClipImported` echo with it. Since FU-A13e two loads
+                    // of one id both in flight never get this far — the
+                    // later one's ticket supersedes the earlier's — so this
+                    // only catches a load arriving after the id's clip has
+                    // already landed. The app's reload-in-place is a
+                    // `DeleteClip` first (A-13i), which removes the landed
+                    // clip and cancels any load still in flight.
                     let mut clips = clips_arc.write();
+                    // Redeemed before any early return, so a load that is
+                    // dropped for another reason still retires its ticket.
+                    let live = tickets.redeem(clip_id, ticket);
                     // The `ClearAll` fence (FU-D7c): checked under the same
                     // write lock `handle_clear_all` drains under, so this
                     // can never land in — or echo into — a project that
@@ -774,6 +854,13 @@ fn submit_clip_load(
                     // the comment on `generation` above for why the lock
                     // makes this race-free rather than best-effort.
                     if clear_generation.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    // Cancelled by a `DeleteClip`, or superseded by a later
+                    // load of the id (FU-A13e): the delete already echoed,
+                    // and a load that lands after it must not resurrect
+                    // the clip — nor echo a `ClipImported` for it.
+                    if !live {
                         return;
                     }
                     if clips.iter().any(|c| c.id == clip_id) {
@@ -815,8 +902,13 @@ fn submit_clip_load(
                 }
             }
             Err(e) => {
-                let _ = thread_event_tx
-                    .send(AudioEvent::Error(EngineError::io(format!("Failed to load clip WAV: {e}"))));
+                // Retire the ticket either way; a load already cancelled
+                // by its delete has nobody left to report the failure to.
+                if tickets.redeem(clip_id, ticket) {
+                    let _ = thread_event_tx.send(AudioEvent::Error(EngineError::io(format!(
+                        "Failed to load clip WAV: {e}"
+                    ))));
+                }
             }
         }
     });

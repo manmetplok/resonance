@@ -1483,6 +1483,8 @@ parked by the engine's load-deferral queue (`defer_clip_command`) for a
 clip that never lands, times out with an error and never echoes — an
 owed echo that never settles. Deleting every clip first, explicitly,
 gives one command and one echo per clip whatever happens to its track.
+(Since FU-A13e/f a `DeleteClip` is never parked for its load and always
+echoes; the order stays, since `RemoveTrack` still drops clips silently.)
 Adds stay in the clip domains (after the tracks they sit on exist).
 
 ### Sub-tracks
@@ -1514,8 +1516,8 @@ counts. Handlers (`engine_events::{tracks, clips, midi}`):
   `MidiClipCreated`, and the clip placement echoes (`ClipMoved` /
   `ClipTrimmed` / fade / gain, MIDI moved / trimmed). An audio clip's
   `ClipImported` comes from the load worker, not the command thread, but a
-  `DeleteClip` of a loading clip waits for it to land, so it still echoes
-  after the load.
+  `DeleteClip` of a loading clip cancels that load (FU-A13e), so a load
+  echo never follows its delete's.
 
 **Live deletes owe their echo too.** STATE-10 made the GUI track and clip
 deletes mirror at once, and their echoes found nothing left to drop.
@@ -1526,10 +1528,10 @@ every live path that mirrors a deletion at once now owes its echo:
 `ConfirmRemoveTrack` (the track and each sub-track), the track removal's
 own MIDI clip deletes, the GUI clip delete, the arrange-span delete, the
 placement purge, `forget_track`, `install_derived_midi_clip` and the vocal
-MIDI install (`engine_events::{clips, midi}::send_mirrored_delete`). An
-audio delete is owed only for a mirrored clip (the engine answers a
-delete of an id it never loaded with no echo); the engine echoes every
-MIDI delete. Paths that mirror on the echo (the GUI MIDI-clip delete, the
+MIDI install (`engine_events::{clips, midi}::send_mirrored_delete`). The
+engine echoes every audio and MIDI delete — since FU-A13e/f an audio
+delete of an id it never loaded (missing media, a cancelled load) too —
+so both are owed whether or not the mirror held the clip. Paths that mirror on the echo (the GUI MIDI-clip delete, the
 vocal-audio re-install) owe nothing. Guards:
 `undoing_a_{track,clip}_delete_before_its_echo_keeps_the_{track,clip}`.
 
@@ -1598,7 +1600,7 @@ and clips, by a prune in the removal domains:
 
 ### Found, not fixed
 
-* **Audio clip load race in the engine.** Loads are asynchronous; a
+* **Audio clip load race in the engine** — fixed (FU-A13e, below). Loads are asynchronous; a
   `DeleteClip` of a still-loading clip is parked until it lands. A load,
   delete and re-load of one id within one load's latency (a held Ctrl+Z
   over a clip delete) can let the second load's worker see the first
@@ -1606,7 +1608,7 @@ and clips, by a prune in the removal domains:
   parked delete removes the only copy: the engine ends without the clip
   the app shows. Fix is engine-side (a delete should cancel an in-flight
   load of that id rather than wait for it).
-* **An owed audio delete that never echoes.** A clip whose WAV never
+* **An owed audio delete that never echoes** — fixed (FU-A13f, below). A clip whose WAV never
   loaded (missing media) is mirrored; its `DeleteClip` parks, times out
   and never echoes, so its ledger entry stays and later echoes naming the
   id are ignored (a re-added clip's `ClipImported` would not set its
@@ -1645,3 +1647,38 @@ and clips, by a prune in the removal domains:
   `clear_on_empty`.
 * `LiveCarry::project_path` can go once nothing `take()`s
   `io.project_path` (FU-A7a).
+
+### FU-A13e / FU-A13f: a delete cancels the load
+
+Engine side (`resonance-audio/src/engine/clip_loads.rs`,
+`clips::handle_delete_clip`). Every `LoadClipFromWav` /
+`LoadTakeClipFromWav` is issued a ticket for its clip id at submit,
+superseding any earlier one; the worker publishes only if its ticket is
+still the id's current one, checked under the same `ctx.clips.write()` as
+the FU-D7c `clear_generation` fence and the take-park delivery.
+`DeleteClip` is no longer parked for its load: under that lock it
+withdraws the id's ticket and removes the clip, drops edits parked for the
+id (they were aimed at the instance being deleted), and echoes
+`ClipDeleted` — exactly once, whether the clip had landed, was still
+loading, failed to load or was never heard of. The one delete that still
+waits is one of the tail a parked `SplitClip` will create; it runs once no
+such split is parked (it ran, expired, or its parent was deleted).
+
+Interleavings the old deferral got wrong (load A, delete, load B, one id;
+`tests/engine/clip_delete_cancels_load.rs`, the import pool held so each
+test runs the worker jobs in the order it pins):
+
+| Order | Before | Now |
+|---|---|---|
+| B lands, loop replays the delete, A lands | A's clip survives (wrong audio), `ClipImported` twice | B only |
+| A lands, loop replays the delete, B lands | right clip, but A's `ClipImported` echoes | B only, one `ClipImported` |
+| A lands, B lands (duplicate, dropped), delete replayed | no clip | B only |
+| A's trim parked before the delete | trim applied to A, extra echoes | trim dropped |
+| A's WAV missing, then delete | parks 10 s, errors, never echoes | `ClipDeleted` at once |
+
+App side: `send_mirrored_delete` now owes the echo unconditionally — an
+unowed echo of a delete of a not-yet-mirrored clip would remove a clip an
+undo put back under the id before it landed
+(`tests/timeline/clip_delete_echo_owed.rs`). An unowed `ClipDeleted` of an
+unknown id (the vocal-audio re-install's delete of a cancelled load) is a
+no-op on the mirror.

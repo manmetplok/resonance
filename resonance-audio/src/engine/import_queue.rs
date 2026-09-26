@@ -69,6 +69,12 @@ pub struct ImportQueue {
     /// worker that unwound and died would never be replaced — after
     /// `max_workers` panics, imports would silently queue forever.
     workers: usize,
+    /// Test-only: while `Some`, [`Self::submit`] parks each job here in
+    /// submission order instead of running it, so a harness test can run
+    /// them itself in whatever completion order it is pinning
+    /// (`EngineHandlerHarness::hold_imports`).
+    #[cfg(feature = "test-internals")]
+    held: Option<Vec<ImportJob>>,
 }
 
 impl ImportQueue {
@@ -81,6 +87,8 @@ impl ImportQueue {
             rx,
             max_workers: max_workers.max(1),
             workers: 0,
+            #[cfg(feature = "test-internals")]
+            held: None,
         }
     }
 
@@ -95,6 +103,11 @@ impl ImportQueue {
     /// failure is benign: the job is queued and an existing worker will
     /// pick it up.
     pub fn submit<F: FnOnce() + Send + 'static>(&mut self, job: F) -> Result<(), ImportQueueError> {
+        #[cfg(feature = "test-internals")]
+        if let Some(held) = self.held.as_mut() {
+            held.push(Box::new(job));
+            return Ok(());
+        }
         self.ensure_worker()?;
         // Unbounded channel with a live receiver held right here, so
         // this can neither block nor fail.
@@ -105,6 +118,19 @@ impl ImportQueue {
     /// Number of worker threads spawned so far (never above the cap).
     pub fn worker_count(&self) -> usize {
         self.workers
+    }
+
+    /// Test-only: park every later job instead of running it.
+    #[cfg(feature = "test-internals")]
+    pub(crate) fn hold(&mut self) {
+        self.held.get_or_insert_with(Vec::new);
+    }
+
+    /// Test-only: the jobs parked since [`Self::hold`] (or the last
+    /// call), in submission order. Holding stays on.
+    #[cfg(feature = "test-internals")]
+    pub(crate) fn take_held(&mut self) -> Vec<ImportJob> {
+        self.held.as_mut().map(std::mem::take).unwrap_or_default()
     }
 
     fn ensure_worker(&mut self) -> Result<(), ImportQueueError> {
