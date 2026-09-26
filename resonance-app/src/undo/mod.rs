@@ -86,7 +86,7 @@ impl crate::Resonance {
             UndoAction::Record | UndoAction::RecordCoalesced(_) => {
                 let absorbed = self.undo.absorb_into_compound();
                 if !absorbed {
-                    self.revision = self.revision.wrapping_add(1);
+                    self.bump_revision();
                 }
                 absorbed
             }
@@ -162,7 +162,7 @@ impl crate::Resonance {
         }
         self.dirty = true;
         if !self.undo.absorb_into_compound() {
-            self.revision = self.revision.wrapping_add(1);
+            self.bump_revision();
         }
         self.undo.commit();
     }
@@ -174,7 +174,7 @@ impl crate::Resonance {
     /// the history (and so the redo stack) alone.
     pub(crate) fn mark_edited_without_history(&mut self) {
         self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.bump_revision();
     }
 
     /// Record what a recording lands as an undoable edit (STATE-02). Called
@@ -192,7 +192,7 @@ impl crate::Resonance {
     /// into one entry (`RecordingStarted` breaks the run).
     pub(crate) fn record_recording_edit(&mut self) {
         self.dirty = true;
-        self.revision = self.revision.wrapping_add(1);
+        self.bump_revision();
         if !self.can_record_undo() {
             return;
         }

@@ -744,6 +744,16 @@ impl Resonance {
         self.revision
     }
 
+    /// Bump the monotonic edit counter (doc #265, todo #1147). The single
+    /// choke point for every `revision` increment — routing all six
+    /// call sites (`undo/mod.rs`, `undo/snapshot.rs`) through this method
+    /// instead of touching the field directly caps the blast radius of a
+    /// later `SessionMetaState` fold (A-12 survey) to this one function
+    /// (ARCH-06, A-12g).
+    pub(crate) fn bump_revision(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     /// Re-derive the transport stat-block label strings from current
     /// state. Called after every `update()` dispatch, at construction,
     /// and at the end of the demo seed functions — never from `view()`,
