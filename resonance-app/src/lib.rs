@@ -722,11 +722,14 @@ impl Resonance {
             mixer: MixerUiState::default(),
             registry: TrackRegistry {
                 next_sub_track_id: state::ids::SUB_TRACK_ID_BASE,
-                next_return_bus_id: state::ids::RETURN_BUS_ID_BASE,
+                next_bus_id: state::ids::BUS_ID_BASE,
                 ..TrackRegistry::default()
             },
             track_groups: state::TrackGroupRegistry::new(),
-            aux: state::AuxSendState::default(),
+            aux: state::AuxSendState {
+                next_send_id: 1,
+                ..state::AuxSendState::default()
+            },
             sidechain: state::SidechainState::default(),
             take_groups: state::TakeGroupState::default(),
             undo: UndoHistory::new(),

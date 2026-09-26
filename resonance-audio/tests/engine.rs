@@ -14,6 +14,10 @@
 mod automation_handlers;
 #[path = "engine/aux_send_cycle.rs"]
 mod aux_send_cycle;
+#[path = "engine/aux_send_id_duplicate_rejected.rs"]
+mod aux_send_id_duplicate_rejected;
+#[path = "engine/bus_id_duplicate_rejected.rs"]
+mod bus_id_duplicate_rejected;
 #[path = "engine/bus_plugin_move.rs"]
 mod bus_plugin_move;
 #[path = "engine/clip_fade_gain_handlers.rs"]

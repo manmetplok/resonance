@@ -485,16 +485,18 @@ pub struct TrackRegistry {
     /// consumed through `Resonance::allocate_track_id`, which also skips
     /// the ids tracks and groups already hold.
     pub next_sub_track_id: u64,
-    /// Id counter for FX return busses the *app* creates up front (the
-    /// "create new FX return from this send" gesture), so it can name the
-    /// return role and the send's destination before the engine echoes
-    /// `BusAdded`. Like [`next_sub_track_id`](Self::next_sub_track_id) it
-    /// lives in a high range so an app-chosen id never collides with the
-    /// engine's own bus allocator (busses count up from 1). Seeded at
-    /// [`RETURN_BUS_ID_BASE`](super::ids::RETURN_BUS_ID_BASE) in
-    /// `Resonance::new`; the engine bumps its allocator past any id it
-    /// receives as a hint, so the two never overlap.
-    pub next_return_bus_id: u64,
+    /// Id counter for EVERY bus the app creates (ARCH-04 D-3): the engine
+    /// has no bus allocator of its own left, so `AudioCommand::AddBus`
+    /// always carries a concrete `id` from here — the GUI's plain "Add
+    /// bus", `bus.create`, and the "create new FX return from this send"
+    /// gesture alike. Seeded at
+    /// [`BUS_ID_BASE`](super::ids::BUS_ID_BASE) in `Resonance::new` —
+    /// not because the engine needs the range kept clear any more (it
+    /// doesn't), but because `song.summary` / `song.tracks` list tracks
+    /// and busses in one id-addressed sequence, and a bus id landing on a
+    /// live track's would be shadowed by it there. Consumed through
+    /// `TrackRegistry::allocate_bus_id`, which skips ids already held.
+    pub next_bus_id: u64,
 }
 
 impl TrackRegistry {
@@ -551,18 +553,24 @@ impl TrackRegistry {
         self.busses.iter_mut().find(|b| b.id == id).map(f)
     }
 
-    /// Allocate a fresh bus id for an app-created FX return bus, skipping
-    /// past any id already taken by a bus in the registry. Same collision-
-    /// avoidance rationale as
-    /// [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id):
-    /// the app hands this id to the engine as an `AddBus` hint, so it must
-    /// not clash with a bus the engine allocated itself. Without the
-    /// skip, a collision with an engine-allocated id silently overwrites
-    /// the other entry in the engine's hashmap (or no-ops the new one,
-    /// depending on which command ran first).
-    pub fn allocate_return_bus_id(&mut self) -> BusId {
+    /// Allocate a fresh bus id for EVERY bus add (ARCH-04 D-3), skipping
+    /// past any id already taken by a bus in the registry. The id is sent
+    /// to the engine as `AudioCommand::AddBus`'s `id` field, which the
+    /// engine honours unconditionally and refuses to reuse
+    /// (`resonance-audio/src/engine/busses.rs::handle_add_bus` rejects a
+    /// collision with `EngineErrorKind::Internal` rather than replacing
+    /// the live bus). The in-use scan is what actually keeps two calls
+    /// from returning the same id — the counter alone cannot, since a
+    /// project loaded with ids the counter hasn't caught up to yet is
+    /// exactly the case it is for (same reasoning as
+    /// `Resonance::allocate_plugin_id`). Seeded at
+    /// [`BUS_ID_BASE`](super::ids::BUS_ID_BASE), which is no longer an
+    /// engine-agreed range (see `state/ids.rs`) — it exists solely so a
+    /// bus never lands on a live track's id, which would make the bus
+    /// unreachable through `song.summary` / `song.tracks`.
+    pub fn allocate_bus_id(&mut self) -> BusId {
         let busses = &self.busses;
-        super::ids::allocate_unused(&mut self.next_return_bus_id, |id| {
+        super::ids::allocate_unused(&mut self.next_bus_id, |id| {
             busses.iter().any(|b| b.id == id)
         })
     }

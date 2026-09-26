@@ -70,16 +70,23 @@ fn save_and_reload(file: &ProjectFile) -> (Resonance, Vec<AudioCommand>) {
     (app, cmds)
 }
 
-/// The single `SetAuxSend` the replay issued for send `id`.
+/// The single `AddAuxSend` (a project load) or `SetAuxSend` (a diff-replay
+/// edit — ARCH-04 D-2 split the two) issued for send `id`.
 fn set_aux_send_for(cmds: &[AudioCommand], id: u64) -> &AudioCommand {
     let matching: Vec<&AudioCommand> = cmds
         .iter()
-        .filter(|c| matches!(c, AudioCommand::SetAuxSend { id_hint: Some(h), .. } if *h == id))
+        .filter(|c| {
+            matches!(
+                c,
+                AudioCommand::AddAuxSend { id: h, .. } | AudioCommand::SetAuxSend { id: h, .. }
+                    if *h == id
+            )
+        })
         .collect();
     assert_eq!(
         matching.len(),
         1,
-        "expected exactly one SetAuxSend for send {id}, got {matching:?}"
+        "expected exactly one AddAuxSend/SetAuxSend for send {id}, got {matching:?}"
     );
     matching[0]
 }
@@ -159,7 +166,7 @@ fn save_and_reload_restores_the_send_with_its_level_and_tap_point() {
     // …and the engine was told about it, so the reloaded project makes
     // the same sound, not just the same picture.
     match set_aux_send_for(&cmds, SEND) {
-        AudioCommand::SetAuxSend {
+        AudioCommand::AddAuxSend {
             source,
             dest,
             level_db,
@@ -173,7 +180,7 @@ fn save_and_reload_restores_the_send_with_its_level_and_tap_point() {
             assert!(*pre_fader);
             assert!(*enabled);
         }
-        other => panic!("expected SetAuxSend, got {other:?}"),
+        other => panic!("expected AddAuxSend, got {other:?}"),
     }
 
     // The destination is a return bus again, in the mirror and in the
@@ -232,7 +239,7 @@ fn removing_a_send_removes_it_from_the_saved_project() {
     assert!(
         !cmds
             .iter()
-            .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })),
+            .any(|c| matches!(c, AudioCommand::AddAuxSend { .. } | AudioCommand::SetAuxSend { .. })),
         "replay must not re-register a deleted send"
     );
 }
@@ -299,7 +306,7 @@ fn a_legacy_project_without_sends_still_loads() {
     assert!(
         !cmds
             .iter()
-            .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })),
+            .any(|c| matches!(c, AudioCommand::AddAuxSend { .. } | AudioCommand::SetAuxSend { .. })),
         "an old project must not invent sends"
     );
     // The bus itself still loads.
@@ -448,7 +455,7 @@ fn a_send_with_a_missing_endpoint_is_not_mirrored_on_load() {
     assert!(
         !cmds
             .iter()
-            .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })),
+            .any(|c| matches!(c, AudioCommand::AddAuxSend { .. } | AudioCommand::SetAuxSend { .. })),
         "and no SetAuxSend should be sent for it"
     );
 }
@@ -473,7 +480,7 @@ fn an_unknown_source_kind_drops_the_send_rather_than_guessing() {
     );
     assert!(!cmds
         .iter()
-        .any(|c| matches!(c, AudioCommand::SetAuxSend { .. })));
+        .any(|c| matches!(c, AudioCommand::AddAuxSend { .. } | AudioCommand::SetAuxSend { .. })));
 }
 
 /// Pruning the mirror is not enough: the engine keeps its own copy.

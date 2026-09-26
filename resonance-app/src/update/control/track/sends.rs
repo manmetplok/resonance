@@ -100,11 +100,11 @@ pub(super) fn add_send(app: &mut Resonance, request: &Request) -> (Response, Tas
         );
     }
 
-    // App-chosen id so the reply carries it; the engine bumps its own
-    // allocator past any hint it receives. Role flag + send creation are
-    // ONE undoable transaction: one revision bump for the call, one
-    // edit_undo to take the whole gesture back.
-    let send_id = app.aux.allocate_control_send_id();
+    // App-chosen id so the reply carries it (ARCH-04 D-2: the app is the
+    // only send-id allocator left, GUI adds included). Role flag + send
+    // creation are ONE undoable transaction: one revision bump for the
+    // call, one edit_undo to take the whole gesture back.
+    let send_id = app.aux.allocate_send_id();
     app.with_compound_undo(|app| {
         let role_task = run_via_update(
             app,

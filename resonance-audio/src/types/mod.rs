@@ -4,16 +4,36 @@
 pub type TrackId = u64;
 pub type ClipId = u64;
 pub type SamplePos = u64;
-/// Unlike [`TrackId`]/[`BusId`]/[`SendId`] below, this space has no
-/// engine-vs-app partition: the app allocates every plugin instance id
-/// (`Resonance::allocate_plugin_id`) and the engine only ever honours the
-/// one it is given — an `AudioCommand::AddPlugin`/`AddPluginToBus`/
-/// `AddPluginToMaster` carries a concrete `id`, not an optional hint, and
-/// the add is rejected with `EngineError::internal` if that id is already
-/// live (ARCH-04 D-1, `refactor-intent.md` Epic D). There is no base to
-/// name here because there is only one owner.
+/// Unlike [`TrackId`] above, this space has no engine-vs-app partition:
+/// the app allocates every plugin instance id (`Resonance::allocate_plugin_id`)
+/// and the engine only ever honours the one it is given — an
+/// `AudioCommand::AddPlugin`/`AddPluginToBus`/`AddPluginToMaster` carries a
+/// concrete `id`, not an optional hint, and the add is rejected with
+/// `EngineError::internal` if that id is already live (ARCH-04 D-1,
+/// `refactor-intent.md` Epic D). There is no base to name here because
+/// there is only one owner.
 pub type PluginInstanceId = u64;
+/// Same engine-side shape as [`PluginInstanceId`] since ARCH-04 D-3: the
+/// app allocates every bus id and `AudioCommand::AddBus` carries a
+/// concrete `id`, which the engine either honours or refuses with
+/// `EngineError::internal` on a collision — the engine itself has no
+/// counter and no range to defend, because `ctx.tracks` and `ctx.busses`
+/// are separate maps it never confuses. Unlike `PluginInstanceId`,
+/// though, the APP still keeps bus ids in their own range
+/// (`resonance_app::state::ids::BUS_ID_BASE`): `song.summary` /
+/// `song.tracks` list tracks and busses together as one `TrackKind`-tagged
+/// sequence addressed by this same raw id, so a bus id landing on a
+/// live track's id would make that bus invisible to the control API (the
+/// track's entry, listed first, wins the id). Purely an app/control-layer
+/// convention — this crate has no reason to know about it.
 pub type BusId = u64;
+/// Same shape as [`PluginInstanceId`] since ARCH-04 D-2: the app allocates
+/// every send id. `AudioCommand::AddAuxSend` carries a concrete `id` and is
+/// refused with `EngineError::internal` on a collision; `SetAuxSend` edits
+/// an id already live (a no-op if it is not). `CONTROL_SEND_ID_BASE` (2e9)
+/// is gone outright: unlike [`BusId`], a send id is never displayed
+/// alongside a track/bus id in one merged, id-keyed list, so there is no
+/// app-side reason to keep sends in their own range either.
 pub type SendId = u64;
 /// Identifier for an imported media-pool asset. Allocated by the engine
 /// on `AudioCommand::ImportAudioToPool` and carried by the
@@ -29,16 +49,6 @@ pub type AssetId = u64;
 /// put the next GUI add (`id_hint: None`) onto an id the app may already
 /// hold for a group the engine never hears about.
 pub const SUB_TRACK_ID_BASE: TrackId = 1_000_000_000;
-
-/// First bus id the app allocates itself (FX returns created up front,
-/// `bus.create`). Engine busses count up from 1; `AddBus` bumps
-/// `next_bus_id` only for hints below this base, as for tracks.
-pub const RETURN_BUS_ID_BASE: BusId = 2_000_000_000;
-
-/// First aux-send id the app allocates itself (`track.add_send`). Engine
-/// sends count up from 1; `SetAuxSend` bumps `next_send_id` only for
-/// hints below this base, as for tracks.
-pub const CONTROL_SEND_ID_BASE: SendId = 2_000_000_000;
 
 /// First clip id the app allocates itself — the clips it derives from
 /// chords, drum patterns and vocal renders, and the other clips it must

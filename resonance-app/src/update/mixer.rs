@@ -8,11 +8,14 @@
 //! single writer means a route the engine rejects never shows up as live in
 //! the GUI — the rejection surfaces through `AuxSendRejected` instead.
 //!
-//! The "set level / re-route / toggle pre-post / toggle enable" edits all
-//! resolve to a single `SetAuxSend` *upsert*: we read the send's current
-//! mirrored fields, apply the one change, and re-send the whole send under
-//! its existing id. The engine treats a `SetAuxSend` carrying a known id as
-//! an in-place edit (see `types/commands.rs`).
+//! Since ARCH-04 D-2 a create and an edit are two different engine
+//! commands: [`AudioCommand::AddAuxSend`] under an app-allocated id
+//! (`Resonance::allocate_send_id`), refused on a collision, and
+//! [`AudioCommand::SetAuxSend`] — what the "set level / re-route / toggle
+//! pre-post / toggle enable" edits all resolve to, via [`upsert_send`]: read
+//! the send's current mirrored fields, apply the one change, and re-send the
+//! whole send under its existing id, which the engine treats as an in-place
+//! edit (see `types/commands.rs`).
 
 use iced::Task;
 use resonance_audio::types::{AudioCommand, AuxSend, BusId, SendId, SendSource};
@@ -32,13 +35,17 @@ use crate::Resonance;
 #[derive(Debug, Clone)]
 pub enum MixerMessage {
     /// Create a new aux send from `source` into return bus `dest` with
-    /// default routing (0 dB, post-fader, enabled). The engine allocates
-    /// the [`SendId`].
+    /// default routing (0 dB, post-fader, enabled). Since ARCH-04 D-2 the
+    /// [`SendId`] is app-allocated here too (`Resonance::allocate_send_id`),
+    /// same as [`AddSendWithId`](Self::AddSendWithId) — what distinguishes
+    /// the two is only that this one waits for the engine's
+    /// `AuxSendChanged` echo to mirror the send, rather than mirroring it
+    /// eagerly.
     AddSend { source: SendSource, dest: BusId },
     /// Create an aux send whose id the *app* chose up front, with
     /// explicit level and tap point, so a caller can use the id without
     /// waiting for the engine's `AuxSendChanged` echo (ba doc #273).
-    /// Same hint pattern as [`BusMessage::AddBusWithId`].
+    /// Same pattern as [`BusMessage::AddBusWithId`].
     AddSendWithId {
         id: SendId,
         source: SendSource,
@@ -96,10 +103,13 @@ impl MixerMessage {
 pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
     match m {
         MixerMessage::AddSend { source, dest } => {
-            // Fresh send: let the engine allocate the id. Default routing
-            // matches a typical "post-fader reverb send at unity".
-            let _ = r.engine.send(AudioCommand::SetAuxSend {
-                id_hint: None,
+            // App-allocated (ARCH-04 D-2); still no eager mirror, same as
+            // the plain plugin/bus GUI adds — the mixer waits for
+            // `AuxSendChanged`. Default routing matches a typical
+            // "post-fader reverb send at unity".
+            let id = r.aux.allocate_send_id();
+            let _ = r.engine.send(AudioCommand::AddAuxSend {
+                id,
                 source,
                 dest,
                 level_db: 0.0,
@@ -114,8 +124,8 @@ pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
             level_db,
             pre_fader,
         } => {
-            let _ = r.engine.send(AudioCommand::SetAuxSend {
-                id_hint: Some(id),
+            let _ = r.engine.send(AudioCommand::AddAuxSend {
+                id,
                 source,
                 dest,
                 level_db,
@@ -142,22 +152,24 @@ pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
             let _ = r.engine.send(AudioCommand::SetBusRole { bus_id, is_return });
         }
         MixerMessage::CreateReturnFromSend { source } => {
-            // Allocate the new bus's id up front so we can name its return
-            // role and the send's destination without waiting for the
-            // engine's `BusAdded` echo. The three commands run in order:
-            // add the bus, flag it a return, then route the send into it.
-            let bus_id = r.registry.allocate_return_bus_id();
+            // Allocate the new bus's id (and the new send's) up front so
+            // we can name the return role and the send's destination
+            // without waiting for the engine's `BusAdded` echo. The three
+            // commands run in order: add the bus, flag it a return, then
+            // route the send into it.
+            let bus_id = r.registry.allocate_bus_id();
+            let send_id = r.aux.allocate_send_id();
             let name = next_return_bus_name(r);
             let _ = r.engine.send(AudioCommand::AddBus {
-                id_hint: Some(bus_id),
+                id: bus_id,
                 name: Some(name),
             });
             let _ = r.engine.send(AudioCommand::SetBusRole {
                 bus_id,
                 is_return: true,
             });
-            let _ = r.engine.send(AudioCommand::SetAuxSend {
-                id_hint: None,
+            let _ = r.engine.send(AudioCommand::AddAuxSend {
+                id: send_id,
                 source,
                 dest: bus_id,
                 level_db: 0.0,
@@ -179,7 +191,7 @@ fn upsert_send(r: &mut Resonance, send_id: SendId, edit: impl FnOnce(&mut AuxSen
     };
     edit(&mut send);
     let _ = r.engine.send(AudioCommand::SetAuxSend {
-        id_hint: Some(send.id),
+        id: send.id,
         source: send.source,
         dest: send.dest,
         level_db: send.level_db,

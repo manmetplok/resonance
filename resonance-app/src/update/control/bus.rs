@@ -9,10 +9,11 @@
 //! Listing is deliberately absent: `song.summary` / `song.tracks` already
 //! report busses as tracks with `kind: "bus"`, from a distinct id range.
 //!
-//! `bus.create` allocates the id APP-SIDE and passes it to the engine as
-//! `id_hint`, because the plain `AddBus` path lets the engine allocate
-//! and echo the id asynchronously — a reply that has to carry `bus_id`
-//! cannot wait for that.
+//! `bus.create` allocates the id APP-SIDE (ARCH-04 D-3: the app is the
+//! only bus-id allocator, so every `AddBus` — including the plain GUI
+//! one — carries a concrete id now) so the reply can return `bus_id`
+//! immediately rather than waiting on the engine's asynchronous
+//! `BusAdded` echo.
 
 use crate::message::{BusMessage, Message};
 use crate::state::BusState;
@@ -157,9 +158,9 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         }
     };
 
-    // App-side id so the reply can return it immediately; the engine
-    // bumps its own allocator past any hint it receives.
-    let bus_id = app.registry.allocate_return_bus_id();
+    // App-side id so the reply can return it immediately (ARCH-04 D-3: the
+    // app is the only bus-id allocator left, GUI adds included).
+    let bus_id = app.registry.allocate_bus_id();
     let task = super::run_via_update(
         app,
         Message::Bus(BusMessage::AddBusWithId { id: bus_id, name }),

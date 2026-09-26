@@ -1,59 +1,79 @@
 //! The app side of the entity-id partition, in one place (ARCH-04 A4-2).
 //!
 //! Two owners hand out entity ids today. The engine allocates the ids of
-//! everything the GUI creates without a hint (tracks, busses, plugins,
-//! sends, clips, assets, take groups — counters in
-//! `resonance-audio/src/engine/thread/mod.rs`), and the app allocates the
-//! ids it needs *synchronously* — a control reply that must carry the id
-//! before the engine echoes, a sub-track the mirror names up front, a
-//! derived clip the compose model owns outright. Each app-owned space
-//! starts at a base far above anything the engine's counters reach, so
-//! the two owners never meet; this file is where those bases live and
-//! where the "is it free?" loop every allocator runs is written once.
+//! everything the GUI creates without a hint (tracks, clips, assets, take
+//! groups — counters in `resonance-audio/src/engine/thread/mod.rs`), and
+//! the app allocates the ids it needs *synchronously* — a control reply
+//! that must carry the id before the engine echoes, a sub-track the
+//! mirror names up front, a derived clip the compose model owns outright.
+//! Each app-owned space starts at a base far above anything the engine's
+//! counters reach, so the two owners never meet; this file is where those
+//! bases live and where the "is it free?" loop every allocator runs is
+//! written once.
 //!
 //! Who gets what:
 //!
 //! | Space | App base | Allocator | Engine rule on a hint |
 //! |---|---|---|---|
 //! | track + track group (one space) | [`SUB_TRACK_ID_BASE`] | [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id) | counter bumps only for hints *below* the base |
-//! | bus | [`RETURN_BUS_ID_BASE`] | `TrackRegistry::allocate_return_bus_id` | counter bumps only for hints *below* the base |
-//! | aux send | [`CONTROL_SEND_ID_BASE`] | `AuxSendState::allocate_control_send_id` | counter bumps only for hints *below* the base |
+//! | bus | [`BUS_ID_BASE`] | `TrackRegistry::allocate_bus_id` | none — the engine has no bus counter left (D-3); this base is an app/control-API-only convention (see below) |
 //! | clip (derived, control-created, vocal render, …) | [`DERIVED_CLIP_ID_BASE`] | [`ComposeState::fresh_derived_clip_id`](crate::compose::ComposeState::fresh_derived_clip_id) | counter bumps only for ids *below* the base (FU-A6a) |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
 //!
-//! **Plugin instance ids are no longer a partition** (ARCH-04 D-1): the
-//! app is the ONLY allocator (`Resonance::allocate_plugin_id`, in
-//! `state/plugin_index.rs`), the engine has no counter of its own left,
-//! and every add — GUI, control API, presets, templates, project-load
-//! replay — carries a concrete id the engine either honours or refuses
-//! (`EngineErrorKind::Internal`) if it collides with a live instance.
-//! There is no base to name because there is no neighbouring range to
-//! stay clear of.
+//! **Plugin instance ids and aux-send ids are no longer a partition**
+//! (ARCH-04 D-1, D-2 respectively): the app is the ONLY allocator for
+//! each (`Resonance::allocate_plugin_id` in `state/plugin_index.rs`,
+//! `AuxSendState::allocate_send_id` in `state/aux_sends.rs`), the engine
+//! has no counter of its own left for either, and every add — GUI,
+//! control API, presets, templates, project-load replay — carries a
+//! concrete id the engine either honours or refuses
+//! (`EngineErrorKind::Internal`) if it collides with a live entity. There
+//! is no base to name for either because there is no neighbouring range
+//! to stay clear of. Aux sends keep one wrinkle plugins don't:
+//! `AudioCommand::SetAuxSend` legitimately reuses a live id on every edit
+//! (level drag, re-route, toggle), so the create path is a separate
+//! command, `AddAuxSend`, and only THAT one is refused on a collision.
+//!
+//! **Busses also lost their engine-side counter** (ARCH-04 D-3,
+//! `TrackRegistry::allocate_bus_id` is the only allocator, and
+//! `AudioCommand::AddBus` is refused rather than honoured on a collision)
+//! but — unlike plugins and sends — [`BUS_ID_BASE`] stays. The reason has
+//! nothing to do with the engine: `resonance-audio`'s `ctx.tracks` and
+//! `ctx.busses` are separate maps that never confuse a track id for a bus
+//! id. It is `song.summary` / `song.tracks` (ba doc #265) that cannot:
+//! both list tracks and busses in ONE `TrackKind`-tagged sequence,
+//! addressed by this same raw id (`view_model::track::track_summaries`
+//! appends bus rows after track rows). A fresh bus landing on a live
+//! track's id would not error — it would silently make that bus
+//! unreachable through the control API, because the track's entry, which
+//! comes first, wins any lookup by id. Tracks (engine-allocated ones
+//! count from 1, `SUB_TRACK_ID_BASE`-range ones from 1e9) can in
+//! principle grow into any range over a long enough session, so this is
+//! the same "practically safe, not literally unbounded" argument
+//! [`SUB_TRACK_ID_BASE`] itself already rests on — discovered the hard
+//! way when folding this base away made `bus.create` hand out id 1 in a
+//! test that had already created track id 1, and `song.summary` reported
+//! the bus as the track.
 //!
 //! Markers, automation lanes and grooves are app-only spaces with their
 //! own counters; the engine never hears their ids.
 //!
-//! The last column is what makes each of the REMAINING ranges a real
-//! partition rather than a convention: the engine takes an app-range
-//! hint but never moves its own counter for it, so an engine allocation
-//! (`id_hint: None`) can never land on an id the app holds — including a
-//! track group's, which the engine never hears about. Until ARCH-04 A4-1
-//! the track, bus and send paths bumped past *any* hint, so one control
-//! `track.add` followed by a Cmd-G group and a GUI "Add track" put a
-//! track on the group's id; the clip paths did the same until FU-A6a
-//! (see [`DERIVED_CLIP_ID_BASE`]). The in-use scan in [`allocate_unused`] is
-//! belt and braces on top of the split, not the thing that makes it
-//! safe: it only sees ids the app already mirrors. (D-2 through D-5 fold
-//! the send, bus, track and reference rows into the same "app is the
-//! only owner" shape this row already is.)
+//! The last column is what makes each of the REMAINING engine-agreed
+//! ranges (track, clip) a real partition rather than a convention: the
+//! engine takes an app-range hint but never moves its own counter for it,
+//! so an engine allocation (`id_hint: None`) can never land on an id the
+//! app holds — including a track group's, which the engine never hears
+//! about. Until ARCH-04 A4-1 the track path bumped past *any* hint, so
+//! one control `track.add` followed by a Cmd-G group and a GUI "Add
+//! track" put a track on the group's id; the clip paths did the same
+//! until FU-A6a (see [`DERIVED_CLIP_ID_BASE`]). The in-use scan in
+//! [`allocate_unused`] is belt and braces on top of the split, not the
+//! thing that makes it safe: it only sees ids the app already mirrors.
+//! (D-4/D-5 fold the track and reference rows into the same "app is the
+//! only owner" shape plugins and sends already have.)
 
-use resonance_audio::types::TrackId;
+use resonance_audio::types::{BusId, TrackId};
 
-// The four bases the engine also honours are defined beside the
-// engine's id types (`resonance-audio/src/types/mod.rs`): the partition
-// only works when both sides agree on it, and the engine's add and load
-// paths bump their counters only for ids below these.
-//
 // `DERIVED_CLIP_ID_BASE` is where `ComposeState::fresh_derived_clip_id`
 // starts: the clips the app names before the engine echoes (compose
 // lanes, drum patterns, vocal MIDI and rendered vocal audio, control
@@ -68,9 +88,15 @@ use resonance_audio::types::TrackId;
 // the range: it is session-monotonic (undo never lowers it) and a load
 // reserves past every restored clip id in the range, so with the engine
 // kept out of it there is no second allocator to skip over.
-pub use resonance_audio::types::{
-    CONTROL_SEND_ID_BASE, DERIVED_CLIP_ID_BASE, RETURN_BUS_ID_BASE, SUB_TRACK_ID_BASE,
-};
+pub use resonance_audio::types::{DERIVED_CLIP_ID_BASE, SUB_TRACK_ID_BASE};
+
+/// First bus id the app allocates — every bus now, GUI or control alike
+/// (ARCH-04 D-3). Not an engine-agreed range any more (the engine has no
+/// bus counter to keep clear of it); see the module doc for why it stays
+/// anyway — `song.summary` / `song.tracks` list tracks and busses in one
+/// id-addressed sequence, and a bus sharing a live track's raw id would
+/// be shadowed by it there.
+pub const BUS_ID_BASE: BusId = 2_000_000_000;
 
 /// First id handed to a reference track whose file is missing on load,
 /// so it can be listed without ever being registered with the engine.
@@ -80,12 +106,10 @@ pub const MISSING_REFERENCE_ID_BASE: u32 = 1_000_000_000;
 
 // The convention the bases follow, pinned so a moved base fails to
 // compile rather than silently overlapping a neighbour: every app range
-// sits above the engine's counters, and the ranges that share an id
-// space with each other are ordered.
+// sits above the ids it must stay clear of.
 const _: () = {
-    assert!(SUB_TRACK_ID_BASE < RETURN_BUS_ID_BASE);
-    assert!(RETURN_BUS_ID_BASE == CONTROL_SEND_ID_BASE);
-    assert!(CONTROL_SEND_ID_BASE < DERIVED_CLIP_ID_BASE);
+    assert!(SUB_TRACK_ID_BASE < BUS_ID_BASE);
+    assert!(BUS_ID_BASE < DERIVED_CLIP_ID_BASE);
 };
 
 /// Hand out the next id from `next`, skipping any candidate `in_use`

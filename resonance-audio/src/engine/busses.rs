@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use indexmap::IndexMap;
+
 use crate::types::*;
 
 use super::plugins::{
@@ -13,12 +15,23 @@ use super::plugins::{
 use super::thread::{HandlerCtx, HandlerState};
 use super::MAX_BUSSES;
 
-pub(crate) fn handle_add_bus(
-    ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    id_hint: Option<BusId>,
-    name: Option<String>,
-) {
+/// Refuse an add whose id is already live in `busses`, rather than
+/// silently replacing the bus it names — the bus twin of
+/// `plugins::reject_if_plugin_id_in_use` (ARCH-04 D-3). Takes the guard
+/// already held by [`handle_add_bus`] rather than re-locking `ctx.busses`,
+/// so the whole add stays one atomic critical section.
+fn reject_if_bus_id_in_use(ctx: &HandlerCtx, busses: &IndexMap<BusId, Bus>, id: BusId) -> bool {
+    if busses.contains_key(&id) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "bus id {id} is already in use; refusing the add rather than replacing the live bus"
+        ))));
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn handle_add_bus(ctx: &HandlerCtx, id: BusId, name: Option<String>) {
     let mut busses_guard = ctx.busses.write();
     if busses_guard.len() >= MAX_BUSSES {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(format!(
@@ -26,25 +39,13 @@ pub(crate) fn handle_add_bus(
         ))));
         return;
     }
-    let bus_id = id_hint.unwrap_or_else(|| {
-        let i = state.next_bus_id;
-        state.next_bus_id += 1;
-        i
-    });
-    if id_hint.is_some() {
-        if busses_guard.contains_key(&bus_id) {
-            return;
-        }
-        // Same hint rule as `tracks::handle_add_track`: an app-owned id
-        // (`RETURN_BUS_ID_BASE` and up) never moves the engine's counter.
-        if bus_id < RETURN_BUS_ID_BASE {
-            state.next_bus_id = state.next_bus_id.max(bus_id + 1);
-        }
+    if reject_if_bus_id_in_use(ctx, &busses_guard, id) {
+        return;
     }
-    let name = name.unwrap_or_else(|| format!("Bus {bus_id}"));
-    busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
+    let name = name.unwrap_or_else(|| format!("Bus {id}"));
+    busses_guard.insert(id, Bus::new(id, name.clone()));
     drop(busses_guard);
-    let _ = ctx.event_tx.send(AudioEvent::BusAdded { bus_id, name });
+    let _ = ctx.event_tx.send(AudioEvent::BusAdded { bus_id: id, name });
 }
 
 pub(crate) fn handle_remove_bus(ctx: &HandlerCtx, bus_id: BusId) {
@@ -272,17 +273,21 @@ pub(crate) fn handle_set_bus_role(ctx: &HandlerCtx, bus_id: BusId, is_return: bo
         .send(AudioEvent::BusRoleChanged { bus_id, is_return });
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn handle_set_aux_send(
+/// Validate a prospective aux-send route: the destination and source must
+/// exist, and registering it must not close a feedback loop. Shared by
+/// [`handle_add_aux_send`] and [`handle_set_aux_send`] (ARCH-04 D-2) — the
+/// only difference between the two is `updating`, which excludes a send's
+/// own current edge from the cycle check: `None` for a brand-new send,
+/// `Some(id)` for an edit of an existing one. Reports
+/// `AudioEvent::AuxSendRejected` and returns `false` on any failure;
+/// `true` means the route is safe to register.
+fn validate_aux_send_route(
     ctx: &HandlerCtx,
-    state: &mut HandlerState,
-    id_hint: Option<SendId>,
+    state: &HandlerState,
+    updating: Option<SendId>,
     source: SendSource,
     dest: BusId,
-    level_db: f32,
-    pre_fader: bool,
-    enabled: bool,
-) {
+) -> bool {
     // Reject up front with a plain-language reason; never store an
     // invalid send. The app surfaces `reason` to the user.
     let reject = |reason: String| {
@@ -296,27 +301,24 @@ pub(crate) fn handle_set_aux_send(
     // Destination must be a real bus.
     if !ctx.busses.read().contains_key(&dest) {
         reject(format!("Aux send destination bus {dest} does not exist"));
-        return;
+        return false;
     }
     // Source must exist (a track or a bus, depending on the variant).
     match source {
         SendSource::Track(tid) => {
             if !ctx.tracks.read().contains_key(&tid) {
                 reject(format!("Aux send source track {tid} does not exist"));
-                return;
+                return false;
             }
         }
         SendSource::Bus(bid) => {
             if !ctx.busses.read().contains_key(&bid) {
                 reject(format!("Aux send source bus {bid} does not exist"));
-                return;
+                return false;
             }
         }
     }
 
-    // An upsert on an existing id must not count its own current edge
-    // when checking for cycles.
-    let updating = id_hint.filter(|id| state.aux_sends.contains_key(id));
     if aux_send_would_cycle(state.aux_sends.values(), source, dest, updating) {
         reject(match source {
             SendSource::Bus(b) if b == dest => {
@@ -328,39 +330,62 @@ pub(crate) fn handle_set_aux_send(
             // Unreachable: track sources never cycle.
             SendSource::Track(t) => format!("Aux send from track {t} is invalid"),
         });
-        return;
+        return false;
     }
+    true
+}
 
-    let level_db = if level_db.is_finite() {
+/// Clamp a send level to the sane range, treating a non-finite value (a
+/// stray `NaN`/`inf` from the GUI) as unity rather than storing it.
+fn clamp_send_level(level_db: f32) -> f32 {
+    if level_db.is_finite() {
         level_db.clamp(AUX_SEND_MIN_DB, AUX_SEND_MAX_DB)
     } else {
         0.0
-    };
+    }
+}
 
-    // Resolve the id: honour `id_hint` (update in place, or a project-
-    // load hint), else allocate a fresh monotonic id.
-    let send_id = match id_hint {
-        Some(id) => {
-            // Bump the allocator past a hinted engine-range id so a later
-            // fresh send can't collide with it; an app-owned id
-            // (`CONTROL_SEND_ID_BASE` and up) never moves the counter,
-            // same rule as `tracks::handle_add_track`.
-            if id < CONTROL_SEND_ID_BASE {
-                state.next_send_id = state.next_send_id.max(id + 1);
-            }
-            id
-        }
-        None => {
-            let id = state.next_send_id;
-            state.next_send_id += 1;
-            id
-        }
-    };
+/// Refuse an `AddAuxSend` whose id is already live, rather than silently
+/// turning what the caller meant as a create into an edit of the send that
+/// id already names — the send twin of `plugins::reject_if_plugin_id_in_use`
+/// (ARCH-04 D-2).
+fn reject_if_send_id_in_use(ctx: &HandlerCtx, state: &HandlerState, id: SendId) -> bool {
+    if state.aux_sends.contains_key(&id) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            "aux send id {id} is already in use; refusing the add rather than replacing the \
+             live send"
+        ))));
+        true
+    } else {
+        false
+    }
+}
 
+/// Create a new aux send under an app-allocated `id` (ARCH-04 D-2). Refuses
+/// a colliding id instead of silently editing the send it already names —
+/// see [`reject_if_send_id_in_use`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_add_aux_send(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    id: SendId,
+    source: SendSource,
+    dest: BusId,
+    level_db: f32,
+    pre_fader: bool,
+    enabled: bool,
+) {
+    if reject_if_send_id_in_use(ctx, state, id) {
+        return;
+    }
+    if !validate_aux_send_route(ctx, state, None, source, dest) {
+        return;
+    }
+    let level_db = clamp_send_level(level_db);
     state.aux_sends.insert(
-        send_id,
+        id,
         AuxSend {
-            id: send_id,
+            id,
             source,
             dest,
             level_db,
@@ -368,12 +393,59 @@ pub(crate) fn handle_set_aux_send(
             enabled,
         },
     );
-    // Make the new/updated send visible to the audio + bounce render
-    // paths before confirming the change to the app.
+    // Make the new send visible to the audio + bounce render paths before
+    // confirming the change to the app.
     publish_aux_sends(ctx, state);
-
     let _ = ctx.event_tx.send(AudioEvent::AuxSendChanged {
-        send_id,
+        send_id: id,
+        source,
+        dest,
+        level_db,
+        pre_fader,
+        enabled,
+    });
+}
+
+/// Edit an existing aux send in place — re-route / level / pre-post /
+/// enable, all covered by resending the send's full state under its own
+/// `id` (ARCH-04 D-2). A quiet no-op if `id` does not name a live send (an
+/// edit racing its own removal): unlike a duplicate id on
+/// [`handle_add_aux_send`], there is no caller invariant to complain about
+/// here.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_set_aux_send(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    id: SendId,
+    source: SendSource,
+    dest: BusId,
+    level_db: f32,
+    pre_fader: bool,
+    enabled: bool,
+) {
+    if !state.aux_sends.contains_key(&id) {
+        return;
+    }
+    if !validate_aux_send_route(ctx, state, Some(id), source, dest) {
+        return;
+    }
+    let level_db = clamp_send_level(level_db);
+    state.aux_sends.insert(
+        id,
+        AuxSend {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        },
+    );
+    // Make the updated send visible to the audio + bounce render paths
+    // before confirming the change to the app.
+    publish_aux_sends(ctx, state);
+    let _ = ctx.event_tx.send(AudioEvent::AuxSendChanged {
+        send_id: id,
         source,
         dest,
         level_db,

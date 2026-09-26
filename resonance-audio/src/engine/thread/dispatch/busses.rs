@@ -11,9 +11,7 @@ pub(super) fn dispatch_busses(
     cmd: AudioCommand,
 ) {
     match cmd {
-        AudioCommand::AddBus { id_hint, name } => {
-            busses::handle_add_bus(ctx, state, id_hint, name)
-        }
+        AudioCommand::AddBus { id, name } => busses::handle_add_bus(ctx, id, name),
         AudioCommand::RemoveBus { bus_id } => {
             busses::handle_remove_bus(ctx, bus_id);
             crate::engine::sidechain::drop_source_routes(
@@ -60,15 +58,25 @@ pub(super) fn dispatch_busses(
         AudioCommand::SetBusRole { bus_id, is_return } => {
             busses::handle_set_bus_role(ctx, bus_id, is_return)
         }
+        AudioCommand::AddAuxSend {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => busses::handle_add_aux_send(
+            ctx, state, id, source, dest, level_db, pre_fader, enabled,
+        ),
         AudioCommand::SetAuxSend {
-            id_hint,
+            id,
             source,
             dest,
             level_db,
             pre_fader,
             enabled,
         } => busses::handle_set_aux_send(
-            ctx, state, id_hint, source, dest, level_db, pre_fader, enabled,
+            ctx, state, id, source, dest, level_db, pre_fader, enabled,
         ),
         AudioCommand::RemoveAuxSend { send_id } => {
             busses::handle_remove_aux_send(ctx, state, send_id)

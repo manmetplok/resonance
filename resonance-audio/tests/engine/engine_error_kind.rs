@@ -37,12 +37,13 @@ fn unknown_plugin_on_master_reorder_is_not_found() {
 #[test]
 fn bus_limit_reached_is_busy() {
     let mut harness = EngineHandlerHarness::new();
-    for _ in 0..MAX_BUSSES {
-        harness.add_bus(None, None);
+    // The app allocates every bus id now (ARCH-04 D-3), so each add needs
+    // its own — a repeated id would be refused as a duplicate before ever
+    // reaching the `MAX_BUSSES` check this test is after.
+    for id in 1..=MAX_BUSSES as u64 {
+        harness.add_bus(id, None);
     }
-    harness.drain_events(); // the MAX_BUSSES successful `BusAdded` echoes
-    harness.add_bus(None, None);
-    let events = harness.drain_events();
+    let events = harness.add_bus(MAX_BUSSES as u64 + 1, None);
     assert_eq!(
         error_kind(&events),
         Some(EngineErrorKind::Busy),

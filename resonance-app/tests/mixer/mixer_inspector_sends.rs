@@ -95,17 +95,19 @@ fn echo_send(
     });
 }
 
-/// Replay the `SetAuxSend` / `RemoveAuxSend` / `AddBus` / `SetBusRole`
-/// commands a GUI gesture emitted back as the events the engine would
-/// answer with. `allocated` is the id the engine hands to a send created
-/// without a hint. Returns the send ids that were touched.
-fn echo_engine(app: &mut Resonance, cmds: &[AudioCommand], allocated: u64) -> Vec<u64> {
+/// Replay the `AddAuxSend` / `SetAuxSend` / `RemoveAuxSend` / `AddBus` /
+/// `SetBusRole` commands a GUI gesture emitted back as the events the
+/// engine would answer with. Since ARCH-04 D-2/D-3 every add carries a
+/// concrete, app-allocated id already — there is no more "hand the engine
+/// a hint and see what it echoes back" case, so unlike before this needs
+/// no id to fall back on. Returns the send ids that were touched.
+fn echo_engine(app: &mut Resonance, cmds: &[AudioCommand]) -> Vec<u64> {
     let mut touched = Vec::new();
     for cmd in cmds {
         match cmd {
-            AudioCommand::AddBus { id_hint, name } => {
+            AudioCommand::AddBus { id, name } => {
                 app.test_apply_engine_event(AudioEvent::BusAdded {
-                    bus_id: id_hint.expect("the GUI always hints a bus id"),
+                    bus_id: *id,
                     name: name.clone().unwrap_or_default(),
                 });
             }
@@ -115,24 +117,31 @@ fn echo_engine(app: &mut Resonance, cmds: &[AudioCommand], allocated: u64) -> Ve
                     is_return: *is_return,
                 });
             }
-            AudioCommand::SetAuxSend {
-                id_hint,
+            AudioCommand::AddAuxSend {
+                id,
+                source,
+                dest,
+                level_db,
+                pre_fader,
+                enabled,
+            }
+            | AudioCommand::SetAuxSend {
+                id,
                 source,
                 dest,
                 level_db,
                 pre_fader,
                 enabled,
             } => {
-                let send_id = id_hint.unwrap_or(allocated);
                 app.test_apply_engine_event(AudioEvent::AuxSendChanged {
-                    send_id,
+                    send_id: *id,
                     source: *source,
                     dest: *dest,
                     level_db: *level_db,
                     pre_fader: *pre_fader,
                     enabled: *enabled,
                 });
-                touched.push(send_id);
+                touched.push(*id);
             }
             AudioCommand::RemoveAuxSend { send_id } => {
                 app.test_apply_engine_event(AudioEvent::AuxSendRemoved {
@@ -148,11 +157,11 @@ fn echo_engine(app: &mut Resonance, cmds: &[AudioCommand], allocated: u64) -> Ve
 
 /// Press one panel affordance and pump the engine's answer, returning
 /// the commands it produced.
-fn press(app: &mut Resonance, message: Message, allocated: u64) -> Vec<AudioCommand> {
+fn press(app: &mut Resonance, message: Message) -> Vec<AudioCommand> {
     let rx = app.test_capture_engine();
     let _ = app.update(message);
     let cmds: Vec<AudioCommand> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-    echo_engine(app, &cmds, allocated);
+    echo_engine(app, &cmds);
     cmds
 }
 
@@ -308,14 +317,14 @@ fn a_send_made_in_the_panel_reads_back_over_the_control_api() {
         .expect("the create-a-return entry is always offered");
     assert!(label.starts_with("New FX return"));
 
-    const ENGINE_SEND_ID: u64 = 77;
-    let cmds = press(&mut app, add, ENGINE_SEND_ID);
+    let cmds = press(&mut app, add);
 
     // The gesture is three ordered commands: make the bus, flag it a
-    // return, route into it.
+    // return, route into it. Both the bus and the send ids are
+    // app-allocated now (ARCH-04 D-2/D-3), so read back whichever one the
+    // gesture actually used rather than assuming a fixed id.
     assert!(
-        cmds.iter()
-            .any(|c| matches!(c, AudioCommand::AddBus { id_hint: Some(_), .. })),
+        cmds.iter().any(|c| matches!(c, AudioCommand::AddBus { .. })),
         "{cmds:?}"
     );
     assert!(
@@ -325,11 +334,18 @@ fn a_send_made_in_the_panel_reads_back_over_the_control_api() {
         )),
         "{cmds:?}"
     );
+    let engine_send_id = cmds
+        .iter()
+        .find_map(|c| match c {
+            AudioCommand::AddAuxSend { id, .. } => Some(*id),
+            _ => None,
+        })
+        .expect("the gesture creates the send with AddAuxSend");
 
     // The API sees the send the GUI just made.
     let sends = api_sends(&mut app, GUITAR);
     assert_eq!(sends.len(), 1, "song.tracks reports the panel's send");
-    assert_eq!(sends[0].send_id.0, ENGINE_SEND_ID);
+    assert_eq!(sends[0].send_id.0, engine_send_id);
     assert!(
         (sends[0].level_db - 0.0).abs() < 1e-4,
         "a fresh send is at unity"
@@ -360,11 +376,11 @@ fn every_slot_control_edits_the_send_the_api_can_see() {
 
     // Level slider.
     let slot = panel_sends(&app, GUITAR).remove(0);
-    let cmds = press(&mut app, slot.set_level(-9.0), send_id);
+    let cmds = press(&mut app, slot.set_level(-9.0));
     assert!(
         cmds.iter().any(|c| matches!(
             c,
-            AudioCommand::SetAuxSend { id_hint: Some(id), level_db, .. }
+            AudioCommand::SetAuxSend { id, level_db, .. }
                 if *id == send_id && (*level_db - -9.0).abs() < 1e-4
         )),
         "the slider must upsert the send's level: {cmds:?}"
@@ -375,13 +391,13 @@ fn every_slot_control_edits_the_send_the_api_can_see() {
     // PRE/POST toggle.
     let slot = panel_sends(&app, GUITAR).remove(0);
     assert_eq!(slot.tap_label, "POST");
-    press(&mut app, slot.toggle_tap(), send_id);
+    press(&mut app, slot.toggle_tap());
     assert!(api_sends(&mut app, GUITAR)[0].pre_fader);
     assert_eq!(panel_sends(&app, GUITAR)[0].tap_label, "PRE");
 
     // ON toggle.
     let slot = panel_sends(&app, GUITAR).remove(0);
-    press(&mut app, slot.toggle_enabled(), send_id);
+    press(&mut app, slot.toggle_enabled());
     assert!(!api_sends(&mut app, GUITAR)[0].enabled);
     assert!(!panel_sends(&app, GUITAR)[0].enabled);
 
@@ -390,13 +406,13 @@ fn every_slot_control_edits_the_send_the_api_can_see() {
     let slot = panel_sends(&app, GUITAR).remove(0);
     let offered: Vec<u64> = slot.dest_options.iter().map(|(id, _)| *id).collect();
     assert!(offered.contains(&reverb) && offered.contains(&delay), "{offered:?}");
-    press(&mut app, slot.reroute_to(delay), send_id);
+    press(&mut app, slot.reroute_to(delay));
     assert_eq!(api_sends(&mut app, GUITAR)[0].to_bus.0, delay);
     assert_eq!(panel_sends(&app, GUITAR)[0].dest_bus, delay);
 
     // Trash affordance.
     let slot = panel_sends(&app, GUITAR).remove(0);
-    let cmds = press(&mut app, slot.remove(), send_id);
+    let cmds = press(&mut app, slot.remove());
     assert!(
         cmds.iter()
             .any(|c| matches!(c, AudioCommand::RemoveAuxSend { send_id: id } if *id == send_id)),
@@ -434,7 +450,6 @@ fn the_bus_return_toggle_makes_a_plain_bus_a_send_destination() {
         Message::Mixer(resonance_app::message::MixerMessage::SetBusReturnRole(
             bus_id, true,
         )),
-        0,
     );
 
     let labels: Vec<String> = app
@@ -456,11 +471,11 @@ fn the_bus_return_toggle_makes_a_plain_bus_a_send_destination() {
 fn panel_edits_record_undo_entries() {
     let mut app = app();
     let reverb = create_return_bus(&mut app, "Reverb");
-    let send_id = api_add_send(&mut app, GUITAR, reverb, 0.0);
+    let _send_id = api_add_send(&mut app, GUITAR, reverb, 0.0);
     let baseline = app.test_undo_history().test_undo_entries().len();
 
     let slot = panel_sends(&app, GUITAR).remove(0);
-    press(&mut app, slot.toggle_tap(), send_id);
+    press(&mut app, slot.toggle_tap());
     assert_eq!(
         app.test_undo_history().test_undo_entries().len(),
         baseline + 1,
@@ -472,7 +487,7 @@ fn panel_edits_record_undo_entries() {
     let before = app.test_undo_history().test_undo_entries().len();
     for db in [-1.0f32, -2.0, -3.0, -4.0] {
         let slot = panel_sends(&app, GUITAR).remove(0);
-        press(&mut app, slot.set_level(db), send_id);
+        press(&mut app, slot.set_level(db));
     }
     assert_eq!(
         app.test_undo_history().test_undo_entries().len(),
@@ -483,7 +498,7 @@ fn panel_edits_record_undo_entries() {
 
     let before = app.test_undo_history().test_undo_entries().len();
     let slot = panel_sends(&app, GUITAR).remove(0);
-    press(&mut app, slot.remove(), send_id);
+    press(&mut app, slot.remove());
     assert_eq!(
         app.test_undo_history().test_undo_entries().len(),
         before + 1
@@ -502,11 +517,11 @@ fn a_panel_made_send_survives_save_and_reload() {
         .into_iter()
         .next()
         .expect("create-a-return entry");
-    press(&mut app, add, 42);
+    press(&mut app, add);
     let slot = panel_sends(&app, GUITAR).remove(0);
-    press(&mut app, slot.set_level(-4.5), 42);
+    press(&mut app, slot.set_level(-4.5));
     let slot = panel_sends(&app, GUITAR).remove(0);
-    press(&mut app, slot.toggle_tap(), 42);
+    press(&mut app, slot.toggle_tap());
 
     let before = panel_sends(&app, GUITAR).remove(0);
     assert_eq!(before.level_readout, "-4.5 dB");
@@ -547,7 +562,7 @@ fn the_lazy_fingerprint_tracks_the_send_graph() {
     let reverb = create_return_bus(&mut app, "Reverb");
     let empty = app.test_inspector_fingerprint(GUITAR).expect("track exists");
 
-    let send_id = api_add_send(&mut app, GUITAR, reverb, 0.0);
+    let _send_id = api_add_send(&mut app, GUITAR, reverb, 0.0);
     let created = app.test_inspector_fingerprint(GUITAR).expect("track exists");
     assert_ne!(empty, created, "a new send must redraw the routing group");
 
@@ -557,7 +572,7 @@ fn the_lazy_fingerprint_tracks_the_send_graph() {
         ("level again", -12.0),
     ] {
         let slot = panel_sends(&app, GUITAR).remove(0);
-        press(&mut app, slot.set_level(edit), send_id);
+        press(&mut app, slot.set_level(edit));
         let fp = app.test_inspector_fingerprint(GUITAR).expect("track exists");
         assert!(!seen.contains(&fp), "{label} must change the fingerprint");
         seen.push(fp);
@@ -570,7 +585,7 @@ fn the_lazy_fingerprint_tracks_the_send_graph() {
         } else {
             slot.toggle_enabled()
         };
-        press(&mut app, msg, send_id);
+        press(&mut app, msg);
         let fp = app.test_inspector_fingerprint(GUITAR).expect("track exists");
         assert!(!seen.contains(&fp), "{label} must change the fingerprint");
         seen.push(fp);

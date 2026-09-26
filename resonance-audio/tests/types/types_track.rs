@@ -49,9 +49,10 @@ fn track_output_roundtrip_various_bus_ids() {
 #[test]
 fn track_output_master_sentinel_is_u64_max() {
     // The sentinel chosen for Master is u64::MAX. Bus id u64::MAX is
-    // reserved and intentionally indistinguishable from Master; the
-    // engine's next_bus_id starts at 1 and grows, so this is safe in
-    // practice but worth pinning in a test.
+    // reserved and intentionally indistinguishable from Master; the app's
+    // bus-id allocator (`TrackRegistry::allocate_bus_id`, ARCH-04 D-3)
+    // starts at 1 and grows, so this is safe in practice but worth
+    // pinning in a test.
     let track = Track::new(1, "T1".to_string());
     track.set_output(TrackOutput::Master);
     assert_eq!(track.output(), TrackOutput::Master);

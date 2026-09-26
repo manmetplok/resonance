@@ -590,8 +590,6 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // new take overwrite that WAV (code review STATE-08); clip ids stay
     // monotonic for the session.
     state.next_track_id = 1;
-    state.next_bus_id = 1;
-    state.next_send_id = 1;
     state.next_take_group_id = 1;
 
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);

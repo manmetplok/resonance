@@ -38,14 +38,14 @@ pub struct AuxSendState {
     /// reason suitable for the UI. Cleared once a send is successfully
     /// created or updated (the user's retry superseded the error).
     pub last_rejection: Option<AuxSendRejection>,
-    /// Id counter for sends the *app* creates up front, so a control
-    /// method can return the `send_id` in its reply instead of waiting
-    /// for the engine's `AuxSendChanged` echo (ba doc #273, todo #1229).
-    /// Lives in a high range for the same reason
-    /// `TrackRegistry::next_return_bus_id` does: the engine bumps its own
-    /// allocator past any id it receives as a hint, so the two ranges
-    /// never overlap. `0` means "not seeded yet".
-    pub next_control_send_id: SendId,
+    /// Id counter for EVERY aux send the app creates (ARCH-04 D-2): the
+    /// engine has no send allocator of its own left, so
+    /// `AudioCommand::AddAuxSend` always carries a concrete `id` from
+    /// here — a fresh GUI "Add send", `track.add_send`, and the
+    /// "create new FX return from this send" gesture alike. Starts at 1:
+    /// there is no neighbouring engine range to stay clear of any more,
+    /// unlike the pre-D-2 `CONTROL_SEND_ID_BASE` range.
+    pub next_send_id: SendId,
 }
 
 impl AuxSendState {
@@ -100,15 +100,18 @@ impl AuxSendState {
         ids
     }
 
-    /// Allocate a fresh app-chosen send id, skipping past any id already
-    /// mirrored from the engine. Handed to the engine as a `SetAuxSend`
-    /// hint, so it must not clash with one the engine allocated itself.
-    pub fn allocate_control_send_id(&mut self) -> SendId {
-        if self.next_control_send_id == 0 {
-            self.next_control_send_id = super::ids::CONTROL_SEND_ID_BASE;
-        }
+    /// Allocate a fresh send id for EVERY send add (ARCH-04 D-2), skipping
+    /// past any id already mirrored from the engine. Handed to the engine
+    /// as `AudioCommand::AddAuxSend`'s `id` field, which the engine
+    /// honours unconditionally and refuses to reuse
+    /// (`resonance-audio/src/engine/busses.rs::handle_add_aux_send`
+    /// rejects a collision with `EngineErrorKind::Internal` rather than
+    /// editing the send that id already names). The in-use scan is what
+    /// actually keeps two calls from returning the same id — the counter
+    /// alone cannot (same reasoning as `Resonance::allocate_plugin_id`).
+    pub fn allocate_send_id(&mut self) -> SendId {
         let sends = &self.sends;
-        super::ids::allocate_unused(&mut self.next_control_send_id, |id| {
+        super::ids::allocate_unused(&mut self.next_send_id, |id| {
             sends.iter().any(|s| s.id == id)
         })
     }

@@ -260,15 +260,19 @@ fn replay_tracks_and_busses(
 /// Re-register the saved aux sends (ba doc #273) with the engine and seed
 /// the GUI mirror.
 ///
-/// Each send goes back as a `SetAuxSend` carrying its saved id as
-/// `id_hint`, which the engine honours (and bumps its own allocator past),
-/// so send ids survive a reload. The engine re-validates every route and
-/// re-clamps every level, then echoes `AuxSendChanged` — which overwrites
-/// the seeded entry with the engine-resolved one, keeping the engine the
-/// authority on what is live. Seeding here rather than waiting for that
-/// echo mirrors what every other entity in this module does (a track's
-/// `TrackState` is pushed alongside its `AddTrack`), so the mixer is
-/// correct the moment the load returns.
+/// Each send goes back as an `AddAuxSend` carrying its saved id (ARCH-04
+/// D-2: every send in a freshly loaded project is new to the engine, since
+/// `ClearAll` ran first), so send ids survive a reload. The engine
+/// re-validates every route and re-clamps every level, then echoes
+/// `AuxSendChanged` — which overwrites the seeded entry with the
+/// engine-resolved one, keeping the engine the authority on what is live.
+/// Seeding here rather than waiting for that echo mirrors what every other
+/// entity in this module does (a track's `TrackState` is pushed alongside
+/// its `AddTrack`), so the mixer is correct the moment the load returns —
+/// and puts the id in the app's mirror eagerly, so a later
+/// `Resonance::allocate_send_id` in the same session skips it without
+/// needing a separate counter bump (same reasoning as `replay_bus`'s eager
+/// `BusState` push for `Resonance::allocate_bus_id`).
 ///
 /// Legacy projects carry no sends, so this is a no-op for them — the
 /// mirror was already emptied by [`wipe_registry`].
@@ -305,8 +309,8 @@ fn replay_sends(r: &mut Resonance, project: &ProjectFile) {
             );
             continue;
         }
-        let _ = r.engine.send(AudioCommand::SetAuxSend {
-            id_hint: Some(ps.id),
+        let _ = r.engine.send(AudioCommand::AddAuxSend {
+            id: ps.id,
             source,
             dest: ps.dest_bus,
             level_db: ps.level_db,

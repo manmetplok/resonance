@@ -82,10 +82,11 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     apply_busses(r, &current, target_file);
 
     // -- Aux sends -----------------------------------------------------
-    // A send is a plain routing edge: `SetAuxSend` upserts one and
-    // `RemoveAuxSend` drops one, both surgical, so adding or removing a
-    // send never has to force the slow path (unlike a plugin instance,
-    // which can only be re-created wholesale). Reconciled after the
+    // A send is a plain routing edge: `AddAuxSend` creates one, `SetAuxSend`
+    // edits one in place, and `RemoveAuxSend` drops one (ARCH-04 D-2), all
+    // three surgical, so adding or removing a send never has to force the
+    // slow path (unlike a plugin instance, which can only be re-created
+    // wholesale). Reconciled after the
     // busses so a send restored alongside its return bus lands second.
     apply_sends(r, &current, target_file);
 
@@ -593,7 +594,8 @@ fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     }
 
     for sb in &b.sends {
-        if a_by_id.get(&sb.id).copied() == Some(sb) {
+        let existed_before = a_by_id.get(&sb.id);
+        if existed_before.copied() == Some(sb) {
             continue;
         }
         // Unknown source kind: drop rather than guess (see
@@ -601,13 +603,28 @@ fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
         let Some(source) = send_source_from_tag(&sb.source_kind, sb.source_id) else {
             continue;
         };
-        let _ = r.engine.send(AudioCommand::SetAuxSend {
-            id_hint: Some(sb.id),
-            source,
-            dest: sb.dest_bus,
-            level_db: sb.level_db,
-            pre_fader: sb.pre_fader,
-            enabled: sb.enabled,
+        // ARCH-04 D-2: `existed_before` tells us whether the engine
+        // already has this id (an edit — `a` was built from the mirror
+        // BEFORE this reconciliation ran) or not (a send this undo/redo
+        // step is bringing back that the current state doesn't have).
+        let _ = r.engine.send(if existed_before.is_some() {
+            AudioCommand::SetAuxSend {
+                id: sb.id,
+                source,
+                dest: sb.dest_bus,
+                level_db: sb.level_db,
+                pre_fader: sb.pre_fader,
+                enabled: sb.enabled,
+            }
+        } else {
+            AudioCommand::AddAuxSend {
+                id: sb.id,
+                source,
+                dest: sb.dest_bus,
+                level_db: sb.level_db,
+                pre_fader: sb.pre_fader,
+                enabled: sb.enabled,
+            }
         });
         r.aux.upsert(AuxSend {
             id: sb.id,
@@ -618,7 +635,6 @@ fn apply_sends(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
             enabled: sb.enabled,
         });
     }
-
 }
 
 /// Reconcile the sidechain key routes (ba doc #157/#159, todo #1311) to
