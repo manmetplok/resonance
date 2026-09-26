@@ -10,6 +10,7 @@ pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
 mod plugin_panel;
+pub(crate) use plugin_panel::plugin_params_fingerprint;
 mod reference_panel;
 pub(crate) mod reorder;
 mod strip_fingerprint;
