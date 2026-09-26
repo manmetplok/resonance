@@ -24,7 +24,9 @@ master and updates this table. Agents do **not** edit this file.
 | G1 drums timing | DSP-01 | opus | merged | 50dad7db |
 | G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
 | G3 resampler | LIB-01 | opus | in progress |  |
-| H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | queued (after bug batches, cross-cutting) | |
+| H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | planning (read-only) | |
+| M1 plugin framework (medium) | PLG-01, PLG-02, PLG-03, PLG-04 | opus | in progress | |
+| M2 DSP (medium) | DSP-04, DSP-05, DSP-06, DSP-07, DSP-08, DSP-09, DSP-10 | opus | in progress | |
 
 ### Follow-ups found while fixing (new todos)
 
