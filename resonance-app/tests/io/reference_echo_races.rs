@@ -54,8 +54,8 @@ impl Engine {
                 self.player.clear();
                 let _ = self.tx.send(AudioEvent::AllCleared);
             }
-            AudioCommand::LoadReferenceTrack { id_hint, path } => {
-                let id = register_reference(&mut self.player, id_hint, path.clone());
+            AudioCommand::LoadReferenceTrack { id, path } => {
+                let id = register_reference(&mut self.player, id, path.clone());
                 self.loads.push((id, path.to_string_lossy().into_owned()));
             }
             AudioCommand::RemoveReferenceTrack { id } => {

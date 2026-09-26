@@ -58,8 +58,23 @@
 //! 1 in a test that had already created track id 1, and `song.summary`
 //! reported the bus as the track.
 //!
+//! **Reference ids lost their engine-side counter too** (ARCH-04 D-5):
+//! [`crate::reference::ReferenceState::alloc_engine_id`] is the only
+//! allocator, and `AudioCommand::LoadReferenceTrack`'s `id` is mandatory
+//! — the engine refuses a collision (`EngineErrorKind::Internal`) rather
+//! than replacing the live entry, same shape as plugins/sends/busses.
+//! [`MISSING_REFERENCE_ID_BASE`] stays, but for a different reason than
+//! [`BUS_ID_BASE`]: it isn't there to stay clear of an engine counter —
+//! there is none — it separates the app's own two reference sub-spaces,
+//! a live engine-registered id from `next_engine_id` and a `Missing`
+//! entry's id (which the engine never hears about), so a missing entry
+//! can never collide with a later real load.
+//!
 //! Markers, automation lanes and grooves are app-only spaces with their
-//! own counters; the engine never hears their ids.
+//! own counters; the engine never hears their ids. This includes
+//! reference *comparison* markers (`AddRefMarker`, FU-A5a) as well as
+//! arrangement/timeline markers ([`ArrangementMarkers`](crate::state::markers::ArrangementMarkers))
+//! — the engine has never had a counter for either.
 //!
 //! [`BUS_ID_BASE`] is the last real partition left in this file: the
 //! engine has nothing to keep it clear of any more (see above), but the
@@ -69,9 +84,9 @@
 //! group's id; the clip paths did the same until FU-A6a (see
 //! [`DERIVED_CLIP_ID_BASE`]). The in-use scan in [`allocate_unused`] is
 //! belt and braces on top of that, not the thing that makes it safe: it
-//! only sees ids the app already mirrors. (D-5 folds the reference row
-//! into the same "app is the only owner" shape tracks, plugins and sends
-//! already have.)
+//! only sees ids the app already mirrors. (D-4 and D-5 folded the track
+//! and reference rows into the same "app is the only owner" shape
+//! plugins, sends and busses already had.)
 
 use resonance_audio::types::{BusId, TrackId};
 
@@ -106,8 +121,12 @@ pub const BUS_ID_BASE: BusId = 2_000_000_000;
 
 /// First id handed to a reference track whose file is missing on load,
 /// so it can be listed without ever being registered with the engine.
-/// The engine allocates reference ids sequentially from 1, so it would
-/// take ~1e9 loads in one session to reach this.
+/// Kept disjoint from [`ReferenceState::next_engine_id`](crate::reference::ReferenceState::next_engine_id),
+/// the app's own allocator for every *live* reference id (ARCH-04 D-5:
+/// the engine has no reference-id counter of its own left to stay clear
+/// of) — a `LoadReferenceTrack` id comes from that counter, which starts
+/// at 1, so it would take ~1e9 loads in one session for it to reach this
+/// base and risk landing on a missing entry's id.
 pub const MISSING_REFERENCE_ID_BASE: u32 = 1_000_000_000;
 
 // The convention the one remaining base follows, pinned so a moved base

@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::message::*;
 use resonance_app::project;
+use resonance_app::reference::ReferenceMessage;
 use resonance_app::state::ids::{BUS_ID_BASE, DERIVED_CLIP_ID_BASE};
 use resonance_app::{demo, Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
@@ -1029,4 +1030,128 @@ fn every_track_add_path_gets_a_unique_app_id_including_across_undo() {
          id the undone add held"
     );
     assert_partition_holds(&f.app, "after undo + a fresh track add");
+}
+
+// ---------------------------------------------------------------------------
+// References (ARCH-04 D-5)
+// ---------------------------------------------------------------------------
+
+/// ARCH-04 D-5: `LoadReferenceTrack`'s `id` is now mandatory — the app is
+/// the only allocator left for reference ids
+/// (`ReferenceState::alloc_engine_id`), and the engine refuses a collision
+/// (`EngineErrorKind::Internal`) rather than inventing one. References sit
+/// outside the `Fixture`/`FakeEngine`/`add_round` machinery above (no base,
+/// no engine counter, not part of `structurally_compatible`), so this test
+/// is self-contained: it drives the real `ReferenceMessage::LoadRequested`
+/// path through an add, an undo, a fresh add, and a save/reload, and checks
+/// every id handed to `LoadReferenceTrack` is a set throughout — the same
+/// undo-monotonicity and reload-uniqueness shape
+/// `every_send_add_path_gets_a_unique_app_id_including_across_undo` and
+/// `ids_stay_unique_across_gui_and_control_adds_and_a_reload` pin for sends
+/// and tracks.
+#[test]
+fn every_reference_load_gets_a_unique_app_id_including_across_undo_and_reload() {
+    let root = std::env::temp_dir().join(format!(
+        "resonance-id-allocation-reference-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let project = root.join("fixture.rproj");
+    std::fs::create_dir_all(project.join("audio")).expect("create project dir");
+
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+    app.test_set_project_path(project.clone());
+
+    // Real (if empty) files: `restore_references` only re-issues
+    // `LoadReferenceTrack` for an entry whose path still exists on disk —
+    // otherwise it is seeded as `Missing` and never sent to the engine.
+    let ref_path = |name: &str| -> PathBuf {
+        let p = root.join(name);
+        std::fs::write(&p, b"").expect("create stand-in reference file");
+        p
+    };
+
+    let load = |app: &mut Resonance, path: PathBuf| {
+        let _ = app.update(Message::Reference(ReferenceMessage::LoadRequested(path)));
+    };
+    let sent_id = |rx: &Receiver<AudioCommand>| -> u32 {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .find_map(|c| match c {
+                AudioCommand::LoadReferenceTrack { id, .. } => Some(id.0),
+                _ => None,
+            })
+            .expect("LoadRequested sends a LoadReferenceTrack")
+    };
+
+    load(&mut app, ref_path("ref-a.wav"));
+    let first_id = sent_id(&rx);
+
+    load(&mut app, ref_path("ref-b.wav"));
+    let second_id = sent_id(&rx);
+    assert_ne!(first_id, second_id, "two loads must not share an id");
+
+    // Undo the second load: a reference add is not structural
+    // (`structurally_compatible` never looks at `ProjectFile::references`),
+    // so this takes the fast diff-replay path (`reconcile_references`), not
+    // `ClearAll` + full restore.
+    let _ = app.update(Message::Undo);
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a reference-only undo must take the fast diff-replay path, not ClearAll"
+    );
+    assert!(
+        !app.test_reference().entries.iter().any(|e| e.id.0 == second_id),
+        "undo removed the reference the second load created"
+    );
+
+    load(&mut app, ref_path("ref-c.wav"));
+    let third_id = sent_id(&rx);
+    assert_ne!(
+        third_id, second_id,
+        "undo must not rewind the allocator: the post-undo load reused the \
+         id the undone load held"
+    );
+
+    let ids_before_reload: Vec<u32> =
+        app.test_reference().entries.iter().map(|e| e.id.0).collect();
+    assert_eq!(
+        ids_before_reload.iter().collect::<HashSet<_>>().len(),
+        ids_before_reload.len(),
+        "pre-reload reference ids are a set: {ids_before_reload:?}"
+    );
+
+    // Save + reload: `restore_references` re-issues `LoadReferenceTrack` for
+    // every saved entry under a fresh id from the app's own allocator
+    // (ARCH-04 D-5 — the engine keeps none of its own to restart at 1).
+    let file = app.test_build_project_file();
+    project::save_project(&project, &file, &[], &[]).expect("save");
+    let loaded = project::load_project(&project).expect("reload");
+    app.test_replay_loaded_project_from(loaded);
+    let reload_ids: Vec<u32> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|c| match c {
+            AudioCommand::LoadReferenceTrack { id, .. } => Some(id.0),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reload_ids.len(),
+        ids_before_reload.len(),
+        "the reload re-issues one LoadReferenceTrack per saved reference"
+    );
+    assert_eq!(
+        reload_ids.iter().collect::<HashSet<_>>().len(),
+        reload_ids.len(),
+        "reload ids are a set: {reload_ids:?}"
+    );
+
+    // A further load after the reload must not collide with a restored id.
+    load(&mut app, ref_path("ref-d.wav"));
+    let fourth_id = sent_id(&rx);
+    assert!(
+        !reload_ids.contains(&fourth_id),
+        "a post-reload load must not reuse a restored id"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
 }
