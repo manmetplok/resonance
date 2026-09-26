@@ -64,7 +64,7 @@ fn find_track(app: &Resonance, id: u64) -> Option<&TrackState> {
 /// fixable with `external.enable`, and saying so saves a round trip.
 fn require_external(app: &Resonance, id: u64) -> Result<&TrackState, RpcError> {
     let track = find_track(app, id).ok_or_else(|| no_track(id))?;
-    if !app.external_instruments.contains_key(&id) {
+    if !app.devices.external_instruments.contains_key(&id) {
         return Err(RpcError::invalid_params(format!(
             "track {id} is not an external instrument; call external.enable first"
         )));
@@ -79,19 +79,21 @@ fn require_external(app: &Resonance, id: u64) -> Result<&TrackState, RpcError> {
 fn devices(app: &Resonance, request: &Request) -> Response {
     let view = DevicesView {
         midi_outputs: app
-            .midi_devices
+            .devices
+            .midi
             .midi_output_devices
             .iter()
             .map(|d| d.name.clone())
             .collect(),
         audio_inputs: app
-            .input_devices
+            .devices
+            .input
             .devices
             .iter()
             .map(|d| AudioInputView {
                 name: d.name.clone(),
                 channels: d.channels,
-                default: app.input_devices.default_name.as_deref() == Some(d.name.as_str()),
+                default: app.devices.input.default_name.as_deref() == Some(d.name.as_str()),
             })
             .collect(),
     };
@@ -116,7 +118,7 @@ fn status(app: &Resonance, request: &Request) -> Response {
         .tracks
         .iter()
         .filter(|t| wanted.is_none_or(|id| t.id == id))
-        .filter_map(|t| app.external_instruments.get(&t.id).map(|ext| (t, ext)))
+        .filter_map(|t| app.devices.external_instruments.get(&t.id).map(|ext| (t, ext)))
         .map(|(t, ext)| ExternalTrackView {
             track_id: resonance_control::ids::TrackId(t.id),
             name: t.name.clone(),
@@ -237,7 +239,7 @@ fn set_midi_out(app: &mut Resonance, request: &Request) -> (Response, Task<Messa
     // An unknown port name would be stored and silently swallow every
     // note, so check it against the live list rather than accepting it.
     if let Some(Some(name)) = &params.device {
-        if !app.midi_devices.midi_output_devices.iter().any(|d| &d.name == name) {
+        if !app.devices.midi.midi_output_devices.iter().any(|d| &d.name == name) {
             return reject(
                 request,
                 RpcError::not_found(format!(
@@ -290,7 +292,7 @@ fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         );
     }
     if let Some(Some(name)) = &params.device {
-        if !app.input_devices.devices.iter().any(|d| &d.name == name) {
+        if !app.devices.input.devices.iter().any(|d| &d.name == name) {
             return reject(
                 request,
                 RpcError::not_found(format!(
@@ -307,7 +309,7 @@ fn set_return(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             None => find_track(app, id).and_then(|t| t.input_device_name.clone()),
         };
         if let Some(name) = device_name {
-            if let Some(dev) = app.input_devices.devices.iter().find(|d| d.name == name) {
+            if let Some(dev) = app.devices.input.devices.iter().find(|d| d.name == name) {
                 if dev.channels > 0 && port >= dev.channels {
                     return reject(
                         request,
@@ -379,7 +381,7 @@ fn set_patch(app: &mut Resonance, request: &Request) -> (Response, Task<Message>
     // pairs at the synth, and the first would select a patch the caller
     // never asked for.
     let (bank, program) = {
-        let ext = &app.external_instruments[&id];
+        let ext = &app.devices.external_instruments[&id];
         (
             params.bank.unwrap_or(ext.bank),
             params.program.unwrap_or(ext.program),
@@ -436,7 +438,7 @@ fn detect_latency(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
             RpcError::invalid_params("stop the transport before measuring latency"),
         );
     }
-    if app.external_instruments[&id].latency_detect_in_progress {
+    if app.devices.external_instruments[&id].latency_detect_in_progress {
         return reject(
             request,
             RpcError::invalid_params(format!("a latency measurement is already running on track {id}")),
@@ -544,7 +546,7 @@ fn bounce(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
             )),
         );
     };
-    if !app.input_devices.devices.iter().any(|d| d.name == device) {
+    if !app.devices.input.devices.iter().any(|d| d.name == device) {
         return reject(
             request,
             RpcError::not_found(format!(

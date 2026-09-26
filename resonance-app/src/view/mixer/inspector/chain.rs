@@ -43,7 +43,7 @@ pub(super) fn chain_group(
     // the audio return. Offering an instrument slot here would build a
     // chain the engine renders differently from how it reads.
     let is_instrument = track.track_type == TrackType::Instrument
-        && !r.external_instruments.contains_key(&track.id);
+        && !r.devices.external_instruments.contains_key(&track.id);
     if track.plugins.is_empty() {
         col = col.push(empty_chain_row());
     } else {

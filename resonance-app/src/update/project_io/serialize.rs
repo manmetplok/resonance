@@ -170,7 +170,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             // *presence* of an entry in `external_instruments` marks the
             // track external; the route + monitor/arm already serialize via
             // the track fields above. Runtime offline flags are not saved.
-            external_instrument: r.external_instruments.get(&t.id).map(|ext| {
+            external_instrument: r.devices.external_instruments.get(&t.id).map(|ext| {
                 // Embed a copy of the selected definition only when it's
                 // user-authored (not bundled) and still resolvable, so a
                 // portable project carries unsupported gear with it while
@@ -179,7 +179,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
                     if bundled_device_ids.contains(id) {
                         None
                     } else {
-                        r.device_registry.get(id).cloned()
+                        r.devices.registry.get(id).cloned()
                     }
                 });
                 ProjectExternalInstrument {
@@ -420,10 +420,10 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),
         signature_events: r.signature_events.clone(),
-        midi_clock_send_enabled: r.midi_devices.midi_clock_send_enabled,
-        midi_clock_send_device: r.midi_devices.midi_clock_send_device.clone(),
-        midi_clock_recv_enabled: r.midi_devices.midi_clock_recv_enabled,
-        midi_clock_recv_device: r.midi_devices.midi_clock_recv_device.clone(),
+        midi_clock_send_enabled: r.devices.midi.midi_clock_send_enabled,
+        midi_clock_send_device: r.devices.midi.midi_clock_send_device.clone(),
+        midi_clock_recv_enabled: r.devices.midi.midi_clock_recv_enabled,
+        midi_clock_recv_device: r.devices.midi.midi_clock_recv_device.clone(),
         // Legacy field — current code persists the full pattern bank
         // below. Kept empty here so projects authored by this build skip
         // straight to the new shape, and the legacy loader only kicks in

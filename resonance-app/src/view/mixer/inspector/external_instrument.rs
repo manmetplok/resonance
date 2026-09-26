@@ -181,7 +181,7 @@ fn ext_midi_output_block(
     let out_choices = super::midi_choices_with_override(
         &r.ui.view_caches.midi_output_choices,
         track.midi_output_device.as_deref(),
-        &r.midi_devices.midi_output_devices,
+        &r.devices.midi.midi_output_devices,
     );
     let selected = MidiPickerChoice(track.midi_output_device.clone());
     let device_picker = pick_list(out_choices, Some(selected), move |choice| {
@@ -377,7 +377,7 @@ fn ext_patch_block(
     let selected_def = ext
         .device_id
         .as_ref()
-        .and_then(|id| r.device_registry.get(id));
+        .and_then(|id| r.devices.registry.get(id));
     let named_patches = selected_def.map(|d| !d.patches.is_empty()).unwrap_or(false);
 
     let patch_section: Element<'static, Message> = if let Some(def) =

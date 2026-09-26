@@ -54,7 +54,7 @@ pub(crate) fn view_bounce_dialog_overlay<'a>(r: &'a Resonance) -> Element<'a, Me
     let selected_device = dialog
         .selected_device
         .as_ref()
-        .and_then(|name| r.input_devices.devices.iter().find(|d| &d.name == name))
+        .and_then(|name| r.devices.input.devices.iter().find(|d| &d.name == name))
         .cloned();
     let device_picker = pick_list(
         // Cached refcounted slice — see inspector.rs comment.

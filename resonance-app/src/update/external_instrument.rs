@@ -157,7 +157,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::Disable(track_id) => {
-            if r.external_instruments.remove(&track_id).is_some() {
+            if r.devices.external_instruments.remove(&track_id).is_some() {
                 let _ = r
                     .engine
                     .send(AudioCommand::ClearExternalInstrument { track_id });
@@ -171,7 +171,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             if let Some(channel) = channel {
                 // A freshly-picked output is assumed online until a re-check
                 // proves otherwise — the engine only ever reports *offline*.
-                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                     state.midi_out_offline = false;
                 }
                 let _ = r.engine.send(AudioCommand::SetTrackMidiOutput {
@@ -200,16 +200,17 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // registry borrow), store the id on the track state, then hand
             // the engine the binding map. An unknown id or `None` clears the
             // engine map (empty params) and the selection.
-            if r.external_instruments.contains_key(&track_id) {
+            if r.devices.external_instruments.contains_key(&track_id) {
                 let params = match &device_id {
                     Some(id) => r
-                        .device_registry
+                        .devices
+                        .registry
                         .get(id)
                         .map(|def| def.params.clone())
                         .unwrap_or_default(),
                     None => Vec::new(),
                 };
-                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                     // Keep the selected id even if it didn't resolve to a
                     // known definition — the picker only offers real ids, and
                     // this makes clearing (`None`) unambiguous.
@@ -227,7 +228,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             });
             if updated.is_some() {
                 // Assume the freshly-picked return is online until re-checked.
-                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                     state.return_input_offline = false;
                 }
                 let _ = r.engine.send(AudioCommand::SetTrackInputDevice {
@@ -248,7 +249,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::SetBank(track_id, bank) => {
-            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+            if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                 state.bank = bank;
                 let program = state.program;
                 let _ = r.engine.send(AudioCommand::SetExternalInstrumentPatch {
@@ -259,7 +260,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::SetProgram(track_id, program) => {
-            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+            if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                 state.program = program;
                 let bank = state.bank;
                 let _ = r.engine.send(AudioCommand::SetExternalInstrumentPatch {
@@ -274,7 +275,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // single Bank Select + Program Change — the same engine path the
             // numeric Bank/Program pickers use (doc #201 §5). The named patch
             // persists implicitly via the resolved bank/program.
-            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+            if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                 state.bank = bank;
                 state.program = program;
                 let _ = r.engine.send(AudioCommand::SetExternalInstrumentPatch {
@@ -285,7 +286,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::SetLatencyOffset(track_id, latency_offset_samples) => {
-            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+            if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                 state.latency_offset_samples = latency_offset_samples;
                 let _ = r
                     .engine
@@ -321,7 +322,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
         }
         M::ToggleRecordArm(track_id) => {
-            let default_device = r.input_devices.default_name.clone();
+            let default_device = r.devices.input.default_name.clone();
             let auto = r.with_track_mut(track_id, |t| {
                 t.record_armed = !t.record_armed;
                 if t.record_armed && t.input_device_name.is_none() {
@@ -345,7 +346,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // Clear offline optimistically, then re-check: the engine
             // re-asserts the offline event for any endpoint still missing,
             // so a recovered device drops back to online with no extra event.
-            if let Some(state) = r.external_instruments.get_mut(&track_id) {
+            if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                 state.midi_out_offline = false;
                 state.return_input_offline = false;
                 let _ = r
@@ -358,11 +359,11 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // track is external, no detect is already running, and the
             // transport is stopped (the engine rejects a ping mid-playback).
             let can_detect = !r.transport.playing
-                && r.external_instruments
+                && r.devices.external_instruments
                     .get(&track_id)
                     .is_some_and(|state| !state.latency_detect_in_progress);
             if can_detect {
-                if let Some(state) = r.external_instruments.get_mut(&track_id) {
+                if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
                     state.latency_detect_in_progress = true;
                     // A fresh attempt supersedes any stale failure reason.
                     state.latency_detect_error = None;
@@ -403,7 +404,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             }
             r.ui.view_caches
                 .rebuild_device_choices(&registry.list());
-            r.device_registry = registry;
+            r.devices.registry = registry;
         }
     }
     Task::none()
@@ -423,6 +424,7 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
 pub(crate) fn enable_external_instrument(r: &mut Resonance, track_id: TrackId) {
     remove_in_app_instrument(r, track_id);
     let state = r
+        .devices
         .external_instruments
         .entry(track_id)
         .or_insert_with(|| ExternalInstrumentState::new(track_id));

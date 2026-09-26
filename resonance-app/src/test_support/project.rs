@@ -328,7 +328,7 @@ impl Resonance {
     /// construction even though the user-authored directory is not read.
     #[doc(hidden)]
     pub fn test_device_definitions(&self) -> Vec<&resonance_common::DeviceDefinition> {
-        self.device_registry.list()
+        self.devices.registry.list()
     }
 
     /// Test-only: read the current error message banner, if any.

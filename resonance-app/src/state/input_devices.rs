@@ -1,6 +1,7 @@
 //! Hardware audio input device list and the OS default (ARCH-06 A6-2).
 //!
-//! Held as a sub-struct on [`Resonance`](crate::Resonance) so handlers
+//! Held as a sub-struct on [`state::DeviceState`](crate::state::DeviceState)
+//! (A-12f) — itself a field on [`Resonance`](crate::Resonance) — so handlers
 //! that only care about audio input configuration can take
 //! `&InputDevices` / `&mut InputDevices` instead of the whole app.
 
@@ -12,8 +13,8 @@ use resonance_audio::types::InputDeviceInfo;
 ///
 /// Named `devices`/`default_name` rather than `input_devices`/
 /// `default_input_device_name` to avoid stuttering through this
-/// struct's own name (`r.input_devices.devices`, not
-/// `r.input_devices.input_devices`) — the one field pair in this batch
+/// struct's own name (`r.devices.input.devices`, not
+/// `r.devices.input.input_devices`) — the one field pair in this batch
 /// where keeping the original names verbatim reads worse than
 /// shortening them.
 #[derive(Debug, Clone, Default)]

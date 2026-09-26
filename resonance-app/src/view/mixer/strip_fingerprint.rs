@@ -120,7 +120,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
     }
     // External-instrument head pill, offline flag and summary chips.
-    let ext = r.external_instruments.get(&track.id);
+    let ext = r.devices.external_instruments.get(&track.id);
     ext.is_some().hash(&mut h);
     if let Some(ext) = ext {
         ext.midi_out_offline.hash(&mut h);
@@ -140,7 +140,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         track.input_device_name.hash(&mut h);
         track.input_port_index.hash(&mut h);
         // Named device params feed the automation picker's option list.
-        if let Some(def) = ext.device_id.as_deref().and_then(|id| r.device_registry.get(id)) {
+        if let Some(def) = ext.device_id.as_deref().and_then(|id| r.devices.registry.get(id)) {
             for p in &def.params {
                 p.id.hash(&mut h);
                 p.name.hash(&mut h);

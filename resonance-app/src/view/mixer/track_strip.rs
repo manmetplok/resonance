@@ -79,7 +79,7 @@ impl crate::Resonance {
         let is_collapsed =
             has_sub_tracks && !self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
 
-        let ext_state = self.external_instruments.get(&track.id);
+        let ext_state = self.devices.external_instruments.get(&track.id);
         let is_selected = self.ui.interaction.selected_track == Some(track.id);
         // A configured external device that's gone offline gives the strip a
         // BAD-pink inset glow so the outage reads at a glance from the mixer
@@ -266,7 +266,7 @@ impl crate::Resonance {
         // at-a-glance "this strip drives outboard gear" cue from design
         // doc #169. Presence in `external_instruments` is the only marker
         // (these tracks have no track-type discriminant).
-        let ext_state = self.external_instruments.get(&track.id);
+        let ext_state = self.devices.external_instruments.get(&track.id);
         if let Some(ext) = ext_state {
             head_row = head_row.push(ext_pill());
             // Offline flag — a small BAD-pink marker in the head when a
@@ -419,10 +419,11 @@ impl crate::Resonance {
         // params) unless this is an external-instrument track with a preset
         // selected whose id resolves in the registry.
         let device_params: &[resonance_common::DeviceParam] = self
+            .devices
             .external_instruments
             .get(&track.id)
             .and_then(|ext| ext.device_id.as_deref())
-            .and_then(|id| self.device_registry.get(id))
+            .and_then(|id| self.devices.registry.get(id))
             .map(|def| def.params.as_slice())
             .unwrap_or(&[]);
         let auto_header = super::automation::automation_header(

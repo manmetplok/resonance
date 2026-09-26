@@ -312,7 +312,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             // `InstrumentTrackAdded` for this id a beat later, which mirrors the
             // track into the registry. Enabling external mode here — before the
             // echo — is safe: `enable_external_instrument` only touches
-            // `r.external_instruments` + the engine, not the registry, and the
+            // `r.devices.external_instruments` + the engine, not the registry, and the
             // engine applies `SetExternalInstrument` after the track exists.
             //
             // Both effects (track creation + external state) fall under one undo
@@ -460,7 +460,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::ToggleRecordArm(id) => {
-            let default_device = r.input_devices.default_name.clone();
+            let default_device = r.devices.input.default_name.clone();
             let auto_device = r.with_track_mut(id, |t| {
                 t.record_armed = !t.record_armed;
                 if t.record_armed && t.input_device_name.is_none() {
@@ -850,7 +850,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
         BounceMode::External => {
             r.modals.bounce_dialog = Some(crate::state::BounceDialogState {
                 source_track_id: track_id,
-                selected_device: r.input_devices.default_name.clone(),
+                selected_device: r.devices.input.default_name.clone(),
                 selected_port: 0,
                 mono: false,
             });

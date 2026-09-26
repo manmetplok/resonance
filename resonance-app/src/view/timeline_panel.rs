@@ -67,8 +67,8 @@ impl crate::Resonance {
             automation: &self.automation,
             device_param_labels: crate::view::timeline::automation::device_param_labels(
                 &self.automation,
-                &self.external_instruments,
-                &self.device_registry,
+                &self.devices.external_instruments,
+                &self.devices.registry,
             ),
             markers: self.markers.as_slice(),
             selected_marker_id: self.ui.interaction.selected_marker_id,

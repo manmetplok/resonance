@@ -19,7 +19,7 @@ use crate::Resonance;
 /// wasn't external yet (the engine accepted it as one), preserving any live
 /// offline flags for a track that was already external.
 pub(super) fn changed(r: &mut Resonance, config: ExternalInstrument) {
-    r.external_instruments
+    r.devices.external_instruments
         .entry(config.track_id)
         .or_insert_with(|| ExternalInstrumentState::new(config.track_id))
         .apply_config(&config);
@@ -27,20 +27,20 @@ pub(super) fn changed(r: &mut Resonance, config: ExternalInstrument) {
 
 /// The track left external-instrument mode — drop its mirror.
 pub(super) fn cleared(r: &mut Resonance, track_id: TrackId) {
-    r.external_instruments.remove(&track_id);
+    r.devices.external_instruments.remove(&track_id);
 }
 
 /// The track's MIDI output device went offline. Set the flag if the track is
 /// external; an event for an unknown track is a stale race and ignored.
 pub(super) fn midi_out_offline(r: &mut Resonance, track_id: TrackId) {
-    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+    if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
         state.midi_out_offline = true;
     }
 }
 
 /// The track's audio-return input device went offline.
 pub(super) fn return_input_offline(r: &mut Resonance, track_id: TrackId) {
-    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+    if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
         state.return_input_offline = true;
     }
 }
@@ -61,7 +61,7 @@ pub(super) fn return_input_offline(r: &mut Resonance, track_id: TrackId) {
 /// `latency_detect_in_progress` guard is cleared and any stale failure reason
 /// from a previous attempt is dropped (todo #1068).
 pub(super) fn latency_measured(r: &mut Resonance, track_id: TrackId, latency_samples: i64) {
-    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+    if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
         state.latency_offset_samples = latency_samples;
         state.latency_detect_in_progress = false;
         state.latency_detect_error = None;
@@ -75,7 +75,7 @@ pub(super) fn latency_measured(r: &mut Resonance, track_id: TrackId, latency_sam
 /// user waiting on a hung detect (todo #1068). An event for an unknown track
 /// is a stale race and ignored.
 pub(super) fn latency_detect_failed(r: &mut Resonance, track_id: TrackId, reason: String) {
-    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+    if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
         state.latency_detect_in_progress = false;
         state.latency_detect_error = Some(reason);
     }
@@ -94,7 +94,7 @@ pub(super) fn device_params_applied(
     track_id: TrackId,
     param_ids: Vec<String>,
 ) {
-    if let Some(state) = r.external_instruments.get_mut(&track_id) {
+    if let Some(state) = r.devices.external_instruments.get_mut(&track_id) {
         state.applied_param_ids = param_ids;
     }
 }

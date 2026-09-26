@@ -199,7 +199,7 @@ fn drop_track_references(
         group.ordered_members.retain(|&m| m != track_id);
     }
 
-    if r.external_instruments.remove(&track_id).is_some() {
+    if r.devices.external_instruments.remove(&track_id).is_some() {
         let _ = r
             .engine
             .send(AudioCommand::ClearExternalInstrument { track_id });

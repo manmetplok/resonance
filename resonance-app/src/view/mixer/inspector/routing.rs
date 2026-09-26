@@ -17,7 +17,7 @@ pub(super) fn routing_group(
 ) -> Element<'static, Message> {
     // External-instrument tracks replace the generic input / MIDI-out
     // routing with the dedicated "External Instrument" group (doc #169).
-    if let Some(ext) = r.external_instruments.get(&track.id) {
+    if let Some(ext) = r.devices.external_instruments.get(&track.id) {
         if collapsed {
             return super::widgets::group_header(
                 "EXTERNAL INSTRUMENT",

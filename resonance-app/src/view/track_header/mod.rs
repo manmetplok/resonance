@@ -176,8 +176,8 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     expanded.hash(&mut h);
     let device_labels = crate::view::timeline::automation::device_param_labels(
         &r.automation,
-        &r.external_instruments,
-        &r.device_registry,
+        &r.devices.external_instruments,
+        &r.devices.registry,
     );
     // Order-independent XOR fold (same discipline as the canvas
     // fingerprint): equal label maps must hash equal regardless of the
@@ -394,8 +394,8 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
     // on a parameter's name (raw-id fallback included).
     let device_labels = crate::view::timeline::automation::device_param_labels(
         &r.automation,
-        &r.external_instruments,
-        &r.device_registry,
+        &r.devices.external_instruments,
+        &r.devices.registry,
     );
     let selected_tracks = &r.ui.interaction.selected_tracks;
     let mut lane_col = column![].spacing(0);
