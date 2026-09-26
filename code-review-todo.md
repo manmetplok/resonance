@@ -40,7 +40,7 @@ master and updates this table. Agents do **not** edit this file.
 | M10 socket/presets/test hygiene | CTL-11/UPD-12, STATE-14, FU-D5, STATE-15, MIX-11 | opus | merged | 32f76e9b |
 | M11 vocal pipeline | UPD-08, VIEW-31, VIEW-34, VIEW-35, FU-V2d | opus | merged | 500d58ee |
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | in progress | |
-| H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | in progress | |
+| H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
 | H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | queued (after M3) | |
@@ -118,6 +118,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
 - [ ] **FU-M11a** (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
+- [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
+- [ ] **FU-H4b** note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
 
 ## How to use this file
 
@@ -1847,7 +1849,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Flip `resonance-audio`/`resonance-app` to depend on `resonance-model`, delete the shims, and add the rule to ARCHITECTURE.md: plugins may depend on `resonance-common` and `resonance-dsp` only.
 - **Verification / done-when:** `cargo tree -p resonance-eq --no-default-features -e normal | grep -c symphonia` is 0; `grep -l resonance-model plugins/*/Cargo.toml` empty.
 
-### [ ] ARCH-08 — Platform and host-GUI leakage in the plugin SDK: 11 manifests name Wayland, and an iced module lives in the plugin crate
+### [x] ARCH-08 — Platform and host-GUI leakage in the plugin SDK: 11 manifests name Wayland, and an iced module lives in the plugin crate — fixed @7eae1a86/be8479d7 (manifests platform-neutral; iced UI moved to app)
 - **Severity:** low
 - **Category:** layering
 - **Location:** `plugins/*/Cargo.toml` `[features] editor = ["dep:wayland-plugin-gui", "dep:plugin-gui-core", …]` (11 copies; only one manifest mentions cocoa), versus `resonance-plugin/Cargo.toml:35-39` which already selects the runtime per target; `resonance-plugin/src/ui.rs` (`pub use iced;`, `UiParam`, `view_generic_params`) used only by `resonance-app` (`resonance-app/Cargo.toml` enables `features = ["ui"]`); `resonance-audio/src/latency.rs:3-6` module doc still says the host "doesn't implement `clap_host_latency`" while `clap_host/mod.rs:46-64` does.
@@ -1871,7 +1873,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Only after ARCH-01 step 3: derive snapshots from the same `Reconcile` diff (store deltas, replay inverses) — not before, as two diff engines would be worse than one deep copy.
 - **Verification / done-when:** a benchmark test snapshots a 2,000-note project 200 times and asserts memory growth is sublinear in note count; the capacity constant no longer appears in `resonance-audio`.
 
-### [ ] ARCH-10 — Rules that exist only in prose: encode the load-bearing invariants as tests
+### [x] ARCH-10 — Rules that exist only in prose: encode the load-bearing invariants as tests — fixed @3519eb79 (tools/arch-invariants, 8 rules)
 - **Severity:** low
 - **Category:** testability
 - **Location:** `ARCHITECTURE.md` (crate DAG, "no direct getters on `AudioEngine`", "view never mutates state", "no `resonance-app` dep from audio"); `resonance-mcp/tests/agent_plugin_lockstep.rs` (the one existing rule-as-test, and a good template); `resonance-app/src/update/control/view_model/` (no wildcard arms today — correct, but unguarded).
