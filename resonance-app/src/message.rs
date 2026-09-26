@@ -1258,9 +1258,14 @@ pub enum ViewportMessage {
     ZoomIn,
     ZoomOut,
     ScrollY(f32),
-    /// Horizontal scroll-to, dispatched when the canvas-side trim/drag
-    /// helpers auto-scroll the timeline as the cursor approaches an edge.
-    ScrollToX(f32),
+    /// The arrange view's outer horizontal `Scrollable` moved or resized
+    /// (its `on_scroll`): live x offset, visible width and content width,
+    /// all in px. Feeds playhead follow (review FU-D1).
+    ArrangeScrolled {
+        offset_x: f32,
+        visible_width: f32,
+        content_width: f32,
+    },
     ScrollToY(f32),
     ViewportWidth(f32),
     /// Total available height the timeline canvas + track-header column

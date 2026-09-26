@@ -61,6 +61,8 @@ mod marker_ui_reducers;
 mod markers_overview_snapshot;
 #[path = "timeline/markers_overview_ui.rs"]
 mod markers_overview_ui;
+#[path = "timeline/playhead_follow.rs"]
+mod playhead_follow;
 #[path = "timeline/quantize_persistence.rs"]
 mod quantize_persistence;
 #[path = "timeline/recording_undo.rs"]

@@ -56,6 +56,22 @@ impl Resonance {
         self.viewport.scroll_offset_y
     }
 
+    /// Test-only: the arrange view's horizontal scroll offset (px) as
+    /// state knows it — the outer `Scrollable`'s reported offset, or
+    /// the target playhead follow last asked it for (review FU-D1).
+    #[doc(hidden)]
+    pub fn test_arrange_scroll_x(&self) -> f32 {
+        self.viewport
+            .follow_pending_x
+            .unwrap_or(self.viewport.scroll_offset)
+    }
+
+    /// Test-only: whether playhead follow is paused by a manual scroll.
+    #[doc(hidden)]
+    pub fn test_follow_paused(&self) -> bool {
+        self.viewport.follow_paused
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.

@@ -368,9 +368,6 @@ pub struct TimelineState {
     pub(super) last_reported_content_height: f32,
     /// Tracks the most recent click on a MIDI clip for double-click detection.
     pub(super) last_midi_click: Option<(Instant, ClipId)>,
-    /// Horizontal scrollbar drag in progress. Stores the x-offset of the
-    /// grab point relative to the left edge of the thumb (in track pixels).
-    pub(super) h_scrollbar_grab: Option<f32>,
     /// Vertical scrollbar drag in progress (y-offset within the thumb).
     pub(super) v_scrollbar_grab: Option<f32>,
     /// Tracks the most recent click on a global track for double-click detection.
@@ -1268,25 +1265,11 @@ impl<'a> TimelineCanvas<'a> {
         // `draw_overlay_into`. Keeping it out of the cached path lets
         // the rest of the timeline geometry stay cached during playback.
 
-        // Smart scrollbars — drawn last so they sit above clips + playhead.
-        let (h_rects, v_rects) = self.scrollbar_rects(bounds);
-
+        // Smart scrollbar — drawn last so it sits above clips + playhead.
         let track_color = Color::from_rgba(0.08, 0.08, 0.08, 0.8);
         let thumb_color = Color::from_rgba(0.45, 0.45, 0.45, 0.85);
 
-        if let Some(sb) = h_rects {
-            frame.fill_rectangle(
-                Point::new(sb.track.x, sb.track.y),
-                Size::new(sb.track.width, sb.track.height),
-                track_color,
-            );
-            frame.fill_rectangle(
-                Point::new(sb.thumb.x, sb.thumb.y),
-                Size::new(sb.thumb.width, sb.thumb.height),
-                thumb_color,
-            );
-        }
-        if let Some(sb) = v_rects {
+        if let Some(sb) = self.scrollbar_rects(bounds) {
             frame.fill_rectangle(
                 Point::new(sb.track.x, sb.track.y),
                 Size::new(sb.track.width, sb.track.height),

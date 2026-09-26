@@ -120,6 +120,9 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     update_vu_meters(r);
     poll_ab_meters(r);
     sync_tempo_at_playhead(r);
+    if let Some(task) = follow_playhead(r) {
+        tasks.push(task);
+    }
     refresh_midi_devices_if_stale(r);
     check_engine_disconnected(r);
     check_output_stream_lost(r);
@@ -338,6 +341,69 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
             denominator: den,
         });
     }
+}
+
+/// Lead-in kept left of the playhead when follow pages the arrange view,
+/// as a fraction of the visible width, so the playhead doesn't sit on
+/// the very edge right after a page turn.
+const FOLLOW_LEAD_FRACTION: f32 = 0.05;
+
+/// Page-style playhead follow for the arrange view (review FU-D1): while
+/// playing, when the playhead leaves the visible part of the outer
+/// `Scrollable`, scroll so it sits just inside the left edge again. Also
+/// catches a loop wrap or seek behind the view.
+///
+/// Follow stays out of the way of the user: it is paused by a manual
+/// scroll during playback (`update::viewport::arrange_scrolled`) until
+/// the transport stops, and skipped while a pointer drag on the timeline
+/// is in flight, so content never pages away under the cursor.
+fn follow_playhead(r: &mut Resonance) -> Option<Task<Message>> {
+    if !r.transport.playing {
+        r.viewport.follow_paused = false;
+        return None;
+    }
+    if r.view_mode != crate::state::ViewMode::Arrange
+        || r.viewport.follow_paused
+        || r.viewport.visible_width <= 0.0
+        || arrange_pointer_drag_active(r)
+    {
+        return None;
+    }
+    let vp = &r.viewport;
+    let playhead_x =
+        (r.transport.playhead as f64 / r.sample_rate.max(1) as f64) as f32 * vp.zoom;
+    let left = vp.follow_pending_x.unwrap_or(vp.scroll_offset);
+    if playhead_x >= left && playhead_x < left + vp.visible_width {
+        return None;
+    }
+    let max_x = (vp.scroll_content_width - vp.visible_width).max(0.0);
+    let target = (playhead_x - vp.visible_width * FOLLOW_LEAD_FRACTION).clamp(0.0, max_x);
+    if (target - left).abs() <= 0.5 {
+        // Already as far as the content allows (playhead past the end).
+        return None;
+    }
+    r.viewport.follow_pending_x = Some(target);
+    Some(iced::widget::operation::scroll_to(
+        crate::state::ARRANGE_SCROLL_ID,
+        iced::widget::scrollable::AbsoluteOffset {
+            x: Some(target),
+            y: None,
+        },
+    ))
+}
+
+/// A pointer gesture on the arrange timeline is in flight (clip / MIDI
+/// clip move or trim, fade or gain drag, loop-marker drag, browser drop).
+fn arrange_pointer_drag_active(r: &Resonance) -> bool {
+    let i = &r.interaction;
+    i.clip_drag.is_some()
+        || i.clip_trim.is_some()
+        || i.clip_fade_drag.is_some()
+        || i.clip_gain_drag.is_some()
+        || i.midi_clip_drag.is_some()
+        || i.midi_clip_trim.is_some()
+        || r.transport.dragging_loop.is_some()
+        || r.drag_placement.is_some()
 }
 
 /// Quantise a BPM to the `{:.1}` precision the transport field displays,
