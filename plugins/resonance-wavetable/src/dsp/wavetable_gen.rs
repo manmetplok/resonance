@@ -13,7 +13,7 @@ use std::path::Path;
 use resonance_dsp::SimpleRng;
 
 pub const WAVETABLE_SIZE: usize = 2048;
-pub const NUM_OCTAVES: usize = 11;
+pub const NUM_OCTAVES: usize = 12;
 pub const NUM_WAVETABLES: usize = 10;
 
 struct WavetableFrame {

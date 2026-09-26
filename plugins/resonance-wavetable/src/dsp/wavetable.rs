@@ -7,7 +7,7 @@
 ///
 /// Storage layout
 /// --------------
-/// The bundle is ~36 MB. The previous loader parsed it into a
+/// The bundle is ~40 MB. The previous loader parsed it into a
 /// `Vec<Wavetable> -> Vec<WavetableFrame> -> Vec<Vec<f32>>` tree **per plugin
 /// instance**, which meant:
 ///
@@ -28,7 +28,10 @@
 compile_error!("bundled wavetables assume little-endian f32 layout");
 
 pub const WAVETABLE_SIZE: usize = 2048;
-pub const NUM_OCTAVES: usize = 11;
+/// Mip levels per frame. Level `k` holds partials up to
+/// `22050 / (8.1758 * 2^k)`; the top one (11) is the fundamental alone, the
+/// alias-free read above C9 (FU-G2b).
+pub const NUM_OCTAVES: usize = 12;
 pub const NUM_WAVETABLES: usize = 10;
 
 /// Number of `f32`s spanned by all mip levels of one frame.

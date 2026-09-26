@@ -96,8 +96,11 @@ pub fn select_mip(freq_hz: f32, sample_rate: f32) -> (usize, f32) {
     let weight = ((x - lo) / MIP_CROSSFADE_OCTAVES + 1.0).clamp(0.0, 1.0);
     let lo = lo as usize;
     if lo >= top {
-        // Above the top level's range nothing darker exists; the top level
-        // (two partials) is what there is.
+        // Above the top level's range nothing darker exists. The top level
+        // (11, design pitch C10 at 44.1 kHz) holds the fundamental alone,
+        // so it stays alias-free until the fundamental itself passes
+        // Nyquist. It used to be level 10, whose second partial folded
+        // from about 11 kHz up (FU-G2b).
         (top, 0.0)
     } else {
         (lo, weight)

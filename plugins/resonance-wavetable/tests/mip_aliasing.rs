@@ -258,3 +258,23 @@ fn higher_sample_rate_never_selects_darker() {
     }
     assert!(brighter_somewhere, "48 kHz never used a brighter level than 44.1 kHz");
 }
+
+/// Above the top level's design pitch (C9 at 44.1 kHz) the selection used
+/// to stay on level 10, whose two partials fold once the second one passes
+/// Nyquist — from about 11 kHz up (FU-G2b). The keyboard above C8 (pitch
+/// bend, transposition, modulation) must stay band-limited up to MIDI 127.
+#[test]
+fn top_octave_is_band_limited() {
+    let tables = load_bundled();
+    let freqs: Vec<f32> = (109..=127).map(|n| midi_to_hz(n as f32)).collect();
+    for sr in [44_100.0f32, 48_000.0] {
+        for (position, shape) in [(SAW_POS, "saw"), (SQUARE_POS, "square")] {
+            let (db, f) = worst(&tables[BASIC], position, &freqs, sr);
+            eprintln!("{shape} @ {sr} Hz above C8: worst off-harmonic energy {db:.1} dB at {f:.1} Hz");
+            assert!(
+                db < MAX_ALIAS_DB,
+                "{shape} @ {sr} Hz aliases above C8: {db:.1} dB re fundamental at {f:.1} Hz"
+            );
+        }
+    }
+}
