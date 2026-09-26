@@ -38,13 +38,80 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AssetId, AudioCommand};
 use resonance_audio::PoolImportOutcome;
 
-use crate::message::{Message, RelinkError, RelinkMessage};
+use crate::message::Message;
 use crate::state::pool::PoolAsset;
 use crate::state::{RelinkScan, ScanControl};
 use crate::Resonance;
+
+/// Missing-file relink actions (doc #175, todo #600). When a project is
+/// loaded whose pool references a WAV that is no longer on disk, that
+/// asset is flagged [`missing`](crate::state::pool::PoolAsset::missing) —
+/// its clips are kept offline so nothing is lost — and these messages
+/// drive resolving the file again:
+///
+/// * per-file [`Locate`](RelinkMessage::Locate) opens an OS file picker so
+///   the user points one missing asset at a replacement file, and
+/// * one-shot [`SearchFolder`](RelinkMessage::SearchFolder) picks a folder
+///   and resolves *every* missing asset whose original filename is found
+///   inside it (recursively).
+///
+/// Either way the resolved source is copied/transcoded back into the
+/// project's `audio/` folder under the asset's stable
+/// `asset_{id}.wav` name (reusing the import-to-pool path), the missing
+/// flag is cleared, and the asset's clips are reloaded so playback
+/// resumes. The metadata change rides the normal project snapshot, so the
+/// relink is undoable. Routed through `update::relink::handle`.
+#[derive(Debug, Clone)]
+pub enum RelinkMessage {
+    /// Open the OS file picker to locate a replacement file for one
+    /// missing asset (the per-file `Locate…` action).
+    Locate(AssetId),
+    /// File-picker result for a single-asset [`Locate`](Self::Locate):
+    /// `Some` with the chosen path, or `None` if the user cancelled.
+    Located(AssetId, Option<std::path::PathBuf>),
+    /// Open the OS folder picker for the one-shot `Search a folder…`
+    /// batch relink.
+    SearchFolder,
+    /// Folder-picker result for [`SearchFolder`](Self::SearchFolder):
+    /// `Some` folder resolves every missing asset whose original filename
+    /// exists inside it; `None` if the user cancelled.
+    FolderChosen(Option<std::path::PathBuf>),
+    /// The background walk of a [`FolderChosen`](Self::FolderChosen)
+    /// folder finished: the scan's token and the lowercased filename →
+    /// path matches, or `None` if it was cancelled. Starts the imports.
+    ScanFinished(
+        u64,
+        Option<std::collections::HashMap<String, std::path::PathBuf>>,
+    ),
+    /// Cancel the folder search in flight.
+    CancelScan,
+    /// A background relink import finished. `Ok` carries the transcoded
+    /// asset's fresh metadata (it now lives in the project folder); `Err`
+    /// carries the asset/file/reason of a failed import.
+    Imported(Result<PoolImportOutcome, RelinkError>),
+    /// Open the missing-files relink modal (todo #607). Fired on load when
+    /// a project references missing assets, and by the Pool tab's inline
+    /// `relink` chip. Snapshots the currently-missing assets into
+    /// [`RelinkState::modal_targets`](crate::state::RelinkState::modal_targets).
+    /// Presentational only — never undoable.
+    ShowModal,
+    /// Dismiss the relink modal (its "Leave offline" / close action). The
+    /// tracked clips stay offline until relinked later. Presentational
+    /// only — never undoable.
+    DismissModal,
+}
+
+/// A failed relink import: which asset was being relinked, the source
+/// file that was tried, and a user-facing reason.
+#[derive(Debug, Clone)]
+pub struct RelinkError {
+    pub asset_id: AssetId,
+    pub path: String,
+    pub reason: String,
+}
 
 pub fn handle(r: &mut Resonance, m: RelinkMessage) -> Task<Message> {
     match m {
