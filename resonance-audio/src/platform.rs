@@ -779,6 +779,36 @@ impl MonitorResampler {
     }
 }
 
+/// The recording ring producer, parked until the input stream that
+/// actually opens claims it (see `build_input_stream_cpal`).
+type RecProducerSlot = Arc<parking_lot::Mutex<Option<ringbuf::HeapProd<f32>>>>;
+
+/// Channel counts to try, in order, when opening a cpal input stream
+/// (FU-M3a): the capped request first, then every count the device
+/// reports as supported that fits `max_channels` (widest first), then the
+/// device default when it fits. Deduplicated; never above `max_channels`.
+/// Empty only when nothing the device offers fits — the caller reports
+/// that instead of opening a stream wider than the monitor scratch.
+pub fn input_channel_candidates(
+    primary: u16,
+    default_channels: u16,
+    supported: &[u16],
+    max_channels: u16,
+) -> Vec<u16> {
+    let mut fitting: Vec<u16> = supported.to_vec();
+    fitting.sort_unstable_by(|a, b| b.cmp(a));
+    let mut out: Vec<u16> = Vec::new();
+    for c in std::iter::once(primary)
+        .chain(fitting)
+        .chain(std::iter::once(default_channels))
+    {
+        if (1..=max_channels).contains(&c) && !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// cpal-based input stream builder. Kept as the fallback for non-
 /// Linux platforms and for Linux setups where PipeWire init fails.
 #[allow(clippy::too_many_arguments)]
@@ -862,9 +892,17 @@ fn build_input_stream_cpal(
     let make_callback = move |channels: u16,
                               shared: Arc<SharedState>,
                               mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                              mut rec_producer: Option<ringbuf::HeapProd<f32>>,
+                              rec_slot: RecProducerSlot,
                               capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
         let stride = channels.max(1) as usize;
+        // The recording producer stays in `rec_slot` until the first
+        // callback of the stream that actually opened claims it: a
+        // rejected attempt drops its callback unrun, and the producer
+        // must survive for the next channel count (FU-M3a). One
+        // non-blocking `try_lock` per callback until it is claimed
+        // (uncontended: the builder only peeks at it before building).
+        let mut rec_producer: Option<ringbuf::HeapProd<f32>> = None;
+        let mut rec_pending = rec_slot.lock().is_some();
         // Monitor-path rate conversion (finding #21): the monitor ring's
         // consumer replays at the engine rate, so a device running at a
         // different rate must be converted before the push — otherwise
@@ -873,6 +911,12 @@ fn build_input_stream_cpal(
         let mut monitor_resampler = (sample_rate != engine_sample_rate)
             .then(|| MonitorResampler::new(sample_rate, engine_sample_rate, stride));
         move |data: &[f32], _: &cpal::InputCallbackInfo| {
+            if rec_pending {
+                if let Some(mut slot) = rec_slot.try_lock() {
+                    rec_producer = slot.take();
+                    rec_pending = false;
+                }
+            }
             let recording = shared.recording.load(Ordering::Relaxed);
             let capture = recording
                 || capture_gate.as_ref().is_some_and(|g| g.load(Ordering::Relaxed));
@@ -914,11 +958,12 @@ fn build_input_stream_cpal(
     // input stream. See `stream_errors.rs` for the rationale — same
     // story as the output stream in `engine::AudioEngine::new`: counted
     // here on the audio thread, logged by the engine loop (FU-H6b).
-    let attempt = |channels: u16,
-                   shared: Arc<SharedState>,
-                   mon_producer: Arc<parking_lot::Mutex<ringbuf::HeapProd<f32>>>,
-                   rec_producer: Option<ringbuf::HeapProd<f32>>,
-                   capture_gate: Option<Arc<std::sync::atomic::AtomicBool>>| {
+    let rec_slot: RecProducerSlot = Arc::new(parking_lot::Mutex::new(rec_producer.take()));
+    let attempt = |channels: u16| {
+        let shared = Arc::clone(&shared);
+        let mon_producer = Arc::clone(&mon_producer);
+        let rec_slot = Arc::clone(&rec_slot);
+        let capture_gate = capture_gate.clone();
         let mut cfg = base_config.clone();
         cfg.sample_rate = sample_rate;
         cfg.buffer_size = cpal::BufferSize::Fixed(quantum as cpal::FrameCount);
@@ -926,49 +971,49 @@ fn build_input_stream_cpal(
         let shared_err = Arc::clone(&shared);
         device.build_input_stream(
             &cfg,
-            make_callback(channels, shared, mon_producer, rec_producer, capture_gate),
+            make_callback(channels, shared, mon_producer, rec_slot, capture_gate),
             move |err| shared_err.input_stream_errors.record(&err),
             None,
         )
     };
 
     // Capped at the monitor scratch width (code review MIX-09): a device
-    // whose default is wider (MADI / Dante) is asked for the cap instead,
-    // and its default is only a fallback when it fits.
+    // whose default is wider (MADI / Dante) is asked for the cap instead.
+    // If the device rejects that, walk down through the channel counts it
+    // says it supports (up to the cap), then its default when that fits,
+    // before giving up (FU-M3a).
     let max_channels = crate::limits::MAX_INPUT_CHANNELS as u16;
     let primary_channels = desired_channels.max(default_channels).min(max_channels);
-    let (stream, channels) = match attempt(
-        primary_channels,
-        Arc::clone(&shared),
-        Arc::clone(&mon_producer),
-        rec_producer.take(),
-        capture_gate.clone(),
-    ) {
-        Ok(s) => (s, primary_channels),
-        Err(primary_err) => {
-            // Fall back to the device's default channel count. The
-            // recording / deinterleave layer will then clamp ports past
-            // that to the last channel — same caveat as before this
-            // fix, but at least monitoring of channels 1+2 still works.
-            tracing::warn!(
-                "[input] {} channels rejected ({}); falling back to {} channels",
-                primary_channels, primary_err, default_channels
-            );
-            if default_channels > max_channels {
-                return Err(format!(
-                    "Failed to build input stream (requested {primary_channels}ch: {primary_err}; \
-                     the device default of {default_channels}ch exceeds the supported {max_channels})"
-                ));
+    let supported: Vec<u16> = device
+        .supported_input_configs()
+        .map(|configs| configs.map(|c| c.channels()).collect())
+        .unwrap_or_default();
+    let candidates =
+        input_channel_candidates(primary_channels, default_channels, &supported, max_channels);
+    let mut failures: Vec<String> = Vec::new();
+    let mut opened = None;
+    for &channels in &candidates {
+        match attempt(channels) {
+            Ok(s) => {
+                opened = Some((s, channels));
+                break;
             }
-            match attempt(default_channels, shared, mon_producer, rec_producer, capture_gate) {
-                Ok(s) => (s, default_channels),
-                Err(e) => {
-                    return Err(format!(
-                        "Failed to build input stream (requested {primary_channels}ch: {primary_err}; fell back to {default_channels}ch: {e})"
-                    ));
-                }
+            Err(e) => {
+                tracing::warn!("[input] {channels} channels rejected ({e})");
+                failures.push(format!("{channels}ch: {e}"));
             }
         }
+    }
+    let Some((stream, channels)) = opened else {
+        let tried = if failures.is_empty() {
+            "no channel count to try".to_string()
+        } else {
+            failures.join("; ")
+        };
+        return Err(format!(
+            "Failed to build input stream: the device offers no channel count up to the \
+             supported {max_channels} that it accepts (default {default_channels}ch; tried {tried})"
+        ));
     };
 
     stream

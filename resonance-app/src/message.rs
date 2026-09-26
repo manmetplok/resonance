@@ -682,6 +682,11 @@ pub enum ProjectIoMessage {
     /// set, skips the recents list) rather than a manual save.
     ProjectSaved(Result<(), String>, bool),
     ProjectLoaded(Result<Box<LoadedProject>, String>),
+    /// A disk open's async load finished, tagged with the
+    /// `io.open_token` it was started under. Forwarded as
+    /// [`Self::ProjectLoaded`] when the token is still current; dropped
+    /// when a later open overtook it (FU-A1a).
+    OpenLoadFinished(u64, Result<Box<LoadedProject>, String>),
     /// A *user* template finished loading from disk (todo #665). Carries the
     /// same `LoadedProject` payload as [`Self::ProjectLoaded`], but the
     /// instantiate handler replays it as a fresh, untitled project (path left

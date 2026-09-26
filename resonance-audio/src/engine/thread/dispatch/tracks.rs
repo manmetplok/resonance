@@ -71,10 +71,10 @@ pub(super) fn dispatch_tracks(
         AudioCommand::ListInputDevices => tracks::handle_list_input_devices(ctx),
         AudioCommand::ClearAll => tracks::handle_clear_all(ctx, state),
         AudioCommand::SetTrackFrozenSource { track_id, source } => {
-            tracks::handle_set_track_frozen_source(ctx, track_id, source)
+            tracks::handle_set_track_frozen_source(ctx, state, track_id, source)
         }
         AudioCommand::UnfreezeTrack { track_id } => {
-            tracks::handle_unfreeze_track(ctx, track_id)
+            tracks::handle_unfreeze_track(ctx, state, track_id)
         }
         AudioCommand::SetTrackFxBypass { track_id, bypassed } => {
             tracks::handle_set_track_fx_bypass(ctx, track_id, bypassed)

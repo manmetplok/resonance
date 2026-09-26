@@ -111,17 +111,19 @@ fn undoing_a_param_change_restores_only_that_param_everywhere() {
     // The mirror (knob display) shows the undone state.
     assert_eq!(app.test_plugin_param(EQ, A), Some(5.0), "A keeps its edit");
     assert_eq!(app.test_plugin_param(EQ, B), Some(0.0), "B is undone");
-    // The engine is told B's old value, and A's value survives the stale
-    // blob the restore pushes before it.
+    // The engine is told B's old value, and A's value survives: either no
+    // stale blob is pushed (the cache hasn't moved since the snapshot), or
+    // A is re-sent after it.
     assert_eq!(last_sent(&cmds, B), Some(0.0));
-    assert_eq!(last_sent(&cmds, A), Some(5.0));
     let blob_at = cmds
         .iter()
         .position(|c| matches!(c, AudioCommand::LoadPluginState { .. }));
-    let param_at = cmds
-        .iter()
-        .rposition(|c| matches!(c, AudioCommand::SetPluginParam { .. }));
-    if let (Some(blob_at), Some(param_at)) = (blob_at, param_at) {
+    if let Some(blob_at) = blob_at {
+        assert_eq!(last_sent(&cmds, A), Some(5.0));
+        let param_at = cmds
+            .iter()
+            .rposition(|c| matches!(c, AudioCommand::SetPluginParam { .. }))
+            .expect("params re-sent");
         assert!(param_at > blob_at, "explicit values win over the blob");
     }
     // The next save persists the undone values.
@@ -155,4 +157,63 @@ fn undoing_a_preset_recall_restores_the_previous_values() {
     assert_eq!(last_sent(&cmds, B), Some(0.0));
     assert_eq!(saved(&app, A), 2.0);
     assert_eq!(saved(&app, B), 0.0);
+}
+
+/// Undoing one knob re-sends that knob only (FU-A2b). The blob cached at
+/// plugin add is the same one the snapshot holds, so the engine's live
+/// state already matches the snapshot everywhere but the undone param:
+/// the restore used to push that stale blob anyway and then re-send every
+/// non-default param to repair what it reset — each one also echoing a
+/// `PluginParamText` back.
+#[test]
+fn undoing_one_knob_resends_only_that_knob() {
+    let (mut app, rx) = app();
+    set(&mut app, A, 5.0);
+    set(&mut app, B, 3.0);
+    drain(&rx);
+
+    let _ = app.update(Message::Undo);
+    let cmds = drain(&rx);
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, AudioCommand::LoadPluginState { .. })),
+        "the unchanged cached blob is not re-pushed"
+    );
+    let sent: Vec<u32> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            AudioCommand::SetPluginParam { param_id, .. } => Some(*param_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec![B], "only the undone param is re-sent");
+    assert_eq!(app.test_plugin_param(EQ, B), Some(0.0));
+}
+
+/// When the cache moved on since the snapshot (an editor close or a save
+/// refreshed it), the snapshot's blob is pushed, and every param it may
+/// have reset is driven back explicitly.
+#[test]
+fn a_refreshed_blob_is_pushed_and_params_reapplied_after_it() {
+    let (mut app, rx) = app();
+    set(&mut app, A, 5.0);
+    set(&mut app, B, 3.0);
+    // The engine's fresh blob arrives after the edits.
+    app.test_seed_plugin_state(EQ, vec![0xD1]);
+    drain(&rx);
+
+    let _ = app.update(Message::Undo);
+    let cmds = drain(&rx);
+    let blob_at = cmds
+        .iter()
+        .position(|c| matches!(c, AudioCommand::LoadPluginState { .. }))
+        .expect("the snapshot's blob differs from the live cache");
+    assert_eq!(last_sent(&cmds, A), Some(5.0));
+    assert_eq!(last_sent(&cmds, B), Some(0.0));
+    let param_at = cmds
+        .iter()
+        .rposition(|c| matches!(c, AudioCommand::SetPluginParam { .. }))
+        .expect("params re-sent");
+    assert!(param_at > blob_at);
 }

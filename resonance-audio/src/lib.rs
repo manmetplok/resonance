@@ -65,7 +65,7 @@ pub use engine::{MAX_CLIP_GAIN_DB, MIN_CLIP_GAIN_DB};
 /// The pure per-file import step behind `ImportAudioToPool`, and its
 /// result. The app's relink flow runs it directly on a worker to re-import
 /// a missing asset under its existing id.
-pub use engine::{import_one_to_pool, PoolImportOutcome};
+pub use engine::{import_one_to_pool, PoolImportOutcome, POOL_IMPORT_CANCELLED};
 pub use midi_hardware::MidiDeviceInfo;
 pub use types::*;
 
@@ -192,7 +192,9 @@ pub mod test_support {
         retune_clip, snapshot_tuning_jobs, TuningJob,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
-    pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
+    pub use crate::platform::{
+        input_channel_candidates, pw_delay_to_engine_samples, MonitorResampler,
+    };
     pub use crate::recording::apply_take_shift;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
@@ -226,7 +228,7 @@ pub mod test_support {
     };
     pub use crate::stream_errors::{
         format_underrun_line, StreamErrorLatch, UnderrunRateLimiter, UnderrunReport,
-        UNDERRUN_REPORT_INTERVAL,
+        STREAM_ERROR_TEXT_MAX, UNDERRUN_REPORT_INTERVAL,
     };
     /// The panic containment every detached worker (offline render
     /// spawn sites, `ImportQueue` jobs) runs its body through — exposed

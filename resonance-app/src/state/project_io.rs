@@ -50,6 +50,12 @@ pub struct ProjectIoState {
     /// once the load succeeds, so a failed open leaves the current
     /// project's path alone (code review STATE-01 / UPD-01).
     pub pending_open_path: Option<std::path::PathBuf>,
+    /// Token of the most recently started disk open. Each open bumps it
+    /// and its async load reports back with the value it started with
+    /// (`OpenLoadFinished`); a result whose token is no longer current was
+    /// overtaken by a later open and is dropped, so two overlapping opens
+    /// can't adopt one's content under the other's path (FU-A1a).
+    pub open_token: u64,
     /// Runtime-only state to re-apply after an undo/redo restore, once
     /// `replay_loaded_project` has rebuilt the declarative project.
     /// `None` for a normal project load, `Some` for undo/redo.

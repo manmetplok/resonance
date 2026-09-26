@@ -148,17 +148,42 @@ fn a_contended_block_without_a_note_off_does_not_cut_a_sustained_note() {
 }
 
 /// When the MIDI clips themselves are the contended map, what the block
-/// lost can't be known: it flushes, as before.
+/// lost is checked on the next block that holds them: a NoteOff that fell
+/// in the skipped span flushes (FU-A4a)...
 #[test]
-fn a_block_skipped_with_the_midi_clips_contended_still_flushes() {
-    let (mut h, rec) = harness(16);
-    for _ in 0..3 {
+fn a_note_off_skipped_with_the_midi_clips_contended_flushes() {
+    // NoteOff at 24 000 samples, inside block 187 ([23 936, 24 064)).
+    let (mut h, rec) = harness(1);
+    for _ in 0..187 {
         h.render();
     }
+    assert!(rec.lock().held[60]);
     h.render_with_queued_writer(StateMap::MidiClips);
     let calls_before = rec.lock().calls;
     h.render();
     assert!(rec.lock().panicked_in(calls_before));
+    assert!(!rec.lock().any_held());
+}
+
+/// ...but a sustained note survives MIDI-clip contention (a piano-roll
+/// edit) when no NoteOff fell in the skipped span — it used to be cut.
+#[test]
+fn midi_clip_contention_without_a_note_off_does_not_cut_a_sustained_note() {
+    let (mut h, rec) = harness(16);
+    for _ in 0..3 {
+        h.render();
+    }
+    for _ in 0..5 {
+        h.render_with_queued_writer(StateMap::MidiClips);
+        h.render();
+    }
+    let rec = rec.lock();
+    assert!(rec.held[60], "the pad still sounds");
+    assert!(
+        rec.events.iter().all(|e| e.on),
+        "no NoteOff / panic reached the instrument: {:?}",
+        rec.events.iter().filter(|e| !e.on).count()
+    );
 }
 
 /// A/B reference monitoring while playing: the chord's NoteOff falls

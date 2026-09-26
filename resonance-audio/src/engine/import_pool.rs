@@ -181,6 +181,38 @@ pub fn run_pool_import_with(
     }
 }
 
+/// Reason reported for each file of a pool-import batch whose project was
+/// closed before it finished (FU-A4b).
+pub const POOL_IMPORT_CANCELLED: &str =
+    "Import cancelled: the project was closed before it finished.";
+
+/// The one terminal event a stale batch sends for the file `ev` is about,
+/// the first time that file comes up after the project closed: an
+/// `ImportFailed` with [`POOL_IMPORT_CANCELLED`]. `None` for a file already
+/// cancelled, or an event that names no file of this batch.
+fn cancellation(
+    jobs: &[(AssetId, String)],
+    cancelled: &mut Vec<AssetId>,
+    ev: &AudioEvent,
+) -> Option<AudioEvent> {
+    let asset_id = match ev {
+        AudioEvent::ImportProgress { asset_id, .. }
+        | AudioEvent::ImportFailed { asset_id, .. }
+        | AudioEvent::AssetImported { asset_id, .. } => *asset_id,
+        _ => return None,
+    };
+    if cancelled.contains(&asset_id) {
+        return None;
+    }
+    let (_, path) = jobs.iter().find(|(id, _)| *id == asset_id)?;
+    cancelled.push(asset_id);
+    Some(AudioEvent::ImportFailed {
+        asset_id,
+        path: path.clone(),
+        reason: POOL_IMPORT_CANCELLED.into(),
+    })
+}
+
 pub(crate) fn handle_import_audio_to_pool(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -224,7 +256,9 @@ pub(crate) fn handle_import_audio_to_pool(
     // `AllCleared` after it. Every event of this batch is sent under a read
     // of that lock after re-checking the generation, so a batch outlived by
     // its project stops emitting before `AllCleared` and never lands in the
-    // new project's pool.
+    // new project's pool. Its unresolved files each get one final
+    // `ImportFailed` ("cancelled") instead, so the import modal's rows and
+    // any control-API import job waiting on them resolve (FU-A4b).
     let clips_fence = std::sync::Arc::clone(ctx.clips);
     let clear_generation = std::sync::Arc::clone(&state.clear_generation);
     let generation = clear_generation.load(std::sync::atomic::Ordering::SeqCst);
@@ -247,6 +281,7 @@ pub(crate) fn handle_import_audio_to_pool(
                 || {
                     let stale =
                         || clear_generation.load(std::sync::atomic::Ordering::SeqCst) != generation;
+                    let mut cancelled: Vec<AssetId> = Vec::new();
                     run_pool_import_with(
                         &jobs,
                         &project_dir,
@@ -271,6 +306,9 @@ pub(crate) fn handle_import_audio_to_pool(
                                     let _ = std::fs::remove_file(
                                         project_dir.join(project_relative_path),
                                     );
+                                }
+                                if let Some(ev) = cancellation(&jobs, &mut cancelled, &ev) {
+                                    let _ = event_tx.send(ev);
                                 }
                                 return;
                             }

@@ -62,8 +62,18 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // previously open project. A disk load re-attaches frozen caches
     // afterwards from the project file (see `Resonance::rehydrate_frozen_tracks`,
     // ba todo #577); an undo/redo restore instead reinstates the snapshot's
-    // statuses via `apply_freeze_restore`.
+    // statuses via `apply_freeze_restore`. That restore keeps the UPD-05
+    // content baselines too: a track it brings back `Frozen` must still
+    // go stale on its next content edit, and the baseline it was frozen
+    // with is not in the snapshot (FU-H2b). The fingerprint is keyed by
+    // track id and slot position, both stable across the replay.
+    let baselines = if r.io.pending_undo_extras.is_some() {
+        std::mem::take(&mut r.freeze.content_baselines)
+    } else {
+        Default::default()
+    };
     r.freeze.reset();
+    r.freeze.content_baselines = baselines;
 
     // Missing-plugin warning (ba doc #275 P5, todo #1309). A genuine
     // disk load starts with a clean slate: every slot is re-added

@@ -28,6 +28,13 @@ pub trait NoteSink {
     fn note_on(&mut self, key: u8, velocity: f32, sample_offset: u32);
     fn note_off(&mut self, key: u8, sample_offset: u32);
     fn all_notes_off(&mut self);
+    /// A parked loop-seam panic: like [`Self::all_notes_off`], but the
+    /// events an instrument carried past the seam's head sub-block are
+    /// timed after the panic and survive it (FU-A4a). Defaults to the
+    /// plain panic for sinks with no carried events.
+    fn all_notes_off_keep_carried(&mut self) {
+        self.all_notes_off();
+    }
 }
 
 impl NoteSink for SyncClapInstance {
@@ -41,10 +48,15 @@ impl NoteSink for SyncClapInstance {
         self.0.arm_idle_hold();
         self.0.queue_note_off(key, sample_offset);
     }
-    // A parked panic lands a block or more late, past any seam its
-    // carried events were timed against — drop them (FU-F2a).
+    // A parked Stop / relocate panic has no "after" for carried events
+    // to belong to — drop them (FU-F2a).
     fn all_notes_off(&mut self) {
         self.0.all_notes_off_and_drop_carried();
+    }
+    // A parked seam panic: carried events are the loop's first notes,
+    // timed after it — keep them (FU-A4a).
+    fn all_notes_off_keep_carried(&mut self) {
+        self.0.all_notes_off();
     }
 }
 
@@ -52,9 +64,12 @@ struct Slot {
     instance: Option<PluginInstanceId>,
     events: Vec<PendingNoteEvent>,
     /// Deliver an all-notes-off before any stashed events on the next
-    /// successful lock. Set by `request_panic` (loop-seam panic that
-    /// couldn't take the lock) and by note-off overflow.
+    /// successful lock. Set by `request_panic` (a panic that couldn't
+    /// take the plugin lock) and by note-off overflow.
     panic: bool,
+    /// The parked panic must also drop the instrument's carried events:
+    /// set by every panic except a loop seam's (FU-A4a).
+    drop_carried: bool,
 }
 
 pub struct MidiStash {
@@ -69,6 +84,7 @@ impl MidiStash {
                     instance: None,
                     events: Vec::with_capacity(MAX_STASHED_EVENTS),
                     panic: false,
+                    drop_carried: false,
                 })
                 .collect(),
         }
@@ -112,6 +128,7 @@ impl MidiStash {
             } else {
                 slot.events.clear();
                 slot.panic = true;
+                slot.drop_carried = true;
             }
         }
     }
@@ -131,13 +148,27 @@ impl MidiStash {
             slot.instance = None;
             slot.events.clear();
             slot.panic = false;
+            slot.drop_carried = false;
         }
     }
 
     /// Request an all-notes-off on the next successful lock for `id`
-    /// (used when the loop-seam panic couldn't take the plugin lock).
-    /// Clears any stashed events — they predate the panic.
+    /// (used when a Stop / relocate panic couldn't take the plugin
+    /// lock). Clears any stashed events — they predate the panic — and
+    /// drops the instrument's carried events on delivery (FU-F2a).
     pub fn request_panic(&mut self, id: PluginInstanceId) {
+        if let Some(slot) = self.slot_mut(id) {
+            slot.events.clear();
+            slot.panic = true;
+            slot.drop_carried = true;
+        }
+    }
+
+    /// [`Self::request_panic`] for a loop-seam panic: the events the
+    /// instrument carried past the seam's head sub-block are timed after
+    /// the seam, so delivery keeps them (FU-A4a) — unless another parked
+    /// panic already asked for them to go.
+    pub fn request_seam_panic(&mut self, id: PluginInstanceId) {
         if let Some(slot) = self.slot_mut(id) {
             slot.events.clear();
             slot.panic = true;
@@ -154,7 +185,11 @@ impl MidiStash {
             return;
         };
         if slot.panic {
-            sink.all_notes_off();
+            if slot.drop_carried {
+                sink.all_notes_off();
+            } else {
+                sink.all_notes_off_keep_carried();
+            }
         }
         for event in &slot.events {
             if event.is_note_on {
@@ -166,6 +201,7 @@ impl MidiStash {
         slot.instance = None;
         slot.events.clear();
         slot.panic = false;
+        slot.drop_carried = false;
     }
 }
 

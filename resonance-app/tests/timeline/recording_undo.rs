@@ -205,3 +205,50 @@ fn a_midi_clip_created_outside_recording_is_not_recorded_again() {
     });
     assert_eq!(entries(&app), 0);
 }
+
+/// A take that lands while a drag gesture is open (FU-A2a). The gesture's
+/// pre-drag snapshot used to be committed *after* the take's entry, so
+/// undoing the drag restored a state that predates the take — the take
+/// vanished with it. The take now splits the gesture: the part of the
+/// drag before it, the take, and the rest of the drag are three entries,
+/// undone newest first.
+#[test]
+fn a_take_landing_mid_drag_survives_undoing_the_drag() {
+    use resonance_app::message::TransportMessage;
+    use resonance_app::state::LoopDragTarget;
+
+    let mut app = app();
+    let (_, loop_out_before, _) = app.test_loop_range();
+    let _ = app.update(Message::Transport(TransportMessage::StartLoopDrag(
+        LoopDragTarget::Out,
+    )));
+    let _ = app.update(Message::Transport(TransportMessage::UpdateLoopDrag(200.0)));
+    let (_, loop_out_mid, _) = app.test_loop_range();
+    app.test_apply_engine_event(finished(CLIP));
+    let _ = app.update(Message::Transport(TransportMessage::UpdateLoopDrag(800.0)));
+    let _ = app.update(Message::Transport(TransportMessage::EndLoopDrag));
+    let (_, loop_out_end, _) = app.test_loop_range();
+    assert!(
+        loop_out_before != loop_out_mid && loop_out_mid != loop_out_end,
+        "each half of the drag moves the loop end, or this test is vacuous"
+    );
+
+    // Undo the rest of the drag: the take stays.
+    let _ = app.update(Message::Undo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        app.test_clips().iter().any(|c| c.id == CLIP),
+        "undoing the drag keeps the take that landed during it"
+    );
+    assert_eq!(app.test_loop_range().1, loop_out_mid);
+
+    // Then the take, then the part of the drag before it.
+    let _ = app.update(Message::Undo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(!app.test_clips().iter().any(|c| c.id == CLIP));
+    assert_eq!(app.test_loop_range().1, loop_out_mid);
+    let _ = app.update(Message::Undo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert_eq!(app.test_loop_range().1, loop_out_before);
+    assert!(!app.test_undo_history().can_undo());
+}

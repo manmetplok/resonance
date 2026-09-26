@@ -370,8 +370,13 @@ impl crate::Resonance {
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.restore_automation_lanes(&extras.automation_lanes);
         self.restore_external_instruments(&extras);
-        self.compose.derived_clips = extras.compose_derived_clips;
-        self.compose.next_derived_clip_id = extras.compose_next_derived_clip_id;
+        // `ClearAll` wiped any clip whose echo was still pending at
+        // snapshot time; nothing will re-create it.
+        self.restore_derived_clips(
+            extras.compose_derived_clips,
+            extras.compose_next_derived_clip_id,
+            false,
+        );
         self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
         self.apply_freeze_restore(extras.track_freeze);
@@ -379,6 +384,33 @@ impl crate::Resonance {
         // runs immediately before this and ends in `replay_take_groups`,
         // which sends `RestoreTakeGroups` — see the note on the fast path
         // in `begin_restore_from_snapshot`.
+    }
+
+    /// Restore the compose section→clip map and its id counter from a
+    /// snapshot — the one rule both restore paths share (FU-H2a).
+    ///
+    /// The map is the snapshot's, not a rebuild from the mirror: a
+    /// snapshot taken while a re-derived clip's `MidiClipCreated` echo was
+    /// in flight holds that clip's entry but not the clip, and on the
+    /// diff replay (`echoes_in_flight`) the engine still has the clip and
+    /// the echo will land — dropping the entry would orphan it. After a
+    /// full replay the engine holds only the replayed clips, so there an
+    /// entry whose clip is not mirrored can never be satisfied and is
+    /// dropped (left in, it would also suspend the UPD-05 freeze check on
+    /// its track forever, see `revalidate_frozen_content`).
+    pub(crate) fn restore_derived_clips(
+        &mut self,
+        mut derived: HashMap<(u64, u64, TrackId), ClipId>,
+        next_derived_clip_id: u64,
+        echoes_in_flight: bool,
+    ) {
+        if !echoes_in_flight {
+            derived.retain(|_, id| self.midi_clips.iter().any(|mc| mc.id == *id));
+        }
+        self.compose.derived_clips = derived;
+        self.compose.next_derived_clip_id = next_derived_clip_id;
+        self.compose
+            .reserve_derived_clip_ids(self.midi_clips.iter().map(|mc| mc.id));
     }
 
     /// Drive the engine + GUI external-instrument state back to `extras`.

@@ -52,6 +52,8 @@ mod playhead_seek_race;
 mod reference_handlers;
 #[path = "engine/take_removal.rs"]
 mod take_removal;
+#[path = "engine/tempo_handlers.rs"]
+mod tempo_handlers;
 #[path = "engine/track_plugin_chain.rs"]
 mod track_plugin_chain;
 #[path = "engine/track_plugin_move.rs"]

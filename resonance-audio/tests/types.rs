@@ -18,6 +18,8 @@ mod bar_length_shared;
 mod clip_warp;
 #[path = "types/fade_curve.rs"]
 mod fade_curve;
+#[path = "types/input_channel_candidates.rs"]
+mod input_channel_candidates;
 #[path = "types/pw_latency_math.rs"]
 mod pw_latency_math;
 #[path = "types/quantize_engine.rs"]

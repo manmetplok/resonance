@@ -49,7 +49,10 @@ master and updates this table. Agents do **not** edit this file.
 | H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | merged | 4f274847 |
 | L1 app logging sweep | FU-H6a, FU-H6c | opus | merged | b8952f64 |
 | C1 app/control follow-ups | FU-E1, E2, M5a/b/c, B2, B3, V2c, V3c, V4a, V4b, A2c, M6b, V1b, M12c | opus | in progress | |
-| A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | in progress | |
+| A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | merged | a2a53c5f |
+| U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | merged | b611a4f5 |
+| R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | in progress | |
+| T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
@@ -58,7 +61,7 @@ master and updates this table. Agents do **not** edit this file.
 
 ### Follow-ups found while fixing (new todos)
 
-- [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
+- [x] **FU-A1a** — fixed @317341e6; (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
 - [x] **FU-A1b** (medium, = UPD-03) — fixed @137c320a; edits during `io.loading` are still acked then wiped by replay.
 - [x] **FU-A1c** — fixed @0c09001c (`Resonance::allocate_track_id` skips group ids); (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
 - [x] **FU-G2a** — fixed @25f5da5c (−79 dB worst bass); (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
@@ -69,7 +72,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-B2** (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
 - [ ] **FU-B3** (low) vocal WAVs are never garbage-collected after section/placement delete.
 - [x] **FU-F2a** — fixed @6f682cc6; (low) carried CLAP note events wait for the instrument's next `process()`; if the tail sub-block skips that instrument the note is late, and a carried note-on can land after a Stop panic.
-- [ ] **FU-F2b** (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
+- [x] **FU-F2b** — fixed @8a534f5d; (low) ENG-03 salvage rewrites the WAV header in place — may fail on CoW filesystems (btrfs) when the disk is full; then no clip.
 - [x] **FU-F2c** — fixed (M8); (low) ENG-12 should reuse the new `activate_and_start()` in `clap_host/state.rs`; `restart()` still bails on inactive instances.
 - [ ] **FU-E1** (medium) `update/control/import_midi.rs:275` rounds imported clip length with `time_sig_num * TICKS_PER_QUARTER_NOTE` — wrong for x/8 meters; use `tempo_map.bar_len_ticks_at(bar)`.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
@@ -77,8 +80,8 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-C1** (medium, = UPD-11) — fixed @b1357803; global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
 - [x] **FU-C2** — fixed @0408640f; (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
 - [x] **FU-C3** — fixed @71423884; (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
-- [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
-- [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
+- [x] **FU-A2a** — fixed @a7198323; (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
+- [x] **FU-A2b** — fixed @6c7e1ee8; (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
 - [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
 - [x] **FU-A2d** — fixed @93f57443 (= STATE-08); (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
 - [x] **FU-F1a** — fixed @be70a1a9; (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
@@ -88,15 +91,15 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-G3b** — fixed @82a7c5b0; (low) no end-to-end test of a loop-record seam at a mismatched device rate (seam flush only covered at resampler level).
 - [x] **FU-D1** — fixed @68f4563d; (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
 - [x] **FU-D2** — fixed @68f4563d; (low, cleanup) dead horizontal-scroll plumbing: `h_scrollbar_grab`, `ScrollToX`, `scroll_to_x`, `viewport.scroll_offset`.
-- [ ] **FU-D3** (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
-- [ ] **FU-D4** (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
+- [x] **FU-D3** — fixed @d6680afc; (low) engine `handle_set_bpm` clamps 20..999 and passes NaN; use `sanitize_bpm` there too.
+- [x] **FU-D4** — fixed @956cbb05; (low) MIDI-imported tempo points > 300 BPM are now clamped at bar-table rebuild.
 - [x] **FU-D5** — fixed @5869f48f; (low, test hygiene) `track_preset_save_prompt` golden reads the real user preset dir (cf. STATE-14).
 - [ ] **FU-M1a** (medium, needs macOS) Cocoa changes for PLG-01/03/05 (+ M8's async destroy) were never compiled: run `cargo check` + `editor_open_cocoa`, `cocoa-plugin-gui editor_size`, `modal_reentrancy` with `-- --ignored` on a Mac.
 - [x] **FU-M1b** — fixed (M8); (low) now that `on_main_thread` runs, a plugin reporting latency while inactive triggers `restart()` on an inactive instance → spurious "failed to reactivate" error; narrow double-restart race.
 - [x] **FU-M1c** — fixed (M8); (low) Wayland re-map waits ≤200 ms for configure then paints anyway (Hyprland quirk) — could be a protocol error on strict compositors; button held across hide stays pressed in egui.
-- [ ] **FU-M3a** (low) MIX-09: >32-ch device whose capped request is rejected now fails to open input (was: crash-prone).
+- [x] **FU-M3a** — fixed @22de6f89; (low) MIX-09: >32-ch device whose capped request is rejected now fails to open input (was: crash-prone).
 - [x] **FU-M3b** — fixed @c63ad91f; (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
-- [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
+- [x] **FU-M3c** — fixed @512942dc; (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
 - [x] **FU-F2d** (medium, upgraded) — fixed @829d19e9 (30/30 under CPU load); `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
 - [x] **FU-M2a** — fixed @0319fb91; (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
 - [x] **FU-M2b** — fixed @06e2803f; (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
@@ -110,7 +113,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-M6d** — fixed @6433c3ac; (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
 - [x] **FU-M4a** — fixed @6146d7b8; (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [x] **FU-M4b** — fixed @12279270; (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
-- [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
+- [x] **FU-M4c** — no bug; documented + pinned @c75d5dad; (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
 - [x] **FU-V1a** — fixed @78487a42; (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
 - [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
@@ -121,9 +124,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
 - [x] **FU-M8b** — fixed @c2fb20fc; (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
 - [ ] **FU-M8c** (low) Cocoa runtime still lacks the PLG-10 bounded `Editor::new` and the held-button release across hide.
-- [ ] **FU-H2a** (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
-- [ ] **FU-H2b** (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
-- [ ] **FU-H2c** (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
+- [x] **FU-H2a** — fixed @55c68584; (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
+- [x] **FU-H2b** — fixed @a6e17050; (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
+- [x] **FU-H2c** — fixed @bdc6479b; (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
 - [x] **FU-V3a** — fixed @dac46f8c; (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
 - [x] **FU-V3b** — fixed @4907ebb1; (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
 - [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
@@ -140,10 +143,13 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-H6c** — fixed @359709b8; (low) default tracing filter string duplicated in `resonance-app/src/main.rs` and `resonance-plugin/src/logging.rs`; log lines now carry `LEVEL target:` prefixes.
 - [ ] **FU-V4a** (low) MIDI import: "match time" rescales against the project tempo at the import point only; "use file tempo" replaces the whole tempo map from bar 1 even for playhead placement; placement controls (start at playhead, merge target) have no UI.
 - [ ] **FU-V4b** (low) chord revalidation runs only on signature-changing messages, not on project load.
-- [ ] **FU-A4a** (low) a carried note-on is dropped when a panic had to be parked (busy lock); MIDI-clip lock contention during piano-roll edits still flushes held notes.
-- [ ] **FU-A4b** (low) after a project switch, the import modal rows of a stale pool batch get no final event — verify the app clears them on load.
-- [ ] **FU-A4c** (low) mismatched-rate freeze cache conversion runs on the engine command thread (~2.7 ms per audio second); backend stream-error text no longer logged (kind only).
+- [x] **FU-A4a** — fixed @ab066bb5; (low) a carried note-on is dropped when a panic had to be parked (busy lock); MIDI-clip lock contention during piano-roll edits still flushes held notes.
+- [x] **FU-A4b** — fixed @6dbbeeec; (low) after a project switch, the import modal rows of a stale pool batch get no final event — verify the app clears them on load.
+- [x] **FU-A4c** — fixed @b40d19d9; (low) mismatched-rate freeze cache conversion runs on the engine command thread (~2.7 ms per audio second); backend stream-error text no longer logged (kind only).
 - [ ] **FU-P1a** (low, test infra) EQ `dsp_golden` differs in last bits between debug and release — always bless under the debug profile the suite uses (or make the comparison tolerant).
+- [ ] **FU-A5a** (medium, flaky) `resonance-audio` `io::import_audio_to_pool::a_pool_import_outlived_by_its_project_never_lands_after_clear_all` failed once under full-suite load (passes 6/6 standalone) — make its timing deterministic.
+- [ ] **FU-A5b** (low) import dialog doesn't show `ImportedSmf::tempo_points_clamped` yet (small hunk in `update/import.rs`).
+- [ ] **FU-A5c** (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
 
 ## How to use this file
 

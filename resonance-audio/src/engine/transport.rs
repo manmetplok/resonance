@@ -478,8 +478,15 @@ pub(crate) fn handle_seek_to(ctx: &HandlerCtx, state: &mut HandlerState, pos: u6
     super::midi::clock_send_song_position(ctx, state, pos);
 }
 
+/// Set the flat tempo. Goes through the one tempo-legality rule
+/// (`sanitize_bpm`, FU-D3): out-of-range values clamp into
+/// `MIN_BPM..=MAX_BPM`, and a non-finite one is ignored — a NaN tempo
+/// would turn every bar position into NaN (→ sample 0).
 pub(crate) fn handle_set_bpm(ctx: &HandlerCtx, bpm: f32) {
-    super::rcu_tempo(ctx, |tm| tm.bpm = bpm.clamp(20.0, 999.0));
+    let Some(bpm) = crate::types::sanitize_bpm(bpm) else {
+        return;
+    };
+    super::rcu_tempo(ctx, |tm| tm.bpm = bpm);
 }
 
 pub(crate) fn handle_set_tempo_events(

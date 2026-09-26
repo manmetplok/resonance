@@ -36,6 +36,10 @@ pub struct UndoHistory {
     coalesce_key: Option<CoalesceKey>,
     /// Label for the snapshot in `pending`, committed with it.
     pending_label: String,
+    /// Label of a gesture a take split mid-drag (FU-A2a): the gesture is
+    /// re-opened under it, with a post-take snapshot, once the take's
+    /// engine event has landed.
+    split_gesture: Option<String>,
     /// Where the control layer's atomic compound group stands (one
     /// revision bump per mutating call). GUI paths never open one.
     compound: CompoundPhase,
@@ -67,6 +71,7 @@ impl UndoHistory {
             pending: None,
             coalesce_key: None,
             pending_label: String::new(),
+            split_gesture: None,
             compound: CompoundPhase::Closed,
             capacity: DEFAULT_HISTORY_CAPACITY,
         }
@@ -234,6 +239,24 @@ impl UndoHistory {
         }
     }
 
+    /// Close the open gesture at a take landing mid-drag (FU-A2a): hand
+    /// back its pre-gesture snapshot and label for the caller to record
+    /// (or drop, when the drag has moved nothing yet), and remember the
+    /// label so [`resume_split_gesture`](Self::resume_split_gesture) can
+    /// re-open the gesture once the take has landed.
+    pub fn split_pending(&mut self) -> Option<(UndoSnapshot, String)> {
+        let snap = self.pending.take()?;
+        let label = std::mem::take(&mut self.pending_label);
+        self.split_gesture = Some(label.clone());
+        Some((snap, label))
+    }
+
+    /// The label of a gesture [`split_pending`](Self::split_pending)
+    /// closed and not yet re-opened; taking it clears it.
+    pub fn take_split_gesture(&mut self) -> Option<String> {
+        self.split_gesture.take()
+    }
+
     // -- Compound-group API for multi-dispatch control calls -----------
     //
     // The wire contract promises one revision bump per mutating control
@@ -303,6 +326,7 @@ impl UndoHistory {
         self.redo_labels.clear();
         self.pending = None;
         self.pending_label = String::new();
+        self.split_gesture = None;
         self.coalesce_key = None;
         self.compound = CompoundPhase::Closed;
     }

@@ -137,6 +137,9 @@ pub(crate) struct HandlerState {
     /// The `SetProjectDir` clip-id reservation scan still running on its
     /// worker (FU-M12b); see `clips::settle_clip_id_scan`.
     pub clip_id_scan: Option<std::thread::JoinHandle<Option<ClipId>>>,
+    /// Freeze caches being converted to the engine rate on a worker
+    /// (FU-A4c); see `tracks::settle_frozen_conversions`.
+    pub frozen_conversions: Vec<crate::engine::tracks::PendingFrozenConversion>,
     /// Current project directory. Set via `AudioCommand::SetProjectDir`
     /// whenever the app opens, creates, or saves-as a project.
     /// Recording and import refuse to run when this is `None`.
@@ -295,6 +298,7 @@ impl HandlerState {
             imports: ImportQueue::default(),
             clear_generation: Default::default(),
             clip_id_scan: None,
+            frozen_conversions: Vec::new(),
             project_dir: None,
             midi_hw: MidiHardwareState::new(live_midi_tx, live_control_tx),
             midi_recording: HashMap::new(),
@@ -617,6 +621,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         }
 
         super::clips::settle_clip_id_scan(&mut state, false);
+        super::tracks::settle_frozen_conversions(&ctx, &mut state, false);
 
         // The cpal streams' error callbacks only count (FU-H6b).
         for (label, latch, limiter) in [
@@ -633,7 +638,12 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                 tracing::warn!("{line}");
             }
             if let Some((count, kind)) = latch.take_errors() {
-                tracing::error!("audio: {label} stream error: {kind} ({count}x)");
+                match latch.take_error_text() {
+                    Some(text) => tracing::error!(
+                        "audio: {label} stream error: {kind} ({count}x); latest backend message: {text}"
+                    ),
+                    None => tracing::error!("audio: {label} stream error: {kind} ({count}x)"),
+                }
             }
         }
 
