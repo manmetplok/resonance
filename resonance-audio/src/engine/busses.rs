@@ -35,7 +35,11 @@ pub(crate) fn handle_add_bus(
         if busses_guard.contains_key(&bus_id) {
             return;
         }
-        state.next_bus_id = state.next_bus_id.max(bus_id + 1);
+        // Same hint rule as `tracks::handle_add_track`: an app-owned id
+        // (`RETURN_BUS_ID_BASE` and up) never moves the engine's counter.
+        if bus_id < RETURN_BUS_ID_BASE {
+            state.next_bus_id = state.next_bus_id.max(bus_id + 1);
+        }
     }
     let name = name.unwrap_or_else(|| format!("Bus {bus_id}"));
     busses_guard.insert(bus_id, Bus::new(bus_id, name.clone()));
@@ -334,9 +338,13 @@ pub(crate) fn handle_set_aux_send(
     // load hint), else allocate a fresh monotonic id.
     let send_id = match id_hint {
         Some(id) => {
-            // Bump the allocator past any hinted id so a later fresh send
-            // can't collide with it.
-            state.next_send_id = state.next_send_id.max(id + 1);
+            // Bump the allocator past a hinted engine-range id so a later
+            // fresh send can't collide with it; an app-owned id
+            // (`CONTROL_SEND_ID_BASE` and up) never moves the counter,
+            // same rule as `tracks::handle_add_track`.
+            if id < CONTROL_SEND_ID_BASE {
+                state.next_send_id = state.next_send_id.max(id + 1);
+            }
             id
         }
         None => {

@@ -274,13 +274,19 @@ pub fn chunk_span(remaining: u64) -> (usize, usize) {
 /// real `clap_plugin.reset()` (code review ENG-04), which is what clears
 /// tails and kills voices — first-party plugins map it to their
 /// `Plugin::reset`.
-pub(super) fn reset_plugins(
-    plugins: &Arc<RwLock<PluginMap>>,
-) {
+///
+/// A plugin the reset leaves deactivated (it refused to restart) is
+/// silent from now on; it is queued on
+/// [`SharedState::plugins_dead_after_reset`] for the engine loop to
+/// report (FU-M8b).
+pub(super) fn reset_plugins(plugins: &Arc<RwLock<PluginMap>>, shared: &SharedState) {
     let plugins_guard = plugins.read();
-    for mutex in plugins_guard.values() {
+    for (&id, mutex) in plugins_guard.iter() {
         let mut inst = lock_plugin_for_bounce(mutex);
-        inst.0.reset_processing();
+        let was_active = inst.0.is_active();
+        if !inst.0.reset_processing() && was_active {
+            shared.plugins_dead_after_reset.lock().push(id);
+        }
         inst.0.reset();
     }
 }

@@ -108,18 +108,15 @@ impl ArrangementMarkers {
         Self::default()
     }
 
-    /// Allocate a fresh, unused marker id. Mirrors the track registry's
-    /// `allocate_sub_track_id`: hands out `next_id` and bumps the counter,
-    /// skipping any id already present so a counter restored from a loaded
-    /// project (or externally-built ids) can never collide.
+    /// Allocate a fresh, unused marker id: hands out `next_id` and bumps
+    /// the counter, skipping any id already present so a counter restored
+    /// from a loaded project (or externally-built ids) can never collide.
+    /// An app-only space — the engine never hears marker ids.
     pub fn allocate_id(&mut self) -> u64 {
-        loop {
-            let candidate = self.next_id;
-            self.next_id += 1;
-            if !self.markers.iter().any(|m| m.id == candidate) {
-                return candidate;
-            }
-        }
+        let markers = &self.markers;
+        super::ids::allocate_unused(&mut self.next_id, |id| {
+            markers.iter().any(|m| m.id == id)
+        })
     }
 
     /// Get a marker by ID.

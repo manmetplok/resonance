@@ -251,3 +251,23 @@ fn set_track_frozen_source_attaches_and_unfreeze_detaches() {
         "unfreeze must detach the frozen source"
     );
 }
+
+/// A cache rendered at another rate is converted by the shared
+/// band-limited resampler when the engine publishes it, so the mixer
+/// reads it frame for frame at the engine rate (code review FU-G3a).
+#[test]
+fn a_frozen_source_at_another_rate_is_converted_on_publish() {
+    let mut h = resonance_audio::test_support::EngineHandlerHarness::new();
+    h.push_track(Track::new(1, "frozen".into()));
+    let cache_ref = FreezeCacheRef::new("c.wav".into(), 44_100, 32, 1, FreezeCacheStatus::Frozen);
+    let source = FrozenSource::new(cache_ref.clone(), Arc::new(vec![0.25; 44_100 * 2]), 44_100, 44_100);
+
+    h.set_track_frozen_source(1, Some(source));
+
+    let published = h.frozen_source(1).expect("attached");
+    assert_eq!(published.sample_rate, SR, "published at the engine rate");
+    assert_eq!(published.frame_count, SR as u64, "one second stays one second");
+    assert_eq!(published.samples.len(), SR as usize * 2);
+    assert!(published.samples.iter().all(|&s| (s - 0.25).abs() < 1e-4), "DC stays DC");
+    assert_eq!(published.cache_ref, cache_ref, "the file's metadata is kept");
+}

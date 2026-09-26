@@ -1,7 +1,7 @@
 //! UI-side wavetable shape generation.
 //!
 //! We deliberately do NOT reuse the audio engine's `generate_all()` here —
-//! it computes 11 mip-mapped octaves per frame with up to thousands of
+//! it computes 12 mip-mapped octaves per frame with up to thousands of
 //! harmonics, which takes seconds on the UI thread even in release builds.
 //! For display we only need a single 256-sample representative waveform per
 //! frame, so we use lightweight purpose-built generators matched to the

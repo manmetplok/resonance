@@ -172,6 +172,14 @@ impl Resonance {
         a.same_state(b)
     }
 
+    /// Test-only: the gesture-end check `commit_undo_gesture` runs —
+    /// whether the live state differs from the snapshot a gesture opened
+    /// with (code review STATE-07). Exposed for the snapshot cost probe.
+    #[doc(hidden)]
+    pub fn test_gesture_changed_since(&self, before: &crate::undo::UndoSnapshot) -> bool {
+        self.gesture_changed_since(before)
+    }
+
     /// Test-only: borrow the undo history, so the import-placement tests
     /// can assert a single pre-import entry was recorded (ba todo #598).
     #[doc(hidden)]

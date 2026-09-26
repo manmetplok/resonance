@@ -35,7 +35,8 @@ pub use filter::OnePole;
 pub use formant::{formant_pitch_shift, FormantShifter};
 pub use granular::{GrainEngine, GrainParams, GrainView, InterpQuality, SchedulerMode, MAX_GRAINS};
 pub use interp::{
-    BandlimitedReader, bspline6, hermite4, read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped,
+    BandlimitedReader, bspline6, hermite4, lagrange6, read_bspline6_wrapped, read_hermite_wrapped,
+    read_linear_wrapped,
 };
 pub use lfo::Lfo;
 pub use pan::{constant_power_pan, stereo_balance};

@@ -324,7 +324,7 @@ pub(super) fn apply_preset(app: &mut Resonance, request: &Request) -> (Response,
         );
     };
 
-    let track_id = app.registry.allocate_sub_track_id();
+    let track_id = app.allocate_track_id();
     let task = run_via_update(
         app,
         Message::Track(TrackMessage::AddTrackFromPreset {

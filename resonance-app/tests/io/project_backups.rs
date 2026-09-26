@@ -224,12 +224,12 @@ fn a_backup_keeps_its_own_plugin_state_and_notes() {
 
     let restored = load_project(&backup).expect("a backup file loads");
     assert_eq!(restored.project_dir, dir, "a backup resolves against its bundle");
-    assert_eq!(restored.plugin_states[&5], b"state at backup");
+    assert_eq!(&restored.plugin_states[&5][..], b"state at backup");
     assert_eq!(restored.midi_notes[&1][0].note, 60);
 
     // The current project is untouched by the backup.
     let current = load_project(&dir).unwrap();
-    assert_eq!(current.plugin_states[&5], b"later state");
+    assert_eq!(&current.plugin_states[&5][..], b"later state");
 }
 
 /// Pruning a backup also removes the side files it owned.

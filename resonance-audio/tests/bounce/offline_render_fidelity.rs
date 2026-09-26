@@ -44,6 +44,8 @@ struct FakeFx {
     pos: usize,
     gain: f32,
     reset_calls: u32,
+    /// When set, every `start_processing` fails (FU-M8b).
+    refuse_start: bool,
 }
 
 unsafe fn fx<'a>(plugin: *const clap_plugin) -> &'a mut FakeFx {
@@ -58,8 +60,8 @@ unsafe extern "C" fn fx_activate(_p: *const clap_plugin, _sr: f64, _min: u32, _m
     true
 }
 unsafe extern "C" fn fx_deactivate(_p: *const clap_plugin) {}
-unsafe extern "C" fn fx_start(_p: *const clap_plugin) -> bool {
-    true
+unsafe extern "C" fn fx_start(p: *const clap_plugin) -> bool {
+    !unsafe { fx(p) }.refuse_start
 }
 unsafe extern "C" fn fx_stop(_p: *const clap_plugin) {}
 
@@ -142,6 +144,7 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
                 pos: 0,
                 gain: 1.0,
                 reset_calls: 0,
+                refuse_start: false,
             }));
             state_ptr = state;
             Box::into_raw(Box::new(clap_plugin {
@@ -574,4 +577,29 @@ fn a_failed_export_leaves_the_previous_file_untouched() {
     assert!(peak(&read_f32_wav(&path)) > 0.1, "the new export is in place");
     assert!(partials(&dir).is_empty(), "no temp file may be left behind");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// FU-M8b — a plugin an export's reset leaves dead is reported, once
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_plugin_that_will_not_restart_after_the_export_reset_is_reported_once() {
+    let e = Engine::with_clip(tone(SR as usize / 10, 0.25));
+    let (slot, state) = fake_fx(0);
+    e.add_master_fx(slot);
+    unsafe { (*state).refuse_start = true };
+
+    let path = tmp("fu-m8b");
+    assert_completed(&e.export(&path, &ExportSettings::default_wav(), false));
+    assert_eq!(
+        std::mem::take(&mut *e.shared.plugins_dead_after_reset.lock()),
+        vec![FX_ID],
+        "the dead plugin is queued for the engine loop's error report"
+    );
+
+    // Still dead at the next export: not reported again.
+    assert_completed(&e.export(&path, &ExportSettings::default_wav(), false));
+    assert!(e.shared.plugins_dead_after_reset.lock().is_empty());
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

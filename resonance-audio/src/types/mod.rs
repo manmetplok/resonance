@@ -29,9 +29,28 @@ pub type AssetId = u64;
 /// `engine/master.rs` therefore bump only for hints *below* this base —
 /// project-load replay hints, which are all engine-allocated.
 ///
-/// Same distinct-range convention as sub-track ids (1e9) and return-bus
-/// ids (2e9).
+/// Same distinct-range convention as [`SUB_TRACK_ID_BASE`],
+/// [`RETURN_BUS_ID_BASE`] and [`CONTROL_SEND_ID_BASE`] below.
 pub const CONTROL_PLUGIN_ID_BASE: PluginInstanceId = 3_000_000_000;
+
+/// First track id the app allocates itself — sub-tracks, bounce targets,
+/// control-API adds, and track groups (app-only entities that share the
+/// track id space). The engine's own tracks count up from 1, and the
+/// track add paths bump `next_track_id` only for hints *below* this
+/// base: a hint at or above it is app-owned, and bumping past it would
+/// put the next GUI add (`id_hint: None`) onto an id the app may already
+/// hold for a group the engine never hears about.
+pub const SUB_TRACK_ID_BASE: TrackId = 1_000_000_000;
+
+/// First bus id the app allocates itself (FX returns created up front,
+/// `bus.create`). Engine busses count up from 1; `AddBus` bumps
+/// `next_bus_id` only for hints below this base, as for tracks.
+pub const RETURN_BUS_ID_BASE: BusId = 2_000_000_000;
+
+/// First aux-send id the app allocates itself (`track.add_send`). Engine
+/// sends count up from 1; `SetAuxSend` bumps `next_send_id` only for
+/// hints below this base, as for tracks.
+pub const CONTROL_SEND_ID_BASE: SendId = 2_000_000_000;
 
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or

@@ -349,7 +349,7 @@ fn render_scenario(s: &Scenario) -> Vec<u32> {
                     right: r.as_mut_slice(),
                 })
                 .collect();
-            sampler.render_block(&mut ports, BLOCK, &params);
+            sampler.render_block(&mut ports, BLOCK, &params, &[]);
         }
 
         // The kit mix: what a host summing every port would hear.
@@ -462,7 +462,7 @@ fn every_scenario_sounds_on_several_ports() {
                         right: r.as_mut_slice(),
                     })
                     .collect();
-                sampler.render_block(&mut ports, BLOCK, &params);
+                sampler.render_block(&mut ports, BLOCK, &params, &[]);
             }
             for (p, (l, r)) in bufs.iter().enumerate() {
                 for (a, b) in l.iter().zip(r.iter()) {

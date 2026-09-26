@@ -73,6 +73,21 @@ impl SendSlotAffordances {
 }
 
 impl Resonance {
+    /// Test-only: the app-side aux-send id counter (`0` until the
+    /// first control add seeds it), so the id-partition invariant test
+    /// can check it sits above every send it handed out.
+    #[doc(hidden)]
+    pub fn test_aux_next_control_send_id(&self) -> resonance_audio::types::SendId {
+        self.aux.next_control_send_id
+    }
+
+    /// Test-only: the app-side plugin-instance id counter, for the same
+    /// invariant check on the plugin space.
+    #[doc(hidden)]
+    pub fn test_next_control_plugin_id(&self) -> resonance_audio::types::PluginInstanceId {
+        self.next_control_plugin_id
+    }
+
     /// Test-only: read the mirrored aux-send graph. Driven from
     /// `tests/aux_send_mirror.rs` to assert events reconstruct state.
     #[doc(hidden)]
@@ -293,7 +308,7 @@ impl Resonance {
         instance_id: resonance_audio::types::PluginInstanceId,
         data: Vec<u8>,
     ) {
-        self.plugin_state_cache.insert(instance_id, data);
+        self.plugin_state_cache.insert(instance_id, data.into());
     }
 
     /// Test-only: the chain as `(instance_id, clap_plugin_id, missing)`

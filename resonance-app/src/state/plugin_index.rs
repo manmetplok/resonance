@@ -32,7 +32,7 @@ use crate::Resonance;
 /// own allocator past a hint from this range (see
 /// `engine::plugins::allocate_plugin_instance_id`). One definition, both
 /// sides.
-pub use resonance_audio::types::CONTROL_PLUGIN_ID_BASE;
+pub use super::ids::CONTROL_PLUGIN_ID_BASE;
 
 impl Resonance {
     /// Locate a plugin slot on any track, bus, or master by instance id
@@ -135,7 +135,7 @@ impl Resonance {
     /// project-load replay path already relies on.
     ///
     /// Same distinct-range convention as
-    /// [`TrackRegistry::allocate_sub_track_id`](crate::state::TrackRegistry::allocate_sub_track_id)
+    /// [`Resonance::allocate_track_id`](crate::Resonance::allocate_track_id)
     /// (1e9) and
     /// [`allocate_return_bus_id`](crate::state::TrackRegistry::allocate_return_bus_id)
     /// (2e9): control-allocated plugin ids count up from
@@ -159,32 +159,21 @@ impl Resonance {
         if self.next_control_plugin_id < CONTROL_PLUGIN_ID_BASE {
             self.next_control_plugin_id = CONTROL_PLUGIN_ID_BASE;
         }
-        loop {
-            let candidate = self.next_control_plugin_id;
-            self.next_control_plugin_id += 1;
-            if !self.plugin_instance_id_in_use(candidate) {
-                return candidate;
-            }
-        }
-    }
-
-    /// True when any track, bus or master chain already mirrors this
-    /// instance id. `plugin_index` is a cache, so this checks the chains
-    /// themselves — a stale index must never hand out a live id.
-    fn plugin_instance_id_in_use(&self, instance_id: PluginInstanceId) -> bool {
-        self.registry
-            .tracks
-            .iter()
-            .any(|t| t.plugins.iter().any(|p| p.instance_id == instance_id))
-            || self
-                .registry
-                .busses
+        // The in-use scan checks the chains themselves, not
+        // `plugin_index`: that is a cache, and a stale one must never
+        // hand out a live id.
+        let (registry, master) = (&self.registry, &self.master_plugins);
+        super::ids::allocate_unused(&mut self.next_control_plugin_id, |id| {
+            registry
+                .tracks
                 .iter()
-                .any(|b| b.plugins.iter().any(|p| p.instance_id == instance_id))
-            || self
-                .master_plugins
-                .iter()
-                .any(|p| p.instance_id == instance_id)
+                .any(|t| t.plugins.iter().any(|p| p.instance_id == id))
+                || registry
+                    .busses
+                    .iter()
+                    .any(|b| b.plugins.iter().any(|p| p.instance_id == id))
+                || master.iter().any(|p| p.instance_id == id)
+        })
     }
 
     /// Recompute the entire `plugin_index` from `registry.tracks`,

@@ -3,7 +3,6 @@
 // Modules that were previously `pub` are now `pub(crate)`. The handful
 // of items the app legitimately needs are re-exported below:
 // - `MidiDeviceInfo`            (replaces `pub use midi_hardware::*`)
-// - `DEFAULT_HISTORY_CAPACITY`  (replaces `pub use limits::*`)
 // - `linear_resample` / `StreamingLinearResampler`  (decode tools used
 //   by the app's vocal-SVS post-processing path)
 // - `midi_io` stays public — it's a small, stable utility surface for
@@ -59,7 +58,6 @@ pub use resonance_common::AudioFormat;
 /// re-derives it when the engine echoes fresh text for a value it just
 /// wrote (`AudioEvent::PluginParamText`).
 pub use clap_host::unit_from_text;
-pub use limits::DEFAULT_HISTORY_CAPACITY;
 /// The per-clip gain bounds `SetClipGain` clamps to; the app clamps its
 /// own gain edits to the same range so its mirror never disagrees with
 /// what the engine stores.
@@ -227,7 +225,8 @@ pub mod test_support {
         parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
     };
     pub use crate::stream_errors::{
-        format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
+        format_underrun_line, StreamErrorLatch, UnderrunRateLimiter, UnderrunReport,
+        UNDERRUN_REPORT_INTERVAL,
     };
     /// The panic containment every detached worker (offline render
     /// spawn sites, `ImportQueue` jobs) runs its body through — exposed

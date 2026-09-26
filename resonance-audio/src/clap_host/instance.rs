@@ -570,6 +570,17 @@ impl ClapInstance {
         }
     }
 
+    /// [`Self::all_notes_off`] for a transport Stop / relocate panic
+    /// (FU-F2a): also drops the events carried past an earlier
+    /// sub-block. Those are timed after a *seam*, which is why the seam
+    /// panic keeps them; after a Stop or a seek there is no "after" for
+    /// them to belong to, and a carried note-on delivered behind the
+    /// 128 offs would hang. Allocation-free.
+    pub fn all_notes_off_and_drop_carried(&mut self) {
+        self.carried_notes.clear();
+        self.all_notes_off();
+    }
+
     /// Read-only view of the pending note queue. Test surface only —
     /// see `tests/clap_host/clap_all_notes_off.rs`.
     #[doc(hidden)]

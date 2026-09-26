@@ -6,12 +6,41 @@ use std::sync::atomic::Ordering;
 
 use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::common::{advance_playhead_silent, commit_playhead, panic_instrument_tracks};
+use crate::mixer::midi_events::collect_midi_events;
 use crate::mixer::render_core::BlockInputs;
-use crate::types::any_top_level_solo;
+use crate::types::{any_top_level_solo, MidiClip, PendingNoteEvent, TempoMap};
 
 use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
 use super::master_pass::{run_master_passes, MasterTail};
 use super::seam;
+
+/// Whether any MIDI clip has a NoteOff in `[playhead, playhead + frames)`
+/// — what a skipped block would have lost. Uses the callback's
+/// pre-allocated note buffer; allocation-free.
+fn any_note_off_in(
+    clips: &[MidiClip],
+    playhead: u64,
+    frames: usize,
+    map: &TempoMap,
+    sample_rate: u32,
+    buf: &mut Vec<PendingNoteEvent>,
+) -> bool {
+    clips.iter().enumerate().any(|(i, clip)| {
+        // Each track once: `collect_midi_events` walks all its clips.
+        !clips[..i].iter().any(|c| c.track_id == clip.track_id) && {
+            collect_midi_events(
+                clips,
+                clip.track_id,
+                playhead,
+                frames,
+                map,
+                sample_rate,
+                buf,
+            );
+            buf.iter().any(|e| !e.is_note_on)
+        }
+    })
+}
 
 /// `playhead` is the callback's single observation of the transport for
 /// this block (`mix_audio` loads it once); both publishes below are
@@ -36,26 +65,40 @@ pub(super) fn render_playing_block(
     let clips_guard = try_read_counted(inputs.clips, StateMap::Clips, misses);
     let midi_clips_guard = try_read_counted(inputs.midi_clips, StateMap::MidiClips, misses);
     let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-    let (
-        Some(tracks_guard),
-        Some(busses_guard),
-        Some(clips_guard),
-        Some(midi_clips_guard),
-        Some(plugins_guard),
-    ) = (
+    let (tracks_guard, busses_guard, clips_guard, midi_clips_guard, plugins_guard) = match (
         tracks_guard,
         busses_guard,
         clips_guard,
         midi_clips_guard,
         plugins_guard,
-    )
-    else {
-        // Lock contended -- advance playhead to avoid desync, output
-        // silence this buffer.
-        shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
-        let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
-        commit_playhead(shared, playhead, new_playhead);
-        return;
+    ) {
+        (Some(t), Some(b), Some(c), Some(m), Some(p)) => (t, b, c, m, p),
+        (_, _, _, midi_clips_guard, _) => {
+            // Lock contended -- advance playhead to avoid desync, output
+            // silence this buffer.
+            shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
+            let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
+            let committed = commit_playhead(shared, playhead, new_playhead);
+            // Flush on the next block only if this one dropped something
+            // a held voice needed (FU-M3b): a seam's panic (it wrapped),
+            // a timeline NoteOff, or anything, when the MIDI clips
+            // themselves were the contended map.
+            let lost = new_playhead != playhead + frames as u64
+                || midi_clips_guard.as_deref().is_none_or(|clips| {
+                    any_note_off_in(
+                        clips,
+                        playhead,
+                        frames,
+                        timing.map,
+                        inputs.sample_rate,
+                        scratch.note_event_buf,
+                    )
+                });
+            scratch
+                .continuity
+                .skipped(playhead, new_playhead, committed, lost);
+            return;
+        }
     };
 
     let active_busses = busses_guard.len().min(scratch.bus_bufs.len());
@@ -83,7 +126,7 @@ pub(super) fn render_playing_block(
     // than skipped — and drop captured keys, which belong to the old
     // position.
     if scratch.continuity.jumped(playhead) {
-        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash);
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
         scratch.sidechain.clear();
     }
 

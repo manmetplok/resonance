@@ -363,11 +363,6 @@ pub(crate) fn restore_pool(
 pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
     use crate::reference::{ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
 
-    /// Base for ids handed to missing (never-registered) references. The
-    /// engine allocates reference ids sequentially from 1, so it would
-    /// take ~1e9 loads in a single session to reach this — i.e. never.
-    const MISSING_ID_BASE: u32 = 1_000_000_000;
-
     // Drop the previous project's references (entries + settings + any
     // in-flight load bookkeeping). Nothing here talks to the engine — the
     // engine's own reference state was already emptied by `ClearAll`.
@@ -376,7 +371,7 @@ pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
     let settings = &project.reference_settings;
 
     let mut next_present_id: u32 = 1;
-    let mut next_missing_id: u32 = MISSING_ID_BASE;
+    let mut next_missing_id: u32 = crate::state::ids::MISSING_REFERENCE_ID_BASE;
     for pr in &project.references {
         let exists = std::path::Path::new(&pr.path).exists();
         let markers: Vec<ReferenceMarkerState> = pr

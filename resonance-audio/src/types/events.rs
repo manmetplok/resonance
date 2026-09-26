@@ -290,6 +290,11 @@ pub enum AudioEvent {
         value_norm: f32,
     },
     Stopped,
+    /// The engine refused a Play/Record (an offline render holds the
+    /// transport): the app's optimistic `playing` mirror goes back to
+    /// false. Unlike [`AudioEvent::Stopped`] the playhead is untouched —
+    /// nothing moved it (FU-F1a).
+    TransportRefused,
     Error(String),
     InputDevicesListed {
         devices: Vec<InputDeviceInfo>,

@@ -55,7 +55,7 @@ fn peaks_for_hit(sampler: &mut DrumSampler, note: u8, velocity: f32, blocks: usi
                     right: r.as_mut_slice(),
                 })
                 .collect();
-            sampler.render_block(&mut ports, frames, &params);
+            sampler.render_block(&mut ports, frames, &params, &[]);
         }
         for (p, (l, r)) in bufs.iter().enumerate() {
             for (a, b) in l.iter().zip(r.iter()) {

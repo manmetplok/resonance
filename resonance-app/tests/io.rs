@@ -35,6 +35,8 @@ mod engine_events_pool_mirror;
 mod export_dialog_shell;
 #[path = "io/files_tab_rendering.rs"]
 mod files_tab_rendering;
+#[path = "io/id_allocation.rs"]
+mod id_allocation;
 #[path = "io/import_dialog.rs"]
 mod import_dialog;
 #[path = "io/import_dialog_confirm.rs"]

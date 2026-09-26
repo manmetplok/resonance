@@ -31,7 +31,9 @@ pub(crate) fn handle_add_instrument_track(
         state.next_track_id += 1;
         i
     });
-    if id_hint.is_some() {
+    // Same hint rule as `tracks::handle_add_track`: app-owned ids
+    // (`SUB_TRACK_ID_BASE` and up) never move the engine's counter.
+    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
         state.next_track_id = state.next_track_id.max(id + 1);
     }
     let name = name.unwrap_or_else(|| format!("Instrument {}", id));
@@ -57,7 +59,9 @@ pub(crate) fn handle_add_vocal_track(
         state.next_track_id += 1;
         i
     });
-    if id_hint.is_some() {
+    // Same hint rule as `tracks::handle_add_track`: app-owned ids
+    // (`SUB_TRACK_ID_BASE` and up) never move the engine's counter.
+    if id_hint.is_some() && id < SUB_TRACK_ID_BASE {
         state.next_track_id = state.next_track_id.max(id + 1);
     }
     let name = name.unwrap_or_else(|| format!("Vocal {}", id));
@@ -76,6 +80,7 @@ pub(crate) fn handle_create_midi_clip(
     duration_ticks: u64,
     name: String,
 ) {
+    crate::engine::clips::settle_clip_id_scan(state, true);
     let clip_id = state.next_clip_id;
     state.next_clip_id += 1;
     let clip = MidiClip {
