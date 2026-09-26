@@ -672,7 +672,9 @@ pub(crate) fn handle_load_plugin_state(
 ) {
     if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
-            inst.0.reload_with_state(&data);
+            if let Some(event) = reload_plugin_state(&mut inst.0, instance_id, &data) {
+                let _ = ctx.event_tx.send(event);
+            }
         } else {
             // Audio thread holds the lock — retry next tick
             let _ = ctx
@@ -680,6 +682,34 @@ pub(crate) fn handle_load_plugin_state(
                 .send(AudioCommand::LoadPluginState { instance_id, data });
         }
     }
+}
+
+/// Reload `inst` from a state blob and describe a failure as the
+/// user-visible error the engine should emit, or `None` on success
+/// (code review ENG-02: a rejected preset used to leave the plugin
+/// silently deactivated). `pub` via `__test_support` — see
+/// `tests/clap_latency_tracking.rs`.
+pub fn reload_plugin_state(
+    inst: &mut crate::clap_host::ClapInstance,
+    instance_id: PluginInstanceId,
+    data: &[u8],
+) -> Option<AudioEvent> {
+    if inst.reload_with_state(data) {
+        return None;
+    }
+    Some(AudioEvent::Error(if inst.is_active() {
+        format!(
+            "Plugin instance {} rejected the state it was given (corrupt preset, or saved by \
+             another plugin version); it keeps its previous settings.",
+            instance_id
+        )
+    } else {
+        format!(
+            "Plugin instance {} failed to reactivate after a state load; it is deactivated \
+             and will stay silent.",
+            instance_id
+        )
+    }))
 }
 
 pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
