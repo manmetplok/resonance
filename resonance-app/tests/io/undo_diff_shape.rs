@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use resonance_app::compose::messages::DrumGroupsMessage;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
-use resonance_app::message::{GroupMessage, MarkerMessage, Message};
+use resonance_app::message::{GroupMessage, MarkerMessage, Message, TrackMessage};
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
@@ -452,4 +452,255 @@ fn creating_a_placed_section_undoes_through_the_diff_path() {
         "the edit created and placed a section"
     );
     undo_redo_over(&mut f, &before, &created, "placed section create");
+}
+
+// ---------------------------------------------------------------------------
+// Group macro solo / mute: effective re-derivation on restore (FU-A13a)
+// ---------------------------------------------------------------------------
+//
+// The group handlers (`update::group::toggle_macro_mute`/`toggle_macro_solo`)
+// send each member's *effective* solo/mute — its own flag OR the group's
+// macro — to the engine. Design doc §12 "found, not fixed": no restore ever
+// re-derived that; the entity domain (`Tracks`) only ever restores a
+// member's *own* flag, and only when it changed. So undoing a macro toggle
+// (a scalar change, no track added/removed — always the diff path) used to
+// leave the engine holding the stale effective value even though the GUI
+// showed the toggle undone. These pin the fix: `TrackGroups`'s reconcile
+// now re-sends every member's effective solo/mute wherever it may have
+// changed, on both restore paths.
+
+/// Group the first two top-level demo tracks and return `(group_id, a, b)`.
+fn group_first_two_tracks(f: &mut Fixture) -> (u64, u64, u64) {
+    let tracks: Vec<u64> = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .filter(|t| t.sub_track.is_none())
+        .map(|t| t.id)
+        .take(2)
+        .collect();
+    assert_eq!(tracks.len(), 2, "the demo has two top-level tracks to group");
+    f.app.test_set_selected_tracks(tracks.clone());
+    let _ = edit(f, Message::Group(GroupMessage::CreateGroupFromSelection));
+    let group_id = f
+        .app
+        .test_track_groups()
+        .get_all_groups()
+        .into_iter()
+        .map(|g| g.id)
+        .next()
+        .expect("the group was created");
+    (group_id, tracks[0], tracks[1])
+}
+
+/// The last `SetTrackMute` this app sent for `track_id`, across `cmds`.
+fn last_mute(cmds: &[AudioCommand], track_id: u64) -> Option<bool> {
+    cmds.iter().rev().find_map(|c| match c {
+        AudioCommand::SetTrackMute { track_id: t, muted } if *t == track_id => Some(*muted),
+        _ => None,
+    })
+}
+
+/// The last `SetTrackSolo` this app sent for `track_id`, across `cmds`.
+fn last_solo(cmds: &[AudioCommand], track_id: u64) -> Option<bool> {
+    cmds.iter().rev().find_map(|c| match c {
+        AudioCommand::SetTrackSolo { track_id: t, soloed } if *t == track_id => Some(*soloed),
+        _ => None,
+    })
+}
+
+/// Like [`edit`], but returns the commands the app sent while applying
+/// `msg` instead of discarding them — `edit` routes everything through
+/// `echo_midi_clip_loads`, which drains and discards every non-clip-load
+/// command, so it cannot be used where the test needs to see a
+/// `SetTrackMute`/`SetTrackSolo`. None of the group-macro messages issue a
+/// `LoadMidiClipDirect`, so there is nothing to echo here.
+fn edit_capturing(f: &mut Fixture, msg: Message) -> Vec<AudioCommand> {
+    let depth = f.app.test_undo_history().undo_len();
+    let _ = drain(&f.rx);
+    let _ = f.app.update(msg);
+    let cmds = drain(&f.rx);
+    assert_eq!(
+        f.app.test_undo_history().undo_len(),
+        depth + 1,
+        "the edit must record one undo entry"
+    );
+    cmds
+}
+
+#[test]
+fn undoing_a_group_macro_mute_toggle_resends_effective_member_mute() {
+    let mut f = fixture("group-macro-mute");
+    let (group_id, a, b) = group_first_two_tracks(&mut f);
+
+    // Engage the macro mute: both members get the effective (true) mute.
+    let cmds = edit_capturing(&mut f, Message::Group(GroupMessage::ToggleMacroMute(group_id)));
+    for t in [a, b] {
+        assert_eq!(
+            last_mute(&cmds, t),
+            Some(true),
+            "engaging the macro mute must send member {t}'s effective mute"
+        );
+    }
+
+    // Undo (diff path — no track or group was added/removed): both
+    // members' effective mute must drop back to false.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Undo);
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "undoing a macro toggle must take the diff path"
+    );
+    for t in [a, b] {
+        assert_eq!(
+            last_mute(&cmds, t),
+            Some(false),
+            "undoing the macro mute must resend member {t}'s effective mute (FU-A13a)"
+        );
+    }
+
+    // Redo re-engages it.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Redo);
+    let cmds = drain(&f.rx);
+    for t in [a, b] {
+        assert_eq!(
+            last_mute(&cmds, t),
+            Some(true),
+            "redoing the macro mute must resend member {t}'s effective mute"
+        );
+    }
+}
+
+#[test]
+fn undoing_a_group_macro_solo_toggle_resends_effective_member_solo() {
+    let mut f = fixture("group-macro-solo");
+    let (group_id, a, b) = group_first_two_tracks(&mut f);
+
+    let cmds = edit_capturing(&mut f, Message::Group(GroupMessage::ToggleMacroSolo(group_id)));
+    for t in [a, b] {
+        assert_eq!(
+            last_solo(&cmds, t),
+            Some(true),
+            "engaging the macro solo must send member {t}'s effective solo"
+        );
+    }
+
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Undo);
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "undoing a macro toggle must take the diff path"
+    );
+    for t in [a, b] {
+        assert_eq!(
+            last_solo(&cmds, t),
+            Some(false),
+            "undoing the macro solo must resend member {t}'s effective solo (FU-A13a)"
+        );
+    }
+}
+
+/// A member's own mute changes while the group macro mute holds: the
+/// engine's effective mute must stay `true` throughout — including after
+/// undoing the member's own toggle, which the `Tracks` entity domain alone
+/// would resend as the member's bare (now `false`) own flag.
+#[test]
+fn undoing_a_member_mute_while_group_macro_holds_keeps_effective_mute() {
+    let mut f = fixture("group-macro-member-mute");
+    let (group_id, a, _b) = group_first_two_tracks(&mut f);
+    let _ = edit_capturing(&mut f, Message::Group(GroupMessage::ToggleMacroMute(group_id)));
+
+    // The member mutes itself too — effective mute was already true, and
+    // stays true.
+    let cmds = edit_capturing(&mut f, Message::Track(TrackMessage::ToggleMute(a)));
+    assert_eq!(
+        last_mute(&cmds, a),
+        Some(true),
+        "the member's own mute composes with the still-active macro mute"
+    );
+
+    // Undo the member's own toggle (diff path): `Tracks` alone would send
+    // the member's bare own flag (false); the effective mute — still held
+    // up by the group macro — must be what actually reaches the engine.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Undo);
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "undoing a member's own mute must take the diff path"
+    );
+    assert_eq!(
+        last_mute(&cmds, a),
+        Some(true),
+        "undoing the member's own mute must not clear the still-active group's effective mute (FU-A13a)"
+    );
+}
+
+/// A saved project with an engaged group macro mute (a disk load, or an
+/// undo's structural `ClearAll` fallback — both share `Tracks`' full-replay
+/// arm, which sends only each track's bare own flag): loading it must still
+/// bring the engine up on the *effective* mute, not the bare saved flag.
+#[test]
+fn loading_a_saved_group_macro_mute_sends_effective_member_mute() {
+    use resonance_app::project::ProjectTrack;
+    use resonance_app::state::{InstrumentIcon, InstrumentType};
+    use resonance_common::group_identity::GroupIdentityColor;
+    use resonance_common::track_group::TrackGroup;
+
+    fn track(id: u64) -> ProjectTrack {
+        ProjectTrack {
+            id,
+            name: format!("T{id}"),
+            order: id as usize,
+            volume: 0.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            fx_bypassed: false,
+            record_armed: false,
+            monitor_enabled: false,
+            playback_source: resonance_common::PlaybackSource::Live,
+            mono: true,
+            input_device_name: None,
+            input_port_index: Some(0),
+            plugins: Vec::new(),
+            track_type: "audio".to_string(),
+            output_bus: None,
+            instrument_type: InstrumentType::default(),
+            instrument_icon: InstrumentIcon::default(),
+            role: None,
+            sub_track: None,
+            midi_input_device: None,
+            midi_input_channel: None,
+            midi_output_device: None,
+            midi_output_channel: None,
+            freeze: resonance_common::TrackFreezeState::unfrozen(),
+            external_instrument: None,
+        }
+    }
+
+    let mut group = TrackGroup::new(100, "Drums", GroupIdentityColor::Drum);
+    group.ordered_members = vec![10, 11];
+    group.macro_mute = true;
+
+    let file = ProjectFile {
+        tracks: vec![track(10), track(11)],
+        track_groups: vec![group],
+        ..ProjectFile::default()
+    };
+
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_replay_loaded_project(file);
+    let cmds = drain(&rx);
+    for t in [10u64, 11u64] {
+        assert_eq!(
+            last_mute(&cmds, t),
+            Some(true),
+            "loading a project with an engaged group macro mute must bring up member {t} muted"
+        );
+    }
 }

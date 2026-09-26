@@ -113,6 +113,36 @@ impl TrackGroupRegistry {
             .any(|group| group.macro_mute)
     }
 
+    /// A track's *effective* solo — its own flag OR membership in a
+    /// macro-soloed group. The single computation the audio engine's solo
+    /// state is always derived from (FU-A13a): the macro-toggle cascade
+    /// (`update::group::toggle_macro_solo`) and every project restore
+    /// (`TrackGroups`, the diff and full paths alike) route through this so
+    /// they can never disagree about what the engine should hold.
+    pub fn effective_solo(&self, track_id: TrackId, own_soloed: bool) -> bool {
+        own_soloed || self.is_track_soloed_via_group(track_id)
+    }
+
+    /// A track's *effective* mute — its own flag OR membership in a
+    /// macro-muted group. See [`effective_solo`](Self::effective_solo).
+    pub fn effective_mute(&self, track_id: TrackId, own_muted: bool) -> bool {
+        own_muted || self.is_track_muted_via_group(track_id)
+    }
+
+    /// Build a scratch registry from a saved project's `track_groups` list,
+    /// for computing what a track's effective solo/mute *was* against an
+    /// older snapshot (FU-A13a's diff-path restore). Never installed as
+    /// live state, so unlike `restore_track_groups` it does not touch the
+    /// live track-id counter — this is a throwaway view onto one snapshot's
+    /// macro state, not a registry replacement.
+    pub fn from_saved(groups: &[TrackGroup]) -> Self {
+        let mut registry = Self::new();
+        for g in groups {
+            registry.add_group(g.clone());
+        }
+        registry
+    }
+
     /// Returns the indent depth for a track based on its group membership.
     ///
     /// - Returns 0 for tracks that are not members of any group

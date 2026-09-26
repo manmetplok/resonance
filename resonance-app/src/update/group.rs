@@ -217,13 +217,16 @@ fn toggle_macro_solo(r: &mut Resonance, group_id: TrackId) {
 /// A track's *effective* solo: its own `soloed` flag OR membership in any
 /// macro-soloed group. This is what the audio engine must see so a group
 /// solo and a per-track solo compose instead of overwriting one another.
+/// Delegates to `TrackGroupRegistry::effective_solo` (FU-A13a), the same
+/// computation the project-restore path uses, so a live toggle and an undo
+/// of one can never land on different answers.
 fn member_effective_solo(r: &Resonance, track_id: TrackId) -> bool {
     let own = r
         .registry
         .sorted_tracks()
         .iter()
         .any(|t| t.id == track_id && t.soloed);
-    own || r.track_groups.is_track_soloed_via_group(track_id)
+    r.track_groups.effective_solo(track_id, own)
 }
 
 /// Toggle a group's macro mute and cascade the *effective* mute to every
@@ -254,13 +257,15 @@ fn toggle_macro_mute(r: &mut Resonance, group_id: TrackId) {
 /// A track's *effective* mute: its own `muted` flag OR membership in any
 /// macro-muted group. This is what the audio engine must see so a group
 /// mute and a per-track mute compose instead of overwriting one another.
+/// Delegates to `TrackGroupRegistry::effective_mute` (FU-A13a) — see
+/// [`member_effective_solo`].
 fn member_effective_mute(r: &Resonance, track_id: TrackId) -> bool {
     let own = r
         .registry
         .sorted_tracks()
         .iter()
         .any(|t| t.id == track_id && t.muted);
-    own || r.track_groups.is_track_muted_via_group(track_id)
+    r.track_groups.effective_mute(track_id, own)
 }
 
 // ---------------------------------------------------------------------

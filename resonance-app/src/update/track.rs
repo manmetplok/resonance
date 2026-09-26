@@ -434,8 +434,9 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 // A group's macro mute composes with the track's own mute,
                 // so the engine always receives the *effective* mute: the
                 // track stays muted while its group mute holds even after
-                // its own mute is cleared (todo #687).
-                let muted = own || r.track_groups.is_track_muted_via_group(id);
+                // its own mute is cleared (todo #687). Shared with the
+                // macro-toggle cascade and every restore (FU-A13a).
+                let muted = r.track_groups.effective_mute(id, own);
                 let _ = r.engine.send(AudioCommand::SetTrackMute {
                     track_id: id,
                     muted,
@@ -451,8 +452,9 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 // A group's macro solo composes with the track's own solo,
                 // so the engine always receives the *effective* solo: the
                 // track stays soloed while its group solo holds even after
-                // its own solo is cleared (todo #688).
-                let soloed = own || r.track_groups.is_track_soloed_via_group(id);
+                // its own solo is cleared (todo #688). Shared with the
+                // macro-toggle cascade and every restore (FU-A13a).
+                let soloed = r.track_groups.effective_solo(id, own);
                 let _ = r.engine.send(AudioCommand::SetTrackSolo {
                     track_id: id,
                     soloed,
