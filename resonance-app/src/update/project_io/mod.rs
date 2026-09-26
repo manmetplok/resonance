@@ -18,7 +18,7 @@ use iced::Task;
 use resonance_audio::types::*;
 
 use crate::message::*;
-use crate::project::SaveCollector;
+use crate::project::{LoadedProject, SaveCollector};
 use crate::Resonance;
 
 pub use autosave::{should_autosave, tick_autosave, AutosaveGate};
@@ -38,6 +38,64 @@ pub use templates::{
     StaleReason, StaleTemplate, Template, TemplateCaptureOptions, TemplateEntry, TemplateKind,
     TemplateMetadata, TemplateSummary,
 };
+
+#[derive(Debug, Clone)]
+pub enum ProjectIoMessage {
+    BounceToWav,
+    BouncePathSelected(Option<String>),
+    /// Cancel button of the WAV mixdown progress modal (FU-F1c): stops the
+    /// in-flight render cooperatively via `AudioCommand::CancelBounce`.
+    CancelBounce,
+    SaveProject,
+    SaveProjectAs,
+    /// Begin a periodic autosave snapshot. Routed through the same async
+    /// engine save state machine as [`Self::SaveProject`], but writes the
+    /// metadata to `project.autosave.json`, leaves the project dirty, and
+    /// targets a per-session scratch dir when the project was never saved.
+    /// Fired by the change-gated autosave timer (todo #465).
+    Autosave,
+    /// Capture the open project as a reusable user template (todo #666).
+    /// `name`/`description` label it in the picker; the two booleans are
+    /// the capture toggles (carry the tempo map / the master FX chain).
+    SaveAsTemplate {
+        name: String,
+        description: String,
+        include_markers_and_tempo: bool,
+        include_master_chain: bool,
+    },
+    OpenProject,
+    /// User clicked a recent entry in the startup modal.
+    OpenRecent(std::path::PathBuf),
+    SavePathSelected(Option<String>),
+    OpenPathSelected(Option<String>),
+    /// Async save completion. The `bool` is `true` when the completed
+    /// save was an autosave (routes to `last_autosave_at`, keeps `dirty`
+    /// set, skips the recents list) rather than a manual save.
+    ProjectSaved(Result<(), String>, bool),
+    ProjectLoaded(Result<Box<LoadedProject>, String>),
+    /// A disk open's async load finished, tagged with the
+    /// `io.open_token` it was started under. Forwarded as
+    /// [`Self::ProjectLoaded`] when the token is still current; dropped
+    /// when a later open overtook it (FU-A1a).
+    OpenLoadFinished(u64, Result<Box<LoadedProject>, String>),
+    /// A *user* template finished loading from disk (todo #665). Carries the
+    /// same `LoadedProject` payload as [`Self::ProjectLoaded`], but the
+    /// instantiate handler replays it as a fresh, untitled project (path left
+    /// `None`) so the template source on disk is never overwritten.
+    TemplateLoaded(Result<Box<LoadedProject>, String>),
+    ExportChordSheet,
+    ChordSheetPathSelected(Option<String>, Vec<u8>),
+    /// The user's answer to the autosave-recovery prompt (code review
+    /// FU-M12a).
+    RecoveryChoice(RecoveryChoice),
+    /// Open `path` without the recovery prompt; `recover` loads its
+    /// autosave (when one is recoverable) instead of `project.json`. The
+    /// control `project.open` path: a client can't answer a modal.
+    OpenResolved {
+        path: std::path::PathBuf,
+        recover: bool,
+    },
+}
 
 /// Route a `ProjectIoMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
