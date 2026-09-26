@@ -11,10 +11,12 @@
 //! [`try_diff_replay`] computes the structural shape of the current
 //! state vs. the target snapshot. When they match, it drives the engine
 //! surgically — one engine command per changed scalar — and rebuilds
-//! GUI state in place. When the shapes diverge (a track was added or
-//! removed, a clip was inserted, a plugin instance changed identity),
+//! GUI state in place. When the shapes diverge (a track or bus was added
+//! or removed, a clip was inserted, a plugin instance changed identity),
 //! it returns `false` and the caller falls back to the full clear-and-
-//! replay pipeline.
+//! replay pipeline. App-side entities restored whole on both paths
+//! (sections, drum patterns, track groups, markers) are not part of the
+//! shape (A-13g).
 //!
 //! Plugin parameter restores: a snapshot's state blob is re-sent with
 //! `LoadPluginState` only when the live cache has moved on since the
@@ -39,9 +41,10 @@ use super::serialize::build_project_file;
 /// Attempt a structure-preserving replay. Returns `true` when the diff
 /// path successfully drove engine + GUI to the target state; `false`
 /// when the structural shape of the project differs (tracks, busses,
-/// plugins, clips, drum groups, master plugins, or sections were
-/// added / removed / renumbered) and the caller must fall back to the
-/// full clear-and-replay pipeline.
+/// plugins, master plugins or clips were added / removed / renumbered)
+/// and the caller must fall back to the full clear-and-replay pipeline.
+/// App-side entities (sections, drum patterns, track groups, markers) may
+/// differ: their domains restore them whole (A-13g).
 ///
 /// On success the caller must skip the `ClearAll` command — there is no
 /// `AllCleared` event to wait for, so neither `pending_load` nor
@@ -112,43 +115,16 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !midi_clip_set_matches(&a.midi_clips, &b.midi_clips) {
         return false;
     }
-    // Compose: section definitions/placements + drum groups by id only.
-    if !id_set_eq(
-        a.section_definitions.iter().map(|d| d.id),
-        b.section_definitions.iter().map(|d| d.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.section_placements.iter().map(|p| p.id),
-        b.section_placements.iter().map(|p| p.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.drum_groups.iter().map(|g| g.id),
-        b.drum_groups.iter().map(|g| g.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.drum_patterns.iter().map(|p| p.id),
-        b.drum_patterns.iter().map(|p| p.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.track_groups.iter().map(|g| g.id),
-        b.track_groups.iter().map(|g| g.id),
-    ) {
-        return false;
-    }
-    if !id_set_eq(
-        a.arrangement_markers.iter().map(|m| m.id),
-        b.arrangement_markers.iter().map(|m| m.id),
-    ) {
-        return false;
-    }
+    // Not checked (ARCH-01 A-13g): entity kinds whose domains restore them
+    // whole on both paths, so adding or removing one needs no `ClearAll`.
+    // Section definitions and placements (`ComposeSections`; what a
+    // placement generates is clips, gated above, and the maps keyed by it
+    // are rebuilt in `Clips` from the target), drum patterns and the legacy
+    // flat drum-group list they promote (`DrumPatterns`, whose diff arm
+    // empties the bank for an empty target), track groups (`TrackGroups`),
+    // arrangement markers (`Markers`). What is left is what the diff arms
+    // cannot add or remove yet: tracks, busses and plugin instances
+    // (A-13h/i), clips (A-13i).
     true
 }
 
