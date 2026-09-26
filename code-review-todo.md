@@ -50,7 +50,7 @@ master and updates this table. Agents do **not** edit this file.
 | L1 app logging sweep | FU-H6a, FU-H6c | opus | merged | b8952f64 |
 | C1 app/control follow-ups | FU-E1, E2, M5a/b/c, B2, B3, V2c, V3c, V4a, V4b, A2c, M6b, V1b, M12c | opus | in progress | |
 | A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | merged | a2a53c5f |
-| U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | in progress | |
+| U1 undo follow-ups | FU-A1a, A2a, A2b, M4c, H2a, H2b, H2c | opus | merged | b611a4f5 |
 | R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | in progress | |
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
@@ -61,7 +61,7 @@ master and updates this table. Agents do **not** edit this file.
 
 ### Follow-ups found while fixing (new todos)
 
-- [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
+- [x] **FU-A1a** — fixed @317341e6; (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
 - [x] **FU-A1b** (medium, = UPD-03) — fixed @137c320a; edits during `io.loading` are still acked then wiped by replay.
 - [x] **FU-A1c** — fixed @0c09001c (`Resonance::allocate_track_id` skips group ids); (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
 - [x] **FU-G2a** — fixed @25f5da5c (−79 dB worst bass); (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
@@ -80,8 +80,8 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-C1** (medium, = UPD-11) — fixed @b1357803; global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
 - [x] **FU-C2** — fixed @0408640f; (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
 - [x] **FU-C3** — fixed @71423884; (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
-- [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
-- [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
+- [x] **FU-A2a** — fixed @a7198323; (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
+- [x] **FU-A2b** — fixed @6c7e1ee8; (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
 - [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
 - [x] **FU-A2d** — fixed @93f57443 (= STATE-08); (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
 - [x] **FU-F1a** — fixed @be70a1a9; (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
@@ -113,7 +113,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-M6d** — fixed @6433c3ac; (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
 - [x] **FU-M4a** — fixed @6146d7b8; (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
 - [x] **FU-M4b** — fixed @12279270; (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
-- [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
+- [x] **FU-M4c** — no bug; documented + pinned @c75d5dad; (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
 - [x] **FU-V1a** — fixed @78487a42; (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
 - [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
@@ -124,9 +124,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
 - [x] **FU-M8b** — fixed @c2fb20fc; (low) `bounce/render.rs` ignores `reset_processing()`'s bool → a plugin that stays dead after export is silent without an error.
 - [ ] **FU-M8c** (low) Cocoa runtime still lacks the PLG-10 bounded `Editor::new` and the held-button release across hide.
-- [ ] **FU-H2a** (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
-- [ ] **FU-H2b** (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
-- [ ] **FU-H2c** (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
+- [x] **FU-H2a** — fixed @55c68584; (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
+- [x] **FU-H2b** — fixed @a6e17050; (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
+- [x] **FU-H2c** — fixed @bdc6479b; (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
 - [x] **FU-V3a** — fixed @dac46f8c; (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
 - [x] **FU-V3b** — fixed @4907ebb1; (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
 - [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
