@@ -18,11 +18,13 @@
 //! scans for its own range when it learns the project dir.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use resonance_app::compose::ComposeMessage;
 use resonance_app::message::{
-    Message, MidiClipMessage, TrackMessage, TransportMessage,
+    Message, MidiClipMessage, ProjectIoMessage, TrackMessage, TransportMessage,
 };
+use resonance_app::state::ids::DERIVED_CLIP_ID_BASE;
 use resonance_app::state::FreezeStatus;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
@@ -342,4 +344,63 @@ fn regenerating_after_a_delete_installs_a_new_clip() {
     assert!(has_clip(&s.app, id), "the regenerated clip is on the timeline");
     assert_ne!(id, s.clip, "a deleted clip's id is not handed out again");
     assert_eq!(clips_on_track(&s.app), vec![id]);
+}
+
+// ---------------------------------------------------------------------------
+// FU-A6c
+// ---------------------------------------------------------------------------
+
+fn write_wav_named(dir: &Path, id: ClipId) {
+    std::fs::create_dir_all(dir.join("audio")).expect("audio dir");
+    crate::common::write_freeze_cache_wav(&dir.join("audio").join(format!("clip_{id}.wav")));
+}
+
+/// A derived-range `clip_<id>.wav` in the bundle whose clip is no longer
+/// in the saved file (a deleted vocal render a backup still names): after
+/// the reopen, a newly generated clip must not get that id.
+#[test]
+fn a_reopen_reserves_past_derived_clip_wavs_on_disk() {
+    let s = generated_part();
+    let file = s.app.test_build_project_file();
+    let midi: Vec<(ClipId, Vec<resonance_audio::types::MidiNote>)> = s
+        .app
+        .test_midi_clips()
+        .iter()
+        .map(|mc| (mc.id, mc.notes.clone()))
+        .collect();
+    let dir = s._root.path().join("reopened.rproj");
+    std::fs::create_dir_all(dir.join("audio")).expect("bundle dir");
+    resonance_app::project::save_project(&dir, &file, &[], &midi).expect("save");
+    let orphan = DERIVED_CLIP_ID_BASE + 50;
+    write_wav_named(&dir, orphan);
+    // Below the range: the engine's scan owns those, the app ignores them.
+    write_wav_named(&dir, 12);
+
+    let loaded = resonance_app::project::load_project(&dir).expect("load");
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_replay_loaded_project_from(loaded);
+    let _ = rx.try_iter().count();
+    let next = app.compose_state().next_derived_clip_id;
+    assert!(
+        next > orphan,
+        "after the reopen the counter ({next}) would re-issue {orphan}, whose WAV is on disk"
+    );
+}
+
+/// The same for a Save As into a bundle that already holds derived-range
+/// WAVs: from then on the session writes clip WAVs there.
+#[test]
+fn a_save_as_into_an_existing_bundle_reserves_past_its_derived_wavs() {
+    let mut s = generated_part();
+    let target = s._root.path().join("existing.rproj");
+    let orphan = DERIVED_CLIP_ID_BASE + 500;
+    write_wav_named(&target, orphan);
+    let _ = s.app.update(Message::ProjectIo(ProjectIoMessage::SavePathSelected(Some(
+        target.to_string_lossy().into_owned(),
+    ))));
+    let next = s.app.compose_state().next_derived_clip_id;
+    assert!(
+        next > orphan,
+        "the counter ({next}) would re-issue {orphan}, whose WAV is in the new bundle"
+    );
 }

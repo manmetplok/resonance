@@ -854,6 +854,35 @@ impl ComposeState {
         }
     }
 
+    /// Reserve the counter past every `audio/clip_<id>.wav` in the
+    /// derived range under the project dir `dir` (code review FU-A6c).
+    ///
+    /// A vocal render's WAV is `clip_<id>.wav` with a derived id, and it
+    /// outlives its clip: a backup, the autosave or an older undo state
+    /// can still name it after the clip is gone from the saved file. The
+    /// counter is reset on every load and reserved only past the file's
+    /// clips, so without this a reopen re-issued such an id and the next
+    /// render overwrote the WAV (STATE-12 for the derived range). The
+    /// engine's STATE-08 scan covers the ids below the range and skips
+    /// this one since FU-A6a, because the app is its only allocator.
+    ///
+    /// Not persisted in `ProjectFile`: a monotonic value there would break
+    /// the undo fixed point (A-6 §3). A missing or unreadable `audio/`
+    /// reserves nothing.
+    pub(crate) fn reserve_derived_clip_ids_on_disk(&mut self, dir: &std::path::Path) {
+        let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
+            return;
+        };
+        self.reserve_derived_clip_ids(entries.flatten().filter_map(|e| {
+            let name = e.file_name();
+            let digits = name.to_str()?.strip_prefix("clip_")?.strip_suffix(".wav")?;
+            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            digits.parse::<ClipId>().ok()
+        }));
+    }
+
     /// Counterpart of [`rebuild_derived_clips`] for the SVS-rendered
     /// audio clips that sit on `TrackType::Vocal` tracks. Audio clips
     /// land in `r.clips` after project load with no marker for "this

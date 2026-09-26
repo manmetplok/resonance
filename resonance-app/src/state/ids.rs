@@ -85,9 +85,11 @@ use resonance_audio::types::{BusId, TrackId};
 // counter handed out next — and a drawn clip, a recording or an import
 // then collided with the next generated clip (sharing its
 // `clip_<id>.wav`, for a vocal render). Nothing but the counter checks
-// the range: it is session-monotonic (undo never lowers it) and a load
-// reserves past every restored clip id in the range, so with the engine
-// kept out of it there is no second allocator to skip over.
+// the range: it is session-monotonic (undo never lowers it), and a load
+// reserves past every restored clip id in the range and every
+// derived-range `audio/clip_<id>.wav` in the bundle (as does a Save As
+// into an existing one, FU-A6c), so with the engine kept out of it there
+// is no second allocator to skip over.
 pub use resonance_audio::types::{DERIVED_CLIP_ID_BASE, SUB_TRACK_ID_BASE};
 
 /// First bus id the app allocates — every bus now, GUI or control alike

@@ -227,3 +227,8 @@ session had, which undo already did.
 - The derived counter is not seeded from `audio/clip_*.wav` on load, so a
   vocal WAV of a deleted derived clip that a backup still references can be
   overwritten after a reopen (STATE-12 for the derived range).
+  **Fixed (FU-A6c):** `ComposeState::reserve_derived_clip_ids_on_disk`
+  scans the bundle's `audio/` for derived-range ids, from the
+  `DerivedClips` reconcile domain on a disk load and from
+  `SavePathSelected` (Save As into an existing bundle). Undo needs no scan
+  (the counter never goes down). Still not persisted in the file (§3).
