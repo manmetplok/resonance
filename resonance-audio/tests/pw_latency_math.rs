@@ -2,7 +2,7 @@
 //! ticks, `rate = num/denom` seconds per tick) to engine-rate samples
 //! (doc #260 finding #13, ba todo #1126).
 
-use resonance_audio::__test_support::pw_delay_to_engine_samples;
+use resonance_audio::test_support::pw_delay_to_engine_samples;
 
 #[test]
 fn typical_graph_rate_is_identity_at_engine_rate() {

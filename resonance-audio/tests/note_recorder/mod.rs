@@ -1,6 +1,6 @@
 //! A hand-rolled CLAP instrument that records every note event the host
 //! hands it, for tests that drive the whole audio callback
-//! ([`MixAudioHarness`](resonance_audio::__test_support::MixAudioHarness))
+//! ([`MixAudioHarness`](resonance_audio::test_support::MixAudioHarness))
 //! and need to see what reached the plugin — stuck-note and
 //! stopped-transport regressions (code review MIX-06 / MIX-08).
 //!
@@ -24,7 +24,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
 use parking_lot::Mutex;
 
-use resonance_audio::__test_support::{PluginSlot, __instance_from_raw_for_test};
+use resonance_audio::test_support::{PluginSlot, __instance_from_raw_for_test};
 
 /// What the instrument writes to both channels while any voice is held.
 pub const VOICE_LEVEL: f32 = 0.5;

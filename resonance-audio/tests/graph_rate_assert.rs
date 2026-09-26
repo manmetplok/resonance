@@ -6,7 +6,7 @@
 //! daemon and is exercised manually (`pw-metadata -n settings`); these
 //! tests pin the decision logic around it.
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     choose_assert_rate, force_is_redundant, force_release_target, needs_reassert,
     parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
 };

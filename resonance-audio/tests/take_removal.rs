@@ -35,7 +35,7 @@
 //! list, kept in memory — which is what stops it sounding, while the file
 //! stays where it was.
 
-use resonance_audio::__test_support::EngineHandlerHarness;
+use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::*;
 use resonance_common::{Comp, CompSegment, Take, TakeContent, TakeGroup, TakeId, TimelineRange};
 

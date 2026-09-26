@@ -211,7 +211,7 @@ fn move_note_resorted_reports_the_moved_notes_new_index() {
 /// by the index the previous step reported. The neighbour never moves.
 #[test]
 fn chained_note_moves_follow_the_dragged_note_across_a_neighbour() {
-    use resonance_audio::__test_support::EngineHandlerHarness;
+    use resonance_audio::test_support::EngineHandlerHarness;
     use resonance_audio::types::{move_note_resorted, AudioCommand};
     let mut h = EngineHandlerHarness::new();
     let mut clip = sample_clip(1, 1, 0);

@@ -25,7 +25,7 @@ const OTHER: &str = "com.resonance.compressor";
 
 fn app() -> (
     Resonance,
-    resonance_audio::__test_support::Receiver<AudioCommand>,
+    resonance_audio::test_support::Receiver<AudioCommand>,
 ) {
     let (mut app, _task, cmd_rx) = Resonance::new_for_test_with_capture();
     app.test_set_active_project(true);
@@ -63,7 +63,7 @@ fn track_with_two_effects(app: &mut Resonance) -> (u64, u64, u64) {
 }
 
 fn bypass_commands(
-    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> Vec<(u64, bool)> {
     rx.try_iter()
         .filter_map(|c| match c {

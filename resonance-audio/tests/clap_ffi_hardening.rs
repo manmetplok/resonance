@@ -25,7 +25,7 @@ use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 
-use resonance_audio::__test_support::{ClapBundle, ClapInstance, __instance_from_raw_for_test};
+use resonance_audio::test_support::{ClapBundle, ClapInstance, __instance_from_raw_for_test};
 
 // ---------------------------------------------------------------------------
 // Fake plugin

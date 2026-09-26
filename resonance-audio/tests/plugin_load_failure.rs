@@ -15,7 +15,7 @@
 //! which used to send its own generic error and now hands the reason
 //! back to the caller instead.
 
-use resonance_audio::__test_support::{ensure_bundle, plugin_load_failed_event};
+use resonance_audio::test_support::{ensure_bundle, plugin_load_failed_event};
 use resonance_audio::types::AudioEvent;
 
 /// The whole point: the failure names the instance the command asked

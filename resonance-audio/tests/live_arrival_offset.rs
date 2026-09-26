@@ -125,7 +125,7 @@ fn engine_cadence_arrivals_would_still_clamp_at_small_quanta() {
 // -- Instrument resolution for the audio-thread pickup -----------------------
 
 use indexmap::IndexMap;
-use resonance_audio::__test_support::live_instrument_for;
+use resonance_audio::test_support::live_instrument_for;
 use resonance_audio::types::{Track, TrackId, TrackType};
 
 #[test]

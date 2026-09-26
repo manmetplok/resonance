@@ -27,7 +27,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use indexmap::IndexMap;
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     affects_latency, apply_bypass_request, chain_latencies, compensation_delays, crossfade_to_dry,
     fade_frames, fade_weight, run_faded, slot_latency, BypassFade, FadeStage, FxDryScratch,
     SharedState, BYPASS_FADE_MS,

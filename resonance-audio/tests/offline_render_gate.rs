@@ -19,7 +19,7 @@
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     EngineHandlerHarness, LiveMidiEvent, MixAudioHarness, OfflineRenderGuard,
     OFFLINE_RENDER_BUSY_MSG,
 };

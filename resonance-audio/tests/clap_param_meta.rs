@@ -25,7 +25,7 @@ use clap_sys::ext::params::{
 use clap_sys::plugin::clap_plugin;
 
 use indexmap::IndexMap;
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     choice_labels, AutomationSnapshot, ClapInstance, PluginSlot, __instance_from_raw_for_test,
 };
 use resonance_audio::unit_from_text;

@@ -14,7 +14,7 @@ use crossbeam_channel::unbounded;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{to_wav, PluginMap, SharedState, CLIP_DECLICK_FRAMES};
+use resonance_audio::test_support::{to_wav, PluginMap, SharedState, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 use resonance_audio::{
     handle_reference_analyzed, handle_set_ab_source, handle_set_active_reference,

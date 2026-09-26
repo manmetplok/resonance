@@ -19,13 +19,13 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, StemBitDepth, StemSource, render_stem, stem_filter, stem_project_range, write_stem_wav};
+use resonance_audio::test_support::{PluginMap, SharedState, StemBitDepth, StemSource, render_stem, stem_filter, stem_project_range, write_stem_wav};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
 /// First frame past a clip's automatic edge declick — level assertions
 /// below read a clip's steady interior rather than its ramped edges.
-const STEADY: usize = resonance_audio::__test_support::CLIP_DECLICK_FRAMES as usize;
+const STEADY: usize = resonance_audio::test_support::CLIP_DECLICK_FRAMES as usize;
 
 struct EngineState {
     shared: Arc<SharedState>,

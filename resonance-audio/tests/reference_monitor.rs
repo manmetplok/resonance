@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 
-use resonance_audio::__test_support::SharedState;
+use resonance_audio::test_support::SharedState;
 use resonance_audio::types::{ABSource, AudioEvent, ReferenceId};
 use resonance_audio::{
     handle_reference_analyzed, handle_set_ab_source, handle_set_active_reference,

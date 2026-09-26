@@ -27,7 +27,7 @@ fn call_no_params(app: &mut Resonance, method: &str) -> Response {
     roundtrip(app, Request::without_params(1, method))
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let mut cmds = Vec::new();
     while let Ok(cmd) = rx.try_recv() {
         cmds.push(cmd);

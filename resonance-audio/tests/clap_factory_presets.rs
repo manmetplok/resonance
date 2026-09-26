@@ -13,7 +13,7 @@
 //! not run the bundle step, which is the same contract the rest of the
 //! plugin-hosting tests use.
 
-use resonance_audio::__test_support::ClapBundle;
+use resonance_audio::test_support::ClapBundle;
 
 /// Locate a built bundle by file name, if the workspace has been bundled.
 fn bundle_path(file: &str) -> Option<std::path::PathBuf> {

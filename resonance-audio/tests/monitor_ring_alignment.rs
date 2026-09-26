@@ -4,7 +4,7 @@
 //! consumer now round every push/skip/read down to whole frames via
 //! the helpers exercised here.
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     monitor_catchup_skip, monitor_read_len, whole_frame_push_len,
 };
 use ringbuf::traits::{Consumer, Observer, Producer, Split};
@@ -115,7 +115,7 @@ fn overflow_does_not_rotate_channel_alignment() {
 
 // -- Adaptive native-backend backlog drain (doc #260 finding #12) ------------
 
-use resonance_audio::__test_support::{MonitorDrain, MONITOR_DRAIN_STREAK};
+use resonance_audio::test_support::{MonitorDrain, MONITOR_DRAIN_STREAK};
 
 #[test]
 fn drain_fires_only_after_a_full_stable_high_streak() {
@@ -213,7 +213,7 @@ fn cpal_fallback_never_drains() {
 
 // -- Input wider than the monitor scratch (code review MIX-09) --------------
 
-use resonance_audio::__test_support::MixAudioHarness;
+use resonance_audio::test_support::MixAudioHarness;
 use resonance_audio::types::{TempoMap, Track, TrackOutput};
 use std::sync::atomic::Ordering;
 

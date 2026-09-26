@@ -22,7 +22,7 @@ use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache, AutomationSnapshot,
     PluginMap, PluginSlot, ResolvedParamLane, SharedState, StemBitDepth, StemSource, StemTarget,
     CLIP_DECLICK_FRAMES,

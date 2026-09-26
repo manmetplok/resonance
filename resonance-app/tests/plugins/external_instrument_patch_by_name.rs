@@ -21,7 +21,7 @@ use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, UiMessag
 use resonance_app::state::{TrackState, ViewMode};
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::{theme, Resonance};
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, TrackId};
 
 const TRACK: TrackId = 1;

@@ -29,7 +29,7 @@ use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, PluginMap, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
+use resonance_audio::test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, PluginMap, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

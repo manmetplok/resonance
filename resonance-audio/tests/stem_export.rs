@@ -24,7 +24,7 @@ use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, StemBitDepth, StemSource, StemTarget, export_stems};
+use resonance_audio::test_support::{PluginMap, SharedState, StemBitDepth, StemSource, StemTarget, export_stems};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

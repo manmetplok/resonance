@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use parking_lot::RwLock;
-use resonance_audio::__test_support::affects_latency;
+use resonance_audio::test_support::affects_latency;
 use resonance_audio::types::{AudioCommand, Track, TrackId};
 
 fn track_with(ids: &[u64]) -> Track {

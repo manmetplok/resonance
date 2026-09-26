@@ -40,7 +40,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
 
 use multi_out_harness::{at_master, peak, EngineState, PARENT, SR, TAP_A, TAP_B};
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     __instance_from_raw_for_test, render_stem, PluginSlot, StemSource,
 };
 use resonance_audio::types::*;
@@ -602,7 +602,7 @@ fn a_muted_key_bus_still_keys_in_the_mixdown() {
     assert_keyed(got, at_master(KEY_LEVEL), "muted key bus, mixdown");
 }
 
-use resonance_audio::__test_support::MixAudioHarness;
+use resonance_audio::test_support::MixAudioHarness;
 
 const LIVE_BLOCK: usize = 128;
 

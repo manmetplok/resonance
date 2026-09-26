@@ -26,7 +26,7 @@
 
 use std::path::{Path, PathBuf};
 
-use resonance_audio::__test_support::encode_buffer_for_test;
+use resonance_audio::test_support::encode_buffer_for_test;
 #[cfg(feature = "mp3")]
 use resonance_audio::types::Mp3Rate;
 use resonance_audio::types::{BitDepth, ExportFormat, ExportMetadata, FlacLevel};

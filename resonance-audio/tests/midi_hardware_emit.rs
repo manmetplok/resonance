@@ -1,9 +1,9 @@
 //! Pure-data tests for the MIDI output encoders. No `midir` device
-//! required — the encoders are exposed via `__test_support`. They assert
+//! required — the encoders are exposed via `test_support`. They assert
 //! the exact byte sequences for a 7-bit Control Change, a 7-bit NRPN, and
 //! a 14-bit NRPN.
 
-use resonance_audio::__test_support::{encode_control_change, encode_nrpn};
+use resonance_audio::test_support::{encode_control_change, encode_nrpn};
 
 #[test]
 fn control_change_exact_bytes() {

@@ -59,7 +59,7 @@ fn rescan(app: &mut Resonance) -> Response {
     call(app, "plugins.rescan", serde_json::json!({}))
 }
 
-fn drain(rx: &resonance_audio::__test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
+fn drain(rx: &resonance_audio::test_support::Receiver<AudioCommand>) -> Vec<AudioCommand> {
     std::iter::from_fn(|| rx.try_recv().ok()).collect()
 }
 

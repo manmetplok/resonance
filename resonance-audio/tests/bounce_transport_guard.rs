@@ -15,7 +15,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{AutomationSnapshot, PluginMap, SharedState, to_audio_clip};
+use resonance_audio::test_support::{AutomationSnapshot, PluginMap, SharedState, to_audio_clip};
 use resonance_audio::types::*;
 
 struct EngineState {

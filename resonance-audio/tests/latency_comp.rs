@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     add_external_offsets, affects_latency, bus_chain_latencies, chain_latencies,
     compensation_delays, render_aux_with_comp_for_test, AutomationSnapshot, LatencyComp,
     MAX_COMP_LATENCY,
@@ -424,7 +424,7 @@ fn loop_wrap_keeps_the_delay_line_continuous() {
 /// track while the other plays on.
 #[test]
 fn looping_playback_keeps_compensated_tracks_continuous_across_the_seam() {
-    use resonance_audio::__test_support::MixAudioHarness;
+    use resonance_audio::test_support::MixAudioHarness;
     use resonance_audio::types::TempoMap;
     use std::sync::atomic::Ordering;
     const BLOCK: usize = 128;

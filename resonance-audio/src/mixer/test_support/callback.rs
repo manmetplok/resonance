@@ -284,7 +284,7 @@ impl MixAudioHarness {
     /// Load an audition preview source and start it (the overlay branch).
     pub fn start_audition(&self, samples: Vec<f32>, looping: bool) {
         use std::sync::atomic::Ordering;
-        let source = crate::AuditionSource::from_samples(samples, self.sample_rate);
+        let source = crate::engine::AuditionSource::from_samples(samples, self.sample_rate);
         crate::engine::retire::publish_opt(
             &self.shared.audition_source,
             Some(std::sync::Arc::new(source)),

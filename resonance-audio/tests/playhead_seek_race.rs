@@ -20,7 +20,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use resonance_audio::__test_support::{commit_playhead, MixAudioHarness, SharedState};
+use resonance_audio::test_support::{commit_playhead, MixAudioHarness, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

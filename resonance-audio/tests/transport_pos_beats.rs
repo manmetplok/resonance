@@ -3,7 +3,7 @@
 //! rather than assume a flat samples-per-beat factor, or tempo-synced
 //! plugins drift under tempo ramps.
 
-use resonance_audio::__test_support::transport_pos_beats;
+use resonance_audio::test_support::transport_pos_beats;
 use resonance_audio::types::{SignaturePoint, TempoMap, TempoPoint, TICKS_PER_QUARTER_NOTE};
 
 const SR: u32 = 48_000;

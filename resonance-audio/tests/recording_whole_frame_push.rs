@@ -8,7 +8,7 @@
 //! ever push whole frames (and report the overflow), so drained audio
 //! stays channel-aligned no matter how often the ring overflows.
 
-use resonance_audio::__test_support::push_recording_frames;
+use resonance_audio::test_support::push_recording_frames;
 use ringbuf::traits::{Consumer, Observer, Split};
 
 /// Interleaved test signal: sample value encodes `frame * 10 + channel`

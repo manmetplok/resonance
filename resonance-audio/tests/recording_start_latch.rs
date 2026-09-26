@@ -13,7 +13,7 @@
 
 use std::sync::atomic::Ordering;
 
-use resonance_audio::__test_support::SharedState;
+use resonance_audio::test_support::SharedState;
 
 #[test]
 fn first_push_latches_the_playhead_and_disarms() {

@@ -29,7 +29,7 @@
 //! [`first_party_cdylib`] says so on stderr rather than passing quietly.
 
 use crossbeam_channel::unbounded;
-use resonance_audio::__test_support::{rescan_plugins_in, ClapBundle};
+use resonance_audio::test_support::{rescan_plugins_in, ClapBundle};
 use resonance_audio::types::AudioEvent;
 use std::path::{Path, PathBuf};
 

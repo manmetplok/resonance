@@ -4,7 +4,7 @@
 //! callback (parse → push onto a bounded channel) to prove events reach
 //! the drain channel the engine control thread reads.
 
-use resonance_audio::__test_support::{parse_control_event_for_test, LiveControlEvent};
+use resonance_audio::test_support::{parse_control_event_for_test, LiveControlEvent};
 
 #[test]
 fn cc_basic() {

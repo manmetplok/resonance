@@ -6,7 +6,7 @@
 
 use std::sync::atomic::Ordering;
 
-use resonance_audio::__test_support::MixAudioHarness;
+use resonance_audio::test_support::MixAudioHarness;
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

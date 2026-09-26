@@ -3,7 +3,7 @@
 //! or mute step between two blocks fades smoothly across the block
 //! instead of producing zipper noise / clicks.
 
-use resonance_audio::__test_support::{ramped_gain, sum_to_output, sum_to_stereo};
+use resonance_audio::test_support::{ramped_gain, sum_to_output, sum_to_stereo};
 
 const FRAMES: usize = 64;
 

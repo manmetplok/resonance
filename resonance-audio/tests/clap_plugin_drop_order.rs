@@ -41,7 +41,7 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
-use resonance_audio::__test_support::{ClapBundle, PluginSlot};
+use resonance_audio::test_support::{ClapBundle, PluginSlot};
 
 /// Find a locally-built CLAP bundle to load. Returns `None` if none
 /// of the candidate paths exist — the test then becomes a no-op so it

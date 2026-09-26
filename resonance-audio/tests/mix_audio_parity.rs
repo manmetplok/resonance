@@ -21,7 +21,7 @@
 //! is a real difference: re-bless a constant only together with a
 //! deliberate, documented change to the mix.
 
-use resonance_audio::__test_support::{AutomationSnapshot, LatencyComp, MixAudioHarness};
+use resonance_audio::test_support::{AutomationSnapshot, LatencyComp, MixAudioHarness};
 use resonance_audio::types::*;
 use resonance_common::{real_to_lane_value, AutomationLane, AutomationTarget, Breakpoint, CurveKind};
 

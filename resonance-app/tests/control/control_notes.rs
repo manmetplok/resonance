@@ -205,7 +205,7 @@ fn edit_only_changes_requested_fields() {
 /// engine handlers replaying the captured commands.
 #[test]
 fn edit_that_reorders_the_note_changes_that_note_only() {
-    use resonance_audio::__test_support::EngineHandlerHarness;
+    use resonance_audio::test_support::EngineHandlerHarness;
     use resonance_audio::types::MidiClip;
     // C@0, D@1, E@2 (beats).
     let start = vec![note(60, 0, 1, 0.8), note(62, 1, 1, 0.8), note(64, 2, 1, 0.8)];

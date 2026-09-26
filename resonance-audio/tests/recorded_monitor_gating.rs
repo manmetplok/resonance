@@ -12,7 +12,7 @@
 //! through this gate, so monitoring while preparing a take is untouched
 //! by construction.
 
-use resonance_audio::__test_support::recorded_monitor_gate;
+use resonance_audio::test_support::recorded_monitor_gate;
 use resonance_audio::types::*;
 use resonance_common::PlaybackSource;
 

@@ -18,7 +18,7 @@
 use resonance_app::message::{Message, MidiEditorMessage};
 use resonance_app::state::{GrooveSelection, MidiClipState};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::quantize::{Division, GridValue, GrooveTemplate};
 use resonance_audio::types::{AudioCommand, AudioEvent, ClipId, MidiNote};
 

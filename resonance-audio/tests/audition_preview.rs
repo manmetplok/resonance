@@ -21,7 +21,7 @@ use std::sync::atomic::Ordering;
 
 use hound::{SampleFormat, WavSpec, WavWriter};
 
-use resonance_audio::__test_support::{mix_audition_overlay, SharedState};
+use resonance_audio::test_support::{mix_audition_overlay, SharedState};
 use resonance_audio::{
     compute_sync_ratio, load_audition_source, set_audition_options_in_place,
     start_audition_in_place, stop_audition_in_place, AuditionSource,

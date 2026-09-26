@@ -10,7 +10,7 @@
 //! plus unit coverage for the `track_stage()` accessor and the
 //! MAX_COMP_LATENCY clamp predicate (finding #20).
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     auto_gain_ramp, comp_latency_clamped, render_aux_with_comp_for_test, AutomationSnapshot,
     LatencyComp, MAX_COMP_LATENCY,
 };

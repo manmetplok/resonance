@@ -11,7 +11,7 @@
 //! ceiling has to be last, because anything after it can push the sum
 //! back over the ceiling it exists to hold.
 
-use resonance_audio::__test_support::affects_latency;
+use resonance_audio::test_support::affects_latency;
 use resonance_audio::types::{AudioCommand, MasterBus};
 
 fn master_with(ids: &[u64]) -> MasterBus {

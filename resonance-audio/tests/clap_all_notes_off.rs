@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use resonance_audio::__test_support::{ClapBundle, SyncClapInstance};
+use resonance_audio::test_support::{ClapBundle, SyncClapInstance};
 
 fn find_bundled_clap() -> Option<PathBuf> {
     let candidates = [

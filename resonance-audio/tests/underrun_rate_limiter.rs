@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     format_underrun_line, UnderrunRateLimiter, UNDERRUN_REPORT_INTERVAL,
 };
 

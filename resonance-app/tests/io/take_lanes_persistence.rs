@@ -26,7 +26,7 @@ use std::path::Path;
 
 use resonance_app::project::{load_project, save_project, LoadedProject, ProjectFile};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackType};
 use resonance_common::{
     Comp, CompSegment, SlotCover, Take, TakeContent, TakeGroup, TakeNote, TimelineRange,
@@ -956,7 +956,7 @@ fn undoing_a_capture_re_syncs_the_engines_take_groups() {
 // the clips away — the engine below is built from cold and driven by
 // nothing but the commands the project load emitted.
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     build_comp_table, render_take_comp_for_test, EngineHandlerHarness,
 };
 use resonance_audio::transcode_to_wav;
@@ -1125,7 +1125,7 @@ fn engine_rebuilt_by(cmds: &[AudioCommand]) -> EngineHandlerHarness {
 }
 
 /// Render `[RSLOT]` on `TRACK` through the production render block.
-fn render(clips: Vec<AudioClip>, table: &resonance_audio::__test_support::CompRenderTable, live: bool) -> Vec<f32> {
+fn render(clips: Vec<AudioClip>, table: &resonance_audio::test_support::CompRenderTable, live: bool) -> Vec<f32> {
     let out = render_take_comp_for_test(
         vec![Track::new(TRACK, "comped".into())],
         clips,

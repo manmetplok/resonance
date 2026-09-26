@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use resonance_audio::__test_support::normalize_buffer_for_test;
+use resonance_audio::test_support::normalize_buffer_for_test;
 use resonance_audio::types::{
     BitDepth, ExportFormat, ExportMetadata, NormalizeMode, NormalizeSpec,
 };

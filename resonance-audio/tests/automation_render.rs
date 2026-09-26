@@ -10,7 +10,7 @@
 //! feed their output through the real gain-application helper
 //! (`sum_to_output`) to show an automated fade actually reaches the mix.
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     auto_gain_ramp, auto_master_volume, auto_muted, sum_to_output, AutomationSnapshot,
     ResolvedParamLane,
 };

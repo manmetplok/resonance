@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use resonance_audio::__test_support::bundle_binary_path;
+use resonance_audio::test_support::bundle_binary_path;
 
 /// A scratch dir unique to this test process, removed on drop.
 struct Scratch(PathBuf);

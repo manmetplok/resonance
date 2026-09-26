@@ -17,7 +17,7 @@
 mod multi_out_harness;
 
 use multi_out_harness::{peak, EngineState, FRAMES};
-use resonance_audio::__test_support::{stem_filter, StemSource};
+use resonance_audio::test_support::{stem_filter, StemSource};
 use resonance_audio::types::TrackOutput;
 
 /// The bug, end to end: an instrument's group taps routed into a bus of

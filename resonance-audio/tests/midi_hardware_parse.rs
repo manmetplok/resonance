@@ -2,7 +2,7 @@
 //! required — the parser is exposed via
 //! `parse_live_event_for_test`.
 
-use resonance_audio::__test_support::{parse_live_event_for_test, LiveMidiEvent};
+use resonance_audio::test_support::{parse_live_event_for_test, LiveMidiEvent};
 
 #[test]
 fn note_on_basic() {

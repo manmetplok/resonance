@@ -190,7 +190,7 @@ fn trailing_pass_rolls_without_reopening_and_clears_buffers() {
 /// site — fails both assertions below.
 #[test]
 fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
-    use resonance_audio::__test_support::push_take;
+    use resonance_audio::test_support::push_take;
     use resonance_common::{TakeContent, TakeGroup, TimelineRange};
 
     let project_dir = make_tempdir("punch-in-extent");
@@ -251,7 +251,7 @@ fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
 /// the slot does.
 #[test]
 fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
-    use resonance_audio::__test_support::push_take;
+    use resonance_audio::test_support::push_take;
     use resonance_common::{TakeContent, TakeGroup, TimelineRange};
 
     let project_dir = make_tempdir("cut-short-extent");
@@ -314,7 +314,7 @@ fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
 /// `take_id = pass_index` rule both takes below would come back as `0`.
 #[test]
 fn two_captures_in_one_pass_get_distinct_take_ids() {
-    use resonance_audio::__test_support::push_take;
+    use resonance_audio::test_support::push_take;
     use resonance_common::{TakeContent, TakeGroup, TimelineRange};
 
     let slot = TimelineRange::new(0, 48_000);
@@ -339,7 +339,7 @@ fn two_captures_in_one_pass_get_distinct_take_ids() {
 /// is dense and monotonic regardless of how the passes broke down.
 #[test]
 fn take_ids_stay_unique_across_passes() {
-    use resonance_audio::__test_support::push_take;
+    use resonance_audio::test_support::push_take;
     use resonance_common::{TakeContent, TakeGroup, TimelineRange};
 
     let slot = TimelineRange::new(0, 48_000);
@@ -439,7 +439,7 @@ fn vocal_tracks_still_capture_audio() {
 
 use std::collections::HashMap;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     build_comp_table, capture_take_event, push_take, resolve_take_group,
     restore_take_groups_in_place, slots_match, store_take_in, take_group_for_slot, TakeGroupStore,
     SAME_SLOT_TOLERANCE_FRAMES,
@@ -846,7 +846,7 @@ fn a_mixed_project_reserves_off_its_audio_takes_only() {
 // headless `EngineHandlerHarness` over the engine thread's own
 // `HandlerCtx` + `HandlerState`.
 
-use resonance_audio::__test_support::EngineHandlerHarness;
+use resonance_audio::test_support::EngineHandlerHarness;
 
 /// A harness holding one comped three-take group (id 1, clips 100..102),
 /// with the comp table published — where a cycle-record run or a project
@@ -1735,7 +1735,7 @@ fn write_take_clip_wav(dir: &std::path::Path, clip_id: u64) -> std::path::PathBu
 /// Drive both real handlers through the engine harness and report where
 /// the clip allocator ends up.
 fn allocator_after(order: &[resonance_audio::types::AudioCommand]) -> u64 {
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     for cmd in order {
         assert!(
             engine.replay_take_lane_command(cmd),
@@ -1808,7 +1808,7 @@ fn two_take_clip_loads_racing_each_other_still_leave_one_clip() {
         name: "Take 100".into(),
     };
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     // No `wait_for_clips` between these two: the point is that the second
     // dispatch happens while the first load is still in flight.
     engine.replay_take_lane_command(&load);
@@ -1862,7 +1862,7 @@ fn re_loading_a_take_clip_the_engine_already_holds_is_a_no_op() {
         name: "Take 100".into(),
     };
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.replay_take_lane_command(&load);
     assert!(
         engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
@@ -1949,7 +1949,7 @@ fn a_restored_take_clip_does_not_resurrect_the_parked_one() {
     let path = write_take_clip_wav(&dir, 100);
     let group = one_audio_take_group(100);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.seed_take_group(group.clone());
     // The clip capture left behind, distinguishable from anything the
     // loader would produce: the WAV on disk is DC 0.5, this is DC 1.0.
@@ -1996,7 +1996,7 @@ fn a_restored_take_clip_does_not_resurrect_the_parked_one() {
 /// restored groups the engine derives its claim set from.
 #[test]
 fn a_take_left_removed_stays_parked_across_a_restore() {
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.seed_take_group(one_audio_take_group(100));
     engine.push_clip(memory_clip(100, 1.0));
     engine.remove_take(1, 0);
@@ -2088,7 +2088,7 @@ fn peak(out: &[f32]) -> f32 {
 /// Deliberately counts both, so a broken interlock (which lands the clip in
 /// the list) finishes just as fast as a working one and the test fails on
 /// its assertions rather than on a timeout.
-fn settle(engine: &resonance_audio::__test_support::EngineHandlerHarness, landed: usize) {
+fn settle(engine: &resonance_audio::test_support::EngineHandlerHarness, landed: usize) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while std::time::Instant::now() < deadline
         && engine.clip_ids().len() + engine.parked_clip_ids().len() < landed
@@ -2117,7 +2117,7 @@ fn a_removal_racing_the_take_clip_load_still_parks_the_recording() {
     let removed = write_dc_take_wav(&dir, 100, 1.0, 240_000);
     let survivor = write_dc_take_wav(&dir, 101, 0.25, 48_000);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
     engine.replay_take_lane_command(&take_clip_load(100, removed));
     engine.replay_take_lane_command(&take_clip_load(101, survivor));
@@ -2173,7 +2173,7 @@ fn a_take_clip_load_landing_after_its_take_was_removed_goes_to_the_park() {
     let dir = make_tempdir("load-after-removal");
     let removed = write_dc_take_wav(&dir, 100, 1.0, 48_000);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
 
     engine.remove_take(1, 0);
@@ -2220,7 +2220,7 @@ fn undoing_a_removal_that_raced_the_load_restores_the_audio() {
     let dir = make_tempdir("undo-raced-removal");
     let removed = write_dc_take_wav(&dir, 100, 1.0, 48_000);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
     engine.remove_take(1, 0);
     engine.replay_take_lane_command(&take_clip_load(100, removed));
@@ -2268,7 +2268,7 @@ fn undoing_a_removal_before_the_load_lands_restores_the_audio() {
     // Long, so the load cannot land before the removal and the undo do.
     let removed = write_dc_take_wav(&dir, 100, 1.0, 240_000);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
     engine.replay_take_lane_command(&take_clip_load(100, removed));
     assert!(
@@ -2340,7 +2340,7 @@ fn a_park_claim_does_not_outlive_its_project() {
     let dir = make_tempdir("claim-vs-clear-all");
     let wav = write_dc_take_wav(&dir, 100, 1.0, 48_000);
 
-    let mut engine = resonance_audio::__test_support::EngineHandlerHarness::new();
+    let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
     // Take 0 is removed with its recording still in flight: a claim on 100
     // and no recording behind it.

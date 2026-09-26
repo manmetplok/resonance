@@ -18,7 +18,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
     render_stem, snapshot_tuning_jobs, PluginMap, SharedState, StemSource,
 };

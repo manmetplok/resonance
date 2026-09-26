@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{midi_render_range, SharedState};
+use resonance_audio::test_support::{midi_render_range, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

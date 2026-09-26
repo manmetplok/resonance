@@ -28,7 +28,7 @@ use clap_sys::ext::gui::{clap_host_gui, clap_plugin_gui, CLAP_EXT_GUI};
 use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     plugin_editor_failure_events, ClapInstance, __instance_from_raw_for_test,
 };
 use resonance_audio::types::{AudioEvent, PluginEditorFailure};

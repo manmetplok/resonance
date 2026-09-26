@@ -11,7 +11,7 @@ use resonance_app::compose::ComposeMessage;
 use resonance_app::message::Message;
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, ClipId, TrackType};
 use resonance_control::ids::{SectionDefinitionId, TrackId as ProtoTrackId};
 use resonance_control::methods::generate::{self as proto, GenerateResult, GenerateRole};

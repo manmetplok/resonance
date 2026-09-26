@@ -9,7 +9,7 @@
 //! the WAVE_FORMAT_EXTENSIBLE shape `hound` writes, and the malformed
 //! cases — with no filesystem involved.
 
-use resonance_audio::__test_support::locate_wav_float_data;
+use resonance_audio::test_support::locate_wav_float_data;
 
 const SR: u32 = 48_000;
 

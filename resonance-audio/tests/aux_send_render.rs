@@ -14,7 +14,7 @@
 //! accumulated aux-send contribution — so the tap can be asserted in
 //! isolation from the return bus's own fader/pan.
 
-use resonance_audio::__test_support::{render_aux_for_test, CLIP_DECLICK_FRAMES};
+use resonance_audio::test_support::{render_aux_for_test, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 
 const FRAMES: usize = 512;

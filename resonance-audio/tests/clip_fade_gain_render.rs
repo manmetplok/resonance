@@ -12,7 +12,7 @@
 //! unity assertions below deliberately look at the clip's interior; the
 //! edges themselves are pinned by the declick tests at the bottom.
 
-use resonance_audio::__test_support::{mix_track_clips, CLIP_DECLICK_FRAMES};
+use resonance_audio::test_support::{mix_track_clips, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 
 const TRACK: TrackId = 1;

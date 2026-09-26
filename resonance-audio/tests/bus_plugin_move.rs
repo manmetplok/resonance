@@ -8,7 +8,7 @@
 //! there is no tearing property to test, only the reorder itself, the
 //! clamp, and the "not on this chain" answer.
 
-use resonance_audio::__test_support::affects_latency;
+use resonance_audio::test_support::affects_latency;
 use resonance_audio::types::{AudioCommand, Bus};
 
 fn bus_with(ids: &[u64]) -> Bus {

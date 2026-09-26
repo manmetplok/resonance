@@ -21,7 +21,7 @@ mod note_recorder;
 use std::sync::atomic::Ordering;
 
 use note_recorder::{note_recorder, Recorder};
-use resonance_audio::__test_support::MixAudioHarness;
+use resonance_audio::test_support::MixAudioHarness;
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;

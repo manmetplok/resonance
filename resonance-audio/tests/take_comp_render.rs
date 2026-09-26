@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     build_comp_table, mix_track_comp, render_take_comp_for_test, CompRenderTable,
 };
 use resonance_audio::types::*;
@@ -809,7 +809,7 @@ fn a_restored_comp_bounces_identically_to_before_the_save() {
     let mut store: HashMap<TakeGroupId, TakeGroup> = HashMap::new();
     let mut next_group_id = 1u64;
     let mut next_clip_id = 1u64;
-    resonance_audio::__test_support::restore_take_groups_in_place(
+    resonance_audio::test_support::restore_take_groups_in_place(
         &mut store,
         &mut next_group_id,
         &mut next_clip_id,
@@ -859,7 +859,7 @@ fn a_restored_active_take_still_overrides_the_comp() {
     let mut store: HashMap<TakeGroupId, TakeGroup> = HashMap::new();
     let mut next_group_id = 1u64;
     let mut next_clip_id = 1u64;
-    resonance_audio::__test_support::restore_take_groups_in_place(
+    resonance_audio::test_support::restore_take_groups_in_place(
         &mut store,
         &mut next_group_id,
         &mut next_clip_id,

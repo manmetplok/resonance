@@ -13,7 +13,7 @@
 mod multi_out_harness;
 
 use multi_out_harness::{at_master, peak, EngineState, PARENT, PORT_LEVELS, TAP_A};
-use resonance_audio::__test_support::StemSource;
+use resonance_audio::test_support::StemSource;
 
 /// Both taps reach master, so the kit's level is their sum.
 const BOTH_TAPS: f32 = PORT_LEVELS[1] + PORT_LEVELS[2];

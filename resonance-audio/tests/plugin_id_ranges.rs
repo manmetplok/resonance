@@ -25,7 +25,7 @@
 //!
 //! These tests drive the allocation rule the three add paths now share.
 
-use resonance_audio::__test_support::allocate_plugin_instance_id;
+use resonance_audio::test_support::allocate_plugin_instance_id;
 use resonance_audio::types::{PluginInstanceId, CONTROL_PLUGIN_ID_BASE};
 
 /// The engine's counter as it starts on the engine thread

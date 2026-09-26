@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     chunk_span, master_chain_latency, BOUNCE_CHUNK, MIN_CLAP_FRAMES,
 };
 

@@ -14,7 +14,7 @@ use multi_out_harness::{
     at_master, peak, EngineState, FRAMES, PARENT, PORT_LEVELS, SIBLING, SIBLING_TAP, TAP_A,
     TAP_B,
 };
-use resonance_audio::__test_support::StemSource;
+use resonance_audio::test_support::StemSource;
 use resonance_audio::types::TrackOutput;
 
 /// Both taps land on master, so the parent's own stem is their sum.

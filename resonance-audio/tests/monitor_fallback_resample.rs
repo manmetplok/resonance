@@ -9,7 +9,7 @@
 //! ratio, channel-layout preservation, and streaming continuity across
 //! chunk boundaries.
 
-use resonance_audio::__test_support::MonitorResampler;
+use resonance_audio::test_support::MonitorResampler;
 
 /// Interleaved frames where channel `c` carries the constant `c + 1`.
 fn constant_frames(channels: usize, frames: usize) -> Vec<f32> {

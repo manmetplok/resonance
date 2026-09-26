@@ -37,7 +37,7 @@ use clap_sys::process::clap_process;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     render_stem, PluginMap, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
 };
 use resonance_audio::types::*;

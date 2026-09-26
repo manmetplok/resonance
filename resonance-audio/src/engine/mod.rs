@@ -110,7 +110,7 @@ pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
 pub mod vocal_render;
 
 /// Shared state between the engine control thread and the audio callback.
-/// `pub` (not `pub(crate)`) only so `__test_support` can re-export it for
+/// `pub` (not `pub(crate)`) only so `test_support` can re-export it for
 /// integration tests; the `engine` module itself stays private.
 pub struct SharedState {
     /// Current playhead position in sample frames.
@@ -484,7 +484,7 @@ impl std::error::Error for EngineSendError {}
 /// `EngineSendError` returned by `AudioEngine::send`. Uses an atomic
 /// latch so a stuck app doesn't flood stderr. Lives at module scope
 /// so the test-only `for_test_disconnected` path can reset it (see
-/// `__test_support::__reset_engine_disconnect_latch_for_test`).
+/// `test_support::__reset_engine_disconnect_latch_for_test`).
 fn report_engine_disconnect_once() {
     use std::sync::atomic::Ordering;
     if !ENGINE_DISCONNECT_REPORTED.swap(true, Ordering::Relaxed) {
@@ -1170,7 +1170,7 @@ impl AudioEngine {
     /// returned handle therefore always exercises the disconnect branch
     /// and returns `Err(EngineSendError)`.
     ///
-    /// Exposed via `__test_support` so the disconnect regression test in
+    /// Exposed via `test_support` so the disconnect regression test in
     /// `tests/` can run without bringing up a real audio device.
     #[doc(hidden)]
     pub fn for_test_disconnected() -> Self {

@@ -8,7 +8,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot, MixAudioHarness,
     SharedState, StateMap, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, STATE_MAP_COUNT,
     VERBOSE_REPORT_INTERVAL,

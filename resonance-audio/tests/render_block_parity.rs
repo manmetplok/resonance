@@ -28,7 +28,7 @@
 
 use std::sync::Arc;
 
-use resonance_audio::__test_support::{
+use resonance_audio::test_support::{
     render_aux_with_comp_for_test, AutomationSnapshot, LatencyComp, RenderBenchHarness,
 };
 use resonance_audio::types::*;

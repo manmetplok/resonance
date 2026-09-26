@@ -16,7 +16,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{AutomationSnapshot, FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
+use resonance_audio::test_support::{AutomationSnapshot, FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 

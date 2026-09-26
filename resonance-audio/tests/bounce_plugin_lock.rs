@@ -27,7 +27,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use resonance_audio::__test_support::try_lock_with_backoff;
+use resonance_audio::test_support::try_lock_with_backoff;
 
 /// Upper bound on any wait in these tests: a wedge, not jitter.
 const WEDGE: Duration = Duration::from_secs(10);

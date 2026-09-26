@@ -49,7 +49,7 @@ use resonance_app::view::timeline::takes::{
     effective_cover, silent_ranges, unlit_ranges, CoverSource,
 };
 use resonance_app::{demo, theme, Resonance};
-use resonance_audio::__test_support::build_comp_table;
+use resonance_audio::test_support::build_comp_table;
 use resonance_audio::types::AudioEvent;
 use resonance_common::{CompSegment, Take, TakeContent, TakeGroup, TakeNote, TimelineRange};
 use tempfile::TempDir;

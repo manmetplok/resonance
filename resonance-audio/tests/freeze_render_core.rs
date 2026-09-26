@@ -14,7 +14,7 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, PluginMap, SharedState};
+use resonance_audio::test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, PluginMap, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
