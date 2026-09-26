@@ -186,8 +186,9 @@ fn open_starts_a_job_that_fails_with_the_load_error() {
         ),
     ));
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
-    // The open routed through the path-carrying message: the path is set.
-    assert_eq!(app.test_project_path(), Some(target.as_path()));
+    // The open routed through the path-carrying message, but the path is
+    // only adopted once the load succeeds (code review STATE-01 / UPD-01).
+    assert_eq!(app.test_project_path(), None);
 
     // The async load fails → the job fails with the message.
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Err(
@@ -196,6 +197,51 @@ fn open_starts_a_job_that_fails_with_the_load_error() {
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
     assert_eq!(status.error.as_deref(), Some("corrupt project.json"));
+    // A failed open never repoints the current project at the target.
+    assert_eq!(app.test_project_path(), None);
+}
+
+#[test]
+fn open_completes_only_once_the_loaded_project_has_replayed() {
+    // Code review UPD-02: the job used to resolve in `ProjectLoaded(Ok)`,
+    // before `ClearAll` was even sent, so a `job.wait` → readback raced
+    // the replay and saw (or edited) the previous project.
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target = dir.path().join("song.rproj");
+    std::fs::create_dir(&target).expect("existing project dir");
+
+    let mut app = app();
+    let job = started_job(roundtrip(
+        &mut app,
+        request(
+            1,
+            "project.open",
+            json!({ "path": target.display().to_string() }),
+        ),
+    ));
+    let loaded = resonance_app::project::LoadedProject {
+        file: resonance_app::project::ProjectFile::default(),
+        project_dir: target.clone(),
+        midi_notes: Default::default(),
+        plugin_states: Default::default(),
+    };
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
+        Box::new(loaded),
+    ))));
+    assert_eq!(
+        job_status(&mut app, job).state,
+        JobState::Pending,
+        "the replay has not run yet"
+    );
+
+    // The engine confirms the clear → the project replays → done.
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    let status = job_status(&mut app, job);
+    assert_eq!(status.state, JobState::Done);
+    let result = status.result.expect("done jobs carry a result");
+    assert_eq!(result["path"], json!(target.display().to_string()));
+    assert_eq!(result["revision"], json!(app.revision()));
+    assert_eq!(app.test_project_path(), Some(target.as_path()));
 }
 
 // ---------------- project.save / project.save_as ----------------

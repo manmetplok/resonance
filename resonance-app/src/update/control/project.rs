@@ -11,8 +11,8 @@
 //! parent, `.rproj` extension applied exactly like the GUI save path),
 //! then registers a job on the [`JobBoard`](crate::control_jobs::JobBoard)
 //! and dispatches the real operation. Completion is keyed off the
-//! existing completion points via [`JobToken`]s: `ProjectSaved` /
-//! `ProjectLoaded` (wired in todo #1149) and, for `project.new`, the
+//! existing completion points via [`JobToken`]s: `ProjectSaved` (wired
+//! in todo #1149) and, for `project.open` / `project.new`, the
 //! engine-confirmed clear+replay (`engine_events::project_io::all_cleared`).
 //!
 //! Guards (doc #265):
@@ -108,7 +108,7 @@ fn new(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<
 }
 
 /// `project.open {path}` — open a project from an explicit absolute
-/// path, as a job resolved by `ProjectLoaded`.
+/// path, as a job resolved once the loaded project has replayed.
 fn open(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
     let params: OpenParams = match request.params() {
         Ok(p) => p,
@@ -296,7 +296,7 @@ fn save_impl(
 /// same `ProjectSave` / `ProjectLoad` / `ProjectNew` token and its
 /// completion event cannot resolve the wrong client's job.
 fn busy_guard(app: &Resonance) -> Option<RpcError> {
-    if app.io.loading || app.io.pending_load.is_some() {
+    if app.io.loading || app.io.pending_load.is_some() || app.io.pending_open_path.is_some() {
         return Some(RpcError::busy("a project load is in progress"));
     }
     if app.io.saving || app.io.save_state.is_some() {

@@ -67,6 +67,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.browser.audition.playing.is_some()
         || r.freeze.any_in_flight()
         || r.io.bouncing
+        || r.io.loading
         || r.bounce_in_progress.is_some()
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())

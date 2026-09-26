@@ -23,6 +23,8 @@ mod aux_send_persistence;
 mod frost_treatment_swatch;
 #[path = "mixer/group_creation_from_selection.rs"]
 mod group_creation_from_selection;
+#[path = "mixer/group_id_after_load.rs"]
+mod group_id_after_load;
 #[path = "mixer/group_header.rs"]
 mod group_header;
 #[path = "mixer/group_identity_rail.rs"]

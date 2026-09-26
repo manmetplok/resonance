@@ -43,6 +43,8 @@ mod import_placement;
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
 mod media_browser_scaffold;
+#[path = "io/open_failure_keeps_path.rs"]
+mod open_failure_keeps_path;
 #[path = "io/pool_persistence.rs"]
 mod pool_persistence;
 #[path = "io/pool_tab_rendering.rs"]
