@@ -74,6 +74,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 | refactor-intent C-1 (ARCH-05) | A5-3 `EngineError { kind, message }`; 39 emit sites classified (NotFound 5, Busy 2, Io 15, Plugin 4, dynamic 1, Internal 12) | sonnet | merged | 8339eecd |
 | refactor-intent C-2 (ARCH-05) | A5-3 second half: BounceError carries ExportErrorKind, Track/Stem bounce errors carry EngineError; `JobStatus.error` = `{message, kind?}` | sonnet | merged | 4f3342dd |
+| refactor-intent D-1 (ARCH-04) | A4-4 plugins: mandatory `id` on plugin adds; engine rejects duplicates (`Internal`); `next_plugin_id` / `CONTROL_PLUGIN_ID_BASE` gone | sonnet | merged | 630b5197 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
