@@ -5,8 +5,8 @@
 //! that only care about the plugin-instance mirror can take
 //! `&PluginMirror` / `&mut PluginMirror` instead of the whole app.
 //! Distinct from `registry.tracks[*].plugins` / `registry.busses[*].plugins`
-//! (the chains themselves) and from `master_plugins`, which stays on
-//! `Resonance` directly pending the `MasterState` batch (A6-3 last).
+//! (the chains themselves) and from `master.plugins`, which lives on
+//! [`crate::state::MasterState`] (A6-3 last).
 
 use resonance_audio::types::PluginInstanceId;
 
@@ -42,7 +42,7 @@ pub struct PluginMirror {
     /// Side-index mapping every live plugin instance to the slot that
     /// owns it (a track, a bus, or master). Kept in sync with
     /// `registry.tracks[*].plugins`, `registry.busses[*].plugins`, and
-    /// `master_plugins` by `insert_plugin_index` / `remove_plugin_index`
+    /// `master.plugins` by `insert_plugin_index` / `remove_plugin_index`
     /// at each add/remove site, and wholesale via `rebuild_plugin_index`
     /// after seed / replay. Replaces the O(tracks × plugins) scan that
     /// `with_plugin_mut` did pre-index.

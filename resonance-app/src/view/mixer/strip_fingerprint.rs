@@ -211,13 +211,13 @@ pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64
 /// transient Bounce button stay outside the lazy region.
 pub(super) fn master_strip_fingerprint(r: &crate::Resonance) -> u64 {
     let mut h = DefaultHasher::new();
-    r.master_fx_bypassed.hash(&mut h);
-    r.master_plugins.len().hash(&mut h);
-    for p in &r.master_plugins {
+    r.master.fx_bypassed.hash(&mut h);
+    r.master.plugins.len().hash(&mut h);
+    for p in &r.master.plugins {
         hash_slot(&mut h, p, r.mixer.selected_plugin == Some(p.instance_id));
     }
     hash_scanned(&mut h, &r.view_caches.fx_plugins);
-    hash_auto_header(&mut h, r, AutoChan::Master, &r.master_plugins);
+    hash_auto_header(&mut h, r, AutoChan::Master, &r.master.plugins);
     h.finish()
 }
 

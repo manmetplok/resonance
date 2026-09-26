@@ -42,8 +42,8 @@ pub fn seed_demo_content(app: &mut Resonance) {
     // `60/bpm * 6 * sr`, i.e. a 6/4 bar, while the clips' notes below
     // were written against a 6/8 one (ba todo #1389).
     let bar_samples = app.tempo_map.bar_to_sample(1);
-    app.master_level_l = 0.62;
-    app.master_level_r = 0.48;
+    app.master.level_l = 0.62;
+    app.master.level_r = 0.48;
 
     // ---- Tracks ----
     let mk_instr = |id: u64,

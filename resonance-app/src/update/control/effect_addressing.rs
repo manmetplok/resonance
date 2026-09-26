@@ -79,7 +79,7 @@ pub(super) trait ChainWording {
 /// turns a resolved `(plugin_id, occurrence)` back into an engine
 /// instance id — a track, a bus and the master each hold their chain in
 /// a different collection ([`crate::state::TrackState::plugins`],
-/// [`crate::state::BusState::plugins`], `Resonance::master_plugins`),
+/// [`crate::state::BusState::plugins`], `Resonance::master.plugins`),
 /// so this is the one piece of surface-specific *behaviour* (not just
 /// wording) left as a closure rather than data. [`instance_at`] is the
 /// shared body for it; track keeps its own copy

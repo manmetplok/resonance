@@ -107,7 +107,7 @@ pub fn plugin_states_for_save(
     for bus in &r.registry.busses {
         preserve(&bus.plugins, &mut out);
     }
-    preserve(&r.master_plugins, &mut out);
+    preserve(&r.master.plugins, &mut out);
 
     out
 }
@@ -335,7 +335,8 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         .collect();
 
     let master_plugins = r
-        .master_plugins
+        .master
+        .plugins
         .iter()
         .map(|p| project_plugin(r, p))
         .collect();
@@ -402,9 +403,9 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         time_sig_num: r.transport.time_sig_num,
         time_sig_den: r.transport.time_sig_den,
         metronome_enabled: r.transport.metronome_enabled,
-        master_volume: r.master_volume,
+        master_volume: r.master.volume,
         master_plugins,
-        master_fx_bypassed: r.master_fx_bypassed,
+        master_fx_bypassed: r.master.fx_bypassed,
         loop_enabled: r.transport.loop_enabled,
         loop_in: r.transport.loop_in,
         loop_out: r.transport.loop_out,

@@ -350,7 +350,7 @@ fn current_static_lane_value(r: &Resonance, target: &AutomationTarget) -> f32 {
         BusGain(id) => bus_field(r, *id, |b| b.volume),
         BusPan(id) => bus_field(r, *id, |b| b.pan),
         BusMute(id) => bus_field(r, *id, |b| if b.muted { 1.0 } else { 0.0 }),
-        MasterGain => r.master_volume,
+        MasterGain => r.master.volume,
         // Plugin params live in a per-plugin range, not the fixed ranges
         // `real_to_lane_value` knows, so normalize with the param's own
         // `min..=max` and return directly.
@@ -393,7 +393,7 @@ fn current_plugin_param_lane_value(r: &Resonance, instance: u64, param_id: u32) 
         .iter()
         .flat_map(|t| t.plugins.iter())
         .chain(r.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-        .chain(r.master_plugins.iter());
+        .chain(r.master.plugins.iter());
     for slot in slots {
         if slot.instance_id != instance {
             continue;

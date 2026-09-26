@@ -57,7 +57,7 @@ impl Chain {
                 .find(|b| b.id == id)
                 .map(|b| b.plugins.as_slice())
                 .ok_or_else(|| no_bus(id)),
-            Chain::Master => Ok(&app.master_plugins),
+            Chain::Master => Ok(&app.master.plugins),
         }
     }
 }

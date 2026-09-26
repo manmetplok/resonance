@@ -146,8 +146,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     r.registry.tracks.clear();
     r.registry.busses.clear();
-    r.master_plugins.clear();
-    r.master_fx_bypassed = false;
+    r.master.plugins.clear();
+    r.master.fx_bypassed = false;
     // The audio and MIDI clip mirrors are emptied by their own reconcile
     // domains (`AudioClips`, `MidiClips`), just before they reload them;
     // nothing in between reads them.
@@ -260,7 +260,7 @@ fn finalize_plugin_chains(r: &mut Resonance, saved: &SavedPluginOrder) {
             sort_plugins_by_saved_order(&mut bus.plugins, order);
         }
     }
-    sort_plugins_by_saved_order(&mut r.master_plugins, &saved.master);
+    sort_plugins_by_saved_order(&mut r.master.plugins, &saved.master);
 
     // Re-populate the `with_plugin_mut` side-index from the wholesale
     // replay we just performed. Per-slot inserts would also work but

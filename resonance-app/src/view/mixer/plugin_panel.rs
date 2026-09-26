@@ -21,7 +21,7 @@ impl crate::Resonance {
             .iter()
             .flat_map(|t| t.plugins.iter())
             .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master_plugins.iter())
+            .chain(self.master.plugins.iter())
             .find(|p| p.instance_id == selected_id)?;
 
         let inst_id = selected_id;

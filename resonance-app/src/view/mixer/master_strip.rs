@@ -36,9 +36,9 @@ impl crate::Resonance {
             v,
         ));
         let fader_block = fader_section(
-            self.master_level_l,
-            self.master_level_r,
-            self.master_volume,
+            self.master.level_l,
+            self.master.level_r,
+            self.master.volume,
             gain_live,
             |v| Message::Track(TrackMessage::SetMasterVolume(v)),
         );
@@ -97,7 +97,7 @@ impl crate::Resonance {
         // has a dedicated control spot (tracks and busses share a row
         // with other toggles; the master strip only has this one).
         let button_row = container(fx_bypass_button(
-            self.master_fx_bypassed,
+            self.master.fx_bypassed,
             Message::Master(MasterMessage::ToggleMasterFxBypass),
             10,
         ))
@@ -106,8 +106,8 @@ impl crate::Resonance {
 
         // Plugin chain — every plugin is an effect.
         let mut plugin_section = column![].spacing(4).width(Length::Fill);
-        let chain_len = self.master_plugins.len();
-        for (index, plugin) in self.master_plugins.iter().enumerate() {
+        let chain_len = self.master.plugins.len();
+        for (index, plugin) in self.master.plugins.iter().enumerate() {
             plugin_section = plugin_section.push(self.view_plugin_slot_row(
                 PluginOwner::Master,
                 plugin,
@@ -163,7 +163,7 @@ impl crate::Resonance {
         let auto_header = super::automation::automation_header(
             &self.automation,
             super::automation::AutoChan::Master,
-            &self.master_plugins,
+            &self.master.plugins,
             &[],
         );
 

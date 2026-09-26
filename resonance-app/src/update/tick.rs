@@ -83,8 +83,8 @@ fn needs_fast_tick(r: &Resonance) -> bool {
 /// always visible, so "someone consumes peaks" reduces to "the meters
 /// have not finished falling" once the transport is stopped.
 fn meters_unsettled(r: &Resonance) -> bool {
-    r.master_level_l != 0.0
-        || r.master_level_r != 0.0
+    r.master.level_l != 0.0
+        || r.master.level_r != 0.0
         || r.registry
             .tracks
             .iter()
@@ -236,8 +236,8 @@ fn update_vu_meters(r: &mut Resonance) {
         decay_level(&mut bus.level_l);
         decay_level(&mut bus.level_r);
     }
-    decay_level(&mut r.master_level_l);
-    decay_level(&mut r.master_level_r);
+    decay_level(&mut r.master.level_l);
+    decay_level(&mut r.master.level_r);
     if peaks_have_consumers(r) {
         let _ = r.engine.send(AudioCommand::PollPeaks);
     }
@@ -303,11 +303,11 @@ pub fn apply_peak_snapshot(
             }
         });
     }
-    if master_peak_l > r.master_level_l {
-        r.master_level_l = master_peak_l;
+    if master_peak_l > r.master.level_l {
+        r.master.level_l = master_peak_l;
     }
-    if master_peak_r > r.master_level_r {
-        r.master_level_r = master_peak_r;
+    if master_peak_r > r.master.level_r {
+        r.master.level_r = master_peak_r;
     }
 }
 
@@ -438,6 +438,6 @@ impl Resonance {
     /// Test-only: master VU levels `(l, r)`, for the settle-floor tests.
     #[doc(hidden)]
     pub fn test_master_levels(&self) -> (f32, f32) {
-        (self.master_level_l, self.master_level_r)
+        (self.master.level_l, self.master.level_r)
     }
 }

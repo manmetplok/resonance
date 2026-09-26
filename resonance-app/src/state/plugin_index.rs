@@ -56,7 +56,8 @@ impl Resonance {
                 .and_then(|b| b.plugins.iter_mut().find(|p| p.instance_id == instance_id))
                 .map(f),
             Some(PluginLocator::Master) => self
-                .master_plugins
+                .master
+                .plugins
                 .iter_mut()
                 .find(|p| p.instance_id == instance_id)
                 .map(f),
@@ -95,7 +96,8 @@ impl Resonance {
                 return Some(f(p));
             }
         }
-        self.master_plugins
+        self.master
+            .plugins
             .iter_mut()
             .find(|p| p.instance_id == instance_id)
             .map(f)
@@ -145,7 +147,7 @@ impl Resonance {
     /// counter hasn't caught up to yet is exactly the case that scan is
     /// for.
     pub(crate) fn allocate_plugin_id(&mut self) -> PluginInstanceId {
-        let (registry, master) = (&self.registry, &self.master_plugins);
+        let (registry, master) = (&self.registry, &self.master.plugins);
         super::ids::allocate_unused(&mut self.plugin_mirror.next_id, |id| {
             registry
                 .tracks
@@ -160,7 +162,7 @@ impl Resonance {
     }
 
     /// Recompute the entire `plugin_mirror.index` from `registry.tracks`,
-    /// `registry.busses`, and `master_plugins`. Used after a full
+    /// `registry.busses`, and `master.plugins`. Used after a full
     /// project replay or demo seed where the state is repopulated
     /// wholesale.
     pub(crate) fn rebuild_plugin_index(&mut self) {
@@ -179,7 +181,7 @@ impl Resonance {
                     .insert(p.instance_id, PluginLocator::Bus(bus.id));
             }
         }
-        for p in &self.master_plugins {
+        for p in &self.master.plugins {
             self.plugin_mirror
                 .index
                 .insert(p.instance_id, PluginLocator::Master);
