@@ -741,8 +741,8 @@ pub fn generate_group_pattern(g: &mut DrumGroup) {
 /// bar-by-bar: each span emits its pattern's groups over its bar range, an
 /// entry's fill pattern takes over the entry's last bar, gap bars stay
 /// silent, and overflow past the section length is clipped away. Within a
-/// span each group emits one note per non-zero pattern step per pad; the step
-/// stride is `TICKS_PER_QUARTER_NOTE / group.grid` so triplet- and
+/// span each group emits one note per non-zero pattern step per pad; step
+/// `n` starts at `n * TICKS_PER_QUARTER_NOTE / group.grid` so triplet- and
 /// septuplet-grid groups land at sub-beat positions inside the bar. The
 /// pattern repeats every `group.cycle` steps (indexed by absolute section
 /// position so phase stays continuous across spans, see [`build_drum_notes`]),
@@ -970,11 +970,13 @@ fn emit_span_notes(
         if g.pads.is_empty() || g.cycle == 0 || g.grid == 0 {
             continue;
         }
-        // Step length in ticks. For grids that don't divide 480 evenly
-        // (5, 7, etc.) we rely on integer rounding; the audio engine
-        // tolerates the small drift and these are explicitly polyrhythmic
-        // grids where exact tick alignment isn't expected.
-        let step_ticks = (TICKS_PER_QUARTER_NOTE / g.grid as u64).max(1);
+        // Step onsets are `step * TPQ / grid`, rounded per step, and each
+        // step lasts until the next onset. Grids that don't divide a
+        // quarter evenly (5, 7, …) used a truncated fixed step length
+        // instead, so the error accumulated: a grid-7 group lost 4 ticks
+        // a beat, 128 ticks over 8 bars (code review VIEW-24).
+        let grid = g.grid as u64;
+        let onset = |step: u64| step * TICKS_PER_QUARTER_NOTE / grid;
         let steps_per_bar = time_sig_num as u64 * g.grid as u64;
         let cycle = g.cycle as u64;
         let phase = g.phase as u64 % cycle.max(1);
@@ -984,7 +986,8 @@ fn emit_span_notes(
         let end_step = span.bar_end as u64 * steps_per_bar;
         for step in start_step..end_step {
             let pattern_idx = ((step + phase) % cycle) as usize;
-            let start_tick = step * step_ticks;
+            let start_tick = onset(step);
+            let step_ticks = (onset(step + 1) - start_tick).max(1);
             for pad in &g.pads {
                 let cell = pad.pattern.get(pattern_idx).copied().unwrap_or(0);
                 if cell == 0 {

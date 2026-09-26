@@ -65,6 +65,8 @@ mod compose_track_count;
 mod compose_vocal_placeholder;
 #[path = "compose/compose_workspace_collapse.rs"]
 mod compose_workspace_collapse;
+#[path = "compose/drum_grid_tuplet_drift.rs"]
+mod drum_grid_tuplet_drift;
 #[path = "compose/drum_kit_pads.rs"]
 mod drum_kit_pads;
 #[path = "compose/drum_pattern_library.rs"]
