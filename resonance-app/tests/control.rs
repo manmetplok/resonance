@@ -131,6 +131,8 @@ mod control_track_remove_effect;
 mod control_transport;
 #[path = "control/control_undo_contract.rs"]
 mod control_undo_contract;
+#[path = "control/pool_usage_staleness.rs"]
+mod pool_usage_staleness;
 #[path = "control/control_view_model_shared.rs"]
 mod control_view_model_shared;
 #[path = "control/control_vocal.rs"]

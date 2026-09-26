@@ -190,6 +190,8 @@ pub fn split_clip_at(
         head.fade_out_frames = 0;
     }
     r.clips.push(tail);
+    // Both halves reference the asset (review VIEW-30).
+    r.recompute_pool_usage();
 
     let _ = r.engine.send(AudioCommand::SplitClip {
         clip_id,
