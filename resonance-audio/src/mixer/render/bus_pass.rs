@@ -55,11 +55,15 @@ fn render_one_bus(
         AutomationTarget::BusMute(bus.id),
         ctx.evals.bus_start,
     );
-    let Some((bus_gain_l, bus_gain_r)) =
-        strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute)
-    else {
-        return;
-    };
+    // A muted bus that keys something still runs its chain for the
+    // capture, and stops there (code review MIX-05).
+    let bus_tap = SendSource::Bus(bus.id);
+    let ((bus_gain_l, bus_gain_r), key_only) =
+        match strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute) {
+            Some(gains) => (gains, false),
+            None if scratch.sidechain.is_tapped(bus_tap) => (((0.0, 0.0), (0.0, 0.0)), true),
+            None => return,
+        };
 
     // Process the bus plugin chain in place over the accumulated buffer
     // (skipped once the bus's bypass fade has fully landed).
@@ -82,7 +86,6 @@ fn render_one_bus(
     // legal route target all along (`sidechain::from_bus`), so without
     // this a bus-sourced route resolved to a slot that was never written
     // and silently keyed off the plugin's own input.
-    let bus_tap = SendSource::Bus(bus.id);
     if scratch.sidechain.is_tapped(bus_tap) {
         let (bus_buf_l, bus_buf_r) = &scratch.bus_bufs[bus_idx];
         scratch.sidechain.capture(
@@ -94,7 +97,7 @@ fn render_one_bus(
     }
 
     // Captured, and not part of this stem (ba doc #277).
-    if strategy.is_key_only_bus(bus.id) {
+    if key_only || strategy.is_key_only_bus(bus.id) {
         return;
     }
 

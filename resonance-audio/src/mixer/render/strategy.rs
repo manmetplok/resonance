@@ -109,9 +109,43 @@ pub(crate) struct TrackDisposition {
     /// todo #1242). Unlike `discard_after_instrument` this must NOT skip
     /// the rest of the iteration, or the fan-out never happens.
     pub(crate) discard_own_output: bool,
+    /// Silenced by mute / solo, but a sidechain key is tapped from it (or
+    /// from one of its sub-tracks): render the source and FX chain so the
+    /// key is captured — taps are post-FX, pre-fader, and must not depend
+    /// on the source's mute (code review MIX-05) — then stop before PDC,
+    /// fader, aux sends and routing, so nothing of it is heard.
+    pub(crate) key_only: bool,
+}
+
+impl TrackDisposition {
+    /// A silenced track rendered only for its sidechain key (see
+    /// [`TrackDisposition::key_only`]). Marked `silenced` so its
+    /// sub-tracks follow it out and fall to key-only themselves.
+    pub(crate) fn key_only() -> Self {
+        Self {
+            gain_l: (0.0, 0.0),
+            gain_r: (0.0, 0.0),
+            silenced: true,
+            discard_after_instrument: false,
+            discard_own_output: false,
+            key_only: true,
+        }
+    }
 }
 
 impl RenderStrategy<'_> {
+    /// Whether this track takes part in this render at all, mute / solo
+    /// aside: always live; only in-filter tracks in a bounce / stem. A
+    /// silenced track that a key is tapped from renders key-only exactly
+    /// when this holds (code review MIX-05).
+    #[inline]
+    pub(crate) fn renders(&self, id: TrackId) -> bool {
+        match self {
+            Self::Live { .. } => true,
+            Self::Bounce { in_filter, .. } => in_filter(id),
+        }
+    }
+
     /// Live-only side effects: VU peak meters and the last-gain atomics
     /// that seed the next block's ramp. Bounce must not touch either —
     /// it can run while live playback owns them.
@@ -253,6 +287,7 @@ impl RenderStrategy<'_> {
                     silenced,
                     discard_after_instrument: silenced && faded_out,
                     discard_own_output: false,
+                    key_only: false,
                 })
             }
             Self::Bounce {
@@ -292,6 +327,7 @@ impl RenderStrategy<'_> {
                     silenced: false,
                     discard_after_instrument: false,
                     discard_own_output: fan_out_only(track.id),
+                    key_only: false,
                 })
             }
         }
@@ -347,8 +383,9 @@ impl RenderStrategy<'_> {
             } => {
                 // Same resolution as live: a sub-track follows its
                 // parent's solo, never its own flag (code review MIX-07).
-                // A solo-suppressed parent never reaches its fan-out here
-                // (`track_disposition` dropped it).
+                // A solo-suppressed parent only reaches its fan-out here
+                // when it renders key-only (code review MIX-05), and then
+                // its taps follow it out.
                 if *respect_mute_solo && sub_track_silenced(muted, parent_silenced) {
                     return None;
                 }

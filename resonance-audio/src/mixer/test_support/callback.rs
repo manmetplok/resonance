@@ -206,6 +206,23 @@ impl MixAudioHarness {
         Arc::clone(&self.shared)
     }
 
+    /// The track table the callback reads, for a test that mutes / solos
+    /// / re-routes between blocks as the engine control thread would.
+    pub fn tracks(&self) -> &RwLock<IndexMap<TrackId, Track>> {
+        &self.tracks
+    }
+
+    /// The bus table the callback reads.
+    pub fn busses(&self) -> &RwLock<IndexMap<BusId, Bus>> {
+        &self.busses
+    }
+
+    /// The plugin instances the callback drives — empty until a test
+    /// inserts a hand-rolled CLAP instance (`__instance_from_raw_for_test`).
+    pub fn plugins(&self) -> &RwLock<PluginMap> {
+        &self.plugins
+    }
+
     /// Publish a new automation snapshot (as the engine thread does on a
     /// lane edit).
     pub fn set_automation(&self, snapshot: AutomationSnapshot) {
