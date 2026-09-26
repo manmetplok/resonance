@@ -80,4 +80,8 @@ pub struct ProjectIoState {
     /// when the revision is unchanged: an edit made while the files were
     /// being written is not in them (code review STATE-09).
     pub save_capture_revision: Option<u64>,
+    /// A manual save was requested while another save's engine round-trip
+    /// was collecting; it starts once that collector completes (code
+    /// review STATE-11).
+    pub manual_save_queued: bool,
 }

@@ -343,6 +343,9 @@ fn saving_over_the_projects_own_path_needs_no_confirm() {
     // Both the pathless in-place save…
     let job = started_job(roundtrip(&mut app, request(1, "project.save", json!({}))));
     assert_eq!(job_status(&mut app, job).state, JobState::Pending);
+    // The engine reports both save branches, then the write completes.
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectSaved(
         Ok(()),
         false,

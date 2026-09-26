@@ -24,36 +24,59 @@ pub fn save_project(
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
     midi_clips: &[(ClipId, Vec<MidiNote>)],
 ) -> Result<(), String> {
-    write_project_metadata(path, PROJECT_JSON, project, plugin_states, midi_clips)
+    write_project_metadata(path, PROJECT_JSON, "", project, plugin_states, midi_clips)
 }
 
-/// Write an autosave snapshot. Identical to [`save_project`] except the
-/// project metadata goes to [`AUTOSAVE_JSON`] instead of [`PROJECT_JSON`],
-/// so the canonical `project.json` is never overwritten. The shared
-/// audio / MIDI / plugin blobs are written to the same id-keyed paths as
-/// a normal save, so the side file plus those blobs form a complete,
-/// loadable snapshot for crash recovery.
+/// Project-relative subtree an autosave writes its MIDI and plugin files
+/// into, so it never touches the ones `project.json` points to.
+pub const AUTOSAVE_SIDECAR_DIR: &str = "autosave";
+
+/// Write an autosave snapshot. The project metadata goes to
+/// [`AUTOSAVE_JSON`] instead of [`PROJECT_JSON`], and the MIDI files and
+/// plugin blobs go under [`AUTOSAVE_SIDECAR_DIR`] with the snapshot's
+/// JSON pointing there — so neither the canonical `project.json` nor the
+/// files it references are ever overwritten (code review STATE-11: a
+/// "Don't save" quit used to reopen the old arrangement with the
+/// autosave's notes and plugin states). Audio WAVs stay shared: a clip's
+/// WAV never changes once written.
 pub fn save_autosave(
     path: &Path,
     project: &ProjectFile,
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
     midi_clips: &[(ClipId, Vec<MidiNote>)],
 ) -> Result<(), String> {
-    write_project_metadata(path, AUTOSAVE_JSON, project, plugin_states, midi_clips)
+    write_project_metadata(
+        path,
+        AUTOSAVE_JSON,
+        AUTOSAVE_SIDECAR_DIR,
+        project,
+        plugin_states,
+        midi_clips,
+    )
 }
 
 /// Shared body of [`save_project`] / [`save_autosave`]: write the plugin
-/// state blobs and MIDI clip files, then the project-metadata JSON under
-/// `json_file_name`. Every write goes through [`atomic_write`].
+/// state blobs and MIDI clip files under `{path}/{sidecar_root}`, then the
+/// project-metadata JSON under `json_file_name`, its `state_file` /
+/// `midi_file` paths pointing at those files. Every write goes through
+/// [`atomic_write`].
 fn write_project_metadata(
     path: &Path,
     json_file_name: &str,
+    sidecar_root: &str,
     project: &ProjectFile,
     plugin_states: &[(PluginInstanceId, Vec<u8>)],
     midi_clips: &[(ClipId, Vec<MidiNote>)],
 ) -> Result<(), String> {
-    let plugins_dir = path.join("plugins");
-    let midi_dir = path.join("midi");
+    let rel = |sub: &str| {
+        if sidecar_root.is_empty() {
+            sub.to_string()
+        } else {
+            format!("{sidecar_root}/{sub}")
+        }
+    };
+    let plugins_dir = path.join(rel("plugins"));
+    let midi_dir = path.join(rel("midi"));
     std::fs::create_dir_all(&plugins_dir).map_err(|e| format!("Create plugins dir: {e}"))?;
     std::fs::create_dir_all(&midi_dir).map_err(|e| format!("Create midi dir: {e}"))?;
 
@@ -78,6 +101,20 @@ fn write_project_metadata(
     let notes_by_clip: HashMap<ClipId, &Vec<MidiNote>> =
         midi_clips.iter().map(|(id, notes)| (*id, notes)).collect();
     let mut project = project.clone();
+    if !sidecar_root.is_empty() {
+        for mc in &mut project.midi_clips {
+            mc.midi_file = rel(&format!("midi/clip_{}.mid", mc.id));
+        }
+        let plugins = project
+            .tracks
+            .iter_mut()
+            .flat_map(|t| t.plugins.iter_mut())
+            .chain(project.busses.iter_mut().flat_map(|b| b.plugins.iter_mut()))
+            .chain(project.master_plugins.iter_mut());
+        for plugin in plugins {
+            plugin.state_file = rel(&format!("plugins/plugin_{}.bin", plugin.instance_id));
+        }
+    }
     for mc in &mut project.midi_clips {
         if let Some(notes) = notes_by_clip.get(&mc.id) {
             mc.notes = Some(

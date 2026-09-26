@@ -209,6 +209,10 @@ fn manual_save_with_path_adds_to_recents() {
         "not recent until the save completes"
     );
 
+    // The engine reports both branches, then the async write completes.
+    use resonance_audio::types::AudioEvent;
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
     dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), false));
 
     assert_eq!(
@@ -250,4 +254,149 @@ fn autosave_of_never_saved_project_targets_a_scratch_dir() {
     );
 
     let _ = std::fs::remove_dir_all(&scratch);
+}
+
+// ---- Autosave never touches the canonical project (STATE-11) ----------
+
+fn midi_clip(id: u64) -> project::ProjectMidiClip {
+    project::ProjectMidiClip {
+        id,
+        track_id: 1,
+        start_sample: 0,
+        duration_ticks: 960,
+        name: "clip".into(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+        midi_file: format!("midi/clip_{id}.mid"),
+        vocal_lyrics: Vec::new(),
+        notes: None,
+    }
+}
+
+fn plugin(instance_id: u64) -> project::ProjectPlugin {
+    serde_json::from_value(serde_json::json!({
+        "instance_id": instance_id,
+        "plugin_name": "Synth",
+        "clap_plugin_id": "com.example.synth",
+        "clap_file_path": "/nowhere/synth.clap",
+        "state_file": format!("plugins/plugin_{instance_id}.bin"),
+    }))
+    .expect("plugin json")
+}
+
+fn note(pitch: u8) -> resonance_audio::types::MidiNote {
+    resonance_audio::types::MidiNote {
+        note: pitch,
+        velocity: 0.8,
+        start_tick: 0,
+        duration_ticks: 480,
+    }
+}
+
+/// Code review STATE-11 (1): the autosave wrote `midi/clip_*.mid` and
+/// `plugins/plugin_*.bin` into the project folder, overwriting the files
+/// the saved `project.json` points to. Quitting with "Don't save" then
+/// reopened the old arrangement with the unsaved notes and plugin states.
+#[test]
+fn autosave_leaves_the_canonical_midi_and_plugin_files_alone() {
+    let dir = TempDir::new("canonical");
+    let file = ProjectFile {
+        midi_clips: vec![midi_clip(1)],
+        master_plugins: vec![plugin(5)],
+        ..ProjectFile::default()
+    };
+    let saved_state = b"saved state".to_vec();
+    project::save_project(dir.path(), &file, &[(5, saved_state.clone())], &[(1, vec![note(60)])])
+        .expect("manual save");
+    let mid = std::fs::read(dir.path().join("midi/clip_1.mid")).expect("canonical mid");
+
+    let unsaved_state = b"unsaved state".to_vec();
+    project::save_autosave(dir.path(), &file, &[(5, unsaved_state.clone())], &[(1, vec![note(72)])])
+        .expect("autosave");
+
+    assert_eq!(std::fs::read(dir.path().join("midi/clip_1.mid")).unwrap(), mid);
+    assert_eq!(std::fs::read(dir.path().join("plugins/plugin_5.bin")).unwrap(), saved_state);
+    let reopened = project::load_project(dir.path()).expect("reopen");
+    assert_eq!(reopened.plugin_states[&5], saved_state);
+    assert_eq!(reopened.midi_notes[&1][0].note, 60);
+
+    // The snapshot is complete on its own: its side files live in the
+    // autosave subtree and its JSON points there.
+    let snap: ProjectFile = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(AUTOSAVE_JSON)).unwrap(),
+    )
+    .unwrap();
+    let state_file = &snap.master_plugins[0].state_file;
+    assert!(state_file.starts_with("autosave/"), "{state_file}");
+    assert_eq!(std::fs::read(dir.path().join(state_file)).unwrap(), unsaved_state);
+    let midi_file = &snap.midi_clips[0].midi_file;
+    assert!(midi_file.starts_with("autosave/"), "{midi_file}");
+    assert!(dir.path().join(midi_file).exists());
+}
+
+/// Code review STATE-11 (2): a manual save requested while an autosave's
+/// engine round-trip is in flight replaced the autosave's collector, so
+/// the autosave's `ClipsSavedToProjectDir` / `AllPluginStatesSaved` (for
+/// the scratch dir) completed the manual save. The manual save now waits
+/// and runs its own round-trip once the autosave has collected.
+#[test]
+fn a_manual_save_during_an_autosave_runs_its_own_engine_round_trip() {
+    use resonance_audio::types::{AudioCommand, AudioEvent};
+
+    isolate_user_config();
+    let (mut app, _task, cmds) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+    let dir = TempDir::new("interrupt");
+    let saved = dir.path().join("song.rproj");
+    app.test_set_project_path(saved.clone());
+    let _ = app.update(Message::Transport(TransportMessage::ToggleMetronome));
+
+    dispatch(&mut app, ProjectIoMessage::Autosave);
+    dispatch(&mut app, ProjectIoMessage::SaveProject);
+    // The autosave's two engine reports.
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+
+    assert_eq!(
+        app.test_save_in_flight(),
+        Some((saved.clone(), false)),
+        "the manual save is still collecting its own results"
+    );
+    let clip_saves = cmds
+        .try_iter()
+        .filter(|c| matches!(c, AudioCommand::SaveClipsToProjectDir))
+        .count();
+    assert_eq!(clip_saves, 2, "one engine round-trip per save");
+
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    assert_eq!(app.test_save_in_flight(), None);
+
+    // The autosave's completion lands while nothing else is in flight.
+    dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), true));
+    assert!(app.is_dirty(), "an autosave never cleans");
+}
+
+/// The autosave's completion must not wipe a manual save's collector
+/// that started after the autosave captured.
+#[test]
+fn an_autosave_completion_does_not_drop_a_running_manual_save() {
+    use resonance_audio::types::AudioEvent;
+
+    isolate_user_config();
+    let (mut app, _task) = Resonance::new_for_test();
+    app.test_set_active_project(true);
+    let dir = TempDir::new("completion");
+    let saved = dir.path().join("song.rproj");
+    app.test_set_project_path(saved.clone());
+
+    dispatch(&mut app, ProjectIoMessage::Autosave);
+    app.test_apply_engine_event(AudioEvent::ClipsSavedToProjectDir { clip_files: Vec::new() });
+    app.test_apply_engine_event(AudioEvent::AllPluginStatesSaved { states: Vec::new() });
+    // The autosave is writing; the user saves.
+    dispatch(&mut app, ProjectIoMessage::SaveProject);
+    dispatch(&mut app, ProjectIoMessage::ProjectSaved(Ok(()), true));
+
+    assert_eq!(app.test_save_in_flight(), Some((saved, false)));
+    assert!(app.is_saving(), "the manual save is still running");
 }
