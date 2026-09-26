@@ -65,17 +65,17 @@ fn build_app_with_tempo_ramp_clip(duration_ticks: u64) -> Resonance {
 }
 
 fn snap_like_reducer(app: &Resonance, sample: u64) -> u64 {
-    // Mirror `update_midi_clip_trim`'s snap closure exactly: it uses
-    // the flat-BPM `snap_sample_to_grid` (which constructs an empty
-    // `TempoMap`), driven from `transport.bpm` and the default
-    // numerator.
-    use resonance_app::view::timeline::snap_sample_to_grid;
-    snap_sample_to_grid(
+    // Mirror `update_midi_clip_trim`'s snap closure exactly: it snaps
+    // against the project tempo map (review VIEW-22), driven from
+    // `transport.bpm` and the transport numerator.
+    use resonance_app::view::timeline::snap_sample_to_grid_tempo;
+    snap_sample_to_grid_tempo(
         sample,
         app.test_transport_bpm(),
         app.test_transport_time_sig().0,
         SR,
         ZOOM,
+        app.test_tempo_map(),
     )
 }
 
