@@ -435,10 +435,11 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// one-block silent process pass right here. We deliberately use
 /// `try_lock` rather than blocking — the audio thread's own try_lock
 /// would otherwise fail for whatever block straddles this call and
-/// silence the plugin's tail. If the audio thread is mid-process now,
-/// the next loop seam (or the next playback) will run the queued
-/// NoteOffs, which is acoustically equivalent to what a one-block
-/// silent pass here achieved.
+/// silence the plugin's tail. An instrument the audio thread is holding
+/// is skipped here; the audio thread flushes it itself, because it
+/// notices the playhead jump (or the stop) and issues its own
+/// all-notes-off, parked in its MIDI stash on contention rather than
+/// lost (code review MIX-06).
 fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let tracks_guard = ctx.tracks.read();
     let plugins_guard = ctx.plugins.read();

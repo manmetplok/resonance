@@ -31,7 +31,7 @@ use crate::latency::LatencyComp;
 use crate::midi_hardware::LiveMidiEvent;
 use crate::types::*;
 
-use crate::mixer::common::{transport_pos_beats, TransportSnap};
+use crate::mixer::common::{transport_pos_beats, TransportContinuity, TransportSnap};
 use crate::mixer::midi_stash::MidiStash;
 use crate::mixer::render_core::BlockScratch;
 
@@ -101,6 +101,9 @@ pub(crate) struct CallbackScratch<'a> {
     /// Dry staging for the click-free bypass crossfades (`crate::bypass`),
     /// pre-allocated for the same reason.
     pub(crate) fx_dry: &'a mut crate::bypass::FxDryScratch,
+    /// Where the next playing block should start, so a playhead jump
+    /// flushes held voices (code review MIX-06). Audio-thread owned.
+    pub(crate) continuity: &'a mut TransportContinuity,
 }
 
 impl CallbackScratch<'_> {

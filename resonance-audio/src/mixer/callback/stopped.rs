@@ -2,6 +2,7 @@
 
 use std::sync::atomic::Ordering;
 
+use crate::mixer::common::panic_instrument_tracks;
 use crate::mixer::master::apply_master_volume_and_peaks;
 use crate::mixer::monitor::mix_monitor_passthrough;
 
@@ -17,14 +18,28 @@ pub(super) fn render_stopped_block(
     monitor: MonitorRead,
 ) {
     let shared = inputs.shared;
-    if monitor.frames == 0 || !shared.monitoring.load(Ordering::Relaxed) {
+    let flush = scratch.continuity.was_rolling();
+    let monitor_on = monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed);
+    if !flush && !monitor_on {
         return;
     }
     let (Some(tracks_guard), Some(plugins_guard)) =
         (inputs.tracks.try_read(), inputs.plugins.try_read())
     else {
+        // Contended: a pending stop flush stays armed for the next block.
         return;
     };
+    // The transport just stopped (code review MIX-06). The engine's own
+    // Stop panic `try_lock`s each instrument and skips one the audio
+    // thread was holding; this one is issued from the audio thread, whose
+    // MIDI stash parks it on contention instead of losing it.
+    if flush {
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash);
+        scratch.continuity.stopped();
+    }
+    if !monitor_on {
+        return;
+    }
     let any_monitor = mix_monitor_passthrough(
         scratch.data,
         inputs.channels,

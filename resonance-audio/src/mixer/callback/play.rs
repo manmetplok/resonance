@@ -4,7 +4,7 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::mixer::common::{advance_playhead_silent, commit_playhead};
+use crate::mixer::common::{advance_playhead_silent, commit_playhead, panic_instrument_tracks};
 use crate::mixer::render_core::BlockInputs;
 use crate::types::any_top_level_solo;
 
@@ -65,6 +65,18 @@ pub(super) fn render_playing_block(
     let sidechain_guard = shared.sidechain_routes.load();
     scratch.sidechain.begin_block(&sidechain_guard);
 
+    // Playhead discontinuity (code review MIX-06): a seek / relocate, or
+    // a block that advanced without rendering (lock contention, the A/B
+    // reference), means NoteOffs were never collected for whatever is
+    // held. Flush every instrument from here — the audio thread owns the
+    // MIDI stash, so a contended instrument gets the panic parked rather
+    // than skipped — and drop captured keys, which belong to the old
+    // position.
+    if scratch.continuity.jumped(playhead) {
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash);
+        scratch.sidechain.clear();
+    }
+
     // Snapshot the parameter-automation lanes once per buffer (wait-free,
     // published by the engine thread on lane edits). Held across both seam
     // sub-blocks and the master pass so the whole buffer agrees.
@@ -115,6 +127,8 @@ pub(super) fn render_playing_block(
     );
 
     // A lost commit means the control thread repositioned the transport
-    // while this block rendered; the next block starts from its position.
-    commit_playhead(shared, playhead, new_playhead);
+    // while this block rendered; the next block starts from its position
+    // and, through `continuity`, flushes the voices first (MIX-06).
+    let committed = commit_playhead(shared, playhead, new_playhead);
+    scratch.continuity.rendered(new_playhead, committed);
 }

@@ -67,6 +67,7 @@ macro_rules! run_callback {
                 ab_meters: &mut $h.ab_meters,
                 sidechain: &mut $h.sidechain,
                 fx_dry: &mut $h.fx_dry,
+                continuity: &mut $h.continuity,
             },
         )
     };
@@ -116,6 +117,7 @@ pub struct MixAudioHarness {
     ab_meters: ABMeters,
     sidechain: SidechainTaps,
     fx_dry: crate::bypass::FxDryScratch,
+    continuity: crate::mixer::TransportContinuity,
     live_midi_tx: crossbeam_channel::Sender<LiveMidiEvent>,
     live_midi_rx: crossbeam_channel::Receiver<LiveMidiEvent>,
     live_fwd_tx: crossbeam_channel::Sender<LiveMidiEvent>,
@@ -185,6 +187,7 @@ impl MixAudioHarness {
             ab_meters,
             sidechain: SidechainTaps::new(frames),
             fx_dry: crate::bypass::FxDryScratch::new(frames),
+            continuity: crate::mixer::TransportContinuity::default(),
             live_midi_tx,
             live_midi_rx,
             live_fwd_tx,
@@ -257,6 +260,13 @@ impl MixAudioHarness {
         player.active_id = Some(id);
         player.ab_source = ABSource::Reference;
         player.publish(&self.shared.reference, true);
+    }
+
+    /// Switch the monitored A/B source back to the mix, as the A/B toggle
+    /// does (the reference branch then no longer takes the block).
+    pub fn disable_reference(&self) {
+        use crate::engine::reference::ReferencePlayer;
+        ReferencePlayer::new().publish(&self.shared.reference, true);
     }
 
     /// Load an audition preview source and start it (the overlay branch).

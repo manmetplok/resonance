@@ -53,6 +53,7 @@ pub(crate) use callback::{mix_audio, CallbackInputs, CallbackScratch, MixFn};
 pub use audition::mix_audition_overlay;
 pub use automation_apply::{auto_gain_ramp, auto_master_volume, auto_muted};
 pub use common::{commit_playhead, ramped_gain, sum_to_output, sum_to_stereo, transport_pos_beats};
+pub(crate) use common::TransportContinuity;
 pub use live_midi::live_instrument_for;
 pub use midi_events::collect_midi_events_bounce;
 pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;

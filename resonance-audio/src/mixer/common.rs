@@ -63,6 +63,56 @@ pub fn commit_playhead(shared: &SharedState, observed: u64, new_playhead: u64) -
         .is_ok()
 }
 
+/// The audio thread's record of where the transport should be next, so it
+/// can tell a playhead jump from continuous playback (code review MIX-06).
+///
+/// The engine control thread repositions the transport with plain stores
+/// (seek, stop, MIDI-clock relocate) and flushes voices with a `try_lock`
+/// panic that silently skips an instrument the audio thread is holding.
+/// The callback owns the `MidiStash`, so a panic it issues is never lost
+/// (it is parked on contention); this lets it issue one whenever the
+/// block it is about to render does not continue the last one it
+/// rendered. Audio-thread owned; two words, no allocation.
+#[derive(Default)]
+pub(crate) struct TransportContinuity {
+    /// Where the last rendered playing block said the next one starts;
+    /// `None` while the transport is not rolling.
+    expected: Option<u64>,
+    /// The last block's `commit_playhead` lost: the control thread moved
+    /// the transport under it. Flush regardless of where it moved to.
+    repositioned: bool,
+}
+
+impl TransportContinuity {
+    /// A playing block is about to render from `playhead`: whether it
+    /// does NOT continue the previous rendered block, so held voices must
+    /// be flushed first. A block skipped in between (lock contention, the
+    /// A/B reference, an offline render) never updated `expected`, so the
+    /// advance it made reads as a jump too — its NoteOffs were never
+    /// collected.
+    pub(crate) fn jumped(&self, playhead: u64) -> bool {
+        self.repositioned || self.expected.is_some_and(|e| e != playhead)
+    }
+
+    /// A playing block rendered and published its advance to `next`;
+    /// `committed` is `commit_playhead`'s result.
+    pub(crate) fn rendered(&mut self, next: u64, committed: bool) {
+        self.expected = Some(next);
+        self.repositioned = !committed;
+    }
+
+    /// Whether the transport was rolling when it stopped — the stopped
+    /// branch then flushes the run's voices once.
+    pub(crate) fn was_rolling(&self) -> bool {
+        self.expected.is_some()
+    }
+
+    /// The voices have been flushed for a stop.
+    pub(crate) fn stopped(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Fallback playhead advance used when the audio callback couldn't acquire
 /// its locks. No audio is rendered on that path, so we only need to move
 /// the playhead forward and handle the loop seam by snapping back — stuck
