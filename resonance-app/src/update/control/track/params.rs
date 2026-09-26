@@ -10,6 +10,30 @@ use iced::Task;
 use resonance_control::methods::track;
 use resonance_control::{Request, Response, RpcError};
 
+/// Resolve a `param` string against a plugin's parameter list: by display
+/// name (case-insensitive) first — what a client reading `plugin_params`
+/// usually has to hand — then by numeric CLAP id, then by a first-party
+/// plugin's string key (`"lim_on"`), whose CLAP id is
+/// [`resonance_plugin::stable_hash`] of the key (FU-M5c). Keys survive a
+/// display rename, so skills can pin them. Shared by the track, bus and
+/// master setters.
+pub(crate) fn find_param<'a>(
+    params: &'a [track::PluginParamView],
+    wanted: &str,
+) -> Option<&'a track::PluginParamView> {
+    params
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(wanted))
+        .or_else(|| {
+            let id = wanted.parse::<u32>().ok()?;
+            params.iter().find(|p| p.id == id)
+        })
+        .or_else(|| {
+            let id = resonance_plugin::stable_hash(wanted);
+            params.iter().find(|p| p.id == id)
+        })
+}
+
 /// Set one parameter on one plugin (ba doc #272 V-3).
 ///
 /// Routes the same `PluginMessage::SetPluginParam` the GUI's plugin
@@ -85,20 +109,8 @@ pub(super) fn set_plugin_param(
         );
     }
 
-    // Resolve the parameter by name first, then by numeric CLAP id — a
-    // client reading `track.plugin_params` has both, and a name is what
-    // it will usually have to hand.
     let wanted = params.param.trim();
-    let param = entry
-        .params
-        .iter()
-        .find(|p| p.name.eq_ignore_ascii_case(wanted))
-        .or_else(|| {
-            wanted
-                .parse::<u32>()
-                .ok()
-                .and_then(|id| entry.params.iter().find(|p| p.id == id))
-        });
+    let param = find_param(&entry.params, wanted);
     let Some(param) = param else {
         let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
         return reject(

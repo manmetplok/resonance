@@ -71,12 +71,13 @@ identically to an empty master. Adding it is half the job; the other half is
 
 Read `mcp__resonance__master_plugin_params` for the real parameter names, ids,
 ranges and current values before setting anything. `param` takes a parameter's
-display **name** (case-insensitive) or its numeric `id` from that listing —
-never the plugin's internal string keys like `lim_on`, which are refused as
-not found. The stage switches are "Glue On", "Sat On", "Multiband On",
-"Imager On", "Limiter On" and "Dither On", and the limiter's controls are
-"Ceiling" (dBTP) and "Release" (ms), but confirm against `master_plugin_params`
-rather than trusting this paragraph: it is a map, not the territory.
+display **name** (case-insensitive), its numeric `id` from that listing, or —
+on this first-party plugin — its stable string **key**, which is unambiguous
+where display names repeat across stages. The stage switches are `glue_on`,
+`sat_on`, `mb_on`, `img_on`, `lim_on` and `dith_on`, and the limiter's
+controls are `lim_ceiling` (dBTP) and `lim_release` (ms), but confirm ranges
+and current values against `master_plugin_params` rather than trusting this
+paragraph: it is a map, not the territory.
 
 ## 3. Enable stages one at a time, measuring after each
 

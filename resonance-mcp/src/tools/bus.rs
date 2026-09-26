@@ -231,7 +231,8 @@ impl ResonanceMcp {
                        track_set_plugin_param, and what makes a bus compressor actually useful \
                        rather than just present at its default patch. param takes the \
                        parameter's name (case-insensitive) or its numeric id as a string, both \
-                       from bus_plugin_params. plugin_id names which effect; omitted it targets \
+                       from bus_plugin_params, or on a com.resonance.* plugin its stable string \
+                       key (e.g. \"threshold\"). plugin_id names which effect; omitted it targets \
                        the bus's first, which is unambiguous only on a one-effect chain. A \
                        value outside the parameter's min..=max is rejected with the range \
                        rather than clamped, but a value that rounds onto an f32-declared bound \

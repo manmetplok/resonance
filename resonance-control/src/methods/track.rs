@@ -789,8 +789,10 @@ pub struct SetPluginParamParams {
     pub plugin_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
-    /// The parameter, by name (case-insensitive) or by its numeric id
-    /// as a string. Names come from `track.plugin_params`.
+    /// The parameter, by name (case-insensitive), by its numeric id as a
+    /// string, or — on a first-party `com.resonance.*` plugin — by its
+    /// string key (`"lim_on"`), which survives a display rename. Names
+    /// and ids come from `track.plugin_params`.
     pub param: String,
     /// New value: a number, or — for a stepped parameter that names its
     /// values — one of the labels `track.plugin_params` reports in
