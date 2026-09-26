@@ -1,11 +1,14 @@
 //! A window closed from its own close button reports that to its owner
-//! (PLG-01), and a window the owner destroyed does not.
+//! (PLG-01), and a window the owner destroyed does not. An editor whose
+//! `ui()` panics is closed and reported the same way instead of taking the
+//! host down (PLG-03's Wayland counterpart).
 //!
 //! This is what lets the CLAP bridge send `clap_host_gui.closed()`: the
 //! runtime raises `Editor::set_closed_callback` after `EditorApp::on_close`,
 //! and only then. The click is synthesized through the runtime's own
-//! `WPG_TEST_CLOSE_AT` hook, which drives the real CSD close button, so the
-//! test is a separate binary: the hook is process-wide and one-shot.
+//! `WPG_TEST_CLOSE_AT` hook, which drives the real CSD close button, so
+//! these tests are a separate binary and run one at a time: the hook is
+//! process-wide and one-shot.
 //!
 //! Needs a live Wayland session, so it is `#[ignore]`d:
 //!
@@ -22,12 +25,27 @@ mod live {
 
     use wayland_plugin_gui::{egui, Editor, EditorApp, EditorOptions};
 
+    /// One test at a time; see the module docs.
+    static LIVE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialize() -> std::sync::MutexGuard<'static, ()> {
+        LIVE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     struct Blank {
         on_close_ran: Arc<AtomicBool>,
+        /// Panic inside `ui()` on this frame (1-based), like a plugin
+        /// hitting an `unwrap` or a debug assertion mid-frame.
+        panic_at_frame: Option<u32>,
+        frames: u32,
     }
 
     impl EditorApp for Blank {
         fn ui(&mut self, ui: &mut egui::Ui) {
+            self.frames += 1;
+            if Some(self.frames) == self.panic_at_frame {
+                panic!("deliberate panic in ui() at frame {}", self.frames);
+            }
             ui.label("wpg close notification test");
             ui.ctx().request_repaint();
         }
@@ -37,8 +55,16 @@ mod live {
     }
 
     fn open(on_close_ran: Arc<AtomicBool>) -> Editor {
+        open_app(Blank {
+            on_close_ran,
+            panic_at_frame: None,
+            frames: 0,
+        })
+    }
+
+    fn open_app(app: Blank) -> Editor {
         Editor::new(
-            Blank { on_close_ran },
+            app,
             EditorOptions {
                 title: "wpg close notification".to_string(),
                 app_id: "com.resonance.wpg-close-test".to_string(),
@@ -53,8 +79,9 @@ mod live {
     #[test]
     #[ignore = "opens real windows; needs a live Wayland session"]
     fn a_self_close_is_reported_and_a_destroy_is_not() {
-        // Process-wide (and safe to call in edition 2021): this binary
-        // holds this one test, so nothing reads it concurrently.
+        let _live = serialize();
+        // Process-wide (and safe to call in edition 2021): the lock above
+        // keeps every other window in this binary from reading it.
         std::env::set_var("WPG_TEST_CLOSE_AT", "5");
 
         // -- the user closes the window from its own close button ---------
@@ -96,5 +123,37 @@ mod live {
             0,
             "a host-initiated destroy was reported back as a close"
         );
+
+        std::env::remove_var("WPG_TEST_CLOSE_AT");
+    }
+
+    #[test]
+    #[ignore = "opens real windows; needs a live Wayland session"]
+    fn a_panicking_ui_closes_the_editor_and_reports_it() {
+        let _live = serialize();
+        let on_close_ran = Arc::new(AtomicBool::new(false));
+        let mut editor = open_app(Blank {
+            on_close_ran,
+            panic_at_frame: Some(3),
+            frames: 0,
+        });
+        let (tx, rx) = mpsc::channel();
+        editor.set_closed_callback(move || {
+            let _ = tx.send(());
+        });
+        editor.show();
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("a panicking ui() never reported the editor closed");
+
+        // The editor thread is gone; the handle degrades, the host lives.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while editor.set_size(500, 300).is_ok() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the handle still accepts commands after the editor died"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        editor.destroy();
     }
 }

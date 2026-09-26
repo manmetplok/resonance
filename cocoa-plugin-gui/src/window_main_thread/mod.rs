@@ -58,8 +58,11 @@ impl EditorMain {
         alive: Arc<AtomicBool>,
         closed: CloseNotifier,
     ) -> Result<(), EditorError> {
-        let mtm = MainThreadMarker::new()
-            .expect("EditorMain::create must run on the AppKit main thread");
+        // An error, not a panic: this runs inside a main-queue dispatch,
+        // and a panic there would unwind through libdispatch (PLG-03).
+        let mtm = MainThreadMarker::new().ok_or_else(|| {
+            EditorError::Cocoa("EditorMain::create must run on the AppKit main thread".to_string())
+        })?;
 
         let (w, h) = options.initial_size;
         let content = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(w as f64, h as f64));
