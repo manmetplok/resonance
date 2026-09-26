@@ -215,7 +215,9 @@ fn scenarios() -> Vec<Scenario> {
         p.lfo3.retrigger.set_value(true);
         p.filter.enabled.set_value(true);
         p.filter.filter_type.set_value(1); // highpass
-        p.filter.cutoff.set_value(8000.0);
+        // Low enough that the notes' upper partials pass: at 8 kHz the
+        // highpass left a 1.2e-3 peak (FU-G2c).
+        p.filter.cutoff.set_value(500.0);
         p.filter.resonance.set_value(0.8);
         p.mod_slots[0].source.set_value(1);
         p.mod_slots[0].destination.set_value(5);
@@ -350,15 +352,25 @@ fn render_block_output_is_bit_exact() {
     }
 }
 
-/// Guards the scenario table itself: every scenario must contribute audio,
-/// so a future edit cannot silently turn one into a no-op that the golden
-/// then happily matches.
+/// Per-scenario peak floor (−26 dBFS). "Not silent" is not enough: a
+/// scenario idling at a 1e-3 peak (as `lfo_sh_hpf` did, its highpass
+/// removing nearly everything) pins mostly rounding noise, so a real DSP
+/// change can move it by less than it moves the loud ones (FU-G2c).
+const MIN_SCENARIO_PEAK: f32 = 0.05;
+
+/// Guards the scenario table itself: every scenario must contribute audio
+/// at a meaningful level, so a future edit cannot silently turn one into
+/// a (near-)no-op that the golden then happily matches.
 #[test]
 fn every_scenario_renders_audio() {
     for s in scenarios() {
         let out = render_scenario(&s);
         let peak = out.iter().fold(0.0f32, |m, x| m.max(x.abs()));
-        assert!(peak > 1e-3, "scenario `{}` rendered silence", s.name);
+        assert!(
+            peak > MIN_SCENARIO_PEAK,
+            "scenario `{}` peaks at {peak:.2e}, below {MIN_SCENARIO_PEAK}",
+            s.name
+        );
         assert!(
             out.iter().all(|x| x.is_finite()),
             "scenario `{}` rendered non-finite samples",
