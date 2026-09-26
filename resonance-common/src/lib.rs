@@ -12,6 +12,7 @@ pub mod group_identity;
 pub mod midi_map;
 pub mod freeze;
 pub mod registry;
+pub mod resample;
 mod scan;
 pub mod take;
 pub mod track_group;

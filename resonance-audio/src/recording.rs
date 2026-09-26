@@ -465,8 +465,8 @@ impl RecordingState {
     /// next pass.
     ///
     /// The streaming resampler keeps running across the seam, so no input
-    /// frames are dropped — at most a sub-frame of resampler carry is
-    /// attributed to the next take rather than this one. `clip_start_sample`
+    /// frames are dropped; its held-back lookahead is flushed into the
+    /// finished take, so each take covers exactly its own input span. `clip_start_sample`
     /// positions the finished clips on the timeline (the loop region's
     /// start). Pass `reopen = true` at a loop seam (keeps capturing) and
     /// `reopen = false` for the trailing pass at transport stop (flushes
@@ -490,9 +490,10 @@ impl RecordingState {
 
         let mut rolled = Vec::new();
         for (track_id, track_buf) in self.buffers.iter_mut() {
-            // Close the current take's writer. At a seam we keep the
-            // resampler running (no flush) so the next pass continues
-            // seamlessly; on the trailing pass we flush its held tail.
+            // Close the current take's writer. At a seam the resampler's
+            // held-back tail goes into this take and it keeps running, so
+            // the next pass continues seamlessly; on the trailing pass we
+            // flush its held tail and finish.
             if reopen {
                 close_pass_writer(track_buf);
             } else if let Err(e) = finalize_wav_file(track_buf) {
@@ -625,11 +626,28 @@ impl RolledAudioTake {
     }
 }
 
-/// Close a take's WAV writer at a loop seam WITHOUT flushing the streaming
-/// resampler, so the next pass's writer continues the input stream
-/// seamlessly. Commits the trailing peak bucket and finalizes the writer
-/// so the on-disk WAV header carries the correct data-chunk size.
+/// Close a take's WAV writer at a loop seam. The streaming resampler is
+/// flushed into this take (it holds back ~1 ms of lookahead) but keeps
+/// running: its flush is resumable, so the next pass's writer continues
+/// the input stream on the same time grid instead of starting with this
+/// pass's held-back tail (LIB-01). Commits the trailing peak bucket and
+/// finalizes the writer so the on-disk WAV header carries the correct
+/// data-chunk size.
 fn close_pass_writer(track_buf: &mut TrackRecordingBuf) {
+    if !track_buf.write_failed && track_buf.writer.is_some() {
+        if let Some(r) = track_buf.resampler.as_mut() {
+            let mut tail = std::mem::take(&mut track_buf.resample_scratch);
+            tail.clear();
+            r.flush(&mut tail);
+            if let Err(e) = write_samples_and_peaks(track_buf, &tail) {
+                eprintln!(
+                    "recording: seam flush failed for {}: {e}",
+                    track_buf.path.display()
+                );
+            }
+            track_buf.resample_scratch = tail;
+        }
+    }
     if track_buf.peak_frames > 0 {
         track_buf
             .peaks

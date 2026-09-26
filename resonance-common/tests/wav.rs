@@ -122,12 +122,15 @@ fn resample_length_scales_with_ratio() {
 fn tiny_input_resamples_to_at_least_one_sample() {
     // 2 samples downsampled 12:1 used to truncate to a 0-length output,
     // silently discarding non-empty audio. Non-empty in => non-empty out.
+    // (The band-limited filter blends both input samples into it.)
     let mono = linear_resample_mono(&[0.5, 0.7], 96_000.0, 8_000.0);
-    assert_eq!(mono, vec![0.5]);
+    assert_eq!(mono.len(), 1);
+    assert!(mono[0] > 0.5 && mono[0] < 0.7, "{mono:?}");
 
     // Same for stereo: one frame in, at least one frame out.
     let stereo = linear_resample_stereo(&[0.5, -0.5], 96_000.0, 8_000.0);
-    assert_eq!(stereo, vec![0.5, -0.5]);
+    assert_eq!(stereo.len(), 2);
+    assert!((stereo[0] - 0.5).abs() < 1e-6 && (stereo[1] + 0.5).abs() < 1e-6);
 
     // Empty input still yields empty output.
     assert!(linear_resample_mono(&[], 96_000.0, 8_000.0).is_empty());

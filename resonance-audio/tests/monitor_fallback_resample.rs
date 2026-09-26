@@ -4,8 +4,8 @@
 //! When the fallback input device runs at a different rate than the
 //! engine, the monitor ring's consumer (which replays at the engine
 //! rate) would pitch-shift and glitch the monitor signal. The
-//! `MonitorResampler` wraps the existing streaming linear resampler
-//! over interleaved N-channel frames; these tests pin the frame-rate
+//! `MonitorResampler` wraps the existing streaming (band-limited,
+//! LIB-01) resampler over interleaved N-channel frames; these tests pin the frame-rate
 //! ratio, channel-layout preservation, and streaming continuity across
 //! chunk boundaries.
 
@@ -25,19 +25,19 @@ fn constant_frames(channels: usize, frames: usize) -> Vec<f32> {
 #[test]
 fn converts_frame_rate_and_preserves_channel_layout() {
     // 44.1k device -> 48k engine, stereo. Feed one second of input; the
-    // output must be ~48000 frames (linear streaming holds back the
-    // final interpolation frame) with each channel's constant intact
-    // (linear interpolation of a constant is the constant).
+    // output must be ~48000 frames (streaming holds back ~1 ms of filter
+    // lookahead) with each channel's constant intact (the filter has
+    // unit DC gain).
     let mut rs = MonitorResampler::new(44_100, 48_000, 2);
     let out = rs.process(&constant_frames(2, 44_100)).to_vec();
     let out_frames = out.len() / 2;
     assert!(
-        (47_990..=48_000).contains(&out_frames),
+        (47_900..=48_000).contains(&out_frames),
         "expected ~48000 output frames, got {out_frames}"
     );
     for f in out.chunks(2) {
-        assert_eq!(f[0], 1.0);
-        assert_eq!(f[1], 2.0);
+        assert!((f[0] - 1.0).abs() < 1e-5, "{f:?}");
+        assert!((f[1] - 2.0).abs() < 1e-5, "{f:?}");
     }
 }
 
@@ -49,7 +49,9 @@ fn odd_channel_counts_keep_identity() {
     assert!(!out.is_empty());
     assert_eq!(out.len() % 3, 0);
     for f in out.chunks(3) {
-        assert_eq!(f, [1.0, 2.0, 3.0]);
+        for (c, v) in f.iter().enumerate() {
+            assert!((v - (c + 1) as f32).abs() < 1e-5, "{f:?}");
+        }
     }
 }
 
@@ -79,8 +81,10 @@ fn chunked_processing_is_continuous() {
 #[test]
 fn matching_rates_pass_frames_through_unchanged_count() {
     // Same-rate construction isn't used by the callback (it skips the
-    // resampler entirely), but the wrapper must still behave sanely.
+    // resampler entirely), but the wrapper must still behave sanely: an
+    // identity rate is a straight pass-through.
     let mut rs = MonitorResampler::new(48_000, 48_000, 2);
-    let out = rs.process(&constant_frames(2, 128)).to_vec();
-    assert_eq!(out.len() / 2, 127, "streaming holds back one edge frame");
+    let input = constant_frames(2, 128);
+    let out = rs.process(&input).to_vec();
+    assert_eq!(out, input);
 }
