@@ -112,7 +112,7 @@ pub(crate) fn handle_set_track_frozen_source(
                 }
                 // The source went with the closure; nothing to attach.
                 Err(e) => {
-                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
                         "Could not convert track {track_id}'s freeze cache to the engine \
                          sample rate ({e}); it plays unfrozen."
                     ))));

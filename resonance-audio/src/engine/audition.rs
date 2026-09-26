@@ -189,7 +189,7 @@ pub(crate) fn handle_audition_file(ctx: &HandlerCtx, path: std::path::PathBuf, s
         Err(e) => {
             let _ = ctx
                 .event_tx
-                .send(AudioEvent::Error(EngineError::internal(format!("audition: {e}"))));
+                .send(AudioEvent::Error(EngineError::io(format!("audition: {e}"))));
         }
     }
 }

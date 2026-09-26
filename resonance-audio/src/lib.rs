@@ -150,6 +150,11 @@ pub mod test_support {
     /// no audio device and no engine thread. Used by
     /// `tests/engine/loop_record_takes.rs` to pin `ClearAll`'s take-lane reset.
     pub use crate::engine::EngineHandlerHarness;
+    /// The bus-count ceiling `AddBus` refuses past with
+    /// `EngineError::busy` (ARCH-05/C-1) — exposed so
+    /// `tests/engine/engine_error_kind.rs` can drive the harness to the
+    /// limit without hard-coding the number twice.
+    pub use crate::limits::MAX_BUSSES;
     /// The "one lane per slot" lookup a cycle-record run resolves its take
     /// group through, and the "same slot" predicate behind it (epic #15,
     /// ba todo #1392). Pure over the store, so

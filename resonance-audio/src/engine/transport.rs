@@ -24,7 +24,7 @@ pub(crate) fn refuse_while_offline_render(ctx: &HandlerCtx, what: &str) -> bool 
     if !ctx.shared.offline_render_active() {
         return false;
     }
-    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(format!(
         "Cannot {what}: {}",
         super::bounce::OFFLINE_RENDER_BUSY_MSG
     ))));
@@ -306,7 +306,7 @@ pub(crate) fn begin_recording_stream(
             Err(e) => {
                 state.rec.buffers.clear();
                 state.rec.ring_consumer = None;
-                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
                     "Failed to open recording file: {e}"
                 ))));
                 return;

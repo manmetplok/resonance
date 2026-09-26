@@ -163,7 +163,7 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         .comp_clamp_engaged
         .swap(clamped, std::sync::atomic::Ordering::Relaxed);
     if clamped && !was_engaged {
-        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
             "Plugin-delay compensation limit reached: a chain reports more than {} samples \
              of latency; timing for that path is no longer fully compensated. Consider \
              bypassing or removing the highest-latency plugin.",
@@ -268,7 +268,7 @@ pub fn service_host_restart_request(
     }
     (
         false,
-        Some(AudioEvent::Error(EngineError::internal(format!(
+        Some(AudioEvent::Error(EngineError::plugin(format!(
             "Plugin instance {} failed to reactivate after a restart/latency-change \
              request; it is deactivated and will stay silent.",
             instance_id
@@ -450,7 +450,7 @@ pub(crate) fn handle_move_plugin(
             });
         }
         None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
                 "Cannot reorder plugin {} on track {}: no such track, or that \
                  plugin is not on its chain",
                 instance_id, track_id
@@ -563,7 +563,7 @@ pub(crate) fn handle_set_plugin_bypass(
     let own_bypass_param = {
         let plugins_guard = ctx.plugins.read();
         let Some(slot) = plugins_guard.get(&instance_id) else {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
                 "Cannot bypass plugin {}: no such plugin instance",
                 instance_id
             ))));
@@ -605,11 +605,14 @@ pub fn plugin_editor_failure_events(
             open: false,
             failure: Some(failure),
         },
-        AudioEvent::Error(EngineError::internal(format!(
-            "Could not open the editor for plugin instance {}: {}.",
-            instance_id,
-            failure.message()
-        ))),
+        AudioEvent::Error(EngineError::new(
+            failure.engine_error_kind(),
+            format!(
+                "Could not open the editor for plugin instance {}: {}.",
+                instance_id,
+                failure.message()
+            ),
+        )),
     ]
 }
 
@@ -742,7 +745,7 @@ pub fn reload_plugin_state(
     if inst.reload_with_state(data) {
         return None;
     }
-    Some(AudioEvent::Error(EngineError::internal(if inst.is_active() {
+    Some(AudioEvent::Error(EngineError::plugin(if inst.is_active() {
         format!(
             "Plugin instance {} rejected the state it was given (corrupt preset, or saved by \
              another plugin version); it keeps its previous settings.",

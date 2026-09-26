@@ -322,7 +322,7 @@ pub(crate) fn handle_import_audio_to_pool(
             );
         });
     if let Err(e) = spawn_result {
-        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
             "Failed to spawn pool-import thread: {e}"
         ))));
     }
