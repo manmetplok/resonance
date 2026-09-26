@@ -106,3 +106,15 @@ impl From<resonance_common::WavDecodeError> for EngineError {
         EngineError::io(e.to_string())
     }
 }
+
+/// `resonance_common::AudioProbeError` (C-4) also classifies as
+/// [`EngineErrorKind::Io`] — same precedent as [`EngineError`]'s
+/// `WavDecodeError` conversion above; `import_pool.rs`'s `probe_audio_file`
+/// call currently stringifies this itself (its enclosing fn predates a
+/// typed `EngineError` return), but a future caller that already returns
+/// `Result<_, EngineError>` can use `?` directly.
+impl From<resonance_common::AudioProbeError> for EngineError {
+    fn from(e: resonance_common::AudioProbeError) -> Self {
+        EngineError::io(e.to_string())
+    }
+}

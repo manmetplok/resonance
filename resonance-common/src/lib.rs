@@ -65,7 +65,7 @@ pub use midi_map::{
 #[cfg(feature = "decode")]
 pub use audio_probe::{
     probe_audio_file, scan_audio_folder, waveform_thumbnail, AudioFileEntry, AudioFormat,
-    AudioInfo, WaveformThumbnail,
+    AudioInfo, AudioProbeError, WaveformThumbnail,
 };
 #[cfg(feature = "model")]
 pub use group_identity::{GroupColor, GroupIdentityColor};

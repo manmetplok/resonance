@@ -66,7 +66,7 @@ pub fn import_one_to_pool(
     // Source metadata for display (format / channels / original rate).
     // Cheap for WAV/FLAC (declared frame counts); the media browser's
     // probe helper handles the compressed-format fallback.
-    let info = probe_audio_file(Path::new(src_path))?;
+    let info = probe_audio_file(Path::new(src_path)).map_err(|e| e.to_string())?;
 
     // Decode + up/down-mix to stereo + resample to the project rate in
     // one pass. `decode_file` returns stereo-interleaved f32 already at
