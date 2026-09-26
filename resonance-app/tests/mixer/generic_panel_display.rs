@@ -6,12 +6,10 @@
 //! declare `with_value_to_string` in 100+ places. The layout needs a
 //! GUI to test; the decision does not, and the decision is the finding.
 //!
-//! The panel lives behind the crate's `ui` feature (the app turns it on;
-//! a DSP-only consumer does not), so this file compiles to nothing
-//! without it rather than breaking a default-feature build.
-#![cfg(feature = "ui")]
+//! The panel is host-side code (`resonance_app::plugin_ui`); it moved out
+//! of the plugin SDK with ARCH-08.
 
-use resonance_plugin::ui::{param_display, UiParam};
+use resonance_app::plugin_ui::{param_display, UiParam};
 
 fn param(current: f64, text: &str) -> UiParam {
     UiParam {

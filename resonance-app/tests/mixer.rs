@@ -45,6 +45,8 @@ mod mixer_automation_controls;
 mod mixer_chain_reorder;
 #[path = "mixer/mixer_generic_param_panel.rs"]
 mod mixer_generic_param_panel;
+#[path = "mixer/generic_panel_display.rs"]
+mod generic_panel_display;
 #[path = "mixer/mixer_group_clustering.rs"]
 mod mixer_group_clustering;
 #[path = "mixer/inspector_lazy_fingerprint.rs"]
