@@ -261,6 +261,7 @@ fn enqueue_vocal_render(r: &mut crate::Resonance, req: VocalRenderRequest) -> Ta
         req.track_id,
         req.clip_name,
         plan.audio_starts,
+        plan.lead_ticks,
         render_epoch,
     )
 }
@@ -298,13 +299,20 @@ fn bump_render_epoch(
     definition_id: u64,
     track_id: TrackId,
 ) -> u64 {
+    // Epochs come from a process-wide counter as well as the lane's own:
+    // a full replay (undo, project load) clears the per-lane map back to
+    // nothing, and a render queued before it would otherwise carry the
+    // same epoch as the first one queued after it and install over it
+    // (code review VIEW-19).
+    static LAST_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let global = LAST_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let entry = r
         .compose
         .vocal_audio
         .render_epoch
         .entry((definition_id, track_id))
         .or_insert(0);
-    *entry = plan::next_render_epoch(Some(*entry));
+    *entry = plan::next_render_epoch(Some(*entry)).max(global);
     *entry
 }
 
@@ -333,6 +341,7 @@ fn spawn_render(
     track_id: TrackId,
     clip_name: String,
     audio_starts: Vec<(u64, u64)>,
+    lead_ticks: u64,
     render_epoch: u64,
 ) -> Task<Message> {
     use crate::compose::messages::VocalAudioReadyData;
@@ -353,6 +362,7 @@ fn spawn_render(
                     clip_name: clip_name.clone(),
                     trim_start_frames: trim_start,
                     trim_end_frames: trim_end,
+                    lead_ticks,
                     render_epoch,
                 })),
             ),

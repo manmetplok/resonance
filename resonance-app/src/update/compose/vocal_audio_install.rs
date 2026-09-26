@@ -33,6 +33,7 @@ pub(super) fn handle_vocal_audio_ready(
         clip_name,
         trim_start_frames,
         trim_end_frames,
+        lead_ticks,
         render_epoch,
     } = data;
 
@@ -41,12 +42,22 @@ pub(super) fn handle_vocal_audio_ready(
         return false;
     }
 
-    for (placement_id, start_sample) in placements {
+    for (placement_id, _queued_start) in placements {
         // The placement was deleted while the render ran — installing
         // audio for it would resurrect the section's vocal (VIEW-04).
-        if r.compose.find_placement(placement_id).is_none() {
+        let Some(placement) = r.compose.find_placement(placement_id) else {
             continue;
-        }
+        };
+        // …or it moved (a drag, bars inserted before it): place the audio
+        // from where the section starts *now*, not where it started when
+        // the render was queued (code review VIEW-19).
+        let section_start = r.tempo_map.bar_to_sample(placement.start_bar);
+        let start_sample = crate::compose::vocal_svs::vocal_audio_start(
+            &r.tempo_map,
+            section_start,
+            lead_ticks,
+            r.sample_rate,
+        );
         if let Some((old_id, old_path)) = r
             .compose
             .vocal_audio

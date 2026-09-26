@@ -99,5 +99,7 @@ mod templates_save;
 mod templates_scan;
 #[path = "compose/track_delete_lane_cleanup.rs"]
 mod track_delete_lane_cleanup;
+#[path = "compose/vocal_render_inflight_placement.rs"]
+mod vocal_render_inflight_placement;
 #[path = "compose/vocal_roll_key_focus.rs"]
 mod vocal_roll_key_focus;
