@@ -46,7 +46,7 @@ pub use automation::{
 #[cfg(feature = "model")]
 pub use device_definition::{
     binding_value_to_lane, lane_value_to_binding_value, DeviceDefinition, DeviceDefinitionError,
-    DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
+    DeviceJsonError, DeviceParam, ParamCurve, PatchEntry, SCHEMA_VERSION,
 };
 #[cfg(feature = "model")]
 pub use device_registry::{
