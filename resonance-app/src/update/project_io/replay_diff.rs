@@ -33,7 +33,7 @@ use crate::project::{
 };
 use crate::Resonance;
 
-use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
 use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
@@ -67,56 +67,15 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
         },
     };
 
-    // -- Migrated domains, head (ARCH-01 A-13) -------------------------
-    // Transport / master scalars that changed, compose sections and the
-    // drum-pattern bank (`Globals`); then tempo / signature events, chord
-    // track and markers (`Timeline`) — before any track or clip, as on the
-    // full path (A-13c: tempo used to go out after the clips here; nothing
-    // in between reads the tempo map, app- or engine-side).
-    reconcile_stage(r, Stage::Globals, Some(&current), target_file, &ctx);
-    reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
-
-    // -- Migrated domains: entities (ARCH-01 A-13f) ---------------------
-    // Track, bus and master scalars that changed (plugin names with them),
-    // the track outputs that changed, then each plugin's state: its blob
-    // only when the cache moved on since the snapshot (FU-A2b), the
-    // per-slot bypass that changed, and the snapshot's param values
-    // (STATE-03). A-13f: the blobs and params used to go out after
-    // `Routing`; the send and key-route tables touch no plugin state.
-    reconcile_stage(r, Stage::Entities, Some(&current), target_file, &ctx);
-
-    // -- Migrated domains: routing (ARCH-01 A-13e) ----------------------
-    // Aux sends, then sidechain key routes, by diff against `current`
-    // (removals first). Both are plain routing edges with surgical add /
-    // edit / remove commands, so adding or removing one never forces the
-    // slow path. After the master as on the full path (A-13e: they used to
-    // go out between the busses and the master; the engine's send and
-    // route tables are independent of the master bypass and plugin bypass
-    // flags `apply_master` writes).
-    reconcile_stage(r, Stage::Routing, Some(&current), target_file, &ctx);
-
-    // -- Migrated domains, tail (ARCH-01 A-13) -------------------------
-    // The audio clips (scalar reposition / retrim / fade / gain) and MIDI
-    // clips (reposition, or notes replaced by delete + reload) by diff
-    // against `current`; then the lyric side-table (padded to the note
-    // counts just installed), the derived-clip map (the snapshot's with
-    // every entry, pending echoes included — FU-H2a, A-6; after
-    // `ComposeSections` reset it) and the vocal audio-clip map.
-    reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
-    // References (reconciled against the engine's live ones, no
-    // `ClearAll` here), then pool, quantize, performance, track groups,
-    // take lanes: app-side content the structural check ignores, restored
-    // verbatim. The pool counts the clips' asset refs `AudioClips`
-    // mirrored; the take lanes' `RestoreTakeGroups` replaces the engine's
-    // store wholesale, so an undo that deleted a take does not resurrect it
-    // (no `ClearAll` here).
-    reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
-
-    // External instruments, then the automation lanes (a `DeviceParam`
-    // lane lands on known bindings), freeze last (detach/delete caches no
-    // longer frozen). None alters the project shape, so the structural
-    // check ignores them.
-    reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
+    // Every domain, in table order, by diff against `current` (ARCH-01
+    // A-13): the transport / compose globals and the tempo map before any
+    // entity; the track, bus and master scalars that changed, the track
+    // outputs, each plugin's blob (only when the cache moved on — FU-A2b),
+    // bypass and params, the registry resort; the routing edges (removals
+    // first); the clips and what derives from them; the app-side content;
+    // external instruments, lanes and freeze last. See
+    // `docs/design/A-13-reconcile.md` for why each sits where it does.
+    reconcile_all_stages(r, Some(&current), target_file, &ctx);
 
     true
 }

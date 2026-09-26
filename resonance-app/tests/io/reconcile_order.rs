@@ -3,12 +3,12 @@
 //! The migrated project domains are restored by `Reconcile` impls that the
 //! driver runs from one table, `reconcile::DOMAINS`, on all three origins:
 //! a disk load and an undo's full replay (`replay_loaded_project`, after
-//! `ClearAll`) and an undo's diff replay (`try_diff_replay`). Each path
-//! calls the table's stages at different points in its not-yet-migrated
-//! inline code, so the guard is that the domains each restore actually ran
-//! (`io.reconcile_trace`) are exactly the table, in table order, under the
-//! right origin. A domain restored inline by one path, or a stage called
-//! out of sequence, fails here.
+//! `ClearAll`) and an undo's diff replay (`try_diff_replay`). Since A-13f
+//! both run the whole table through `reconcile_all_stages`; the guard is
+//! that the domains each restore actually ran (`io.reconcile_trace`) are
+//! exactly the table, in table order, under the right origin. A domain
+//! restored inline by one path, or run out of sequence, fails here; the
+//! command-order tests below pin where each moved piece now goes out.
 
 use std::path::PathBuf;
 

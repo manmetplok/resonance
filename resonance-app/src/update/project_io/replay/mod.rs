@@ -20,7 +20,7 @@ mod restore;
 
 use resonance_audio::types::*;
 
-use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
+use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
 use crate::project::LoadedProject;
 use crate::Resonance;
 
@@ -77,42 +77,15 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let _ = r.engine
         .send(AudioCommand::SetProjectDir(loaded.project_dir.clone()));
 
-    // Transport / master scalars (every one sent: `old` is `None`), the
-    // transient UI reset, compose sections and the drum-pattern bank;
-    // then tempo / signature events (+ `SetTempoEvents`), chord track,
-    // markers and the section chord trim — all before any track or clip.
-    reconcile_stage(r, Stage::Globals, None, project, &ctx);
-    reconcile_stage(r, Stage::Timeline, None, project, &ctx);
-
-    // Tracks (with their plugin chains), busses, the master chain, the
-    // track outputs once every bus exists, each plugin's blob / bypass /
-    // parked params, then the registry resort, the saved plugin-slot order
-    // and the plugin side-index — each registry emptied by its own domain
-    // first (every entity added: `old` is `None`).
-    reconcile_stage(r, Stage::Entities, None, project, &ctx);
-
-    // The aux sends, then the sidechain key routes (every one sent: `old`
-    // is `None`), once every endpoint they name — tracks, busses and the
-    // master chain's plugin ids — has gone out.
-    reconcile_stage(r, Stage::Routing, None, project, &ctx);
-
-    // The audio and MIDI clips (every one loaded: `old` is `None`), then
-    // the state derived from them: the lyric side-table (padded to the
-    // replayed note counts), the derived-clip map (ARCH-01 A-6, keeping
-    // only entries whose clip this replay installed — `ClearAll` wiped
-    // anything else) and the vocal audio-clip map.
-    reconcile_stage(r, Stage::Clips, None, project, &ctx);
-
-    // References, pool (after the clips, whose asset refs it counts),
-    // quantize, performance, track groups, and the cycle-record take lanes
-    // (each audio take's WAV resolved against the project directory, so a
-    // take whose file travelled with the bundle comes back and one that
-    // didn't is flagged rather than lost).
-    reconcile_stage(r, Stage::Content, None, project, &ctx);
-
-    // External instruments, then the automation lanes (a `DeviceParam`
-    // lane needs the device bindings the first sends), the missing-plugin
-    // warning, and freeze last (a disk load's baseline fingerprints the
-    // replayed content, lanes included).
-    reconcile_stage(r, Stage::Tail, None, project, &ctx);
+    // Every domain, in table order, with `old = None` — each mirror
+    // emptied by its own domain, then everything sent (ARCH-01 A-13): the
+    // transport scalars, transient-UI reset, compose sections, drum bank,
+    // tempo map, chord track, markers and chord trim before any entity;
+    // tracks, busses, the master chain, the track outputs, each plugin's
+    // blob / bypass / parked params, the registry order and plugin index;
+    // the routing edges; the clips and what derives from them; the
+    // references and app-side content; external instruments, lanes, the
+    // missing-plugin warning and freeze last. See
+    // `docs/design/A-13-reconcile.md` for why each sits where it does.
+    reconcile_all_stages(r, None, project, &ctx);
 }
