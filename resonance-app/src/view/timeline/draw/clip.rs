@@ -183,9 +183,20 @@ impl TimelineCanvas<'_> {
                 ..theme::WARM
             };
 
+            // Only the columns inside the cull window are tessellated
+            // (review VIEW-28). The walk keeps its original stepping so
+            // every drawn bar lands on exactly the same x as before.
+            let (lo, hi) = crate::view::timeline::cull::clip_px_range(x, w, self.cull_window());
             let start_px = (-x).max(0.0);
             let mut px = start_px;
             while px < w {
+                if px > hi {
+                    break;
+                }
+                if px + pixels_per_peak.max(1.0) < lo {
+                    px += pixels_per_peak.max(1.0);
+                    continue;
+                }
                 let peak_idx_f = trim_start_peaks + px / pixels_per_peak;
                 let peak_idx = peak_idx_f as usize;
                 if peak_idx >= clip.waveform_peaks.len() {
@@ -223,63 +234,74 @@ impl TimelineCanvas<'_> {
         y_off: f32,
         visible_height: f32,
     ) {
-        let n = self.clips.len();
-        for i in 0..n {
-            for j in (i + 1)..n {
-                let a = &self.clips[i];
-                let b = &self.clips[j];
-                if a.track_id != b.track_id {
-                    continue;
-                }
-                let Some((ov_start, ov_end)) = overlap_range(
-                    a.start_sample,
-                    a.duration_samples,
-                    b.start_sample,
-                    b.duration_samples,
-                ) else {
-                    continue;
-                };
-                let Some((y, h, indent)) = clip_lane_rect(
-                    self,
-                    a.track_id,
-                    layout,
-                    ruler_height,
-                    y_off,
-                    visible_height,
-                ) else {
-                    continue;
-                };
+        // Candidate pairs come from a per-track sweep (review VIEW-28),
+        // in the same (i, j) order the old all-pairs walk used.
+        let spans: Vec<(u64, u64, u64)> = self
+            .clips
+            .iter()
+            .map(|c| {
+                (
+                    c.track_id,
+                    c.start_sample,
+                    c.start_sample.saturating_add(c.duration_samples),
+                )
+            })
+            .collect();
+        let cull = self.cull_window();
+        for (i, j) in crate::view::timeline::cull::overlapping_pairs(&spans) {
+            let a = &self.clips[i];
+            let b = &self.clips[j];
+            let Some((ov_start, ov_end)) = overlap_range(
+                a.start_sample,
+                a.duration_samples,
+                b.start_sample,
+                b.duration_samples,
+            ) else {
+                continue;
+            };
+            let Some((y, h, indent)) = clip_lane_rect(
+                self,
+                a.track_id,
+                layout,
+                ruler_height,
+                y_off,
+                visible_height,
+            ) else {
+                continue;
+            };
 
-                let x0 = self.sample_to_x(ov_start) + indent;
-                let x1 = self.sample_to_x(ov_end) + indent;
-                let ow = x1 - x0;
-                if ow <= 0.5 {
-                    continue;
-                }
-
-                // Lavender overlap wash.
-                frame.fill_rectangle(
-                    Point::new(x0, y),
-                    Size::new(ow, h),
-                    Color {
-                        a: 0.16,
-                        ..theme::ACCENT
-                    },
-                );
-
-                // Crossing equal-power curves: the earlier clip fades out
-                // across the overlap, the later clip fades in. Their sum
-                // is constant power — a click-free seam. Equal-power is
-                // symmetric, so the same pair of curves serves either
-                // ordering of the overlapping clips.
-                let fade_out = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, false);
-                let fade_in = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, true);
-                stroke_polyline(frame, &fade_out, theme::ACCENT_SOFT, 1.5);
-                stroke_polyline(frame, &fade_in, theme::ACCENT_SOFT, 1.5);
-
-                // `⤬` badge centred at the top of the overlap.
-                draw_crossfade_badge(frame, x0 + ow / 2.0, y + 9.0);
+            let x0 = self.sample_to_x(ov_start) + indent;
+            let x1 = self.sample_to_x(ov_end) + indent;
+            let ow = x1 - x0;
+            if ow <= 0.5 {
+                continue;
             }
+            if !crate::view::timeline::cull::span_may_be_visible((x0, x1), cull) {
+                continue;
+            }
+
+            // Lavender overlap wash.
+            frame.fill_rectangle(
+                Point::new(x0, y),
+                Size::new(ow, h),
+                Color {
+                    a: 0.16,
+                    ..theme::ACCENT
+                },
+            );
+
+            // Crossing equal-power curves: the earlier clip fades out
+            // across the overlap, the later clip fades in. Their sum
+            // is constant power — a click-free seam. Equal-power is
+            // symmetric, so the same pair of curves serves either
+            // ordering of the overlapping clips.
+            let fade_out = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, false);
+            let fade_in = fade_envelope(FadeCurve::EqualPower, x0, ow, y, h, true);
+            stroke_polyline(frame, &fade_out, theme::ACCENT_SOFT, 1.5);
+            stroke_polyline(frame, &fade_in, theme::ACCENT_SOFT, 1.5);
+
+            // `⤬` badge centred at the top of the overlap.
+            draw_crossfade_badge(frame, x0 + ow / 2.0, y + 9.0);
         }
     }
 }

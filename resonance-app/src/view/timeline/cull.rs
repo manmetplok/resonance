@@ -74,3 +74,75 @@ pub fn sample_span_x(
     };
     (to_x(start_sample), to_x(end_sample))
 }
+
+/// The clip-local pixel range `[lo, hi]` of a clip body at canvas x `x`,
+/// width `w`, that may intersect the cull window (with [`SPAN_PAD`]
+/// slack). Per-column work — waveform bars, the frozen silhouette, note
+/// rects — outside it is off screen and is skipped, so a long clip only
+/// a sliver of which is visible no longer tessellates its full width on
+/// every cache miss. `None` — no window — is the whole clip.
+pub fn clip_px_range(x: f32, w: f32, window: Option<(f32, f32)>) -> (f32, f32) {
+    match window {
+        None => (0.0, w),
+        Some((w0, w1)) => ((w0 - SPAN_PAD - x).max(0.0), (w1 + SPAN_PAD - x).min(w)),
+    }
+}
+
+/// Answers "does any note sound at this tick?" for non-decreasing ticks
+/// in O(1) amortised, replacing a per-column scan over every note. Built
+/// from `(start, end)` half-open tick intervals in any order: a tick is
+/// covered iff the largest `end` among the intervals with `start <= tick`
+/// exceeds it — exactly `any(|(s, e)| s <= tick && tick < e)`.
+pub struct CoverageSweep {
+    intervals: Vec<(f32, f32)>,
+    next: usize,
+    max_end: f32,
+}
+
+impl CoverageSweep {
+    pub fn new(mut intervals: Vec<(f32, f32)>) -> Self {
+        intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Self {
+            intervals,
+            next: 0,
+            max_end: f32::NEG_INFINITY,
+        }
+    }
+
+    /// Whether `tick` is covered. Ticks must be passed in non-decreasing
+    /// order.
+    pub fn covers(&mut self, tick: f32) -> bool {
+        while let Some(&(start, end)) = self.intervals.get(self.next) {
+            if start > tick {
+                break;
+            }
+            self.max_end = self.max_end.max(end);
+            self.next += 1;
+        }
+        tick < self.max_end
+    }
+}
+
+/// Index pairs `(i, j)`, `i < j`, of same-track clips whose
+/// `[start, end)` sample ranges may overlap, in the `(i, j)` order a
+/// nested `for i { for j > i }` walk visits them. `clips` is `(track,
+/// start, end)` per clip. Grouped per track and swept in start order, so
+/// the cost is O(n log n + pairs) instead of O(n²). Callers still apply
+/// the exact overlap test to each pair.
+pub fn overlapping_pairs(clips: &[(u64, u64, u64)]) -> Vec<(usize, usize)> {
+    let mut order: Vec<usize> = (0..clips.len()).collect();
+    order.sort_by_key(|&i| (clips[i].0, clips[i].1, i));
+    let mut pairs = Vec::new();
+    for (p, &i) in order.iter().enumerate() {
+        let (track, _, end) = clips[i];
+        for &j in &order[p + 1..] {
+            let (other_track, other_start, _) = clips[j];
+            if other_track != track || other_start >= end {
+                break;
+            }
+            pairs.push((i.min(j), i.max(j)));
+        }
+    }
+    pairs.sort_unstable();
+    pairs
+}
