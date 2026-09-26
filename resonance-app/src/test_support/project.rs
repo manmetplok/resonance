@@ -327,7 +327,7 @@ impl Resonance {
     /// Test-only: read the current error message banner, if any.
     #[doc(hidden)]
     pub fn test_error_message(&self) -> Option<&str> {
-        self.error_message.as_deref()
+        self.banners.error_message.as_deref()
     }
 
     /// Test-only: returns `true` when a user-facing error message has been
@@ -335,7 +335,7 @@ impl Resonance {
     /// need to confirm the app showed an error without reading private fields.
     #[doc(hidden)]
     pub fn test_error_message_is_set(&self) -> bool {
-        self.error_message.is_some()
+        self.banners.error_message.is_some()
     }
 
     /// Test-only: replay a [`crate::project::ProjectFile`] into this app as

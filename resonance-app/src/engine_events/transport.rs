@@ -22,7 +22,7 @@ pub(super) fn refused(r: &mut Resonance) {
 
 pub(super) fn error(r: &mut Resonance, e: EngineError) {
     tracing::error!(kind = ?e.kind, "Audio engine error: {}", e.message);
-    r.error_message = Some(e.message);
+    r.banners.error_message = Some(e.message);
 }
 
 pub(super) fn input_devices_listed(
@@ -52,7 +52,7 @@ pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
 /// the take was silently corrupted with zero indication to the user.
 pub(super) fn recording_overflow(r: &mut Resonance, dropped_frames: u64) {
     tracing::error!("Audio engine: recording overflow — {dropped_frames} input frames dropped");
-    r.error_message = Some(format!(
+    r.banners.error_message = Some(format!(
         "Recording overflow: {dropped_frames} input frames were dropped — \
          this take is missing audio and may be out of sync"
     ));
@@ -85,7 +85,7 @@ pub(super) fn bounce_error(r: &mut Resonance, e: String) {
     // A cancel the user asked for from the progress modal (FU-F1c) is
     // not a failure worth a banner.
     if !std::mem::take(&mut r.io.bounce_cancel_requested) {
-        r.error_message = Some(format!("Bounce failed: {e}"));
+        r.banners.error_message = Some(format!("Bounce failed: {e}"));
     }
 }
 
@@ -93,7 +93,7 @@ pub(super) fn track_bounce_error(r: &mut Resonance, e: String) {
     // Drop the in-progress modal — the run is over either way — and
     // surface the engine's reason as a banner.
     r.bounce_in_progress = None;
-    r.error_message = Some(format!("Bounce in place failed: {e}"));
+    r.banners.error_message = Some(format!("Bounce in place failed: {e}"));
 }
 
 pub(super) fn track_bounce_cancelled(
@@ -139,7 +139,7 @@ pub(super) fn export_error(
     message: String,
 ) {
     r.io.bouncing = false;
-    r.error_message = Some(format!("Export failed: {message}"));
+    r.banners.error_message = Some(format!("Export failed: {message}"));
 }
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {

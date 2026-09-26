@@ -102,7 +102,7 @@ pub(super) fn finish_preset_save(r: &mut Resonance, pending: &crate::PendingPres
             r.user_presets = crate::presets::load_user_presets();
         }
         Err(e) => {
-            r.error_message = Some(format!("Save preset: {e}"));
+            r.banners.error_message = Some(format!("Save preset: {e}"));
         }
     }
 }

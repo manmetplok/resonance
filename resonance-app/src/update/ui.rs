@@ -61,7 +61,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.mixer.reference_panel_open = !r.mixer.reference_panel_open;
         }
         UiMessage::DismissError => {
-            r.error_message = None;
+            r.banners.error_message = None;
         }
         UiMessage::DismissImportProgress => {
             r.import_progress_modal_open = false;

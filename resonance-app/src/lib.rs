@@ -101,22 +101,9 @@ pub struct Resonance {
     /// demo seeding) so `view()` only ever reads it — the view layer
     /// never mutates state. See `view::transport_labels`.
     pub(crate) transport_labels: view::transport_labels::TransportLabels,
-    pub(crate) error_message: Option<String>,
-    /// Set once the tick handler has surfaced the "engine stopped
-    /// responding" banner for [`resonance_audio::AudioEngine::is_disconnected`]
-    /// (see `update::tick::check_engine_disconnected`). Latches the check
-    /// app-side so a dismissed (or superseded) banner isn't forced back
-    /// onto `error_message` every subsequent tick — the underlying engine
-    /// latch never resets, so without this the message would be
-    /// unclearable.
-    pub(crate) engine_disconnected_banner_shown: bool,
-    /// Set while the tick handler is showing the "audio stream lost"
-    /// banner for [`resonance_audio::AudioEngine::output_stream_lost`]
-    /// (see `update::tick::check_output_stream_lost`). Unlike the
-    /// engine-death latch above, this one clears again: the PipeWire
-    /// backend reports the stream coming back, and the tick handler
-    /// then removes the banner it raised (and only that banner).
-    pub(crate) stream_lost_banner_shown: bool,
+    /// The transient error/notification banner and its raise latches
+    /// (ARCH-06 A6-2). See `state::Banners`.
+    pub(crate) banners: state::Banners,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
     pub(crate) master_level_r: f32,
@@ -798,9 +785,7 @@ impl Resonance {
             missing_plugins: crate::state::MissingPluginState::default(),
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
-            error_message: None,
-            engine_disconnected_banner_shown: false,
-            stream_lost_banner_shown: false,
+            banners: state::Banners::default(),
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
             master_level_r: 0.0,

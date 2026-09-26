@@ -401,7 +401,7 @@ impl crate::Resonance {
         if !self.offline_render_in_progress() {
             return false;
         }
-        self.error_message = Some(
+        self.banners.error_message = Some(
             "An offline render is in progress; open or create a project when it finishes".into(),
         );
         true

@@ -68,7 +68,7 @@ impl crate::Resonance {
             ViewMode::Performance => self.view_performance_shell(),
         };
 
-        let content: Element<'_, Message> = if let Some(ref err) = self.error_message {
+        let content: Element<'_, Message> = if let Some(ref err) = self.banners.error_message {
             let error_bar = container(
                 row![
                     text(err).size(13).color(iced::Color::WHITE),

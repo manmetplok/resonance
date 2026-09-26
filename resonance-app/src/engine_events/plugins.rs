@@ -406,7 +406,7 @@ pub(super) fn load_failed(
     if marked {
         r.missing_plugins.note_failure();
     } else {
-        r.error_message = Some(format!(
+        r.banners.error_message = Some(format!(
             "Could not load plugin {}{}: {reason}",
             if clap_plugin_id.is_empty() {
                 clap_file_path.as_str()
@@ -537,7 +537,8 @@ pub(super) fn state_saved(
             &pending.name,
             &data,
         ) {
-            r.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
+            r.banners.error_message =
+                Some(format!("Could not save preset {:?}: {e}", pending.name));
         }
     }
 
