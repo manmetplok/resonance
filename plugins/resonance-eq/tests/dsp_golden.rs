@@ -114,6 +114,26 @@ impl Signal {
     }
 }
 
+/// `x^n` by square-and-multiply — the exact sequence of f32 roundings
+/// compiler-rt's `__powisf2` performs, so the golden (blessed from the
+/// debug build, which calls it) is unchanged. Not `f32::powi`: with a
+/// constant `n` (the unrolled band loop) LLVM folds that at compile time
+/// with different rounding, so a `--release` run rendered this scenario
+/// ~1e-5 off the golden (code review FU-P1a).
+fn powi(mut x: f32, mut n: u32) -> f32 {
+    let mut r = 1.0f32;
+    loop {
+        if n & 1 == 1 {
+            r *= x;
+        }
+        n /= 2;
+        if n == 0 {
+            return r;
+        }
+        x *= x;
+    }
+}
+
 /// A parameter edit applied *between* blocks, so the next block's
 /// `update_from_params` picks it up. `None` for static scenarios.
 type MidRunEdit = fn(&EqParams, usize);
@@ -242,7 +262,7 @@ fn scenarios() -> Vec<Scenario> {
                     let b = &p.bands[i];
                     // Each band sweeps over its own octave so they
                     // never collapse onto the same frequency.
-                    let base = 60.0 * 1.9f32.powi(i as i32);
+                    let base = 60.0 * powi(1.9, i as u32);
                     b.freq.set_value(base * (1.0 + t));
                     b.gain
                         .set_value(if i % 2 == 0 { 12.0 * t } else { -12.0 * t });

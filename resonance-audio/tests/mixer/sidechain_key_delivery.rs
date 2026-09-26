@@ -657,6 +657,42 @@ fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
     assert_keyed(got, at_master(NO_KEY), "muted key bus keyed by its probe");
 }
 
+/// A muted key source whose consumer sits in a chain that will not run
+/// is not rendered either (FU-A5c): the consumer's own bypass is not the
+/// only way it stops reading its key — its track's whole FX chain being
+/// bypassed, or its track being muted, does the same.
+#[test]
+fn a_muted_key_bus_whose_consumer_chain_is_dormant_does_not_render() {
+    const PROBE_ID: PluginInstanceId = 901;
+    let state = fixture();
+    let calls = Arc::new(AtomicUsize::new(0));
+    state
+        .plugins
+        .write()
+        .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
+    state.add_bus(BUS, "Ghost");
+    state.busses.read().get(&BUS).unwrap().set_muted(true);
+    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(PROBE_ID);
+    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    route(&state, SendSource::Bus(BUS));
+    let probe_calls = || calls.swap(0, std::sync::atomic::Ordering::Relaxed);
+    let with_parent = |f: &dyn Fn(&Track)| f(state.tracks.read().get(&PARENT).unwrap());
+
+    with_parent(&|t| t.fx_bypass().set_bypassed_settled(true));
+    render_second_chunk(&state, StemSource::Master);
+    assert_eq!(probe_calls(), 0, "consumer's chain bypassed: nobody reads the key");
+
+    with_parent(&|t| t.fx_bypass().set_bypassed_settled(false));
+    with_parent(&|t| t.set_muted(true));
+    render_second_chunk(&state, StemSource::Master);
+    assert_eq!(probe_calls(), 0, "consumer's track muted: nobody reads the key");
+
+    with_parent(&|t| t.set_muted(false));
+    let got = render_second_chunk(&state, StemSource::Master);
+    assert!(probe_calls() > 0, "an audible, engaged consumer brings the key render back");
+    assert_keyed(got, at_master(NO_KEY), "muted key bus keyed by its probe");
+}
+
 use resonance_audio::test_support::MixAudioHarness;
 
 const LIVE_BLOCK: usize = 128;

@@ -34,7 +34,8 @@
 //! # Why derive rather than be told
 //!
 //! The engine already computes these peaks while recording
-//! ([`RolledAudioTake::waveform_peaks`](resonance_audio::RolledAudioTake))
+//! (`resonance_audio::RolledAudioTake::waveform_peaks`, behind its
+//! `test-internals` feature)
 //! and could carry them on `TakeCaptured`. That would remove the capture
 //! path's read — but not this module, because it would do nothing for a
 //! **project load**: peaks are not persisted (deliberately; a project

@@ -172,15 +172,18 @@ impl<'a> BlockCtx<'a> {
 ///
 /// Whether a SILENCED `source` must still render for its sidechain key
 /// (code review MIX-05): some enabled route taps it AND that route's
-/// plugin is present and not bypassed — a bypassed (or removed) keyed
-/// plugin does not read its key, so a muted source feeding only such
-/// consumers renders nothing (FU-M3c). Audible sources capture whenever
-/// they are tapped; this only gates the key-only render. A keyed plugin
-/// being un-bypassed gets its first key one block later, during its
-/// bypass crossfade. Allocation- and lock-free.
+/// plugin is present and not bypassed AND the chain holding it runs this
+/// block ([`consumer_chain_runs`]) — a bypassed (or removed) keyed plugin,
+/// or one in a bypassed chain or on a silenced track / bus, does not read
+/// its key, so a muted source feeding only such consumers renders nothing
+/// (FU-M3c, FU-A5c). Audible sources capture whenever they are tapped;
+/// this only gates the key-only render. A keyed plugin being un-bypassed
+/// (or its track un-muted) gets its first key one block later, during its
+/// fade-in. Allocation- and lock-free.
 pub(crate) fn key_consumed(
     ctx: &BlockCtx<'_>,
     sidechain: &SidechainTaps,
+    strategy: &RenderStrategy<'_>,
     source: SendSource,
 ) -> bool {
     sidechain.is_tapped(source)
@@ -192,7 +195,72 @@ pub(crate) fn key_consumed(
                     .plugins
                     .get(&r.plugin)
                     .is_some_and(|slot| !slot.bypass.bypassed())
+                && consumer_chain_runs(ctx, sidechain, strategy, r.plugin)
         })
+}
+
+/// Whether the chain holding the keyed `plugin` runs this block, so it
+/// would actually read a key (FU-A5c). False only when that is certain:
+/// the owning track's / bus's whole FX chain is bypassed (an instrument
+/// track's instrument slot excepted — chain bypass never skips it), or
+/// the owner is silenced and would skip its chain — the same
+/// `track_disposition` / `bus_disposition` call its own pass makes.
+///
+/// Conservative everywhere else, since a wrong `false` drops a key
+/// someone hears: a silenced owner that is itself a key source may render
+/// key-only and run its chain after all (not followed, so two muted
+/// tracks keying each other can't recurse), a sub-track's silence depends
+/// on its parent's, and master's chain has no mute — all count as
+/// running.
+fn consumer_chain_runs(
+    ctx: &BlockCtx<'_>,
+    sidechain: &SidechainTaps,
+    strategy: &RenderStrategy<'_>,
+    plugin: PluginInstanceId,
+) -> bool {
+    use crate::mixer::automation_apply::auto_muted;
+    use resonance_common::AutomationTarget;
+
+    let tracks = ctx.inputs.tracks;
+    if let Some(track) = tracks.values().find(|t| t.plugins().contains(&plugin)) {
+        let is_instrument = track.track_type == TrackType::Instrument
+            && track.plugins().first() == Some(&plugin);
+        if !is_instrument && track.fx_bypass().bypassed() {
+            return false;
+        }
+        let keys_itself = |id: TrackId| sidechain.is_tapped(SendSource::Track(id));
+        if track.sub_track_of.is_some()
+            || keys_itself(track.id)
+            || tracks.values().any(|t| {
+                matches!(t.sub_track_of, Some((p, _)) if p == track.id) && keys_itself(t.id)
+            })
+        {
+            return true;
+        }
+        let auto_mute = auto_muted(
+            ctx.inputs.automation,
+            AutomationTarget::TrackMute(track.id),
+            ctx.evals.gain_start,
+        );
+        return strategy
+            .track_disposition(track, ctx.inputs.any_solo, None, auto_mute)
+            .is_some_and(|d| is_instrument || !d.discard_after_instrument);
+    }
+    if let Some(bus) = ctx.inputs.busses.values().find(|b| b.plugin_ids.contains(&plugin)) {
+        if bus.fx_bypass().bypassed() {
+            return false;
+        }
+        if sidechain.is_tapped(SendSource::Bus(bus.id)) {
+            return true;
+        }
+        let auto_mute = auto_muted(
+            ctx.inputs.automation,
+            AutomationTarget::BusMute(bus.id),
+            ctx.evals.bus_start,
+        );
+        return strategy.bus_disposition(bus, None, auto_mute).is_some();
+    }
+    true
 }
 
 /// Returns whether any plugin actually ran; a plugin whose instance is

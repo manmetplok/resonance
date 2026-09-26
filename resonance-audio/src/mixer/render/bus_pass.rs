@@ -61,7 +61,7 @@ fn render_one_bus(
     let ((bus_gain_l, bus_gain_r), key_only) =
         match strategy.bus_disposition(bus, bus_auto_gain, bus_auto_mute) {
             Some(gains) => (gains, false),
-            None if key_consumed(ctx, scratch.sidechain, bus_tap) => {
+            None if key_consumed(ctx, scratch.sidechain, strategy, bus_tap) => {
                 (((0.0, 0.0), (0.0, 0.0)), true)
             }
             None => return,

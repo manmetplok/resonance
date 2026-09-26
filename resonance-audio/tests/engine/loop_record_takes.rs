@@ -1814,26 +1814,10 @@ fn two_take_clip_loads_racing_each_other_still_leave_one_clip() {
     engine.replay_take_lane_command(&load);
     engine.replay_take_lane_command(&load);
 
-    let wait_start = std::time::Instant::now();
-    assert!(
-        engine.wait_for_clips(1, std::time::Duration::from_secs(5)),
-        "the take clip never loaded at all"
-    );
-    // Let a second worker publish if one is going to. A flat sleep here can
-    // false-pass under load: a buggy-but-slow second worker can miss a
-    // fixed window and land only after the assertion below has already
-    // read the list. There is no flush to wait on instead — the duplicate
-    // check that actually binds lives inside the worker's own
-    // `clips.write()` (see `submit_clip_load`), and this harness has no
-    // handle on the worker pool to drain it deterministically. So the
-    // grace scales with how long the wait above actually took to see the
-    // first publish — a live reading of how loaded this machine is right
-    // now — floored so a fast, idle machine still gets a real window, and
-    // capped so a pathologically slow one doesn't stall the suite.
-    let grace = (wait_start.elapsed() * 5)
-        .max(std::time::Duration::from_millis(200))
-        .min(std::time::Duration::from_secs(5));
-    std::thread::sleep(grace);
+    // Wait for both loads to finish, then read the list: a second worker
+    // that is going to publish has published by then (FU-A5a — this was a
+    // load-scaled grace sleep, which a slow enough second worker outran).
+    engine.settle_imports(std::time::Duration::from_secs(60));
 
     assert_eq!(
         engine.clip_ids(),
@@ -1873,7 +1857,7 @@ fn re_loading_a_take_clip_the_engine_already_holds_is_a_no_op() {
     for _ in 0..3 {
         engine.replay_take_lane_command(&load);
     }
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    engine.settle_imports(std::time::Duration::from_secs(60));
 
     assert_eq!(
         engine.clip_ids(),
@@ -1974,7 +1958,7 @@ fn a_restored_take_clip_does_not_resurrect_the_parked_one() {
         path,
         name: "Take 100".into(),
     });
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    engine.settle_imports(std::time::Duration::from_secs(60));
 
     assert_eq!(
         engine.clip_ids(),
@@ -2082,22 +2066,13 @@ fn peak(out: &[f32]) -> f32 {
     out.iter().fold(0.0f32, |acc, s| acc.max(s.abs()))
 }
 
-/// Spin until every submitted load has landed *somewhere* — the clip list
-/// or the park — so the assertions that follow read a settled engine.
-///
-/// Deliberately counts both, so a broken interlock (which lands the clip in
-/// the list) finishes just as fast as a working one and the test fails on
-/// its assertions rather than on a timeout.
-fn settle(engine: &resonance_audio::test_support::EngineHandlerHarness, landed: usize) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while std::time::Instant::now() < deadline
-        && engine.clip_ids().len() + engine.parked_clip_ids().len() < landed
-    {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    // A short grace period on top, so a second, wrong publish has time to
-    // show up rather than landing after the assertions have read the list.
-    std::thread::sleep(std::time::Duration::from_millis(200));
+/// Wait until every submitted load has finished — landed in the clip list,
+/// landed in the park, or been dropped — so the assertions that follow
+/// read a settled engine. Waits on the import pool itself rather than on a
+/// count plus a grace sleep, so a second, wrong publish can't land after
+/// the assertions have read the list (FU-A5a).
+fn settle(engine: &mut resonance_audio::test_support::EngineHandlerHarness) {
+    engine.settle_imports(std::time::Duration::from_secs(60));
 }
 
 /// **The race.** A `RemoveTake` dispatched while the take's recording is
@@ -2131,7 +2106,7 @@ fn a_removal_racing_the_take_clip_load_still_parks_the_recording() {
 
     engine.remove_take(1, 0);
 
-    settle(&engine, 2);
+    settle(&mut engine);
 
     assert_eq!(
         engine.clip_ids(),
@@ -2183,7 +2158,7 @@ fn a_take_clip_load_landing_after_its_take_was_removed_goes_to_the_park() {
     );
 
     engine.replay_take_lane_command(&take_clip_load(100, removed));
-    settle(&engine, 1);
+    settle(&mut engine);
 
     assert_eq!(
         engine.clip_ids(),
@@ -2224,7 +2199,7 @@ fn undoing_a_removal_that_raced_the_load_restores_the_audio() {
     engine.restore_take_groups(vec![two_audio_take_group(100, 101)]);
     engine.remove_take(1, 0);
     engine.replay_take_lane_command(&take_clip_load(100, removed));
-    settle(&engine, 1);
+    settle(&mut engine);
     assert_eq!(engine.parked_clip_ids(), vec![100], "fixture check: parked");
 
     // The undo: the app rebuilds its mirror and replays it wholesale.
@@ -2294,7 +2269,7 @@ fn undoing_a_removal_before_the_load_lands_restores_the_audio() {
     // than the cover's latest-pass fallback.
     engine.set_active_take(1, Some(0));
 
-    settle(&engine, 1);
+    settle(&mut engine);
 
     // The audible assertion first — it is the one that states the
     // requirement. A claim the restore failed to drop diverts the finished
@@ -2352,7 +2327,7 @@ fn a_park_claim_does_not_outlive_its_project() {
     // The next project's *timeline* clip happens to take id 100 — which it
     // will, because `ClearAll` put the allocator back to 1.
     engine.load_clip_from_wav(100, 7, 0, wav, "Timeline clip".into());
-    settle(&engine, 1);
+    settle(&mut engine);
 
     assert_eq!(
         engine.clip_ids(),
@@ -2425,18 +2400,12 @@ fn an_import_finishing_after_clear_all_is_dropped() {
 
     let mut engine = resonance_audio::test_support::EngineHandlerHarness::new();
     engine.set_project_dir(project.clone());
-    let clip_id = engine.next_clip_id();
     engine.import_clip(7, source.display().to_string(), 0);
     engine.clear_all();
 
-    // The worker transcodes before it would push; wait for that, then a
-    // grace period for a (wrong) push to show up.
-    let target = project.join("audio").join(format!("clip_{clip_id}.wav"));
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while !target.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // Wait for the worker to finish outright, so a (wrong) push has
+    // happened by the time the list is read (FU-A5a: was a 500 ms grace).
+    engine.settle_imports(std::time::Duration::from_secs(60));
 
     assert!(engine.clip_ids().is_empty(), "the stale import landed: {:?}", engine.clip_ids());
     let events = engine.drain_events();
