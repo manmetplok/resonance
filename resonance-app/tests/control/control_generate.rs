@@ -922,3 +922,72 @@ fn part_rejects_the_harmony_knobs_it_cannot_honour() {
     }
     assert_eq!(app.revision(), revision, "nothing was generated");
 }
+
+// ---------------- frozen targets (code review FU-M4b) ----------------
+
+fn freeze_track(app: &mut Resonance, track_id: u64) {
+    let cache = resonance_common::FreezeCacheRef::new(
+        "freeze_gen.wav".to_owned(),
+        48_000,
+        32,
+        1,
+        resonance_common::FreezeCacheStatus::Frozen,
+    );
+    app.test_set_freeze_status(
+        track_id,
+        resonance_app::state::FreezeStatus::Frozen { cache_ref: cache },
+    );
+}
+
+/// A frozen track's inputs are read-only: the GUI refuses a note edit on
+/// one, and `generate.*` used to just regenerate underneath it and leave
+/// the freeze Stale. It refuses `busy` instead, with nothing changed.
+#[test]
+fn generate_part_on_a_frozen_track_is_refused_busy() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    let track = add_synth_track(&mut app, 10);
+    freeze_track(&mut app, 10);
+    let before = app.revision();
+
+    let params = proto::PartParams {
+        section_id,
+        track_id: track,
+        role: GenerateRole::Bass,
+        chord_count: None,
+        beats_per_chord: None,
+        sevenths: None,
+        seed: Some(5),
+        options: None,
+    };
+    let message = expect_error(call(&mut app, "generate.part", &params), ErrorKind::Busy);
+    assert!(message.contains("frozen"), "unexpected: {message}");
+    assert_eq!(app.revision(), before, "nothing changed");
+    assert!(
+        matches!(
+            app.test_freeze_status(10),
+            resonance_app::state::FreezeStatus::Frozen { .. }
+        ),
+        "the freeze is untouched, not marked stale"
+    );
+}
+
+#[test]
+fn generate_drums_with_a_frozen_drum_track_is_refused_busy() {
+    let mut app = app_with_project();
+    let section_id = section_with_chords(&mut app);
+    app.test_add_drum_track(20);
+    freeze_track(&mut app, 20);
+    let before = app.revision();
+
+    let params = proto::DrumsParams {
+        section_id,
+        track_id: ProtoTrackId(20),
+        pattern: None,
+        density: None,
+        seed: Some(99),
+    };
+    let message = expect_error(call(&mut app, "generate.drums", &params), ErrorKind::Busy);
+    assert!(message.contains("frozen"), "unexpected: {message}");
+    assert_eq!(app.revision(), before, "nothing changed");
+}

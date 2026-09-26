@@ -12,6 +12,12 @@
 //! are rejected as `invalid_params`. Chord symbols round-trip through
 //! `resonance_music_theory::parse_chord` / `Display` (the same pair
 //! `song.sections` uses to render them).
+//!
+//! Frozen tracks are not refused here (code review FU-M4b): chords are
+//! the section's shared harmony, not one track's input, and the GUI's
+//! chord edits are not gated either. A frozen lane the cascade rewrites
+//! goes Stale for a refreeze. `generate.*`, which targets tracks, does
+//! refuse — see `generate::frozen_reject`.
 
 use std::collections::HashSet;
 

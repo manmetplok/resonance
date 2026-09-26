@@ -92,6 +92,9 @@ fn part(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     if let Some(e) = require_instrument_track(app, track_id) {
         return reject(request, e);
     }
+    if let Some(e) = frozen_reject(app, &[track_id]) {
+        return reject(request, e);
+    }
     // The generators read the section's chord grid; with no chords they
     // would silently produce nothing, so refuse up front.
     let has_chords = app
@@ -204,6 +207,22 @@ fn drums(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
     }
     let track_id: u64 = params.track_id.into();
     if let Some(e) = require_drum_track(app, track_id) {
+        return reject(request, e);
+    }
+    // The drum clips materialise onto EVERY top-level drum track, so any
+    // of them being frozen refuses the call, not just the named one.
+    let drum_tracks: Vec<u64> = app
+        .registry
+        .tracks
+        .iter()
+        .filter(|t| {
+            t.track_type == TrackType::Instrument
+                && t.sub_track.is_none()
+                && t.instrument_type == InstrumentType::Drum
+        })
+        .map(|t| t.id)
+        .collect();
+    if let Some(e) = frozen_reject(app, &drum_tracks) {
         return reject(request, e);
     }
 
@@ -319,6 +338,28 @@ fn require_drum_track(app: &Resonance, track_id: u64) -> Option<RpcError> {
             "track {track_id} is not a drum track"
         ))),
     }
+}
+
+/// The #576 frozen-input rule, applied up front (code review FU-M4b): a
+/// frozen track's notes are read-only, so regenerating them is refused
+/// `busy` like `notes.*` / `notes.import_midi`, instead of rewriting the
+/// material underneath the freeze and leaving it Stale. `harmony.*` is
+/// deliberately NOT gated: chords are section-level harmony shared by
+/// every lane, the GUI's chord edits are not gated either, and a frozen
+/// lane in that section goes Stale for a refreeze exactly as it does
+/// after a GUI chord edit.
+fn frozen_reject(app: &Resonance, track_ids: &[u64]) -> Option<RpcError> {
+    let frozen: Vec<String> = track_ids
+        .iter()
+        .filter(|id| app.freeze.status(**id).is_frozen())
+        .map(u64::to_string)
+        .collect();
+    (!frozen.is_empty()).then(|| {
+        RpcError::busy(format!(
+            "track {} is frozen; unfreeze it before generating into it",
+            frozen.join(", ")
+        ))
+    })
 }
 
 fn track_kind(app: &Resonance, track_id: u64) -> Option<(TrackType, InstrumentType)> {
