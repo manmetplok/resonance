@@ -54,7 +54,7 @@ master and updates this table. Agents do **not** edit this file.
 | R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | merged | d2be52fc |
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
 | V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | merged | 141b3f76 |
-| F1 final follow-ups | FU-G2d, FU-F1c, FU-R1a, FU-M11b | opus | in progress | |
+| F1 final follow-ups | FU-G2d, FU-F1c, FU-R1a, FU-M11b | opus | merged | 58dcbbb0 |
 | V6 undo audio + compose culling | FU-V5b, FU-V5a, FU-V2c (rest) | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
@@ -70,7 +70,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-G2a** — fixed @25f5da5c (−79 dB worst bass); (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
 - [x] **FU-G2b** — fixed @20ee064c; (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
 - [x] **FU-G2c** — fixed @96e5d02a; (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
-- [ ] **FU-G2d** [partial @28f7a5c0: held-key legato done; held-note stack return not done] (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
+- [x] **FU-G2d** — done @28f7a5c0 + @7bccf43c (held-note stack); (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
 - [ ] **FU-B1** (low, NEEDS USER DECISION — preserve hand edits vs re-roll) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
 - [x] **FU-B2** — fixed (C1); (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
 - [x] **FU-B3** — fixed (C1); (low) vocal WAVs are never garbage-collected after section/placement delete.
@@ -89,7 +89,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-A2d** — fixed @93f57443 (= STATE-08); (low, = STATE-08 remainder) engine can still reuse clip ids after a full-reload undo.
 - [x] **FU-F1a** — fixed @be70a1a9; (low) if the engine refuses Play as a backstop (e.g. external MIDI-clock master), app mirror `transport.playing` stays true until Stop (banner shows).
 - [x] **FU-F1b** — fixed @e9d8bd26; (low) `measure_mix` acquires its render guard on the worker → sub-quantum window where Play lands and the transport appears to start then stall. Move acquire to the engine thread.
-- [ ] **FU-F1c** (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
+- [x] **FU-F1c** — fixed @fe9401a7 (progress modal + cancel); (low, UX) WAV mixdown now blocks GUI traffic like bounce-in-place but has no modal, only the master-strip label.
 - [x] **FU-G3a** — fixed @115dd5f1 (freeze cache resampled at attach; rubato kept for export: 6× faster, cleaner — measured); (low) `mixer/render/frozen.rs` still linear-resamples freeze caches on rate mismatch; `bounce/resample.rs` uses rubato → two resampler implementations; consolidate on `resonance_common::resample`.
 - [x] **FU-G3b** — fixed @82a7c5b0; (low) no end-to-end test of a loop-record seam at a mismatched device rate (seam flush only covered at resampler level).
 - [x] **FU-D1** — fixed @68f4563d; (medium, feature gap) Arrange never followed the playhead (old `auto_follow_playhead` wrote a dead offset, now removed). Implement via scrollable id + `scrollable::scroll_to` from tick using the visible viewport width.
@@ -134,7 +134,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-V3b** — fixed @4907ebb1; (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
 - [x] **FU-V3c** — done (C1 + @ecbd728b); (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
 - [x] **FU-M11a** — fixed @d27ee2ab; (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
-- [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
+- [x] **FU-M11b** — mitigated @f4bcdc02 (tempo-mismatch warning; per-placement render not done; MCP song.vocal doesn't report it yet); (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
 - [x] **FU-H4b** — done (A3-2); note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
 - [x] **FU-M12a** — done (R1): session marker, recovery modal, untitled recovery at startup, settings UI; control `project.open` gets `autosave_available` / `recover_autosave`; (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
@@ -155,7 +155,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-A5c** — fixed @22757a50; (low) FU-M3c only checks the keyed plugin's own bypass (not chain-level FX bypass / muted consumer); frozen tracks play the live chain during async cache conversion (~100s of ms).
 - [x] **FU-C1a** — fixed @ec2cf6a2 (only unreferenced `vocal_*.wav` are ever unlinked); (HIGH, data loss) after a project reload the vocal-clip map points at `clip_<id>.wav`; re-rendering a vocal calls `unlink_if_exists(old_path)` in `vocal_audio_install` and deletes the file the saved project and undo snapshots reference.
 - [x] **FU-C1b** — documented, intentionally not deleted @94da144c; (low) stray `vocal_*.wav` files from before the project-audio-dir fix remain in sibling `audio/` folders.
-- [ ] **FU-R1a** (low) stale autosave files inside project dirs are never deleted; marker-less scratch dirs (autosave racing Save As) are never GC'd; untitled recovery only offered at startup; non-Linux can't tell a live other instance from a crash.
+- [x] **FU-R1a** — fixed @791719d1 (untitled recovery still startup-only); (low) stale autosave files inside project dirs are never deleted; marker-less scratch dirs (autosave racing Save As) are never GC'd; untitled recovery only offered at startup; non-Linux can't tell a live other instance from a crash.
 - [ ] **FU-V5a** (low) `clip_*.wav` files are never garbage-collected (removed vocal clips leave theirs) — disk only.
 - [ ] **FU-V5b** (medium, pre-existing) slow-path undo reloads audio from `clip_<id>.wav`, which only exists after a save → undoing a vocal re-render (or any unsaved audio clip edit) in a never-saved-since session can come back silent. Consider writing clip WAVs eagerly to the project audio dir or keeping them in memory for undo.
 
