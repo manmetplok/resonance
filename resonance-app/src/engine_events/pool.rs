@@ -169,7 +169,7 @@ pub(super) fn import_failed(r: &mut Resonance, asset_id: AssetId, path: String, 
             reason: reason.clone(),
         },
     );
-    r.error_message = Some(format!("Import failed: {reason}"));
+    r.banners.error_message = Some(format!("Import failed: {reason}"));
     resolve_control_import(r, &path, Some(&reason), asset_id, None);
 }
 

@@ -22,7 +22,7 @@ pub(super) fn refused(r: &mut Resonance) {
 
 pub(super) fn error(r: &mut Resonance, e: EngineError) {
     tracing::error!(kind = ?e.kind, "Audio engine error: {}", e.message);
-    r.error_message = Some(e.message);
+    r.banners.error_message = Some(e.message);
 }
 
 pub(super) fn input_devices_listed(
@@ -30,12 +30,13 @@ pub(super) fn input_devices_listed(
     devices: Vec<InputDeviceInfo>,
     default_name: Option<String>,
 ) {
-    r.input_devices = devices;
-    r.default_input_device_name = default_name;
+    r.input_devices.devices = devices;
+    r.input_devices.default_name = default_name;
     // Refresh the cached `Rc<[InputDeviceInfo]>` used by the mixer
     // inspector and bounce-dialog pickers so they stop cloning the
     // full Vec every frame.
-    r.view_caches.rebuild_input_devices(&r.input_devices);
+    r.view_caches
+        .rebuild_input_devices(&r.input_devices.devices);
 }
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
@@ -52,7 +53,7 @@ pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
 /// the take was silently corrupted with zero indication to the user.
 pub(super) fn recording_overflow(r: &mut Resonance, dropped_frames: u64) {
     tracing::error!("Audio engine: recording overflow — {dropped_frames} input frames dropped");
-    r.error_message = Some(format!(
+    r.banners.error_message = Some(format!(
         "Recording overflow: {dropped_frames} input frames were dropped — \
          this take is missing audio and may be out of sync"
     ));
@@ -94,7 +95,7 @@ pub(super) fn bounce_error(
     // A cancel the user asked for from the progress modal (FU-F1c) is
     // not a failure worth a banner.
     if !std::mem::take(&mut r.io.bounce_cancel_requested) {
-        r.error_message = Some(format!("Bounce failed: {e}"));
+        r.banners.error_message = Some(format!("Bounce failed: {e}"));
     }
 }
 
@@ -106,7 +107,7 @@ pub(super) fn track_bounce_error(r: &mut Resonance, e: resonance_audio::types::E
     // `transport::error` banner above.
     tracing::error!(kind = ?e.kind, "Bounce in place failed: {}", e.message);
     r.bounce_in_progress = None;
-    r.error_message = Some(format!("Bounce in place failed: {}", e.message));
+    r.banners.error_message = Some(format!("Bounce in place failed: {}", e.message));
 }
 
 pub(super) fn track_bounce_cancelled(
@@ -152,17 +153,19 @@ pub(super) fn export_error(
     message: String,
 ) {
     r.io.bouncing = false;
-    r.error_message = Some(format!("Export failed: {message}"));
+    r.banners.error_message = Some(format!("Export failed: {message}"));
 }
 
 pub(super) fn midi_input_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
-    r.midi_input_devices = devices;
-    r.view_caches.rebuild_midi_input(&r.midi_input_devices);
+    r.midi_devices.midi_input_devices = devices;
+    r.view_caches
+        .rebuild_midi_input(&r.midi_devices.midi_input_devices);
 }
 
 pub(super) fn midi_output_devices(r: &mut Resonance, devices: Vec<MidiDeviceInfo>) {
-    r.midi_output_devices = devices;
-    r.view_caches.rebuild_midi_output(&r.midi_output_devices);
+    r.midi_devices.midi_output_devices = devices;
+    r.view_caches
+        .rebuild_midi_output(&r.midi_devices.midi_output_devices);
 }
 
 pub(super) fn midi_clock_started(r: &mut Resonance) {

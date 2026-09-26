@@ -146,7 +146,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // busy_guard before reaching this message; this covers the
             // bounce dialog.)
             if r.offline_measure_in_progress() {
-                r.error_message =
+                r.banners.error_message =
                     Some("A measurement is in progress; bounce again when it finishes".into());
             } else {
                 r.io.bouncing = true;
@@ -190,7 +190,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 include_master_chain,
             };
             if let Err(e) = save_current_as_template(r, &name, &description, options) {
-                r.error_message = Some(format!("Save template failed: {e}"));
+                r.banners.error_message = Some(format!("Save template failed: {e}"));
             }
         }
         ProjectIoMessage::SavePathSelected(Some(path)) => {
@@ -247,7 +247,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // or whose volume isn't mounted. Check here, at the moment
             // it matters: surface the error and drop the dead entry.
             if !path.exists() {
-                r.error_message = Some(format!(
+                r.banners.error_message = Some(format!(
                     "Project not found: {} — removed from recent projects.",
                     path.display()
                 ));
@@ -324,7 +324,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 tracing::warn!("Autosave failed: {e}");
             } else {
                 r.quit_after_save = None;
-                r.error_message = Some(format!("Save failed: {e}"));
+                r.banners.error_message = Some(format!("Save failed: {e}"));
             }
         }
         ProjectIoMessage::OpenLoadFinished(token, result) => {
@@ -381,7 +381,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 &crate::control_jobs::JobToken::ProjectLoad,
                 e.clone(),
             );
-            r.error_message = Some(format!("Load failed: {e}"));
+            r.banners.error_message = Some(format!("Load failed: {e}"));
         }
         ProjectIoMessage::TemplateLoaded(Ok(loaded)) => {
             instantiate::begin_instantiate(r, loaded);
@@ -392,7 +392,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.control
                 .jobs
                 .fail_token(&crate::control_jobs::JobToken::ProjectNew, e.clone());
-            r.error_message = Some(format!("Open template failed: {e}"));
+            r.banners.error_message = Some(format!("Open template failed: {e}"));
         }
         ProjectIoMessage::ExportChordSheet => {
             let pdf_bytes =
@@ -401,7 +401,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ChordSheetPathSelected(Some(path), data) => {
             if let Err(e) = std::fs::write(&path, &data) {
-                r.error_message = Some(format!("Export failed: {e}"));
+                r.banners.error_message = Some(format!("Export failed: {e}"));
             }
         }
         ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
@@ -496,7 +496,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         if autosave {
             tracing::warn!("Autosave skipped: create dir {}: {e}", path.display());
         } else {
-            r.error_message = Some(format!("Create project directory: {e}"));
+            r.banners.error_message = Some(format!("Create project directory: {e}"));
         }
         return Task::none();
     }

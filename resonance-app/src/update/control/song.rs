@@ -356,11 +356,12 @@ fn vocal(app: &Resonance, request: &Request) -> Response {
 /// prefix read as a per-track query and cost a field agent a session's
 /// debugging. The alias kept for the rename was removed in todo #1240.
 ///
-/// Reads `app.available_plugins`, which the scanner fills at startup, so
+/// Reads `app.plugin_catalog.available_plugins`, which the scanner fills at startup, so
 /// it needs NO open project and is listed in
 /// [`is_read_only_method`](super::is_read_only_method).
 fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
     let plugins = app
+        .plugin_catalog
         .available_plugins
         .iter()
         .map(|p| PluginCatalogEntry {
@@ -377,6 +378,7 @@ fn plugin_catalog(app: &Resonance, request: &Request) -> Response {
     // is simply absent from `plugins`, which reads as "not installed"
     // until something says otherwise (ba todo #1307).
     let scan_failures = app
+        .plugin_catalog
         .plugin_scan_failures
         .iter()
         .map(|f| resonance_control::methods::plugins::PluginScanFailure {

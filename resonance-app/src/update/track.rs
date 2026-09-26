@@ -439,7 +439,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             }
         }
         TrackMessage::ToggleRecordArm(id) => {
-            let default_device = r.default_input_device_name.clone();
+            let default_device = r.input_devices.default_name.clone();
             let auto_device = r.with_track_mut(id, |t| {
                 t.record_armed = !t.record_armed;
                 if t.record_armed && t.input_device_name.is_none() {
@@ -645,7 +645,7 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::DeleteUserPreset(name) => {
             if let Err(e) = crate::presets::delete_user_preset(&name) {
-                r.error_message = Some(format!("Delete preset: {e}"));
+                r.banners.error_message = Some(format!("Delete preset: {e}"));
             }
             r.user_presets = crate::presets::load_user_presets();
         }
@@ -696,17 +696,17 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
         return;
     };
     let Some(device) = dialog.selected_device.clone() else {
-        r.error_message = Some("Pick an audio input device first".into());
+        r.banners.error_message = Some("Pick an audio input device first".into());
         // Keep the dialog open by re-stashing it.
         r.bounce_dialog = Some(dialog);
         return;
     };
     let Some(source) = r.registry.tracks.iter().find(|t| t.id == dialog.source_track_id) else {
-        r.error_message = Some("Bounce: source track not found".into());
+        r.banners.error_message = Some("Bounce: source track not found".into());
         return;
     };
     if r.transport.playing {
-        r.error_message = Some("Stop transport before bouncing".into());
+        r.banners.error_message = Some("Stop transport before bouncing".into());
         r.bounce_dialog = Some(dialog);
         return;
     }
@@ -715,7 +715,8 @@ fn handle_bounce_dialog_confirm(r: &mut Resonance) {
     // same conflict the offline renderers have (see
     // `offline_measure_in_progress`), so it refuses too.
     if r.offline_measure_in_progress() {
-        r.error_message = Some("A measurement is in progress; bounce again when it finishes".into());
+        r.banners.error_message =
+            Some("A measurement is in progress; bounce again when it finishes".into());
         r.bounce_dialog = Some(dialog);
         return;
     }
@@ -768,17 +769,17 @@ fn handle_save_track_as_preset(
 ) {
     let name = name.trim().to_string();
     if name.is_empty() {
-        r.error_message = Some("Save preset: name a preset before saving it".to_string());
+        r.banners.error_message = Some("Save preset: name a preset before saving it".to_string());
         return;
     }
     if !r.registry.tracks.iter().any(|t| t.id == track_id) {
-        r.error_message = Some(format!("Save preset: no track {track_id}"));
+        r.banners.error_message = Some(format!("Save preset: no track {track_id}"));
         return;
     }
     if !overwrite && crate::presets::user_preset_exists(&name) {
         // The GUI reaches this only if the prompt's own guard was
         // bypassed; it normally offers "Overwrite" instead.
-        r.error_message = Some(format!(
+        r.banners.error_message = Some(format!(
             "Save preset: a preset named {name:?} already exists — save it under another name,              or overwrite it"
         ));
         return;
@@ -791,18 +792,18 @@ fn handle_save_track_as_preset(
 
 fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::TrackId) {
     let Some(source) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
-        r.error_message = Some("Bounce: source track not found".into());
+        r.banners.error_message = Some("Bounce: source track not found".into());
         return;
     };
     let mode = match classify_bounce(source, r.midi_clips.iter().map(|c| c.track_id)) {
         Ok(mode) => mode,
         Err(msg) => {
-            r.error_message = Some(msg.into());
+            r.banners.error_message = Some(msg.into());
             return;
         }
     };
     if r.transport.playing {
-        r.error_message = Some("Stop transport before bouncing".into());
+        r.banners.error_message = Some("Stop transport before bouncing".into());
         return;
     }
     // An offline control measurement holds the offline renderer
@@ -810,7 +811,8 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
     // plugin instances from two renderers at once (mirrors
     // `meter.measure` refusing while a bounce runs).
     if r.offline_measure_in_progress() {
-        r.error_message = Some("A measurement is in progress; bounce again when it finishes".into());
+        r.banners.error_message =
+            Some("A measurement is in progress; bounce again when it finishes".into());
         return;
     }
 
@@ -818,7 +820,7 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
         BounceMode::External => {
             r.bounce_dialog = Some(crate::state::BounceDialogState {
                 source_track_id: track_id,
-                selected_device: r.default_input_device_name.clone(),
+                selected_device: r.input_devices.default_name.clone(),
                 selected_port: 0,
                 mono: false,
             });

@@ -115,7 +115,7 @@ pub(crate) fn view_missing_plugins_overlay(r: &Resonance) -> Element<'_, Message
         .padding([8, 18])
         .style(|_theme, status| theme::ghost_button_style(status));
 
-    let rescan_label = if r.plugin_scan_in_progress {
+    let rescan_label = if r.plugin_catalog.plugin_scan_in_progress {
         "Scanning\u{2026}"
     } else {
         "Rescan plugins"
@@ -130,7 +130,7 @@ pub(crate) fn view_missing_plugins_overlay(r: &Resonance) -> Element<'_, Message
     )
     .padding([8, 18])
     .style(|_theme, status| theme::primary_button_style(status));
-    if !r.plugin_scan_in_progress {
+    if !r.plugin_catalog.plugin_scan_in_progress {
         rescan_btn = rescan_btn.on_press(Message::Plugin(PluginMessage::RescanPlugins));
     }
 

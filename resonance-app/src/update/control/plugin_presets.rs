@@ -66,7 +66,7 @@ fn bank_for(app: &Resonance, clap_id: &str) -> PresetBank {
 
 /// Factory presets for `clap_id`, as `(name, state json)`.
 fn factory_presets(app: &Resonance, clap_id: &str) -> Vec<(String, String)> {
-    app.available_plugins
+    app.plugin_catalog.available_plugins
         .iter()
         .find(|p| p.clap_plugin_id == clap_id)
         .map(|p| p.factory_presets.clone())

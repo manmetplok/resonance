@@ -418,10 +418,10 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         section_placements: r.compose.to_project_placements(),
         tempo_events: r.tempo_events.clone(),
         signature_events: r.signature_events.clone(),
-        midi_clock_send_enabled: r.midi_clock_send_enabled,
-        midi_clock_send_device: r.midi_clock_send_device.clone(),
-        midi_clock_recv_enabled: r.midi_clock_recv_enabled,
-        midi_clock_recv_device: r.midi_clock_recv_device.clone(),
+        midi_clock_send_enabled: r.midi_devices.midi_clock_send_enabled,
+        midi_clock_send_device: r.midi_devices.midi_clock_send_device.clone(),
+        midi_clock_recv_enabled: r.midi_devices.midi_clock_recv_enabled,
+        midi_clock_recv_device: r.midi_devices.midi_clock_recv_device.clone(),
         // Legacy field — current code persists the full pattern bank
         // below. Kept empty here so projects authored by this build skip
         // straight to the new shape, and the legacy loader only kicks in

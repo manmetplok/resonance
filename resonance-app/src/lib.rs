@@ -9,7 +9,6 @@
 //! as needed for the test fixtures (`demo::seed_demo_content`,
 //! `Resonance`, `Message`, etc.) — everything else stays `pub(crate)`.
 
-use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 use resonance_music_theory::TableRegistry;
@@ -76,35 +75,16 @@ pub(crate) struct PendingPluginPresetSave {
 pub struct Resonance {
     pub engine: AudioEngine,
     pub sample_rate: u32,
-    pub(crate) input_devices: Vec<InputDeviceInfo>,
-    pub(crate) default_input_device_name: Option<String>,
-    /// Hardware MIDI input ports advertised by the OS. Refreshed
-    /// periodically from `Tick` so hot-plugged devices appear.
-    pub(crate) midi_input_devices: Vec<MidiDeviceInfo>,
-    /// Hardware MIDI output ports.
-    pub(crate) midi_output_devices: Vec<MidiDeviceInfo>,
-    /// Wall-clock instant of the last MIDI device list refresh.
-    pub(crate) midi_devices_last_refresh: std::time::Instant,
-    /// Whether MIDI clock master output is enabled.
-    pub(crate) midi_clock_send_enabled: bool,
-    /// Hardware MIDI output port carrying the master clock.
-    pub(crate) midi_clock_send_device: Option<String>,
-    /// Whether MIDI clock slave (input) is enabled.
-    pub(crate) midi_clock_recv_enabled: bool,
-    /// Hardware MIDI input port carrying the master clock.
-    pub(crate) midi_clock_recv_device: Option<String>,
-    pub(crate) available_plugins: Vec<ScannedPlugin>,
-    /// Bundles the last scan found but could not load (ba todo #1307).
-    ///
-    /// Kept because a broken `.clap` is invisible otherwise: it simply
-    /// does not appear in the catalog, which reads as "not installed".
-    /// Shown in Settings next to the rescan button and reported by
-    /// `plugins.catalog`.
-    pub(crate) plugin_scan_failures: Vec<resonance_audio::types::PluginScanFailure>,
-    /// A rescan has been asked for and its result has not arrived yet.
-    /// Only the button's label depends on it; a scan is fast enough that
-    /// nothing is blocked while it runs.
-    pub(crate) plugin_scan_in_progress: bool,
+    /// Hardware audio input device list and the OS default (ARCH-06
+    /// A6-2). See `state::InputDevices`.
+    pub(crate) input_devices: state::InputDevices,
+    /// Hardware MIDI device lists and clock sync settings (ARCH-06 A6-2).
+    /// See `state::MidiDevices`.
+    pub(crate) midi_devices: state::MidiDevices,
+    /// CLAP plugin scan result (ARCH-06 A6-2): what's available, what
+    /// failed to load, and whether a rescan is in flight. See
+    /// `state::PluginCatalog`.
+    pub(crate) plugin_catalog: state::PluginCatalog,
     /// Whether the "this project uses plugins this machine hasn't got"
     /// warning is showing (ba doc #275 P5, todo #1309). Session state
     /// only — which slots are missing is derived from the chains by
@@ -122,22 +102,9 @@ pub struct Resonance {
     /// demo seeding) so `view()` only ever reads it — the view layer
     /// never mutates state. See `view::transport_labels`.
     pub(crate) transport_labels: view::transport_labels::TransportLabels,
-    pub(crate) error_message: Option<String>,
-    /// Set once the tick handler has surfaced the "engine stopped
-    /// responding" banner for [`resonance_audio::AudioEngine::is_disconnected`]
-    /// (see `update::tick::check_engine_disconnected`). Latches the check
-    /// app-side so a dismissed (or superseded) banner isn't forced back
-    /// onto `error_message` every subsequent tick — the underlying engine
-    /// latch never resets, so without this the message would be
-    /// unclearable.
-    pub(crate) engine_disconnected_banner_shown: bool,
-    /// Set while the tick handler is showing the "audio stream lost"
-    /// banner for [`resonance_audio::AudioEngine::output_stream_lost`]
-    /// (see `update::tick::check_output_stream_lost`). Unlike the
-    /// engine-death latch above, this one clears again: the PipeWire
-    /// backend reports the stream coming back, and the tick handler
-    /// then removes the banner it raised (and only that banner).
-    pub(crate) stream_lost_banner_shown: bool,
+    /// The transient error/notification banner and its raise latches
+    /// (ARCH-06 A6-2). See `state::Banners`.
+    pub(crate) banners: state::Banners,
     pub(crate) master_volume: f32,
     pub(crate) master_level_l: f32,
     pub(crate) master_level_r: f32,
@@ -812,24 +779,13 @@ impl Resonance {
         let mut app = Self {
             engine,
             sample_rate: 44100, // overwritten by SampleRateDetected event
-            input_devices: Vec::new(),
-            default_input_device_name: None,
-            midi_input_devices: Vec::new(),
-            midi_output_devices: Vec::new(),
-            midi_devices_last_refresh: std::time::Instant::now(),
-            midi_clock_send_enabled: false,
-            midi_clock_send_device: None,
-            midi_clock_recv_enabled: false,
-            midi_clock_recv_device: None,
-            available_plugins: Vec::new(),
-            plugin_scan_failures: Vec::new(),
-            plugin_scan_in_progress: false,
+            input_devices: state::InputDevices::default(),
+            midi_devices: state::MidiDevices::default(),
+            plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),
             view_caches,
             transport_labels: view::transport_labels::TransportLabels::default(),
-            error_message: None,
-            engine_disconnected_banner_shown: false,
-            stream_lost_banner_shown: false,
+            banners: state::Banners::default(),
             master_volume: 0.0, // 0 dB = unity gain
             master_level_l: 0.0,
             master_level_r: 0.0,

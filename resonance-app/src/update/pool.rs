@@ -178,7 +178,7 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
         // and, as of ba todo #608, there is no undo snapshot for this arm.)
         PoolMessage::WindowAudioDrop(path) => {
             if r.io.project_path.is_none() {
-                r.error_message = Some(
+                r.banners.error_message = Some(
                     "Save the project before importing audio, so imported files have a home."
                         .into(),
                 );
@@ -227,7 +227,7 @@ pub fn handle(r: &mut Resonance, message: PoolMessage) -> Task<Message> {
             // mirror. Surface the reason to the GUI too, so a dropped
             // placement is never completely silent.
             if let Err(reason) = place_pooled_asset(r, clip_id, asset_id, track_id, start_sample) {
-                r.error_message = Some(reason);
+                r.banners.error_message = Some(reason);
             }
         }
     }
@@ -333,7 +333,7 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
         return;
     }
     if r.io.project_path.is_none() {
-        r.error_message =
+        r.banners.error_message =
             Some("Save the project before importing audio, so imported files have a home.".into());
         return;
     }

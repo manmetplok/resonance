@@ -181,7 +181,7 @@ fn ext_midi_output_block(
     let out_choices = super::midi_choices_with_override(
         &r.view_caches.midi_output_choices,
         track.midi_output_device.as_deref(),
-        &r.midi_output_devices,
+        &r.midi_devices.midi_output_devices,
     );
     let selected = MidiPickerChoice(track.midi_output_device.clone());
     let device_picker = pick_list(out_choices, Some(selected), move |choice| {

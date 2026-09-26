@@ -250,17 +250,17 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
 
     // Restore MIDI clock settings. The engine treats `enabled=false`
     // as a no-op port-wise, so it's safe to send for legacy projects.
-    r.midi_clock_send_enabled = project.midi_clock_send_enabled;
-    r.midi_clock_send_device = project.midi_clock_send_device.clone();
-    r.midi_clock_recv_enabled = project.midi_clock_recv_enabled;
-    r.midi_clock_recv_device = project.midi_clock_recv_device.clone();
+    r.midi_devices.midi_clock_send_enabled = project.midi_clock_send_enabled;
+    r.midi_devices.midi_clock_send_device = project.midi_clock_send_device.clone();
+    r.midi_devices.midi_clock_recv_enabled = project.midi_clock_recv_enabled;
+    r.midi_devices.midi_clock_recv_device = project.midi_clock_recv_device.clone();
     let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-        device: r.midi_clock_send_device.clone(),
-        enabled: r.midi_clock_send_enabled,
+        device: r.midi_devices.midi_clock_send_device.clone(),
+        enabled: r.midi_devices.midi_clock_send_enabled,
     });
     let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-        device: r.midi_clock_recv_device.clone(),
-        enabled: r.midi_clock_recv_enabled,
+        device: r.midi_devices.midi_clock_recv_device.clone(),
+        enabled: r.midi_devices.midi_clock_recv_enabled,
     });
 
     // Loop range.

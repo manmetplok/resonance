@@ -132,11 +132,11 @@ pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
 /// surfaces a user-facing error instead.
 fn reveal_freeze_cache(r: &mut Resonance) {
     let Some(dir) = freeze_dir(r) else {
-        r.error_message = Some("Save the project before revealing the freeze cache".into());
+        r.banners.error_message = Some("Save the project before revealing the freeze cache".into());
         return;
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        r.error_message = Some(format!("Could not open freeze cache directory: {e}"));
+        r.banners.error_message = Some(format!("Could not open freeze cache directory: {e}"));
         return;
     }
     write_cache_gitignore(&dir);
@@ -148,15 +148,15 @@ fn reveal_freeze_cache(r: &mut Resonance) {
 /// status unchanged) when the track can't be frozen.
 fn freeze_one(r: &mut Resonance, track_id: TrackId) {
     let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
-        r.error_message = Some("Freeze: track not found".into());
+        r.banners.error_message = Some("Freeze: track not found".into());
         return;
     };
     if let Err(msg) = freezable(track) {
-        r.error_message = Some(msg.into());
+        r.banners.error_message = Some(msg.into());
         return;
     }
     if r.transport.playing {
-        r.error_message = Some("Stop transport before freezing".into());
+        r.banners.error_message = Some("Stop transport before freezing".into());
         return;
     }
     // An offline control measurement holds the offline renderer
@@ -164,7 +164,8 @@ fn freeze_one(r: &mut Resonance, track_id: TrackId) {
     // live plugin instances from two renderers at once (mirrors
     // `meter.measure` refusing while a freeze runs).
     if r.offline_measure_in_progress() {
-        r.error_message = Some("A measurement is in progress; freeze again when it finishes".into());
+        r.banners.error_message =
+            Some("A measurement is in progress; freeze again when it finishes".into());
         return;
     }
     if r.freeze.status(track_id).is_freezing() {
@@ -218,12 +219,13 @@ fn cancel_freeze(r: &mut Resonance) {
 /// queueing the rest. No-op when nothing is freezable.
 fn start_batch(r: &mut Resonance, tracks: Vec<TrackId>) {
     if r.transport.playing {
-        r.error_message = Some("Stop transport before freezing".into());
+        r.banners.error_message = Some("Stop transport before freezing".into());
         return;
     }
     // Same offline-renderer exclusion as `freeze_one`.
     if r.offline_measure_in_progress() {
-        r.error_message = Some("A measurement is in progress; freeze again when it finishes".into());
+        r.banners.error_message =
+            Some("A measurement is in progress; freeze again when it finishes".into());
         return;
     }
     // Skip tracks already frozen or mid-render — re-freezing them would be
@@ -275,7 +277,7 @@ pub(crate) fn advance_freeze_queue(r: &mut Resonance) -> bool {
 /// established — chiefly an unsaved project.
 fn start_freeze(r: &mut Resonance, track_id: TrackId) -> bool {
     let Some(dir) = freeze_dir(r) else {
-        r.error_message = Some("Save the project before freezing".into());
+        r.banners.error_message = Some("Save the project before freezing".into());
         r.freeze.set(
             track_id,
             FreezeStatus::Failed {
@@ -286,7 +288,7 @@ fn start_freeze(r: &mut Resonance, track_id: TrackId) -> bool {
     };
     if let Err(e) = std::fs::create_dir_all(&dir) {
         let message = format!("Could not create freeze cache directory: {e}");
-        r.error_message = Some(message.clone());
+        r.banners.error_message = Some(message.clone());
         r.freeze.set(track_id, FreezeStatus::Failed { message });
         return false;
     }

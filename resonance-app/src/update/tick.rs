@@ -72,7 +72,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || r.bounce_in_progress.is_some()
         || export_render_in_flight(r)
         || (r.mixer.reference_panel_open && !r.reference.entries.is_empty())
-        || r.plugin_scan_in_progress
+        || r.plugin_catalog.plugin_scan_in_progress
         || r.relink.scanning()
         || !r.control.pending_tracks.is_empty()
         || r.control.jobs.has_live_offline_measure()
@@ -148,12 +148,12 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
 /// standard error banner is set exactly once instead of being forced
 /// back onto `error_message` on every subsequent tick.
 fn check_engine_disconnected(r: &mut Resonance) {
-    if r.engine_disconnected_banner_shown {
+    if r.banners.engine_disconnected_banner_shown {
         return;
     }
     if r.engine.is_disconnected() {
-        r.engine_disconnected_banner_shown = true;
-        r.error_message = Some(
+        r.banners.engine_disconnected_banner_shown = true;
+        r.banners.error_message = Some(
             "Audio engine stopped responding — restart the app; edits are no longer reaching audio"
                 .to_string(),
         );
@@ -188,17 +188,17 @@ fn check_output_stream_lost(r: &mut Resonance) {
     // Engine death outranks stream loss: once the engine thread is gone
     // the stream banner would understate the failure (nothing recovers a
     // dead engine thread), so never raise over that banner.
-    if r.engine_disconnected_banner_shown {
+    if r.banners.engine_disconnected_banner_shown {
         return;
     }
     let lost = r.engine.output_stream_lost();
-    if lost && !r.stream_lost_banner_shown {
-        r.stream_lost_banner_shown = true;
-        r.error_message = Some(STREAM_LOST_BANNER.to_string());
-    } else if !lost && r.stream_lost_banner_shown {
-        r.stream_lost_banner_shown = false;
-        if r.error_message.as_deref() == Some(STREAM_LOST_BANNER) {
-            r.error_message = None;
+    if lost && !r.banners.stream_lost_banner_shown {
+        r.banners.stream_lost_banner_shown = true;
+        r.banners.error_message = Some(STREAM_LOST_BANNER.to_string());
+    } else if !lost && r.banners.stream_lost_banner_shown {
+        r.banners.stream_lost_banner_shown = false;
+        if r.banners.error_message.as_deref() == Some(STREAM_LOST_BANNER) {
+            r.banners.error_message = None;
         }
     }
 }
@@ -208,10 +208,10 @@ fn check_output_stream_lost(r: &mut Resonance) {
 /// Cadence is intentionally low (every 2 s) — ALSA seq enumeration
 /// is cheap, but doing it every frame would still be wasteful.
 fn refresh_midi_devices_if_stale(r: &mut Resonance) {
-    if r.midi_devices_last_refresh.elapsed() < std::time::Duration::from_secs(2) {
+    if r.midi_devices.midi_devices_last_refresh.elapsed() < std::time::Duration::from_secs(2) {
         return;
     }
-    r.midi_devices_last_refresh = std::time::Instant::now();
+    r.midi_devices.midi_devices_last_refresh = std::time::Instant::now();
     let _ = r.engine.send(AudioCommand::ListMidiInputDevices);
     let _ = r.engine.send(AudioCommand::ListMidiOutputDevices);
 }

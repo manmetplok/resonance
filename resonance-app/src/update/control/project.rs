@@ -281,7 +281,7 @@ fn save_impl(
     // the client to wait out the timeout.
     if !app.io.saving && app.io.save_state.is_none() {
         let reason = app
-            .error_message
+            .banners.error_message
             .clone()
             .unwrap_or_else(|| "save did not start".to_owned());
         app.control.jobs.fail(u64::from(started.job_id), reason);

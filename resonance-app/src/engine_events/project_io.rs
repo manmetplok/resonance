@@ -219,7 +219,7 @@ fn report_clips_without_audio(r: &mut Resonance, save: &crate::project::SaveColl
     );
     tracing::warn!("[save] {detail}");
     if !save.autosave {
-        r.error_message = Some(detail);
+        r.banners.error_message = Some(detail);
     }
 }
 

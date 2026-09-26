@@ -96,7 +96,7 @@ fn catalog_entry(app: &Resonance, plugin_id: &str) -> Result<ScannedPlugin, RpcE
              from plugins.catalog",
         ));
     }
-    app.available_plugins
+    app.plugin_catalog.available_plugins
         .iter()
         .find(|p| p.clap_plugin_id == plugin_id)
         .cloned()

@@ -33,7 +33,7 @@ impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
         let sorted_busses = self.sorted_busses();
-        let available_plugins = &self.available_plugins;
+        let available_plugins = &self.plugin_catalog.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
         // The lane is built in two clustering layers so related strips
