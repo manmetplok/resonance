@@ -21,20 +21,24 @@ pub struct ScrollbarRects {
 
 /// Vertical scrollbar rects (track area only, excludes the ruler at the top).
 /// Returns `None` when the track area fits the viewport.
+///
+/// `right_edge` is the canvas-local x of the *visible* right edge: the
+/// canvas spans the whole song inside the outer horizontal `Scrollable`,
+/// so `bounds.width` is usually off screen (review VIEW-33).
 pub fn v_rects(
     bounds: Rectangle,
+    right_edge: f32,
     content_height: f32,
     scroll_offset_y: f32,
     ruler_height: f32,
-    show_h_bar: bool,
 ) -> Option<ScrollbarRects> {
-    let viewport_height = bounds.height - ruler_height - if show_h_bar { THICKNESS } else { 0.0 };
+    let viewport_height = bounds.height - ruler_height;
     let track_content_h = content_height - ruler_height;
     if viewport_height <= 0.0 || track_content_h <= viewport_height + 0.5 {
         return None;
     }
     let track = Rectangle {
-        x: bounds.width - THICKNESS,
+        x: right_edge.min(bounds.width) - THICKNESS,
         y: ruler_height,
         width: THICKNESS,
         height: viewport_height,

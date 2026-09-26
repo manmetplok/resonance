@@ -255,7 +255,7 @@ impl<'a> VocalLaneCanvas<'a> {
     /// Locate the generator-produced MIDI clip for `track_id` in this
     /// placement. Falls back to `None` when nothing has been generated
     /// yet — the caller paints the synthetic contour preview instead.
-    fn vocal_clip(&self, track_id: TrackId) -> Option<&MidiClipState> {
+    pub(super) fn vocal_clip(&self, track_id: TrackId) -> Option<&MidiClipState> {
         let clip_id = *self.derived_clip_ids.get(&track_id)?;
         self.midi_clips.iter().find(|c| c.id == clip_id)
     }

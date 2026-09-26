@@ -165,30 +165,74 @@ pub(super) struct VocalLaneCanvas<'a> {
 
 /// Local canvas state — tracks the last single-click on a vocal lane
 /// row so a second click within the double-click window can open the
-/// vocal roll editor.
+/// vocal roll editor — plus the fingerprinted geometry cache, so the
+/// 16 ms app tick reuses the tessellated staff / lyrics / notes instead
+/// of rebuilding them at ~60 fps (review VIEW-32).
 #[derive(Debug, Default)]
 pub struct VocalLaneCanvasState {
     last_click: Option<(Instant, TrackId)>,
+    cache: canvas::Cache,
+    cache_fingerprint: std::cell::Cell<u64>,
 }
 
-impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
-    type State = VocalLaneCanvasState;
+impl VocalLaneCanvas<'_> {
+    /// Hash of everything the lane paints, plus which placeholder row is
+    /// hovered (its wash is painted under the grid and hint, so it lives
+    /// in the cached frame; a hover change is rare next to the tick).
+    fn fingerprint(&self, hovered_placeholder: Option<usize>) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        super::tempo_map_hash(self.tempo_map).hash(&mut h);
+        self.start_bar.hash(&mut h);
+        self.length_bars.hash(&mut h);
+        match &self.selected_lane {
+            SelectedLane::Instrument(t) => Some(*t),
+            _ => None,
+        }
+        .hash(&mut h);
+        hovered_placeholder.hash(&mut h);
+        for (track_id, params) in &self.vocal_tracks {
+            track_id.hash(&mut h);
+            self.track_name(*track_id).hash(&mut h);
+            params.voice.as_str().hash(&mut h);
+            params.range.hash(&mut h);
+            <&'static str>::from(params.contour).hash(&mut h);
+            params.draft.len().hash(&mut h);
+            for line in params.draft.iter().take(2) {
+                line.text.hash(&mut h);
+            }
+            match self.vocal_clip(*track_id) {
+                Some(clip) => {
+                    clip.id.hash(&mut h);
+                    clip.duration_ticks.hash(&mut h);
+                    clip.notes.len().hash(&mut h);
+                    for n in &clip.notes {
+                        n.note.hash(&mut h);
+                        n.start_tick.hash(&mut h);
+                        n.duration_ticks.hash(&mut h);
+                        n.velocity.to_bits().hash(&mut h);
+                    }
+                }
+                None => u64::MAX.hash(&mut h),
+            }
+        }
+        for track_id in &self.unconfigured {
+            track_id.hash(&mut h);
+            self.track_name(*track_id).hash(&mut h);
+        }
+        h.finish()
+    }
+}
 
-    fn draw(
-        &self,
-        _state: &Self::State,
-        renderer: &Renderer,
-        _theme: &Theme,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+impl VocalLaneCanvas<'_> {
+    /// Paint the whole lane into the cached frame.
+    fn draw_into(&self, frame: &mut Frame, bounds: Rectangle, hovered_placeholder: Option<usize>) {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), theme::BG);
 
         if bounds.width <= 0.0
             || (self.vocal_tracks.is_empty() && self.unconfigured.is_empty())
         {
-            return vec![frame.into_geometry()];
+            return;
         }
 
         for (idx, (track_id, params)) in self.vocal_tracks.iter().enumerate() {
@@ -199,15 +243,13 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
                 width: bounds.width,
                 height: VOCAL_LANE_HEIGHT,
             };
-            self.draw_row(&mut frame, *track_id, params, row_rect);
+            self.draw_row(frame, *track_id, params, row_rect);
         }
 
         // Placeholder rows for unconfigured vocal tracks, stacked below
-        // the configured rows. Hover feedback comes from the cursor
-        // position — this canvas has no `canvas::Cache`, so the fill
-        // tracks the cursor without staleness.
+        // the configured rows. The hovered row is part of the cache
+        // fingerprint, so its wash never goes stale.
         let configured_h = self.vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT;
-        let cursor_pos = cursor.position_in(bounds);
         for (idx, track_id) in self.unconfigured.iter().enumerate() {
             let row_rect = Rectangle {
                 x: 0.0,
@@ -215,12 +257,41 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
                 width: bounds.width,
                 height: PLACEHOLDER_ROW_HEIGHT,
             };
-            let hovered = cursor_pos.is_some_and(|p| row_rect.contains(p));
-            self.draw_placeholder_row(&mut frame, *track_id, row_rect, hovered);
+            let hovered = hovered_placeholder == Some(idx);
+            self.draw_placeholder_row(frame, *track_id, row_rect, hovered);
         }
 
-        vec![frame.into_geometry()]
     }
+}
+
+impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
+    type State = VocalLaneCanvasState;
+
+    fn draw(
+        &self,
+        state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let configured_h = self.vocal_tracks.len() as f32 * VOCAL_LANE_HEIGHT;
+        let hovered_placeholder = cursor
+            .position_in(bounds)
+            .filter(|p| p.y >= configured_h)
+            .map(|p| ((p.y - configured_h) / PLACEHOLDER_ROW_HEIGHT) as usize)
+            .filter(|&idx| idx < self.unconfigured.len());
+        let fp = self.fingerprint(hovered_placeholder);
+        if state.cache_fingerprint.get() != fp {
+            state.cache.clear();
+            state.cache_fingerprint.set(fp);
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
+            self.draw_into(frame, bounds, hovered_placeholder);
+        });
+        vec![geometry]
+    }
+
 
     fn update(
         &self,

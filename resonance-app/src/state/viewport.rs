@@ -12,6 +12,10 @@ pub enum ViewMode {
     Performance,
 }
 
+/// Widget id of the arrange view's outer horizontal `Scrollable`, the
+/// target of playhead follow's `scroll_to` (review FU-D1).
+pub const ARRANGE_SCROLL_ID: iced::widget::Id = iced::widget::Id::new("arrange-timeline-scroll");
+
 /// Horizontal and vertical scroll position of the arrange-view timeline.
 /// `viewport_width` / `timeline_content_width` / `_height` are reported back
 /// from the canvas after layout.
@@ -19,12 +23,27 @@ pub enum ViewMode {
 pub struct ArrangeViewport {
     /// Horizontal zoom in pixels per second.
     pub zoom: f32,
-    /// NOT the arrange timeline's horizontal scroll: that is owned by the
-    /// outer `Scrollable` in `view_timeline`, and the canvas works in
-    /// content coordinates with its own offset pinned to 0. Pointer →
-    /// sample conversions must never add this (review VIEW-10); it is
-    /// only fed by the canvas's dormant in-canvas scrollbar path.
+    /// Live horizontal scroll offset (content px) of the outer arrange
+    /// `Scrollable` ([`ARRANGE_SCROLL_ID`]), mirrored from its `on_scroll`
+    /// viewport — and set optimistically when playhead follow issues a
+    /// `scroll_to`. The `Scrollable` owns the scroll; this is only its
+    /// read-back. The canvas works in content coordinates, so pointer →
+    /// sample conversions must never add this (review VIEW-10).
     pub scroll_offset: f32,
+    /// Visible width (px) of the arrange `Scrollable`, from `on_scroll`.
+    /// `0.0` until the first report.
+    pub visible_width: f32,
+    /// Content width (px) of the arrange `Scrollable`, from `on_scroll`
+    /// (the fixed canvas width) — the clamp for follow's `scroll_to`.
+    pub scroll_content_width: f32,
+    /// Playhead follow is paused because the user scrolled the arrange
+    /// view by hand during playback. Cleared whenever the transport is
+    /// stopped, so the next playback follows again.
+    pub follow_paused: bool,
+    /// The offset follow last asked the `Scrollable` for, until its
+    /// `on_scroll` echo arrives — so that echo isn't mistaken for a
+    /// manual scroll.
+    pub follow_pending_x: Option<f32>,
     pub scroll_offset_y: f32,
     pub viewport_width: f32,
     /// On-screen height (in pixels) of the timeline canvas viewport.
@@ -44,6 +63,10 @@ impl Default for ArrangeViewport {
         Self {
             zoom: 100.0,
             scroll_offset: 0.0,
+            visible_width: 0.0,
+            scroll_content_width: 0.0,
+            follow_paused: false,
+            follow_pending_x: None,
             scroll_offset_y: 0.0,
             viewport_width: 1000.0,
             viewport_height: 0.0,

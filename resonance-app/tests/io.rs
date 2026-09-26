@@ -67,6 +67,8 @@ mod project_backups;
 mod project_track_groups_persist;
 #[path = "io/relink.rs"]
 mod relink;
+#[path = "io/relink_folder_scan.rs"]
+mod relink_folder_scan;
 #[path = "io/relink_modal.rs"]
 mod relink_modal;
 #[path = "io/replay.rs"]

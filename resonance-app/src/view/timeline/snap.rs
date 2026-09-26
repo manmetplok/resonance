@@ -23,15 +23,29 @@ pub fn snap_sample_to_grid_tempo(
     if bpm <= 0.0 || time_sig_num == 0 || zoom <= 0.0 {
         return sample;
     }
-    // When there's no meaningful tempo map, use the flat-BPM path.
-    if tempo_map.tempo_points.len() <= 1 {
+    // A single tempo *and* a single signature make a uniform grid: use
+    // the flat path. Any signature change needs the map's bar table —
+    // the transport numerator follows the playhead, so it can't stand in
+    // for the meter at `sample` (review FU-V1a). The map's own points win
+    // over the transport values, which are only the fallback for an
+    // empty map.
+    if tempo_map.tempo_points.len() <= 1 && tempo_map.signature_points.len() <= 1 {
+        let bpm = tempo_map.tempo_points.first().map_or(bpm, |p| p.bpm);
+        let (num, den) = tempo_map
+            .signature_points
+            .first()
+            .map_or((time_sig_num, tempo_map.denominator_at_bar(0)), |p| {
+                (p.numerator, p.denominator)
+            });
+        if bpm <= 0.0 || num == 0 {
+            return sample;
+        }
         // BPM counts quarter notes, so the bar's length comes from the
         // signature's length in quarters, not its numerator; the beat
         // step then follows from the bar (ba todo #1389).
         let samples_per_quarter = sample_rate as f64 * 60.0 / bpm as f64;
-        let samples_per_bar =
-            samples_per_quarter * bar_len_quarters(time_sig_num, tempo_map.denominator_at_bar(0));
-        let samples_per_beat = samples_per_bar / time_sig_num as f64;
+        let samples_per_bar = samples_per_quarter * bar_len_quarters(num, den);
+        let samples_per_beat = samples_per_bar / num as f64;
         let bar_pixel_width = (samples_per_bar / sample_rate as f64) as f32 * zoom;
         let step = if bar_pixel_width >= 40.0 {
             samples_per_beat

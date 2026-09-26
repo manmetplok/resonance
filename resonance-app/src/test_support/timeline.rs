@@ -56,6 +56,39 @@ impl Resonance {
         self.viewport.scroll_offset_y
     }
 
+    /// Test-only: the arrange view's horizontal scroll offset (px) as
+    /// state knows it — the outer `Scrollable`'s reported offset, or
+    /// the target playhead follow last asked it for (review FU-D1).
+    #[doc(hidden)]
+    pub fn test_arrange_scroll_x(&self) -> f32 {
+        self.viewport
+            .follow_pending_x
+            .unwrap_or(self.viewport.scroll_offset)
+    }
+
+    /// Test-only: the left x of the timeline canvas's in-canvas vertical
+    /// scrollbar track (`None` when the lanes fit), for a canvas of
+    /// `canvas_size` of which `visible` (canvas-local; `None` = no probe
+    /// write yet) is on screen inside the outer `Scrollable` (VIEW-33).
+    #[doc(hidden)]
+    pub fn test_timeline_vscrollbar_x(
+        &self,
+        canvas_size: iced::Size,
+        visible: Option<iced::Rectangle>,
+    ) -> Option<f32> {
+        let canvas = self.timeline_canvas_data();
+        canvas.visible_viewport.set(visible);
+        canvas
+            .test_scrollbar_rects(iced::Rectangle::new(iced::Point::ORIGIN, canvas_size))
+            .map(|sb| sb.track.x)
+    }
+
+    /// Test-only: whether playhead follow is paused by a manual scroll.
+    #[doc(hidden)]
+    pub fn test_follow_paused(&self) -> bool {
+        self.viewport.follow_paused
+    }
+
     /// Test-only: read the GUI-side audio clip list. Used by the
     /// engine-event mirroring tests to assert that fade/gain events
     /// land on the matching `ClipState`.
