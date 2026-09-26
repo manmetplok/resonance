@@ -314,21 +314,11 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
         .midi_clips
         .iter()
         .map(|mc| {
-            // Per-note lyric annotations from the side-table. Strip
-            // trailing empties so a clip without slurs / overrides
-            // doesn't bloat the project file with an empty-string
-            // array; the replay path pads back to `notes.len()` on
-            // load.
-            let mut vocal_lyrics: Vec<String> = r
-                .compose
-                .vocal_audio
-                .clip_lyrics
-                .get(&mc.id)
-                .cloned()
-                .unwrap_or_default();
-            while vocal_lyrics.last().is_some_and(|s| s.is_empty()) {
-                vocal_lyrics.pop();
-            }
+            // Per-note lyric annotations from the side-table, in their
+            // canonical file form (trailing empties stripped, so a clip
+            // without slurs / overrides doesn't bloat the project file);
+            // the replay paths pad back to `notes.len()` on load.
+            let vocal_lyrics = r.compose.vocal_audio.file_lyrics(mc.id, mc.notes.len());
             ProjectMidiClip {
                 id: mc.id,
                 track_id: mc.track_id,

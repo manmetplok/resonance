@@ -29,20 +29,15 @@ use resonance_audio::types::TrackId;
 /// is being folded away field by field (ARCH-01 A1-2): a field leaves
 /// once both paths restore it from the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`. Clip fade/gain, the drum
-/// arrangements, the chord track and the external-instrument config
-/// already went — `ProjectClip`, `ProjectSectionDefinition::arrangement`,
-/// `ProjectFile::chord_track` and `ProjectTrack::external_instrument`
+/// arrangements, the chord track, the external-instrument config and the
+/// vocal lyrics already went — `ProjectClip`,
+/// `ProjectSectionDefinition::arrangement`, `ProjectFile::chord_track`,
+/// `ProjectTrack::external_instrument` and `ProjectMidiClip::vocal_lyrics`
 /// carry them.
 #[derive(Debug, Clone, Default)]
 pub struct UndoExtras {
     pub compose_derived_clips: HashMap<(u64, u64, TrackId), ClipId>,
     pub compose_next_derived_clip_id: u64,
-    /// Per-clip vocal lyric annotations. Captured so `ToggleSlur` and
-    /// any future per-note lyric override edit are reversible. The
-    /// `ProjectMidiClip` round-trip writes these on save, but during
-    /// a session the undo system snapshots them separately because
-    /// the project-file form of a clip isn't rebuilt on each edit.
-    pub vocal_clip_lyrics: HashMap<ClipId, Vec<String>>,
     /// App-side parameter-automation lanes, one per target. Also
     /// persisted as `ProjectFile::automation_lanes`, which the full
     /// replay reads; the diff replay reconciles the engine to this copy
@@ -101,7 +96,6 @@ impl UndoSnapshot {
 fn extras_equal(a: &UndoExtras, b: &UndoExtras) -> bool {
     a.compose_derived_clips == b.compose_derived_clips
         && a.compose_next_derived_clip_id == b.compose_next_derived_clip_id
-        && a.vocal_clip_lyrics == b.vocal_clip_lyrics
         && a.automation_lanes == b.automation_lanes
         && a.reference.entries == b.reference.entries
         && a.reference.active_id == b.reference.active_id
@@ -246,7 +240,6 @@ impl crate::Resonance {
         UndoExtras {
             compose_derived_clips: self.compose.derived_clips.clone(),
             compose_next_derived_clip_id: self.compose.next_derived_clip_id,
-            vocal_clip_lyrics: self.compose.vocal_audio.clip_lyrics.clone(),
             automation_lanes: self.automation.lanes.clone(),
             reference: self.reference.undo_snapshot(),
             track_freeze: self.freeze.statuses.clone(),
@@ -346,9 +339,9 @@ impl crate::Resonance {
     /// `AllCleared` engine-event handler immediately after
     /// `replay_loaded_project` runs, only when the pending load came
     /// from an undo/redo (distinguished by `pending_undo_extras.is_some()`).
-    /// Clip fade/gain, the drum arrangements, the chord track and the
-    /// external-instrument config need nothing here: the replay restores
-    /// them from the snapshot's `ProjectFile`.
+    /// Clip fade/gain, the drum arrangements, the chord track, the
+    /// external-instrument config and the vocal lyrics need nothing here:
+    /// the replay restores them from the snapshot's `ProjectFile`.
     pub(crate) fn finalize_undo_restore(&mut self, extras: UndoExtras) {
         self.restore_automation_lanes(&extras.automation_lanes);
         // `ClearAll` wiped any clip whose echo was still pending at
@@ -358,7 +351,6 @@ impl crate::Resonance {
             extras.compose_next_derived_clip_id,
             false,
         );
-        self.compose.vocal_audio.clip_lyrics = extras.vocal_clip_lyrics;
         self.reference.restore_undo(extras.reference);
         self.apply_freeze_restore(extras.track_freeze);
         // Take lanes are *not* reconciled here. `replay_loaded_project`
