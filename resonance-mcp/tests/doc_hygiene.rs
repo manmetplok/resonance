@@ -264,5 +264,8 @@ fn clip_split_documents_the_position_keys_that_exist() {
         !split.contains("{seconds}") && !split.contains("{samples}"),
         "clip_split advertises position keys PositionSpec does not have: {split}"
     );
-    assert!(split.contains("{sample}"), "clip_split should document {{sample}}: {split}");
+    assert!(
+        split.contains("{sample}"),
+        "clip_split should document {{sample}}: {split}"
+    );
 }

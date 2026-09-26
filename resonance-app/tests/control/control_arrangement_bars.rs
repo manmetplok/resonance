@@ -428,3 +428,32 @@ fn huge_bar_counts_are_invalid_params_and_change_nothing() {
     assert_eq!(clip_start(&app, 1), Some(4 * BAR), "nothing moved");
     assert_eq!(app.revision(), revision, "nothing was committed");
 }
+
+/// FU-M5a: each call's span fits, but repeated inserts before existing
+/// content used to push that content past MAX_BARS. The check is on
+/// where the song would END.
+#[test]
+fn repeated_inserts_cannot_push_content_past_max_bars() {
+    use resonance_control::ErrorKind;
+    let mut app = app_with_project();
+    push_audio_clip(&mut app, 1, 5);
+    let raw_insert = |app: &mut Resonance, at_bar: u32, count: u32| {
+        call(app, proto::INSERT_BARS, &InsertBarsParams { at_bar, count })
+    };
+
+    let half = resonance_control::MAX_BARS / 2;
+    let first = raw_insert(&mut app, 1, half);
+    assert!(first.error.is_none(), "first insert fits: {:?}", first.error);
+    let revision = app.revision();
+    let start = clip_start(&app, 1);
+
+    let second = raw_insert(&mut app, 1, half);
+    let error = second.error.expect("content would end past MAX_BARS");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert_eq!(clip_start(&app, 1), start, "nothing moved");
+    assert_eq!(app.revision(), revision, "nothing was committed");
+
+    // Inserting AFTER the content moves nothing, so only the span counts.
+    let after = raw_insert(&mut app, half + 10, 4);
+    assert!(after.error.is_none(), "insert past the end fits: {:?}", after.error);
+}
