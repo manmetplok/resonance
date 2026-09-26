@@ -42,7 +42,7 @@ master and updates this table. Agents do **not** edit this file.
 | M12 autosave + undo leftovers | UPD-07, STATE-11, STATE-12, STATE-08, STATE-10, VIEW-18, UPD-09, FU-M6a | opus | merged | 213505c2 |
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
 | H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | done → arch-migration-plan.md Part 2 | |
-| V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | in progress | |
+| V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | merged | 6f170c1b |
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
@@ -71,8 +71,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-E2** (low) `clip_split` tool description says `at` accepts `{seconds}/{samples}` but `PositionSpec` has only `sample` — fix description or add the variant.
 - [ ] **FU-G1** (low) drums: `render_block` alone still starts voices at frame 0; sample-accurate callers must use begin/span/end.
 - [x] **FU-C1** (medium, = UPD-11) — fixed @b1357803; global `keyboard::listen()` shortcuts (Enter, B, Cmd-Z) still fire while typing; use the `any_text_input_focused` probe pattern.
-- [ ] **FU-C2** (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
-- [ ] **FU-C3** (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
+- [x] **FU-C2** — fixed @0408640f; (low) timeline Delete now needs a prior click on the timeline (KeyFocus); a clip selected via control API/other widget isn't deletable by key until clicked.
+- [x] **FU-C3** — fixed @71423884; (low) expanded compose editor's `+`/`-`/Escape still use hover gating, not KeyFocus.
 - [ ] **FU-A2a** (low) a take landing mid-drag: undoing the drag also drops the take (redoable).
 - [ ] **FU-A2b** (low) plugin state-blob cache isn't refreshed after param edits; quick-restore undo re-sends every non-default param (+ a PluginParamText echo each).
 - [ ] **FU-A2c** (medium) live MIDI recording: `close_open_recordings` sets note durations at Stop without an event → app mirror keeps zero-length held notes.
@@ -105,13 +105,13 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M6c** (low) EQ band kind change restarts its stages from zero (can click on loud material); optional ~5 ms crossfade.
 - [ ] **FU-M6d** (low) flaky `resonance-eq` `analyzer_teardown::spectrum_workers_are_joined_on_reinitialize_and_drop` (thread count under load).
 - [ ] **FU-M4a** (low) UPD-04: a stale asset finishing import after a project switch still lands (unplaced) in the new project's pool — tag queued imports with a project epoch.
-- [ ] **FU-M4b** (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
+- [x] **FU-M4b** — fixed @12279270; (low) control `generate.*`/`harmony.*` edits on frozen tracks only mark them stale; consider refusing like GUI edits.
 - [ ] **FU-M4c** (low) STATE-07: gestures that change only un-snapshotted state now record no undo entry.
 - [x] **FU-V1a** — fixed @78487a42; (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
 - [x] **FU-V1c** — fixed @68f4563d; note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
-- [ ] **FU-V2a** (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
-- [ ] **FU-V2b** (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
+- [x] **FU-V2a** — fixed @14f059e0; (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
+- [x] **FU-V2b** — fixed @895ae569; (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
 - [ ] **FU-V2c** (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
 - [x] **FU-V2d** — fixed @accf5caf; (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
 - [ ] **FU-M8a** (low) with async Cocoa destroy, `editor_size`/`editor_open_cocoa` teardown watchdogs pass trivially — make them wait for the main-thread teardown.
@@ -120,10 +120,10 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-H2a** (low) undo fast path rebuilds `compose.derived_clips` while slow path copies extras → a derived clip whose `MidiClipCreated` echo hasn't landed is dropped on fast-path undo (narrow race).
 - [ ] **FU-H2b** (low) slow-path undo calls `freeze.reset()` → restored Frozen tracks lose their UPD-05 content baseline (blind spot until next freeze).
 - [ ] **FU-H2c** (low) `restore_performance` runs only on the slow path; `vocal_clip_lyrics` padding differs between paths (file-identical).
-- [ ] **FU-V3a** (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
-- [ ] **FU-V3b** (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
+- [x] **FU-V3a** — fixed @dac46f8c; (low) `update/project_io/replay/mod.rs:161` resets `viewport.scroll_offset = 0` on load → can disagree with the real Scrollable until its next report.
+- [x] **FU-V3b** — fixed @4907ebb1; (low, UX) playhead follow has no on/off switch; after a manual scroll it only resumes at next playback.
 - [ ] **FU-V3c** (low) `update/compose/section.rs:508` removes clips without recomputing pool usage; `vocal_lane::view` builds a HashMap per call; `TimelineCanvas::scroll_offset` (always 0) still threaded through draw sites.
-- [ ] **FU-M11a** (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
+- [x] **FU-M11a** — fixed @d27ee2ab; (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
 - [x] **FU-H4b** — done (A3-2); note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
@@ -134,6 +134,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-H6a** (medium) ARCH-05 app sweep: convert resonance-app's ~49 `eprintln!` to tracing, then remove resonance-app's exemption from `library_crates_log_through_tracing_not_stderr`.
 - [ ] **FU-H6b** (low) cpal error callbacks in `engine/mod.rs` / `platform.rs` still format+log on the ALSA audio worker thread (rate-limited; outside the `mixer/` invariant) — route via atomics like the oversize latch.
 - [ ] **FU-H6c** (low) default tracing filter string duplicated in `resonance-app/src/main.rs` and `resonance-plugin/src/logging.rs`; log lines now carry `LEVEL target:` prefixes.
+- [ ] **FU-V4a** (low) MIDI import: "match time" rescales against the project tempo at the import point only; "use file tempo" replaces the whole tempo map from bar 1 even for playhead placement; placement controls (start at playhead, merge target) have no UI.
+- [ ] **FU-V4b** (low) chord revalidation runs only on signature-changing messages, not on project load.
 
 ## How to use this file
 
@@ -819,7 +821,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Compute `start_tick = step * TPQ / grid`, and make each duration the difference to the next onset.
 - **Verification:** Add a `compose` group-binary test asserting that the first step of the last bar lands exactly on `bar * 4 * TPQ`.
 
-### [ ] VIEW-25 — MIDI Import modal is a dead end: a dropped file stays on "Parsing…" and there is no file chooser
+### [x] VIEW-25 — MIDI Import modal is a dead end: a dropped file stays on "Parsing…" and there is no file chooser — fixed @14f059e0 (Confirm imports as one undo; tempo-conflict choices)
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** ux
