@@ -17,6 +17,8 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use resonance_app::compose::messages::DrumGroupsMessage;
+use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
 use resonance_app::message::{GroupMessage, MarkerMessage, Message};
 use resonance_app::project::ProjectFile;
@@ -225,4 +227,79 @@ fn creating_a_track_group_undoes_through_the_diff_path() {
     );
     // Undo removes the group, redo brings it back.
     undo_redo_over(&mut f, &before, &added, "track group create");
+}
+
+// ---------------------------------------------------------------------------
+// Drum patterns
+// ---------------------------------------------------------------------------
+
+fn drum(msg: DrumGroupsMessage) -> Message {
+    Message::Compose(ComposeMessage::DrumGroups(msg))
+}
+
+fn group_count(app: &Resonance) -> usize {
+    app.compose_state()
+        .drum_patterns
+        .iter()
+        .map(|p| p.groups.len())
+        .sum()
+}
+
+#[test]
+fn adding_a_drum_pattern_undoes_through_the_diff_path() {
+    let mut f = fixture("drum-pattern");
+    let before = f.app.test_snapshot_for_undo();
+    let added = edit(&mut f, drum(DrumGroupsMessage::AddPattern));
+    assert_eq!(
+        added.project.file.drum_patterns.len(),
+        before.project.file.drum_patterns.len() + 1,
+        "the edit added a pattern"
+    );
+    // Undo removes the pattern the drum-roll focus still names (the diff
+    // path leaves the focus alone), redo brings it back.
+    undo_redo_over(&mut f, &before, &added, "drum pattern add");
+    step_lands_on(&mut f, Message::Undo, &before, "undo drum pattern add again");
+
+    // A stale focus is resolved, not trusted: a group add after the undo
+    // lands in a pattern that exists.
+    let groups = group_count(&f.app);
+    let _ = f.app.update(drum(DrumGroupsMessage::AddGroup));
+    assert_eq!(
+        group_count(&f.app),
+        groups + 1,
+        "a group add after undoing the focused pattern's add lands in a live pattern"
+    );
+}
+
+/// `DrumPatterns`' diff arm clears the bank when the target has none
+/// (`clear_on_empty`). A-13c noted this was dead on the diff path while
+/// the gate forced equal pattern sets; it is live now, and it is the rule
+/// that keeps the fixed point (the full path instead keeps the live bank,
+/// a disk-load rule for projects that predate drum patterns). No edit can
+/// empty the bank (the last pattern refuses to delete), so the snapshot is
+/// made by hand.
+#[test]
+fn a_diff_restore_to_an_empty_drum_bank_clears_it() {
+    let mut f = fixture("drum-bank-empty");
+    let mut target = f.app.test_snapshot_for_undo();
+    assert!(
+        !target.project.file.drum_patterns.is_empty(),
+        "the demo seeds a drum bank, or this test is vacuous"
+    );
+    target.project.file.drum_patterns.clear();
+    for d in &mut target.project.file.section_definitions {
+        d.arrangement.clear();
+    }
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(target.clone());
+    assert!(
+        !drain(&f.rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an emptied bank takes the diff path"
+    );
+    assert!(f.app.compose_state().drum_patterns.is_empty());
+    assert_eq!(f.app.compose_state().default_drum_pattern_id, None);
+    assert_eq!(
+        f.app.test_build_project_file().drum_patterns,
+        target.project.file.drum_patterns
+    );
 }
