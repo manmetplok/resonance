@@ -17,10 +17,11 @@ pub(super) fn dispatch_clips(
         // Every edit that names an existing clip goes through the
         // load race first (ba doc #276 BUG 1): the clip may still be
         // on the import worker, in which case the command is parked
-        // and replayed rather than silently dropped.
+        // and replayed rather than silently dropped. Not `DeleteClip`:
+        // it cancels a load in flight instead of waiting for it, and
+        // always echoes (FU-A13e/f, `clips::handle_delete_clip`).
         AudioCommand::MoveClip { clip_id, .. }
         | AudioCommand::TrimClip { clip_id, .. }
-        | AudioCommand::DeleteClip { clip_id }
         | AudioCommand::SplitClip { clip_id, .. }
         | AudioCommand::SetClipFade { clip_id, .. }
         | AudioCommand::SetClipGain { clip_id, .. }
@@ -45,7 +46,7 @@ pub(super) fn dispatch_clips(
             trim_start_frames,
             trim_end_frames,
         ),
-        AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, clip_id),
+        AudioCommand::DeleteClip { clip_id } => clips::handle_delete_clip(ctx, state, clip_id),
         AudioCommand::SplitClip {
             clip_id,
             new_clip_id,

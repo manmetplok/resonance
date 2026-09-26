@@ -31,6 +31,8 @@ mod automation_mirror;
 mod automation_persistence;
 #[path = "timeline/bpm_input_validation.rs"]
 mod bpm_input_validation;
+#[path = "timeline/clip_delete_echo_owed.rs"]
+mod clip_delete_echo_owed;
 #[path = "timeline/clip_fade_gain_draw.rs"]
 mod clip_fade_gain_draw;
 #[path = "timeline/clip_fade_gain_handlers.rs"]
