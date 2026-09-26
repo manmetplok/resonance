@@ -287,7 +287,9 @@ fn freeze_backup_side_files(
 
 /// Delete the oldest snapshots in `backups_dir` (and the side files each
 /// one owns) until at most `retention` remain. Newest-first ordering comes
-/// from [`scan_backups`].
+/// from [`scan_backups`]. Also sweeps side-file folders whose snapshot
+/// JSON is gone — a crash between [`freeze_backup_side_files`] and the
+/// JSON write strands one (code review FU-M12b).
 fn prune_backups(backups_dir: &Path, retention: u32) -> Result<(), String> {
     for entry in scan_backups(backups_dir).into_iter().skip(retention as usize) {
         std::fs::remove_file(&entry.path)
@@ -298,7 +300,35 @@ fn prune_backups(backups_dir: &Path, retention: u32) -> Result<(), String> {
                 .map_err(|e| format!("Prune backup files {}: {e}", files.display()))?;
         }
     }
+    remove_orphaned_side_files(backups_dir);
     Ok(())
+}
+
+/// Remove every `project-<ts>.files/` folder in `backups_dir` that has no
+/// `project-<ts>.json` beside it. Best effort: a folder that can't be
+/// removed is logged and retried on the next backup.
+fn remove_orphaned_side_files(backups_dir: &Path) {
+    let Ok(read_dir) = std::fs::read_dir(backups_dir) else {
+        return;
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(timestamp) = name
+            .strip_prefix("project-")
+            .and_then(|rest| rest.strip_suffix(".files"))
+        else {
+            continue;
+        };
+        if !path.is_dir() || backups_dir.join(backup_file_name(timestamp)).exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            tracing::warn!("Remove orphaned backup files {}: {e}", path.display());
+        }
+    }
 }
 
 /// List the versioned backups under `{project_dir}/backups`, newest

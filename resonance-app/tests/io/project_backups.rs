@@ -254,3 +254,39 @@ fn pruning_removes_a_backups_side_files() {
         vec!["project-2026-01-02T00:00:00Z.files", "project-2026-01-02T00:00:00Z.json"]
     );
 }
+
+/// Code review FU-M12b: a crash between freezing a backup's side files and
+/// writing its JSON leaves a `project-<ts>.files/` folder no snapshot owns.
+/// Pruning only looked at the JSONs, so the folder stayed forever; the
+/// next successful backup now sweeps it.
+#[test]
+fn the_next_backup_removes_orphaned_side_file_folders() {
+    use resonance_app::project::save_project;
+
+    let dir = scratch_dir("orphanfiles");
+    let (file, notes) = clip_with_notes(60);
+    save_project(&dir, &file, &[(5, b"s".to_vec())], &notes).unwrap();
+    // The crash: side files frozen, JSON never written.
+    let orphan = dir.join("backups/project-2025-12-31T00:00:00Z.files/midi");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("clip_1.mid"), b"x").unwrap();
+    // Not a backup's folder at all: left alone.
+    std::fs::create_dir_all(dir.join("backups/keep-me")).unwrap();
+
+    write_backup(&dir, "2026-01-01T00:00:00Z", 5).unwrap();
+
+    let mut names: Vec<String> = std::fs::read_dir(dir.join("backups"))
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "keep-me",
+            "project-2026-01-01T00:00:00Z.files",
+            "project-2026-01-01T00:00:00Z.json"
+        ]
+    );
+}

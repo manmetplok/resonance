@@ -305,7 +305,7 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
 
 /// Begin an async autosave snapshot. Unlike [`start_save`] this works on
 /// a never-saved project too: with no `project_path` it targets a
-/// per-session scratch dir under `cache_dir()/resonance/autosave/`. The
+/// per-session scratch dir under `<app data>/resonance/autosave/`. The
 /// snapshot routes to `project.autosave.json` and the completion handler
 /// leaves the project dirty (see [`ProjectIoMessage::Autosave`]).
 pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
@@ -339,7 +339,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         (None, true) => match autosave_scratch_dir(r) {
             Some(p) => p,
             None => {
-                tracing::warn!("Autosave skipped: no cache directory available.");
+                tracing::warn!("Autosave skipped: no app-data directory available.");
                 return Task::none();
             }
         },
@@ -394,11 +394,20 @@ fn finish_save_write(r: &mut Resonance) {
 }
 
 /// Scratch directory for autosaving a never-saved project:
-/// `cache_dir()/resonance/autosave/<session-id>/`. The per-session id
+/// `<app data>/resonance/autosave/<session-id>/`. The per-session id
 /// keeps concurrent app instances from stomping on each other's
-/// snapshots. `None` when the platform has no cache directory.
-fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
-    dirs::cache_dir().map(|c| c.join("resonance").join("autosave").join(r.session_id()))
+/// snapshots. App data rather than the cache dir: it is the only copy of
+/// an untitled session's work, which a cache cleaner may delete; and
+/// through [`crate::user_dirs`] a test app writes under its hermetic temp
+/// root instead of the developer's real dir (code review FU-M12b).
+/// `None` when the platform has no data directory.
+pub(crate) fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
+    autosave_scratch_root().map(|root| root.join(r.session_id()))
+}
+
+/// Parent of every session's [`autosave_scratch_dir`].
+pub(crate) fn autosave_scratch_root() -> Option<std::path::PathBuf> {
+    crate::user_dirs::data_dir().map(|d| d.join("resonance").join("autosave"))
 }
 
 /// Capture the open project as a user template (todo #666), into the

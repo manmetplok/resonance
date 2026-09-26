@@ -233,17 +233,20 @@ fn autosave_of_never_saved_project_targets_a_scratch_dir() {
     assert!(app.last_autosave_at().is_none());
 
     // No project path set → the autosave snapshots into a per-session
-    // scratch dir under the cache directory. The write itself runs async
-    // on the engine path, but the directory is created synchronously when
-    // the save kicks off.
+    // scratch dir under the app-data directory. The write itself runs
+    // async on the engine path, but the directory is created synchronously
+    // when the save kicks off.
     dispatch(&mut app, ProjectIoMessage::Autosave);
     assert!(
         app.is_saving(),
         "autosave kicked off even with no project path"
     );
 
-    let scratch = dirs::cache_dir()
-        .expect("cache dir")
+    // A test app is hermetic: the scratch dir lives under the process's
+    // temp root, never the developer's real app-data dir (FU-M12b).
+    let scratch = resonance_app::user_dirs::hermetic_root()
+        .expect("test apps are hermetic")
+        .join("data")
         .join("resonance")
         .join("autosave")
         .join(app.session_id());
