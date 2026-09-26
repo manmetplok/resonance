@@ -33,7 +33,7 @@ master and updates this table. Agents do **not** edit this file.
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | merged | 26e1e316 |
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | merged | 0a8cf2fa |
 | V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | in progress | |
-| M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | in progress | |
+| M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | in progress | |
 | V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
 | M9 engine export/bounce | ENG-04, -06, -07, -08, -09, -13 | opus | in progress | |
@@ -48,7 +48,7 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-A1c** (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
 - [ ] **FU-G2a** (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
 - [ ] **FU-G2b** (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
-- [ ] **FU-G2c** (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
+- [x] **FU-G2c** — fixed @96e5d02a; (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
 - [ ] **FU-G2d** (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
 - [ ] **FU-B1** (low) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
 - [ ] **FU-B2** (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
@@ -83,8 +83,8 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M3b** (low) MIX-06: every lock-contended block causes a flush on the next block → sustained notes can be cut during heavy UI edits.
 - [ ] **FU-M3c** (low) MIX-05: muted key sources keep rendering (CPU cost while muted).
 - [x] **FU-F2d** (medium, upgraded) — fixed @829d19e9 (30/30 under CPU load); `bounce_plugin_lock` timing test fails 3/5 standalone — make it deterministic.
-- [ ] **FU-M2a** (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
-- [ ] **FU-M2b** (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
+- [x] **FU-M2a** — fixed @0319fb91; (medium) DSP-10 partial: linear-phase EQ FIR design still runs on the audio thread (≤1/hop, now crossfaded). Plan: per-EQ design worker + lock-free request slot + double-buffered spectrum; fall back to inline design at hop boundary if result not ready (deterministic for bounce).
+- [x] **FU-M2b** — fixed @06e2803f; (medium) mastering multiband crossover lowpass: fixed 4097-tap FIR, hard swap, allocates a Vec on the audio thread on crossover move (= DSP-12) — give it the EQ treatment.
 - [ ] **FU-M2c** (low, perf) granular HQ sinc read ≈80 taps/grain-sample at +24 st (vs 6) — benchmark; bypassed mastering now costs full CPU.
 - [ ] **FU-M5a** (low) CTL-05: repeated `insert_bars` can still push content past MAX_BARS (per-call check only).
 - [ ] **FU-M5b** (low) CTL-12 remainder: lockstep doesn't check param / plugin-param ids in skills.
@@ -1507,7 +1507,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
   If neither is done, rename the option so it does not claim anti-aliasing.
 - **Verification:** `resonance-dsp/tests/granular_pitch.rs`: 10 kHz sine source, rate 4, HQ. FFT the output and assert the energy at 8 kHz is < −60 dB re the input. Assert the output is non-silent at a legitimate 1 kHz→4 kHz case.
 
-### [ ] DSP-10 — Linear-phase EQ swaps its FIR with no crossfade, and the redesign runs on the audio thread
+### [x] DSP-10 — Linear-phase EQ swaps its FIR with no crossfade, and the redesign runs on the audio thread — fixed (completed by FU-M2a @0319fb91 — design worker)
 - **Severity:** medium
 - **Confidence:** medium
 - **Category:** dsp
@@ -1519,7 +1519,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Keep two convolvers (old and new IR) and crossfade their outputs over one hop when the IR changes. Alternatively, crossfade the IR spectra across a few hops. Rate-limit redesigns, for example at most one per hop.
 - **Verification:** Test module: a sustained 100 Hz sine through the EQ with the bell gain stepped once. Assert the maximum sample-to-sample delta of the output after the switch is < 2× the steady-state delta. Assert the output is non-silent.
 
-### [ ] DSP-11 — Amp tuner cannot see low strings at 96/192 kHz (lag range clamped to FRAME_LEN/2)
+### [x] DSP-11 — Amp tuner cannot see low strings at 96/192 kHz (lag range clamped to FRAME_LEN/2) — fixed @93d1d97a
 - **Severity:** low
 - **Confidence:** high
 - **Category:** dsp
@@ -1529,7 +1529,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Decimate the tuner input to ~24-48 kHz before `feed` (a simple 2×/4× lowpass-decimate), or scale `FRAME_LEN` with the sample rate at construction. Also feed the mono sum the model hears (it currently takes `left` only, `lib.rs:233`).
 - **Verification:** `plugins/resonance-amp/tests/`: a harmonic 82.4 Hz tone into `Tuner::new(96000.)`/`(192000.)`. Assert the result is 82.4 ± 0.5 Hz.
 
-### [ ] DSP-12 — Multiband crossover redesign allocates on the audio thread
+### [x] DSP-12 — Multiband crossover redesign allocates on the audio thread — fixed @06e2803f
 - **Severity:** low
 - **Confidence:** high
 - **Category:** rt-safety
@@ -1539,7 +1539,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Build a `[BandConfig; CASCADE_ORDER]` on the stack.
 - **Verification:** Extend the existing no-alloc guard test (if the mastering crate has one; otherwise add one using a counting global allocator in a test binary) to sweep `crossover_hz[0]` across blocks.
 
-### [ ] DSP-13 — Dither "noise shaping" filters the dither itself, not the requantization error
+### [x] DSP-13 — Dither "noise shaping" filters the dither itself, not the requantization error — fixed @6c3e62aa
 - **Severity:** low
 - **Confidence:** high
 - **Category:** dsp
@@ -1549,7 +1549,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Either quantize here (`q = round((x + d − e_fb)·2^(b−1))/2^(b−1)`, `e = q − (x − e_fb)`, with the error feedback being the shaper), or drop or rename the option.
 - **Verification:** Test module: dither + 16-bit quantize a −60 dBFS 1 kHz tone. Assert the in-band (< 4 kHz) noise is lower with shaping than without.
 
-### [ ] DSP-14 — WSOLA (Transient) stretch has +2.5 dB gain from wrong OLA normalization
+### [x] DSP-14 — WSOLA (Transient) stretch has +2.5 dB gain from wrong OLA normalization — fixed @9452427b
 - **Severity:** low
 - **Confidence:** high
 - **Category:** dsp
@@ -1559,7 +1559,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pre-window the WSOLA frame (analysis window) before `add_frame`, or give `Ola` a normalization mode that uses `Σw`.
 - **Verification:** `resonance-dsp/tests/timestretch.rs`: steady-state RMS ratio within ±0.2 dB for both algorithms at ratio 1.0/1.5 on noise.
 
-### [ ] DSP-15 — Granular `process_block` leaves frames beyond `max_block` unprocessed
+### [x] DSP-15 — Granular `process_block` leaves frames beyond `max_block` unprocessed — fixed @fa48f00d
 - **Severity:** low
 - **Confidence:** high
 - **Category:** error-handling
@@ -1569,7 +1569,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Loop over `capacity()`-sized chunks, as the multiband does.
 - **Verification:** Test module: initialize with max 256 and process 1024. Assert that the output equals four 256-frame calls.
 
-### [ ] DSP-16 — Mastering convolvers all run their FFT in the same callback every 4096 samples (CPU spike)
+### [x] DSP-16 — Mastering convolvers all run their FFT in the same callback every 4096 samples (CPU spike) — fixed @adc13c6f
 - **Severity:** low
 - **Confidence:** medium
 - **Category:** performance
