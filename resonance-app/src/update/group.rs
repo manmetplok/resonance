@@ -20,10 +20,60 @@
 
 use iced::Task;
 
-use crate::message::{GroupMessage, Message};
+use crate::message::Message;
 use crate::state::{MembershipDragState, MembershipDragSubject, MembershipDropTarget};
 use crate::Resonance;
 use resonance_audio::types::{AudioCommand, TrackId};
+
+/// Track-group (folder-track) messages emitted by the group-header row
+/// (epic #36, doc #200). The header is an organisational + macro-control
+/// strip: caret folds the group, `M`/`S` toggle the macro mute/solo that
+/// cascade to members, and the level trim scales members' contribution.
+///
+/// The header *view* (todo #680) emits the caret / macro / trim variants;
+/// the reducers that apply them — collapse/fold (#686), macro mute (#687),
+/// macro solo (#688) and level trim (#689) — land in their own todos.
+/// Until then they route to the placeholder `update::group::handle`.
+///
+/// The `*MembershipDrag*` / `*Membership*` variants drive drag-and-drop
+/// group membership (todo #685): a track row or group header is dragged
+/// onto a group to join / nest, or onto open space to ungroup / un-nest.
+/// Their reducers live in `update::group` and mutate the registry directly.
+#[derive(Debug, Clone)]
+pub enum GroupMessage {
+    /// Fold / unfold a group, hiding or showing its member lanes.
+    ToggleCollapse(TrackId),
+    /// Toggle the group's macro mute (cascades to members non-destructively).
+    ToggleMacroMute(TrackId),
+    /// Toggle the group's macro solo (cascades to members non-destructively).
+    ToggleMacroSolo(TrackId),
+    /// Set the group's macro level trim — a multiplicative gain scaling
+    /// members' contribution (`1.0` is unity).
+    SetMacroLevel(TrackId, f32),
+    /// Create a new group from the current multi-track selection (the
+    /// "Group selected" floating-bar action and the `Cmd-G` shortcut,
+    /// todo #684). The selected tracks become the new group's members; a
+    /// no-op when fewer than two tracks are selected.
+    CreateGroupFromSelection,
+    /// Begin a drag-and-drop membership edit (todo #685). The subject is the
+    /// track row or group header that was grabbed; `cursor_y` is the pointer
+    /// Y in the header column at grab, for the drag ghost.
+    StartMembershipDrag(MembershipDragSubject, f32),
+    /// The active membership drag's pointer moved. `target` is the drop
+    /// target the view resolved under the cursor (`None` when over nothing
+    /// droppable); `cursor_y` is the latest pointer Y.
+    UpdateMembershipDrag {
+        target: Option<MembershipDropTarget>,
+        cursor_y: f32,
+    },
+    /// Commit the active membership drag, applying the hovered target's
+    /// change to the group registry. A no-op when nothing is dragging or no
+    /// valid target is hovered.
+    DropMembership,
+    /// Abandon the active membership drag with no change (released off any
+    /// target, or `Esc`).
+    CancelMembershipDrag,
+}
 
 pub fn handle(r: &mut Resonance, m: GroupMessage) -> Task<Message> {
     match m {

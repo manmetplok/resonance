@@ -28,9 +28,39 @@ use resonance_common::{
     compute_fingerprint, FreezeCacheStatus, FreezeFingerprintBuilder, TrackFreezeState,
 };
 
-use crate::message::{FreezeMessage, Message};
+use crate::message::Message;
 use crate::state::{FreezeQueue, FreezeStatus, MidiClipState, TrackState};
 use crate::Resonance;
+
+/// Track-freeze actions raised from the track header / context menu and
+/// the Tracks header-cap "Freeze all" button. Each variant maps to one
+/// engine command (or, for the batch variants, a sequence driven one
+/// track at a time). The handlers set the initiating UI status
+/// ([`FreezeStatus`](crate::state::FreezeStatus)) and let the engine's
+/// progress / completion events (mirrored by ba todo #575) drive the
+/// later transitions.
+#[derive(Debug, Clone)]
+pub enum FreezeMessage {
+    /// Freeze one track: render its post-FX output to a cache WAV and
+    /// switch playback to the cache. No-op if it's already freezing.
+    FreezeTrack(TrackId),
+    /// Unfreeze one track: detach the cache, remove the cache file, and
+    /// restore live synth + FX editing.
+    UnfreezeTrack(TrackId),
+    /// Re-render a frozen (typically stale) track's cache in place.
+    RefreezeTrack(TrackId),
+    /// Cancel the in-flight freeze render. Also abandons any active batch.
+    CancelFreeze,
+    /// Freeze every currently selected freezable track, sequentially.
+    FreezeSelectedTracks,
+    /// Freeze every freezable track in the project, sequentially.
+    FreezeAllTracks,
+    /// Open the project's freeze-cache directory in the OS file manager
+    /// (the context menu's "Reveal freeze cache…" entry, design doc #181).
+    /// Surfaces an error when the project has never been saved (no cache
+    /// directory exists yet in that case).
+    RevealFreezeCache,
+}
 
 pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
     // Every freeze action is reachable from the track context menu (ba

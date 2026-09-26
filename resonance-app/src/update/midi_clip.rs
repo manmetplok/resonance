@@ -1,9 +1,52 @@
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, ClipId};
 
-use crate::message::{Message, MidiClipMessage};
+use crate::message::Message;
+use crate::state::ClipEdge;
 use crate::update::clips;
 use crate::Resonance;
+
+#[derive(Debug, Clone)]
+pub enum MidiClipMessage {
+    DeleteMidiClip(ClipId),
+    /// Create an empty MIDI clip with a caller-allocated id (control
+    /// endpoint `notes.create_clip`, doc #265, todo #1155). The id is
+    /// allocated app-side (derived-clip range) and carried to the engine
+    /// via `LoadMidiClipDirect`, which echoes `MidiClipCreated { id }`;
+    /// so the control reply returns the id immediately. Undoable
+    /// (Record) like a clip deletion.
+    CreateEmptyClip {
+        clip_id: ClipId,
+        track_id: resonance_audio::types::TrackId,
+        start_sample: resonance_audio::types::SamplePos,
+        duration_ticks: u64,
+        name: String,
+    },
+    /// Move an existing MIDI clip to an absolute timeline position
+    /// (control endpoint `notes.move_clip`, ba doc #269 FR-4). The GUI
+    /// reaches the same engine command through the drag messages below;
+    /// this variant exists because a remote client has no drag gesture,
+    /// only a target bar. Undoable (Record).
+    MoveClipTo {
+        clip_id: ClipId,
+        new_start_sample: resonance_audio::types::SamplePos,
+    },
+    StartMidiClipDrag {
+        clip_id: ClipId,
+        grab_offset_x: f32,
+        start_x: f32,
+        start_y: f32,
+    },
+    UpdateMidiClipDrag(f32, f32),
+    EndMidiClipDrag,
+    StartMidiClipTrim {
+        clip_id: ClipId,
+        edge: ClipEdge,
+        anchor_x: f32,
+    },
+    UpdateMidiClipTrim(f32),
+    EndMidiClipTrim,
+}
 
 pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
     match m {

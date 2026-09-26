@@ -7,9 +7,27 @@
 
 use iced::Task;
 
-use crate::message::{ExportMessage, Message};
-use crate::state::ExportDialogState;
+use crate::message::Message;
+use crate::state::{ExportDialogState, ExportMode};
 use crate::Resonance;
+
+/// User actions in the Export modal (design doc #155). The scaffold wires
+/// the shell lifecycle - open/close and the mode-tab switch - plus the
+/// footer's primary action. The per-tab body controls (source checklist,
+/// range/format, destination) emit their own messages added by the body
+/// todos (#326/#327); `Confirm` kicks off the render in #330/#331.
+#[derive(Debug, Clone)]
+pub enum ExportMessage {
+    /// Open the modal in its default (Audio-stems) state.
+    Open,
+    /// Dismiss the modal, discarding the transient selection.
+    Close,
+    /// Switch the active mode tab (Audio stems / MIDI).
+    SetMode(ExportMode),
+    /// Footer primary action - render the selected sources. Wired here so
+    /// the shell is complete; the actual orchestration lands in #330/#331.
+    Confirm,
+}
 
 pub fn handle(r: &mut Resonance, msg: ExportMessage) -> Task<Message> {
     match msg {

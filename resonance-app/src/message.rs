@@ -12,9 +12,8 @@ use crate::presets::TrackPreset;
 use crate::project::LoadedProject;
 use crate::reference::ReferenceMessage;
 use crate::state::{
-    BrowserTab, ClipEdge, DraggedAsset, DropResolution, ExportMode, FolderScan, GridChoice,
-    GrooveSelection, MembershipDragSubject, MembershipDropTarget,
-    MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent,
+    BrowserTab, ClipEdge, DraggedAsset, DropResolution, FolderScan, GridChoice,
+    GrooveSelection, MixerInspectorGroup, ParsedImport, PlacementMode, PlacementStart, SelectedGlobalEvent,
     TempoAlignment, TempoChoice, ViewMode,
 };
 use resonance_audio::quantize::{Division, QuantizeMode};
@@ -28,7 +27,14 @@ use resonance_common::{AutomationTarget, CurveKind, TakeGroupId, TakeId, Timelin
 use resonance_music_theory::Scale;
 
 pub use crate::update::bus::BusMessage;
+pub use crate::update::export::ExportMessage;
+pub use crate::update::external_instrument::ExternalInstrumentMessage;
+pub use crate::update::freeze::FreezeMessage;
+pub use crate::update::group::GroupMessage;
+pub use crate::update::marker::MarkerMessage;
+pub use crate::update::marker_ui::MarkerUiMessage;
 pub use crate::update::master::MasterMessage;
+pub use crate::update::midi_clip::MidiClipMessage;
 pub use crate::update::transport::TransportMessage;
 
 #[derive(Debug, Clone)]
@@ -108,56 +114,6 @@ pub enum Message {
     WindowCloseRequested(iced::window::Id),
 }
 
-/// Track-group (folder-track) messages emitted by the group-header row
-/// (epic #36, doc #200). The header is an organisational + macro-control
-/// strip: caret folds the group, `M`/`S` toggle the macro mute/solo that
-/// cascade to members, and the level trim scales members' contribution.
-///
-/// The header *view* (todo #680) emits the caret / macro / trim variants;
-/// the reducers that apply them — collapse/fold (#686), macro mute (#687),
-/// macro solo (#688) and level trim (#689) — land in their own todos.
-/// Until then they route to the placeholder `update::group::handle`.
-///
-/// The `*MembershipDrag*` / `*Membership*` variants drive drag-and-drop
-/// group membership (todo #685): a track row or group header is dragged
-/// onto a group to join / nest, or onto open space to ungroup / un-nest.
-/// Their reducers live in `update::group` and mutate the registry directly.
-#[derive(Debug, Clone)]
-pub enum GroupMessage {
-    /// Fold / unfold a group, hiding or showing its member lanes.
-    ToggleCollapse(TrackId),
-    /// Toggle the group's macro mute (cascades to members non-destructively).
-    ToggleMacroMute(TrackId),
-    /// Toggle the group's macro solo (cascades to members non-destructively).
-    ToggleMacroSolo(TrackId),
-    /// Set the group's macro level trim — a multiplicative gain scaling
-    /// members' contribution (`1.0` is unity).
-    SetMacroLevel(TrackId, f32),
-    /// Create a new group from the current multi-track selection (the
-    /// "Group selected" floating-bar action and the `Cmd-G` shortcut,
-    /// todo #684). The selected tracks become the new group's members; a
-    /// no-op when fewer than two tracks are selected.
-    CreateGroupFromSelection,
-    /// Begin a drag-and-drop membership edit (todo #685). The subject is the
-    /// track row or group header that was grabbed; `cursor_y` is the pointer
-    /// Y in the header column at grab, for the drag ghost.
-    StartMembershipDrag(MembershipDragSubject, f32),
-    /// The active membership drag's pointer moved. `target` is the drop
-    /// target the view resolved under the cursor (`None` when over nothing
-    /// droppable); `cursor_y` is the latest pointer Y.
-    UpdateMembershipDrag {
-        target: Option<MembershipDropTarget>,
-        cursor_y: f32,
-    },
-    /// Commit the active membership drag, applying the hovered target's
-    /// change to the group registry. A no-op when nothing is dragging or no
-    /// valid target is hovered.
-    DropMembership,
-    /// Abandon the active membership drag with no change (released off any
-    /// target, or `Esc`).
-    CancelMembershipDrag,
-}
-
 /// Arrangement-marker actions, routed like [`TransportMessage`] and
 /// handled by `update/marker.rs`. The mutating variants
 /// (`AddAtPlayhead`, `Rename`, `Recolor`, `Delete`, `MoveStart`,
@@ -176,68 +132,6 @@ pub enum ArrangementMessage {
     /// Close `count` bars at 1-based `at_bar`, deleting what starts
     /// inside them.
     RemoveBars { at_bar: u32, count: u32 },
-}
-
-#[derive(Debug, Clone)]
-pub enum MarkerMessage {
-    /// Drop a new point marker at the current playhead (snapped to the
-    /// grid via `snap_sample_to_grid_tempo`).
-    AddAtPlayhead,
-    /// Replace all section-seeded markers with a fresh set derived from
-    /// the current Compose section placements — one ranged marker per
-    /// placement, named/coloured from its section definition. Markers the
-    /// user placed by hand are left untouched.
-    SeedFromSections,
-    /// Rename the marker with the given id.
-    Rename(u64, String),
-    /// Recolor the marker with the given id.
-    Recolor(u64, [u8; 3]),
-    /// Delete the marker with the given id.
-    Delete(u64),
-    /// Move a marker's start to a new sample position (snapped to the
-    /// grid). The collection re-sorts after the move.
-    MoveStart(u64, u64),
-    /// Set (or clear, with `None`) a marker's region end, turning a
-    /// point marker into a ranged region and back.
-    SetRegionEnd(u64, Option<u64>),
-    /// Move the playhead to the next marker after the playhead.
-    JumpToNext,
-    /// Move the playhead to the previous marker before the playhead.
-    JumpToPrev,
-    /// Move the playhead to a specific marker.
-    JumpTo(u64),
-    /// Set the loop range to a marker's region and enable looping. A
-    /// ranged marker loops over `[start, end]`; a point marker loops
-    /// from its start to the next marker's start.
-    LoopToRegion(u64),
-    /// Seek to a marker and start playback.
-    PlayFromMarker(u64),
-}
-
-/// Transient marker interaction messages emitted by the timeline ruler
-/// hit-testing (todo #369). Unlike [`MarkerMessage`] these never touch the
-/// persisted marker set: they drive selection highlighting, the right-click
-/// context menu, and the inline rename field. The rename is committed by
-/// re-dispatching [`MarkerMessage::Rename`] (which *is* undoable) once the
-/// user confirms.
-#[derive(Debug, Clone)]
-pub enum MarkerUiMessage {
-    /// Select (highlight) a marker in the ruler, or clear the selection.
-    Select(Option<u64>),
-    /// Open the right-click context menu for a marker. `x` / `y` are the
-    /// window-space anchor (from the cursor) the overlay positions itself at.
-    OpenMenu { id: u64, x: f32, y: f32 },
-    /// Dismiss the context menu without acting.
-    CloseMenu,
-    /// Start an inline rename of a marker, seeded with its current name.
-    /// `x` / `y` are the window-space anchor for the floating text field.
-    BeginRename { id: u64, x: f32, y: f32 },
-    /// The rename text field changed.
-    RenameChanged(String),
-    /// Commit the inline rename (re-dispatches [`MarkerMessage::Rename`]).
-    CommitRename,
-    /// Abandon the inline rename, discarding the edit.
-    CancelRename,
 }
 
 #[derive(Debug, Clone)]
@@ -369,104 +263,6 @@ pub enum BounceMessage {
     CancelInProgress,
 }
 
-/// User actions in the Export modal (design doc #155). The scaffold wires
-/// the shell lifecycle - open/close and the mode-tab switch - plus the
-/// footer's primary action. The per-tab body controls (source checklist,
-/// range/format, destination) emit their own messages added by the body
-/// todos (#326/#327); `Confirm` kicks off the render in #330/#331.
-#[derive(Debug, Clone)]
-pub enum ExportMessage {
-    /// Open the modal in its default (Audio-stems) state.
-    Open,
-    /// Dismiss the modal, discarding the transient selection.
-    Close,
-    /// Switch the active mode tab (Audio stems / MIDI).
-    SetMode(ExportMode),
-    /// Footer primary action - render the selected sources. Wired here so
-    /// the shell is complete; the actual orchestration lands in #330/#331.
-    Confirm,
-}
-
-/// User actions on an external-instrument track's inspector / strip
-/// (architecture doc #169, epic #39). Each variant maps to one update
-/// handler that mutates GUI state and dispatches the matching
-/// `AudioCommand`. The MIDI-out / audio-return / monitor / arm controls
-/// reuse the plain-track engine commands (the engine keeps one source of
-/// truth for them); the bank/program, latency and device-check controls
-/// use the external-instrument commands. No view in this todo.
-#[derive(Debug, Clone)]
-pub enum ExternalInstrumentMessage {
-    /// Turn `track` into an external instrument (or re-assert it), storing a
-    /// fresh config when none exists. Dispatches `SetExternalInstrument`.
-    Enable(TrackId),
-    /// Take `track` out of external-instrument mode, dropping its config.
-    /// Dispatches `ClearExternalInstrument`.
-    Disable(TrackId),
-    /// Pick the hardware MIDI output device (`None` disconnects).
-    SetMidiOutDevice(TrackId, Option<String>),
-    /// Pick the MIDI output channel (`None` = channel 1).
-    SetMidiOutChannel(TrackId, Option<u8>),
-    /// Pick a device preset by id (a `DeviceDefinition::id`), or `None` to
-    /// clear the selection. Stores the id on the track's external-instrument
-    /// state and dispatches `SetTrackDeviceParams` with the definition's
-    /// params (empty on clear / unknown id). Epic #40, doc #201 §5.
-    SetDevice(TrackId, Option<String>),
-    /// Pick the audio-return input device (`None` clears).
-    SetReturnDevice(TrackId, Option<String>),
-    /// Pick the 0-indexed starting audio-return input port.
-    SetReturnPort(TrackId, u16),
-    /// Set the selected MIDI bank (combined 14-bit MSB<<7|LSB), or `None` to
-    /// send no Bank Select. Fires the patch send.
-    SetBank(TrackId, Option<u16>),
-    /// Set the selected MIDI program (`0..=127`), or `None` to send no
-    /// Program Change. Fires the patch send.
-    SetProgram(TrackId, Option<u8>),
-    /// Select a **named patch** from the selected device definition (epic
-    /// #40, doc #201 §5): sets the combined 14-bit bank (`MSB<<7|LSB`) and
-    /// the program together, resolved from the chosen `PatchEntry`. `None`
-    /// bank/program clears the corresponding selection (the "(no patch)"
-    /// entry sends both `None`). Fires a single Bank Select + Program Change
-    /// through the same path as `SetBank`/`SetProgram`.
-    SetPatch(TrackId, Option<u16>, Option<u8>),
-    /// Set the manual latency offset (samples) aligning the audio return.
-    SetLatencyOffset(TrackId, i64),
-    /// Toggle input monitoring for the return.
-    ToggleMonitor(TrackId),
-    /// Toggle record-arm (capture the audio return to the timeline).
-    ToggleRecordArm(TrackId),
-    /// Pick what the track plays back: `Live` re-drives the hardware from
-    /// timeline MIDI, `Recorded` plays recorded takes over the spans they
-    /// cover (doc #257). Engine-owned like monitor/arm — dispatches
-    /// `SetTrackPlaybackSource`; the engine echoes
-    /// `TrackPlaybackSourceChanged`. Auto-switched to `Recorded` when a
-    /// take finishes recording on an external-instrument track.
-    SetPlaybackSource(TrackId, resonance_common::PlaybackSource),
-    /// Auto-detect ping: re-check this track's MIDI-out + audio-return
-    /// devices against the live hardware and report any that are offline.
-    CheckDevices(TrackId),
-    /// Auto-detect the round-trip latency of this external-instrument track:
-    /// dispatch `DetectExternalInstrumentLatency` so the engine fires a MIDI
-    /// impulse and times the audio return, then reports back via
-    /// `ExternalInstrumentLatencyMeasured` / `…LatencyDetectFailed`. No-op if
-    /// the track isn't external, a detect is already running, or the transport
-    /// is playing (the engine requires a stopped transport). Runtime-only —
-    /// the measured offset arrives as a separate engine event; no undo entry.
-    DetectLatency(TrackId),
-    /// Re-scan the available hardware so the "pick another device" lists are
-    /// fresh. Runtime-only — refreshes device lists, mutates no config.
-    RescanDevices,
-    /// Open the user device-definitions folder in the OS file manager so the
-    /// user can add or edit `.json` definition files. Creates the folder
-    /// first so the file manager opens something rather than erroring.
-    /// Runtime-only — no undo, no config mutation.
-    RevealUserDefinitionsFolder,
-    /// Re-scan the device-definition registry (bundled + user folder) and
-    /// rebuild the device-preset picker options. Call after the user has
-    /// dropped a new `.json` file into the user definitions folder.
-    /// Runtime-only — no undo.
-    RescanDefinitions,
-}
-
 /// Aux-send + return-bus actions raised from the Mixer inspector's
 /// ROUTING group. Every variant maps to one engine command (or, for
 /// [`CreateReturnFromSend`](MixerMessage::CreateReturnFromSend), a short
@@ -509,36 +305,6 @@ pub enum MixerMessage {
     /// Create a brand-new FX return bus and route `source` into it in one
     /// gesture: add a bus, flag it as a return, then upsert the send.
     CreateReturnFromSend { source: SendSource },
-}
-
-/// Track-freeze actions raised from the track header / context menu and
-/// the Tracks header-cap "Freeze all" button. Each variant maps to one
-/// engine command (or, for the batch variants, a sequence driven one
-/// track at a time). The handlers set the initiating UI status
-/// ([`FreezeStatus`](crate::state::FreezeStatus)) and let the engine's
-/// progress / completion events (mirrored by ba todo #575) drive the
-/// later transitions.
-#[derive(Debug, Clone)]
-pub enum FreezeMessage {
-    /// Freeze one track: render its post-FX output to a cache WAV and
-    /// switch playback to the cache. No-op if it's already freezing.
-    FreezeTrack(TrackId),
-    /// Unfreeze one track: detach the cache, remove the cache file, and
-    /// restore live synth + FX editing.
-    UnfreezeTrack(TrackId),
-    /// Re-render a frozen (typically stale) track's cache in place.
-    RefreezeTrack(TrackId),
-    /// Cancel the in-flight freeze render. Also abandons any active batch.
-    CancelFreeze,
-    /// Freeze every currently selected freezable track, sequentially.
-    FreezeSelectedTracks,
-    /// Freeze every freezable track in the project, sequentially.
-    FreezeAllTracks,
-    /// Open the project's freeze-cache directory in the OS file manager
-    /// (the context menu's "Reveal freeze cache…" entry, design doc #181).
-    /// Surfaces an error when the project has never been saved (no cache
-    /// directory exists yet in that case).
-    RevealFreezeCache,
 }
 
 #[derive(Debug, Clone)]
@@ -658,48 +424,6 @@ pub enum ClipMessage {
         new_clip_id: ClipId,
         at_sample: SamplePos,
     },
-}
-
-#[derive(Debug, Clone)]
-pub enum MidiClipMessage {
-    DeleteMidiClip(ClipId),
-    /// Create an empty MIDI clip with a caller-allocated id (control
-    /// endpoint `notes.create_clip`, doc #265, todo #1155). The id is
-    /// allocated app-side (derived-clip range) and carried to the engine
-    /// via `LoadMidiClipDirect`, which echoes `MidiClipCreated { id }`;
-    /// so the control reply returns the id immediately. Undoable
-    /// (Record) like a clip deletion.
-    CreateEmptyClip {
-        clip_id: ClipId,
-        track_id: resonance_audio::types::TrackId,
-        start_sample: resonance_audio::types::SamplePos,
-        duration_ticks: u64,
-        name: String,
-    },
-    /// Move an existing MIDI clip to an absolute timeline position
-    /// (control endpoint `notes.move_clip`, ba doc #269 FR-4). The GUI
-    /// reaches the same engine command through the drag messages below;
-    /// this variant exists because a remote client has no drag gesture,
-    /// only a target bar. Undoable (Record).
-    MoveClipTo {
-        clip_id: ClipId,
-        new_start_sample: resonance_audio::types::SamplePos,
-    },
-    StartMidiClipDrag {
-        clip_id: ClipId,
-        grab_offset_x: f32,
-        start_x: f32,
-        start_y: f32,
-    },
-    UpdateMidiClipDrag(f32, f32),
-    EndMidiClipDrag,
-    StartMidiClipTrim {
-        clip_id: ClipId,
-        edge: ClipEdge,
-        anchor_x: f32,
-    },
-    UpdateMidiClipTrim(f32),
-    EndMidiClipTrim,
 }
 
 #[derive(Debug, Clone)]
