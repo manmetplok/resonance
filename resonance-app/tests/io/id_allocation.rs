@@ -902,9 +902,8 @@ fn every_plugin_add_path_gets_a_unique_app_id_including_across_undo() {
 /// drives the GUI and control paths every round; this adds the
 /// undo-monotonicity half `every_plugin_add_path_gets_a_unique_app_id_including_across_undo`
 /// pins for plugins: undoing a bus add must not let the next add reuse the
-/// id undo just freed. A bus add is structural (`bus_set_matches` is part
-/// of `structurally_compatible`), so undo takes the same `ClearAll` ->
-/// replay path as a plugin add.
+/// id undo just freed. Since A-13h a bus add undoes through the diff path
+/// (`RemoveBus`, no `ClearAll`), synchronously inside `update()`.
 #[test]
 fn every_bus_add_path_gets_a_unique_app_id_including_across_undo() {
     let mut f = fixture("bus-paths");
@@ -934,10 +933,10 @@ fn every_bus_add_path_gets_a_unique_app_id_including_across_undo() {
 
     let _ = f.app.update(Message::Undo);
     assert!(
-        std::iter::from_fn(|| f.rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
-        "undo must find the add and start restoring the pre-add snapshot"
+        std::iter::from_fn(|| f.rx.try_recv().ok())
+            .any(|c| matches!(c, AudioCommand::RemoveBus { bus_id } if bus_id == first_id)),
+        "undo must find the add and remove the bus it created, on the diff path"
     );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
     assert!(
         !f.app.test_registry().busses.iter().any(|b| b.id == first_id),
         "undo removed the bus the first add created"

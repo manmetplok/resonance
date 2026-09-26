@@ -20,13 +20,15 @@ use std::path::PathBuf;
 use resonance_app::compose::messages::DrumGroupsMessage;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
-use resonance_app::message::{GroupMessage, MarkerMessage, Message};
+use resonance_app::message::{
+    BusMessage, GroupMessage, MarkerMessage, Message, MixerMessage, PluginMessage,
+};
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::reconcile::{domain_order, Origin};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent};
+use resonance_audio::types::{AudioCommand, AudioEvent, SendSource};
 
 struct Fixture {
     app: Resonance,
@@ -68,10 +70,32 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
 }
 
 /// Answer every `LoadMidiClipDirect` with its `MidiClipCreated` echo, as
-/// the live engine does.
+/// the live engine does, and every other command below with its echo
+/// (the adds, removals and moves of busses and plugins, sends and key
+/// routes — A-13h). Until the engine goes quiet: an echo handler may send
+/// commands of its own (a bus removal's send cleanup).
 fn echo_midi_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
-    for cmd in drain(rx) {
-        if let AudioCommand::LoadMidiClipDirect {
+    echo(app, rx, drain(rx));
+}
+
+fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, mut cmds: Vec<AudioCommand>) {
+    while !cmds.is_empty() {
+        for cmd in cmds {
+            if let Some(event) = echo_of(cmd) {
+                app.test_apply_engine_event(event);
+            }
+        }
+        cmds = drain(rx);
+    }
+}
+
+/// The event the engine answers `cmd` with, for the commands these tests
+/// drive. The removals and moves are answered for any id, as the engine
+/// does.
+fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
+    let plugin_params = Vec::new;
+    Some(match cmd {
+        AudioCommand::LoadMidiClipDirect {
             clip_id,
             track_id,
             start_sample,
@@ -80,20 +104,151 @@ fn echo_midi_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
             name,
             trim_start_ticks,
             trim_end_ticks,
-        } = cmd
-        {
-            app.test_apply_engine_event(AudioEvent::MidiClipCreated {
-                clip_id,
-                track_id,
-                start_sample,
-                duration_ticks,
-                name,
-                notes,
-                trim_start_ticks,
-                trim_end_ticks,
-            });
+        } => AudioEvent::MidiClipCreated {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            name,
+            notes,
+            trim_start_ticks,
+            trim_end_ticks,
+        },
+        AudioCommand::AddBus { id, name } => AudioEvent::BusAdded {
+            bus_id: id,
+            name: name.unwrap_or_else(|| format!("Bus {id}")),
+        },
+        AudioCommand::RemoveBus { bus_id } => AudioEvent::BusRemoved { bus_id },
+        AudioCommand::SetBusRole { bus_id, is_return } => {
+            AudioEvent::BusRoleChanged { bus_id, is_return }
         }
-    }
+        AudioCommand::AddPlugin {
+            track_id,
+            clap_file_path,
+            clap_plugin_id,
+            id,
+        } => AudioEvent::PluginAdded {
+            track_id,
+            instance_id: id,
+            plugin_name: clap_plugin_id.clone(),
+            clap_plugin_id,
+            clap_file_path,
+            params: plugin_params(),
+            has_gui: false,
+            has_sidechain_input: true,
+            output_port_count: 1,
+            output_port_names: vec!["Main".to_owned()],
+        },
+        AudioCommand::AddPluginToBus {
+            bus_id,
+            clap_file_path,
+            clap_plugin_id,
+            id,
+        } => AudioEvent::BusPluginAdded {
+            bus_id,
+            instance_id: id,
+            plugin_name: clap_plugin_id.clone(),
+            clap_plugin_id,
+            clap_file_path,
+            params: plugin_params(),
+            has_gui: false,
+            has_sidechain_input: true,
+        },
+        AudioCommand::AddPluginToMaster {
+            clap_file_path,
+            clap_plugin_id,
+            id,
+        } => AudioEvent::MasterPluginAdded {
+            instance_id: id,
+            plugin_name: clap_plugin_id.clone(),
+            clap_plugin_id,
+            clap_file_path,
+            params: plugin_params(),
+            has_gui: false,
+            has_sidechain_input: true,
+        },
+        AudioCommand::RemovePlugin {
+            track_id,
+            instance_id,
+        } => AudioEvent::PluginRemoved {
+            track_id,
+            instance_id,
+        },
+        AudioCommand::RemovePluginFromBus {
+            bus_id,
+            instance_id,
+        } => AudioEvent::BusPluginRemoved {
+            bus_id,
+            instance_id,
+        },
+        AudioCommand::RemovePluginFromMaster { instance_id } => {
+            AudioEvent::MasterPluginRemoved { instance_id }
+        }
+        AudioCommand::MovePlugin {
+            track_id,
+            instance_id,
+            to_index,
+        } => AudioEvent::PluginMoved {
+            track_id,
+            instance_id,
+            to_index,
+        },
+        AudioCommand::MovePluginInBus {
+            bus_id,
+            instance_id,
+            to_index,
+        } => AudioEvent::BusPluginMoved {
+            bus_id,
+            instance_id,
+            to_index,
+        },
+        AudioCommand::MovePluginInMaster {
+            instance_id,
+            to_index,
+        } => AudioEvent::MasterPluginMoved {
+            instance_id,
+            to_index,
+        },
+        AudioCommand::AddAuxSend {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        }
+        | AudioCommand::SetAuxSend {
+            id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        } => AudioEvent::AuxSendChanged {
+            send_id: id,
+            source,
+            dest,
+            level_db,
+            pre_fader,
+            enabled,
+        },
+        AudioCommand::RemoveAuxSend { send_id } => AudioEvent::AuxSendRemoved { send_id },
+        AudioCommand::SetSidechainRoute {
+            plugin,
+            source,
+            enabled,
+        } => AudioEvent::SidechainRouteChanged {
+            plugin,
+            source: Some(source),
+            enabled,
+        },
+        AudioCommand::ClearSidechainRoute { plugin } => AudioEvent::SidechainRouteChanged {
+            plugin,
+            source: None,
+            enabled: false,
+        },
+        _ => return None,
+    })
 }
 
 /// Apply a recorded edit and return the snapshot of the state it left.
@@ -114,8 +269,13 @@ fn pretty(file: &ProjectFile) -> String {
 }
 
 /// Run `Undo` / `Redo` and assert it took the diff path and landed on
-/// `target` exactly.
-fn step_lands_on(f: &mut Fixture, msg: Message, target: &UndoSnapshot, what: &str) {
+/// `target` exactly. Returns the commands it sent, not yet echoed.
+fn step_lands_on(
+    f: &mut Fixture,
+    msg: Message,
+    target: &UndoSnapshot,
+    what: &str,
+) -> Vec<AudioCommand> {
     let _ = drain(&f.rx);
     let _ = f.app.update(msg);
     let cmds = drain(&f.rx);
@@ -155,6 +315,11 @@ fn step_lands_on(f: &mut Fixture, msg: Message, target: &UndoSnapshot, what: &st
             ctx(&b)
         );
     }
+    assert_same_state(f, target, what);
+    cmds
+}
+
+fn assert_same_state(f: &mut Fixture, target: &UndoSnapshot, what: &str) {
     let after = f.app.test_snapshot_for_undo();
     assert!(
         Resonance::test_snapshot_same_state(&after, target),
@@ -452,4 +617,177 @@ fn creating_a_placed_section_undoes_through_the_diff_path() {
         "the edit created and placed a section"
     );
     undo_redo_over(&mut f, &before, &created, "placed section create");
+}
+
+// ---------------------------------------------------------------------------
+// Busses and plugin instances (A-13h)
+// ---------------------------------------------------------------------------
+
+/// Echo what a step sent, then assert the restore still sits on `target`
+/// and owes the engine nothing: the echoes of its own adds, removals and
+/// moves change nothing.
+fn settle(f: &mut Fixture, cmds: Vec<AudioCommand>, target: &UndoSnapshot, what: &str) {
+    echo(&mut f.app, &f.rx, cmds);
+    assert_eq!(
+        f.app.test_build_project_file(),
+        target.project.file,
+        "{what}: the echoes moved the restored state"
+    );
+    assert_same_state(f, target, what);
+    assert!(
+        f.app.test_restore_echoes_settled(),
+        "{what}: every owed echo was consumed"
+    );
+}
+
+/// The commands a restore sent, as the engine sees them, without the
+/// `Stop` every restore opens with.
+fn sent(cmds: &[AudioCommand]) -> Vec<String> {
+    cmds.iter()
+        .filter(|c| !matches!(c, AudioCommand::Stop))
+        .map(|c| format!("{c:?}"))
+        .collect()
+}
+
+fn bus_ids(app: &Resonance) -> HashSet<u64> {
+    app.test_registry().busses.iter().map(|b| b.id).collect()
+}
+
+const DRUMS: u64 = 1;
+const DRUM_BUS_COMP: u64 = 10001;
+
+/// What every diff restore of the demo sends besides its own domain's
+/// commands: the redo snapshot's clip-WAV persist (`snapshot_for_undo`),
+/// the tempo map and the take groups (restored whole on every origin).
+const TEMPO: &str = "SetTempoEvents { tempo: [TempoPoint { bar: 0, bpm: 90.0 }], signature: \
+                     [SignaturePoint { bar: 0, numerator: 6, denominator: 8 }] }";
+const NO_TAKES: &str = "RestoreTakeGroups { groups: [] }";
+
+/// A GUI bus add, made a return, fed by a send from the drums and keying
+/// the drum bus's compressor; then the bus is deleted (which, live, drops
+/// the send and the route on the `BusRemoved` echo). Every undo and redo
+/// over the five edits takes the diff path: the bus comes back with its
+/// send and key route (`AddBus` before `AddAuxSend` / `SetSidechainRoute`),
+/// and goes again with them (`RemoveAuxSend` / `ClearSidechainRoute`
+/// before `RemoveBus`).
+#[test]
+fn adding_and_removing_a_bus_with_routing_undoes_through_the_diff_path() {
+    let mut f = fixture("bus");
+    let s0 = f.app.test_snapshot_for_undo();
+    let ids = bus_ids(&f.app);
+    let s1 = edit(&mut f, Message::Bus(BusMessage::AddBus));
+    let bus = bus_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the add landed a bus");
+    let s2 = edit(&mut f, Message::Mixer(MixerMessage::SetBusReturnRole(bus, true)));
+    let s3 = edit(
+        &mut f,
+        Message::Mixer(MixerMessage::AddSend {
+            source: SendSource::Track(DRUMS),
+            dest: bus,
+        }),
+    );
+    let s4 = edit(
+        &mut f,
+        Message::Plugin(PluginMessage::SetPluginSidechain {
+            instance_id: DRUM_BUS_COMP,
+            source: Some(SendSource::Bus(bus)),
+            enabled: true,
+        }),
+    );
+    assert_eq!(s4.project.file.sends.len(), 1, "the send landed");
+    assert_eq!(s4.project.file.sidechain_routes.len(), 1, "the key route landed");
+    let s5 = edit(&mut f, Message::Bus(BusMessage::RemoveBus(bus)));
+    assert!(
+        s5.project.file.sends.is_empty() && s5.project.file.sidechain_routes.is_empty(),
+        "deleting the bus dropped its send and key route"
+    );
+
+    // Undo the delete: the bus, its send and its key route come back.
+    let cmds = step_lands_on(&mut f, Message::Undo, &s4, "undo bus delete");
+    let send = s4.project.file.sends[0].id;
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            format!("AddBus {{ id: {bus}, name: Some(\"Bus {bus}\") }}"),
+            format!("SetBusVolume {{ bus_id: {bus}, volume: 1.0 }}"),
+            format!("SetBusPan {{ bus_id: {bus}, pan: 0.0 }}"),
+            format!("SetBusMute {{ bus_id: {bus}, muted: false }}"),
+            format!("SetBusFxBypass {{ bus_id: {bus}, bypassed: false }}"),
+            format!("SetBusRole {{ bus_id: {bus}, is_return: true }}"),
+            format!(
+                "AddAuxSend {{ id: {send}, source: Track({DRUMS}), dest: {bus}, level_db: 0.0, \
+                 pre_fader: false, enabled: true }}"
+            ),
+            format!(
+                "SetSidechainRoute {{ plugin: {DRUM_BUS_COMP}, source: Bus({bus}), enabled: true }}"
+            ),
+            NO_TAKES.to_owned(),
+        ],
+        "undo bus delete: the bus, then its routing"
+    );
+    settle(&mut f, cmds, &s4, "undo bus delete");
+    for (target, what) in [(&s3, "undo key route"), (&s2, "undo send"), (&s1, "undo return role")] {
+        let cmds = step_lands_on(&mut f, Message::Undo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo bus add");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            format!("RemoveBus {{ bus_id: {bus} }}"),
+            NO_TAKES.to_owned(),
+        ],
+        "undo bus add"
+    );
+    settle(&mut f, cmds, &s0, "undo bus add");
+    for (target, what) in [
+        (&s1, "redo bus add"),
+        (&s2, "redo return role"),
+        (&s3, "redo send"),
+        (&s4, "redo key route"),
+    ] {
+        let cmds = step_lands_on(&mut f, Message::Redo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+    let cmds = step_lands_on(&mut f, Message::Redo, &s5, "redo bus delete");
+    assert_eq!(
+        sent(&cmds),
+        [
+            "PersistClipWavs".to_owned(),
+            TEMPO.to_owned(),
+            format!("RemoveAuxSend {{ send_id: {send} }}"),
+            format!("ClearSidechainRoute {{ plugin: {DRUM_BUS_COMP} }}"),
+            format!("RemoveBus {{ bus_id: {bus} }}"),
+            NO_TAKES.to_owned(),
+        ],
+        "redo bus delete: the routing, then the bus"
+    );
+    settle(&mut f, cmds, &s5, "redo bus delete");
+}
+
+/// The echoes of one restore land after the next one ran — a held Ctrl+Z
+/// or a control client's undo/redo burst. `BusRemoved` for a bus the redo
+/// has put back must not delete it, and the `BusAdded` of a bus the undo
+/// has removed again must not resurrect it.
+#[test]
+fn a_bus_restore_survives_the_previous_restores_late_echoes() {
+    let mut f = fixture("bus-late-echo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let s1 = edit(&mut f, Message::Bus(BusMessage::AddBus));
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo bus add");
+    let redo = step_lands_on(&mut f, Message::Redo, &s1, "redo bus add");
+    let late: Vec<_> = undo.into_iter().chain(redo).collect();
+    settle(&mut f, late, &s1, "redo bus add, then undo's echoes");
+
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo bus add again");
+    let redo = step_lands_on(&mut f, Message::Redo, &s1, "redo bus add again");
+    let back = step_lands_on(&mut f, Message::Undo, &s0, "and undo it once more");
+    let late: Vec<_> = undo.into_iter().chain(redo).chain(back).collect();
+    settle(&mut f, late, &s0, "undo bus add, then three restores' echoes");
 }

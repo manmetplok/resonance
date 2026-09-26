@@ -12,7 +12,7 @@
 //! fit comfortably in one file.
 
 use resonance_app::compose::DrumGroup;
-use resonance_app::project::{ProjectClip, ProjectFile, ProjectPlugin, ProjectTrack};
+use resonance_app::project::{ProjectBus, ProjectClip, ProjectFile, ProjectPlugin, ProjectTrack};
 use resonance_app::state::{InstrumentIcon, InstrumentType};
 use resonance_app::update::project_io::replay_diff::{
     id_set_eq, midi_notes_equal, structurally_compatible,
@@ -256,5 +256,33 @@ fn legacy_drum_group_id_set_change_is_compatible() {
     };
     a.drum_groups = vec![g(1)];
     b.drum_groups = vec![g(1), g(2)];
+    assert!(structurally_compatible(&a, &b));
+}
+
+fn bus(id: u64, plugins: Vec<ProjectPlugin>) -> ProjectBus {
+    ProjectBus {
+        id,
+        name: format!("B{id}"),
+        order: 0,
+        volume: 0.0,
+        pan: 0.0,
+        muted: false,
+        fx_bypassed: false,
+        plugins,
+        is_return: false,
+    }
+}
+
+/// The bus set is not part of the shape (A-13h): the diff arms add a bus
+/// `a` lacks (with its chain) and remove one `b` lacks. A chain change on
+/// a bus both hold still is, until the plugin checks go too.
+#[test]
+fn bus_set_change_is_compatible() {
+    let mut a = empty_file();
+    let mut b = empty_file();
+    a.busses = vec![bus(100, vec![plugin(10)])];
+    b.busses = vec![bus(101, vec![plugin(11)])];
+    assert!(structurally_compatible(&a, &b));
+    b.busses = vec![bus(100, vec![plugin(10)]), bus(101, Vec::new())];
     assert!(structurally_compatible(&a, &b));
 }

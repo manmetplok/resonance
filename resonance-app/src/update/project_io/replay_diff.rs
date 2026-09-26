@@ -98,8 +98,12 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     if !track_set_matches(&a.tracks, &b.tracks) {
         return false;
     }
-    // Bus set + per-bus plugin set.
-    if !bus_set_matches(&a.busses, &b.busses) {
+    // Per-bus plugin set, for every bus both files hold. The bus set
+    // itself is not checked (ARCH-01 A-13h): `EntityRemovals` removes a bus
+    // `b` lacks (with its chain, after `RoutingRemovals` dropped the sends
+    // and key routes naming it), `Busses` adds one `a` lacks (with its
+    // chain, as a load does).
+    if !bus_chains_match(&a.busses, &b.busses) {
         return false;
     }
     // Master plugin set.
@@ -122,9 +126,9 @@ pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
     // are rebuilt in `Clips` from the target), drum patterns and the legacy
     // flat drum-group list they promote (`DrumPatterns`, whose diff arm
     // empties the bank for an empty target), track groups (`TrackGroups`),
-    // arrangement markers (`Markers`). What is left is what the diff arms
-    // cannot add or remove yet: tracks, busses and plugin instances
-    // (A-13h/i), clips (A-13i).
+    // arrangement markers (`Markers`); and (A-13h) busses. What is left is
+    // what the diff arms cannot add or remove yet: tracks and plugin
+    // instances (A-13h/i), clips (A-13i).
     true
 }
 
@@ -163,20 +167,13 @@ fn track_set_matches(a: &[ProjectTrack], b: &[ProjectTrack]) -> bool {
     true
 }
 
-fn bus_set_matches(a: &[ProjectBus], b: &[ProjectBus]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
+fn bus_chains_match(a: &[ProjectBus], b: &[ProjectBus]) -> bool {
     let by_id_b: HashMap<u64, &ProjectBus> = b.iter().map(|x| (x.id, x)).collect();
-    for ba in a {
-        let Some(bb) = by_id_b.get(&ba.id) else {
-            return false;
-        };
-        if !plugin_set_matches(&ba.plugins, &bb.plugins) {
-            return false;
-        }
-    }
-    true
+    a.iter().all(|ba| {
+        by_id_b
+            .get(&ba.id)
+            .is_none_or(|bb| plugin_set_matches(&ba.plugins, &bb.plugins))
+    })
 }
 
 fn plugin_set_matches(a: &[ProjectPlugin], b: &[ProjectPlugin]) -> bool {
