@@ -187,14 +187,46 @@ pub const PRESET_DIR_ENV: &str = "RESONANCE_PRESET_DIR";
 /// Saving is a file write that replaces whatever is there, so both
 /// surfaces ask first: the GUI turns its button into "Overwrite" and
 /// `track.save_preset` refuses without `overwrite: true` (the control
-/// API's destructive-operation convention). Compared on the SANITIZED
-/// name, because that is what decides the filename — "My Bass" and
-/// "My/Bass" would otherwise look distinct and land on one file.
+/// API's destructive-operation convention). Matched on the name stored
+/// inside the file, so a preset saved under an older filename scheme is
+/// still found (code review STATE-15).
 pub fn user_preset_exists(name: &str) -> bool {
     let Some(dir) = presets_dir() else {
         return false;
     };
-    dir.join(format!("{}.json", sanitize_filename(name))).exists()
+    !files_named(&dir, name).is_empty()
+}
+
+/// The preset files in `dir` whose stored name is `name`: the one at
+/// [`preset_file`], plus the file the old lossy sanitizer would have used
+/// for it — the only other place a preset of that name can be. Checking
+/// just those two keeps this cheap enough for the save prompt, which asks
+/// on every keystroke.
+fn files_named(dir: &Path, name: &str) -> Vec<PathBuf> {
+    let current = preset_file(dir, name);
+    let legacy = dir.join(format!("{}.json", legacy_filename(name)));
+    let mut out = Vec::new();
+    for path in [current, legacy] {
+        if !out.contains(&path)
+            && load_preset_file(&path).is_ok_and(|preset| preset.name == name)
+        {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// The pre-STATE-15 filename scheme: anything but alphanumerics, `-` and
+/// `_` became `_`. Only used to find presets saved before the switch.
+fn legacy_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect()
+}
+
+/// The file a preset named `name` is saved to.
+fn preset_file(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!("{}.json", encode_filename(name)))
 }
 
 /// Load all user presets from disk.
@@ -235,37 +267,79 @@ fn load_preset_file(path: &Path) -> Result<TrackPreset, String> {
 }
 
 /// Save a user preset to disk.
+///
+/// Refuses an empty name, and refuses to replace a file that holds a
+/// *different* preset (a case-insensitive filesystem folds "Bass" and
+/// "bass" onto one file) rather than silently losing it. Replacing a
+/// preset of the same name is the caller's call — both surfaces confirm
+/// through [`user_preset_exists`] first.
 pub fn save_user_preset(preset: &TrackPreset) -> Result<PathBuf, String> {
+    if preset.name.trim().is_empty() {
+        return Err("name a preset before saving it".to_string());
+    }
     let dir = presets_dir().ok_or_else(|| "Could not determine data directory".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("Create presets dir: {e}"))?;
 
-    let file_name = sanitize_filename(&preset.name);
-    let path = dir.join(format!("{file_name}.json"));
+    let path = preset_file(&dir, &preset.name);
+    if path.exists() {
+        match load_preset_file(&path) {
+            Ok(existing) if existing.name == preset.name => {}
+            Ok(existing) => {
+                return Err(format!(
+                    "{} already holds the preset {:?}; save under another name",
+                    path.display(),
+                    existing.name
+                ))
+            }
+            Err(e) => {
+                return Err(format!(
+                    "{} exists and is not a readable preset ({e}); not replacing it",
+                    path.display()
+                ))
+            }
+        }
+    }
     let json =
         serde_json::to_string_pretty(preset).map_err(|e| format!("Serialize preset: {e}"))?;
     atomic_write(&path, json.as_bytes())?;
+    // Overwriting a preset stored under an older filename: drop that copy
+    // so the name is not listed twice.
+    for stale in files_named(&dir, &preset.name) {
+        if stale != path {
+            let _ = std::fs::remove_file(stale);
+        }
+    }
     Ok(path)
 }
 
-/// Delete a user preset from disk.
+/// Delete a user preset from disk: every file whose stored name is `name`,
+/// and nothing else (code review STATE-15).
 pub fn delete_user_preset(name: &str) -> Result<(), String> {
     let dir = presets_dir().ok_or_else(|| "Could not determine data directory".to_string())?;
-    let file_name = sanitize_filename(name);
-    let path = dir.join(format!("{file_name}.json"));
-    if path.exists() {
+    for path in files_named(&dir, name) {
         std::fs::remove_file(&path).map_err(|e| format!("Delete preset: {e}"))?;
     }
     Ok(())
 }
 
-fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
+/// Injective preset-name → file-stem encoding (code review STATE-15).
+///
+/// Alphanumerics, `-`, `_` and space are kept so the files stay readable;
+/// every other character — `%` itself included — becomes `%XX` per UTF-8
+/// byte. Distinct names therefore never share a file (the old sanitizer
+/// mapped "A B", "A.B" and "A_B" all to `A_B.json`), and a name of dots
+/// can neither hide the file nor step out of the directory.
+fn encode_filename(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+            out.push(c);
+        } else {
+            let mut buf = [0u8; 4];
+            for b in c.encode_utf8(&mut buf).bytes() {
+                out.push_str(&format!("%{b:02X}"));
             }
-        })
-        .collect()
+        }
+    }
+    out
 }

@@ -81,3 +81,5 @@ mod user_definitions_rescan;
 mod files_listing_fingerprint;
 #[path = "io/hermetic_user_state.rs"]
 mod hermetic_user_state;
+#[path = "io/preset_name_collisions.rs"]
+mod preset_name_collisions;
