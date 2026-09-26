@@ -70,6 +70,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-7 (ARCH-01) | A1-2 (9b) `UndoExtras` deleted; snapshot = `LoadedProject`; `io.restoring_undo` flag | opus | merged | 3e4496e9 |
 | FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
 | FU-A6b/c (from A-6) | User-deleted derived clips drop their map entry (no resurrection on resize, UPD-05 resumes); derived counter reserves past on-disk WAVs on load / Save As | opus | merged | 1da0beba |
+| FU-A6d (from A-6) | Vocal audio-clip map: only `remove_bars`' audio casualty loop left a dangling entry; now `forget_deleted_clip` | sonnet | merged | d8c04f22 |
 | FU-A4a (from A-4) | Undo/redo re-attach frozen caches (`SetTrackFrozenSource`) on both paths; undecodable cache → Stale | opus | merged | 5dc2fa1e |
 | FU-A5a–c (from A-5) | App-owned reference marker ids; stale analysis/loaded echoes ignored (`is_stale`, ids never rewound); loads listed immediately so undo cancels them; load failure marks the entry `Error` | opus | merged | 71ed3a6b |
 | FU-A7a (from A-7) | GUI open/recent/template during an in-flight undo no longer replays the disk project with undo branches | sonnet | merged | f0c07231 |
