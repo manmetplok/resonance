@@ -113,7 +113,7 @@ impl ResonancePlugin for ResonanceCompressor {
         };
         let left = &mut main.left[..frames];
         let right = &mut main.right[..frames];
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         let Some(dsp) = &mut self.dsp else {
             return;
@@ -135,7 +135,7 @@ impl ResonancePlugin for ResonanceCompressor {
         };
         let left = &mut *main.left;
         let right = &mut *main.right;
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         let Some(dsp) = &mut self.dsp else {
             return;

@@ -100,7 +100,7 @@ impl ResonancePlugin for ResonanceWavetable {
         };
         let left = &mut main.left[..frames];
         let right = &mut main.right[..frames];
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         // The engine drains `events` with sample-accurate timing internally
         // and snapshots every atomic parameter once for the whole block --

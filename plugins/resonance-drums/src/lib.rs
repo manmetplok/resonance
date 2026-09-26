@@ -340,7 +340,7 @@ impl ResonancePlugin for ResonanceDrums {
         events: &mut EventIterator<'_>,
         _tempo: Option<TempoInfo>,
     ) {
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         // Real block size for the editor's status bar.
         self.bridge

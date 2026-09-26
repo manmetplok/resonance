@@ -243,7 +243,7 @@ impl ResonancePlugin for ResonanceGranularDelay {
         let right = &mut *main.right;
         // FTZ/DAZ guard (doc #252 §5/§8): grain tails and future
         // feedback recursions decay into denormal range otherwise.
-        resonance_common::flush_denormals();
+        resonance_dsp::flush_denormals();
 
         let Some(dsp) = &mut self.dsp else {
             return;

@@ -2,7 +2,6 @@
 pub mod atomic_file;
 pub mod audio_probe;
 pub mod automation;
-mod denormal;
 pub mod device_definition;
 pub mod device_registry;
 pub mod external_instrument;
@@ -45,7 +44,6 @@ pub use audio_probe::{
     probe_audio_file, scan_audio_folder, waveform_thumbnail, AudioFileEntry, AudioFormat,
     AudioInfo, WaveformThumbnail,
 };
-pub use denormal::flush_denormals;
 pub use group_identity::{GroupColor, GroupIdentityColor};
 pub use scan::scan_directory;
 pub use take::{

@@ -19,7 +19,6 @@ editor = [
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
-resonance-common = { path = "../../resonance-common" }
 resonance-dsp = { path = "../../resonance-dsp" }
 # Spectrum analyzer stack (SPSC ring + background FFT worker). Not gated
 # on `editor`: the audio thread's ring push lives in `process()`, which is

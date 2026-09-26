@@ -54,7 +54,7 @@ fn analyzer_tap_leaves_audio_bit_identical() {
     // Pin the denormal mode up front: the plugin's `process()` sets
     // flush-to-zero on its calling thread, and the reference chain must
     // run under the same mode for a bit-exact comparison.
-    resonance_common::flush_denormals();
+    resonance_dsp::flush_denormals();
 
     const BLOCKS: usize = 24;
 
