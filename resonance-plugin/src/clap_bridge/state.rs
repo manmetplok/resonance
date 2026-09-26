@@ -175,7 +175,11 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // Everything from here to `end_param_publish` is one
             // transition as far as the audio thread is concerned: it will
             // neither apply a half-published load nor write into one.
-            self.shared.begin_param_publish();
+            //
+            // The window is a guard so it closes even if something in it
+            // unwinds: a generation left odd would disable the re-sync and
+            // the editor push-back for this instance forever (PLG-06).
+            let publish = self.shared.param_publish_guard();
 
             let params_ok = crate::state::load_params_from_shared_json(
                 &self.shared.param_metas,
@@ -201,14 +205,28 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // happened to be running — the divergence this whole path
             // exists to avoid — so the failure below is reported *after*
             // the saver has had the blob.
-            if let Some(saver) = &self.extra_state_saver {
-                saver.load(&state);
-            }
+            //
+            // The saver is arbitrary plugin code, so a panic in it is
+            // caught here rather than unwound through: the params half has
+            // already been stored and is still announced below — what the
+            // inactive path leaves behind too, since its `load_state` has
+            // set the params before it calls the saver — and the load is
+            // then reported as failed (PLG-06).
+            let saver_ok = match &self.extra_state_saver {
+                Some(saver) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    saver.load(&state)
+                }))
+                .is_ok(),
+                None => true,
+            };
 
             if params_ok {
                 self.shared.params_dirty.store(true, Ordering::Release);
             }
-            self.shared.end_param_publish();
+            drop(publish);
+            if !saver_ok {
+                return Err(PluginError::Message("Extra state failed to load"));
+            }
             if !params_ok {
                 // Nothing was stored, so there was nothing to announce.
                 return Err(PluginError::Message("Failed to load state"));

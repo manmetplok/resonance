@@ -105,7 +105,7 @@ pub struct ClapShared<'a> {
     pub(crate) params_gen: AtomicU64,
 }
 
-impl ClapShared<'_> {
+impl<'a> ClapShared<'a> {
     pub fn find_slot(&self, clap_id: u32) -> Option<usize> {
         self.clap_id_to_slot.get(&clap_id).copied()
     }
@@ -180,10 +180,28 @@ impl ClapShared<'_> {
             .store(current.wrapping_add(1), Ordering::SeqCst);
     }
 
+    /// Main thread: open the publication window and close it again when
+    /// the returned guard drops — on every exit, unwinding included. A
+    /// window left open leaves `params_gen` odd forever, which disables
+    /// the state re-sync and the editor push-back for good (PLG-06).
+    pub(crate) fn param_publish_guard(&self) -> ParamPublishGuard<'_, 'a> {
+        self.begin_param_publish();
+        ParamPublishGuard(self)
+    }
+
     /// Audio thread: the current publication generation. Odd means a load
     /// is publishing right now.
     pub(crate) fn param_publish_gen(&self) -> u64 {
         self.params_gen.load(Ordering::SeqCst)
+    }
+}
+
+/// An open publication window; see [`ClapShared::param_publish_guard`].
+pub(crate) struct ParamPublishGuard<'s, 'a>(&'s ClapShared<'a>);
+
+impl Drop for ParamPublishGuard<'_, '_> {
+    fn drop(&mut self) {
+        self.0.end_param_publish();
     }
 }
 
