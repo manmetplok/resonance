@@ -125,6 +125,12 @@ pub fn view<'a>(
         section_start,
         section_end,
         section_length_bars: definition.length_bars,
+        total_ticks: super::section_total_ticks(
+            &app.tempo_map,
+            placement.start_bar,
+            definition.length_bars,
+        ),
+        visible_x: super::visible_x_window(app.compose.workspace_view),
         sample_rate: app.sample_rate,
         tempo_map: &app.tempo_map,
         start_bar: placement.start_bar,
@@ -148,6 +154,14 @@ pub struct ComposeTrackCanvas<'a> {
     pub section_start: u64,
     pub section_end: u64,
     pub section_length_bars: u32,
+    /// [`super::section_total_ticks`] of the section, computed once per
+    /// view: every tick→x mapping divides by it, and summing it per call
+    /// made the beat grid quadratic in the section length (FU-V2c).
+    pub total_ticks: u64,
+    /// Canvas-x window that may be on screen
+    /// ([`super::visible_x_window`]); bars and notes outside it are not
+    /// drawn.
+    pub visible_x: (f32, f32),
     pub sample_rate: u32,
     pub tempo_map: &'a TempoMap,
     pub start_bar: u32,
@@ -182,6 +196,7 @@ pub struct ComposeTrackFingerprint {
     section_start: u64,
     section_end: u64,
     section_length_bars: u32,
+    visible_x_bits: (u32, u32),
     sample_rate: u32,
     tempo_hash: u64,
     start_bar: u32,
@@ -228,6 +243,7 @@ impl<'a> ComposeTrackCanvas<'a> {
             section_start: self.section_start,
             section_end: self.section_end,
             section_length_bars: self.section_length_bars,
+            visible_x_bits: (self.visible_x.0.to_bits(), self.visible_x.1.to_bits()),
             sample_rate: self.sample_rate,
             tempo_hash: super::tempo_map_hash(self.tempo_map),
             start_bar: self.start_bar,

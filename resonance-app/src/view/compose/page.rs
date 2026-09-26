@@ -113,6 +113,7 @@ impl crate::Resonance {
                         placement.start_bar,
                         self.compose.selected_chord_id,
                         chords_selected,
+                        super::visible_x_window(self.compose.workspace_view),
                     );
                     let editor: Element<'_, Message> = match self.compose.selected_chord_id {
                         Some(chord_id)
@@ -153,10 +154,18 @@ impl crate::Resonance {
                 // lane column (outside it, so the shared beat grid is
                 // shifted uniformly, never resized).
                 let left_column: Element<'_, Message> =
-                    scrollable(container(inner).padding([14, 20]))
+                    scrollable(container(inner).padding([14.0, super::WORKSPACE_PAD_X]))
                         .direction(scrollable::Direction::Both {
                             vertical: scrollable::Scrollbar::default(),
                             horizontal: scrollable::Scrollbar::default(),
+                        })
+                        // The canvases draw only the bars on screen
+                        // (FU-V2c), so they need the viewport.
+                        .on_scroll(|vp| {
+                            Message::Compose(crate::compose::ComposeMessage::WorkspaceScrolled {
+                                offset_x: vp.absolute_offset().x,
+                                width: vp.bounds().width,
+                            })
                         })
                         .height(Length::Fill)
                         .width(Length::Fill)

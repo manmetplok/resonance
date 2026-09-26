@@ -52,11 +52,19 @@ impl<'a> ChordLaneCanvas<'a> {
         let beat_width = grid_w / total_beats as f32;
 
         // Ruler ticks + bar numbers — walk bars for correct placement
-        // with varying time signatures.
-        let mut beat_pos: u32 = 0;
-        for bar_offset in 0..self.definition.length_bars {
-            let bar = self.start_bar + bar_offset;
-            let num = self.tempo_map.numerator_at_bar(bar) as u32;
+        // with varying time signatures, only those in the visible window
+        // (FU-V2c).
+        let (win_lo, win_hi) = self.visible_x;
+        let bars = crate::view::compose::section_bars_in_range(
+            self.tempo_map,
+            self.start_bar,
+            self.definition.length_bars,
+            crate::view::compose::BarUnit::Beats,
+            ((win_lo - grid_x) / beat_width) as f64,
+            ((win_hi - grid_x) / beat_width) as f64,
+        );
+        for b in bars {
+            let (bar_offset, beat_pos, num) = (b.offset, b.beat as u32, b.beats);
 
             // Bar line
             let x = grid_x + beat_pos as f32 * beat_width;
@@ -83,11 +91,9 @@ impl<'a> ChordLaneCanvas<'a> {
                         .with_color(theme::SEPARATOR),
                 );
             }
-
-            beat_pos += num;
         }
         // Final bar line at section end
-        let x = grid_x + beat_pos as f32 * beat_width;
+        let x = grid_x + total_beats as f32 * beat_width;
         frame.stroke(
             &Path::line(Point::new(x, 0.0), Point::new(x, RULER_HEIGHT)),
             Stroke::default().with_width(1.0).with_color(theme::TEXT_DIM),

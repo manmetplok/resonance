@@ -143,6 +143,9 @@ pub enum ComposeMessage {
     ExpandedScrollX(f32),
     /// Scroll the expanded editor vertically.
     ExpandedScrollY(f32),
+    /// The Compose workspace `Scrollable` reported its viewport: the
+    /// horizontal offset and visible width, in content pixels (FU-V2c).
+    WorkspaceScrolled { offset_x: f32, width: f32 },
     /// Adjust vertical zoom of the expanded editor.
     ExpandedZoomY(f32),
 

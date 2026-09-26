@@ -111,6 +111,8 @@ mod track_delete_lane_cleanup;
 mod vocal_render_inflight_placement;
 #[path = "compose/vocal_rerender_keeps_saved_audio.rs"]
 mod vocal_rerender_keeps_saved_audio;
+#[path = "compose/compose_visible_bars.rs"]
+mod compose_visible_bars;
 #[path = "compose/chords_after_meter_change.rs"]
 mod chords_after_meter_change;
 #[path = "compose/expanded_editor_key_focus.rs"]

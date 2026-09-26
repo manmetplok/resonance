@@ -56,6 +56,7 @@ fn clicking_the_first_cell_with_phase_4_flips_pattern_index_4() {
             is_fill: false,
         }],
         section_bars: 1,
+        visible_x: resonance_app::view::compose::visible_x_window(None),
     };
 
     let bounds = Rectangle::new(Point::ORIGIN, Size::new(1000.0, 400.0));

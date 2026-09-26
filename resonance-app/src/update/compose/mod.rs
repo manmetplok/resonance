@@ -414,6 +414,9 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
         ComposeMessage::CollapseTrack => expand::handle_collapse(r),
         ComposeMessage::ExpandedScrollX(delta) => expand::handle_scroll_x(r, delta),
         ComposeMessage::ExpandedScrollY(delta) => expand::handle_scroll_y(r, delta),
+        ComposeMessage::WorkspaceScrolled { offset_x, width } => {
+            r.compose.workspace_view = Some((offset_x, width));
+        }
         ComposeMessage::ExpandedZoomY(delta) => expand::handle_zoom_y(r, delta),
 
         // Chord ops
