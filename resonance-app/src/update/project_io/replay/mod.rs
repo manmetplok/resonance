@@ -16,8 +16,8 @@
 //!
 //! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
 //! A-13) are not restored inline here: [`replay_loaded_project`] opens
-//! with `Stage::Globals` and `Stage::Timeline`, `replay_vocal` runs
-//! `Stage::Clips` and the end of [`replay_loaded_project`] runs
+//! with `Stage::Globals` and `Stage::Timeline`, runs `Stage::Clips` after
+//! the tracks, busses and master, and the end of [`replay_loaded_project`] runs
 //! `Stage::Content` and `Stage::Tail` — the same stages, in the same
 //! sequence, `try_diff_replay` runs.
 
@@ -108,8 +108,11 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     replay_tracks_and_busses(r, project, &loaded);
 
     // The audio and MIDI clips (every one loaded: `old` is `None`), then
-    // the vocal state derived from them.
-    replay_vocal(r, project, &loaded, &ctx);
+    // the state derived from them: the lyric side-table (padded to the
+    // replayed note counts), the derived-clip map (ARCH-01 A-6, keeping
+    // only entries whose clip this replay installed — `ClearAll` wiped
+    // anything else) and the vocal audio-clip map.
+    reconcile_stage(r, Stage::Clips, None, project, &ctx);
 
     // Re-impose the saved plugin-slot order and refresh the side-index.
     finalize_plugin_chains(r, &saved_plugin_order);
@@ -401,47 +404,6 @@ fn replay_sidechain_routes(r: &mut Resonance, project: &ProjectFile) {
             enabled: pr.enabled,
         });
     }
-}
-
-/// The [`Stage::Clips`] domains (the audio and MIDI clips, the lyric
-/// side-table and the `derived_clips` section→clip map the compose view
-/// uses), then the vocal-audio clip map (so the next Generate Vocal
-/// correctly tears down old clips rather than stacking on top of them).
-fn replay_vocal(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    loaded: &LoadedProject,
-    ctx: &ReconcileCtx<'_>,
-) {
-    // Every audio and MIDI clip, the lyric side-table (padded to the
-    // replayed note counts) and the derived-clip map (ARCH-01 A-6),
-    // keeping only entries whose clip this replay installed — `ClearAll`
-    // wiped anything else.
-    reconcile_stage(r, Stage::Clips, None, project, ctx);
-
-    // Rebuild the vocal audio clip map so subsequent regen tear-downs
-    // find the loaded clips and clean them up — otherwise the next
-    // Generate Vocal stacks a new clip on top of the old one and the
-    // mixer plays both summed together.
-    use std::collections::{HashMap, HashSet};
-    let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
-        .registry
-        .tracks
-        .iter()
-        .filter(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
-        .map(|t| t.id)
-        .collect();
-    let audio_clip_paths: HashMap<resonance_audio::types::ClipId, std::path::PathBuf> = project
-        .clips
-        .iter()
-        .map(|pc| (pc.id, loaded.project_dir.join(&pc.audio_file)))
-        .collect();
-    r.compose.rebuild_vocal_audio_clips(
-        &r.clips,
-        &audio_clip_paths,
-        &vocal_track_ids,
-        &r.tempo_map,
-    );
 }
 
 /// Re-impose the saved plugin-chain order on every track, bus, and the

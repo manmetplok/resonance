@@ -130,7 +130,7 @@ pub enum Stage {
     /// track or clip is restored.
     Timeline,
     /// The audio and MIDI clips, then state derived from them: the lyric
-    /// side-table and the derived-clip map. Full path: right after the
+    /// side-table, the derived-clip map and the vocal audio-clip map. Full path: right after the
     /// tracks, busses, master and routing are replayed. Diff path: right
     /// after the plugin params are applied.
     Clips,
@@ -190,6 +190,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // After the MIDI and audio clips they read / filter against.
     domain::<globals::ClipLyrics>(Stage::Clips),
     domain::<restored::DerivedClips>(Stage::Clips),
+    // Last in `Clips`: reads the audio clips, placements and tempo map, and
+    // reserves the derived counter past the audio clip ids after
+    // `DerivedClips` set it.
+    domain::<clips::VocalAudioClips>(Stage::Clips),
     // After the clips: the pool counts their asset refs. The full path's
     // order.
     domain::<restored::References>(Stage::Content),

@@ -9,10 +9,10 @@
 //! never adds or deletes a clip. A clip id missing from `old` is skipped
 //! there as defence in depth rather than loaded.
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
-use resonance_audio::types::{AudioCommand, ClipId, MidiNote};
+use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TrackId, TrackType};
 
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{fade_curve_from_tag, ProjectClip, ProjectFile, ProjectMidiClip};
@@ -305,5 +305,43 @@ fn apply_midi_clip(
         mc.trim_end_ticks = pmc.trim_end_ticks;
         mc.name = pmc.name.clone();
         mc.notes = notes;
+    }
+}
+
+/// The vocal audio-clip map (`(section, placement, track) → (clip, WAV)`),
+/// rebuilt from the restored audio clips on vocal tracks so the next
+/// Generate Vocal tears the loaded clips down instead of stacking a new one
+/// on top (the mixer would play both). Runtime-only, never saved. The same
+/// body on every origin.
+///
+/// Last in `Clips`: reads the audio clips, the section placements
+/// (`Globals`) and the tempo map (`Timeline`), and reserves the derived-id
+/// counter past every audio clip id — after `DerivedClips` set the counter.
+/// Nothing in `Content` or `Tail` reads the map or the counter.
+pub(crate) struct VocalAudioClips;
+
+impl Reconcile for VocalAudioClips {
+    const NAME: &'static str = "vocal_audio_clips";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        let vocal_track_ids: HashSet<TrackId> = r
+            .registry
+            .tracks
+            .iter()
+            .filter(|t| t.track_type == TrackType::Vocal)
+            .map(|t| t.id)
+            .collect();
+        let dir = project_dir(ctx);
+        let audio_clip_paths: HashMap<ClipId, PathBuf> = new
+            .clips
+            .iter()
+            .map(|pc| (pc.id, dir.join(&pc.audio_file)))
+            .collect();
+        r.compose.rebuild_vocal_audio_clips(
+            &r.clips,
+            &audio_clip_paths,
+            &vocal_track_ids,
+            &r.tempo_map,
+        );
     }
 }

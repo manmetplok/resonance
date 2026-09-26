@@ -124,9 +124,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // The audio clips (scalar reposition / retrim / fade / gain) and MIDI
     // clips (reposition, or notes replaced by delete + reload) by diff
     // against `current`; then the lyric side-table (padded to the note
-    // counts just installed) and the derived-clip map: the snapshot's with
-    // every entry, pending echoes included (FU-H2a, A-6). After
-    // `ComposeSections` reset it.
+    // counts just installed), the derived-clip map (the snapshot's with
+    // every entry, pending echoes included — FU-H2a, A-6; after
+    // `ComposeSections` reset it) and the vocal audio-clip map.
     reconcile_stage(r, Stage::Clips, Some(&current), target_file, &ctx);
     // References (reconciled against the engine's live ones, no
     // `ClearAll` here), then pool, quantize, performance, track groups,
@@ -148,30 +148,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     r.registry.resort_busses();
     r.view_caches.rebuild_output(&r.registry.busses);
     r.compose.refresh_track_count(&r.registry.tracks);
-
-    // Rebuild runtime-only caches that aren't captured in the snapshot.
-    // Mirrors the tail end of `replay_loaded_project` so the Compose tab
-    // shows the right vocal audio clips after the restore. The derived
-    // MIDI clip map is *not* rebuilt here: the `DerivedClips` domain
-    // restored the snapshot's from `ProjectFile::derived_clips` (FU-H2a,
-    // A-6).
-    use std::collections::HashSet;
-    let vocal_track_ids: HashSet<resonance_audio::types::TrackId> = r
-        .registry
-        .tracks
-        .iter()
-        .filter(|t| t.track_type == resonance_audio::types::TrackType::Vocal)
-        .map(|t| t.id)
-        .collect();
-    let project_dir = r.io.project_path.clone().unwrap_or_default();
-    let audio_clip_paths: HashMap<resonance_audio::types::ClipId, std::path::PathBuf> = target
-        .file
-        .clips
-        .iter()
-        .map(|pc| (pc.id, project_dir.join(&pc.audio_file)))
-        .collect();
-    r.compose
-        .rebuild_vocal_audio_clips(&r.clips, &audio_clip_paths, &vocal_track_ids, &r.tempo_map);
 
     true
 }
