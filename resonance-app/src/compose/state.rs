@@ -103,6 +103,25 @@ impl VocalAudioRegistry {
         self.render_cache.clear();
     }
 
+    /// The user deleted `clip_id` from the timeline: drop every `clips`
+    /// entry naming it (code review FU-A6d, the `vocal_audio.clips`
+    /// analogue of `ComposeState::forget_deleted_derived_clip`).
+    ///
+    /// Unlike the MIDI derived-clip map, this is also safe to call from
+    /// the engine's `ClipDeleted` echo (`engine_events::clips::deleted`
+    /// already does): a vocal re-render never reuses the torn-down clip's
+    /// id — `handle_vocal_audio_ready` always allocates a fresh one — so
+    /// there is no in-flight-reinstall race to protect against here. What
+    /// was still missing was a call at every user-delete site;
+    /// `remove_bars`'s audio-clip casualties (a rendered clip the user
+    /// dragged off its placement's start bar outlives the placement-scoped
+    /// `purge_placement_outputs` above it) had none, so it dangled until
+    /// the engine's echo or the next reconcile (`VocalAudioClips`, which
+    /// rebuilds the whole map from `r.clips`) happened to clear it.
+    pub fn forget_deleted_clip(&mut self, clip_id: ClipId) {
+        self.clips.retain(|_, (id, _)| *id != clip_id);
+    }
+
     /// A clip's lyrics in their file form (`ProjectMidiClip::vocal_lyrics`):
     /// cut to the clip's `note_count`, trailing empties stripped. Empty
     /// when the clip has no entry.

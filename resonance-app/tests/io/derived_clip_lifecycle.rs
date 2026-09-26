@@ -16,13 +16,23 @@
 //! still name, and the next render overwrote it. The engine's STATE-08
 //! scan skips the derived range since FU-A6a (the app owns it), so the app
 //! scans for its own range when it learns the project dir.
+//!
+//! FU-A6d: `compose.vocal_audio.clips` (the rendered-vocal-audio-clip map,
+//! keyed the same way as `derived_clips` but out of A-6's scope — see
+//! `docs/design/A-6-derived-clips.md` §1) has the same "clip the user moved
+//! outlives its placement's purge" hole `remove_bars` had for MIDI derived
+//! clips before FU-A6b, but only in `remove_bars`: a single-clip user
+//! delete (`clip.delete` / the GUI Delete key) and a whole-placement delete
+//! already scrub it (`engine_events::clips::deleted`,
+//! `purge_placement_outputs`).
 
 use std::collections::HashMap;
 use std::path::Path;
 
+use resonance_app::compose::messages::VocalAudioReadyData;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::message::{
-    Message, MidiClipMessage, ProjectIoMessage, TrackMessage, TransportMessage,
+    ClipMessage, Message, MidiClipMessage, ProjectIoMessage, TrackMessage, TransportMessage,
 };
 use resonance_app::state::ids::DERIVED_CLIP_ID_BASE;
 use resonance_app::state::FreezeStatus;
@@ -31,6 +41,7 @@ use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, ClipId, TrackId, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 use resonance_control::ids::{SectionDefinitionId, TrackId as ProtoTrackId};
+use resonance_control::methods::arrangement::RemoveBarsParams;
 use resonance_control::methods::generate::{self as generate_proto, GenerateResult, GenerateRole};
 use resonance_control::methods::harmony as harmony_proto;
 use resonance_control::methods::section as section_proto;
@@ -404,3 +415,219 @@ fn a_save_as_into_an_existing_bundle_reserves_past_its_derived_wavs() {
         "the counter ({next}) would re-issue {orphan}, whose WAV is in the new bundle"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FU-A6d
+// ---------------------------------------------------------------------------
+
+const VOCAL_TRACK: TrackId = 60;
+
+/// An 8-bar vocal section, placed at bar 1, with a rendered vocal audio
+/// clip installed on the lane (as `handle_vocal_audio_ready` would after a
+/// real SVS render), in a saved project (so edits record undo steps).
+/// Returns the installed clip's id alongside the app; the `TempDir` must
+/// be kept alive by the caller for the project path to stay valid.
+fn vocal_song_with_installed_audio()
+-> (Resonance, Receiver<AudioCommand>, u64, u64, ClipId, tempfile::TempDir) {
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    let root = tempfile::tempdir().expect("temp dir");
+    let project = root.path().join("song.rproj");
+    std::fs::create_dir_all(project.join("audio")).expect("project dir");
+    std::fs::create_dir_all(project.with_extension("freeze")).expect("freeze dir");
+    app.test_set_active_project(true);
+    app.test_set_project_path(project);
+    app.test_set_sample_rate(48_000);
+    app.test_set_flat_tempo(120.0);
+    app.test_add_track(VOCAL_TRACK, TrackType::Vocal);
+
+    let section = call(
+        &mut app,
+        "section.create",
+        &section_proto::CreateParams {
+            name: "Verse".to_owned(),
+            length_bars: 8,
+            scale: None,
+            place: true,
+        },
+    )
+    .result::<section_proto::CreateResult>()
+    .expect("section.create succeeds")
+    .section_id;
+    let definition = u64::from(section);
+    app.test_install_vocal_lane(definition, VOCAL_TRACK);
+    let (placement, start_bar) = {
+        let p = &app.compose_state().placements[0];
+        (p.id, p.start_bar)
+    };
+    let queued_start = app.test_tempo_map().bar_to_sample(start_bar);
+
+    let _ = app.update(Message::Compose(ComposeMessage::VocalAudioReady(Box::new(
+        VocalAudioReadyData {
+            definition_id: definition,
+            track_id: VOCAL_TRACK,
+            wav_path: std::path::PathBuf::from("/tmp/fu-a6d-vocal.wav"),
+            placements: vec![(placement, queued_start)],
+            clip_name: "Verse · Vocal".to_owned(),
+            trim_start_frames: 0,
+            trim_end_frames: 0,
+            lead_ticks: 0,
+            render_epoch: 0,
+            bpm: 120.0,
+        },
+    ))));
+    let installed_clip = rx
+        .try_iter()
+        .find_map(|cmd| match cmd {
+            AudioCommand::LoadClipFromWav {
+                clip_id,
+                track_id,
+                start_sample,
+                name,
+                ..
+            } => {
+                // Mirror the engine's `ClipImported` echo, exactly as a
+                // real render's `LoadClipFromWav` would get mirrored into
+                // `r.clips` (`engine_events::clips::imported`).
+                app.test_apply_engine_event(AudioEvent::ClipImported {
+                    clip_id,
+                    track_id,
+                    start_sample,
+                    duration_samples: 64,
+                    name,
+                    waveform_peaks: Vec::new(),
+                });
+                Some(clip_id)
+            }
+            _ => None,
+        })
+        .expect("the render installed an audio clip");
+    assert_eq!(
+        app.test_vocal_audio_clips(VOCAL_TRACK),
+        vec![(definition, installed_clip)],
+        "precondition: the rendered clip is in the vocal-audio map"
+    );
+    (app, rx, definition, placement, installed_clip, root)
+}
+
+/// `remove_bars` deleting a vocal audio clip the user dragged off its
+/// placement's start bar (so the placement itself survives, and only the
+/// audio-clip casualty path runs — not `purge_placement_outputs`) must not
+/// leave the clip's `(definition, placement, track)` entry in
+/// `vocal_audio.clips`. Mirrors FU-A6b's fix for `derived_clips`, which
+/// covers this same `remove_bars` case for MIDI clips but never touched
+/// the vocal-audio map.
+#[test]
+fn remove_bars_drops_a_moved_vocal_audio_clips_entry() {
+    let (mut app, rx, definition, placement, clip_id, _root) = vocal_song_with_installed_audio();
+    let start_bar = app
+        .compose_state()
+        .find_placement(placement)
+        .expect("placement exists")
+        .start_bar;
+
+    // Drag the rendered clip two bars into the section, off the placement's
+    // own start bar.
+    let moved_to = app.test_tempo_map().bar_to_sample(start_bar + 2);
+    let _ = app.update(Message::Clip(ClipMessage::MoveClipTo {
+        clip_id,
+        new_start_sample: moved_to,
+        new_track_id: VOCAL_TRACK,
+    }));
+    assert!(
+        app.test_clips().iter().any(|c| c.id == clip_id && c.start_sample == moved_to),
+        "precondition: the clip moved"
+    );
+    let _ = rx.try_iter().count();
+
+    // Remove exactly the bar the clip now sits on: 1-based `at_bar` is
+    // `start_bar + 2 + 1`, distinct from the placement's own start bar
+    // (`start_bar + 1`), so `removal_casualties` puts only the clip, not
+    // the placement, in its casualty list.
+    let response = call(
+        &mut app,
+        "arrangement.remove_bars",
+        &RemoveBarsParams {
+            at_bar: start_bar + 3,
+            count: 1,
+            confirm: true,
+        },
+    );
+    assert!(response.error.is_none(), "remove_bars failed: {:?}", response.error);
+    assert!(
+        app.compose_state().find_placement(placement).is_some(),
+        "precondition: the placement survives the removal"
+    );
+    assert!(
+        !app.test_clips().iter().any(|c| c.id == clip_id),
+        "precondition: the clip itself was removed"
+    );
+
+    assert!(
+        app.test_vocal_audio_clips(VOCAL_TRACK).is_empty(),
+        "a dangling vocal-audio entry survived remove_bars for a clip the user moved: {:?}",
+        app.test_vocal_audio_clips(VOCAL_TRACK)
+    );
+    let _ = definition;
+}
+
+/// Known limitation (not fixed here, and not a regression from FU-A6d):
+/// undoing a `remove_bars` that deleted a *moved* vocal audio clip brings
+/// the clip's `ClipState` back, but not its `vocal_audio.clips` entry.
+///
+/// Unlike `derived_clips`, which A-6 made undo restore from the snapshot's
+/// authoritative saved map, `vocal_audio.clips` is runtime-only and always
+/// rebuilt positionally from `r.clips` on every reconcile (the
+/// `VocalAudioClips` domain, `docs/design/A-6-derived-clips.md` §1: "out of
+/// scope here"). That rebuild only claims a clip sitting exactly on a
+/// placement's start bar, so a clip restored at the position the user
+/// dragged it to is not reclaimed — the same gap the design doc already
+/// calls out for a "derived clip the user moved" (§`Relation to
+/// midi_clips`), just for the audio side. A lane in this state reads as
+/// `not_rendered` until the user regenerates it; nothing crashes or
+/// resurrects stale audio.
+#[test]
+fn undoing_the_removal_does_not_reclaim_a_moved_clips_vocal_audio_entry() {
+    let (mut app, rx, _definition, placement, clip_id, _root) = vocal_song_with_installed_audio();
+    let start_bar = app
+        .compose_state()
+        .find_placement(placement)
+        .expect("placement exists")
+        .start_bar;
+    let moved_to = app.test_tempo_map().bar_to_sample(start_bar + 2);
+    let _ = app.update(Message::Clip(ClipMessage::MoveClipTo {
+        clip_id,
+        new_start_sample: moved_to,
+        new_track_id: VOCAL_TRACK,
+    }));
+    let _ = rx.try_iter().count();
+    let response = call(
+        &mut app,
+        "arrangement.remove_bars",
+        &RemoveBarsParams {
+            at_bar: start_bar + 3,
+            count: 1,
+            confirm: true,
+        },
+    );
+    assert!(response.error.is_none(), "remove_bars failed: {:?}", response.error);
+    let _ = rx.try_iter().count();
+
+    let sent: Vec<AudioCommand> = {
+        let _ = app.update(Message::Undo);
+        rx.try_iter().collect()
+    };
+    if sent.iter().any(|c| matches!(c, AudioCommand::ClearAll)) {
+        app.test_apply_engine_event(AudioEvent::AllCleared);
+    }
+    let _ = rx.try_iter().count();
+
+    assert!(
+        app.test_clips().iter().any(|c| c.id == clip_id && c.start_sample == moved_to),
+        "the clip itself comes back at its moved position"
+    );
+    assert!(
+        app.test_vocal_audio_clips(VOCAL_TRACK).is_empty(),
+        "documents the known gap: the positional rebuild does not reclaim a moved clip"
+    );
+}
+

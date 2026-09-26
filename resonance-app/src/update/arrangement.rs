@@ -224,6 +224,10 @@ pub fn remove_bars(r: &mut Resonance, at_bar: u32, count: u32) -> ShiftOutcome {
             continue;
         }
         r.clips.retain(|c| c.id != *clip_id);
+        // A rendered vocal-audio clip the user moved into the span
+        // outlives its placement's purge above; its entry must not
+        // dangle (FU-A6d, the audio-map analogue of the MIDI fix below).
+        r.compose.vocal_audio.forget_deleted_clip(*clip_id);
         let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
     }
     if !casualties.audio_clips.is_empty() {

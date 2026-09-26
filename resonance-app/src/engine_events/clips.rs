@@ -69,10 +69,7 @@ pub(crate) fn deleted(r: &mut Resonance, clip_id: ClipId) {
     // (engine returns "unknown clip"; unlink fails on the already-
     // removed WAV) and then never clear, since the entry is keyed by
     // (def, placement, track) — not by clip id.
-    r.compose
-        .vocal_audio
-        .clips
-        .retain(|_, (id, _)| *id != clip_id);
+    r.compose.vocal_audio.forget_deleted_clip(clip_id);
 }
 
 pub(super) fn moved(
