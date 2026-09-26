@@ -108,3 +108,32 @@ impl Reconcile for References {
         }
     }
 }
+
+/// The missing-plugin warning (ba doc #275 P5, todo #1309). App-side only;
+/// nothing is read from the file.
+///
+/// A disk load starts with a clean slate: every slot is re-added
+/// optimistically and the engine's refusals (`PluginAdded` never arrives,
+/// an error does — handled later, as engine events) raise the warning
+/// again for *this* project. A full-replay undo re-adds the same plugins
+/// and gets the same refusals, so it dismisses the warning for the
+/// project instead of re-raising the modal on every history step — the
+/// same reason the missing-FILE modal is opened only for disk loads. The
+/// diff path re-adds nothing, so it leaves the warning as it is.
+///
+/// Runs in the Tail rather than before the plugins are re-added: the
+/// refusals are asynchronous engine events handled after the restore
+/// returns, and nothing in the restore reads or raises the warning.
+pub(crate) struct MissingPlugins;
+
+impl Reconcile for MissingPlugins {
+    const NAME: &'static str = "missing_plugins";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, _: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        match ctx.origin {
+            Origin::DiskLoad => r.missing_plugins.reset(),
+            Origin::UndoFull => r.missing_plugins.dismiss(),
+            Origin::UndoDiff => {}
+        }
+    }
+}

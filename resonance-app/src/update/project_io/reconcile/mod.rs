@@ -173,6 +173,7 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // the device bindings), freeze last.
     domain::<restored::ExternalInstruments>(Stage::Tail),
     domain::<restored::AutomationLanes>(Stage::Tail),
+    domain::<restored::MissingPlugins>(Stage::Tail),
 ];
 
 /// Run every [`DOMAINS`] entry of `stage`, in table order.
