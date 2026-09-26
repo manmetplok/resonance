@@ -538,7 +538,7 @@ pub fn render_stem(
     // track/bus stems render their source regardless of mute/solo.
     let respect_mute_solo = filter.include_master_fx;
 
-    reset_plugins(plugins);
+    reset_plugins(plugins, shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));

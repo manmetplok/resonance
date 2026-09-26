@@ -36,7 +36,7 @@ pub(super) fn render_stopped_block(
     // thread was holding; this one is issued from the audio thread, whose
     // MIDI stash parks it on contention instead of losing it.
     if flush {
-        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash);
+        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
         scratch.continuity.stopped();
     }
     let any_monitor = monitor_on

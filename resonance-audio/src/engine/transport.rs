@@ -33,6 +33,7 @@ pub(crate) fn refuse_while_offline_render(ctx: &HandlerCtx, what: &str) -> bool 
 
 pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
     if refuse_while_offline_render(ctx, "start playback") {
+        let _ = ctx.event_tx.send(AudioEvent::TransportRefused);
         return;
     }
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
@@ -55,6 +56,7 @@ pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
 
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
     if refuse_while_offline_render(ctx, "start recording") {
+        let _ = ctx.event_tx.send(AudioEvent::TransportRefused);
         return;
     }
     if precount_bars == 0 {
@@ -285,6 +287,7 @@ pub(crate) fn begin_recording_stream(
     // — file a second, spurious take for every loop pass (ba doc #292).
     // They stay in `armed_tracks` so the transport still enters recording
     // and opens the cycle-record session for their MIDI.
+    super::clips::settle_clip_id_scan(state, true);
     for info in armed_tracks.iter().filter(|i| i.captures_audio) {
         let clip_id = state.next_clip_id;
         state.next_clip_id += 1;
@@ -450,7 +453,7 @@ fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
             if let Some(&inst_id) = track.plugins().first() {
                 if let Some(mutex) = plugins_guard.get(&inst_id) {
                     if let Some(mut inst) = mutex.try_lock() {
-                        inst.0.all_notes_off();
+                        inst.0.all_notes_off_and_drop_carried();
                         inst.0.process(&mut silent_l, &mut silent_r, 64);
                     }
                 }
@@ -590,6 +593,7 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     }
 
     // -- Audio takes --
+    super::clips::settle_clip_id_scan(state, true);
     let rolled = state.rec.roll_audio_pass(
         ctx.sample_rate,
         clip_start,

@@ -126,7 +126,7 @@ pub fn to_audio_clip(
     // which reads the same caches through `mix_track_clips` (todo #358).
     super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
 
-    reset_plugins(plugins);
+    reset_plugins(plugins, shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));

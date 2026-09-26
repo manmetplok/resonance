@@ -295,6 +295,7 @@ pub(crate) fn handle_record_midi_event(
         // checker can't always prove safe.
         let needs_new_clip = !state.midi_recording.contains_key(&track_id);
         if needs_new_clip {
+            crate::engine::clips::settle_clip_id_scan(state, true);
             let clip_id = state.next_clip_id;
             state.next_clip_id += 1;
             // Lazy clip creation on the first note. Start the clip

@@ -21,6 +21,7 @@
 //! since cpal 0.17, so we do *not* need to forward to cpal — the
 //! recovery has already happened by the time `err_fn` fires.
 
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -87,9 +88,27 @@ impl UnderrunRateLimiter {
         now: Instant,
         interval: Duration,
     ) -> Option<UnderrunReport> {
+        self.record_count_with_interval(now, 1, interval)
+    }
+
+    /// Register `count` underruns at once — what the engine loop drains
+    /// from a [`StreamErrorLatch`] per tick. `count == 0` records nothing.
+    pub fn record_count(&self, now: Instant, count: u64) -> Option<UnderrunReport> {
+        self.record_count_with_interval(now, count, UNDERRUN_REPORT_INTERVAL)
+    }
+
+    fn record_count_with_interval(
+        &self,
+        now: Instant,
+        count: u64,
+        interval: Duration,
+    ) -> Option<UnderrunReport> {
+        if count == 0 {
+            return None;
+        }
         let mut state = self.inner.lock().expect("poisoned underrun limiter");
-        state.pending += 1;
-        state.total += 1;
+        state.pending += count;
+        state.total += count;
 
         let should_emit = match state.last_report {
             None => true,
@@ -127,5 +146,61 @@ pub fn format_underrun_line(label: &str, report: &UnderrunReport) -> String {
             UNDERRUN_REPORT_INTERVAL.as_secs(),
             report.lifetime_total,
         )
+    }
+}
+
+/// A cpal stream's error callback, reduced to atomics (code review
+/// FU-H6b). cpal runs `err_fn` on its ALSA worker — the audio thread —
+/// so it only counts here; the engine loop drains the counts, rate-limits
+/// the underruns through an [`UnderrunRateLimiter`] and formats + logs.
+/// A backend-specific error's description string is not kept (storing
+/// it would allocate); its kind is.
+#[derive(Debug, Default)]
+pub struct StreamErrorLatch {
+    underruns: AtomicU64,
+    errors: AtomicU64,
+    /// The most recent non-underrun error's kind ([`Self::kind_name`]).
+    last_error_kind: AtomicU8,
+}
+
+impl StreamErrorLatch {
+    /// Audio-thread side: count one error. Atomics only.
+    pub fn record(&self, err: &cpal::StreamError) {
+        let kind = match err {
+            cpal::StreamError::BufferUnderrun => {
+                self.underruns.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            cpal::StreamError::DeviceNotAvailable => 1,
+            cpal::StreamError::StreamInvalidated => 2,
+            cpal::StreamError::BackendSpecific { .. } => 3,
+        };
+        self.last_error_kind.store(kind, Ordering::Relaxed);
+        self.errors.fetch_add(1, Ordering::Release);
+    }
+
+    /// Engine-loop side: underruns since the last call.
+    pub fn take_underruns(&self) -> u64 {
+        self.underruns.swap(0, Ordering::Relaxed)
+    }
+
+    /// Engine-loop side: `(count, kind of the latest)` of the other
+    /// errors since the last call, or `None`.
+    pub fn take_errors(&self) -> Option<(u64, &'static str)> {
+        let count = self.errors.swap(0, Ordering::Acquire);
+        (count > 0).then(|| {
+            (
+                count,
+                Self::kind_name(self.last_error_kind.load(Ordering::Relaxed)),
+            )
+        })
+    }
+
+    fn kind_name(kind: u8) -> &'static str {
+        match kind {
+            1 => "device no longer available",
+            2 => "stream configuration invalidated",
+            _ => "backend-specific error",
+        }
     }
 }

@@ -227,7 +227,8 @@ pub mod test_support {
         parse_allowed_rates, parse_pw_metadata_value, reassert_source_key, CANONICAL_RATE,
     };
     pub use crate::stream_errors::{
-        format_underrun_line, UnderrunRateLimiter, UnderrunReport, UNDERRUN_REPORT_INTERVAL,
+        format_underrun_line, StreamErrorLatch, UnderrunRateLimiter, UnderrunReport,
+        UNDERRUN_REPORT_INTERVAL,
     };
     /// The panic containment every detached worker (offline render
     /// spawn sites, `ImportQueue` jobs) runs its body through — exposed

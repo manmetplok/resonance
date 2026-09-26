@@ -190,6 +190,12 @@ fn play_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
         events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.contains(OFFLINE_RENDER_BUSY_MSG))),
         "the refusal must be surfaced as an error event, got {events:?}"
     );
+    // ...and as the event that resets the app's optimistic `playing`
+    // mirror (FU-F1a).
+    assert!(
+        events.iter().any(|e| matches!(e, AudioEvent::TransportRefused)),
+        "the refusal must tell the app the transport did not start, got {events:?}"
+    );
 
     drop(guard);
     h.play();
@@ -231,4 +237,40 @@ fn record_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
             .any(|e| matches!(e, AudioEvent::Error(m) if !m.contains(OFFLINE_RENDER_BUSY_MSG))),
         "expected the ordinary record path's own error, got {events:?}"
     );
+}
+
+/// A measurement takes the renderer on the engine thread, before its
+/// worker exists (FU-F1b): a Play handled right after the `MeasureMix`
+/// command is refused even while the worker hasn't reached its render.
+/// It used to be taken on the worker, leaving a window where the Play
+/// landed first and the transport started, then stalled.
+#[test]
+fn a_play_right_after_a_measurement_is_refused_before_its_worker_runs() {
+    let mut h = EngineHandlerHarness::new();
+    // Park the worker at its first clip-list read, holding the renderer.
+    let clips = h.clips_lock();
+    let parked = clips.write();
+
+    h.measure_master(7);
+    h.play();
+    assert!(!h.is_playing(), "Play must not start under a spawned measurement");
+    assert!(h.drain_events().iter().any(|e| matches!(e, AudioEvent::TransportRefused)));
+
+    drop(parked);
+    let deadline = Instant::now() + std::time::Duration::from_secs(10);
+    let mut events = Vec::new();
+    while Instant::now() < deadline
+        && !events.iter().any(|e| matches!(e, AudioEvent::MixMeasureError { measure_id: 7, .. }))
+    {
+        events.extend(h.drain_events());
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(
+        events.iter().any(|e| matches!(e, AudioEvent::MixMeasureError { measure_id: 7, .. })),
+        "the (empty) measurement terminates, got {events:?}"
+    );
+    // ...and releases the renderer.
+    h.play();
+    assert!(h.is_playing());
+    h.stop();
 }

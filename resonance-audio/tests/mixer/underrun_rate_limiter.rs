@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::{
-    format_underrun_line, UnderrunRateLimiter, UNDERRUN_REPORT_INTERVAL,
+    format_underrun_line, StreamErrorLatch, UnderrunRateLimiter, UNDERRUN_REPORT_INTERVAL,
 };
 
 const INTERVAL: Duration = Duration::from_secs(10);
@@ -140,4 +140,28 @@ fn format_underrun_line_plural_form_includes_count_and_interval() {
     assert!(line.contains("5 buffer underruns/overruns"), "got: {line}");
     assert!(line.contains("in the last 10s"), "got: {line}");
     assert!(line.contains("lifetime total: 6"), "got: {line}");
+}
+
+/// The error callback only counts (code review FU-H6b); the engine loop
+/// drains the counts into the limiter and logs.
+#[test]
+fn stream_error_latch_counts_on_the_audio_side_and_drains_on_the_engine_side() {
+    let latch = StreamErrorLatch::default();
+    for _ in 0..3 {
+        latch.record(&cpal::StreamError::BufferUnderrun);
+    }
+    latch.record(&cpal::StreamError::DeviceNotAvailable);
+    latch.record(&cpal::StreamError::StreamInvalidated);
+
+    let limiter = UnderrunRateLimiter::new();
+    let t0 = Instant::now();
+    let report = limiter
+        .record_count(t0, latch.take_underruns())
+        .expect("first batch reports");
+    assert_eq!((report.count, report.lifetime_total), (3, 3));
+    assert_eq!(latch.take_underruns(), 0, "drained");
+    assert!(limiter.record_count(t0, 0).is_none(), "nothing new, nothing reported");
+
+    assert_eq!(latch.take_errors(), Some((2, "stream configuration invalidated")));
+    assert_eq!(latch.take_errors(), None);
 }

@@ -149,11 +149,27 @@ impl EngineHandlerHarness {
         self.state.project_dir = Some(dir);
     }
 
+    /// What the `SetProjectDir` handler itself does (FU-M12b): start the
+    /// reservation scan on its worker and return; the reservation lands
+    /// at the next clip-id allocation (or engine-loop poll).
+    pub fn set_project_dir_async(&mut self, dir: std::path::PathBuf) {
+        crate::engine::clips::start_clip_id_scan(&mut self.state, &dir);
+        self.state.project_dir = Some(dir);
+    }
+
     /// Run the real `AudioCommand::ImportClip` handler: queues a decode on
     /// the import worker, which lands the clip asynchronously.
     pub fn import_clip(&mut self, track_id: TrackId, path: String, start_sample: u64) {
         self.with_ctx(|ctx, state| {
             crate::engine::clips::handle_import_clip(ctx, state, track_id, path, start_sample)
+        });
+    }
+
+    /// Run the real `AudioCommand::ImportAudioToPool` handler: spawns the
+    /// pool-import worker, whose events arrive asynchronously.
+    pub fn import_audio_to_pool(&mut self, paths: Vec<String>) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::import_pool::handle_import_audio_to_pool(ctx, state, paths)
         });
     }
 
@@ -464,6 +480,35 @@ impl EngineHandlerHarness {
     /// bounce / freeze / stem worker does for the length of its render.
     pub fn hold_offline_render(&self) -> OfflineRenderGuard {
         OfflineRenderGuard::mark(&self.shared)
+    }
+
+    /// Run the real `AudioCommand::MeasureMix` spawn path: one offline
+    /// (`Render`) measurement of the master, on its worker thread.
+    pub fn measure_master(&mut self, measure_id: u64) {
+        self.with_ctx(|ctx, _| {
+            crate::engine::bounce::measure_mix_spawn(
+                measure_id,
+                vec![StemSource::Master],
+                None,
+                MeasureSource::Render,
+                Arc::clone(ctx.shared),
+                Arc::clone(ctx.tracks),
+                Arc::clone(ctx.busses),
+                Arc::clone(ctx.master),
+                Arc::clone(ctx.clips),
+                Arc::clone(ctx.midi_clips),
+                Arc::clone(ctx.plugins),
+                Arc::clone(ctx.tempo_map),
+                ctx.sample_rate,
+                ctx.event_tx.clone(),
+            )
+        });
+    }
+
+    /// The engine's clip list, so a test can hold its lock to park a
+    /// worker that reads it.
+    pub fn clips_lock(&self) -> Arc<RwLock<Vec<AudioClip>>> {
+        Arc::clone(&self.clips)
     }
 
     /// Render one block of `track_id` through the **real** `render_block`,

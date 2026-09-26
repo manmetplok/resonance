@@ -220,10 +220,10 @@ fn project() -> (Vec<Track>, Vec<Bus>, Vec<AudioClip>, Vec<AuxSend>) {
     let t4 = Track::new(4, "frozen-resampled".into());
     t4.set_output(TrackOutput::Master);
     t4.set_pan(0.2);
-    // A cache rendered at a different rate takes the linear-interpolation
-    // branch of the frozen-source read.
+    // A cache rendered at a different rate, converted the way the engine
+    // publishes it (`FrozenSource::at_rate`, code review FU-G3a).
     t4.frozen_source
-        .store(Some(Arc::new(frozen(91, BLOCK * 4, 44_100))));
+        .store(Some(Arc::new(frozen(91, BLOCK * 4, 44_100).at_rate(SR))));
 
     let t5 = Track::new(5, "mute-automated".into());
     t5.set_output(TrackOutput::Master);
@@ -266,7 +266,10 @@ fn project() -> (Vec<Track>, Vec<Bus>, Vec<AudioClip>, Vec<AuxSend>) {
 /// a full compensation table.
 #[test]
 fn bounce_block_output_is_bit_identical() {
-    const EXPECTED: u64 = 0x99fe_15e8_e91d_a389;
+    // Re-blessed for FU-G3a: the 44.1 kHz frozen cache (track 4) is now
+    // converted by the shared band-limited resampler at publish time
+    // instead of linearly interpolated in the render.
+    const EXPECTED: u64 = 0x2e96_ac89_c4b8_9182;
 
     let (tracks, busses, clips, sends) = project();
     let (data, bus_bufs) = render_aux_with_comp_for_test(
@@ -309,7 +312,8 @@ fn bounce_block_output_is_bit_identical() {
 /// and the VU peak writes run.
 #[test]
 fn live_blocks_output_is_bit_identical() {
-    const EXPECTED: u64 = 0xee24_8fd4_1d34_8c76;
+    // Re-blessed for FU-G3a (see the bounce test).
+    const EXPECTED: u64 = 0x046c_2eac_0a19_102d;
 
     let (tracks, busses, clips, sends) = project();
     // The live path has no automation snapshot in the bench harness, so

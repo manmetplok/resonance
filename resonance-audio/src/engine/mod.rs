@@ -25,7 +25,6 @@ use crate::midi_clock::MidiClockEvent;
 use crate::midi_hardware::{LiveControlEvent, LiveMidiEvent};
 use crate::mixer;
 use crate::platform::{self, DeviceDirection};
-use crate::stream_errors::{format_underrun_line, UnderrunRateLimiter};
 use crate::types::*;
 
 mod bounce;
@@ -286,6 +285,16 @@ pub struct SharedState {
     /// The callback's one-shot oversize-buffer warning, logged by the
     /// engine loop — never the audio thread (code review ARCH-05 A5-2).
     pub oversize_buffer: crate::cycle_load::OversizeBufferLatch,
+    /// The cpal output / input streams' error callbacks, counted on the
+    /// audio thread and logged by the engine loop (code review FU-H6b).
+    pub output_stream_errors: crate::stream_errors::StreamErrorLatch,
+    pub input_stream_errors: crate::stream_errors::StreamErrorLatch,
+    /// Plugins an offline render's reset took down: active before, and
+    /// neither the stop/start cycle nor a full reactivation brought them
+    /// back (FU-M8b). Pushed by the bounce workers, drained and reported
+    /// by the engine loop — each instance once, since a plugin already
+    /// inactive at the next render is not pushed again.
+    pub plugins_dead_after_reset: parking_lot::Mutex<Vec<crate::types::PluginInstanceId>>,
     /// Replaced snapshots kept alive until the engine loop's sweep finds
     /// no reader pinning them (code review MIX-04 / ARCH-02 A2-2). Every
     /// `ArcSwap` the callback reads is published through
@@ -434,6 +443,9 @@ impl Default for SharedState {
             lock_misses: crate::cycle_load::LockMissCounters::new(),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
+            output_stream_errors: Default::default(),
+            input_stream_errors: Default::default(),
+            plugins_dead_after_reset: parking_lot::Mutex::new(Vec::new()),
             retired: retire::Retired::new(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
@@ -669,13 +681,6 @@ impl AudioEngine {
 
         let audio_buf_frames = buf_frames;
         let audio_quantum = quantum;
-        // Rate-limited counter for `StreamError::BufferUnderrun` events.
-        // cpal 0.17 surfaces ALSA/JACK underruns through `err_fn`
-        // (previously they went to cpal-internal stderr). On a busy
-        // desktop with PipeWire that can fire many times a second
-        // under normal UI load, so we coalesce into one summary line
-        // per `UNDERRUN_REPORT_INTERVAL` instead of spamming.
-        let underrun_limiter = Arc::new(UnderrunRateLimiter::new());
         // Build one fully-captured mixer callback plus the matching
         // monitor-ring producer. Callable more than once (the native
         // PipeWire attempt, then the cpal fallback) — each call
@@ -844,20 +849,15 @@ impl AudioEngine {
         // 2+ periods of extra latency over the native stream.
         let build_cpal = |config: &cpal::StreamConfig| {
             let (mut mix, prod) = make_mixer(false);
-            let underrun_limiter = Arc::clone(&underrun_limiter);
             let shared_err = Arc::clone(&shared);
             let result = device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mix(data, channels),
-                move |err| match err {
-                    cpal::StreamError::BufferUnderrun => {
-                        if let Some(report) =
-                            underrun_limiter.record(std::time::Instant::now())
-                        {
-                            tracing::warn!("{}", format_underrun_line("output", &report));
-                        }
-                    }
-                    other => {
+                // Runs on cpal's ALSA worker, the audio thread: atomics
+                // only; the engine loop rate-limits underruns and logs
+                // (code review FU-H6b).
+                move |err| {
+                    if !matches!(err, cpal::StreamError::BufferUnderrun) {
                         // DeviceNotAvailable / StreamInvalidated / backend
                         // errors: the stream is dead but the engine thread
                         // is not, so without this flag the failure is
@@ -868,8 +868,8 @@ impl AudioEngine {
                         shared_err
                             .output_stream_lost
                             .store(true, std::sync::atomic::Ordering::Release);
-                        tracing::error!("Audio stream error: {}", other);
                     }
+                    shared_err.output_stream_errors.record(&err);
                 },
                 None,
             );

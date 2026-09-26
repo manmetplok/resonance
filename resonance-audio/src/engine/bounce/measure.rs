@@ -95,6 +95,46 @@ pub fn measure_mix(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
+    measure_mix_holding(
+        measure_id,
+        targets,
+        range,
+        source,
+        shared,
+        tracks,
+        busses,
+        master,
+        clips,
+        midi_clips,
+        plugins,
+        tempo_map,
+        sample_rate,
+        event_tx,
+        None,
+    );
+}
+
+/// [`measure_mix`] with the offline renderer optionally already held:
+/// [`measure_mix_spawn`] takes it on the engine thread (FU-F1b) so a Play
+/// can't land between the spawn and the worker's transport check.
+#[allow(clippy::too_many_arguments)]
+fn measure_mix_holding(
+    measure_id: u64,
+    targets: Vec<StemSource>,
+    range: Option<(SamplePos, SamplePos)>,
+    source: MeasureSource,
+    shared: &Arc<SharedState>,
+    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
+    master: &Arc<RwLock<MasterBus>>,
+    clips: &Arc<RwLock<Vec<AudioClip>>>,
+    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    plugins: &Arc<RwLock<PluginMap>>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    sample_rate: u32,
+    event_tx: &Sender<AudioEvent>,
+    held: Option<OfflineRenderGuard>,
+) {
     let fail = |message: String| {
         let _ = event_tx.send(AudioEvent::MixMeasureError {
             measure_id,
@@ -126,7 +166,7 @@ pub fn measure_mix(
     // A measurement must never disturb a render that is producing a file,
     // and two renders would corrupt each other's plugin state, so this is
     // the one offline path that refuses rather than queues.
-    let Some(_offline) = OfflineRenderGuard::try_acquire_exclusive(shared) else {
+    let Some(_offline) = held.or_else(|| OfflineRenderGuard::try_acquire_exclusive(shared)) else {
         fail(MEASURE_BUSY_MSG.into());
         return;
     };
@@ -208,19 +248,37 @@ pub(crate) fn measure_mix_spawn(
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) {
+    // Take the renderer here, on the engine thread, like the file-writing
+    // spawn paths (FU-F1b): the transport handlers are then ordered
+    // against it, so a Play either precedes it (and the worker's
+    // "stop the transport" check refuses) or is refused itself.
+    let held = if source == MeasureSource::Render && !targets.is_empty() {
+        match OfflineRenderGuard::try_acquire_exclusive(&shared) {
+            Some(guard) => Some(guard),
+            None => {
+                let _ = event_tx.send(AudioEvent::MixMeasureError {
+                    measure_id,
+                    message: MEASURE_BUSY_MSG.into(),
+                });
+                return;
+            }
+        }
+    } else {
+        None
+    };
     std::thread::Builder::new()
         .name("measure-mix".into())
         .spawn(move || {
             // Panic supervision: a panicking render must still emit the
             // path's terminal error event (see `crate::supervise`). The
-            // exclusive `OfflineRenderGuard` is taken inside
-            // `measure_mix` and drops during the unwind, so the panic
-            // path releases the renderer like the error path does.
+            // exclusive `OfflineRenderGuard` moves into
+            // `measure_mix_holding` and drops during the unwind, so the
+            // panic path releases the renderer like the error path does.
             let panic_tx = event_tx.clone();
             crate::supervise::run_supervised(
                 "measure-mix",
                 || {
-                    measure_mix(
+                    measure_mix_holding(
                         measure_id,
                         targets,
                         range,
@@ -235,6 +293,7 @@ pub(crate) fn measure_mix_spawn(
                         &tempo_map,
                         sample_rate,
                         &event_tx,
+                        held,
                     );
                 },
                 |message| {

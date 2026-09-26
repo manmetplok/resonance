@@ -183,6 +183,28 @@ fn carried_note_off_survives_a_seam_panic() {
     assert!(tail.contains(&(3, true, 64)));
 }
 
+/// A Stop / relocate panic, unlike the seam's, drops carried events: a
+/// carried note-on delivered after the 128 offs would hang (FU-F2a).
+#[test]
+fn a_stop_panic_drops_a_carried_note_on() {
+    let (mut inst, state) = make_instance();
+    let state = unsafe { &mut *state };
+
+    inst.queue_note_on(60, 0.8, 100);
+    run(&mut inst, 20);
+    inst.all_notes_off_and_drop_carried();
+    run(&mut inst, 108);
+    run(&mut inst, 128);
+
+    assert_in_block_and_sorted(&state.calls);
+    let delivered: Vec<_> = state.calls.iter().flat_map(|(_, seen)| seen.iter()).collect();
+    assert!(
+        !delivered.iter().any(|e| e.1),
+        "a note-on outlived the Stop panic: {delivered:?}"
+    );
+    assert_eq!(delivered.len(), 128, "the panic's offs, nothing else");
+}
+
 #[test]
 fn equal_time_events_keep_insertion_order() {
     let (mut inst, state) = make_instance();

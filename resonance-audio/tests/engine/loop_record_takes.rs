@@ -2452,3 +2452,122 @@ fn an_import_finishing_after_clear_all_is_dropped() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The `SetProjectDir` handler runs that folder scan on a worker (code
+/// review FU-M12b), yet the first clip id allocated after it — here by
+/// an import — still waits for the reservation.
+#[test]
+fn the_project_dir_scan_runs_off_thread_but_lands_before_the_next_id() {
+    let dir = std::env::temp_dir().join(format!("resonance_fu_m12b_{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("audio")).unwrap();
+    std::fs::write(dir.join("audio/clip_41.wav"), b"").unwrap();
+
+    let mut h = EngineHandlerHarness::new();
+    h.set_project_dir_async(dir.clone());
+    // Allocates an id synchronously; the decode of the (missing) file
+    // fails later on the import worker.
+    h.import_clip(1, dir.join("missing.wav").display().to_string(), 0);
+
+    assert_eq!(h.next_clip_id(), 43, "the import took id 42, past the reserved 41");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// Loop-record seams at a mismatched device rate (code review FU-G3b)
+// ---------------------------------------------------------------------------
+
+/// A 44.1 kHz input captured into a 48 kHz project across three loop
+/// passes: the input resampler runs across every seam and flushes its
+/// lookahead into the finished take (LIB-01). End to end through
+/// `roll_audio_pass`: the takes, laid end to end, hold exactly the
+/// one-shot conversion's frame count — nothing dropped or doubled at a
+/// seam — follow the ideal 48 kHz tone away from the seams, and never
+/// jump across one.
+#[test]
+fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
+    let project_dir = make_tempdir("mismatched-rate-seams");
+    let audio_dir = project_dir.join("audio");
+    let (engine_sr, input_sr) = (48_000u32, 44_100u32);
+    // Uneven passes, none a multiple of the 147:160 rate ratio.
+    let passes = [22_050u64, 19_999, 23_417];
+    let freq = 441.0f64;
+    let amp = 0.5f64;
+
+    let mut rec = RecordingState::new(engine_sr);
+    let total_in: u64 = passes.iter().sum();
+    let ring: HeapRb<f32> = HeapRb::new(total_in as usize * 2);
+    let (mut prod, cons) = ring.split();
+    rec.ring_consumer = Some(cons);
+    rec.input_channels = 2;
+    rec.input_sample_rate = input_sr;
+    rec.start_sample = 0;
+    let buf = RecordingState::create_track_buf(&project_dir, 7, 1, engine_sr, input_sr, 0, false)
+        .unwrap();
+    rec.buffers.insert(7, buf);
+
+    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut next_clip_id = 2u64;
+    let mut fed = 0u64;
+    let mut take_lengths = Vec::new();
+    for (pass, &frames) in passes.iter().enumerate() {
+        let chunk: Vec<f32> = (fed..fed + frames)
+            .flat_map(|i| {
+                let s = (amp * (std::f64::consts::TAU * freq * i as f64 / input_sr as f64).sin())
+                    as f32;
+                [s, s]
+            })
+            .collect();
+        prod.push_slice(&chunk);
+        fed += frames;
+        let last = pass + 1 == passes.len();
+        let rolled =
+            rec.roll_audio_pass(engine_sr, 0, &clips, &audio_dir, &mut next_clip_id, !last);
+        assert_eq!(rolled.len(), 1, "pass {pass} produced one take");
+        take_lengths.push(rolled[0].duration_samples);
+    }
+
+    // Nothing dropped or doubled: take k holds exactly the one-shot
+    // conversion's output for its share of the input.
+    let out_len = |input: u64| (input * engine_sr as u64).div_ceil(input_sr as u64);
+    let mut cumulative = 0u64;
+    for (k, &frames) in passes.iter().enumerate() {
+        let expected = out_len(cumulative + frames) - out_len(cumulative);
+        assert_eq!(take_lengths[k], expected, "take {k} length");
+        cumulative += frames;
+    }
+
+    // Lay the takes end to end, in pass order.
+    let guard = clips.read();
+    let mut ids: Vec<u64> = guard.iter().map(|c| c.id).collect();
+    ids.sort_unstable();
+    let mut joined = Vec::new();
+    let mut seams = Vec::new();
+    for id in ids {
+        let clip = guard.iter().find(|c| c.id == id).unwrap();
+        let frames = clip.source.as_frames();
+        joined.extend(frames.chunks_exact(2).map(|f| f[0]));
+        seams.push(joined.len());
+    }
+    drop(guard);
+    assert_eq!(joined.len() as u64, out_len(total_in));
+
+    let ideal = |n: usize| amp * (std::f64::consts::TAU * freq * n as f64 / engine_sr as f64).sin();
+    // Away from the seams (and the stream's own edges) the capture is the
+    // band-limited conversion of the tone.
+    let guard_frames = 200;
+    for (n, &s) in joined.iter().enumerate() {
+        let near_seam = seams.iter().any(|&b| n + guard_frames > b && n < b + guard_frames);
+        if n < guard_frames || near_seam {
+            continue;
+        }
+        assert!((s as f64 - ideal(n)).abs() < 1e-3, "frame {n}: {s} vs {}", ideal(n));
+    }
+    // And nothing jumps anywhere, seams included: no step exceeds the
+    // tone's own slope by more than a small margin.
+    let max_step = amp * std::f64::consts::TAU * freq / engine_sr as f64;
+    for (n, w) in joined.windows(2).enumerate() {
+        let step = (w[1] - w[0]).abs() as f64;
+        assert!(step < max_step * 1.5, "click at frame {n}: step {step} (tone max {max_step})");
+    }
+    let _ = std::fs::remove_dir_all(&project_dir);
+}

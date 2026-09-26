@@ -21,7 +21,7 @@ use crate::note_recorder;
 use std::sync::atomic::Ordering;
 
 use note_recorder::{note_recorder, Recorder};
-use resonance_audio::test_support::MixAudioHarness;
+use resonance_audio::test_support::{MixAudioHarness, StateMap};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -107,15 +107,55 @@ fn continuous_playback_never_flushes() {
 }
 
 /// A lock-contended block advances the playhead without rendering, so
-/// whatever NoteOff fell in it was never collected: the next rendered
+/// a NoteOff that fell in it was never collected: the next rendered
 /// block flushes.
 #[test]
 fn a_block_skipped_under_lock_contention_flushes_on_the_next_render() {
+    // A one-quarter note: NoteOff at 24 000 samples, inside block 187
+    // ([23 936, 24 064)).
+    let (mut h, rec) = harness(1);
+    for _ in 0..187 {
+        h.render();
+    }
+    assert!(rec.lock().held[60]);
+    h.render_lock_contended();
+    let calls_before = rec.lock().calls;
+    h.render();
+    assert!(rec.lock().panicked_in(calls_before));
+    assert!(!rec.lock().any_held(), "the skipped NoteOff must not leave the note hanging");
+}
+
+/// ...but a contended block that lost no NoteOff is not a discontinuity:
+/// a sustained note survives it (FU-M3b — every contended block used to
+/// flush, cutting held notes during heavy UI edits).
+#[test]
+fn a_contended_block_without_a_note_off_does_not_cut_a_sustained_note() {
     let (mut h, rec) = harness(16);
     for _ in 0..3 {
         h.render();
     }
-    h.render_lock_contended();
+    for _ in 0..5 {
+        h.render_lock_contended();
+        h.render();
+    }
+    let rec = rec.lock();
+    assert!(rec.held[60], "the pad still sounds");
+    assert!(
+        rec.events.iter().all(|e| e.on),
+        "no NoteOff / panic reached the instrument: {:?}",
+        rec.events.iter().filter(|e| !e.on).count()
+    );
+}
+
+/// When the MIDI clips themselves are the contended map, what the block
+/// lost can't be known: it flushes, as before.
+#[test]
+fn a_block_skipped_with_the_midi_clips_contended_still_flushes() {
+    let (mut h, rec) = harness(16);
+    for _ in 0..3 {
+        h.render();
+    }
+    h.render_with_queued_writer(StateMap::MidiClips);
     let calls_before = rec.lock().calls;
     h.render();
     assert!(rec.lock().panicked_in(calls_before));
