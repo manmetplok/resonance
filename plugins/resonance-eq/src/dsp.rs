@@ -56,6 +56,18 @@ impl EqDsp {
                 // but carry independent delay-line state).
                 let n = configure_stages(&snapshot, self.sample_rate, &mut self.channels[0][i]);
                 let _ = configure_stages(&snapshot, self.sample_rate, &mut self.channels[1][i]);
+                // Stages that were not running hold z1/z2 frozen from
+                // another input (and maybe other coefficients); TDF-II
+                // injects that straight into the output. Start them clean.
+                // A kind change repurposes every stage, so clear them all.
+                let prev_n = self.active_stages[i];
+                let kind_changed = self.last_snapshot[i].is_some_and(|p| p.kind != snapshot.kind);
+                let fresh_from = if kind_changed { 0 } else { prev_n.min(n) };
+                for ch in self.channels.iter_mut() {
+                    for stage in &mut ch[i][fresh_from..n] {
+                        stage.reset();
+                    }
+                }
                 self.active_stages[i] = n;
                 self.last_snapshot[i] = Some(snapshot);
             }

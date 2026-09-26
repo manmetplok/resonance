@@ -11,6 +11,7 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Crash-safe file write: write `bytes` to a sibling `*.tmp` in the
 /// same directory, fsync it, atomically rename it over `path`, then
@@ -20,12 +21,16 @@ use std::path::Path;
 ///
 /// The temp file lives in the same directory as the target so the
 /// rename stays within one filesystem (cross-device renames are not
-/// atomic). Its name embeds the target's file name to avoid colliding
-/// with the temp files of sibling writes in the same directory.
+/// atomic). Its name is unique per write — the target's file name plus
+/// the process id and a per-process counter, created with `create_new`
+/// — so two concurrent writers of the same target (two threads, two app
+/// instances) never share, truncate or rename each other's temp file;
+/// the last rename wins with one writer's complete content.
 ///
-/// A leftover `*.tmp` from an interrupted write is inert: it shares no
-/// name with any file the loader looks for, so it can never clobber a
-/// good target file.
+/// Any failure after the temp file exists (write, fsync or rename — e.g.
+/// a full disk) removes it before returning the error. Only a crash can
+/// strand one, and a leftover `*.tmp` is inert: it shares no name with
+/// any file the loader looks for, so it can never clobber a good target.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
@@ -35,27 +40,43 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
         .file_name()
         .ok_or_else(|| format!("Atomic write target {} has no file name", path.display()))?;
 
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut tmp_name = file_name.to_os_string();
-    tmp_name.push(".tmp");
+    tmp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp_path = parent.join(&tmp_name);
 
-    // Write the full contents and fsync before the rename so the new
-    // data is durable on disk before it becomes visible at `path`.
-    {
-        let mut f = std::fs::File::create(&tmp_path)
-            .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
-        f.write_all(bytes)
-            .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
-        f.sync_all()
-            .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
-    }
+    // `create_new` never opens (and truncates) a file that is already
+    // there, so even a stale name collision fails loudly instead.
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp_path)
+        .map_err(|e| format!("create {}: {e}", tmp_path.display()))?;
 
-    // Atomic on POSIX: an observer sees either the old or the new file.
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        // Best-effort cleanup so a failed rename doesn't strand the tmp.
+    // Write the full contents and fsync before the rename so the new
+    // data is durable on disk before it becomes visible at `path`. Then
+    // rename — atomic on POSIX: an observer sees either the old or the
+    // new file. Any failure removes the temp file so it is not stranded.
+    let result = f
+        .write_all(bytes)
+        .map_err(|e| format!("write {}: {e}", tmp_path.display()))
+        .and_then(|()| {
+            f.sync_all()
+                .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))
+        })
+        .and_then(|()| {
+            drop(f);
+            std::fs::rename(&tmp_path, path)
+                .map_err(|e| format!("rename {} -> {}: {e}", tmp_path.display(), path.display()))
+        });
+    if let Err(e) = result {
         let _ = std::fs::remove_file(&tmp_path);
-        format!("rename {} -> {}: {e}", tmp_path.display(), path.display())
-    })?;
+        return Err(e);
+    }
 
     // fsync the directory so the rename entry itself survives a crash.
     // Directory fsync is unsupported on some platforms/filesystems, so

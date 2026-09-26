@@ -368,3 +368,99 @@ fn the_param_count_matches_the_declared_surface() {
         assert!(ids.contains(id), "{id} is not reachable through param_at");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Transport lock (LIB-03)
+// ---------------------------------------------------------------------------
+
+/// A plugin configured as a hard 1/4 gate, 50% open, over a 10 ms wet-only
+/// delay with no feedback — so the output is the gated echo of the input.
+fn quarter_gate() -> ResonanceDelay {
+    let mut p = ResonanceDelay::new();
+    p.params.mix.set_value(1.0);
+    p.params.sync.set_plain(0.0);
+    p.params.time_ms.set_value(10.0);
+    p.params.feedback.set_value(0.0);
+    p.params.gate_on.set_plain(1.0);
+    p.params.gate_rate.set_plain(4.0); // 1/4 — one beat
+    p.params.gate_width.set_value(0.5);
+    p.params.gate_shape.set_value(0.0);
+    p.params.gate_depth.set_value(1.0);
+    p
+}
+
+fn sine(start: usize, frames: usize) -> Vec<f32> {
+    (start..start + frames)
+        .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / SR).sin() * 0.5)
+        .collect()
+}
+
+/// Process one block of a 440 Hz sine starting at absolute sample
+/// `start`, with the given transport state.
+fn block(p: &mut ResonanceDelay, start: usize, frames: usize, t: TempoInfo) -> Vec<f32> {
+    let mut left = sine(start, frames);
+    let mut right = left.clone();
+    let mut outs = [OutputBuffer {
+        left: &mut left,
+        right: &mut right,
+    }];
+    let mut ev = EventIterator::empty();
+    p.process(&mut outs, frames, &mut ev, Some(t));
+    left
+}
+
+fn at(song_pos_beats: f64) -> TempoInfo {
+    TempoInfo {
+        song_pos_beats,
+        ..tempo(120.0)
+    }
+}
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt()
+}
+
+#[test]
+fn a_mid_beat_start_opens_on_the_beat_not_on_the_first_sample() {
+    // 120 BPM: one beat is 24_000 samples. Starting playback half a beat
+    // in puts the first 12_000 samples in the CLOSED half of the window.
+    let mut p = quarter_gate();
+    p.initialize(SR, 24_000);
+    let out = block(&mut p, 0, 24_000, at(0.5));
+    let closed = rms(&out[1_000..11_000]);
+    let open = rms(&out[13_000..23_000]);
+    assert!(open > 0.1, "the open half must carry the echo (rms {open})");
+    assert!(closed < 1e-4, "the off-beat half must be gated (rms {closed})");
+}
+
+#[test]
+fn a_seek_snaps_the_gate_to_the_new_position() {
+    let mut p = quarter_gate();
+    p.initialize(SR, 6_000);
+    // Two blocks from the top of the song: 0 .. 0.5 beat, gate open.
+    block(&mut p, 0, 6_000, at(0.0));
+    let b = block(&mut p, 6_000, 6_000, at(0.25));
+    assert!(rms(&b) > 0.1, "open window before the seek (rms {})", rms(&b));
+    // Seek to beat 7.5: the gate must be closed at once, not keep the
+    // phase it had accumulated (which would still be open).
+    let c = block(&mut p, 12_000, 6_000, at(7.5));
+    assert!(rms(&c) < 1e-4, "closed window after the seek (rms {})", rms(&c));
+    // And a block back on a beat is open again.
+    let d = block(&mut p, 18_000, 6_000, at(8.0));
+    assert!(rms(&d) > 0.1, "open window on the beat (rms {})", rms(&d));
+}
+
+#[test]
+fn a_stopped_transport_still_free_runs() {
+    // Not playing: song_pos is meaningless, the gate keeps its own phase,
+    // starting on an open window.
+    let mut p = quarter_gate();
+    p.initialize(SR, 24_000);
+    let t = TempoInfo {
+        playing: false,
+        ..at(0.5)
+    };
+    let out = block(&mut p, 0, 24_000, t);
+    assert!(rms(&out[1_000..11_000]) > 0.1, "free-running gate opens first");
+    assert!(rms(&out[13_000..23_000]) < 1e-4, "then closes");
+}

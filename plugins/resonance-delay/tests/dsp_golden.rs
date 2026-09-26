@@ -344,7 +344,13 @@ fn render_scenario(s: &Scenario) -> Vec<f32> {
                 right: &mut right[..frames],
             }];
             let mut ev = EventIterator::empty();
-            plugin.process(&mut outs, frames, &mut ev, s.tempo);
+            // The transport rolls with the render, as a host's would: the
+            // wet gate locks its phase to `song_pos_beats` (LIB-03).
+            let tempo = s.tempo.map(|t| TempoInfo {
+                song_pos_beats: t.song_pos_beats + n as f64 * t.bpm as f64 / (60.0 * SR as f64),
+                ..t
+            });
+            plugin.process(&mut outs, frames, &mut ev, tempo);
         }
         n += frames as u64;
         out.extend_from_slice(&left[..frames]);

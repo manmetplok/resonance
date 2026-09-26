@@ -169,6 +169,7 @@ impl ResonancePlugin for ResonanceDelay {
                         tempo,
                         self.sample_rate,
                     ),
+                    gate_phase: gate::gate_phase_at(self.params.gate_rate.value() as usize, tempo),
                     gate_width: self.params.gate_width.value(),
                     gate_edge: self.params.gate_shape.value(),
                     gate_depth: self.params.gate_depth.value(),

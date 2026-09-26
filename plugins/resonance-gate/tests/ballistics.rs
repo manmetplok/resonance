@@ -266,3 +266,17 @@ fn the_default_patch_opens_promptly() {
          inversion is back"
     );
 }
+
+/// LIB-07: the attack knob reaches down to 0.05 ms, and the bottom half of
+/// its lowest decade must not be dead — 0.05 ms has to open faster than
+/// 0.1 ms, not snap to the same 0.1 ms coefficient.
+#[test]
+fn attack_below_a_tenth_of_a_millisecond_is_honoured() {
+    let at_0_1 = open_ms(0.1, 100.0);
+    let at_0_05 = open_ms(0.05, 100.0);
+    assert!(at_0_1 > 0.0, "0.1 ms attack opened on the first sample");
+    assert!(
+        at_0_05 < at_0_1 * 0.75,
+        "0.05 ms attack opened in {at_0_05:.3}ms vs {at_0_1:.3}ms at 0.1 ms"
+    );
+}

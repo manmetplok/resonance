@@ -93,26 +93,33 @@ pub struct SampleCurve {
 }
 
 impl SampleCurve {
+    /// True when there is nothing to resample: no samples, or a timestep
+    /// that is not a finite positive number (0, negative, NaN, ±inf).
     pub fn is_empty(&self) -> bool {
-        self.samples.is_empty() || self.timestep == 0.0
+        self.samples.is_empty() || !valid_timestep(self.timestep)
     }
 
     /// Resample to `target_timestep` and pad / truncate to exactly `target_length`. Linear
     /// interpolation. Mirrors openvpi/Jobsecond `SampleCurve::resample` semantics.
     pub fn resample(&self, target_timestep: f64, target_length: usize) -> Vec<f64> {
-        if self.is_empty() || target_timestep == 0.0 || target_length == 0 {
+        if self.is_empty() || !valid_timestep(target_timestep) || target_length == 0 {
             return Vec::new();
         }
         if self.samples.len() == 1 {
             return vec![self.samples[0]; target_length];
         }
         let last_time = (self.samples.len() - 1) as f64 * self.timestep;
-        let n_target = ((last_time / target_timestep).floor() as usize) + 1;
+        // Anything past `target_length` is truncated below, so never
+        // compute (or allocate) more — a huge source timestep would
+        // otherwise ask for an absurd `n_target`.
+        let n_target = ((last_time / target_timestep).floor() as usize)
+            .saturating_add(1)
+            .min(target_length);
         let mut out = Vec::with_capacity(n_target.max(target_length));
         for i in 0..n_target {
             let t = i as f64 * target_timestep;
             let src_pos = t / self.timestep;
-            let lo = src_pos.floor() as usize;
+            let lo = (src_pos.floor() as usize).min(self.samples.len() - 1);
             let hi = (lo + 1).min(self.samples.len() - 1);
             let frac = src_pos - lo as f64;
             let v = self.samples[lo] * (1.0 - frac) + self.samples[hi] * frac;
@@ -161,6 +168,7 @@ fn compile_segment(raw: &DsSegmentRaw) -> Result<DsSegment> {
         .f0_timestep
         .ok_or_else(|| anyhow!("segment missing required f0_timestep"))?
         .value();
+    check_timestep("f0_timestep", f0_timestep)?;
 
     let mut seg = DsSegment {
         offset: raw.offset.unwrap_or(0.0),
@@ -188,13 +196,31 @@ fn compile_segment(raw: &DsSegmentRaw) -> Result<DsSegment> {
     if let Some(s) = raw.note_slur.as_deref() {
         seg.note_slur = split_ints(s)?;
     }
-    fill_curve(&mut seg.gender, raw.gender.as_deref(), raw.gender_timestep)?;
-    fill_curve(&mut seg.velocity, raw.velocity.as_deref(), raw.velocity_timestep)?;
-    fill_curve(&mut seg.energy, raw.energy.as_deref(), raw.energy_timestep)?;
-    fill_curve(&mut seg.breathiness, raw.breathiness.as_deref(), raw.breathiness_timestep)?;
-    fill_curve(&mut seg.voicing, raw.voicing.as_deref(), raw.voicing_timestep)?;
-    fill_curve(&mut seg.tension, raw.tension.as_deref(), raw.tension_timestep)?;
+    fill_curve(&mut seg.gender, raw.gender.as_deref(), raw.gender_timestep, "gender_timestep")?;
+    fill_curve(&mut seg.velocity, raw.velocity.as_deref(), raw.velocity_timestep, "velocity_timestep")?;
+    fill_curve(&mut seg.energy, raw.energy.as_deref(), raw.energy_timestep, "energy_timestep")?;
+    fill_curve(
+        &mut seg.breathiness,
+        raw.breathiness.as_deref(),
+        raw.breathiness_timestep,
+        "breathiness_timestep",
+    )?;
+    fill_curve(&mut seg.voicing, raw.voicing.as_deref(), raw.voicing_timestep, "voicing_timestep")?;
+    fill_curve(&mut seg.tension, raw.tension.as_deref(), raw.tension_timestep, "tension_timestep")?;
     Ok(seg)
+}
+
+/// A curve timestep must be a finite, strictly positive number of seconds.
+fn valid_timestep(ts: f64) -> bool {
+    ts.is_finite() && ts > 0.0
+}
+
+fn check_timestep(field: &str, ts: f64) -> Result<()> {
+    if valid_timestep(ts) {
+        Ok(())
+    } else {
+        Err(anyhow!("{field} must be a finite number > 0, got {ts}"))
+    }
 }
 
 fn split_strings(s: &str) -> Vec<String> {
@@ -213,10 +239,16 @@ fn split_ints(s: &str) -> Result<Vec<i32>> {
         .collect()
 }
 
-fn fill_curve(dst: &mut SampleCurve, samples: Option<&str>, ts: Option<TimestepField>) -> Result<()> {
+fn fill_curve(
+    dst: &mut SampleCurve,
+    samples: Option<&str>,
+    ts: Option<TimestepField>,
+    field: &str,
+) -> Result<()> {
     let (Some(s), Some(ts)) = (samples, ts) else {
         return Ok(());
     };
+    check_timestep(field, ts.value())?;
     dst.samples = split_floats(s)?;
     dst.timestep = ts.value();
     Ok(())

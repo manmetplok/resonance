@@ -67,7 +67,100 @@ fn successful_write_replaces_existing_content() {
     );
 
     // No stray tmp left behind.
-    assert!(!dir.path().join("state.json.tmp").exists());
+    assert_eq!(tmp_files(dir.path()), Vec::<String>::new());
+}
+
+/// Every `*.tmp` file in `dir`, by name.
+fn tmp_files(dir: &Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect()
+}
+
+/// LIB-08: two writers of the same target must not share a temp file.
+/// With a fixed `<name>.tmp`, one writer's `create` truncates the other's
+/// in-progress temp, and the renames race — publishing a spliced file or
+/// failing with ENOENT. Every write must succeed, and every read of the
+/// target must be exactly one of the two payloads.
+#[test]
+fn concurrent_writers_never_publish_a_spliced_file() {
+    let dir = TempDir::new("race");
+    let target = dir.path().join("settings.json");
+    let a = vec![b'a'; 64 * 1024];
+    let b = vec![b'b'; 48 * 1024];
+    atomic_write(&target, &a).expect("seed write");
+
+    std::thread::scope(|s| {
+        for payload in [&a, &b] {
+            let target = &target;
+            s.spawn(move || {
+                for i in 0..300 {
+                    atomic_write(target, payload)
+                        .unwrap_or_else(|e| panic!("write {i} failed: {e}"));
+                }
+            });
+        }
+        let target = &target;
+        let (a, b) = (&a, &b);
+        s.spawn(move || {
+            for _ in 0..600 {
+                let got = std::fs::read(target).expect("target always exists");
+                assert!(
+                    got == *a || got == *b,
+                    "published a spliced/truncated file ({} bytes)",
+                    got.len()
+                );
+            }
+        });
+    });
+
+    let got = std::fs::read(&target).unwrap();
+    assert!(got == a || got == b);
+    assert_eq!(tmp_files(dir.path()), Vec::<String>::new(), "temp files leaked");
+}
+
+const CHILD_ENV: &str = "RESONANCE_ATOMIC_WRITE_FSIZE_CHILD";
+
+/// LIB-08: a write that fails part-way (here: `RLIMIT_FSIZE`, standing in
+/// for a full disk / EDQUOT) must return an error, leave the existing
+/// target untouched and remove its partial temp file. Runs the body in a
+/// child process so the file-size limit can't affect anything else; the
+/// child ignores SIGXFSZ (an ignored disposition survives `exec`), so the
+/// oversized write fails with EFBIG instead of killing it.
+#[test]
+fn failed_write_removes_its_temp_file() {
+    let dir = TempDir::new("fsize");
+    let exe = std::env::current_exe().unwrap();
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("trap '' XFSZ; ulimit -f 16; exec \"$0\" --exact failed_write_child --nocapture --test-threads=1")
+        .arg(&exe)
+        .env(CHILD_ENV, dir.path())
+        .status()
+        .expect("spawn child");
+    assert!(status.success(), "child assertions failed: {status}");
+}
+
+/// Child half of [`failed_write_removes_its_temp_file`]; a no-op unless
+/// launched by it.
+#[test]
+fn failed_write_child() {
+    let Some(dir) = std::env::var_os(CHILD_ENV) else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let target = dir.join("project.json");
+    atomic_write(&target, b"the good content").expect("small write fits the limit");
+
+    // Far over the 16-block limit: `write_all` fails part-way through.
+    let big = vec![b'x'; 4 * 1024 * 1024];
+    let result = atomic_write(&target, &big);
+    assert!(result.is_err(), "an oversized write must fail under RLIMIT_FSIZE");
+    assert_eq!(std::fs::read(&target).unwrap(), b"the good content");
+    assert_eq!(tmp_files(&dir), Vec::<String>::new(), "partial temp file left behind");
 }
 
 #[test]

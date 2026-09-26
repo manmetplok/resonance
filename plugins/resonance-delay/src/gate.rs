@@ -80,11 +80,27 @@ pub fn gate_period_samples(
     }
 }
 
+/// Gate phase (`0.0..1.0`) at a transport position: how far
+/// `song_pos_beats` sits into the current `division` period. `None` when
+/// there is no host tempo or the transport is stopped — the gate then
+/// free-runs on its own accumulator.
+pub fn gate_phase_at(division: usize, tempo: Option<resonance_plugin::TempoInfo>) -> Option<f32> {
+    let t = tempo.filter(|t| t.playing && t.song_pos_beats.is_finite())?;
+    let div = crate::sync::division_beats(division) as f64;
+    let cycles = t.song_pos_beats / div;
+    Some((cycles - cycles.floor()) as f32)
+}
+
 /// Per-block gate + duck settings, resolved once in `process`.
 pub struct GateDuckParams {
     pub gate_on: bool,
     /// Length of one gate period in samples.
     pub gate_period: f32,
+    /// Phase of the block's first sample, from the transport position
+    /// ([`gate_phase_at`]). `Some` locks the gate to the bar grid — the
+    /// accumulator snaps to it every block, so seeks, loops and tempo
+    /// changes land on the grid at once; `None` free-runs.
+    pub gate_phase: Option<f32>,
     pub gate_width: f32,
     /// Edge ramp as a fraction of the period.
     pub gate_edge: f32,
@@ -122,10 +138,14 @@ impl GateDuck {
         self.gr_db = 0.0;
     }
 
-    /// Refresh the ducker's ballistics when the release time changed.
+    /// Lock the gate to the transport (when the block carries a phase),
+    /// and refresh the ducker's ballistics when the release time changed.
     /// Recomputing exp coefficients per sample would be wasteful, and per
     /// block is inaudible for a release control.
     pub fn prepare_block(&mut self, params: &GateDuckParams) {
+        if let (true, Some(phase)) = (params.gate_on, params.gate_phase) {
+            self.phase = phase - phase.floor();
+        }
         if (params.duck_release_ms - self.release_ms).abs() > f32::EPSILON {
             self.release_ms = params.duck_release_ms;
             self.ballistics =
