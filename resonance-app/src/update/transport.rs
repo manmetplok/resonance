@@ -73,8 +73,11 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
             r.transport.bpm_input = s;
         }
         TransportMessage::CommitBpm => {
-            if let Ok(parsed) = r.transport.bpm_input.trim().parse::<f32>() {
-                let bpm = parsed.clamp(20.0, 300.0);
+            // `"nan".parse()` is `Ok(NaN)`, and NaN survives `clamp` —
+            // it must be rejected here, before it reaches the bar table
+            // and re-anchors every clip to sample 0 (review VIEW-06).
+            let parsed = r.transport.bpm_input.trim().parse::<f32>().ok();
+            if let Some(bpm) = parsed.and_then(resonance_audio::types::sanitize_bpm) {
                 // Read every timeline position as a MUSICAL position
                 // BEFORE the grid moves, so it can be put back on the same
                 // bar afterwards (ba doc #275 P1.4). Only a real tempo

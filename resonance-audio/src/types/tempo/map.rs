@@ -5,11 +5,38 @@ use serde::{Deserialize, Serialize};
 use super::conversion::{arrival_bpm_at_bar, avg_bpm_for_bar, bpm_at_bar};
 use super::signature::{bar_len_ticks, ticks_to_quarters};
 
+/// Slowest tempo the app supports, in BPM.
+pub const MIN_BPM: f32 = 20.0;
+/// Fastest tempo the app supports, in BPM.
+pub const MAX_BPM: f32 = 300.0;
+/// Tempo used when a stored one is unusable (non-finite / missing).
+pub const DEFAULT_BPM: f32 = 120.0;
+
+/// The one definition of a legal tempo: `None` for a non-finite value
+/// (a NaN tempo turns every bar position into NaN, which casts to
+/// sample 0), otherwise the value clamped into [`MIN_BPM`]..=[`MAX_BPM`].
+pub fn sanitize_bpm(bpm: f32) -> Option<f32> {
+    bpm.is_finite().then(|| bpm.clamp(MIN_BPM, MAX_BPM))
+}
+
+/// Serde helper for stored tempos: accepts `null` (what serde_json
+/// writes for a NaN `f32`) and any out-of-range number, falling back to
+/// [`DEFAULT_BPM`] / clamping, so a project saved with a bad tempo still
+/// loads.
+pub fn deserialize_bpm<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = Option::<f32>::deserialize(deserializer)?;
+    Ok(raw.and_then(sanitize_bpm).unwrap_or(DEFAULT_BPM))
+}
+
 /// A tempo change point on the tempo track.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TempoPoint {
     /// 0-based bar number where this tempo takes effect.
     pub bar: u32,
+    #[serde(deserialize_with = "deserialize_bpm")]
     pub bpm: f32,
 }
 
@@ -83,6 +110,14 @@ impl TempoMap {
         self.bar_table.clear();
         if sample_rate == 0 {
             return;
+        }
+        // A non-finite tempo would make every bar position NaN (→ sample
+        // 0); clamp every point into the supported range and replace an
+        // unusable one with the tempo before it (review VIEW-06).
+        let mut prev = DEFAULT_BPM;
+        for p in &mut self.tempo_points {
+            p.bpm = sanitize_bpm(p.bpm).unwrap_or(prev);
+            prev = p.bpm;
         }
         let sr = sample_rate as f64;
         let mut sample_pos: f64 = 0.0;

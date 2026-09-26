@@ -29,6 +29,8 @@ mod automation_live_tint;
 mod automation_mirror;
 #[path = "timeline/automation_persistence.rs"]
 mod automation_persistence;
+#[path = "timeline/bpm_input_validation.rs"]
+mod bpm_input_validation;
 #[path = "timeline/clip_fade_gain_draw.rs"]
 mod clip_fade_gain_draw;
 #[path = "timeline/clip_fade_gain_handlers.rs"]

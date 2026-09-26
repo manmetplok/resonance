@@ -96,8 +96,8 @@ pub fn handle(r: &mut Resonance, m: GlobalTrackMessage) -> Task<Message> {
             r.rebuild_and_send_tempo();
         }
         GlobalTrackMessage::UpdateTempoEvent { index, bar, bpm } => {
-            let bpm = bpm.clamp(20.0, 300.0);
-            if let Some(event) = r.tempo_events.get_mut(index) {
+            let bpm = resonance_audio::types::sanitize_bpm(bpm);
+            if let (Some(event), Some(bpm)) = (r.tempo_events.get_mut(index), bpm) {
                 event.bar = if index == 0 { 0 } else { bar };
                 event.bpm = bpm;
                 r.rebuild_tempo_map();
