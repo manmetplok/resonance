@@ -20,6 +20,49 @@ use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
+use thiserror::Error;
+
+/// Failure decoding a WAV (or, for [`decode_file`], any workspace-enabled
+/// `symphonia` format) into samples. `kind` labels which entry point failed
+/// ("WAV" for the in-memory decoders, "audio" for [`decode_file`]) — the same
+/// role the string of that name played in the pre-thiserror error messages.
+#[derive(Debug, Error)]
+pub enum WavDecodeError {
+    #[error("Failed to open file: {0}")]
+    Open(#[source] std::io::Error),
+    #[error("{kind} probe error: {source}")]
+    Probe {
+        kind: &'static str,
+        #[source]
+        source: SymphoniaError,
+    },
+    #[error("{kind} has no decodable track")]
+    NoTrack { kind: &'static str },
+    #[error("{kind} track missing audio codec parameters")]
+    MissingCodecParams { kind: &'static str },
+    #[error("{kind} missing sample rate")]
+    MissingSampleRate { kind: &'static str },
+    #[error("{kind} decoder error: {source}")]
+    Decoder {
+        kind: &'static str,
+        #[source]
+        source: SymphoniaError,
+    },
+    #[error("{kind} read packet: {source}")]
+    ReadPacket {
+        kind: &'static str,
+        #[source]
+        source: SymphoniaError,
+    },
+    #[error("{kind} decode: {source}")]
+    Decode {
+        kind: &'static str,
+        #[source]
+        source: SymphoniaError,
+    },
+    #[error("{kind} decoded 0 samples")]
+    Empty { kind: &'static str },
+}
 
 /// Decoded WAV data split into separate channels.
 pub struct WavChannels {
@@ -30,7 +73,7 @@ pub struct WavChannels {
 
 /// Decode a WAV file from bytes into stereo interleaved f32 samples,
 /// resampled to the target sample rate if necessary.
-pub fn decode_wav_stereo(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32>, String> {
+pub fn decode_wav_stereo(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32>, WavDecodeError> {
     let decoded = decode_to_interleaved(data)?;
     let source_rate = decoded.sample_rate;
     let stereo = to_stereo_interleaved(&decoded.samples, decoded.channels);
@@ -48,7 +91,10 @@ pub fn decode_wav_stereo(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32
 
 /// Decode a WAV file from bytes into separate left/right channels,
 /// resampled to the target sample rate if necessary.
-pub fn decode_wav_channels(data: &[u8], target_sample_rate: f32) -> Result<WavChannels, String> {
+pub fn decode_wav_channels(
+    data: &[u8],
+    target_sample_rate: f32,
+) -> Result<WavChannels, WavDecodeError> {
     let decoded = decode_to_interleaved(data)?;
     let source_rate = decoded.sample_rate;
     let channels = decoded.channels;
@@ -91,7 +137,10 @@ pub fn decode_wav_channels(data: &[u8], target_sample_rate: f32) -> Result<WavCh
 /// target sample rate. Returns the samples plus a display name
 /// derived from the file stem. Any format the workspace `symphonia`
 /// features enable is accepted, not just WAV.
-pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, String), String> {
+pub fn decode_file(
+    path: &str,
+    target_sample_rate: u32,
+) -> Result<(Vec<f32>, String), WavDecodeError> {
     let path = Path::new(path);
     let name = path
         .file_stem()
@@ -99,7 +148,7 @@ pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<(Vec<f32>, Str
         .unwrap_or("untitled")
         .to_string();
 
-    let file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
+    let file = std::fs::File::open(path).map_err(WavDecodeError::Open)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -130,7 +179,7 @@ struct Decoded {
 /// Run the input bytes through symphonia's default decoder registry
 /// and return the full interleaved `f32` sample stream plus the
 /// source rate and channel count.
-fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
+fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, WavDecodeError> {
     let cursor = Cursor::new(data.to_vec());
     let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
 
@@ -145,8 +194,8 @@ fn decode_to_interleaved(data: &[u8]) -> Result<Decoded, String> {
 fn decode_source_to_interleaved(
     mss: MediaSourceStream,
     hint: Hint,
-    kind: &str,
-) -> Result<Decoded, String> {
+    kind: &'static str,
+) -> Result<Decoded, WavDecodeError> {
     let mut format = symphonia::default::get_probe()
         .probe(
             &hint,
@@ -154,11 +203,11 @@ fn decode_source_to_interleaved(
             FormatOptions::default(),
             MetadataOptions::default(),
         )
-        .map_err(|e| format!("{kind} probe error: {e}"))?;
+        .map_err(|source| WavDecodeError::Probe { kind, source })?;
 
     let track = format
         .first_track_known_codec(TrackType::Audio)
-        .ok_or_else(|| format!("{kind} has no decodable track"))?;
+        .ok_or(WavDecodeError::NoTrack { kind })?;
     let track_id = track.id;
     // The container's declared length, when present. The final FLAC frame is
     // padded to a full block by some encoders (see resonance-audio's export
@@ -169,13 +218,13 @@ fn decode_source_to_interleaved(
         .codec_params
         .as_ref()
         .and_then(|p| p.audio())
-        .ok_or_else(|| format!("{kind} track missing audio codec parameters"))?
+        .ok_or(WavDecodeError::MissingCodecParams { kind })?
         .clone();
 
     let sample_rate = audio_params
         .sample_rate
         .map(|sr| sr as f32)
-        .ok_or_else(|| format!("{kind} missing sample rate"))?;
+        .ok_or(WavDecodeError::MissingSampleRate { kind })?;
     let channels = audio_params
         .channels
         .as_ref()
@@ -185,7 +234,7 @@ fn decode_source_to_interleaved(
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(&audio_params, &AudioDecoderOptions::default())
-        .map_err(|e| format!("{kind} decoder error: {e}"))?;
+        .map_err(|source| WavDecodeError::Decoder { kind, source })?;
 
     let mut samples: Vec<f32> = Vec::new();
     // Per-packet scratch. `copy_to_vec_interleaved` *resizes* its
@@ -201,7 +250,7 @@ fn decode_source_to_interleaved(
             Ok(Some(p)) => p,
             Ok(None) => break,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("{kind} read packet: {e}")),
+            Err(source) => return Err(WavDecodeError::ReadPacket { kind, source }),
         };
         if packet.track_id != track_id {
             continue;
@@ -210,14 +259,14 @@ fn decode_source_to_interleaved(
             Ok(d) => d,
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(SymphoniaError::IoError(_)) => break,
-            Err(e) => return Err(format!("{kind} decode: {e}")),
+            Err(source) => return Err(WavDecodeError::Decode { kind, source }),
         };
         decoded.copy_to_vec_interleaved(&mut packet_buf);
         samples.extend_from_slice(&packet_buf);
     }
 
     if samples.is_empty() {
-        return Err(format!("{kind} decoded 0 samples"));
+        return Err(WavDecodeError::Empty { kind });
     }
 
     // Drop any samples past the container's declared frame count (encoder

@@ -72,7 +72,7 @@ pub fn import_one_to_pool(
     // one pass. `decode_file` returns stereo-interleaved f32 already at
     // `engine_rate`, so mismatched-rate sources land at correct
     // pitch/speed and the project stays self-contained.
-    let (data, _name) = decode::decode_file(src_path, engine_rate)?;
+    let (data, _name) = decode::decode_file(src_path, engine_rate).map_err(|e| e.to_string())?;
 
     let project_relative_path = asset_relative_path(asset_id);
     let target = project_dir.join(&project_relative_path);
