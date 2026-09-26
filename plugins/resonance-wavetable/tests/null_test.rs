@@ -270,6 +270,12 @@ fn output_matches_golden() {
     // (mono: legato notes now glide on the held voice) and
     // `voice_stealing_u7` (4 voices sound, not 9).
     //
+    // And for DSP-03: mip selection now rounds up to a level that is
+    // band-limited at the playing pitch and sample rate instead of down to
+    // one that aliases. Every scenario reading more than a sine moved
+    // (peak delta <= 0.05); `init_single` (a sine, identical in every level)
+    // did not.
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:

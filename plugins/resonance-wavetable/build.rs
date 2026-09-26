@@ -9,6 +9,9 @@ mod wavetable_gen;
 fn main() {
     let out_dir = std::env::var_os("OUT_DIR").expect("OUT_DIR not set");
     let dest = std::path::Path::new(&out_dir).join("wavetables.bin");
+    // The mip levels are band-limited for this rate; the runtime selection
+    // (`oscillator::TABLE_SAMPLE_RATE`) rescales to the actual one. Keep the
+    // two in sync.
     wavetable_gen::write_bundled(44_100.0, &dest);
 
     println!("cargo:rerun-if-changed=src/dsp/wavetable_gen.rs");
