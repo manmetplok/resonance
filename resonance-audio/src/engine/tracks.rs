@@ -449,6 +449,12 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // "engaged" outright rather than fading there.
     ctx.shared.master_fx_bypass.set_bypassed_settled(false);
 
+    // Fence queued imports first: a worker that has not yet taken the clip
+    // lock sees the new generation and drops its result (UPD-09).
+    state
+        .clear_generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
     // Clear clips -- collect to drop outside lock
     let removed_clips: Vec<_> = ctx.clips.write().drain(..).collect();
     drop(removed_clips);

@@ -149,6 +149,14 @@ impl EngineHandlerHarness {
         self.state.project_dir = Some(dir);
     }
 
+    /// Run the real `AudioCommand::ImportClip` handler: queues a decode on
+    /// the import worker, which lands the clip asynchronously.
+    pub fn import_clip(&mut self, track_id: TrackId, path: String, start_sample: u64) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::clips::handle_import_clip(ctx, state, track_id, path, start_sample)
+        });
+    }
+
     /// Run the real `AudioCommand::ClearAll` handler.
     pub fn clear_all(&mut self) {
         self.with_ctx(tracks::handle_clear_all);
