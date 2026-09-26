@@ -289,11 +289,10 @@ fn edit_every_domain(f: &mut Fixture, h: &Handles, variant: u8) {
     if let Some(&t) = h.tracks.get(1) {
         let cache_filename = format!("freeze_{t}.wav");
         if variant == 0 {
-            std::fs::write(
-                f.project.with_extension("freeze").join(&cache_filename),
-                b"",
-            )
-            .expect("write freeze cache");
+            // Decodable: a restore re-attaches the cache (FU-A4a).
+            crate::common::write_freeze_cache_wav(
+                &f.project.with_extension("freeze").join(&cache_filename),
+            );
             app.test_set_freeze_status(
                 t,
                 FreezeStatus::Frozen {
@@ -603,6 +602,27 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
     }
 }
 
+/// Each restore path hands the engine the decoded cache of every track the
+/// snapshot has frozen, exactly once (FU-A4a): the round-1 edit left the
+/// frozen track live, so neither path's engine holds its source, and the
+/// full path's `ClearAll` dropped every source anyway.
+fn assert_freeze_attached(path: &str, cmds: &[AudioCommand], snapshot: &ProjectFile) {
+    for pt in snapshot.tracks.iter().filter(|pt| pt.freeze.is_frozen) {
+        let attaches = cmds
+            .iter()
+            .filter(|c| {
+                matches!(c, AudioCommand::SetTrackFrozenSource { track_id, source: Some(_) }
+                    if *track_id == pt.id)
+            })
+            .count();
+        assert_eq!(
+            attaches, 1,
+            "{path}: frozen track {} gets its cache attached once",
+            pt.id
+        );
+    }
+}
+
 fn external_of(file: &ProjectFile, t: TrackId) -> Option<&ProjectExternalInstrument> {
     file.tracks
         .iter()
@@ -691,6 +711,7 @@ fn check_both_paths(mut f: Fixture) {
         "scalar-only edits must take the diff replay, not the full clear"
     );
     assert_external_restored("fast path", &cmds, &snapshot.project.file);
+    assert_freeze_attached("fast path", &cmds, &snapshot.project.file);
     assert_fixed_point(&f, "fast path (try_diff_replay)", &snapshot);
 
     // -- Slow path: an extra track forces the structural fallback. --
@@ -706,6 +727,7 @@ fn check_both_paths(mut f: Fixture) {
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     let cmds = drain(&f.rx);
     assert_external_restored("slow path", &cmds, &snapshot.project.file);
+    assert_freeze_attached("slow path", &cmds, &snapshot.project.file);
     assert!(
         f.app.test_project_path() == Some(f.project.as_path()),
         "the undo replay must keep the project path"
@@ -985,11 +1007,9 @@ fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
         .expect("a second track");
     f.app.test_set_clip_lyrics(clip, vec![String::new(); n]);
     let cache_filename = format!("freeze_{track}.wav");
-    std::fs::write(
-        f.project.with_extension("freeze").join(&cache_filename),
-        b"",
-    )
-    .expect("write freeze cache");
+    crate::common::write_freeze_cache_wav(
+        &f.project.with_extension("freeze").join(&cache_filename),
+    );
     f.app.test_set_freeze_status(
         track,
         FreezeStatus::Frozen {
@@ -1348,8 +1368,20 @@ fn freeze_cache(f: &Fixture, t: TrackId) -> PathBuf {
         .join(format!("freeze_{t}.wav"))
 }
 
+/// A decodable cache: a restore re-attaches the cache of every freeze the
+/// engine does not hold (FU-A4a), and an empty file would read as
+/// undecodable and go `Stale`.
 fn write_freeze_cache(f: &Fixture, t: TrackId) {
-    std::fs::write(freeze_cache(f, t), b"").expect("write freeze cache");
+    crate::common::write_freeze_cache_wav(&freeze_cache(f, t));
+}
+
+fn attaches(cmds: &[AudioCommand], t: TrackId) -> usize {
+    cmds.iter()
+        .filter(|c| {
+            matches!(c, AudioCommand::SetTrackFrozenSource { track_id, source: Some(_) }
+                if *track_id == t)
+        })
+        .count()
 }
 
 fn set_frozen(f: &mut Fixture, t: TrackId) {
@@ -1524,6 +1556,11 @@ fn freeze_states_restore_identically_through_both_paths() {
         "freeze + scalar edits take the diff replay"
     );
     assert_freeze_restored(&mut f, "fast path", &t, &cmds, kept_baseline);
+    // The engine still holds the sources of the tracks frozen throughout;
+    // the re-frozen one has no cache to attach (FU-A4a).
+    for (id, what) in [(t.kept, "kept"), (t.stale, "stale"), (t.missing, "missing")] {
+        assert_eq!(attaches(&cmds, id), 0, "fast path: {what} attaches nothing");
+    }
     let fast = freeze_statuses(&f.app, &t);
 
     // -- Slow path: the same edits plus an extra track. --
@@ -1541,6 +1578,12 @@ fn freeze_states_restore_identically_through_both_paths() {
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     cmds.extend(drain(&f.rx));
     assert_freeze_restored(&mut f, "slow path", &t, &cmds, kept_baseline);
+    // `ClearAll` dropped every engine source: each restored freeze with a
+    // cache on disk is re-attached, the one whose cache is gone is not.
+    assert_eq!(attaches(&cmds, t.kept), 1, "slow path: kept is re-attached");
+    assert_eq!(attaches(&cmds, t.stale), 1, "slow path: stale still plays its cache");
+    assert_eq!(attaches(&cmds, t.missing), 0, "slow path: missing has no cache");
+    assert_eq!(attaches(&cmds, t.undone), 0, "slow path: undone is live");
 
     assert_eq!(
         fast,

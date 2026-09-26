@@ -198,6 +198,29 @@ pub fn write_take_wav(
     writer.finalize().expect("finalize take wav");
 }
 
+/// Write a decodable freeze cache at `path` (a short silent 32-bit float
+/// stereo WAV, the format the engine renders). A restore decodes and
+/// attaches the cache of every freeze the engine does not hold, so an empty
+/// placeholder file reads as undecodable and goes `Stale` (FU-A4a).
+#[allow(dead_code)]
+pub fn write_freeze_cache_wav(path: &std::path::Path) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create the freeze dir");
+    }
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: 48_000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).expect("create freeze cache");
+    for _ in 0..64 {
+        writer.write_sample(0.0f32).expect("write left");
+        writer.write_sample(0.0f32).expect("write right");
+    }
+    writer.finalize().expect("finalize freeze cache");
+}
+
 // ---------------------------------------------------------------------------
 // Control-request round trip
 // ---------------------------------------------------------------------------

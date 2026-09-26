@@ -367,11 +367,16 @@ passed unchanged at each commit.
 
 ### FU-A4a
 
-Still open (a pure refactor). The fix goes in `Freeze`'s undo arm: for each
-track `apply_freeze_restore` leaves `Frozen` (every one after a `ClearAll`;
-on the diff path, those not frozen before), decode and attach the cache as
-`rehydrate_frozen_tracks` does, downgrading an undecodable one to `Stale`.
-The domain's doc comment says so.
+Fixed after A-13b (branch `fix/FU-A4a`). `Freeze`'s undo arm passes
+`origin.after_clear_all()` to `apply_freeze_restore`; for each track the
+target has frozen (`Frozen` or `Stale`) whose engine source is not attached
+— every one after a `ClearAll`, on the diff path those whose live status was
+not frozen — `reconcile_freeze_statuses` decodes and attaches the cache
+through `attach_freeze_cache` (shared with `rehydrate_frozen_tracks`),
+downgrading an undecodable or missing one to `Stale`. A track frozen
+throughout a diff restore is not re-decoded. Baselines are untouched
+(FU-H2b). Guards: `plugins::freeze_persist::undo_reattach`, attach counts in
+`undo_snapshot_fixed_point`.
 
 ### What groups (3) and (4) need
 

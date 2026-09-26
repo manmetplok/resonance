@@ -198,7 +198,8 @@ fn a_full_replay_undo_keeps_the_frozen_content_baseline() {
     std::fs::create_dir_all(&project).expect("project dir");
     let freeze_dir = project.with_extension("freeze");
     std::fs::create_dir_all(&freeze_dir).expect("freeze dir");
-    std::fs::write(freeze_dir.join("freeze_10.wav"), b"").expect("cache file");
+    // Decodable: the full replay re-attaches it (FU-A4a).
+    crate::common::write_freeze_cache_wav(&freeze_dir.join("freeze_10.wav"));
     app.test_set_project_path(project);
 
     let snapshot = app.test_snapshot_for_undo();

@@ -16,8 +16,9 @@
 //! Undo: freeze / unfreeze are atomic undo entries (see `undo.rs`); the
 //! rendered cache is deliberately *not* part of undo history. On restore,
 //! [`Resonance::apply_freeze_restore`] detaches + deletes the cache of any
-//! track that is no longer frozen and downgrades a re-frozen track to
-//! `Stale` when its cache file is gone.
+//! track that is no longer frozen, re-attaches the cache of a restored
+//! freeze the engine does not hold, and downgrades a re-frozen track to
+//! `Stale` when its cache file is gone or undecodable.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -435,34 +436,59 @@ impl Resonance {
             // saved while a track was stale stays stale (so the UI keeps
             // offering a refreeze) but still plays the cache it has.
             let status = FreezeStatus::from_persisted(state);
-            let Some(cache_ref) = status.cache_ref().cloned() else {
+            if !status.is_frozen() {
                 continue;
-            };
-            let path = dir.join(&cache_ref.cache_filename);
-            match resonance_audio::read_freeze_cache(&path, cache_ref.clone()) {
-                Ok(source) => {
-                    // Cache is present and decodable: replay it instead of
-                    // re-rendering the live chain.
-                    let _ = self.engine.send(AudioCommand::SetTrackFrozenSource {
-                        track_id,
-                        source: Some(source),
-                    });
-                    self.freeze.set(track_id, status);
-                    // The project was saved with this cache valid, so the
-                    // content just replayed is what it was rendered from.
-                    self.note_freeze_content_baseline(track_id);
-                }
-                Err(e) => {
-                    // Missing / corrupt cache: load stale and offer a
-                    // refreeze rather than failing the whole project.
-                    tracing::warn!(
-                        "Freeze cache for track {track_id} unavailable ({e}); loading as stale"
-                    );
-                    let mut cache_ref = cache_ref;
-                    cache_ref.status = FreezeCacheStatus::Stale;
-                    self.freeze
-                        .set(track_id, FreezeStatus::Stale { cache_ref });
-                }
+            }
+            let (status, attached) = self.attach_freeze_cache(track_id, status, Some(&dir));
+            self.freeze.set(track_id, status);
+            if attached {
+                // The project was saved with this cache valid, so the
+                // content just replayed is what it was rendered from.
+                self.note_freeze_content_baseline(track_id);
+            }
+        }
+    }
+
+    /// Decode a frozen (or stale-frozen) track's cache from `dir` and hand
+    /// the engine the buffer via `SetTrackFrozenSource`, so playback reads
+    /// the cache instead of the live chain. Returns the status the track
+    /// should take and whether a source was attached: `status` unchanged on
+    /// success; on a missing / corrupt / unreadable cache (or no `dir`),
+    /// `Stale` with nothing attached — the live chain plays until the user
+    /// refreezes — and never a panic. The one attach step shared by a disk
+    /// load ([`Self::rehydrate_frozen_tracks`]) and an undo/redo restore
+    /// ([`Self::reconcile_freeze_statuses`], FU-A4a).
+    fn attach_freeze_cache(
+        &self,
+        track_id: TrackId,
+        status: FreezeStatus,
+        dir: Option<&Path>,
+    ) -> (FreezeStatus, bool) {
+        let Some(cache_ref) = status.cache_ref().cloned() else {
+            return (status, false);
+        };
+        let decoded = match dir {
+            Some(dir) => resonance_audio::read_freeze_cache(
+                &dir.join(&cache_ref.cache_filename),
+                cache_ref.clone(),
+            ),
+            None => Err("no project path".to_string()),
+        };
+        match decoded {
+            Ok(source) => {
+                let _ = self.engine.send(AudioCommand::SetTrackFrozenSource {
+                    track_id,
+                    source: Some(source),
+                });
+                (status, true)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Freeze cache for track {track_id} unavailable ({e}); marking stale"
+                );
+                let mut cache_ref = cache_ref;
+                cache_ref.status = FreezeCacheStatus::Stale;
+                (FreezeStatus::Stale { cache_ref }, false)
             }
         }
     }
@@ -489,9 +515,15 @@ impl Resonance {
     /// - a track that was frozen but is not in the target (undo of a
     ///   freeze) has its cache detached from the engine and deleted from
     ///   disk;
-    /// - a track that is `Frozen` in the target (redo of a freeze) keeps
-    ///   that status only if its cache file still exists, otherwise it is
-    ///   downgraded to `Stale` (the cache was removed by the matching undo).
+    /// - a track the target has frozen (`Frozen` or `Stale`) whose engine
+    ///   source is not attached — every one after a `ClearAll`
+    ///   (`after_clear_all`), and on the diff path each one that was not
+    ///   frozen before the restore — has its cache decoded and re-attached
+    ///   (`SetTrackFrozenSource`), as a disk load does; an undecodable or
+    ///   missing cache leaves it `Stale` with nothing attached (FU-A4a);
+    /// - a track that stays frozen across a diff-path restore keeps the
+    ///   source the engine already holds (no re-decode); restored `Frozen`,
+    ///   it is downgraded to `Stale` if its cache file is gone.
     ///
     /// The UPD-05 content baselines are left alone: a track restored
     /// `Frozen` must still go stale on its next content edit (FU-H2b).
@@ -503,13 +535,14 @@ impl Resonance {
         &mut self,
         tracks: &[crate::project::ProjectTrack],
         project_path: Option<&Path>,
+        after_clear_all: bool,
     ) {
         let target = tracks
             .iter()
             .map(|t| (t.id, FreezeStatus::from_persisted(&t.freeze)))
             .filter(|(_, status)| *status != FreezeStatus::Idle)
             .collect();
-        self.reconcile_freeze_statuses(target, project_path);
+        self.reconcile_freeze_statuses(target, project_path, after_clear_all);
     }
 
     /// The body of [`Self::apply_freeze_restore`], on a target already in
@@ -518,8 +551,23 @@ impl Resonance {
         &mut self,
         target: std::collections::HashMap<TrackId, FreezeStatus>,
         project_path: Option<&Path>,
+        after_clear_all: bool,
     ) {
         let dir = project_path.map(freeze_cache_dir_for);
+        // The tracks whose engine source is attached right now: a live
+        // `Frozen` / `Stale` status plays its cache (the engine attaches on
+        // `FreezeCompleted`, a load or restore on decode), unless a
+        // `ClearAll` has just rebuilt every engine track without one.
+        let attached: std::collections::HashSet<TrackId> = if after_clear_all {
+            Default::default()
+        } else {
+            self.freeze
+                .statuses
+                .iter()
+                .filter(|(_, status)| status.is_frozen())
+                .map(|(id, _)| *id)
+                .collect()
+        };
         // Detach + delete caches for tracks that are no longer frozen.
         let no_longer_frozen: Vec<TrackId> = self
             .freeze
@@ -534,28 +582,33 @@ impl Resonance {
             detach_and_delete_cache_in(self, id, dir.as_deref());
         }
 
-        // Apply the target, downgrading any restored-frozen track whose
-        // cache file is gone to `Stale`.
-        let reconciled = target
-            .into_iter()
-            .map(|(id, status)| {
-                let resolved = match status {
-                    FreezeStatus::Frozen { mut cache_ref } => {
-                        let exists = dir
-                            .as_ref()
-                            .is_some_and(|d| d.join(&cache_ref.cache_filename).exists());
-                        if !exists {
-                            cache_ref.status = FreezeCacheStatus::Stale;
-                            FreezeStatus::Stale { cache_ref }
-                        } else {
-                            FreezeStatus::Frozen { cache_ref }
-                        }
+        // Apply the target: attach the cache of every restored freeze the
+        // engine does not hold, and downgrade any restored `Frozen` whose
+        // cache is gone (or undecodable) to `Stale`. Track order, so the
+        // engine sees the attaches deterministically.
+        let mut target: Vec<(TrackId, FreezeStatus)> = target.into_iter().collect();
+        target.sort_by_key(|(id, _)| *id);
+        let mut reconciled = std::collections::HashMap::new();
+        for (id, status) in target {
+            let resolved = match status {
+                status if status.is_frozen() && !attached.contains(&id) => {
+                    self.attach_freeze_cache(id, status, dir.as_deref()).0
+                }
+                FreezeStatus::Frozen { mut cache_ref } => {
+                    let exists = dir
+                        .as_ref()
+                        .is_some_and(|d| d.join(&cache_ref.cache_filename).exists());
+                    if !exists {
+                        cache_ref.status = FreezeCacheStatus::Stale;
+                        FreezeStatus::Stale { cache_ref }
+                    } else {
+                        FreezeStatus::Frozen { cache_ref }
                     }
-                    other => other,
-                };
-                (id, resolved)
-            })
-            .collect();
+                }
+                other => other,
+            };
+            reconciled.insert(id, resolved);
+        }
         self.freeze.statuses = reconciled;
         self.freeze.queue = None;
     }
