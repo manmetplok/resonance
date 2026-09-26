@@ -32,7 +32,7 @@ master and updates this table. Agents do **not** edit this file.
 | M5 control API (medium+low) | CTL-04..10, CTL-12, CTL-13, UPD-11 | opus | merged | d3b41d37 |
 | M6 theory + small plugins | LIB-02..LIB-09 | opus | merged | 26e1e316 |
 | V1 view perf + scrolling (medium) | VIEW-11, -14, -21, -22, -23, -26, -27, -28 (+FU-D1 if time) | opus | merged | 0a8cf2fa |
-| V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | in progress | |
+| V2 compose view (medium) | VIEW-12, -13, -15, -16, -17, -19, -20, -24, -25 | opus | merged | 47e86611 |
 | M7 DSP lows + follow-ups | FU-M2a, FU-M2b/DSP-12, DSP-11, -13, -14, -15, -16, FU-G2c | opus | merged | a7660033 |
 | M8 plugin framework lows | PLG-05..10, ENG-10, ENG-12, FU-M1b, FU-M1c | opus | in progress | |
 | V3 view lows + playhead follow | FU-D1/D2, VIEW-33, FU-V1a, VIEW-29/UPD-10, VIEW-30, VIEW-32, VIEW-36 | opus | in progress | |
@@ -99,6 +99,10 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-V1a** (low) `snap_sample_to_grid_tempo` single-tempo shortcut uses the transport numerator (follows playhead) — wrong after a signature change with one tempo point; ruler shares the shortcut.
 - [ ] **FU-V1b** (low, test infra) `app.update(Message::Browser(SetFilter))` didn't apply the filter in tests while `test_dispatch` did — investigate.
 - [ ] **FU-V1c** note: FU-D1 (playhead follow) should be done together with FU-D2 (dead scroll plumbing), storing the outer Scrollable's live x offset.
+- [ ] **FU-V2a** (medium) VIEW-25 partial: MIDI Import modal now parses off-thread + has a file chooser, but Confirm is still a no-op, Review has no Import button, TempoConflict is a placeholder (doc #158 follow-ups); needs `undo/classify.rs` to stop classifying `Message::Import(_)` as Skip.
+- [ ] **FU-V2b** (low) existing chords are not revalidated after a global signature change; control `edit_tempo_event` can still move an event past neighbours.
+- [ ] **FU-V2c** (low) 100 000-bar sections are accepted but Compose views loop every bar per frame; section lengths loaded from project files aren't validated.
+- [ ] **FU-V2d** (low) a vocal render that finishes after its placement moved into a different tempo region is placed right but rendered at the old tempo.
 
 ## How to use this file
 
@@ -637,7 +641,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pass `0.0`, since the outer scrollable already handles overflow.
 - **Verification:** Add a golden in the `compose` group binary: `new_for_test_on(Compose)` with `viewport.scroll_offset_y = 300.0`, rendered and compared to the unscrolled golden.
 
-### [ ] VIEW-12 — Deleting a track leaves its lane generators behind, and the next chord edit creates a ghost clip on the dead track
+### [x] VIEW-12 — Deleting a track leaves its lane generators behind, and the next chord edit creates a ghost clip on the dead track — fixed @0110881f
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -647,7 +651,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Purge every compose map keyed by the removed track id on removal. Make `regenerate_lane`/`roll_vocal_melody` return early when the track is not in `registry.tracks`.
 - **Verification:** Add a `compose` group-binary test: generator → delete track → `EditChord`. Assert no MIDI clip exists whose `track_id` is missing from the registry.
 
-### [ ] VIEW-13 — Compose uses the time signature and BPM under the playhead, not at the section
+### [x] VIEW-13 — Compose uses the time signature and BPM under the playhead, not at the section — fixed @7558afff
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -676,7 +680,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Resolve the row with `ArrangeRowLayout::row_at_y` (reuse `row_at_canvas_y`), accept only `Track` rows, and draw the ghost from `track_row_rect`.
 - **Verification:** Add a `timeline` group-binary test: expand automation on track 1, drop at track 2's layout y, and assert the new clip's track id.
 
-### [ ] VIEW-15 — After dragging a tempo point, Delete removes a different event; a drag can also stack two events on one bar
+### [x] VIEW-15 — After dragging a tempo point, Delete removes a different event; a drag can also stack two events on one bar — fixed @c830e8fd
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -686,7 +690,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** After the sort, locate the dragged event and update `selected_global_event`. Clamp the drag between its neighbours, or upsert by bar.
 - **Verification:** Add a `timeline` group-binary test driving the drag messages followed by `DeleteSelectedEvent`, asserting the remaining bars are [0, 8].
 
-### [ ] VIEW-16 — The expanded Compose editor treats clip-relative note ticks as section-relative
+### [x] VIEW-16 — The expanded Compose editor treats clip-relative note ticks as section-relative — fixed @6ac373c0
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -696,7 +700,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add the clip offset when drawing and hit-testing, and subtract it when converting back to clip ticks, as `tracks/draw.rs` does.
 - **Verification:** Add a golden in the `compose` group binary with an offset clip, plus an AddNote test asserting the clip-relative tick.
 
-### [ ] VIEW-17 — Section lengths and chord or placement positions are unbounded; the invariants overflow (UI hang, debug panic, release bypass)
+### [x] VIEW-17 — Section lengths and chord or placement positions are unbounded; the invariants overflow (UI hang, debug panic, release bypass) — fixed @bea9237c
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** error-handling
@@ -722,7 +726,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Classify those messages as `Skip`. Give `VocalAudioReady` a non-recording path that amends the queuing entry or relies on the render epoch.
 - **Verification:** Add a `control` group-binary test: edit, undo, send `SelectArrangementEntry(Some(0))`, then assert `edit_status().can_redo`.
 
-### [ ] VIEW-19 — An in-flight vocal render installs audio at placements that were deleted or moved while it ran
+### [x] VIEW-19 — An in-flight vocal render installs audio at placements that were deleted or moved while it ran — fixed @9fc073b3
 - **Severity:** medium
 - **Confidence:** high
 - **Category:** correctness
@@ -732,7 +736,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** On completion, re-resolve each `placement_id` against current placements: skip missing ones and recompute the start from the current `start_bar`. Take epochs from a global monotonic counter.
 - **Verification:** Add a `compose` group-binary test: queue the render, delete the placement, deliver a synthetic `VocalAudioReady`, and assert no clip was loaded.
 
-### [ ] VIEW-20 — Chord-lane drag preview doesn't move during the drag
+### [x] VIEW-20 — Chord-lane drag preview doesn't move during the drag — fixed @7f698488
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** ux
@@ -774,7 +778,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Store the absolute y at press and use `cursor.position()` while `drag_anchor_y.is_some()`.
 - **Verification:** Add a `mixer` group-binary test: drive the knob program's `update` with a press and then a move outside the bounds, and assert it publishes `on_change(1.0)`.
 
-### [ ] VIEW-24 — Drift in grid-7 drum groups accumulates across the section
+### [x] VIEW-24 — Drift in grid-7 drum groups accumulates across the section — fixed @c7dfef0f
 - **Severity:** medium
 - **Confidence:** high (spot-checked)
 - **Category:** correctness
