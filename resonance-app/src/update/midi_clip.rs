@@ -70,6 +70,7 @@ pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
     match m {
         MidiClipMessage::DeleteMidiClip(id) => {
             let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
+            r.compose.forget_deleted_derived_clip(id);
             if r.interaction.selected_midi_clip == Some(id) {
                 r.interaction.selected_midi_clip = None;
             }

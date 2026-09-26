@@ -428,6 +428,22 @@ impl ComposeState {
         id
     }
 
+    /// The user deleted `clip_id` from the timeline: drop every derived
+    /// entry naming it (code review FU-A6b). Called where the user's
+    /// delete is *sent*, never from the engine's `MidiClipDeleted` echo —
+    /// a regeneration tears a slot's clip down and re-installs it under
+    /// the same id (#275 P1.7), so the echo of that teardown lands after
+    /// the new entry and must not drop it.
+    ///
+    /// Without this the entry dangled: it was saved and snapshotted, kept
+    /// UPD-05 skipping the track as "echo pending" for good, and made a
+    /// section resize (which re-derives exactly the lanes with an entry)
+    /// re-create the clip the user had deleted. Undoing the delete brings
+    /// the entry back from the snapshot's `ProjectFile::derived_clips`.
+    pub fn forget_deleted_derived_clip(&mut self, clip_id: ClipId) {
+        self.derived_clips.retain(|_, id| *id != clip_id);
+    }
+
     pub fn find_definition(&self, id: u64) -> Option<&SectionDefinitionState> {
         self.definitions.iter().find(|d| d.id == id)
     }

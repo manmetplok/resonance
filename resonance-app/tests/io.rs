@@ -99,6 +99,8 @@ mod save_keeps_dirty_for_late_edit;
 mod take_lanes_persistence;
 #[path = "io/undo_snapshot_fixed_point.rs"]
 mod undo_snapshot_fixed_point;
+#[path = "io/derived_clip_lifecycle.rs"]
+mod derived_clip_lifecycle;
 #[path = "io/undo_restore_flag.rs"]
 mod undo_restore_flag;
 #[path = "io/reconcile_order.rs"]
