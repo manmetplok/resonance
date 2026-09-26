@@ -45,7 +45,7 @@ master and updates this table. Agents do **not** edit this file.
 | V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | merged | 6f170c1b |
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
-| H8a message enums beside handlers | ARCH-06 A6-1 | opus | in progress | |
+| H8a message enums beside handlers | ARCH-06 A6-1 | opus | merged | a6a0a6e9 |
 | H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | in progress | |
@@ -1842,7 +1842,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Convert `Result<_, String>` in `resonance-audio` and `resonance-common` to the new type behind `thiserror`; leave plugin crates for last (their strings are mostly internal).
 - **Verification / done-when:** `grep -rn 'eprintln!' resonance-app/src resonance-audio/src` empty; no `AudioEvent` variant carries a bare `String` error; `resonance-app/src/update/control/reply.rs` maps `EngineErrorKind` → `ErrorKind` exhaustively with no wildcard arm.
 
-### [ ] ARCH-06 — `Resonance` and `message.rs` are the hub files every change touches
+### [ ] ARCH-06 — (partial: A6-1 landed @3492f217, message.rs 1771→1051 lines; Resonance sub-states A6-2/3 + exhaustive undo_action A6-4 open) `Resonance` and `message.rs` are the hub files every change touches
 - **Severity:** medium
 - **Category:** modularity
 - **Location:** `resonance-app/src/lib.rs` (989 lines, `Resonance` with 89 fields; 85 commits/300), `resonance-app/src/message.rs` (1821 lines, 31 sub-enums, 406 variants; 128 commits/300), `resonance-app/src/undo/classify.rs` (543 lines, 30 commits), `resonance-app/src/engine_events/dispatch.rs` (72 commits).
