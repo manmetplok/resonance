@@ -106,20 +106,6 @@ pub fn view<'a>(
         definition.length_bars,
     );
 
-    // Snapshot the (track_id → derived_clip_id) mapping for this
-    // placement. The vocal canvas uses it to find the generated MIDI
-    // clip authoritatively, instead of guessing by `start_sample`
-    // which can collide with a user-placed clip at bar 0.
-    let derived_clip_ids: std::collections::HashMap<u64, ClipId> = app
-        .compose
-        .derived_clips
-        .iter()
-        .filter(|((def_id, plac_id, _), _)| {
-            *def_id == definition.id && *plac_id == placement.id
-        })
-        .map(|((_, _, tid), cid)| (*tid, *cid))
-        .collect();
-
     let canvas_prog = VocalLaneCanvas {
         tracks: &app.registry.tracks,
         vocal_tracks,
@@ -129,7 +115,9 @@ pub fn view<'a>(
         length_bars: definition.length_bars,
         selected_lane: app.compose.selected_lane.clone(),
         midi_clips: &app.midi_clips,
-        derived_clip_ids,
+        derived_clips: &app.compose.derived_clips,
+        definition_id: definition.id,
+        placement_id: placement.id,
     };
 
     container(
@@ -156,11 +144,12 @@ pub(super) struct VocalLaneCanvas<'a> {
     /// MIDI clips on every track. Used to draw the generated vocal
     /// melody on the staff once `derive_vocal` has produced notes.
     pub(super) midi_clips: &'a [MidiClipState],
-    /// Authoritative `(track_id → derived_clip_id)` mapping for this
-    /// placement, taken from `compose.derived_clips`. Lets the canvas
-    /// find the generator-produced clip without guessing by
-    /// `start_sample` (which can collide with a manually placed clip).
-    pub(super) derived_clip_ids: std::collections::HashMap<u64, ClipId>,
+    /// `compose.derived_clips`, read in place for this placement (see
+    /// [`Self::derived_clip_id`]) rather than copied into a per-view
+    /// `HashMap` on every frame (code review FU-V3c).
+    pub(super) derived_clips: &'a std::collections::HashMap<(u64, u64, TrackId), ClipId>,
+    pub(super) definition_id: u64,
+    pub(super) placement_id: u64,
 }
 
 /// Local canvas state — tracks the last single-click on a vocal lane
@@ -176,6 +165,16 @@ pub struct VocalLaneCanvasState {
 }
 
 impl VocalLaneCanvas<'_> {
+    /// The generator-produced MIDI clip for `track_id` in this placement,
+    /// found authoritatively through `compose.derived_clips` instead of
+    /// guessing by `start_sample` (which can collide with a user-placed
+    /// clip at bar 0).
+    pub(super) fn derived_clip_id(&self, track_id: TrackId) -> Option<ClipId> {
+        self.derived_clips
+            .get(&(self.definition_id, self.placement_id, track_id))
+            .copied()
+    }
+
     /// Hash of everything the lane paints, plus which placeholder row is
     /// hovered (its wash is painted under the grid and hint, so it lives
     /// in the cached frame; a hover change is rare next to the tick).
@@ -333,7 +332,7 @@ impl<'a> canvas::Program<Message> for VocalLaneCanvas<'a> {
             state.last_click = Some((now, *track_id));
             if is_double_click {
                 state.last_click = None;
-                if let Some(clip_id) = self.derived_clip_ids.get(track_id).copied() {
+                if let Some(clip_id) = self.derived_clip_id(*track_id) {
                     return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::OpenMidiEditor(
                             clip_id,
                         ))).and_capture());
