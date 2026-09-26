@@ -1155,3 +1155,23 @@ fn a_plugin_restore_survives_the_previous_restores_late_echoes() {
     // bypassed, its gain at 0.5.
     assert_eq!(chain_ids(&f.app, chain), [comp, eq, gate]);
 }
+
+/// A plugin re-added by one restore has no param list until its
+/// `PluginAdded`: its values are parked for the echo. A second restore
+/// before that echo, to a state where the plugin's values differ, must
+/// re-park the target's values rather than leave the first restore's for
+/// the echo to apply.
+#[test]
+fn a_re_added_plugins_params_follow_a_second_restore_before_its_echo() {
+    let mut f = fixture("plugin-parked-params");
+    let chain = TestChain::Track(AUDIO_TRACK);
+    let added = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = chain_ids(&f.app, chain)[0];
+    let turned_up = edit(&mut f, Message::Plugin(PluginMessage::SetPluginParam(eq, GAIN, 0.5)));
+    let _removed = edit(&mut f, remove_from(chain, eq));
+
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Undo, &turned_up, "undo remove"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &added, "undo param"));
+    settle(&mut f, late, &added, "undo remove, undo param, then the echoes");
+}

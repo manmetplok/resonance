@@ -125,6 +125,17 @@ impl Reconcile for PluginState {
                 .insert(pp.instance_id, pp.params.clone());
         }
         if old.is_some() {
+            // A live instance still waiting for its `PluginAdded` (a
+            // previous restore added it, or its `.clap` is missing and it
+            // never will) has no param list to drive: its parked values
+            // are what the echo applies and what a save writes, so they
+            // become the target's.
+            for pp in all_plugins(new).filter(|pp| !fresh(pp.instance_id)) {
+                let overrides = &mut r.presets.pending_plugin_param_overrides;
+                if let Some(parked) = overrides.get_mut(&pp.instance_id) {
+                    parked.clone_from(&pp.params);
+                }
+            }
             // A live instance: the blob just pushed is only as fresh as
             // its last refresh (plugin add, editor close, save) — never a
             // param edit — so the snapshot's own values are re-applied
