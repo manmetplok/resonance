@@ -162,6 +162,34 @@ pub enum TakeMessage {
     },
 }
 
+impl TakeMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Take-lane comping (doc #165, todo #411). Every variant is one
+            // discrete, atomic edit — there is no gesture here; the canvas drag
+            // that *chooses* a promote range is todo #414's and commits by
+            // emitting a single `PromoteTakeSegment`. Take groups ride the
+            // `ProjectFile` snapshot (todo #412), so the generic Record path
+            // reverses a comp edit with no per-message capture; the engine is
+            // driven back by `replay_take_groups`'s `RestoreTakeGroups` on both
+            // restore paths (todo #1394).
+            //
+            // An edit that would change nothing never reaches here: it is
+            // dropped by `take_edit_is_refused` before `record_undo` runs, so no
+            // vacuous entry is recorded.
+            Self::SetActiveTake { .. }
+            | Self::SplitCompAtPlayhead { .. }
+            | Self::PromoteTakeSegment { .. }
+            | Self::DeleteTake { .. } => UndoAction::Record,
+        }
+    }
+}
+
 /// The mutation a [`TakeMessage`] performs, resolved against current
 /// state.
 ///

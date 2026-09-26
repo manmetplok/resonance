@@ -350,6 +350,84 @@ pub enum ComposeMessage {
     },
 }
 
+impl ComposeMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Form input, selections, panel open/close: UI only.
+            Self::OpenCreateSectionDialog
+            | Self::CancelCreateSectionDialog
+            | Self::SetNewSectionName(..)
+            | Self::SetNewSectionLength(..)
+            | Self::OpenEditSectionDialog { .. }
+            | Self::CancelEditSectionDialog
+            | Self::SetEditSectionName(..)
+            | Self::SetEditSectionLength(..)
+            | Self::SelectSectionPlacement { .. }
+            | Self::SelectChord { .. }
+            | Self::ClearChordSelection
+            | Self::SelectLane(..)
+            | Self::ToggleRailPanel(..)
+            | Self::ToggleWorkspaceGroup(..)
+            | Self::ExpandTrack { .. }
+            | Self::CollapseTrack
+            | Self::ExpandedScrollX(..)
+            | Self::ExpandedScrollY(..)
+            | Self::WorkspaceScrolled { .. }
+            | Self::ExpandedZoomY(..) => UndoAction::Skip,
+            // Drum-ribbon span selection is view state too (code review
+            // VIEW-18): recording it wiped the redo stack.
+            Self::SelectArrangementEntry(..) => UndoAction::Skip,
+            // A vocal render finishing is the tail of the edit that queued it,
+            // seconds later — not a new edit, so it must not clear the redo
+            // stack an undo in the meantime filled (VIEW-18). An accepted
+            // install still marks the project dirty and bumps the revision in
+            // its handler: it changed the project's clips.
+            Self::VocalAudioReady(..)
+            | Self::VocalAudioFailed { .. }
+            | Self::VocalAudioUnavailable { .. } => UndoAction::Skip,
+            // The nested editors classify themselves.
+            Self::DrumGroups(m) => m.undo_action(),
+            Self::Arrangement(m) => m.undo_action(),
+            Self::Expression { msg, .. } => msg.undo_action(),
+            // Everything else in Compose mutates project state.
+            Self::CreateMidiClipInSection { .. }
+            | Self::ConfirmCreateSection
+            | Self::ConfirmEditSection
+            | Self::CycleSectionColor { .. }
+            | Self::CreateSection { .. }
+            | Self::RenameSection { .. }
+            | Self::ResizeSection { .. }
+            | Self::DeleteSectionDefinition { .. }
+            | Self::SetSectionScale { .. }
+            | Self::PlaceSection { .. }
+            | Self::DeleteSectionPlacement { .. }
+            | Self::AddChord { .. }
+            | Self::EditChord { .. }
+            | Self::MoveChord { .. }
+            | Self::ResizeChord { .. }
+            | Self::DeleteChord { .. }
+            | Self::ReplaceSectionChords { .. }
+            | Self::DeleteSectionWithPlacements { .. }
+            | Self::GenerateSectionPart { .. }
+            | Self::SetLaneGenerator { .. }
+            | Self::GenerateSectionDrums { .. }
+            | Self::ControlGenerateVocal { .. }
+            | Self::ControlSetVocalLyrics { .. }
+            | Self::ControlSetVocalLine { .. }
+            | Self::ControlSetPronunciation { .. }
+            | Self::ControlClearPronunciation { .. }
+            | Self::ControlRenderVocal { .. }
+            | Self::ChordInspector { .. }
+            | Self::LaneInspector { .. } => UndoAction::Record,
+        }
+    }
+}
+
 /// Payload dispatched when the background SVS render finishes. Carries
 /// the freshly-written WAV path and the placements that should mmap it.
 #[derive(Debug, Clone)]
@@ -432,6 +510,29 @@ pub enum ExpressionMessage {
     /// Reset `kind` to its generated baseline: drop the overlay and depth/
     /// smoothing, flipping the curve's status back to `Auto`.
     Reset { kind: CurveKind },
+}
+
+impl ExpressionMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // The Expression dock's tool state (active curve, pen, snap) is
+            // view state (code review VIEW-18): recording it wiped the redo
+            // stack.
+            Self::SelectCurve(..) | Self::SetPenMode(..) | Self::SetSnap(..) => UndoAction::Skip,
+            // Every breakpoint / depth / smoothing edit mutates the lane.
+            Self::AddBreakpoint { .. }
+            | Self::MoveBreakpoint { .. }
+            | Self::RemoveBreakpoint { .. }
+            | Self::SetDepth { .. }
+            | Self::SetSmoothing { .. }
+            | Self::Reset { .. } => UndoAction::Record,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -765,6 +866,55 @@ pub enum DrumGroupsMessage {
     },
 }
 
+impl DrumGroupsMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Classified as `ComposeMessage::DrumGroups` always was: every
+            // message records.
+            Self::SelectGroup { .. }
+            | Self::SelectPattern { .. }
+            | Self::AssignPattern { .. }
+            | Self::AddPattern
+            | Self::DuplicatePattern { .. }
+            | Self::DeletePattern { .. }
+            | Self::RenamePattern { .. }
+            | Self::SetPatternColor { .. }
+            | Self::BeginRenamePattern { .. }
+            | Self::UpdateRenamePatternText(..)
+            | Self::CommitRenamePattern
+            | Self::CancelRenamePattern
+            | Self::OpenManager
+            | Self::CloseManager
+            | Self::ManagerSelectGroup { .. }
+            | Self::ManagerSetFilter(..)
+            | Self::AddGroup
+            | Self::DeleteGroup { .. }
+            | Self::RenameGroup { .. }
+            | Self::SetGroupColor { .. }
+            | Self::TogglePadAssignment { .. }
+            | Self::ClearGroupPads { .. }
+            | Self::SetGroupGrid { .. }
+            | Self::SetGroupCycle { .. }
+            | Self::SetGroupPhase { .. }
+            | Self::SetGroupMeter { .. }
+            | Self::SetGroupDensity { .. }
+            | Self::SetGroupSwing { .. }
+            | Self::SetGroupAccent { .. }
+            | Self::SetGroupHumanize { .. }
+            | Self::SetGroupFills { .. }
+            | Self::SetPadWeight { .. }
+            | Self::GenerateGroup { .. }
+            | Self::GenerateAllGroups
+            | Self::TogglePadStep { .. } => UndoAction::Record,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Drum arrangement
 // ---------------------------------------------------------------------------
@@ -828,4 +978,29 @@ pub enum ArrangementMessage {
     /// Remediation: shrink / drop trailing entries so the arrangement lands
     /// exactly on the section boundary, dropping any overflow.
     TrimToFit { definition_id: u64 },
+}
+
+impl ArrangementMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Selecting an arrangement entry is pure UI state (the right-rail
+            // inspector focus); it never mutates the project.
+            Self::SelectEntry { .. } => UndoAction::Skip,
+            // Every other entry edit mutates the section's drum arrangement.
+            Self::AddEntry { .. }
+            | Self::RemoveEntry { .. }
+            | Self::MoveEntry { .. }
+            | Self::SetEntryPattern { .. }
+            | Self::SetEntryLength { .. }
+            | Self::SetEntryFill { .. }
+            | Self::DuplicateEntry { .. }
+            | Self::FillToEnd { .. }
+            | Self::TrimToFit { .. } => UndoAction::Record,
+        }
+    }
 }

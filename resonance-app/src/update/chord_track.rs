@@ -70,6 +70,31 @@ pub enum ChordTrackMessage {
     DeleteKeyChange { id: u64 },
 }
 
+impl ChordTrackMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Every chord-track edit is a discrete action (no drag gestures
+            // reach the update layer — todo #441), so each records one entry.
+            Self::AddAtPlayhead
+            | Self::AddRegion { .. }
+            | Self::SetSymbol { .. }
+            | Self::MoveStart { .. }
+            | Self::SetEnd { .. }
+            | Self::Delete { .. }
+            | Self::TogglePin { .. }
+            | Self::SetSongKey { .. }
+            | Self::InsertKeyChange { .. }
+            | Self::MoveKeyChange { .. }
+            | Self::DeleteKeyChange { .. } => UndoAction::Record,
+        }
+    }
+}
+
 /// The tonic chord of `scale` — the default chord seeded for a region
 /// added with no explicit symbol (doc #168: "default chord from key").
 /// Root is the scale root; the triad quality follows the mode: the
