@@ -50,6 +50,30 @@ pub enum BusMessage {
     },
 }
 
+impl BusMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            Self::SetBusVolume(id, _) => UndoAction::RecordCoalesced(CoalesceKey::BusVolume(*id)),
+            Self::SetBusPan(id, _) => UndoAction::RecordCoalesced(CoalesceKey::BusPan(*id)),
+            // Every other variant is a discrete, persisted edit.
+            Self::AddBus
+            | Self::AddBusWithId { .. }
+            | Self::RemoveBus(..)
+            | Self::ToggleBusMute(..)
+            | Self::ToggleBusFxBypass(..)
+            | Self::AddPluginToBus(..)
+            | Self::AddPluginToBusWithId { .. }
+            | Self::RemovePluginFromBus(..)
+            | Self::MovePluginInBus { .. } => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
     match m {
         BusMessage::AddBus => {

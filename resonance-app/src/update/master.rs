@@ -35,6 +35,25 @@ pub enum MasterMessage {
     },
 }
 
+impl MasterMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Every master-bus edit (FX bypass, insert chain) is a discrete,
+            // persisted edit.
+            Self::ToggleMasterFxBypass
+            | Self::AddPluginToMaster(..)
+            | Self::AddPluginToMasterWithId { .. }
+            | Self::RemovePluginFromMaster(..)
+            | Self::MovePluginInMaster { .. } => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
     match m {
         MasterMessage::ToggleMasterFxBypass => {

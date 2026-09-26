@@ -97,6 +97,39 @@ pub enum ProjectIoMessage {
     },
 }
 
+impl ProjectIoMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Save / open / bounce / template flows: project I/O, not an edit.
+            // Opening a project replaces the history wholesale instead.
+            Self::BounceToWav
+            | Self::BouncePathSelected(..)
+            | Self::CancelBounce
+            | Self::SaveProject
+            | Self::SaveProjectAs
+            | Self::Autosave
+            | Self::SaveAsTemplate { .. }
+            | Self::OpenProject
+            | Self::OpenRecent(..)
+            | Self::SavePathSelected(..)
+            | Self::OpenPathSelected(..)
+            | Self::ProjectSaved(..)
+            | Self::ProjectLoaded(..)
+            | Self::OpenLoadFinished(..)
+            | Self::TemplateLoaded(..)
+            | Self::ExportChordSheet
+            | Self::ChordSheetPathSelected(..)
+            | Self::RecoveryChoice(..)
+            | Self::OpenResolved { .. } => UndoAction::Skip,
+        }
+    }
+}
+
 /// Route a `ProjectIoMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
     match m {

@@ -87,6 +87,20 @@ pub enum ArrangementMessage {
     RemoveBars { at_bar: u32, count: u32 },
 }
 
+impl ArrangementMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // A bar shift touches every timeline collection; one entry.
+            Self::InsertBars { .. } | Self::RemoveBars { .. } => UndoAction::Record,
+        }
+    }
+}
+
 /// One structural shift's outcome, as the control layer reports it.
 #[derive(Debug, Clone, Default)]
 pub struct ShiftOutcome {

@@ -72,6 +72,25 @@ pub enum ControlMessage {
     Request(ControlRequest),
 }
 
+impl ControlMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Connect / disconnect events and request execution carry no undo
+            // weight at this level (doc #265, todo #1147). Mutating control
+            // methods synthesize ordinary domain messages that re-enter `update()`
+            // individually and are classified there.
+            Self::Connected { .. } | Self::Disconnected { .. } | Self::Request(..) => {
+                UndoAction::Skip
+            }
+        }
+    }
+}
+
 /// Non-blocking reply channel to one connection's writer thread.
 ///
 /// Cloneable so the update loop can hold it across an async job if a

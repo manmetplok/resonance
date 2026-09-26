@@ -104,6 +104,35 @@ pub enum RelinkMessage {
     DismissModal,
 }
 
+impl RelinkMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Missing-file relink (doc #175, todo #600). Only the applied outcome
+            // (`Imported(Ok)`) clears the missing flag, refreshes the asset's
+            // source provenance, and reloads its clips, so that one records a
+            // pre-relink snapshot to make the relink reversible.
+            Self::Imported(Ok(_)) => UndoAction::Record,
+            // `Imported(Err)` only sets a transient error string.
+            Self::Imported(Err(_)) => UndoAction::Skip,
+            // Opening the OS picker, its cancel results, and starting the
+            // background import are transient — they mutate no project state.
+            Self::Locate(..)
+            | Self::Located(..)
+            | Self::SearchFolder
+            | Self::FolderChosen(..)
+            | Self::ScanFinished(..)
+            | Self::CancelScan
+            | Self::ShowModal
+            | Self::DismissModal => UndoAction::Skip,
+        }
+    }
+}
+
 /// A failed relink import: which asset was being relinked, the source
 /// file that was tried, and a user-facing reason.
 #[derive(Debug, Clone)]

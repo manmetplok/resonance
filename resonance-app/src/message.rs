@@ -245,6 +245,55 @@ pub enum PluginMessage {
     RescanPlugins,
 }
 
+impl PluginMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            Self::AddPluginToTrack(_, _)
+            | Self::AddPluginToTrackWithId { .. }
+            | Self::RemovePluginFromTrack(_, _)
+            | Self::MovePluginInTrack { .. } => UndoAction::Record,
+            // Replacing a slot's plugin is a chain edit like any other,
+            // and one the user must be able to take back: a swap
+            // DISCARDS the outgoing plugin's preserved state (ba todo
+            // #1308), and the snapshot taken before this message is the
+            // only place that state still exists afterwards. Never
+            // coalesced — two replaces in a row are two decisions.
+            Self::ReplacePlugin { .. } => UndoAction::Record,
+            // Routing a key is a project edit like any other insert
+            // change, so it takes an undo entry of its own.
+            Self::SetPluginSidechain { .. } => UndoAction::Record,
+            // Bypassing a slot is a project edit and it persists, so it
+            // takes an entry. Deliberately NOT coalesced: a knob drag
+            // emits one message per frame and wants collapsing, but two
+            // bypass toggles are two decisions a user expects to undo
+            // separately (ba todo #1305).
+            Self::SetPluginBypass { .. } => UndoAction::Record,
+            // A preset recall is one gesture, so it takes one entry —
+            // and it must NOT coalesce with anything: coalescing a recall
+            // into a neighbouring knob edit would make the two undo
+            // together (ba todo #1333).
+            Self::LoadPluginPreset { .. } => UndoAction::Record,
+            Self::SetPluginParam(instance_id, param_id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
+                    instance_id: *instance_id,
+                    param_id: *param_id,
+                })
+            }
+            Self::TogglePluginPanel(_)
+            | Self::OpenPluginEditor(_)
+            // A rescan changes what the machine offers, not what the
+            // project contains — there is nothing to undo (todo #1307).
+            | Self::RescanPlugins
+            | Self::ClosePluginEditor(_) => UndoAction::Skip,
+        }
+    }
+}
+
 /// A button on the autosave-recovery prompt. `OpenLastSaved` is offered
 /// for a saved project, `Discard` for a crashed untitled session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -414,3 +463,57 @@ pub enum UiMessage {
     CloseTrackMenu,
 }
 
+impl UiMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Tabs, dialogs, menus, selection, performance mode and app
+            // settings: pure UI or user-settings state, never a project edit.
+            Self::SwitchView(..)
+            | Self::TogglePerformanceMode
+            | Self::RequestPerformanceToggle
+            | Self::PerformanceToggleResolved { .. }
+            | Self::ExitPerformanceMode
+            | Self::OpenSettings
+            | Self::CloseSettings
+            | Self::OpenAddTrackMenu
+            | Self::CloseAddTrackMenu
+            | Self::ToggleReferencePanel
+            | Self::DismissError
+            | Self::StartNewProject
+            | Self::SelectTrack(..)
+            | Self::SelectBus(..)
+            | Self::ModifiersChanged(..)
+            | Self::ConfirmSaveAndQuit
+            | Self::ConfirmDiscardAndQuit
+            | Self::CancelQuit
+            | Self::ToggleGlobalTracks
+            | Self::ToggleMixerInspectorGroup(..)
+            | Self::ToggleTakeLane(..)
+            | Self::ToggleFollowPlayhead
+            | Self::ToggleAutosave
+            | Self::SetAutosaveInterval(..)
+            | Self::ToggleMidiClockSend
+            | Self::SetMidiClockSendDevice(..)
+            | Self::ToggleMidiClockRecv
+            | Self::SetMidiClockRecvDevice(..)
+            | Self::SetPerformanceTuning(..)
+            | Self::SetPerformanceCapo(..)
+            | Self::ToggleMarkersOverview
+            | Self::CloseMarkersOverview
+            | Self::RequestMarkerNav { .. }
+            | Self::MarkerNavResolved { .. }
+            | Self::RequestShortcut(..)
+            | Self::ShortcutResolved { .. }
+            | Self::DismissImportProgress
+            | Self::DismissMissingPlugins
+            | Self::ShowMissingPlugins
+            | Self::OpenTrackMenu { .. }
+            | Self::CloseTrackMenu => UndoAction::Skip,
+        }
+    }
+}

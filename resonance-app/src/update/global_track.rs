@@ -33,6 +33,30 @@ pub enum GlobalTrackMessage {
     DeleteSelectedEvent,
 }
 
+impl GlobalTrackMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Selecting an event is view state.
+            Self::SelectEvent(..) => UndoAction::Skip,
+            // A tempo drag is one gesture: Begin at the grab, Commit at the
+            // release, and the per-step updates in between skip the history.
+            Self::StartTempoDrag(..) => UndoAction::Begin,
+            Self::EndTempoDrag => UndoAction::Commit,
+            Self::UpdateTempoEvent { .. } => UndoAction::Skip,
+            // Every other tempo / signature edit is a discrete, persisted edit.
+            Self::AddTempoEvent { .. }
+            | Self::AddSignatureEvent { .. }
+            | Self::UpdateSignatureEvent { .. }
+            | Self::DeleteSelectedEvent => UndoAction::Record,
+        }
+    }
+}
+
 impl Resonance {
     /// Rebuild the GUI-side tempo map from the current events and send the
     /// events to the audio engine. Call whenever `tempo_events` or

@@ -100,6 +100,48 @@ pub enum ExternalInstrumentMessage {
     RescanDefinitions,
 }
 
+impl ExternalInstrumentMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Runtime-only: re-checking devices / re-scanning hardware /
+            // revealing the user definitions folder / re-scanning definitions /
+            // auto-detecting latency all mutate no project state. The measured
+            // offset a detect eventually produces arrives as a separate engine
+            // event (mirrored into runtime-only state), not this message.
+            Self::CheckDevices(_)
+            | Self::RescanDevices
+            | Self::RevealUserDefinitionsFolder
+            | Self::RescanDefinitions
+            | Self::DetectLatency(_) => UndoAction::Skip,
+            // Every config change (enable/disable, route, patch, latency,
+            // monitor, arm, playback source) is a user-meaningful,
+            // reversible edit. The playback-source *auto-switch* after a
+            // recorded take is event-driven (`RecordingFinished`), not a
+            // message, so it never lands an undo entry of its own — only
+            // the explicit inspector toggle does.
+            Self::Enable(..)
+            | Self::Disable(..)
+            | Self::SetMidiOutDevice(..)
+            | Self::SetMidiOutChannel(..)
+            | Self::SetDevice(..)
+            | Self::SetReturnDevice(..)
+            | Self::SetReturnPort(..)
+            | Self::SetBank(..)
+            | Self::SetProgram(..)
+            | Self::SetPatch(..)
+            | Self::SetLatencyOffset(..)
+            | Self::ToggleMonitor(..)
+            | Self::ToggleRecordArm(..)
+            | Self::SetPlaybackSource(..) => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> {
     use ExternalInstrumentMessage as M;
     match m {

@@ -55,6 +55,24 @@ pub enum DragMessage {
     Cancel,
 }
 
+impl DragMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Drag-to-timeline placement preview (doc #175, todo #605) is pure
+            // transient UI: the drag pill, lit lane, ghost clip and tooltip are
+            // never undoable and never in the project file. The one durable
+            // effect — the drop — re-dispatches a `Pool(ImportAndPlace)`, which
+            // records its own single undo entry.
+            Self::Start(..) | Self::Hover { .. } | Self::Drop | Self::Cancel => UndoAction::Skip,
+        }
+    }
+}
+
 /// Where a drop-import lands its clips (doc #175, ba todo #598). The
 /// sample position is the **raw** drop position; the orchestration snaps
 /// it to the timeline grid (the same snap the clip-drag handlers use)

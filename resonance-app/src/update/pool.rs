@@ -103,6 +103,37 @@ pub enum PoolMessage {
     },
 }
 
+impl PoolMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // The two entry-point helpers (ba todo #608) are pure intent
+            // signals — no state changes at their dispatch time — so they are
+            // skipped here. `PickFiles` opens the OS dialog and returns a task
+            // that fires `ImportFilesToPool` later (recorded then).
+            // `WindowAudioDrop` re-dispatches `ImportAndPlace` inside the handler
+            // (recorded then).
+            Self::PickFiles | Self::WindowAudioDrop(..) => UndoAction::Skip,
+            // Audio import + placement (doc #175, todo #598) is one undoable
+            // action. Recording here — before the import command is even sent —
+            // captures the pre-import project (no pool asset, no placed clip, no
+            // spawned track); the asset lands asynchronously and mutates state
+            // via the engine-event path, which never records undo. So one undo
+            // of this single snapshot removes the whole import + placement. Both
+            // the pool-only and place variants are reversible (a pool asset
+            // rides the `ProjectFile` snapshot just like a clip does).
+            Self::ImportFilesToPool(..)
+            | Self::ImportAndPlace { .. }
+            | Self::ImportAndPlaceExact { .. }
+            | Self::PlacePooledAsset { .. } => UndoAction::Record,
+        }
+    }
+}
+
 /// Audio container extensions accepted by the import entry points (the
 /// chrome button, the window file-drop subscription, and the browser
 /// drag-to-timeline gesture). Shared by [`is_pool_audio_path`] and the

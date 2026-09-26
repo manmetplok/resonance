@@ -112,6 +112,64 @@ pub enum TrackMessage {
     Bounce(BounceMessage),
 }
 
+impl TrackMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            Self::SetTrackVolume(id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::TrackVolume(*id))
+            }
+            Self::SetTrackPan(id, _) => UndoAction::RecordCoalesced(CoalesceKey::TrackPan(*id)),
+            Self::SetMasterVolume(_) => UndoAction::RecordCoalesced(CoalesceKey::MasterVolume),
+            Self::ToggleSubTracksVisible(_) => UndoAction::Skip,
+            // Dismissing the delete-confirmation dialog is a transient
+            // UI gesture — nothing to undo.
+            Self::CancelRemoveTrack => UndoAction::Skip,
+            // Only asks: it opens the confirm dialog, or — for an empty
+            // track — re-dispatches `ConfirmRemoveTrack`, which records
+            // the delete (code review STATE-13).
+            Self::RequestRemoveTrack(_) => UndoAction::Skip,
+            // Preset operations that don't mutate project state: a
+            // preset is a file on the machine, and saving one leaves the
+            // project exactly as it was (ba todo #1303). The prompt
+            // around it is transient UI for the same reason.
+            Self::DeleteUserPreset(_)
+            | Self::SaveTrackAsPreset { .. }
+            | Self::OpenSavePresetPrompt(_)
+            | Self::SetSavePresetName(_)
+            | Self::CloseSavePresetPrompt => UndoAction::Skip,
+            // Every other variant is a discrete, persisted edit.
+            Self::AddTrack
+            | Self::AddInstrumentTrack
+            | Self::AddExternalInstrumentTrack
+            | Self::AddVocalTrack
+            | Self::AddControlTrack { .. }
+            | Self::ConfirmRemoveTrack
+            | Self::ToggleMute(..)
+            | Self::ToggleSolo(..)
+            | Self::ToggleRecordArm(..)
+            | Self::ToggleMonitor(..)
+            | Self::ToggleTrackMono(..)
+            | Self::ToggleTrackFxBypass(..)
+            | Self::SetTrackName(..)
+            | Self::SetTrackInputDevice(..)
+            | Self::SetTrackInputPort(..)
+            | Self::SetTrackMidiInputDevice(..)
+            | Self::SetTrackMidiOutputDevice(..)
+            | Self::SetTrackMidiInputChannel(..)
+            | Self::SetTrackMidiOutputChannel(..)
+            | Self::SetTrackOutput(..)
+            | Self::AddTrackFromPreset { .. }
+            | Self::BounceInPlace(..) => UndoAction::Record,
+            Self::Bounce(m) => m.undo_action(),
+        }
+    }
+}
+
 /// User actions in the realtime bounce-in-place dialog (only shown for
 /// external-MIDI instrument tracks). The dialog lifecycle: open →
 /// `PickDevice` / `PickPort` → `Confirm` (kicks off the realtime bounce)
@@ -134,6 +192,32 @@ pub enum BounceMessage {
     /// a bounce is actually running. Distinct from `Cancel`, which only
     /// dismisses the pre-bounce input-picker dialog.
     CancelInProgress,
+}
+
+impl BounceMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // The input picker's choices and its dismissal only touch
+            // `bounce_dialog`, which is session UI — never in the project.
+            // Cancelling a running bounce asks the engine to stop; nothing
+            // the project holds changes (A-10: these used to record, one
+            // empty entry per click that also wiped the redo stack).
+            Self::PickDevice(..)
+            | Self::PickPort(..)
+            | Self::SetMono(..)
+            | Self::Cancel
+            | Self::CancelInProgress => UndoAction::Skip,
+            // Confirm adds the target track and starts the render; like a
+            // pool import, the snapshot taken here is the pre-bounce
+            // project the async result lands on top of.
+            Self::Confirm => UndoAction::Record,
+        }
+    }
 }
 
 /// Where a "bounce in place" request should route. Computed from a

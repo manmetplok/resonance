@@ -30,6 +30,23 @@ pub enum VocalTuningMessage {
     ClosePitchEditor,
 }
 
+impl VocalTuningMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Pitch-editor open/close is editor lifecycle + an analysis request
+            // (a read-only engine query whose result is cached, not user-authored
+            // project data) — never an undoable edit, mirroring the MIDI editor
+            // open/close.
+            Self::OpenPitchEditor(..) | Self::ClosePitchEditor => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: VocalTuningMessage) -> Task<Message> {
     match m {
         VocalTuningMessage::OpenPitchEditor(clip_id) => open_pitch_editor(r, clip_id),

@@ -64,6 +64,35 @@ pub enum MixerMessage {
     CreateReturnFromSend { source: SendSource },
 }
 
+impl MixerMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            // Aux-send edits. A level drag coalesces into one entry per
+            // gesture (like the volume/pan faders); every other send action is
+            // a discrete, atomic edit. The send graph rides the `ProjectFile`
+            // snapshot since ba todo #1269, so these entries restore
+            // end-to-end; here we only classify the bookkeeping (dirty-mark +
+            // redo-clear).
+            Self::SetSendLevel(send_id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::SendLevel(*send_id))
+            }
+            Self::AddSend { .. }
+            | Self::AddSendWithId { .. }
+            | Self::RemoveSend(_)
+            | Self::SetSendDest(_, _)
+            | Self::ToggleSendPreFader(_)
+            | Self::ToggleSendEnabled(_)
+            | Self::SetBusReturnRole(_, _)
+            | Self::CreateReturnFromSend { .. } => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: MixerMessage) -> Task<Message> {
     match m {
         MixerMessage::AddSend { source, dest } => {

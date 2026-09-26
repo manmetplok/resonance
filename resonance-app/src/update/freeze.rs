@@ -62,6 +62,32 @@ pub enum FreezeMessage {
     RevealFreezeCache,
 }
 
+impl FreezeMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Freeze edits. Freeze / unfreeze / refreeze / batch-freeze are
+            // discrete, atomic transitions worth an undo entry; the rendered
+            // cache is deliberately excluded from history (see `UndoExtras` and
+            // `apply_freeze_restore`). Cancelling an in-flight render is a
+            // transient abort, not a project mutation — skip it.
+            Self::CancelFreeze => UndoAction::Skip,
+            // Opening the cache directory in the file manager reads state
+            // only — never a project mutation (ba todo #581).
+            Self::RevealFreezeCache => UndoAction::Skip,
+            Self::FreezeTrack(_)
+            | Self::UnfreezeTrack(_)
+            | Self::RefreezeTrack(_)
+            | Self::FreezeSelectedTracks
+            | Self::FreezeAllTracks => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: FreezeMessage) -> Task<Message> {
     // Every freeze action is reachable from the track context menu (ba
     // todo #581); acting on an entry closes the menu, and the messages

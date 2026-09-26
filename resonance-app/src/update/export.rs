@@ -29,6 +29,20 @@ pub enum ExportMessage {
     Confirm,
 }
 
+impl ExportMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // The export dialog reads the project; it never edits it.
+            Self::Open | Self::Close | Self::SetMode(..) | Self::Confirm => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, msg: ExportMessage) -> Task<Message> {
     match msg {
         ExportMessage::Open => {
