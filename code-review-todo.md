@@ -54,6 +54,7 @@ master and updates this table. Agents do **not** edit this file.
 | R1 autosave crash recovery | FU-M12a, FU-M12b (rest) | opus | merged | d2be52fc |
 | T1 flaky tests + small items | FU-A5a, FU-A5c, FU-P1a, FU-H3a | opus | merged | 51000f97 |
 | V5 vocal data loss + canvas leftovers | FU-C1a, FU-C1b, FU-V2c, FU-V3c | opus | in progress | |
+| F1 final follow-ups | FU-G2d, FU-F1c, FU-R1a, FU-M11b | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | merged | e6d7dc93 |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | merged | b9a5e1a4 |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
@@ -69,7 +70,7 @@ master and updates this table. Agents do **not** edit this file.
 - [x] **FU-G2b** — fixed @20ee064c; (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
 - [x] **FU-G2c** — fixed @96e5d02a; (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
 - [ ] **FU-G2d** [partial @28f7a5c0: held-key legato done; held-note stack return not done] (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
-- [ ] **FU-B1** (low) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
+- [ ] **FU-B1** (low, NEEDS USER DECISION — preserve hand edits vs re-roll) section resize re-rolls chord/vocal lanes from seed → hand edits to generated notes are lost (same as a chord change); vocal lanes re-render.
 - [x] **FU-B2** — fixed (C1); (low) `remove_bars` leaves stale vocal-audio map entries for placements it deletes (clips themselves are removed).
 - [x] **FU-B3** — fixed (C1); (low) vocal WAVs are never garbage-collected after section/placement delete.
 - [x] **FU-F2a** — fixed @6f682cc6; (low) carried CLAP note events wait for the instrument's next `process()`; if the tail sub-block skips that instrument the note is late, and a carried note-on can land after a Stop panic.
