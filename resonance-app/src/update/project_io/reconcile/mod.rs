@@ -14,10 +14,14 @@
 //! domains in table order.
 
 mod app_side;
+mod clips;
 mod globals;
 mod restored;
 
+use std::collections::HashMap;
 use std::path::Path;
+
+use resonance_audio::types::{ClipId, MidiNote};
 
 use crate::project::ProjectFile;
 use crate::Resonance;
@@ -57,6 +61,9 @@ pub struct ReconcileCtx<'a> {
     /// `LoadedProject::project_dir` on the full paths, the live
     /// `io.project_path` on the diff path (`None` for an untitled project).
     pub project_dir: Option<&'a Path>,
+    /// The target's MIDI notes per clip id (`LoadedProject::midi_notes`),
+    /// which the `ProjectFile` does not carry. Read by `MidiClips`.
+    pub midi_notes: &'a HashMap<ClipId, Vec<MidiNote>>,
     /// Live state an undo keeps, captured by the entry point before
     /// anything is restored.
     pub live: LiveCarry<'a>,
@@ -122,9 +129,10 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
-    /// State derived from the restored clips: the lyric side-table and
-    /// the derived-clip map. Full path: right after the MIDI clips are
-    /// replayed. Diff path: right after the MIDI clips are applied.
+    /// The audio and MIDI clips, then state derived from them: the lyric
+    /// side-table and the derived-clip map. Full path: right after the
+    /// tracks, busses, master and routing are replayed. Diff path: right
+    /// after the plugin params are applied.
     Clips,
     /// App-side content restored whole, and the references. Full path:
     /// after the plugin chains are finalised (the pool counts the clips'
@@ -174,6 +182,11 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Markers>(Stage::Timeline),
     // Reads the meter (tempo events) and the sections.
     domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // The clips themselves, after every track they sit on (and, diff
+    // path, the tempo map — no clip command reads it). Audio before MIDI,
+    // as both paths always had it.
+    domain::<clips::AudioClips>(Stage::Clips),
+    domain::<clips::MidiClips>(Stage::Clips),
     // After the MIDI and audio clips they read / filter against.
     domain::<globals::ClipLyrics>(Stage::Clips),
     domain::<restored::DerivedClips>(Stage::Clips),

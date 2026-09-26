@@ -212,6 +212,8 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "chord_track"),
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
+            (Stage::Clips, "audio_clips"),
+            (Stage::Clips, "midi_clips"),
             (Stage::Clips, "clip_lyrics"),
             (Stage::Clips, "derived_clips"),
             (Stage::Content, "references"),

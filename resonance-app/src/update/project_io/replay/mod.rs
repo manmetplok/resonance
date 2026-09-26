@@ -28,7 +28,6 @@ use resonance_audio::types::*;
 
 use super::reconcile::{reconcile_stage, LiveCarry, Origin, ReconcileCtx, Stage};
 use crate::project::{LoadedProject, ProjectFile};
-use crate::state::*;
 use crate::Resonance;
 
 // Re-export helpers consumed by sibling modules (undo replay, diff replay).
@@ -73,6 +72,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let ctx = ReconcileCtx {
         origin,
         project_dir: Some(&loaded.project_dir),
+        midi_notes: &loaded.midi_notes,
         live: LiveCarry {
             project_path: live_project_path.as_deref(),
             // An undo/redo never lowers the derived-clip id counter
@@ -107,11 +107,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Replay tracks, busses, and master FX chain.
     replay_tracks_and_busses(r, project, &loaded);
 
-    // Restore audio and MIDI clips.
-    replay_audio_clips(r, project, &loaded);
-    replay_midi_clips(r, project, &loaded);
-
-    // Rebuild vocal-derived state from the restored clips.
+    // The audio and MIDI clips (every one loaded: `old` is `None`), then
+    // the vocal state derived from them.
     replay_vocal(r, project, &loaded, &ctx);
 
     // Re-impose the saved plugin-slot order and refresh the side-index.
@@ -143,8 +140,9 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     r.registry.busses.clear();
     r.master_plugins.clear();
     r.master_fx_bypassed = false;
-    r.clips.clear();
-    r.midi_clips.clear();
+    // The audio and MIDI clip mirrors are emptied by their own reconcile
+    // domains (`AudioClips`, `MidiClips`), just before they reload them;
+    // nothing in between reads them.
     r.registry.next_track_order = 0;
     r.registry.next_bus_order = 0;
     r.plugin_index.clear();
@@ -405,120 +403,20 @@ fn replay_sidechain_routes(r: &mut Resonance, project: &ProjectFile) {
     }
 }
 
-/// Replay audio clips from the project's clip list: hand the engine an
-/// absolute path to each WAV file, push non-default fades/gain, and
-/// build the corresponding `ClipState` entries.
-fn replay_audio_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
-    for pc in &project.clips {
-        let abs_path = loaded.project_dir.join(&pc.audio_file);
-        let _ = r.engine.send(AudioCommand::LoadClipFromWav {
-            clip_id: pc.id,
-            track_id: pc.track_id,
-            start_sample: pc.start_sample,
-            path: abs_path,
-            name: pc.name.clone(),
-            trim_start_frames: pc.trim_start_frames,
-            trim_end_frames: pc.trim_end_frames,
-        });
-
-        // Fades & per-clip gain (epic #18, doc #156). `LoadClipFromWav`
-        // carries no fade/gain, so push them explicitly after the clip
-        // exists; the engine clamps and echoes them back. Only emit when
-        // non-default to keep legacy/unfaded projects quiet.
-        let fade_in_frames = pc.fade_in_frames;
-        let fade_in_curve = fade_curve_from_tag(&pc.fade_in_curve);
-        let fade_out_frames = pc.fade_out_frames;
-        let fade_out_curve = fade_curve_from_tag(&pc.fade_out_curve);
-        let gain_db = pc.gain_db;
-        if fade_in_frames != 0 || fade_out_frames != 0 {
-            let _ = r.engine.send(AudioCommand::SetClipFade {
-                clip_id: pc.id,
-                fade_in_frames,
-                fade_in_curve,
-                fade_out_frames,
-                fade_out_curve,
-            });
-        }
-        if gain_db != 0.0 {
-            let _ = r.engine.send(AudioCommand::SetClipGain {
-                clip_id: pc.id,
-                gain_db,
-            });
-        }
-
-        let duration_samples = pc
-            .total_frames
-            .saturating_sub(pc.trim_start_frames)
-            .saturating_sub(pc.trim_end_frames);
-        r.clips.push(ClipState {
-            id: pc.id,
-            track_id: pc.track_id,
-            start_sample: pc.start_sample,
-            duration_samples,
-            name: pc.name.clone(),
-            total_frames: pc.total_frames,
-            trim_start_frames: pc.trim_start_frames,
-            trim_end_frames: pc.trim_end_frames,
-            fade_in_frames,
-            fade_in_curve,
-            fade_out_frames,
-            fade_out_curve,
-            gain_db,
-            waveform_peaks: Vec::new(), // Populated by ClipImported event.
-            vocal_tuning: None,         // Re-derived on demand when the pitch editor opens.
-            // Link to the pool asset this clip was placed from, if any
-            // (doc #175). Persisted on `ProjectClip`; rebuilt here so
-            // imported audio survives reload. `restore_pool` reconciles
-            // it against the pool (and recomputes usage) after every clip
-            // is in place.
-            asset_ref: pc.asset_ref.map(crate::state::pool::AssetRef::new),
-        });
-    }
-}
-
-/// Replay MIDI clips from the parsed `.mid` files. Their lyric side-table
-/// is the `ClipLyrics` domain ([`Stage::Clips`]).
-fn replay_midi_clips(r: &mut Resonance, project: &ProjectFile, loaded: &LoadedProject) {
-    for pmc in &project.midi_clips {
-        let notes: Vec<MidiNote> = loaded.midi_notes.get(&pmc.id).cloned().unwrap_or_default();
-
-        let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
-            clip_id: pmc.id,
-            track_id: pmc.track_id,
-            start_sample: pmc.start_sample,
-            duration_ticks: pmc.duration_ticks,
-            notes: notes.clone(),
-            name: pmc.name.clone(),
-            trim_start_ticks: pmc.trim_start_ticks,
-            trim_end_ticks: pmc.trim_end_ticks,
-        });
-
-        r.midi_clips.push(MidiClipState {
-            id: pmc.id,
-            track_id: pmc.track_id,
-            start_sample: pmc.start_sample,
-            duration_ticks: pmc.duration_ticks,
-            name: pmc.name.clone(),
-            notes,
-            trim_start_ticks: pmc.trim_start_ticks,
-            trim_end_ticks: pmc.trim_end_ticks,
-        });
-    }
-}
-
-/// Rebuild vocal-derived state that depends on the already-restored MIDI and
-/// audio clips: the [`Stage::Clips`] domains (the lyric side-table and the
-/// `derived_clips` section→clip map the compose view uses) and the vocal-audio clip map (so the next Generate Vocal correctly
-/// tears down old clips rather than stacking on top of them).
+/// The [`Stage::Clips`] domains (the audio and MIDI clips, the lyric
+/// side-table and the `derived_clips` section→clip map the compose view
+/// uses), then the vocal-audio clip map (so the next Generate Vocal
+/// correctly tears down old clips rather than stacking on top of them).
 fn replay_vocal(
     r: &mut Resonance,
     project: &ProjectFile,
     loaded: &LoadedProject,
     ctx: &ReconcileCtx<'_>,
 ) {
-    // The lyric side-table (padded to the replayed note counts) and the
-    // derived-clip map (ARCH-01 A-6), keeping only entries whose clip this
-    // replay installed — `ClearAll` wiped anything else.
+    // Every audio and MIDI clip, the lyric side-table (padded to the
+    // replayed note counts) and the derived-clip map (ARCH-01 A-6),
+    // keeping only entries whose clip this replay installed — `ClearAll`
+    // wiped anything else.
     reconcile_stage(r, Stage::Clips, None, project, ctx);
 
     // Rebuild the vocal audio clip map so subsequent regen tear-downs
@@ -570,6 +468,3 @@ fn finalize_plugin_chains(r: &mut Resonance, saved: &SavedPluginOrder) {
     // on their own concern.
     r.rebuild_plugin_index();
 }
-
-// Needed by replay_audio_clips; imported via the crate's project module.
-use crate::project::fade_curve_from_tag;
