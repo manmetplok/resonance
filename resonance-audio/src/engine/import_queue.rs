@@ -28,10 +28,26 @@
 //! queued first.
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
+use thiserror::Error;
+
+use crate::types::{EngineError, EngineErrorKind};
 
 /// Hard cap on concurrent clip decode/load workers. Requests past this
 /// bound wait in the queue and run as workers free up; none are dropped.
 pub const MAX_CONCURRENT_IMPORTS: usize = 4;
+
+/// Failure spawning the pool's first worker thread. Transparent: Display
+/// matches the wrapped `std::io::Error`'s text exactly (the historical
+/// `e.to_string()`).
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct ImportQueueError(#[from] std::io::Error);
+
+impl From<ImportQueueError> for EngineError {
+    fn from(e: ImportQueueError) -> Self {
+        EngineError::new(EngineErrorKind::Io, e.to_string())
+    }
+}
 
 type ImportJob = Box<dyn FnOnce() + Send + 'static>;
 
@@ -78,7 +94,7 @@ impl ImportQueue {
     /// the failure. Once at least one worker exists a later spawn
     /// failure is benign: the job is queued and an existing worker will
     /// pick it up.
-    pub fn submit<F: FnOnce() + Send + 'static>(&mut self, job: F) -> Result<(), String> {
+    pub fn submit<F: FnOnce() + Send + 'static>(&mut self, job: F) -> Result<(), ImportQueueError> {
         self.ensure_worker()?;
         // Unbounded channel with a live receiver held right here, so
         // this can neither block nor fail.
@@ -91,7 +107,7 @@ impl ImportQueue {
         self.workers
     }
 
-    fn ensure_worker(&mut self) -> Result<(), String> {
+    fn ensure_worker(&mut self) -> Result<(), ImportQueueError> {
         if self.workers >= self.max_workers {
             return Ok(());
         }
@@ -114,7 +130,7 @@ impl ImportQueue {
                 self.workers += 1;
                 Ok(())
             }
-            Err(e) if self.workers == 0 => Err(e.to_string()),
+            Err(e) if self.workers == 0 => Err(e.into()),
             // At least one worker is already running: it will pick the
             // job up, so this spawn failure costs throughput, not work.
             Err(_) => Ok(()),

@@ -132,7 +132,7 @@ fn import_one_reports_error_for_missing_file() {
     let missing = dir.join("does-not-exist.wav");
     let err = import_one_to_pool(1, &missing.to_string_lossy(), &dir, PROJECT_RATE)
         .expect_err("missing file must error");
-    assert!(!err.is_empty());
+    assert!(!err.to_string().is_empty());
     // No stray asset file gets written on failure.
     assert!(!dir.join("audio/asset_1.wav").exists());
     let _ = std::fs::remove_dir_all(&dir);

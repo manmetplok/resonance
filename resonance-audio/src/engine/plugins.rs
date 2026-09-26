@@ -7,11 +7,30 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::clap_host::ClapBundle;
+use thiserror::Error;
+
+use crate::clap_host::{ClapBundle, ClapBundleError};
 use crate::types::*;
 
 use super::external_instrument::ExternalInstruments;
 use super::thread::{HandlerCtx, HandlerState};
+
+/// Failure resolving or loading the `.clap` bundle behind a plugin add
+/// ([`ensure_bundle`] / [`resolve_plugin_id`]). Message text matches the
+/// historical `format!()` / literal strings.
+#[derive(Debug, Error)]
+pub enum PluginBundleError {
+    #[error("Failed to load plugin: {0}")]
+    Load(#[from] ClapBundleError),
+    #[error("No plugins found in file")]
+    NoPluginsFound,
+}
+
+impl From<PluginBundleError> for EngineError {
+    fn from(e: PluginBundleError) -> Self {
+        EngineError::new(EngineErrorKind::Plugin, e.to_string())
+    }
+}
 
 /// True for commands that can change a track's or bus's chain latency
 /// (plugin add/remove, routing, track/bus topology, freeze / FX-bypass
@@ -325,7 +344,7 @@ pub(crate) fn handle_add_plugin(
     let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
         Ok(idx) => idx,
         Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
             return;
         }
     };
@@ -334,7 +353,7 @@ pub(crate) fn handle_add_plugin(
     {
         Ok(resolved) => resolved,
         Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
             return;
         }
     };
@@ -788,20 +807,16 @@ pub fn ensure_bundle(
     bundles: &mut Vec<ClapBundle>,
     path: &Path,
     clap_plugin_id: &str,
-) -> Result<usize, String> {
+) -> Result<usize, PluginBundleError> {
     if let Some(idx) = bundles
         .iter()
         .position(|b| b.descriptors().iter().any(|d| d.id == clap_plugin_id))
     {
         return Ok(idx);
     }
-    match ClapBundle::load(path) {
-        Ok(bundle) => {
-            bundles.push(bundle);
-            Ok(bundles.len() - 1)
-        }
-        Err(e) => Err(format!("Failed to load plugin: {}", e)),
-    }
+    let bundle = ClapBundle::load(path)?;
+    bundles.push(bundle);
+    Ok(bundles.len() - 1)
 }
 
 /// Returns the canonical plugin id to instantiate from `bundle`. If the
@@ -810,13 +825,13 @@ pub fn ensure_bundle(
 pub(crate) fn resolve_plugin_id(
     bundle: &ClapBundle,
     clap_plugin_id: String,
-) -> Result<String, String> {
+) -> Result<String, PluginBundleError> {
     if !clap_plugin_id.is_empty() {
         return Ok(clap_plugin_id);
     }
     match bundle.descriptors().first() {
         Some(d) => Ok(d.id.clone()),
-        None => Err("No plugins found in file".to_string()),
+        None => Err(PluginBundleError::NoPluginsFound),
     }
 }
 

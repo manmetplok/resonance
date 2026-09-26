@@ -99,6 +99,7 @@ impl EngineState {
             &self.tempo_map,
             SR,
         )
+        .map_err(|e| e.to_string())
     }
 }
 

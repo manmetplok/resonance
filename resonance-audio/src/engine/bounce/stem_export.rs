@@ -153,8 +153,11 @@ pub fn export_stems(
                 });
             }
             // Keep the stems written so far and carry on with the queue.
-            Err(message) => {
-                let _ = event_tx.send(AudioEvent::StemExportTargetError { index, message });
+            Err(e) => {
+                let _ = event_tx.send(AudioEvent::StemExportTargetError {
+                    index,
+                    message: e.to_string(),
+                });
             }
         }
     }

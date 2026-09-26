@@ -278,6 +278,7 @@ fn unavailable_encoders_leave_no_file() {
             &out,
         )
         .expect_err("encoder should be unavailable");
+        let err = err.to_string();
         assert!(err.contains("not available"), "message: {err}");
         assert!(!out.exists(), "no partial file must be left behind");
     }

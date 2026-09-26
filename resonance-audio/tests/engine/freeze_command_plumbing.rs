@@ -16,7 +16,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{AutomationSnapshot, FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
+use resonance_audio::test_support::{AutomationSnapshot, FreezeError, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -187,10 +187,10 @@ fn freeze_missing_track_emits_freeze_error() {
 
 #[test]
 fn terminal_event_maps_cancel_sentinel_to_freeze_cancelled() {
-    // The renderer returns `FREEZE_CANCELLED_MSG` on cooperative cancel
+    // The renderer returns `FreezeError::Cancelled` on cooperative cancel
     // (proven end-to-end in freeze_render_core.rs); the worker must turn
-    // that into `FreezeCancelled`, not `FreezeError`.
-    let ev = freeze_terminal_event(7, Err(FREEZE_CANCELLED_MSG.to_string()));
+    // that into `FreezeCancelled`, not `AudioEvent::FreezeError`.
+    let ev = freeze_terminal_event(7, Err(FreezeError::Cancelled));
     assert!(
         matches!(ev, AudioEvent::FreezeCancelled { track_id: 7 }),
         "cancel sentinel must map to FreezeCancelled, got {ev:?}"
@@ -199,11 +199,11 @@ fn terminal_event_maps_cancel_sentinel_to_freeze_cancelled() {
 
 #[test]
 fn terminal_event_maps_other_errors_to_freeze_error() {
-    let ev = freeze_terminal_event(9, Err("disk full".to_string()));
+    let ev = freeze_terminal_event(9, Err(FreezeError::NothingToFreeze));
     match ev {
         AudioEvent::FreezeError { track_id, message } => {
             assert_eq!(track_id, 9);
-            assert_eq!(message, "disk full");
+            assert_eq!(message, "Nothing to freeze");
         }
         other => panic!("expected FreezeError, got {other:?}"),
     }

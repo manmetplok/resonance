@@ -77,7 +77,8 @@ fn a_bundle_that_is_not_there_yields_a_reason_rather_than_a_silent_none() {
     let missing = std::path::Path::new("/definitely/not/here/MegaVerb.clap");
 
     let reason = ensure_bundle(&mut bundles, missing, "com.thirdparty.mega-verb")
-        .expect_err("a nonexistent bundle cannot load");
+        .expect_err("a nonexistent bundle cannot load")
+        .to_string();
     assert!(
         reason.starts_with("Failed to load plugin:"),
         "the reason has to say what failed: {reason}"
