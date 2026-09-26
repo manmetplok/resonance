@@ -109,3 +109,5 @@ mod track_delete_lane_cleanup;
 mod vocal_render_inflight_placement;
 #[path = "compose/vocal_roll_key_focus.rs"]
 mod vocal_roll_key_focus;
+#[path = "compose/vocal_roll_fingerprint.rs"]
+mod vocal_roll_fingerprint;
