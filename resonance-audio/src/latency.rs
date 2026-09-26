@@ -1,9 +1,13 @@
 //! Plugin-delay compensation (PDC).
 //!
 //! Model: each plugin's latency is read from its `clap.latency`
-//! extension once, right after activation (the host vtable doesn't
-//! implement `clap_host_latency`, so latency changes after activation
-//! are not tracked). Compensation runs in two stages so aux sends stay
+//! extension right after activation. The host vtable does implement
+//! `clap_host_latency` (`clap_host/mod.rs`): a plugin calling
+//! `changed()` latches a flag on its `HostData`, and the engine thread's
+//! next poll (`take_host_restart_requests`) deactivates,
+//! re-activates and re-reads the instance at a safe point, then
+//! recomputes the chains below (doc #260 finding #10). Compensation
+//! runs in two stages so aux sends stay
 //! aligned with main outputs (a signal can leave one track through
 //! *several* paths — main output plus any number of sends — and a
 //! single per-track delay cannot equalize divergent downstream chains):
