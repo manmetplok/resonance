@@ -4,7 +4,9 @@ Design for `refactor-intent.md` Epic A item 13 (`arch-migration-plan.md`
 ARCH-01 step 3, "A-13 roadmap" in the A-7 progress note). Written against
 master `d6d89413`. This document covers the trait, the driver, and the first
 slice (A-13a, roadmap group 1); §7 records the second (A-13b, group 2,
-written against master `c325335a`). Later slices move one group at a time.
+written against master `c325335a`), §8 the third (A-13c, group 4, against
+master `d538d5cf`; group 3 waits for D-2/D-3). Later slices move one group
+at a time.
 
 ## 1. The problem
 
@@ -407,3 +409,163 @@ throughout a diff restore is not re-decoded. Baselines are untouched
 * `ctx.project_dir` and `ctx.live.project_path` are the same value on the
   diff path; once the full path no longer `take()`s `io.project_path`
   (FU-A7a's `pending_load` payload rework) the carry field can go.
+
+## 8. Group (4): A-13c
+
+Group (3) (sends, sidechain routes) is skipped for now: D-2/D-3 is
+re-keying send and bus ids concurrently. This slice moves group (4).
+
+### What `replay_globals` / `apply_global` actually covered
+
+| Piece | Full path (`replay_globals`) | Diff path |
+|---|---|---|
+| bpm, time sig, metronome, master volume, MIDI clock in/out, loop range | set + sent, all | `apply_global`: set + sent when changed |
+| playhead = 0 | yes | no |
+| `loop_range_set = loop_enabled` | end of `replay_vocal` | inside the loop-changed branch |
+| selected clip/plugin, clip drag/trim, delete-track/quit confirm | reset | kept |
+| sections (`load_from_project`) | yes | `apply_compose`, after the MIDI clips |
+| drum-pattern bank | `restore_drum_patterns(.., false)` + drum-roll focus | `(.., true)`, focus kept |
+| chord trim to sections | after `Timeline` | no |
+| lyric side-table | per clip in `replay_midi_clips` | `apply_compose`, after the MIDI clips |
+
+### Domains and stages
+
+`Stage` is now `Globals, Timeline, Clips, Content, Tail`; 20 domains
+(`reconcile_order::the_table_is_the_agreed_order`). New rows (code
+`reconcile/globals.rs`):
+
+| Stage | Domain | Body by origin |
+|---|---|---|
+| Globals | `transport` | each scalar set + sent when `old` differs — every one when `old = None`. After `ClearAll`: playhead 0. `loop_range_set` follows the loop whenever the loop is restored. The first domain to read `old`. |
+| Globals | `transient_ui` | after `ClearAll`: the UI reset; diff: nothing |
+| Globals | `compose_sections` | `load_from_project` — all origins |
+| Globals | `drum_patterns` | `restore_drum_patterns(clear_on_empty = UndoDiff)`; after `ClearAll` also the drum-roll focus |
+| Timeline (last) | `section_chord_trim` | after `ClearAll`: `trim_chords_to_sections`; diff: nothing |
+| Clips (first) | `clip_lyrics` | clear + `restore_clip_lyrics` padded to the restored note counts — all origins |
+
+The explicit origin branches, and why each is kept:
+
+* **`drum_patterns`' `clear_on_empty`.** Kept as it was. On the diff path
+  it is close to dead: `structurally_compatible` requires equal
+  `drum_patterns` id sets, so an empty target means the live bank is empty
+  too and the clear is a no-op. The exception is an old snapshot that only
+  has `drum_groups`, which takes the promotion branch anyway. Kept rather
+  than proven away.
+* **`transient_ui`, drum-roll focus, playhead.** Full path only, as before.
+  The diff path never removes the entities they name.
+* **`section_chord_trim`.** Full path only, as before. A diff target is a
+  snapshot of live state that every edit already kept trimmed. Trimming it
+  would also make the restore differ from the snapshot (fixed-point).
+* **`transport` changed-only.** On the diff path, scalars are compared
+  against `old`. `old` is `build_project_file(r)`, so "unchanged" means
+  "equals live". The skipped sets were no-ops. The skipped sends are what
+  the diff path never sent.
+
+### Where the stages sit now
+
+```
+Full path (replay_loaded_project)
+  vocal_audio.clear, SetProjectDir,
+  ── Globals ── ── Timeline ──,
+  wipe_registry, tracks/busses/master/sends/sidechain, audio + MIDI clips,
+  replay_vocal [── Clips ──, vocal audio clip map], finalize_plugin_chains,
+  ── Content ── ── Tail ──
+
+Diff path (try_diff_replay)
+  ── Globals ── ── Timeline ──,
+  tracks, busses, sends, sidechain, master, plugin blobs + params,
+  audio clips, MIDI clips,
+  ── Clips ── ── Content ── ── Tail ──,
+  resort, vocal audio clip map
+```
+
+`replay_globals`, `apply_global` and `apply_compose` are deleted. Both paths
+now run the same stage sequence with inline code in the same two gaps:
+entities + clips between `Timeline` and `Clips`, and (full path only)
+plugin-chain finalisation between `Clips` and `Content`.
+
+### Tempo convergence (diff path): done
+
+`SetTempoEvents` (and the chord track / markers) on the diff path moved
+from after the MIDI clips to before the first track command. That matches
+the full path. Checked against every reader between the old and new
+positions:
+
+* **Engine.** The commands the diff path sends in between are track, bus,
+  send, sidechain, master and plugin bypass scalars, `LoadPluginState`,
+  param sets, `MoveClip` / `TrimClip` / `SetClipFade` / `SetClipGain`, and
+  `DeleteMidiClip` + `LoadMidiClipDirect` / `TrimMidiClip` /
+  `MoveMidiClip`. None of their handlers reads `ctx.tempo_map`. MIDI clips
+  store ticks and a start sample; the tick→sample projection happens at
+  render time (`midi/outbound.rs`). The engine's tempo-map readers are:
+  quantize / groove / extract-groove handlers, the count-in in
+  `handle_record`, the control loop's per-tick `sync_bpm_at`, and the
+  render, bounce, freeze and audition paths. None is on the restore path.
+* **App.** `apply_tracks` … `apply_midi_clips` read none of `tempo_map`,
+  `tempo_events`, `signature_events`, `chord_track`, `markers` or
+  `compose`. `restore_derived_clips`' legacy positional rebuild (the only
+  tempo-map reader in a restore) is in `Clips`, after `Timeline` on both
+  paths either way. Undo snapshots always carry `derived_clips`, so the
+  diff path does not reach it.
+
+So the only difference is *when* the engine holds the target tempo map
+relative to the clip commands. It holds it before them now, as after a
+full replay. Guard:
+`reconcile_order::a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars`
+(it fails on the A-13b order).
+
+### Other ordering changes (each checked against every reader in between)
+
+Full path:
+
+1. **`SetTimeSignature`, `SetMetronomeEnabled`, `SetMasterVolume`,
+   `SetMidiClock{Output,Input}`, `SetLoopRange`** go out before
+   `SetTempoEvents` instead of after. `SetBpm` still precedes it (the
+   events' first point must win the engine map's `bpm`).
+   `SetTimeSignature` writes the map's fallback `numerator`/`denominator`.
+   `rebuild_bar_table` reads those only when there are no signature
+   points, and `restore_tempo_events` always installs at least one. So the
+   two commute. The rest are independent atomics and ports. The guard
+   `the_full_path_sends_bpm_then_tempo_events_then_meter` became
+   `the_full_path_sends_the_transport_scalars_then_tempo_events`.
+2. **`SetBpm`** goes out before the section load and drum-bank restore
+   instead of after. Neither sends anything nor reads the transport.
+3. **`loop_range_set`** is set in `transport` instead of at the end of
+   `replay_vocal`. Its only readers are message handlers and views.
+4. **Lyrics** move from inside `replay_midi_clips` to the head of `Clips`.
+   `replay_vocal` opens with that stage, so nothing runs in between.
+
+Diff path:
+
+5. **Transport scalars:** `SetLoopRange` now follows the MIDI-clock pair
+   instead of preceding it (full-path order). These are independent engine
+   settings.
+6. **Sections + drum bank** move from after the MIDI clips to the head.
+   The derived-counter floor was already captured before them. Nothing
+   from `apply_tracks` to `apply_midi_clips` reads compose state.
+7. **Lyrics** move from before `Timeline` to the head of `Clips`, still
+   after `apply_midi_clips` (note counts) and before `DerivedClips`.
+   Nothing in between reads them.
+
+Every existing guard passed unchanged, apart from the renamed full-path
+order test above.
+
+### What's next
+
+* **(3) Routing.** A `Routing` stage between `Timeline` and `Clips` still
+  fits. Full path: after `replay_master` (sidechain needs the master
+  chain's plugin ids). Diff path: after `apply_master`, before the plugin
+  blobs. Shapes are unchanged there, so the diff path's current
+  "sends after busses" rule holds. `wipe_registry`'s `aux.sends.clear()` /
+  `sidechain.clear()` move into the domains. Model the domains on
+  `transport`'s `old = None` ⇒ "send everything" shape.
+* **(5) Clips.** `apply_audio_clips` / `apply_midi_clips` vs
+  `replay_audio_clips` / `replay_midi_clips` become a `Clips`-stage head.
+  Full path: load everything. Diff path: move/trim/reload by diff against
+  `old`. The clip-id sets are equal on the diff path. The vocal audio clip
+  map rebuild, still inline at the end of both paths, can follow as the
+  last `Clips` domain once the diff path's copy moves ahead of the
+  registry resort. Lyrics already moved here.
+* **(6) Structural.** Tracks, busses, master, plugins; then
+  `structurally_compatible` and the `ClearAll` fallback go, and
+  `wipe_registry` / `finalize_plugin_chains` fold into those domains.
