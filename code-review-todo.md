@@ -22,9 +22,19 @@ master and updates this table. Agents do **not** edit this file.
 | F1 playhead + render exclusivity | MIX-01, MIX-02 (=ENG-05) | fable | in progress | |
 | F2 CLAP host / recording | ENG-01, ENG-02, ENG-03 | opus | in progress | |
 | G1 drums timing | DSP-01 | opus | queued | |
-| G2 wavetable | DSP-02, DSP-03 | opus | in progress | |
+| G2 wavetable | DSP-02, DSP-03 | opus | merged | b598d2e9 |
 | G3 resampler | LIB-01 | opus | queued | |
 | H architecture | ARCH-01, ARCH-02, ARCH-03 | fable | queued (after bug batches, cross-cutting) | |
+
+### Follow-ups found while fixing (new todos)
+
+- [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
+- [ ] **FU-A1b** (medium, = UPD-03) edits during `io.loading` are still acked then wiped by replay.
+- [ ] **FU-A1c** (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
+- [ ] **FU-G2a** (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
+- [ ] **FU-G2b** (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
+- [ ] **FU-G2c** (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
+- [ ] **FU-G2d** (low) wavetable mono legato steals + retriggers the envelope (glides, but not true non-retrigger legato).
 
 ## How to use this file
 
@@ -1335,7 +1345,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Pass `timing` into `note_on` and store a `start_offset: u32` on `Voice`. In `render_block`, start the frame loop for that voice at `start_offset` in its first block and then clear it. Alternatively, split `render_block` at event boundaries the way the wavetable `drain_events` loop does. Choke and choke_note should use the same offset.
 - **Verification:** Add a module to `plugins/resonance-drums/tests/` (existing group file). Send a NoteOn with `timing = 300` into a 1024-frame block and assert the port's first non-zero sample is at index ≥ 300. Also send two same-pad hits at timings 0 and 512 and assert two onsets. Assert non-silence per scenario.
 
-### [ ] DSP-02 — Wavetable `find_free_voice` ignores `max_voices` and breaks legato glide
+### [x] DSP-02 — Wavetable `find_free_voice` ignores `max_voices` and breaks legato glide — fixed @3faa770d
 - **Severity:** high
 - **Confidence:** high
 - **Category:** correctness
@@ -1345,7 +1355,7 @@ Paths are relative to `resonance-app/src/` unless stated otherwise. Every findin
 - **Suggested fix:** Add `.filter(|(_, v)| v.state != VoiceState::Idle)` to steps 3 and 4, mirroring the drums fix. Also prefer the same-note voice before the releasing one for mono and retrigger.
 - **Verification:** New module in the wavetable test group. With max_voices=1, send held note-on 48 then 55 and assert that `engine.voices` has exactly 1 non-idle voice. With glide on, assert `current_pitch` passes through values between 48 and 55. Check the `render_block_regression` / `null_test` goldens for the stealing scenarios: they currently pin the buggy allocation and must be re-blessed deliberately.
 
-### [ ] DSP-03 — Wavetable mip selection rounds the octave down, so every note aliases by up to one octave
+### [x] DSP-03 — Wavetable mip selection rounds the octave down, so every note aliases by up to one octave — fixed @d18863c5 (−80 dB from D2 up; ~−69 dB floor below 70 Hz from table interpolation — see follow-ups)
 - **Severity:** high
 - **Confidence:** high
 - **Category:** dsp
