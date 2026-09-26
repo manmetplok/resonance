@@ -71,6 +71,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
 | FU-A6b/c (from A-6) | User-deleted derived clips drop their map entry (no resurrection on resize, UPD-05 resumes); derived counter reserves past on-disk WAVs on load / Save As | opus | merged | 1da0beba |
 | FU-A4a (from A-4) | Undo/redo re-attach frozen caches (`SetTrackFrozenSource`) on both paths; undecodable cache → Stale | opus | merged | 5dc2fa1e |
+| FU-A5a–c (from A-5) | App-owned reference marker ids; stale analysis/loaded echoes ignored (`is_stale`, ids never rewound); loads listed immediately so undo cancels them; load failure marks the entry `Error` | opus | merged | 71ed3a6b |
 | FU-A7a (from A-7) | GUI open/recent/template during an in-flight undo no longer replays the disk project with undo branches | sonnet | merged | f0c07231 |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
 | FU-A10b (from A-10) | Coalesced undo: 16 lane-inspector + 3 chord-inspector sliders; bulk-lyrics edits coalesce, cursor moves skip | sonnet | merged | e4869177 |
