@@ -43,7 +43,7 @@ master and updates this table. Agents do **not** edit this file.
 | H4 SDK leakage + invariant tests | ARCH-08, ARCH-10 | fable | merged | d1cdaa66 |
 | H5 plan ARCH-04/05/06/07/09 | planning (read-only) | fable | done → arch-migration-plan.md Part 2 | |
 | V4 import dialog + app follow-ups | VIEW-25/FU-V2a, FU-M11a, FU-M4b, FU-C2, FU-C3, FU-V2b, FU-V3a, FU-V3b | opus | in progress | |
-| H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | in progress | |
+| H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
@@ -130,6 +130,9 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M12b** (low) autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
 - [ ] **FU-M12c** (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
 - [ ] **FU-H3a** (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
+- [ ] **FU-H6a** (medium) ARCH-05 app sweep: convert resonance-app's ~49 `eprintln!` to tracing, then remove resonance-app's exemption from `library_crates_log_through_tracing_not_stderr`.
+- [ ] **FU-H6b** (low) cpal error callbacks in `engine/mod.rs` / `platform.rs` still format+log on the ALSA audio worker thread (rate-limited; outside the `mixer/` invariant) — route via atomics like the oversize latch.
+- [ ] **FU-H6c** (low) default tracing filter string duplicated in `resonance-app/src/main.rs` and `resonance-plugin/src/logging.rs`; log lines now carry `LEVEL target:` prefixes.
 
 ## How to use this file
 
@@ -1823,7 +1826,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: demo seeding (`demo.rs`) and templates construct entities before the engine echoes; they need the allocator too.
 - **Verification / done-when:** `grep -rn 'next_[a-z_]*_id' resonance-audio/src/engine` empty; `grep -rn '_ID_BASE' resonance-app resonance-audio` empty; a test loads a project, adds one of each entity via GUI and via control, saves, reloads, and asserts no id reuse.
 
-### [ ] ARCH-05 — No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
+### [ ] ARCH-05 — (partial: tracing facade + RT print fix + invariants landed @9dcd3bcd; app sweep of 49 sites, error taxonomy A5-3/4 open) No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
 - **Severity:** medium
 - **Category:** consistency
 - **Location:** `resonance-audio/src/types/events.rs` (`Error(String)`, `BounceError(String)`, `TrackBounceError(String)`, `StemExportError(String)`, …); `Result<_, String>` counts: audio 41, app 27, common 23, amp 65, plugin 8; `eprintln!` counts: app 49, audio 34; only `resonance-mcp` and `resonance-svs` use `tracing`, only `resonance-control` and `resonance-music-theory` use `thiserror`; `resonance-app/src/engine_events/dispatch.rs:56` logs an engine report with `eprintln!` because "no UI surface yet".
