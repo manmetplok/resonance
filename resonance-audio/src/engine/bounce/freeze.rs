@@ -78,6 +78,7 @@ pub fn to_freeze_cache(
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
     progress: &mut dyn FnMut(f32),
 ) -> Result<FreezeCacheRef, String> {
@@ -112,12 +113,19 @@ pub fn to_freeze_cache(
         set
     };
 
+    // The automation baked into the cache (code review ENG-08): the
+    // plugin-parameter lanes of every plugin the frozen tracks run. Gain /
+    // pan / mute lanes stay out — `freeze_raw` renders pre-fader, and the
+    // live mixer still applies those lanes to the frozen track on playback.
+    let baked = baked_automation(&filter_set, tracks, automation);
+
     // Compute the fingerprint of the frozen inputs before rendering so
     // the returned ref records exactly what was captured. (Engine-side
     // inputs: the filtered tracks' MIDI notes + the source track's
-    // plugin chain / instrument selection. The app layer recomputes
-    // this to detect staleness.)
-    let render_fingerprint = compute_track_fingerprint(&filter_set, source_track_id, tracks, midi_clips);
+    // plugin chain / instrument selection + the baked plugin automation.
+    // The app layer recomputes its own fingerprint to detect staleness.)
+    let render_fingerprint =
+        compute_track_fingerprint(&filter_set, source_track_id, tracks, midi_clips, &baked);
 
     // Project range: [0, latest clip/MIDI end]. Starting at 0 keeps the
     // cache timeline-aligned so it plays back from sample 0 with no
@@ -166,11 +174,6 @@ pub fn to_freeze_cache(
     let comp_latency = latency_comp.max_latency();
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
-    // Freeze predates parameter automation (epic #40) and has no lane
-    // snapshot threaded through its command path, so render with an empty
-    // one — matching the pre-merge freeze behaviour exactly. Automated
-    // device/param lanes still apply on the live/bounce/export paths.
-    let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tracks,
@@ -180,7 +183,7 @@ pub fn to_freeze_cache(
         midi_clips,
         plugins,
         tempo_map: &bounce_tm,
-        automation: &automation,
+        automation: &baked,
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
@@ -330,16 +333,38 @@ pub fn read_freeze_cache(path: &Path, cache_ref: FreezeCacheRef) -> Result<Froze
     ))
 }
 
+/// The slice of `automation` a freeze of `filter_set` bakes in: the
+/// plugin-parameter lanes of every plugin on those tracks' chains (code
+/// review ENG-08). Mix lanes are left out — see the call site.
+fn baked_automation(
+    filter_set: &HashSet<TrackId>,
+    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    automation: &crate::engine::AutomationSnapshot,
+) -> crate::engine::AutomationSnapshot {
+    let mut baked = crate::engine::AutomationSnapshot::default();
+    let tracks_guard = tracks.read();
+    for track in filter_set.iter().filter_map(|id| tracks_guard.get(id)) {
+        for id in track.plugins().iter() {
+            if let Some(lanes) = automation.plugin_params.get(id) {
+                baked.plugin_params.insert(*id, lanes.clone());
+            }
+        }
+    }
+    baked
+}
+
 /// Compute a stable fingerprint over the engine-visible freeze inputs:
 /// the filtered tracks' MIDI notes plus the source track's plugin chain
-/// (instrument = first slot). Re-rendering with identical notes and an
-/// unchanged plugin chain yields the same hash; editing either changes
-/// it, which the app layer uses to mark a frozen track stale.
+/// (instrument = first slot) and the baked plugin-parameter automation.
+/// Re-rendering with identical inputs yields the same hash; editing any
+/// of them changes it, which the app layer uses to mark a frozen track
+/// stale.
 fn compute_track_fingerprint(
     filter_set: &HashSet<TrackId>,
     source_track_id: TrackId,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    baked: &crate::engine::AutomationSnapshot,
 ) -> u64 {
     let mut notes = Vec::new();
     {
@@ -380,6 +405,27 @@ fn compute_track_fingerprint(
             None => (String::new(), Vec::new()),
         }
     };
+    let mut plugin_params = plugin_params;
+    // Baked automation, in a fixed (instance, param) order so map order
+    // never perturbs the hash (code review ENG-08).
+    let mut lanes: Vec<(PluginInstanceId, &crate::engine::ResolvedParamLane)> = baked
+        .plugin_params
+        .iter()
+        .flat_map(|(id, lanes)| lanes.iter().map(move |l| (*id, l)))
+        .collect();
+    lanes.sort_by_key(|(id, l)| (*id, l.param_id));
+    for (id, l) in lanes {
+        plugin_params.extend_from_slice(b"auto");
+        plugin_params.extend_from_slice(&id.to_le_bytes());
+        plugin_params.extend_from_slice(&l.param_id.to_le_bytes());
+        plugin_params.extend_from_slice(&l.min.to_bits().to_le_bytes());
+        plugin_params.extend_from_slice(&l.max.to_bits().to_le_bytes());
+        for p in &l.lane.points {
+            plugin_params.extend_from_slice(&p.time_frames.to_le_bytes());
+            plugin_params.extend_from_slice(&p.value.to_bits().to_le_bytes());
+            plugin_params.push(p.curve as u8);
+        }
+    }
 
     let inputs = FreezeFingerprintBuilder::new()
         .with_notes(notes)

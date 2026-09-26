@@ -409,6 +409,7 @@ pub fn to_freeze_cache_spawn(
     midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) -> Arc<AtomicBool> {
@@ -441,6 +442,7 @@ pub fn to_freeze_cache_spawn(
                         &midi_clips,
                         &plugins,
                         &tempo_map,
+                        &automation,
                         sample_rate,
                         &mut progress,
                     );

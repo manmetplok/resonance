@@ -23,10 +23,12 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_audio::__test_support::{
-    __instance_from_raw_for_test, export_for_test, export_stems, AutomationSnapshot, PluginMap,
-    PluginSlot, SharedState, StemBitDepth, StemSource, StemTarget, CLIP_DECLICK_FRAMES,
+    __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache, AutomationSnapshot,
+    PluginMap, PluginSlot, ResolvedParamLane, SharedState, StemBitDepth, StemSource, StemTarget,
+    CLIP_DECLICK_FRAMES,
 };
 use resonance_audio::types::*;
+use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind, FreezeCacheRef};
 
 const SR: u32 = 48_000;
 const FX_ID: PluginInstanceId = 900;
@@ -203,7 +205,6 @@ impl Engine {
         self.master.write().plugin_ids.push(FX_ID);
     }
 
-    #[allow(dead_code)]
     fn add_track_fx(&self, slot: PluginSlot) {
         self.plugins.write().insert(FX_ID, slot);
         let _ = self.tracks.read()[&1].push_plugin(FX_ID);
@@ -235,6 +236,25 @@ impl Engine {
             automation,
             SR,
         )
+    }
+    fn freeze(&self, path: &Path, automation: &AutomationSnapshot) -> FreezeCacheRef {
+        to_freeze_cache(
+            1,
+            path.to_string_lossy().into_owned(),
+            &self.shared,
+            &AtomicBool::new(false),
+            &self.tracks,
+            &self.busses,
+            &self.master,
+            &self.clips,
+            &self.midi_clips,
+            &self.plugins,
+            &self.tempo_map,
+            automation,
+            SR,
+            &mut |_| {},
+        )
+        .expect("freeze must succeed")
     }
 }
 
@@ -434,5 +454,76 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         "stem export must complete: {events:?}"
     );
     assert_eq!(read_f32_wav(&stem_path).len(), out.len(), "stem and master lengths differ");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// ENG-08 — freeze bakes the track's plugin-parameter automation
+// ---------------------------------------------------------------------------
+
+/// A snapshot holding one plugin-param lane on the fake FX's gain,
+/// ramping `from` → `to` across `frames`, mapped onto a `0..=1` range.
+fn gain_ramp(from: f32, to: f32, frames: u64) -> AutomationSnapshot {
+    let target = AutomationTarget::PluginParam {
+        instance: FX_ID,
+        param_id: GAIN_PARAM,
+    };
+    let lane = AutomationLane::new(
+        1,
+        target,
+        vec![
+            Breakpoint::new(0, from, CurveKind::Linear),
+            Breakpoint::new(frames, to, CurveKind::Linear),
+        ],
+    );
+    let mut snap = AutomationSnapshot::default();
+    snap.plugin_params.insert(
+        FX_ID,
+        vec![ResolvedParamLane {
+            param_id: GAIN_PARAM,
+            lane,
+            min: 0.0,
+            max: 1.0,
+        }],
+    );
+    snap
+}
+
+/// Mean absolute level of interleaved frames `[from, to)`.
+fn level(s: &[f32], from: usize, to: usize) -> f32 {
+    let w = &s[from * 2..to * 2];
+    w.iter().map(|x| x.abs()).sum::<f32>() / w.len() as f32
+}
+
+#[test]
+fn freeze_renders_the_tracks_plugin_automation() {
+    let frames = SR as usize;
+    let e = Engine::with_clip(tone(frames, 0.5));
+    let (slot, _state) = fake_fx(0);
+    e.add_track_fx(slot);
+
+    let path = tmp("eng08");
+    let flat = e.freeze(&path, &AutomationSnapshot::default());
+    let ramp = gain_ramp(0.0, 1.0, frames as u64);
+    let swept = e.freeze(&path, &ramp);
+    let out = read_f32_wav(&path);
+
+    // The cache follows the 0 → 1 gain sweep: near-silent at the start,
+    // loud at the end.
+    let head = level(&out, 0, frames / 10);
+    let tail = level(&out, frames * 9 / 10, frames);
+    assert!(tail > 0.2, "frozen audio must not be silent (end level {tail})");
+    assert!(
+        head < tail * 0.2,
+        "the cache must carry the automated gain sweep (start {head}, end {tail})"
+    );
+
+    // The automation is part of what the cache was rendered from.
+    assert_ne!(
+        flat.render_fingerprint, swept.render_fingerprint,
+        "an automation-lane change must change the freeze fingerprint"
+    );
+    let reswept = e.freeze(&path, &gain_ramp(0.0, 0.5, frames as u64));
+    assert_ne!(swept.render_fingerprint, reswept.render_fingerprint);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }

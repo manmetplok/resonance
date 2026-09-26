@@ -16,7 +16,7 @@ use crossbeam_channel::{unbounded, Receiver};
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
+use resonance_audio::__test_support::{AutomationSnapshot, FREEZE_CANCELLED_MSG, PluginMap, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -116,6 +116,7 @@ fn drive_freeze(
         Arc::clone(&state.midi_clips),
         Arc::clone(&state.plugins),
         Arc::clone(&state.tempo_map),
+        Arc::new(AutomationSnapshot::default()),
         SR,
         tx,
     );

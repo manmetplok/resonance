@@ -22,7 +22,7 @@ use crossbeam_channel::unbounded;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::__test_support::{PluginMap, SharedState, to_freeze_cache, to_wav};
+use resonance_audio::__test_support::{AutomationSnapshot, PluginMap, SharedState, to_freeze_cache, to_wav};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -161,6 +161,7 @@ fn freeze_track1(state: &EngineState, name: &str) -> FrozenSource {
         &state.midi_clips,
         &state.plugins,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &mut |_| {},
     )
