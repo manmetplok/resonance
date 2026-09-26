@@ -57,3 +57,5 @@ mod missing_plugin_state_preserved;
 mod settings_plugin_rescan_button;
 #[path = "plugins/track_freeze_menu.rs"]
 mod track_freeze_menu;
+#[path = "plugins/track_preset_save_prompt.rs"]
+mod track_preset_save_prompt;
