@@ -141,3 +141,122 @@ pub fn read_hermite_wrapped(buffer: &[f32], index: f64) -> f32 {
     let x2 = buffer[((i0 + 2) & mask) as usize];
     hermite4(xm1, x0, x1, x2, frac)
 }
+
+/// Zero crossings on each side of the unscaled band-limiting kernel.
+const BL_ZEROS: usize = 8;
+/// Kernel table resolution, entries per zero crossing.
+const BL_RES: usize = 512;
+/// Kaiser window β (≈ −63 dB sidelobes).
+const BL_KAISER_BETA: f64 = 6.0;
+/// Cutoff as a fraction of the decimated Nyquist `fs / (2·|rate|)`.
+/// With 8 zero crossings and β = 6 the transition band is ~0.23 of the
+/// cutoff wide, so 0.8 puts the stopband edge just under the decimated
+/// Nyquist: nothing that would fold escapes the −60 dB stopband.
+const BL_CUTOFF: f64 = 0.8;
+
+/// Band-limited fractional read for resampling *down* the source
+/// (DSP-09): a Kaiser-windowed sinc whose cutoff scales with
+/// `1 / |rate|`, so everything the read would fold past Nyquist is
+/// removed before it can fold. A lowpass applied after a plain
+/// polynomial read cannot do that — the folded partials already sit
+/// in-band and are indistinguishable from real ones.
+///
+/// The kernel is a precomputed table (built at construction, never on
+/// the audio thread); a read costs `≈ 2·BL_ZEROS·|rate| / BL_CUTOFF`
+/// taps (20 at unity, 80 at +24 st). The weights are normalized per
+/// read, so DC passes exactly at every fractional position.
+#[derive(Clone)]
+pub struct BandlimitedReader {
+    table: Vec<f32>,
+}
+
+impl Default for BandlimitedReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BandlimitedReader {
+    pub fn new() -> Self {
+        // I0 by its power series; converges fast for β ≤ ~20.
+        fn bessel_i0(x: f64) -> f64 {
+            let (mut sum, mut term, mut k) = (1.0_f64, 1.0_f64, 1.0_f64);
+            loop {
+                term *= (x / (2.0 * k)).powi(2);
+                sum += term;
+                if term < sum * 1e-12 {
+                    return sum;
+                }
+                k += 1.0;
+            }
+        }
+        let n = BL_ZEROS * BL_RES;
+        let i0_beta = bessel_i0(BL_KAISER_BETA);
+        let table = (0..=n + 1)
+            .map(|i| {
+                let u = i as f64 / BL_RES as f64;
+                if u >= BL_ZEROS as f64 {
+                    return 0.0;
+                }
+                let x = u / BL_ZEROS as f64;
+                let w = bessel_i0(BL_KAISER_BETA * (1.0 - x * x).sqrt()) / i0_beta;
+                let sinc = if u == 0.0 {
+                    1.0
+                } else {
+                    let a = std::f64::consts::PI * u;
+                    a.sin() / a
+                };
+                (sinc * w) as f32
+            })
+            .collect();
+        Self { table }
+    }
+
+    /// Source samples the read reaches on each side of `index` at
+    /// `rate` — callers keep this much clearance from a write head.
+    pub fn half_width(rate: f64) -> f64 {
+        BL_ZEROS as f64 * rate.abs().max(1.0) / BL_CUTOFF
+    }
+
+    /// Read a power-of-two circular buffer at fractional `index`,
+    /// band-limited for playback at `rate` source samples per output
+    /// sample. Same wrapping contract as [`read_hermite_wrapped`].
+    ///
+    /// # Panics
+    /// Panics if `buffer.len()` is not a power of two or is smaller than 4.
+    #[inline]
+    pub fn read_wrapped(&self, buffer: &[f32], index: f64, rate: f64) -> f32 {
+        let len = buffer.len();
+        assert!(
+            len >= 4 && len.is_power_of_two(),
+            "buffer length must be a power of two >= 4, got {len}"
+        );
+        let mask = (len - 1) as i64;
+        // Kernel scale: source-sample distance → zero-crossing units.
+        let c = BL_CUTOFF / rate.abs().max(1.0);
+        let half = BL_ZEROS as f64 / c;
+        let first = (index - half).ceil() as i64;
+        let last = (index + half).floor() as i64;
+        let scale = (c * BL_RES as f64) as f32;
+        let base = ((index - first as f64) * c * BL_RES as f64) as f32;
+        let limit = (BL_ZEROS * BL_RES) as f32;
+        let (mut acc, mut wsum) = (0.0_f32, 0.0_f32);
+        for (k, n) in (first..=last).enumerate() {
+            // |index − n| in table units.
+            let pos = (base - k as f32 * scale).abs();
+            if pos >= limit {
+                continue;
+            }
+            let i = pos as usize;
+            let frac = pos - i as f32;
+            let w = self.table[i] + (self.table[i + 1] - self.table[i]) * frac;
+            acc += buffer[(n & mask) as usize] * w;
+            wsum += w;
+        }
+        if wsum.abs() > 1e-6 {
+            acc / wsum
+        } else {
+            0.0
+        }
+    }
+}

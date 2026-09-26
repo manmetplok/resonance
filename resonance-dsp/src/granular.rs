@@ -31,7 +31,9 @@
 //! itself interpolates parameter changes, so per-grain values need no
 //! smoothing).
 
-use crate::interp::{read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped};
+use crate::interp::{
+    read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped, BandlimitedReader,
+};
 use crate::pan::constant_power_pan;
 use crate::rng::SimpleRng;
 use crate::window::WindowMorph;
@@ -173,11 +175,14 @@ pub struct GrainParams {
     /// playback rate). Reversed grains still window to zero at both
     /// ends and respect the write-head collision guard.
     pub reverse_probability: f32,
-    /// Enable the per-grain anti-alias one-pole lowpass, tracked to
-    /// `0.45 · fs / |rate|` and engaged only when `|rate| > 1` (upward
-    /// transposition folds content above `Nyquist / rate`; the HQ
-    /// quality tier turns this on). The one-pole runs on the resampled
-    /// grain stream, attenuating the folded images (doc #252 §3).
+    /// Enable the band-limited read for upward transposition (the HQ
+    /// quality tier turns this on). Engaged per grain only when
+    /// `|rate| > 1`, where the read decimates the source and would fold
+    /// content above `Nyquist / |rate|`: such grains read through a
+    /// windowed sinc whose cutoff tracks `1 / |rate|` instead of the
+    /// `interp` kernel, removing that content *before* it can fold
+    /// (DSP-09; a lowpass after a polynomial read — the old one-pole —
+    /// cannot tell folded partials from real ones).
     pub anti_alias: bool,
     /// Enable WSOLA-style correlation-aligned grain onsets (doc #252
     /// §4-5). Before a grain spawns, the engine searches
@@ -278,12 +283,9 @@ struct Grain {
     /// Block offset at which a pending steal starts the release ramp;
     /// `u32::MAX` = no steal pending.
     release_at: u32,
-    /// True when the anti-alias one-pole is engaged for this grain.
+    /// True when this grain reads through the band-limited sinc
+    /// (anti-alias on and `|rate| > 1`).
     aa_active: bool,
-    /// One-pole coefficient `e^(-2π·fc/fs)` with `fc = 0.45·fs/|rate|`.
-    aa_coeff: f32,
-    /// One-pole state (per grain, reset at spawn).
-    aa_state: f32,
     /// Read-interpolation kernel, latched at spawn (ba todo #1083).
     interp: InterpQuality,
     /// 8-bit µ-law quantization of the resampled stream, latched at
@@ -308,8 +310,6 @@ impl Grain {
         start_offset: 0,
         release_at: u32::MAX,
         aa_active: false,
-        aa_coeff: 0.0,
-        aa_state: 0.0,
         interp: InterpQuality::Hermite4,
         lofi: false,
     };
@@ -376,6 +376,9 @@ pub struct GrainEngine {
     /// [`GrainEngine::new`] so the per-sample Lo-fi path is a
     /// log + round + table read — no `powf` on the render path.
     mu_law_decode: [f32; MU_LAW_LEVELS],
+    /// Band-limited read kernel for anti-aliased upward-transposed
+    /// grains (DSP-09); its table is built in [`GrainEngine::new`].
+    bl_reader: BandlimitedReader,
 }
 
 impl GrainEngine {
@@ -422,6 +425,7 @@ impl GrainEngine {
             max_abs_align_lag: 0.0,
             aligned_spawns: 0,
             mu_law_decode,
+            bl_reader: BandlimitedReader::new(),
         }
     }
 
@@ -552,6 +556,7 @@ impl GrainEngine {
             ref mut free,
             ref mut free_len,
             ref mu_law_decode,
+            ref bl_reader,
             ..
         } = *self;
         // 8-bit µ-law quantizer for Lo-fi grains: compand, round to one
@@ -575,21 +580,23 @@ impl GrainEngine {
                     grain.releasing = true;
                 }
                 let w = window.evaluate((grain.env_phase * grain.inv_dur) as f32, grain.texture);
-                // Per-grain kernel, latched at spawn (ba todo #1083).
-                let mut s = match grain.interp {
-                    InterpQuality::Linear => read_linear_wrapped(source, grain.read_pos),
-                    InterpQuality::Hermite4 => read_hermite_wrapped(source, grain.read_pos),
-                    InterpQuality::Bspline6 => read_bspline6_wrapped(source, grain.read_pos),
+                // Per-grain kernel, latched at spawn (ba todo #1083);
+                // upward-transposed anti-aliased grains band-limit at
+                // the read (DSP-09).
+                let mut s = if grain.aa_active {
+                    bl_reader.read_wrapped(source, grain.read_pos, grain.rate)
+                } else {
+                    match grain.interp {
+                        InterpQuality::Linear => read_linear_wrapped(source, grain.read_pos),
+                        InterpQuality::Hermite4 => read_hermite_wrapped(source, grain.read_pos),
+                        InterpQuality::Bspline6 => read_bspline6_wrapped(source, grain.read_pos),
+                    }
                 };
                 if grain.lofi {
                     // Applied before window/gain so the quantization
                     // noise is enveloped with the grain (click-free at
                     // the grain edges).
                     s = mu_law(s);
-                }
-                if grain.aa_active {
-                    grain.aa_state = s + grain.aa_coeff * (grain.aa_state - s);
-                    s = grain.aa_state;
                 }
                 let v = s * w * grain.gain * grain.release_gain;
                 out_left[k] += v * grain.gain_l;
@@ -666,23 +673,23 @@ impl GrainEngine {
             rate = -rate;
         }
 
-        // Optional rate-tracked anti-alias one-pole: only upward
-        // transposition (`|rate| > 1`) folds content past Nyquist/rate.
-        let abs_rate = rate.abs();
-        let aa_active = params.anti_alias && abs_rate > 1.0;
-        let aa_coeff = if aa_active {
-            let fc = 0.45 * self.sample_rate / abs_rate as f32;
-            (-(std::f32::consts::TAU * fc / self.sample_rate)).exp()
+        // Optional band-limited read: only upward transposition
+        // (`|rate| > 1`) folds content past Nyquist/rate (DSP-09).
+        let aa_active = params.anti_alias && rate.abs() > 1.0;
+        // The sinc reaches `half_width` source samples either side of
+        // the read position; widen the head clearance to match.
+        let margin = if aa_active {
+            HEAD_MARGIN_SAMPLES + BandlimitedReader::half_width(rate)
         } else {
-            0.0
+            HEAD_MARGIN_SAMPLES
         };
 
         // Write-head collision guard (doc #252 §5): over the grain's
         // lifetime the reader must neither overtake the head (fast
         // grains) nor be lapped by it (slow, frozen or reversed grains
         // on long buffers). `d` is the start offset behind the head.
-        let d_min = HEAD_MARGIN_SAMPLES + dur * (rate - advance).max(0.0);
-        let d_max = source_len as f64 - HEAD_MARGIN_SAMPLES - dur * (advance - rate).max(0.0);
+        let d_min = margin + dur * (rate - advance).max(0.0);
+        let d_max = source_len as f64 - margin - dur * (advance - rate).max(0.0);
         if d_max < d_min {
             // The buffer cannot hold a grain of this length/rate at all.
             self.free[self.free_len] = slot;
@@ -749,8 +756,6 @@ impl GrainEngine {
             start_offset: onset as u32,
             release_at: u32::MAX,
             aa_active,
-            aa_coeff,
-            aa_state: 0.0,
             interp: params.interp,
             lofi: params.lofi_quantize,
         };

@@ -342,3 +342,72 @@ fn render_path_never_allocates_with_pitch_features() {
         "pitch render path allocated {allocations} times"
     );
 }
+
+/// Grain cloud at `semitones` over `source`, with or without the
+/// anti-alias read (HQ tier kernel either way).
+fn render_transposed(source: &[f32], semitones: f32, anti_alias: bool) -> Vec<f32> {
+    let mut engine = GrainEngine::new(SR, 23);
+    let params = GrainParams {
+        density_hz: 40.0,
+        grain_seconds: 0.1,
+        position_seconds: 0.5,
+        texture: 1.0,
+        mode: SchedulerMode::Sync,
+        pitch_semitones: semitones,
+        anti_alias,
+        interp: resonance_dsp::InterpQuality::Bspline6,
+        ..GrainParams::default()
+    };
+    render_seconds(&mut engine, source, &params, 1.0).0
+}
+
+/// DSP-09: +24 st (rate 4) reads a 10 kHz source partial at 40 kHz,
+/// which folds to 8 kHz. The old anti-alias one-pole ran *after* the
+/// resampling read and could only dull the fold by a few dB; the
+/// band-limited read must keep it > 60 dB below the input.
+#[test]
+fn anti_alias_read_removes_folding_at_plus_24_semitones() {
+    // 13653 cycles over 65536 samples ≈ 9999.76 Hz; ×4 folds to
+    // 48000 − 39999.0 ≈ 8001 Hz.
+    let cycles = 13_653;
+    let f_src = cycles as f32 * SR / BUF_LEN as f32;
+    let f_alias = SR - 4.0 * f_src;
+    let source = sine_buffer(BUF_LEN, cycles, 0.8);
+    let input_mag = dft_mag(&source[..16_384], f_src);
+
+    let on = render_transposed(&source, 24.0, true);
+    let off = render_transposed(&source, 24.0, false);
+    let seg = 24_000..24_000 + 16_384;
+    let alias_on = dft_mag(&on[seg.clone()], f_alias);
+    let alias_off = dft_mag(&off[seg], f_alias);
+    assert!(
+        alias_off > 1e-2 * input_mag,
+        "no fold without AA ({alias_off} vs input {input_mag}) — test signal invalid"
+    );
+    let rel_db = 20.0 * (alias_on / input_mag).log10();
+    assert!(
+        rel_db < -60.0,
+        "8 kHz alias at {rel_db:.1} dB re input with anti-alias on (off: {:.1} dB)",
+        20.0 * (alias_off / input_mag).log10()
+    );
+}
+
+/// The band-limited read must still pass legitimate content: a 1 kHz
+/// source at rate 4 comes out at 4 kHz at essentially the level the
+/// plain kernel gives it.
+#[test]
+fn anti_alias_read_passes_in_band_transposition() {
+    // 1365 cycles ≈ 999.8 Hz → ≈ 3999 Hz at rate 4.
+    let cycles = 1_365;
+    let f_out = 4.0 * cycles as f32 * SR / BUF_LEN as f32;
+    let source = sine_buffer(BUF_LEN, cycles, 0.8);
+    let seg = 24_000..24_000 + 16_384;
+    let on = dft_mag(&render_transposed(&source, 24.0, true)[seg.clone()], f_out);
+    let off = dft_mag(&render_transposed(&source, 24.0, false)[seg], f_out);
+    assert!(off > 1e-3, "transposed output is silent ({off})");
+    let rel_db = 20.0 * (on / off).log10();
+    assert!(
+        rel_db.abs() < 1.0,
+        "in-band 4 kHz level changed by {rel_db:.2} dB with anti-alias on"
+    );
+}
