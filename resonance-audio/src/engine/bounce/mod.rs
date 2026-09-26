@@ -25,6 +25,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use indexmap::IndexMap;
 use parking_lot::RwLock;
+use thiserror::Error;
 
 use resonance_common::FreezeCacheRef;
 
@@ -90,15 +91,30 @@ impl PartialFile {
 
     /// Move the finished file into place. On failure the temp file is
     /// removed (on drop) and the target left as it was.
-    pub(super) fn commit(mut self) -> Result<(), String> {
-        std::fs::rename(&self.temp, &self.target).map_err(|e| {
-            format!(
-                "Could not move the finished file into place at {}: {e}",
-                self.target.display()
-            )
+    pub(super) fn commit(mut self) -> Result<(), PartialFileError> {
+        std::fs::rename(&self.temp, &self.target).map_err(|e| PartialFileError {
+            path: self.target.display().to_string(),
+            source: e,
         })?;
         self.committed = true;
         Ok(())
+    }
+}
+
+/// Failure moving a [`PartialFile`]'s temp file into place
+/// ([`PartialFile::commit`]). Message text matches the historical
+/// `format!()` string.
+#[derive(Debug, Error)]
+#[error("Could not move the finished file into place at {path}: {source}")]
+pub(super) struct PartialFileError {
+    path: String,
+    #[source]
+    source: std::io::Error,
+}
+
+impl From<PartialFileError> for EngineError {
+    fn from(e: PartialFileError) -> Self {
+        EngineError::new(EngineErrorKind::Io, e.to_string())
     }
 }
 

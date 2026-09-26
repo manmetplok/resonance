@@ -686,5 +686,5 @@ pub fn write_stem_wav(
     writer
         .finalize()
         .map_err(|e| format!("WAV finalize error: {e}"))?;
-    output.commit()
+    output.commit().map_err(|e| e.to_string())
 }

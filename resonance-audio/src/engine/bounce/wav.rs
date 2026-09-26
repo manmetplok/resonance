@@ -585,6 +585,6 @@ pub(crate) fn run_export(
     };
     match output.commit() {
         Ok(()) => reporter.complete(event_tx, path, achieved_lufs, achieved_dbtp, bytes),
-        Err(message) => reporter.error(event_tx, ExportErrorKind::Io, message),
+        Err(e) => reporter.error(event_tx, ExportErrorKind::Io, e.to_string()),
     }
 }

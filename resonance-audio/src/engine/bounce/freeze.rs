@@ -266,7 +266,7 @@ pub fn to_freeze_cache(
     writer
         .finalize()
         .map_err(|e| format!("Freeze-cache WAV finalize error: {e}"))?;
-    output.commit()?;
+    output.commit().map_err(|e| e.to_string())?;
 
     progress(1.0);
 
