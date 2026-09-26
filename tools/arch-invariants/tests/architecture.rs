@@ -170,7 +170,8 @@ fn report(rule: &str, violations: &[String]) {
 
 /// What every crate under `plugins/` may depend on, any dependency kind.
 ///
-/// ARCHITECTURE.md: "`resonance-common` ──► every plugin",
+/// ARCHITECTURE.md: "`resonance-common` ──► ... amp/drums/ir plugins" (which
+/// ones: `only_listed_plugins_depend_on_resonance_common`),
 /// "`resonance-plugin` ──► every plugin", "`resonance-dsp` ──► (every FX
 /// plugin)", the metering and music-theory arrows, and `plugin-gui-core`
 /// as "the platform-neutral half of the editor stack". The platform
@@ -411,6 +412,147 @@ fn plugins_never_name_a_platform_runtime() {
     }
     report(
         "ARCHITECTURE.md / editor_host.rs: only `resonance_plugin::editor_host` names a platform runtime",
+        &violations,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Plugin reach into resonance-common (ARCH-07)
+// ---------------------------------------------------------------------------
+
+/// The `resonance_common::` items plugin code may name: file/preset/
+/// content utilities, never DAW model types. `flush_denormals` is not
+/// here — it moved to `resonance-dsp` (ARCH-07 A7-2).
+const PLUGIN_COMMON_ITEMS: &[&str] = &[
+    "scan_directory",      // amp, ir; resonance-plugin's loader
+    "registry",            // drums: downloadable kit content
+    "drum_map",            // drums: the GM pad contract shared with the app
+    "decode_wav_stereo",   // drums: sample decode
+    "decode_wav_channels", // ir: impulse-response decode
+    "factory_presets",     // resonance-plugin: the factory-preset codec
+];
+
+/// The plugins that declare a `resonance-common` dependency at all. The
+/// other plugins reach only `resonance-dsp`/`resonance-plugin`; a new edge
+/// is a decision, not a side effect of an auto-import.
+const PLUGINS_ON_COMMON: &[&str] = &["resonance-amp", "resonance-drums", "resonance-ir"];
+
+/// The item(s) a `resonance_common` occurrence names: `::x` → `x`,
+/// `::{a, b::{c}}` → `a, b` (`self` skipped), a bare crate name → `""`.
+fn common_items_named(rest: &str) -> Vec<String> {
+    let head = |s: &str| {
+        s.trim()
+            .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '*'))
+            .next()
+            .unwrap_or("")
+            .to_owned()
+    };
+    let Some(path) = rest.strip_prefix("::") else {
+        return vec![String::new()];
+    };
+    let Some(group) = path.strip_prefix('{') else {
+        return vec![head(path)];
+    };
+    let mut depth = 0usize;
+    let mut items = vec![String::new()];
+    for c in group.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' if depth == 0 => break,
+            '}' => depth -= 1,
+            ',' if depth == 0 => items.push(String::new()),
+            _ if depth == 0 => items.last_mut().expect("non-empty").push(c),
+            _ => {}
+        }
+    }
+    items
+        .iter()
+        .map(|i| head(i))
+        .filter(|i| !i.is_empty() && i != "self")
+        .collect()
+}
+
+/// ARCHITECTURE.md → Crate Layering: "Plugins reach `resonance-common`
+/// only for utilities … DAW model types are not plugin API". Every
+/// `resonance_common::<item>` in a plugin crate or `resonance-plugin` (any
+/// target: src, tests, benches, examples, build.rs) must be in
+/// `PLUGIN_COMMON_ITEMS`; a bare `resonance_common` (`use resonance_common
+/// as rc;`) or a glob would hide the item, so both fail too.
+///
+/// Exercised 2026-09-26: added `use resonance_common::Take;` to
+/// `plugins/resonance-drums/src/lib.rs` → failed on that line; reverted.
+#[test]
+fn plugins_reach_only_common_utilities() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for p in packages()
+        .iter()
+        .filter(|p| p.is_plugin(&root) || p.name == "resonance-plugin")
+    {
+        let mut files = Vec::new();
+        rust_files(&p.dir, &mut files);
+        for file in files {
+            let text: String = code_lines(&file).iter().map(|(_, l)| format!("{l}\n")).collect();
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            for (off, _) in text.match_indices("resonance_common") {
+                let before = text[..off].chars().next_back();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &text[off + "resonance_common".len()..];
+                for item in common_items_named(rest) {
+                    if !PLUGIN_COMMON_ITEMS.contains(&item.as_str()) {
+                        let shown = if item.is_empty() { "<bare crate name>" } else { &item };
+                        violations.push(format!(
+                            "{rel}:{}: resonance_common::{shown} — DAW model types are not \
+                             plugin API; add the utility to `PLUGIN_COMMON_ITEMS` or move it \
+                             down (e.g. into resonance-dsp)",
+                            text[..off].matches('\n').count() + 1
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(
+        "ARCHITECTURE.md: plugins reach resonance-common only for listed utilities (ARCH-07)",
+        &violations,
+    );
+}
+
+/// ARCH-07: a plugin that does not depend on `resonance-common` must not
+/// gain the dependency silently, and the list must not go stale when one
+/// drops it. Any dependency kind counts.
+///
+/// Exercised 2026-09-26: re-added `resonance-common = { path = ... }` to
+/// `plugins/resonance-gate/Cargo.toml` → failed with "not in
+/// `PLUGINS_ON_COMMON`"; reverted.
+#[test]
+fn only_listed_plugins_depend_on_resonance_common() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    let mut seen = BTreeSet::new();
+    for p in packages().iter().filter(|p| p.is_plugin(&root)) {
+        if !p.deps.iter().any(|d| d.name == "resonance-common") {
+            continue;
+        }
+        seen.insert(p.name.clone());
+        if !PLUGINS_ON_COMMON.contains(&p.name.as_str()) {
+            violations.push(format!(
+                "{}/Cargo.toml depends on resonance-common but is not in `PLUGINS_ON_COMMON` — \
+                 use resonance-dsp/resonance-plugin, or add it to the list deliberately",
+                p.rel_dir(&root).display()
+            ));
+        }
+    }
+    for name in PLUGINS_ON_COMMON.iter().filter(|n| !seen.contains(**n)) {
+        violations.push(format!(
+            "{name} is in `PLUGINS_ON_COMMON` but no longer depends on resonance-common — \
+             drop it from the list"
+        ));
+    }
+    report(
+        "ARCH-07: only the plugins in `PLUGINS_ON_COMMON` depend on resonance-common",
         &violations,
     );
 }
