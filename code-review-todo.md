@@ -68,6 +68,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-5 (ARCH-01) | A1-2 (7) reference content/monitor split; engine re-sync on both undo paths; `null` LUFS load fix | opus | merged | db57a50c |
 | refactor-intent A-6 (ARCH-01) | A1-2 (8) derived-clip map → `ProjectFile.derived_clips`; derived counter session-monotonic; `UndoExtras` empty | opus | merged | 4c76bb78 |
 | refactor-intent A-7 (ARCH-01) | A1-2 (9b) `UndoExtras` deleted; snapshot = `LoadedProject`; `io.restoring_undo` flag | opus | merged | 3e4496e9 |
+| FU-A6a (from A-6) | Clip-id collision: engine bumped `next_clip_id` into the derived range (drawn clip = next derived clip id; also on reopen via STATE-08 WAV scan). Engine now reserves only below `DERIVED_CLIP_ID_BASE` | opus | merged | 6942f712 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
