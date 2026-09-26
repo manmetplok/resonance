@@ -20,7 +20,7 @@ mod presets;
 mod project_io;
 mod reference;
 mod takes;
-mod tracks;
+pub(crate) mod tracks;
 mod transport;
 
 pub(crate) use dispatch::handle_engine_event;
