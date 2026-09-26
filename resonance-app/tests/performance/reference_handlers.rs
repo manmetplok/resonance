@@ -48,7 +48,7 @@ fn load_requested_queues_pending_and_clears_error() {
 
     let st = app.test_reference();
     assert_eq!(st.pending_loads.len(), 1);
-    assert_eq!(st.pending_loads.front().unwrap(), "/refs/track.wav");
+    assert_eq!(st.pending_loads.front().unwrap().1, "/refs/track.wav");
     assert!(st.last_error.is_none());
     // No entry yet — the id is allocated by the engine.
     assert!(st.entries.is_empty());

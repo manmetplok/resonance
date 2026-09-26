@@ -386,12 +386,14 @@ pub(crate) enum ReferenceMonitorSource {
 /// (name + path preserved) and is *not* sent to the engine, so the panel
 /// can show it without crashing or losing the user's markers.
 ///
-/// Engine ids are reallocated here: the engine's reference id counter was
-/// reset by `ClearAll`, so present entries take ids `1..=K` in load order,
-/// exactly mirroring what the engine allocates as it registers each
-/// `LoadReferenceTrack`. Missing entries — which the engine never hears
-/// about — take ids from a high, disjoint base so a later in-session load
-/// can never collide with one.
+/// Engine ids are reallocated here, from the app's session-monotonic
+/// allocator (hinted on each `LoadReferenceTrack`), not restarted at 1
+/// with the engine's: a late echo from a load `ClearAll` superseded
+/// carries an old id, which must not name a restored entry (FU-A5b).
+/// Pending loads are dropped with the rest, so their echoes are stale.
+/// Missing entries — which the engine never hears about — take ids from
+/// a high, disjoint base so a later in-session load can never collide
+/// with one.
 ///
 /// Everything the engine's `ReferencePlayer` holds is re-sent, monitor
 /// state included: `ClearAll` reset it to its defaults.
@@ -405,9 +407,10 @@ pub(crate) fn restore_references(
     // undo leaves alone. The engine's own reference state was already
     // emptied by `ClearAll`, allocator included.
     let live_monitor = std::mem::take(&mut r.reference.monitor);
+    let next_engine_id = r.reference.next_engine_id;
     let next_marker_id = r.reference.next_marker_id;
     r.reference = crate::reference::ReferenceState::default();
-    r.reference.next_engine_id = 1;
+    r.reference.next_engine_id = next_engine_id;
     r.reference.next_marker_id = next_marker_id;
 
     let mut next_missing_id: u32 = crate::state::ids::MISSING_REFERENCE_ID_BASE;

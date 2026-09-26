@@ -12,22 +12,31 @@ use resonance_metering::MeterSnapshot;
 use crate::reference::{AbMeters, ReferenceEntry, ReferenceMarkerState, ReferenceStatus};
 use crate::Resonance;
 
-/// Recover the queued name/path for a not-yet-registered reference id.
-/// Loads are processed in dispatch order, so the oldest pending path
-/// belongs to the first new id we hear about.
-fn take_pending(r: &mut Resonance) -> Option<String> {
-    r.reference.pending_loads.pop_front()
+/// The path of the pending load `id` was sent for, or `None` when the
+/// event is a stale echo to drop: the analysis worker of a reference the
+/// app has removed, undone or replaced by a restore runs on and still
+/// reports (FU-A5b). An id the app never issued is taken as it comes.
+fn new_entry_path(r: &mut Resonance, id: ReferenceId) -> Option<String> {
+    if let Some(path) = r.reference.take_pending(id) {
+        return Some(path);
+    }
+    if r.reference.is_stale(id) {
+        return None;
+    }
+    r.reference.saw_engine_id(id);
+    Some(String::new())
 }
 
 pub(super) fn analysis_progress(r: &mut Resonance, id: ReferenceId, stage: ReferenceAnalysisStage) {
-    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.status = ReferenceStatus::Analyzing(stage);
         return;
     }
     // First we've heard of this id — register a provisional entry so the
     // view can show the "analysing…" stage before `ReferenceLoaded`.
-    let path = take_pending(r).unwrap_or_default();
+    let Some(path) = new_entry_path(r, id) else {
+        return;
+    };
     let name = std::path::Path::new(&path)
         .file_stem()
         .and_then(|s| s.to_str())
@@ -48,7 +57,6 @@ pub(super) fn loaded(
     waveform_peaks: Vec<(f32, f32)>,
     length_samples: u64,
 ) {
-    r.reference.saw_engine_id(id);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.name = name;
         entry.path = path;
@@ -58,8 +66,10 @@ pub(super) fn loaded(
         entry.status = ReferenceStatus::Loaded;
     } else {
         // No provisional entry (no analysis-progress was seen) — register
-        // the finished reference directly. Drain the pending path it used.
-        let _ = take_pending(r);
+        // the finished reference directly, unless it is a stale echo.
+        if new_entry_path(r, id).is_none() {
+            return;
+        }
         r.reference.entries.push(ReferenceEntry {
             id,
             name,
@@ -75,9 +85,13 @@ pub(super) fn loaded(
 }
 
 pub(super) fn load_failed(r: &mut Resonance, path: String, reason: String) {
-    // A failed load never allocated an id, so drop the matching pending
-    // path (oldest, FIFO) and surface the reason as a dismissable notice.
-    let _ = take_pending(r);
+    // The failure carries no id: drop the oldest pending load of that
+    // path (a restore's re-decode has none) and surface the reason as a
+    // dismissable notice.
+    let pending = r.reference.pending_loads.iter().position(|(_, p)| *p == path);
+    if let Some(idx) = pending {
+        r.reference.pending_loads.remove(idx);
+    }
     r.reference.last_error = Some(format!("{path}: {reason}"));
 }
 

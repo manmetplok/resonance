@@ -72,16 +72,16 @@ fn pick_file_dialog() -> Task<Message> {
 }
 
 fn load_requested(r: &mut Resonance, path: PathBuf) {
-    // The engine allocates the id, so we can't register an entry yet —
-    // queue the path so the first analysis event for the new id can
-    // recover its name. Clear any stale load-error notice.
+    // The app picks the id (FU-A5b) but lists no entry until the engine's
+    // first analysis event — queue the load so that event can recover
+    // its path. Clear any stale load-error notice.
     r.reference.last_error = None;
+    let id = r.reference.alloc_engine_id();
     r.reference
         .pending_loads
-        .push_back(path.to_string_lossy().into_owned());
-    r.reference.saw_unhinted_load();
+        .push_back((id, path.to_string_lossy().into_owned()));
     let _ = r.engine.send(AudioCommand::LoadReferenceTrack {
-        id_hint: None,
+        id_hint: Some(id),
         path,
     });
 }

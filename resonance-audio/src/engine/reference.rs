@@ -124,8 +124,8 @@ impl ReferencePlayer {
 
     /// Drop every loaded reference and reset the A/B controls to their
     /// defaults, including the id allocator. Used by `ClearAll` (project
-    /// close / load) so a freshly loaded project's references are
-    /// re-registered from id 1, matching the app-side restore. The caller
+    /// close / load). The app hints every load's id from its own
+    /// session-monotonic allocator, so ids do not restart at 1. The caller
     /// must `publish` afterwards so the audio-thread monitor stops reading
     /// the dropped reference's PCM.
     pub fn clear(&mut self) {

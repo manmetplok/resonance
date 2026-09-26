@@ -123,16 +123,19 @@ pub struct ReferenceState {
     /// Most recent load-failure reason, shown until dismissed. Load
     /// failures carry no id, so they live here rather than as an entry.
     pub last_error: Option<String>,
-    /// Paths whose `LoadReferenceTrack` has been dispatched but whose
-    /// engine-allocated id is not yet known. Drained FIFO when the first
-    /// analysis event for a new id arrives, to recover its name / path.
-    pub pending_loads: VecDeque<String>,
-    /// The app's copy of the engine's reference-id allocator: past every
-    /// id the engine has registered, or will register for a load already
-    /// sent. A restore that brings a reference back hints its id from
-    /// here ([`Self::alloc_engine_id`]), so it never collides with a live
-    /// engine entry. `ClearAll` resets the engine's allocator; the replay
-    /// after it resets this one (`restore_references`).
+    /// User loads whose `LoadReferenceTrack` has been sent but whose first
+    /// analysis event has not arrived yet: `(id, path)`, in send order.
+    /// The first event for `id` takes its entry out, to recover the path.
+    /// Dropped by an undo or a restore that supersedes the load, which is
+    /// what makes a later echo for it stale (FU-A5b/c).
+    pub pending_loads: VecDeque<(ReferenceId, String)>,
+    /// The reference-id allocator. The app hints every `LoadReferenceTrack`
+    /// with an id from here ([`Self::alloc_engine_id`]), and it is
+    /// session-monotonic — no restore rewinds it, though `ClearAll` resets
+    /// the engine's own — so an id is never handed out twice. That is how
+    /// an echo for a reference the app has since dropped is told apart
+    /// from a live one ([`Self::is_stale`]): before FU-A5b a reopened
+    /// project re-used id 1 and a late echo of the old load landed on it.
     pub next_engine_id: u32,
     /// Marker-id allocator, session-monotonic and shared by every
     /// reference (ids only need to be unique per reference). The app owns
@@ -185,10 +188,21 @@ impl ReferenceState {
         }
     }
 
-    /// Note a `LoadReferenceTrack` sent without a hint: the engine gives
-    /// it the next id from its allocator.
-    pub fn saw_unhinted_load(&mut self) {
-        self.next_engine_id = self.next_engine_id.max(1) + 1;
+    /// Take the pending user load `id` was sent for, if any.
+    pub fn take_pending(&mut self, id: ReferenceId) -> Option<String> {
+        let idx = self.pending_loads.iter().position(|(p, _)| *p == id)?;
+        self.pending_loads.remove(idx).map(|(_, path)| path)
+    }
+
+    /// Whether an engine event for `id` is an echo of a reference the app
+    /// has dropped — removed, undone, or superseded by a restore: an id
+    /// this app handed out that is neither listed nor pending. Ids past
+    /// the allocator were never issued here and are not stale.
+    pub fn is_stale(&self, id: ReferenceId) -> bool {
+        id.0 < self.next_engine_id
+            && id.0 < crate::state::ids::MISSING_REFERENCE_ID_BASE
+            && self.index_of(id).is_none()
+            && !self.pending_loads.iter().any(|(p, _)| *p == id)
     }
 
     /// A fresh marker id for the reference `ref_id`: past every id this

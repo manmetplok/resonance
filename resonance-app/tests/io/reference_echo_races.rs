@@ -15,11 +15,11 @@ use crossbeam_channel::{unbounded, Receiver as EventRx, Sender as EventTx};
 
 use resonance_app::message::Message;
 use resonance_app::project::{LoadedProject, ProjectReference, ProjectReferenceMarker};
-use resonance_app::reference::ReferenceMessage;
+use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ReferenceId};
+use resonance_audio::types::{AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId};
 use resonance_audio::{
     handle_add_ref_marker, handle_remove_ref_marker, handle_remove_reference_track,
     register_reference, ReferencePlayer,
@@ -252,4 +252,116 @@ fn a_marker_added_after_reopening_does_not_collide_with_a_restored_one() {
         marker_id: new_id,
     });
     assert_eq!(f.marker_ids(&a), vec![1, 2]);
+}
+
+// ---------------------------------------------------------------------------
+// FU-A5b — late analysis echoes for a reference the app dropped
+// ---------------------------------------------------------------------------
+
+fn progress(id: ReferenceId) -> AudioEvent {
+    AudioEvent::ReferenceAnalysisProgress {
+        id,
+        stage: ReferenceAnalysisStage::MeasuringLufs,
+    }
+}
+
+fn loaded(id: ReferenceId, path: &Path) -> AudioEvent {
+    AudioEvent::ReferenceLoaded {
+        id,
+        name: path.file_stem().unwrap().to_string_lossy().into_owned(),
+        path: path.to_string_lossy().into_owned(),
+        integrated_lufs: -9.0,
+        waveform_peaks: vec![(-0.5, 0.5)],
+        length_samples: 480_000,
+    }
+}
+
+fn listed_paths(app: &Resonance) -> Vec<String> {
+    app.test_reference()
+        .entries
+        .iter()
+        .map(|e| e.path.clone())
+        .collect()
+}
+
+/// The user removes a reference while it is still analysing. The engine
+/// drops it, but its analysis worker runs on and reports progress and
+/// then `ReferenceLoaded` for the removed id; neither may bring it back.
+#[test]
+fn a_reference_removed_mid_analysis_stays_removed() {
+    let mut f = Fixture::new("remove-mid-analysis");
+    let a = f.file("a");
+    f.user(ReferenceMessage::LoadRequested(a.clone()));
+    let id = f.engine.last_load();
+    f.worker(progress(id));
+    assert_eq!(listed_paths(&f.app), vec![a.to_string_lossy().into_owned()]);
+
+    f.user(ReferenceMessage::Remove(id));
+    assert!(!f.engine.holds(id));
+    f.worker(progress(id));
+    f.worker(loaded(id, &a));
+
+    assert!(
+        listed_paths(&f.app).is_empty(),
+        "a late echo re-created the removed reference: {:?}",
+        listed_paths(&f.app)
+    );
+}
+
+/// Undoing a load whose analysis is under way (diff replay) drops the
+/// entry and the engine's copy; the worker's `ReferenceLoaded` that lands
+/// afterwards must not re-create it.
+#[test]
+fn a_late_loaded_echo_does_not_undo_an_undo() {
+    let mut f = Fixture::new("undo-mid-analysis");
+    let a = f.file("a");
+    f.user(ReferenceMessage::LoadRequested(a.clone()));
+    let id = f.engine.last_load();
+    f.worker(progress(id));
+
+    f.undo();
+    assert!(listed_paths(&f.app).is_empty(), "undo drops the load");
+    assert!(!f.engine.holds(id), "and the engine's copy");
+    f.worker(loaded(id, &a));
+
+    assert!(
+        listed_paths(&f.app).is_empty(),
+        "a late echo re-created the undone reference: {:?}",
+        listed_paths(&f.app)
+    );
+}
+
+/// A project opened while another reference is still analysing: after
+/// `ClearAll` the old worker's `ReferenceLoaded` still arrives. Before
+/// FU-A5b the reopened project's first reference was re-registered under
+/// id 1 — the very id the old load had — and the stale echo overwrote it
+/// with the old file's name, path and loudness.
+#[test]
+fn a_stale_echo_from_before_a_reopen_does_not_overwrite_a_restored_reference() {
+    let mut f = Fixture::new("reopen-mid-analysis");
+    let (old, b) = (f.file("old"), f.file("b"));
+    f.user(ReferenceMessage::LoadRequested(old.clone()));
+    let old_id = f.engine.last_load();
+    f.worker(progress(old_id));
+
+    f.open(vec![saved(&b, &[])]);
+    assert_eq!(listed_paths(&f.app), vec![b.to_string_lossy().into_owned()]);
+    let b_id = f.app.test_reference().entries[0].id;
+    assert!(f.engine.holds(b_id));
+
+    f.worker(progress(old_id));
+    f.worker(loaded(old_id, &old));
+
+    assert_eq!(
+        listed_paths(&f.app),
+        vec![b.to_string_lossy().into_owned()],
+        "the stale echo landed on the reopened project"
+    );
+    assert!(
+        !matches!(
+            f.app.test_reference().entries[0].status,
+            ReferenceStatus::Loaded
+        ),
+        "the reopened reference is still waiting for its own analysis"
+    );
 }
