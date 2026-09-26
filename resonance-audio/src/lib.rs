@@ -194,7 +194,9 @@ pub mod test_support {
         retune_clip, snapshot_tuning_jobs, TuningJob,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
-    pub use crate::platform::{pw_delay_to_engine_samples, MonitorResampler};
+    pub use crate::platform::{
+        input_channel_candidates, pw_delay_to_engine_samples, MonitorResampler,
+    };
     pub use crate::recording::apply_take_shift;
     pub use crate::engine::__reset_engine_disconnect_latch_for_test;
     pub use crate::midi_clock::{parse_clock_message, ClockTempoTracker, MidiClockEvent};
