@@ -812,6 +812,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 
 **C-1 landed (A5-3 first half) @ 8339eecd.** 39 emit sites (not 41). `PluginEditorFailure::engine_error_kind()` classifies editor-open failures per variant. 12 sites stay `Internal` because their `Result<_, String>` source mixes causes: 4 "no project directory", 2 worker-panic recoveries, 2 `platform::build_input_stream`, 4 MIDI hardware/clock `configure`/`set_track_*` — C-3's per-module `thiserror` should split these. `midi/hardware.rs`'s `set_track_input` `Err` arm is unreachable today.
 
+**C-2 landed @ 4f3342dd.** `BounceError { kind: ExportErrorKind, message }` (its sites already went through `ExportReporter::error` with a kind); `TrackBounceError`/`StemExportError` carry `EngineError`. `JobStatus.error` is now `Option<JobError { message, kind: Option<ErrorKind> }>`; its `Deserialize` also accepts the old bare string. **Wire note:** the *serialized* shape changed (string → object), so a pre-C-2 reader cannot parse a new app's failure; accepted without a `PROTOCOL_VERSION` bump since app and `resonance-mcp` ship together and there are no external clients. `ExportErrorKind` → control `ErrorKind` mapping is in the app (`update/control/job.rs::export_kind_to_rpc`). Only `render.mixdown` reaches a control job today; track/stem bounce kinds are only logged.
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 
