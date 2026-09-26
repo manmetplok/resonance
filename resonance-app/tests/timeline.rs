@@ -69,6 +69,8 @@ mod recording_undo;
 mod track_delete_cleanup;
 #[path = "timeline/undo_noop_gesture.rs"]
 mod undo_noop_gesture;
+#[path = "timeline/undo_view_state_keeps_redo.rs"]
+mod undo_view_state_keeps_redo;
 #[path = "timeline/render_cache.rs"]
 mod render_cache;
 #[path = "timeline/selection_bar.rs"]

@@ -495,6 +495,7 @@ pub fn handle(r: &mut crate::Resonance, msg: ComposeMessage) -> Task<Message> {
             // lane (a GUI-driven render).
             let (definition_id, track_id) = (data.definition_id, data.track_id);
             if vocal_audio_install::handle_vocal_audio_ready(r, *data) {
+                r.mark_edited_without_history();
                 r.control
                     .jobs
                     .complete_vocal_lane(definition_id, track_id, r.revision());
