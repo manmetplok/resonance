@@ -23,7 +23,7 @@ pub struct PluginMirror {
     /// GUI state instead.
     ///
     /// Also **seeded from the project file at load time** (see
-    /// `update::project_io::replay::entity::replay_plugins`), which is
+    /// `update::project_io::reconcile::plugin_state::PluginState`), which is
     /// what keeps a slot whose `.clap` is missing from losing its opaque
     /// state: the engine can never report a blob for an instance it
     /// failed to create, so without the seed the first Save As wrote

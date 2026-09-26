@@ -10,6 +10,9 @@
 //! identity and order), so it never adds or removes an entity. An id
 //! missing from `old` is skipped there as defence in depth.
 //!
+//! Each plugin's state (blob, per-slot bypass, params) is
+//! `plugin_state::PluginState`'s, the next domain in the stage.
+//!
 //! `Stage::Entities` runs after `Timeline` and before `Routing` on both
 //! paths: the engine rejects a send naming an unregistered endpoint, and a
 //! key route names a plugin instance id.
@@ -42,7 +45,7 @@ pub(crate) struct Tracks;
 impl Reconcile for Tracks {
     const NAME: &'static str = "tracks";
 
-    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
         let Some(old) = old else {
             r.registry.tracks.clear();
             r.registry.next_track_order = 0;
@@ -63,7 +66,7 @@ impl Reconcile for Tracks {
                 }
             }
             for pt in &new.tracks {
-                replay_track(r, pt, ctx);
+                replay_track(r, pt);
             }
             // Defensive: older project files weren't guaranteed to be saved
             // in .order sequence, and replay relies on the registry staying
@@ -99,12 +102,12 @@ pub(crate) struct Busses;
 impl Reconcile for Busses {
     const NAME: &'static str = "busses";
 
-    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
         let Some(old) = old else {
             r.registry.busses.clear();
             r.registry.next_bus_order = 0;
             for pb in &new.busses {
-                replay_bus(r, pb, ctx);
+                replay_bus(r, pb);
             }
             r.registry.resort_busses();
             // Output-destination picker depends on the bus list.
@@ -126,18 +129,21 @@ impl Reconcile for Busses {
 /// * After a `ClearAll`: `SetMasterFxBypass`, then every master plugin is
 ///   added; the mirror is rebuilt.
 /// * Diff: `SetMasterFxBypass` when it changed; slot names refreshed.
+///
+/// The per-slot bypass, blobs and params of every chain are
+/// `plugin_state::PluginState`'s.
 pub(crate) struct Master;
 
 impl Reconcile for Master {
     const NAME: &'static str = "master";
 
-    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
         let Some(old) = old else {
             r.master.fx_bypassed = new.master_fx_bypassed;
             let _ = r.engine.send(AudioCommand::SetMasterFxBypass {
                 bypassed: new.master_fx_bypassed,
             });
-            r.master.plugins = replay_plugins(r, &new.master_plugins, ctx, |pp| {
+            r.master.plugins = replay_plugins(r, &new.master_plugins, |pp| {
                 AudioCommand::AddPluginToMaster {
                     clap_file_path: pp.clap_file_path.clone(),
                     clap_plugin_id: pp.clap_plugin_id.clone(),
@@ -193,7 +199,7 @@ impl Reconcile for TrackOutputs {
 // Full arms: add one entity after a `ClearAll`
 // ---------------------------------------------------------------------------
 
-fn replay_track(r: &mut Resonance, pt: &ProjectTrack, ctx: &ReconcileCtx<'_>) {
+fn replay_track(r: &mut Resonance, pt: &ProjectTrack) {
     // Repair sub-track id collisions left by buggier prior versions. If
     // the saved id is already in use by an earlier-loaded track, allocate
     // a fresh app-side id from `next_track_id` (which the pre-loop bump
@@ -302,7 +308,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, ctx: &ReconcileCtx<'_>) {
     }
 
     // Build GUI track state.
-    let gui_plugins = replay_plugins(r, &pt.plugins, ctx, |pp| AudioCommand::AddPlugin {
+    let gui_plugins = replay_plugins(r, &pt.plugins, |pp| AudioCommand::AddPlugin {
         track_id,
         clap_file_path: pp.clap_file_path.clone(),
         clap_plugin_id: pp.clap_plugin_id.clone(),
@@ -366,7 +372,7 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, ctx: &ReconcileCtx<'_>) {
     // `ExternalInstruments` reconcile domain (ARCH-01 A-13b).
 }
 
-fn replay_bus(r: &mut Resonance, pb: &ProjectBus, ctx: &ReconcileCtx<'_>) {
+fn replay_bus(r: &mut Resonance, pb: &ProjectBus) {
     let _ = r.engine.send(AudioCommand::AddBus {
         id: pb.id,
         name: Some(pb.name.clone()),
@@ -399,7 +405,6 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, ctx: &ReconcileCtx<'_>) {
     let gui_plugins = replay_plugins(
         r,
         &pb.plugins,
-        ctx,
         |pp| AudioCommand::AddPluginToBus {
             bus_id: pb.id,
             clap_file_path: pp.clap_file_path.clone(),
@@ -419,64 +424,28 @@ fn replay_bus(r: &mut Resonance, pb: &ProjectBus, ctx: &ReconcileCtx<'_>) {
     r.registry.next_bus_order += 1;
 }
 
-/// Replay one saved plugin chain: instantiate each plugin on the engine
-/// (via the target-specific `add_command`), restore its saved state
-/// blob, and collect placeholder GUI slots. The placeholders' params +
-/// has_gui are overwritten when the subsequent PluginAdded event
-/// arrives from the engine.
+/// Add one saved plugin chain: instantiate each plugin on the engine
+/// (via the target-specific `add_command`) and collect placeholder GUI
+/// slots. The placeholders' params + has_gui are overwritten when the
+/// instance's `PluginAdded` echo arrives from the engine, after this
+/// restore returns; `adopt_live_instance` leaves the rest (name, bypass)
+/// alone. The saved state blob, the bypass command and the param
+/// overrides follow in `PluginState`, once every chain is added.
 ///
 /// **A plugin that never comes back.** `AddPlugin` is fire-and-forget:
 /// if the `.clap` isn't on this machine the engine replies with a
 /// generic `AudioEvent::Error` and no `PluginAdded`, so the placeholder
 /// stays in the chain with an empty `params` mirror and the engine has
-/// no instance to save state from. Everything this loop parks app-side —
-/// the opaque blob in `plugin_mirror.state_cache`, the parameter values in
-/// `pending_plugin_param_overrides` — is therefore the *only* surviving
-/// copy of that plugin's settings, and every project-writing path reads
-/// it back so a Save As on a machine without the plugin no longer
-/// destroys them (ba doc #275, P5). Both are dropped again the moment
-/// the instance does turn up (`engine_events::plugins`), where the
-/// engine becomes the source of truth.
+/// no instance to save state from (see `PluginState` for what keeps its
+/// settings alive).
 fn replay_plugins(
     r: &mut Resonance,
     plugins: &[ProjectPlugin],
-    ctx: &ReconcileCtx<'_>,
     mut add_command: impl FnMut(&ProjectPlugin) -> AudioCommand,
 ) -> Vec<PluginSlotState> {
     let mut gui_plugins = Vec::with_capacity(plugins.len());
     for pp in plugins {
         let _ = r.engine.send(add_command(pp));
-        if let Some(state_data) = ctx.plugin_states.get(&pp.instance_id) {
-            let _ = r.engine.send(AudioCommand::LoadPluginState {
-                instance_id: pp.instance_id,
-                data: state_data.to_vec(),
-            });
-            // Keep the blob app-side, byte for byte, as the plugin's
-            // last known state. A live plugin overwrites this entry with
-            // its own fresh blob on the `PluginStateSaved` echo that
-            // follows `PluginAdded`; a missing one never does, and this
-            // copy is what the next save writes.
-            r.plugin_mirror.state_cache.insert(pp.instance_id, std::sync::Arc::clone(state_data));
-        }
-        // Park the saved parameter overrides until `PluginAdded` reports
-        // this instance's param list. Applying them here would be undone:
-        // that event carries the values the plugin instantiated with (its
-        // defaults) and overwrites `slot.params` wholesale. See
-        // `Resonance::pending_plugin_param_overrides`.
-        if !pp.params.is_empty() {
-            r.presets.pending_plugin_param_overrides
-                .insert(pp.instance_id, pp.params.clone());
-        }
-        // Restore a bypassed slot through the very same command a user
-        // toggle sends, so there is one path into the engine. Only when
-        // it is actually bypassed: the engine's default is running, and
-        // a command per slot on every load would be noise.
-        if pp.bypassed {
-            let _ = r.engine.send(AudioCommand::SetPluginBypass {
-                instance_id: pp.instance_id,
-                bypassed: true,
-            });
-        }
         let mut slot = PluginSlotState::new(
             pp.instance_id,
             pp.plugin_name.clone(),
@@ -488,6 +457,7 @@ fn replay_plugins(
         // Seeded rather than left to the echo: the mixer draws before
         // the engine answers, and a slot that flashed un-bypassed for a
         // frame would read as the project having lost the setting.
+        // `PluginState` sends the matching `SetPluginBypass`.
         slot.bypassed = pp.bypassed;
         gui_plugins.push(slot);
     }
@@ -654,11 +624,11 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         t.midi_output_channel = b.midi_output_channel;
         // Plugin slot metadata: instance_id/clap identity are
         // guaranteed stable by the structural check, but the
-        // human-visible name may change.
+        // human-visible name may change. The per-slot bypass is
+        // `PluginState`'s.
         for (slot, pp) in t.plugins.iter_mut().zip(b.plugins.iter()) {
             slot.plugin_name = pp.plugin_name.clone();
         }
-        apply_plugin_bypass(&r.engine, &mut t.plugins, &b.plugins);
     }
 }
 
@@ -708,7 +678,6 @@ fn apply_bus(r: &mut Resonance, a: &ProjectBus, b: &ProjectBus) {
         for (slot, pp) in bus.plugins.iter_mut().zip(b.plugins.iter()) {
             slot.plugin_name = pp.plugin_name.clone();
         }
-        apply_plugin_bypass(&r.engine, &mut bus.plugins, &b.plugins);
     }
 }
 
@@ -721,37 +690,5 @@ fn apply_master(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     }
     for (slot, pp) in r.master.plugins.iter_mut().zip(b.master_plugins.iter()) {
         slot.plugin_name = pp.plugin_name.clone();
-    }
-    apply_plugin_bypass(&r.engine, &mut r.master.plugins, &b.master_plugins);
-}
-
-/// Apply the saved per-slot bypass to one chain, telling the engine about
-/// every slot that actually moved (ba todo #1305).
-///
-/// This is what makes bypass UNDOABLE rather than merely persisted. Undo
-/// restores through the diff replay, not through a reload, and the diff
-/// used to copy only `plugin_name` per slot — so an undo of a bypass
-/// recorded its entry, replayed, and changed nothing. `plugin_set_matches`
-/// compares slot IDENTITY only, deliberately: a bypass-only change is not
-/// a structural change and must not force the whole project to reload.
-/// That means the difference has to be applied here, or nowhere.
-///
-/// Sends only on a real change. The engine crossfades a bypass, and
-/// re-asserting the state a slot is already in would start a fade for a
-/// value that is not moving.
-fn apply_plugin_bypass(
-    engine: &resonance_audio::AudioEngine,
-    slots: &mut [PluginSlotState],
-    saved: &[ProjectPlugin],
-) {
-    for (slot, pp) in slots.iter_mut().zip(saved.iter()) {
-        if slot.bypassed == pp.bypassed {
-            continue;
-        }
-        slot.bypassed = pp.bypassed;
-        let _ = engine.send(AudioCommand::SetPluginBypass {
-            instance_id: slot.instance_id,
-            bypassed: pp.bypassed,
-        });
     }
 }

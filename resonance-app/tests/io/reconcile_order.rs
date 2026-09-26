@@ -13,7 +13,7 @@
 use std::path::PathBuf;
 
 use resonance_app::message::{ExternalInstrumentMessage as Eim, Message, ProjectIoMessage};
-use resonance_app::project::{LoadedProject, ProjectFile};
+use resonance_app::project::{LoadedProject, ProjectFile, ProjectPluginParam};
 use resonance_app::compose::{GenerateParams, SectionDefinitionState};
 use resonance_app::state::{ClipState, MidiClipState, TempoEvent, TrackState};
 use resonance_app::update::project_io::reconcile::{domain_order, Origin, Stage};
@@ -220,6 +220,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Entities, "busses"),
             (Stage::Entities, "master"),
             (Stage::Entities, "track_outputs"),
+            (Stage::Entities, "plugin_state"),
             (Stage::Routing, "sends"),
             (Stage::Routing, "sidechain_routes"),
             (Stage::Clips, "audio_clips"),
@@ -384,6 +385,27 @@ const KICK: u64 = 1;
 const BUS: u64 = 10;
 const SEND: u64 = 3;
 const MASTER_COMP: u64 = 300;
+const THRESHOLD: u32 = 1;
+
+fn threshold_param() -> ParamInfo {
+    ParamInfo {
+        id: THRESHOLD,
+        name: "Threshold".to_string(),
+        min_value: 0.0,
+        max_value: 1.0,
+        default_value: 0.0,
+        current_value: 0.0,
+        ..Default::default()
+    }
+}
+
+fn threshold_override(value: f64) -> Vec<ProjectPluginParam> {
+    vec![ProjectPluginParam {
+        id: THRESHOLD,
+        name: "Threshold".to_string(),
+        value,
+    }]
+}
 
 /// A kick track sending into a bus, a compressor on the master keyed from
 /// the kick, and a MIDI clip on the kick.
@@ -398,7 +420,7 @@ fn app_with_routing() -> Resonance {
         plugin_name: "Compressor".to_string(),
         clap_plugin_id: "com.resonance.compressor".to_string(),
         clap_file_path: "/plugins/compressor.clap".to_string(),
-        params: Vec::<ParamInfo>::new(),
+        params: vec![threshold_param()],
         has_gui: false,
         has_sidechain_input: true,
     });
@@ -508,4 +530,116 @@ fn a_diff_undo_sends_routing_after_the_master_and_before_the_clips() {
     );
     assert_eq!(app.test_aux_sends()[0].level_db, -12.0);
     assert!(!app.test_sidechain_routes()[0].enabled);
+}
+
+/// Full path (A-13f): every entity is added before any plugin's state is
+/// restored. `LoadPluginState` used to follow its own `AddPlugin*` inside
+/// the chain replay; it now goes out after every track, bus, the master
+/// chain and the track outputs (`PluginState`, last in `Entities`), still
+/// before `Routing`. Per instance the blob still precedes the bypass, and
+/// the saved param overrides are parked for the `PluginAdded` echo, which
+/// applies them after the blob.
+#[test]
+fn the_full_path_restores_plugin_state_after_every_entity_and_before_routing() {
+    let mut file = app_with_routing().test_build_project_file();
+    file.tracks[0].output_bus = Some(BUS);
+    file.master_plugins[0].bypassed = true;
+    file.master_plugins[0].params = threshold_override(0.5);
+    let (mut fresh, _task) = Resonance::new_for_test();
+    let rx = fresh.test_capture_engine();
+    let blob: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![1u8, 2, 3]);
+    replay_loaded_project(
+        &mut fresh,
+        Box::new(LoadedProject {
+            file,
+            project_dir: PathBuf::from("/tmp/resonance-test-a13f"),
+            midi_notes: Default::default(),
+            plugin_states: [(MASTER_COMP, blob)].into_iter().collect(),
+        }),
+    );
+    let cmds = drain(&rx);
+    let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the replay sends it")
+    };
+    let master = pos(&|c| matches!(c, AudioCommand::AddPluginToMaster { id: MASTER_COMP, .. }));
+    let output = pos(&|c| matches!(c, AudioCommand::SetTrackOutput { track_id: KICK, .. }));
+    let state = pos(&|c| {
+        matches!(c, AudioCommand::LoadPluginState { instance_id: MASTER_COMP, data } if data[..] == [1, 2, 3])
+    });
+    let bypass = pos(&|c| {
+        matches!(c, AudioCommand::SetPluginBypass { instance_id: MASTER_COMP, bypassed: true })
+    });
+    let send = pos(&|c| matches!(c, AudioCommand::AddAuxSend { id: SEND, .. }));
+    assert!(
+        master < output && output < state && state < bypass && bypass < send,
+        "{master} < {output} < {state} < {bypass} < {send}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::SetPluginParam { .. })),
+        "the overrides wait for the PluginAdded echo: {cmds:?}"
+    );
+    fresh.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+        instance_id: MASTER_COMP,
+        plugin_name: "Compressor".to_string(),
+        clap_plugin_id: "com.resonance.compressor".to_string(),
+        clap_file_path: "/plugins/compressor.clap".to_string(),
+        params: vec![threshold_param()],
+        has_gui: false,
+        has_sidechain_input: true,
+    });
+    assert!(
+        drain(&rx).iter().any(|c| matches!(
+            c,
+            AudioCommand::SetPluginParam { instance_id: MASTER_COMP, param_id: THRESHOLD, value }
+                if *value == 0.5
+        )),
+        "the parked override is applied on the echo"
+    );
+}
+
+/// Diff path (A-13f): the plugin blobs and params go out before `Routing`
+/// (they used to follow it), and the per-slot bypass after the blob (it
+/// used to precede it, with the master scalars). The engine's send and
+/// key-route tables touch no plugin state (design doc §11).
+#[test]
+fn a_diff_undo_restores_plugin_state_before_routing() {
+    let mut app = app_with_routing();
+    let rx = app.test_capture_engine();
+    let mut target = app.test_snapshot_for_undo();
+    target.project.file.master_fx_bypassed = true;
+    target.project.file.master_plugins[0].bypassed = true;
+    target.project.file.master_plugins[0].params = threshold_override(0.5);
+    // A blob the live cache does not hold, so it is re-pushed.
+    target
+        .project
+        .plugin_states
+        .insert(MASTER_COMP, std::sync::Arc::from(vec![7u8, 7, 7]));
+    target.project.file.sends[0].level_db = -12.0;
+    let _ = drain(&rx);
+    app.test_begin_restore_from_snapshot(target);
+    let cmds = drain(&rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an unchanged shape takes the diff path"
+    );
+    let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the diff replay sends it")
+    };
+    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    let state = pos(&|c| matches!(c, AudioCommand::LoadPluginState { instance_id: MASTER_COMP, .. }));
+    let bypass = pos(&|c| {
+        matches!(c, AudioCommand::SetPluginBypass { instance_id: MASTER_COMP, bypassed: true })
+    });
+    let param = pos(&|c| {
+        matches!(
+            c,
+            AudioCommand::SetPluginParam { instance_id: MASTER_COMP, param_id: THRESHOLD, value }
+                if *value == 0.5
+        )
+    });
+    let send = pos(&|c| matches!(c, AudioCommand::SetAuxSend { id: SEND, .. }));
+    assert!(
+        master < state && state < bypass && bypass < param && param < send,
+        "{master} < {state} < {bypass} < {param} < {send}"
+    );
 }

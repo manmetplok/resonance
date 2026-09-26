@@ -17,6 +17,7 @@ mod app_side;
 mod clips;
 mod entities;
 mod globals;
+mod plugin_state;
 mod restored;
 mod routing;
 
@@ -138,16 +139,17 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
-    /// The entities: tracks, busses, the master chain, the track outputs.
-    /// Right after `Timeline` on both paths. After a `ClearAll` every
-    /// entity is added; on the diff path only changed scalars are sent.
+    /// The entities: tracks, busses, the master chain, the track outputs,
+    /// then each plugin's state (blob, bypass, params). Right after
+    /// `Timeline` on both paths. After a `ClearAll` every entity is added;
+    /// on the diff path only changed scalars are sent.
     Entities,
     /// The routing edges between entities: aux sends, then sidechain key
     /// routes. Both paths: right after every track, bus and the master
     /// chain are restored (the engine rejects a send naming an unregistered
     /// endpoint; a key route names a plugin instance id). Full path: after
-    /// the track outputs, before the clips. Diff path: after the master,
-    /// before the plugin state blobs and params.
+    /// the plugin state, before the clips. Diff path: likewise (A-13f moved
+    /// the plugin blobs and params ahead of it).
     Routing,
     /// The audio and MIDI clips, then state derived from them: the lyric
     /// side-table, the derived-clip map and the vocal audio-clip map. Full
@@ -208,6 +210,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<entities::Busses>(Stage::Entities),
     domain::<entities::Master>(Stage::Entities),
     domain::<entities::TrackOutputs>(Stage::Entities),
+    // After every chain it names is added / matched: blobs, then per-slot
+    // bypass, then params (which win over the blob).
+    domain::<plugin_state::PluginState>(Stage::Entities),
     // After every entity they connect. Sends before key routes, as both
     // paths always had it (the two are independent tables in the engine).
     domain::<routing::Sends>(Stage::Routing),
