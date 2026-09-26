@@ -43,14 +43,14 @@ pub use bounce_common::midi_render_range;
 /// audio thread. The audio side does wait-free `load()`s; this helper
 /// is the single-writer mutation path used by every engine-thread
 /// site that previously held a `RwLock<TempoMap>::write()`.
-pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(
-    map: &arc_swap::ArcSwap<TempoMap>,
-    f: F,
-) {
-    let mut new = (**map.load()).clone();
+pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(ctx: &thread::HandlerCtx, f: F) {
+    let mut new = (**ctx.tempo_map.load()).clone();
     f(&mut new);
-    map.store(Arc::new(new));
+    retire::publish(ctx.tempo_map, Arc::new(new), &ctx.shared.retired);
 }
+
+pub(crate) mod retire;
+pub use retire::Retired;
 
 pub(crate) mod audition;
 pub use audition::{
@@ -282,6 +282,11 @@ pub struct SharedState {
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
     pub cycle_report: crate::cycle_load::CycleReportSlot,
+    /// Replaced snapshots kept alive until the engine loop's sweep finds
+    /// no reader pinning them (code review MIX-04 / ARCH-02 A2-2). Every
+    /// `ArcSwap` the callback reads is published through
+    /// `retire::publish`; the audio thread never touches this queue.
+    pub retired: retire::Retired,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -424,6 +429,7 @@ impl Default for SharedState {
             render_skip_cycles: AtomicU64::new(0),
             lock_misses: crate::cycle_load::LockMissCounters::new(),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
+            retired: retire::Retired::new(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),

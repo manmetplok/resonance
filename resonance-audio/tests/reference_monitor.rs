@@ -12,11 +12,11 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 
+use resonance_audio::__test_support::SharedState;
 use resonance_audio::types::{ABSource, AudioEvent, ReferenceId};
 use resonance_audio::{
     handle_reference_analyzed, handle_set_ab_source, handle_set_active_reference,
-    handle_set_ref_loop_to_mix, handle_set_ref_trim, register_reference, ReferenceMonitor,
-    ReferencePlayer,
+    handle_set_ref_loop_to_mix, handle_set_ref_trim, register_reference, ReferencePlayer,
 };
 
 /// Build a player whose single registered reference is active and carries
@@ -45,9 +45,10 @@ fn ramp_pcm(frames: usize) -> Vec<f32> {
 #[test]
 fn mix_source_leaves_the_buffer_untouched() {
     let player = player_with_active_pcm(vec![0.5; 8]);
-    let monitor = ReferenceMonitor::default();
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
     // ab_source defaults to Mix.
-    player.publish(&monitor, true);
+    player.publish(&shared, true);
 
     let mut buf = vec![1.0f32; 8];
     assert!(
@@ -60,18 +61,19 @@ fn mix_source_leaves_the_buffer_untouched() {
 #[test]
 fn switching_ab_source_mid_monitor_swaps_the_buffer() {
     let mut player = player_with_active_pcm(vec![0.5; 8]); // 4 frames, all 0.5
-    let monitor = ReferenceMonitor::default();
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
     let (tx, _rx) = unbounded::<AudioEvent>();
 
     // Start on the mix: the processed mix passes through untouched.
-    player.publish(&monitor, false);
+    player.publish(&shared, false);
     let mut buf = vec![1.0f32; 8];
     assert!(!monitor.render(&mut buf, 2, 4, 0));
     assert_eq!(buf, vec![1.0f32; 8]);
 
     // Flip to the reference: the buffer is replaced with the reference PCM.
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
-    player.publish(&monitor, false);
+    player.publish(&shared, false);
     assert!(monitor.render(&mut buf, 2, 4, 0));
     assert!(
         buf.iter().all(|&s| (s - 0.5).abs() < 1e-6),
@@ -80,7 +82,7 @@ fn switching_ab_source_mid_monitor_swaps_the_buffer() {
 
     // Flip back to the mix: the reference is dropped again.
     handle_set_ab_source(&mut player, &tx, ABSource::Mix);
-    player.publish(&monitor, false);
+    player.publish(&shared, false);
     let mut buf2 = vec![1.0f32; 8];
     assert!(!monitor.render(&mut buf2, 2, 4, 0));
     assert_eq!(buf2, vec![1.0f32; 8]);
@@ -89,10 +91,11 @@ fn switching_ab_source_mid_monitor_swaps_the_buffer() {
 #[test]
 fn free_run_cursor_advances_and_wraps() {
     let mut player = player_with_active_pcm(ramp_pcm(6)); // 6 frames
-    let monitor = ReferenceMonitor::default();
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
     let (tx, _rx) = unbounded::<AudioEvent>();
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
-    player.publish(&monitor, true); // cursor reset to 0
+    player.publish(&shared, true); // cursor reset to 0
 
     // First block: frames 0..4 -> 0.0, 0.1, 0.2, 0.3.
     let mut buf = vec![0.0f32; 8];
@@ -121,11 +124,12 @@ fn free_run_cursor_advances_and_wraps() {
 #[test]
 fn loop_to_mix_reads_from_the_playhead_and_holds_the_cursor() {
     let mut player = player_with_active_pcm(ramp_pcm(6));
-    let monitor = ReferenceMonitor::default();
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
     let (tx, _rx) = unbounded::<AudioEvent>();
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
     handle_set_ref_loop_to_mix(&mut player, &tx, true);
-    player.publish(&monitor, true);
+    player.publish(&shared, true);
 
     // Playhead at frame 3 -> reads reference frames 3, 4 (0.3, 0.4).
     let mut buf = vec![0.0f32; 4];
@@ -138,12 +142,13 @@ fn loop_to_mix_reads_from_the_playhead_and_holds_the_cursor() {
 #[test]
 fn trim_gain_scales_and_clamps_the_reference() {
     let mut player = player_with_active_pcm(vec![0.3, 0.3, 0.8, 0.8]); // 2 frames
-    let monitor = ReferenceMonitor::default();
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
     let (tx, _rx) = unbounded::<AudioEvent>();
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
     // +6.0206 dB ~= linear gain 2.0.
     handle_set_ref_trim(&mut player, &tx, 6.020_6);
-    player.publish(&monitor, true);
+    player.publish(&shared, true);
 
     let mut buf = vec![0.0f32; 4];
     assert!(monitor.render(&mut buf, 2, 2, 0));
@@ -161,8 +166,9 @@ fn reference_active_but_undecoded_stays_on_the_mix() {
     let id = register_reference(&mut player, Some(ReferenceId(1)), PathBuf::from("/ref.wav"));
     handle_set_active_reference(&mut player, &tx, id);
     handle_set_ab_source(&mut player, &tx, ABSource::Reference);
-    let monitor = ReferenceMonitor::default();
-    player.publish(&monitor, true);
+    let shared = SharedState::default();
+    let monitor = &shared.reference;
+    player.publish(&shared, true);
 
     let mut buf = vec![1.0f32; 8];
     assert!(

@@ -175,7 +175,7 @@ pub(crate) fn handle_midi_clock_event(
             if let Some(bpm) = state.midi_clock_tempo.observe(arrival) {
                 if (bpm - state.midi_clock_last_emitted_bpm).abs() > 0.1 {
                     state.midi_clock_last_emitted_bpm = bpm;
-                    super::super::rcu_tempo(ctx.tempo_map, |tm| tm.bpm = bpm);
+                    super::super::rcu_tempo(ctx, |tm| tm.bpm = bpm);
                     let _ = ctx
                         .event_tx
                         .send(AudioEvent::MidiClockTempoDetected { bpm });

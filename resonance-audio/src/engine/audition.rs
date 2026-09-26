@@ -115,7 +115,9 @@ pub fn start_audition_in_place(
         .audition_pos_bits
         .store(start.to_bits(), Ordering::Relaxed);
     shared.audition_finished.store(false, Ordering::Relaxed);
-    shared.audition_source.store(Some(Arc::new(source)));
+    // The previous source (a whole sample's PCM) is retired, not dropped:
+    // the overlay may be mid-block on it (code review MIX-04).
+    super::retire::publish_opt(&shared.audition_source, Some(Arc::new(source)), &shared.retired);
     // Flip playing last, with Release: the audio callback gates on this
     // flag and only then loads the source + flags above. The Release
     // store publishes every Relaxed store before it, pairing with the
@@ -136,7 +138,7 @@ pub fn stop_audition_in_place(shared: &SharedState) -> bool {
     // synchronises itself) and mixes one extra block of preview, which is
     // the same outcome as the stop landing a block later.
     let was_playing = shared.audition_playing.swap(false, Ordering::Relaxed);
-    shared.audition_source.store(None);
+    super::retire::publish_opt(&shared.audition_source, None, &shared.retired);
     shared.audition_finished.store(false, Ordering::Relaxed);
     was_playing
 }
@@ -199,7 +201,7 @@ pub(crate) fn poll_audition(ctx: &HandlerCtx, last_report: &mut Instant) {
     // Natural finish latched by the audio callback: emit once, drop the
     // source. Runs even though `audition_playing` is already false.
     if ctx.shared.audition_finished.swap(false, Ordering::Relaxed) {
-        ctx.shared.audition_source.store(None);
+        super::retire::publish_opt(&ctx.shared.audition_source, None, &ctx.shared.retired);
         let _ = ctx.event_tx.send(AudioEvent::AuditionStopped);
     }
 

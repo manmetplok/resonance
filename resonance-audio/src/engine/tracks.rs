@@ -82,8 +82,22 @@ pub(crate) fn handle_set_track_frozen_source(
     source: Option<FrozenSource>,
 ) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
-        track.frozen_source.store(source.map(Arc::new));
+        // A replaced cache can be tens of MB; it is retired, not dropped
+        // here, so the callback's block-long load can never be its last
+        // owner (code review MIX-04).
+        super::retire::publish_opt(&track.frozen_source, source.map(Arc::new), &ctx.shared.retired);
     }
+}
+
+/// Take a track out of the live set for good: its published snapshots
+/// (frozen cache, plugin chain) go to the retire queue first, because a
+/// callback block may still hold a load of either, and dropping the
+/// `Track` — and with it the `ArcSwap`'s own reference — would otherwise
+/// hand that block the last owner (code review MIX-04).
+pub(crate) fn retire_removed_track(track: Track, retired: &super::Retired) {
+    retired.retire_opt(track.frozen_source.swap(None));
+    retired.retire(track.clear_plugins());
+    drop(track);
 }
 
 /// Detach a track's frozen source so playback resumes through the live
@@ -91,7 +105,7 @@ pub(crate) fn handle_set_track_frozen_source(
 /// kept as a distinct command so the intent reads clearly at the call site.
 pub(crate) fn handle_unfreeze_track(ctx: &HandlerCtx, track_id: TrackId) {
     if let Some(track) = ctx.tracks.read().get(&track_id) {
-        track.frozen_source.store(None);
+        super::retire::publish_opt(&track.frozen_source, None, &ctx.shared.retired);
     }
 }
 
@@ -192,19 +206,23 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
     drop(removed_plugins);
     // Drop the parent track and any sub-tracks fed by it in one pass
     // under the same write lock.
-    let removed_sub_ids: Vec<TrackId> = {
+    let (removed_sub_ids, removed_tracks): (Vec<TrackId>, Vec<Track>) = {
         let mut tracks_guard = ctx.tracks.write();
-        tracks_guard.shift_remove(&track_id);
+        let mut removed = Vec::new();
+        removed.extend(tracks_guard.shift_remove(&track_id));
         let sub_ids: Vec<TrackId> = tracks_guard
             .values()
             .filter(|t| matches!(t.sub_track_of, Some((p, _)) if p == track_id))
             .map(|t| t.id)
             .collect();
         for sid in &sub_ids {
-            tracks_guard.shift_remove(sid);
+            removed.extend(tracks_guard.shift_remove(sid));
         }
-        sub_ids
+        (sub_ids, removed)
     };
+    for track in removed_tracks {
+        retire_removed_track(track, &ctx.shared.retired);
+    }
     // Remove clips -- collect removed clips so dealloc happens outside
     // lock.
     let removed_clips: Vec<_> = {
@@ -412,8 +430,11 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
         drop(removed);
     }
 
-    // Clear tracks
-    ctx.tracks.write().clear();
+    // Clear tracks -- drain under the lock, retire + drop outside it.
+    let removed_tracks: Vec<Track> = ctx.tracks.write().drain(..).map(|(_, t)| t).collect();
+    for track in removed_tracks {
+        retire_removed_track(track, &ctx.shared.retired);
+    }
 
     // Clear busses
     ctx.busses.write().clear();
@@ -443,7 +464,7 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // (References are monitor-only and never in any render, but a stale one
     // would otherwise linger across a project load.)
     state.reference.clear();
-    state.reference.publish(&ctx.shared.reference, true);
+    state.reference.publish(ctx.shared, true);
 
     // Drop cycle-record take lanes and publish the now-empty comp table
     // (epic #15, ba todo #1394). `wipe_registry` on the app side has always

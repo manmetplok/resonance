@@ -318,7 +318,7 @@ pub(crate) fn publish_automation_snapshot(
     lanes: &automation::AutomationLanes,
 ) {
     let snapshot = automation::AutomationSnapshot::build(lanes, &ctx.plugins.read());
-    ctx.automation.store(Arc::new(snapshot));
+    super::retire::publish(ctx.automation, Arc::new(snapshot), &ctx.shared.retired);
 }
 
 /// Construction parameters for [`engine_thread`].
@@ -541,9 +541,14 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
             if current.sync_bpm_would_change(playhead, ctx.sample_rate) {
                 let mut new_tm = (**current).clone();
                 new_tm.sync_bpm_at(playhead, ctx.sample_rate);
-                ctx.tempo_map.store(Arc::new(new_tm));
+                super::retire::publish(ctx.tempo_map, Arc::new(new_tm), &ctx.shared.retired);
             }
         }
+
+        // Free the snapshots replaced since the last tick that no reader
+        // pins any more — on this thread, never the audio thread (code
+        // review MIX-04).
+        ctx.shared.retired.sweep();
 
         // Apply the take start latched by the input callback's first
         // push (doc #260 finding #2) before anything is drained against

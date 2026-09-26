@@ -177,7 +177,9 @@ pub fn to_audio_clip(
             // need to remove the freshly-added empty target track.
             // The token is this render's own, so it is not cleared —
             // a later render starts with a fresh one.
-            let _ = tracks.write().shift_remove(&target_track_id);
+            if let Some(track) = tracks.write().shift_remove(&target_track_id) {
+                super::super::tracks::retire_removed_track(track, &shared.retired);
+            }
             let _ = event_tx.send(AudioEvent::TrackRemoved {
                 track_id: target_track_id,
             });

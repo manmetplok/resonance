@@ -94,6 +94,12 @@ pub mod __test_support {
     /// `tests/offline_render_gate.rs` can hold the real guard over the
     /// mixer and engine harnesses.
     pub use crate::engine::{OfflineRenderGuard, OFFLINE_RENDER_BUSY_MSG};
+    /// The deferred-drop queue every callback-visible `ArcSwap` is
+    /// published through (code review MIX-04 / ARCH-02 A2-2), and the two
+    /// publish helpers, so `tests/retire_queue.rs` can pin the primitive
+    /// against a drop-tracking payload.
+    pub use crate::engine::retire::{publish as publish_retiring, publish_opt as publish_opt_retiring};
+    pub use crate::engine::Retired;
     pub use crate::types::{MeasureSource, MixMeasurement, StemBitDepth, StemSource, StemTarget};
     pub use crate::engine::affects_latency;
     /// The take-id allocator behind every captured cycle-record pass

@@ -227,19 +227,31 @@ impl MixAudioHarness {
     }
 
     /// Publish a new automation snapshot (as the engine thread does on a
-    /// lane edit).
+    /// lane edit): the replaced one goes to `shared.retired`.
     pub fn set_automation(&self, snapshot: AutomationSnapshot) {
-        self.automation.store(std::sync::Arc::new(snapshot));
+        crate::engine::retire::publish(
+            &self.automation,
+            std::sync::Arc::new(snapshot),
+            &self.shared.retired,
+        );
     }
 
     /// Publish a new plugin-delay-compensation table.
     pub fn set_latency_comp(&self, comp: crate::latency::LatencyComp) {
-        self.latency_comp.store(std::sync::Arc::new(comp));
+        crate::engine::retire::publish(
+            &self.latency_comp,
+            std::sync::Arc::new(comp),
+            &self.shared.retired,
+        );
     }
 
     /// Publish a new tempo map (metronome flag included).
     pub fn set_tempo_map(&self, map: TempoMap) {
-        self.tempo_map.store(std::sync::Arc::new(map));
+        crate::engine::retire::publish(
+            &self.tempo_map,
+            std::sync::Arc::new(map),
+            &self.shared.retired,
+        );
     }
 
     /// Push interleaved capture frames into the monitor ring, as the
@@ -259,23 +271,25 @@ impl MixAudioHarness {
         handle_reference_analyzed(&mut player, id, std::sync::Arc::new(pcm), -14.0);
         player.active_id = Some(id);
         player.ab_source = ABSource::Reference;
-        player.publish(&self.shared.reference, true);
+        player.publish(&self.shared, true);
     }
 
     /// Switch the monitored A/B source back to the mix, as the A/B toggle
     /// does (the reference branch then no longer takes the block).
     pub fn disable_reference(&self) {
         use crate::engine::reference::ReferencePlayer;
-        ReferencePlayer::new().publish(&self.shared.reference, true);
+        ReferencePlayer::new().publish(&self.shared, true);
     }
 
     /// Load an audition preview source and start it (the overlay branch).
     pub fn start_audition(&self, samples: Vec<f32>, looping: bool) {
         use std::sync::atomic::Ordering;
         let source = crate::AuditionSource::from_samples(samples, self.sample_rate);
-        self.shared
-            .audition_source
-            .store(Some(std::sync::Arc::new(source)));
+        crate::engine::retire::publish_opt(
+            &self.shared.audition_source,
+            Some(std::sync::Arc::new(source)),
+            &self.shared.retired,
+        );
         self.shared.audition_pos_bits.store(0f64.to_bits(), Ordering::Relaxed);
         self.shared.audition_loop.store(looping, Ordering::Relaxed);
         // Release pairs with the overlay's Acquire gate, matching

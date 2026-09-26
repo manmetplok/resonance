@@ -166,6 +166,33 @@ impl EngineHandlerHarness {
         self.shared.take_comp.load_full()
     }
 
+    /// The callback-visible state the handlers publish into — for a test
+    /// that inspects the retire queue (code review MIX-04) or the
+    /// contention counters (ARCH-02 A2-1).
+    pub fn shared(&self) -> &SharedState {
+        &self.shared
+    }
+
+    /// Run the real `AudioCommand::RemoveTrack` handler.
+    pub fn remove_track(&mut self, track_id: TrackId) {
+        self.with_ctx(|ctx, state| tracks::handle_remove_track(ctx, state, track_id));
+    }
+
+    /// Run the real `SetTrackFrozenSource` handler.
+    pub fn set_track_frozen_source(&mut self, track_id: TrackId, source: Option<FrozenSource>) {
+        self.with_ctx(|ctx, _| tracks::handle_set_track_frozen_source(ctx, track_id, source));
+    }
+
+    /// Insert `track` into the live track table, as `AddTrack` would.
+    pub fn push_track(&mut self, track: Track) {
+        self.tracks.write().insert(track.id, track);
+    }
+
+    /// The frozen source the callback would read for `track_id`.
+    pub fn frozen_source(&self, track_id: TrackId) -> Option<Arc<FrozenSource>> {
+        self.tracks.read().get(&track_id)?.frozen_source.load_full()
+    }
+
     /// Replay one command from a captured project-load command stream
     /// through the engine's **real** handler; reports whether this harness
     /// understood it.
