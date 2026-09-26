@@ -74,6 +74,9 @@ fn capture(app: &mut Resonance, take_id: u64, pass_index: u32) {
             clip_ref: 5_000 + take_id,
         },
     });
+    // A recorded take is an undoable edit (STATE-02); these fixtures seed
+    // takes as setup, so the edits under test start from an empty history.
+    app.test_forget_history();
 }
 
 /// One captured audio pass that recorded only `extent` of its slot: a
@@ -96,6 +99,9 @@ fn capture_over(app: &mut Resonance, take_id: u64, pass_index: u32, extent: Time
             clip_ref: 5_000 + take_id,
         },
     });
+    // A recorded take is an undoable edit (STATE-02); these fixtures seed
+    // takes as setup, so the edits under test start from an empty history.
+    app.test_forget_history();
 }
 
 /// A group of `n` audio takes with ids `0..n`, no comp and no solo — the
@@ -243,7 +249,11 @@ fn promote_is_clamped_to_the_takes_own_recorded_audio() {
     // app never produces for a take, so the clamp was correct and never
     // bit in the real recording flow. The assertion below that
     // `test_clips` is empty is what keeps that from creeping back.
-    let (mut app, rx) = app_with_takes(2);
+    //
+    // Take 1 is captured *after* take 0: the default cover goes to the
+    // latest capture by wall-clock stamp, so re-capturing take 0 last
+    // would hand it the whole slot whenever a millisecond ticked over.
+    let (mut app, rx) = capturing_app();
     let punch_in = SLOT.start + 40_000;
     capture_over(
         &mut app,
@@ -251,6 +261,7 @@ fn promote_is_clamped_to_the_takes_own_recorded_audio() {
         0,
         TimelineRange::from_bounds(punch_in, SLOT.end()),
     );
+    capture(&mut app, 1, 1);
     drain(&rx);
     assert!(
         app.test_clips().is_empty(),

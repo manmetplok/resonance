@@ -129,6 +129,32 @@ impl crate::Resonance {
         commit_after
     }
 
+    /// Record what a recording lands as an undoable edit (STATE-02). Called
+    /// by the engine-event handlers that add recorded material — a
+    /// `RecordingFinished` clip, a cycle-record `TakeCaptured`, the MIDI
+    /// clip a live recording opens — *before* they mutate the mirror, so
+    /// the snapshot is the pre-take state.
+    ///
+    /// Recording starts and stops through `Skip` transport messages, so
+    /// without this a take never marked the project dirty (closing lost it
+    /// without a prompt), never cleared the redo stack, and undoing an
+    /// earlier edit silently dropped it through the full-reload path.
+    /// Like any committed edit it marks dirty and bumps the revision; all
+    /// the events of one session coalesce under [`CoalesceKey::Recording`]
+    /// into one entry (`RecordingStarted` breaks the run).
+    pub(crate) fn record_recording_edit(&mut self) {
+        self.dirty = true;
+        self.revision = self.revision.wrapping_add(1);
+        if !self.can_record_undo() {
+            return;
+        }
+        let key = CoalesceKey::Recording;
+        if !self.undo.try_extend_coalesced(&key) {
+            let snap = self.snapshot_for_undo();
+            self.undo.record_coalesced(snap, key, "Record".to_string());
+        }
+    }
+
     /// Run `f` with the undo history in a compound group: every
     /// undoable dispatch inside `f` lands in ONE history entry — the
     /// first dispatch snapshots the pre-call state and bumps the

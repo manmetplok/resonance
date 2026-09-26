@@ -147,6 +147,15 @@ impl Resonance {
         &self.undo
     }
 
+    /// Test-only: drop the undo history and the dirty flag, so a fixture
+    /// that seeds state through recorded-take events (which are undoable
+    /// edits, STATE-02) starts its test from a clean history.
+    #[doc(hidden)]
+    pub fn test_forget_history(&mut self) {
+        self.undo.clear();
+        self.dirty = false;
+    }
+
     /// Test-only: restore a previously captured snapshot, exercising the
     /// fast (`try_diff_replay`) restore path when the snapshot is
     /// structure-identical to the current state. Used to prove that an

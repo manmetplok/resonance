@@ -118,6 +118,8 @@ pub(super) fn recording_finished(
     name: String,
     waveform_peaks: Vec<(f32, f32)>,
 ) {
+    // A take is an undoable edit; snapshot before it lands (STATE-02).
+    r.record_recording_edit();
     r.clips.push(ClipState {
         id: clip_id,
         track_id,
