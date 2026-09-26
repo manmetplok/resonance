@@ -99,6 +99,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent D-1 (ARCH-04) | A4-4 plugins: mandatory `id` on plugin adds; engine rejects duplicates (`Internal`); `next_plugin_id` / `CONTROL_PLUGIN_ID_BASE` gone | sonnet | merged | 630b5197 |
 | refactor-intent D-2 + D-3 (ARCH-04) | App allocates send + bus ids; `next_send_id`/`next_bus_id` + `CONTROL_SEND_ID_BASE` gone; `BUS_ID_BASE` kept app-only | sonnet | merged | fdef85fd |
 | refactor-intent D-4 (ARCH-04) | App allocates every track id; engine `next_track_id` + `SUB_TRACK_ID_BASE` gone; demo seed counter bug fixed | sonnet | merged | c44abfdb |
+| refactor-intent D-5 (ARCH-04) | Mandatory reference id; engine `next_ref_id` gone, collision refused; arrangement markers were already app-only | sonnet | merged | 32a81629 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 

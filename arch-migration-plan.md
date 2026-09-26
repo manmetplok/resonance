@@ -870,6 +870,8 @@ time cargo test -p resonance-audio --no-run     # all test targets, lib fresh
 
 **D-4 landed @ c44abfdb.** `AddTrack`/`AddInstrumentTrack`/`AddVocalTrack` take a mandatory `id`; engine `reject_if_track_id_in_use` (`Internal`); `SUB_TRACK_ID_BASE` deleted; `TrackRegistry::next_track_id` starts at 1 (fresh projects unchanged) and `debug_assert`s below `BUS_ID_BASE`. Replay mirrors eagerly. Fixed: `demo::seed_demo_content` never bumped the counter past its hand-picked ids 1–6. **Open (FU-D4a):** the real engine thread creates a default track id 1 unprompted at startup; the app's counter also starts at 1, so a first GUI "Add Track" handled before the app mirrors that `TrackAdded` echo would collide (engine rejects it). Fix: the app sends the default track itself, or seeds past it. Remaining engine counters: clip, take-group, asset, reference, marker (D-5 in flight, D-6).
 
+**D-5 landed @ 32a81629.** `LoadReferenceTrack { id }` mandatory; `ReferencePlayer::next_ref_id` deleted; `reject_if_reference_id_in_use` (`Internal`). `MISSING_REFERENCE_ID_BASE` kept — an app-only split between real loads and missing-file entries. Arrangement markers were always app-allocated (`ArrangementMarkers::allocate_id`). Engine counters left: `next_clip_id`, `next_asset_id`, `next_take_group_id` (D-6 design in progress).
+
 **E landed (A7-3) @ 38d66942.** `dirs` and `time` stay unconditional deps, not optional under `model`: the ungated `registry` module (used by drums) calls `dirs::data_dir()` and `time::OffsetDateTime`. `symphonia` is optional under `decode`. amp and `resonance-plugin` use no features; drums and ir use `decode`. `arch-invariants::plugins_disable_default_features_on_resonance_common` guards it.
 
 
