@@ -133,10 +133,10 @@ fn render_burst(fb_pitch: bool) -> Vec<f32> {
     left
 }
 
-/// Repeat-`k` analysis window (loop period = delay + one block of
-/// feedback-bus latency, as in tests/feedback.rs).
+/// Repeat-`k` analysis window (loop period = exactly the delay, as in
+/// tests/feedback.rs).
 fn repeat_window(x: &[f32], k: usize) -> &[f32] {
-    let period = (0.400 * SR) as usize + 512;
+    let period = (0.400 * SR) as usize;
     &x[k * period..k * period + (0.12 * SR) as usize]
 }
 

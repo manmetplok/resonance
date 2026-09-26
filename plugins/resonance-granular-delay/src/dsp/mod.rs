@@ -64,6 +64,12 @@ pub use source::{FREEZE_RAMP_SECONDS, MAX_DELAY_SECONDS};
 pub use time::{FADE_LEG_SECONDS, REPITCH_TAU_SECONDS};
 pub use voice::VOICE_FADE_SECONDS;
 
+/// Longest chunk the buffer-feeding feedback routes render in one pass
+/// (DSP-08). Well under the 10 ms minimum delay at any supported rate,
+/// and equal to the live PipeWire quantum, so live and bounce share one
+/// chunk grid.
+pub const FEEDBACK_CHUNK: usize = 128;
+
 /// Block-level parameters resolved once per process call in `lib.rs`.
 /// Grain-latched values need no smoothing (latched per grain at spawn);
 /// the smoothed wet/dry mix, feedback amount and damping cutoff come
@@ -147,7 +153,7 @@ impl GranularDsp {
         let max_block = max_block.max(1);
         Self {
             sample_rate,
-            source: SourceRing::new(ring_len),
+            source: SourceRing::new(ring_len, max_block),
             time: TimeMachine::new(sample_rate, max_block),
             voice: VoiceStage::new(sample_rate, max_block),
             grains: GrainBank::new(sample_rate, max_block),
@@ -303,12 +309,48 @@ impl GranularDsp {
     /// Render one block in place. `left`/`right` arrive carrying the dry
     /// input and leave carrying the equal-power dry/wet mix.
     ///
+    /// On the buffer-feeding routes the block runs in chunks of at most
+    /// [`FEEDBACK_CHUNK`] samples (DSP-08): each chunk's wet is written
+    /// back into the ring before the next chunk's grains read it, so a
+    /// repeat lands exactly one delay after its source even when the
+    /// host block is longer than the delay, and a 1024-frame bounce
+    /// renders the same as a 128-frame live quantum.
+    pub fn process_block(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        frames: usize,
+        smoothers: &mut GranularSmoothers,
+        params: &BlockParams,
+    ) {
+        let frames = frames.min(left.len()).min(right.len());
+        if !params.fb_route.feeds_buffer() {
+            self.process_chunk(left, right, frames, smoothers, params);
+            return;
+        }
+        let mut start = 0;
+        while start < frames {
+            let n = (frames - start).min(FEEDBACK_CHUNK);
+            let end = start + n;
+            self.process_chunk(
+                &mut left[start..end],
+                &mut right[start..end],
+                n,
+                smoothers,
+                params,
+            );
+            start = end;
+        }
+    }
+
+    /// Render one chunk in place (see [`Self::process_block`]).
+    ///
     /// Orchestration only (ba todos #1132/#1264): each stage lives in
     /// its sub-system's module, called here in render order — buffer
     /// write, time-mode resolution, pitch-sync state, grain rendering,
     /// the decor/PSOLA blends, feedback and the output mix. Everything
     /// remains allocation-free and lock-free on this path.
-    pub fn process_block(
+    fn process_chunk(
         &mut self,
         left: &mut [f32],
         right: &mut [f32],
@@ -337,9 +379,7 @@ impl GranularDsp {
             right,
             frames,
             self.sample_rate,
-            wet_to_buffer,
             params,
-            &self.feedback,
             &mut self.voice.track_in,
         );
         let plan = self.time.resolve(frames, params);
@@ -403,6 +443,12 @@ impl GranularDsp {
             &plan,
             smoothers,
         );
+        if wet_to_buffer {
+            // Recirculate this chunk's conditioned wet at the very
+            // samples it came from: loop delay == grain delay (DSP-08).
+            self.source
+                .add_feedback(&self.feedback.bus_l, &self.feedback.bus_r, frames);
+        }
         // Diffusion (ba todo #1321) sits *after* the feedback tap and
         // before the width/mix stage, so the loop recirculates the
         // undiffused wet: the smear is heard on every repeat but never

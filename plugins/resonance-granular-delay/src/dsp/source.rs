@@ -5,7 +5,6 @@
 
 use crate::viz::PEAK_BINS;
 
-use super::feedback::FeedbackStage;
 use super::BlockParams;
 
 /// Maximum delay time the ring buffer is sized for at activation.
@@ -43,10 +42,16 @@ pub(super) struct SourceRing {
     pub(super) peak_shift: u32,
     /// Bin the write head last accumulated into (`usize::MAX` = none).
     peak_last_bin: usize,
+    /// Per input sample of the current block: the ring index it was
+    /// written to (`usize::MAX` while fully frozen) and its write gain,
+    /// so the same block's conditioned wet can be added at exactly that
+    /// position after the grains render (DSP-08).
+    write_idx: Vec<usize>,
+    write_gain: Vec<f32>,
 }
 
 impl SourceRing {
-    pub(super) fn new(ring_len: usize) -> Self {
+    pub(super) fn new(ring_len: usize, max_block: usize) -> Self {
         Self {
             buf_l: vec![0.0; ring_len],
             buf_r: vec![0.0; ring_len],
@@ -56,6 +61,8 @@ impl SourceRing {
             peak_bins: [0.0; PEAK_BINS],
             peak_shift: (ring_len / PEAK_BINS).max(1).trailing_zeros(),
             peak_last_bin: usize::MAX,
+            write_idx: vec![usize::MAX; max_block],
+            write_gain: vec![0.0; max_block],
         }
     }
 
@@ -73,11 +80,13 @@ impl SourceRing {
         self.buf_l.len() as f32 / sample_rate
     }
 
-    /// Write into the circular buffer (ba todo #1074): the dry input,
-    /// plus — on the Wet→Buffer route — the conditioned wet bus of the
-    /// previous block, so each recirculation is re-granulated. The
-    /// Output-only route keeps the buffer clean. Returns the number of
-    /// samples actually written (the head advance).
+    /// Write the dry input into the circular buffer (ba todo #1074).
+    /// On the Wet→Buffer route the conditioned wet of the *same* samples
+    /// is added afterwards by [`Self::add_feedback`], once the grains
+    /// have rendered, so each recirculation is re-granulated exactly
+    /// one delay later (DSP-08). The Output-only route keeps the buffer
+    /// clean. Returns the number of samples actually written (the head
+    /// advance).
     ///
     /// Freeze (ba todo #1075) gates this whole write — dry *and*
     /// feedback, so a frozen buffer cannot run away no matter the
@@ -94,16 +103,13 @@ impl SourceRing {
     ///
     /// `track_in` receives the dry mid of exactly the samples written,
     /// for the pitch tracker (ba todo #1082).
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn write_input(
         &mut self,
         left: &[f32],
         right: &[f32],
         frames: usize,
         sample_rate: f32,
-        wet_to_buffer: bool,
         params: &BlockParams,
-        feedback: &FeedbackStage,
         track_in: &mut [f32],
     ) -> usize {
         let base = self.write_pos as usize;
@@ -117,19 +123,17 @@ impl SourceRing {
                 self.freeze_xf = (self.freeze_xf - freeze_step).max(0.0);
             }
             if self.freeze_xf >= 1.0 {
+                self.write_idx[i] = usize::MAX;
                 continue; // fully frozen: hold the buffer, stop the head
             }
             let idx = (base + advanced) & self.mask;
-            let (mut in_l, mut in_r) = (left[i], right[i]);
+            self.write_idx[i] = idx;
+            let (in_l, in_r) = (left[i], right[i]);
             if params.pitch_sync {
                 // The tracker is fed the *dry* mid of exactly the
                 // samples written, so its markers map 1:1 onto
                 // write-stream positions (ba todo #1082).
                 track_in[advanced] = 0.5 * (left[i] + right[i]);
-            }
-            if wet_to_buffer && i < feedback.bus_len {
-                in_l += feedback.bus_l[i];
-                in_r += feedback.bus_r[i];
             }
             if self.freeze_xf > 0.0 {
                 // Engage/resume ramp: equal-power blend of held content
@@ -138,9 +142,11 @@ impl SourceRing {
                 let (keep_g, write_g) = phase.sin_cos();
                 self.buf_l[idx] = self.buf_l[idx] * keep_g + in_l * write_g;
                 self.buf_r[idx] = self.buf_r[idx] * keep_g + in_r * write_g;
+                self.write_gain[i] = write_g;
             } else {
                 self.buf_l[idx] = in_l;
                 self.buf_r[idx] = in_r;
+                self.write_gain[i] = 1.0;
             }
             // Coarse peak mip of the written content (ba todo #1135):
             // shift + mask binning, bin reset on head entry. While
@@ -157,5 +163,30 @@ impl SourceRing {
             advanced += 1;
         }
         advanced
+    }
+
+    /// Add the conditioned wet bus of this block into the ring at the
+    /// positions [`Self::write_input`] just wrote, with the same freeze
+    /// write gain (the blend is linear, so this equals writing
+    /// `dry + wet` in one pass). Running after the grains render makes
+    /// the loop delay exactly the grain delay, independent of the host
+    /// block size (DSP-08).
+    pub(super) fn add_feedback(&mut self, bus_l: &[f32], bus_r: &[f32], frames: usize) {
+        for i in 0..frames {
+            let idx = self.write_idx[i];
+            if idx == usize::MAX {
+                continue;
+            }
+            let g = self.write_gain[i];
+            self.buf_l[idx] += bus_l[i] * g;
+            self.buf_r[idx] += bus_r[i] * g;
+            // Keep the peak mip in step with what the ring now holds
+            // (the bin was entered — and reset — by `write_input`).
+            let bin = (idx >> self.peak_shift) & (PEAK_BINS - 1);
+            let mag = self.buf_l[idx].abs().max(self.buf_r[idx].abs());
+            if mag > self.peak_bins[bin] {
+                self.peak_bins[bin] = mag;
+            }
+        }
     }
 }

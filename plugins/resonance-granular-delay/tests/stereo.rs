@@ -273,9 +273,8 @@ fn ping_pong_alternates_repeat_energy_between_channels() {
 
     run_blocks(&mut plugin, &mut left, &mut right, block);
 
-    // Loop period per pass: delay + one block of feedback-bus latency
-    // (see tests/feedback.rs).
-    let period = (0.250 * SR) as usize + block;
+    // Loop period per pass: exactly the delay (see tests/feedback.rs).
+    let period = (0.250 * SR) as usize;
     let window = |x: &[f32], k: usize| rms(&x[k * period - 2_000..k * period + 8_000]);
 
     let (l1, r1) = (window(&left, 1), window(&right, 1));

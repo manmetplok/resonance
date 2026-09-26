@@ -111,9 +111,8 @@ fn hf_ratio(x: &[f32]) -> f32 {
 }
 
 /// Amplitude ratio between consecutive impulse repeats. The loop delay
-/// per pass is `delay + block` (the Wet→Buffer bus is applied at the
-/// next block's write point), so repeat `k` centres near
-/// `k * (delay_samples + block)`.
+/// per pass is exactly the delay (DSP-08), so repeat `k` centres near
+/// `k * delay_samples`.
 fn repeat_amplitude_ratio(feedback: f32, block: usize) -> f32 {
     let mut plugin = feedback_plugin(250.0, feedback);
     plugin.initialize(SR, block as u32);
@@ -125,7 +124,7 @@ fn repeat_amplitude_ratio(feedback: f32, block: usize) -> f32 {
     right[0] = 1.0;
     run_blocks(&mut plugin, &mut left, &mut right, block);
 
-    let period = (0.250 * SR) as usize + block;
+    let period = (0.250 * SR) as usize;
     let window = |k: usize| -> &[f32] {
         let c = k * period;
         &left[c - 2_000..c + 8_000]
@@ -155,7 +154,7 @@ fn impulse_at_half_feedback_yields_decaying_repeat_train() {
         assert!(x.is_finite(), "non-finite sample in repeat train: {x}");
     }
 
-    let period = (0.250 * SR) as usize + block;
+    let period = (0.250 * SR) as usize;
     let energy: Vec<f32> = (1..=4)
         .map(|k| rms(&left[k * period - 2_000..k * period + 8_000]))
         .collect();
@@ -437,4 +436,66 @@ fn audio_path_with_feedback_active_does_not_allocate() {
         "feedback path allocated {} times on the audio path",
         after - before
     );
+}
+
+/// Impulse through Wet→Buffer (or Ping-pong) at 250 ms / 90 % feedback,
+/// rendered in `block`-sized host blocks; left channel.
+fn impulse_train(route: i32, block: usize) -> Vec<f32> {
+    let mut plugin = feedback_plugin(250.0, 0.9);
+    plugin.params.fb_route.set_value(route);
+    plugin.initialize(SR, block as u32);
+    let frames = (1.3 * SR) as usize;
+    let mut left = vec![0.0f32; frames];
+    let mut right = vec![0.0f32; frames];
+    left[0] = 1.0;
+    right[0] = 1.0;
+    run_blocks(&mut plugin, &mut left, &mut right, block);
+    left
+}
+
+/// Index of the largest |sample| in `x[range]`.
+fn peak_at(x: &[f32], range: std::ops::Range<usize>) -> usize {
+    let mut best = (range.start, 0.0f32);
+    for i in range {
+        if x[i].abs() > best.1 {
+            best = (i, x[i].abs());
+        }
+    }
+    best.0
+}
+
+/// DSP-08: the Wet→Buffer / Ping-pong loop wrote the wet into the
+/// buffer one host block late, so every repeat added a block (the 10th
+/// repeat of a 1/8 at 120 BPM sat 27 ms late live and 213 ms late in a
+/// 1024-frame bounce). Repeats must land on `k · delay` exactly, and
+/// the render must not depend on the host block size.
+#[test]
+fn feedback_repeats_are_sample_accurate_and_block_size_independent() {
+    let d = (0.250 * SR) as usize;
+    let tol = (0.001 * SR) as usize;
+    for route in [0, 2] {
+        let small = impulse_train(route, 128);
+        let large = impulse_train(route, 1024);
+        for (name, out) in [("128", &small), ("1024", &large)] {
+            for k in 1..=4usize {
+                let at = peak_at(out, k * d - 2_000..k * d + 12_000);
+                assert!(
+                    at.abs_diff(k * d) <= tol,
+                    "route {route}, block {name}: repeat {k} peaks at {:.2} ms, want {:.2} ms",
+                    at as f32 / SR * 1000.0,
+                    (k * d) as f32 / SR * 1000.0
+                );
+                let level = out[at].abs();
+                assert!(level > 1e-3, "route {route}, block {name}: repeat {k} is silent");
+            }
+        }
+        let max_diff = small
+            .iter()
+            .zip(&large)
+            .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(
+            max_diff < 1e-4,
+            "route {route}: live (128) and bounce (1024) renders differ by {max_diff}"
+        );
+    }
 }
