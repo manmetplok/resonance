@@ -20,7 +20,9 @@ use resonance_app::update::project_io::reconcile::{domain_order, Origin, Stage};
 use resonance_app::update::project_io::replay_loaded_project;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, FadeCurve, ParamInfo, SendSource, TrackType,
+};
 use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
 use resonance_music_theory::MotifSource;
 
@@ -196,9 +198,9 @@ fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
 /// The table itself, pinned: a domain added, dropped or moved is a
 /// decision, recorded in `docs/design/A-13-reconcile.md`. `Globals` feeds
 /// `Timeline` (the tempo map is rebuilt from the transport scalars) and
-/// the compose load precedes `Clips` (it resets the derived map). Within
-/// `Tail`,
-/// external instruments come before the lanes (a `DeviceParam` lane needs
+/// the compose load precedes `Clips` (it resets the derived map). `Routing`
+/// (sends, then key routes) follows every entity it connects. Within
+/// `Tail`, external instruments come before the lanes (a `DeviceParam` lane needs
 /// the device bindings) and freeze is last (a disk load's baseline
 /// fingerprints the lanes); derived clips follow the clips.
 #[test]
@@ -214,6 +216,8 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "chord_track"),
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
+            (Stage::Routing, "sends"),
+            (Stage::Routing, "sidechain_routes"),
             (Stage::Clips, "audio_clips"),
             (Stage::Clips, "midi_clips"),
             (Stage::Clips, "clip_lyrics"),
@@ -366,4 +370,138 @@ fn a_diff_undo_rebuilds_the_vocal_audio_clip_map_from_the_target() {
         AudioCommand::MoveClip { clip_id: CLIP, new_start_sample: 0, .. }
     )));
     assert_eq!(l.app.test_vocal_audio_clips(VOCAL), vec![(DEF, CLIP)]);
+}
+
+// ---------------------------------------------------------------------------
+// Routing (A-13e): sends and key routes after every entity they connect
+// ---------------------------------------------------------------------------
+
+const KICK: u64 = 1;
+const BUS: u64 = 10;
+const SEND: u64 = 3;
+const MASTER_COMP: u64 = 300;
+
+/// A kick track sending into a bus, a compressor on the master keyed from
+/// the kick, and a MIDI clip on the kick.
+fn app_with_routing() -> Resonance {
+    let (mut app, _task) = Resonance::new_for_test();
+    app.test_set_active_project(true);
+    app.test_set_project_path(PathBuf::from("/tmp/resonance-test-a13e.rproj"));
+    app.test_push_track(TrackState::new_instrument(KICK, 0));
+    app.test_add_bus(BUS, "Bus");
+    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+        instance_id: MASTER_COMP,
+        plugin_name: "Compressor".to_string(),
+        clap_plugin_id: "com.resonance.compressor".to_string(),
+        clap_file_path: "/plugins/compressor.clap".to_string(),
+        params: Vec::<ParamInfo>::new(),
+        has_gui: false,
+        has_sidechain_input: true,
+    });
+    app.test_apply_engine_event(AudioEvent::AuxSendChanged {
+        send_id: SEND,
+        source: SendSource::Track(KICK),
+        dest: BUS,
+        level_db: -6.0,
+        pre_fader: false,
+        enabled: true,
+    });
+    app.test_apply_engine_event(AudioEvent::SidechainRouteChanged {
+        plugin: MASTER_COMP,
+        source: Some(SendSource::Track(KICK)),
+        enabled: true,
+    });
+    app.test_push_midi_clip(MidiClipState {
+        id: 20,
+        track_id: KICK,
+        start_sample: 0,
+        duration_ticks: 3840,
+        name: "clip".to_string(),
+        notes: Vec::new(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
+    app
+}
+
+/// Full path: the send and the key route go out after the master chain
+/// (the route names a master plugin's instance id) and before the clips.
+/// `Stage::Routing` sits where `replay_sends` / `replay_sidechain_routes`
+/// ran, at the end of the entity replay.
+#[test]
+fn the_full_path_sends_routing_after_the_master_chain_and_before_the_clips() {
+    let file = app_with_routing().test_build_project_file();
+    let (mut fresh, _task) = Resonance::new_for_test();
+    let rx = fresh.test_capture_engine();
+    replay_loaded_project(
+        &mut fresh,
+        Box::new(LoadedProject {
+            file,
+            project_dir: PathBuf::from("/tmp/resonance-test-a13e"),
+            midi_notes: Default::default(),
+            plugin_states: Default::default(),
+        }),
+    );
+    let cmds = drain(&rx);
+    let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the replay sends it")
+    };
+    let master = pos(&|c| matches!(c, AudioCommand::AddPluginToMaster { id: MASTER_COMP, .. }));
+    let send = pos(&|c| matches!(c, AudioCommand::AddAuxSend { id: SEND, dest: BUS, .. }));
+    let route = pos(&|c| matches!(c, AudioCommand::SetSidechainRoute { plugin: MASTER_COMP, .. }));
+    let clip = pos(&|c| matches!(c, AudioCommand::LoadMidiClipDirect { .. }));
+    assert!(
+        master < send && send < route && route < clip,
+        "{master} < {send} < {route} < {clip}"
+    );
+    assert_eq!(fresh.test_aux_sends().len(), 1);
+    assert_eq!(fresh.test_sidechain_routes().len(), 1);
+}
+
+/// Diff path: the routing edges now go out after `apply_master` (A-13e;
+/// they used to precede it), as on the full path, and before the clips.
+/// The engine's send and key-route tables are independent of the master
+/// and plugin bypass flags (design doc §10). Only the changed edges are
+/// re-sent, and a send the engine already holds as a `SetAuxSend`.
+#[test]
+fn a_diff_undo_sends_routing_after_the_master_and_before_the_clips() {
+    let mut app = app_with_routing();
+    let rx = app.test_capture_engine();
+    let mut target = app.test_snapshot_for_undo();
+    target.project.file.master_fx_bypassed = true;
+    target.project.file.master_plugins[0].bypassed = true;
+    target.project.file.sends[0].level_db = -12.0;
+    target.project.file.sidechain_routes[0].enabled = false;
+    target.project.file.midi_clips[0].start_sample = 96_000;
+    let _ = drain(&rx);
+    app.test_begin_restore_from_snapshot(target);
+    let cmds = drain(&rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an unchanged shape takes the diff path"
+    );
+    let pos = |pred: &dyn Fn(&AudioCommand) -> bool| {
+        cmds.iter().position(pred).expect("the diff replay sends it")
+    };
+    let master = pos(&|c| matches!(c, AudioCommand::SetMasterFxBypass { bypassed: true }));
+    let bypass = pos(&|c| {
+        matches!(c, AudioCommand::SetPluginBypass { instance_id: MASTER_COMP, bypassed: true })
+    });
+    let send = pos(&|c| {
+        matches!(c, AudioCommand::SetAuxSend { id: SEND, level_db, .. } if *level_db == -12.0)
+    });
+    let route = pos(&|c| {
+        matches!(c, AudioCommand::SetSidechainRoute { plugin: MASTER_COMP, enabled: false, .. })
+    });
+    let clip = pos(&|c| matches!(c, AudioCommand::MoveMidiClip { clip_id: 20, .. }));
+    assert!(
+        master < bypass && bypass < send && send < route && route < clip,
+        "{master} < {bypass} < {send} < {route} < {clip}"
+    );
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::AddAuxSend { .. })),
+        "a send the engine already holds is edited, not re-added: {cmds:?}"
+    );
+    assert_eq!(app.test_aux_sends()[0].level_db, -12.0);
+    assert!(!app.test_sidechain_routes()[0].enabled);
 }

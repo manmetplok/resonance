@@ -30,7 +30,7 @@ pub(crate) fn restore_track_groups(r: &mut Resonance, project: &ProjectFile) {
 /// Seed the cycle-record take lanes (epic #15, design doc #165) from a
 /// saved project file (or an undo snapshot).
 ///
-/// **Additive on purpose.** Like `replay_sends` this only pushes what the
+/// **Additive on purpose.** This only pushes what the
 /// file carries; emptying the previous project's mirror is
 /// the `TakeGroups` reconcile domain's job, just before it (via
 /// [`TakeGroupState::clear`](crate::state::TakeGroupState::clear)). Keeping

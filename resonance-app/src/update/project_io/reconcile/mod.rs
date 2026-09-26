@@ -17,6 +17,7 @@ mod app_side;
 mod clips;
 mod globals;
 mod restored;
+mod routing;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -129,10 +130,17 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
+    /// The routing edges between entities: aux sends, then sidechain key
+    /// routes. Both paths: right after every track, bus and the master
+    /// chain are restored (the engine rejects a send naming an unregistered
+    /// endpoint; a key route names a plugin instance id). Full path: after
+    /// the track outputs, before the clips. Diff path: after the master,
+    /// before the plugin state blobs and params.
+    Routing,
     /// The audio and MIDI clips, then state derived from them: the lyric
-    /// side-table, the derived-clip map and the vocal audio-clip map. Full path: right after the
-    /// tracks, busses, master and routing are replayed. Diff path: right
-    /// after the plugin params are applied.
+    /// side-table, the derived-clip map and the vocal audio-clip map. Full
+    /// path: right after `Routing`. Diff path: right after the plugin
+    /// params are applied.
     Clips,
     /// App-side content restored whole, and the references. Full path:
     /// after the plugin chains are finalised (the pool counts the clips'
@@ -182,6 +190,10 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Markers>(Stage::Timeline),
     // Reads the meter (tempo events) and the sections.
     domain::<globals::SectionChordTrim>(Stage::Timeline),
+    // After every entity they connect. Sends before key routes, as both
+    // paths always had it (the two are independent tables in the engine).
+    domain::<routing::Sends>(Stage::Routing),
+    domain::<routing::SidechainRoutes>(Stage::Routing),
     // The clips themselves, after every track they sit on (and, diff
     // path, the tempo map — no clip command reads it). Audio before MIDI,
     // as both paths always had it.
