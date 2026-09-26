@@ -64,6 +64,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-1 (ARCH-01) | A1-2 (3) external_instruments + devices from ProjectFile; slow-path double restore removed | opus | merged | 37ae683a |
 | refactor-intent A-2 (ARCH-01) | A1-2 (4) vocal_clip_lyrics from ProjectFile; canonical file/live lyric forms | opus | merged | cb850b0c |
 | refactor-intent A-3 (ARCH-01) | A1-2 (5) automation_lanes from ProjectFile; slow-path double restore removed | opus | merged | 5479f8cf |
+| refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
 | refactor-intent E (ARCH-07) | A7-3 `model`/`decode` features in resonance-common; plugins set `default-features = false` (invariant) | sonnet | merged | 38d66942 |
 | refactor-intent A-11 (ARCH-06) | A1-3 remainder: 11 enums moved beside handlers, `message.rs` 1084 → 416 | sonnet | merged | d8bd59b7 |
 | refactor-intent C-1 (ARCH-05) | A5-3 `EngineError { kind, message }`; 39 emit sites classified (NotFound 5, Busy 2, Io 15, Plugin 4, dynamic 1, Internal 12) | sonnet | merged | 8339eecd |
