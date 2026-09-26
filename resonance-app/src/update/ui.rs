@@ -139,6 +139,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ConfirmDiscardAndQuit => {
             if let Some(id) = r.confirm_quit.take() {
+                crate::update::project_io::recovery::close_session(r);
                 r.engine.shutdown(std::time::Duration::from_millis(150));
                 return iced::window::close(id);
             }
@@ -164,6 +165,17 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             if !set.remove(&track_id) {
                 set.insert(track_id);
             }
+        }
+        UiMessage::ToggleAutosave => {
+            let enabled = &mut r.settings.autosave.enabled;
+            *enabled = !*enabled;
+            crate::settings::persist(&r.settings);
+        }
+        UiMessage::SetAutosaveInterval(secs) => {
+            // The trigger reads the setting on every tick, so the new
+            // spacing applies from the next one.
+            r.settings.autosave.interval_secs = secs.max(1);
+            crate::settings::persist(&r.settings);
         }
         UiMessage::ToggleFollowPlayhead => {
             let follow = &mut r.settings.arrange.follow_playhead;

@@ -23,6 +23,7 @@ pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
+pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
 pub mod performance;
@@ -100,7 +101,16 @@ impl crate::Resonance {
             .style(theme::base_bg)
             .into();
 
-        if !self.io.has_active_project {
+        if let Some(prompt) = &self.io.recovery_prompt {
+            // The autosave-recovery prompt (FU-M12a) answers an open, so
+            // it sits over the startup screen when nothing is open yet.
+            let prompt = recovery_prompt::view_recovery_prompt_overlay(prompt);
+            if self.io.has_active_project {
+                stack![base, prompt].into()
+            } else {
+                stack![base, startup::view_startup_overlay(self), prompt].into()
+            }
+        } else if !self.io.has_active_project {
             stack![base, startup::view_startup_overlay(self)].into()
         } else if self.bounce_in_progress.is_some() {
             // The bounce progress modal sits above any other overlay

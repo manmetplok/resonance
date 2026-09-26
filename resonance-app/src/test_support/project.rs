@@ -40,6 +40,27 @@ impl Resonance {
         self.io.save_state.as_ref().map(|s| (s.path.clone(), s.autosave))
     }
 
+    /// Test-only: the open autosave-recovery prompt, if any (FU-M12a).
+    #[doc(hidden)]
+    pub fn test_recovery_prompt(&self) -> Option<&state::RecoveryPrompt> {
+        self.io.recovery_prompt.as_ref()
+    }
+
+    /// Test-only: run the startup scan for a crashed untitled session
+    /// that `Resonance::new` runs — in a test app, over the hermetic
+    /// scratch root.
+    #[doc(hidden)]
+    pub fn test_offer_orphaned_session(&mut self) {
+        crate::update::project_io::recovery::offer_orphaned_session(self);
+    }
+
+    /// Test-only: open the recovery prompt for `offer` directly (for the
+    /// modal's golden images).
+    #[doc(hidden)]
+    pub fn test_set_recovery_prompt(&mut self, prompt: state::RecoveryPrompt) {
+        self.io.recovery_prompt = Some(prompt);
+    }
+
     /// Test-only: replace the in-memory autosave settings (nothing is
     /// persisted), e.g. to drive the autosave trigger with a 0 s interval.
     #[doc(hidden)]

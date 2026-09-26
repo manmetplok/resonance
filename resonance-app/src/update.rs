@@ -213,6 +213,7 @@ impl crate::Resonance {
                     self.confirm_quit = Some(id);
                     Task::none()
                 } else {
+                    project_io::recovery::close_session(self);
                     self.engine.shutdown(std::time::Duration::from_millis(150));
                     iced::window::close(id)
                 }

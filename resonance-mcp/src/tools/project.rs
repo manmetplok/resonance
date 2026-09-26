@@ -33,7 +33,9 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Open a project from an absolute path. Refused with a summary when the \
-                       current project has unsaved changes — pass confirm: true to discard them.",
+                       current project has unsaved changes — pass confirm: true to discard them. \
+                       Opens the last saved version; autosave_available in the result means a \
+                       crash left newer work behind — reopen with recover_autosave: true to load it.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

@@ -6,6 +6,7 @@
 mod autosave;
 mod dialogs;
 mod instantiate;
+pub(crate) mod recovery;
 mod replay;
 pub mod replay_diff;
 mod serialize;
@@ -127,6 +128,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // succeeds (`ProjectLoaded(Ok)`): a failed open must leave
             // the still-open project tied to its own folder.
             let path = std::path::PathBuf::from(path);
+            if recovery::prompt_before_open(r, &path) {
+                return Task::none();
+            }
             return start_open(r, path);
         }
         ProjectIoMessage::OpenPathSelected(None) => {}
@@ -147,10 +151,14 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 crate::recent::remove(&mut r.io.recent_projects, &path);
                 return Task::none();
             }
+            if recovery::prompt_before_open(r, &path) {
+                return Task::none();
+            }
             return start_open(r, path);
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
+            recovery::after_save(r, autosave);
             // Resolve a control-initiated save job (doc #265, todo
             // #1149) — manual saves only: an autosave completing must
             // never satisfy a client's project.save. No-op when no
@@ -190,6 +198,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                         r.confirm_quit = Some(id);
                         return Task::none();
                     }
+                    recovery::close_session(r);
                     r.engine.shutdown(std::time::Duration::from_millis(150));
                     return iced::window::close(id);
                 }
@@ -229,10 +238,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             // Adopt the opened path now that the load succeeded — before
             // `ClearAll`, since `all_cleared` restores `project_path`
             // around the replay.
-            if let Some(path) = r.io.pending_open_path.take() {
+            let pending = r.io.pending_open_path.take();
+            if let Some(path) = pending.filter(|_| !recovery::loads_untitled(r)) {
                 let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 r.io.project_path = Some(path);
             }
+            recovery::sync_session_marker(r);
             // A control-initiated load job (todo #1149) is NOT resolved
             // here: the replay only runs once the engine confirms the
             // `ClearAll` below, on a later Tick. `all_cleared` completes
@@ -262,6 +273,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ProjectLoaded(Err(e)) => {
             r.io.pending_open_path = None;
+            r.io.load_recovery = None;
             r.control.jobs.fail_token(
                 &crate::control_jobs::JobToken::ProjectLoad,
                 e.clone(),
@@ -290,6 +302,12 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
         }
         ProjectIoMessage::ChordSheetPathSelected(None, _) => {}
+        ProjectIoMessage::RecoveryChoice(choice) => {
+            return recovery::handle_choice(r, choice);
+        }
+        ProjectIoMessage::OpenResolved { path, recover } => {
+            return recovery::open_resolved(r, path, recover);
+        }
     }
     Task::none()
 }
@@ -300,6 +318,8 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
 fn start_open(r: &mut Resonance, path: std::path::PathBuf) -> Task<Message> {
     r.io.open_token = r.io.open_token.wrapping_add(1);
     r.io.pending_open_path = Some(path.clone());
+    // A plain open supersedes an overtaken recovery open's intent too.
+    r.io.load_recovery = None;
     dialogs::load_project_task(path, r.io.open_token)
 }
 
@@ -323,7 +343,7 @@ pub fn start_save(r: &mut Resonance) -> Task<Message> {
 
 /// Begin an async autosave snapshot. Unlike [`start_save`] this works on
 /// a never-saved project too: with no `project_path` it targets a
-/// per-session scratch dir under `cache_dir()/resonance/autosave/`. The
+/// per-session scratch dir under `<app data>/resonance/autosave/`. The
 /// snapshot routes to `project.autosave.json` and the completion handler
 /// leaves the project dirty (see [`ProjectIoMessage::Autosave`]).
 pub fn start_autosave(r: &mut Resonance) -> Task<Message> {
@@ -357,7 +377,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         (None, true) => match autosave_scratch_dir(r) {
             Some(p) => p,
             None => {
-                tracing::warn!("Autosave skipped: no cache directory available.");
+                tracing::warn!("Autosave skipped: no app-data directory available.");
                 return Task::none();
             }
         },
@@ -438,11 +458,20 @@ fn finish_save_write(r: &mut Resonance) {
 }
 
 /// Scratch directory for autosaving a never-saved project:
-/// `cache_dir()/resonance/autosave/<session-id>/`. The per-session id
+/// `<app data>/resonance/autosave/<session-id>/`. The per-session id
 /// keeps concurrent app instances from stomping on each other's
-/// snapshots. `None` when the platform has no cache directory.
-fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
-    dirs::cache_dir().map(|c| c.join("resonance").join("autosave").join(r.session_id()))
+/// snapshots. App data rather than the cache dir: it is the only copy of
+/// an untitled session's work, which a cache cleaner may delete; and
+/// through [`crate::user_dirs`] a test app writes under its hermetic temp
+/// root instead of the developer's real dir (code review FU-M12b).
+/// `None` when the platform has no data directory.
+pub(crate) fn autosave_scratch_dir(r: &Resonance) -> Option<std::path::PathBuf> {
+    autosave_scratch_root().map(|root| root.join(r.session_id()))
+}
+
+/// Parent of every session's [`autosave_scratch_dir`].
+pub(crate) fn autosave_scratch_root() -> Option<std::path::PathBuf> {
+    crate::user_dirs::data_dir().map(|d| d.join("resonance").join("autosave"))
 }
 
 /// Capture the open project as a user template (todo #666), into the
