@@ -47,6 +47,7 @@ master and updates this table. Agents do **not** edit this file.
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8a message enums beside handlers | ARCH-06 A6-1 | opus | merged | a6a0a6e9 |
 | H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | in progress | |
+| L1 app logging sweep | FU-H6a, FU-H6c | opus | in progress | |
 | P1 plugin follow-ups | FU-G2a, FU-G2b, FU-G2d, FU-M6c, FU-M6d, FU-G1, FU-M2c | opus | in progress | |
 | A4 audio follow-ups | FU-M4a, FU-M8b, FU-F1a, FU-F1b, FU-G3a, FU-G3b, FU-F2a, FU-M3b, FU-H6b, FU-M12b(part) | opus | in progress | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
