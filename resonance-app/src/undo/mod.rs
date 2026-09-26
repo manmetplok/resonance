@@ -45,7 +45,17 @@ impl crate::Resonance {
     /// `self.commit_undo_gesture()` after dispatch — i.e. when the message is a
     /// gesture-end that closes a transaction opened by an earlier `Begin`.
     pub(crate) fn record_undo(&mut self, message: &crate::message::Message) -> bool {
-        let action = classify(message);
+        let action = match classify(message) {
+            // A control call that drives a gesture (`global.edit_tempo_event`
+            // brackets its edit in Start…End) runs inside the call's
+            // compound group, which already makes it one entry: the gesture
+            // start records the pre-call state like any other opening edit,
+            // and the gesture end has nothing left to close (code review
+            // CTL-03).
+            UndoAction::Begin if self.undo.in_compound() => UndoAction::Record,
+            UndoAction::Commit if self.undo.in_compound() => UndoAction::Skip,
+            action => action,
+        };
         let commit_after = matches!(action, UndoAction::Commit);
 
         // Mark the project dirty on any state-changing action. This
@@ -198,9 +208,11 @@ impl crate::Resonance {
     /// client sees exactly one revision bump for its one call.
     ///
     /// Defaults off — GUI paths never open a group, so coalesced drags
-    /// and Begin/Commit gestures are untouched. Groups do not nest
-    /// (debug-asserted): a group opens and closes synchronously within
-    /// a single control dispatch on the update loop, so no other
+    /// and Begin/Commit gestures are untouched. `control::execute` runs
+    /// every mutating call in a group (code review CTL-03), so a handler
+    /// that opens its own is already inside one: an inner call just runs
+    /// `f` in the enclosing group. A group opens and closes synchronously
+    /// within a single control dispatch on the update loop, so no other
     /// message can interleave. A nested `update` triggered by a
     /// wrapped dispatch is absorbed into the same group — which is
     /// exactly the atomicity the group exists to provide.
@@ -211,6 +223,9 @@ impl crate::Resonance {
     /// reply says what happened, and one `edit.undo` takes the partial
     /// edit back.
     pub fn with_compound_undo<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        if self.undo.in_compound() {
+            return f(self);
+        }
         self.undo.begin_compound();
         let out = f(self);
         self.undo.end_compound();
