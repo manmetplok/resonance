@@ -42,6 +42,29 @@ pub enum MarkerUiMessage {
     CancelRename,
 }
 
+impl MarkerUiMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // Committing an inline rename edits the persisted marker name, so it
+            // records an undo entry exactly like `MarkerMessage::Rename`.
+            Self::CommitRename => UndoAction::Record,
+            // Every other marker-interaction message (selection, menu open/close,
+            // rename begin/change/cancel) is pure view state — never undoable.
+            Self::Select(..)
+            | Self::OpenMenu { .. }
+            | Self::CloseMenu
+            | Self::BeginRename { .. }
+            | Self::RenameChanged(..)
+            | Self::CancelRename => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: MarkerUiMessage) -> Task<Message> {
     match m {
         MarkerUiMessage::Select(id) => {

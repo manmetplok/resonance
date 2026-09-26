@@ -128,6 +128,41 @@ pub enum ClipMessage {
     },
 }
 
+impl ClipMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            Self::StartClipDrag { .. } | Self::StartClipTrim { .. } => UndoAction::Begin,
+            Self::StartClipFadeDrag { .. } | Self::StartClipGainDrag { .. } => UndoAction::Begin,
+            Self::EndClipDrag | Self::EndClipTrim => UndoAction::Commit,
+            Self::EndClipFadeDrag | Self::EndClipGainDrag => UndoAction::Commit,
+            Self::UpdateClipDrag(_, _) | Self::UpdateClipTrim(_) => UndoAction::Skip,
+            Self::UpdateClipFadeDrag(_) | Self::UpdateClipGainDrag(_) => UndoAction::Skip,
+            Self::DeleteClip(_) => UndoAction::Record,
+            // Inspector flyout edits (todo #319): each is one discrete,
+            // atomic edit — record a single undo entry per change, like the
+            // numeric edits elsewhere. The drag gestures above coalesce via
+            // Begin/Commit; these don't.
+            Self::SetClipFadeInMs { .. }
+            | Self::SetClipFadeOutMs { .. }
+            | Self::SetClipGainDb { .. }
+            | Self::SetClipFadeInCurve { .. }
+            | Self::SetClipFadeOutCurve { .. }
+            | Self::ResetClipFadeGain { .. } => UndoAction::Record,
+            // Control-endpoint placement edits (`clip.move` / `clip.trim`):
+            // atomic and already resolved, so one undo entry each — the
+            // Begin/Commit coalescing above exists only for pointer drags.
+            Self::MoveClipTo { .. } | Self::TrimClipTo { .. } | Self::SplitClipAt { .. } => {
+                UndoAction::Record
+            }
+        }
+    }
+}
+
 /// Route a `ClipMessage` to the appropriate handler.
 pub fn handle(r: &mut Resonance, m: ClipMessage) -> Task<Message> {
     match m {

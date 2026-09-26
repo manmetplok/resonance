@@ -50,6 +50,42 @@ pub enum MarkerMessage {
     PlayFromMarker(u64),
 }
 
+impl MarkerMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            // Mutating edits: record an undo entry capturing the
+            // pre-edit marker set (markers ride the ProjectFile
+            // snapshot/replay path). `LoopToRegion` mutates the loop
+            // range, matching `ToggleLoop`'s classification.
+            Self::AddAtPlayhead
+            | Self::Rename(_, _)
+            | Self::Recolor(_, _)
+            | Self::Delete(_)
+            | Self::LoopToRegion(_)
+            | Self::SeedFromSections => UndoAction::Record,
+            // Drag gestures: a marker move or a region-edge resize fires
+            // one message per pointer step, so coalesce each gesture into a
+            // single undo entry keyed by marker id (mirrors fader / knob
+            // bursts). A one-off convert-to-region / point still records a
+            // lone entry — nothing to coalesce it with.
+            Self::MoveStart(id, _) => UndoAction::RecordCoalesced(CoalesceKey::MarkerMove(*id)),
+            Self::SetRegionEnd(id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::MarkerResize(*id))
+            }
+            // Navigation only — moves the playhead / starts playback,
+            // no project mutation, mirroring `SeekToSample` / `Play`.
+            Self::JumpToNext | Self::JumpToPrev | Self::JumpTo(_) | Self::PlayFromMarker(_) => {
+                UndoAction::Skip
+            }
+        }
+    }
+}
+
 /// Default colours handed out to freshly-added markers, cycled by the
 /// current marker count so a sequence of `AddAtPlayhead` actions yields
 /// visually distinct flags without the user picking a colour each time.

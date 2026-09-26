@@ -99,6 +99,35 @@ pub enum AutomationMessage {
     ToggleTrackExpanded(TrackId),
 }
 
+impl AutomationMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            // A breakpoint drag is one gesture → one undo entry.
+            Self::StartBreakpointDrag { .. } => UndoAction::Begin,
+            Self::EndBreakpointDrag => UndoAction::Commit,
+            Self::DragBreakpoint { .. } => UndoAction::Skip,
+            // Chip-cycle of the shown lane is transient view state (todo
+            // #1095) — never an undo entry.
+            Self::CycleTrackLane(_) => UndoAction::Skip,
+            // Expanding a track's lane sub-rows is transient view state
+            // (doc #256, todo #1096) — never an undo entry.
+            Self::ToggleTrackExpanded(_) => UndoAction::Skip,
+            // Every discrete lane / breakpoint edit is atomic.
+            Self::AddLane(_)
+            | Self::RemoveLane(_)
+            | Self::ToggleRead(_)
+            | Self::AddBreakpoint { .. }
+            | Self::DeleteBreakpoint { .. }
+            | Self::SetCurveKind { .. } => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
     match m {
         AutomationMessage::AddLane(target) => add_lane(r, target),

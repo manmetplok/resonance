@@ -176,6 +176,69 @@ pub enum MidiEditorMessage {
     SetGrooveStrength(f32),
 }
 
+impl MidiEditorMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            Self::AddNote { .. }
+            | Self::RemoveNote { .. }
+            | Self::RemoveSelectedNotes { .. }
+            | Self::MoveNote { .. }
+            | Self::ResizeNote { .. }
+            | Self::SetNoteVelocity { .. }
+            | Self::ToggleSlur { .. }
+            // Bulk control write (doc #269 FR-5): the pre-dispatch
+            // snapshot of the prior notes makes the whole batch one
+            // undo step — the entire point of the method.
+            | Self::SetClipNotes { .. }
+            // Bulk timing edits (doc #163): each rewrites the clip's note
+            // array, so the pre-dispatch snapshot of the prior notes is
+            // the single undo step. Humanize draws its seed in the handler,
+            // so re-doing rolls a new feel — undo still restores the exact
+            // prior notes via the snapshot, which is what matters.
+            | Self::Quantize { .. }
+            | Self::Humanize { .. }
+            | Self::ApplyGroove { .. } => UndoAction::Record,
+            // Groove *extraction* reads the clip and produces a template;
+            // it never mutates the notes, so there's nothing to undo here.
+            // Library persistence/undo is a separate slice (#395).
+            Self::ExtractGroove { .. } => UndoAction::Skip,
+            Self::OpenMidiEditor(_)
+            | Self::OpenSelectedMidiClip
+            | Self::CloseMidiEditor
+            | Self::SelectNote { .. }
+            | Self::ToggleNoteSelection { .. }
+            | Self::SelectNotesInRect { .. }
+            | Self::SelectAllNotes
+            | Self::ClearNoteSelection
+            | Self::PreviewNote(_, _)
+            | Self::StopPreview(_, _)
+            | Self::ScrollY(_)
+            // Quantize-panel control edits (todo #392) just mutate view
+            // state — the actual note edit is the `Quantize` message above.
+            | Self::SetQuantizeGrid(_)
+            | Self::SetQuantizeStrength(_)
+            | Self::SetQuantizeSwing(_)
+            | Self::SetQuantizeMode(_)
+            | Self::SetQuantizeEnds(_)
+            | Self::SetQuantizeIterative(_)
+            // Humanize-panel control edits (todo #393) likewise just mutate
+            // view state — the note edit is the `Humanize` message above.
+            | Self::SetHumanizeTiming(_)
+            | Self::SetHumanizeVelocity(_)
+            // Groove-panel control edits (todo #394) just mutate view state —
+            // the note edit is the `ApplyGroove` message; extract is read-only.
+            | Self::SetGrooveName(_)
+            | Self::SetGrooveSelection(_)
+            | Self::SetGrooveStrength(_) => UndoAction::Skip,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: MidiEditorMessage) -> Task<Message> {
     match m {
         MidiEditorMessage::OpenMidiEditor(clip_id) => {

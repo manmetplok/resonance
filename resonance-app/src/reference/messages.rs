@@ -51,3 +51,43 @@ pub enum ReferenceMessage {
     /// Dismiss the current load-failure notice.
     DismissError,
 }
+
+impl ReferenceMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::{CoalesceKey, UndoAction};
+        match self {
+            // Reference-track (A/B). Only the content-changing actions named
+            // in the design (load / remove / set-active / loudness-match /
+            // trim) are reversible; the trim drag coalesces. The monitoring
+            // toggles, markers, scrub, and error dismissal are transient.
+            Self::LoadRequested(_)
+            // A picked file ends in the same load path as a drag-drop, so
+            // a successful pick is just as reversible; a cancelled pick
+            // (`None`) changes nothing.
+            | Self::FilePicked(Some(_))
+            | Self::Remove(_)
+            | Self::SetActive(_)
+            | Self::ToggleLoudnessMatch => UndoAction::Record,
+            Self::TrimChanged(_) => {
+                UndoAction::RecordCoalesced(CoalesceKey::ReferenceTrim)
+            }
+            // Opening the picker and a cancelled pick are pure UI / no-ops;
+            // the monitoring toggles, markers, scrub, and error dismissal
+            // are transient.
+            Self::PickFile
+            | Self::FilePicked(None)
+            | Self::ToggleAbSource
+            | Self::SetAbSource(_)
+            | Self::MomentaryAudition(_)
+            | Self::AddMarker { .. }
+            | Self::RemoveMarker { .. }
+            | Self::Scrub { .. }
+            | Self::ToggleLoopToMix
+            | Self::DismissError => UndoAction::Skip,
+        }
+    }
+}

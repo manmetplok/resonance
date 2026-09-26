@@ -42,6 +42,37 @@ pub enum TransportMessage {
     EndLoopDrag,
 }
 
+impl TransportMessage {
+    /// How this message interacts with the undo history (`undo::classify`
+    /// delegates here). Exhaustive on purpose — no `_` arm — so a new
+    /// variant does not compile until someone decides what undo does with
+    /// it (ARCH-06 A6-4).
+    pub(crate) fn undo_action(&self) -> crate::undo::UndoAction {
+        use crate::undo::UndoAction;
+        match self {
+            Self::StartLoopDrag(_) => UndoAction::Begin,
+            Self::EndLoopDrag => UndoAction::Commit,
+            Self::UpdateLoopDrag(_) => UndoAction::Skip,
+            Self::Play
+            | Self::Record
+            | Self::Pause
+            | Self::Stop
+            | Self::SkipBack
+            | Self::SkipForward
+            | Self::SeekToSample(_)
+            | Self::SetBpmText(_) => UndoAction::Skip,
+            Self::CommitBpm
+            | Self::ToggleMetronome
+            | Self::CycleTimeSignature
+            // Direct control-endpoint setters (doc #265): undoable like
+            // their GUI counterparts (cycle / loop toggle+drag).
+            | Self::SetTimeSignature { .. }
+            | Self::SetLoopRange { .. }
+            | Self::ToggleLoop => UndoAction::Record,
+        }
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
         TransportMessage::Play => {
