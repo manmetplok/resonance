@@ -1144,6 +1144,8 @@ Conflict: `classify.rs` is in M12 → strictly after. Done-when:
 **Verdict:** NOW = A6-1 (+A6-2). Also: close or re-scope ba #1059 to A6-1's
 shape; its branch is unsalvageable.
 
+**Progress (H8a, branch `arch/H8a-message-split`):** A6-1 done — all 14 enums (+ `DropTarget` → `update/drag.rs`) moved beside their handlers with `pub use` re-exports; `message.rs` 1771 → 1051 lines.
+
 ---
 
 ## ARCH-07 — `resonance-common` is a model crate every plugin links

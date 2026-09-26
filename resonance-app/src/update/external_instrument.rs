@@ -16,9 +16,89 @@
 use iced::Task;
 use resonance_audio::types::{AudioCommand, TrackId};
 
-use crate::message::{ExternalInstrumentMessage, Message};
+use crate::message::Message;
 use crate::state::ExternalInstrumentState;
 use crate::Resonance;
+
+/// User actions on an external-instrument track's inspector / strip
+/// (architecture doc #169, epic #39). Each variant maps to one update
+/// handler that mutates GUI state and dispatches the matching
+/// `AudioCommand`. The MIDI-out / audio-return / monitor / arm controls
+/// reuse the plain-track engine commands (the engine keeps one source of
+/// truth for them); the bank/program, latency and device-check controls
+/// use the external-instrument commands. No view in this todo.
+#[derive(Debug, Clone)]
+pub enum ExternalInstrumentMessage {
+    /// Turn `track` into an external instrument (or re-assert it), storing a
+    /// fresh config when none exists. Dispatches `SetExternalInstrument`.
+    Enable(TrackId),
+    /// Take `track` out of external-instrument mode, dropping its config.
+    /// Dispatches `ClearExternalInstrument`.
+    Disable(TrackId),
+    /// Pick the hardware MIDI output device (`None` disconnects).
+    SetMidiOutDevice(TrackId, Option<String>),
+    /// Pick the MIDI output channel (`None` = channel 1).
+    SetMidiOutChannel(TrackId, Option<u8>),
+    /// Pick a device preset by id (a `DeviceDefinition::id`), or `None` to
+    /// clear the selection. Stores the id on the track's external-instrument
+    /// state and dispatches `SetTrackDeviceParams` with the definition's
+    /// params (empty on clear / unknown id). Epic #40, doc #201 §5.
+    SetDevice(TrackId, Option<String>),
+    /// Pick the audio-return input device (`None` clears).
+    SetReturnDevice(TrackId, Option<String>),
+    /// Pick the 0-indexed starting audio-return input port.
+    SetReturnPort(TrackId, u16),
+    /// Set the selected MIDI bank (combined 14-bit MSB<<7|LSB), or `None` to
+    /// send no Bank Select. Fires the patch send.
+    SetBank(TrackId, Option<u16>),
+    /// Set the selected MIDI program (`0..=127`), or `None` to send no
+    /// Program Change. Fires the patch send.
+    SetProgram(TrackId, Option<u8>),
+    /// Select a **named patch** from the selected device definition (epic
+    /// #40, doc #201 §5): sets the combined 14-bit bank (`MSB<<7|LSB`) and
+    /// the program together, resolved from the chosen `PatchEntry`. `None`
+    /// bank/program clears the corresponding selection (the "(no patch)"
+    /// entry sends both `None`). Fires a single Bank Select + Program Change
+    /// through the same path as `SetBank`/`SetProgram`.
+    SetPatch(TrackId, Option<u16>, Option<u8>),
+    /// Set the manual latency offset (samples) aligning the audio return.
+    SetLatencyOffset(TrackId, i64),
+    /// Toggle input monitoring for the return.
+    ToggleMonitor(TrackId),
+    /// Toggle record-arm (capture the audio return to the timeline).
+    ToggleRecordArm(TrackId),
+    /// Pick what the track plays back: `Live` re-drives the hardware from
+    /// timeline MIDI, `Recorded` plays recorded takes over the spans they
+    /// cover (doc #257). Engine-owned like monitor/arm — dispatches
+    /// `SetTrackPlaybackSource`; the engine echoes
+    /// `TrackPlaybackSourceChanged`. Auto-switched to `Recorded` when a
+    /// take finishes recording on an external-instrument track.
+    SetPlaybackSource(TrackId, resonance_common::PlaybackSource),
+    /// Auto-detect ping: re-check this track's MIDI-out + audio-return
+    /// devices against the live hardware and report any that are offline.
+    CheckDevices(TrackId),
+    /// Auto-detect the round-trip latency of this external-instrument track:
+    /// dispatch `DetectExternalInstrumentLatency` so the engine fires a MIDI
+    /// impulse and times the audio return, then reports back via
+    /// `ExternalInstrumentLatencyMeasured` / `…LatencyDetectFailed`. No-op if
+    /// the track isn't external, a detect is already running, or the transport
+    /// is playing (the engine requires a stopped transport). Runtime-only —
+    /// the measured offset arrives as a separate engine event; no undo entry.
+    DetectLatency(TrackId),
+    /// Re-scan the available hardware so the "pick another device" lists are
+    /// fresh. Runtime-only — refreshes device lists, mutates no config.
+    RescanDevices,
+    /// Open the user device-definitions folder in the OS file manager so the
+    /// user can add or edit `.json` definition files. Creates the folder
+    /// first so the file manager opens something rather than erroring.
+    /// Runtime-only — no undo, no config mutation.
+    RevealUserDefinitionsFolder,
+    /// Re-scan the device-definition registry (bundled + user folder) and
+    /// rebuild the device-preset picker options. Call after the user has
+    /// dropped a new `.json` file into the user definitions folder.
+    /// Runtime-only — no undo.
+    RescanDefinitions,
+}
 
 pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> {
     use ExternalInstrumentMessage as M;

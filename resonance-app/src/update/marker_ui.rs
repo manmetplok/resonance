@@ -10,9 +10,37 @@
 
 use iced::Task;
 
-use crate::message::{MarkerUiMessage, Message};
+use crate::message::Message;
 use crate::state::{MarkerMenuState, MarkerRenameState};
 use crate::Resonance;
+
+/// Transient marker interaction messages emitted by the timeline ruler
+/// hit-testing (todo #369). Unlike
+/// [`MarkerMessage`](crate::message::MarkerMessage) these never touch the
+/// persisted marker set: they drive selection highlighting, the right-click
+/// context menu, and the inline rename field. The rename is committed by
+/// re-dispatching
+/// [`MarkerMessage::Rename`](crate::message::MarkerMessage::Rename) (which
+/// *is* undoable) once the user confirms.
+#[derive(Debug, Clone)]
+pub enum MarkerUiMessage {
+    /// Select (highlight) a marker in the ruler, or clear the selection.
+    Select(Option<u64>),
+    /// Open the right-click context menu for a marker. `x` / `y` are the
+    /// window-space anchor (from the cursor) the overlay positions itself at.
+    OpenMenu { id: u64, x: f32, y: f32 },
+    /// Dismiss the context menu without acting.
+    CloseMenu,
+    /// Start an inline rename of a marker, seeded with its current name.
+    /// `x` / `y` are the window-space anchor for the floating text field.
+    BeginRename { id: u64, x: f32, y: f32 },
+    /// The rename text field changed.
+    RenameChanged(String),
+    /// Commit the inline rename (re-dispatches [`MarkerMessage::Rename`]).
+    CommitRename,
+    /// Abandon the inline rename, discarding the edit.
+    CancelRename,
+}
 
 pub fn handle(r: &mut Resonance, m: MarkerUiMessage) -> Task<Message> {
     match m {

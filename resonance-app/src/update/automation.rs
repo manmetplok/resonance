@@ -16,14 +16,88 @@
 //! it coalesces into one entry.
 
 use iced::Task;
-use resonance_audio::types::AudioCommand;
+use resonance_audio::types::{AudioCommand, TrackId};
 use resonance_common::{
     plugin_param_to_lane_value, real_to_lane_value, AutomationLane, AutomationTarget, Breakpoint,
     CurveKind,
 };
 
-use crate::message::{AutomationMessage, Message};
+use crate::message::Message;
 use crate::Resonance;
+
+/// Edits to parameter-automation lanes (architecture doc #162 §3, epic
+/// #14). Every variant maps to one mutation of the app-side
+/// [`crate::state::AutomationState`] plus the matching engine command;
+/// the discrete edits are atomic undo entries while the breakpoint drag
+/// coalesces into one (see the `Begin`/`Commit` classification in
+/// `undo.rs`). The `target` identifies which lane is edited; the
+/// parameter-picker UI that *chooses* the target lives in todo #383 and
+/// the canvas hit-testing that emits the breakpoint edits in todo #382 —
+/// this enum is the shared edit vocabulary both dispatch through.
+#[derive(Debug, Clone)]
+pub enum AutomationMessage {
+    /// Create a lane for `target`, seeded with a single breakpoint at
+    /// frame 0 holding the target's current static value so turning Read
+    /// on doesn't jump the parameter. No-op when a lane already exists.
+    AddLane(AutomationTarget),
+    /// Remove the lane for `target` entirely (Read flag, breakpoints and
+    /// any live tint). No-op when no lane exists.
+    RemoveLane(AutomationTarget),
+    /// Flip the lane's Read flag (`AutomationLane::enabled`) without
+    /// discarding its breakpoints. No-op when no lane exists.
+    ToggleRead(AutomationTarget),
+    /// Insert a breakpoint at `time_frames` with normalized `value` and
+    /// `curve`. Creates the lane first when absent.
+    AddBreakpoint {
+        target: AutomationTarget,
+        time_frames: u64,
+        value: f32,
+        curve: CurveKind,
+    },
+    /// Delete the breakpoint at `index` in the lane's time-sorted point
+    /// list. Removing the last point clears the lane (an enabled empty
+    /// lane would otherwise force the value to its floor).
+    DeleteBreakpoint {
+        target: AutomationTarget,
+        index: usize,
+    },
+    /// Set the curve kind on the breakpoint at `index`.
+    SetCurveKind {
+        target: AutomationTarget,
+        index: usize,
+        curve: CurveKind,
+    },
+    /// Begin a breakpoint drag: opens an undo transaction so the whole
+    /// drag collapses into a single entry. Carries the grabbed `index`
+    /// for the caller's drag-state bookkeeping (todo #382).
+    StartBreakpointDrag {
+        target: AutomationTarget,
+        index: usize,
+    },
+    /// Move the dragged breakpoint to a new `time_frames` + `value`
+    /// (mid-gesture; not itself an undo entry). Re-sorts the lane after
+    /// the move so the time invariant holds.
+    DragBreakpoint {
+        target: AutomationTarget,
+        index: usize,
+        time_frames: u64,
+        value: f32,
+    },
+    /// Commit the breakpoint drag opened by [`Self::StartBreakpointDrag`].
+    EndBreakpointDrag,
+    /// Cycle which of `track`'s lanes the Arrange overlay band shows: the
+    /// lane after the currently shown one in `(target_priority, param-id)`
+    /// order, wrapping (todo #1095). Emitted by a click on the band's
+    /// parameter-label chip. Mutates only the transient
+    /// `AutomationState::lane_selection` view state — no engine command,
+    /// no persistence, no undo entry.
+    CycleTrackLane(TrackId),
+    /// Expand / collapse a track's automation lanes into dedicated slim
+    /// arrange sub-rows (doc #256, todo #1096). Pure transient view state
+    /// (`ClipInteractionState::automation_expanded_tracks`): no engine
+    /// command, no undo entry, no persistence.
+    ToggleTrackExpanded(TrackId),
+}
 
 pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
     match m {

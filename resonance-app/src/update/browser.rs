@@ -27,9 +27,74 @@ use std::path::{Path, PathBuf};
 use iced::Task;
 use resonance_audio::types::AudioCommand;
 
-use crate::message::{BrowserMessage, Message};
-use crate::state::FolderScan;
+use crate::message::Message;
+use crate::state::{BrowserTab, FolderScan};
 use crate::Resonance;
+
+/// Docked media-browser interaction (doc #175, todo #599): filesystem
+/// navigation, filtering, favourite / recent management, tab switching,
+/// and the audition preview transport. Routed through
+/// `update::browser::handle`.
+///
+/// Every variant is **transient** — classified `UndoAction::Skip` (like
+/// the collapse toggles) so none of it lands on the undo stack or in the
+/// project file. The audition variants additionally drive the engine's
+/// preview transport (`AuditionFile` / `StopAudition` /
+/// `SetAuditionOptions`); favourite / recent changes are mirrored into
+/// user settings (`settings.json`), which is user-level state, not project
+/// persistence.
+#[derive(Debug, Clone)]
+pub enum BrowserMessage {
+    // -- Panel chrome -------------------------------------------------
+    /// Show / hide the docked media-browser panel in the Arrange view.
+    /// Dispatched by the "Media" chrome toggle and the panel header's
+    /// collapse caret. Pure transient UI state (never persisted / undone).
+    ToggleVisible,
+
+    // -- Tabs & navigation --------------------------------------------
+    /// Switch between the Files and Pool tabs.
+    SelectTab(BrowserTab),
+    /// Navigate the Files tab into `path` (a folder row, a breadcrumb
+    /// crumb, or a favourite / recent shelf entry). Sets it as the current
+    /// folder, clears the per-folder filter, records it as most-recently
+    /// visited, and kicks off an off-thread scan.
+    OpenFolder(std::path::PathBuf),
+    /// An off-thread folder scan finished. Applied only when `folder`
+    /// still matches the current folder (a scan for a folder the user has
+    /// since left is dropped). Clears the `scanning` flag.
+    ScanCompleted {
+        folder: std::path::PathBuf,
+        scan: FolderScan,
+    },
+    /// Set the current folder's case-insensitive file-name filter.
+    SetFilter(String),
+
+    // -- Favourites / recent ------------------------------------------
+    /// Toggle whether `path` is a pinned favourite folder, persisting the
+    /// updated favourites list to user settings.
+    ToggleFavourite(std::path::PathBuf),
+
+    // -- Audition preview ---------------------------------------------
+    /// Select `path` as the row to audition. Highlights it; when Auto-play
+    /// is on, immediately starts previewing it. `None` clears the
+    /// selection (and stops any preview started from it).
+    Select(Option<std::path::PathBuf>),
+    /// Start previewing `path` from its start through the engine.
+    Play(std::path::PathBuf),
+    /// Stop the current audition preview.
+    Stop,
+    /// Scrub the current preview to `frame` (seek): restarts the engine
+    /// preview of the playing / selected row at that source frame.
+    Scrub(u64),
+    /// Toggle looping of the preview, pushing the new options to the
+    /// engine.
+    ToggleLoop,
+    /// Toggle sync-to-tempo time-stretch of the preview, pushing the new
+    /// options to the engine.
+    ToggleSync,
+    /// Toggle Auto-play-on-select. Pure UI state; not sent to the engine.
+    ToggleAutoPlay,
+}
 
 pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
     match message {
