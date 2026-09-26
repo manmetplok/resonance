@@ -196,7 +196,10 @@ fn open_starts_a_job_that_fails_with_the_load_error() {
     ))));
     let status = job_status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
-    assert_eq!(status.error.as_deref(), Some("corrupt project.json"));
+    assert_eq!(
+        status.error.as_ref().map(|e| e.message.as_str()),
+        Some("corrupt project.json")
+    );
     // A failed open never repoints the current project at the target.
     assert_eq!(app.test_project_path(), None);
 }

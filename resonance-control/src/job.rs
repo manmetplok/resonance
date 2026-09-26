@@ -6,6 +6,8 @@
 //! socket thread, never the app's update loop).
 
 use crate::ids::JobId;
+use crate::rpc::ErrorKind;
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,8 +48,8 @@ pub struct JobStarted {
 /// Result of `job.status` / `job.wait`.
 ///
 /// `result` carries the job's method-specific payload once `state` is
-/// `done` (e.g. [`crate::methods::render::MixdownResult`]); `error` is a
-/// human-readable failure message once `state` is `error`.
+/// `done` (e.g. [`crate::methods::render::MixdownResult`]); `error`
+/// carries the failure once `state` is `error`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct JobStatus {
@@ -60,7 +62,69 @@ pub struct JobStatus {
     #[cfg_attr(feature = "schemars", schemars(schema_with = "any_json_value_schema"))]
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub error: Option<JobError>,
+}
+
+/// A `job.status` failure (ARCH-05 / epic C, C-2). `message` is the
+/// human-readable text this field always carried; `kind` is new — the
+/// same `{kind, message}` shape [`crate::rpc::ErrorData`] uses for a
+/// synchronous RPC failure and `resonance_audio::types::EngineError`
+/// uses for an engine failure — so a control client branches on it
+/// instead of pattern-matching `message`.
+///
+/// `kind` is absent when the underlying engine failure carries no typed
+/// classification yet (a `Result<_, String>` site `thiserror` hasn't
+/// reached), or when the job failed before any engine round-trip (a
+/// plain `JobBoard::fail` with no kind supplied).
+///
+/// Serializes as `{"message": "...", "kind": "not_found"}` (or without
+/// `kind` when absent). Deserializes that shape *or* a bare JSON string
+/// — the pre-C-2 wire shape of this field — so an older peer's
+/// `"error": "some message"` still parses under the current type.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct JobError {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ErrorKind>,
+}
+
+impl JobError {
+    pub fn new(message: impl Into<String>, kind: Option<ErrorKind>) -> Self {
+        JobError {
+            message: message.into(),
+            kind,
+        }
+    }
+}
+
+impl From<String> for JobError {
+    fn from(message: String) -> Self {
+        JobError { message, kind: None }
+    }
+}
+
+impl<'de> Deserialize<'de> for JobError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            /// Pre-C-2 wire shape.
+            Legacy(String),
+            Typed {
+                message: String,
+                #[serde(default)]
+                kind: Option<ErrorKind>,
+            },
+        }
+        Ok(match Wire::deserialize(deserializer)? {
+            Wire::Legacy(message) => JobError { message, kind: None },
+            Wire::Typed { message, kind } => JobError { message, kind },
+        })
+    }
 }
 
 /// Schema for [`JobStatus::result`]. schemars renders a bare

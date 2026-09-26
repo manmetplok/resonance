@@ -75,13 +75,22 @@ pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     tracing::info!("Bounce complete: {path}");
 }
 
-pub(super) fn bounce_error(r: &mut Resonance, e: String) {
+pub(super) fn bounce_error(
+    r: &mut Resonance,
+    kind: resonance_audio::types::ExportErrorKind,
+    e: String,
+) {
     r.io.bouncing = false;
     // `BounceError` carries no path, but only one bounce runs at a time
     // (the render busy-guard forbids a second), so failing every live
     // control export job resolves the one in flight (todo #1157). No-op
-    // when none is control-initiated.
-    r.control.jobs.fail_export_jobs(e.clone());
+    // when none is control-initiated. `kind` (ARCH-05 / epic C, C-2) is
+    // mapped onto the control protocol's `ErrorKind` in `update::control`,
+    // not here — the app crate owns that mirror, not the engine event.
+    r.control.jobs.fail_export_jobs(
+        e.clone(),
+        Some(crate::update::control::export_kind_to_rpc(kind)),
+    );
     // A cancel the user asked for from the progress modal (FU-F1c) is
     // not a failure worth a banner.
     if !std::mem::take(&mut r.io.bounce_cancel_requested) {
@@ -89,11 +98,15 @@ pub(super) fn bounce_error(r: &mut Resonance, e: String) {
     }
 }
 
-pub(super) fn track_bounce_error(r: &mut Resonance, e: String) {
+pub(super) fn track_bounce_error(r: &mut Resonance, e: resonance_audio::types::EngineError) {
     // Drop the in-progress modal — the run is over either way — and
-    // surface the engine's reason as a banner.
+    // surface the engine's reason as a banner. `e.kind` (ARCH-05 / epic
+    // C, C-2) has no control-job consumer yet — "bounce in place" has no
+    // control-API surface — so it is only logged, same as the generic
+    // `transport::error` banner above.
+    tracing::error!(kind = ?e.kind, "Bounce in place failed: {}", e.message);
     r.bounce_in_progress = None;
-    r.error_message = Some(format!("Bounce in place failed: {e}"));
+    r.error_message = Some(format!("Bounce in place failed: {}", e.message));
 }
 
 pub(super) fn track_bounce_cancelled(

@@ -24,7 +24,8 @@
 
 use crate::control_socket::ConnId;
 use resonance_control::ids::JobId;
-use resonance_control::job::{JobStarted, JobState, JobStatus};
+use resonance_control::job::{JobError, JobStarted, JobState, JobStatus};
+use resonance_control::ErrorKind;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex};
@@ -123,7 +124,7 @@ struct JobEntry {
     state: JobState,
     progress: Option<f32>,
     result: Option<Value>,
-    error: Option<String>,
+    error: Option<JobError>,
     token: Option<JobToken>,
     /// Lanes of a [`JobToken::VocalRender`] batch whose audio hasn't
     /// landed yet. Seeded from the token at [`JobBoard::start`] and
@@ -270,13 +271,23 @@ impl JobBoard {
         self.terminal.notify_all();
     }
 
-    /// Fail a job by id with a human-readable message.
+    /// Fail a job by id with a human-readable message and no `kind`
+    /// (most failures today: project I/O, vocal render, pool import —
+    /// nothing upstream of them classifies a failure cause yet).
     pub fn fail(&self, id: u64, error: impl Into<String>) {
+        self.fail_with_kind(id, error, None);
+    }
+
+    /// Fail a job by id with a message and an optional [`ErrorKind`]
+    /// (ARCH-05 / epic C, C-2) — a control client branches on `kind`
+    /// instead of the message text. `None` when the failing engine event
+    /// carries no typed classification.
+    pub fn fail_with_kind(&self, id: u64, error: impl Into<String>, kind: Option<ErrorKind>) {
         let mut table = self.table();
         if let Some(entry) = table.jobs.get_mut(&id) {
             if !entry.state.is_terminal() {
                 entry.state = JobState::Error;
-                entry.error = Some(error.into());
+                entry.error = Some(JobError::new(error, kind));
             }
         }
         drop(table);
@@ -535,12 +546,14 @@ impl JobBoard {
             .min()
     }
 
-    /// Fail every live [`JobToken::Export`] job with `error`. The engine's
-    /// `BounceError` event carries no path to correlate on, but the
-    /// render busy-guard forbids more than one bounce at a time, so at
-    /// most one export job is ever live (todo #1157). Returns whether any
-    /// matched.
-    pub fn fail_export_jobs(&self, error: impl Into<String>) -> bool {
+    /// Fail every live [`JobToken::Export`] job with `error` and,
+    /// optionally, its [`ErrorKind`] (ARCH-05 / epic C, C-2 — the engine's
+    /// `BounceError` now carries an `ExportErrorKind`, mapped onto the
+    /// control-side kind by the caller). The engine's `BounceError` event
+    /// carries no path to correlate on, but the render busy-guard forbids
+    /// more than one bounce at a time, so at most one export job is ever
+    /// live (todo #1157). Returns whether any matched.
+    pub fn fail_export_jobs(&self, error: impl Into<String>, kind: Option<ErrorKind>) -> bool {
         let ids: Vec<u64> = {
             let table = self.table();
             table
@@ -554,7 +567,7 @@ impl JobBoard {
         };
         let error = error.into();
         for id in &ids {
-            self.fail(*id, error.clone());
+            self.fail_with_kind(*id, error.clone(), kind);
         }
         !ids.is_empty()
     }

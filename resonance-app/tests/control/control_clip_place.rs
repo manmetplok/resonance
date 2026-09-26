@@ -424,7 +424,7 @@ fn a_failed_import_fails_the_place_job() {
     let status = job_status(&mut app, job_id);
     assert_eq!(status.state, JobState::Error, "a failed import fails the job");
     let error = status.error.expect("the failure names the file and reason");
-    assert!(error.contains("unsupported codec"), "{error}");
+    assert!(error.message.contains("unsupported codec"), "{}", error.message);
     assert!(app.test_clips().is_empty(), "nothing was placed");
 }
 

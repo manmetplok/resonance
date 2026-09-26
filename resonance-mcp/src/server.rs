@@ -233,16 +233,18 @@ fn job_status_result(status: JobStatus, waited_ms: u64) -> CallToolResult {
     }
 }
 
-/// A job that reached `state: error` — a tool error with the app's message.
+/// A job that reached `state: error` — a tool error with the app's
+/// message and, when the app classified the failure (ARCH-05 / epic C,
+/// C-2), its machine-readable `kind` (e.g. `not_found`, `busy`).
 fn job_failure(status: &JobStatus) -> CallToolResult {
-    CallToolResult::error(vec![ContentBlock::text(format!(
-        "job {} failed: {}",
-        status.job_id,
-        status
-            .error
-            .as_deref()
-            .unwrap_or("no error detail reported"),
-    ))])
+    let text = match &status.error {
+        Some(error) => match error.kind {
+            Some(kind) => format!("job {} failed [{kind}]: {}", status.job_id, error.message),
+            None => format!("job {} failed: {}", status.job_id, error.message),
+        },
+        None => format!("job {} failed: no error detail reported", status.job_id),
+    };
+    CallToolResult::error(vec![ContentBlock::text(text)])
 }
 
 fn status_value(status: JobStatus) -> Value {

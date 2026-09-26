@@ -334,8 +334,13 @@ fn refuses_to_export_while_transport_playing() {
     assert!(!p1.exists(), "no stem is written while the transport rolls");
     assert_eq!(events.len(), 1, "exactly one event: {events:?}");
     match &events[0] {
-        AudioEvent::StemExportError(msg) => {
-            assert!(msg.contains("transport"), "guard names the transport: {msg}")
+        AudioEvent::StemExportError(err) => {
+            assert!(
+                err.message.contains("transport"),
+                "guard names the transport: {}",
+                err.message
+            );
+            assert_eq!(err.kind, EngineErrorKind::Busy);
         }
         other => panic!("expected StemExportError, got {other:?}"),
     }

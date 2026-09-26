@@ -93,7 +93,7 @@ fn save_failure_fails_the_job_with_the_message() {
         .result()
         .expect("status succeeds");
     assert_eq!(status.state, JobState::Error);
-    assert_eq!(status.error.as_deref(), Some("disk full"));
+    assert_eq!(status.error.as_ref().map(|e| e.message.as_str()), Some("disk full"));
     assert!(status.result.is_none());
 }
 
@@ -593,7 +593,10 @@ fn a_failed_lane_fails_only_the_jobs_waiting_on_it() {
     let _ = app.update(vocal_audio_failed(def_a, track_a, 1, "voicebank missing"));
     let status = app.control_jobs().status(job_a).expect("job A known");
     assert_eq!(status.state, JobState::Error);
-    assert_eq!(status.error.as_deref(), Some("voicebank missing"));
+    assert_eq!(
+        status.error.as_ref().map(|e| e.message.as_str()),
+        Some("voicebank missing")
+    );
 }
 
 #[test]
@@ -616,7 +619,10 @@ fn a_render_with_no_voicebank_settles_the_job_and_the_lane() {
     let status = app.control_jobs().status(job).expect("job known");
     assert_eq!(status.state, JobState::Error, "the job resolves, not hangs");
     assert!(
-        status.error.as_deref().is_some_and(|e| e.contains("voicebank")),
+        status
+            .error
+            .as_ref()
+            .is_some_and(|e| e.message.contains("voicebank")),
         "the reason names the missing voicebank: {:?}",
         status.error
     );

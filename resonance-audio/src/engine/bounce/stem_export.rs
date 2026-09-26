@@ -68,25 +68,31 @@ pub fn export_stems(
 ) {
     // -- Pre-flight: a failed check writes no files. --
     if targets.is_empty() {
-        let _ = event_tx.send(AudioEvent::StemExportError("No stems selected to export".into()));
+        let _ = event_tx.send(AudioEvent::StemExportError(EngineError::unsupported(
+            "No stems selected to export",
+        )));
         return;
     }
     // Same guard as the other offline renderers: rendering while the
     // transport rolls would interleave shared plugin process()/reset
     // calls with live playback and corrupt both outputs.
     if shared.playing.load(Ordering::Relaxed) {
-        let _ = event_tx.send(AudioEvent::StemExportError(
-            "Stop transport before exporting stems".into(),
-        ));
+        let _ = event_tx.send(AudioEvent::StemExportError(EngineError::busy(
+            "Stop transport before exporting stems",
+        )));
         return;
     }
     let Some((start, end)) = range.or_else(|| stem_project_range(clips, midi_clips, tempo_map, engine_rate))
     else {
-        let _ = event_tx.send(AudioEvent::StemExportError("No audio to export".into()));
+        let _ = event_tx.send(AudioEvent::StemExportError(EngineError::unsupported(
+            "No audio to export",
+        )));
         return;
     };
     if end <= start {
-        let _ = event_tx.send(AudioEvent::StemExportError("Empty render range".into()));
+        let _ = event_tx.send(AudioEvent::StemExportError(EngineError::unsupported(
+            "Empty render range",
+        )));
         return;
     }
 
@@ -214,7 +220,9 @@ pub(crate) fn export_stems_spawn(
                     );
                 },
                 |message| {
-                    let _ = panic_tx.send(AudioEvent::StemExportError(message));
+                    let _ = panic_tx.send(AudioEvent::StemExportError(EngineError::internal(
+                        message,
+                    )));
                 },
             );
         })

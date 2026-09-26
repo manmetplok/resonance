@@ -72,10 +72,14 @@ fn bounce_in_place_refuses_while_transport_playing() {
 
     let ev = run_bounce(&state);
     match ev {
-        AudioEvent::TrackBounceError(msg) => assert!(
-            msg.contains("Stop transport"),
-            "guard must name the transport as the reason, got: {msg}"
-        ),
+        AudioEvent::TrackBounceError(err) => {
+            assert!(
+                err.message.contains("Stop transport"),
+                "guard must name the transport as the reason, got: {}",
+                err.message
+            );
+            assert_eq!(err.kind, EngineErrorKind::Busy);
+        }
         other => panic!("expected TrackBounceError, got {other:?}"),
     }
     // The renderer must not have produced a clip.
@@ -91,10 +95,14 @@ fn bounce_in_place_passes_guard_when_transport_stopped() {
 
     let ev = run_bounce(&state);
     match ev {
-        AudioEvent::TrackBounceError(msg) => assert!(
-            msg.contains("not found"),
-            "stopped transport must fall through to track validation, got: {msg}"
-        ),
+        AudioEvent::TrackBounceError(err) => {
+            assert!(
+                err.message.contains("not found"),
+                "stopped transport must fall through to track validation, got: {}",
+                err.message
+            );
+            assert_eq!(err.kind, EngineErrorKind::NotFound);
+        }
         other => panic!("expected TrackBounceError, got {other:?}"),
     }
 }

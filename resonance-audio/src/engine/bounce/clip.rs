@@ -65,9 +65,9 @@ pub fn to_audio_clip(
     // the transport rolls would interleave process() calls (and the
     // reset below) with live playback, corrupting both outputs.
     if shared.playing.load(Ordering::Relaxed) {
-        let _ = event_tx.send(AudioEvent::TrackBounceError(
-            "Stop transport before bouncing".into(),
-        ));
+        let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::busy(
+            "Stop transport before bouncing",
+        )));
         return;
     }
 
@@ -76,15 +76,15 @@ pub fn to_audio_clip(
     let filter_set: HashSet<TrackId> = {
         let tracks_guard = tracks.read();
         if !tracks_guard.contains_key(&source_track_id) {
-            let _ = event_tx.send(AudioEvent::TrackBounceError(format!(
+            let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(format!(
                 "Source track {source_track_id} not found"
-            )));
+            ))));
             return;
         }
         if !tracks_guard.contains_key(&target_track_id) {
-            let _ = event_tx.send(AudioEvent::TrackBounceError(format!(
+            let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(format!(
                 "Target track {target_track_id} not found"
-            )));
+            ))));
             return;
         }
         let mut set = HashSet::new();
@@ -111,13 +111,15 @@ pub fn to_audio_clip(
     ) {
         Ok(range) => range,
         Err(msg) => {
-            let _ = event_tx.send(AudioEvent::TrackBounceError(msg.into()));
+            let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::unsupported(msg)));
             return;
         }
     };
 
     if render_end <= render_start {
-        let _ = event_tx.send(AudioEvent::TrackBounceError("Empty render range".into()));
+        let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::unsupported(
+            "Empty render range",
+        )));
         return;
     }
 
