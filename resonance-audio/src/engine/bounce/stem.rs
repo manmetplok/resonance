@@ -41,6 +41,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use parking_lot::RwLock;
+use thiserror::Error;
 
 use crate::clap_host::PluginMap;
 use crate::types::*;
@@ -50,6 +51,46 @@ use super::render::{
     build_latency_comp, chunk_span, master_fx_latency, render_chunk, reset_plugins, ChunkCtx,
     ChunkScratch,
 };
+use super::PartialFileError;
+
+/// Failure rendering or writing a stem ([`render_stem`] /
+/// [`write_stem_wav`]) — the two share one error type because
+/// `stem_export.rs`'s `export_stems` chains them into a single
+/// `Result<(), StemError>` per target. Message text matches the
+/// historical `format!()` / literal strings.
+#[derive(Debug, Error)]
+pub enum StemError {
+    #[error("Stop transport before rendering stems")]
+    TransportRunning,
+    #[error("Empty render range")]
+    EmptyRange,
+    /// [`frozen_fan_out_refusal`]'s message: a tap whose parent is
+    /// frozen has no separable signal to render.
+    #[error("{0}")]
+    FrozenFanOut(String),
+    #[error("Failed to create WAV file: {0}")]
+    Create(#[source] hound::Error),
+    #[error("WAV write error: {0}")]
+    Write(#[source] hound::Error),
+    #[error("WAV finalize error: {0}")]
+    Finalize(#[source] hound::Error),
+    #[error(transparent)]
+    Commit(#[from] PartialFileError),
+}
+
+impl From<StemError> for EngineError {
+    fn from(e: StemError) -> Self {
+        let kind = match &e {
+            StemError::TransportRunning => EngineErrorKind::Busy,
+            StemError::EmptyRange | StemError::FrozenFanOut(_) => EngineErrorKind::Unsupported,
+            StemError::Create(_) | StemError::Write(_) | StemError::Finalize(_) => {
+                EngineErrorKind::Io
+            }
+            StemError::Commit(_) => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 // `StemSource` and `StemBitDepth` are pure protocol descriptors and live
 // in `crate::types` (re-exported here via `use crate::types::*`). The
@@ -504,15 +545,15 @@ pub fn render_stem(
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
-) -> Result<Vec<f32>, String> {
+) -> Result<Vec<f32>, StemError> {
     // Same guard as the other offline renderers: rendering while the
     // transport rolls would interleave shared plugin process()/reset
     // calls with live playback and corrupt both outputs.
     if shared.playing.load(Ordering::Relaxed) {
-        return Err("Stop transport before rendering stems".into());
+        return Err(StemError::TransportRunning);
     }
     if render_end <= render_start {
-        return Err("Empty render range".into());
+        return Err(StemError::EmptyRange);
     }
 
     // Refresh vocal-tuning render caches so each stem mixes corrected audio
@@ -530,7 +571,7 @@ pub fn render_stem(
         // A tap whose parent is FROZEN has no separable signal at all
         // (ba todo #1248) — refuse rather than hand back the whole kit.
         if let Some(message) = frozen_fan_out_refusal(&filter, &tracks_guard) {
-            return Err(message);
+            return Err(StemError::FrozenFanOut(message));
         }
         filter
     };
@@ -633,7 +674,7 @@ pub fn write_stem_wav(
     engine_rate: u32,
     target_rate: u32,
     bit_depth: StemBitDepth,
-) -> Result<(), String> {
+) -> Result<(), StemError> {
     // Resample to the requested rate only when it actually differs —
     // a matching rate is a straight passthrough (no quality loss).
     let resampled;
@@ -653,38 +694,30 @@ pub fn write_stem_wav(
     // Temp file + rename on success (code review ENG-13): a failed write
     // leaves any previous file at `path` intact and no partial behind.
     let output = super::PartialFile::new(path);
-    let mut writer = hound::WavWriter::create(output.temp(), spec)
-        .map_err(|e| format!("Failed to create WAV file: {e}"))?;
+    let mut writer = hound::WavWriter::create(output.temp(), spec).map_err(StemError::Create)?;
 
     match bit_depth {
         StemBitDepth::Float32 => {
             for &s in pcm {
-                writer
-                    .write_sample(s)
-                    .map_err(|e| format!("WAV write error: {e}"))?;
+                writer.write_sample(s).map_err(StemError::Write)?;
             }
         }
         StemBitDepth::Int16 => {
             for &s in pcm {
                 let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
-                writer
-                    .write_sample(v)
-                    .map_err(|e| format!("WAV write error: {e}"))?;
+                writer.write_sample(v).map_err(StemError::Write)?;
             }
         }
         StemBitDepth::Int24 => {
             const MAX_24: f32 = 8_388_607.0; // 2^23 - 1
             for &s in pcm {
                 let v = (s.clamp(-1.0, 1.0) * MAX_24).round() as i32;
-                writer
-                    .write_sample(v)
-                    .map_err(|e| format!("WAV write error: {e}"))?;
+                writer.write_sample(v).map_err(StemError::Write)?;
             }
         }
     }
 
-    writer
-        .finalize()
-        .map_err(|e| format!("WAV finalize error: {e}"))?;
-    output.commit().map_err(|e| e.to_string())
+    writer.finalize().map_err(StemError::Finalize)?;
+    output.commit()?;
+    Ok(())
 }
