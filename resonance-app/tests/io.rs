@@ -65,6 +65,8 @@ mod relink_modal;
 mod replay;
 #[path = "io/replay_diff.rs"]
 mod replay_diff;
+#[path = "io/save_keeps_dirty_for_late_edit.rs"]
+mod save_keeps_dirty_for_late_edit;
 #[path = "io/take_lanes_persistence.rs"]
 mod take_lanes_persistence;
 #[path = "io/user_definitions_rescan.rs"]

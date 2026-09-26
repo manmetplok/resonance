@@ -170,13 +170,26 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 // and never satisfy a pending quit-after-save.
                 r.io.last_autosave_at = Some(std::time::SystemTime::now());
             } else {
-                r.dirty = false;
+                // Clean only what the save captured: an edit made while
+                // the files were being written bumped the revision and is
+                // not on disk (code review STATE-09). A completion with no
+                // recorded capture keeps the old unconditional clean.
+                let captured = r.io.save_capture_revision.take();
+                if captured.is_none_or(|rev| rev == r.revision()) {
+                    r.dirty = false;
+                }
                 r.io.has_active_project = true;
                 r.io.last_saved_at = Some(std::time::SystemTime::now());
                 if let Some(ref path) = r.io.project_path {
                     crate::recent::add(&mut r.io.recent_projects, path);
                 }
                 if let Some(id) = r.quit_after_save.take() {
+                    // Still dirty: the save missed a late edit. Ask again
+                    // rather than close over it.
+                    if r.dirty {
+                        r.confirm_quit = Some(id);
+                        return Task::none();
+                    }
                     r.engine.shutdown(std::time::Duration::from_millis(150));
                     return iced::window::close(id);
                 }
@@ -185,6 +198,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ProjectSaved(Err(e), autosave) => {
             r.io.save_state = None;
             r.io.saving = false;
+            if !autosave {
+                r.io.save_capture_revision = None;
+            }
             if !autosave {
                 r.control.jobs.fail_token(
                     &crate::control_jobs::JobToken::ProjectSave,
