@@ -497,7 +497,11 @@ fn plugins_reach_only_common_utilities() {
         rust_files(&p.dir, &mut files);
         for file in files {
             let text: String = code_lines(&file).iter().map(|(_, l)| format!("{l}\n")).collect();
-            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
             for (off, _) in text.match_indices("resonance_common") {
                 let before = text[..off].chars().next_back();
                 if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
@@ -788,7 +792,11 @@ fn no_inline_test_modules_outside_the_documented_exception() {
         let mut files = Vec::new();
         rust_files(&p.dir.join("src"), &mut files);
         for file in files {
-            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
             for (n, code) in code_lines(&file) {
                 if code.trim_start().starts_with("#[cfg(test)]") && !allowed.contains(rel.as_str()) {
                     violations.push(format!("{rel}:{n}: inline test module — write `tests/<feature>.rs` instead"));
@@ -869,6 +877,81 @@ fn control_view_model_has_no_wildcard_arms() {
     );
 }
 
+/// True for a match arm that is a bare wildcard: `_ =>` or `| _ =>`.
+fn is_wildcard_arm(code: &str) -> bool {
+    let t = code.trim_start();
+    t.starts_with("_ =>") || t.starts_with("| _ =>")
+}
+
+/// ARCH-06 A6-4 (refactor-intent A-10): every sub-message enum classifies
+/// itself for undo in an exhaustive `fn undo_action`, and `undo/classify.rs`
+/// only delegates. A catch-all arm — `Message::X(_) => UndoAction::Skip`
+/// in the classifier, or `_ =>` inside an `undo_action` — lets a new
+/// variant land silently non-undoable (or silently recorded, clearing the
+/// redo stack); without one, a new variant does not compile until someone
+/// decides what undo does with it.
+///
+/// Exercised 2026-09-26: before A-10 it failed on 36 lines of
+/// `classify.rs`; after, adding `_ => UndoAction::Skip,` to
+/// `TakeMessage::undo_action` failed on that line; reverted.
+#[test]
+fn undo_classification_has_no_catch_all_arms() {
+    let root = workspace_root();
+    let classify = root.join("resonance-app/src/undo/classify.rs");
+    let mut violations = Vec::new();
+    for (n, code) in code_lines(&classify) {
+        if code.contains("(_) => UndoAction::Skip")
+            || code.contains("(_) => UndoAction::Record")
+            || is_wildcard_arm(&code)
+        {
+            violations.push(format!(
+                "resonance-app/src/undo/classify.rs:{n}: catch-all undo arm — delegate to the enum's `undo_action`"
+            ));
+        }
+    }
+    let mut files = Vec::new();
+    rust_files(&root.join("resonance-app/src"), &mut files);
+    let mut impls = 0;
+    for file in files {
+        let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
+        // Brace depth of the `fn undo_action` body we are inside, if any.
+        let mut body: Option<i32> = None;
+        for (n, code) in code_lines(&file) {
+            if body.is_none() && code.contains("fn undo_action(") {
+                impls += 1;
+                body = Some(0);
+            }
+            let Some(depth) = body.as_mut() else {
+                continue;
+            };
+            if is_wildcard_arm(&code) {
+                violations.push(format!(
+                    "{rel}:{n}: `_ =>` in an `undo_action` — enumerate the variants"
+                ));
+            }
+            let opened = code.matches('{').count() as i32;
+            let closed = code.matches('}').count() as i32;
+            let was_open = *depth > 0 || opened > 0;
+            *depth += opened - closed;
+            if was_open && *depth <= 0 {
+                body = None;
+            }
+        }
+    }
+    report(
+        "ARCH-06 A6-4: undo classification is exhaustive per message enum (no catch-all arms)",
+        &violations,
+    );
+    assert!(
+        impls >= 30,
+        "found only {impls} `fn undo_action` impls in resonance-app/src — did the pattern move? update this test"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Logging (code review ARCH-05: one facade, nothing on the audio thread)
 // ---------------------------------------------------------------------------
@@ -926,7 +1009,11 @@ fn library_crates_log_through_tracing_not_stderr() {
         let mut files = Vec::new();
         rust_files(&p.dir.join("src"), &mut files);
         for file in files {
-            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let rel = file
+            .strip_prefix(&root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
             if is_binary_or_test_support(&rel) || allowed_files.contains(rel.as_str()) {
                 continue;
             }
