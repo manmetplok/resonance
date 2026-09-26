@@ -137,3 +137,55 @@ impl Reconcile for MissingPlugins {
         }
     }
 }
+
+/// Track freeze status, from `ProjectTrack::freeze` (ARCH-01 A-4). Last in
+/// the table: a disk load's content baseline fingerprints the replayed
+/// content, automation lanes included.
+///
+/// **Disk load** drops the previous project's statuses, batch and UPD-05
+/// baselines, then [`rehydrate_frozen_tracks`] re-attaches each frozen
+/// track's cache to the engine (`SetTrackFrozenSource`, ba todo #577)
+/// against `ctx.project_dir`, or loads it `Stale` when the cache is gone.
+///
+/// **Undo/redo, both paths**, reconciles against the live statuses through
+/// [`apply_freeze_restore`]: the cache of a freeze the restore undoes is
+/// detached and deleted, a restored `Frozen` whose cache is gone becomes
+/// `Stale`, and the UPD-05 baselines survive (FU-H2b). The statuses are
+/// live state an undo keeps; they stay in `r.freeze` (nothing in either
+/// restore touches them before this runs), and the caches live beside the
+/// live project path, carried in `ctx.live` because the full replay has
+/// taken `io.project_path` by now.
+///
+/// **FU-A4a (open, not fixed here):** after a `ClearAll`, a track an undo
+/// restores `Frozen` never gets `SetTrackFrozenSource` — it shows Frozen
+/// and plays the live chain; the diff path has the same gap for a redo of a
+/// freeze whose cache exists. The fix belongs in the undo arm below: for
+/// each track `apply_freeze_restore` leaves `Frozen` (all of them after a
+/// `ClearAll`; on the diff path, those that were not frozen before), decode
+/// and attach the cache as `rehydrate_frozen_tracks` does, downgrading an
+/// undecodable one to `Stale`.
+///
+/// [`rehydrate_frozen_tracks`]: Resonance::rehydrate_frozen_tracks
+/// [`apply_freeze_restore`]: Resonance::apply_freeze_restore
+pub(crate) struct Freeze;
+
+impl Reconcile for Freeze {
+    const NAME: &'static str = "freeze";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        if ctx.origin.is_undo() {
+            r.apply_freeze_restore(&new.tracks, ctx.live.project_path);
+            return;
+        }
+        r.freeze.reset();
+        if let Some(project_dir) = ctx.project_dir {
+            let freezes: Vec<_> = new
+                .tracks
+                .iter()
+                .filter(|t| t.freeze.is_frozen)
+                .map(|t| (t.id, t.freeze.clone()))
+                .collect();
+            r.rehydrate_frozen_tracks(project_dir, &freezes);
+        }
+    }
+}

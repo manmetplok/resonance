@@ -174,6 +174,8 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::ExternalInstruments>(Stage::Tail),
     domain::<restored::AutomationLanes>(Stage::Tail),
     domain::<restored::MissingPlugins>(Stage::Tail),
+    // Last: a disk load's baseline fingerprints everything above.
+    domain::<restored::Freeze>(Stage::Tail),
 ];
 
 /// Run every [`DOMAINS`] entry of `stage`, in table order.

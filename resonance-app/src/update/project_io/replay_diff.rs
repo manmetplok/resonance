@@ -123,11 +123,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file);
 
-    // -- Track freeze status (detach/delete caches no longer frozen) ----
-    // From `ProjectTrack::freeze`, as `replay_loaded_project` does on the
-    // slow path (A-4).
-    r.apply_freeze_restore(&target_file.tracks, project_path.as_deref());
-
     // -- Migrated domains (ARCH-01 A-13) -------------------------------
     // Tempo / signature events, chord track, markers. Tempo stays where
     // the diff path always sent it (the full path sends it before the
@@ -147,8 +142,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
     // External instruments, then the automation lanes (a `DeviceParam`
-    // lane lands on known bindings). Neither alters the project shape, so
-    // the structural check ignores them.
+    // lane lands on known bindings), freeze last (detach/delete caches no
+    // longer frozen). None alters the project shape, so the structural
+    // check ignores them.
     reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
 
     // -- Sort track / bus registry so view-layer invariant holds -------

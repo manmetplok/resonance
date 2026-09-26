@@ -66,7 +66,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     };
     r.io.reconcile_trace.clear();
     // Will be set by the caller (OpenPathSelected); an undo/redo's caller
-    // puts this one back, which the freeze restore needs meanwhile.
+    // puts this one back. The freeze restore needs it meanwhile, so the
+    // ctx carries it.
     let live_project_path = r.io.project_path.take();
     let ctx = ReconcileCtx {
         origin,
@@ -85,22 +86,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // loading a project on top of an existing one keeps stale lyrics
     // for clips that no longer exist.
     r.compose.vocal_audio.clear();
-
-    // Freeze status is restored from `ProjectTrack.freeze` at the end of
-    // the replay (`replay_freeze`). A disk load drops the previously open
-    // project's statuses, batch and UPD-05 baselines now. An undo/redo
-    // keeps the live statuses until then, so `apply_freeze_restore` can
-    // see which caches the restore retires, and keeps the baselines: a
-    // track it brings back `Frozen` must still go stale on its next
-    // content edit, and the baseline it was frozen with is not in the
-    // snapshot (FU-H2b). The fingerprint is keyed by track id and slot
-    // position, both stable across the replay. Nothing in the replay
-    // reads the statuses.
-    if ctx.origin.is_undo() {
-        r.freeze.queue = None;
-    } else {
-        r.freeze.reset();
-    }
 
     // Point the engine at the loaded project's directory so that
     // subsequent imports and recordings stream into it.
@@ -136,37 +121,9 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // External instruments, then the automation lanes (a `DeviceParam`
     // lane needs the device bindings the first sends), the missing-plugin
-    // warning.
+    // warning, and freeze last (a disk load's baseline fingerprints the
+    // replayed content, lanes included).
     reconcile_stage(r, Stage::Tail, None, project, &ctx);
-
-    // Last: a disk load's freeze baseline fingerprints the replayed
-    // content, automation lanes included.
-    replay_freeze(r, project, &ctx, ctx.live.project_path);
-}
-
-/// Restore every track's freeze status from `ProjectTrack.freeze` (ARCH-01
-/// A-4). A disk load re-attaches each frozen track's cache to the engine
-/// (ba todo #577); an undo/redo reconciles against the live statuses the
-/// way the diff replay does, deleting the cache of a freeze it undoes —
-/// against the live project path, which the undo caller restores after the
-/// replay (`engine_events::project_io::all_cleared`).
-fn replay_freeze(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    ctx: &ReconcileCtx<'_>,
-    live_project_path: Option<&std::path::Path>,
-) {
-    if ctx.origin.is_undo() {
-        r.apply_freeze_restore(&project.tracks, live_project_path);
-    } else if let Some(project_dir) = ctx.project_dir {
-        let freezes: Vec<_> = project
-            .tracks
-            .iter()
-            .filter(|t| t.freeze.is_frozen)
-            .map(|t| (t.id, t.freeze.clone()))
-            .collect();
-        r.rehydrate_frozen_tracks(project_dir, &freezes);
-    }
 }
 
 // ---------------------------------------------------------------------------
