@@ -53,7 +53,6 @@ pub fn to_audio_clip(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
@@ -103,7 +102,6 @@ pub fn to_audio_clip(
     // loop range wins; otherwise we fall back to the source track's
     // MIDI extent + 2 s tail.
     let (render_start, render_end) = match midi_render_range(
-        midi_clips,
         tempo_map,
         shared,
         source_track_id,
@@ -148,7 +146,6 @@ pub fn to_audio_clip(
         busses,
         master,
         clips,
-        midi_clips,
         plugins,
         tempo_map: &bounce_tm,
         sample_rate,

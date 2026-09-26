@@ -89,7 +89,6 @@ pub fn measure_mix(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
@@ -105,7 +104,6 @@ pub fn measure_mix(
         busses,
         master,
         clips,
-        midi_clips,
         plugins,
         tempo_map,
         sample_rate,
@@ -128,7 +126,6 @@ fn measure_mix_holding(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
@@ -181,7 +178,7 @@ fn measure_mix_holding(
     // extent plus the shared FX tail (code review ENG-07) — so the
     // reported loudness is the exported file's.
     let Some((start, end)) = range.or_else(|| {
-        stem_project_range(clips, midi_clips, tempo_map, sample_rate)
+        stem_project_range(clips, &shared.graph.load().midi_clips, tempo_map, sample_rate)
             .map(|(s, e)| (s, e + super::super::bounce_common::offline_tail_frames(sample_rate)))
     }) else {
         fail("No audio to measure".into());
@@ -203,7 +200,6 @@ fn measure_mix_holding(
             busses,
             master,
             clips,
-            midi_clips,
             plugins,
             tempo_map,
             sample_rate,
@@ -242,7 +238,6 @@ pub(crate) fn measure_mix_spawn(
     busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
@@ -288,7 +283,6 @@ pub(crate) fn measure_mix_spawn(
                         &busses,
                         &master,
                         &clips,
-                        &midi_clips,
                         &plugins,
                         &tempo_map,
                         sample_rate,

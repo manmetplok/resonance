@@ -141,8 +141,9 @@ impl ChunkScratch {
 /// re-acquire each lock per chunk (matching live playback's contention
 /// pattern).
 ///
-/// Lock scope (code review ARCH-02): [`render_chunk`] holds all five map
-/// read guards for one `BOUNCE_CHUNK` — every plugin's `process()` on
+/// Lock scope (code review ARCH-02): [`render_chunk`] holds the map read
+/// guards still behind locks (tracks, busses, clips, plugins) for one
+/// `BOUNCE_CHUNK` — every plugin's `process()` on
 /// every track — and releases them between chunks. That never stalls
 /// the live callback: every caller runs under an
 /// [`OfflineRenderGuard`](super::OfflineRenderGuard), and while that
@@ -151,15 +152,16 @@ impl ChunkScratch {
 /// a clip / note / track edit dispatched mid-render queues behind the
 /// chunk (a few ms) — which is the price of the offline render seeing
 /// edits at chunk granularity rather than snapshotting the project. The
-/// graph-publishing migration (ARCH-02 A2-4…) removes the guards
-/// altogether; until then this is by design, not an oversight.
+/// graph-publishing migration (ARCH-02 A2-4…) removes the guards one map
+/// at a time: the MIDI clips are already a per-chunk
+/// `shared.graph.load()` with no guard, so a note edit never queues
+/// behind a chunk.
 pub(super) struct ChunkCtx<'a> {
     pub shared: &'a Arc<SharedState>,
     pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub busses: &'a Arc<RwLock<IndexMap<BusId, Bus>>>,
     pub master: &'a Arc<RwLock<MasterBus>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
-    pub midi_clips: &'a Arc<RwLock<Vec<MidiClip>>>,
     pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a TempoMap,
     pub sample_rate: u32,
@@ -337,7 +339,9 @@ pub(super) fn render_chunk(
     let tracks_guard = ctx.tracks.read();
     let busses_guard = ctx.busses.read();
     let clips_guard = ctx.clips.read();
-    let midi_guard = ctx.midi_clips.read();
+    // The render graph, loaded once for the chunk (ARCH-02 A2-4): no
+    // guard, so no engine-thread edit ever queues behind the chunk.
+    let graph = ctx.shared.graph.load();
     let plugins_guard = ctx.plugins.read();
 
     let active_busses = busses_guard.len().min(scratch.bus_bufs.len());
@@ -378,7 +382,7 @@ pub(super) fn render_chunk(
             tracks: &tracks_guard,
             busses: &busses_guard,
             clips: &clips_guard,
-            midi_clips: &midi_guard,
+            midi_clips: &graph.midi_clips,
             plugins: &plugins_guard,
             tempo_map: ctx.tempo_map,
             sample_rate: ctx.sample_rate,

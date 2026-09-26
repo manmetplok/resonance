@@ -50,6 +50,8 @@ mod master_plugin_move;
 mod midi_bulk_edits;
 #[path = "engine/midi_clip_handlers.rs"]
 mod midi_clip_handlers;
+#[path = "engine/render_graph_midi.rs"]
+mod render_graph_midi;
 #[path = "engine/midi_map_command_plumbing.rs"]
 mod midi_map_command_plumbing;
 #[path = "engine/offline_render_gate.rs"]

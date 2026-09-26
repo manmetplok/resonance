@@ -54,6 +54,9 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(ctx: &thread::HandlerCtx, f: F
 pub(crate) mod retire;
 pub use retire::Retired;
 
+pub(crate) mod render_graph;
+pub use render_graph::{RenderGraph, RenderGraphSlot};
+
 pub(crate) mod audition;
 pub use audition::{
     compute_sync_ratio, load_audition_source, set_audition_options_in_place,
@@ -279,7 +282,7 @@ pub struct SharedState {
     /// by `mix_audio`'s contended branch, folded into the load report.
     pub render_skip_cycles: AtomicU64,
     /// Lifetime `try_read` misses per state map (code review ARCH-02,
-    /// A2-1): which of the six locks the callback found write-held or
+    /// A2-1): which of the still-locked maps the callback found write-held or
     /// writer-queued, across every branch that takes one. Read by the
     /// load meter for the per-window report; a UI meter can read them
     /// next to `dsp_load_ema_bits`.
@@ -305,6 +308,11 @@ pub struct SharedState {
     /// `ArcSwap` the callback reads is published through
     /// `retire::publish`; the audio thread never touches this queue.
     pub retired: retire::Retired,
+    /// The immutable render graph (code review ARCH-02 A2-4): built and
+    /// published by the engine thread, `load()`ed once per block by the
+    /// callback and once per chunk by the offline renderers. Holds the
+    /// MIDI clips today; the other project maps move in over B-2…B-5.
+    pub graph: render_graph::RenderGraphSlot,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -378,6 +386,22 @@ pub struct SharedState {
 }
 
 impl SharedState {
+    /// [`RenderGraphSlot::edit_midi_clips`], retiring the replaced graph
+    /// onto this state's queue. Engine thread.
+    pub fn edit_midi_clips<R>(&self, f: impl FnOnce(&mut Vec<Arc<MidiClip>>) -> R) -> R {
+        self.graph.edit_midi_clips(&self.retired, f)
+    }
+
+    /// [`RenderGraphSlot::edit_midi_clip`], retiring the replaced graph
+    /// onto this state's queue. Engine thread.
+    pub fn edit_midi_clip<R>(
+        &self,
+        clip_id: ClipId,
+        f: impl FnOnce(&mut MidiClip) -> R,
+    ) -> Option<R> {
+        self.graph.edit_midi_clip(&self.retired, clip_id, f)
+    }
+
     /// Whether an offline renderer (export, stem export, bounce in place,
     /// freeze, offline measurement) currently owns the live plugin
     /// instances — the one gate the audio callback and the transport
@@ -452,6 +476,7 @@ impl Default for SharedState {
             input_stream_errors: Default::default(),
             plugins_dead_after_reset: parking_lot::Mutex::new(Vec::new()),
             retired: retire::Retired::new(),
+            graph: render_graph::RenderGraphSlot::new(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),
@@ -675,14 +700,11 @@ impl AudioEngine {
             Arc::new(parking_lot::RwLock::new(MasterBus::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
-        let midi_clips: Arc<parking_lot::RwLock<Vec<MidiClip>>> =
-            Arc::new(parking_lot::RwLock::new(Vec::new()));
 
         let tracks_audio = Arc::clone(&tracks);
         let busses_audio = Arc::clone(&busses);
         let master_audio = Arc::clone(&master);
         let clips_audio = Arc::clone(&clips);
-        let midi_clips_audio = Arc::clone(&midi_clips);
 
         let tempo_map: Arc<arc_swap::ArcSwap<TempoMap>> =
             Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
@@ -729,7 +751,6 @@ impl AudioEngine {
             let busses_audio = Arc::clone(&busses_audio);
             let master_audio = Arc::clone(&master_audio);
             let clips_audio = Arc::clone(&clips_audio);
-            let midi_clips_audio = Arc::clone(&midi_clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
@@ -837,7 +858,6 @@ impl AudioEngine {
                             busses: &busses_audio,
                             master: &master_audio,
                             clips: &clips_audio,
-                            midi_clips: &midi_clips_audio,
                             plugins: &plugins_audio,
                             tempo_map: &tempo_audio,
                             latency_comp: &latency_comp_audio,
@@ -1019,7 +1039,6 @@ impl AudioEngine {
         let busses_ctrl = Arc::clone(&busses);
         let master_ctrl = Arc::clone(&master);
         let clips_ctrl = Arc::clone(&clips);
-        let midi_clips_ctrl = Arc::clone(&midi_clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
         let latency_comp_ctrl = Arc::clone(&latency_comp);
@@ -1038,7 +1057,6 @@ impl AudioEngine {
                     busses_arc: busses_ctrl,
                     master_arc: master_ctrl,
                     clips_arc: clips_ctrl,
-                    midi_clips_arc: midi_clips_ctrl,
                     tempo_map: tempo_ctrl,
                     plugins_arc: plugins_ctrl,
                     latency_comp: latency_comp_ctrl,

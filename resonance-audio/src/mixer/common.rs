@@ -84,11 +84,6 @@ pub(crate) struct TransportContinuity {
     /// A block skipped since the last render dropped a NoteOff (or a
     /// seam panic) the instruments never saw (FU-M3b).
     lost_events: bool,
-    /// The timeline span `[start, end)` skipped while the MIDI clips map
-    /// itself was contended, so its NoteOffs could not be checked then.
-    /// The next rendered block checks it against the clips it does hold
-    /// and flushes only if a NoteOff fell inside (FU-A4a).
-    unchecked: Option<(u64, u64)>,
 }
 
 impl TransportContinuity {
@@ -109,7 +104,6 @@ impl TransportContinuity {
         self.expected = Some(next);
         self.repositioned = !committed;
         self.lost_events = false;
-        self.unchecked = None;
     }
 
     /// A lock-contended playing block advanced `from` → `to` silently
@@ -118,33 +112,13 @@ impl TransportContinuity {
     /// when `lost` — a NoteOff (or a loop seam's panic) fell inside it.
     /// Otherwise `expected` stays behind and the next block reads as a
     /// jump, as before. Every contended block used to flush, cutting
-    /// sustained notes during heavy UI edits.
-    ///
-    /// `unchecked`: the MIDI clips were the contended map, so whether a
-    /// NoteOff fell in `from..to` is not known yet — the span is kept for
-    /// the next rendered block to check ([`Self::take_unchecked`]).
-    pub(crate) fn skipped(
-        &mut self,
-        from: u64,
-        to: u64,
-        committed: bool,
-        lost: bool,
-        unchecked: bool,
-    ) {
+    /// sustained notes during heavy UI edits. The MIDI clips come from the
+    /// render graph, which is always readable, so `lost` is always known.
+    pub(crate) fn skipped(&mut self, from: u64, to: u64, committed: bool, lost: bool) {
         if committed && self.expected == Some(from) {
             self.expected = Some(to);
             self.lost_events |= lost;
-            if unchecked {
-                let start = self.unchecked.map_or(from, |(start, _)| start);
-                self.unchecked = Some((start, to));
-            }
         }
-    }
-
-    /// The skipped span whose NoteOffs are still to be checked, if any
-    /// (see [`Self::skipped`]); cleared by the call.
-    pub(crate) fn take_unchecked(&mut self) -> Option<(u64, u64)> {
-        self.unchecked.take()
     }
 
     /// Whether the transport was rolling when it stopped — the stopped

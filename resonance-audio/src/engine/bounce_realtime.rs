@@ -116,7 +116,6 @@ pub(crate) fn handle_bounce_track_realtime(
     // Compute render range — punch-in/out loop wins, otherwise the
     // source track's MIDI extent + tail.
     let (render_start, render_end) = match midi_render_range(
-        ctx.midi_clips,
         ctx.tempo_map,
         ctx.shared,
         source_track_id,

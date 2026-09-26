@@ -19,9 +19,9 @@
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
 
 use resonance_audio::quantize::{Division, GridValue, GrooveTemplate, QuantizeMode};
+use resonance_audio::test_support::SharedState;
 use resonance_audio::types::{AudioEvent, MidiClip, MidiNote, TempoMap};
 use resonance_audio::{
     apply_groove_to_clip_in_place, extract_groove_from_clip_in_place, humanize_midi_notes_in_place,
@@ -52,8 +52,11 @@ fn clip_with(id: u64, notes: Vec<MidiNote>) -> MidiClip {
     }
 }
 
-fn clips_of(clip: MidiClip) -> Arc<RwLock<Vec<MidiClip>>> {
-    Arc::new(RwLock::new(vec![clip]))
+/// Engine state holding `clip` in its published render graph.
+fn clips_of(clip: MidiClip) -> Arc<SharedState> {
+    let shared = Arc::new(SharedState::default());
+    shared.edit_midi_clips(|clips| clips.push(Arc::new(clip)));
+    shared
 }
 
 // ---------------------------------------------------------------------
@@ -61,18 +64,18 @@ fn clips_of(clip: MidiClip) -> Arc<RwLock<Vec<MidiClip>>> {
 // ---------------------------------------------------------------------
 
 #[test]
-fn quantize_computes_off_lock_and_lands_the_same_result_under_a_reader() {
-    // Code review ARCH-02 A2-3: the quantizer runs on a copy taken under
-    // a read guard and swaps the result in under a write. With a reader
-    // pinning the lock the worker gets as far as the swap — observable
-    // deterministically: parking_lot fails `try_read` once a writer is
-    // queued — and lands the identical result once the reader lets go.
+fn quantize_publishes_a_new_graph_while_a_reader_keeps_the_old_one() {
+    // Code review ARCH-02 A2-4: the quantizer never waits on a reader.
+    // A reader pinning the published graph (the audio callback's block)
+    // keeps seeing the pre-quantize notes; the edit publishes a new graph
+    // and retires the old one, which the engine loop's sweep frees once
+    // the reader lets go.
     let clips = clips_of(clip_with(
         1,
         vec![note(5, 100, 0.8, 60), note(118, 100, 0.8, 62), note(250, 100, 0.8, 64)],
     ));
     let (tx, rx) = unbounded::<AudioEvent>();
-    let reader = clips.read();
+    let reader = clips.graph.load_full();
     let worker = {
         let clips = Arc::clone(&clips);
         std::thread::spawn(move || {
@@ -92,16 +95,20 @@ fn quantize_computes_off_lock_and_lands_the_same_result_under_a_reader() {
             );
         })
     };
-    // The worker's write is queued behind our read guard: it has read
-    // and computed, and is parked on the swap.
-    while clips.try_read().is_some() {
-        std::thread::yield_now();
-    }
-    assert!(rx.is_empty(), "the echo is sent after the swap, not before");
-    drop(reader);
+    // Completes with the reader still pinning the old graph.
     worker.join().expect("worker");
+    let pinned: Vec<u64> = reader.midi_clips[0].notes.iter().map(|n| n.start_tick).collect();
+    assert_eq!(pinned, vec![5, 118, 250], "the pinned graph is immutable");
+    assert!(clips.retired.holds(&reader), "the replaced graph is retired");
+    // The sweep frees the (unpinned) empty seed graph only.
+    assert_eq!(clips.retired.sweep(), 1);
+    assert!(clips.retired.holds(&reader), "a pinned graph survives the sweep");
+    drop(reader);
+    assert_eq!(clips.retired.sweep(), 1, "freed once the reader let go");
+    assert!(clips.retired.is_empty());
 
-    let starts: Vec<u64> = clips.read()[0].notes.iter().map(|n| n.start_tick).collect();
+    let starts: Vec<u64> =
+        clips.graph.load().midi_clips[0].notes.iter().map(|n| n.start_tick).collect();
     assert_eq!(starts, vec![0, 120, 240]);
     match rx.try_recv() {
         Ok(AudioEvent::MidiNotesEdited { clip_id, notes }) => {
@@ -145,7 +152,7 @@ fn quantize_snaps_selected_and_emits_one_bulk_event() {
 
     // Engine clip table mutated to the snapped positions.
     {
-        let guard = clips.read();
+        let guard = clips.graph.load().midi_clips.clone();
         let n = &guard[0].notes;
         assert_eq!(n[0].start_tick, 0);
         assert_eq!(n[1].start_tick, 120);
@@ -196,7 +203,7 @@ fn quantize_respects_selection_indices() {
         false,
     );
 
-    let guard = clips.read();
+    let guard = clips.graph.load().midi_clips.clone();
     let n = &guard[0].notes;
     assert_eq!(n[0].start_tick, 0, "selected note snapped");
     assert_eq!(n[1].start_tick, 118, "unselected note untouched");
@@ -229,7 +236,7 @@ fn quantize_missing_clip_is_noop_no_event() {
         "missing clip must emit no ghost event"
     );
     assert_eq!(
-        clips.read()[0].notes[0].start_tick,
+        clips.graph.load().midi_clips.clone()[0].notes[0].start_tick,
         5,
         "missing-clip op must not mutate any clip"
     );
@@ -251,8 +258,8 @@ fn humanize_is_deterministic_and_emits_bulk_event() {
     humanize_midi_notes_in_place(&b, &txb, 1, &[0, 1], 20, 0.2, /* seed */ 42);
 
     // Same seed → identical result (reproducible / undoable).
-    let na = a.read();
-    let nb = b.read();
+    let na = a.graph.load().midi_clips.clone();
+    let nb = b.graph.load().midi_clips.clone();
     for (x, y) in na[0].notes.iter().zip(nb[0].notes.iter()) {
         assert_eq!(x.start_tick, y.start_tick);
         assert_eq!(x.velocity, y.velocity);
@@ -276,7 +283,7 @@ fn humanize_missing_clip_is_noop_no_event() {
     humanize_midi_notes_in_place(&clips, &tx, /* clip_id */ 7, &[0], 20, 0.2, 1);
 
     assert!(rx.try_recv().is_err());
-    assert_eq!(clips.read()[0].notes[0].start_tick, 480);
+    assert_eq!(clips.graph.load().midi_clips.clone()[0].notes[0].start_tick, 480);
 }
 
 // ---------------------------------------------------------------------
@@ -305,7 +312,7 @@ fn apply_groove_shifts_offbeats_and_emits_bulk_event() {
     apply_groove_to_clip_in_place(&clips, &tx, &tempo, 1, &[0, 1], &swing_template(), 1.0);
 
     {
-        let guard = clips.read();
+        let guard = clips.graph.load().midi_clips.clone();
         let n = &guard[0].notes;
         assert_eq!(n[0].start_tick, 0, "downbeat unchanged");
         assert_eq!(n[1].start_tick, 150, "off-16th delayed by 30");
@@ -330,7 +337,7 @@ fn apply_groove_missing_clip_is_noop_no_event() {
     apply_groove_to_clip_in_place(&clips, &tx, &tempo, /* clip_id */ 5, &[0], &swing_template(), 1.0);
 
     assert!(rx.try_recv().is_err());
-    assert_eq!(clips.read()[0].notes[0].start_tick, 120);
+    assert_eq!(clips.graph.load().midi_clips.clone()[0].notes[0].start_tick, 120);
 }
 
 #[test]
@@ -352,7 +359,7 @@ fn extract_groove_emits_template_without_mutating_clip() {
 
     // The clip is read-only for extraction.
     {
-        let guard = clips.read();
+        let guard = clips.graph.load().midi_clips.clone();
         assert_eq!(guard[0].notes[0].start_tick, 0);
         assert_eq!(guard[0].notes[1].start_tick, 150);
     }

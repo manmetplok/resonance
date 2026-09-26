@@ -43,7 +43,6 @@ pub struct EngineHandlerHarness {
     busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: Arc<RwLock<Vec<MidiClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
@@ -98,7 +97,6 @@ impl EngineHandlerHarness {
             busses: Arc::new(RwLock::new(IndexMap::new())),
             master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
-            midi_clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -154,7 +152,6 @@ impl EngineHandlerHarness {
             busses_arc: Arc::new(RwLock::new(IndexMap::new())),
             master_arc: Arc::new(RwLock::new(MasterBus::new())),
             clips_arc: Arc::new(RwLock::new(Vec::new())),
-            midi_clips_arc: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             plugins_arc: Arc::new(RwLock::new(IndexMap::new())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -195,7 +192,6 @@ impl EngineHandlerHarness {
             busses: &self.busses,
             master: &self.master,
             clips: &self.clips,
-            midi_clips: &self.midi_clips,
             plugins: &self.plugins,
             tempo_map: &self.tempo_map,
             latency_comp: &self.latency_comp,
@@ -746,10 +742,10 @@ impl EngineHandlerHarness {
     /// duplicate-id `CreateMidiClip` did not rename/replace the clip it
     /// collided with.
     pub fn midi_clip_name(&self, clip_id: ClipId) -> Option<String> {
-        self.midi_clips
-            .read()
-            .iter()
-            .find(|c| c.id == clip_id)
+        self.shared
+            .graph
+            .load()
+            .midi_clip(clip_id)
             .map(|c| c.name.clone())
     }
 
@@ -774,24 +770,62 @@ impl EngineHandlerHarness {
 
     /// Ids in the shared MIDI clip list, ascending.
     pub fn midi_clip_ids(&self) -> Vec<ClipId> {
-        let mut ids: Vec<ClipId> = self.midi_clips.read().iter().map(|c| c.id).collect();
+        let graph = self.shared.graph.load();
+        let mut ids: Vec<ClipId> = graph.midi_clips.iter().map(|c| c.id).collect();
         ids.sort_unstable();
         ids
     }
 
-    /// Push a MIDI clip into the shared MIDI clip list.
+    /// Push a MIDI clip into the shared MIDI clip list (publishes a new
+    /// render graph, as a clip handler does).
     pub fn push_midi_clip(&mut self, clip: MidiClip) {
-        self.midi_clips.write().push(clip);
+        self.shared
+            .edit_midi_clips(|clips| clips.push(Arc::new(clip)));
     }
 
     /// The engine's notes for `clip_id`, in stored order.
     pub fn midi_notes(&self, clip_id: ClipId) -> Vec<MidiNote> {
-        self.midi_clips
-            .read()
-            .iter()
-            .find(|c| c.id == clip_id)
+        self.shared
+            .graph
+            .load()
+            .midi_clip(clip_id)
             .map(|c| c.notes.clone())
             .unwrap_or_default()
+    }
+
+    /// The render graph the audio callback would load right now.
+    pub fn render_graph(&self) -> Arc<crate::engine::RenderGraph> {
+        self.shared.graph.load_full()
+    }
+
+    /// Run the real `AudioCommand::AddMidiNote` handler.
+    pub fn add_midi_note(&mut self, clip_id: ClipId, note: MidiNote) {
+        self.with_ctx(|ctx, _| crate::engine::midi::handle_add_midi_note(ctx, clip_id, note));
+    }
+
+    /// Run the real `AudioCommand::SetMidiClipNotes` handler (the bulk
+    /// replace the control API's note writes use).
+    pub fn set_midi_clip_notes(&mut self, clip_id: ClipId, notes: Vec<MidiNote>) {
+        self.with_ctx(|ctx, _| {
+            crate::engine::midi::handle_set_midi_clip_notes(ctx, clip_id, notes)
+        });
+    }
+
+    /// Run the real `AudioCommand::DeleteMidiClip` handler.
+    pub fn delete_midi_clip(&mut self, clip_id: ClipId) {
+        self.with_ctx(|ctx, _| crate::engine::midi::handle_delete_midi_clip(ctx, clip_id));
+    }
+
+    /// A second handle on the engine's shared state, for a thread that
+    /// plays the audio callback's reader against the handlers.
+    pub fn shared_arc(&self) -> Arc<SharedState> {
+        Arc::clone(&self.shared)
+    }
+
+    /// Run the engine loop's retire sweep, as its 16 ms tick does.
+    /// Returns how many replaced snapshots it dropped.
+    pub fn sweep_retired(&self) -> usize {
+        self.shared.retired.sweep()
     }
 
     /// Run the real `MoveMidiNote` / `ResizeMidiNote` /
@@ -912,7 +946,6 @@ impl EngineHandlerHarness {
                 Arc::clone(ctx.busses),
                 Arc::clone(ctx.master),
                 Arc::clone(ctx.clips),
-                Arc::clone(ctx.midi_clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
                 ctx.sample_rate,

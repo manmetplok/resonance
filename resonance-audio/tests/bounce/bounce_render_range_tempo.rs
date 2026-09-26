@@ -7,7 +7,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{midi_render_range, SharedState};
 use resonance_audio::types::*;
@@ -46,9 +45,9 @@ fn render_range(
     tm: &TempoMap,
 ) -> Result<(SamplePos, SamplePos), &'static str> {
     let shared = Arc::new(SharedState::default());
-    let midi_clips = Arc::new(RwLock::new(vec![clip]));
+    shared.edit_midi_clips(|clips| clips.push(Arc::new(clip)));
     let tempo_map = Arc::new(arc_swap::ArcSwap::from_pointee(tm.clone()));
-    midi_render_range(&midi_clips, &tempo_map, &shared, 1, SR)
+    midi_render_range(&tempo_map, &shared, 1, SR)
 }
 
 #[test]

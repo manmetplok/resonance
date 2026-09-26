@@ -21,7 +21,7 @@ use crate::note_recorder;
 use std::sync::atomic::Ordering;
 
 use note_recorder::{note_recorder, Recorder};
-use resonance_audio::test_support::{MixAudioHarness, StateMap};
+use resonance_audio::test_support::MixAudioHarness;
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -147,36 +147,54 @@ fn a_contended_block_without_a_note_off_does_not_cut_a_sustained_note() {
     );
 }
 
-/// When the MIDI clips themselves are the contended map, what the block
-/// lost is checked on the next block that holds them: a NoteOff that fell
-/// in the skipped span flushes (FU-A4a)...
+/// An edit elsewhere in clip 1 — what a piano-roll drag publishes.
+fn edit_far_note(h: &MixAudioHarness, i: u64) {
+    h.edit_midi_clip(1, |clip| {
+        clip.notes.push(MidiNote {
+            note: 72,
+            velocity: 0.5,
+            start_tick: (40 + i) * TICKS_PER_QUARTER_NOTE,
+            duration_ticks: 10,
+        })
+    })
+    .expect("clip 1 exists");
+}
+
+/// The MIDI clips come from the published render graph (code review
+/// ARCH-02 A2-4), so a MIDI edit can no longer make a block skip: a
+/// NoteOff due in the block right after an edit is delivered as a plain
+/// event, with no skip and no flush. (Until A2-4 the MIDI-clip lock could
+/// be the contended map, and FU-A4a deferred the block's NoteOff check to
+/// the next block that held it.)
 #[test]
-fn a_note_off_skipped_with_the_midi_clips_contended_flushes() {
+fn a_note_off_right_after_a_midi_edit_lands_without_a_skip() {
     // NoteOff at 24 000 samples, inside block 187 ([23 936, 24 064)).
     let (mut h, rec) = harness(1);
     for _ in 0..187 {
         h.render();
     }
     assert!(rec.lock().held[60]);
-    h.render_with_queued_writer(StateMap::MidiClips);
+    edit_far_note(&h, 0);
     let calls_before = rec.lock().calls;
     h.render();
-    assert!(rec.lock().panicked_in(calls_before));
-    assert!(!rec.lock().any_held());
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
+    assert!(!rec.lock().panicked_in(calls_before), "no flush was needed");
+    assert!(!rec.lock().any_held(), "the NoteOff itself was delivered");
 }
 
-/// ...but a sustained note survives MIDI-clip contention (a piano-roll
-/// edit) when no NoteOff fell in the skipped span — it used to be cut.
+/// ...and a sustained note is never cut by a run of MIDI edits during
+/// playback — every block renders.
 #[test]
-fn midi_clip_contention_without_a_note_off_does_not_cut_a_sustained_note() {
+fn midi_clip_edits_during_playback_do_not_cut_a_sustained_note() {
     let (mut h, rec) = harness(16);
     for _ in 0..3 {
         h.render();
     }
-    for _ in 0..5 {
-        h.render_with_queued_writer(StateMap::MidiClips);
+    for i in 0..5 {
+        edit_far_note(&h, i);
         h.render();
     }
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
     let rec = rec.lock();
     assert!(rec.held[60], "the pad still sounds");
     assert!(

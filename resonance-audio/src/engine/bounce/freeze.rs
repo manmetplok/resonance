@@ -147,7 +147,6 @@ pub fn to_freeze_cache(
     busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
     master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &crate::engine::AutomationSnapshot,
@@ -197,14 +196,15 @@ pub fn to_freeze_cache(
     // plugin chain / instrument selection + the baked plugin automation.
     // The app layer recomputes its own fingerprint to detect staleness.)
     let render_fingerprint =
-        compute_track_fingerprint(&filter_set, source_track_id, tracks, midi_clips, &baked);
+        compute_track_fingerprint(&filter_set, source_track_id, tracks, shared, &baked);
 
     // Project range: [0, latest clip/MIDI end]. Starting at 0 keeps the
     // cache timeline-aligned so it plays back from sample 0 with no
     // stored offset.
     let render_end = {
         let clips_guard = clips.read();
-        let midi_guard = midi_clips.read();
+        let graph = shared.graph.load();
+        let midi_guard = &graph.midi_clips;
         let tm = tempo_map.load();
 
         let audio_end = clips_guard.iter().map(|c| c.end_sample()).max();
@@ -256,7 +256,6 @@ pub fn to_freeze_cache(
         busses,
         master,
         clips,
-        midi_clips,
         plugins,
         tempo_map: &bounce_tm,
         automation: &baked,
@@ -448,16 +447,18 @@ fn compute_track_fingerprint(
     filter_set: &HashSet<TrackId>,
     source_track_id: TrackId,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
-    midi_clips: &Arc<RwLock<Vec<MidiClip>>>,
+    shared: &SharedState,
     baked: &crate::engine::AutomationSnapshot,
 ) -> u64 {
     let mut notes = Vec::new();
     {
-        let midi_guard = midi_clips.read();
+        let graph = shared.graph.load();
         // Deterministic order: clips sorted by (track, start, id) so the
         // hash is independent of storage order.
-        let mut relevant: Vec<&MidiClip> = midi_guard
+        let mut relevant: Vec<&MidiClip> = graph
+            .midi_clips
             .iter()
+            .map(|c| &**c)
             .filter(|c| filter_set.contains(&c.track_id))
             .collect();
         relevant.sort_by_key(|c| (c.track_id, c.start_sample, c.id));
