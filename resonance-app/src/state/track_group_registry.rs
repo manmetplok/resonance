@@ -274,6 +274,10 @@ impl TrackGroupRegistry {
         name: impl Into<String>,
         identity_color: GroupIdentityColor,
     ) -> TrackId {
+        debug_assert!(
+            !self.groups.contains_key(&id),
+            "group id {id} is already taken; add_group_new would overwrite it"
+        );
         let group = TrackGroup::new(id, name, identity_color);
         self.groups.insert(group.id, group);
         id

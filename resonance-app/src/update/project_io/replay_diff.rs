@@ -1008,6 +1008,10 @@ fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
     r.track_groups = crate::state::TrackGroupRegistry::new();
     for tg in &b.track_groups {
         r.track_groups.add_group(tg.clone());
+        // Same counter bump as the slow path (code review STATE-04).
+        if tg.id >= r.registry.next_sub_track_id {
+            r.registry.next_sub_track_id = tg.id + 1;
+        }
     }
 }
 

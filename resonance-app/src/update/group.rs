@@ -74,7 +74,14 @@ fn create_group_from_selection(r: &mut Resonance) {
     if members.len() < 2 {
         return;
     }
-    let group_id = r.registry.allocate_sub_track_id();
+    // `allocate_sub_track_id` only skips track ids; also skip existing
+    // group ids so a group can never overwrite another (STATE-04).
+    let group_id = loop {
+        let id = r.registry.allocate_sub_track_id();
+        if r.track_groups.get_group(id).is_none() {
+            break id;
+        }
+    };
     r.track_groups.create_group_from_selection(group_id, &members);
     r.interaction.select_single_track(None);
 }
