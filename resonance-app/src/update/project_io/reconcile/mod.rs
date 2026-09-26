@@ -10,8 +10,9 @@
 //! Since A-13f no domain is restored inline by either path: each entry
 //! point is its setup (the ctx; on the full path the vocal side-table
 //! clear and `SetProjectDir`), then `reconcile_all_stages`. What still
-//! differs is how they get there — `structurally_compatible` picks the
-//! diff path, else `ClearAll` and the full path (A-13g..j remove that).
+//! differs is how they get there: an undo always takes the diff path since
+//! A-13i (`structurally_compatible` accepts every pair; A-13j deletes it
+//! and the undo's `ClearAll` fallback), a disk load the full path.
 //! The [`Stage`]s group the table and document why each group sits where
 //! it does; `DOMAINS` is sorted by stage.
 
@@ -144,10 +145,11 @@ pub enum Stage {
     /// (reads the meter). Right after `Globals` on both paths, before any
     /// track or clip is restored.
     Timeline,
-    /// What a diff restore removes: the routing edges `new` lacks, then
-    /// the plugin instances and busses (A-13h). Before `Entities`, so an
-    /// edge is gone before its endpoint and an instance before a re-add
-    /// under its id. Nothing after a `ClearAll`.
+    /// What a diff restore removes: the routing edges `new` lacks, the
+    /// clips it does not keep (A-13i), then the plugin instances, tracks
+    /// and busses (A-13h, A-13i). Before `Entities`, so an edge or a clip
+    /// is gone before its endpoint and an entity before a re-add under its
+    /// id. Nothing after a `ClearAll`.
     Removals,
     /// The entities: tracks, busses, the master chain, the track outputs,
     /// then each plugin's state (blob, bypass, params), then the registry
@@ -214,6 +216,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     // Diff path only: edges before the entities they connect, instances
     // before a re-add under the same id.
     domain::<removals::RoutingRemovals>(Stage::Removals),
+    // Clips before the tracks they sit on (`RemoveTrack` drops audio
+    // clips silently and keeps MIDI clips).
+    domain::<removals::ClipRemovals>(Stage::Removals),
     domain::<removals::EntityRemovals>(Stage::Removals),
     // Tracks before busses (as both paths always had it), the master
     // chain, then the track outputs once every bus they name exists.

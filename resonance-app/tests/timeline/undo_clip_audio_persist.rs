@@ -65,12 +65,13 @@ fn an_edit_persists_clip_audio_before_its_own_commands() {
     );
 }
 
+/// The undo of a clip delete: the redo snapshot's clips are persisted
+/// first, then (since A-13i on the diff path, no `ClearAll`) the deleted
+/// clip is reloaded under its id from exactly the file its own pre-delete
+/// snapshot persisted.
 #[test]
-fn undo_persists_the_current_clips_before_clearing_the_engine() {
+fn undo_persists_the_current_clips_before_restoring() {
     let (mut app, cmds, _dir) = app();
-    // A structural edit that leaves the clip in place — deleting a second
-    // one — so the undo takes the slow path while the redo snapshot names
-    // the clip.
     app.test_apply_engine_event(AudioEvent::ClipImported {
         clip_id: CLIP + 1,
         track_id: TRACK,
@@ -84,22 +85,24 @@ fn undo_persists_the_current_clips_before_clearing_the_engine() {
 
     let _ = app.update(Message::Undo);
     let sent = drain(&cmds);
+    assert!(
+        !sent.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a clip delete undoes through the diff path: {sent:?}"
+    );
     let persist = position(&sent, |c| matches!(c, AudioCommand::PersistClipWavs))
         .expect("the redo snapshot's clips are persisted");
-    let clear = position(&sent, |c| matches!(c, AudioCommand::ClearAll))
-        .expect("a structural undo clears the engine");
-    assert!(persist < clear, "{sent:?}");
-
-    // The replay then reloads the clip from exactly the file persisted.
-    app.test_apply_engine_event(AudioEvent::AllCleared);
-    let sent = drain(&cmds);
-    let reload = sent.iter().find_map(|c| match c {
-        AudioCommand::LoadClipFromWav { clip_id, path, .. } if *clip_id == CLIP => Some(path),
+    let reload = position(&sent, |c| {
+        matches!(c, AudioCommand::LoadClipFromWav { clip_id, .. } if *clip_id == CLIP + 1)
+    })
+    .expect("the deleted clip is reloaded");
+    assert!(persist < reload, "{sent:?}");
+    let path = sent.iter().find_map(|c| match c {
+        AudioCommand::LoadClipFromWav { clip_id, path, .. } if *clip_id == CLIP + 1 => Some(path),
         _ => None,
     });
     assert_eq!(
-        reload.map(|p| p.file_name().unwrap().to_owned()),
-        Some(format!("clip_{CLIP}.wav").into()),
+        path.map(|p| p.file_name().unwrap().to_owned()),
+        Some(format!("clip_{}.wav", CLIP + 1).into()),
         "{sent:?}"
     );
 }

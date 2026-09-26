@@ -1230,22 +1230,43 @@ fn automation_lanes_restore_identically_through_both_paths() {
     assert_fixed_point(&f, "lanes: fast path", &snapshot);
     let fast = f.app.test_automation().lanes.clone();
 
-    // -- Slow path: also delete the track that owns the pan lane. --
-    edit_lanes(&mut f.app, &l);
-    f.app
-        .test_dispatch(Message::Track(TrackMessage::RequestRemoveTrack(l.doomed)));
-    f.app
-        .test_dispatch(Message::Track(TrackMessage::ConfirmRemoveTrack));
-    assert!(
-        !f.app.test_automation().lanes.contains_key(&l.pan),
-        "deleting the track dropped its lane"
-    );
-    let _ = drain(&f.rx);
+    // -- Fast path over a track delete: also delete the track that owns
+    // the pan lane. Since A-13i the diff path re-adds it (with its clips),
+    // and its lane goes back to the engine. --
+    let delete_doomed = |f: &mut Fixture| {
+        edit_lanes(&mut f.app, &l);
+        f.app
+            .test_dispatch(Message::Track(TrackMessage::RequestRemoveTrack(l.doomed)));
+        f.app
+            .test_dispatch(Message::Track(TrackMessage::ConfirmRemoveTrack));
+        assert!(
+            !f.app.test_automation().lanes.contains_key(&l.pan),
+            "deleting the track dropped its lane"
+        );
+        let _ = drain(&f.rx);
+    };
+    delete_doomed(&mut f);
     f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a track delete undoes through the diff replay"
+    );
+    assert_eq!(
+        lane_commands(&cmds),
+        expected(true),
+        "track-delete undo: engine lane traffic"
+    );
+    assert_lanes_restored(&f.app, "track-delete undo", &snapshot);
+    assert_fixed_point(&f, "lanes: track-delete undo", &snapshot);
+
+    // -- Slow path (forced: no shape falls back on its own since A-13i). --
+    delete_doomed(&mut f);
+    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
     let mut cmds = drain(&f.rx);
     assert!(
         cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a deleted track forces the full clear-and-replay"
+        "the full restore clears the engine"
     );
     f.app.test_apply_engine_event(AudioEvent::AllCleared);
     cmds.extend(drain(&f.rx));

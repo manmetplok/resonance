@@ -1,5 +1,7 @@
 //! Undo/redo across an add or remove of an app-side entity takes the diff
-//! path and lands exactly on the snapshot (ARCH-01 A-13g).
+//! path and lands exactly on the snapshot (ARCH-01 A-13g) — and since
+//! A-13h / A-13i across busses, plugin instances, tracks and clips too, so
+//! no undo falls back to `ClearAll` any more.
 //!
 //! `structurally_compatible` used to send any change in the id sets of
 //! section definitions and placements, drum patterns, track groups and
@@ -21,8 +23,8 @@ use resonance_app::compose::messages::DrumGroupsMessage;
 use resonance_app::compose::ComposeMessage;
 use resonance_app::demo;
 use resonance_app::message::{
-    BusMessage, GroupMessage, MarkerMessage, MarkerUiMessage, MasterMessage, Message,
-    MixerMessage, PluginMessage, TrackMessage,
+    BusMessage, ClipMessage, GroupMessage, MarkerMessage, MarkerUiMessage, MasterMessage,
+    Message, MidiClipMessage, MixerMessage, PluginMessage, TrackMessage,
 };
 use resonance_app::project::ProjectFile;
 use resonance_app::undo::UndoSnapshot;
@@ -2083,4 +2085,327 @@ fn undoing_a_track_add_drops_its_selection_and_never_reissues_its_id() {
 
     let (_, again) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
     assert_ne!(again, t, "the undone add's id is not reissued");
+}
+
+// ---------------------------------------------------------------------------
+// Clips (A-13i)
+// ---------------------------------------------------------------------------
+
+/// The demo's audio clip, on `AUDIO_TRACK`.
+const AUDIO_CLIP: u64 = 15;
+/// The demo's bass clip, on the bass track (2).
+const BASS_CLIP: u64 = 12;
+const BASS_TRACK: u64 = 2;
+
+fn audio_clip_ids(app: &Resonance) -> Vec<u64> {
+    app.test_clips().iter().map(|c| c.id).collect()
+}
+
+fn midi_clip_ids(app: &Resonance) -> Vec<u64> {
+    app.test_midi_clips().iter().map(|c| c.id).collect()
+}
+
+fn load_cmd(f: &Fixture, snapshot: &UndoSnapshot, clip_id: u64) -> String {
+    let pc = snapshot
+        .project
+        .file
+        .clips
+        .iter()
+        .find(|c| c.id == clip_id)
+        .expect("the clip is in the snapshot");
+    format!(
+        "LoadClipFromWav {{ clip_id: {clip_id}, track_id: {}, start_sample: {}, path: {:?}, \
+         name: {:?}, trim_start_frames: {}, trim_end_frames: {} }}",
+        pc.track_id,
+        pc.start_sample,
+        f.root.join("fixture.rproj").join(&pc.audio_file),
+        pc.name,
+        pc.trim_start_frames,
+        pc.trim_end_frames
+    )
+}
+
+/// A GUI audio-clip delete: undo reloads it under its id from its
+/// persisted WAV (nothing else), redo deletes it again.
+#[test]
+fn deleting_an_audio_clip_undoes_through_the_diff_path() {
+    let mut f = fixture("audio-clip-delete");
+    let s0 = f.app.test_snapshot_for_undo();
+    let s1 = edit(&mut f, Message::Clip(ClipMessage::DeleteClip(AUDIO_CLIP)));
+    assert!(!audio_clip_ids(&f.app).contains(&AUDIO_CLIP));
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo clip delete");
+    assert_eq!(
+        sent(&cmds),
+        [TEMPO.to_owned(), load_cmd(&f, &s0, AUDIO_CLIP), NO_TAKES.to_owned()],
+        "undo clip delete: one load"
+    );
+    settle(&mut f, cmds, &s0, "undo clip delete");
+    let cmds = step_lands_on(&mut f, Message::Redo, &s1, "redo clip delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![format!("DeleteClip {{ clip_id: {AUDIO_CLIP} }}")]),
+        "redo clip delete: one delete"
+    );
+    settle(&mut f, cmds, &s1, "redo clip delete");
+}
+
+/// A split: undo deletes the tail and trims the head back; redo reloads
+/// the tail and trims the head again. A selection on the tail is dropped
+/// by the undo.
+#[test]
+fn splitting_an_audio_clip_undoes_through_the_diff_path() {
+    let mut f = fixture("audio-clip-split");
+    let s0 = f.app.test_snapshot_for_undo();
+    let clip = f
+        .app
+        .test_clips()
+        .iter()
+        .find(|c| c.id == AUDIO_CLIP)
+        .expect("the demo clip")
+        .clone();
+    let tail = 5_000;
+    let s1 = edit(
+        &mut f,
+        Message::Clip(ClipMessage::SplitClipAt {
+            clip_id: AUDIO_CLIP,
+            new_clip_id: tail,
+            at_sample: clip.start_sample + clip.duration_samples / 2,
+        }),
+    );
+    assert_eq!(audio_clip_ids(&f.app), [AUDIO_CLIP, tail]);
+    f.app.test_set_selected_clip(Some(tail));
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo split");
+    let sent_cmds = sent(&cmds);
+    assert_eq!(sent_cmds[1], TEMPO);
+    assert_eq!(
+        sent_cmds[2],
+        format!("DeleteClip {{ clip_id: {tail} }}"),
+        "undo split: the tail goes first: {sent_cmds:?}"
+    );
+    assert!(
+        sent_cmds[3].starts_with(&format!("TrimClip {{ clip_id: {AUDIO_CLIP},")),
+        "then the head is trimmed back: {sent_cmds:?}"
+    );
+    assert_eq!(f.app.test_selected_clip(), None, "the tail's selection is dropped");
+    settle(&mut f, cmds, &s0, "undo split");
+
+    let cmds = step_lands_on(&mut f, Message::Redo, &s1, "redo split");
+    let sent_cmds = sent(&cmds);
+    assert!(sent_cmds.contains(&load_cmd(&f, &s1, tail)), "redo reloads the tail: {sent_cmds:?}");
+    assert!(
+        sent_cmds
+            .iter()
+            .any(|c| c.starts_with(&format!("TrimClip {{ clip_id: {AUDIO_CLIP},"))),
+        "and trims the head: {sent_cmds:?}"
+    );
+    settle(&mut f, cmds, &s1, "redo split");
+}
+
+/// A MIDI clip drawn, then another one deleted: undo and redo load and
+/// delete them (`LoadMidiClipDirect` with the snapshot's notes,
+/// `DeleteMidiClip`), nothing else.
+#[test]
+fn adding_and_removing_midi_clips_undoes_through_the_diff_path() {
+    let mut f = fixture("midi-clips");
+    let s0 = f.app.test_snapshot_for_undo();
+    let drawn = 6_000;
+    let s1 = edit(
+        &mut f,
+        Message::MidiClip(MidiClipMessage::CreateEmptyClip {
+            clip_id: drawn,
+            track_id: BASS_TRACK,
+            start_sample: 10_000_000,
+            duration_ticks: 1_920,
+            name: "Drawn".into(),
+        }),
+    );
+    assert!(midi_clip_ids(&f.app).contains(&drawn));
+    let s2 = edit(&mut f, Message::MidiClip(MidiClipMessage::DeleteMidiClip(BASS_CLIP)));
+    assert!(!midi_clip_ids(&f.app).contains(&BASS_CLIP));
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s1, "undo MIDI clip delete");
+    let sent_cmds = sent(&cmds);
+    assert_eq!(sent_cmds.len(), 4, "undo MIDI clip delete: one load: {sent_cmds:?}");
+    assert!(sent_cmds[2].starts_with(&format!(
+        "LoadMidiClipDirect {{ clip_id: {BASS_CLIP}, track_id: {BASS_TRACK},"
+    )));
+    settle(&mut f, cmds, &s1, "undo MIDI clip delete");
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo MIDI clip draw");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![format!("DeleteMidiClip {{ clip_id: {drawn} }}")]),
+        "undo MIDI clip draw: one delete"
+    );
+    settle(&mut f, cmds, &s0, "undo MIDI clip draw");
+    for (target, what) in [(&s1, "redo MIDI clip draw"), (&s2, "redo MIDI clip delete")] {
+        let cmds = step_lands_on(&mut f, Message::Redo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+    assert_eq!(midi_clip_ids(&f.app).contains(&BASS_CLIP), false);
+}
+
+/// Deleting a track that carries clips (the confirmed delete): undo
+/// re-adds the track, its plugin and its clips; redo deletes the clips
+/// first — each by its own command — then the track.
+#[test]
+fn deleting_a_track_with_clips_undoes_through_the_diff_path() {
+    let mut f = fixture("track-with-clips");
+    let s0 = f.app.test_snapshot_for_undo();
+    let _ = f.app.update(Message::Track(TrackMessage::RequestRemoveTrack(BASS_TRACK)));
+    let s1 = edit(&mut f, Message::Track(TrackMessage::ConfirmRemoveTrack));
+    assert!(!track_ids(&f.app).contains(&BASS_TRACK));
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo track-with-clips delete");
+    let sent_cmds = sent(&cmds);
+    let add = sent_cmds
+        .iter()
+        .position(|c| c.starts_with(&format!("AddInstrumentTrack {{ id: {BASS_TRACK},")))
+        .expect("the track comes back");
+    let load = sent_cmds
+        .iter()
+        .position(|c| c.starts_with(&format!("LoadMidiClipDirect {{ clip_id: {BASS_CLIP},")))
+        .expect("its clip comes back");
+    assert!(add < load, "the track before its clip: {sent_cmds:?}");
+    settle(&mut f, cmds, &s0, "undo track-with-clips delete");
+
+    let cmds = step_lands_on(&mut f, Message::Redo, &s1, "redo track-with-clips delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![
+            format!("DeleteMidiClip {{ clip_id: {BASS_CLIP} }}"),
+            format!("RemoveTrack {{ track_id: {BASS_TRACK} }}"),
+        ]),
+        "redo: the clip, then the track with its chain"
+    );
+    settle(&mut f, cmds, &s1, "redo track-with-clips delete");
+
+    // The audio track and its clip, the same way.
+    let _ = f.app.update(Message::Track(TrackMessage::RequestRemoveTrack(AUDIO_TRACK)));
+    let s2 = edit(&mut f, Message::Track(TrackMessage::ConfirmRemoveTrack));
+    let cmds = step_lands_on(&mut f, Message::Undo, &s1, "undo audio track delete");
+    assert!(sent(&cmds).contains(&load_cmd(&f, &s1, AUDIO_CLIP)));
+    settle(&mut f, cmds, &s1, "undo audio track delete");
+    let cmds = step_lands_on(&mut f, Message::Redo, &s2, "redo audio track delete");
+    assert_eq!(
+        sent(&cmds),
+        wrap(vec![
+            format!("DeleteClip {{ clip_id: {AUDIO_CLIP} }}"),
+            format!("RemoveTrack {{ track_id: {AUDIO_TRACK} }}"),
+        ]),
+        "redo: the audio clip, then the track"
+    );
+    settle(&mut f, cmds, &s2, "redo audio track delete");
+}
+
+/// A clip whose WAV or length changed under the same id (a hand-made
+/// snapshot) is deleted and reloaded, as the full replay did.
+#[test]
+fn a_clip_whose_wav_changed_is_deleted_and_reloaded() {
+    let mut f = fixture("clip-wav-change");
+    let before = f.app.test_snapshot_for_undo();
+    let mut changed = before.clone();
+    changed
+        .project
+        .file
+        .clips
+        .iter_mut()
+        .find(|c| c.id == AUDIO_CLIP)
+        .expect("the demo clip")
+        .total_frames += 1_000;
+
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(changed.clone());
+    let cmds = drain(&f.rx);
+    let sent_cmds = sent(&cmds);
+    let delete = sent_cmds
+        .iter()
+        .position(|c| *c == format!("DeleteClip {{ clip_id: {AUDIO_CLIP} }}"))
+        .expect("deleted");
+    let load = sent_cmds
+        .iter()
+        .position(|c| *c == load_cmd(&f, &changed, AUDIO_CLIP))
+        .expect("reloaded");
+    assert!(delete < load, "{sent_cmds:?}");
+    assert_eq!(f.app.test_build_project_file(), changed.project.file);
+    settle(&mut f, cmds, &changed, "a changed WAV");
+}
+
+/// Late echoes over clip restores (a held Ctrl+Z): the `ClipDeleted` /
+/// `MidiClipDeleted` of one restore must not delete what the next put
+/// back, and the load echo of a clip a later restore deleted must not
+/// bring it back.
+#[test]
+fn a_clip_restore_survives_the_previous_restores_late_echoes() {
+    let mut f = fixture("clip-late-echo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let s1 = edit(&mut f, Message::Clip(ClipMessage::DeleteClip(AUDIO_CLIP)));
+    let s2 = edit(&mut f, Message::MidiClip(MidiClipMessage::DeleteMidiClip(BASS_CLIP)));
+
+    let mut late = Vec::new();
+    late.extend(step_lands_on(&mut f, Message::Undo, &s1, "undo MIDI delete"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &s0, "undo audio delete"));
+    late.extend(step_lands_on(&mut f, Message::Redo, &s1, "redo audio delete"));
+    late.extend(step_lands_on(&mut f, Message::Redo, &s2, "redo MIDI delete"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &s1, "undo MIDI delete again"));
+    late.extend(step_lands_on(&mut f, Message::Undo, &s0, "undo audio delete again"));
+    settle(&mut f, late, &s0, "clip deletes undone, redone, undone, then the echoes");
+    assert!(audio_clip_ids(&f.app).contains(&AUDIO_CLIP));
+    assert!(midi_clip_ids(&f.app).contains(&BASS_CLIP));
+}
+
+/// STATE-10 on the diff path: the GUI delete mirrors at once and owes its
+/// echo, so an undo before that echo re-adds the clip and the late
+/// `ClipDeleted` leaves it alone.
+#[test]
+fn undoing_a_clip_delete_before_its_echo_keeps_the_clip() {
+    let mut f = fixture("clip-delete-early-undo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Clip(ClipMessage::DeleteClip(AUDIO_CLIP)));
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo clip delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s0, "the delete's echo, then the undo's");
+    assert!(audio_clip_ids(&f.app).contains(&AUDIO_CLIP));
+}
+
+/// A kept MIDI clip whose notes changed is reloaded under its id
+/// (`DeleteMidiClip` + `LoadMidiClipDirect`). The delete's echo is owed:
+/// before A-13i it dropped the mirror's clip and its lyric side-table
+/// entry, and the load's echo brought the clip back without its lyrics.
+#[test]
+fn a_midi_note_restore_keeps_the_clips_lyrics_through_its_echoes() {
+    let mut f = fixture("midi-reload-lyrics");
+    f.app.test_set_clip_lyrics(BASS_CLIP, vec!["la".into(), "di".into()]);
+    let with_lyrics = f.app.test_snapshot_for_undo();
+    assert!(
+        with_lyrics
+            .project
+            .file
+            .midi_clips
+            .iter()
+            .any(|c| c.id == BASS_CLIP && !c.vocal_lyrics.is_empty()),
+        "the snapshot carries the lyrics, or this test is vacuous"
+    );
+    let mut fewer_notes = with_lyrics.clone();
+    fewer_notes
+        .project
+        .midi_notes
+        .get_mut(&BASS_CLIP)
+        .expect("the clip's notes")
+        .pop();
+
+    for (target, what) in [(&fewer_notes, "drop a note"), (&with_lyrics, "put it back")] {
+        let _ = drain(&f.rx);
+        f.app.test_begin_restore_from_snapshot(target.clone());
+        let cmds = drain(&f.rx);
+        assert!(
+            sent(&cmds).contains(&format!("DeleteMidiClip {{ clip_id: {BASS_CLIP} }}")),
+            "{what}: the clip is reloaded"
+        );
+        assert_eq!(f.app.test_build_project_file(), target.project.file, "{what}");
+        settle(&mut f, cmds, target, what);
+    }
 }

@@ -14,7 +14,10 @@
 //!    would name a removed endpoint in between, and the removals-first
 //!    rule of A-13e (a replacement edge is cycle-checked against a graph
 //!    without the edge it replaces) holds for the whole restore this way.
-//! 2. [`EntityRemovals`] — every plugin instance `new` does not keep
+//! 2. [`ClipRemovals`] — every audio and MIDI clip `new` does not keep
+//!    (`clips::kept_audio_clips` / `kept_midi_clips`, A-13i), before the
+//!    tracks they sit on.
+//! 3. [`EntityRemovals`] — every plugin instance `new` does not keep
 //!    (`entities::kept_plugins`), then every track it does not keep
 //!    (`entities::kept_tracks`, A-13i), then every bus `new` lacks.
 //!
@@ -28,8 +31,9 @@
 
 use std::collections::HashSet;
 
-use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, SendSource, TrackId};
+use resonance_audio::types::{AudioCommand, BusId, ClipId, PluginInstanceId, SendSource, TrackId};
 
+use super::clips::{kept_audio_clips, kept_midi_clips};
 use super::entities::{kept_plugins, kept_tracks, plugin_owners};
 use super::{Reconcile, ReconcileCtx};
 use crate::project::{send_source_from_tag, ProjectFile, ProjectTrack};
@@ -96,6 +100,87 @@ impl Reconcile for RoutingRemovals {
     }
 }
 
+/// The clips a diff restore removes (A-13i), before any track goes.
+///
+/// * After a `ClearAll`: nothing (the clip domains empty their mirrors).
+/// * Diff: `DeleteClip` for every audio clip of `old` that is not kept
+///   (`clips::kept_audio_clips` — gone from `new`, on a track the restore
+///   removes, or with a different WAV or length), `DeleteMidiClip` for
+///   every MIDI clip not kept; each mirrored at once, its echo owed.
+///
+/// Before `EntityRemovals` because `RemoveTrack` drops a track's audio
+/// clips without an echo (a `DeleteClip` after it would wait on the
+/// engine's load-deferral queue for a clip that never lands, and never
+/// echo) and keeps its MIDI clips (which would then outlive the track).
+/// This way every clip removal is one explicit command with one echo.
+///
+/// The mirror prune: the clip, and every piece of transient UI naming it —
+/// the timeline selection, an in-flight drag, trim, fade or gain gesture,
+/// the open MIDI editor or pitch editor. The pool usage, the lyric
+/// side-table and the derived / vocal-audio maps are rebuilt from the
+/// target by their own domains later in the restore.
+pub(crate) struct ClipRemovals;
+
+impl Reconcile for ClipRemovals {
+    const NAME: &'static str = "clip_removals";
+
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, _ctx: &ReconcileCtx<'_>) {
+        let Some(old) = old else {
+            return;
+        };
+        let kept = kept_audio_clips(Some(old), new);
+        for oc in old.clips.iter().filter(|c| !kept.contains(&c.id)) {
+            let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: oc.id });
+            r.io.restore_echoes.expect_clip_deleted(oc.id);
+            r.clips.retain(|c| c.id != oc.id);
+            prune_clip(r, oc.id);
+        }
+        let kept = kept_midi_clips(Some(old), new);
+        for oc in old.midi_clips.iter().filter(|c| !kept.contains(&c.id)) {
+            let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: oc.id });
+            r.io.restore_echoes.expect_midi_clip_deleted(oc.id);
+            r.midi_clips.retain(|c| c.id != oc.id);
+            prune_clip(r, oc.id);
+        }
+    }
+}
+
+/// Transient UI naming a clip a restore removed (audio and MIDI clips
+/// share one id space).
+fn prune_clip(r: &mut Resonance, clip_id: ClipId) {
+    let ui = &mut r.ui.interaction;
+    if ui.selected_clip == Some(clip_id) {
+        ui.selected_clip = None;
+    }
+    if ui.selected_midi_clip == Some(clip_id) {
+        ui.selected_midi_clip = None;
+    }
+    if ui.clip_drag.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.clip_drag = None;
+    }
+    if ui.clip_trim.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.clip_trim = None;
+    }
+    if ui.clip_fade_drag.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.clip_fade_drag = None;
+    }
+    if ui.clip_gain_drag.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.clip_gain_drag = None;
+    }
+    if ui.midi_clip_drag.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.midi_clip_drag = None;
+    }
+    if ui.midi_clip_trim.as_ref().is_some_and(|d| d.clip_id == clip_id) {
+        ui.midi_clip_trim = None;
+    }
+    if ui.editing_midi_clip.as_ref().is_some_and(|e| e.clip_id == clip_id) {
+        ui.editing_midi_clip = None;
+    }
+    if ui.editing_pitch_clip == Some(clip_id) {
+        ui.editing_pitch_clip = None;
+    }
+}
+
 /// The plugin instances, tracks and busses a diff restore removes.
 ///
 /// * After a `ClearAll`: nothing.
@@ -110,7 +195,7 @@ impl Reconcile for RoutingRemovals {
 ///   echo — any sub-track still under it, but not that sub-track's chain).
 ///   Then every bus `new` lacks (`RemoveBus`).
 ///
-/// A removed track's clips are already gone (`ClipRemovals`, before this):
+/// A removed track's clips are already gone ([`ClipRemovals`], before this):
 /// `RemoveTrack` drops its audio clips silently and keeps its MIDI clips.
 /// Its edges are gone too (`RoutingRemovals`). What else names it —
 /// freeze status and cache, external-instrument config, automation lanes,

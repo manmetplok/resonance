@@ -97,6 +97,18 @@ impl Resonance {
         &self.clips
     }
 
+    /// Test-only: the timeline's selected audio clip.
+    #[doc(hidden)]
+    pub fn test_selected_clip(&self) -> Option<resonance_audio::types::ClipId> {
+        self.ui.interaction.selected_clip
+    }
+
+    /// Test-only: select an audio clip on the timeline.
+    #[doc(hidden)]
+    pub fn test_set_selected_clip(&mut self, clip_id: Option<resonance_audio::types::ClipId>) {
+        self.ui.interaction.selected_clip = clip_id;
+    }
+
     /// Test-only: push an audio clip straight into GUI state, bypassing
     /// the engine `ClipImported` round-trip, so a test can then drive
     /// fade/gain events against a known clip id.

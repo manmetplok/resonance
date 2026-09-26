@@ -1,23 +1,17 @@
 //! Diff-based undo/redo replay — the cheap alternative to the
 //! `ClearAll → AllCleared → replay_loaded_project` round-trip.
 //!
-//! For undo/redo within a single editing session the engine's *shape*
-//! almost never changes: the same tracks, busses, plugins, and clips are
-//! still there; only their scalar properties have moved. The full replay
-//! tears every plugin instance down and re-instantiates it — expensive,
-//! audible (the plugin chain is briefly silent), and entirely wasted
-//! when the user just dragged a fader.
+//! The full replay tears every plugin instance down and re-instantiates
+//! it — expensive, audible (the plugin chain is briefly silent), and
+//! wasted on an undo, which almost always changes a few things.
 //!
-//! [`try_diff_replay`] computes the structural shape of the current
-//! state vs. the target snapshot. When they match, it drives the engine
-//! surgically — one engine command per changed scalar — and rebuilds
-//! GUI state in place. When the shapes diverge (a track was added or
-//! removed or changed type, a clip was inserted), it returns `false` and
-//! the caller falls back to the full clear-and-replay pipeline. App-side
-//! entities restored whole on both paths (sections, drum patterns, track
-//! groups, markers) are not part of the shape (A-13g), and neither are
-//! busses and plugin instances, which the diff arms add, remove and
-//! reorder one at a time (A-13h).
+//! [`try_diff_replay`] drives the engine surgically — one engine command
+//! per changed scalar, one add or remove per entity that differs — and
+//! rebuilds GUI state in place. Since A-13i it accepts every pair of
+//! snapshots: app-side entities are restored whole (A-13g), busses and
+//! plugin instances (A-13h), tracks and clips (A-13i) are added, removed
+//! and reordered one at a time. `structurally_compatible` is left, always
+//! true, for A-13j to delete with the undo's `ClearAll` fallback.
 //!
 //! Plugin parameter restores: a snapshot's state blob is re-sent with
 //! `LoadPluginState` only when the live cache has moved on since the
@@ -26,23 +20,17 @@
 //! differ from the live mirror when no blob was pushed), so plugin param
 //! undo works without a full re-instantiation (`reconcile::plugin_state`).
 
-use std::collections::HashMap;
-
 use resonance_audio::types::*;
 
-use crate::project::{LoadedProject, ProjectClip, ProjectFile, ProjectMidiClip};
+use crate::project::{LoadedProject, ProjectFile};
 use crate::Resonance;
 
 use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
 use super::serialize::build_project_file;
 
-/// Attempt a structure-preserving replay. Returns `true` when the diff
-/// path successfully drove engine + GUI to the target state; `false`
-/// when the structural shape of the project differs (tracks or clips were
-/// added / removed / renumbered) and the caller must fall back to the full
-/// clear-and-replay pipeline. App-side entities (sections, drum patterns,
-/// track groups, markers) may differ: their domains restore them whole
-/// (A-13g); so may busses and plugin chains (A-13h).
+/// Attempt a diff replay. Returns `true` when the diff path drove the
+/// engine and the GUI to the target state — since A-13i, always (`false`
+/// would send the caller down the full clear-and-replay pipeline).
 ///
 /// On success the caller must skip the `ClearAll` command — there is no
 /// `AllCleared` event to wait for, so neither `pending_load` nor
@@ -88,43 +76,29 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
 // Structural comparison
 // =====================================================================
 
-/// True iff the two project files have the same set of structural
-/// identifiers — track ids, clip ids — arranged into the same
-/// parent-child shape. Pure ordering of the
-/// outer collections is normalised via id-sort before comparison so a
-/// re-ordering by `.order` alone does NOT force the slow path.
-pub fn structurally_compatible(a: &ProjectFile, b: &ProjectFile) -> bool {
-    // Audio + MIDI clip ids + clip→track binding (a clip that moved to a
-    // different track is structural — we can `MoveClip` but the GUI
-    // state needs more care; force fallback for safety).
-    if !audio_clip_set_matches(&a.clips, &b.clips) {
-        return false;
-    }
-    if !midi_clip_set_matches(&a.midi_clips, &b.midi_clips) {
-        return false;
-    }
-    // Not checked (ARCH-01 A-13g): entity kinds whose domains restore them
-    // whole on both paths, so adding or removing one needs no `ClearAll`.
-    // Section definitions and placements (`ComposeSections`; what a
-    // placement generates is clips, gated above, and the maps keyed by it
-    // are rebuilt in `Clips` from the target), drum patterns and the legacy
-    // flat drum-group list they promote (`DrumPatterns`, whose diff arm
-    // empties the bank for an empty target), track groups (`TrackGroups`),
-    // arrangement markers (`Markers`). Nor (A-13h) busses and plugin
-    // chains — track, bus and master: `RoutingRemovals` drops the edges
+/// Whether the diff path can restore `b` over `a`. Always, since A-13i.
+pub fn structurally_compatible(_a: &ProjectFile, _b: &ProjectFile) -> bool {
+    // Nothing is checked any more (ARCH-01 A-13g..i): every domain restores
+    // any difference itself. App-side entities (sections, drum patterns,
+    // track groups, markers) are restored whole on both paths (A-13g).
+    // Busses and plugin chains (A-13h): `RoutingRemovals` drops the edges
     // `b` lacks, `EntityRemovals` the plugin instances it does not keep
     // (`entities::kept_plugins`: same id, chain and `.clap` identity) and
     // the busses it lacks, the entity domains add what `a` lacks,
     // `PluginState` treats each added instance as a load does, and
     // `EntityOrder` moves every chain into `b`'s order (`MovePlugin*`).
-    // Nor (A-13i) tracks: `entities::kept_tracks` keeps a track whose id,
-    // type and sub-track link match (and whose parent is kept);
-    // `EntityRemovals` removes every other track of `a` (sub-tracks first),
-    // `Tracks` adds every other track of `b` (parents first) as a load
-    // does, and the domains that treat a track differently after a
-    // `ClearAll` (outputs, plugin state, external instruments, freeze,
-    // group macros) do so per fresh track. What is left is what the diff
-    // arms cannot add or remove yet: clips (A-13i).
+    // Tracks (A-13i): `entities::kept_tracks` keeps a track whose id, type
+    // and sub-track link match (and whose parent is kept); `EntityRemovals`
+    // removes every other track of `a` (sub-tracks first), `Tracks` adds
+    // every other track of `b` (parents first) as a load does, and the
+    // domains that treat a track differently after a `ClearAll` (outputs,
+    // plugin state, external instruments, freeze, group macros) do so per
+    // fresh track. Clips (A-13i): `clips::kept_audio_clips` /
+    // `kept_midi_clips` keep a clip on a kept track (an audio clip with the
+    // same WAV and length); `ClipRemovals` deletes every other clip of `a`
+    // before any track goes, and the clip domains load every other clip of
+    // `b` as a load does. Left in place, always true, until A-13j deletes
+    // it with the undo's `ClearAll` fallback.
     true
 }
 
@@ -138,38 +112,6 @@ where
     av.sort_unstable();
     bv.sort_unstable();
     av == bv
-}
-
-fn audio_clip_set_matches(a: &[ProjectClip], b: &[ProjectClip]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let by_id_b: HashMap<u64, &ProjectClip> = b.iter().map(|c| (c.id, c)).collect();
-    for ca in a {
-        let Some(cb) = by_id_b.get(&ca.id) else {
-            return false;
-        };
-        // Track reassignment can ride through MoveClip surgically (track
-        // and start sample are both arguments). But the underlying WAV
-        // file must be identical — a re-import would have produced a
-        // new id, so this is mostly defensive.
-        if ca.audio_file != cb.audio_file {
-            return false;
-        }
-        if ca.total_frames != cb.total_frames {
-            return false;
-        }
-    }
-    true
-}
-
-fn midi_clip_set_matches(a: &[ProjectMidiClip], b: &[ProjectMidiClip]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let ids_a: std::collections::HashSet<u64> = a.iter().map(|c| c.id).collect();
-    let ids_b: std::collections::HashSet<u64> = b.iter().map(|c| c.id).collect();
-    ids_a == ids_b
 }
 
 // =====================================================================

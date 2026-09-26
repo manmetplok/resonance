@@ -219,6 +219,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Timeline, "markers"),
             (Stage::Timeline, "section_chord_trim"),
             (Stage::Removals, "routing_removals"),
+            (Stage::Removals, "clip_removals"),
             (Stage::Removals, "entity_removals"),
             (Stage::Entities, "tracks"),
             (Stage::Entities, "busses"),

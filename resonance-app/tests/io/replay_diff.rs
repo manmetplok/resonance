@@ -173,7 +173,7 @@ fn track_reorder_alone_is_compatible() {
 }
 
 #[test]
-fn audio_file_path_change_forces_fallback() {
+fn audio_file_path_change_is_compatible() {
     let mut a = empty_file();
     let mut b = empty_file();
     let mk = |id: u64, name: &str| ProjectClip {
@@ -192,9 +192,16 @@ fn audio_file_path_change_forces_fallback() {
         fade_out_curve: "equal_power".into(),
         gain_db: 0.0,
     };
+    // Clips are not part of the shape (A-13i): a clip whose WAV changed is
+    // deleted and reloaded under its id (`clips::kept_audio_clips`); an
+    // added or removed clip is loaded or deleted.
     a.clips = vec![mk(1, "audio/a.wav")];
     b.clips = vec![mk(1, "audio/b.wav")];
-    assert!(!structurally_compatible(&a, &b));
+    assert!(structurally_compatible(&a, &b));
+    b.clips = vec![mk(1, "audio/a.wav"), mk(2, "audio/b.wav")];
+    assert!(structurally_compatible(&a, &b));
+    b.clips.clear();
+    assert!(structurally_compatible(&a, &b));
 }
 
 #[test]
