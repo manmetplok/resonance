@@ -75,6 +75,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-A5a–c (from A-5) | App-owned reference marker ids; stale analysis/loaded echoes ignored (`is_stale`, ids never rewound); loads listed immediately so undo cancels them; load failure marks the entry `Error` | opus | merged | 71ed3a6b |
 | FU-A7a (from A-7) | GUI open/recent/template during an in-flight undo no longer replays the disk project with undo branches | sonnet | merged | f0c07231 |
 | FU-A13a (from A-13g) | Group macro solo/mute: `TrackGroupRegistry::effective_solo/mute` shared by handlers and a new `TrackGroups` reconcile step that resends what the engine actually holds | sonnet | merged | 42c297ae |
+| FU-A13b (from A-13g) | Marker id counter never rewound by a restore; stale marker selection cleared | haiku + orchestrator fix | merged | ea146a8e |
 | FU-D4a (from D-4) | Startup default track sent by the app (`send_startup_default_track`); engine no longer creates one unprompted | sonnet | merged | b14fe4e9 |
 | FU-D7c (from D-7c) | `submit_clip_load` checks `clear_generation` under the clips write lock (echo sent under it too); `LoadClipFromWav`/`LoadTakeClipFromWav` can't land in the next project | sonnet | merged | 04339a6e |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
