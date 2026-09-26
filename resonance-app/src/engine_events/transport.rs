@@ -60,6 +60,7 @@ pub(super) fn recording_overflow(r: &mut Resonance, dropped_frames: u64) {
 
 pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     r.io.bouncing = false;
+    r.io.bounce_cancel_requested = false;
     // Resolve a control-initiated `render.mixdown` job (doc #265, todo
     // #1157). The engine echoes the requested path verbatim, so the
     // token matches exactly the job that asked for this file. No-op when
@@ -81,7 +82,11 @@ pub(super) fn bounce_error(r: &mut Resonance, e: String) {
     // control export job resolves the one in flight (todo #1157). No-op
     // when none is control-initiated.
     r.control.jobs.fail_export_jobs(e.clone());
-    r.error_message = Some(format!("Bounce failed: {e}"));
+    // A cancel the user asked for from the progress modal (FU-F1c) is
+    // not a failure worth a banner.
+    if !std::mem::take(&mut r.io.bounce_cancel_requested) {
+        r.error_message = Some(format!("Bounce failed: {e}"));
+    }
 }
 
 pub(super) fn track_bounce_error(r: &mut Resonance, e: String) {
@@ -101,8 +106,12 @@ pub(super) fn track_bounce_cancelled(
 }
 
 pub(super) fn bounce_progress(r: &mut Resonance, fraction: f32) {
+    // Only one offline render runs at a time: a bounce in place, or the
+    // WAV mixdown (FU-F1c).
     if let Some(state) = r.bounce_in_progress.as_mut() {
         state.fraction = fraction.clamp(0.0, 1.0);
+    } else if r.io.bouncing {
+        r.io.bounce_fraction = fraction.clamp(0.0, 1.0);
     }
 }
 
@@ -116,9 +125,7 @@ pub(super) fn export_progress(
     fraction: f32,
 ) {
     r.io.bouncing = true;
-    if let Some(state) = r.bounce_in_progress.as_mut() {
-        state.fraction = fraction.clamp(0.0, 1.0);
-    }
+    r.io.bounce_fraction = fraction.clamp(0.0, 1.0);
 }
 
 pub(super) fn export_complete(r: &mut Resonance, path: String, bytes: u64) {

@@ -76,12 +76,21 @@ impl ExportReporter {
         };
     }
 
-    fn progress(self, tx: &Sender<AudioEvent>, phase: ExportPhase, fraction: f32) {
-        // The legacy full-mix bounce emitted no progress events; only the
-        // generalized export path reports them (the WAV bounce UI keys off
-        // `io.bouncing`, not a fraction).
-        if let ExportReporter::Export = self {
-            let _ = tx.send(AudioEvent::ExportProgress { phase, fraction });
+    /// Report `fraction` (the previous report was `prev`). The generalized
+    /// export path reports every chunk as `ExportProgress`; the legacy WAV
+    /// mixdown reports `BounceProgress` — which drives the app's blocking
+    /// mixdown progress modal (FU-F1c) — only when the whole percent
+    /// changes, so a long song sends ~100 events, not one per chunk.
+    fn progress(self, tx: &Sender<AudioEvent>, phase: ExportPhase, fraction: f32, prev: f32) {
+        match self {
+            ExportReporter::Export => {
+                let _ = tx.send(AudioEvent::ExportProgress { phase, fraction });
+            }
+            ExportReporter::Bounce => {
+                if (fraction * 100.0) as u32 != (prev * 100.0) as u32 {
+                    let _ = tx.send(AudioEvent::BounceProgress { fraction });
+                }
+            }
         }
     }
 }
@@ -275,8 +284,9 @@ fn render_range(
             return RenderOutcome::WriteError(e);
         }
 
+        let prev = (pos - render_start) as f32 / total_frames;
         pos += emit as u64;
-        reporter.progress(event_tx, phase, (pos - render_start) as f32 / total_frames);
+        reporter.progress(event_tx, phase, (pos - render_start) as f32 / total_frames, prev);
     }
     RenderOutcome::Completed
 }
@@ -565,7 +575,7 @@ pub(crate) fn run_export(
             return;
         }
     }
-    reporter.progress(event_tx, ExportPhase::Encode, 1.0);
+    reporter.progress(event_tx, ExportPhase::Encode, 1.0, 1.0);
     let bytes = match sink.finalize(&settings.metadata) {
         Ok(bytes) => bytes,
         Err(e) => {

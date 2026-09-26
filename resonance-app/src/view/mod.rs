@@ -123,6 +123,15 @@ impl crate::Resonance {
                 bounce_progress::view_bounce_progress_overlay(self)
             ]
             .into()
+        } else if self.io.bouncing {
+            // The WAV mixdown gates the same traffic as a bounce in place
+            // (`gates_message`), so it gets the same blocking modal at the
+            // same priority (code review FU-F1c).
+            stack![
+                base,
+                bounce_progress::view_mixdown_progress_overlay(self)
+            ]
+            .into()
         } else if self.freeze.any_in_flight() {
             // The freeze progress modal (design doc #181, todo #582) is the
             // same blocking overlay — a freeze IS a bounce-in-place run.

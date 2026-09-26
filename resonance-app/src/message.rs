@@ -655,6 +655,9 @@ pub enum ViewportMessage {
 pub enum ProjectIoMessage {
     BounceToWav,
     BouncePathSelected(Option<String>),
+    /// Cancel button of the WAV mixdown progress modal (FU-F1c): stops the
+    /// in-flight render cooperatively via `AudioCommand::CancelBounce`.
+    CancelBounce,
     SaveProject,
     SaveProjectAs,
     /// Begin a periodic autosave snapshot. Routed through the same async

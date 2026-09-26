@@ -65,6 +65,8 @@ mod media_browser_scaffold;
 mod midi_clip_lossless_roundtrip;
 #[path = "io/offline_render_gate.rs"]
 mod offline_render_gate;
+#[path = "io/mixdown_progress_modal.rs"]
+mod mixdown_progress_modal;
 #[path = "io/open_failure_keeps_path.rs"]
 mod open_failure_keeps_path;
 #[path = "io/pool_persistence.rs"]

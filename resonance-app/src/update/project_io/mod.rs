@@ -59,10 +59,22 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                     Some("A measurement is in progress; bounce again when it finishes".into());
             } else {
                 r.io.bouncing = true;
+                r.io.bounce_fraction = 0.0;
+                r.io.bounce_cancel_requested = false;
+                r.io.bounce_target = std::path::Path::new(&path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.clone());
                 let _ = r.engine.send(AudioCommand::BounceToWav { path });
             }
         }
         ProjectIoMessage::BouncePathSelected(None) => {}
+        ProjectIoMessage::CancelBounce => {
+            if r.io.bouncing && !r.io.bounce_cancel_requested {
+                r.io.bounce_cancel_requested = true;
+                let _ = r.engine.send(AudioCommand::CancelBounce);
+            }
+        }
         ProjectIoMessage::SaveProject => {
             if r.io.project_path.is_some() {
                 return start_save(r);
