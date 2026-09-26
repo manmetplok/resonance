@@ -59,7 +59,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     let send_toggle = toggle_button(
         "Send MIDI Clock",
-        r.midi_clock_send_enabled,
+        r.midi_devices.midi_clock_send_enabled,
         Message::Ui(UiMessage::ToggleMidiClockSend),
     );
     // Option lists come from `UiViewCaches` — the overlay redraws every
@@ -69,12 +69,12 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     // device that is currently unplugged.
     let send_choices = midi_choices_with_override(
         &r.view_caches.midi_output_choices,
-        r.midi_clock_send_device.as_deref(),
-        &r.midi_output_devices,
+        r.midi_devices.midi_clock_send_device.as_deref(),
+        &r.midi_devices.midi_output_devices,
     );
     let send_picker = pick_list(
         send_choices,
-        Some(MidiPickerChoice(r.midi_clock_send_device.clone())),
+        Some(MidiPickerChoice(r.midi_devices.midi_clock_send_device.clone())),
         |choice| Message::Ui(UiMessage::SetMidiClockSendDevice(choice.0)),
     )
     .placeholder("MIDI output port...")
@@ -83,17 +83,17 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
 
     let recv_toggle = toggle_button(
         "Receive MIDI Clock",
-        r.midi_clock_recv_enabled,
+        r.midi_devices.midi_clock_recv_enabled,
         Message::Ui(UiMessage::ToggleMidiClockRecv),
     );
     let recv_choices = midi_choices_with_override(
         &r.view_caches.midi_input_choices,
-        r.midi_clock_recv_device.as_deref(),
-        &r.midi_input_devices,
+        r.midi_devices.midi_clock_recv_device.as_deref(),
+        &r.midi_devices.midi_input_devices,
     );
     let recv_picker = pick_list(
         recv_choices,
-        Some(MidiPickerChoice(r.midi_clock_recv_device.clone())),
+        Some(MidiPickerChoice(r.midi_devices.midi_clock_recv_device.clone())),
         |choice| Message::Ui(UiMessage::SetMidiClockRecvDevice(choice.0)),
     )
     .placeholder("MIDI input port...")

@@ -434,8 +434,8 @@ fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.midi_clock_send_enabled != b.midi_clock_send_enabled
         || a.midi_clock_send_device != b.midi_clock_send_device
     {
-        r.midi_clock_send_enabled = b.midi_clock_send_enabled;
-        r.midi_clock_send_device = b.midi_clock_send_device.clone();
+        r.midi_devices.midi_clock_send_enabled = b.midi_clock_send_enabled;
+        r.midi_devices.midi_clock_send_device = b.midi_clock_send_device.clone();
         let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
             device: b.midi_clock_send_device.clone(),
             enabled: b.midi_clock_send_enabled,
@@ -444,8 +444,8 @@ fn apply_global(r: &mut Resonance, a: &ProjectFile, b: &ProjectFile) {
     if a.midi_clock_recv_enabled != b.midi_clock_recv_enabled
         || a.midi_clock_recv_device != b.midi_clock_recv_device
     {
-        r.midi_clock_recv_enabled = b.midi_clock_recv_enabled;
-        r.midi_clock_recv_device = b.midi_clock_recv_device.clone();
+        r.midi_devices.midi_clock_recv_enabled = b.midi_clock_recv_enabled;
+        r.midi_devices.midi_clock_recv_device = b.midi_clock_recv_device.clone();
         let _ = r.engine.send(AudioCommand::SetMidiClockInput {
             device: b.midi_clock_recv_device.clone(),
             enabled: b.midi_clock_recv_enabled,

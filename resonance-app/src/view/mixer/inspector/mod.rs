@@ -299,8 +299,8 @@ pub(crate) fn inspector_fingerprint(
     // Live MIDI device list too — the audio block isn't a strict
     // function of the cached lists since the stale-override branch
     // peeks at `midi_input_devices` directly.
-    r.midi_input_devices.len().hash(&mut h);
-    r.midi_output_devices.len().hash(&mut h);
+    r.midi_devices.midi_input_devices.len().hash(&mut h);
+    r.midi_devices.midi_output_devices.len().hash(&mut h);
     h.finish()
 }
 

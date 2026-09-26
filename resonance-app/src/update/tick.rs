@@ -208,10 +208,10 @@ fn check_output_stream_lost(r: &mut Resonance) {
 /// Cadence is intentionally low (every 2 s) — ALSA seq enumeration
 /// is cheap, but doing it every frame would still be wasteful.
 fn refresh_midi_devices_if_stale(r: &mut Resonance) {
-    if r.midi_devices_last_refresh.elapsed() < std::time::Duration::from_secs(2) {
+    if r.midi_devices.midi_devices_last_refresh.elapsed() < std::time::Duration::from_secs(2) {
         return;
     }
-    r.midi_devices_last_refresh = std::time::Instant::now();
+    r.midi_devices.midi_devices_last_refresh = std::time::Instant::now();
     let _ = r.engine.send(AudioCommand::ListMidiInputDevices);
     let _ = r.engine.send(AudioCommand::ListMidiOutputDevices);
 }

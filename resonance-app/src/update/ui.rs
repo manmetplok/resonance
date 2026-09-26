@@ -186,31 +186,31 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             crate::settings::persist(&r.settings);
         }
         UiMessage::ToggleMidiClockSend => {
-            r.midi_clock_send_enabled = !r.midi_clock_send_enabled;
+            r.midi_devices.midi_clock_send_enabled = !r.midi_devices.midi_clock_send_enabled;
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
-                device: r.midi_clock_send_device.clone(),
-                enabled: r.midi_clock_send_enabled,
+                device: r.midi_devices.midi_clock_send_device.clone(),
+                enabled: r.midi_devices.midi_clock_send_enabled,
             });
         }
         UiMessage::SetMidiClockSendDevice(device) => {
-            r.midi_clock_send_device = device.clone();
+            r.midi_devices.midi_clock_send_device = device.clone();
             let _ = r.engine.send(AudioCommand::SetMidiClockOutput {
                 device,
-                enabled: r.midi_clock_send_enabled,
+                enabled: r.midi_devices.midi_clock_send_enabled,
             });
         }
         UiMessage::ToggleMidiClockRecv => {
-            r.midi_clock_recv_enabled = !r.midi_clock_recv_enabled;
+            r.midi_devices.midi_clock_recv_enabled = !r.midi_devices.midi_clock_recv_enabled;
             let _ = r.engine.send(AudioCommand::SetMidiClockInput {
-                device: r.midi_clock_recv_device.clone(),
-                enabled: r.midi_clock_recv_enabled,
+                device: r.midi_devices.midi_clock_recv_device.clone(),
+                enabled: r.midi_devices.midi_clock_recv_enabled,
             });
         }
         UiMessage::SetMidiClockRecvDevice(device) => {
-            r.midi_clock_recv_device = device.clone();
+            r.midi_devices.midi_clock_recv_device = device.clone();
             let _ = r.engine.send(AudioCommand::SetMidiClockInput {
                 device,
-                enabled: r.midi_clock_recv_enabled,
+                enabled: r.midi_devices.midi_clock_recv_enabled,
             });
         }
         UiMessage::SetPerformanceTuning(index) => {

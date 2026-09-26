@@ -90,7 +90,7 @@ pub(super) fn midi_input_block(
     let in_choices = super::midi_choices_with_override(
         &r.view_caches.midi_input_choices,
         track.midi_input_device.as_deref(),
-        &r.midi_input_devices,
+        &r.midi_devices.midi_input_devices,
     );
     let in_selected = MidiPickerChoice(track.midi_input_device.clone());
     let in_picker = pick_list(in_choices, Some(in_selected), move |choice| {
@@ -129,7 +129,7 @@ pub(super) fn midi_output_block(
     let out_choices = super::midi_choices_with_override(
         &r.view_caches.midi_output_choices,
         track.midi_output_device.as_deref(),
-        &r.midi_output_devices,
+        &r.midi_devices.midi_output_devices,
     );
     let out_selected = MidiPickerChoice(track.midi_output_device.clone());
     let out_picker = pick_list(out_choices, Some(out_selected), move |choice| {

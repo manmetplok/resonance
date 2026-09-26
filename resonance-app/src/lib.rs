@@ -9,7 +9,6 @@
 //! as needed for the test fixtures (`demo::seed_demo_content`,
 //! `Resonance`, `Message`, etc.) — everything else stays `pub(crate)`.
 
-use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 use resonance_audio::AudioEngine;
 use resonance_music_theory::TableRegistry;
@@ -78,21 +77,9 @@ pub struct Resonance {
     pub sample_rate: u32,
     pub(crate) input_devices: Vec<InputDeviceInfo>,
     pub(crate) default_input_device_name: Option<String>,
-    /// Hardware MIDI input ports advertised by the OS. Refreshed
-    /// periodically from `Tick` so hot-plugged devices appear.
-    pub(crate) midi_input_devices: Vec<MidiDeviceInfo>,
-    /// Hardware MIDI output ports.
-    pub(crate) midi_output_devices: Vec<MidiDeviceInfo>,
-    /// Wall-clock instant of the last MIDI device list refresh.
-    pub(crate) midi_devices_last_refresh: std::time::Instant,
-    /// Whether MIDI clock master output is enabled.
-    pub(crate) midi_clock_send_enabled: bool,
-    /// Hardware MIDI output port carrying the master clock.
-    pub(crate) midi_clock_send_device: Option<String>,
-    /// Whether MIDI clock slave (input) is enabled.
-    pub(crate) midi_clock_recv_enabled: bool,
-    /// Hardware MIDI input port carrying the master clock.
-    pub(crate) midi_clock_recv_device: Option<String>,
+    /// Hardware MIDI device lists and clock sync settings (ARCH-06 A6-2).
+    /// See `state::MidiDevices`.
+    pub(crate) midi_devices: state::MidiDevices,
     /// CLAP plugin scan result (ARCH-06 A6-2): what's available, what
     /// failed to load, and whether a rescan is in flight. See
     /// `state::PluginCatalog`.
@@ -806,13 +793,7 @@ impl Resonance {
             sample_rate: 44100, // overwritten by SampleRateDetected event
             input_devices: Vec::new(),
             default_input_device_name: None,
-            midi_input_devices: Vec::new(),
-            midi_output_devices: Vec::new(),
-            midi_devices_last_refresh: std::time::Instant::now(),
-            midi_clock_send_enabled: false,
-            midi_clock_send_device: None,
-            midi_clock_recv_enabled: false,
-            midi_clock_recv_device: None,
+            midi_devices: state::MidiDevices::default(),
             plugin_catalog: state::PluginCatalog::default(),
             missing_plugins: crate::state::MissingPluginState::default(),
             view_caches,

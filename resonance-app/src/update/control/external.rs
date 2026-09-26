@@ -79,6 +79,7 @@ fn require_external(app: &Resonance, id: u64) -> Result<&TrackState, RpcError> {
 fn devices(app: &Resonance, request: &Request) -> Response {
     let view = DevicesView {
         midi_outputs: app
+            .midi_devices
             .midi_output_devices
             .iter()
             .map(|d| d.name.clone())
@@ -235,7 +236,7 @@ fn set_midi_out(app: &mut Resonance, request: &Request) -> (Response, Task<Messa
     // An unknown port name would be stored and silently swallow every
     // note, so check it against the live list rather than accepting it.
     if let Some(Some(name)) = &params.device {
-        if !app.midi_output_devices.iter().any(|d| &d.name == name) {
+        if !app.midi_devices.midi_output_devices.iter().any(|d| &d.name == name) {
             return reject(
                 request,
                 RpcError::not_found(format!(
