@@ -1,11 +1,13 @@
 //! Project save / load — message dispatch + async save-collector kickoff.
 //! Pure serialization lives in `serialize.rs`, the `LoadedProject` →
-//! engine + state replay lives in `replay.rs`, and rfd file-dialog
+//! engine + state replay lives in `replay/` and `replay_diff.rs` (the
+//! domains both share run through `reconcile/`), and rfd file-dialog
 //! tasks live in `dialogs.rs`.
 
 mod autosave;
 mod dialogs;
 mod instantiate;
+pub mod reconcile;
 pub(crate) mod recovery;
 mod replay;
 pub mod replay_diff;

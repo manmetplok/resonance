@@ -19,6 +19,7 @@ mod restore;
 
 use resonance_audio::types::*;
 
+use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
 use crate::project::{LoadedProject, ProjectFile};
 use crate::state::*;
 use crate::util::db_to_gain;
@@ -50,14 +51,26 @@ struct SavedPluginOrder {
 /// after `AudioEvent::AllCleared` confirms the engine is empty.
 pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
+    // `io.restoring_undo` marks an undo/redo's full replay (set at its
+    // `ClearAll`, cleared by `all_cleared` after this returns); the
+    // replay reads it only through the ctx.
+    let ctx = ReconcileCtx {
+        origin: if r.io.restoring_undo {
+            Origin::UndoFull
+        } else {
+            Origin::DiskLoad
+        },
+        project_dir: Some(&loaded.project_dir),
+    };
+    r.io.reconcile_trace.clear();
     // Will be set by the caller (OpenPathSelected); an undo/redo's caller
     // puts this one back, which the freeze restore needs meanwhile.
     let live_project_path = r.io.project_path.take();
     // An undo/redo never lowers the derived-clip id counter (ARCH-01
     // A-6); `load_from_project` resets it, so remember it here.
-    let derived_counter_floor = r
-        .io
-        .restoring_undo
+    let derived_counter_floor = ctx
+        .origin
+        .is_undo()
         .then_some(r.compose.next_derived_clip_id);
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)
@@ -76,7 +89,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // snapshot (FU-H2b). The fingerprint is keyed by track id and slot
     // position, both stable across the replay. Nothing in the replay
     // reads the statuses.
-    if r.io.restoring_undo {
+    if ctx.origin.is_undo() {
         r.freeze.queue = None;
     } else {
         r.freeze.reset();
@@ -89,7 +102,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // gets the same refusals, so it would re-raise the modal on every
     // history step — the same reason the missing-FILE modal is opened
     // only for disk loads (`engine_events::project_io::all_cleared`).
-    if !r.io.restoring_undo {
+    if !ctx.origin.is_undo() {
         r.missing_plugins.reset();
     } else {
         r.missing_plugins.dismiss();
@@ -101,7 +114,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         .send(AudioCommand::SetProjectDir(loaded.project_dir.clone()));
 
     // Restore global transport, compose sections, and engine settings.
-    replay_globals(r, project);
+    replay_globals(r, project, &ctx);
 
     // Wipe the runtime registry and collect the saved plugin-chain order so
     // we can re-impose it after all async PluginAdded events have settled.
@@ -122,7 +135,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Restore independent sub-states. An undo/redo keeps the live A/B
     // monitor; a disk load takes the one the project was saved with.
-    let reference_monitor = if r.io.restoring_undo {
+    let reference_monitor = if ctx.origin.is_undo() {
         ReferenceMonitorSource::Live
     } else {
         ReferenceMonitorSource::File
@@ -151,7 +164,7 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 
     // Last: a disk load's freeze baseline fingerprints the replayed
     // content, automation lanes included.
-    replay_freeze(r, project, &loaded.project_dir, live_project_path.as_deref());
+    replay_freeze(r, project, &ctx, live_project_path.as_deref());
 }
 
 /// Restore every track's freeze status from `ProjectTrack.freeze` (ARCH-01
@@ -163,12 +176,12 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
 fn replay_freeze(
     r: &mut Resonance,
     project: &ProjectFile,
-    project_dir: &std::path::Path,
+    ctx: &ReconcileCtx<'_>,
     live_project_path: Option<&std::path::Path>,
 ) {
-    if r.io.restoring_undo {
+    if ctx.origin.is_undo() {
         r.apply_freeze_restore(&project.tracks, live_project_path);
-    } else {
+    } else if let Some(project_dir) = ctx.project_dir {
         let freezes: Vec<_> = project
             .tracks
             .iter()
@@ -185,10 +198,10 @@ fn replay_freeze(
 
 /// Restore global transport state (BPM, time signature, metronome, master
 /// volume, MIDI clock, loop range), compose/section state (definitions,
-/// placements, markers, drum patterns), and the tempo-event map. Sends all
-/// corresponding engine commands so the engine is in sync before tracks and
-/// clips are replayed.
-fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
+/// placements, drum patterns), and the [`Stage::Timeline`] domains (tempo
+/// events, chord track, markers). Sends all corresponding engine commands
+/// so the engine is in sync before tracks and clips are replayed.
+fn replay_globals(r: &mut Resonance, project: &ProjectFile, ctx: &ReconcileCtx<'_>) {
     // Transport scalars.
     r.transport.bpm = project.bpm;
     r.transport.time_sig_num = project.time_sig_num;
@@ -216,10 +229,6 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
     // Sections / compose.
     r.compose
         .load_from_project(&project.section_definitions, &project.section_placements);
-    r.markers = crate::state::ArrangementMarkers::from(project.arrangement_markers.clone());
-    // Global chord track (epic #33): app-side metadata only, nothing to
-    // send. Legacy projects carry none and come up with an empty track.
-    r.chord_track = project.chord_track.to_chord_track();
 
     // Restore the project's drum pattern bank (with legacy promotion),
     // keeping the `ComposeState::default()` bank in place when the
@@ -235,14 +244,14 @@ fn replay_globals(r: &mut Resonance, project: &ProjectFile) {
     r.compose.drumroll.managing_group_id = first_group_id;
     r.compose.drumroll.managing_pattern_id = r.compose.default_drum_pattern_id;
 
-    // Tempo / signature events — must precede the engine commands below.
-    restore_tempo_events(r, project);
-
     // Engine commands: tempo, signature, metronome, master volume.
     let _ = r.engine.send(AudioCommand::SetBpm {
         bpm: r.transport.bpm,
     });
-    r.rebuild_and_send_tempo();
+    // Tempo / signature events (+ `SetTempoEvents`), chord track, markers.
+    // After `SetBpm`, before the chord trim below (it reads the meter) and
+    // before any clip is replayed.
+    reconcile_stage(r, Stage::Timeline, None, project, ctx);
     // Chords past a section's end are refused by every edit; hold a
     // file to the same once the meter is known (code review FU-V4b).
     let trimmed = crate::update::compose::trim_chords_to_sections(r);

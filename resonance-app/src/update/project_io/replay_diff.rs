@@ -34,7 +34,8 @@ use crate::project::{
 use crate::util::db_to_gain;
 use crate::Resonance;
 
-use super::replay::{restore_drum_patterns, restore_tempo_events};
+use super::reconcile::{reconcile_stage, Origin, ReconcileCtx, Stage};
+use super::replay::restore_drum_patterns;
 use super::serialize::build_project_file;
 
 /// Attempt a structure-preserving replay. Returns `true` when the diff
@@ -55,6 +56,12 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     if !structurally_compatible(&current, target_file) {
         return false;
     }
+    r.io.reconcile_trace.clear();
+    let project_path = r.io.project_path.clone();
+    let ctx = ReconcileCtx {
+        origin: Origin::UndoDiff,
+        project_dir: project_path.as_deref(),
+    };
 
     // -- Global transport / master -------------------------------------
     apply_global(r, &current, target_file);
@@ -112,7 +119,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // -- Compose state (definitions, placements, drum groups, lyrics) --
     apply_compose(r, target_file);
     apply_track_groups(r, target_file);
-    apply_markers(r, target_file);
 
     // -- Media pool (doc #175) -----------------------------------------
     // The pool is pure app-side data (no engine instances), so an
@@ -153,17 +159,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // are all still loaded). The monitor state is left alone.
     super::replay::reconcile_references(r, target_file);
 
-    // -- Global chord track --------------------------------------------
-    // App-side metadata restored wholesale from the snapshot's file, as
-    // `replay_globals` does on the slow path. The structural check
-    // ignores it — chord edits never alter the project shape, so they
-    // always take this fast path.
-    r.chord_track = target_file.chord_track.to_chord_track();
-
     // -- Track freeze status (detach/delete caches no longer frozen) ----
     // From `ProjectTrack::freeze`, as `replay_loaded_project` does on the
     // slow path (A-4).
-    let project_path = r.io.project_path.clone();
     r.apply_freeze_restore(&target_file.tracks, project_path.as_deref());
 
     // -- External-instrument config -----------------------------------
@@ -172,8 +170,11 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // project shape, so it always takes this fast path.
     r.restore_external_instruments(target_file);
 
-    // -- Tempo / signature events --------------------------------------
-    apply_tempo(r, target_file);
+    // -- Migrated domains (ARCH-01 A-13) -------------------------------
+    // Tempo / signature events, chord track, markers. Tempo stays where
+    // the diff path always sent it (the full path sends it before the
+    // clips; roadmap group (4) moves it there on this path too).
+    reconcile_stage(r, Stage::Timeline, Some(&current), target_file, &ctx);
 
     // -- Automation lanes ----------------------------------------------
     // From `ProjectFile::automation_lanes`, as `replay_loaded_project`
@@ -1101,11 +1102,6 @@ pub fn midi_notes_equal(a: &[MidiNote], b: &[MidiNote]) -> bool {
     })
 }
 
-fn apply_tempo(r: &mut Resonance, b: &ProjectFile) {
-    restore_tempo_events(r, b);
-    r.rebuild_and_send_tempo();
-}
-
 /// Restore the track group registry from a saved project file. The
 /// group id set is guaranteed equal by `structurally_compatible`, but
 /// the per-group contents (membership, collapse state, nesting, macros)
@@ -1122,10 +1118,6 @@ fn apply_track_groups(r: &mut Resonance, b: &ProjectFile) {
             r.registry.next_sub_track_id = tg.id + 1;
         }
     }
-}
-
-fn apply_markers(r: &mut Resonance, b: &ProjectFile) {
-    r.markers = crate::state::ArrangementMarkers::from(b.arrangement_markers.clone());
 }
 
 /// Restore the media pool from a snapshot on the fast (diff) path (doc
