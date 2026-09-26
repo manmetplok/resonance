@@ -12,7 +12,7 @@
 use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, ParamInfo, PluginInstanceId, TrackType};
 
 const TRACK: u64 = 1;

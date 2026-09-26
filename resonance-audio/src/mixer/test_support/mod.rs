@@ -14,7 +14,7 @@
 //!   ([`MixAudioHarness`]).
 //!
 //! None of it is part of the crate's public API; it is re-exported under
-//! `crate::__test_support`.
+//! `crate::test_support`.
 
 mod callback;
 mod render_block;

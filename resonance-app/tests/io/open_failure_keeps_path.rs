@@ -13,7 +13,7 @@ use resonance_audio::types::AudioCommand;
 use std::path::{Path, PathBuf};
 
 fn project_dirs_sent(
-    rx: &resonance_audio::__test_support::Receiver<AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<AudioCommand>,
 ) -> Vec<PathBuf> {
     rx.try_iter()
         .filter_map(|cmd| match cmd {

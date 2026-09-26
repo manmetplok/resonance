@@ -40,7 +40,7 @@
 //! seqlock of plain atomics on `SharedState`) and the engine control
 //! loop formats + prints it on its next tick.
 //!
-//! See `tests/cycle_load.rs` for behaviour coverage.
+//! See `tests/mixer/cycle_load.rs` for behaviour coverage.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};

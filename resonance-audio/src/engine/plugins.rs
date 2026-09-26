@@ -16,7 +16,7 @@ use super::thread::{HandlerCtx, HandlerState};
 /// True for commands that can change a track's or bus's chain latency
 /// (plugin add/remove, routing, track/bus topology, freeze / FX-bypass
 /// state). The engine loop republishes the plugin-delay-compensation
-/// table after these run. `pub` (via `__test_support`) so integration
+/// table after these run. `pub` (via `test_support`) so integration
 /// tests can pin the command set.
 pub fn affects_latency(cmd: &AudioCommand) -> bool {
     matches!(
@@ -582,7 +582,7 @@ pub(crate) fn handle_set_plugin_bypass(
 /// The pair of events that report a failed editor open (ba todo #1347).
 ///
 /// Split out as a pure function so the wording and the structured
-/// payload cannot drift, and so `tests/plugin_editor_state.rs` can pin
+/// payload cannot drift, and so `tests/clap_host/plugin_editor_state.rs` can pin
 /// the failure path — the one that used to lie, reporting only
 /// `AudioEvent::Error("Failed to open plugin editor")` with no instance
 /// id and no reason.
@@ -732,8 +732,8 @@ pub(crate) fn handle_load_plugin_state(
 /// Reload `inst` from a state blob and describe a failure as the
 /// user-visible error the engine should emit, or `None` on success
 /// (code review ENG-02: a rejected preset used to leave the plugin
-/// silently deactivated). `pub` via `__test_support` — see
-/// `tests/clap_latency_tracking.rs`.
+/// silently deactivated). `pub` via `test_support` — see
+/// `tests/clap_host/clap_latency_tracking.rs`.
 pub fn reload_plugin_state(
     inst: &mut crate::clap_host::ClapInstance,
     instance_id: PluginInstanceId,

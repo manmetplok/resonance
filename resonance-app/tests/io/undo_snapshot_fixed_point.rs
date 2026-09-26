@@ -37,7 +37,7 @@ use resonance_app::state::FreezeStatus;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, ClipId, TrackId, TrackType};
 use resonance_common::{AutomationTarget, CurveKind, FreezeCacheRef, FreezeCacheStatus};
 use resonance_music_theory::{Chord, ChordQuality, Mode, PitchClass, Scale};

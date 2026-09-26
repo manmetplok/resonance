@@ -13,7 +13,7 @@ use resonance_app::message::{ExternalInstrumentMessage as Eim, Message};
 use resonance_app::state::TrackState;
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, AudioEvent, TrackId};
 
 const TRACK: TrackId = 1;

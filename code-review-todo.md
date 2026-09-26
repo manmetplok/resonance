@@ -48,7 +48,7 @@ master and updates this table. Agents do **not** edit this file.
 | H8 message enums + undo blobs + ids | ARCH-06 A6-1, ARCH-09 A9-1/2, ARCH-04 A4-1/2/3 | — | queued (after V4/H3) | |
 | H1 ARCH-02 NOW steps | A2-1 per-map try_read miss counters, A2-3 off-lock compute, A2-2 deferred-drop retire queue (= MIX-04) | fable | merged | f615e46c |
 | H2 ARCH-01 NOW steps | A1-1 snapshot fixed-point test, A1-2 drop redundant UndoExtras, persist chord_track | fable | merged | 9cb5803b |
-| H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | in progress | |
+| H3 ARCH-03 NOW steps | A3-4, A3-5 `test-internals` feature, A3-1 group resonance-audio tests | opus | merged | 6755fbb7 |
 
 ### Follow-ups found while fixing (new todos)
 
@@ -124,10 +124,11 @@ master and updates this table. Agents do **not** edit this file.
 - [ ] **FU-M11a** (low) a vocal render returning `Ok(None)` (no voicebank → MIDI-only fallback) maps to `Message::Tick`: a `vocal.render` job can still hang and the `in_flight_render` entry stays.
 - [ ] **FU-M11b** (low) a section's vocal is rendered at one tempo (first placement's); placements in other tempo regions / intra-section tempo changes aren't handled.
 - [ ] **FU-H4a** (low) `resonance-gate`'s macOS-only dev-dep on `cocoa-plugin-gui` (NSApplication pump for `editor_open_cocoa`) — re-export a test_support pump from `editor_host` instead.
-- [ ] **FU-H4b** note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
+- [x] **FU-H4b** — done (A3-2); note: new crates need a row in `tools/arch-invariants` `allowed_internal_deps`; A3-1 (audio test grouping) should add its root list there (A3-2).
 - [ ] **FU-M12a** (medium) autosave crash detection + recovery prompt (#466/#467 on `ba/epic-32`, ~1000 lines) and the autosave settings UI (#471) not ported — need their own todos.
 - [ ] **FU-M12b** (low) autosave of a never-saved project uses the real user cache dir; backup side-file folder can be orphaned by a crash mid-backup; `SetProjectDir` folder scan runs on the engine command thread.
 - [ ] **FU-M12c** (low) possibly flaky: `io preset_name_collisions::a_file_holding_another_preset_is_never_overwritten` failed once under full-suite load.
+- [ ] **FU-H3a** (low) crate-level `allow(dead_code, unused_imports)` when `test-internals` is off — reviewer may prefer per-item cfg gating; broken intra-doc link to gated `RolledAudioTake` from `project/take_audio.rs`; stale binary counts in run-tests.py docstring / CLAUDE.md.
 
 ## How to use this file
 
@@ -1796,7 +1797,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: `HandlerCtx` (`engine/thread/mod.rs:44`) holds `&Arc<RwLock<...>>` for every handler; migrate by adding a `graph: &ArcSwap<RenderGraph>` alongside and removing the old fields last.
 - **Verification / done-when:** `grep -rn '\.write()' resonance-audio/src/engine | grep -E 'tracks|busses|clips|midi_clips'` is empty; the callback does no `try_read` on project maps; a test using `EngineHandlerHarness` loads a 500-clip project while a synthetic callback runs and asserts zero contended blocks.
 
-### [ ] ARCH-03 — Test-binary sprawl outside the app, and engine internals leaking into the public API for tests
+### [x] ARCH-03 — Test-binary sprawl outside the app, and engine internals leaking into the public API for tests — fixed @811b08a0 (130→12 binaries, rebuild 12.1s→3.7s, test-internals feature)
 - **Severity:** high
 - **Category:** build-time
 - **Location:** `resonance-audio/tests/` (121 files = 121 binaries, 29,930 LOC, `0` `[[test]]` groups in `resonance-audio/Cargo.toml`), `resonance-music-theory/tests/` (41), `plugins/resonance-amp/tests/` (28), `plugins/resonance-granular-delay/tests/` (22), `plugins/resonance-mastering/tests/` (21); `resonance-audio/src/lib.rs:56-120` and `:200-400` (`__test_support` plus 24 `#[doc(hidden)] pub use engine::…` blocks); `scripts/run-tests.py:1-12` ("~620 of them").

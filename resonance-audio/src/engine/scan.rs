@@ -86,7 +86,7 @@ pub fn rescan_plugins(bundles: &mut Vec<ClapBundle>, event_tx: &Sender<AudioEven
 
 /// [`rescan_plugins`] over a given set of directories.
 ///
-/// The seam `tests/plugin_rescan.rs` drives. A test must not scan the
+/// The seam `tests/clap_host/plugin_rescan.rs` drives. A test must not scan the
 /// machine's real plugin directories: `dlopen`ing whatever third-party
 /// `.clap` files happen to be installed pulls their static initialisers
 /// and `atexit` handlers into the test process, and a broken one takes

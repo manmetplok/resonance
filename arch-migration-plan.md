@@ -184,6 +184,18 @@ a `#[test]` that globs `resonance-audio/tests/*.rs` and asserts the set equals
 the 10 known roots).
 Diff: ~30 lines. Conflict: none. Behaviour: none.
 
+> **Progress 2026-09-26 (branch `arch/H3-test-grouping`):** A3-4, A3-5,
+> A3-1, A3-2 landed. 129 test files → 7 groups + 4 standalone (the plan's
+> 3 plus `retire_queue`, a second `#[global_allocator]`); the five files
+> added since the plan went to bounce (`offline_render_fidelity`) and
+> mixer (`playhead_discontinuity_flush`, `silent_advance_loop_seam`,
+> `stopped_instrument_preview`, with `note_recorder/`). 1028 tests
+> before/after; 130 → 12 executables; touch-lib rebuild+run 12.1 s → 3.7 s.
+> `__test_support` is now `test_support` behind `test-internals`; the
+> featureless build allows `dead_code`/`unused_imports` crate-wide instead
+> of cfg-gating each test-only helper (feature-on builds lint as before).
+> Guard: `tools/arch-invariants` → `audio_test_binaries_are_the_known_groups`.
+
 **A3-3. Same for `resonance-mastering`, `resonance-granular-delay`, `resonance-amp`.**
 Goal: the three largest per-binary costs in the workspace (351–374 MB × 22–23).
 Grouping: mastering → `stages` (12 `stages_*` + `multiband_band_gr`),

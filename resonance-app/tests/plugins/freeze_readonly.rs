@@ -15,7 +15,7 @@ use resonance_app::message::{
 };
 use resonance_app::state::{FreezeStatus, MidiClipState, PluginSlotState};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, MidiNote, ParamInfo, TrackId, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 

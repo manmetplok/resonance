@@ -174,8 +174,8 @@ impl ClapBundle {
 
     /// Test-only doorway to [`descriptor_strings`]: the `bundle` module
     /// is private, so the helper rides on `ClapBundle` — already
-    /// re-exported through `__test_support` — to stay reachable from
-    /// `tests/clap_ffi_hardening.rs` without widening the module.
+    /// re-exported through `test_support` — to stay reachable from
+    /// `tests/clap_host/clap_ffi_hardening.rs` without widening the module.
     ///
     /// # Safety
     /// Same contract as [`descriptor_strings`].

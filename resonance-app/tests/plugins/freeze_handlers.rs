@@ -14,7 +14,7 @@ use resonance_app::message::{FreezeMessage, Message};
 use resonance_app::state::FreezeStatus;
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
-use resonance_audio::__test_support::Receiver;
+use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{AudioCommand, TrackId, TrackType};
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 

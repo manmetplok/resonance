@@ -1520,7 +1520,7 @@ fn promote_across_silence_snapshot() {
 }
 
 fn drain(
-    rx: &resonance_audio::__test_support::Receiver<resonance_audio::types::AudioCommand>,
+    rx: &resonance_audio::test_support::Receiver<resonance_audio::types::AudioCommand>,
 ) -> Vec<resonance_audio::types::AudioCommand> {
     let mut cmds = Vec::new();
     while let Ok(cmd) = rx.try_recv() {
