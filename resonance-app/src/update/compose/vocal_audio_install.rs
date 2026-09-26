@@ -8,7 +8,7 @@
 
 use resonance_audio::types::TrackId;
 
-use super::vocal_audio_io::unlink_if_exists;
+use super::vocal_audio_io::{unlink_if_exists, unlink_superseded_take};
 
 /// Apply the vocal audio render result: send `LoadClipFromWav` to the
 /// engine for every snapshotted placement and remember the resulting
@@ -67,7 +67,10 @@ pub(super) fn handle_vocal_audio_ready(
         {
             let _ = r.engine
                 .send(AudioCommand::DeleteClip { clip_id: old_id });
-            unlink_if_exists(&old_path);
+            // Never the saved project's `clip_<id>.wav`, nor a take
+            // another placement still plays (FU-C1a).
+            let installed = r.compose.vocal_audio.clips.values().map(|(_, p)| p);
+            unlink_superseded_take(&old_path, installed);
         }
 
         let audio_clip_id = r.compose.fresh_derived_clip_id();
@@ -140,8 +143,10 @@ pub(super) fn current_render_epoch(
 }
 
 /// Drop every previously-installed vocal audio clip on this (def, track)
-/// pair from both the engine and disk. Run before the new audio is
-/// installed so we don't leak WAV files.
+/// pair from the engine, and unlink the rendered takes that backed them
+/// once nothing else plays them. Run before the new audio is installed so
+/// we don't leak WAV files. A loaded clip's `clip_<id>.wav` is kept: the
+/// saved project and the undo history still name it (FU-C1a).
 pub(super) fn tear_down_old_vocal_audio(
     r: &mut crate::Resonance,
     definition_id: u64,
@@ -158,9 +163,12 @@ pub(super) fn tear_down_old_vocal_audio(
         .filter(|((d, _p, t), _)| *d == definition_id && *t == track_id)
         .map(|(k, v)| (*k, v.clone()))
         .collect();
-    for (key, (clip_id, path)) in stale {
-        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id });
-        unlink_if_exists(&path);
-        r.compose.vocal_audio.clips.remove(&key);
+    for (key, (clip_id, _)) in &stale {
+        let _ = r.engine.send(AudioCommand::DeleteClip { clip_id: *clip_id });
+        r.compose.vocal_audio.clips.remove(key);
+    }
+    for (_, (_, path)) in &stale {
+        let installed = r.compose.vocal_audio.clips.values().map(|(_, p)| p);
+        unlink_superseded_take(path, installed);
     }
 }

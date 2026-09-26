@@ -36,12 +36,19 @@ impl<'a> ComposeTrackCanvas<'a> {
         }
     }
 
-    /// Total ticks in the section, summing each bar's length.
+    /// Total ticks in the section, summing each bar's length (computed
+    /// once by the view, see [`ComposeTrackCanvas::total_ticks`]).
     pub(super) fn section_total_ticks(&self) -> u64 {
-        crate::view::compose::section_total_ticks(
-            self.tempo_map,
-            self.start_bar,
-            self.section_length_bars,
+        self.total_ticks
+    }
+
+    /// The section-relative tick range of `clip_area` that lies inside
+    /// the visible window (FU-V2c).
+    fn visible_tick_range(&self, clip_area: Rectangle) -> (f64, f64) {
+        let (lo, hi) = self.visible_x;
+        (
+            self.x_to_tick(lo - clip_area.x, clip_area.width),
+            self.x_to_tick(hi - clip_area.x, clip_area.width),
         )
     }
 
@@ -158,11 +165,19 @@ impl<'a> ComposeTrackCanvas<'a> {
         if self.section_length_bars == 0 || clip_area.width <= 0.0 {
             return;
         }
-        let mut tick_pos: u64 = 0;
-        for bar_offset in 0..self.section_length_bars {
-            let bar = self.start_bar + bar_offset;
-            let num = self.tempo_map.numerator_at_bar(bar) as u64;
-            let bar_ticks = self.tempo_map.bar_len_ticks_at(bar);
+        // Only the bars in the visible window (FU-V2c).
+        let (lo, hi) = self.visible_tick_range(clip_area);
+        let bars = crate::view::compose::section_bars_in_range(
+            self.tempo_map,
+            self.start_bar,
+            self.section_length_bars,
+            crate::view::compose::BarUnit::Ticks,
+            lo,
+            hi,
+        );
+        for b in bars {
+            let tick_pos = b.tick;
+            let num = b.beats as u64;
 
             // Bar line — LINE, 1px (matches the redesign's hairline ruler).
             let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);
@@ -186,11 +201,9 @@ impl<'a> ComposeTrackCanvas<'a> {
                     Stroke::default().with_width(1.0).with_color(theme::LINE_2),
                 );
             }
-
-            tick_pos += bar_ticks;
         }
         // Final bar line at section end
-        let x = clip_area.x + self.tick_to_x(tick_pos as f64, clip_area.width);
+        let x = clip_area.x + self.tick_to_x(self.total_ticks as f64, clip_area.width);
         frame.stroke(
             &Path::line(
                 Point::new(x, clip_area.y + NOTE_GRID_PAD),
@@ -238,10 +251,14 @@ impl<'a> ComposeTrackCanvas<'a> {
     ) {
         let cell_h = self.cell_height(clip_area);
         let total_ticks = self.section_total_ticks() as f64;
+        let (win_lo, win_hi) = self.visible_tick_range(clip_area);
         for note in &clip.notes {
             let note_start_tick = clip_start_tick + note.start_tick as f64;
             let note_end_tick = note_start_tick + note.duration_ticks as f64;
             if note_end_tick <= 0.0 || note_start_tick >= total_ticks {
+                continue;
+            }
+            if note_end_tick < win_lo || note_start_tick > win_hi {
                 continue;
             }
             let vs = note_start_tick.max(0.0);

@@ -46,12 +46,6 @@ impl crate::Resonance {
             playhead: self.transport.playhead,
             sample_rate: self.sample_rate,
             zoom: self.viewport.zoom,
-            // Horizontal scrolling is now driven by the outer
-            // `Scrollable` — the canvas always renders content from
-            // sample-zero. The internal scroll_offset field is kept
-            // (so `sample_to_x` and friends keep their signature) but
-            // pinned to 0 from the view side.
-            scroll_offset: 0.0,
             recording_tracks,
             recording_start_sample: self.transport.recording_start_sample,
             bpm: self.transport.bpm,

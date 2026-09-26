@@ -518,6 +518,7 @@ pub fn classify(message: &crate::message::Message) -> UndoAction {
             | ComposeMessage::CollapseTrack
             | ComposeMessage::ExpandedScrollX(_)
             | ComposeMessage::ExpandedScrollY(_)
+            | ComposeMessage::WorkspaceScrolled { .. }
             | ComposeMessage::ExpandedZoomY(_) => UndoAction::Skip,
 
             // Selecting an arrangement entry is pure UI state (the right-rail

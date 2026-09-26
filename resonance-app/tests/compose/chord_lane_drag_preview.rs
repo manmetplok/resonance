@@ -70,6 +70,7 @@ fn the_fingerprint_follows_a_move_drag() {
         start_bar: 0,
         selected_chord_id: None,
         chords_selected: false,
+        visible_x: resonance_app::view::compose::visible_x_window(None),
     };
     let mut state = ChordLaneState::default();
 
@@ -91,6 +92,7 @@ fn the_fingerprint_follows_a_resize_drag() {
         start_bar: 0,
         selected_chord_id: None,
         chords_selected: false,
+        visible_x: resonance_app::view::compose::visible_x_window(None),
     };
     let mut state = ChordLaneState::default();
 

@@ -75,6 +75,8 @@ fn track_canvas<'a>(
         section_start: 0,
         section_end: 8 * SAMPLE_RATE as u64,
         section_length_bars: 4,
+        total_ticks: resonance_app::view::compose::section_total_ticks(tempo_map, 0, 4),
+        visible_x: resonance_app::view::compose::visible_x_window(None),
         sample_rate: SAMPLE_RATE,
         tempo_map,
         start_bar: 0,
@@ -199,6 +201,7 @@ fn drum_canvas<'a>(
             is_fill: false,
         }],
         section_bars: 4,
+        visible_x: resonance_app::view::compose::visible_x_window(None),
     }
 }
 

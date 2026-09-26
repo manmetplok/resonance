@@ -106,6 +106,10 @@ pub struct ComposeDrumCanvas<'a> {
     /// Total bars in the section. Drives the bar-width subdivision within
     /// the step area.
     pub section_bars: u32,
+    /// Canvas-x window that may be on screen
+    /// ([`crate::view::compose::visible_x_window`]); only the bars inside
+    /// it get labels and cells (FU-V2c).
+    pub visible_x: (f32, f32),
 }
 
 /// Canvas-local state: just the geometry cache. The drum lane draws no
@@ -128,6 +132,7 @@ pub struct ComposeDrumFingerprint {
     track_selected: bool,
     spans_hash: u64,
     section_bars: u32,
+    visible_x_bits: (u32, u32),
 }
 
 impl<'a> ComposeDrumCanvas<'a> {
@@ -161,6 +166,7 @@ impl<'a> ComposeDrumCanvas<'a> {
             track_selected: self.track_selected,
             spans_hash: sh.finish(),
             section_bars: self.section_bars,
+            visible_x_bits: (self.visible_x.0.to_bits(), self.visible_x.1.to_bits()),
         }
     }
 }
@@ -268,9 +274,15 @@ impl<'a> ComposeDrumCanvas<'a> {
 
         let section_bars = self.section_bars.max(1);
         let bar_w = step_area_width / section_bars as f32;
+        // Only the bars in the visible window get labels and cells
+        // (FU-V2c): rows × bars × cells is the lane's whole cost.
+        let (win_lo, win_hi) = self.visible_x;
+        let bar_at = |x: f32| ((x - step_area_x) / bar_w).max(0.0) as u32;
+        let visible_bars = bar_at(win_lo).min(section_bars)
+            ..bar_at(win_hi).saturating_add(1).min(section_bars);
 
         // Step header — bar number labels, one per bar.
-        for bar_idx in 0..section_bars {
+        for bar_idx in visible_bars.clone() {
             let bar_x = step_area_x + bar_idx as f32 * bar_w;
             // Center the label within the bar.
             let label_x = bar_x + bar_w / 2.0 - 4.0;
@@ -398,7 +410,7 @@ impl<'a> ComposeDrumCanvas<'a> {
 
                 // Cells — bar-by-bar, reading each bar's cell data from the
                 // span covering it (resolved_group at same index gi).
-                for bar_idx in 0..section_bars {
+                for bar_idx in visible_bars.clone() {
                     let bar_x = step_area_x + bar_idx as f32 * bar_w;
 
                     // Find the span covering this bar.

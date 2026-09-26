@@ -189,6 +189,7 @@ pub fn view<'a>(
             track_selected: track_selected && selected_track_id == Some(track.id),
             bar_spans: spans_clone,
             section_bars,
+            visible_x: crate::view::compose::visible_x_window(app.compose.workspace_view),
         };
         rows.push(
             container(

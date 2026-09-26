@@ -48,7 +48,7 @@ struct AutomationBandHit<'l> {
 impl TimelineCanvas<'_> {
     /// Sample position (frames) under pixel `x`, floored at 0.
     pub(in crate::view::timeline) fn x_to_frames(&self, x: f32) -> u64 {
-        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        let seconds = (x / self.zoom).max(0.0);
         (seconds as f64 * self.sample_rate as f64) as u64
     }
 

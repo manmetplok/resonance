@@ -30,6 +30,14 @@ use crate::compose::ExpressionCurves;
 /// its own `audio/` — not a sibling `audio/` shared with every other
 /// project in the same parent folder, which is where renders used to
 /// land (FU-B3).
+///
+/// Takes rendered before that fix are still sitting in those sibling
+/// `audio/` folders, and they are deliberately never cleaned up
+/// (FU-C1b): the folder is shared by every project in the parent
+/// directory, so a `vocal_*.wav` there may be the audio a *different*
+/// project's older save still plays, and nothing in this project can
+/// tell which. Only the project's own `audio/` is ever reaped
+/// ([`reap_orphaned_takes`]); deleting the strays is left to the user.
 pub fn vocal_audio_dir(project_path: Option<&Path>) -> PathBuf {
     project_path
         .map(|p| p.join("audio"))
@@ -70,6 +78,33 @@ pub fn reap_orphaned_takes(
         }
     }
     removed
+}
+
+/// Unlink `path` after a re-render superseded the clip that played it —
+/// but only when it is a rendered take (`vocal_*.wav`) that no installed
+/// vocal clip in `installed` still points at (FU-C1a).
+///
+/// After a project load or an undo restore, a lane's clip points at
+/// `audio/clip_<id>.wav`: the file the saved project, its autosave and
+/// every undo snapshot name for that clip. Deleting it on re-render
+/// destroyed the vocal the moment the user undid the re-render or
+/// reopened the saved project. Such files are never a re-render's to
+/// delete; an unreferenced take left behind here is collected by the
+/// save-time reaper ([`reap_orphaned_takes`]) instead.
+///
+/// One render is installed on every placement of its section, so the
+/// same take can back several clips: it stays until the last goes.
+///
+/// Returns whether the file was unlinked.
+pub fn unlink_superseded_take<'a>(
+    path: &Path,
+    installed: impl IntoIterator<Item = &'a PathBuf>,
+) -> bool {
+    if !is_rendered_take(path) || installed.into_iter().any(|p| p == path) {
+        return false;
+    }
+    unlink_if_exists(path);
+    true
 }
 
 /// Best-effort file delete. Missing files (e.g. a previous render

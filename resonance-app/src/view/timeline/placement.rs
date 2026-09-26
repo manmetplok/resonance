@@ -11,8 +11,8 @@
 //! Coordinates are **canvas content coordinates**: the same space
 //! [`TimelineCanvas::sample_to_x`](super::TimelineCanvas::sample_to_x) works
 //! in, where x=0 is sample 0 (the outer `Scrollable` owns horizontal
-//! scrolling, so the canvas itself renders from sample-zero and its
-//! `scroll_offset` is pinned to 0). Vertical scrolling *is* internal, so
+//! scrolling, so the canvas itself renders from sample-zero and has no
+//! horizontal offset of its own). Vertical scrolling *is* internal, so
 //! `scroll_offset_y` is folded in here.
 
 use iced::Point;

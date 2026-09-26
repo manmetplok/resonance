@@ -93,12 +93,12 @@ fn the_skip_predicate_culls_outside_and_keeps_edge_straddlers() {
 }
 
 /// The span helper maps samples to pixels exactly like `sample_to_x`:
-/// seconds × zoom − scroll.
+/// seconds × zoom, in canvas content coordinates (x=0 is sample 0).
 #[test]
 fn sample_span_matches_the_canvas_mapping() {
-    let (x0, x1) = cull::sample_span_x(48_000, 96_000, 48_000, 100.0, 50.0);
-    assert!((x0 - 50.0).abs() < 1e-3, "start: 1 s × 100 px/s − 50 = 50");
-    assert!((x1 - 150.0).abs() < 1e-3, "end: 2 s × 100 px/s − 50 = 150");
+    let (x0, x1) = cull::sample_span_x(48_000, 96_000, 48_000, 100.0);
+    assert!((x0 - 100.0).abs() < 1e-3, "start: 1 s × 100 px/s = 100");
+    assert!((x1 - 200.0).abs() < 1e-3, "end: 2 s × 100 px/s = 200");
 }
 
 // --------------------------------------------------------------------

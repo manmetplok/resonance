@@ -171,6 +171,11 @@ pub struct ComposeState {
     pub expanded_scroll_x: f32,
     /// Vertical scroll offset (pixels) for the expanded editor.
     pub expanded_scroll_y: f32,
+    /// The workspace `Scrollable`'s last reported horizontal viewport,
+    /// `(offset_x, width)` in its content pixels; `None` until it first
+    /// reports. The lane canvases draw only the bars inside it (FU-V2c,
+    /// see `view::compose::visible_x_window`). Runtime-only.
+    pub workspace_view: Option<(f32, f32)>,
     /// Generated clips we created, keyed by (definition_id, placement_id,
     /// track_id). Runtime-only: rebuilt on project load by scanning clip
     /// names in `r.midi_clips`. The regeneration path uses this to delete
@@ -275,6 +280,7 @@ impl Default for ComposeState {
             expanded_zoom_y: 12.0,
             expanded_scroll_x: 0.0,
             expanded_scroll_y: 0.0,
+            workspace_view: None,
             drumroll,
             derived_clips: HashMap::new(),
             vocal_audio: VocalAudioRegistry::default(),

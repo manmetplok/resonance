@@ -209,7 +209,6 @@ fn member_clip_body_rect_lands_on_the_member_lane() {
         44_100,
         100.0,
         44_100,
-        0.0,
     );
     assert_eq!(rect.y, body_y, "clip body sits on the member lane");
     assert_eq!(rect.height, body_h);

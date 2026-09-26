@@ -38,7 +38,7 @@ impl TimelineCanvas<'_> {
         let start_seconds = clip.start_sample as f32 / self.sample_rate as f32;
         let duration_seconds = duration_samples as f32 / self.sample_rate as f32;
 
-        let x = start_seconds * self.zoom - self.scroll_offset + indent;
+        let x = start_seconds * self.zoom + indent;
         let w = duration_seconds * self.zoom;
         if w <= 0.0 {
             return;

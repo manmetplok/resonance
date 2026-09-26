@@ -86,7 +86,6 @@ impl TimelineCanvas<'_> {
             duration_samples,
             self.zoom,
             self.sample_rate,
-            self.scroll_offset,
         );
         match hit_test::hit_test(pos, rect, theme::CLIP_EDGE_THRESHOLD) {
             HitKind::Miss => None,
@@ -123,7 +122,6 @@ impl TimelineCanvas<'_> {
             clip.duration_samples,
             self.zoom,
             self.sample_rate,
-            self.scroll_offset,
         );
         let handles = self.clip_handles(clip, rect);
         match hit_test::hit_test_audio(pos, rect, theme::CLIP_EDGE_THRESHOLD, &handles) {
@@ -150,7 +148,7 @@ impl TimelineCanvas<'_> {
     /// Map a pixel x-position to an absolute sample position (clamped at 0).
     /// The inverse of [`Self::sample_to_x`], used by the marker drag handlers.
     pub(in crate::view::timeline::input) fn x_to_sample(&self, x: f32) -> u64 {
-        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        let seconds = (x / self.zoom).max(0.0);
         (seconds as f64 * self.sample_rate as f64) as u64
     }
 
@@ -171,7 +169,7 @@ impl TimelineCanvas<'_> {
 
     /// Map a pixel x-position to a bar number using the tempo map.
     pub(in crate::view::timeline::input) fn x_to_bar(&self, x: f32) -> u32 {
-        let seconds = ((x + self.scroll_offset) / self.zoom).max(0.0);
+        let seconds = (x / self.zoom).max(0.0);
         let sample = (seconds as f64 * self.sample_rate as f64) as u64;
         let (bar, frac) = self.tempo_map.sample_to_bar(sample, self.sample_rate);
         if frac >= 0.5 {

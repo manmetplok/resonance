@@ -34,6 +34,7 @@ pub fn view<'a>(
     start_bar: u32,
     selected_chord_id: Option<u64>,
     chords_selected: bool,
+    visible_x: (f32, f32),
 ) -> Element<'a, Message> {
     let width = super::workspace_width(tempo_map, start_bar, definition.length_bars);
     Canvas::new(ChordLaneCanvas {
@@ -42,6 +43,7 @@ pub fn view<'a>(
         start_bar,
         selected_chord_id,
         chords_selected,
+        visible_x,
     })
     .width(Length::Fixed(width))
     .height(Length::Fixed(LANE_HEIGHT))
@@ -54,6 +56,10 @@ pub struct ChordLaneCanvas<'a> {
     pub start_bar: u32,
     pub selected_chord_id: Option<u64>,
     pub chords_selected: bool,
+    /// Canvas-x window that may be on screen
+    /// ([`super::visible_x_window`]); the ruler draws only the bars
+    /// inside it (FU-V2c).
+    pub visible_x: (f32, f32),
 }
 
 #[derive(Debug, Default)]
@@ -81,6 +87,7 @@ pub struct ChordLaneFingerprint {
     length_bars: u32,
     tempo_points: usize,
     sig_points: usize,
+    visible_x_bits: (u32, u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +174,7 @@ impl<'a> ChordLaneCanvas<'a> {
             length_bars: self.definition.length_bars,
             tempo_points: self.tempo_map.tempo_points.len(),
             sig_points: self.tempo_map.signature_points.len(),
+            visible_x_bits: (self.visible_x.0.to_bits(), self.visible_x.1.to_bits()),
         }
     }
 
