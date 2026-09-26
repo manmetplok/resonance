@@ -98,7 +98,7 @@ fn swap_over_active_crossfades_out_then_in() {
 }
 
 #[test]
-fn second_swap_mid_fade_replaces_pending_and_restarts_fade_out() {
+fn second_swap_mid_fade_replaces_pending_and_continues_fade_out() {
     let mut fader = SwapFader::new(4);
     fader.install(1u32);
     fader.begin_swap(2u32);
@@ -106,7 +106,8 @@ fn second_swap_mid_fade_replaces_pending_and_restarts_fade_out() {
     fader.next();
 
     // A newer payload arrives before the swap lands: it supersedes the
-    // pending one and the fade-out restarts from the top.
+    // pending one and the fade-out carries on from where it was (DSP-07
+    // — restarting it at full gain was a step discontinuity).
     fader.begin_swap(3u32);
     let log: Vec<(f32, u32)> = (0..5)
         .map(|_| {
@@ -116,8 +117,71 @@ fn second_swap_mid_fade_replaces_pending_and_restarts_fade_out() {
         .collect();
     assert_eq!(
         log,
-        vec![(0.75, 1), (0.5, 1), (0.25, 1), (0.0, 3), (0.25, 3)]
+        vec![(0.25, 1), (0.0, 3), (0.25, 3), (0.5, 3), (0.75, 3)]
     );
+}
+
+#[test]
+fn swap_mid_fade_in_fades_out_from_the_current_gain() {
+    let mut fader = SwapFader::new(4);
+    fader.install(1u32);
+    fader.begin_swap(2u32);
+    // 0.75, 0.5, 0.25, 0.0 (lands on 2), then fade-in 0.25, 0.5.
+    for _ in 0..6 {
+        fader.next();
+    }
+    fader.begin_swap(3u32);
+    let log: Vec<(f32, u32)> = (0..5)
+        .map(|_| {
+            let (gain, payload) = fader.next();
+            (gain, payload.copied().unwrap())
+        })
+        .collect();
+    assert_eq!(
+        log,
+        vec![(0.25, 2), (0.0, 3), (0.25, 3), (0.5, 3), (0.75, 3)]
+    );
+}
+
+/// DSP-07: under continuous retargeting (granular Fade mode with Time
+/// automated calls `begin_swap` every block) the gain must never step by
+/// more than one fade step, and the latest target must eventually land.
+#[test]
+fn repeated_begin_swap_keeps_gain_continuous_and_lands() {
+    const FADE: u32 = 256;
+    let step = 1.0 / FADE as f32;
+    let mut fader = SwapFader::new(FADE);
+    fader.install(0u32);
+    let mut prev = 1.0_f32;
+    let mut target = 0u32;
+    let mut landed_values = Vec::new();
+    for n in 0..4096u32 {
+        if n % 64 == 0 {
+            target += 1;
+            fader.begin_swap(target);
+        }
+        let (gain, payload) = fader.next();
+        let v = *payload.unwrap();
+        assert!(
+            (gain - prev).abs() <= step + 1e-6,
+            "gain jumped {prev} -> {gain} at sample {n}"
+        );
+        prev = gain;
+        if landed_values.last() != Some(&v) {
+            landed_values.push(v);
+        }
+    }
+    // Swaps must actually land while the retargeting continues — the
+    // tap moved at all — and never to a superseded value's predecessor.
+    assert!(landed_values.len() > 3, "swap never landed: {landed_values:?}");
+    assert!(landed_values.windows(2).all(|w| w[1] > w[0]));
+    // Once retargeting stops, the most recent target lands and the gain
+    // returns to unity.
+    for _ in 0..(2 * FADE) {
+        fader.next();
+    }
+    let (gain, payload) = fader.next();
+    assert_eq!((gain, *payload.unwrap()), (1.0, target));
 }
 
 #[test]
