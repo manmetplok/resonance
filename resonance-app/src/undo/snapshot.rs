@@ -329,27 +329,38 @@ impl crate::Resonance {
         );
     }
 
-    /// Drive the engine + GUI external-instrument state back to `target`'s
-    /// `ProjectTrack::external_instrument`s — the diff replay's
-    /// (`try_diff_replay`) restore. The full replay restores the same
-    /// state per track in `replay_track`, after `ClearAll` wiped it.
+    /// Drive the engine + GUI external-instrument state to `target`'s
+    /// `ProjectTrack::external_instrument`s — the one restore for a disk
+    /// load and both undo/redo paths (the `ExternalInstruments` reconcile
+    /// domain, ARCH-01 A-13b).
     ///
     /// Clears tracks that are no longer external, then (re-)asserts every
-    /// target config via `SetExternalInstrument` — idempotent on the engine
-    /// and, unlike a patch send, it never re-fires MIDI to the synth. The
-    /// selected device preset (epic #40) is restored too: the id is re-applied
-    /// to the GUI state and the resolved params re-sent via
-    /// `SetTrackDeviceParams`, so device selection reverses with the rest of
-    /// the config. The runtime device-offline flags are preserved for tracks
-    /// that stay external (live hardware status survives an undo); a track
-    /// returning to external mode starts online and is re-checked on the next
-    /// ping.
-    pub(crate) fn restore_external_instruments(&mut self, target: &crate::project::ProjectFile) {
-        let externals: HashMap<TrackId, &crate::project::ProjectExternalInstrument> = target
-            .tracks
-            .iter()
-            .filter_map(|pt| pt.external_instrument.as_ref().map(|ext| (pt.id, ext)))
-            .collect();
+    /// target config via `SetExternalInstrument` in file order — idempotent
+    /// on the engine and, unlike a patch send, it never re-fires MIDI to the
+    /// synth (a disk load re-sends the patches afterwards, in the
+    /// `AllCleared` handler). The selected device preset (epic #40) is
+    /// restored too: the id is re-applied to the GUI state and the resolved
+    /// params re-sent via `SetTrackDeviceParams`, so device selection
+    /// reverses with the rest of the config. The runtime device-offline
+    /// flags are preserved for tracks that stay external (live hardware
+    /// status survives an undo); a track returning to external mode starts
+    /// online and is re-checked on the next ping.
+    ///
+    /// `after_clear_all`: the engine was just emptied by `ClearAll`, so
+    /// nothing is cleared on it — the app map is simply dropped (every
+    /// track starts online) — and a track with no device selected gets no
+    /// `SetTrackDeviceParams` (the engine has no bindings to clear; a
+    /// project from before device presets loads with no device traffic).
+    /// Without a clear, an empty map is sent so a deselected device leaves
+    /// no stale bindings behind.
+    pub(crate) fn restore_external_instruments(
+        &mut self,
+        target: &crate::project::ProjectFile,
+        after_clear_all: bool,
+    ) {
+        if after_clear_all {
+            self.external_instruments.clear();
+        }
         // Drop external mode from tracks absent in the target snapshot. Clear
         // their engine device-param map too, so a track leaving external mode
         // doesn't leave stale bindings behind on the engine side.
@@ -357,7 +368,12 @@ impl crate::Resonance {
             .external_instruments
             .keys()
             .copied()
-            .filter(|id| !externals.contains_key(id))
+            .filter(|id| {
+                !target
+                    .tracks
+                    .iter()
+                    .any(|pt| pt.id == *id && pt.external_instrument.is_some())
+            })
             .collect();
         for id in stale {
             self.external_instruments.remove(&id);
@@ -370,18 +386,27 @@ impl crate::Resonance {
             });
         }
         // Re-assert every target config, keeping live offline flags.
-        for (&id, ext) in &externals {
+        for pt in &target.tracks {
+            let Some(ext) = &pt.external_instrument else {
+                continue;
+            };
+            let id = pt.id;
             let config = ext.config(id);
             let _ = self
                 .engine
                 .send(AudioCommand::SetExternalInstrument { config });
             // Restore the selected device preset and re-send its params
-            // (an empty map when none is selected).
-            let params = ext.device_params(&self.device_registry);
-            let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
-                track_id: id,
-                params,
-            });
+            // (an empty map when none is selected, unless there is nothing
+            // on the engine to clear). An unresolved id also sends an empty
+            // map, and the selection is kept so a later rescan can recover
+            // it.
+            if !after_clear_all || ext.device_id.is_some() {
+                let params = ext.device_params(&self.device_registry);
+                let _ = self.engine.send(AudioCommand::SetTrackDeviceParams {
+                    track_id: id,
+                    params,
+                });
+            }
             let state = self
                 .external_instruments
                 .entry(id)

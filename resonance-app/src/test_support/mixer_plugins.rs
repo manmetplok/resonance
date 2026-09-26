@@ -741,7 +741,7 @@ impl Resonance {
     /// round-trip.
     #[doc(hidden)]
     pub fn test_restore_external_instruments(&mut self, target: &crate::project::ProjectFile) {
-        self.restore_external_instruments(target);
+        self.restore_external_instruments(target, false);
     }
 
     /// Test-only: the ordered automation-parameter-picker labels the mixer

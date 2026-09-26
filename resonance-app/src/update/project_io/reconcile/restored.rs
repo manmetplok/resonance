@@ -51,3 +51,30 @@ impl Reconcile for DerivedClips {
         r.restore_derived_clips(new, echoes_in_flight, ctx.live.derived_counter_floor);
     }
 }
+
+/// External-instrument mode (`ProjectTrack::external_instrument`): the
+/// bank/program/latency config and the selected device preset's param
+/// bindings, through [`Resonance::restore_external_instruments`]. Before
+/// `AutomationLanes`, so a `DeviceParam` lane lands on known bindings.
+///
+/// After a `ClearAll` the map is rebuilt from scratch and a track with no
+/// device selected sends no `SetTrackDeviceParams`; on the diff path stale
+/// tracks are cleared on the engine and every live offline flag survives.
+/// The Bank Select + Program Change resend a disk load needs
+/// (`ResendExternalInstrumentPatches`) is not part of this domain: it stays
+/// in the `AllCleared` handler's disk-load tail, since an undo must never
+/// re-fire MIDI at the synth.
+///
+/// This used to run per track inside `replay_track` on the full path.
+/// Keyed by the file's track id: a legacy sub-track whose id collided and
+/// was remapped in `replay_track` is never external (sub-tracks cannot be
+/// made external).
+pub(crate) struct ExternalInstruments;
+
+impl Reconcile for ExternalInstruments {
+    const NAME: &'static str = "external_instruments";
+
+    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        r.restore_external_instruments(new, ctx.origin.after_clear_all());
+    }
+}

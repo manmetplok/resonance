@@ -168,6 +168,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<app_side::Performance>(Stage::Content),
     domain::<app_side::TrackGroups>(Stage::Content),
     domain::<app_side::TakeGroups>(Stage::Content),
+    // External instruments before the lanes (a `DeviceParam` lane needs
+    // the device bindings), freeze last.
+    domain::<restored::ExternalInstruments>(Stage::Tail),
     domain::<restored::AutomationLanes>(Stage::Tail),
 ];
 

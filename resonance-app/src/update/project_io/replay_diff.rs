@@ -134,12 +134,6 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // slow path (A-4).
     r.apply_freeze_restore(&target_file.tracks, project_path.as_deref());
 
-    // -- External-instrument config -----------------------------------
-    // From `ProjectTrack::external_instrument`, as `replay_track` does on
-    // the slow path. Entering or leaving external mode never alters the
-    // project shape, so it always takes this fast path.
-    r.restore_external_instruments(target_file);
-
     // -- Migrated domains (ARCH-01 A-13) -------------------------------
     // Tempo / signature events, chord track, markers. Tempo stays where
     // the diff path always sent it (the full path sends it before the
@@ -156,9 +150,9 @@ pub fn try_diff_replay(r: &mut Resonance, target: &LoadedProject) -> bool {
     // here).
     reconcile_stage(r, Stage::Content, Some(&current), target_file, &ctx);
 
-    // Automation lanes: never alter the project shape, so the structural
-    // check ignores them. After the external-instrument restore, so a
-    // `DeviceParam` lane lands on known bindings.
+    // External instruments, then the automation lanes (a `DeviceParam`
+    // lane lands on known bindings). Neither alters the project shape, so
+    // the structural check ignores them.
     reconcile_stage(r, Stage::Tail, Some(&current), target_file, &ctx);
 
     // -- Sort track / bus registry so view-layer invariant holds -------

@@ -155,9 +155,8 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // is flagged rather than lost).
     reconcile_stage(r, Stage::Content, None, project, &ctx);
 
-    // Automation lanes: after each external track's `SetTrackDeviceParams`
-    // (dispatched in `replay_track`), so the engine knows the bindings by
-    // the time a `DeviceParam` lane arrives.
+    // External instruments, then the automation lanes (a `DeviceParam`
+    // lane needs the device bindings the first sends).
     reconcile_stage(r, Stage::Tail, None, project, &ctx);
 
     // Last: a disk load's freeze baseline fingerprints the replayed
@@ -316,10 +315,9 @@ fn wipe_registry(r: &mut Resonance, project: &ProjectFile) -> SavedPluginOrder {
     // leave the new one keying plugins from the old one's tracks.
     // `replay_sidechain_routes` re-seeds it from the project file.
     r.sidechain.clear();
-    // Drop external-instrument mode so the load starts clean. Both a fresh
-    // project load and an undo's full replay re-assert it per-track from
-    // `ProjectTrack.external_instrument` in `replay_track`.
-    r.external_instruments.clear();
+    // External-instrument mode is dropped and re-asserted by its own
+    // reconcile domain (`ExternalInstruments`, `Stage::Tail`); nothing in
+    // between reads it.
     // The cycle-record take lanes are cleared by their own reconcile
     // domain (`reconcile::app_side::TakeGroups`), just before it re-seeds
     // them; nothing in between reads them.
