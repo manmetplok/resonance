@@ -71,6 +71,8 @@ mod drum_pattern_library;
 mod drum_cell_click_phase;
 #[path = "compose/drum_section_coverage.rs"]
 mod drum_section_coverage;
+#[path = "compose/expanded_editor_clip_offset.rs"]
+mod expanded_editor_clip_offset;
 #[path = "compose/fresh_project_tempo_map.rs"]
 mod fresh_project_tempo_map;
 #[path = "compose/generator_section.rs"]

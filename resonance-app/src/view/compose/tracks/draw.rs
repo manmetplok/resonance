@@ -65,20 +65,12 @@ impl<'a> ComposeTrackCanvas<'a> {
 
     /// Convert an absolute sample position to a section-relative tick.
     pub(super) fn sample_to_section_tick(&self, sample: u64) -> f64 {
-        let (bar, frac) = self.tempo_map.sample_to_bar(sample, self.sample_rate);
-        let mut tick: f64 = 0.0;
-        if bar > self.start_bar {
-            for b in self.start_bar..bar {
-                tick += self.tempo_map.bar_len_ticks_at(b) as f64;
-            }
-        } else if bar < self.start_bar {
-            for b in bar..self.start_bar {
-                tick -= self.tempo_map.bar_len_ticks_at(b) as f64;
-            }
-        }
-        let bar_ticks = self.tempo_map.bar_len_ticks_at(bar) as f64;
-        tick += frac * bar_ticks;
-        tick
+        crate::view::compose::layout::sample_to_section_tick(
+            self.tempo_map,
+            self.sample_rate,
+            self.start_bar,
+            sample,
+        )
     }
 
     /// Tick range of a clip within the section, or `None` if the clip

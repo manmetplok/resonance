@@ -39,6 +39,30 @@ pub fn section_total_ticks(tempo_map: &TempoMap, start_bar: u32, length_bars: u3
         .sum()
 }
 
+/// Section-relative tick of an absolute sample position, for a section
+/// that starts at 0-based `start_bar`. Negative before the section. Walks
+/// the per-bar tick lengths, so meter changes inside or before the
+/// section are honoured.
+pub fn sample_to_section_tick(
+    tempo_map: &TempoMap,
+    sample_rate: u32,
+    start_bar: u32,
+    sample: u64,
+) -> f64 {
+    let (bar, frac) = tempo_map.sample_to_bar(sample, sample_rate);
+    let mut tick: f64 = 0.0;
+    if bar > start_bar {
+        for b in start_bar..bar {
+            tick += tempo_map.bar_len_ticks_at(b) as f64;
+        }
+    } else if bar < start_bar {
+        for b in bar..start_bar {
+            tick -= tempo_map.bar_len_ticks_at(b) as f64;
+        }
+    }
+    tick + frac * tempo_map.bar_len_ticks_at(bar) as f64
+}
+
 /// Pixel width of every Compose-tab lane (chord lane, track lane, drum
 /// lane, global tempo/signature rows). Equal to `NAME_COLUMN_WIDTH` plus
 /// `section_total_beats * BEAT_PX_COMPOSE`.

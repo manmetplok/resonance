@@ -97,8 +97,12 @@ pub struct ExpandedEditorCanvas<'a> {
 pub(super) enum DragMode {
     MoveNote {
         note_index: usize,
+        /// Grabbed note's section tick minus the pressed section tick.
         start_tick_offset: i64,
         clip_id: u64,
+        /// Section tick of the clip's start (see
+        /// [`ExpandedEditorCanvas::clip_offset_ticks`]).
+        clip_offset: i64,
         /// The clip's notes as the engine holds them, replayed through
         /// every move this drag sent (`move_note_resorted`). A move
         /// re-sorts the clip, so after crossing a neighbour `note_index`
@@ -108,7 +112,8 @@ pub(super) enum DragMode {
     },
     ResizeNote {
         note_index: usize,
-        anchor_tick: u64,
+        /// The note's start, in section ticks.
+        anchor_tick: i64,
         clip_id: u64,
     },
 }
@@ -465,17 +470,35 @@ impl<'a> ExpandedEditorCanvas<'a> {
         grid_w / ticks as f32
     }
 
-    /// Pixel rectangle for `note`, in canvas-local coordinates.
+    /// Section-relative tick of `clip`'s start: the offset from the
+    /// clip-relative ticks its notes carry to the section ticks this
+    /// canvas draws in (negative when the clip starts before the
+    /// section). Every clip that intersects the section is drawn, so each
+    /// needs its own offset (code review VIEW-16).
+    pub(super) fn clip_offset_ticks(&self, clip: &MidiClipState) -> i64 {
+        super::layout::sample_to_section_tick(
+            self.tempo_map,
+            self.sample_rate,
+            self.start_bar,
+            clip.start_sample,
+        )
+        .round() as i64
+    }
+
+    /// Pixel rectangle for `note` of a clip starting `clip_offset`
+    /// section ticks in, in canvas-local coordinates.
     pub(super) fn note_rect(
         &self,
         layout: &PianoRollLayout,
         viewport: &PianoRollViewport,
         note: &resonance_audio::types::MidiNote,
+        clip_offset: i64,
     ) -> Rectangle {
         let h = viewport.zoom_y;
         let note_h = (h - 1.0).max(2.0);
+        let section_tick = clip_offset + note.start_tick as i64;
         Rectangle {
-            x: layout.grid_x() + viewport.tick_to_x_local(note.start_tick),
+            x: layout.grid_x() + section_tick as f32 * viewport.zoom_x - viewport.scroll_x,
             y: layout.grid_top + viewport.note_to_y_local(note.note),
             width: viewport.duration_to_w(note.duration_ticks),
             height: note_h,
