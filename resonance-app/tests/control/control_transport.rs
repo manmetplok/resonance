@@ -67,6 +67,21 @@ fn play_pause_stop_drive_the_engine_without_undo_entries() {
     assert!(!app.test_can_undo());
 }
 
+/// The engine refusing a Play (an offline render holds the transport)
+/// resets the optimistic `playing` mirror without zeroing the playhead
+/// (FU-F1a).
+#[test]
+fn a_refused_play_clears_the_playing_mirror_and_keeps_the_playhead() {
+    let mut app = app();
+    let _ = call(&mut app, "transport.seek", serde_json::json!({ "sample": 12_345 }));
+    let _ = call_no_params(&mut app, "transport.play");
+    assert!(app.test_transport_playing());
+
+    app.test_apply_engine_event(resonance_audio::types::AudioEvent::TransportRefused);
+    assert!(!app.test_transport_playing());
+    assert_eq!(app.test_transport_playhead(), 12_345);
+}
+
 // ---------------- seek ----------------
 
 #[test]

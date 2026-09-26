@@ -28,6 +28,7 @@ pub(crate) fn handle_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<
             r.rebuild_tempo_map();
         }
         E::Stopped => transport::stopped(r),
+        E::TransportRefused => transport::refused(r),
         // The engine echoes a key route change back. It is the authority
         // on what is actually keyed, so reconcile the GUI mirror to the
         // echo rather than trusting the optimistic write the dispatching

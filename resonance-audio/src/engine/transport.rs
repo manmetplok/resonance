@@ -33,6 +33,7 @@ pub(crate) fn refuse_while_offline_render(ctx: &HandlerCtx, what: &str) -> bool 
 
 pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
     if refuse_while_offline_render(ctx, "start playback") {
+        let _ = ctx.event_tx.send(AudioEvent::TransportRefused);
         return;
     }
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
@@ -55,6 +56,7 @@ pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
 
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
     if refuse_while_offline_render(ctx, "start recording") {
+        let _ = ctx.event_tx.send(AudioEvent::TransportRefused);
         return;
     }
     if precount_bars == 0 {

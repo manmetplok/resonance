@@ -190,6 +190,12 @@ fn play_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
         events.iter().any(|e| matches!(e, AudioEvent::Error(m) if m.contains(OFFLINE_RENDER_BUSY_MSG))),
         "the refusal must be surfaced as an error event, got {events:?}"
     );
+    // ...and as the event that resets the app's optimistic `playing`
+    // mirror (FU-F1a).
+    assert!(
+        events.iter().any(|e| matches!(e, AudioEvent::TransportRefused)),
+        "the refusal must tell the app the transport did not start, got {events:?}"
+    );
 
     drop(guard);
     h.play();

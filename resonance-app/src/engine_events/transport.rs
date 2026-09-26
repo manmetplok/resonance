@@ -13,6 +13,13 @@ pub(super) fn stopped(r: &mut Resonance) {
     }
 }
 
+/// The engine refused the Play/Record the app already mirrored
+/// (FU-F1a): drop the optimistic flags, keep the playhead.
+pub(super) fn refused(r: &mut Resonance) {
+    r.transport.playing = false;
+    r.transport.recording = false;
+}
+
 pub(super) fn error(r: &mut Resonance, e: String) {
     eprintln!("Audio engine error: {}", e);
     r.error_message = Some(e);
