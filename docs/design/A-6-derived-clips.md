@@ -232,3 +232,24 @@ session had, which undo already did.
   `DerivedClips` reconcile domain on a disk load and from
   `SavePathSelected` (Save As into an existing bundle). Undo needs no scan
   (the counter never goes down). Still not persisted in the file (§3).
+- `vocal_audio.clips` (§1) had the same "clip the user moved outlives its
+  placement's purge" hole `remove_bars` had for `derived_clips` before
+  FU-A6b, but narrower: a single-clip user delete (`clip.delete`, the GUI
+  Delete key) and a whole-placement delete already scrubbed it
+  (`engine_events::clips::deleted`, `purge_placement_outputs`), and — unlike
+  `derived_clips` — a leftover entry is harmless past one engine tick or
+  any reconcile: the audio-clip echo already cleans the map (a vocal
+  regen never reuses the torn-down clip's id, unlike the MIDI path's
+  `#275 P1.7` reuse), and `VocalAudioClips` unconditionally rebuilds the
+  whole map from `r.clips` on every load and undo/redo. Only `remove_bars`
+  had no synchronous cleanup at all, so a clip the user dragged off its
+  placement's start bar dangled in the map until the next tick or
+  reconcile. **Fixed (FU-A6d):** `remove_bars`'s audio-clip casualty loop
+  now calls the new `VocalAudioRegistry::forget_deleted_clip`, same as the
+  echo handler. Undoing the removal does *not* generally restore the
+  entry (unlike `derived_clips` since §2): the rebuild is still purely
+  positional, so it only reclaims a clip sitting exactly on a placement's
+  start bar — a moved clip comes back as a plain `ClipState` with no
+  `vocal_audio.clips` entry, same as before this fix. That gap (the "a
+  derived clip the user moved" limitation this doc already calls out for
+  `midi_clips` in §1) is unchanged and out of scope here.
