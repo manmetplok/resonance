@@ -134,7 +134,7 @@ pub(crate) fn handle_add_plugin_to_bus(
     let bundle_idx = match ensure_bundle(&mut state.bundles, path, &clap_plugin_id) {
         Ok(idx) => idx,
         Err(reason) => {
-            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
+            report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
             return;
         }
     };
@@ -142,7 +142,7 @@ pub(crate) fn handle_add_plugin_to_bus(
         match resolve_plugin_id(&state.bundles[bundle_idx], clap_plugin_id.clone()) {
             Ok(resolved) => resolved,
             Err(reason) => {
-                report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason);
+                report_plugin_load_failure(ctx, Some(id), &clap_plugin_id, &clap_file_path, reason.to_string());
                 return;
             }
         };
