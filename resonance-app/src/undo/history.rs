@@ -77,6 +77,11 @@ impl UndoHistory {
         !self.redo.is_empty()
     }
 
+    /// Number of entries on the undo stack.
+    pub fn undo_len(&self) -> usize {
+        self.undo.len()
+    }
+
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
     }

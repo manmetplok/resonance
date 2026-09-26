@@ -48,6 +48,11 @@ pub struct PendingImport {
     pub source_path: String,
     /// Placement to perform once the asset lands.
     pub target: PlacementTarget,
+    /// Undo-stack depth right after the import recorded its entry. An
+    /// undo that takes the stack below it has undone the import, so the
+    /// placement is dropped (code review UPD-04); undoing a later edit
+    /// leaves it queued.
+    pub history_depth: usize,
 }
 
 /// In-flight import placements, keyed by source path. Emptied as each
@@ -74,6 +79,22 @@ impl PendingImports {
             .iter()
             .position(|e| e.source_path == source_path)?;
         Some(self.entries.remove(pos).target)
+    }
+
+    /// Forget every queued placement. The project they were queued
+    /// against is gone or rewound — a project load, a template
+    /// instantiation — so placing them later would
+    /// land clips outside the undo history, possibly on a track that no
+    /// longer exists (code review UPD-04). An asset still arriving lands
+    /// in the pool unplaced, and a waiting `clip.place` job fails.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Drop the placements whose import an undo just took back: those
+    /// queued deeper in the history than the `undo_depth` it left.
+    pub fn drop_undone(&mut self, undo_depth: usize) {
+        self.entries.retain(|e| e.history_depth <= undo_depth);
     }
 
     /// True when no placements are pending.

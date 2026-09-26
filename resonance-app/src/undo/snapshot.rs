@@ -581,6 +581,9 @@ impl crate::Resonance {
             return None;
         }
         let (snapshot, label) = self.undo.pop_undo()?;
+        // An import whose entry this undo pops must not place its clip
+        // when the file lands later (code review UPD-04).
+        self.pool_import.drop_undone(self.undo.undo_len());
         let current = self.snapshot_for_undo();
         // The action just undone is what a redo would re-apply, so its
         // label travels with the state pushed onto the redo stack.

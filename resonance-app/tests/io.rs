@@ -39,6 +39,8 @@ mod import_dialog_review;
 mod import_entry_points;
 #[path = "io/import_placement.rs"]
 mod import_placement;
+#[path = "io/import_placement_stale.rs"]
+mod import_placement_stale;
 #[path = "io/import_progress_dialog.rs"]
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
