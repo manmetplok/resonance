@@ -46,7 +46,7 @@ master and updates this table. Agents do **not** edit this file.
 | H6 logging facade | ARCH-05 A5-1 (audio/common/plugin/wayland) + A5-2 | opus | merged | 582c4fcb |
 | H7 plugin dep trim | ARCH-07 A7-1 + A7-2 | opus | merged | 423ea205 |
 | H8a message enums beside handlers | ARCH-06 A6-1 | opus | merged | a6a0a6e9 |
-| H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | in progress | |
+| H8b undo blobs + id allocation | ARCH-09 A9-1/2, ARCH-04 A4-1/2/3, FU-A1c | fable | merged | 4f274847 |
 | L1 app logging sweep | FU-H6a, FU-H6c | opus | merged | b8952f64 |
 | C1 app/control follow-ups | FU-E1, E2, M5a/b/c, B2, B3, V2c, V3c, V4a, V4b, A2c, M6b, V1b, M12c | opus | in progress | |
 | A5 audio follow-ups 2 | FU-D3, D4, F2b, M3a, M3c, A4a, A4b, A4c | opus | in progress | |
@@ -60,7 +60,7 @@ master and updates this table. Agents do **not** edit this file.
 
 - [ ] **FU-A1a** (low) `io.pending_open_path` is a single slot: two overlapping GUI opens → first load adopts the second path. Control opens are busy-guarded; GUI isn't. Fix: tag the pending path with a load token and match it in `ProjectLoaded`.
 - [x] **FU-A1b** (medium, = UPD-03) — fixed @137c320a; edits during `io.loading` are still acked then wiped by replay.
-- [ ] **FU-A1c** (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
+- [x] **FU-A1c** — fixed @0c09001c (`Resonance::allocate_track_id` skips group ids); (low) `allocate_sub_track_id` (pool.rs, control `track.add`) is still unaware of group ids; relies on load-time counter bump. Fix: collision-check against the group registry too.
 - [x] **FU-G2a** — fixed @25f5da5c (−79 dB worst bass); (low) wavetable: ~−69 dB aliasing floor below ~70 Hz at 44.1/48k from table interpolation; needs better interpolation or bigger low tables.
 - [x] **FU-G2b** — fixed @20ee064c; (low) wavetable: above ~C9 the top mip still aliases (no darker table exists).
 - [x] **FU-G2c** — fixed @96e5d02a; (low) wavetable golden `render_block_regression::lfo_sh_hpf` peaks at 1.2e-3 — near-silent, nearly vacuous; raise its level.
@@ -1824,7 +1824,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Make `EngineHandlerHarness` the preferred surface for new engine tests so future helpers do not need re-exporting.
 - **Verification / done-when:** `cargo test -p resonance-audio --no-run 2>&1 | grep -c Executable` ≤ 10; `run-tests.py` wall clock recorded before/after; `grep -rn '__test_support' resonance-app/src` returns only `#[cfg(feature)]`-gated lines.
 
-### [ ] ARCH-04 — Entity ids are allocated in two places with hand-partitioned bases
+### [ ] ARCH-04 — (partial: A4-1..3 @0c09001c — `state/ids.rs`, collision test found+fixed a real engine hint-bump track/group collision; A4-4 app-owned ids → epic) Entity ids are allocated in two places with hand-partitioned bases
 - **Severity:** medium
 - **Category:** api-design
 - **Location:** engine allocators: `resonance-audio/src/engine/thread/mod.rs` + `engine/*.rs` (`next_clip_id`, `next_track_id`, `next_plugin_id`, `next_bus_id`, `next_send_id`, `next_group_id`, `next_take_group_id`, `next_asset_id`, …); app allocators: `resonance-app/src/state/plugin_index.rs:158` (`allocate_control_plugin_id`, base `CONTROL_PLUGIN_ID_BASE = 3_000_000_000` in `resonance-audio/src/types/mod.rs:34`), `resonance-app/src/state/aux_sends.rs:121` (`CONTROL_SEND_ID_BASE = 2_000_000_000`), `resonance-app/src/compose/state.rs:31` (`DERIVED_CLIP_ID_BASE = 1 << 40`), plus `next_return_bus_id`, `next_sub_track_id`, `next_lane_id`; the `AudioCommand::ReserveAssetIds` command (`types/commands.rs:95`) and the hint-vs-base rule in `engine/plugins.rs:244-265`.
@@ -1885,7 +1885,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Fix the `latency.rs` header to describe the `clap_host_latency.changed` path.
 - **Verification / done-when:** `grep -l 'wayland-plugin-gui' plugins/*/Cargo.toml` empty; `resonance-plugin/Cargo.toml` has no `iced` dependency; `grep -n "doesn't implement" resonance-audio/src/latency.rs` empty.
 
-### [ ] ARCH-09 — Undo snapshots deep-copy the whole project per edit
+### [ ] ARCH-09 — (partial: A9-1/A9-2 @018839d9 — plugin blobs shared via Arc, cheap gesture check, snapshot 425→289 µs; A9-3 `Arc<Vec<MidiNote>>` + PartialEq on ProjectFile open) Undo snapshots deep-copy the whole project per edit
 - **Severity:** low
 - **Category:** modularity
 - **Location:** `resonance-app/src/undo/snapshot.rs:178-230` (`snapshot_for_undo` calls `build_project_file` and clones every MIDI note vec, automation lane, chord track, and plugin state blob), `resonance-app/src/undo/history.rs:68` (capacity 200 via `resonance_audio::DEFAULT_HISTORY_CAPACITY`, oddly owned by the audio crate at `resonance-audio/src/limits.rs:60`).
