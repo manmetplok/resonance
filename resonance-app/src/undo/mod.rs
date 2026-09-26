@@ -27,7 +27,7 @@ pub mod snapshot;
 pub use classify::{classify, UndoAction};
 pub use describe::describe;
 pub use history::{UndoHistory, DEFAULT_HISTORY_CAPACITY};
-pub use snapshot::{CoalesceKey, UndoSnapshot};
+pub use snapshot::{CoalesceKey, DrumGroupKnob, UndoSnapshot};
 
 // -------------------------------------------------------------------------
 // Record-undo dispatch — bridges message classification (classify.rs),

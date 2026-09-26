@@ -86,6 +86,35 @@ pub enum CoalesceKey {
     /// clips a live recording opens — so the whole take is one entry.
     /// `RecordingStarted` breaks the run, so each session is its own.
     Recording,
+    /// Typing in a track's name field (lane inspector instrument panel),
+    /// keyed by track so renaming two different tracks in a row is two
+    /// entries but every keystroke on the same field is one (FU-A10a).
+    TrackName(TrackId),
+    /// Typing in the drum-group manager's rename input, keyed by group id
+    /// (FU-A10a).
+    DrumGroupName(u64),
+    /// Dragging one of a drum group's generator knobs (density, swing,
+    /// accent, humanize, fills — the right-rail sliders), keyed by group
+    /// id and which knob so switching knob or group breaks the run but
+    /// repeated steps on the same knob merge (FU-A10a).
+    DrumGroupParam(u64, DrumGroupKnob),
+    /// Typing in a vocal lane's lyric theme / prompt field, keyed by the
+    /// lane (section definition + track) it belongs to (FU-A10a).
+    VocalTheme(u64, TrackId),
+    /// Typing in one draft lyric line's text field, keyed by the lane and
+    /// the 1-based line number (FU-A10a).
+    VocalLineText(u64, TrackId, u8),
+}
+
+/// Which of a drum group's right-rail generator knobs a coalesce run is
+/// for — see [`CoalesceKey::DrumGroupParam`] (FU-A10a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DrumGroupKnob {
+    Density,
+    Swing,
+    Accent,
+    Humanize,
+    Fills,
 }
 
 // -------------------------------------------------------------------------

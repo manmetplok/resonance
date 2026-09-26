@@ -106,6 +106,16 @@ pub enum TrackMessage {
     /// dialog (for external-MIDI tracks that need a real-time record
     /// from a chosen audio input).
     BounceInPlace(TrackId),
+    /// The internal-synth half of `BounceInPlace`, dispatched by its own
+    /// handler once `classify_bounce` has resolved the route to
+    /// `BounceMode::Internal` (FU-A10a). `BounceInPlace` only *asks* — it
+    /// may end up opening the realtime dialog instead, where nothing
+    /// records until `Bounce(BounceMessage::Confirm)` — so it classifies
+    /// `Skip`, the same idiom `RequestRemoveTrack`/`ConfirmRemoveTrack`
+    /// uses for a decision the classifier can't make from the message
+    /// alone. This variant is the confirmed one-and-only edit: the
+    /// offline render that actually mutates the project.
+    BounceInPlaceOffline(TrackId),
     /// Sub-flow for the realtime "Bounce in place" dialog (external
     /// MIDI tracks). Grouped under one variant so the top-level
     /// `TrackMessage` doesn't accumulate dialog plumbing.
@@ -125,6 +135,9 @@ impl TrackMessage {
             }
             Self::SetTrackPan(id, _) => UndoAction::RecordCoalesced(CoalesceKey::TrackPan(*id)),
             Self::SetMasterVolume(_) => UndoAction::RecordCoalesced(CoalesceKey::MasterVolume),
+            Self::SetTrackName(id, _) => {
+                UndoAction::RecordCoalesced(CoalesceKey::TrackName(*id))
+            }
             Self::ToggleSubTracksVisible(_) => UndoAction::Skip,
             // Dismissing the delete-confirmation dialog is a transient
             // UI gesture — nothing to undo.
@@ -133,6 +146,15 @@ impl TrackMessage {
             // track — re-dispatches `ConfirmRemoveTrack`, which records
             // the delete (code review STATE-13).
             Self::RequestRemoveTrack(_) => UndoAction::Skip,
+            // Only asks, same idiom as `RequestRemoveTrack`: routes to
+            // either the realtime dialog (external MIDI — nothing records
+            // until `Bounce(BounceMessage::Confirm)`) or re-dispatches
+            // `BounceInPlaceOffline`, which records the one committed edit
+            // (FU-A10a — this used to record unconditionally, so an
+            // external-track bounce recorded twice: once here for opening
+            // the dialog, empty since nothing had changed yet, and once
+            // more on Confirm).
+            Self::BounceInPlace(_) => UndoAction::Skip,
             // Preset operations that don't mutate project state: a
             // preset is a file on the machine, and saving one leaves the
             // project exactly as it was (ba todo #1303). The prompt
@@ -155,7 +177,6 @@ impl TrackMessage {
             | Self::ToggleMonitor(..)
             | Self::ToggleTrackMono(..)
             | Self::ToggleTrackFxBypass(..)
-            | Self::SetTrackName(..)
             | Self::SetTrackInputDevice(..)
             | Self::SetTrackInputPort(..)
             | Self::SetTrackMidiInputDevice(..)
@@ -164,7 +185,7 @@ impl TrackMessage {
             | Self::SetTrackMidiOutputChannel(..)
             | Self::SetTrackOutput(..)
             | Self::AddTrackFromPreset { .. }
-            | Self::BounceInPlace(..) => UndoAction::Record,
+            | Self::BounceInPlaceOffline(..) => UndoAction::Record,
             Self::Bounce(m) => m.undo_action(),
         }
     }
@@ -652,6 +673,9 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         TrackMessage::BounceInPlace(track_id) => {
             handle_bounce_in_place(r, track_id);
         }
+        TrackMessage::BounceInPlaceOffline(track_id) => {
+            internal_bounce_dispatch(r, track_id);
+        }
         TrackMessage::Bounce(BounceMessage::PickDevice(device)) => {
             if let Some(d) = r.modals.bounce_dialog.as_mut() {
                 d.selected_device = device;
@@ -828,6 +852,14 @@ fn handle_bounce_in_place(r: &mut Resonance, track_id: resonance_audio::types::T
             let _ = r.engine.send(AudioCommand::ListInputDevices);
         }
         BounceMode::Internal => {
+            // `BounceInPlace` classifies `Skip` — it only asks — so the
+            // one committed edit is recorded here, under the dedicated
+            // `BounceInPlaceOffline` message, exactly as
+            // `RequestRemoveTrack` records `ConfirmRemoveTrack` for its
+            // no-confirmation-needed path (FU-A10a).
+            let _ = r.record_undo(&Message::Track(TrackMessage::BounceInPlaceOffline(
+                track_id,
+            )));
             internal_bounce_dispatch(r, track_id);
         }
     }

@@ -28,6 +28,8 @@ pub fn describe(message: &Message) -> String {
             TrackMessage::ToggleSolo(_) => "track solo",
             TrackMessage::SetTrackName(..) => "rename track",
             TrackMessage::SetTrackOutput(..) => "track routing",
+            TrackMessage::BounceInPlaceOffline(_)
+            | TrackMessage::Bounce(BounceMessage::Confirm) => "bounce in place",
             TrackMessage::AddControlTrack { .. } | TrackMessage::AddTrackFromPreset { .. } => {
                 "add track"
             }
