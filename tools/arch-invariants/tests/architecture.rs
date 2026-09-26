@@ -1070,3 +1070,163 @@ fn audio_callback_never_logs() {
         &violations,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Error taxonomy (ARCH-05 epic C, C-5): no new `Result<_, String>` in a
+// `pub fn` of resonance-audio or resonance-common.
+// ---------------------------------------------------------------------------
+
+/// Whether `sig` — a function signature's source text, comments stripped
+/// and lines joined with spaces, from `pub fn` through (not including)
+/// its opening `{` or terminating `;` — declares a return type of
+/// `Result<_, String>`: some `Result<...>` whose *last* top-level generic
+/// argument (i.e. the Err type; nested `<...>`/`(...)`/`[...]` don't
+/// count as top-level) is exactly `String`. Matches
+/// `Result<(), String>`, `Result<(Vec<f32>, String), String>` (Ok type
+/// containing `String` doesn't fool it) and multi-line signatures
+/// (rustfmt puts `-> Result<...> {` on its own line, but this doesn't
+/// depend on that); doesn't match `Result<String, MyError>` or a
+/// `Result<_, String>` that isn't the function's own return type (e.g.
+/// a closure parameter's) since it's called on the field/arg text
+/// surrounding it too — deliberately over-eager on that boundary, since
+/// missing a real violation is worse than an occasional false positive.
+fn returns_result_string(sig: &str) -> bool {
+    let mut idx = 0;
+    while let Some(rel) = sig[idx..].find("Result<") {
+        let start = idx + rel + "Result<".len();
+        let mut depth = 1i32;
+        let mut end = None;
+        for (i, c) in sig[start..].char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(start + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(end) = end else { break };
+        let inner = &sig[start..end];
+        let mut depth2 = 0i32;
+        let mut last_comma = None;
+        for (i, c) in inner.char_indices() {
+            match c {
+                '<' | '(' | '[' => depth2 += 1,
+                '>' | ')' | ']' => depth2 -= 1,
+                ',' if depth2 == 0 => last_comma = Some(i),
+                _ => {}
+            }
+        }
+        if let Some(ci) = last_comma {
+            if inner[ci + 1..].trim() == "String" {
+                return true;
+            }
+        }
+        idx = end;
+    }
+    false
+}
+
+/// The identifier a `pub fn ...` line declares, e.g. `"decode_file"` for
+/// `pub fn decode_file(path: &str, ...`. `None` if `code`'s trimmed
+/// start isn't `pub fn ` (a `pub(crate) fn` doesn't count — the C-5 rule
+/// is about `pub fn` signatures only).
+fn pub_fn_name(code: &str) -> Option<&str> {
+    let rest = code.trim_start().strip_prefix("pub fn ")?;
+    let end = rest.find(['(', '<', ' ']).unwrap_or(rest.len());
+    let name = &rest[..end];
+    (!name.is_empty()).then_some(name)
+}
+
+/// Every `pub fn` in `file` whose signature returns `Result<_, String>`,
+/// as `(line, fn_name)`. Walks from each `pub fn` line to its opening
+/// `{` (or a `;` for a trait-style declaration with no body), joining
+/// the lines in between — a signature with a multi-line parameter list
+/// still has its `-> Result<...>` recognised. Bounded to 60 lines past
+/// the `pub fn` so a parse hiccup can't scan the rest of the file.
+fn pub_fn_result_string_violations(file: &std::path::Path) -> Vec<(usize, String)> {
+    let lines = code_lines(file);
+    let mut violations = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let (line_no, ref first) = lines[i];
+        if let Some(name) = pub_fn_name(first) {
+            let mut sig = String::new();
+            let mut j = i;
+            while j < lines.len() && j < i + 60 {
+                let (_, ref code) = lines[j];
+                sig.push_str(code);
+                sig.push(' ');
+                if code.contains('{') || code.trim_end().ends_with(';') {
+                    break;
+                }
+                j += 1;
+            }
+            if returns_result_string(&sig) {
+                violations.push((line_no, name.to_string()));
+            }
+            i = j;
+        }
+        i += 1;
+    }
+    violations
+}
+
+/// C-4 landed with zero `Result<_, String>` left in resonance-common
+/// (`arch-migration-plan.md` → "C-4 (7/7)"), so this side of the
+/// allow-list starts empty — any future `pub fn Result<_, String>` here
+/// is new and should be rejected, not grown into.
+const RESONANCE_COMMON_ALLOW: &[(&str, &str)] = &[];
+
+/// C-3 (parts 1 + 2 / "C-3b") converted every `pub`/`pub(crate)`
+/// `Result<_, String>` fn in resonance-audio except
+/// `recording.rs::take_clip_source`, which stayed `Result<_, String>`
+/// deliberately (`arch-migration-plan.md` → "C-3 part 1 landed") — but
+/// that one is a private `fn`, not `pub fn`, so it's already outside
+/// this check's scope and needs no entry here.
+const RESONANCE_AUDIO_ALLOW: &[(&str, &str)] = &[];
+
+/// ARCH-05 epic C, C-5: "resonance-audio/common public fns don't return
+/// `Result<_, String>`" (`refactor-intent.md` → "Epic C — Engine error
+/// taxonomy", "Done when"). `resonance-amp`'s NAM loader is exempt by
+/// construction — this only walks the two crates named in the rule, not
+/// `plugins/`.
+///
+/// The allow-lists exist for exactly the transition where one crate
+/// converts before the other; both are empty as of C-3b/C-4 landing
+/// together, and should stay empty — a new entry here is the rule
+/// silently regressing, not a place to grow.
+///
+/// Exercised 2026-09-26: added `pub fn x() -> Result<(), String> { Ok(()) }`
+/// to `resonance-audio/src/lib.rs` → failed on that line; reverted.
+#[test]
+fn engine_common_public_fns_dont_return_result_string() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for (crate_dir, allow) in [
+        ("resonance-audio/src", RESONANCE_AUDIO_ALLOW),
+        ("resonance-common/src", RESONANCE_COMMON_ALLOW),
+    ] {
+        let mut files = Vec::new();
+        rust_files(&root.join(crate_dir), &mut files);
+        for file in files {
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            for (line, name) in pub_fn_result_string_violations(&file) {
+                if allow.iter().any(|(f, n)| rel.ends_with(f) && *n == name) {
+                    continue;
+                }
+                violations.push(format!(
+                    "{rel}:{line}: pub fn `{name}` returns Result<_, String> — use a thiserror type per module (see C-3/C-4) and add EngineError::from"
+                ));
+            }
+        }
+    }
+    report(
+        "ARCH-05 epic C (C-5): resonance-audio/common pub fns don't return Result<_, String>",
+        &violations,
+    );
+}

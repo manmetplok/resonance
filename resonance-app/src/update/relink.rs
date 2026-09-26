@@ -363,6 +363,7 @@ fn spawn_import(
                     &project_dir,
                     engine_rate,
                 )
+                .map_err(|e| e.to_string())
             })
             .await
             .unwrap_or_else(|join_err| Err(format!("relink import task join: {join_err}")))

@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use indexmap::IndexMap;
 use parking_lot::RwLock;
+use thiserror::Error;
 
 use resonance_common::{
     compute_fingerprint, FreezeCacheRef, FreezeCacheStatus, FreezeFingerprintBuilder,
@@ -29,16 +30,87 @@ use super::super::SharedState;
 use super::render::{
     build_latency_comp, chunk_span, render_chunk, reset_plugins, ChunkCtx, ChunkScratch,
 };
+use super::PartialFileError;
 
 /// Bit depth of the freeze-cache WAV. Matches the project-bounce path
 /// ([`super::wav::to_wav`]): 32-bit float so the cache is a bit-exact
 /// capture of the rendered mix with no requantization.
 const FREEZE_BIT_DEPTH: u16 = 32;
 
-/// Error message returned when a freeze render is cancelled cooperatively.
-/// [`super::freeze_terminal_event`] matches on this to emit
-/// `AudioEvent::FreezeCancelled` rather than `FreezeError`.
+/// Message [`FreezeError::Cancelled`] carries — kept as a named constant
+/// since [`super::freeze_terminal_event`] used to string-match on it
+/// (before that became an enum match); tests still reference it.
 pub const FREEZE_CANCELLED_MSG: &str = "Freeze cancelled";
+
+/// Failure rendering a track freeze ([`to_freeze_cache`]). Message text
+/// matches the historical `format!()` / literal strings. `Cancelled` is
+/// not really an error — [`super::freeze_terminal_event`] matches on it
+/// to emit `AudioEvent::FreezeCancelled` instead of `AudioEvent::FreezeError`.
+#[derive(Debug, Error)]
+pub enum FreezeError {
+    #[error("Stop transport before freezing")]
+    TransportRunning,
+    #[error("Source track {0} not found")]
+    SourceTrackNotFound(TrackId),
+    #[error("Nothing to freeze")]
+    NothingToFreeze,
+    #[error("{FREEZE_CANCELLED_MSG}")]
+    Cancelled,
+    #[error("Failed to create freeze-cache WAV: {0}")]
+    CreateWav(#[source] hound::Error),
+    #[error("Freeze-cache WAV write error: {0}")]
+    WriteWav(#[source] hound::Error),
+    #[error("Freeze-cache WAV finalize error: {0}")]
+    FinalizeWav(#[source] hound::Error),
+    #[error(transparent)]
+    Commit(#[from] PartialFileError),
+}
+
+impl From<FreezeError> for EngineError {
+    fn from(e: FreezeError) -> Self {
+        let kind = match &e {
+            FreezeError::SourceTrackNotFound(_) => EngineErrorKind::NotFound,
+            FreezeError::TransportRunning => EngineErrorKind::Busy,
+            FreezeError::NothingToFreeze | FreezeError::Cancelled => EngineErrorKind::Unsupported,
+            FreezeError::CreateWav(_) | FreezeError::WriteWav(_) | FreezeError::FinalizeWav(_) => {
+                EngineErrorKind::Io
+            }
+            FreezeError::Commit(_) => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
+
+/// Failure decoding a freeze-cache WAV back into a [`FrozenSource`]
+/// ([`read_freeze_cache`]). Message text matches the historical
+/// `format!()` strings.
+#[derive(Debug, Error)]
+pub enum FrozenCacheError {
+    #[error("Open freeze cache {path}: {source}")]
+    Open {
+        path: String,
+        #[source]
+        source: hound::Error,
+    },
+    #[error("Freeze cache {path} is not stereo (has {channels} channel(s))")]
+    NotStereo { path: String, channels: u16 },
+    #[error("Read freeze cache {path}: {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: hound::Error,
+    },
+}
+
+impl From<FrozenCacheError> for EngineError {
+    fn from(e: FrozenCacheError) -> Self {
+        let kind = match &e {
+            FrozenCacheError::Open { .. } | FrozenCacheError::Read { .. } => EngineErrorKind::Io,
+            FrozenCacheError::NotStereo { .. } => EngineErrorKind::Unsupported,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 /// Render the full post-instrument / post-FX output of `source_track_id`
 /// (and any of its instrument sub-tracks) over the project range to a
@@ -81,13 +153,13 @@ pub fn to_freeze_cache(
     automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
     progress: &mut dyn FnMut(f32),
-) -> Result<FreezeCacheRef, String> {
+) -> Result<FreezeCacheRef, FreezeError> {
     // Same guard as the bounce paths: the offline renderer shares plugin
     // instances with the live mixer, so rendering while the transport
     // rolls would interleave process() calls (and the reset below) with
     // live playback, corrupting both outputs.
     if shared.playing.load(Ordering::Relaxed) {
-        return Err("Stop transport before freezing".into());
+        return Err(FreezeError::TransportRunning);
     }
 
     // Refresh vocal-tuning render caches so a retuned clip on the frozen
@@ -99,7 +171,7 @@ pub fn to_freeze_cache(
     let filter_set: HashSet<TrackId> = {
         let tracks_guard = tracks.read();
         if !tracks_guard.contains_key(&source_track_id) {
-            return Err(format!("Source track {source_track_id} not found"));
+            return Err(FreezeError::SourceTrackNotFound(source_track_id));
         }
         let mut set = HashSet::new();
         set.insert(source_track_id);
@@ -147,7 +219,7 @@ pub fn to_freeze_cache(
     let render_start: u64 = 0;
 
     if render_end <= render_start {
-        return Err("Nothing to freeze".into());
+        return Err(FreezeError::NothingToFreeze);
     }
     // The shared offline FX tail (code review ENG-07): the frozen track's
     // reverb / delay / release past the last clip end stays audible.
@@ -163,8 +235,8 @@ pub fn to_freeze_cache(
     // review ENG-13): a failed or cancelled refreeze keeps the previous
     // cache intact. Every early return drops `output`, removing the temp.
     let output = super::PartialFile::new(&path);
-    let mut writer = hound::WavWriter::create(output.temp(), spec)
-        .map_err(|e| format!("Failed to create freeze-cache WAV: {e}"))?;
+    let mut writer =
+        hound::WavWriter::create(output.temp(), spec).map_err(FreezeError::CreateWav)?;
 
     reset_plugins(plugins, shared);
 
@@ -208,7 +280,7 @@ pub fn to_freeze_cache(
         if cancel.load(Ordering::Relaxed) {
             drop(writer);
             drop(output);
-            return Err(FREEZE_CANCELLED_MSG.into());
+            return Err(FreezeError::Cancelled);
         }
 
         // Tail chunks are padded up to the CLAP activation minimum and
@@ -247,7 +319,7 @@ pub fn to_freeze_cache(
                 // sits next to its expected output.
                 drop(writer);
                 drop(output);
-                return Err(format!("Freeze-cache WAV write error: {e}"));
+                return Err(FreezeError::WriteWav(e));
             }
         }
 
@@ -263,9 +335,7 @@ pub fn to_freeze_cache(
         }
     }
 
-    writer
-        .finalize()
-        .map_err(|e| format!("Freeze-cache WAV finalize error: {e}"))?;
+    writer.finalize().map_err(FreezeError::FinalizeWav)?;
     output.commit()?;
 
     progress(1.0);
@@ -299,16 +369,20 @@ pub fn to_freeze_cache(
 /// Returns `Err` — never panics — when the file is missing, unreadable,
 /// the wrong format, or truncated, so the project-load path can fall the
 /// track back to a *stale* (offer-refreeze) state instead of crashing.
-pub fn read_freeze_cache(path: &Path, cache_ref: FreezeCacheRef) -> Result<FrozenSource, String> {
-    let mut reader = hound::WavReader::open(path)
-        .map_err(|e| format!("Open freeze cache {}: {e}", path.display()))?;
+pub fn read_freeze_cache(
+    path: &Path,
+    cache_ref: FreezeCacheRef,
+) -> Result<FrozenSource, FrozenCacheError> {
+    let mut reader = hound::WavReader::open(path).map_err(|e| FrozenCacheError::Open {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     let spec = reader.spec();
     if spec.channels != 2 {
-        return Err(format!(
-            "Freeze cache {} is not stereo (has {} channel(s))",
-            path.display(),
-            spec.channels
-        ));
+        return Err(FrozenCacheError::NotStereo {
+            path: path.display().to_string(),
+            channels: spec.channels,
+        });
     }
 
     // Caches are written as 32-bit float; decode int as a defensive
@@ -318,14 +392,20 @@ pub fn read_freeze_cache(path: &Path, cache_ref: FreezeCacheRef) -> Result<Froze
         hound::SampleFormat::Float => reader
             .samples::<f32>()
             .collect::<Result<Vec<f32>, _>>()
-            .map_err(|e| format!("Read freeze cache {}: {e}", path.display()))?,
+            .map_err(|e| FrozenCacheError::Read {
+                path: path.display().to_string(),
+                source: e,
+            })?,
         hound::SampleFormat::Int => {
             let scale = 1.0 / (1i64 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .samples::<i32>()
                 .map(|s| s.map(|v| v as f32 * scale))
                 .collect::<Result<Vec<f32>, _>>()
-                .map_err(|e| format!("Read freeze cache {}: {e}", path.display()))?
+                .map_err(|e| FrozenCacheError::Read {
+                    path: path.display().to_string(),
+                    source: e,
+                })?
         }
     };
 

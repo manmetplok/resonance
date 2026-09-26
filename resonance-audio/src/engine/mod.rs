@@ -19,6 +19,7 @@ use std::sync::Arc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crossbeam_channel::{Receiver, Sender};
 use ringbuf::traits::Split;
+use thiserror::Error;
 
 use crate::clap_host::PluginMap;
 use crate::midi_clock::MidiClockEvent;
@@ -33,8 +34,9 @@ pub use bounce::{
     measure_mix,
     measure_rendered_buffer, normalize_buffer_for_test, read_freeze_cache, render_stem,
     stem_filter, stem_project_range, to_audio_clip, to_freeze_cache, to_freeze_cache_spawn, to_wav,
-    try_lock_with_backoff, write_stem_wav, OfflineRenderGuard, BOUNCE_CHUNK,
-    FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG, MIN_CLAP_FRAMES, OFFLINE_RENDER_BUSY_MSG, StemFilter,
+    try_lock_with_backoff, write_stem_wav, FreezeError, OfflineRenderGuard,
+    BOUNCE_CHUNK, FREEZE_CANCELLED_MSG, MEASURE_BUSY_MSG, MIN_CLAP_FRAMES,
+    OFFLINE_RENDER_BUSY_MSG, StemFilter,
 };
 mod bounce_common;
 pub use bounce_common::midi_render_range;
@@ -560,9 +562,40 @@ pub struct AudioEngine {
     _graph_force: Option<platform::GraphRateForce>,
 }
 
+/// Failure starting the audio engine ([`AudioEngine::new`]): probing the
+/// output device, building the cpal stream (with the buffer-size
+/// fallback), starting it, or spawning the engine control thread.
+/// Message text matches the historical `format!()` / literal strings.
+#[derive(Debug, Error)]
+pub enum EngineInitError {
+    #[error("No audio output device found")]
+    NoOutputDevice,
+    #[error("Failed to get default output config: {0}")]
+    DefaultConfig(#[source] cpal::DefaultStreamConfigError),
+    #[error("Failed to build output stream: {0}")]
+    BuildStream(#[source] cpal::BuildStreamError),
+    #[error("Failed to start stream: {0}")]
+    PlayStream(#[source] cpal::PlayStreamError),
+    #[error("Failed to spawn engine thread: {0}")]
+    SpawnThread(#[source] std::io::Error),
+}
+
+impl From<EngineInitError> for EngineError {
+    fn from(e: EngineInitError) -> Self {
+        let kind = match &e {
+            EngineInitError::NoOutputDevice => EngineErrorKind::NotFound,
+            EngineInitError::DefaultConfig(_)
+            | EngineInitError::BuildStream(_)
+            | EngineInitError::PlayStream(_)
+            | EngineInitError::SpawnThread(_) => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
+
 impl AudioEngine {
     /// Create and start the audio engine. Returns the engine handle.
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, EngineInitError> {
         // Replace ALSA's default stderr error handler before any cpal
         // / device enumeration so the startup PCM probing doesn't
         // spam "Cannot open device /dev/dsp" and friends. Idempotent.
@@ -571,7 +604,7 @@ impl AudioEngine {
         let host = cpal::default_host();
         let device = host
             .default_output_device()
-            .ok_or_else(|| "No audio output device found".to_string())?;
+            .ok_or(EngineInitError::NoOutputDevice)?;
 
         let device_name = device
             .description()
@@ -580,7 +613,7 @@ impl AudioEngine {
 
         let config = device
             .default_output_config()
-            .map_err(|e| format!("Failed to get default output config: {}", e))?;
+            .map_err(EngineInitError::DefaultConfig)?;
 
         let channels = config.channels() as usize;
         let default_rate = config.sample_rate();
@@ -892,7 +925,7 @@ impl AudioEngine {
                             );
                         Ok((stream, prod, false))
                     }
-                    Err(e) => Err(format!("Failed to build output stream: {}", e)),
+                    Err(e) => Err(EngineInitError::BuildStream(e)),
                 }
             }
         };
@@ -977,9 +1010,7 @@ impl AudioEngine {
         let monitor_prod_audio = Arc::new(parking_lot::Mutex::new(monitor_prod_raw));
 
         if let Some(stream) = &stream {
-            stream
-                .play()
-                .map_err(|e| format!("Failed to start stream: {}", e))?;
+            stream.play().map_err(EngineInitError::PlayStream)?;
         }
 
         // Spawn the engine control thread
@@ -1024,7 +1055,7 @@ impl AudioEngine {
                     quantum,
                 });
             })
-            .map_err(|e| format!("Failed to spawn engine thread: {}", e))?;
+            .map_err(EngineInitError::SpawnThread)?;
 
         Ok(Self {
             cmd_tx,

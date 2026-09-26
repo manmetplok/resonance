@@ -37,13 +37,35 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use thiserror::Error;
+
 use super::thread::HandlerCtx;
 use super::SharedState;
-use crate::types::{AudioEvent, EngineError};
+use crate::types::{AudioEvent, EngineError, EngineErrorKind};
 
 /// Minimum interval between throttled `AuditionPosition` events, matching the
 /// ~60 Hz cadence of the main `PlayheadMoved` reporting.
 const POSITION_REPORT_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Failure decoding an audition preview file. Message text matches the
+/// historical literal / propagated-decoder strings.
+#[derive(Debug, Error)]
+pub enum AuditionError {
+    #[error("audition path is not valid UTF-8")]
+    InvalidPath,
+    #[error(transparent)]
+    Decode(#[from] resonance_common::WavDecodeError),
+}
+
+impl From<AuditionError> for EngineError {
+    fn from(e: AuditionError) -> Self {
+        let kind = match &e {
+            AuditionError::InvalidPath => EngineErrorKind::Unsupported,
+            AuditionError::Decode(_) => EngineErrorKind::Io,
+        };
+        EngineError::new(kind, e.to_string())
+    }
+}
 
 /// A decoded audition preview source: stereo-interleaved f32 samples at the
 /// engine sample rate. Published behind an `ArcSwapOption` so the audio
@@ -166,12 +188,9 @@ pub fn set_audition_options_in_place(
 
 /// Decode an audio file (any format the workspace `symphonia` features
 /// enable) to engine-rate stereo and wrap it as an [`AuditionSource`].
-pub fn load_audition_source(path: &Path, sample_rate: u32) -> Result<AuditionSource, String> {
-    let path_str = path
-        .to_str()
-        .ok_or_else(|| "audition path is not valid UTF-8".to_string())?;
-    let (samples, _name) =
-        crate::decode::decode_file(path_str, sample_rate).map_err(|e| e.to_string())?;
+pub fn load_audition_source(path: &Path, sample_rate: u32) -> Result<AuditionSource, AuditionError> {
+    let path_str = path.to_str().ok_or(AuditionError::InvalidPath)?;
+    let (samples, _name) = crate::decode::decode_file(path_str, sample_rate)?;
     Ok(AuditionSource::from_samples(samples, sample_rate))
 }
 

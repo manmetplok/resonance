@@ -215,8 +215,8 @@ fn measure_mix_holding(
                 &samples,
                 sample_rate,
             )),
-            Err(message) => {
-                fail(message);
+            Err(e) => {
+                fail(e.to_string());
                 return;
             }
         }
