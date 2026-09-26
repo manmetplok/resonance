@@ -37,7 +37,7 @@ pub(crate) mod viewport_probe;
 
 // Snap helpers are external public API for this canvas — re-export them
 // from the snap submodule so existing call sites keep working.
-pub use self::snap::{snap_sample_to_grid, snap_sample_to_grid_tempo};
+pub use self::snap::snap_sample_to_grid_tempo;
 
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]

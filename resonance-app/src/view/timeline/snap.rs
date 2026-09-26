@@ -9,22 +9,9 @@
 
 use resonance_audio::types::{bar_len_quarters, bpm_at_bar, TempoMap};
 
-/// Snap a sample position to the nearest bar or beat boundary,
-/// accounting for the tempo map. At high zoom (bar wider than 40 px)
-/// snaps to beats; lower zoom snaps to bars.
-pub fn snap_sample_to_grid(
-    sample: u64,
-    bpm: f32,
-    time_sig_num: u8,
-    sample_rate: u32,
-    zoom: f32,
-) -> u64 {
-    let tm = TempoMap::default();
-    snap_sample_to_grid_tempo(sample, bpm, time_sig_num, sample_rate, zoom, &tm)
-}
-
-/// Tempo-map-aware version of `snap_sample_to_grid`. Uses the shared
-/// `TempoMap` for bar boundary computation.
+/// Snap a sample position to the nearest bar or beat boundary of the
+/// project's `TempoMap` (the grid the ruler draws). At high zoom (bar
+/// wider than 40 px) snaps to beats; lower zoom snaps to bars.
 pub fn snap_sample_to_grid_tempo(
     sample: u64,
     bpm: f32,

@@ -266,12 +266,13 @@ fn import(r: &mut Resonance, paths: Vec<std::path::PathBuf>, placement: Placemen
 /// helper the clip-drag reducer uses so a dropped clip lands on the same
 /// boundaries a dragged one would.
 fn snap_drop_sample(r: &Resonance, raw: SamplePos) -> SamplePos {
-    crate::view::timeline::snap_sample_to_grid(
+    crate::view::timeline::snap_sample_to_grid_tempo(
         raw,
         r.transport.bpm,
         r.transport.time_sig_num,
         r.sample_rate,
         r.viewport.zoom,
+        &r.tempo_map,
     )
 }
 
