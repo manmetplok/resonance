@@ -24,7 +24,8 @@ use super::instance::{ClapInstance, StereoBufMut};
 // ---------------------------------------------------------------------------
 
 /// Context for input events carrying both param value and note events.
-/// Param events (time=0) come first, then note events sorted by time.
+/// Param events (time=0) come first, then note events, which
+/// `process_multi_with_key` sorts by time and bounds to the block.
 ///
 /// Also reused by [`super::params`] to build the param-only event list
 /// handed to `clap_plugin_params.flush` (with `note_events` empty).
@@ -62,6 +63,57 @@ pub(super) unsafe extern "C" fn discard_output_event(
     _event: *const clap_event_header,
 ) -> bool {
     true
+}
+
+/// Split step for one queued note: an event inside the block is pushed
+/// onto `out` as a CLAP note event and dropped from its queue (`false`);
+/// a later one is re-based to the next call's start and kept (`true`).
+#[inline]
+fn keep_for_later(
+    n: &mut (bool, u8, f32, u32),
+    frames: u32,
+    out: &mut Vec<clap_event_note>,
+) -> bool {
+    let (is_on, key, vel, offset) = *n;
+    if offset >= frames {
+        n.3 = offset - frames;
+        return true;
+    }
+    out.push(clap_event_note {
+        header: clap_event_header {
+            size: std::mem::size_of::<clap_event_note>() as u32,
+            time: offset,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_: if is_on {
+                CLAP_EVENT_NOTE_ON
+            } else {
+                CLAP_EVENT_NOTE_OFF
+            },
+            flags: 0,
+        },
+        note_id: -1,
+        port_index: 0,
+        channel: 0,
+        key: key as i16,
+        velocity: vel as f64,
+    });
+    false
+}
+
+/// Stable in-place sort by `header.time`. Insertion sort: no allocation
+/// (std's stable sort allocates past 20 elements), and the list is
+/// short and almost always already sorted. Stable because equal-time
+/// order is meaningful and only the producer knows it — a retrigger
+/// wants off-then-on, a zero-length note on-then-off.
+#[inline]
+fn sort_notes_by_time(events: &mut [clap_event_note]) {
+    for i in 1..events.len() {
+        let mut j = i;
+        while j > 0 && events[j - 1].header.time > events[j].header.time {
+            events.swap(j - 1, j);
+            j -= 1;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -236,28 +288,29 @@ impl ClapInstance {
                 .map(|(param_id, value)| super::params::param_value_event(param_id, value)),
         );
 
-        // Build note events from pending notes (reuse pre-allocated buffer)
+        // Build note events (reuse pre-allocated buffer). CLAP requires
+        // input events inside the block and sorted by time. Events past
+        // this call's end — a live note queued against the whole callback
+        // when this is the head sub-block of a loop seam — are carried,
+        // re-based, to the next call instead of being handed over out of
+        // range (the plugin would never reach them, and the queue is
+        // drained, so a lost note-off sticks). Allocation-free: both
+        // queues are filtered in place and the carry is capacity-bounded.
+        let frames_u32 = frames as u32;
         self.note_event_buf.clear();
-        self.note_event_buf.extend(self.pending_notes.drain(..).map(
-            |(is_on, key, vel, offset)| clap_event_note {
-                header: clap_event_header {
-                    size: std::mem::size_of::<clap_event_note>() as u32,
-                    time: offset,
-                    space_id: CLAP_CORE_EVENT_SPACE_ID,
-                    type_: if is_on {
-                        CLAP_EVENT_NOTE_ON
-                    } else {
-                        CLAP_EVENT_NOTE_OFF
-                    },
-                    flags: 0,
-                },
-                note_id: -1,
-                port_index: 0,
-                channel: 0,
-                key: key as i16,
-                velocity: vel as f64,
-            },
-        ));
+        let note_buf = &mut self.note_event_buf;
+        // Carried events were queued earlier, so they go first; the
+        // stable sort below keeps that order among equal times.
+        self.carried_notes
+            .retain_mut(|n| keep_for_later(n, frames_u32, note_buf));
+        self.pending_notes
+            .retain_mut(|n| keep_for_later(n, frames_u32, note_buf));
+        for n in self.pending_notes.drain(..) {
+            if self.carried_notes.len() < crate::limits::MAX_PENDING_NOTES {
+                self.carried_notes.push(n);
+            }
+        }
+        sort_notes_by_time(&mut self.note_event_buf);
 
         let mut event_ctx = MixedEventListCtx {
             param_events: std::mem::take(&mut self.param_event_buf),
