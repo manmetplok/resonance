@@ -139,6 +139,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::ConfirmDiscardAndQuit => {
             if let Some(id) = r.confirm_quit.take() {
+                crate::update::project_io::recovery::close_session(r);
                 r.engine.shutdown(std::time::Duration::from_millis(150));
                 return iced::window::close(id);
             }

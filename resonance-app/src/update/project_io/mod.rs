@@ -6,6 +6,7 @@
 mod autosave;
 mod dialogs;
 mod instantiate;
+pub(crate) mod recovery;
 mod replay;
 pub mod replay_diff;
 mod serialize;
@@ -153,6 +154,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         }
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
+            recovery::after_save(r, autosave);
             // Resolve a control-initiated save job (doc #265, todo
             // #1149) — manual saves only: an autosave completing must
             // never satisfy a client's project.save. No-op when no
@@ -191,6 +193,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                         r.confirm_quit = Some(id);
                         return Task::none();
                     }
+                    recovery::close_session(r);
                     r.engine.shutdown(std::time::Duration::from_millis(150));
                     return iced::window::close(id);
                 }
@@ -224,6 +227,7 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 let _ = r.engine.send(AudioCommand::SetProjectDir(path.clone()));
                 r.io.project_path = Some(path);
             }
+            recovery::sync_session_marker(r);
             // A control-initiated load job (todo #1149) is NOT resolved
             // here: the replay only runs once the engine confirms the
             // `ClearAll` below, on a later Tick. `all_cleared` completes

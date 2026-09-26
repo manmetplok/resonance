@@ -27,11 +27,13 @@
 /// | [`io`]     | Save / load / autosave / atomic-write / backup |
 /// | [`sections`] | Section-definition and placement structs |
 /// | [`take_audio`] | Reading a cycle-record take's WAV back out of the bundle |
+/// | [`session`] | Session marker + crash-recovery probe (FU-M12a) |
 
 pub mod sections;
 pub mod model;
 pub mod io;
 pub mod take_audio;
+pub mod session;
 
 // Re-export section types (existing public surface).
 pub use sections::{

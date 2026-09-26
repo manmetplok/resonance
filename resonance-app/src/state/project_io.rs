@@ -90,4 +90,8 @@ pub struct ProjectIoState {
     /// The revision the last autosave snapshot started at; an unchanged
     /// project is not snapshotted again.
     pub autosave_revision: Option<u64>,
+    /// The directory this session's crash-detection marker is in: the
+    /// open project's dir, or the untitled autosave scratch dir
+    /// (`update::project_io::recovery`, code review FU-M12a).
+    pub session_marker_dir: Option<std::path::PathBuf>,
 }

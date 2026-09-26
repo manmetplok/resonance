@@ -70,6 +70,7 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // Drop any previously-open project's path *before* the clear/replay so
     // `all_cleared` can't restore it: a template always lands untitled.
     r.io.project_path = None;
+    super::recovery::sync_session_marker(r);
     r.io.loading = true;
     r.io.pending_load = Some(loaded);
     r.undo.clear();
