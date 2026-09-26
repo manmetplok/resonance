@@ -28,6 +28,9 @@ pub const AUTOSAVE_JSON: &str = "project.autosave.json";
 pub struct ProjectFile {
     pub version: u32,
     pub sample_rate: u32,
+    /// Tolerates `null` / out-of-range values (a NaN tempo used to save
+    /// as `null` and make the project unloadable — review VIEW-06).
+    #[serde(deserialize_with = "resonance_audio::types::deserialize_bpm")]
     pub bpm: f32,
     pub time_sig_num: u8,
     pub time_sig_den: u8,

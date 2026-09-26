@@ -91,7 +91,7 @@ fn collapsed(r: &crate::Resonance, group: MixerInspectorGroup) -> bool {
 /// Hash every field the lazy ROUTING + CHAIN groups read. The live level
 /// fields are intentionally absent — SIGNAL renders them per-frame
 /// outside the lazy region.
-fn fingerprint(
+pub(crate) fn fingerprint(
     r: &crate::Resonance,
     bus: &BusState,
     routing_collapsed: bool,
@@ -108,6 +108,8 @@ fn fingerprint(
     for p in &bus.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
+        // Drives the BYP button and its press message (review VIEW-08).
+        p.bypassed.hash(&mut h);
     }
     // MEMBERS is derived from every track's routing, so it changes when
     // a track is re-routed, renamed, added or removed.
@@ -124,6 +126,23 @@ fn fingerprint(
             s.source.hash(&mut h);
             s.enabled.hash(&mut h);
             s.level_db.to_bits().hash(&mut h);
+            // The list names each source, so a rename must redraw it.
+            match s.source {
+                SendSource::Track(id) => r
+                    .registry
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| &t.name)
+                    .hash(&mut h),
+                SendSource::Bus(id) => r
+                    .registry
+                    .busses
+                    .iter()
+                    .find(|b| b.id == id)
+                    .map(|b| &b.name)
+                    .hash(&mut h),
+            }
         }
     }
     Rc::as_ptr(&r.view_caches.fx_plugins).hash(&mut h);

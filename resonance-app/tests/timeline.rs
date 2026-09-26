@@ -29,6 +29,8 @@ mod automation_live_tint;
 mod automation_mirror;
 #[path = "timeline/automation_persistence.rs"]
 mod automation_persistence;
+#[path = "timeline/bpm_input_validation.rs"]
+mod bpm_input_validation;
 #[path = "timeline/clip_fade_gain_draw.rs"]
 mod clip_fade_gain_draw;
 #[path = "timeline/clip_fade_gain_handlers.rs"]
@@ -43,6 +45,8 @@ mod clip_fade_gain_persistence;
 mod clip_fade_gain_snapshot;
 #[path = "timeline/clip_inspector_flyout.rs"]
 mod clip_inspector_flyout;
+#[path = "timeline/drag_after_auto_follow.rs"]
+mod drag_after_auto_follow;
 #[path = "timeline/drag_placement_handlers.rs"]
 mod drag_placement_handlers;
 #[path = "timeline/drag_placement_visuals.rs"]

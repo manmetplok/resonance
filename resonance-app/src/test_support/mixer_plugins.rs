@@ -678,6 +678,24 @@ impl Resonance {
         ))
     }
 
+    /// Test-only: the bus twin of [`Self::test_inspector_fingerprint`] —
+    /// the lazy-region key of the bus inspector (review VIEW-08). `None`
+    /// when the bus doesn't exist.
+    #[doc(hidden)]
+    pub fn test_bus_inspector_fingerprint(
+        &self,
+        bus_id: resonance_audio::types::BusId,
+    ) -> Option<u64> {
+        let bus = self.registry.busses.iter().find(|b| b.id == bus_id)?;
+        let groups = &self.mixer.collapsed_inspector_groups;
+        Some(crate::view::mixer::inspector::bus_fingerprint(
+            self,
+            bus,
+            groups.contains(&state::MixerInspectorGroup::Routing),
+            groups.contains(&state::MixerInspectorGroup::Chain),
+        ))
+    }
+
     /// Test-only: drive the GUI external-instrument map (and engine) back to
     /// `extras`, the same restore path both undo replays use. Pairs with
     /// [`Self::test_snapshot_undo_extras`] to exercise a config round-trip.

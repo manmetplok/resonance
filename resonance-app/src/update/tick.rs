@@ -120,7 +120,6 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     update_vu_meters(r);
     poll_ab_meters(r);
     sync_tempo_at_playhead(r);
-    auto_follow_playhead(r);
     refresh_midi_devices_if_stale(r);
     check_engine_disconnected(r);
     check_output_stream_lost(r);
@@ -346,21 +345,6 @@ fn sync_tempo_at_playhead(r: &mut Resonance) {
 /// `bpm_centi` idiom from `view::transport_labels`).
 fn bpm_display_key(bpm: f32) -> u32 {
     (bpm * 10.0).round() as u32
-}
-
-fn auto_follow_playhead(r: &mut Resonance) {
-    if !r.transport.playing {
-        return;
-    }
-    let playhead_seconds = r.transport.playhead as f64 / r.sample_rate as f64;
-    let playhead_x = playhead_seconds as f32 * r.viewport.zoom - r.viewport.scroll_offset;
-    let visible_width = r.viewport.viewport_width;
-    if playhead_x > visible_width * 0.8 {
-        r.viewport.scroll_offset = playhead_seconds as f32 * r.viewport.zoom - visible_width * 0.5;
-    } else if playhead_x < 0.0 {
-        r.viewport.scroll_offset =
-            (playhead_seconds as f32 * r.viewport.zoom - visible_width * 0.2).max(0.0);
-    }
 }
 
 impl Resonance {

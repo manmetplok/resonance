@@ -242,8 +242,11 @@ impl crate::Resonance {
         // window-root overlay chain — because its anchor coordinates are
         // computed in arrange-area space from the track-header row layout
         // (a widget `mouse_area` press carries no cursor position), so the
-        // overlay must share that coordinate origin.
-        if self.interaction.track_menu.is_some() {
+        // overlay must share that coordinate origin. The "Save as
+        // preset…" name prompt is drawn by the same overlay and outlives
+        // the menu that opened it, so it keeps the stack alive on its own
+        // (review VIEW-07).
+        if self.interaction.track_menu.is_some() || self.interaction.preset_save.is_some() {
             stack![base, menus::view_track_menu_overlay(self)].into()
         } else {
             base

@@ -578,3 +578,40 @@ fn tick_to_sample_and_back_with_ramp() {
     assert_eq!(beat, 1, "expected beat 1, got {beat}");
     assert!(frac < 0.01, "expected frac ~0, got {frac}");
 }
+
+// ---- Non-finite / out-of-range tempo points (review VIEW-06) ----
+
+/// A NaN tempo point used to turn every bar's sample position into NaN,
+/// which casts to 0: the whole song collapsed onto sample 0. The bar
+/// table must fall back to a sane tempo instead.
+#[test]
+fn nan_tempo_point_does_not_collapse_bar_table() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let tm = make_tempo_map(&[(0, bad)], &[(0, 4, 4)]);
+        let b1 = tm.bar_to_sample(1);
+        let b2 = tm.bar_to_sample(2);
+        assert!(b1 > 0, "bpm {bad}: bar 1 collapsed to sample 0");
+        assert!(b2 > b1, "bpm {bad}: bars not increasing ({b1}, {b2})");
+        assert!(tm.bpm_at(b1, SR).is_finite(), "bpm {bad}: lookup not finite");
+    }
+}
+
+/// Zero / negative tempos are clamped into the supported range rather
+/// than producing infinite or negative bar lengths.
+#[test]
+fn zero_and_negative_tempo_points_are_clamped() {
+    for bad in [0.0f32, -120.0] {
+        let tm = make_tempo_map(&[(0, bad)], &[(0, 4, 4)]);
+        let expected = make_tempo_map(&[(0, MIN_BPM)], &[(0, 4, 4)]);
+        assert_eq!(tm.bar_to_sample(4), expected.bar_to_sample(4), "bpm {bad}");
+    }
+}
+
+#[test]
+fn sanitize_bpm_rejects_non_finite_and_clamps() {
+    assert_eq!(sanitize_bpm(f32::NAN), None);
+    assert_eq!(sanitize_bpm(f32::INFINITY), None);
+    assert_eq!(sanitize_bpm(0.0), Some(MIN_BPM));
+    assert_eq!(sanitize_bpm(1_000.0), Some(MAX_BPM));
+    assert_eq!(sanitize_bpm(128.0), Some(128.0));
+}

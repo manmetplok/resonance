@@ -30,6 +30,8 @@ mod routing;
 pub(crate) mod sends;
 mod widgets;
 
+pub(crate) use bus::fingerprint as bus_fingerprint;
+
 use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::TrackOutput;
@@ -231,10 +233,28 @@ pub(crate) fn inspector_fingerprint(
         ext.return_input_offline.hash(&mut h);
         // The latency readout is in ms, derived from the sample rate.
         r.sample_rate.hash(&mut h);
+        // The Detect button's enabled state and the failure note under
+        // it (review VIEW-08).
+        ext.latency_detect_in_progress.hash(&mut h);
+        ext.latency_detect_error.hash(&mut h);
+        r.transport.playing.hash(&mut h);
+        // PLAYBACK SOURCE toggles + the "Playing the recorded take" chip.
+        t.playback_source.hash(&mut h);
+        r.clips.iter().any(|c| c.track_id == t.id).hash(&mut h);
+        // Return-device / device-preset / bank / program pickers.
+        Rc::as_ptr(&r.view_caches.input_devices).hash(&mut h);
+        Rc::as_ptr(&r.view_caches.device_choices).hash(&mut h);
+        Rc::as_ptr(&r.view_caches.bank_choices).hash(&mut h);
+        Rc::as_ptr(&r.view_caches.program_choices).hash(&mut h);
+        Rc::as_ptr(&r.view_caches.output_channel_choices).hash(&mut h);
     }
     for p in &t.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
+        // The BYP button renders — and builds its press message from —
+        // this flag; without it the echo never reaches the retained
+        // tree and the button can't un-bypass (review VIEW-08).
+        p.bypassed.hash(&mut h);
     }
     // The SENDS block (ba todo #1310) renders every send tapped off this
     // track, so each field a slot draws has to be here — otherwise the

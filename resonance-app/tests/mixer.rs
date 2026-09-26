@@ -47,6 +47,8 @@ mod mixer_chain_reorder;
 mod mixer_generic_param_panel;
 #[path = "mixer/mixer_group_clustering.rs"]
 mod mixer_group_clustering;
+#[path = "mixer/inspector_lazy_fingerprint.rs"]
+mod inspector_lazy_fingerprint;
 #[path = "mixer/mixer_inspector_bus.rs"]
 mod mixer_inspector_bus;
 #[path = "mixer/mixer_inspector_bus_snapshot.rs"]

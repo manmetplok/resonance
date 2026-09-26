@@ -263,11 +263,10 @@ pub fn update_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let num = r.transport.time_sig_num;
     let sample_rate = r.sample_rate;
     let zoom = r.viewport.zoom;
-    let scroll = r.viewport.scroll_offset;
     if let Some(ref mut drag) = r.interaction.clip_drag {
         drag.current_x = x;
         drag.current_y = y;
-        let seconds = ((x - drag.grab_offset_x) + scroll) / zoom;
+        let seconds = (x - drag.grab_offset_x) / zoom;
         let raw = if seconds < 0.0 {
             0u64
         } else {
@@ -429,14 +428,14 @@ pub fn update_clip_fade_drag(r: &mut Resonance, x: f32) {
         return;
     };
     let zoom = r.viewport.zoom;
-    let scroll = r.viewport.scroll_offset;
     let sample_rate = r.sample_rate;
     // Clip edges in canvas pixels (same mapping as `hit_test::clip_rect`).
-    let left_px = drag.original_start_sample as f32 / sample_rate as f32 * zoom - scroll;
+    // The canvas works in content coordinates — the outer `Scrollable`
+    // owns horizontal scroll — so no offset applies (review VIEW-10).
+    let left_px = drag.original_start_sample as f32 / sample_rate as f32 * zoom;
     let right_px = (drag.original_start_sample + drag.original_duration_samples) as f32
         / sample_rate as f32
-        * zoom
-        - scroll;
+        * zoom;
     // Length in pixels of the dragged ramp, then to frames. A fade can't be
     // longer than the clip is audible (matches the engine's clamp).
     let len_px = match drag.edge {
@@ -692,11 +691,10 @@ pub fn update_midi_clip_drag(r: &mut Resonance, x: f32, y: f32) {
     let num = r.transport.time_sig_num;
     let sample_rate = r.sample_rate;
     let zoom = r.viewport.zoom;
-    let scroll = r.viewport.scroll_offset;
     if let Some(ref mut drag) = r.interaction.midi_clip_drag {
         drag.current_x = x;
         drag.current_y = y;
-        let seconds = ((x - drag.grab_offset_x) + scroll) / zoom;
+        let seconds = (x - drag.grab_offset_x) / zoom;
         let raw = if seconds < 0.0 {
             0u64
         } else {
