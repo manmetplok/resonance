@@ -4,8 +4,26 @@ version = "0.1.0"
 edition = "2021"
 description = "Shared utilities for Resonance plugins"
 
+[features]
+default = ["model", "decode"]
+# The nine DAW-model modules: take, midi_map, device_definition, automation,
+# freeze, device_registry, group_identity, external_instrument, track_group.
+# Not plugin API (ARCHITECTURE.md) — a plugin that sets
+# `default-features = false` cannot name any of these types (ARCH-07 A7-3).
+#
+# `dirs` and `time` stay plain (non-optional) dependencies rather than
+# gated-optional ones: the plan named them as "optional under model", but
+# `registry` — a utility module, always compiled regardless of features,
+# used by the `drums` plugin — also calls `dirs::data_dir()` and
+# `time::OffsetDateTime` (verified with `grep -rn 'dirs::\|time::'
+# resonance-common/src`). Gating them behind `model` would break a
+# `decode`-only or utility-only build that never touches the model modules.
+model = []
+# WAV decode + audio-file probing; the only consumer of `symphonia`.
+decode = ["dep:symphonia"]
+
 [dependencies]
-symphonia.workspace = true
+symphonia = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true

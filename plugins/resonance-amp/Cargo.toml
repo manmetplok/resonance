@@ -25,7 +25,7 @@ editor = [
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
-resonance-common = { path = "../../resonance-common" }
+resonance-common = { path = "../../resonance-common", default-features = false }
 resonance-dsp = { path = "../../resonance-dsp" }
 # Not editor-gated: `viz.rs`'s meter/scope state is shared with the audio
 # path regardless of whether the editor feature is built.
