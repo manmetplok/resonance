@@ -1,8 +1,11 @@
 //! FX tab — output scope at the top, then a horizontal chain of effect
-//! cards (Chorus / Delay / Distortion) each with their own knobs.
+//! cards (Chorus / Delay / Distortion) each with their own knobs. The
+//! chorus card also carries its mode selector (Classic / Juno I, II, I+II /
+//! Ensemble).
 
-use plugin_gui_core::egui;
+use plugin_gui_core::{egui, widgets};
 
+use crate::dsp::effects::ChorusMode;
 use crate::editor::theme;
 use crate::editor::viz::scope;
 use crate::editor::WavetableEditorApp;
@@ -47,11 +50,27 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             app.params.chorus.enabled.value(),
             |on| app.params.chorus.enabled.set_plain(on),
             |ui| {
+                let chorus = &app.params.chorus;
+                let mode = ChorusMode::from_int(chorus.mode.value());
+                if let Some(i) = widgets::segmented(ui, &ChorusMode::LABELS, mode as usize) {
+                    chorus.mode.set_plain(i as f64);
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                    float_knob(ui, "Rate", &app.params.chorus.rate);
-                    float_knob(ui, "Depth", &app.params.chorus.depth);
-                    float_knob(ui, "Mix", &app.params.chorus.mix);
+                    // The Juno modes run at the hardware's fixed rates and
+                    // ignore the Rate parameter, so the knob is replaced by
+                    // the rate they actually run at. Noise only exists on
+                    // the BBD modes.
+                    if let Some(rate) = mode.fixed_rate_label() {
+                        fixed_readout(ui, "Rate", rate);
+                    } else {
+                        float_knob(ui, "Rate", &chorus.rate);
+                    }
+                    float_knob(ui, "Depth", &chorus.depth);
+                    float_knob(ui, "Mix", &chorus.mix);
+                    if mode.is_bbd() {
+                        float_knob(ui, "Noise", &chorus.noise);
+                    }
                 });
             },
         );
@@ -148,4 +167,18 @@ fn draw_fx_card(
         });
         body(ui);
     });
+}
+
+/// A knob-sized cell showing a value the mode fixes, in place of a knob
+/// whose parameter the mode ignores.
+fn fixed_readout(ui: &mut egui::Ui, caption: &str, value: &str) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(52.0, 72.0),
+        egui::Layout::top_down(egui::Align::Center),
+        |ui| {
+            ui.add_space(20.0);
+            ui.label(egui::RichText::new(value).color(theme::TEXT_2).size(11.0));
+            ui.label(egui::RichText::new(caption).color(theme::TEXT_3).size(10.5));
+        },
+    );
 }

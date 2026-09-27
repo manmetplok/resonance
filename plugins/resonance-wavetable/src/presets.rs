@@ -46,6 +46,10 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/pad_warm_analog.json"),
     },
     PresetEntry {
+        name: "Pad — Juno Chorus",
+        json: include_str!("../presets/pad_juno_chorus.json"),
+    },
+    PresetEntry {
         name: "Pad — Glass Shimmer",
         json: include_str!("../presets/pad_glass_shimmer.json"),
     },

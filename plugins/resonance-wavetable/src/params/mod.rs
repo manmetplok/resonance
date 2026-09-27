@@ -62,8 +62,9 @@ pub struct WavetableParams {
 /// three LFOs. Parameters are addressed by string id everywhere that
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
-/// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+/// changes the order a host lists them in. 95 since `chorus_mode` and
+/// `chorus_noise` (the BBD chorus modes).
+pub const PARAM_COUNT: usize = 95;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -223,21 +224,23 @@ impl WavetableParams {
                     _ => &self.mod_slots[slot_idx].amount,
                 }
             }
-            // Chorus (81..85)
+            // Chorus (81..87)
             81 => &self.chorus.enabled,
             82 => &self.chorus.rate,
             83 => &self.chorus.depth,
             84 => &self.chorus.mix,
-            // Delay (85..90)
-            85 => &self.delay.enabled,
-            86 => &self.delay.time_l,
-            87 => &self.delay.time_r,
-            88 => &self.delay.feedback,
-            89 => &self.delay.mix,
-            // Distortion (90..93)
-            90 => &self.distortion.enabled,
-            91 => &self.distortion.drive,
-            92 => &self.distortion.mix,
+            85 => &self.chorus.mode,
+            86 => &self.chorus.noise,
+            // Delay (87..92)
+            87 => &self.delay.enabled,
+            88 => &self.delay.time_l,
+            89 => &self.delay.time_r,
+            90 => &self.delay.feedback,
+            91 => &self.delay.mix,
+            // Distortion (92..95)
+            92 => &self.distortion.enabled,
+            93 => &self.distortion.drive,
+            94 => &self.distortion.mix,
             _ => &self.master_volume, // fallback
         }
     }
