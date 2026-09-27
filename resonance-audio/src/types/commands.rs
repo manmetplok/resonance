@@ -762,8 +762,8 @@ pub enum AudioCommand {
     },
 
     // -- MIDI clip commands --
-    /// `clip_id` is mandatory (D-7c): the app allocates it (today's general
-    /// clip allocator, `ComposeState::fresh_derived_clip_id`) and carries it
+    /// `clip_id` is mandatory (D-7c): the app allocates it (its one clip
+    /// allocator, `EntityIds::clips` since D-7b) and carries it
     /// here rather than letting the engine invent one. The engine refuses a
     /// collision with `EngineErrorKind::Internal` instead of overwriting the
     /// live clip — see `reject_if_clip_id_in_use`.

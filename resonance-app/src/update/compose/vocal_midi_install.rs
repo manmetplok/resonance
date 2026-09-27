@@ -32,7 +32,7 @@ impl VocalMidiInstall<'_> {
                 r.compose.vocal_audio.clip_lyrics.remove(&old_id);
                 r.midi_clips.retain(|c| c.id != old_id);
             }
-            let clip_id = r.compose.fresh_derived_clip_id();
+            let clip_id = r.media.ids.clips.allocate();
             let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
                 clip_id,
                 track_id: self.track_id,

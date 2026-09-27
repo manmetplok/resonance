@@ -352,7 +352,7 @@ impl crate::Resonance {
         current: &crate::project::ProjectFile,
         snapshot: UndoSnapshot,
     ) {
-        use crate::update::project_io::reconcile::{reconcile_all, LiveCarry, Origin, ReconcileCtx};
+        use crate::update::project_io::reconcile::{reconcile_all, Origin, ReconcileCtx};
 
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
@@ -367,9 +367,6 @@ impl crate::Resonance {
             project_dir: project_path.as_deref(),
             midi_notes: &target.midi_notes,
             plugin_states: &target.plugin_states,
-            live: LiveCarry {
-                derived_counter_floor: LiveCarry::derived_counter_floor(self, Origin::Undo),
-            },
         };
         // Every domain, in table order, by diff against `current`: the
         // transport / compose globals and the tempo map before any entity;
@@ -381,10 +378,10 @@ impl crate::Resonance {
         reconcile_all(self, Some(current), &target.file, &ctx);
     }
 
-    /// Restore the compose section→clip map from `file` and reserve the
-    /// derived-clip counter past everything restored — the one rule a
-    /// disk load and an undo share (FU-H2a, ARCH-01 A-6). Runs
-    /// after the MIDI and audio clips are restored.
+    /// Restore the compose section→clip map from `file` and raise the
+    /// clip-id counter past everything restored — the one rule a disk load
+    /// and an undo share (FU-H2a, ARCH-01 A-6, D-7b). Runs after the MIDI
+    /// and audio clips are restored.
     ///
     /// The map is the file's (`ProjectFile::derived_clips`), not a
     /// rebuild from the mirror: a snapshot taken while a re-derived clip's
@@ -402,18 +399,19 @@ impl crate::Resonance {
     /// (see `revalidate_frozen_content`). A file saved before the field
     /// existed gets the positional rebuild.
     ///
-    /// The counter is not snapshot state. `counter_floor` is the live
-    /// counter an undo started from (`None` for a disk load): an undo
-    /// never lowers it, so an id the redo stack still names — a vocal
-    /// render's `clip_<id>.wav` among them — is never re-issued (the
-    /// derived-range twin of STATE-08). The counter also clears every
-    /// restored MIDI clip, audio clip and map value, the last covering a
-    /// pending clip whose echo lands after the restore.
+    /// The counter (`EntityIds::clips`) is not snapshot state and is never
+    /// lowered — not by an undo, not by a disk load (D-7b) — so an id the
+    /// redo stack, a backup or another open project still names (a vocal
+    /// render's `clip_<id>.wav` among them) is never re-issued (STATE-08).
+    /// It is only raised here: past every restored MIDI clip, audio clip
+    /// and map value (the last covering a pending clip whose echo lands
+    /// after the restore), and past every audio take's `clip_ref`, which
+    /// names a `clip_<id>.wav` no mirrored clip carries. A loaded project
+    /// may come from a session whose counter ran further than this one's.
     pub(crate) fn restore_derived_clips(
         &mut self,
         file: &crate::project::ProjectFile,
         echoes_in_flight: &std::collections::HashSet<ClipId>,
-        counter_floor: Option<u64>,
     ) {
         match &file.derived_clips {
             Some(entries) => {
@@ -434,16 +432,23 @@ impl crate::Resonance {
                     .rebuild_derived_clips(&self.midi_clips, &self.tempo_map, &drum_track_ids);
             }
         }
-        if let Some(floor) = counter_floor {
-            self.compose.next_derived_clip_id = self.compose.next_derived_clip_id.max(floor);
-        }
-        let map_ids: Vec<ClipId> = self.compose.derived_clips.values().copied().collect();
-        self.compose.reserve_derived_clip_ids(
+        let take_refs = file.take_groups.iter().flat_map(|g| &g.takes).filter_map(|t| {
+            match t.content {
+                resonance_common::TakeContent::Audio { clip_ref } => Some(clip_ref),
+                resonance_common::TakeContent::Midi { .. } => None,
+            }
+        });
+        // The file's own clip lists as well as the mirror: a clip the
+        // restore skipped (its WAV unreadable) still names its id.
+        self.media.ids.clips.seed_past(
             self.midi_clips
                 .iter()
                 .map(|mc| mc.id)
                 .chain(self.clips.iter().map(|c| c.id))
-                .chain(map_ids),
+                .chain(file.midi_clips.iter().map(|mc| mc.id))
+                .chain(file.clips.iter().map(|c| c.id))
+                .chain(self.compose.derived_clips.values().copied())
+                .chain(take_refs),
         );
     }
 

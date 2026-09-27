@@ -158,6 +158,13 @@ impl Resonance {
         self.session.dirty = dirty;
     }
 
+    /// Test-only: the clip id the app's one clip allocator
+    /// (`EntityIds::clips`, D-7b) would hand out next, without taking it.
+    #[doc(hidden)]
+    pub fn test_next_clip_id(&self) -> resonance_audio::types::ClipId {
+        self.media.ids.clips.peek()
+    }
+
     /// Test-only: serialize the current GUI state to the on-disk
     /// [`crate::project::ProjectFile`] shape, so a persistence test can
     /// inspect (or round-trip) the reference A/B block without writing to

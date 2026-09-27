@@ -17,7 +17,7 @@
 //! | Space | App base | Allocator | Engine rule on a hint |
 //! |---|---|---|---|
 //! | bus | [`BUS_ID_BASE`] | `TrackRegistry::allocate_bus_id` | none — the engine has no bus counter left (D-3); this base is an app/control-API-only convention (see below) |
-//! | clip (derived, control-created, vocal render, …) | [`DERIVED_CLIP_ID_BASE`] | [`ComposeState::fresh_derived_clip_id`](crate::compose::ComposeState::fresh_derived_clip_id) | counter bumps only for ids *below* the base (FU-A6a) |
+//! | clip (drawn, derived, control-created, import, split, bounce target, vocal render, …) | [`CLIP_ID_BASE`] | [`EntityIds::clips`] (`MediaState::ids`, D-7b) | counter bumps only for ids *below* the base (FU-A6a) — the engine still allocates recordings and take clips there until D-7d |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
 //! | pool asset (D-7a) | none — the app is the ONLY allocator | [`EntityIds::assets`] (`MediaState::ids`) | none left — the engine invents no asset ids any more; `ImportAudioToPool` carries a mandatory id per file and the engine refuses (`ImportFailed`, `create_new`) rather than overwrite a colliding `asset_<id>.wav` |
 //!
@@ -84,31 +84,38 @@
 //! A4-1 the track path bumped past *any* hint, so one control `track.add`
 //! followed by a Cmd-G group and a GUI "Add track" put a track on the
 //! group's id; the clip paths did the same until FU-A6a (see
-//! [`DERIVED_CLIP_ID_BASE`]). The in-use scan in [`allocate_unused`] is
+//! [`CLIP_ID_BASE`]). The in-use scan in [`allocate_unused`] is
 //! belt and braces on top of that, not the thing that makes it safe: it
 //! only sees ids the app already mirrors. (D-4 and D-5 folded the track
 //! and reference rows into the same "app is the only owner" shape
 //! plugins, sends and busses already had.)
 
-use resonance_audio::types::{AssetId, BusId, TrackId};
+use resonance_audio::types::{AssetId, BusId, ClipId, TrackId};
 
-// `DERIVED_CLIP_ID_BASE` is where `ComposeState::fresh_derived_clip_id`
-// starts: the clips the app names before the engine echoes (compose
-// lanes, drum patterns, vocal MIDI and rendered vocal audio, control
-// `notes.create_clip`, imports and bounce targets that go through it).
-// Until FU-A6a the engine bumped `next_clip_id` past *any* id handed to
-// `LoadMidiClipDirect` / `LoadClipFromWav` (and past every
-// `audio/clip_<id>.wav` its STATE-08 scan found), so the first derived
-// clip at the base moved the engine to `base + 1` — the id the derived
-// counter handed out next — and a drawn clip, a recording or an import
-// then collided with the next generated clip (sharing its
-// `clip_<id>.wav`, for a vocal render). Nothing but the counter checks
-// the range: it is session-monotonic (undo never lowers it), and a load
-// reserves past every restored clip id in the range and every
-// derived-range `audio/clip_<id>.wav` in the bundle (as does a Save As
-// into an existing one, FU-A6c), so with the engine kept out of it there
-// is no second allocator to skip over.
-pub use resonance_audio::types::DERIVED_CLIP_ID_BASE;
+/// Where the app's one clip-id allocator ([`EntityIds::clips`]) starts
+/// (D-7b; was `DERIVED_CLIP_ID_BASE`, the start of the "derived" range
+/// `ComposeState::fresh_derived_clip_id` owned). Every clip the app names
+/// — drawn MIDI clips, compose lanes and drum patterns, vocal MIDI and
+/// rendered vocal audio, control `notes.create_clip` / `clip.place` /
+/// `clip.split`, MIDI-file imports, pool placements, bounce targets —
+/// takes its id from that one counter.
+///
+/// The engine still allocates recordings and cycle-record take clips from
+/// its own counter below this base until D-7d moves them onto a grant, and
+/// it keeps FU-A6a's rule until D-7f deletes that counter: an id handed to
+/// it (`LoadMidiClipDirect`, `LoadClipFromWav`, …) raises its counter only
+/// when it is *below* the base, and its STATE-08 WAV scan skips the range.
+/// Before FU-A6a the engine bumped past *any* id it was handed, so the
+/// first app clip at the base moved the engine to `base + 1` — the id the
+/// app handed out next — and a recording then collided with the next
+/// generated clip (sharing its `clip_<id>.wav`, for a vocal render).
+///
+/// Once the engine stops counting, the base is no longer a partition, only
+/// where the allocator starts (design doc D-6 §4.1): legacy projects hold
+/// engine-allocated ids below it and WAVs named after them, and starting
+/// above means none of those needs a scan; `rebuild_derived_clips`' drum
+/// rule (`clip.id >= base`) stays right for the pre-A-6 files it runs on.
+pub const CLIP_ID_BASE: ClipId = resonance_audio::types::DERIVED_CLIP_ID_BASE;
 
 /// First bus id the app allocates — every bus now, GUI or control alike
 /// (ARCH-04 D-3). Not an engine-agreed range any more (the engine has no
@@ -135,7 +142,7 @@ pub const MISSING_REFERENCE_ID_BASE: u32 = 1_000_000_000;
 // fails to compile rather than silently overlapping a neighbour: every
 // app range sits above the ids it must stay clear of.
 const _: () = {
-    assert!(BUS_ID_BASE < DERIVED_CLIP_ID_BASE);
+    assert!(BUS_ID_BASE < CLIP_ID_BASE);
 };
 
 /// Hand out the next id from `next`, skipping any candidate `in_use`
@@ -154,12 +161,9 @@ pub fn allocate_unused(next: &mut u64, in_use: impl Fn(u64) -> bool) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// D-7a: an id space with no engine counter left to stay clear of at all —
-// the app is the ONLY allocator, so there is no base to name, only a
-// session-monotonic counter (`docs/design/D-6-engine-created-ids.md` §4.1).
-// `IdCounter` is deliberately generic: D-7b promotes the derived-clip
-// allocator (`ComposeState::next_derived_clip_id`) into a second field of
-// `EntityIds` the same shape, and D-7e a third for take groups.
+// D-7a / D-7b: session-monotonic counters for the spaces the app allocates
+// from one counter (`docs/design/D-6-engine-created-ids.md` §4.1): pool
+// assets (D-7a) and clips (D-7b). D-7e adds a third for take groups.
 // ---------------------------------------------------------------------------
 
 /// A session-monotonic id counter: never rewound by undo, a load, or
@@ -177,6 +181,11 @@ impl IdCounter {
     /// A counter that will hand out `start` first.
     pub(crate) const fn starting_at(start: u64) -> Self {
         Self { next: start }
+    }
+
+    /// The id [`Self::allocate`] would hand out next, without taking it.
+    pub(crate) const fn peek(&self) -> u64 {
+        self.next
     }
 
     /// Hand out the next id and advance past it.
@@ -197,10 +206,10 @@ impl IdCounter {
     }
 }
 
-/// The app's own allocators for spaces the engine invents no ids for at
-/// all (D-7a start: just the pool's asset ids; D-7b/D-7e add clips and take
-/// groups here as they promote their allocators out of `ComposeState` /
-/// the engine).
+/// The app's own session-monotonic allocators (D-7a: pool assets; D-7b:
+/// clips; D-7e will add take groups). Not project state and not snapshot
+/// state: they live on `MediaState`, outside anything undo or a load
+/// restores, and are only ever raised.
 #[derive(Debug, Clone)]
 pub(crate) struct EntityIds {
     /// Media-pool asset ids (`audio/asset_<id>.wav`). Seeded past every
@@ -208,38 +217,82 @@ pub(crate) struct EntityIds {
     /// finds (`Resonance::seed_asset_ids_on_disk`) — see
     /// `update::project_io::replay::restore_pool_assets`.
     pub assets: IdCounter,
+    /// The app's one clip-id allocator (D-7b), starting at
+    /// [`CLIP_ID_BASE`]. **Never reset** — not by undo, `ClearAll` or a disk
+    /// load (design doc D-6 §7a.2): a second project opened in the same
+    /// session simply gets higher ids. That makes STATE-08 (an id that
+    /// ever named a `clip_<id>.wav` is never reissued in the session) hold
+    /// by construction, and it is why an undo needs no floor carried
+    /// across the restore (the old `LiveCarry::derived_counter_floor`).
+    ///
+    /// A restore still raises it (`Resonance::restore_derived_clips`):
+    /// past every restored audio and MIDI clip, every derived-map value
+    /// and every take `clip_ref`, and on a disk load or a Save As into an
+    /// existing bundle past every `audio/clip_<id>.wav` on disk
+    /// ([`Resonance::seed_clip_ids_on_disk`], FU-A6c). A loaded project may
+    /// have been saved by a session whose counter ran further than this
+    /// one's.
+    pub clips: IdCounter,
 }
 
 impl Default for EntityIds {
     fn default() -> Self {
         Self {
             assets: IdCounter::starting_at(1),
+            clips: IdCounter::starting_at(CLIP_ID_BASE),
         }
     }
 }
 
-impl crate::Resonance {
-    /// Reserve the asset-id counter past every `audio/asset_<id>.wav` file
-    /// under the project directory `dir` (D-7a, mirrors
-    /// [`ComposeState::reserve_derived_clip_ids_on_disk`](crate::compose::ComposeState::reserve_derived_clip_ids_on_disk)
-    /// for the pool). Without this an `asset_<id>.wav` an undone import
-    /// left behind (or a stale backup) could be silently overwritten by
-    /// the next import after a reopen — the pool itself only knows about
-    /// the assets it currently holds, not an orphaned file with no asset
-    /// pointing at it any more. A missing or unreadable `audio/` reserves
-    /// nothing.
-    pub(crate) fn seed_asset_ids_on_disk(&mut self, dir: &std::path::Path) {
-        let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
-            return;
-        };
-        self.media.ids.assets.seed_past(entries.flatten().filter_map(|e| {
+/// The numeric ids of every `audio/<prefix><id>.wav` under the project
+/// directory `dir`. A missing or unreadable `audio/` yields none.
+fn ids_on_disk(dir: &std::path::Path, prefix: &str) -> Vec<u64> {
+    let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
             let name = e.file_name();
-            let digits = name.to_str()?.strip_prefix("asset_")?.strip_suffix(".wav")?;
+            let digits = name.to_str()?.strip_prefix(prefix)?.strip_suffix(".wav")?;
             if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
                 return None;
             }
-            digits.parse::<AssetId>().ok()
-        }));
+            digits.parse::<u64>().ok()
+        })
+        .collect()
+}
+
+impl crate::Resonance {
+    /// Reserve the asset-id counter past every `audio/asset_<id>.wav` file
+    /// under the project directory `dir` (D-7a, the pool's twin of
+    /// [`Self::seed_clip_ids_on_disk`]). Without this an `asset_<id>.wav`
+    /// an undone import left behind (or a stale backup) could be silently
+    /// overwritten by the next import after a reopen — the pool itself
+    /// only knows about the assets it currently holds, not an orphaned
+    /// file with no asset pointing at it any more. A missing or unreadable
+    /// `audio/` reserves nothing.
+    pub(crate) fn seed_asset_ids_on_disk(&mut self, dir: &std::path::Path) {
+        let ids: Vec<AssetId> = ids_on_disk(dir, "asset_");
+        self.media.ids.assets.seed_past(ids);
+    }
+
+    /// Reserve the clip-id counter past every `audio/clip_<id>.wav` under
+    /// the project directory `dir` (code review FU-A6c, folded into the
+    /// one clip allocator by D-7b). Called on a disk load and on a Save As
+    /// into an existing bundle.
+    ///
+    /// A clip's WAV outlives its clip: a backup, the autosave or an older
+    /// undo state can still name it after the clip is gone from the saved
+    /// file, so reissuing its id would let the next render, bounce or
+    /// `PersistClipWavs` overwrite it (STATE-12). Ids below
+    /// [`CLIP_ID_BASE`] (engine recordings) cannot raise the counter, which
+    /// starts at the base; the engine's own STATE-08 scan covers those
+    /// until D-7d. Not persisted in `ProjectFile`: a monotonic value there
+    /// would break the undo fixed point (A-6 §3).
+    pub(crate) fn seed_clip_ids_on_disk(&mut self, dir: &std::path::Path) {
+        let ids: Vec<ClipId> = ids_on_disk(dir, "clip_");
+        self.media.ids.clips.seed_past(ids);
     }
 }
 

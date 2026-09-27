@@ -27,6 +27,11 @@
 //! `Resonance::allocate_track_id` still `debug_assert`s every track id it
 //! hands out stays below it, even though tracks have no base of their own
 //! any more.
+//!
+//! **Clips (D-7b)** come from one app allocator, `EntityIds::clips`,
+//! starting at `CLIP_ID_BASE` and never reset — not by undo, `ClearAll` or
+//! a disk load. The engine still counts recordings below the base until
+//! D-7d, which is what [`FakeEngine::clip`] plays back.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -35,7 +40,7 @@ use resonance_app::compose::ComposeMessage;
 use resonance_app::message::*;
 use resonance_app::project;
 use resonance_app::reference::ReferenceMessage;
-use resonance_app::state::ids::{BUS_ID_BASE, DERIVED_CLIP_ID_BASE};
+use resonance_app::state::ids::{BUS_ID_BASE, CLIP_ID_BASE};
 use resonance_app::{demo, Resonance, TestChain};
 use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{
@@ -69,7 +74,7 @@ impl FakeEngine {
     fn clip(&mut self, id: Option<u64>) -> u64 {
         match id {
             Some(h) => {
-                if h < DERIVED_CLIP_ID_BASE {
+                if h < CLIP_ID_BASE {
                     self.next_clip = self.next_clip.max(h + 1);
                 }
                 h
@@ -319,7 +324,7 @@ fn fixture(tag: &str) -> Fixture {
         .test_midi_clips()
         .iter()
         .map(|c| c.id)
-        .filter(|id| *id < DERIVED_CLIP_ID_BASE)
+        .filter(|id| *id < CLIP_ID_BASE)
         .max()
         .unwrap_or(0)
         + 1;
@@ -428,10 +433,16 @@ fn assert_partition_holds(app: &Resonance, when: &str) {
     // scan-protected allocation coexists with an out-of-band one, which
     // is precisely what `add_round`'s GUI + control adds onto the demo's
     // seeded content already drives.
-    assert!(
-        app.compose_state().next_derived_clip_id >= DERIVED_CLIP_ID_BASE,
-        "{when}: derived-clip counter below its base"
-    );
+    // D-7b: the app's one clip allocator starts at its base and sits
+    // above every app-allocated clip id the mirror holds.
+    let clip_ids: Vec<u64> = app
+        .test_midi_clips()
+        .iter()
+        .map(|c| c.id)
+        .chain(app.test_clips().iter().map(|c| c.id))
+        .collect();
+    assert_set(&format!("{when}: clip"), &clip_ids);
+    above(app.test_next_clip_id(), CLIP_ID_BASE, &clip_ids, "clip");
 }
 
 // ---------------------------------------------------------------------------
@@ -678,7 +689,7 @@ fn a_new_track_never_takes_a_group_id() {
 }
 
 /// D-7c (formerly FU-A6a): a GUI-drawn MIDI clip and two app-derived ones
-/// (`notes.create_clip` draws from `fresh_derived_clip_id`) all come from
+/// (`notes.create_clip` draws from `EntityIds::clips`) all come from
 /// the SAME app allocator now — `AudioCommand::CreateMidiClip` carries a
 /// mandatory id since D-7c, so the engine has nothing left to allocate for
 /// a drawn clip. Before D-7c the engine allocated the drawn clip's id
@@ -732,10 +743,10 @@ fn a_drawn_clip_never_shares_an_id_with_a_derived_clip_including_across_undo_and
     };
 
     let first = derive(&mut f, 40);
-    assert!(first >= DERIVED_CLIP_ID_BASE, "control clips come from the derived range");
+    assert!(first >= CLIP_ID_BASE, "control clips come from the app's clip allocator");
     let drawn = draw(&mut f, 0);
     assert!(
-        drawn >= DERIVED_CLIP_ID_BASE,
+        drawn >= CLIP_ID_BASE,
         "D-7c: the drawn clip now comes from the same app allocator, got {drawn}"
     );
     assert_set("midi clip", &[first, drawn]);
@@ -788,7 +799,7 @@ fn a_drawn_clip_never_shares_an_id_with_a_derived_clip_including_across_undo_and
 /// here (and at compile time in `ids.rs`).
 #[test]
 fn the_app_id_bases_are_ordered_and_disjoint() {
-    assert!(BUS_ID_BASE < DERIVED_CLIP_ID_BASE);
+    assert!(BUS_ID_BASE < CLIP_ID_BASE);
     // A fresh app seeds its counters from the bases.
     let (app, _task) = Resonance::new_for_test();
     // ARCH-04 D-3: busses kept a base — not an engine-agreed one any
@@ -803,6 +814,8 @@ fn the_app_id_bases_are_ordered_and_disjoint() {
     assert_eq!(app.test_registry().next_track_id, 1);
     assert_eq!(app.test_next_plugin_id(), 1);
     assert_eq!(app.test_next_send_id(), 1);
+    // D-7b: the one clip allocator starts at its base.
+    assert_eq!(app.test_next_clip_id(), CLIP_ID_BASE);
 }
 
 /// ARCH-04 D-1: every plugin add — GUI or control, on a track, a bus, or
@@ -1327,4 +1340,202 @@ fn asset_ids_stay_unique_across_undo_and_above_an_orphaned_wav_after_reload() {
     );
 
     let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------------------
+// D-7b: one session-monotonic clip allocator
+// ---------------------------------------------------------------------------
+
+/// The demo's first top-level instrument track, where the clip tests below
+/// create their clips.
+fn instrument_track(app: &Resonance) -> u64 {
+    app.test_registry()
+        .tracks
+        .iter()
+        .find(|t| matches!(t.track_type, TrackType::Instrument) && t.sub_track.is_none())
+        .expect("the demo has an instrument track")
+        .id
+}
+
+/// One `notes.create_clip` — an app-allocated clip id, read back from the
+/// reply — echoed, so the mirror holds the clip.
+fn create_clip(f: &mut Fixture, bar: u32) -> ClipId {
+    let track_id = instrument_track(&f.app);
+    let clip_id = call(
+        &mut f.app,
+        "notes.create_clip",
+        serde_json::json!({ "track_id": track_id, "start_bar": bar, "length_beats": 4.0 }),
+    )
+    .result::<serde_json::Value>()
+    .expect("notes.create_clip succeeds")["clip_id"]
+        .as_u64()
+        .expect("notes.create_clip returns the id");
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    clip_id
+}
+
+/// Save the live project to `dir` (a bundle other than the fixture's own).
+fn save_to(app: &Resonance, dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("audio")).expect("bundle dir");
+    let file = app.test_build_project_file();
+    let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = app
+        .test_midi_clips()
+        .iter()
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
+        .collect();
+    project::save_project(dir, &file, &[], &midi_clips).expect("save");
+}
+
+/// Replay `loaded` into the fixture's app the way a disk open does, then
+/// point the session at `dir`.
+fn open(f: &mut Fixture, loaded: project::LoadedProject, dir: &std::path::Path) {
+    f.app.test_replay_loaded_project_from(loaded);
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    f.app.test_set_active_project(true);
+    f.app.test_set_project_path(dir.to_path_buf());
+}
+
+/// D-7b (design doc D-6 §4.1, decision §7a.2): the clip allocator is
+/// session-monotonic — no undo, redo, second project load or Save As ever
+/// lowers it, so every clip id this session hands out is strictly larger
+/// than the one before.
+///
+/// The second-load step is the behaviour change: before D-7b a disk load
+/// reset the counter to the base and reserved past the loaded clips only,
+/// so opening an earlier save of the same project handed out ids this
+/// session had already used (and whose `clip_<id>.wav` a vocal render may
+/// still hold).
+#[test]
+fn clip_ids_strictly_increase_across_undo_redo_a_second_load_and_save_as() {
+    let mut f = fixture("clip-monotonic");
+    let root = f.project.parent().unwrap().to_path_buf();
+    let mut issued: Vec<ClipId> = Vec::new();
+    let assert_next = |issued: &mut Vec<ClipId>, id: ClipId, when: &str| {
+        if let Some(last) = issued.last() {
+            assert!(
+                id > *last,
+                "{when}: clip id {id} is not above the last one issued ({last}); all: {issued:?}"
+            );
+        }
+        issued.push(id);
+    };
+
+    let a = create_clip(&mut f, 40);
+    assert_next(&mut issued, a, "first clip");
+    // Project B: this project as it stood after one clip.
+    let bundle_b = root.join("earlier.rproj");
+    save_to(&f.app, &bundle_b);
+
+    let b = create_clip(&mut f, 44);
+    assert_next(&mut issued, b, "second clip");
+    let _ = f.app.update(Message::Undo);
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    assert!(!f.app.test_midi_clips().iter().any(|c| c.id == b), "undo removed clip {b}");
+    let _ = f.app.update(Message::Redo);
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    assert!(f.app.test_midi_clips().iter().any(|c| c.id == b), "redo restored clip {b}");
+    let c = create_clip(&mut f, 48);
+    assert_next(&mut issued, c, "after undo + redo");
+    let _ = f.app.update(Message::Undo);
+    echo(&mut f.app, &f.rx, &mut f.engine);
+    let d = create_clip(&mut f, 48);
+    assert_next(&mut issued, d, "after undoing a create");
+
+    // A second project in the same session, whose clips all sit below
+    // what this session has already issued: the counter is not reset.
+    let loaded = project::load_project(&bundle_b).expect("load B");
+    open(&mut f, loaded, &bundle_b);
+    assert!(f.app.test_midi_clips().iter().any(|mc| mc.id == a), "B holds clip {a}");
+    let e = create_clip(&mut f, 52);
+    assert_next(&mut issued, e, "after opening a second project");
+
+    // Save As into a bundle that already holds a clip WAV above the
+    // counter: the session writes clip WAVs there from now on.
+    let bundle_c = root.join("existing.rproj");
+    std::fs::create_dir_all(bundle_c.join("audio")).expect("bundle dir");
+    let orphan = e + 100;
+    std::fs::write(bundle_c.join(format!("audio/clip_{orphan}.wav")), b"orphan")
+        .expect("orphan");
+    let _ = f.app.update(Message::ProjectIo(ProjectIoMessage::SavePathSelected(Some(
+        bundle_c.to_string_lossy().into_owned(),
+    ))));
+    let g = create_clip(&mut f, 56);
+    assert!(g > orphan, "the clip after Save As ({g}) would re-issue clip_{orphan}.wav");
+    assert_next(&mut issued, g, "after Save As");
+}
+
+/// D-7b: a loaded project raises the clip counter past every clip id it
+/// names — a MIDI clip, an audio take's `clip_ref` (which no mirrored clip
+/// carries), and an `audio/clip_<id>.wav` on disk that nothing names any
+/// more. Each step's id sits above the previous one's, so every step has to
+/// raise the counter on its own.
+#[test]
+fn a_loaded_projects_clips_takes_and_wavs_raise_the_clip_counter() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let mut f = fixture("clip-seed");
+    let dir = f.project.clone();
+    let loaded_with = |file: project::ProjectFile, midi_notes: HashMap<ClipId, Arc<Vec<MidiNote>>>| {
+        project::LoadedProject {
+            file,
+            project_dir: dir.clone(),
+            midi_notes,
+            plugin_states: HashMap::new(),
+        }
+    };
+
+    // A MIDI clip far above the counter.
+    let high_midi = CLIP_ID_BASE + 1_000;
+    let low = create_clip(&mut f, 40);
+    let mut file = f.app.test_build_project_file();
+    let clip = file.midi_clips.iter_mut().find(|c| c.id == low).expect("the clip is saved");
+    clip.id = high_midi;
+    let notes = [(high_midi, Arc::new(Vec::new()))].into_iter().collect();
+    open(&mut f, loaded_with(file, notes), &dir);
+    assert!(f.app.test_midi_clips().iter().any(|c| c.id == high_midi), "the clip loaded");
+    let next = create_clip(&mut f, 44);
+    assert!(next > high_midi, "clip id {next} is not above the loaded MIDI clip {high_midi}");
+
+    // An audio take whose recording is `clip_<ref>.wav`, missing from the
+    // bundle (kept and flagged, not dropped) — nothing but the take names
+    // the id.
+    let high_take = CLIP_ID_BASE + 2_000;
+    let audio_track = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| matches!(t.track_type, TrackType::Audio))
+        .expect("the demo has an audio track")
+        .id;
+    let slot = resonance_common::TimelineRange { start: 0, length: 96_000 };
+    f.app.test_apply_engine_event(AudioEvent::TakeCaptured {
+        group_id: 1,
+        take_id: 0,
+        track_id: audio_track,
+        slot,
+        pass_index: 0,
+        extent: slot,
+        content: resonance_common::TakeContent::Audio { clip_ref: high_take },
+    });
+    let file = f.app.test_build_project_file();
+    assert!(
+        file.take_groups.iter().flat_map(|g| &g.takes).any(|t| matches!(
+            t.content,
+            resonance_common::TakeContent::Audio { clip_ref } if clip_ref == high_take
+        )),
+        "the take is saved"
+    );
+    open(&mut f, loaded_with(file, HashMap::new()), &dir);
+    let next = create_clip(&mut f, 48);
+    assert!(next > high_take, "clip id {next} is not above the loaded take's clip_ref {high_take}");
+
+    // A clip WAV in the bundle that nothing in the file names.
+    let high_wav = CLIP_ID_BASE + 3_000;
+    std::fs::write(dir.join(format!("audio/clip_{high_wav}.wav")), b"orphan").expect("orphan");
+    let file = f.app.test_build_project_file();
+    open(&mut f, loaded_with(file, HashMap::new()), &dir);
+    let next = create_clip(&mut f, 52);
+    assert!(next > high_wav, "clip id {next} would re-issue clip_{high_wav}.wav on disk");
 }

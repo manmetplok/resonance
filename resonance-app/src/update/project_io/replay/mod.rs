@@ -21,7 +21,7 @@ mod restore;
 
 use resonance_audio::types::*;
 
-use super::reconcile::{reconcile_all, LiveCarry, Origin, ReconcileCtx};
+use super::reconcile::{reconcile_all, Origin, ReconcileCtx};
 use crate::project::LoadedProject;
 use crate::Resonance;
 
@@ -50,9 +50,6 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
         project_dir: Some(&loaded.project_dir),
         midi_notes: &loaded.midi_notes,
         plugin_states: &loaded.plugin_states,
-        live: LiveCarry {
-            derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::DiskLoad),
-        },
     };
 
     // Wipe runtime-only vocal side-tables (clip_lyrics, render_epoch)

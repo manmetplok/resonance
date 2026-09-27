@@ -9,13 +9,15 @@
 //! delete now drops the entry; undoing the delete brings it back with the
 //! clip.
 //!
-//! FU-A6c: the derived-id counter is reset on every disk load and only
+//! FU-A6c: the derived-id counter was reset on every disk load and only
 //! reserved past the clips in the file, so after a reopen it re-issued the
 //! id of a vocal render deleted before the save, whose
 //! `audio/clip_<id>.wav` a backup (or the file of an older undo state) can
 //! still name, and the next render overwrote it. The engine's STATE-08
-//! scan skips the derived range since FU-A6a (the app owns it), so the app
-//! scans for its own range when it learns the project dir.
+//! scan skips the app's range since FU-A6a, so the app scans the bundle
+//! when it learns the project dir. Since D-7b the counter (the app's one
+//! clip allocator) is never reset at all, but a reopen in a *fresh*
+//! session still starts it at the base, so the scan stays.
 //!
 //! FU-A6d: `compose.vocal_audio.clips` (the rendered-vocal-audio-clip map,
 //! keyed the same way as `derived_clips` but out of A-6's scope — see
@@ -34,7 +36,7 @@ use resonance_app::compose::ComposeMessage;
 use resonance_app::message::{
     ClipMessage, Message, MidiClipMessage, ProjectIoMessage, TrackMessage, TransportMessage,
 };
-use resonance_app::state::ids::DERIVED_CLIP_ID_BASE;
+use resonance_app::state::ids::CLIP_ID_BASE;
 use resonance_app::state::FreezeStatus;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
@@ -383,7 +385,7 @@ fn a_reopen_reserves_past_derived_clip_wavs_on_disk() {
     let dir = s._root.path().join("reopened.rproj");
     std::fs::create_dir_all(dir.join("audio")).expect("bundle dir");
     resonance_app::project::save_project(&dir, &file, &[], &midi).expect("save");
-    let orphan = DERIVED_CLIP_ID_BASE + 50;
+    let orphan = CLIP_ID_BASE + 50;
     write_wav_named(&dir, orphan);
     // Below the range: the engine's scan owns those, the app ignores them.
     write_wav_named(&dir, 12);
@@ -392,7 +394,7 @@ fn a_reopen_reserves_past_derived_clip_wavs_on_disk() {
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     app.test_replay_loaded_project_from(loaded);
     let _ = rx.try_iter().count();
-    let next = app.compose_state().next_derived_clip_id;
+    let next = app.test_next_clip_id();
     assert!(
         next > orphan,
         "after the reopen the counter ({next}) would re-issue {orphan}, whose WAV is on disk"
@@ -405,12 +407,12 @@ fn a_reopen_reserves_past_derived_clip_wavs_on_disk() {
 fn a_save_as_into_an_existing_bundle_reserves_past_its_derived_wavs() {
     let mut s = generated_part();
     let target = s._root.path().join("existing.rproj");
-    let orphan = DERIVED_CLIP_ID_BASE + 500;
+    let orphan = CLIP_ID_BASE + 500;
     write_wav_named(&target, orphan);
     let _ = s.app.update(Message::ProjectIo(ProjectIoMessage::SavePathSelected(Some(
         target.to_string_lossy().into_owned(),
     ))));
-    let next = s.app.compose_state().next_derived_clip_id;
+    let next = s.app.test_next_clip_id();
     assert!(
         next > orphan,
         "the counter ({next}) would re-issue {orphan}, whose WAV is in the new bundle"

@@ -41,7 +41,7 @@ use resonance_app::demo;
 use resonance_app::message::*;
 use resonance_app::project::{LoadedProject, ProjectExternalInstrument, ProjectFile};
 use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
-use resonance_app::state::ids::DERIVED_CLIP_ID_BASE;
+use resonance_app::state::ids::CLIP_ID_BASE;
 use resonance_app::state::FreezeStatus;
 use resonance_app::undo::UndoSnapshot;
 use resonance_app::update::project_io::BuiltinTemplateId;
@@ -1989,7 +1989,7 @@ fn derived_map(app: &Resonance) -> DerivedMap {
 }
 
 fn derived_counter(app: &Resonance) -> u64 {
-    app.compose_state().next_derived_clip_id
+    app.test_next_clip_id()
 }
 
 /// Every derived-range id the app holds: mirrored MIDI and audio clips and
@@ -2001,7 +2001,7 @@ fn highest_derived_id(app: &Resonance) -> Option<ClipId> {
         .map(|mc| mc.id)
         .chain(file.clips.iter().map(|c| c.id))
         .chain(app.compose_state().derived_clips.values().copied())
-        .filter(|id| *id >= DERIVED_CLIP_ID_BASE)
+        .filter(|id| *id >= CLIP_ID_BASE)
         .max()
 }
 
@@ -2009,7 +2009,7 @@ fn assert_counter_monotonic(app: &Resonance, path: &str, before: u64) {
     let after = derived_counter(app);
     assert!(
         after >= before,
-        "{path}: the derived-clip counter went back from {before} to {after} — an id \
+        "{path}: the clip counter went back from {before} to {after} — an id \
          issued before the undo (and still named by the redo stack) would be re-issued"
     );
     if let Some(max) = highest_derived_id(app) {
@@ -2326,11 +2326,11 @@ fn diverge_from_positional_rebuild(
     let map = derived_map(&f.app);
     let (&drum_key, &drum_clip) = map
         .iter()
-        .find(|(_, id)| **id >= DERIVED_CLIP_ID_BASE)
+        .find(|(_, id)| **id >= CLIP_ID_BASE)
         .expect("the demo materialises a drum clip in the derived range");
     let (&vocal_key, &vocal_clip) = map
         .iter()
-        .find(|(_, id)| **id < DERIVED_CLIP_ID_BASE)
+        .find(|(_, id)| **id < CLIP_ID_BASE)
         .expect("the demo seeds its vocal clip below the derived range");
     let start = |app: &Resonance, id: ClipId| {
         app.test_midi_clips()

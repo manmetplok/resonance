@@ -898,7 +898,7 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
         .map(|t| t.name.clone())
         .unwrap_or_default();
     let target_track_id = r.allocate_track_id();
-    let target_clip_id = r.compose.fresh_derived_clip_id();
+    let target_clip_id = r.media.ids.clips.allocate();
 
     let track_name = format!("{source_name} bounce");
     let clip_name = track_name.clone();

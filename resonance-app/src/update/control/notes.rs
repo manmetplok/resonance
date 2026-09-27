@@ -457,7 +457,7 @@ fn create_clip(app: &mut Resonance, request: &Request) -> (Response, Task<Messag
     // reply returns it immediately; `LoadMidiClipDirect` carries the id
     // to the engine, which echoes `MidiClipCreated { clip_id }` to
     // mirror the empty clip into the registry.
-    let clip_id = app.compose.fresh_derived_clip_id();
+    let clip_id = app.media.ids.clips.allocate();
     let name = params.name.clone().unwrap_or_else(|| "MIDI Clip".to_owned());
     let task = super::run_via_update(
         app,

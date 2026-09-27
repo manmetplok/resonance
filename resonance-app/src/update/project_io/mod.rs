@@ -212,9 +212,9 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
                 std::path::PathBuf::from(format!("{path}.rproj"))
             };
             // The session writes clip WAVs into this bundle from now on;
-            // one it already holds must not get its derived-range ids
-            // re-issued (FU-A6c), nor its asset ids (D-7a).
-            r.compose.reserve_derived_clip_ids_on_disk(&path);
+            // one it already holds must not get its clip ids re-issued
+            // (FU-A6c), nor its asset ids (D-7a).
+            r.seed_clip_ids_on_disk(&path);
             r.seed_asset_ids_on_disk(&path);
             r.io.project_path = Some(path);
             return start_save(r);
