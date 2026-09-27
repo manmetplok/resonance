@@ -31,6 +31,7 @@ mod snapshot;
 
 use resonance_plugin::{EventIterator, NoteEvent, TempoInfo};
 
+use crate::dsp::analog::DRIFT_INTERVAL;
 use crate::dsp::effects::Distortion;
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::lfo::LfoMode;
@@ -173,6 +174,7 @@ impl SynthEngine {
         triggered_here: bool,
     ) -> SampleCtx {
         let coeff_tick = (sample_id as u32 & (FILTER_COEFF_INTERVAL - 1)) == 0;
+        let drift_tick = (sample_id as u32 & (DRIFT_INTERVAL - 1)) == 0;
         let lfo_vals_needed = coeff_tick || triggered_here;
 
         let global_lfo = if lfo_vals_needed {
@@ -190,6 +192,7 @@ impl SynthEngine {
 
         SampleCtx {
             coeff_tick,
+            drift_tick,
             lfo_vals_needed,
             global_lfo,
         }
