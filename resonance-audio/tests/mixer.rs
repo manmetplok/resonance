@@ -57,6 +57,8 @@ mod mixer_gain_ramp;
 mod monitor_fallback_resample;
 #[path = "mixer/monitor_ring_alignment.rs"]
 mod monitor_ring_alignment;
+#[path = "mixer/parallel_render.rs"]
+mod parallel_render;
 #[path = "mixer/playhead_discontinuity_flush.rs"]
 mod playhead_discontinuity_flush;
 #[path = "mixer/recorded_monitor_gating.rs"]

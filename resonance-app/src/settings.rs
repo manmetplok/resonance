@@ -92,6 +92,20 @@ pub struct AppSettings {
     pub media: MediaBrowserSettings,
     /// Arrange-view preferences; absent on older files, defaulted.
     pub arrange: ArrangeSettings,
+    /// Audio-engine startup options; absent on older files, defaulted.
+    pub audio: AudioSettings,
+}
+
+/// Audio-engine options read once at startup, before the engine exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    /// Threads the live mixer renders tracks on, the audio thread
+    /// included; 1 = one thread, as before multithreading. `None` lets
+    /// the engine pick (physical cores − 1 workers plus the audio
+    /// thread). The `RESONANCE_RENDER_THREADS` environment variable wins
+    /// over this. Takes effect on the next launch.
+    pub render_threads: Option<usize>,
 }
 
 fn settings_file_path() -> Option<PathBuf> {

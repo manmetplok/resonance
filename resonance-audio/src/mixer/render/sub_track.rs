@@ -14,7 +14,7 @@ use crate::mixer::common::ramped_stereo_peaks;
 use crate::types::*;
 
 use super::context::{run_fx_chain, BlockCtx, JobScratch};
-use super::slots::{SlotRoute, TrackSlot};
+use super::slots::{SlotCells, SlotRoute, TrackSlot};
 use super::strategy::{RenderStrategy, TrackDisposition};
 
 /// One multi-output port routed through the sub-track that owns it.
@@ -37,7 +37,7 @@ pub(super) fn fan_out_to_sub_tracks(
     disp: &TrackDisposition,
     ports_filled: usize,
     ctx: &BlockCtx<'_>,
-    slots: &mut [TrackSlot],
+    cells: &SlotCells<'_>,
     js: &mut JobScratch<'_>,
     strategy: &RenderStrategy<'_>,
 ) {
@@ -50,7 +50,7 @@ pub(super) fn fan_out_to_sub_tracks(
         ctx.evals.gain_start,
         ctx.evals.gain_end,
     );
-    let n = slots.len();
+    let n = cells.len();
     for (slot_idx, sub_track) in ctx.inputs.tracks.values().enumerate().take(n) {
         let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
             continue;
@@ -70,7 +70,9 @@ pub(super) fn fan_out_to_sub_tracks(
                 parent_silenced: disp.silenced,
             },
             ctx,
-            &mut slots[slot_idx],
+            // SAFETY: `sub_track` is one of this job's parent's
+            // sub-tracks, so its slot is this job's own.
+            unsafe { cells.get(slot_idx) },
             js,
             strategy,
         );
@@ -148,8 +150,12 @@ fn render_sub_track_tap(
     // post-FX, pre-fader, exactly like the top-level tracks.
     if js.sidechain.is_tapped(sub_tap) {
         let (pl, pr) = &js.port_scratch[port_idx];
-        js.sidechain
-            .capture(sub_tap, &pl[..frames], &pr[..frames], frames);
+        // SAFETY: only this job (the parent's) renders — so captures —
+        // this sub-track.
+        unsafe {
+            js.sidechain
+                .capture_shared(sub_tap, &pl[..frames], &pr[..frames], frames);
+        }
     }
 
     // Captured, and not a member of this stem (ba doc #277). This is the

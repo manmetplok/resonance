@@ -16,12 +16,15 @@
 //! their own and are driven entirely by their parent's port fan-out (see
 //! [`super::sub_track`]) at the end of the parent's own job.
 
+use std::time::Instant;
+
 use resonance_common::AutomationTarget;
 
 use crate::mixer::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted};
 use crate::mixer::common::ramped_stereo_peaks;
 use crate::mixer::midi_events::collect_midi_events;
 use crate::mixer::midi_stash::{MidiStash, StashEntry};
+use crate::render_pool::{RunStats, WorkerBufs};
 use crate::types::*;
 
 use crate::mixer::take_comp::mix_track_comp;
@@ -31,7 +34,7 @@ use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch, BusBufs
 use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
 use super::routing::{apply_track_aux_sends, route_post_fader};
-use super::slots::{SlotRoute, TrackSlot};
+use super::slots::{PassStats, SlotCells, SlotRoute, TrackSlot};
 use super::strategy::{RenderStrategy, TrackDisposition};
 use super::sub_track::fan_out_to_sub_tracks;
 
@@ -52,14 +55,16 @@ struct TrackBufs<'a> {
     carry: &'a mut StashEntry,
 }
 
-/// Every top-level track: prepare the slots, run each track's job, then
-/// reduce the slots into the bus buffers and the output in track order.
+/// Every top-level track: prepare the slots, run each track's job (on the
+/// render pool when the caller has one), then reduce the slots into the
+/// bus buffers and the output in track order.
 pub(crate) fn render_track_pass(
     ctx: &BlockCtx<'_>,
     scratch: &mut BlockScratch<'_>,
     strategy: &RenderStrategy<'_>,
 ) {
-    let slots = scratch.slots.as_mut_slice();
+    let threads = scratch.pool.map_or(1, |pool| pool.effective_threads());
+    let (slots, order) = scratch.slots.parts();
     let n = ctx.inputs.tracks.len().min(slots.len());
     let slots = &mut slots[..n];
 
@@ -70,19 +75,61 @@ pub(crate) fn render_track_pass(
         scratch.stash.as_deref_mut(),
         strategy,
     );
+    let caller_only = build_schedule(ctx, slots, order, threads > 1);
 
-    let mut js = JobScratch {
-        port_scratch: &mut *scratch.port_scratch,
-        note_event_buf: &mut *scratch.note_event_buf,
-        sidechain: &mut *scratch.sidechain,
-        fx_dry: &mut *scratch.fx_dry,
+    let stats = {
+        let order: &[u32] = order;
+        let cells = SlotCells::new(slots);
+        let sidechain: &SidechainTaps = scratch.sidechain;
+        let job = |k: usize, bufs: &mut WorkerBufs<'_>| {
+            let idx = order[k] as usize;
+            let Some((_, track)) = ctx.inputs.tracks.get_index(idx) else {
+                return;
+            };
+            let start = Instant::now();
+            let mut js = JobScratch {
+                port_scratch: &mut *bufs.port_scratch,
+                note_event_buf: &mut *bufs.note_event_buf,
+                sidechain,
+                fx_dry: &mut *bufs.fx_dry,
+            };
+            run_track_job(idx, track, ctx, &cells, &mut js, strategy);
+            let ns = start.elapsed().as_nanos().min(u32::MAX as u128) as u32;
+            // SAFETY: slot `idx` is this job's own.
+            let slot = unsafe { cells.get(idx) };
+            slot.last_ns = ns;
+            slot.cost_ns = if slot.cost_ns == 0 {
+                ns
+            } else {
+                // EMA, 1/8 per block: follows a chain change within a few
+                // dozen blocks without chasing one-block spikes.
+                slot.cost_ns - slot.cost_ns / 8 + ns / 8
+            };
+        };
+        let mut caller = WorkerBufs {
+            port_scratch: &mut *scratch.port_scratch,
+            note_event_buf: &mut *scratch.note_event_buf,
+            fx_dry: &mut *scratch.fx_dry,
+        };
+        let wall_start = Instant::now();
+        let run = match scratch.pool {
+            Some(pool) => pool.run(&mut caller, caller_only, order.len(), &job),
+            None => {
+                for k in 0..order.len() {
+                    job(k, &mut caller);
+                }
+                RunStats {
+                    join_wait_ns: 0,
+                    threads: 1,
+                }
+            }
+        };
+        let wall_ns = wall_start.elapsed().as_nanos() as u64;
+        pass_stats(ctx, slots_of(&cells), order, wall_ns, run)
     };
-    for (idx, track) in ctx.inputs.tracks.values().enumerate().take(n) {
-        if track.sub_track_of.is_some() {
-            continue;
-        }
-        run_track_job(idx, track, ctx, slots, &mut js, strategy);
-    }
+    scratch.slots.record(stats);
+    let (slots, _) = scratch.slots.parts();
+    let slots = &mut slots[..n];
 
     reduce_track_pass(
         ctx,
@@ -91,6 +138,93 @@ pub(crate) fn render_track_pass(
         &mut *scratch.bus_bufs,
         scratch.stash.as_deref_mut(),
     );
+}
+
+/// Re-borrow the whole slot range once every job is done.
+fn slots_of<'s>(cells: &'s SlotCells<'_>) -> impl Fn(usize) -> &'s TrackSlot + 's {
+    // SAFETY: called only after the pool's join, when no job holds a
+    // slot any more; shared reads only.
+    move |idx| unsafe { &*(cells.get(idx) as *const TrackSlot) }
+}
+
+/// Summarize the job phase for the load report.
+fn pass_stats<'s>(
+    ctx: &BlockCtx<'_>,
+    slot: impl Fn(usize) -> &'s TrackSlot,
+    order: &[u32],
+    wall_ns: u64,
+    run: RunStats,
+) -> PassStats {
+    let mut stats = PassStats {
+        wall_ns,
+        join_wait_ns: run.join_wait_ns,
+        threads: run.threads,
+        ..PassStats::default()
+    };
+    for &idx in order {
+        let ns = slot(idx as usize).last_ns as u64;
+        stats.jobs_ns += ns;
+        if ns > stats.critical_ns {
+            stats.critical_ns = ns;
+            stats.critical_track = ctx.inputs.tracks.get_index(idx as usize).map(|(id, _)| *id);
+        }
+    }
+    stats
+}
+
+/// Fill `order` with this block's jobs — one per top-level track — and
+/// return how many of them lead the list as caller-only.
+///
+/// Caller-only jobs hold a serial-only plugin (realtime-multithreading.md
+/// §4.6) and run on the rendering thread itself. With more than one
+/// thread the rest are sorted longest-first by their cost EMA, so the
+/// heaviest chain starts at once and the cheap ones fill in behind it
+/// (longest-processing-time scheduling). Order never changes the output —
+/// the reduction fixes it — only the makespan. Allocation-free: `order`
+/// has capacity for every slot.
+fn build_schedule(
+    ctx: &BlockCtx<'_>,
+    slots: &[TrackSlot],
+    order: &mut Vec<u32>,
+    parallel: bool,
+) -> usize {
+    let tracks = ctx.inputs.tracks;
+    order.clear();
+    for (idx, track) in tracks.values().enumerate().take(slots.len()) {
+        if track.sub_track_of.is_none() {
+            order.push(idx as u32);
+        }
+    }
+    if !parallel {
+        return 0;
+    }
+    let mut caller_only = 0;
+    if crate::clap_host::any_serial_only_plugin() {
+        for k in 0..order.len() {
+            let (_, track) = tracks.get_index(order[k] as usize).expect("indexed above");
+            if holds_serial_only_plugin(ctx, track) {
+                order.swap(caller_only, k);
+                caller_only += 1;
+            }
+        }
+    }
+    order[caller_only..]
+        .sort_unstable_by_key(|&idx| std::cmp::Reverse(slots[idx as usize].cost_ns));
+    caller_only
+}
+
+/// Whether `track`'s chain, or one of its sub-tracks' chains, holds a
+/// serial-only plugin.
+fn holds_serial_only_plugin(ctx: &BlockCtx<'_>, track: &Track) -> bool {
+    let serial = |t: &Track| {
+        t.plugins()
+            .iter()
+            .any(|id| ctx.inputs.plugins.get(id).is_some_and(|slot| slot.serial_only))
+    };
+    serial(track)
+        || ctx.inputs.tracks.values().any(|t| {
+            matches!(t.sub_track_of, Some((parent, _)) if parent == track.id) && serial(t)
+        })
 }
 
 /// The serial prologue before any job runs: every decision a job needs
@@ -131,18 +265,19 @@ fn prepare_slots(
 }
 
 /// One track's job: render it into its own slot, then its fan-out into
-/// its sub-tracks' slots.
+/// its sub-tracks' slots. Touches no slot but those (see `SlotCells`).
 fn run_track_job(
     idx: usize,
     track: &Track,
     ctx: &BlockCtx<'_>,
-    slots: &mut [TrackSlot],
+    cells: &SlotCells<'_>,
     js: &mut JobScratch<'_>,
     strategy: &RenderStrategy<'_>,
 ) {
-    if let Some((disp, ports_filled)) = render_one_track(idx, track, ctx, slots, js, strategy) {
-        slots[idx].fanned_out = true;
-        fan_out_to_sub_tracks(track, &disp, ports_filled, ctx, slots, js, strategy);
+    if let Some((disp, ports_filled)) = render_one_track(idx, track, ctx, cells, js, strategy) {
+        // SAFETY: slot `idx` is this job's own track.
+        unsafe { cells.get(idx) }.fanned_out = true;
+        fan_out_to_sub_tracks(track, &disp, ports_filled, ctx, cells, js, strategy);
     }
 }
 
@@ -199,13 +334,13 @@ fn reduce_track_pass(
     }
 }
 
-/// Render one top-level track into `slots[idx]`. Returns the disposition
+/// Render one top-level track into slot `idx`. Returns the disposition
 /// and port count when its multi-output fan-out must run next.
 fn render_one_track(
     idx: usize,
     track: &Track,
     ctx: &BlockCtx<'_>,
-    slots: &mut [TrackSlot],
+    cells: &SlotCells<'_>,
     js: &mut JobScratch<'_>,
     strategy: &RenderStrategy<'_>,
 ) -> Option<(TrackDisposition, usize)> {
@@ -228,20 +363,22 @@ fn render_one_track(
     // review MIX-05): the ghost kick keys the bass compressor while muted.
     let disp = match strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
     {
-        Some(d) if d.discard_after_instrument && keys_from(idx, track, ctx, slots) => {
+        Some(d) if d.discard_after_instrument && keys_from(idx, track, ctx, cells) => {
             TrackDisposition::key_only()
         }
         Some(d) => d,
-        None if strategy.renders(track.id) && keys_from(idx, track, ctx, slots) => {
+        None if strategy.renders(track.id) && keys_from(idx, track, ctx, cells) => {
             TrackDisposition::key_only()
         }
         None => return None,
     };
     let (gain_l, gain_r) = (disp.gain_l, disp.gain_r);
 
+    // SAFETY: slot `idx` is this job's own track, and nothing else of it
+    // is borrowed while this lives.
     let TrackSlot {
         l, r, carry, route, ..
-    } = &mut slots[idx];
+    } = unsafe { cells.get(idx) };
     let (buf_l, buf_r) = (l.as_mut_slice(), r.as_mut_slice());
 
     // Zero per-track buffers
@@ -270,8 +407,11 @@ fn render_one_track(
     // actually routed somewhere as a key.
     let tap_source = SendSource::Track(track.id);
     if js.sidechain.is_tapped(tap_source) {
-        js.sidechain
-            .capture(tap_source, &buf_l[..frames], &buf_r[..frames], frames);
+        // SAFETY: only this job renders — so captures — this track.
+        unsafe {
+            js.sidechain
+                .capture_shared(tap_source, &buf_l[..frames], &buf_r[..frames], frames);
+        }
     }
 
     // Silenced, rendered only for a key (code review MIX-05): its own
@@ -339,13 +479,21 @@ fn render_one_track(
 /// slot by [`prepare_slots`]) — the taps a silenced track must still
 /// render for. Only consulted for silenced tracks, so the sub-track scan
 /// costs nothing on the audible path.
-fn keys_from(idx: usize, track: &Track, ctx: &BlockCtx<'_>, slots: &[TrackSlot]) -> bool {
-    if slots[idx].key_consumed {
+fn keys_from(idx: usize, track: &Track, ctx: &BlockCtx<'_>, cells: &SlotCells<'_>) -> bool {
+    // SAFETY (both reads): slot `idx` and the slots of `track`'s
+    // sub-tracks are this job's own; each borrow ends at once.
+    if unsafe { cells.get(idx) }.key_consumed {
         return true;
     }
-    ctx.inputs.tracks.values().zip(slots).any(|(t, slot)| {
-        matches!(t.sub_track_of, Some((parent, _)) if parent == track.id) && slot.key_consumed
-    })
+    ctx.inputs
+        .tracks
+        .values()
+        .enumerate()
+        .take(cells.len())
+        .any(|(sub_idx, t)| {
+            matches!(t.sub_track_of, Some((parent, _)) if parent == track.id)
+                && unsafe { cells.get(sub_idx) }.key_consumed
+        })
 }
 
 /// Fill the track buffers with the track's source signal: the frozen

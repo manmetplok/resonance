@@ -67,23 +67,23 @@ pub(crate) enum RenderStrategy<'a> {
         input_channels: usize,
     },
     Bounce {
-        in_filter: &'a dyn Fn(TrackId) -> bool,
+        in_filter: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// Tracks that are in the filter ONLY to drive their sub-tracks'
         /// port fan-out (ba todo #1242). Their instrument runs — a
         /// sub-track has no other source of audio — but their own main
         /// output (port 0) is discarded before the track's FX chain,
         /// fader, aux sends and routing, so a sub-track stem carries that
         /// tap and nothing else. Always `false` outside stem rendering.
-        fan_out_only: &'a dyn Fn(TrackId) -> bool,
+        fan_out_only: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// Tracks that are in the filter ONLY to be captured as a
         /// sidechain key (ba doc #277). They render through their whole
         /// chain — otherwise there is no audio to capture — and are then
         /// dropped before PDC, fader, aux sends and routing, so they key
         /// the stem without joining it. Always `false` outside stem
         /// rendering, where every track renders anyway.
-        key_only: &'a dyn Fn(TrackId) -> bool,
+        key_only: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// The bus twin of `key_only`.
-        key_only_bus: &'a dyn Fn(BusId) -> bool,
+        key_only_bus: &'a (dyn Fn(BusId) -> bool + Sync),
         respect_mute_solo: bool,
         /// Freeze-cache capture mode. When `true`, every in-filter track
         /// renders its **raw post-instrument / post-FX** signal — unity

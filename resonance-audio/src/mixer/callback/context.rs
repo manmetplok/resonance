@@ -93,6 +93,8 @@ pub(crate) struct CallbackScratch<'a> {
     /// The per-track render slots (`render::slots`), grown by the engine
     /// thread and adopted at the top of each playing block.
     pub(crate) track_slots: &'a mut crate::mixer::render::slots::LiveSlots,
+    /// The render worker pool the track jobs spread over.
+    pub(crate) pool: &'a crate::render_pool::RenderPool,
     /// Dry staging for the click-free bypass crossfades (`crate::bypass`),
     /// pre-allocated for the same reason.
     pub(crate) fx_dry: &'a mut crate::bypass::FxDryScratch,
@@ -125,6 +127,7 @@ impl CallbackScratch<'_> {
                 note_event_buf: &mut *self.note_event_buf,
                 sidechain: &mut *self.sidechain,
                 fx_dry: &mut *self.fx_dry,
+                pool: Some(self.pool),
             },
             &self.monitor_temp[mon],
         )

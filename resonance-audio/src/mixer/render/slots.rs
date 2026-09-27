@@ -27,11 +27,13 @@
 //! next callback. The replaced pool travels back the same way and is
 //! dropped on the engine thread.
 
+use std::marker::PhantomData;
+
 use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 
 use crate::mixer::midi_stash::StashEntry;
-use crate::types::TrackOutput;
+use crate::types::{TrackId, TrackOutput};
 
 use super::context::GainRamp;
 
@@ -70,6 +72,10 @@ pub(crate) struct TrackSlot {
     /// MIDI parked for this track's instrument during earlier lock
     /// contention, lent by the `MidiStash` for the block (live only).
     pub(crate) carry: StashEntry,
+    /// Nanoseconds this track's last job took (its own render plus its
+    /// fan-out), and an EMA of it — the schedule's cost estimate.
+    pub(crate) last_ns: u32,
+    pub(crate) cost_ns: u32,
 }
 
 impl TrackSlot {
@@ -85,6 +91,8 @@ impl TrackSlot {
             fanned_out: false,
             key_consumed: false,
             carry: StashEntry::new(),
+            last_ns: 0,
+            cost_ns: 0,
         }
     }
 }
@@ -92,7 +100,44 @@ impl TrackSlot {
 /// The slot pool one renderer owns. See the module docs.
 pub(crate) struct TrackSlots {
     slots: Vec<TrackSlot>,
+    /// The block's job list: slot indices of the top-level tracks, in
+    /// claim order. Capacity for every slot, so building it never
+    /// allocates.
+    order: Vec<u32>,
     frames: usize,
+    /// What the track passes since the last [`Self::take_stats`] measured.
+    pub(crate) stats: PassStats,
+}
+
+/// Track-pass measurements for the load report
+/// (realtime-multithreading.md §6), accumulated over a callback's
+/// sub-blocks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PassStats {
+    /// Summed job time across all threads.
+    pub jobs_ns: u64,
+    /// Wall time of the job phase (dispatch to join).
+    pub wall_ns: u64,
+    /// The longest single job, and whose it was.
+    pub critical_ns: u64,
+    pub critical_track: Option<TrackId>,
+    /// Time the rendering thread spun at the join with nothing to claim.
+    pub join_wait_ns: u64,
+    /// Threads the jobs were spread over (caller included).
+    pub threads: usize,
+}
+
+impl PassStats {
+    fn merge(&mut self, other: PassStats) {
+        self.jobs_ns += other.jobs_ns;
+        self.wall_ns += other.wall_ns;
+        if other.critical_ns > self.critical_ns {
+            self.critical_ns = other.critical_ns;
+            self.critical_track = other.critical_track;
+        }
+        self.join_wait_ns += other.join_wait_ns;
+        self.threads = self.threads.max(other.threads);
+    }
 }
 
 impl TrackSlots {
@@ -101,7 +146,9 @@ impl TrackSlots {
         let frames = frames.max(1);
         Self {
             slots: (0..capacity).map(|_| TrackSlot::new(frames)).collect(),
+            order: Vec::with_capacity(capacity),
             frames,
+            stats: PassStats::default(),
         }
     }
 
@@ -111,10 +158,66 @@ impl TrackSlots {
         while self.slots.len() < tracks {
             self.slots.push(TrackSlot::new(self.frames));
         }
+        self.order.reserve(self.slots.len().saturating_sub(self.order.len()));
     }
 
-    pub(crate) fn as_mut_slice(&mut self) -> &mut [TrackSlot] {
-        &mut self.slots
+    /// The slots and the job-order buffer, borrowed apart.
+    pub(crate) fn parts(&mut self) -> (&mut [TrackSlot], &mut Vec<u32>) {
+        (&mut self.slots, &mut self.order)
+    }
+
+    pub(crate) fn record(&mut self, stats: PassStats) {
+        self.stats.merge(stats);
+    }
+
+    /// The stats accumulated since the last call.
+    pub(crate) fn take_stats(&mut self) -> PassStats {
+        std::mem::take(&mut self.stats)
+    }
+}
+
+/// The slots of one block's jobs, shared by every thread running them.
+///
+/// Jobs need `&mut` access to the slots they own while other threads hold
+/// other slots, and which slots a job owns is decided by the track graph,
+/// not by a split the borrow checker can see. This is that split, taken on
+/// trust from the ownership rule in the module docs: a job touches only
+/// its own track's slot and its sub-tracks' slots.
+pub(crate) struct SlotCells<'a> {
+    ptr: *mut TrackSlot,
+    len: usize,
+    _slots: PhantomData<&'a mut [TrackSlot]>,
+}
+
+// SAFETY: the cells hand a slot to one job at a time (see `get`), and a
+// `TrackSlot` is plain owned data.
+unsafe impl Sync for SlotCells<'_> {}
+
+impl<'a> SlotCells<'a> {
+    pub(crate) fn new(slots: &'a mut [TrackSlot]) -> Self {
+        Self {
+            ptr: slots.as_mut_ptr(),
+            len: slots.len(),
+            _slots: PhantomData,
+        }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Slot `idx`.
+    ///
+    /// # Safety
+    ///
+    /// The calling job must own `idx` — it is the job's own top-level
+    /// track or one of that track's sub-tracks — and must not hold another
+    /// reference to the same slot while this one lives.
+    #[allow(clippy::mut_from_ref)]
+    pub(crate) unsafe fn get(&self, idx: usize) -> &mut TrackSlot {
+        assert!(idx < self.len, "slot {idx} out of {}", self.len);
+        // SAFETY: in bounds (checked); exclusive per the contract.
+        unsafe { &mut *self.ptr.add(idx) }
     }
 }
 

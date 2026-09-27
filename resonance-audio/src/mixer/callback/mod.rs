@@ -48,6 +48,8 @@ use context::BlockTiming;
 /// the caller's pre-allocated [`CallbackScratch`]) and non-blocking.
 pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratch<'_>) {
     resonance_dsp::flush_denormals();
+    // CLAP `thread-check`: this thread is an audio thread. A TLS store.
+    crate::clap_host::thread_check::mark_audio_thread();
 
     // The one "offline render in progress" gate (code review MIX-02 /
     // ENG-05). Every offline renderer (export, stems, bounce in place,

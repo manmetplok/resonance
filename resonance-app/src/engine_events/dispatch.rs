@@ -70,6 +70,17 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
                 "audio: io latency (samples)"
             );
         }
+        // Render-pool status (realtime-multithreading.md §6): no UI
+        // surface yet. The engine already logs it; kept here so a DSP-load
+        // readout can pick it up.
+        E::RenderThreads {
+            workers,
+            effective_threads,
+            realtime,
+            error,
+        } => {
+            tracing::debug!(workers, effective_threads, realtime, ?error, "audio: render pool");
+        }
         E::BounceComplete { path } => transport::bounce_complete(r, path),
         E::BounceError { kind, message } => transport::bounce_error(r, kind, message),
         E::TrackBounceError(e) => transport::track_bounce_error(r, e),

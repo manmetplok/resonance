@@ -126,6 +126,7 @@ pub fn render_aux_with_comp_for_test(
             fx_dry: &mut fx_dry,
             note_event_buf: &mut note_buf,
             sidechain: &mut sidechain,
+            pool: None,
         },
         &strategy,
     );
@@ -256,6 +257,7 @@ impl RenderBenchHarness {
                 note_event_buf: &mut self.note_buf,
                 sidechain: &mut self.sidechain,
                 fx_dry: &mut self.fx_dry,
+                pool: None,
             },
             &strategy,
         );
@@ -387,6 +389,7 @@ pub fn render_take_comp_borrowed_for_test(
                 note_event_buf: &mut note_buf,
                 sidechain: &mut sidechain,
                 fx_dry: &mut fx_dry,
+                pool: None,
             },
             &strategy,
         );

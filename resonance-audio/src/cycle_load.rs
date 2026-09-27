@@ -41,6 +41,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::engine::SharedState;
+use crate::mixer::render::slots::PassStats;
 
 /// Minimum gap between summary lines in the default (quiet) mode.
 pub const QUIET_REPORT_INTERVAL: Duration = Duration::from_secs(10);
@@ -60,7 +61,7 @@ pub const QUIET_PEAK_THRESHOLD: f32 = 0.75;
 pub const LOAD_EMA_ALPHA: f32 = 0.05;
 
 /// One report-window summary, ready for formatting.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct CycleLoadReport {
     /// Mean load over the window (fraction of the cycle budget).
     pub avg: f32,
@@ -74,6 +75,29 @@ pub struct CycleLoadReport {
     pub shortfalls_window: u64,
     /// Lifetime monitor-ring shortfall cycles.
     pub shortfalls_lifetime: u64,
+    /// The track pass's parallel rendering over the window
+    /// (realtime-multithreading.md §6). All zero when nothing was
+    /// recorded, and then left out of the line.
+    pub pool: PoolReport,
+}
+
+/// The render pool's share of a [`CycleLoadReport`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PoolReport {
+    /// Most threads a block's jobs spread over (the audio thread
+    /// included); 0 = no track pass recorded.
+    pub threads: u32,
+    /// The longest single track job in the window, and whose it was. The
+    /// heaviest job bounds a block however many threads there are, so
+    /// this names the track to freeze.
+    pub critical_us: u32,
+    pub critical_track: Option<u64>,
+    /// Summed job time / (job-phase wall time × threads): 1.0 = every
+    /// thread busy until the join.
+    pub efficiency: f32,
+    /// Mean time per cycle the audio thread spun at the join with no job
+    /// left. High with low efficiency means one job dominates.
+    pub join_wait_us: f32,
 }
 
 /// The audio thread's hand-off of a [`CycleLoadReport`] to the engine
@@ -94,6 +118,12 @@ pub struct CycleReportSlot {
     overruns_lifetime: AtomicU64,
     shortfalls_window: AtomicU64,
     shortfalls_lifetime: AtomicU64,
+    pool_threads: AtomicU32,
+    pool_critical_us: AtomicU32,
+    /// `track id + 1`; 0 = none.
+    pool_critical_track: AtomicU64,
+    pool_efficiency_bits: AtomicU32,
+    pool_join_wait_bits: AtomicU32,
 }
 
 impl CycleReportSlot {
@@ -111,6 +141,16 @@ impl CycleReportSlot {
             .store(report.shortfalls_window, Ordering::Relaxed);
         self.shortfalls_lifetime
             .store(report.shortfalls_lifetime, Ordering::Relaxed);
+        let pool = &report.pool;
+        self.pool_threads.store(pool.threads, Ordering::Relaxed);
+        self.pool_critical_us
+            .store(pool.critical_us, Ordering::Relaxed);
+        self.pool_critical_track
+            .store(pool.critical_track.map_or(0, |t| t + 1), Ordering::Relaxed);
+        self.pool_efficiency_bits
+            .store(pool.efficiency.to_bits(), Ordering::Relaxed);
+        self.pool_join_wait_bits
+            .store(pool.join_wait_us.to_bits(), Ordering::Relaxed);
         self.seq.fetch_add(1, Ordering::Release);
     }
 
@@ -130,6 +170,16 @@ impl CycleReportSlot {
                 overruns_lifetime: self.overruns_lifetime.load(Ordering::Relaxed),
                 shortfalls_window: self.shortfalls_window.load(Ordering::Relaxed),
                 shortfalls_lifetime: self.shortfalls_lifetime.load(Ordering::Relaxed),
+                pool: PoolReport {
+                    threads: self.pool_threads.load(Ordering::Relaxed),
+                    critical_us: self.pool_critical_us.load(Ordering::Relaxed),
+                    critical_track: self
+                        .pool_critical_track
+                        .load(Ordering::Relaxed)
+                        .checked_sub(1),
+                    efficiency: f32::from_bits(self.pool_efficiency_bits.load(Ordering::Relaxed)),
+                    join_wait_us: f32::from_bits(self.pool_join_wait_bits.load(Ordering::Relaxed)),
+                },
             };
             if self.seq.load(Ordering::Acquire) == before {
                 *last_seen = before;
@@ -197,6 +247,15 @@ pub struct CycleLoadMeter {
     /// Lifetime shortfall count as of the last report, for the window delta.
     shortfalls_seen: u64,
     last_report: Option<Instant>,
+    /// Track-pass stats over the window ([`Self::record_pass`]).
+    pass_threads: usize,
+    pass_critical_ns: u64,
+    pass_critical_track: Option<u64>,
+    pass_jobs_ns: u64,
+    /// Job-phase wall time × threads.
+    pass_capacity_ns: u64,
+    pass_join_wait_ns: u64,
+    pass_cycles: u64,
 }
 
 impl CycleLoadMeter {
@@ -215,7 +274,57 @@ impl CycleLoadMeter {
             window_overruns: 0,
             shortfalls_seen: 0,
             last_report: None,
+            pass_threads: 0,
+            pass_critical_ns: 0,
+            pass_critical_track: None,
+            pass_jobs_ns: 0,
+            pass_capacity_ns: 0,
+            pass_join_wait_ns: 0,
+            pass_cycles: 0,
         }
+    }
+
+    /// Fold one callback's track-pass stats into the window. Call before
+    /// [`Self::record`] for the same cycle. Arithmetic only.
+    pub fn record_pass(&mut self, stats: &PassStats) {
+        if stats.threads == 0 {
+            return;
+        }
+        self.pass_threads = self.pass_threads.max(stats.threads);
+        if stats.critical_ns > self.pass_critical_ns {
+            self.pass_critical_ns = stats.critical_ns;
+            self.pass_critical_track = stats.critical_track;
+        }
+        self.pass_jobs_ns += stats.jobs_ns;
+        self.pass_capacity_ns += stats.wall_ns * stats.threads as u64;
+        self.pass_join_wait_ns += stats.join_wait_ns;
+        self.pass_cycles += 1;
+    }
+
+    fn take_pool_report(&mut self) -> PoolReport {
+        let report = PoolReport {
+            threads: self.pass_threads as u32,
+            critical_us: (self.pass_critical_ns / 1_000).min(u32::MAX as u64) as u32,
+            critical_track: self.pass_critical_track,
+            efficiency: if self.pass_capacity_ns == 0 {
+                0.0
+            } else {
+                (self.pass_jobs_ns as f64 / self.pass_capacity_ns as f64) as f32
+            },
+            join_wait_us: if self.pass_cycles == 0 {
+                0.0
+            } else {
+                (self.pass_join_wait_ns as f64 / self.pass_cycles as f64 / 1_000.0) as f32
+            },
+        };
+        self.pass_threads = 0;
+        self.pass_critical_ns = 0;
+        self.pass_critical_track = None;
+        self.pass_jobs_ns = 0;
+        self.pass_capacity_ns = 0;
+        self.pass_join_wait_ns = 0;
+        self.pass_cycles = 0;
+        report
     }
 
     /// Record one mix call of `busy` wall time against a budget of
@@ -270,6 +379,7 @@ impl CycleLoadMeter {
             overruns_lifetime: shared.dsp_overrun_cycles.load(Ordering::Relaxed),
             shortfalls_window: shortfalls_lifetime.saturating_sub(self.shortfalls_seen),
             shortfalls_lifetime,
+            pool: self.take_pool_report(),
         };
         self.last_report = Some(now);
         self.window_peak = 0.0;
@@ -288,7 +398,7 @@ impl CycleLoadMeter {
 /// Format a load summary for stderr. Kept separate so tests can assert
 /// on the exact wording without driving a real audio stream.
 pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
-    format!(
+    let mut line = format!(
         "audio: dsp load avg {:.1}% peak {:.1}% | over-budget cycles {} (lifetime {}) | monitor shortfalls {} (lifetime {})",
         report.avg * 100.0,
         report.peak * 100.0,
@@ -296,5 +406,19 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         report.overruns_lifetime,
         report.shortfalls_window,
         report.shortfalls_lifetime,
-    )
+    );
+    let pool = &report.pool;
+    if pool.threads > 0 {
+        let track = pool
+            .critical_track
+            .map_or_else(|| "-".to_owned(), |t| t.to_string());
+        line.push_str(&format!(
+            " | render {} threads, critical {} µs (track {track}), efficiency {:.0}%, join wait {:.1} µs",
+            pool.threads,
+            pool.critical_us,
+            pool.efficiency * 100.0,
+            pool.join_wait_us,
+        ));
+    }
+    line
 }

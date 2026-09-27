@@ -27,6 +27,7 @@ use crate::mixer::take_comp::CompRenderTable;
 use crate::types::*;
 
 use super::slots::TrackSlots;
+use crate::render_pool::RenderPool;
 use super::strategy::RenderStrategy;
 
 /// Gain ramp endpoints for one block, per channel: `((l_from, l_to),
@@ -102,15 +103,21 @@ pub(crate) struct BlockScratch<'a> {
     /// Pre-allocated by the scratch's owner so a bypass transition never
     /// allocates on the audio thread.
     pub(crate) fx_dry: &'a mut FxDryScratch,
+    /// The render pool the track jobs run on; `None` runs them on the
+    /// calling thread. `port_scratch`, `note_event_buf` and `fx_dry` are
+    /// the calling thread's own share of the job scratch.
+    pub(crate) pool: Option<&'a RenderPool>,
 }
 
-/// What one track job borrows besides its own slots: the per-worker
-/// scratch every job reuses (the multi-output port pool, the MIDI event
-/// buffer, the bypass dry staging) and the sidechain taps.
+/// What one track job borrows besides its own slots: the scratch of the
+/// thread running it (the multi-output port pool, the MIDI event buffer,
+/// the bypass dry staging) and the sidechain taps.
 pub(crate) struct JobScratch<'a> {
     pub(crate) port_scratch: &'a mut [(Vec<f32>, Vec<f32>)],
     pub(crate) note_event_buf: &'a mut Vec<PendingNoteEvent>,
-    pub(crate) sidechain: &'a mut SidechainTaps,
+    /// Shared by every job: keys read the previous block's bank, and a job
+    /// captures only its own sources (`SidechainTaps::capture_shared`).
+    pub(crate) sidechain: &'a SidechainTaps,
     pub(crate) fx_dry: &'a mut FxDryScratch,
 }
 

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::{
     format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot, MixAudioHarness,
+    PassStats, PoolReport,
     SharedState, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL, VERBOSE_REPORT_INTERVAL,
 };
 use resonance_audio::types::*;
@@ -128,6 +129,13 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         overruns_lifetime: 2,
         shortfalls_window: 3,
         shortfalls_lifetime: 4,
+        pool: PoolReport {
+            threads: 8,
+            critical_us: 1_234,
+            critical_track: Some(7),
+            efficiency: 0.8,
+            join_wait_us: 12.5,
+        },
     };
     slot.publish(&report);
     assert_eq!(slot.take_new(&mut seen), Some(report.clone()));
@@ -253,9 +261,69 @@ fn line_format_is_stable() {
         overruns_lifetime: 15,
         shortfalls_window: 0,
         shortfalls_lifetime: 3,
+        pool: PoolReport::default(),
     });
     assert_eq!(
         line,
         "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3)"
     );
+}
+
+/// With the render pool's stats in the window, the line names the
+/// heaviest job's track — the one to freeze — and how well the threads
+/// were used (realtime-multithreading.md §6).
+#[test]
+fn line_names_the_critical_track_when_the_pool_reported() {
+    let line = format_cycle_load_line(&CycleLoadReport {
+        avg: 0.5,
+        peak: 0.9,
+        pool: PoolReport {
+            threads: 8,
+            critical_us: 1_900,
+            critical_track: Some(12),
+            efficiency: 0.625,
+            join_wait_us: 310.25,
+        },
+        ..CycleLoadReport::default()
+    });
+    assert!(
+        line.ends_with(
+            "| render 8 threads, critical 1900 µs (track 12), efficiency 62%, join wait 310.2 µs"
+        ),
+        "{line}"
+    );
+}
+
+/// The meter keeps the window's heaviest job and relates summed job time
+/// to the capacity the threads offered.
+#[test]
+fn pass_stats_fold_into_the_windows_report() {
+    let shared = SharedState::default();
+    let mut meter = CycleLoadMeter::new(true);
+    let t0 = std::time::Instant::now();
+    meter.record(t0, budget() / 2, FRAMES, RATE, &shared);
+    for (critical_ns, track) in [(400_000u64, 3u64), (900_000, 5), (100_000, 3)] {
+        meter.record_pass(&PassStats {
+            jobs_ns: 1_000_000,
+            wall_ns: 500_000,
+            critical_ns,
+            critical_track: Some(track),
+            join_wait_ns: 50_000,
+            threads: 4,
+        });
+    }
+    let report = meter
+        .record(t0 + std::time::Duration::from_secs(5), budget() / 2, FRAMES, RATE, &shared)
+        .expect("verbose meter reports once the interval passed");
+    assert_eq!(report.pool.threads, 4);
+    assert_eq!(report.pool.critical_us, 900);
+    assert_eq!(report.pool.critical_track, Some(5));
+    assert_eq!(report.pool.efficiency, 0.5, "1 ms of work per 0.5 ms × 4 threads");
+    assert_eq!(report.pool.join_wait_us, 50.0);
+
+    meter.record_pass(&PassStats::default());
+    let next = meter
+        .record(t0 + std::time::Duration::from_secs(10), budget() / 2, FRAMES, RATE, &shared)
+        .expect("reports again");
+    assert_eq!(next.pool, PoolReport::default(), "the window's pool stats reset");
 }

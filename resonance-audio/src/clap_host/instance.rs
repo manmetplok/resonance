@@ -280,6 +280,20 @@ impl ClapInstance {
         names
     }
 
+    /// The plugin's descriptor id (`com.vendor.plugin`), if it has one.
+    /// Allocates; engine side.
+    pub fn descriptor_id(&self) -> Option<String> {
+        // SAFETY: `plugin` is live for the instance's lifetime, and a
+        // CLAP descriptor and its strings outlive the plugin.
+        unsafe {
+            let desc = (*self.plugin).desc;
+            if desc.is_null() || (*desc).id.is_null() {
+                return None;
+            }
+            Some(std::ffi::CStr::from_ptr((*desc).id).to_string_lossy().into_owned())
+        }
+    }
+
     /// The id of the plugin's own bypass parameter, if it declares one
     /// (`CLAP_PARAM_IS_BYPASS`).
     ///
