@@ -67,6 +67,8 @@ mod markers_overview_ui;
 mod playhead_follow;
 #[path = "timeline/quantize_persistence.rs"]
 mod quantize_persistence;
+#[path = "timeline/engine_clip_names.rs"]
+mod engine_clip_names;
 #[path = "timeline/recording_undo.rs"]
 mod recording_undo;
 #[path = "timeline/track_delete_cleanup.rs"]

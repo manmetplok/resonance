@@ -223,6 +223,9 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::MissingPlugins>(Stage::Tail),
     // Last: a disk load's baseline fingerprints everything above.
     domain::<restored::Freeze>(Stage::Tail),
+    // The replay's closing command (ARCH-04 D-7d): the engine's fresh
+    // clip-id grant, from a counter every domain above has seeded.
+    domain::<restored::ClipIdGrant>(Stage::Tail),
 ];
 
 /// Drive the app and engine to `new`: every [`DOMAINS`] entry, in table

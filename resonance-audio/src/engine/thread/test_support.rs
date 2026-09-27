@@ -85,7 +85,7 @@ impl EngineHandlerHarness {
         // keeps the allocation trivial.
         let (prod, _cons) = ringbuf::HeapRb::<f32>::new(1).split();
 
-        Self {
+        let mut harness = Self {
             shared: Arc::new(SharedState::default()),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
@@ -101,7 +101,33 @@ impl EngineHandlerHarness {
             cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
             next_test_asset_id: 1,
-        }
+        };
+        // The app grants the engine clip ids at startup (ARCH-04 D-7d);
+        // the harness does the same, so recording and live-MIDI tests keep
+        // their shape. A test of the grant itself starts from
+        // [`Self::revoke_clip_grant`].
+        harness.grant_clip_ids(Self::DEFAULT_CLIP_GRANT);
+        harness
+    }
+
+    /// The clip-id grant every harness starts with: far above any id a
+    /// test hands the engine itself, and larger than any test draws.
+    pub const DEFAULT_CLIP_GRANT: std::ops::Range<ClipId> = (1 << 44)..((1 << 44) + 1_000_000);
+
+    /// Run the real `AudioCommand::GrantIds` for `clips`.
+    pub fn grant_clip_ids(&mut self, clips: std::ops::Range<ClipId>) {
+        self.dispatch(AudioCommand::GrantIds(IdGrantBlocks::clips(clips)));
+    }
+
+    /// Empty the clip-id grant, as `ClearAll` does, without clearing
+    /// anything else.
+    pub fn revoke_clip_grant(&mut self) {
+        self.state.clip_grant.revoke();
+    }
+
+    /// How many granted clip ids the engine has left.
+    pub fn clip_grant_len(&self) -> u64 {
+        self.state.clip_grant.len()
     }
 
     /// Spawn the REAL [`engine_thread`] — not this harness's piecemeal

@@ -52,8 +52,9 @@ pub(crate) fn handle_add_vocal_track(ctx: &HandlerCtx, id: TrackId, name: Option
 }
 
 /// `clip_id` is mandatory (D-7c): the app allocates it and the engine no
-/// longer touches `next_clip_id` for this command (that counter still
-/// serves recording until D-7d). A collision is refused rather than
+/// longer touches `next_clip_id` for this command (since D-7d nothing
+/// allocates from that counter; recordings draw from the app's grant). A
+/// collision is refused rather than
 /// silently replacing the live clip — see `reject_if_clip_id_in_use`.
 pub(crate) fn handle_create_midi_clip(
     ctx: &HandlerCtx,

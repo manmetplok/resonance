@@ -179,17 +179,17 @@ fn write_failure_in_a_cycle_record_pass_keeps_that_take_and_the_next() {
     let (tx, rx) = unbounded();
     let (mut rec, mut prod) = session(&dir, 1);
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2;
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000);
 
     with_file_cap(|| feed(&mut rec, &mut prod, 0, SR as usize));
     // Loop seam: the damaged pass rolls into a take, a fresh writer opens.
-    let first = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut next_clip_id, true);
+    let first = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut grant, true);
     assert_eq!(first.len(), 1, "salvaged pass must still produce a take");
     assert!((9_000..=10_100).contains(&first[0].duration_samples));
 
     // The next pass records normally into its own file.
     feed(&mut rec, &mut prod, 0, 20_000);
-    let second = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut next_clip_id, false);
+    let second = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut grant, false);
     assert_eq!(second.len(), 1);
     assert_ne!(second[0].clip_id, first[0].clip_id);
     assert_eq!(second[0].duration_samples, 20_000);

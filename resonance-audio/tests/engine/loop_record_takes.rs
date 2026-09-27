@@ -70,7 +70,7 @@ fn three_loop_passes_yield_three_takes_with_no_dropped_frames() {
     rec.buffers.insert(7, buf);
 
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2u64; // pass 0 already holds clip id 1
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000); // pass 0 already holds clip id 1
 
     // Feed one loop's worth of audio and roll at the seam, three times.
     for pass in 0..passes {
@@ -80,7 +80,7 @@ fn three_loop_passes_yield_three_takes_with_no_dropped_frames() {
             /* clip_start_sample */ 0,
             &mut clips,
             &audio_dir,
-            &mut next_clip_id,
+            &mut grant,
             /* reopen */ true,
         );
         assert_eq!(rolled.len(), 1, "pass {pass} should produce exactly one take");
@@ -149,14 +149,14 @@ fn trailing_pass_rolls_without_reopening_and_clears_buffers() {
     rec.buffers.insert(1, buf);
 
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2u64;
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000);
 
     // One seam roll (reopen) then a final trailing roll at stop (no reopen).
     push_ramp(&mut prod, 0, loop_frames);
-    let _ = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut next_clip_id, true);
+    let _ = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut grant, true);
     push_ramp(&mut prod, loop_frames, loop_frames);
     drop(prod); // emulate the input stream closing on stop
-    let trailing = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut next_clip_id, false);
+    let trailing = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut grant, false);
 
     assert_eq!(trailing.len(), 1, "trailing pass should emit one take");
     assert_eq!(clips.len(), 2, "two passes -> two takes");
@@ -214,12 +214,12 @@ fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
     rec.buffers.insert(7, buf);
 
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2u64;
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000);
 
     // Pass 0's writer starts at the punch-in, exactly as
     // `finalize_loop_record_pass` positions it.
     push_ramp(&mut prod, 0, recorded);
-    let rolled = rec.roll_audio_pass(sr, punch_in, &mut clips, &audio_dir, &mut next_clip_id, true);
+    let rolled = rec.roll_audio_pass(sr, punch_in, &mut clips, &audio_dir, &mut grant, true);
     assert_eq!(rolled.len(), 1, "one armed track, one take");
 
     let extent = rolled[0].extent();
@@ -273,11 +273,11 @@ fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
     rec.buffers.insert(7, buf);
 
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2u64;
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000);
 
     push_ramp(&mut prod, 0, recorded);
     drop(prod); // the input stream closes at stop
-    let rolled = rec.roll_audio_pass(sr, slot.start, &mut clips, &audio_dir, &mut next_clip_id, false);
+    let rolled = rec.roll_audio_pass(sr, slot.start, &mut clips, &audio_dir, &mut grant, false);
     assert_eq!(rolled.len(), 1);
 
     let extent = rolled[0].extent();
@@ -2425,7 +2425,7 @@ fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
     rec.buffers.insert(7, buf);
 
     let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
-    let mut next_clip_id = 2u64;
+    let mut grant = resonance_audio::ClipIdGrant::from_range(2..2 + 1_000);
     let mut fed = 0u64;
     let mut take_lengths = Vec::new();
     for (pass, &frames) in passes.iter().enumerate() {
@@ -2440,7 +2440,7 @@ fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
         fed += frames;
         let last = pass + 1 == passes.len();
         let rolled =
-            rec.roll_audio_pass(engine_sr, 0, &mut clips, &audio_dir, &mut next_clip_id, !last);
+            rec.roll_audio_pass(engine_sr, 0, &mut clips, &audio_dir, &mut grant, !last);
         assert_eq!(rolled.len(), 1, "pass {pass} produced one take");
         take_lengths.push(rolled[0].duration_samples);
     }

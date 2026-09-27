@@ -752,11 +752,9 @@ fn submit_clip_load(
     trim_end_frames: u64,
     echo: ClipLoadEcho,
 ) {
-    // Bump the engine-thread-local id counter immediately so that any
-    // subsequent recording (C3/C4/C5, still auto-allocated until D-7d)
-    // issued before the worker thread completes still allocates a unique
-    // id. The worker captures `clip_id` by move, so this update only
-    // affects future allocations.
+    // FU-A6a's reservation, kept until D-7f deletes the counter. Since
+    // D-7d no recording allocates from it (C3/C4/C5 draw from the app's
+    // grant), so this protects nothing any more; it is only harmless.
     reserve_clip_id(&mut state.next_clip_id, clip_id);
 
     // The heavy work — `ClipSource::open_wav` (which pre-touches every

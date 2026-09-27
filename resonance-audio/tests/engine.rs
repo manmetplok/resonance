@@ -22,6 +22,8 @@ mod bus_id_duplicate_rejected;
 mod bus_plugin_move;
 #[path = "engine/clip_delete_cancels_load.rs"]
 mod clip_delete_cancels_load;
+#[path = "engine/clip_id_grant.rs"]
+mod clip_id_grant;
 #[path = "engine/clip_fade_gain_handlers.rs"]
 mod clip_fade_gain_handlers;
 #[path = "engine/clip_warp_handlers.rs"]

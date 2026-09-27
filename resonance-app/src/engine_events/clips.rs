@@ -169,6 +169,14 @@ pub(super) fn recording_finished(
 ) {
     // A take is an undoable edit; snapshot before it lands (STATE-02).
     r.record_recording_edit();
+    // "Recording" → "Recording <n>", numbered per track (D-7d).
+    let name = super::number_engine_clip_name(
+        name,
+        r.clips
+            .iter()
+            .filter(|c| c.track_id == track_id)
+            .map(|c| c.name.as_str()),
+    );
     r.clips.push(ClipState {
         id: clip_id,
         track_id,

@@ -44,6 +44,14 @@ pub(super) fn clip_created(
     // every armed track's capture in one run into a single entry, the same
     // as a multi-track Record session.
     r.record_recording_edit();
+    // "MIDI Take" → "MIDI Take <n>", numbered per track (D-7d).
+    let name = super::number_engine_clip_name(
+        name,
+        r.midi_clips
+            .iter()
+            .filter(|c| c.track_id == track_id)
+            .map(|c| c.name.as_str()),
+    );
     r.midi_clips.push(MidiClipState {
         id: clip_id,
         track_id,

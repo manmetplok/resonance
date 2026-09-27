@@ -591,5 +591,14 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // ids.
     state.next_take_group_id = 1;
 
+    // Revoke the clip-id grant (ARCH-04 D-7d, design doc D-6 §4.4). The
+    // grant is a promise from the numbering the app had before this
+    // clear; the project it loads next may already hold ids inside it (a
+    // file saved by a session whose counter ran further), and recording
+    // onto one would overwrite that clip's `clip_<id>.wav`. Every replay
+    // ends by sending a fresh grant. Recording was stopped above, so no
+    // writer holds a revoked id.
+    state.clip_grant.revoke();
+
     let _ = ctx.event_tx.send(AudioEvent::AllCleared);
 }

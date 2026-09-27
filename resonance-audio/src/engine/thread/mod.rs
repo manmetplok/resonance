@@ -119,7 +119,22 @@ pub(crate) struct LoopRecordSession {
 /// dispatches: monotonic id counters, the recording session, the loaded
 /// CLAP bundles, and the bounded clip-import worker pool.
 pub(crate) struct HandlerState {
+    /// The engine's own clip counter, now used by no allocation site: the
+    /// recording, loop-pass, live-MIDI and realtime-bounce paths draw from
+    /// [`Self::clip_grant`] (ARCH-04 D-7d). Only the FU-A6a reservations
+    /// (`clips::reserve_clip_id`) still raise it. D-7f deletes it.
     pub next_clip_id: ClipId,
+    /// Clip ids the app has granted for entities the engine creates at
+    /// moments the app cannot decide (`AudioCommand::GrantIds`, ARCH-04
+    /// D-7d). Draw through [`Self::draw_clip_id`] (or pass it to
+    /// `RecordingState::roll_audio_pass` and call
+    /// [`Self::report_clip_grant_low`] after), never by counting. `ClearAll`
+    /// revokes it.
+    pub clip_grant: crate::engine::id_grant::ClipIdGrant,
+    /// Latched when a live-MIDI first note found no clip id (D-7d, §4.2
+    /// C5), so a run with an empty grant reports one error, not one per
+    /// note. Cleared at Stop / Pause.
+    pub live_midi_no_id_reported: bool,
     /// Aux sends keyed by id, in insertion order. Engine-thread-local
     /// (never read from the audio callback), so plain data — see
     /// [`AuxSend`]. The source of truth for cyclic-route validation.
@@ -316,6 +331,8 @@ impl HandlerState {
     ) -> Self {
         Self {
             next_clip_id: 1,
+            clip_grant: crate::engine::id_grant::ClipIdGrant::new(),
+            live_midi_no_id_reported: false,
             aux_sends: IndexMap::new(),
             sidechain_routes: Default::default(),
             next_take_group_id: 1,
@@ -348,6 +365,24 @@ impl HandlerState {
             bounce_cancel: None,
             freeze_cancel: None,
             stem_cancel: None,
+        }
+    }
+
+    /// Draw one clip id from [`Self::clip_grant`] (ARCH-04 D-7d) and ask
+    /// the app for more if that left the grant low. `None` when the grant
+    /// is used up; each draw site has its own defined response (design doc
+    /// D-6 §4.2).
+    pub(crate) fn draw_clip_id(&mut self, event_tx: &Sender<AudioEvent>) -> Option<ClipId> {
+        let id = self.clip_grant.take();
+        self.report_clip_grant_low(event_tx);
+        id
+    }
+
+    /// Send `IdGrantLow` if the grant has just dipped below the mark (once
+    /// per dip). Called after every draw, including a failed one.
+    pub(crate) fn report_clip_grant_low(&mut self, event_tx: &Sender<AudioEvent>) {
+        if let Some(clips_left) = self.clip_grant.low_water_report() {
+            let _ = event_tx.send(AudioEvent::IdGrantLow { clips_left });
         }
     }
 }

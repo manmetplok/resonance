@@ -258,6 +258,13 @@ pub(crate) fn handle_bounce_track_realtime(
         let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::internal(
             "Failed to start recording for bounce — see audio engine error",
         )));
+        // Drop the empty target track the app pre-created for this run,
+        // exactly as a user cancel does (`TrackRemoved`, then
+        // `TrackBounceCancelled`). It used to be left behind as an empty
+        // "<source> bounce" track (ARCH-04 D-7d found this checking the
+        // design's claim that an out-of-ids refusal cleans up — design doc
+        // D-6 §4.2, "realtime bounce"; it held for no start failure).
+        remove_cancelled_bounce_target(ctx, target_track_id);
         return;
     }
 

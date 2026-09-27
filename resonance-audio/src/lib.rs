@@ -454,3 +454,8 @@ pub use engine::midi::live_arrival_sample_offset;
 /// API — the engine owns `RecordingState` internally.
 #[cfg(feature = "test-internals")]
 pub use recording::{PrecountState, RecordingState, RolledAudioTake, TrackRecordingBuf};
+
+/// The engine's standing clip-id grant (ARCH-04 D-7d), which
+/// `RecordingState::roll_audio_pass` draws each loop pass's clip id from.
+#[cfg(feature = "test-internals")]
+pub use engine::id_grant::ClipIdGrant;

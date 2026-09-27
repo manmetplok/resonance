@@ -17,7 +17,7 @@
 //! | Space | App base | Allocator | Engine rule on a hint |
 //! |---|---|---|---|
 //! | bus | [`BUS_ID_BASE`] | `TrackRegistry::allocate_bus_id` | none — the engine has no bus counter left (D-3); this base is an app/control-API-only convention (see below) |
-//! | clip (drawn, derived, control-created, import, split, bounce target, vocal render, …) | [`CLIP_ID_BASE`] | [`EntityIds::clips`] (`MediaState::ids`, D-7b) | counter bumps only for ids *below* the base (FU-A6a) — the engine still allocates recordings and take clips there until D-7d |
+//! | clip (drawn, derived, control-created, import, split, bounce target, vocal render, …; and since D-7d recordings, cycle-record passes, live-MIDI captures and realtime bounces, through the engine's grant) | [`CLIP_ID_BASE`] | [`EntityIds::clips`] (`MediaState::ids`, D-7b); the engine's ids are blocks of it ([`IdCounter::allocate_block`], `AudioCommand::GrantIds`, D-7d) | the engine allocates nothing from its own counter any more; FU-A6a's "bump only below the base" reservation stays until D-7f deletes that counter |
 //! | missing reference | [`MISSING_REFERENCE_ID_BASE`] | local counter in `replay::restore` | never sees one (app-only) |
 //! | pool asset (D-7a) | none — the app is the ONLY allocator | [`EntityIds::assets`] (`MediaState::ids`) | none left — the engine invents no asset ids any more; `ImportAudioToPool` carries a mandatory id per file and the engine refuses (`ImportFailed`, `create_new`) rather than overwrite a colliding `asset_<id>.wav` |
 //!
@@ -100,11 +100,13 @@ use resonance_audio::types::{AssetId, BusId, ClipId, TrackId};
 /// `clip.split`, MIDI-file imports, pool placements, bounce targets —
 /// takes its id from that one counter.
 ///
-/// The engine still allocates recordings and cycle-record take clips from
-/// its own counter below this base until D-7d moves them onto a grant, and
-/// it keeps FU-A6a's rule until D-7f deletes that counter: an id handed to
-/// it (`LoadMidiClipDirect`, `LoadClipFromWav`, …) raises its counter only
-/// when it is *below* the base, and its STATE-08 WAV scan skips the range.
+/// Since D-7d the engine's own clips (recordings, cycle-record passes,
+/// live-MIDI captures, realtime bounces) take their ids from blocks of the
+/// same counter, granted ahead of time ([`Resonance::send_clip_id_grant`](crate::Resonance::send_clip_id_grant)).
+/// The engine's old counter allocates nothing any more, but keeps FU-A6a's
+/// rule until D-7f deletes it: an id handed to it (`LoadMidiClipDirect`,
+/// `LoadClipFromWav`, …) raises it only when it is *below* the base, and
+/// its STATE-08 WAV scan skips the range.
 /// Before FU-A6a the engine bumped past *any* id it was handed, so the
 /// first app clip at the base moved the engine to `base + 1` — the id the
 /// app handed out next — and a recording then collided with the next
@@ -193,6 +195,16 @@ impl IdCounter {
         let id = self.next;
         self.next += 1;
         id
+    }
+
+    /// Hand out the next `n` ids at once, as a range, and advance past all
+    /// of them (ARCH-04 D-7d: the engine's clip-id grant). Every id in the
+    /// block counts as issued from here on, used or not — an unused one is
+    /// only a gap, never a candidate for [`Self::allocate`].
+    pub(crate) fn allocate_block(&mut self, n: u64) -> std::ops::Range<u64> {
+        let start = self.next;
+        self.next += n;
+        start..self.next
     }
 
     /// Raise the counter past every id in `ids` (each treated as an id
@@ -286,13 +298,44 @@ impl crate::Resonance {
     /// undo state can still name it after the clip is gone from the saved
     /// file, so reissuing its id would let the next render, bounce or
     /// `PersistClipWavs` overwrite it (STATE-12). Ids below
-    /// [`CLIP_ID_BASE`] (engine recordings) cannot raise the counter, which
-    /// starts at the base; the engine's own STATE-08 scan covers those
-    /// until D-7d. Not persisted in `ProjectFile`: a monotonic value there
+    /// [`CLIP_ID_BASE`] (engine recordings from before D-7d) cannot raise
+    /// the counter, which starts at the base. The engine's grant can
+    /// predate this scan (a Save As keeps it), which is why the engine
+    /// also skips a granted id whose WAV already exists
+    /// (`ClipIdGrant::take_unused_wav`). Not persisted in `ProjectFile`: a monotonic value there
     /// would break the undo fixed point (A-6 §3).
     pub(crate) fn seed_clip_ids_on_disk(&mut self, dir: &std::path::Path) {
         let ids: Vec<ClipId> = ids_on_disk(dir, "clip_");
         self.media.ids.clips.seed_past(ids);
+    }
+
+    /// Grant the engine the next [`CLIP_GRANT_SIZE`](resonance_audio::types::CLIP_GRANT_SIZE) clip ids (ARCH-04
+    /// D-7d, design doc D-6 §4.2): the ids its recordings, cycle-record
+    /// passes, live-MIDI captures and realtime bounces are created under.
+    /// They come from [`EntityIds::clips`] and count as issued now, so no
+    /// app-allocated clip can ever land on one, used or not.
+    ///
+    /// Sent at startup ([`Resonance::new`](crate::Resonance::new)), as the
+    /// last command of every disk-load replay (the `ClipIdGrant` reconcile
+    /// domain — `ClearAll` revoked the old grant, and the counter is
+    /// seeded past the loaded project by then), and on
+    /// `AudioEvent::IdGrantLow` ([`Self::refill_clip_id_grant`]).
+    pub(crate) fn send_clip_id_grant(&mut self) {
+        use resonance_audio::types::{AudioCommand, IdGrantBlocks, CLIP_GRANT_SIZE};
+        let clips = self.media.ids.clips.allocate_block(CLIP_GRANT_SIZE);
+        let _ = self.engine.send(AudioCommand::GrantIds(IdGrantBlocks::clips(clips)));
+    }
+
+    /// `AudioEvent::IdGrantLow`: top the engine's grant up — unless a load
+    /// is in flight. A low report raised before that load's `ClearAll`
+    /// would otherwise grant from a counter not yet seeded past the
+    /// incoming project, which may hold those very ids; the replay ends
+    /// with its own grant instead.
+    pub(crate) fn refill_clip_id_grant(&mut self) {
+        if self.io.loading {
+            return;
+        }
+        self.send_clip_id_grant();
     }
 }
 

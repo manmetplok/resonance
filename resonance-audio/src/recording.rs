@@ -479,7 +479,9 @@ impl RecordingState {
             };
 
             let clip_id = track_buf.clip_id;
-            let name = format!("Recording {}", clip_id);
+            // A bare kind, never the id (design doc D-6 §7a.1): the app
+            // names the clip "Recording <n>", numbered per track.
+            let name = "Recording".to_string();
             let duration_samples = track_buf
                 .frames_written
                 .saturating_sub(trim_start_frames)
@@ -535,6 +537,12 @@ impl RecordingState {
     /// `reopen = false` for the trailing pass at transport stop (flushes
     /// the resampler tail and leaves the buffers closed).
     ///
+    /// Each reopened writer's clip id is the next one drawn from
+    /// `clip_grant` (ARCH-04 D-7d). A track that gets no id — the grant is used
+    /// up — or whose next file won't open keeps the pass that just
+    /// finished and records no further passes; the reason lands in
+    /// `write_errors`.
+    ///
     /// Returns one [`RolledAudioTake`] per track that captured at least one
     /// frame this pass; the caller wraps each into an
     /// `AudioEvent::TakeCaptured`.
@@ -544,7 +552,7 @@ impl RecordingState {
         clip_start_sample: SamplePos,
         clips: &mut Vec<std::sync::Arc<AudioClip>>,
         audio_dir: &Path,
-        next_clip_id: &mut ClipId,
+        clip_grant: &mut crate::engine::id_grant::ClipIdGrant,
         reopen: bool,
     ) -> Vec<RolledAudioTake> {
         // Stream any pending input into the current writers first so the
@@ -552,6 +560,7 @@ impl RecordingState {
         self.drain_ring_to_buffers();
 
         let mut rolled = Vec::new();
+        let mut stopped: Vec<TrackId> = Vec::new();
         for (track_id, track_buf) in self.buffers.iter_mut() {
             // Close the current take's writer. At a seam the resampler's
             // held-back tail goes into this take and it keeps running, so
@@ -570,12 +579,19 @@ impl RecordingState {
             let finished_peaks = std::mem::take(&mut track_buf.peaks);
             let mut finished_salvage = track_buf.salvaged_audio.take();
 
-            // Reopen a fresh writer for the next pass (seam only).
+            // Reopen a fresh writer for the next pass (seam only), under the
+            // next id of the app's grant (ARCH-04 D-7d).
             if reopen {
-                let new_clip_id = *next_clip_id;
-                *next_clip_id += 1;
-                match open_track_wav_file(audio_dir, new_clip_id, engine_sample_rate) {
-                    Ok((path, writer)) => {
+                // Out of ids is the same branch as a file that won't open
+                // (design doc D-6 §4.2 C4).
+                let reopened = match clip_grant.take_unused_wav(audio_dir) {
+                    None => Err("no clip id available for the next take".to_string()),
+                    Some(id) => open_track_wav_file(audio_dir, id, engine_sample_rate)
+                        .map(|(path, writer)| (id, path, writer))
+                        .map_err(|e| format!("could not open the next take file ({e})")),
+                };
+                match reopened {
+                    Ok((new_clip_id, path, writer)) => {
                         track_buf.writer = Some(writer);
                         track_buf.path = path;
                         track_buf.clip_id = new_clip_id;
@@ -585,16 +601,17 @@ impl RecordingState {
                         track_buf.peak_max = f32::MIN;
                         track_buf.peak_frames = 0;
                     }
-                    Err(e) => {
-                        tracing::error!("recording: reopen pass writer failed: {e}");
-                        self.write_errors.push(format!(
-                            "Recording stopped on this track: could not open the next take \
-                             file ({e})."
-                        ));
-                        // Leave the writer closed; later passes for this
-                        // track simply produce nothing — and must not
-                        // re-emit the take that just rolled.
-                        track_buf.frames_written = 0;
+                    Err(why) => {
+                        tracing::error!("recording: track {track_id} stops recording: {why}");
+                        self.write_errors
+                            .push(format!("Recording stopped on this track: {why}."));
+                        // The pass that just finished is still kept
+                        // below; this track records no further passes. Its
+                        // buffer leaves the session after this loop: left
+                        // in, the next seam would read its path — the
+                        // finished take's own WAV — as an empty pass and
+                        // delete it.
+                        stopped.push(*track_id);
                     }
                 }
             }
@@ -613,7 +630,9 @@ impl RecordingState {
                     continue;
                 }
             };
-            let name = format!("Take {}", finished_clip_id);
+            // A bare kind, never the id (design doc D-6 §7a.1): ids are
+            // large since D-7d, and the app numbers what it shows.
+            let name = "Take".to_string();
             let clip = AudioClip {
                 id: finished_clip_id,
                 track_id: *track_id,
@@ -645,6 +664,9 @@ impl RecordingState {
             });
         }
 
+        for track_id in stopped {
+            self.buffers.remove(&track_id);
+        }
         if !reopen {
             self.buffers.clear();
             self.ring_consumer = None;

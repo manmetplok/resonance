@@ -30,8 +30,10 @@
 //!
 //! **Clips (D-7b)** come from one app allocator, `EntityIds::clips`,
 //! starting at `CLIP_ID_BASE` and never reset — not by undo, `ClearAll` or
-//! a disk load. The engine still counts recordings below the base until
-//! D-7d, which is what [`FakeEngine::clip`] plays back.
+//! a disk load. Since D-7d the engine's own clips (recordings, loop passes,
+//! live MIDI) take ids from blocks of that same counter granted ahead of
+//! time, which [`FakeEngine::draw`] plays back; its old counter
+//! ([`FakeEngine::clip`]) allocates nothing any more.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -59,11 +61,36 @@ use crate::common::call;
 /// test plays back carry exactly the ids the live engine would.
 struct FakeEngine {
     next_clip: u64,
+    /// The clip ids granted and not yet drawn (`engine/id_grant.rs`,
+    /// D-7d), oldest first.
+    grant: std::collections::VecDeque<std::ops::Range<u64>>,
+    /// Every range ever granted, in order.
+    granted: Vec<std::ops::Range<u64>>,
 }
 
 impl FakeEngine {
     fn new() -> Self {
-        Self { next_clip: 1 }
+        Self {
+            next_clip: 1,
+            grant: Default::default(),
+            granted: Vec::new(),
+        }
+    }
+
+    /// `ClipIdGrant::take` (D-7d): a recording's clip id, drawn from the
+    /// front of the grant.
+    fn draw(&mut self) -> Option<u64> {
+        let front = self.grant.front_mut()?;
+        let id = front.start;
+        front.start += 1;
+        if front.is_empty() {
+            self.grant.pop_front();
+        }
+        Some(id)
+    }
+
+    fn grant_left(&self) -> u64 {
+        self.grant.iter().map(|r| r.end - r.start).sum()
     }
 
     /// `engine/midi/clips.rs`, `engine/clips.rs` (FU-A6a): a clip id
@@ -268,6 +295,13 @@ fn echo(app: &mut Resonance, rx: &Receiver<AudioCommand>, engine: &mut FakeEngin
                     trim_end_ticks,
                 });
             }
+            // D-7d: the engine appends every grant to the ids it draws
+            // recordings from; `ClearAll` revokes them.
+            AudioCommand::GrantIds(blocks) => {
+                engine.granted.push(blocks.clips.clone());
+                engine.grant.push_back(blocks.clips);
+            }
+            AudioCommand::ClearAll => engine.grant.clear(),
             _ => {}
         }
     }
@@ -1538,4 +1572,179 @@ fn a_loaded_projects_clips_takes_and_wavs_raise_the_clip_counter() {
     open(&mut f, loaded_with(file, HashMap::new()), &dir);
     let next = create_clip(&mut f, 52);
     assert!(next > high_wav, "clip id {next} would re-issue clip_{high_wav}.wav on disk");
+}
+
+// ---------------------------------------------------------------------------
+// D-7d: the engine's clip ids come from grants of the same counter
+// ---------------------------------------------------------------------------
+
+fn grants(cmds: &[AudioCommand]) -> Vec<std::ops::Range<u64>> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            AudioCommand::GrantIds(b) => Some(b.clips.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// D-7d (design doc D-6 §4.2 / §4.4): a disk load's replay ends by
+/// granting the engine a fresh block — its `ClearAll` revoked the old one —
+/// taken from the counter after the load seeded it, so the block sits above
+/// every id the loaded project holds and no app clip is ever allocated
+/// inside it. An undo (no `ClearAll`) grants nothing.
+#[test]
+fn a_disk_load_replay_ends_by_granting_ids_above_everything_it_loaded() {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    let mut f = fixture("grant-replay");
+    let dir = f.project.clone();
+
+    // An undo takes the diff path and keeps the engine's grant.
+    let low = create_clip(&mut f, 40);
+    let _: Vec<AudioCommand> = f.rx.try_iter().collect();
+    let _ = f.app.update(Message::Undo);
+    let cmds: Vec<AudioCommand> = f.rx.try_iter().collect();
+    assert!(grants(&cmds).is_empty(), "an undo grants nothing: {cmds:?}");
+    let _ = f.app.update(Message::Redo);
+    echo(&mut f.app, &f.rx, &mut f.engine);
+
+    let high = CLIP_ID_BASE + 50_000;
+    let mut file = f.app.test_build_project_file();
+    file.midi_clips.iter_mut().find(|c| c.id == low).expect("saved").id = high;
+    let notes = [(high, Arc::new(Vec::new()))].into_iter().collect();
+    f.app.test_replay_loaded_project_from(project::LoadedProject {
+        file,
+        project_dir: dir,
+        midi_notes: notes,
+        plugin_states: HashMap::new(),
+    });
+    let cmds: Vec<AudioCommand> = f.rx.try_iter().collect();
+    let granted = grants(&cmds);
+    assert_eq!(granted.len(), 1, "one grant per replay: {granted:?}");
+    assert!(
+        matches!(cmds.last(), Some(AudioCommand::GrantIds(_))),
+        "the grant is the replay's last command"
+    );
+    let block = &granted[0];
+    assert_eq!(block.end - block.start, resonance_audio::types::CLIP_GRANT_SIZE);
+    assert!(block.start > high, "grant {block:?} overlaps the loaded clip {high}");
+    assert_eq!(f.app.test_next_clip_id(), block.end, "the granted ids count as issued");
+}
+
+/// D-7d: `IdGrantLow` tops the engine's grant up with the next block of
+/// the counter — except while a load is in flight: a low report raised
+/// before that load's `ClearAll` would grant from a counter not yet seeded
+/// past the incoming project. The replay's own closing grant covers it.
+#[test]
+fn id_grant_low_refills_the_engine_unless_a_load_is_in_flight() {
+    use std::collections::HashMap;
+
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    let low = AudioEvent::IdGrantLow { clips_left: 3 };
+    app.test_apply_engine_event(low.clone());
+    let first = grants(&rx.try_iter().collect::<Vec<_>>());
+    let size = resonance_audio::types::CLIP_GRANT_SIZE;
+    assert_eq!(first, vec![CLIP_ID_BASE..CLIP_ID_BASE + size]);
+
+    let dir = std::env::temp_dir().join(format!("resonance-grant-load-{}", std::process::id()));
+    let loaded = project::LoadedProject {
+        file: project::ProjectFile::default(),
+        project_dir: dir,
+        midi_notes: HashMap::new(),
+        plugin_states: HashMap::new(),
+    };
+    let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(Box::new(loaded)))));
+    let cmds: Vec<AudioCommand> = rx.try_iter().collect();
+    assert!(cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)));
+    app.test_apply_engine_event(low);
+    assert!(
+        grants(&rx.try_iter().collect::<Vec<_>>()).is_empty(),
+        "no grant while the load is in flight"
+    );
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    let replay = grants(&rx.try_iter().collect::<Vec<_>>());
+    assert_eq!(replay.len(), 1, "the replay's own grant: {replay:?}");
+    assert!(replay[0].start >= first[0].end, "never below an earlier grant");
+}
+
+/// D-7d hammer: app-allocated clips (`notes.create_clip`) and the engine's
+/// recordings — drawn in order from the grants, refilled on `IdGrantLow`,
+/// revoked at a reload's `ClearAll` — interleaved with undos and reloads.
+/// No id is ever issued twice, no app clip lands inside a granted block,
+/// no two grants overlap, and the engine's ids strictly increase for the
+/// whole session (STATE-08: a record after a full undo or a reload gets a
+/// larger id than any before it).
+#[test]
+fn engine_granted_and_app_allocated_clip_ids_never_collide() {
+    let mut f = fixture("grant-hammer");
+    let audio_track = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| matches!(t.track_type, TrackType::Audio) && t.sub_track.is_none())
+        .expect("the demo has an audio track")
+        .id;
+    // The startup grant.
+    f.app.test_apply_engine_event(AudioEvent::IdGrantLow { clips_left: 0 });
+    echo(&mut f.app, &f.rx, &mut f.engine);
+
+    let mut app_ids: Vec<ClipId> = Vec::new();
+    let mut engine_ids: Vec<ClipId> = Vec::new();
+    for round in 0..60u32 {
+        app_ids.push(create_clip(&mut f, 40 + round * 4));
+        // A few recordings: each draws from the grant, asking for more
+        // below the mark as the engine does.
+        for _ in 0..(round % 4) * 150 {
+            let id = f.engine.draw().expect("the grant is kept topped up");
+            if f.engine.grant_left() == resonance_audio::types::CLIP_GRANT_LOW_WATER - 1 {
+                f.app.test_apply_engine_event(AudioEvent::IdGrantLow {
+                    clips_left: f.engine.grant_left(),
+                });
+                echo(&mut f.app, &f.rx, &mut f.engine);
+            }
+            engine_ids.push(id);
+        }
+        if let Some(&id) = engine_ids.last() {
+            f.app.test_apply_engine_event(AudioEvent::RecordingFinished {
+                clip_id: id,
+                track_id: audio_track,
+                start_sample: 0,
+                duration_samples: 480,
+                name: "Recording".into(),
+                waveform_peaks: Vec::new(),
+            });
+        }
+        if round % 7 == 3 {
+            let _ = f.app.update(Message::Undo);
+            echo(&mut f.app, &f.rx, &mut f.engine);
+        }
+        if round % 17 == 9 {
+            // What the reload's `ClearAll` does to the engine's grant.
+            f.engine.grant.clear();
+            save_and_reload(&mut f);
+        }
+    }
+
+    assert!(
+        engine_ids.windows(2).all(|w| w[0] < w[1]),
+        "the engine's clip ids strictly increase across undos and reloads"
+    );
+    let mut all: Vec<ClipId> = app_ids.iter().chain(&engine_ids).copied().collect();
+    let n = all.len();
+    all.sort_unstable();
+    all.dedup();
+    assert_eq!(all.len(), n, "an id was issued twice");
+    let granted = &f.engine.granted;
+    assert!(granted.len() > 3, "the run refilled and reloaded: {granted:?}");
+    for id in &app_ids {
+        assert!(
+            !granted.iter().any(|g| g.contains(id)),
+            "app clip {id} lies inside a grant"
+        );
+    }
+    let mut sorted = granted.clone();
+    sorted.sort_by_key(|r| r.start);
+    assert!(sorted.windows(2).all(|w| w[0].end <= w[1].start), "grants overlap: {sorted:?}");
 }
