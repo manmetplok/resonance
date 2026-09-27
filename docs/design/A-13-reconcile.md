@@ -287,7 +287,7 @@ field when a restore step between the top and the domain clobbers the value.
 | Timeline | tempo_events, chord_track, markers |
 | Clips | derived_clips |
 | Content | **references**, pool, quantize, performance, track_groups, take_groups |
-| Tail | **external_instruments**, **automation_lanes**, **missing_plugins**, **freeze** |
+| Tail | **external_instruments**, **automation_lanes**, **missing_plugins**, **freeze**, clip_id_grant (ARCH-04 D-7d) |
 
 | Domain | Body by origin |
 |---|---|
@@ -297,6 +297,7 @@ field when a restore step between the top and the domain clobbers the value.
 | `AutomationLanes` | `restore_automation_lanes` — origin-independent |
 | `MissingPlugins` | DiskLoad: `reset`; UndoFull: `dismiss`; UndoDiff: nothing (re-adds no plugin — as before) |
 | `Freeze` | DiskLoad: `freeze.reset()` + `rehydrate_frozen_tracks(project_dir)`; undo (both): `apply_freeze_restore(tracks, live.project_path)` |
+| `ClipIdGrant` (D-7d, after `Freeze`) | DiskLoad: `send_clip_id_grant` — the replay's last command, replacing the grant `ClearAll` revoked; undo: nothing (no `ClearAll`, the engine's grant stays good) |
 
 `restore_external_instruments` absorbed `replay_track`'s block: with
 `after_clear_all` it drops the app map (no engine traffic; `ClearAll` emptied

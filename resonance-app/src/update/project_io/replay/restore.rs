@@ -240,7 +240,8 @@ pub(crate) fn replay_take_groups(
             path: project_dir.join(crate::project::clip_audio_file(clip_id)),
             // The name capture gives a take clip, so a restored one is not
             // distinguishable from a freshly recorded one anywhere.
-            name: format!("Take {clip_id}"),
+            // (the bare kind since D-7d — a take clip's id is large).
+            name: "Take".to_string(),
         });
     }
 }

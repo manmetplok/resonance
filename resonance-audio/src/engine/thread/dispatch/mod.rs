@@ -45,6 +45,10 @@ use crate::types::*;
 /// breaks on it before calling this function.
 pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCommand) {
     match cmd {
+        // The app's standing clip-id grant (ARCH-04 D-7d). Appended;
+        // `ClearAll` is what revokes it.
+        AudioCommand::GrantIds(blocks) => state.clip_grant.extend(blocks.clips),
+
         // External sidechain (key) routing: which source feeds a
         // plugin instance's key port.
         AudioCommand::SetSidechainRoute {

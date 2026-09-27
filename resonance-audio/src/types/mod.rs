@@ -58,13 +58,26 @@ pub type AssetId = u64;
 /// derived, imported, split, bounce targets, vocal renders), from its one
 /// clip allocator (`EntityIds::clips` in `resonance-app`, whose name for
 /// this value is `CLIP_ID_BASE` since D-7b). Engine clips (recordings,
-/// take passes) count up from 1 until D-7d, and every path that hands the engine a concrete clip id
+/// take passes, live-MIDI captures) counted up from 1 until D-7d; they now
+/// draw from blocks of that same allocator the app grants
+/// (`AudioCommand::GrantIds`). Until D-7f every path that hands the engine a concrete clip id
 /// (`LoadMidiClipDirect`, `LoadClipFromWav`, the take restore, the
 /// STATE-08 `audio/clip_<id>.wav` scan) bumps `next_clip_id` only for ids
 /// *below* this base, as for tracks. Before that rule (FU-A6a) the first
 /// derived clip dragged the engine's counter to `base + 1`, which is
 /// exactly where the app's derived counter allocated next.
 pub const DERIVED_CLIP_ID_BASE: ClipId = 1 << 40;
+
+/// How many clip ids the app grants the engine at a time
+/// (`AudioCommand::GrantIds`, ARCH-04 D-7d; design doc D-6 §4.2 / §7a.4:
+/// fixed, not scaled by the armed-track count).
+pub const CLIP_GRANT_SIZE: u64 = 1024;
+
+/// The engine reports `AudioEvent::IdGrantLow` once its clip-id grant falls
+/// below this many ids. At the worst consumer the design found (a 1-beat
+/// loop at 200 bpm cycle-recording 16 tracks, ~50 ids a second) this is
+/// about ten seconds of slack against a refill that takes one event drain.
+pub const CLIP_GRANT_LOW_WATER: u64 = 512;
 
 /// Where a track's post-fader audio lands. Tracks either sum directly
 /// into the master output (the default, matching pre-bus behaviour) or
@@ -123,7 +136,7 @@ pub use clip::{
 };
 pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
-pub use commands::{AudioCommand, PoolImportFile};
+pub use commands::{AudioCommand, IdGrantBlocks, PoolImportFile};
 pub use error::{EngineError, EngineErrorKind};
 pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,

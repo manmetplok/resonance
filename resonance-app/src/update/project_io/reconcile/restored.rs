@@ -216,6 +216,28 @@ impl Reconcile for MissingPlugins {
 /// [`apply_freeze_restore`]: Resonance::apply_freeze_restore
 pub(crate) struct Freeze;
 
+/// The engine's clip-id grant (ARCH-04 D-7d, design doc D-6 §4.2 / §4.4),
+/// sent as the last command of a disk load or template replay. That
+/// load's `ClearAll` revoked the grant the engine held — it was a promise
+/// from a numbering the loaded project may already use — so the engine
+/// has none until this. Last so the counter is seeded past everything the
+/// project holds (`DerivedClips` raises it past every clip, derived-map
+/// value and take `clip_ref`, and past the bundle's `clip_*.wav` files).
+///
+/// An undo sends nothing: it runs no `ClearAll`, the counter is never
+/// lowered, so the grant the engine holds is still good.
+pub(crate) struct ClipIdGrant;
+
+impl Reconcile for ClipIdGrant {
+    const NAME: &'static str = "clip_id_grant";
+
+    fn reconcile(r: &mut Resonance, _old: Option<&ProjectFile>, _new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        if ctx.origin.after_clear_all() {
+            r.send_clip_id_grant();
+        }
+    }
+}
+
 impl Reconcile for Freeze {
     const NAME: &'static str = "freeze";
 

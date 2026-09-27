@@ -90,9 +90,11 @@ fn an_unclaimed_audio_clip_id_is_still_reserved() {
 }
 
 /// Legacy engine-allocated clip ids sit below the base and cannot push the
-/// counter around: it starts at the base and only goes up.
+/// counter around: it starts at the base and only goes up. The only thing
+/// the load takes from it is the block its replay grants the engine
+/// (ARCH-04 D-7d), which starts at the base itself.
 #[test]
 fn ids_below_the_base_leave_the_counter_alone() {
     let next = next_id_after_load(vec![audio_clip(42, VOCAL_TRACK)]);
-    assert_eq!(next, CLIP_ID_BASE);
+    assert_eq!(next, CLIP_ID_BASE + resonance_audio::types::CLIP_GRANT_SIZE);
 }

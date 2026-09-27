@@ -272,6 +272,10 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::TakeRemoved { group_id, take_id } => takes::take_removed(r, group_id, take_id),
         E::TakeGroupRemoved { group_id } => takes::take_group_removed(r, group_id),
 
+        // The engine's clip-id grant ran low (ARCH-04 D-7d): top it up,
+        // unless a load is in flight (its replay ends with a grant).
+        E::IdGrantLow { .. } => r.refill_clip_id_grant(),
+
         // MIDI clip + note events
         E::MidiClipCreated {
             clip_id,

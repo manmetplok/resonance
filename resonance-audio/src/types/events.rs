@@ -726,6 +726,18 @@ pub enum AudioEvent {
         track_id: TrackId,
     },
 
+    /// The engine's clip-id grant (`AudioCommand::GrantIds`) fell below
+    /// [`CLIP_GRANT_LOW_WATER`](super::CLIP_GRANT_LOW_WATER) (ARCH-04 D-7d).
+    /// Sent once per dip, with no repeat until a grant lifts it back to the
+    /// mark. A draw that finds the grant empty (after `ClearAll` revoked
+    /// it, say) is below the mark too, so an engine that was never granted
+    /// anything asks. The app answers with a fresh `GrantIds` unless a load
+    /// is in flight (that replay ends with its own grant). Match it with
+    /// `{ .. }`: D-7e adds a take-group count.
+    IdGrantLow {
+        clips_left: u64,
+    },
+
     // -- MIDI clip events --
     MidiClipCreated {
         clip_id: ClipId,

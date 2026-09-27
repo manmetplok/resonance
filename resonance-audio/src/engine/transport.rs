@@ -214,6 +214,23 @@ pub(crate) fn begin_recording_stream(
         return;
     }
 
+    // Every capturing track needs a clip id from the app's grant (ARCH-04
+    // D-7d, design doc D-6 §4.2 C3). Checked before the input stream
+    // opens, and all or nothing: no half-armed take. Out of ids is the
+    // "Failed to start recording" branch below — the transport still rolls
+    // and nothing is captured (§7a.3) — with a `Busy` error the app shows
+    // as a banner. Reachable only when the app has stopped answering
+    // `IdGrantLow` (or never granted anything).
+    let capturing = armed_tracks.iter().filter(|i| i.captures_audio).count() as u64;
+    if state.clip_grant.len() < capturing {
+        ctx.shared.playing.store(true, Ordering::SeqCst);
+        state.report_clip_grant_low(ctx.event_tx);
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(
+            "Failed to start recording: no clip ids available — try again",
+        )));
+        return;
+    }
+
     let source_name: Option<String> = armed_tracks.iter().find_map(|info| info.device.clone());
 
     // Highest input channel any armed track needs. Required so
@@ -287,10 +304,24 @@ pub(crate) fn begin_recording_stream(
     // — file a second, spurious take for every loop pass (ba doc #292).
     // They stay in `armed_tracks` so the transport still enters recording
     // and opens the cycle-record session for their MIDI.
-    super::clips::settle_clip_id_scan(state, true);
+    //
+    // Ids come from the app's grant, in order (D-7d). One whose WAV already
+    // exists is skipped, never overwritten (`ClipIdGrant::take_unused_wav`),
+    // which can leave the grant short despite the check above; that is the
+    // same unwind as a file that fails to open.
+    let audio_dir = project_dir.join("audio");
     for info in armed_tracks.iter().filter(|i| i.captures_audio) {
-        let clip_id = state.next_clip_id;
-        state.next_clip_id += 1;
+        let drawn = state.clip_grant.take_unused_wav(&audio_dir);
+        state.report_clip_grant_low(ctx.event_tx);
+        let Some(clip_id) = drawn else {
+            state.rec.buffers.clear();
+            state.rec.ring_consumer = None;
+            ctx.shared.playing.store(true, Ordering::SeqCst);
+            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(
+                "Failed to start recording: no clip ids available — try again",
+            )));
+            return;
+        };
         match crate::recording::RecordingState::create_track_buf(
             &project_dir,
             info.track_id,
@@ -379,6 +410,8 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     panic_all_instrument_plugins(ctx);
     let pause_sample = ctx.shared.playhead.load(Ordering::SeqCst);
     super::midi::close_open_recordings(ctx, state, pause_sample);
+    // A new run reports its own out-of-ids error (D-7d, C5).
+    state.live_midi_no_id_reported = false;
     // close_open_recordings bails when no recording is active, so call
     // all-notes-off directly to silence hardware synths driven by the
     // timeline.
@@ -420,6 +453,8 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 
     panic_all_instrument_plugins(ctx);
     super::midi::close_open_recordings(ctx, state, stop_sample);
+    // A new run reports its own out-of-ids error (D-7d, C5).
+    state.live_midi_no_id_reported = false;
     state.midi_hw.midi_outputs.all_notes_off_everywhere();
     if was_playing {
         super::midi::clock_send_stop(state);
@@ -606,12 +641,16 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
     }
 
     // -- Audio takes --
-    super::clips::settle_clip_id_scan(state, true);
     // The pass's takes join the render graph's clip list in one publish.
-    let (rec, next_clip_id) = (&mut state.rec, &mut state.next_clip_id);
+    // The next pass's clip ids come from the app's grant (ARCH-04 D-7d);
+    // a track that finds it empty keeps this pass and records no further
+    // ones (`roll_audio_pass`'s reopen-failure branch, design doc D-6 §4.2
+    // C4).
+    let (rec, grant) = (&mut state.rec, &mut state.clip_grant);
     let rolled = ctx.shared.edit_clips(|clips| {
-        rec.roll_audio_pass(ctx.sample_rate, clip_start, clips, &audio_dir, next_clip_id, reopen)
+        rec.roll_audio_pass(ctx.sample_rate, clip_start, clips, &audio_dir, grant, reopen)
     });
+    state.report_clip_grant_low(ctx.event_tx);
     let mut captured_any = false;
     for take in rolled {
         let content = TakeContent::Audio {

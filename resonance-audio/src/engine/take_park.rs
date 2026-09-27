@@ -111,9 +111,9 @@ impl TakeClipPark {
     ///
     /// A claim for an id that no load will ever deliver — a take whose WAV
     /// has gone missing, say — is harmless. It is a claim on the *id*, and
-    /// ids are never reused within a session: `next_clip_id` only ever
-    /// rises, and the one thing that resets it (`ClearAll`) empties this
-    /// park in the same breath.
+    /// ids are never reused within a session: since D-7d they come from
+    /// the app's one clip counter (through the engine's grant), which only
+    /// ever rises, and `ClearAll` empties this park anyway.
     pub(crate) fn claim(&mut self, clip_id: ClipId) {
         self.entries
             .entry(clip_id)

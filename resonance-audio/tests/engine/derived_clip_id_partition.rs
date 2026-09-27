@@ -1,7 +1,8 @@
 //! The clip-id partition (code review FU-A6a): the app allocates derived
 //! clips (compose-generated MIDI, SVS vocal renders, …) from
 //! [`DERIVED_CLIP_ID_BASE`] up, and the engine allocates recordings from 1
-//! up (until D-7d) via `next_clip_id`. Every path that hands the engine a
+//! up via `next_clip_id` (until D-7d; recordings now draw from the app's
+//! grant, `clip_id_grant.rs`, and D-7f deletes the counter this pins). Every path that hands the engine a
 //! concrete clip id used to bump `next_clip_id` past it, so the first
 //! derived clip at `base` dragged the engine's counter to `base + 1` —
 //! exactly the id the app's derived counter hands out next. The next

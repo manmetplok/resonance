@@ -291,14 +291,24 @@ pub(crate) fn handle_record_midi_event(
     let abs_tick = sample_to_abs_tick(&ctx.tempo_map.load(), press_sample, ctx.sample_rate);
 
     if is_note_on {
-        // Manual entry-or-insert: the closure form would force a
-        // disjoint borrow of `state.next_clip_id` that the borrow
-        // checker can't always prove safe.
+        // Manual entry-or-insert: the clip id is drawn from `state`'s
+        // grant, which the closure form would have to borrow alongside
+        // `state.midi_recording`.
         let needs_new_clip = !state.midi_recording.contains_key(&track_id);
         if needs_new_clip {
-            crate::engine::clips::settle_clip_id_scan(state, true);
-            let clip_id = state.next_clip_id;
-            state.next_clip_id += 1;
+            // The clip id comes from the app's grant (ARCH-04 D-7d). Out of
+            // ids (design doc D-6 §4.2 C5): this note is not captured, one
+            // `Busy` error per run, and a later note retries — it succeeds
+            // once the refill `IdGrantLow` asked for has landed.
+            let Some(clip_id) = state.draw_clip_id(ctx.event_tx) else {
+                if !state.live_midi_no_id_reported {
+                    state.live_midi_no_id_reported = true;
+                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(
+                        "MIDI recording skipped a note: no clip ids available — try again",
+                    )));
+                }
+                return;
+            };
             // Lazy clip creation on the first note. Start the clip
             // exactly at the press-time sample so the first note has
             // start_tick = 0 *and* the clip lines up with where the
@@ -310,7 +320,9 @@ pub(crate) fn handle_record_midi_event(
                 start_sample: press_sample,
                 duration_ticks: 0,
                 notes: Vec::new(),
-                name: format!("MIDI Take {}", clip_id),
+                // A bare kind, never the id (design doc D-6 §7a.1): the
+                // app names it "MIDI Take <n>", numbered per track.
+                name: "MIDI Take".to_string(),
                 trim_start_ticks: 0,
                 trim_end_ticks: 0,
             };
@@ -320,7 +332,7 @@ pub(crate) fn handle_record_midi_event(
                 track_id,
                 start_sample: press_sample,
                 duration_ticks: 0,
-                name: format!("MIDI Take {}", clip_id),
+                name: "MIDI Take".to_string(),
                 notes: Vec::new(),
                 trim_start_ticks: 0,
                 trim_end_ticks: 0,

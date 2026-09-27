@@ -205,7 +205,9 @@ fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
 /// entity it connects. Within
 /// `Tail`, external instruments come before the lanes (a `DeviceParam` lane needs
 /// the device bindings) and freeze is last (a disk load's baseline
-/// fingerprints the lanes); derived clips follow the clips.
+/// fingerprints the lanes); derived clips follow the clips. The clip-id
+/// grant closes the replay (ARCH-04 D-7d): every domain above has seeded
+/// the counter it draws from.
 #[test]
 fn the_table_is_the_agreed_order() {
     assert_eq!(
@@ -245,6 +247,7 @@ fn the_table_is_the_agreed_order() {
             (Stage::Tail, "automation_lanes"),
             (Stage::Tail, "missing_plugins"),
             (Stage::Tail, "freeze"),
+            (Stage::Tail, "clip_id_grant"),
         ]
     );
 }

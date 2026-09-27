@@ -406,9 +406,10 @@ pub enum AudioCommand {
     /// so a deleted file would make undo silently lossy. The clip is
     /// *parked* instead — moved out of the shared clip list, which is what
     /// stops it playing, and kept in memory so the undo is instant. The id
-    /// cannot be re-issued while the file lives, because `next_clip_id`
-    /// only ever rises within a session and is reserved past every
-    /// restored `clip_ref` (ba todo #1393). Reclaiming orphaned audio is a
+    /// cannot be re-issued while the file lives: since D-7d every take's
+    /// id comes from the app's one clip counter (through the engine's
+    /// grant), which never falls and is seeded past every restored
+    /// `clip_ref` (ba todo #1393). Reclaiming orphaned audio is a
     /// project-level operation the user asks for, not something a command
     /// on the audio path does behind their back.
     RemoveTake {
@@ -740,8 +741,21 @@ pub enum AudioCommand {
     PersistClipWavs,
     /// Batch save all plugin states for project save.
     SaveAllPluginStates,
-    /// Remove all tracks, clips, and plugins (for project load).
+    /// Remove all tracks, clips, and plugins (for project load). Also
+    /// revokes the engine's id grant ([`AudioCommand::GrantIds`]): the
+    /// project loaded next may already hold ids inside it, so every replay
+    /// ends by sending a fresh grant (design doc D-6 §4.4).
     ClearAll,
+    /// Hand the engine ids it may use for entities it has to create at a
+    /// moment the app cannot decide (ARCH-04 D-7d, design doc D-6 §4.2): a
+    /// recording's clip at record start, each cycle-record pass at a loop
+    /// seam, a live-MIDI clip opened by the first note, a realtime bounce's
+    /// clip. The engine appends each range to its grant, draws from it in
+    /// order and never allocates those ids any other way; it reports
+    /// [`AudioEvent::IdGrantLow`](super::AudioEvent::IdGrantLow) when the
+    /// grant runs low. The app counts every granted id as issued when it
+    /// grants it. Silent.
+    GrantIds(IdGrantBlocks),
 
     // -- Instrument track commands --
     /// Add an instrument track. See [`AudioCommand::AddTrack`] for how
@@ -1441,4 +1455,22 @@ pub enum AudioCommand {
 pub struct PoolImportFile {
     pub asset_id: crate::types::AssetId,
     pub path: String,
+}
+
+/// The id blocks of one [`AudioCommand::GrantIds`] (ARCH-04 D-7d). A struct
+/// rather than inline fields so a later id space (D-7e's take groups) is a
+/// new defaulted field, not a change to every sender: build it with
+/// [`IdGrantBlocks::clips`] or `IdGrantBlocks { clips, ..Default::default() }`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IdGrantBlocks {
+    /// Clip ids for recordings, cycle-record passes, live-MIDI captures and
+    /// realtime bounces. Empty grants nothing.
+    pub clips: std::ops::Range<ClipId>,
+}
+
+impl IdGrantBlocks {
+    /// A grant of clip ids only.
+    pub fn clips(clips: std::ops::Range<ClipId>) -> Self {
+        Self { clips }
+    }
 }
