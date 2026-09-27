@@ -112,8 +112,7 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
     let (mut chains, bus_chains, master_latency) = {
         let tracks_guard = ctx.tracks.read();
-        let busses_guard = ctx.busses.read();
-        let master_guard = ctx.master.read();
+        let graph = ctx.shared.graph.load();
         let plugins_guard = ctx.plugins.read();
         let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
@@ -132,9 +131,9 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
         };
         (
             crate::latency::chain_latencies(&tracks_guard, latency_of),
-            crate::latency::bus_chain_latencies(&busses_guard, latency_of),
+            crate::latency::bus_chain_latencies(&graph.busses, latency_of),
             crate::latency::master_chain_latency(
-                &master_guard.plugin_ids,
+                &graph.master.plugin_ids,
                 ctx.shared.master_fx_bypass.bypassed(),
                 latency_of,
             ),

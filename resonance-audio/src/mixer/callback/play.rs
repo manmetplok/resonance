@@ -58,9 +58,10 @@ pub(super) fn render_playing_block(
 ) {
     let shared = inputs.shared;
 
-    // The render graph (MIDI clips, code review ARCH-02 A2-4): one
-    // wait-free load for the block. It never fails, so it has no miss
-    // counter and can never be the reason a block is skipped.
+    // The render graph (MIDI clips, busses, master chain — code review
+    // ARCH-02 A2-4/A2-5): one wait-free load for the block, held through
+    // the master pass. It never fails, so it has no miss counter and can
+    // never be the reason a block is skipped.
     let graph = shared.graph.load();
     let midi_clips: &[Arc<MidiClip>] = &graph.midi_clips;
 
@@ -69,11 +70,10 @@ pub(super) fn render_playing_block(
     // all-or-nothing.
     let misses = &shared.lock_misses;
     let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
-    let busses_guard = try_read_counted(inputs.busses, StateMap::Busses, misses);
     let clips_guard = try_read_counted(inputs.clips, StateMap::Clips, misses);
     let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-    let (Some(tracks_guard), Some(busses_guard), Some(clips_guard), Some(plugins_guard)) =
-        (tracks_guard, busses_guard, clips_guard, plugins_guard)
+    let (Some(tracks_guard), Some(clips_guard), Some(plugins_guard)) =
+        (tracks_guard, clips_guard, plugins_guard)
     else {
         // Lock contended -- advance playhead to avoid desync, output
         // silence this buffer.
@@ -101,7 +101,7 @@ pub(super) fn render_playing_block(
         return;
     };
 
-    let active_busses = busses_guard.len().min(scratch.bus_bufs.len());
+    let active_busses = graph.busses.len().min(scratch.bus_bufs.len());
 
     // Snapshot the plugin-delay-compensation table once per buffer.
     // Wait-free load; the engine thread publishes a new table whenever the
@@ -144,7 +144,7 @@ pub(super) fn render_playing_block(
     let block = BlockInputs {
         channels: inputs.channels,
         tracks: &tracks_guard,
-        busses: &busses_guard,
+        busses: &graph.busses,
         clips: &clips_guard,
         midi_clips,
         plugins: &plugins_guard,
@@ -170,6 +170,7 @@ pub(super) fn render_playing_block(
         timing,
         MasterTail {
             plugins_guard,
+            master: &graph.master,
             sidechain_routes: &sidechain_guard,
             automation: &auto_guard,
             max_latency: comp_guard.max_latency(),

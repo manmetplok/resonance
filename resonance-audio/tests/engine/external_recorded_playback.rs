@@ -23,8 +23,6 @@ const SR: u32 = 48_000;
 struct EngineState {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -34,8 +32,6 @@ fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         tracks: Arc::new(RwLock::new(IndexMap::new())),
-        busses: Arc::new(RwLock::new(IndexMap::new())),
-        master: Arc::new(RwLock::new(MasterBus::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -93,8 +89,6 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         &state.shared,
         &AtomicBool::new(false),
         &state.tracks,
-        &state.busses,
-        &state.master,
         &state.clips,
         &state.plugins,
         &state.tempo_map,

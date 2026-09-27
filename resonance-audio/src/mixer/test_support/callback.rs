@@ -39,8 +39,6 @@ macro_rules! run_callback {
                 channels: $h.channels,
                 shared: &*$h.shared,
                 tracks: &$h.tracks,
-                busses: &$h.busses,
-                master: &$h.master,
                 clips: &$h.clips,
                 plugins: &$h.plugins,
                 tempo_map: &$h.tempo_map,
@@ -90,8 +88,6 @@ pub struct MixAudioHarness {
     /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
     tracks: RwLock<IndexMap<TrackId, Track>>,
-    busses: RwLock<IndexMap<BusId, Bus>>,
-    master: RwLock<MasterBus>,
     clips: RwLock<Vec<AudioClip>>,
     plugins: RwLock<PluginMap>,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
@@ -140,11 +136,11 @@ impl MixAudioHarness {
         native_drain: bool,
     ) -> Self {
         let tracks: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
-        let busses: IndexMap<BusId, Bus> = busses.into_iter().map(|b| (b.id, b)).collect();
         let bus_count = busses.len().max(1);
         let shared = Arc::new(SharedState::default());
         shared.aux_sends.store(Arc::new(aux_sends));
         shared.edit_midi_clips(|v| v.extend(midi_clips.into_iter().map(Arc::new)));
+        shared.edit_busses(|m| m.extend(busses.into_iter().map(|b| (b.id, Arc::new(b)))));
         // Room for a few blocks of the widest input we drive, matching the
         // engine's ring sizing policy.
         let ring = ringbuf::HeapRb::<f32>::new(frames * MAX_MONITOR_CHANNELS * 4);
@@ -156,8 +152,6 @@ impl MixAudioHarness {
         Self {
             shared,
             tracks: RwLock::new(tracks),
-            busses: RwLock::new(busses),
-            master: RwLock::new(MasterBus::default()),
             clips: RwLock::new(clips),
             plugins: RwLock::new(IndexMap::new()),
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
@@ -213,9 +207,24 @@ impl MixAudioHarness {
         &self.tracks
     }
 
-    /// The bus table the callback reads.
-    pub fn busses(&self) -> &RwLock<IndexMap<BusId, Bus>> {
-        &self.busses
+    /// The bus `bus_id` in the render graph the callback reads, for a
+    /// test that moves its fader / mute between blocks (those setters
+    /// write the bus's shared live state and publish nothing).
+    pub fn bus(&self, bus_id: BusId) -> Option<Arc<Bus>> {
+        self.shared.graph.load().busses.get(&bus_id).cloned()
+    }
+
+    /// Edit the bus `bus_id` and publish the new render graph, as a bus
+    /// handler on the engine thread does. Callable from a second thread
+    /// while blocks render. `None` if there is no such bus.
+    pub fn edit_bus<R>(&self, bus_id: BusId, f: impl FnOnce(&mut Bus) -> R) -> Option<R> {
+        self.shared.edit_bus(bus_id, f)
+    }
+
+    /// Edit the master insert chain and publish the new render graph, as
+    /// a master handler on the engine thread does.
+    pub fn edit_master<R>(&self, f: impl FnOnce(&mut MasterBus) -> R) -> R {
+        self.shared.edit_master(f)
     }
 
     /// The plugin instances the callback drives — empty until a test
@@ -367,8 +376,6 @@ impl MixAudioHarness {
         }
         match map {
             StateMap::Tracks => with_map!(self.tracks),
-            StateMap::Busses => with_map!(self.busses),
-            StateMap::Master => with_map!(self.master),
             StateMap::Clips => with_map!(self.clips),
             StateMap::Plugins => with_map!(self.plugins),
         }

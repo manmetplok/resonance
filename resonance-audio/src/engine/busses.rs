@@ -4,8 +4,7 @@
 //! the `plugins` module.
 
 use std::path::Path;
-
-use indexmap::IndexMap;
+use std::sync::Arc;
 
 use crate::types::*;
 
@@ -17,11 +16,11 @@ use super::MAX_BUSSES;
 
 /// Refuse an add whose id is already live in `busses`, rather than
 /// silently replacing the bus it names — the bus twin of
-/// `plugins::reject_if_plugin_id_in_use` (ARCH-04 D-3). Takes the guard
-/// already held by [`handle_add_bus`] rather than re-locking `ctx.busses`,
-/// so the whole add stays one atomic critical section.
-fn reject_if_bus_id_in_use(ctx: &HandlerCtx, busses: &IndexMap<BusId, Bus>, id: BusId) -> bool {
-    if busses.contains_key(&id) {
+/// `plugins::reject_if_plugin_id_in_use` (ARCH-04 D-3). Checked against
+/// the published render graph: the engine thread is its only writer, so
+/// nothing can add the id between this check and the add's publish.
+fn reject_if_bus_id_in_use(ctx: &HandlerCtx, id: BusId) -> bool {
+    if ctx.shared.graph.load().busses.contains_key(&id) {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "bus id {id} is already in use; refusing the add rather than replacing the live bus"
         ))));
@@ -32,19 +31,18 @@ fn reject_if_bus_id_in_use(ctx: &HandlerCtx, busses: &IndexMap<BusId, Bus>, id: 
 }
 
 pub(crate) fn handle_add_bus(ctx: &HandlerCtx, id: BusId, name: Option<String>) {
-    let mut busses_guard = ctx.busses.write();
-    if busses_guard.len() >= MAX_BUSSES {
+    if ctx.shared.graph.load().busses.len() >= MAX_BUSSES {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(format!(
             "Cannot add bus: maximum of {MAX_BUSSES} busses reached"
         ))));
         return;
     }
-    if reject_if_bus_id_in_use(ctx, &busses_guard, id) {
+    if reject_if_bus_id_in_use(ctx, id) {
         return;
     }
     let name = name.unwrap_or_else(|| format!("Bus {id}"));
-    busses_guard.insert(id, Bus::new(id, name.clone()));
-    drop(busses_guard);
+    let bus = Arc::new(Bus::new(id, name.clone()));
+    ctx.shared.edit_busses(|busses| busses.insert(id, bus));
     let _ = ctx.event_tx.send(AudioEvent::BusAdded { bus_id: id, name });
 }
 
@@ -59,15 +57,19 @@ pub(crate) fn handle_remove_bus(ctx: &HandlerCtx, bus_id: BusId) {
             }
         }
     }
-    // Collect the bus's plugin ids before removing it so we can tear
-    // them down outside the busses lock.
-    let removed_plugins: Vec<PluginInstanceId> = {
-        let mut busses_guard = ctx.busses.write();
-        if let Some(bus) = busses_guard.shift_remove(&bus_id) {
-            bus.plugin_ids
-        } else {
-            Vec::new()
-        }
+    // Unpublish the bus first, keeping its plugin ids to tear down. The
+    // removed bus lives on in the replaced graph, which the retire sweep
+    // drops once no reader pins it.
+    let removed_plugins: Vec<PluginInstanceId> = if ctx.shared.graph.load().bus(bus_id).is_some()
+    {
+        ctx.shared.edit_busses(|busses| {
+            busses
+                .shift_remove(&bus_id)
+                .map(|bus| bus.plugin_ids.clone())
+                .unwrap_or_default()
+        })
+    } else {
+        Vec::new()
     };
     // Drop plugin instances off the audio path.
     {
@@ -82,25 +84,25 @@ pub(crate) fn handle_remove_bus(ctx: &HandlerCtx, bus_id: BusId) {
 }
 
 pub(crate) fn handle_set_bus_volume(ctx: &HandlerCtx, bus_id: BusId, volume: f32) {
-    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
         bus.set_volume(volume);
     }
 }
 
 pub(crate) fn handle_set_bus_pan(ctx: &HandlerCtx, bus_id: BusId, pan: f32) {
-    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
         bus.set_pan(pan);
     }
 }
 
 pub(crate) fn handle_set_bus_mute(ctx: &HandlerCtx, bus_id: BusId, muted: bool) {
-    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
         bus.set_muted(muted);
     }
 }
 
 pub(crate) fn handle_set_bus_fx_bypass(ctx: &HandlerCtx, bus_id: BusId, bypassed: bool) {
-    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
         super::plugins::apply_bypass_request(ctx.shared, bus.fx_bypass(), bypassed);
     }
     let _ = ctx
@@ -109,9 +111,7 @@ pub(crate) fn handle_set_bus_fx_bypass(ctx: &HandlerCtx, bus_id: BusId, bypassed
 }
 
 pub(crate) fn handle_set_bus_name(ctx: &HandlerCtx, bus_id: BusId, name: String) {
-    if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
-        bus.name = name;
-    }
+    ctx.shared.edit_bus(bus_id, |bus| bus.name = name);
 }
 
 pub(crate) fn handle_set_track_output(ctx: &HandlerCtx, track_id: TrackId, output: TrackOutput) {
@@ -163,9 +163,8 @@ pub(crate) fn handle_add_plugin_to_bus(
                 instance_id,
                 crate::clap_host::PluginSlot::new(instance),
             );
-            if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
-                bus.plugin_ids.push(instance_id);
-            }
+            ctx.shared
+                .edit_bus(bus_id, |bus| bus.plugin_ids.push(instance_id));
             let _ = ctx.event_tx.send(AudioEvent::BusPluginAdded {
                 bus_id,
                 instance_id,
@@ -192,8 +191,15 @@ pub(crate) fn handle_remove_plugin_from_bus(
     bus_id: BusId,
     instance_id: PluginInstanceId,
 ) {
-    if let Some(bus) = ctx.busses.write().get_mut(&bus_id) {
-        bus.plugin_ids.retain(|&id| id != instance_id);
+    let on_chain = ctx
+        .shared
+        .graph
+        .load()
+        .bus(bus_id)
+        .is_some_and(|bus| bus.plugin_ids.contains(&instance_id));
+    if on_chain {
+        ctx.shared
+            .edit_bus(bus_id, |bus| bus.plugin_ids.retain(|&id| id != instance_id));
     }
     let removed = ctx.plugins.write().shift_remove(&instance_id);
     drop(removed);
@@ -205,22 +211,30 @@ pub(crate) fn handle_remove_plugin_from_bus(
 
 /// Reorder a bus's insert chain (ba doc #273, todo #1237).
 ///
-/// A bus chain is a plain `Vec<PluginInstanceId>` behind the busses
-/// write lock, NOT the `ArcSwap` a track chain uses, so this mirrors
-/// `handle_remove_plugin_from_bus`'s pattern (one short write guard, no
-/// plugin instance touched — only the order they are visited in) rather
-/// than `handle_move_plugin`'s publish-a-new-Arc pattern.
+/// A bus chain is a plain `Vec<PluginInstanceId>` on the bus, so this
+/// mirrors `handle_remove_plugin_from_bus`'s pattern (copy-on-write the
+/// bus in a new render graph, no plugin instance touched — only the
+/// order they are visited in). A plugin that is not on the chain
+/// publishes nothing.
 pub(crate) fn handle_move_plugin_in_bus(
     ctx: &HandlerCtx,
     bus_id: BusId,
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
-    let moved = ctx
-        .busses
-        .write()
-        .get_mut(&bus_id)
-        .and_then(|bus| bus.move_plugin(instance_id, to_index));
+    let on_chain = ctx
+        .shared
+        .graph
+        .load()
+        .bus(bus_id)
+        .is_some_and(|bus| bus.plugin_ids.contains(&instance_id));
+    let moved = on_chain
+        .then(|| {
+            ctx.shared
+                .edit_bus(bus_id, |bus| bus.move_plugin(instance_id, to_index))
+                .flatten()
+        })
+        .flatten();
     match moved {
         // Report the *clamped* index so the app mirrors what the engine
         // actually did rather than what was requested.
@@ -263,7 +277,7 @@ pub(crate) fn publish_aux_sends(ctx: &HandlerCtx, state: &HandlerState) {
 
 pub(crate) fn handle_set_bus_role(ctx: &HandlerCtx, bus_id: BusId, is_return: bool) {
     // Silently no-op on an unknown bus, matching the other bus setters.
-    if let Some(bus) = ctx.busses.read().get(&bus_id) {
+    if let Some(bus) = ctx.shared.graph.load().bus(bus_id) {
         bus.set_is_return(is_return);
     } else {
         return;
@@ -299,7 +313,7 @@ fn validate_aux_send_route(
     };
 
     // Destination must be a real bus.
-    if !ctx.busses.read().contains_key(&dest) {
+    if !ctx.shared.graph.load().busses.contains_key(&dest) {
         reject(format!("Aux send destination bus {dest} does not exist"));
         return false;
     }
@@ -312,7 +326,7 @@ fn validate_aux_send_route(
             }
         }
         SendSource::Bus(bid) => {
-            if !ctx.busses.read().contains_key(&bid) {
+            if !ctx.shared.graph.load().busses.contains_key(&bid) {
                 reject(format!("Aux send source bus {bid} does not exist"));
                 return false;
             }

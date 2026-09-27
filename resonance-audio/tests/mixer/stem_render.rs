@@ -30,8 +30,6 @@ const STEADY: usize = resonance_audio::test_support::CLIP_DECLICK_FRAMES as usiz
 struct EngineState {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -42,8 +40,6 @@ impl EngineState {
         Self {
             shared: Arc::new(SharedState::default()),
             tracks: Arc::new(RwLock::new(IndexMap::new())),
-            busses: Arc::new(RwLock::new(IndexMap::new())),
-            master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -89,8 +85,6 @@ impl EngineState {
             end,
             &self.shared,
             &self.tracks,
-            &self.busses,
-            &self.master,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -123,7 +117,7 @@ fn track_filter_includes_track_and_its_sub_tracks() {
 #[test]
 fn bus_filter_includes_tracks_routed_to_bus_with_sub_tracks() {
     let state = EngineState::new();
-    state.busses.write().insert(7, Bus::new(7, "reverb".into()));
+    state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "reverb".into()))));
     state.add_track(1, TrackOutput::Bus(7));
     state.add_track(2, TrackOutput::Master);
     state.add_track(3, TrackOutput::Bus(7));
@@ -149,7 +143,7 @@ fn bus_filter_includes_tracks_routed_to_bus_with_sub_tracks() {
 #[test]
 fn bus_filter_includes_sub_tracks_routed_to_it_on_their_own() {
     let state = EngineState::new();
-    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "drum bus".into()))));
     // The instrument track itself stays on master; its group taps are
     // routed into the bus individually, which is what `track.set_output`
     // on each sub-track does.
@@ -187,8 +181,8 @@ fn bus_filter_includes_sub_tracks_routed_to_it_on_their_own() {
 #[test]
 fn bus_filter_excludes_a_sub_track_routed_to_a_different_bus() {
     let state = EngineState::new();
-    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
-    state.busses.write().insert(8, Bus::new(8, "fx bus".into()));
+    state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "drum bus".into()))));
+    state.shared.edit_busses(|b| b.insert(8, Arc::new(Bus::new(8, "fx bus".into()))));
     state.add_track(1, TrackOutput::Master);
     for (id, port, out) in [
         (10u64, 1u32, TrackOutput::Bus(7)),
@@ -228,7 +222,7 @@ fn bus_filter_excludes_a_sub_track_routed_to_a_different_bus() {
 #[test]
 fn bus_filter_counts_a_parent_and_its_sub_track_once() {
     let state = EngineState::new();
-    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "drum bus".into()))));
     state.add_track(1, TrackOutput::Bus(7));
     for (id, port) in [(10u64, 1u32), (11, 2)] {
         let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);

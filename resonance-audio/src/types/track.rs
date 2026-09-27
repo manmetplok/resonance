@@ -538,9 +538,27 @@ pub fn any_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bo
 /// master — tracks can route their post-fader audio to a bus, the bus
 /// processes the sum through its plugin chain, then the bus sums into
 /// master.
+///
+/// A bus lives in the published render graph (code review ARCH-02 B-2)
+/// as an `Arc<Bus>`, and a structural edit (rename, insert-chain change)
+/// copy-on-writes it. The *live* state — fader, pan, mute, role, the
+/// chain-bypass crossfade, meters, last gains — is in a `BusRuntime`
+/// the copy shares with the original (see the `Clone` impl), so the
+/// audio thread's writes to a graph that is being replaced are never
+/// lost and a fader move lands on every copy at once.
 #[derive(Debug)]
 pub struct Bus {
     pub id: BusId,
+    pub name: String,
+    /// Ordered list of plugin instance IDs forming the insert chain.
+    pub plugin_ids: Vec<PluginInstanceId>,
+    runtime: Arc<BusRuntime>,
+}
+
+/// The live, atomically-updated half of a [`Bus`], shared by every
+/// copy-on-write copy of it.
+#[derive(Debug)]
+struct BusRuntime {
     volume_bits: AtomicU32,
     pan_bits: AtomicU32,
     muted: AtomicBool,
@@ -551,73 +569,87 @@ pub struct Bus {
     /// of aux sends rather than (or in addition to) a track-output
     /// group. Purely a role marker today; it does not change summing.
     is_return: AtomicBool,
-    pub name: String,
     peak_l_bits: AtomicU32,
     peak_r_bits: AtomicU32,
     /// See [`Track::last_gains`]: previous block's effective stereo
     /// gains, used by the mixer's per-sample gain ramp.
     last_gain_l_bits: AtomicU32,
     last_gain_r_bits: AtomicU32,
-    /// Ordered list of plugin instance IDs forming the insert chain.
-    pub plugin_ids: Vec<PluginInstanceId>,
+}
+
+/// A copy of the bus's structure (id, name, insert chain) that shares
+/// the original's live state — the copy-on-write step of a render-graph
+/// edit (`Arc::make_mut`). Not an independent bus: a fader move or a
+/// meter write on either is seen by both.
+impl Clone for Bus {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            name: self.name.clone(),
+            plugin_ids: self.plugin_ids.clone(),
+            runtime: Arc::clone(&self.runtime),
+        }
+    }
 }
 
 impl Bus {
     pub fn new(id: BusId, name: String) -> Self {
         Self {
             id,
-            volume_bits: AtomicU32::new(1.0f32.to_bits()),
-            pan_bits: AtomicU32::new(0.0f32.to_bits()),
-            muted: AtomicBool::new(false),
-            fx_bypass: BypassFade::new(),
-            is_return: AtomicBool::new(false),
             name,
-            peak_l_bits: AtomicU32::new(0),
-            peak_r_bits: AtomicU32::new(0),
-            last_gain_l_bits: AtomicU32::new(0),
-            last_gain_r_bits: AtomicU32::new(0),
             plugin_ids: Vec::new(),
+            runtime: Arc::new(BusRuntime {
+                volume_bits: AtomicU32::new(1.0f32.to_bits()),
+                pan_bits: AtomicU32::new(0.0f32.to_bits()),
+                muted: AtomicBool::new(false),
+                fx_bypass: BypassFade::new(),
+                is_return: AtomicBool::new(false),
+                peak_l_bits: AtomicU32::new(0),
+                peak_r_bits: AtomicU32::new(0),
+                last_gain_l_bits: AtomicU32::new(0),
+                last_gain_r_bits: AtomicU32::new(0),
+            }),
         }
     }
 
     pub fn volume(&self) -> f32 {
-        f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+        f32::from_bits(self.runtime.volume_bits.load(Ordering::Relaxed))
     }
 
     pub fn set_volume(&self, v: f32) {
-        self.volume_bits.store(v.to_bits(), Ordering::Relaxed);
+        self.runtime.volume_bits.store(v.to_bits(), Ordering::Relaxed);
     }
 
     pub fn pan(&self) -> f32 {
-        f32::from_bits(self.pan_bits.load(Ordering::Relaxed))
+        f32::from_bits(self.runtime.pan_bits.load(Ordering::Relaxed))
     }
 
     pub fn set_pan(&self, v: f32) {
-        self.pan_bits.store(v.to_bits(), Ordering::Relaxed);
+        self.runtime.pan_bits.store(v.to_bits(), Ordering::Relaxed);
     }
 
     pub fn muted(&self) -> bool {
-        self.muted.load(Ordering::Relaxed)
+        self.runtime.muted.load(Ordering::Relaxed)
     }
 
     pub fn set_muted(&self, v: bool) {
-        self.muted.store(v, Ordering::Relaxed);
+        self.runtime.muted.store(v, Ordering::Relaxed);
     }
 
     pub fn fx_bypassed(&self) -> bool {
-        self.fx_bypass.bypassed()
+        self.runtime.fx_bypass.bypassed()
     }
 
     /// Ask for the chain to be bypassed (or re-engaged). The mixer
     /// crossfades to the new state over [`crate::bypass::BYPASS_FADE_MS`];
     /// nothing switches on this call.
     pub fn set_fx_bypassed(&self, v: bool) {
-        self.fx_bypass.set_bypassed(v);
+        self.runtime.fx_bypass.set_bypassed(v);
     }
 
     /// The chain-level bypass crossfade, for the render path.
     pub fn fx_bypass(&self) -> &BypassFade {
-        &self.fx_bypass
+        &self.runtime.fx_bypass
     }
 
     /// Reorder this bus's insert chain: move `instance_id` to
@@ -626,10 +658,9 @@ impl Bus {
     /// `None` when that instance is not on this chain (ba doc #273, todo
     /// #1237).
     ///
-    /// The bus twin of [`Track::move_plugin`], but a plain `Vec` edit
-    /// rather than a copy-on-write `ArcSwap` publish: `plugin_ids` is
-    /// owned data behind the engine's busses write lock, not a lock-free
-    /// snapshot the audio callback loads. Moving a plugin to the slot it
+    /// The bus twin of [`Track::move_plugin`], but a plain `Vec` edit:
+    /// the engine runs it on a copy-on-write copy of the bus and
+    /// publishes that in a new render graph. Moving a plugin to the slot it
     /// already occupies leaves the chain untouched and still reports
     /// that slot.
     pub fn move_plugin(&mut self, instance_id: PluginInstanceId, to_index: usize) -> Option<usize> {
@@ -646,51 +677,51 @@ impl Bus {
 
     /// Whether this bus is flagged as an aux return bus.
     pub fn is_return(&self) -> bool {
-        self.is_return.load(Ordering::Relaxed)
+        self.runtime.is_return.load(Ordering::Relaxed)
     }
 
     pub fn set_is_return(&self, v: bool) {
-        self.is_return.store(v, Ordering::Relaxed);
+        self.runtime.is_return.store(v, Ordering::Relaxed);
     }
 
     /// See [`Track::update_peak_l`] for the non-negative invariant and the
     /// `AcqRel` ordering rationale.
     pub fn update_peak_l(&self, v: f32) {
-        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
+        self.runtime.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// See [`Track::update_peak_l`] for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
-        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
+        self.runtime.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     pub fn swap_peak_l(&self) -> f32 {
-        f32::from_bits(self.peak_l_bits.swap(0, Ordering::AcqRel))
+        f32::from_bits(self.runtime.peak_l_bits.swap(0, Ordering::AcqRel))
     }
 
     pub fn swap_peak_r(&self) -> f32 {
-        f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
+        f32::from_bits(self.runtime.peak_r_bits.swap(0, Ordering::AcqRel))
     }
 
     /// See [`Track::last_gains`].
     pub fn last_gains(&self) -> (f32, f32) {
         (
-            f32::from_bits(self.last_gain_l_bits.load(Ordering::Relaxed)),
-            f32::from_bits(self.last_gain_r_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.runtime.last_gain_l_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.runtime.last_gain_r_bits.load(Ordering::Relaxed)),
         )
     }
 
     /// See [`Track::set_last_gains`].
     pub fn set_last_gains(&self, l: f32, r: f32) {
-        self.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
-        self.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
+        self.runtime.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
+        self.runtime.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
     }
 }
 
 /// The global master bus. Holds the post-bus-sum FX chain that runs
 /// after every track and bus has been summed into the master output,
 /// right before the master volume / clip / peak pass.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct MasterBus {
     /// Ordered list of plugin instance IDs forming the master insert chain.
     pub plugin_ids: Vec<PluginInstanceId>,

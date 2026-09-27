@@ -1,11 +1,11 @@
 //! Reordering a BUS's insert chain — `Bus::move_plugin` behind
 //! `AudioCommand::MovePluginInBus` (ba doc #273, todo #1237).
 //!
-//! The bus twin of `track_plugin_move.rs`, and deliberately a different
-//! shape underneath: a bus chain is a plain `Vec<PluginInstanceId>` the
-//! engine owns behind its busses write lock, not the lock-free `ArcSwap`
-//! snapshot a track chain publishes. So this is a straight `Vec` edit —
-//! there is no tearing property to test, only the reorder itself, the
+//! The bus twin of `track_plugin_move.rs`, and a different shape
+//! underneath: a bus chain is a plain `Vec<PluginInstanceId>` on the
+//! bus, which the engine edits on a copy-on-write copy and publishes in a
+//! new render graph (ARCH-02 A2-5; `render_graph_busses.rs` pins the
+//! publish). So this is a straight `Vec` edit — the reorder itself, the
 //! clamp, and the "not on this chain" answer.
 
 use resonance_audio::test_support::affects_latency;

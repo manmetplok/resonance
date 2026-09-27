@@ -40,8 +40,6 @@ use super::{engine_thread, EngineThreadParams, HandlerCtx, HandlerState};
 pub struct EngineHandlerHarness {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -94,8 +92,6 @@ impl EngineHandlerHarness {
         Self {
             shared: Arc::new(SharedState::default()),
             tracks: Arc::new(RwLock::new(IndexMap::new())),
-            busses: Arc::new(RwLock::new(IndexMap::new())),
-            master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -149,8 +145,6 @@ impl EngineHandlerHarness {
             event_tx,
             shared: Arc::new(SharedState::default()),
             tracks_arc: Arc::new(RwLock::new(IndexMap::new())),
-            busses_arc: Arc::new(RwLock::new(IndexMap::new())),
-            master_arc: Arc::new(RwLock::new(MasterBus::new())),
             clips_arc: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             plugins_arc: Arc::new(RwLock::new(IndexMap::new())),
@@ -189,8 +183,6 @@ impl EngineHandlerHarness {
         let ctx = HandlerCtx {
             shared: &self.shared,
             tracks: &self.tracks,
-            busses: &self.busses,
-            master: &self.master,
             clips: &self.clips,
             plugins: &self.plugins,
             tempo_map: &self.tempo_map,
@@ -421,13 +413,46 @@ impl EngineHandlerHarness {
     /// The live bus ids, in insertion order. Used to confirm a refused
     /// duplicate-id `AddBus` left the registry exactly as it was.
     pub fn test_bus_ids(&self) -> Vec<BusId> {
-        self.busses.read().keys().copied().collect()
+        self.shared.graph.load().busses.keys().copied().collect()
     }
 
     /// A live bus's name, if it exists. Used to confirm a refused
     /// duplicate-id `AddBus` did not rename the bus it collided with.
     pub fn test_bus_name(&self, id: BusId) -> Option<String> {
-        self.busses.read().get(&id).map(|b| b.name.clone())
+        self.shared.graph.load().bus(id).map(|b| b.name.clone())
+    }
+
+    /// Run the real `AudioCommand::RemoveBus` handler.
+    pub fn remove_bus(&mut self, id: BusId) {
+        self.with_ctx(|ctx, _state| busses::handle_remove_bus(ctx, id));
+    }
+
+    /// Run the real `AudioCommand::SetBusName` handler.
+    pub fn set_bus_name(&mut self, id: BusId, name: &str) {
+        let name = name.to_string();
+        self.with_ctx(|ctx, _state| busses::handle_set_bus_name(ctx, id, name));
+    }
+
+    /// Run the real `AudioCommand::MovePluginInBus` handler.
+    pub fn move_plugin_in_bus(&mut self, id: BusId, instance_id: PluginInstanceId, to_index: usize) {
+        self.with_ctx(|ctx, _state| {
+            busses::handle_move_plugin_in_bus(ctx, id, instance_id, to_index)
+        });
+    }
+
+    /// Run the real `AudioCommand::RemovePluginFromBus` handler.
+    pub fn remove_plugin_from_bus(&mut self, id: BusId, instance_id: PluginInstanceId) {
+        self.with_ctx(|ctx, _state| busses::handle_remove_plugin_from_bus(ctx, id, instance_id));
+    }
+
+    /// Run the real `AudioCommand::RemovePluginFromMaster` handler.
+    pub fn remove_plugin_from_master(&mut self, instance_id: PluginInstanceId) {
+        self.with_ctx(|ctx, _state| master::handle_remove_plugin_from_master(ctx, instance_id));
+    }
+
+    /// Run the real `AudioCommand::SetBusVolume` handler.
+    pub fn set_bus_volume(&mut self, id: BusId, volume: f32) {
+        self.with_ctx(|ctx, _state| busses::handle_set_bus_volume(ctx, id, volume));
     }
 
     /// Run the real `AddPlugin` handler (ARCH-04 D-1's
@@ -943,8 +968,6 @@ impl EngineHandlerHarness {
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.tracks),
-                Arc::clone(ctx.busses),
-                Arc::clone(ctx.master),
                 Arc::clone(ctx.clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),

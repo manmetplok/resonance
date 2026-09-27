@@ -338,8 +338,6 @@ pub(crate) fn run_export(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -434,20 +432,18 @@ pub(crate) fn run_export(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
+    let latency_comp = build_latency_comp(shared, tracks, plugins);
     // Render extra frames and drop the same number from the front:
     // plugin-delay compensation shifts every track by the pipeline
     // latency, and the master FX chain (which this export path runs,
     // unlike live PDC) shifts the summed mix by its own latency on top.
     // Trimming both re-aligns the file with the timeline and the extra
     // tail catches the delayed final samples (doc #260 finding #8).
-    let comp_latency = latency_comp.max_latency() + master_fx_latency(shared, master, plugins);
+    let comp_latency = latency_comp.max_latency() + master_fx_latency(shared, plugins);
     let render_stop = render_end + comp_latency;
     let ctx = ChunkCtx {
         shared,
         tracks,
-        busses,
-        master,
         clips,
         plugins,
         tempo_map: &bounce_tm,

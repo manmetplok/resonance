@@ -22,6 +22,8 @@ pub(super) struct MasterTail<'a> {
     /// passes, which is a meaningful window on the realtime thread.
     pub(super) plugins_guard:
         RwLockReadGuard<'a, PluginMap>,
+    /// The master insert chain, from the block's render graph.
+    pub(super) master: &'a MasterBus,
     pub(super) sidechain_routes: &'a [SidechainRoute],
     pub(super) automation: &'a AutomationSnapshot,
     /// The block's total compensation latency, for the comp-delayed
@@ -48,8 +50,7 @@ pub(super) fn run_master_passes(
     apply_master_fx_chain(
         scratch.data,
         channels,
-        inputs.master,
-        &shared.lock_misses,
+        tail.master,
         &tail.plugins_guard,
         scratch.track_buf_l,
         scratch.track_buf_r,

@@ -232,8 +232,6 @@ pub fn multi_out_instrument(levels: [f32; PORTS]) -> PluginSlot {
 pub struct EngineState {
     pub shared: Arc<SharedState>,
     pub tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    pub busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    pub master: Arc<RwLock<MasterBus>>,
     pub clips: Arc<RwLock<Vec<AudioClip>>>,
     pub plugins: Arc<RwLock<PluginMap>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -254,8 +252,6 @@ impl EngineState {
         let state = Self {
             shared: Arc::new(SharedState::default()),
             tracks: Arc::new(RwLock::new(IndexMap::new())),
-            busses: Arc::new(RwLock::new(IndexMap::new())),
-            master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -331,7 +327,7 @@ impl EngineState {
     }
 
     pub fn add_bus(&self, id: BusId, name: &str) {
-        self.busses.write().insert(id, Bus::new(id, name.into()));
+        self.shared.edit_busses(|b| b.insert(id, Arc::new(Bus::new(id, name.into()))));
     }
 
     pub fn render(&self, source: StemSource) -> Vec<f32> {
@@ -347,8 +343,6 @@ impl EngineState {
             FRAMES,
             &self.shared,
             &self.tracks,
-            &self.busses,
-            &self.master,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
