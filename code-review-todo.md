@@ -127,6 +127,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-B3a (from B-3) | Solo race: one solo snapshot per block (`block_soloed` latched per track) in callback, monitor passes and offline render; 20k-block hammer | sonnet | merged | f46f341f |
 | refactor-intent B-4 (ARCH-02) | plugin map → `RenderGraph` (`Arc<PluginSlot>` shares the instance mutex); removed slots retired per-slot, `ClapInstance::drop` only on the engine sweep (thread-probed); `release_all_plugins` at shutdown; `StateMap` 2 → 1 | opus | merged | bb8fdd28 |
 | FU-B4a (from B-4) | `BypassFade` (target, position) packed into one `AtomicU64`; settled toggle is one store, live paths CAS — no torn pair / spurious crossfade (was ~3% of racing blocks) | sonnet | merged | 4dc228ef |
+| refactor-intent B-5 (ARCH-02) | clips → `RenderGraph` (`ClipSource::Memory(Arc<[f32]>)`); workers post `EngineInternal` messages to the engine thread; ticket/fence/take-park/deferral/V6 guarantees re-argued as engine-thread sequencing; **no `RwLock` left in resonance-audio** | opus | merged | a316feab |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
