@@ -15,6 +15,7 @@
 
 use resonance_dsp::{constant_power_pan, SimpleRng};
 
+use crate::dsp::effects::voice_saturate;
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::modulation::{self, ModState};
 use crate::dsp::oscillator::{self, midi_to_freq};
@@ -98,6 +99,16 @@ pub(crate) fn render_voice(
         osc_r = r;
     }
 
+    // Per-voice pre-filter drive. Resolved per sample from the block's param
+    // and the control-rate mod cache (an add and a clamp); at 0 — the
+    // default, with nothing routed to it — the voice path is untouched.
+    let voice_drive = (snap.voice_drive + mods.voice_drive).clamp(0.0, 1.0);
+    if voice_drive > 0.0 {
+        let (l, r) = voice_saturate(osc_l, osc_r, voice_drive);
+        osc_l = l;
+        osc_r = r;
+    }
+
     // Filter. Coefficients are refreshed at control rate or immediately when
     // a voice was just triggered.
     if snap.filter_enabled {
@@ -163,7 +174,7 @@ fn advance_voice_lfos(
 
 /// Re-evaluate the modulation matrix into the voice's cache, at control rate.
 ///
-/// The slot evaluation is non-trivial (11 destinations x up to
+/// The slot evaluation is non-trivial (13 destinations x up to
 /// `NUM_MOD_SLOTS` branches) and its inputs — LFO values, the mod envelope,
 /// key tracking, velocity — are all sub-audio-rate, so it runs at the same
 /// control rate as the filter coefficients. `mod_dirty` forces an immediate

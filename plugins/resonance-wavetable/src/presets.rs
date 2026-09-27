@@ -74,6 +74,13 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/keys_electric_piano.json"),
     },
     PresetEntry {
+        // Showcases the drive stages: per-voice pre-filter drive (pushed
+        // harder by velocity through the mod matrix — slot 1 → Voice Drive)
+        // into a 2x-oversampled tube stage, tone rolled off, auto gain on.
+        name: "Keys — Driven Chords",
+        json: include_str!("../presets/keys_driven_chords.json"),
+    },
+    PresetEntry {
         name: "Keys — Cathedral Organ",
         json: include_str!("../presets/keys_cathedral_organ.json"),
     },

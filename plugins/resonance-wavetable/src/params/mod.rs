@@ -62,13 +62,15 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs; 97 since the BBD chorus (`chorus_mode`, `chorus_noise`) and
-/// analog instability (`osc_phase_random`, `analog`) were added. Parameters
-/// are addressed by string id everywhere that persists (presets, saved
-/// state, CLAP param ids are hashed from the id), so inserting into the
-/// middle of [`WavetableParams::param_at`] only changes the order a host
-/// lists them in.
-pub const PARAM_COUNT: usize = 97;
+/// three LFOs; 97 once the BBD chorus (`chorus_mode`, `chorus_noise`) and
+/// analog instability (`osc_phase_random`, `analog`) were added; 104 since
+/// the distortion character work added `dist_mode`, `dist_oversample`,
+/// `dist_tone`, `dist_auto_gain`, `dist_bits`, `dist_crush_rate` and
+/// `voice_drive`. Parameters are addressed by string id everywhere that
+/// persists (presets, saved state, CLAP param ids are hashed from the id),
+/// so inserting into the middle of [`WavetableParams::param_at`] only
+/// changes the order a host lists them in.
+pub const PARAM_COUNT: usize = 104;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -251,6 +253,14 @@ impl WavetableParams {
             // Analog (95..97)
             95 => &self.analog.phase_random,
             96 => &self.analog.drift,
+            // Distortion character (97..104)
+            97 => &self.distortion.mode,
+            98 => &self.distortion.oversample,
+            99 => &self.distortion.tone,
+            100 => &self.distortion.auto_gain,
+            101 => &self.distortion.bits,
+            102 => &self.distortion.crush_rate,
+            103 => &self.distortion.voice_drive,
             _ => &self.master_volume, // fallback
         }
     }

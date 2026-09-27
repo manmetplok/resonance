@@ -9,9 +9,9 @@ use crate::dsp::effects::ChorusMode;
 use crate::editor::theme;
 use crate::editor::viz::scope;
 use crate::editor::WavetableEditorApp;
-use resonance_plugin::param::Param;
+use resonance_plugin::param::{BoolParam, Param};
 
-use super::float_knob;
+use super::{float_knob, int_knob};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -99,14 +99,70 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             app.params.distortion.enabled.value(),
             |on| app.params.distortion.enabled.set_plain(on),
             |ui| {
+                let dist = &app.params.distortion;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
-                    float_knob(ui, "Drive", &app.params.distortion.drive);
-                    float_knob(ui, "Mix", &app.params.distortion.mix);
+                    int_knob(ui, "Mode", &dist.mode);
+                    float_knob(ui, "Drive", &dist.drive);
+                    float_knob(ui, "Tone", &dist.tone);
+                    float_knob(ui, "Mix", &dist.mix);
+                });
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+                    int_knob(ui, "OS", &dist.oversample);
+                    float_knob(ui, "Bits", &dist.bits);
+                    float_knob(ui, "Rate", &dist.crush_rate);
+                });
+                bool_toggle(ui, "Auto gain", &dist.auto_gain);
+
+                // Per-voice drive sits before each voice's filter, not on
+                // this bus, so it is not switched by the card's LED.
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("PRE-FILTER · PER VOICE")
+                        .color(theme::TEXT_3)
+                        .size(10.5)
+                        .strong(),
+                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+                    float_knob(ui, "V.Drive", &dist.voice_drive);
                 });
             },
         );
     });
+}
+
+/// Pill switch bound to a `BoolParam` — the same drawing as the Osc tab's
+/// glide switch.
+fn bool_toggle(ui: &mut egui::Ui, label: &str, param: &BoolParam) {
+    let on = param.value();
+    let resp = ui
+        .horizontal(|ui| {
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(32.0, 18.0), egui::Sense::click());
+            let pill_color = if on { theme::ACCENT } else { theme::BG_3 };
+            ui.painter().rect_filled(rect, 9.0, pill_color);
+            ui.painter().rect_stroke(
+                rect,
+                9.0,
+                egui::Stroke::new(1.0, if on { theme::ACCENT } else { theme::LINE }),
+                egui::StrokeKind::Inside,
+            );
+            let knob_x = if on { rect.right() - 9.0 } else { rect.left() + 9.0 };
+            let knob_color = if on {
+                egui::Color32::WHITE
+            } else {
+                theme::TEXT_3
+            };
+            ui.painter()
+                .circle_filled(egui::pos2(knob_x, rect.center().y), 6.0, knob_color);
+            ui.label(egui::RichText::new(label).color(theme::TEXT_1).size(11.0));
+            r
+        })
+        .inner;
+    if resp.clicked() {
+        param.set_plain(if on { 0.0 } else { 1.0 });
+    }
 }
 
 fn draw_fx_card(

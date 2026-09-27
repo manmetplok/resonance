@@ -21,6 +21,7 @@
     "chorus_enabled": 1, "chorus_rate": 0.8, "chorus_depth": 0.35, "chorus_mix": 0.25, "chorus_mode": 0, "chorus_noise": 0.0,
     "delay_enabled": 0, "delay_time_l": 375.0, "delay_time_r": 500.0, "delay_feedback": 0.4, "delay_mix": 0.25,
     "dist_enabled": 1, "dist_drive": 1.8, "dist_mix": 0.25,
-    "osc_phase_random": 0.0, "analog": 0.0
+    "osc_phase_random": 0.0, "analog": 0.0,
+    "dist_mode": 0, "dist_oversample": 0, "dist_tone": 20000.0, "dist_auto_gain": 0, "dist_bits": 8.0, "dist_crush_rate": 11025.0, "voice_drive": 0.0
   }
 }
