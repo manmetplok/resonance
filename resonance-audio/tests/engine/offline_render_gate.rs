@@ -35,7 +35,7 @@ fn dc_clip(id: ClipId, track_id: TrackId, frames: usize) -> AudioClip {
         id,
         track_id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.25; frames * CH]),
+        source: ClipSource::memory(vec![0.25; frames * CH]),
         name: format!("c{id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,

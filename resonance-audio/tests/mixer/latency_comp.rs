@@ -433,7 +433,7 @@ fn looping_playback_keeps_compensated_tracks_continuous_across_the_seam() {
     for loop_len in [300u64, 3 * BLOCK as u64] {
         let dc = |id: TrackId| {
             let (track, mut clip) = impulse_track(id, TrackOutput::Master, 0, 1);
-            clip.source = ClipSource::Memory(vec![0.25; 20_000 * 2]);
+            clip.source = ClipSource::memory(vec![0.25; 20_000 * 2]);
             (track, clip)
         };
         let (t1, c1) = dc(1);
@@ -618,7 +618,7 @@ fn impulse_track(id: TrackId, output: TrackOutput, at: usize, frames: usize) -> 
         id,
         track_id: id,
         start_sample: 0,
-        source: ClipSource::Memory(samples),
+        source: ClipSource::memory(samples),
         name: "impulse".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

@@ -947,7 +947,7 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
     enum Action {
         Ready,
         Copy(PathBuf),
-        Encode(Vec<f32>),
+        Encode(std::sync::Arc<[f32]>),
     }
     let mut entries: Vec<(ClipId, String, Action)> = Vec::new();
     {

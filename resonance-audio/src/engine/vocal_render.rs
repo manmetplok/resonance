@@ -156,7 +156,7 @@ pub fn attach_tuning_caches(
         if cache.is_some() {
             rebuilt += 1;
         }
-        clip.tuning_render_cache = cache;
+        clip.tuning_render_cache = cache.map(Into::into);
     }
     rebuilt
 }

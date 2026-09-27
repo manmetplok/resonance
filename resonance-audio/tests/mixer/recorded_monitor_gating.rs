@@ -24,7 +24,7 @@ fn take_on(track_id: TrackId, start: u64, frames: usize) -> AudioClip {
         id: 100,
         track_id,
         start_sample: start,
-        source: ClipSource::Memory(vec![0.0; frames * 2]),
+        source: ClipSource::memory(vec![0.0; frames * 2]),
         name: "take".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

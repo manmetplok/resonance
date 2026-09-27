@@ -48,7 +48,7 @@ fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
         id,
         track_id: id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![1.0; FRAMES * 4 * 2]),
+        source: ClipSource::memory(vec![1.0; FRAMES * 4 * 2]),
         name: "dc".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

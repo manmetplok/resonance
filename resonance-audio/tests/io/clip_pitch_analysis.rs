@@ -46,7 +46,7 @@ fn sine_clip(id: u64, freq: f32, dur_secs: f32) -> AudioClip {
         id,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(stereo_sine(freq, dur_secs, 0.5)),
+        source: ClipSource::memory(stereo_sine(freq, dur_secs, 0.5)),
         name: format!("clip_{id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,

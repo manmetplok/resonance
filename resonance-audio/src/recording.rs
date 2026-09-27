@@ -995,7 +995,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, RecordingError> {
 /// file.
 fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<ClipSource, String> {
     match salvaged.take() {
-        Some(samples) => Ok(ClipSource::Memory(samples)),
+        Some(samples) => Ok(ClipSource::memory(samples)),
         None => ClipSource::open_wav(path).map_err(|e| e.to_string()),
     }
 }

@@ -245,7 +245,7 @@ fn audio_clip(data: Vec<f32>) -> AudioClip {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(data),
+        source: ClipSource::memory(data),
         name: "src".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

@@ -1896,7 +1896,7 @@ fn memory_clip(id: u64, value: f32) -> resonance_audio::types::AudioClip {
         id,
         track_id: 7,
         start_sample: 0,
-        source: resonance_audio::types::ClipSource::Memory(vec![value; 48_000 * 2]),
+        source: resonance_audio::types::ClipSource::memory(vec![value; 48_000 * 2]),
         name: format!("Take {id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,

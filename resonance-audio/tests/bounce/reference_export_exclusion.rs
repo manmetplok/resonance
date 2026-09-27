@@ -44,7 +44,7 @@ fn engine_with_dc_clip() -> EngineState {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(vec![MIX_DC; FRAMES * 2]),
+        source: ClipSource::memory(vec![MIX_DC; FRAMES * 2]),
         name: "dc".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

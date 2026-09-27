@@ -57,7 +57,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, start_sample: u64, data: Vec<f32>) 
         id,
         track_id,
         start_sample,
-        source: ClipSource::Memory(data),
+        source: ClipSource::memory(data),
         name: "tone".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

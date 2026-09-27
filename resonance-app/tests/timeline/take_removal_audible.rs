@@ -71,7 +71,7 @@ fn const_clip(id: ClipId, value: f32) -> AudioClip {
         id,
         track_id: TRACK,
         start_sample: SLOT.start,
-        source: ClipSource::Memory(vec![value; SLOT.length as usize * 2]),
+        source: ClipSource::memory(vec![value; SLOT.length as usize * 2]),
         name: "take".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

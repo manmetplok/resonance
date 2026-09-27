@@ -55,7 +55,7 @@ impl EngineState {
             id,
             track_id: track,
             start_sample: start,
-            source: ClipSource::Memory(vec![value; frames * 2]),
+            source: ClipSource::memory(vec![value; frames * 2]),
             name: "dc".into(),
             trim_start_frames: 0,
             trim_end_frames: 0,

@@ -125,10 +125,12 @@ pub struct PendingNoteEvent {
 /// 4-byte aligned (see [`ClipSource::open_wav`]). Do not rely on
 /// "project audio is always Mapped" — it holds for every file this
 /// app writes, but not for one authored elsewhere.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ClipSource {
-    /// Owned, in-RAM stereo-interleaved f32 samples.
-    Memory(Vec<f32>),
+    /// In-RAM stereo-interleaved f32 samples, shared (code review ARCH-02
+    /// B-5): a copy-on-write copy of the clip — the render graph's
+    /// `Arc::make_mut` on an edit — clones the `Arc`, never the samples.
+    Memory(Arc<[f32]>),
     /// Memory-mapped WAV file sliced down to the PCM data chunk.
     /// `data_offset_bytes` is the byte offset from the start of the
     /// mapping where interleaved f32 samples begin; `frame_count` is
@@ -146,25 +148,15 @@ pub enum ClipSource {
 impl ClipSource {
     /// A second handle on the same audio, for a clip split in two.
     ///
-    /// `Mapped` shares its mmap through the `Arc` — free, and the case
-    /// that matters (recorded takes and project audio are mapped).
-    /// `Memory` has to copy: an owned `Vec` cannot be shared, and a
-    /// split is a deliberate, one-off edit rather than a hot path.
+    /// Free for both variants: `Mapped` shares its mmap and `Memory` its
+    /// sample buffer through the `Arc` (the same as `clone`).
     pub fn share(&self) -> ClipSource {
-        match self {
-            ClipSource::Memory(v) => ClipSource::Memory(v.clone()),
-            ClipSource::Mapped {
-                mmap,
-                data_offset_bytes,
-                frame_count,
-                path,
-            } => ClipSource::Mapped {
-                mmap: Arc::clone(mmap),
-                data_offset_bytes: *data_offset_bytes,
-                frame_count: *frame_count,
-                path: path.clone(),
-            },
-        }
+        self.clone()
+    }
+
+    /// An in-RAM source over `samples` (stereo-interleaved).
+    pub fn memory(samples: Vec<f32>) -> ClipSource {
+        ClipSource::Memory(samples.into())
     }
 
     /// Stereo-interleaved f32 samples as a slice: one `[l, r]` pair
@@ -173,7 +165,7 @@ impl ClipSource {
     #[inline]
     pub fn as_frames(&self) -> &[f32] {
         match self {
-            ClipSource::Memory(v) => v.as_slice(),
+            ClipSource::Memory(v) => v,
             ClipSource::Mapped {
                 mmap,
                 data_offset_bytes,
@@ -222,7 +214,7 @@ impl ClipSource {
         if wav_sample_rate == engine_sample_rate {
             return Ok(source);
         }
-        Ok(ClipSource::Memory(crate::decode::linear_resample(
+        Ok(ClipSource::memory(crate::decode::linear_resample(
             source.as_frames(),
             wav_sample_rate,
             engine_sample_rate,
@@ -260,7 +252,7 @@ impl ClipSource {
                 .chunks_exact(std::mem::size_of::<f32>())
                 .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect();
-            return Ok((ClipSource::Memory(samples), mapped.sample_rate));
+            return Ok((ClipSource::memory(samples), mapped.sample_rate));
         }
         Ok((
             ClipSource::Mapped {
@@ -374,7 +366,11 @@ pub struct WarpMarker {
 /// [`ClipSource`], which may be an owned `Vec<f32>` or a
 /// memory-mapped WAV file — so large recorded takes never need to
 /// inflate into a contiguous in-RAM buffer.
-#[derive(Debug)]
+///
+/// `Clone` is cheap (code review ARCH-02 B-5): the PCM (either variant of
+/// [`ClipSource`]) and the retune cache are shared `Arc`s, so the render
+/// graph's copy-on-write edit copies the fields, never the audio.
+#[derive(Debug, Clone)]
 pub struct AudioClip {
     pub id: ClipId,
     pub track_id: TrackId,
@@ -438,7 +434,7 @@ pub struct AudioClip {
     /// claim. See the module note on
     /// [`crate::engine::vocal_render`] before depending on it.
     /// The original [`ClipSource`] PCM is never mutated.
-    pub tuning_render_cache: Option<Vec<f32>>,
+    pub tuning_render_cache: Option<Arc<[f32]>>,
 }
 
 /// Number of stereo frames per waveform peak bucket.
@@ -576,7 +572,7 @@ impl AudioClip {
     #[inline]
     pub fn render_frames(&self) -> &[f32] {
         match &self.tuning_render_cache {
-            Some(cache) => cache.as_slice(),
+            Some(cache) => cache,
             None => self.source.as_frames(),
         }
     }

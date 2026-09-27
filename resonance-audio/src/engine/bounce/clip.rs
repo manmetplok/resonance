@@ -232,7 +232,7 @@ pub fn to_audio_clip(
         id: target_clip_id,
         track_id: target_track_id,
         start_sample: render_start,
-        source: ClipSource::Memory(output),
+        source: ClipSource::memory(output),
         name: name.clone(),
         trim_start_frames: 0,
         trim_end_frames: 0,

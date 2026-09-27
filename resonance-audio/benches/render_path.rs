@@ -70,7 +70,7 @@ fn audio_clip(track_id: TrackId, id: u64, start: u64, frames: usize) -> AudioCli
         id,
         track_id,
         start_sample: start,
-        source: ClipSource::Memory(
+        source: ClipSource::memory(
             (0..frames * 2).map(|i| (i as f32 * 0.001).sin()).collect(),
         ),
         name: format!("audio{id}"),

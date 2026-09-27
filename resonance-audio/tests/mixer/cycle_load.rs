@@ -199,7 +199,7 @@ fn playing_harness() -> MixAudioHarness {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.1; 64 * FRAMES * 2]),
+        source: ClipSource::memory(vec![0.1; 64 * FRAMES * 2]),
         name: "c1".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

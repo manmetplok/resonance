@@ -47,7 +47,7 @@ impl EngineState {
             id,
             track_id: track,
             start_sample: start,
-            source: ClipSource::Memory(samples),
+            source: ClipSource::memory(samples),
             name: "impulse".into(),
             trim_start_frames: 0,
             trim_end_frames: 0,

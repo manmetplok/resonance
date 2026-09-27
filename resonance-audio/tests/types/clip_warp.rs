@@ -14,7 +14,7 @@ fn make_clip(frames: usize) -> AudioClip {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.0f32; frames * 2]),
+        source: ClipSource::memory(vec![0.0f32; frames * 2]),
         name: "clip".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

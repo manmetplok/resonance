@@ -48,7 +48,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, start_sample: u64, data: Vec<f32>) 
         id,
         track_id,
         start_sample,
-        source: ClipSource::Memory(data),
+        source: ClipSource::memory(data),
         name: "tone".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -151,7 +151,7 @@ fn freeze_does_not_mutate_source_clips() {
 
     // Snapshot the source clip before freezing.
     let before: Vec<f32> = match &state.clips.read()[0].source {
-        ClipSource::Memory(v) => v.clone(),
+        ClipSource::Memory(v) => v.to_vec(),
         _ => unreachable!(),
     };
     let clip_count_before = state.clips.read().len();
@@ -174,7 +174,7 @@ fn freeze_does_not_mutate_source_clips() {
     assert_eq!(state.clips.read().len(), clip_count_before);
     assert_eq!(state.shared.tracks().len(), track_count_before);
     let after: Vec<f32> = match &state.clips.read()[0].source {
-        ClipSource::Memory(v) => v.clone(),
+        ClipSource::Memory(v) => v.to_vec(),
         _ => unreachable!(),
     };
     assert_eq!(before, after, "source PCM must be byte-identical after freeze");

@@ -125,7 +125,7 @@ fn tone_clip(
         id,
         track_id: track,
         start_sample: 0,
-        source: ClipSource::Memory(to_stereo(&harmonic_mono(f0, frames))),
+        source: ClipSource::memory(to_stereo(&harmonic_mono(f0, frames))),
         name: "tone".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -205,7 +205,7 @@ fn retuned_clip_bounces_with_shifted_pitch() {
 fn tuning_does_not_mutate_source_pcm() {
     let frames = SR as usize / 4;
     let f0 = 220.0;
-    let original = ClipSource::Memory(to_stereo(&harmonic_mono(f0, frames))).as_frames().to_vec();
+    let original = ClipSource::memory(to_stereo(&harmonic_mono(f0, frames))).as_frames().to_vec();
 
     let eng = Engine::new();
     eng.add_master_track(1);
@@ -288,7 +288,7 @@ fn cache_pass_fixture() -> Engine {
     eng.push_clip(tone_clip(1, 1, 220.0, frames, Some(full_clip_tuning(hz_to_midi(220.0), frames, 2.0))));
     eng.push_clip(tone_clip(2, 1, 330.0, frames, Some(full_clip_tuning(hz_to_midi(330.0), frames, -1.0))));
     let mut stale = tone_clip(3, 1, 440.0, frames, None);
-    stale.tuning_render_cache = Some(vec![0.5; frames * 2]);
+    stale.tuning_render_cache = Some(vec![0.5; frames * 2].into());
     eng.push_clip(stale);
     eng.push_clip(tone_clip(4, 1, 110.0, frames, None));
     eng
@@ -298,7 +298,7 @@ fn caches(eng: &Engine) -> Vec<(ClipId, Option<Vec<f32>>)> {
     eng.clips
         .read()
         .iter()
-        .map(|c| (c.id, c.tuning_render_cache.clone()))
+        .map(|c| (c.id, c.tuning_render_cache.as_deref().map(<[f32]>::to_vec)))
         .collect()
 }
 

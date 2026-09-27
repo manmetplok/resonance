@@ -22,7 +22,7 @@ fn sample_clip(id: u64, track_id: u64, frames: usize) -> AudioClip {
         id,
         track_id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.0f32; frames * 2]),
+        source: ClipSource::memory(vec![0.0f32; frames * 2]),
         name: "clip".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
