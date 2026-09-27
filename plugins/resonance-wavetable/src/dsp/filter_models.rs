@@ -475,7 +475,7 @@ pub fn exp2_fast(x: f32) -> f32 {
     let xi = (x + 0.5).floor();
     let f = x - xi;
     let p = 1.0
-        + f * (0.693_147_2
+        + f * (std::f32::consts::LN_2
             + f * (0.240_226_5 + f * (0.055_504_1 + f * (0.009_618_1 + f * 0.001_333_4))));
     p * f32::from_bits(((xi as i32 + 127) as u32) << 23)
 }
