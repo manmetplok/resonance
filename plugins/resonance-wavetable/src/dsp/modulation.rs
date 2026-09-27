@@ -14,13 +14,31 @@ pub enum ModSource {
     KeyTrack = 6,
     ModWheel = 7,
     Aftertouch = 8,
+    /// Per-voice uniform draw in -1..1 at trigger, held for the note's life.
+    /// Appended here (rather than slotted in alphabetically) because preset
+    /// files store `ModSource` as a bare integer — see [`Self::from_int`].
+    RandomBipolar = 9,
+    /// The same per-voice draw as [`Self::RandomBipolar`], remapped to
+    /// 0..1. One RNG pull per note-on feeds both, rather than two —
+    /// there is nothing for a second draw to buy here, and it would be
+    /// one more thing that could drift out of sync between the pair.
+    RandomUnipolar = 10,
+    /// Free-running, clocked by [`crate::params::WavetableParams::mod_sh`]:
+    /// a global "fifth LFO" shared by every voice, distinct from an LFO's
+    /// own [`crate::dsp::lfo::LfoShape::SampleAndHold`] *shape* (which
+    /// stairsteps that LFO's own rate). This one has its own rate/sync and
+    /// an optional slew that turns the classic stepped random into a
+    /// slowly drifting source.
+    SampleHold = 11,
+    /// Round-robin: flips ±1 on every voice trigger.
+    Alternate = 12,
 }
 
 impl ModSource {
     /// Display names, indexed by the parameter's integer value. The editor's
     /// source picker reads this array so the labels can never drift from the
     /// discriminants the DSP matches on.
-    pub const LABELS: [&'static str; 9] = [
+    pub const LABELS: [&'static str; 13] = [
         "None",
         "LFO 1",
         "LFO 2",
@@ -30,6 +48,10 @@ impl ModSource {
         "Key Track",
         "Mod Wheel",
         "Aftertouch",
+        "Random",
+        "Random Uni",
+        "S&H",
+        "Alternate",
     ];
 
     pub fn from_int(v: i32) -> Self {
@@ -42,6 +64,10 @@ impl ModSource {
             6 => Self::KeyTrack,
             7 => Self::ModWheel,
             8 => Self::Aftertouch,
+            9 => Self::RandomBipolar,
+            10 => Self::RandomUnipolar,
+            11 => Self::SampleHold,
+            12 => Self::Alternate,
             _ => Self::None,
         }
     }
@@ -251,6 +277,14 @@ impl ModSlot {
 }
 
 /// Evaluate all modulation slots and return accumulated ModState.
+///
+/// `random_bipolar` and `alternate` are per-voice: drawn/flipped once at
+/// trigger and held for the note's life (see `Voice::random_value` /
+/// `Voice::alternate_value`). `sample_hold_val` is the engine-global S&H
+/// generator's current (possibly slewed) value, shared by every voice for
+/// this control tick — the same relationship a free-running LFO has to the
+/// voices reading it.
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate_mod_matrix(
     slots: &[ModSlot],
     lfo1_val: f32,
@@ -259,6 +293,9 @@ pub fn evaluate_mod_matrix(
     mod_env_val: f32,
     velocity: f32,
     note: f32,
+    random_bipolar: f32,
+    sample_hold_val: f32,
+    alternate: f32,
 ) -> ModState {
     let mut state = ModState::default();
     let key_track = (note - 60.0) / 60.0; // normalized around middle C
@@ -281,6 +318,15 @@ pub fn evaluate_mod_matrix(
             ModSource::Env2 => mod_env_val * 2.0 - 1.0, // 0..1 -> -1..1
             ModSource::Velocity => velocity * 2.0 - 1.0,
             ModSource::KeyTrack => key_track,
+            ModSource::RandomBipolar => random_bipolar,
+            // Deliberately not remapped through `key_track`'s -1..1
+            // convention: the whole point of offering both is a source
+            // that is naturally 0..1, for destinations a symmetric random
+            // would fight (e.g. always brightening a filter rather than
+            // sometimes darkening it).
+            ModSource::RandomUnipolar => random_bipolar * 0.5 + 0.5,
+            ModSource::SampleHold => sample_hold_val,
+            ModSource::Alternate => alternate,
             // Unreachable: filtered by `is_effective` above. Kept exhaustive
             // so #1301 has to come back here when CC delivery lands.
             ModSource::ModWheel | ModSource::Aftertouch | ModSource::None => 0.0,

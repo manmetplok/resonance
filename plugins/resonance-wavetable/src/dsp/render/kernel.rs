@@ -41,6 +41,10 @@ pub(crate) struct SampleCtx {
     /// Global (non-retriggered) LFO values, already scaled by depth. Zero
     /// when `lfo_vals_needed` is false, in which case nothing consumes them.
     pub global_lfo: [f32; 3],
+    /// The `ModSource::SampleHold` generator's current value, shared by
+    /// every voice this sample. Same zero-when-unneeded contract as
+    /// `global_lfo`.
+    pub sample_hold_val: f32,
 }
 
 /// Render one voice's contribution to this sample.
@@ -181,6 +185,9 @@ fn refresh_voice_mods(
         mod_env_val,
         voice.velocity,
         voice.current_pitch,
+        voice.random_value,
+        ctx.sample_hold_val,
+        voice.alternate_value,
     );
     // Only the oscillator-facing destinations invalidate the cached per-unison
     // setup; a filter LFO sweeping every tick must not force an oscillator

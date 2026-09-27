@@ -107,6 +107,8 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     for (i, slot) in p.mod_slots.iter().enumerate() {
         out.push((format!("mod_slots[{i}].amount"), &slot.amount));
     }
+    out.push(("mod_sh.rate".into(), &p.mod_sh.rate));
+    out.push(("mod_sh.slew".into(), &p.mod_sh.slew));
     out
 }
 
@@ -123,6 +125,12 @@ fn int_knob_params(p: &WavetableParams) -> Vec<(String, &IntParam)> {
         ("lfo1.shape".into(), &p.lfo1.shape),
         ("lfo2.shape".into(), &p.lfo2.shape),
         ("lfo3.shape".into(), &p.lfo3.shape),
+        // Drawn plain, not via `int_knob_fmt`: declared with `with_choices`
+        // at construction, so `Param::display` already carries the label
+        // (ba todo #1289/#1292's mechanism, used here from the start rather
+        // than through the `int_knob_fmt` seam the LFOs' own Div knob is
+        // still on).
+        ("mod_sh.division".into(), &p.mod_sh.division),
     ]
 }
 
@@ -132,8 +140,8 @@ fn the_control_list_covers_every_float_parameter() {
     let floats = float_params(&p);
     assert_eq!(
         floats.len(),
-        51,
-        "the synth declares 51 FloatParams; the control list must name all of them"
+        53,
+        "the synth declares 53 FloatParams; the control list must name all of them"
     );
 
     // Every listed parameter is one `param_at` really exposes...
@@ -152,17 +160,18 @@ fn the_control_list_covers_every_float_parameter() {
     }
 
     // ...and the counts add up, which is what proves nothing was left out:
-    // 51 floats + 29 ints + 13 bools is the whole parameter list.
+    // 53 floats + 30 ints + 14 bools is the whole parameter list.
     //
     // Was 51/26/10 == 87 when this guard was written. ba todo #1324 (LFO tempo
-    // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, so the
-    // whole list is 93. The float count is deliberately unchanged — #1324 added
-    // no float — which is what makes this a real check rather than a tautology.
+    // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, taking
+    // it to 51/29/13 == 93. The new-mod-sources work added the `ModSource::
+    // SampleHold` generator's own clock (`mod_sh_rate`/`mod_sh_slew` floats,
+    // `mod_sh_sync` bool, `mod_sh_division` int), taking it to 53/30/14 == 97.
     let mut ids: Vec<&str> = floats.iter().map(|(_, p)| p.id()).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 51, "the control list repeats a parameter");
-    assert_eq!(51 + 29 + 13, PARAM_COUNT);
+    assert_eq!(ids.len(), 53, "the control list repeats a parameter");
+    assert_eq!(53 + 30 + 14, PARAM_COUNT);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +226,8 @@ fn no_control_call_site_restates_a_param_fact() {
         }
     }
 
-    assert_eq!(knobs, 29, "expected 29 float knob cells across the five tabs");
-    assert_eq!(int_knobs, 3, "expected 3 plain int knob cells");
+    assert_eq!(knobs, 31, "expected 31 float knob cells across the five tabs");
+    assert_eq!(int_knobs, 4, "expected 4 plain int knob cells");
     assert_eq!(sliders, 2, "expected the balance and mod-amount sliders");
 }
 
@@ -498,6 +507,9 @@ fn every_knob_used_to_reset_to_its_range_minimum() {
         "lfo1.rate".into(),
         "lfo2.rate".into(),
         "lfo3.rate".into(),
+        // Same shape as the three above: default 1.0 Hz against a 0.01 Hz
+        // minimum.
+        "mod_sh.rate".into(),
         "master_volume".into(),
         "mod_env.attack".into(),
         "mod_env.decay".into(),
@@ -556,8 +568,8 @@ fn the_declared_skew_reaches_the_arc() {
         }
     }
     assert_eq!(
-        skewed, 15,
-        "15 float params declare a skew the old editor ignored"
+        skewed, 16,
+        "16 float params declare a skew the old editor ignored"
     );
 }
 

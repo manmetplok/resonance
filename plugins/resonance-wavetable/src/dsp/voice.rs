@@ -121,6 +121,17 @@ pub struct Voice {
     // `mod_dirty`); read by-value per sample inside the render loop.
     pub cached_mods: crate::dsp::modulation::ModState,
 
+    // Drawn at trigger, held for the note's life: backs both
+    // `ModSource::RandomBipolar` (read as-is) and `RandomUnipolar` (remapped
+    // in `evaluate_mod_matrix`). Not redrawn by `legato()`, for the same
+    // reason velocity isn't touched there — changing it under a held note
+    // would step the modulation mid-note.
+    pub random_value: f32,
+
+    // ±1.0, flipped by the engine on every fresh trigger; backs
+    // `ModSource::Alternate`. Also left alone by `legato()`.
+    pub alternate_value: f32,
+
     // Guards the per-unison `OscSetup` caches. The render loop rebuilds them
     // when this is set, or when `current_pitch` has moved away from
     // `osc_setup_pitch` (i.e. portamento is gliding). Set on trigger and
@@ -158,6 +169,8 @@ impl Voice {
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
+            random_value: 0.0,
+            alternate_value: 1.0,
             osc_setup_dirty: true,
             osc_setup_pitch: f32::NAN,
             last_filter_cutoff: 8000.0,
@@ -184,6 +197,8 @@ impl Voice {
         lfo1_retrigger: bool,
         lfo2_retrigger: bool,
         lfo3_retrigger: bool,
+        random_value: f32,
+        alternate_value: f32,
     ) {
         let was_idle = self.state == VoiceState::Idle;
         self.state = VoiceState::Playing;
@@ -198,6 +213,8 @@ impl Voice {
 
         self.amp_env.trigger();
         self.mod_env.trigger();
+        self.random_value = random_value;
+        self.alternate_value = alternate_value;
 
         if lfo1_retrigger {
             self.lfo1.reset_phase();

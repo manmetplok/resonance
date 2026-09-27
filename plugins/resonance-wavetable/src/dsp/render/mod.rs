@@ -79,7 +79,7 @@ impl SynthEngine {
         for sample_id in 0..frames {
             let triggered_here =
                 self.drain_events(sample_id, &plan, params, events, &mut next_event);
-            let ctx = self.advance_global_lfos(&snap, sample_id, triggered_here);
+            let ctx = self.advance_global_lfos(&snap, &plan, sample_id, triggered_here);
 
             let (mix_l, mix_r) = self.mix_voices(&snap, &plan, &ctx);
             let (mix_l, mix_r) = self.apply_block_effects(&snap, mix_l, mix_r);
@@ -169,6 +169,7 @@ impl SynthEngine {
     fn advance_global_lfos(
         &mut self,
         snap: &ParamSnapshot,
+        plan: &BlockPlan,
         sample_id: usize,
         triggered_here: bool,
     ) -> SampleCtx {
@@ -184,14 +185,28 @@ impl SynthEngine {
         } else {
             [0.0, 0.0, 0.0]
         };
+        // Same gate as the three LFOs above: the mod matrix (the only
+        // consumer) only ever reads this on a sample where `lfo_vals_needed`
+        // holds, so there is nothing to gain from computing it otherwise --
+        // and `sample_hold_val` mirrors `global_lfo` in zeroing when unread.
+        let sample_hold_val = if lfo_vals_needed {
+            self.mod_sample_hold.value()
+        } else {
+            0.0
+        };
         self.global_lfo1.advance(snap.lfo1_shape, &mut self.rng);
         self.global_lfo2.advance(snap.lfo2_shape, &mut self.rng);
         self.global_lfo3.advance(snap.lfo3_shape, &mut self.rng);
+        // Draws from `mod_rng`, never `rng` -- see the field comment on
+        // `SynthEngine::mod_rng`.
+        self.mod_sample_hold
+            .advance(&mut self.mod_rng, plan.sh_slew_coeff);
 
         SampleCtx {
             coeff_tick,
             lfo_vals_needed,
             global_lfo,
+            sample_hold_val,
         }
     }
 

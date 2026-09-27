@@ -10,6 +10,7 @@
     "lfo1_shape": 0, "lfo1_rate": 1.0, "lfo1_depth": 0.0, "lfo1_retrigger": 1, "lfo1_sync": 0, "lfo1_division": 7,
     "lfo2_shape": 0, "lfo2_rate": 2.0, "lfo2_depth": 0.0, "lfo2_retrigger": 1, "lfo2_sync": 0, "lfo2_division": 7,
     "lfo3_shape": 0, "lfo3_rate": 0.5, "lfo3_depth": 0.0, "lfo3_retrigger": 0, "lfo3_sync": 0, "lfo3_division": 7,
+    "mod_sh_rate": 1.0, "mod_sh_slew": 0.0, "mod_sh_sync": 0, "mod_sh_division": 7,
     "mod_1_src": 4, "mod_1_dst": 5, "mod_1_amt": 0.5,
     "mod_2_src": 0, "mod_2_dst": 0, "mod_2_amt": 0.0,
     "mod_3_src": 0, "mod_3_dst": 0, "mod_3_amt": 0.0,

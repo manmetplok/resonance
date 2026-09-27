@@ -34,6 +34,13 @@ pub struct SynthEngine {
     pub global_lfo2: crate::dsp::lfo::MultiLfo,
     pub global_lfo3: crate::dsp::lfo::MultiLfo,
 
+    // `ModSource::SampleHold`'s own generator: a global "fifth LFO" shared
+    // by every voice (see `dsp::lfo::SampleHoldGen`).
+    pub mod_sample_hold: crate::dsp::lfo::SampleHoldGen,
+
+    // Flips ±1.0 on every fresh voice trigger, feeding `ModSource::Alternate`.
+    mod_alternate: f32,
+
     // Wavetable data
     pub wavetables: Vec<Wavetable>,
 
@@ -41,8 +48,16 @@ pub struct SynthEngine {
     pub(crate) chorus: Chorus,
     pub(crate) delay: StereoDelay,
 
-    // RNG for S&H LFO
+    // RNG for the LFOs' own S&H *shape* (`LfoShape::SampleAndHold`).
     pub(crate) rng: SimpleRng,
+
+    // Separate RNG for the newer modulation sources (`ModSource::
+    // RandomBipolar`/`RandomUnipolar`/`SampleHold`/`Alternate` draws from
+    // this, `Alternate` excepted -- it just flips). Kept apart from `rng`
+    // above so a note-on drawing a random value cannot shift the sample
+    // count the LFOs' own S&H shape consumes from *its* RNG -- that stream
+    // is pinned bit-exact by `render_block_regression.rs`.
+    pub(crate) mod_rng: SimpleRng,
 
     // Last note for portamento
     last_note: Option<u8>,
@@ -126,10 +141,15 @@ impl SynthEngine {
             global_lfo1: crate::dsp::lfo::MultiLfo::new(),
             global_lfo2: crate::dsp::lfo::MultiLfo::new(),
             global_lfo3: crate::dsp::lfo::MultiLfo::new(),
+            mod_sample_hold: crate::dsp::lfo::SampleHoldGen::new(),
+            // Starts negative so the first voice trigger's flip (see
+            // `note_on`) lands on +1.0.
+            mod_alternate: -1.0,
             wavetables: Vec::new(),
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
+            mod_rng: SimpleRng::new(1337),
             last_note: None,
             held: [0; HELD_NOTES],
             held_len: 0,
@@ -196,6 +216,8 @@ impl SynthEngine {
         self.global_lfo1.reset_phase();
         self.global_lfo2.reset_phase();
         self.global_lfo3.reset_phase();
+        self.mod_sample_hold.reset_phase();
+        self.mod_alternate = -1.0;
         self.chorus.reset();
         self.delay.reset();
     }
@@ -224,6 +246,13 @@ impl SynthEngine {
             self.last_note = Some(note);
             return;
         }
+
+        // Both are genuine triggers only, like the envelopes above -- a
+        // mono legato take-over (handled by the early return) neither
+        // redraws the random value nor flips the toggle.
+        self.mod_alternate = -self.mod_alternate;
+        let random_value = crate::dsp::lfo::random_bipolar(&mut self.mod_rng);
+
         voice.trigger(
             note,
             velocity,
@@ -236,6 +265,8 @@ impl SynthEngine {
             params.lfo1.retrigger.value() && !params.lfo1.sync.value(),
             params.lfo2.retrigger.value() && !params.lfo2.sync.value(),
             params.lfo3.retrigger.value() && !params.lfo3.sync.value(),
+            random_value,
+            self.mod_alternate,
         );
 
         self.last_note = Some(note);

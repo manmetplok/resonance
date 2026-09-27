@@ -78,6 +78,14 @@ pub(crate) struct ParamSnapshot {
     pub glide_coeff: f32,
     pub mod_slots: [ModSlot; NUM_MOD_SLOTS],
 
+    /// The `ModSource::SampleHold` generator's own clock, same shape as the
+    /// three LFOs above but with no per-voice retrigger state (`mod_sh_mode`
+    /// is only ever `Free` or `Sync`).
+    pub mod_sh_rate: f32,
+    pub mod_sh_slew: f32,
+    pub mod_sh_mode: LfoMode,
+    pub mod_sh_division: SyncDivision,
+
     pub dist_enabled: bool,
     pub dist_drive: f32,
     pub dist_mix: f32,
@@ -179,6 +187,15 @@ impl ParamSnapshot {
 
             glide_coeff,
             mod_slots,
+
+            mod_sh_rate: params.mod_sh.rate.value(),
+            mod_sh_slew: params.mod_sh.slew.value(),
+            mod_sh_mode: if params.mod_sh.sync.value() {
+                LfoMode::Sync
+            } else {
+                LfoMode::Free
+            },
+            mod_sh_division: SyncDivision::from_int(params.mod_sh.division.value()),
 
             dist_enabled: params.distortion.enabled.value(),
             dist_drive: params.distortion.drive.value(),

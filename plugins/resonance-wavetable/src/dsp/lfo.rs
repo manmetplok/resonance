@@ -402,3 +402,115 @@ impl Default for MultiLfo {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// New modulation sources (ba: new-mod-sources)
+// ---------------------------------------------------------------------------
+
+/// Uniform draw in -1..1. The shared helper behind `ModSource::RandomBipolar`
+/// / `RandomUnipolar` (one draw per note-on, remapped for the unipolar case
+/// in `evaluate_mod_matrix`) and [`SampleHoldGen`]'s own latch.
+#[inline]
+pub(crate) fn random_bipolar(rng: &mut SimpleRng) -> f32 {
+    (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0
+}
+
+/// Longest time constant a fully-clockwise `mod_sh_slew` maps to. Chosen so
+/// the slider's far end is a genuinely slow drift (drone territory) without
+/// taking so long to settle that the source looks stuck.
+const MAX_SH_SLEW_SECONDS: f32 = 3.0;
+
+/// One-pole slew coefficient for `mod_sh_slew`'s 0..1 range. 0 snaps `value`
+/// straight to `target` (the classic stepped S&H); the rest of the range
+/// scales a lowpass time constant up to [`MAX_SH_SLEW_SECONDS`].
+pub(crate) fn sh_slew_coeff(slew: f32, sample_rate: f32) -> f32 {
+    if slew <= 0.0 {
+        1.0
+    } else {
+        let time_const_s = slew * MAX_SH_SLEW_SECONDS;
+        1.0 - (-1.0 / (time_const_s * sample_rate)).exp()
+    }
+}
+
+/// Global generator behind `ModSource::SampleHold`.
+///
+/// Distinct from an LFO's own [`LfoShape::SampleAndHold`] *shape*, which
+/// stairsteps that LFO's own rate/depth/retrigger and stays scoped to
+/// whichever LFO has it selected. This is its own clock — its own
+/// `mod_sh_rate`/`mod_sh_sync`/`mod_sh_division` — so it can be routed from
+/// any matrix slot independently of LFO 1-3, plus a slew control (absent
+/// from the LFO shape) that turns the stepped output into a drifting one.
+///
+/// One instance lives on the engine and is shared by every voice, like the
+/// free-running LFOs: the matrix already gives a patch eight independent
+/// slots, so a shared drifting source is more useful than per-voice
+/// retrigger would be here, at a fraction of the state.
+#[derive(Clone)]
+pub struct SampleHoldGen {
+    phase: f32,
+    phase_inc: f32,
+    prev_phase: f32,
+    target: f32,
+    value: f32,
+}
+
+impl SampleHoldGen {
+    pub fn new() -> Self {
+        Self {
+            phase: 0.0,
+            phase_inc: 0.0,
+            prev_phase: 0.0,
+            target: 0.0,
+            value: 0.0,
+        }
+    }
+
+    pub fn set_rate(&mut self, rate_hz: f32, sample_rate: f32) {
+        self.phase_inc = rate_hz / sample_rate;
+    }
+
+    pub fn reset_phase(&mut self) {
+        self.phase = 0.0;
+        self.prev_phase = 0.0;
+    }
+
+    /// Jump the phase to an absolute position without treating it as a
+    /// cycle wrap — see [`MultiLfo::set_phase`], which this mirrors for the
+    /// tempo-synced case.
+    pub fn set_phase(&mut self, phase: f32) {
+        let p = if phase.is_finite() {
+            phase - phase.floor()
+        } else {
+            0.0
+        };
+        self.phase = p;
+        self.prev_phase = p;
+    }
+
+    /// Current (possibly slewed) value, in -1..1, without advancing.
+    #[inline]
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    /// Advance one sample: latch a new random target on every phase wrap,
+    /// then slide `value` toward it by `slew_coeff` (1.0 snaps instantly —
+    /// see [`sh_slew_coeff`]).
+    #[inline]
+    pub fn advance(&mut self, rng: &mut SimpleRng, slew_coeff: f32) {
+        self.prev_phase = self.phase;
+        self.phase += self.phase_inc;
+        self.phase -= self.phase.floor();
+
+        if self.phase < self.prev_phase {
+            self.target = random_bipolar(rng);
+        }
+        self.value += (self.target - self.value) * slew_coeff;
+    }
+}
+
+impl Default for SampleHoldGen {
+    fn default() -> Self {
+        Self::new()
+    }
+}

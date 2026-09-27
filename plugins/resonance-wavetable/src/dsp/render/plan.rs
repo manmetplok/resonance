@@ -53,6 +53,13 @@ pub(crate) struct BlockPlan {
     /// implies at the host's tempo (ba todo #1324).
     pub lfo_rates: [f32; 3],
 
+    /// One-pole slew coefficient for the `ModSource::SampleHold` generator,
+    /// resolved from `mod_sh_slew` once per block -- see
+    /// `dsp::lfo::sh_slew_coeff`. Hoisted out of the per-sample loop for the
+    /// same reason `amp_coeffs`/`mod_coeffs` are: it is one `exp()` shared
+    /// by the whole block rather than one per sample.
+    pub sh_slew_coeff: f32,
+
     pub sample_rate: f32,
 }
 
@@ -101,6 +108,17 @@ impl SynthEngine {
             self.global_lfo3.set_phase(p);
         }
 
+        // Same treatment for the S&H generator's own clock: `mod_sh_mode` is
+        // `Sync`/`Free` only (it has no per-voice retrigger to be `Retrig`
+        // for), but it is otherwise exactly the LFOs' tempo-sync path.
+        let sh_rate_hz =
+            transport.lfo_rate_hz(snap.mod_sh_mode, snap.mod_sh_division, snap.mod_sh_rate);
+        self.mod_sample_hold.set_rate(sh_rate_hz, self.sample_rate);
+        if let Some(p) = transport.lfo_anchor_phase(snap.mod_sh_mode, snap.mod_sh_division) {
+            self.mod_sample_hold.set_phase(p);
+        }
+        let sh_slew_coeff = crate::dsp::lfo::sh_slew_coeff(snap.mod_sh_slew, self.sample_rate);
+
         self.refresh_active();
         self.seed_voice_lfo_rates(lfo_rates, true);
 
@@ -127,6 +145,7 @@ impl SynthEngine {
                 self.sample_rate,
             ),
             lfo_rates,
+            sh_slew_coeff,
             sample_rate: self.sample_rate,
         }
     }

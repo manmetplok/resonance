@@ -21,6 +21,7 @@ pub mod lfo;
 pub mod mod_slot;
 pub mod modulation;
 pub mod osc;
+pub mod sample_hold;
 pub mod unison;
 
 pub use env::EnvParams;
@@ -29,6 +30,7 @@ pub use fx::{ChorusParams, DelayParams, DistortionParams};
 pub use lfo::LfoParams;
 pub use mod_slot::ModSlotParams;
 pub use osc::OscParams;
+pub use sample_hold::SampleHoldParams;
 pub use unison::UnisonParams;
 
 // ---------------------------------------------------------------------------
@@ -51,6 +53,7 @@ pub struct WavetableParams {
     pub lfo2: LfoParams,
     pub lfo3: LfoParams,
     pub mod_slots: Vec<ModSlotParams>,
+    pub mod_sh: SampleHoldParams,
     pub chorus: ChorusParams,
     pub delay: DelayParams,
     pub distortion: DistortionParams,
@@ -59,11 +62,14 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs. Parameters are addressed by string id everywhere that
-/// persists (presets, saved state, CLAP param ids are hashed from the id),
-/// so inserting into the middle of [`WavetableParams::param_at`] only
-/// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+/// three LFOs (-> 93), then four new-mod-sources params (`mod_sh_rate`,
+/// `mod_sh_slew`, `mod_sh_sync`, `mod_sh_division`) for the
+/// `ModSource::SampleHold` generator (-> 97). Parameters are addressed by
+/// string id everywhere that persists (presets, saved state, CLAP param ids
+/// are hashed from the id), so inserting into the middle of
+/// [`WavetableParams::param_at`] only changes the order a host lists them
+/// in.
+pub const PARAM_COUNT: usize = 97;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -134,6 +140,7 @@ impl WavetableParams {
 
             // Modulation matrix
             mod_slots: (0..NUM_MOD_SLOTS).map(ModSlotParams::new).collect(),
+            mod_sh: SampleHoldParams::new(),
 
             // Effects
             chorus: ChorusParams::new(),
@@ -238,6 +245,11 @@ impl WavetableParams {
             90 => &self.distortion.enabled,
             91 => &self.distortion.drive,
             92 => &self.distortion.mix,
+            // Sample & Hold source (93..97)
+            93 => &self.mod_sh.rate,
+            94 => &self.mod_sh.slew,
+            95 => &self.mod_sh.sync,
+            96 => &self.mod_sh.division,
             _ => &self.master_volume, // fallback
         }
     }
