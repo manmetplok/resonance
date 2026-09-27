@@ -74,6 +74,11 @@ criterion.workspace = true
 name = "render_path"
 harness = false
 
+# Render-pool stress project with real plugins (needs scripts/bundle.sh).
+[[bench]]
+name = "render_pool"
+harness = false
+
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
 # `pthread_{get,set}schedparam` and `gettid` for the render pool's
