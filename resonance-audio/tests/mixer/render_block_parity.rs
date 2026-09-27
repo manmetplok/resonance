@@ -312,8 +312,11 @@ fn bounce_block_output_is_bit_identical() {
 /// and the VU peak writes run.
 #[test]
 fn live_blocks_output_is_bit_identical() {
-    // Re-blessed for FU-G3a (see the bounce test).
-    const EXPECTED: u64 = 0x046c_2eac_0a19_102d;
+    // Re-blessed for FU-G3a (see the bounce test), then again for FU-B6a:
+    // the feeder bus's first live block now renders flat at its target
+    // gain instead of ramping in from the construction-time 0
+    // (0x046c_2eac_0a19_102d → this).
+    const EXPECTED: u64 = 0xdfb3_aa2e_a15e_6d2c;
 
     let (tracks, busses, clips, sends) = project();
     // The live path has no automation snapshot in the bench harness, so

@@ -25,6 +25,8 @@ mod automation_live_value;
 mod automation_render;
 #[path = "mixer/aux_send_render.rs"]
 mod aux_send_render;
+#[path = "mixer/bus_first_block_gain.rs"]
+mod bus_first_block_gain;
 #[path = "mixer/bypass_settle_race.rs"]
 mod bypass_settle_race;
 #[path = "mixer/clip_fade_gain_render.rs"]

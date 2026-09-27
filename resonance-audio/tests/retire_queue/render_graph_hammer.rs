@@ -599,12 +599,16 @@ impl Engine {
                     self.bus_born.insert(id, self.rendered.load(Ordering::Acquire));
                 }
                 // The base track itself goes through a scratch bus — one
-                // that has rendered a block already. A bus's gain ramp
-                // starts from 0 (`BusRuntime`'s last gains), so a track
-                // re-routed onto a bus in its very first block fades in
-                // over that block: a one-block dip that is the mixer's
-                // declick, not a publishing fault (reported as a
-                // follow-up).
+                // that has rendered a block already. FU-B6a fixed the
+                // dip this used to guard (a new bus's last gains started
+                // at 0, so a track routed onto it during its very first
+                // rendered block ramped in from silence); the "aged"
+                // requirement stays because routing onto a bus born this
+                // exact pass can still, rarely, coincide with an aligned
+                // loop-seam block (the seam's zero-frame tail sub-render)
+                // and shave a hair off the base level under heavy
+                // contention — not reproduced in isolation, mechanism not
+                // pinned yet (FU-B6b).
                 let now = self.rendered.load(Ordering::Acquire);
                 let aged = busses.iter().copied().find(|b| {
                     self.bus_born.get(b).is_some_and(|&born| born + 2 <= now)
