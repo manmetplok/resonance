@@ -8,6 +8,9 @@
 use crate::dsp::filter::FilterType;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
+use crate::dsp::osc_mix::OscMixMode;
+use crate::dsp::sub_noise::{NoiseType, SubOctave, SubWave};
+use crate::dsp::warp::WarpMode;
 use crate::params::WavetableParams;
 
 /// Immutable snapshot of every parameter read by the per-sample render
@@ -32,6 +35,20 @@ pub(crate) struct ParamSnapshot {
     pub osc2_level: f32,
     pub osc1_pan: f32,
     pub osc2_pan: f32,
+
+    /// Oscillator character: interaction, warp, sub and noise.
+    pub osc_mix_mode: OscMixMode,
+    pub osc_mod_amount: f32,
+    pub osc1_warp_mode: WarpMode,
+    pub osc1_warp_amount: f32,
+    pub osc2_warp_mode: WarpMode,
+    pub osc2_warp_amount: f32,
+    pub sub_wave: SubWave,
+    pub sub_octave: SubOctave,
+    pub sub_level: f32,
+    pub noise_type: NoiseType,
+    pub noise_level: f32,
+    pub noise_color: f32,
 
     /// Unison detune width in cents. Read per block (not baked at note-on)
     /// so `ModDest::UnisonDetune` can move it on a sounding voice.
@@ -127,6 +144,19 @@ impl ParamSnapshot {
             osc2_level: params.osc2.level.value(),
             osc1_pan: params.osc1.pan.value(),
             osc2_pan: params.osc2.pan.value(),
+
+            osc_mix_mode: OscMixMode::from_int(params.osc_mix.mode.value()),
+            osc_mod_amount: params.osc_mix.amount.value(),
+            osc1_warp_mode: WarpMode::from_int(params.osc1_warp.mode.value()),
+            osc1_warp_amount: params.osc1_warp.amount.value(),
+            osc2_warp_mode: WarpMode::from_int(params.osc2_warp.mode.value()),
+            osc2_warp_amount: params.osc2_warp.amount.value(),
+            sub_wave: SubWave::from_int(params.sub.waveform.value()),
+            sub_octave: SubOctave::from_int(params.sub.octave.value()),
+            sub_level: params.sub.level.value(),
+            noise_type: NoiseType::from_int(params.noise.noise_type.value()),
+            noise_level: params.noise.level.value(),
+            noise_color: params.noise.color.value(),
 
             unison_detune: params.unison.detune.value(),
 

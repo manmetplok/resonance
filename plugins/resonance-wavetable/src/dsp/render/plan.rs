@@ -10,7 +10,10 @@ use resonance_plugin::TempoInfo;
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::envelope::EnvCoeffs;
 use crate::dsp::lfo::TransportPlan;
+use crate::dsp::osc_mix::OscMixMode;
 use crate::dsp::render::snapshot::ParamSnapshot;
+use crate::dsp::sub_noise::{NoiseType, SubWave, NOISE_TILT_HZ};
+use crate::dsp::warp::WarpMode;
 use crate::dsp::voice::VoiceState;
 
 pub(crate) struct BlockPlan {
@@ -53,7 +56,70 @@ pub(crate) struct BlockPlan {
     /// implies at the host's tempo (ba todo #1324).
     pub lfo_rates: [f32; 3],
 
+    pub character: CharacterPlan,
+
     pub sample_rate: f32,
+}
+
+/// Block-constant switches for the oscillator-character features. All of
+/// them are off for a patch that uses none, which keeps such a patch on
+/// the original oscillator kernel — not an equivalent one, the same one —
+/// and skips the sub/noise stage entirely.
+pub(crate) struct CharacterPlan {
+    /// Take the interaction/warp kernel: an interaction mode other than
+    /// `Sum`, or a warp mode selected on either oscillator. A warp mode at
+    /// amount zero still takes it (the amount is modulatable per voice); it
+    /// then renders the same samples as the default kernel.
+    pub kernel: bool,
+    pub mix_mode: OscMixMode,
+    /// Warp modes as selected; the per-voice amount decides whether each
+    /// resolves to anything.
+    pub osc1_warp: WarpMode,
+    pub osc2_warp: WarpMode,
+
+    pub sub_active: bool,
+    pub sub_wave: SubWave,
+    pub sub_level: f32,
+    pub noise_active: bool,
+    pub noise_type: NoiseType,
+    pub noise_level: f32,
+    pub noise_color: f32,
+    /// One-pole coefficient for [`NOISE_TILT_HZ`] at the running rate.
+    pub noise_tilt_coeff: f32,
+    /// Constant-power centre gains for the (mono) sub and noise.
+    pub centre_l: f32,
+    pub centre_r: f32,
+}
+
+impl CharacterPlan {
+    fn resolve(snap: &ParamSnapshot, sample_rate: f32) -> Self {
+        let kernel = snap.osc_mix_mode != OscMixMode::Sum
+            || snap.osc1_warp_mode != WarpMode::Off
+            || snap.osc2_warp_mode != WarpMode::Off;
+        let noise_active = snap.noise_level > 0.0;
+        let noise_tilt_coeff = if noise_active {
+            1.0 - (-std::f32::consts::TAU * NOISE_TILT_HZ / sample_rate).exp()
+        } else {
+            0.0
+        };
+        let (centre_l, centre_r) = resonance_dsp::constant_power_pan(0.0);
+        Self {
+            kernel,
+            mix_mode: snap.osc_mix_mode,
+            osc1_warp: snap.osc1_warp_mode,
+            osc2_warp: snap.osc2_warp_mode,
+            sub_active: snap.sub_level > 0.0,
+            sub_wave: snap.sub_wave,
+            sub_level: snap.sub_level,
+            noise_active,
+            noise_type: snap.noise_type,
+            noise_level: snap.noise_level,
+            noise_color: snap.noise_color,
+            noise_tilt_coeff,
+            centre_l,
+            centre_r,
+        }
+    }
 }
 
 impl SynthEngine {
@@ -127,6 +193,7 @@ impl SynthEngine {
                 self.sample_rate,
             ),
             lfo_rates,
+            character: CharacterPlan::resolve(snap, self.sample_rate),
             sample_rate: self.sample_rate,
         }
     }

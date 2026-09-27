@@ -14,6 +14,7 @@ use resonance_plugin::*;
 
 use crate::dsp::modulation::NUM_MOD_SLOTS;
 
+pub mod character;
 pub mod env;
 pub mod filter;
 pub mod fx;
@@ -23,6 +24,7 @@ pub mod modulation;
 pub mod osc;
 pub mod unison;
 
+pub use character::{NoiseParams, OscMixParams, SubParams, WarpParams};
 pub use env::EnvParams;
 pub use filter::FilterParams;
 pub use fx::{ChorusParams, DelayParams, DistortionParams};
@@ -54,6 +56,11 @@ pub struct WavetableParams {
     pub chorus: ChorusParams,
     pub delay: DelayParams,
     pub distortion: DistortionParams,
+    pub osc_mix: OscMixParams,
+    pub osc1_warp: WarpParams,
+    pub osc2_warp: WarpParams,
+    pub sub: SubParams,
+    pub noise: NoiseParams,
 }
 
 /// Total number of parameters.
@@ -63,7 +70,11 @@ pub struct WavetableParams {
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+///
+/// 93 → 105: oscillator interaction (mode + amount), a warp mode + amount
+/// per oscillator, the sub oscillator (waveform, octave, level) and the
+/// noise source (type, level, colour).
+pub const PARAM_COUNT: usize = 105;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -139,6 +150,13 @@ impl WavetableParams {
             chorus: ChorusParams::new(),
             delay: DelayParams::new(),
             distortion: DistortionParams::new(),
+
+            // Oscillator character. All inert by default.
+            osc_mix: OscMixParams::new(),
+            osc1_warp: WarpParams::new(1),
+            osc2_warp: WarpParams::new(2),
+            sub: SubParams::new(),
+            noise: NoiseParams::new(),
         }
     }
 
@@ -238,6 +256,19 @@ impl WavetableParams {
             90 => &self.distortion.enabled,
             91 => &self.distortion.drive,
             92 => &self.distortion.mix,
+            // Oscillator character (93..105)
+            93 => &self.osc_mix.mode,
+            94 => &self.osc_mix.amount,
+            95 => &self.osc1_warp.mode,
+            96 => &self.osc1_warp.amount,
+            97 => &self.osc2_warp.mode,
+            98 => &self.osc2_warp.amount,
+            99 => &self.sub.waveform,
+            100 => &self.sub.octave,
+            101 => &self.sub.level,
+            102 => &self.noise.noise_type,
+            103 => &self.noise.level,
+            104 => &self.noise.color,
             _ => &self.master_volume, // fallback
         }
     }

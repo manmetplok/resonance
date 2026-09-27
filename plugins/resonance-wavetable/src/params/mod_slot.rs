@@ -1,5 +1,7 @@
 use resonance_plugin::*;
 
+use crate::dsp::modulation::ModDest;
+
 pub struct ModSlotParams {
     pub source: IntParam,
     pub destination: IntParam,
@@ -19,7 +21,17 @@ impl ModSlotParams {
 
         Self {
             source: IntParam::new(src_id, src_name, 0, IntRange::Linear { min: 0, max: 8 }),
-            destination: IntParam::new(dst_id, dst_name, 0, IntRange::Linear { min: 0, max: 11 }),
+            // Spans the label table rather than a literal, so appending a
+            // destination cannot leave it unreachable from the picker.
+            destination: IntParam::new(
+                dst_id,
+                dst_name,
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: (ModDest::LABELS.len() - 1) as i32,
+                },
+            ),
             amount: FloatParam::new(
                 amt_id,
                 amt_name,

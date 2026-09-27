@@ -4,8 +4,14 @@
 //! neighbour frames drawn at low alpha when `position` sits between frames
 //! so the morph is visible. A vertical marker shows the post-modulation
 //! live osc position coming from the audio thread.
+//!
+//! With a warp selected the main trace is the *warped* cycle — the frame
+//! read through the same [`Warp`] phase map the oscillator uses — and the
+//! unwarped frame stays behind it at low alpha for reference.
 
 use plugin_gui_core::egui;
+
+use crate::dsp::warp::Warp;
 
 use crate::editor::display_waves;
 use crate::editor::theme;
@@ -16,13 +22,15 @@ use crate::editor::theme;
 /// `position` is the raw param value (0..1) for frame morph position.
 /// `live_position` is the post-mod osc position from the viz snapshot, used
 /// to draw the live marker; pass the same value as `position` if you don't
-/// want a marker.
+/// want a marker. `warp` is the oscillator's resolved warp (the default,
+/// `Off`, draws the frame as stored).
 pub fn draw(
     ui: &mut egui::Ui,
     rect: egui::Rect,
     wavetable_idx: usize,
     position: f32,
     live_position: f32,
+    warp: &Warp,
 ) {
     let painter = ui.painter_at(rect);
 
@@ -83,6 +91,18 @@ pub fn draw(
         blended[i] = samples_lo[i] * (1.0 - t) + samples_hi[i] * t;
     }
 
+    let blended = if warp.is_off() {
+        blended
+    } else {
+        draw_wave(
+            &painter,
+            rect,
+            &blended,
+            egui::Stroke::new(1.0, theme::ACCENT.linear_multiply(0.3)),
+        );
+        warped(&blended, warp)
+    };
+
     // Glow: wide low-alpha stroke first, then sharp full-alpha on top.
     draw_wave(
         &painter,
@@ -107,6 +127,29 @@ pub fn draw(
         ],
         egui::Stroke::new(1.0, theme::WARN),
     );
+}
+
+/// Resample one displayed cycle through `warp`: point `i` shows the frame at
+/// the warped phase of `i / n`, linearly interpolated between the display
+/// points (cyclically, as the oscillator reads its table) and scaled by the
+/// warp's gain.
+pub fn warped(samples: &[f32], warp: &Warp) -> Vec<f32> {
+    let n = samples.len();
+    if n < 2 {
+        return samples.to_vec();
+    }
+    // `display_samples` puts point `j` at phase `j / n`.
+    let len = n as f64;
+    (0..n)
+        .map(|i| {
+            let (q, gain) = warp.apply(i as f64 / len);
+            let pos = q.clamp(0.0, 1.0) * len;
+            let j = (pos as usize).min(n - 1);
+            let frac = (pos - j as f64) as f32;
+            let (a, b) = (samples[j], samples[(j + 1) % n]);
+            (a + frac * (b - a)) * gain
+        })
+        .collect()
 }
 
 fn draw_wave(painter: &egui::Painter, rect: egui::Rect, samples: &[f32], stroke: egui::Stroke) {

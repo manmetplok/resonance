@@ -20,11 +20,15 @@
 //!   engine ([`BlockPlan`]).
 //! * [`kernel`] — the per-voice, per-sample work, including the marked
 //!   oscillator kernel.
+//! * [`character`] — the oscillator-interaction/warp variant of that
+//!   kernel, and the sub and noise sources. Only patches that use them
+//!   reach it.
 //! * this module — the sample loop that drives them, the event drain, the
 //!   global LFOs, the effects chain and the post-block bookkeeping.
 //!
 //! Nothing below `render_block` allocates, locks, or dispatches virtually.
 
+mod character;
 mod kernel;
 mod plan;
 mod snapshot;

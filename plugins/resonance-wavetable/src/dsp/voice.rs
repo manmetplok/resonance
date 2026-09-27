@@ -3,6 +3,8 @@ use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
 use crate::dsp::lfo::MultiLfo;
 use crate::dsp::oscillator::TableTap;
+use crate::dsp::sub_noise::{NoiseGen, SubOsc};
+use crate::dsp::warp::Warp;
 
 pub const MAX_VOICES: usize = 32;
 pub const MAX_UNISON: usize = 7;
@@ -35,6 +37,18 @@ pub struct OscSetup {
     /// Constant-power pan gains for this sub-voice.
     pub pan_l: f32,
     pub pan_r: f32,
+    /// Phase warp resolved at control rate; `Off` unless a warp mode is
+    /// selected *and* its amount is non-zero.
+    pub warp: Warp,
+    /// Height of the step a wrap-jumping warp (Mirror, Formant) puts at the
+    /// cycle wrap: the warped value at phase 0 minus the one at phase 1.
+    /// Fixed per setup, so the per-sample polyBLEP needs no extra reads.
+    pub wrap_jump: f32,
+    /// Warped value at phase 0: what a hard-synced slave restarts at.
+    pub zero_value: f32,
+    /// How far the warped wave moves over the first sample after phase 0:
+    /// the slope a restarted slave leaves with, for the sync polyBLAMP.
+    pub zero_slope: f32,
 }
 
 /// One unison sub-voice: owns its own oscillator phases.
@@ -54,6 +68,12 @@ pub struct UnisonSubVoice {
     /// Control-rate cached oscillator setup, refreshed by the render loop.
     pub osc1_setup: OscSetup,
     pub osc2_setup: OscSetup,
+    /// polyBLEP residual owed to each oscillator's next sample by a
+    /// discontinuity predicted during this one (sync reset, warp wrap jump,
+    /// quantize step). Only the interaction/warp kernel writes these; they
+    /// are zero on the default path.
+    pub osc1_carry: f32,
+    pub osc2_carry: f32,
 }
 
 impl UnisonSubVoice {
@@ -65,13 +85,27 @@ impl UnisonSubVoice {
             pan_offset: 0.0,
             osc1_setup: OscSetup::default(),
             osc2_setup: OscSetup::default(),
+            osc1_carry: 0.0,
+            osc2_carry: 0.0,
         }
     }
 
     pub fn reset(&mut self) {
         self.osc1_phase = 0.0;
         self.osc2_phase = 0.0;
+        self.osc1_carry = 0.0;
+        self.osc2_carry = 0.0;
     }
+}
+
+/// Per-voice oscillator-interaction amounts, resolved at control rate with
+/// the [`OscSetup`]s (the amount is a modulation destination).
+#[derive(Clone, Copy, Default)]
+pub struct MixSetup {
+    /// Phase-modulation depth in cycles per unit of osc2 output.
+    pub pm_depth: f64,
+    /// Ring-mod wet amount, 0..=1.
+    pub ring_wet: f32,
 }
 
 /// A single polyphonic voice.
@@ -102,6 +136,14 @@ pub struct Voice {
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
     pub unison_count: usize,
+
+    // Oscillator interaction, the sub oscillator and the noise source. The
+    // sub's increment follows osc1's pitch, so it is refreshed alongside
+    // the `OscSetup` caches.
+    pub mix_setup: MixSetup,
+    pub sub: SubOsc,
+    pub sub_inc: f64,
+    pub noise: NoiseGen,
 
     // Set by `trigger()`, cleared by the render loop the first time the
     // voice runs through the filter stage. Used to force an immediate
@@ -155,6 +197,10 @@ impl Voice {
             filter_r: StateVariableFilter::new(),
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
+            mix_setup: MixSetup::default(),
+            sub: SubOsc::default(),
+            sub_inc: 0.0,
+            noise: NoiseGen::default(),
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
@@ -211,6 +257,8 @@ impl Voice {
 
         self.filter_l.clear();
         self.filter_r.clear();
+        self.sub = SubOsc::default();
+        self.noise = NoiseGen::default();
         self.filter_dirty = true;
         self.mod_dirty = true;
         self.osc_setup_dirty = true;

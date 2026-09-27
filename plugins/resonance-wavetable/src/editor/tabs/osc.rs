@@ -1,14 +1,17 @@
-//! OSC tab: wavetable viewer + osc selector + per-osc controls + unison.
+//! OSC tab: wavetable viewer + osc selector + per-osc controls (with the
+//! per-osc warp and the oscillator interaction), then unison, sub/noise and
+//! global.
 
 use plugin_gui_core::{egui, widgets};
 
+use crate::dsp::warp::{Warp, WarpMode};
 use crate::editor::display_waves;
 use crate::editor::theme;
 use crate::editor::viz::{frame_strip, waveform};
 use crate::editor::WavetableEditorApp;
 use resonance_plugin::param::Param;
 
-use super::{float_knob, float_slider, int_knob, readout};
+use super::{choice_cycle, choice_segmented, float_knob, float_slider, int_knob, readout};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     ui.spacing_mut().item_spacing = egui::vec2(12.0, 10.0);
@@ -21,10 +24,11 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
 
     ui.add_space(2.0);
 
-    // Bottom row: Unison + Global cards.
-    ui.columns(2, |cols| {
+    // Bottom row: Unison, Sub · Noise and Global cards.
+    ui.columns(3, |cols| {
         draw_unison_card(&mut cols[0], app);
-        draw_global_card(&mut cols[1], app);
+        draw_sub_noise_card(&mut cols[1], app);
+        draw_global_card(&mut cols[2], app);
     });
 }
 
@@ -85,19 +89,25 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             });
         });
 
-        let (osc_params, live_pos) = if app.selected_osc == 0 {
-            (&app.params.osc1, app.snapshot.osc1_position_live)
+        let (osc_params, warp_params, live_pos) = if app.selected_osc == 0 {
+            (&app.params.osc1, &app.params.osc1_warp, app.snapshot.osc1_position_live)
         } else {
-            (&app.params.osc2, app.snapshot.osc2_position_live)
+            (&app.params.osc2, &app.params.osc2_warp, app.snapshot.osc2_position_live)
         };
 
         let wt_idx = osc_params.wavetable.value() as usize;
         let position = osc_params.position.value();
+        // The display runs the frame through the same phase map the DSP
+        // reads with, so the drawn cycle is the warped one.
+        let warp = Warp::resolve(
+            WarpMode::from_int(warp_params.mode.value()),
+            warp_params.amount.value(),
+        );
 
         // Wave display.
         let avail = ui.available_width();
         let (_id, rect) = ui.allocate_space(egui::vec2(avail, 170.0));
-        waveform::draw(ui, rect, wt_idx, position, live_pos);
+        waveform::draw(ui, rect, wt_idx, position, live_pos, &warp);
 
         // Frame strip.
         let (_id2, strip_rect) = ui.allocate_space(egui::vec2(avail, 24.0));
@@ -151,10 +161,10 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     panel(ui, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
 
-        let osc_params = if app.selected_osc == 0 {
-            &app.params.osc1
+        let (osc_params, warp_params) = if app.selected_osc == 0 {
+            (&app.params.osc1, &app.params.osc1_warp)
         } else {
-            &app.params.osc2
+            (&app.params.osc2, &app.params.osc2_warp)
         };
         let title = if app.selected_osc == 0 { "Osc 1" } else { "Osc 2" };
         let wt_idx = osc_params.wavetable.value() as usize;
@@ -206,39 +216,33 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         });
         ui.separator();
 
-        // Knob row.
-        ui.horizontal(|ui| {
+        // Knob row. Wraps rather than overflowing when the editor is
+        // narrowed toward its minimum width: six cells no longer fit there.
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             float_knob(ui, "Position", &osc_params.position);
             int_knob(ui, "Coarse", &osc_params.coarse);
             float_knob(ui, "Fine", &osc_params.fine);
             float_knob(ui, "Level", &osc_params.level);
             float_knob(ui, "Pan", &osc_params.pan);
+            float_knob(ui, "Warp", &warp_params.amount);
         });
 
-        // Routes-to footer.
-        ui.add_space(2.0);
-        let footer = egui::Frame::default()
-            .fill(theme::BG_1)
-            .stroke(egui::Stroke::new(1.0, theme::LINE_2))
-            .corner_radius(8.0)
-            .inner_margin(egui::Margin::symmetric(11, 8));
-        footer.show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (r, _) =
-                    ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                ui.painter().circle_filled(r.center(), 3.0, theme::ACCENT);
-                ui.label(
-                    egui::RichText::new("Routes to")
-                        .color(theme::TEXT_1)
-                        .size(11.5),
-                );
-                ui.label(
-                    egui::RichText::new("Filter · Amp")
-                        .color(theme::TEXT_3)
-                        .size(11.0),
-                );
-            });
+        // This oscillator's warp mode; its amount is the last knob above.
+        choice_segmented(ui, &warp_params.mode);
+
+        // Interaction row. Global rather than per-oscillator, but it is
+        // about how these two oscillators combine, so it lives with them.
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+            ui.label(
+                egui::RichText::new("OSC MIX")
+                    .color(theme::TEXT_3)
+                    .size(9.5)
+                    .strong(),
+            );
+            choice_segmented(ui, &app.params.osc_mix.mode);
+            float_knob(ui, "Amount", &app.params.osc_mix.amount);
         });
     });
 }
@@ -263,6 +267,25 @@ fn draw_unison_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             int_knob(ui, "Voices", &app.params.unison.voices);
             float_knob(ui, "Detune", &app.params.unison.detune);
             float_knob(ui, "Spread", &app.params.unison.spread);
+        });
+    });
+}
+
+fn draw_sub_noise_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
+    panel(ui, |ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+        panel_title(ui, "SUB · NOISE");
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+            float_knob(ui, "Sub", &app.params.sub.level);
+            float_knob(ui, "Noise", &app.params.noise.level);
+            float_knob(ui, "Color", &app.params.noise.color);
+        });
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+            choice_cycle(ui, &app.params.sub.waveform);
+            choice_cycle(ui, &app.params.sub.octave);
+            choice_cycle(ui, &app.params.noise.noise_type);
         });
     });
 }

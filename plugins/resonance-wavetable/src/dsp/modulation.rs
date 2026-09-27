@@ -90,12 +90,17 @@ pub enum ModDest {
     UnisonDetune = 9,
     Osc1Pan = 10,
     Osc2Pan = 11,
+    /// The oscillator-interaction amount: PM index, ring depth or sync
+    /// sweep, per `osc_mix_mode`.
+    OscModAmount = 12,
+    Osc1Warp = 13,
+    Osc2Warp = 14,
 }
 
 impl ModDest {
     /// Display names, indexed by the parameter's integer value. See
     /// [`ModSource::LABELS`] for why these live next to the discriminants.
-    pub const LABELS: [&'static str; 12] = [
+    pub const LABELS: [&'static str; 15] = [
         "None",
         "Osc1 Position",
         "Osc2 Position",
@@ -108,6 +113,9 @@ impl ModDest {
         "Unison Detune",
         "Osc1 Pan",
         "Osc2 Pan",
+        "Osc Mod Amount",
+        "Osc1 Warp",
+        "Osc2 Warp",
     ];
 
     pub fn from_int(v: i32) -> Self {
@@ -123,6 +131,9 @@ impl ModDest {
             9 => Self::UnisonDetune,
             10 => Self::Osc1Pan,
             11 => Self::Osc2Pan,
+            12 => Self::OscModAmount,
+            13 => Self::Osc1Warp,
+            14 => Self::Osc2Warp,
             _ => Self::None,
         }
     }
@@ -202,6 +213,11 @@ pub struct ModState {
     pub unison_detune: f32,
     pub osc1_pan: f32,
     pub osc2_pan: f32,
+    /// Added to `osc_mod_amount` (0..1 range; full scale sweeps it all).
+    pub osc_mod_amount: f32,
+    /// Added to `oscN_warp_amount` (full scale sweeps from 0 to either end).
+    pub osc1_warp: f32,
+    pub osc2_warp: f32,
 }
 
 impl ModState {
@@ -227,6 +243,12 @@ impl ModState {
             // moving one has to invalidate the cache like the others.
             && self.osc_balance == other.osc_balance
             && self.unison_detune == other.unison_detune
+            // The interaction amount and the warps resolve into `OscSetup`
+            // (warp coefficients, mip bias, sync slave pitch) and the
+            // voice's `MixSetup`, which are rebuilt together.
+            && self.osc_mod_amount == other.osc_mod_amount
+            && self.osc1_warp == other.osc1_warp
+            && self.osc2_warp == other.osc2_warp
     }
 }
 
@@ -300,6 +322,9 @@ pub fn evaluate_mod_matrix(
             ModDest::UnisonDetune => state.unison_detune += mod_value,
             ModDest::Osc1Pan => state.osc1_pan += mod_value,
             ModDest::Osc2Pan => state.osc2_pan += mod_value,
+            ModDest::OscModAmount => state.osc_mod_amount += mod_value,
+            ModDest::Osc1Warp => state.osc1_warp += mod_value,
+            ModDest::Osc2Warp => state.osc2_warp += mod_value,
             ModDest::None => {}
         }
     }

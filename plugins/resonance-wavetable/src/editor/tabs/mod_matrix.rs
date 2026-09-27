@@ -15,7 +15,7 @@ use super::{float_slider, readout};
 // them this build can act on is decided there too — see
 // `ModSource::unavailable_reason` / `ModDest::unavailable_reason`.
 const SOURCE_NAMES: [&str; 9] = ModSource::LABELS;
-const DEST_NAMES: [&str; 12] = ModDest::LABELS;
+const DEST_NAMES: [&str; ModDest::LABELS.len()] = ModDest::LABELS;
 
 /// Marker appended to an option the DSP cannot act on.
 const UNAVAILABLE_MARK: &str = "⚠";

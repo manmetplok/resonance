@@ -17,10 +17,13 @@ use resonance_dsp::{constant_power_pan, SimpleRng};
 
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::modulation::{self, ModState};
+use crate::dsp::osc_mix::{self, OscMixMode, PM_DEPTH_CYCLES, SYNC_SWEEP_SEMITONES};
 use crate::dsp::oscillator::{self, midi_to_freq};
+use crate::dsp::render::character;
 use crate::dsp::render::plan::BlockPlan;
 use crate::dsp::render::snapshot::ParamSnapshot;
-use crate::dsp::voice::{OscSetup, Voice, VoiceState};
+use crate::dsp::voice::{MixSetup, OscSetup, Voice, VoiceState};
+use crate::dsp::warp::Warp;
 use crate::dsp::wavetable::Wavetable;
 
 /// Cents of unison detune a full-scale (±1.0) `ModDest::UnisonDetune`
@@ -85,11 +88,27 @@ pub(crate) fn render_voice(
     // runs unchanged on silence.
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
-    if plan.oscs_active {
+    let ch = &plan.character;
+    if plan.oscs_active || ch.sub_active {
         refresh_osc_setups(voice, snap, plan, wavetables, &mods);
-        let (l, r) = osc_kernel(voice, snap, plan, wavetables);
+    }
+    if plan.oscs_active {
+        // Block-constant choice: a patch using no interaction mode and no
+        // warp stays on the original kernel below, untouched.
+        let (l, r) = if ch.kernel {
+            character::osc_kernel(voice, snap, plan, wavetables)
+        } else {
+            osc_kernel(voice, snap, plan, wavetables)
+        };
         osc_l = l;
         osc_r = r;
+    }
+    // Sub and noise join before the filter. Skipped outright at level zero,
+    // so an unused source costs a predicted branch and draws no RNG.
+    if ch.sub_active || ch.noise_active {
+        let s = character::sub_noise(voice, plan, rng);
+        osc_l += s * ch.centre_l;
+        osc_r += s * ch.centre_r;
     }
 
     // Filter. Coefficients are refreshed at control rate or immediately when
@@ -226,9 +245,50 @@ fn refresh_osc_setups(
     let detune_cents =
         (snap.unison_detune + mods.unison_detune * UNISON_DETUNE_MOD_CENTS).clamp(0.0, 100.0);
 
+    // Oscillator character, resolved once per voice. `None` on a patch that
+    // uses no interaction mode and no warp, and then nothing below differs
+    // from the setups this function always built.
+    let ch = &plan.character;
+    let character = if ch.kernel {
+        let amount = (snap.osc_mod_amount + mods.osc_mod_amount).clamp(0.0, 1.0);
+        voice.mix_setup = MixSetup {
+            pm_depth: match ch.mix_mode {
+                OscMixMode::Fm => amount as f64 * PM_DEPTH_CYCLES,
+                _ => 0.0,
+            },
+            ring_wet: match ch.mix_mode {
+                OscMixMode::Ring => amount,
+                _ => 0.0,
+            },
+        };
+        Some(SetupCharacter {
+            warp1: Warp::resolve(ch.osc1_warp, snap.osc1_warp_amount + mods.osc1_warp),
+            warp2: Warp::resolve(ch.osc2_warp, snap.osc2_warp_amount + mods.osc2_warp),
+            slave_semitones: match ch.mix_mode {
+                OscMixMode::Sync => amount * SYNC_SWEEP_SEMITONES,
+                _ => 0.0,
+            },
+            pm_depth: voice.mix_setup.pm_depth,
+        })
+    } else {
+        None
+    };
+
     for u in 0..voice.unison_count {
         let sub = &mut voice.unison[u];
         let detune = sub.detune_spread * detune_cents * 0.5 / 100.0;
+
+        // Osc2's pitch first: phase-modulating osc1 widens osc1's spectrum
+        // in proportion to osc2's frequency, which osc1's mip bias needs.
+        let pitch2 = voice.current_pitch
+            + snap.osc2_coarse
+            + snap.osc2_fine / 100.0
+            + detune
+            + mods.osc2_pitch;
+        let pitch2 = match &character {
+            Some(c) if c.slave_semitones != 0.0 => pitch2 + c.slave_semitones,
+            _ => pitch2,
+        };
 
         if let Some(idx) = plan.wt1_idx {
             let wt = &wavetables[idx];
@@ -241,38 +301,101 @@ fn refresh_osc_setups(
             let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
             let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan).clamp(-1.0, 1.0);
             let (pan_l, pan_r) = constant_power_pan(pan);
+            let (warp, bias) = match &character {
+                Some(c) => {
+                    let pm = if c.pm_depth > 0.0 {
+                        osc_mix::pm_bandwidth(c.pm_depth, midi_to_freq(pitch2), freq)
+                    } else {
+                        1.0
+                    };
+                    (c.warp1, c.warp1.bandwidth() * pm)
+                }
+                None => (Warp::default(), 1.0),
+            };
             sub.osc1_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
+                tap: plan_biased_tap(wt, pos, freq, bias, plan.sample_rate),
                 level: osc1_level,
                 pan_l,
                 pan_r,
+                warp,
+                wrap_jump: 0.0,
+                zero_value: 0.0,
+                zero_slope: 0.0,
             };
+            if character.is_some() {
+                character::finish_setup(wt, &mut sub.osc1_setup);
+            }
         }
 
         if let Some(idx) = plan.wt2_idx {
             let wt = &wavetables[idx];
-            let pitch = voice.current_pitch
-                + snap.osc2_coarse
-                + snap.osc2_fine / 100.0
-                + detune
-                + mods.osc2_pitch;
-            let freq = midi_to_freq(pitch);
+            let freq = midi_to_freq(pitch2);
             let pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
             let pan = (snap.osc2_pan + sub.pan_offset + mods.osc2_pan).clamp(-1.0, 1.0);
             let (pan_l, pan_r) = constant_power_pan(pan);
+            let (warp, bias) = match &character {
+                Some(c) => (c.warp2, c.warp2.bandwidth()),
+                None => (Warp::default(), 1.0),
+            };
             sub.osc2_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
+                tap: plan_biased_tap(wt, pos, freq, bias, plan.sample_rate),
                 level: osc2_level,
                 pan_l,
                 pan_r,
+                warp,
+                wrap_jump: 0.0,
+                zero_value: 0.0,
+                zero_slope: 0.0,
             };
+            if character.is_some() {
+                character::finish_setup(wt, &mut sub.osc2_setup);
+            }
         }
+    }
+
+    // The sub follows osc1's pitch without the unison detune: it is one
+    // centred voice under the stack, not part of it.
+    if ch.sub_active {
+        let pitch = voice.current_pitch
+            + snap.osc1_coarse
+            + snap.osc1_fine / 100.0
+            + mods.osc1_pitch
+            + snap.sub_octave.semitones();
+        voice.sub_inc = oscillator::phase_inc(midi_to_freq(pitch), plan.sample_rate);
     }
 
     voice.osc_setup_dirty = false;
     voice.osc_setup_pitch = voice.current_pitch;
+}
+
+/// The per-voice character values [`refresh_osc_setups`] folds into each
+/// unison sub-voice's setups.
+struct SetupCharacter {
+    warp1: Warp,
+    warp2: Warp,
+    /// Sync slave offset above osc2's own pitch.
+    slave_semitones: f32,
+    pm_depth: f64,
+}
+
+/// [`oscillator::plan_tap`] with the mip selection made for `bias` times the
+/// playing frequency: a warp or phase modulation that sweeps the table up
+/// to `bias` times faster needs a level band-limited for that rate.
+///
+/// A bias of exactly 1 — every unwarped, unmodulated oscillator — plans
+/// for `freq` itself, untouched.
+#[inline]
+fn plan_biased_tap(
+    wt: &Wavetable,
+    pos: f32,
+    freq: f32,
+    bias: f32,
+    sample_rate: f32,
+) -> oscillator::TableTap {
+    let tap_freq = if bias > 1.0 { freq * bias } else { freq };
+    oscillator::plan_tap(wt, pos, tap_freq, sample_rate)
 }
 
 /// ==== THE PER-SAMPLE KERNEL ====
