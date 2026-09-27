@@ -130,6 +130,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-B4a (from B-4) | `BypassFade` (target, position) packed into one `AtomicU64`; settled toggle is one store, live paths CAS — no torn pair / spurious crossfade (was ~3% of racing blocks) | sonnet | merged | 4dc228ef |
 | refactor-intent B-5 (ARCH-02) | clips → `RenderGraph` (`ClipSource::Memory(Arc<[f32]>)`); workers post `EngineInternal` messages to the engine thread; ticket/fence/take-park/deferral/V6 guarantees re-argued as engine-thread sequencing; **no `RwLock` left in resonance-audio** | opus | merged | a316feab |
 | refactor-intent B-6 (ARCH-02) | A2-9 hammer (500 clips, ~72k edits, 0 render-thread frees, every probe destroyed on the sweep); lock-miss/skip machinery deleted; invariant `engine_and_mixer_take_no_state_lock`. **Epic B done**; full suite 369/369 | opus | merged | 0270ac55 |
+| FU-B6a (from B-6) | A new bus renders its first live block flat at target gain (`BusRuntime::rendered_once`); 4 audio goldens re-blessed (isolated to `bus_disposition`); FU-B6b (seam dip under contention) open | sonnet | merged | 82b382f4 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
