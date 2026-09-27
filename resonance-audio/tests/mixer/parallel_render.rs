@@ -536,3 +536,32 @@ fn parked_workers_wake_for_the_next_block() {
         "parked-and-woken workers render what serial does"
     );
 }
+
+/// Offline renders spread over their own pool (realtime-multithreading.md
+/// §4.7) and must come out bit-identical to a serial render: the master
+/// stem, a bus stem and a track stem of the same fixture, rendered serial
+/// and on 4 threads, each from fresh plugin state.
+#[test]
+fn offline_stems_are_bit_identical_across_thread_counts() {
+    use resonance_audio::test_support::{override_threads_on_this_thread, render_stem, StemSource};
+
+    let render = |threads: usize, source: StemSource| -> Vec<u32> {
+        override_threads_on_this_thread(Some(threads));
+        let h = fixture(1, 0);
+        h.shared().playing.store(false, Ordering::Relaxed);
+        let tempo = Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
+        let out = render_stem(source, 0, (BLOCKS * BLOCK) as u64 * 3, &h.shared_arc(), &tempo, SR)
+            .expect("stem renders");
+        override_threads_on_this_thread(None);
+        out.iter().map(|s| s.to_bits()).collect()
+    };
+    for source in [StemSource::Master, StemSource::Bus(FEEDER), StemSource::Track(PARENT)] {
+        let serial = render(1, source);
+        assert!(
+            serial.iter().any(|&b| f32::from_bits(b) != 0.0),
+            "{source:?}: the stem must be audible"
+        );
+        let parallel = render(4, source);
+        assert!(serial == parallel, "{source:?}: parallel offline render differs");
+    }
+}

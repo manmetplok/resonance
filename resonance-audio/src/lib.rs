@@ -215,7 +215,7 @@ pub mod test_support {
     };
     pub use crate::mixer::render::slots::PassStats;
     pub use crate::render_pool::sched::{physical_cores, Sched};
-    pub use crate::render_pool::{PoolHealth, PoolStatus};
+    pub use crate::render_pool::{override_threads_on_this_thread, PoolHealth, PoolStatus};
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, commit_playhead, mix_audition_overlay,
         mix_track_clips,

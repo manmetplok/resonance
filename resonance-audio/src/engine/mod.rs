@@ -819,6 +819,11 @@ impl AudioEngine {
 
         let audio_buf_frames = buf_frames;
         let audio_quantum = quantum;
+        // The render pool's size, resolved once: the live callback's pool
+        // and every offline render's use the same thread count.
+        let live_pool_config =
+            crate::render_pool::PoolConfig::live(audio_buf_frames, options.render_threads);
+        crate::render_pool::configure_threads(live_pool_config.workers + 1);
         // Build one fully-captured mixer callback plus the matching
         // monitor-ring producer. Callable more than once (the native
         // PipeWire attempt, then the cpal fallback) — each call
@@ -839,9 +844,7 @@ impl AudioEngine {
             // (realtime-multithreading.md §4.3). Owned by this closure and
             // joined when the stream drops it; the engine loop reports its
             // status.
-            let render_pool = crate::render_pool::RenderPool::new(
-                crate::render_pool::PoolConfig::live(audio_buf_frames, options.render_threads),
-            );
+            let render_pool = crate::render_pool::RenderPool::new(live_pool_config.clone());
             *shared_audio.render_pool.lock() = Some(render_pool.monitor());
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
             // runtime never allocates on the audio thread. mix_audio only

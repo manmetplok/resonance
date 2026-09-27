@@ -5,7 +5,9 @@
 //! through the whole audio callback at quantum 128 / 48 kHz, once per
 //! thread count. For each it prints the per-callback time against the
 //! 2.667 ms budget: mean, p99, max and the number of over-budget cycles,
-//! plus the pool's own critical-path / efficiency numbers.
+//! plus the pool's own critical-path / efficiency numbers. Then the same
+//! project exported offline (a master stem, the bounce path) per thread
+//! count, wall-clock.
 //!
 //! This measures the render, not the device: it runs as fast as it can on
 //! an ordinary (non-realtime) thread, so it shows the CPU headroom the pool
@@ -32,7 +34,10 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
-use resonance_audio::test_support::{physical_cores, ClapBundle, MixAudioHarness, PluginSlot};
+use resonance_audio::test_support::{
+    override_threads_on_this_thread, physical_cores, render_stem, ClapBundle, MixAudioHarness,
+    PluginSlot, StemSource,
+};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -331,6 +336,42 @@ fn main() {
             crit as f64 / 1e3,
             jobs as f64 / capacity.max(1) as f64 * 100.0,
             join as f64 / blocks as f64 / 1e3,
+        );
+    }
+
+    // Offline: the same project exported as a master stem (the bounce
+    // path, with its own normal-priority pool), wall-clock per thread
+    // count.
+    let seconds = (blocks * BLOCK) as f64 / SR as f64;
+    println!("\noffline master-stem export of {seconds:.1} s:");
+    println!(
+        "{:>7} {:>10} {:>9} {:>8}",
+        "threads", "wall ms", "x realtime", "speedup"
+    );
+    let mut serial_ms = None;
+    for &t in &threads {
+        override_threads_on_this_thread(Some(t));
+        let h = project(&plugins, blocks + 16);
+        h.shared().playing.store(false, Ordering::Relaxed);
+        let tempo = Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
+        let start = Instant::now();
+        let out = render_stem(
+            StemSource::Master,
+            0,
+            (blocks * BLOCK) as u64,
+            &h.shared_arc(),
+            &tempo,
+            SR,
+        )
+        .expect("stem renders");
+        let ms = start.elapsed().as_secs_f64() * 1e3;
+        override_threads_on_this_thread(None);
+        assert!(!out.is_empty());
+        let serial = *serial_ms.get_or_insert(ms);
+        println!(
+            "{t:>7} {ms:>10.0} {:>9.1}x {:>7.2}x",
+            seconds * 1e3 / ms,
+            serial / ms
         );
     }
 }

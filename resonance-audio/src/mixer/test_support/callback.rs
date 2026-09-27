@@ -105,8 +105,9 @@ pub struct MixAudioHarness {
     ab_meters: ABMeters,
     sidechain: SidechainTaps,
     track_slots: crate::mixer::render::slots::LiveSlots,
-    /// Serial unless a test asks for threads ([`Self::set_render_threads`]),
-    /// like the hermetic app harness.
+    /// [`configured_threads`](crate::render_pool::configured_threads) —
+    /// serial in a hermetic test unless `RESONANCE_RENDER_THREADS` says
+    /// otherwise — or what a test sets with [`Self::set_render_threads`].
     pool: crate::render_pool::RenderPool,
     fx_dry: crate::bypass::FxDryScratch,
     continuity: crate::mixer::TransportContinuity,
@@ -215,7 +216,9 @@ impl MixAudioHarness {
             ab_meters,
             sidechain: SidechainTaps::new(frames),
             track_slots,
-            pool: crate::render_pool::RenderPool::serial(),
+            pool: crate::render_pool::RenderPool::new(crate::render_pool::PoolConfig::offline(
+                frames,
+            )),
             fx_dry: crate::bypass::FxDryScratch::new(frames),
             continuity: crate::mixer::TransportContinuity::default(),
             live_midi_tx,

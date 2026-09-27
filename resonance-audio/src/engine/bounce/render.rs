@@ -118,6 +118,10 @@ pub(super) struct ChunkScratch {
     /// requires it, and because it keeps the offline path structurally
     /// identical to the live one.
     pub fx_dry: crate::bypass::FxDryScratch,
+    /// The worker pool the chunk's track and bus jobs spread over
+    /// (realtime-multithreading.md §4.7): normal priority, owned by this
+    /// render, joined when it ends.
+    pub pool: crate::render_pool::RenderPool,
 }
 
 impl ChunkScratch {
@@ -136,6 +140,9 @@ impl ChunkScratch {
             note_buf: Vec::with_capacity(256),
             mix_buf: vec![0.0f32; BOUNCE_CHUNK * 2],
             fx_dry: crate::bypass::FxDryScratch::new(BOUNCE_CHUNK),
+            pool: crate::render_pool::RenderPool::new(crate::render_pool::PoolConfig::offline(
+                BOUNCE_CHUNK,
+            )),
         }
     }
 }
@@ -321,6 +328,8 @@ pub(super) fn render_chunk(
     freeze_raw: bool,
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
+    // CLAP `thread-check`: this thread drives `process()` now.
+    crate::clap_host::thread_check::mark_audio_thread();
 
     // The render graph (audio and MIDI clips, busses, master chain,
     // tracks, plugins), loaded once for the chunk (ARCH-02 A2-4…A2-8): no
@@ -397,7 +406,7 @@ pub(super) fn render_chunk(
             note_event_buf: &mut scratch.note_buf,
             sidechain: &mut scratch.sidechain,
             fx_dry: &mut scratch.fx_dry,
-            pool: None,
+            pool: Some(&scratch.pool),
         },
         &strategy,
     );

@@ -125,9 +125,7 @@ impl PoolConfig {
     /// hot DSP threads on one core mostly contend. Allocates (reads
     /// sysfs); engine side.
     pub fn live(max_frames: usize, configured: Option<usize>) -> Self {
-        let threads = std::env::var("RESONANCE_RENDER_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
+        let threads = env_threads()
             .or(configured)
             .unwrap_or_else(sched::physical_cores);
         let spin_us = std::env::var("RESONANCE_RENDER_SPIN_US")
@@ -143,6 +141,64 @@ impl PoolConfig {
             deny_sched: false,
         }
     }
+
+    /// An offline renderer's pool (bounce, stems, freeze, measure —
+    /// realtime-multithreading.md §4.7): [`configured_threads`] threads
+    /// at normal priority. Its own pool, because an offline render can run
+    /// while the live callback owns the realtime one.
+    pub fn offline(max_frames: usize) -> Self {
+        Self {
+            workers: configured_threads() - 1,
+            max_frames,
+            follow_caller_sched: false,
+            spin: Duration::from_micros(DEFAULT_SPIN_US),
+            name: "resonance-offline",
+            deny_sched: false,
+        }
+    }
+}
+
+/// Total render threads (the rendering thread included) the engine was
+/// configured with; 0 until [`configure_threads`] runs.
+static CONFIGURED_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+/// Record the engine's render thread count, for every pool built later —
+/// the offline renderers' included. Engine startup.
+pub fn configure_threads(threads: usize) {
+    CONFIGURED_THREADS.store(threads.max(1), Ordering::Relaxed);
+}
+
+/// The render thread count pools use when none is given: the engine's
+/// (see [`configure_threads`]), else `RESONANCE_RENDER_THREADS`, else 1.
+/// A process with no engine — a hermetic test — renders serially unless
+/// asked.
+pub fn configured_threads() -> usize {
+    if let Some(n) = THREADS_OVERRIDE.with(|o| o.get()) {
+        return n;
+    }
+    match CONFIGURED_THREADS.load(Ordering::Relaxed) {
+        0 => env_threads().unwrap_or(1),
+        n => n,
+    }
+}
+
+thread_local! {
+    static THREADS_OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test hook: pools built on the calling thread use `threads` (`None`
+/// restores [`configured_threads`]' usual answer). Thread-scoped, so
+/// tests running side by side in one binary cannot change each other's
+/// renders.
+pub fn override_threads_on_this_thread(threads: Option<usize>) {
+    THREADS_OVERRIDE.with(|o| o.set(threads.map(|n| n.max(1))));
+}
+
+fn env_threads() -> Option<usize> {
+    std::env::var("RESONANCE_RENDER_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|n| n.max(1))
 }
 
 /// Default idle spin before a worker parks: long enough to cover the
