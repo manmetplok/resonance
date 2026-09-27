@@ -11,7 +11,8 @@ use super::super::conv_layer::{Conv1x1, Conv1x1Bias, LayerGating, WaveNetLayer};
 use super::super::film::Film;
 use super::super::head::{DenseLayer, HeadRechannel};
 use super::super::params::{FilmParams, GatingMode};
-use super::super::ring::RingBuffer;
+use super::super::history::History;
+use super::MAX_BLOCK;
 
 /// Construction-time validation of a grouped convolution's channel counts
 /// (reference `Conv1D::set_size_` / `Conv1x1` ctor): both the input and the
@@ -76,9 +77,9 @@ fn read_film(
 pub(super) struct StackParts {
     pub(super) rechannel: Conv1x1,
     pub(super) layers: Vec<WaveNetLayer>,
-    pub(super) rings: Vec<RingBuffer>,
+    pub(super) rings: Vec<History>,
     pub(super) head_rechannel: HeadRechannel,
-    pub(super) head_ring: Option<RingBuffer>,
+    pub(super) head_ring: Option<History>,
 }
 
 /// Read one stack's weights in reference order: input rechannel, then each
@@ -167,7 +168,7 @@ fn read_layer(
     dilation: usize,
     l1x1_active: bool,
     fast: bool,
-) -> Result<(WaveNetLayer, RingBuffer), String> {
+) -> Result<(WaveNetLayer, History), String> {
     let ch = stack_cfg.channels;
     let bottleneck = stack_cfg.bottleneck;
     let g_in = stack_cfg.groups_input;
@@ -359,13 +360,13 @@ fn read_layer(
         &films.head1x1_post,
     )?;
 
-    let ring_capacity = (ks - 1) * dilation + 2;
-    let ring = RingBuffer::new(ring_capacity, ch);
+    let ring = History::new((ks - 1) * dilation, ch, MAX_BLOCK);
 
     let layer = WaveNetLayer {
         w_conv,
         b_conv,
         w_input_mixin,
+        condition_size: stack_cfg.condition_size,
         layer1x1,
         head1x1,
         kernel_size: ks,
@@ -406,7 +407,7 @@ fn read_head_rechannel(
     reader: &mut WeightReader,
     si: usize,
     stack_cfg: &StackConfig,
-) -> Result<(HeadRechannel, Option<RingBuffer>), String> {
+) -> Result<(HeadRechannel, Option<History>), String> {
     let skip_ch = if stack_cfg.head1x1.active {
         stack_cfg.head1x1.out_channels
     } else {
@@ -450,9 +451,10 @@ fn read_head_rechannel(
     // Windowed heads need a history of past skip-accumulator
     // frames; capacity mirrors the per-layer conv rings.
     let head_ring = if hr_ks > 1 {
-        Some(RingBuffer::new(
-            (hr_ks - 1) * stack_cfg.head_dilation + 2,
+        Some(History::new(
+            (hr_ks - 1) * stack_cfg.head_dilation,
             skip_ch,
+            MAX_BLOCK,
         ))
     } else {
         None

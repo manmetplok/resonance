@@ -32,7 +32,15 @@ pub struct AmpProcessor {
     dc_r: DcBlocker,
     input_gain_smoother: Smoother,
     output_gain_smoother: Smoother,
+    /// Mono model input / output for the block path, one slot per frame
+    /// (`MAX_BLOCK_FRAMES` long; larger host blocks run in chunks).
+    mono_in: Vec<f32>,
+    mono_out: Vec<f32>,
 }
+
+/// Frames the block scratch is pre-sized for. Hosts in this project run
+/// 64-1024 frame blocks; anything larger is processed in chunks of this.
+const MAX_BLOCK_FRAMES: usize = 4096;
 
 impl Default for AmpProcessor {
     fn default() -> Self {
@@ -54,6 +62,8 @@ impl AmpProcessor {
             dc_r: DcBlocker::default(),
             input_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
             output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            mono_in: vec![0.0; MAX_BLOCK_FRAMES],
+            mono_out: vec![0.0; MAX_BLOCK_FRAMES],
         }
     }
 
@@ -138,6 +148,24 @@ impl AmpProcessor {
             return peaks;
         }
 
+        if self.models.is_settled() {
+            // Steady state (every block but the ~1024 samples of a model
+            // swap): no fade to tick, so the model runs a whole block at
+            // once — the WaveNet's block forward pass is several times
+            // cheaper per sample than sample-serial calls.
+            let mut start = 0;
+            while start < frames {
+                let len = (frames - start).min(MAX_BLOCK_FRAMES);
+                self.process_settled(
+                    &mut left[start..start + len],
+                    &mut right[start..start + len],
+                    &mut peaks,
+                );
+                start += len;
+            }
+            return peaks;
+        }
+
         for i in 0..frames {
             let dry_l = left[i];
             let dry_r = right[i];
@@ -175,5 +203,35 @@ impl AmpProcessor {
         }
 
         peaks
+    }
+
+    /// Block path for a settled fader with an active model: mono sum and
+    /// input gain per frame, one `process_block` through the model, then
+    /// output gain and DC blocking per frame. Per-sample math identical to
+    /// the ticking loop with a fade gain of 1.0.
+    fn process_settled(&mut self, left: &mut [f32], right: &mut [f32], peaks: &mut BlockPeaks) {
+        let n = left.len();
+        let Some(model) = self.models.active_mut() else {
+            return;
+        };
+        let mono_in = &mut self.mono_in[..n];
+        for ((m, &l), &r) in mono_in.iter_mut().zip(left.iter()).zip(right.iter()) {
+            peaks.in_l = peaks.in_l.max(l.abs());
+            peaks.in_r = peaks.in_r.max(r.abs());
+            // The NAM model is mono-by-design (one amp at one mic
+            // position): sum L+R so a stereo input contributes both.
+            *m = 0.5 * (l + r) * self.input_gain_smoother.next();
+        }
+        let mono_out = &mut self.mono_out[..n];
+        model.process_block(mono_in, mono_out);
+        for ((l, r), &raw) in left.iter_mut().zip(right.iter_mut()).zip(mono_out.iter()) {
+            let raw = raw * self.output_gain_smoother.next();
+            let out_l = self.dc_l.process(raw);
+            let out_r = self.dc_r.process(raw);
+            *l = out_l;
+            *r = out_r;
+            peaks.out_l = peaks.out_l.max(out_l.abs());
+            peaks.out_r = peaks.out_r.max(out_r.abs());
+        }
     }
 }

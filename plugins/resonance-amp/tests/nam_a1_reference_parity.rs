@@ -51,3 +51,16 @@ fn wavenet_a1_standard_matches_fast_tanh_reference() {
 fn wavenet_small_matches_fast_tanh_reference() {
     assert_a1_parity("wavenet.nam", "wavenet.fasttanh.f32");
 }
+
+/// Both A1 captures render bit-identically through `process_block` at
+/// every split (see `common::assert_block_split_invariance`). The
+/// standard capture is the one the per-block cost matters for: its
+/// 16-channel convs take the block GEMM's full-width tiles, the small one
+/// its partial-lane tiles.
+#[test]
+fn block_processing_matches_sample_serial_bit_for_bit() {
+    let input = common::read_f32(&common::fixture_path("input.f32"));
+    for model in ["wavenet_a1_standard.nam", "wavenet.nam"] {
+        common::assert_block_split_invariance(&common::fixture_path_in("a1", model), &input);
+    }
+}
