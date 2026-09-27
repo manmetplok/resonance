@@ -99,6 +99,9 @@ pub fn try_lock_with_backoff<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// caller and lent to [`render_chunk`].
 pub(super) struct ChunkScratch {
     pub sidechain: crate::types::SidechainTaps,
+    /// Per-track render slots (`mixer::render::slots`), grown before each
+    /// chunk to the graph's track count — this is not the audio thread.
+    pub track_slots: crate::mixer::render::slots::TrackSlots,
     pub track_buf_l: Vec<f32>,
     pub track_buf_r: Vec<f32>,
     pub bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
@@ -121,6 +124,7 @@ impl ChunkScratch {
     pub(super) fn new() -> Self {
         Self {
             sidechain: crate::types::SidechainTaps::new(BOUNCE_CHUNK),
+            track_slots: crate::mixer::render::slots::TrackSlots::new(0, BOUNCE_CHUNK),
             track_buf_l: vec![0.0f32; BOUNCE_CHUNK],
             track_buf_r: vec![0.0f32; BOUNCE_CHUNK],
             bus_bufs: (0..MAX_BUSSES)
@@ -355,7 +359,7 @@ pub(super) fn render_chunk(
     // `in_filter` / `respect_mute_solo` gating, uses constant gains
     // instead of per-block ramps, and skips meter / last-gain atomic
     // writes so a bounce can run concurrently with live playback.
-    let mut strategy = mixer::RenderStrategy::Bounce {
+    let strategy = mixer::RenderStrategy::Bounce {
         in_filter,
         fan_out_only,
         key_only,
@@ -363,6 +367,7 @@ pub(super) fn render_chunk(
         respect_mute_solo,
         freeze_raw,
     };
+    scratch.track_slots.ensure(tracks_guard.len());
     mixer::render_block(
         mixer::BlockInputs {
             channels: 2,
@@ -385,15 +390,15 @@ pub(super) fn render_chunk(
         },
         &mut mixer::BlockScratch {
             data: &mut scratch.mix_buf[..frames * 2],
-            track_buf_l: &mut scratch.track_buf_l,
-            track_buf_r: &mut scratch.track_buf_r,
             bus_bufs: &mut scratch.bus_bufs,
+            slots: &mut scratch.track_slots,
+            stash: None,
             port_scratch: &mut scratch.port_scratch,
             note_event_buf: &mut scratch.note_buf,
             sidechain: &mut scratch.sidechain,
             fx_dry: &mut scratch.fx_dry,
         },
-        &mut strategy,
+        &strategy,
     );
 
     // Master FX chain: run over the summed mix in place. Skipped when

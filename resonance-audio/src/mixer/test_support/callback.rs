@@ -58,6 +58,7 @@ macro_rules! run_callback {
                 monitor_drain: &mut $h.monitor_drain,
                 ab_meters: &mut $h.ab_meters,
                 sidechain: &mut $h.sidechain,
+                track_slots: &mut $h.track_slots,
                 fx_dry: &mut $h.fx_dry,
                 continuity: &mut $h.continuity,
             },
@@ -102,6 +103,7 @@ pub struct MixAudioHarness {
     monitor_drain: MonitorDrain,
     ab_meters: ABMeters,
     sidechain: SidechainTaps,
+    track_slots: crate::mixer::render::slots::LiveSlots,
     fx_dry: crate::bypass::FxDryScratch,
     continuity: crate::mixer::TransportContinuity,
     live_midi_tx: crossbeam_channel::Sender<LiveMidiEvent>,
@@ -179,6 +181,9 @@ impl MixAudioHarness {
         ab_meters.reserve(frames);
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::unbounded();
         let (live_fwd_tx, live_fwd_rx) = crossbeam_channel::unbounded();
+        // The engine's own supply: grown on every graph publish, adopted
+        // at the top of each playing block.
+        let track_slots = shared.graph.attach_live_slots(frames);
         Self {
             shared,
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
@@ -205,6 +210,7 @@ impl MixAudioHarness {
             monitor_drain: MonitorDrain::new(native_drain),
             ab_meters,
             sidechain: SidechainTaps::new(frames),
+            track_slots,
             fx_dry: crate::bypass::FxDryScratch::new(frames),
             continuity: crate::mixer::TransportContinuity::default(),
             live_midi_tx,

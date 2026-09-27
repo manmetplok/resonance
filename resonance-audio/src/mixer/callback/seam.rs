@@ -150,11 +150,10 @@ fn render_sub(
     input_channels: usize,
     transport: Option<TransportSnap>,
 ) {
-    let (mut block, midi_stash, monitor_temp) = scratch.split_block(out, mon);
+    let (mut block, monitor_temp) = scratch.split_block(out, mon);
     render_timeline_block(
         inputs,
         &mut block,
-        midi_stash,
         LiveBlock {
             monitor_temp,
             monitor_frames,

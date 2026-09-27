@@ -79,6 +79,8 @@ mod render_graph_clips;
 mod render_graph_plugins;
 #[path = "mixer/render_graph_publish.rs"]
 mod render_graph_publish;
+#[path = "mixer/render_slot_supply.rs"]
+mod render_slot_supply;
 #[path = "mixer/render_block_parity.rs"]
 mod render_block_parity;
 #[path = "mixer/sidechain_key_delivery.rs"]

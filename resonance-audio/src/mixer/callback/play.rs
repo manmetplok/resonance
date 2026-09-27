@@ -38,6 +38,10 @@ pub(super) fn render_playing_block(
     // freed by the engine's retire sweep after this guard is gone, never
     // by this thread.
     let graph = shared.graph.load();
+    // Adopt a larger slot pool if the engine offered one. After the graph
+    // load: the engine offers before it publishes, so a graph with more
+    // tracks than the old pool never arrives without its pool.
+    scratch.track_slots.refresh();
     let midi_clips: &[Arc<MidiClip>] = &graph.midi_clips;
     let clips: &[Arc<AudioClip>] = &graph.clips;
     let tracks = &*graph.tracks;

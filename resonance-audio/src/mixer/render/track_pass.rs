@@ -1,25 +1,37 @@
-//! The per-track phase of a render block: source (frozen cache, timeline
-//! instrument or clips + monitor input), sidechain key capture, plugin
-//! delay compensation, meters, post-fader routing and aux sends.
+//! The per-track phase of a render block, split at the summing point
+//! (realtime-multithreading.md §4.1):
+//!
+//! - **Jobs**, one per top-level track: source (frozen cache, timeline
+//!   instrument or clips + monitor input), insert chain, sidechain key
+//!   capture, plugin delay compensation, meters and the multi-output
+//!   fan-out. A job writes only the [`TrackSlot`]s it owns and never a
+//!   shared sum, so jobs are independent of each other.
+//! - **The reduction**, serial, in track-map order: the post-fader route,
+//!   the aux sends and the sub-track routes each job left in its slots —
+//!   exactly the additions, in exactly the order, the single per-track
+//!   loop used to make. The mix is therefore bit-identical to that loop
+//!   whatever order the jobs ran in.
 //!
 //! Sub-tracks are skipped by the top-level walk — they carry no source of
 //! their own and are driven entirely by their parent's port fan-out (see
-//! [`super::sub_track`]) at the end of the parent's own iteration.
+//! [`super::sub_track`]) at the end of the parent's own job.
 
 use resonance_common::AutomationTarget;
 
 use crate::mixer::automation_apply::{apply_plugin_params, auto_gain_ramp, auto_muted};
 use crate::mixer::common::ramped_stereo_peaks;
 use crate::mixer::midi_events::collect_midi_events;
+use crate::mixer::midi_stash::{MidiStash, StashEntry};
 use crate::types::*;
 
 use crate::mixer::take_comp::mix_track_comp;
 
 use super::clips::{mix_track_clips_governed, recorded_monitor_gate};
-use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch};
+use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch, BusBufs, JobScratch};
 use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
 use super::routing::{apply_track_aux_sends, route_post_fader};
+use super::slots::{SlotRoute, TrackSlot};
 use super::strategy::{RenderStrategy, TrackDisposition};
 use super::sub_track::fan_out_to_sub_tracks;
 
@@ -32,28 +44,171 @@ struct TrackSource {
     extra_ports_filled: usize,
 }
 
-/// Walk every top-level track: (clips + monitor input) -> plugins ->
-/// volume -> master (or bus). Sub-tracks are driven from their parent's
-/// fan-out inside [`render_one_track`], not from here.
+/// The job's own buffers: its slot's pre-fader signal, full length (as
+/// the scratch track buffer they replace was), and its MIDI carry.
+struct TrackBufs<'a> {
+    l: &'a mut [f32],
+    r: &'a mut [f32],
+    carry: &'a mut StashEntry,
+}
+
+/// Every top-level track: prepare the slots, run each track's job, then
+/// reduce the slots into the bus buffers and the output in track order.
 pub(crate) fn render_track_pass(
     ctx: &BlockCtx<'_>,
     scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
-    for track in ctx.inputs.tracks.values() {
+    let slots = scratch.slots.as_mut_slice();
+    let n = ctx.inputs.tracks.len().min(slots.len());
+    let slots = &mut slots[..n];
+
+    prepare_slots(
+        ctx,
+        slots,
+        scratch.sidechain,
+        scratch.stash.as_deref_mut(),
+        strategy,
+    );
+
+    let mut js = JobScratch {
+        port_scratch: &mut *scratch.port_scratch,
+        note_event_buf: &mut *scratch.note_event_buf,
+        sidechain: &mut *scratch.sidechain,
+        fx_dry: &mut *scratch.fx_dry,
+    };
+    for (idx, track) in ctx.inputs.tracks.values().enumerate().take(n) {
         if track.sub_track_of.is_some() {
             continue;
         }
-        render_one_track(track, ctx, scratch, strategy);
+        run_track_job(idx, track, ctx, slots, &mut js, strategy);
+    }
+
+    reduce_track_pass(
+        ctx,
+        slots,
+        &mut *scratch.data,
+        &mut *scratch.bus_bufs,
+        scratch.stash.as_deref_mut(),
+    );
+}
+
+/// The serial prologue before any job runs: every decision a job needs
+/// that reads *another* track's live state, and the MIDI hand-off.
+///
+/// - `key_consumed` per track: whether a silenced track must still render
+///   for a sidechain key depends on the consuming track's last gains and
+///   bypass fades, which the consumer's own job advances. Deciding it here
+///   makes it independent of job order.
+/// - The stash lends each instrument track's parked MIDI to its slot's
+///   carry, so the job delivers (or parks more) without sharing the
+///   stash; [`reduce_track_pass`] takes back what is left.
+fn prepare_slots(
+    ctx: &BlockCtx<'_>,
+    slots: &mut [TrackSlot],
+    sidechain: &SidechainTaps,
+    stash: Option<&mut MidiStash>,
+    strategy: &RenderStrategy<'_>,
+) {
+    let tracks = ctx.inputs.tracks;
+    for (slot, track) in slots.iter_mut().zip(tracks.values()) {
+        slot.route = None;
+        slot.fanned_out = false;
+        slot.key_consumed = key_consumed(ctx, sidechain, strategy, SendSource::Track(track.id));
+    }
+    if let Some(stash) = stash {
+        if stash.has_pending() {
+            for (slot, track) in slots.iter_mut().zip(tracks.values()) {
+                if track.sub_track_of.is_some() {
+                    continue;
+                }
+                if let Some(&instrument_id) = track.plugins().first() {
+                    stash.take(instrument_id, &mut slot.carry);
+                }
+            }
+        }
     }
 }
 
-fn render_one_track(
+/// One track's job: render it into its own slot, then its fan-out into
+/// its sub-tracks' slots.
+fn run_track_job(
+    idx: usize,
     track: &Track,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    slots: &mut [TrackSlot],
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
+    if let Some((disp, ports_filled)) = render_one_track(idx, track, ctx, slots, js, strategy) {
+        slots[idx].fanned_out = true;
+        fan_out_to_sub_tracks(track, &disp, ports_filled, ctx, slots, js, strategy);
+    }
+}
+
+/// The ordered reduction: for each top-level track, in map order, replay
+/// the post-fader route and aux sends its job recorded, then its
+/// sub-tracks' routes — the order the single per-track loop summed in.
+/// Also returns each job's MIDI carry to the stash.
+fn reduce_track_pass(
+    ctx: &BlockCtx<'_>,
+    slots: &mut [TrackSlot],
+    data: &mut [f32],
+    bus_bufs: &mut BusBufs,
+    mut stash: Option<&mut MidiStash>,
+) {
+    let tracks = ctx.inputs.tracks;
+    let n = slots.len();
+    for (idx, track) in tracks.values().enumerate().take(n) {
+        if track.sub_track_of.is_some() {
+            continue;
+        }
+        let slot = &mut slots[idx];
+        if let Some(route) = slot.route.take() {
+            let src = (slot.l.as_slice(), slot.r.as_slice());
+            route_post_fader(
+                route.dest,
+                src,
+                route.gains,
+                (&mut *data, &mut *bus_bufs),
+                ctx,
+            );
+            apply_track_aux_sends(track.id, route.gains, src, ctx, bus_bufs);
+        }
+        if let Some(stash) = stash.as_deref_mut() {
+            stash.restore(&mut slot.carry);
+        }
+        if !std::mem::take(&mut slot.fanned_out) {
+            continue;
+        }
+        for (sub_idx, sub_track) in tracks.values().enumerate().take(n) {
+            if !matches!(sub_track.sub_track_of, Some((parent, _)) if parent == track.id) {
+                continue;
+            }
+            let sub_slot = &mut slots[sub_idx];
+            if let Some(route) = sub_slot.route.take() {
+                route_post_fader(
+                    route.dest,
+                    (sub_slot.l.as_slice(), sub_slot.r.as_slice()),
+                    route.gains,
+                    (&mut *data, &mut *bus_bufs),
+                    ctx,
+                );
+            }
+        }
+    }
+}
+
+/// Render one top-level track into `slots[idx]`. Returns the disposition
+/// and port count when its multi-output fan-out must run next.
+fn render_one_track(
+    idx: usize,
+    track: &Track,
+    ctx: &BlockCtx<'_>,
+    slots: &mut [TrackSlot],
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
+) -> Option<(TrackDisposition, usize)> {
     let frames = ctx.inputs.frames;
     let auto_gain = auto_gain_ramp(
         ctx.inputs.automation,
@@ -73,43 +228,50 @@ fn render_one_track(
     // review MIX-05): the ghost kick keys the bass compressor while muted.
     let disp = match strategy.track_disposition(track, ctx.inputs.any_solo, auto_gain, auto_mute)
     {
-        Some(d)
-            if d.discard_after_instrument
-                && keys_from(track, ctx, scratch.sidechain, strategy) =>
-        {
+        Some(d) if d.discard_after_instrument && keys_from(idx, track, ctx, slots) => {
             TrackDisposition::key_only()
         }
         Some(d) => d,
-        None if strategy.renders(track.id) && keys_from(track, ctx, scratch.sidechain, strategy) => {
+        None if strategy.renders(track.id) && keys_from(idx, track, ctx, slots) => {
             TrackDisposition::key_only()
         }
-        None => return,
+        None => return None,
     };
     let (gain_l, gain_r) = (disp.gain_l, disp.gain_r);
 
-    // Zero per-track buffers
-    scratch.track_buf_l[..frames].fill(0.0);
-    scratch.track_buf_r[..frames].fill(0.0);
+    let TrackSlot {
+        l, r, carry, route, ..
+    } = &mut slots[idx];
+    let (buf_l, buf_r) = (l.as_mut_slice(), r.as_mut_slice());
 
-    let Some(TrackSource {
+    // Zero per-track buffers
+    buf_l[..frames].fill(0.0);
+    buf_r[..frames].fill(0.0);
+
+    let TrackSource {
         mut has_audio,
         extra_ports_filled,
-    }) = render_track_source(track, &disp, ctx, scratch, strategy)
-    else {
-        return;
-    };
+    } = render_track_source(
+        track,
+        &disp,
+        ctx,
+        TrackBufs {
+            l: &mut *buf_l,
+            r: &mut *buf_r,
+            carry,
+        },
+        js,
+        strategy,
+    )?;
+    let fan_out = (extra_ports_filled > 1).then_some(extra_ports_filled);
 
     // Capture this track post-FX and pre-fader for anything keying
     // off it. Costs a `copy_from_slice` only for tracks that are
     // actually routed somewhere as a key.
     let tap_source = SendSource::Track(track.id);
-    if scratch.sidechain.is_tapped(tap_source) {
-        scratch.sidechain.capture(
-            tap_source,
-            &scratch.track_buf_l[..frames],
-            &scratch.track_buf_r[..frames],
-            frames,
-        );
+    if js.sidechain.is_tapped(tap_source) {
+        js.sidechain
+            .capture(tap_source, &buf_l[..frames], &buf_r[..frames], frames);
     }
 
     // Silenced, rendered only for a key (code review MIX-05): its own
@@ -117,10 +279,7 @@ fn render_one_track(
     // still runs (each tap then stops at its own capture). Nothing of it
     // reaches PDC, the fader or the mix.
     if disp.key_only {
-        if extra_ports_filled > 1 {
-            fan_out_to_sub_tracks(track, &disp, extra_ports_filled, ctx, scratch, strategy);
-        }
-        return;
+        return fan_out.map(|ports| (disp, ports));
     }
 
     // Present only as a key source: its audio has just been captured,
@@ -128,7 +287,7 @@ fn render_one_track(
     // below — PDC, fader, aux sends, routing — would put it in this
     // one, so stop here.
     if strategy.is_key_only(track.id) {
-        return;
+        return None;
     }
 
     // Plugin-delay compensation: delay the post-chain signal so
@@ -137,8 +296,8 @@ fn render_one_track(
     // this block so delayed tails keep flushing.
     if ctx.inputs.latency_comp.apply(
         track.id,
-        &mut scratch.track_buf_l[..frames],
-        &mut scratch.track_buf_r[..frames],
+        &mut buf_l[..frames],
+        &mut buf_r[..frames],
         ctx.inputs.playhead,
     ) {
         has_audio = true;
@@ -150,61 +309,42 @@ fn render_one_track(
         if strategy.is_live() {
             track.set_last_gains(gain_l.1, gain_r.1);
         }
-        return;
+        return None;
     }
 
     // Compute post-fader peak levels for VU meters (live only).
     if strategy.is_live() {
-        let (peak_l, peak_r) = ramped_stereo_peaks(
-            scratch.track_buf_l,
-            scratch.track_buf_r,
-            frames,
-            gain_l,
-            gain_r,
-        );
+        let (peak_l, peak_r) = ramped_stereo_peaks(buf_l, buf_r, frames, gain_l, gain_r);
         track.update_peak_l(peak_l);
         track.update_peak_r(peak_r);
     }
 
-    // Route post-fader audio: either directly to the interleaved output
-    // or into the target bus's summing buffer. Freeze capture forces the
-    // master route (`None`); see `route_post_fader`.
-    let dest = (!strategy.force_master_route()).then(|| track.output());
-    route_post_fader(
-        dest,
-        (scratch.track_buf_l, scratch.track_buf_r),
-        (gain_l, gain_r),
-        (&mut *scratch.data, &mut *scratch.bus_bufs),
-        ctx,
-    );
+    // Leave the post-fader route to the reduction: either directly to the
+    // interleaved output or into the target bus's summing buffer, then
+    // the aux sends. Freeze capture forces the master route (`None`); see
+    // `route_post_fader`.
+    *route = Some(SlotRoute {
+        dest: (!strategy.force_master_route()).then(|| track.output()),
+        gains: (gain_l, gain_r),
+    });
     if strategy.is_live() {
         track.set_last_gains(gain_l.1, gain_r.1);
     }
 
-    apply_track_aux_sends(track.id, (gain_l, gain_r), ctx, scratch);
-
-    if extra_ports_filled > 1 {
-        fan_out_to_sub_tracks(track, &disp, extra_ports_filled, ctx, scratch, strategy);
-    }
+    fan_out.map(|ports| (disp, ports))
 }
 
 /// Whether a sidechain key is tapped from `track` or from one of its
-/// sub-tracks by a consumer that reads it ([`key_consumed`]) — the taps
-/// a silenced track must still render for. Only
-/// consulted for silenced tracks, so the sub-track scan costs nothing on
-/// the audible path.
-fn keys_from(
-    track: &Track,
-    ctx: &BlockCtx<'_>,
-    sidechain: &SidechainTaps,
-    strategy: &RenderStrategy<'_>,
-) -> bool {
-    if key_consumed(ctx, sidechain, strategy, SendSource::Track(track.id)) {
+/// sub-tracks by a consumer that reads it ([`key_consumed`], decided per
+/// slot by [`prepare_slots`]) — the taps a silenced track must still
+/// render for. Only consulted for silenced tracks, so the sub-track scan
+/// costs nothing on the audible path.
+fn keys_from(idx: usize, track: &Track, ctx: &BlockCtx<'_>, slots: &[TrackSlot]) -> bool {
+    if slots[idx].key_consumed {
         return true;
     }
-    ctx.inputs.tracks.values().any(|t| {
-        matches!(t.sub_track_of, Some((parent, _)) if parent == track.id)
-            && key_consumed(ctx, sidechain, strategy, SendSource::Track(t.id))
+    ctx.inputs.tracks.values().zip(slots).any(|(t, slot)| {
+        matches!(t.sub_track_of, Some((parent, _)) if parent == track.id) && slot.key_consumed
     })
 }
 
@@ -217,8 +357,9 @@ fn render_track_source(
     track: &Track,
     disp: &TrackDisposition,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    bufs: TrackBufs<'_>,
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) -> Option<TrackSource> {
     // Frozen playback substitution (doc #187, todo #573): when the
     // track carries an active frozen source, play its cached post-FX
@@ -240,8 +381,8 @@ fn render_track_source(
             ctx.inputs.sample_rate,
             ctx.inputs.playhead,
             frames,
-            &mut scratch.track_buf_l[..frames],
-            &mut scratch.track_buf_r[..frames],
+            &mut bufs.l[..frames],
+            &mut bufs.r[..frames],
         );
         return Some(TrackSource {
             has_audio,
@@ -253,10 +394,10 @@ fn render_track_source(
     // an audio recording buffer, so playback and capture cannot drift
     // apart about what a track's source is.
     if track.runs_internal_instrument() {
-        render_instrument_source(track, disp, ctx, scratch, strategy)
+        render_instrument_source(track, disp, ctx, bufs, js, strategy)
     } else {
         Some(TrackSource {
-            has_audio: render_audio_source(track, ctx, scratch, strategy),
+            has_audio: render_audio_source(track, ctx, bufs, js, strategy),
             extra_ports_filled: 0,
         })
     }
@@ -269,10 +410,16 @@ fn render_instrument_source(
     track: &Track,
     disp: &TrackDisposition,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    bufs: TrackBufs<'_>,
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) -> Option<TrackSource> {
     let frames = ctx.inputs.frames;
+    let TrackBufs {
+        l: track_buf_l,
+        r: track_buf_r,
+        carry,
+    } = bufs;
     let mut has_audio = false;
     let mut extra_ports_filled: usize = 0;
 
@@ -283,7 +430,7 @@ fn render_instrument_source(
         frames,
         ctx.inputs.tempo_map,
         ctx.inputs.sample_rate,
-        scratch.note_event_buf,
+        js.note_event_buf,
     );
 
     // The first plugin is the instrument (receives note events); the
@@ -292,14 +439,18 @@ fn render_instrument_source(
     let mut plugin_iter = track_plugins.iter();
     if let Some(&instrument_id) = plugin_iter.next() {
         if let Some(mutex) = ctx.inputs.plugins.get(&instrument_id) {
-            if let Some(mut inst) = strategy.lock_instrument(mutex, instrument_id) {
+            if let Some(mut inst) = strategy.lock_instrument(mutex) {
+                // Replay events parked during earlier lock contention
+                // before this block's (a no-op offline, where the carry
+                // is always empty).
+                carry.deliver(instrument_id, &mut *inst);
                 apply_plugin_params(
                     &mut inst,
                     ctx.inputs.automation,
                     instrument_id,
                     ctx.evals.eval_start,
                 );
-                for event in scratch.note_event_buf.iter() {
+                for event in js.note_event_buf.iter() {
                     if event.is_note_on {
                         inst.0
                             .queue_note_on(event.note, event.velocity, event.sample_offset);
@@ -308,30 +459,37 @@ fn render_instrument_source(
                     }
                 }
 
-                let port_count = inst.0.output_port_count().min(scratch.port_scratch.len());
+                let port_count = inst.0.output_port_count().min(js.port_scratch.len());
                 if port_count > 1 {
                     // Multi-output instrument: fan out into the per-port
                     // scratch pool, then copy port 0 back into the
                     // track's main buffer so the rest of the track chain
                     // (effects + fader + bus routing) runs unchanged.
-                    process_multi_port(&mut inst, &mut *scratch.port_scratch, port_count, frames);
-                    scratch.track_buf_l[..frames]
-                        .copy_from_slice(&scratch.port_scratch[0].0[..frames]);
-                    scratch.track_buf_r[..frames]
-                        .copy_from_slice(&scratch.port_scratch[0].1[..frames]);
+                    process_multi_port(&mut inst, &mut *js.port_scratch, port_count, frames);
+                    track_buf_l[..frames].copy_from_slice(&js.port_scratch[0].0[..frames]);
+                    track_buf_r[..frames].copy_from_slice(&js.port_scratch[0].1[..frames]);
                     extra_ports_filled = port_count;
                 } else {
                     // Single-output path (legacy plugins): use the thin
                     // wrapper that re-targets onto track_buf_l/r.
                     inst.0.process(
-                        &mut scratch.track_buf_l[..frames],
-                        &mut scratch.track_buf_r[..frames],
+                        &mut track_buf_l[..frames],
+                        &mut track_buf_r[..frames],
                         frames,
                     );
                 }
                 has_audio = true;
-            } else {
-                strategy.instrument_lock_failed(instrument_id, scratch.note_event_buf);
+            } else if strategy.is_live() {
+                // The UI thread holds the plugin lock (param drag /
+                // autosave / reload): park this block's events so they
+                // replay on the next successful lock instead of dropping
+                // them. The one-block audio dropout is accepted for now
+                // (future work: crossfade). A carry the prologue filled
+                // for a *different* instrument (the chain was swapped
+                // between the two reads) can't take them; they drop.
+                if carry.instance().is_none_or(|id| id == instrument_id) {
+                    carry.stash(instrument_id, js.note_event_buf);
+                }
             }
         }
     }
@@ -351,15 +509,15 @@ fn render_instrument_source(
         // routing that would otherwise carry it into the stem — while
         // still returning the port count, which is the whole reason this
         // track is rendering.
-        scratch.track_buf_l[..frames].fill(0.0);
-        scratch.track_buf_r[..frames].fill(0.0);
+        track_buf_l[..frames].fill(0.0);
+        track_buf_r[..frames].fill(0.0);
     } else if run_fx_chain(
         plugin_iter.copied(),
         track.fx_bypass(),
         ctx,
-        scratch.sidechain,
-        (&mut *scratch.track_buf_l, &mut *scratch.track_buf_r),
-        scratch.fx_dry,
+        js.sidechain,
+        (&mut *track_buf_l, &mut *track_buf_r),
+        js.fx_dry,
         strategy,
     ) {
         // A ducker on a synth track is the most common sidechain there
@@ -385,10 +543,12 @@ fn render_instrument_source(
 fn render_audio_source(
     track: &Track,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    bufs: TrackBufs<'_>,
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) -> bool {
     let frames = ctx.inputs.frames;
+    let (track_buf_l, track_buf_r) = (bufs.l, bufs.r);
     let mut has_audio = false;
 
     // Mix monitor input for all tracks with monitoring enabled (live path
@@ -396,7 +556,7 @@ fn render_audio_source(
     // recorded take covers this block (doc #257); the take itself arrives
     // via the clip mix just below.
     if !recorded_monitor_gate(track, ctx.inputs.clips, ctx.inputs.playhead, frames)
-        && strategy.mix_monitor(track, scratch.track_buf_l, scratch.track_buf_r, frames)
+        && strategy.mix_monitor(track, track_buf_l, track_buf_r, frames)
     {
         has_audio = true;
     }
@@ -411,8 +571,8 @@ fn render_audio_source(
         track.id,
         ctx.inputs.playhead,
         frames,
-        scratch.track_buf_l,
-        scratch.track_buf_r,
+        track_buf_l,
+        track_buf_r,
         ctx.inputs.take_comp,
     ) {
         has_audio = true;
@@ -430,8 +590,8 @@ fn render_audio_source(
                 ctx.inputs.clips,
                 ctx.inputs.playhead,
                 frames,
-                scratch.track_buf_l,
-                scratch.track_buf_r,
+                track_buf_l,
+                track_buf_r,
             ) {
                 has_audio = true;
             }
@@ -446,9 +606,9 @@ fn render_audio_source(
             track_plugins.iter().copied(),
             track.fx_bypass(),
             ctx,
-            scratch.sidechain,
-            (&mut *scratch.track_buf_l, &mut *scratch.track_buf_r),
-            scratch.fx_dry,
+            js.sidechain,
+            (&mut *track_buf_l, &mut *track_buf_r),
+            js.fx_dry,
             strategy,
         )
     {

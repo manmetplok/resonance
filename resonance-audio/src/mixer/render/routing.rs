@@ -62,12 +62,14 @@ pub(crate) fn route_post_fader(
 /// zero on a muted track); pre-fader takes the raw post-plugin signal
 /// with the send level only. The destination's summing buffer is always
 /// filled before the bus pass runs it, so a track→return send is
-/// sample-correct regardless of bus ordering.
+/// sample-correct regardless of bus ordering. `src` is the track's
+/// pre-fader signal.
 pub(crate) fn apply_track_aux_sends(
     track_id: TrackId,
     gains: GainRamp,
+    src: (&[f32], &[f32]),
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
+    bus_bufs: &mut BusBufs,
 ) {
     let frames = ctx.inputs.frames;
     let (gain_l, gain_r) = gains;
@@ -92,16 +94,8 @@ pub(crate) fn apply_track_aux_sends(
                 (gain_r.0 * send_lin, gain_r.1 * send_lin),
             )
         };
-        let (dst_l, dst_r) = &mut scratch.bus_bufs[dst_idx];
-        sum_to_stereo(
-            dst_l,
-            dst_r,
-            frames,
-            scratch.track_buf_l,
-            scratch.track_buf_r,
-            send_gain_l,
-            send_gain_r,
-        );
+        let (dst_l, dst_r) = &mut bus_bufs[dst_idx];
+        sum_to_stereo(dst_l, dst_r, frames, src.0, src.1, send_gain_l, send_gain_r);
     }
 }
 

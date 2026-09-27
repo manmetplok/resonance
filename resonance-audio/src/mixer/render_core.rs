@@ -58,7 +58,7 @@ pub use super::render::clips::{mix_track_clips, recorded_monitor_gate, CLIP_DECL
 pub(crate) fn render_block(
     inputs: BlockInputs<'_>,
     scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
     let ctx = BlockCtx::new(inputs);
     let frames = ctx.inputs.frames;

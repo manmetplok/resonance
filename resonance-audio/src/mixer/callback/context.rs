@@ -90,6 +90,9 @@ pub(crate) struct CallbackScratch<'a> {
     /// the audio thread and pre-allocated, so routing a sidechain never
     /// allocates on the realtime path.
     pub(crate) sidechain: &'a mut SidechainTaps,
+    /// The per-track render slots (`render::slots`), grown by the engine
+    /// thread and adopted at the top of each playing block.
+    pub(crate) track_slots: &'a mut crate::mixer::render::slots::LiveSlots,
     /// Dry staging for the click-free bypass crossfades (`crate::bypass`),
     /// pre-allocated for the same reason.
     pub(crate) fx_dry: &'a mut crate::bypass::FxDryScratch,
@@ -100,8 +103,9 @@ pub(crate) struct CallbackScratch<'a> {
 
 impl CallbackScratch<'_> {
     /// Borrow this scratch as one render-core sub-block: the output slice
-    /// `out`, the shared buffers, the MIDI stash and the monitor slice
-    /// `mon` — three disjoint borrows the render core needs at once.
+    /// `out`, the shared buffers (the MIDI stash among them) and the
+    /// monitor slice `mon` — disjoint borrows the render core needs at
+    /// once.
     ///
     /// Splitting them here (rather than at each call site) is what lets a
     /// seam-crossing callback render two sub-blocks over different slices
@@ -110,19 +114,18 @@ impl CallbackScratch<'_> {
         &mut self,
         out: Range<usize>,
         mon: Range<usize>,
-    ) -> (BlockScratch<'_>, &mut MidiStash, &[f32]) {
+    ) -> (BlockScratch<'_>, &[f32]) {
         (
             BlockScratch {
                 data: &mut self.data[out],
-                track_buf_l: &mut *self.track_buf_l,
-                track_buf_r: &mut *self.track_buf_r,
                 bus_bufs: &mut *self.bus_bufs,
+                slots: self.track_slots.current(),
+                stash: Some(&mut *self.midi_stash),
                 port_scratch: &mut *self.port_scratch,
                 note_event_buf: &mut *self.note_event_buf,
                 sidechain: &mut *self.sidechain,
                 fx_dry: &mut *self.fx_dry,
             },
-            &mut *self.midi_stash,
             &self.monitor_temp[mon],
         )
     }

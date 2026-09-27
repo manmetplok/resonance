@@ -15,6 +15,7 @@ use crate::engine::AutomationSnapshot;
 use crate::types::*;
 
 use super::super::midi_stash::MidiStash;
+use super::super::render::slots::TrackSlots;
 use super::super::render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
 use super::super::{transport_pos_beats, MAX_MIDI_EVENTS_PER_BUFFER, MAX_PLUGIN_OUTPUT_PORTS};
 
@@ -74,8 +75,7 @@ pub fn render_aux_with_comp_for_test(
     let active_busses = busses_guard.len();
 
     let mut data = vec![0.0f32; frames * 2];
-    let mut track_buf_l = vec![0.0f32; frames];
-    let mut track_buf_r = vec![0.0f32; frames];
+    let mut slots = TrackSlots::new(tracks_guard.len(), frames);
     let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..active_busses)
         .map(|_| (vec![0.0f32; frames], vec![0.0f32; frames]))
         .collect();
@@ -87,7 +87,7 @@ pub fn render_aux_with_comp_for_test(
     let fan_out_only = |_id: TrackId| false;
     let key_only = |_id: TrackId| false;
     let key_only_bus = |_id: BusId| false;
-    let mut strategy = RenderStrategy::Bounce {
+    let strategy = RenderStrategy::Bounce {
         in_filter: &in_filter,
         fan_out_only: &fan_out_only,
         key_only: &key_only,
@@ -119,15 +119,15 @@ pub fn render_aux_with_comp_for_test(
         },
         &mut BlockScratch {
             data: &mut data,
-            track_buf_l: &mut track_buf_l,
-            track_buf_r: &mut track_buf_r,
             bus_bufs: &mut bus_bufs,
+            slots: &mut slots,
+            stash: None,
             port_scratch: &mut port_scratch,
             fx_dry: &mut fx_dry,
             note_event_buf: &mut note_buf,
             sidechain: &mut sidechain,
         },
-        &mut strategy,
+        &strategy,
     );
 
     (data, bus_bufs)
@@ -154,8 +154,7 @@ pub struct RenderBenchHarness {
     latency: crate::latency::LatencyComp,
     automation: AutomationSnapshot,
     data: Vec<f32>,
-    track_buf_l: Vec<f32>,
-    track_buf_r: Vec<f32>,
+    slots: TrackSlots,
     bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
     port_scratch: Vec<(Vec<f32>, Vec<f32>)>,
     note_buf: Vec<PendingNoteEvent>,
@@ -183,6 +182,7 @@ impl RenderBenchHarness {
             busses.into_iter().map(|b| (b.id, Arc::new(b))).collect();
         let bus_count = busses.len();
         Self {
+            slots: TrackSlots::new(tracks.len(), frames),
             tracks,
             busses,
             clips: clips.into_iter().map(Arc::new).collect(),
@@ -194,8 +194,6 @@ impl RenderBenchHarness {
             latency: crate::latency::LatencyComp::empty(),
             automation: AutomationSnapshot::default(),
             data: vec![0.0; frames * 2],
-            track_buf_l: vec![0.0; frames],
-            track_buf_r: vec![0.0; frames],
             bus_bufs: (0..bus_count)
                 .map(|_| (vec![0.0; frames], vec![0.0; frames]))
                 .collect(),
@@ -223,8 +221,7 @@ impl RenderBenchHarness {
             playing: true,
             pos_beats: transport_pos_beats(&self.tempo_map, playhead, self.sample_rate),
         });
-        let mut strategy = RenderStrategy::Live {
-            midi_stash: &mut self.midi_stash,
+        let strategy = RenderStrategy::Live {
             transport_snap,
             monitor_temp: &[],
             monitor_frames: 0,
@@ -252,15 +249,15 @@ impl RenderBenchHarness {
             },
             &mut BlockScratch {
                 data: &mut self.data[..frames * 2],
-                track_buf_l: &mut self.track_buf_l,
-                track_buf_r: &mut self.track_buf_r,
                 bus_bufs: &mut self.bus_bufs,
+                slots: &mut self.slots,
+                stash: Some(&mut self.midi_stash),
                 port_scratch: &mut self.port_scratch,
                 note_event_buf: &mut self.note_buf,
                 sidechain: &mut self.sidechain,
                 fx_dry: &mut self.fx_dry,
             },
-            &mut strategy,
+            &strategy,
         );
         &self.data
     }
@@ -321,8 +318,7 @@ pub fn render_take_comp_borrowed_for_test(
     let automation = AutomationSnapshot::default();
 
     let mut data = vec![0.0f32; frames * 2];
-    let mut track_buf_l = vec![0.0f32; frames];
-    let mut track_buf_r = vec![0.0f32; frames];
+    let mut slots = TrackSlots::new(tracks_guard.len(), frames);
     let mut bus_bufs: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
     let mut port_scratch: Vec<(Vec<f32>, Vec<f32>)> = Vec::new();
     let mut note_buf: Vec<PendingNoteEvent> = Vec::new();
@@ -334,9 +330,8 @@ pub fn render_take_comp_borrowed_for_test(
     let fan_out_only = |_id: TrackId| false;
     let key_only = |_id: TrackId| false;
     let key_only_bus = |_id: BusId| false;
-    let mut strategy = if live {
+    let strategy = if live {
         RenderStrategy::Live {
-            midi_stash: &mut midi_stash,
             transport_snap: None,
             monitor_temp: &[],
             monitor_frames: 0,
@@ -385,15 +380,15 @@ pub fn render_take_comp_borrowed_for_test(
             },
             &mut BlockScratch {
                 data: &mut data,
-                track_buf_l: &mut track_buf_l,
-                track_buf_r: &mut track_buf_r,
                 bus_bufs: &mut bus_bufs,
+                slots: &mut slots,
+                stash: live.then_some(&mut midi_stash),
                 port_scratch: &mut port_scratch,
                 note_event_buf: &mut note_buf,
                 sidechain: &mut sidechain,
                 fx_dry: &mut fx_dry,
             },
-            &mut strategy,
+            &strategy,
         );
     }
 

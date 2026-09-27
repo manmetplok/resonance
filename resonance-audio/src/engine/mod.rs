@@ -810,6 +810,9 @@ impl AudioEngine {
             let automation_audio = Arc::clone(&automation_audio);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
+            // One render slot per track (the track jobs' output, reduced in
+            // track order), grown by the engine thread on graph publish.
+            let mut track_slots = shared_audio.graph.attach_live_slots(audio_buf_frames);
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
             // runtime never allocates on the audio thread. mix_audio only
             // uses the first N slots where N = current bus count.
@@ -929,6 +932,7 @@ impl AudioEngine {
                             monitor_drain: &mut monitor_drain,
                             ab_meters: &mut ab_meters,
                             sidechain: &mut sidechain,
+                            track_slots: &mut track_slots,
                             fx_dry: &mut fx_dry,
                             continuity: &mut continuity,
                         },

@@ -20,7 +20,7 @@ use super::strategy::RenderStrategy;
 pub(crate) fn render_bus_pass(
     ctx: &BlockCtx<'_>,
     scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
     for (bus_idx, bus) in ctx
         .inputs
@@ -38,7 +38,7 @@ fn render_one_bus(
     bus_idx: usize,
     ctx: &BlockCtx<'_>,
     scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
     let frames = ctx.inputs.frames;
     let bus_auto_gain = auto_gain_ramp(

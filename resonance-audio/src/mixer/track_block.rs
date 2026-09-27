@@ -8,7 +8,6 @@
 //! Allocation-free.
 
 use super::common::TransportSnap;
-use super::midi_stash::MidiStash;
 use super::render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
 
 /// What the live strategy needs on top of the shared block parameters:
@@ -40,15 +39,13 @@ pub(crate) struct LiveBlock<'a> {
 pub(crate) fn render_timeline_block(
     inputs: BlockInputs<'_>,
     scratch: &mut BlockScratch<'_>,
-    midi_stash: &mut MidiStash,
     live: LiveBlock<'_>,
 ) {
-    let mut strategy = RenderStrategy::Live {
-        midi_stash,
+    let strategy = RenderStrategy::Live {
         transport_snap: live.transport_snap,
         monitor_temp: live.monitor_temp,
         monitor_frames: live.monitor_frames,
         input_channels: live.input_channels,
     };
-    render_block(inputs, scratch, &mut strategy);
+    render_block(inputs, scratch, &strategy);
 }

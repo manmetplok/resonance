@@ -3,8 +3,9 @@
 //!
 //! Sub-track audio exists nowhere else — a sub-track has no clips and no
 //! instrument of its own, only the port its parent filled — so this phase
-//! runs at the end of the parent's own iteration, over the port scratch
-//! the parent's `process_multi` just wrote.
+//! runs at the end of the parent's own job, over the port scratch the
+//! parent's `process_multi` just wrote. Each routed tap is copied into the
+//! sub-track's own slot for the reduction to sum.
 
 use resonance_common::AutomationTarget;
 
@@ -12,8 +13,8 @@ use crate::mixer::automation_apply::{auto_gain_ramp, auto_muted, auto_volume_ram
 use crate::mixer::common::ramped_stereo_peaks;
 use crate::types::*;
 
-use super::context::{key_consumed, run_fx_chain, BlockCtx, BlockScratch};
-use super::routing::route_post_fader;
+use super::context::{run_fx_chain, BlockCtx, JobScratch};
+use super::slots::{SlotRoute, TrackSlot};
 use super::strategy::{RenderStrategy, TrackDisposition};
 
 /// One multi-output port routed through the sub-track that owns it.
@@ -36,8 +37,9 @@ pub(super) fn fan_out_to_sub_tracks(
     disp: &TrackDisposition,
     ports_filled: usize,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    slots: &mut [TrackSlot],
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
     // The parent's fader is the kit's group trim (ba doc #275 P1.1).
     // Evaluated once per block, outside the tap loop.
@@ -48,7 +50,8 @@ pub(super) fn fan_out_to_sub_tracks(
         ctx.evals.gain_start,
         ctx.evals.gain_end,
     );
-    for sub_track in ctx.inputs.tracks.values() {
+    let n = slots.len();
+    for (slot_idx, sub_track) in ctx.inputs.tracks.values().enumerate().take(n) {
         let Some((parent_id, port_idx)) = sub_track.sub_track_of else {
             continue;
         };
@@ -67,7 +70,8 @@ pub(super) fn fan_out_to_sub_tracks(
                 parent_silenced: disp.silenced,
             },
             ctx,
-            scratch,
+            &mut slots[slot_idx],
+            js,
             strategy,
         );
     }
@@ -76,8 +80,9 @@ pub(super) fn fan_out_to_sub_tracks(
 fn render_sub_track_tap(
     tap: SubTrackTap<'_>,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
-    strategy: &mut RenderStrategy<'_>,
+    slot: &mut TrackSlot,
+    js: &mut JobScratch<'_>,
+    strategy: &RenderStrategy<'_>,
 ) {
     let frames = ctx.inputs.frames;
     let SubTrackTap {
@@ -112,9 +117,7 @@ fn render_sub_track_tap(
         parent_volume,
     ) {
         Some(gains) => (gains, false),
-        None if strategy.renders(sub_track.id)
-            && key_consumed(ctx, scratch.sidechain, strategy, sub_tap) =>
-        {
+        None if strategy.renders(sub_track.id) && slot.key_consumed => {
             (((0.0, 0.0), (0.0, 0.0)), true)
         }
         None => return,
@@ -126,15 +129,15 @@ fn render_sub_track_tap(
     // audio effect and is subject to the sub-track's own FX-bypass flag.
     {
         let sub_plugins = sub_track.plugins();
-        let (pl, pr) = &mut scratch.port_scratch[port_idx];
+        let (pl, pr) = &mut js.port_scratch[port_idx];
         let (pl, pr) = (pl.as_mut_slice(), pr.as_mut_slice());
         run_fx_chain(
             sub_plugins.iter().copied(),
             sub_track.fx_bypass(),
             ctx,
-            scratch.sidechain,
+            js.sidechain,
             (pl, pr),
-            scratch.fx_dry,
+            js.fx_dry,
             strategy,
         );
     }
@@ -143,10 +146,9 @@ fn render_sub_track_tap(
     // kick" on a multi-output kit means keying off the kick TAP, which is
     // the only place that piece exists as its own signal. Captured
     // post-FX, pre-fader, exactly like the top-level tracks.
-    if scratch.sidechain.is_tapped(sub_tap) {
-        let (pl, pr) = &scratch.port_scratch[port_idx];
-        scratch
-            .sidechain
+    if js.sidechain.is_tapped(sub_tap) {
+        let (pl, pr) = &js.port_scratch[port_idx];
+        js.sidechain
             .capture(sub_tap, &pl[..frames], &pr[..frames], frames);
     }
 
@@ -160,7 +162,7 @@ fn render_sub_track_tap(
 
     // Plugin-delay compensation for the sub-track's chain.
     {
-        let (pl, pr) = &mut scratch.port_scratch[port_idx];
+        let (pl, pr) = &mut js.port_scratch[port_idx];
         ctx.inputs.latency_comp.apply(
             sub_track.id,
             &mut pl[..frames],
@@ -169,7 +171,7 @@ fn render_sub_track_tap(
         );
     }
 
-    let (pl, pr) = &scratch.port_scratch[port_idx];
+    let (pl, pr) = &js.port_scratch[port_idx];
     // Peak levels for sub-track VU meter (live only).
     if strategy.is_live() {
         let (sub_peak_l, sub_peak_r) = ramped_stereo_peaks(pl, pr, frames, sub_gain_l, sub_gain_r);
@@ -177,17 +179,16 @@ fn render_sub_track_tap(
         sub_track.update_peak_r(sub_peak_r);
     }
 
-    // Route post-fader audio to the sub-track's destination. Freeze
-    // capture folds the fan-out into master so the parent's cache carries
-    // the whole multi-output mix.
-    let dest = (!strategy.force_master_route()).then(|| sub_track.output());
-    route_post_fader(
-        dest,
-        (pl.as_slice(), pr.as_slice()),
-        (sub_gain_l, sub_gain_r),
-        (&mut *scratch.data, &mut *scratch.bus_bufs),
-        ctx,
-    );
+    // Leave the post-fader route to the reduction, which sums it into the
+    // sub-track's destination after the parent's own route and sends.
+    // Freeze capture folds the fan-out into master so the parent's cache
+    // carries the whole multi-output mix.
+    slot.l[..frames].copy_from_slice(&pl[..frames]);
+    slot.r[..frames].copy_from_slice(&pr[..frames]);
+    slot.route = Some(SlotRoute {
+        dest: (!strategy.force_master_route()).then(|| sub_track.output()),
+        gains: (sub_gain_l, sub_gain_r),
+    });
     if strategy.is_live() {
         sub_track.set_last_gains(sub_gain_l.1, sub_gain_r.1);
     }

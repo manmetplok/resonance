@@ -430,7 +430,7 @@ pub use mixer::collect_midi_events_bounce;
 /// overflow / panic / delivery without a live CLAP plugin (the test
 /// supplies its own `NoteSink`).
 #[cfg(feature = "test-internals")]
-pub use mixer::{MidiStash, NoteSink};
+pub use mixer::{MidiStash, NoteSink, StashEntry};
 #[cfg(feature = "test-internals")]
 pub use limits::{MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
 
