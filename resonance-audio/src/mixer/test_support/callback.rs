@@ -141,15 +141,16 @@ impl MixAudioHarness {
     /// that edits it through the real handlers (`EngineHandlerHarness`,
     /// playing the engine thread) while this renders on another thread,
     /// as the audio callback does (code review ARCH-02 B-5's clip hammer).
-    /// Default tempo map, native monitor drain, bus buffers for the busses
-    /// the graph holds now.
+    /// Default tempo map, native monitor drain, and — like the engine's
+    /// own callback — bus buffers for [`MAX_BUSSES`](crate::limits::MAX_BUSSES),
+    /// so a bus the handlers add while this renders is rendered too.
     pub fn on_shared(
         shared: Arc<SharedState>,
         frames: usize,
         channels: usize,
         sample_rate: u32,
     ) -> Self {
-        let bus_count = shared.graph.load().busses.len().max(1);
+        let bus_count = crate::limits::MAX_BUSSES.max(shared.graph.load().busses.len());
         Self::build(
             shared,
             bus_count,
