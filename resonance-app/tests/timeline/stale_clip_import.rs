@@ -1,5 +1,5 @@
 //! A `ClipImported` from a replaced project is dropped (code review
-//! UPD-09). An import queued before a project load or slow-path undo used
+//! UPD-09). An import queued before a project load or an undo used
 //! to land in the new project: it overwrote the waveform and length of the
 //! new project's clip with the same id, or added a phantom clip on a track
 //! the project doesn't have.

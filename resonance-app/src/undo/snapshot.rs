@@ -21,8 +21,7 @@ use crate::project::LoadedProject;
 use resonance_audio::types::TrackId;
 
 /// One point in the undo/redo history. Wraps the `LoadedProject` shape
-/// so snapshots can be fed straight into the existing
-/// `replay_loaded_project` path. Everything undoable travels in the
+/// a disk load restores from, so both share the `Reconcile` driver. Everything undoable travels in the
 /// `ProjectFile` (+ notes + plugin blobs); there is no side-car state
 /// (ARCH-01 A1-2 folded it into the file, guarded by
 /// `tests/io/undo_snapshot_fixed_point.rs`; the derived-clip id counter is
@@ -191,7 +190,7 @@ impl crate::Resonance {
     ///
     /// Also asks the engine to persist every audio clip's
     /// `audio/clip_<id>.wav` (code review FU-V5b): the snapshot names a
-    /// clip's audio only by that file, which the slow-path restore
+    /// clip's audio only by that file, which a restore that re-adds it
     /// reloads, and which otherwise exists only after a save. Sent here —
     /// before the edit's own commands, which the engine runs after it —
     /// so a clip the edit removes is persisted while it still exists.
@@ -294,24 +293,19 @@ impl crate::Resonance {
             && !self.freeze.any_in_flight()
     }
 
-    /// Drive the engine and GUI back to `snapshot`. Tries a structure-
-    /// preserving diff replay first — when the snapshot has the same set
-    /// of tracks, busses, plugins, and clips as the current state, only
-    /// the changed scalars (volumes, mutes, BPM, plugin state blobs,
-    /// MIDI notes, etc.) are pushed to the engine, keeping every plugin
-    /// instance alive. When the structural shape differs, falls back to
-    /// the full `ClearAll → AllCleared → replay_loaded_project` pipeline
-    /// that `ProjectLoaded(Ok)` uses. Playback is stopped either way
-    /// (per v1 policy).
+    /// Drive the engine and GUI back to `snapshot`, in place: the
+    /// `Reconcile` driver diffs every domain against the live state's file
+    /// (`reconcile_all` with `old = Some(current)`, ARCH-01 A-13) — one
+    /// engine command per changed scalar, one add or remove per entity
+    /// that differs, and every plugin instance that is kept stays alive.
+    /// Synchronous: there is no `ClearAll` and nothing waits for
+    /// `AllCleared` (the full-replay fallback went in A-13j). Playback is
+    /// stopped (per v1 policy).
     ///
     /// # Take lanes are restored by the replay, not re-asserted after it
     ///
-    /// Both paths end in `replay_take_groups`, which sends
-    /// `AudioCommand::RestoreTakeGroups` — on the fast path from
-    /// the `TakeGroups` reconcile domain inside [`crate::update::try_diff_replay`], on
-    /// the slow path from `replay_loaded_project`, which the `AllCleared`
-    /// handler runs for the pending undo load. That
-    /// command replaces the engine's take-group store wholesale (comp and
+    /// The `TakeGroups` reconcile domain ends in `replay_take_groups`,
+    /// which sends `AudioCommand::RestoreTakeGroups`. That command replaces the engine's take-group store wholesale (comp and
     /// active take included, since both ride the `TakeGroup`) and
     /// republishes the comp table, so the engine plays and bounces the
     /// restored lanes without touching the transport.
@@ -331,54 +325,48 @@ impl crate::Resonance {
     /// step, and `RestoreTakeGroups` was deliberately made silent so a
     /// restore does not come up dirty.
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
-        self.restore_from_snapshot(snapshot, true);
-    }
+        use crate::update::project_io::reconcile::{reconcile_all, LiveCarry, Origin, ReconcileCtx};
 
-    /// [`Self::begin_restore_from_snapshot`], with the diff path optional.
-    /// `allow_diff = false` forces the `ClearAll` fallback: since A-13i
-    /// `structurally_compatible` accepts every pair of snapshots, so this
-    /// is the only way left to reach `Origin::UndoFull` — kept for the
-    /// tests that pin that path until A-13j deletes it.
-    pub(crate) fn restore_from_snapshot(&mut self, snapshot: UndoSnapshot, allow_diff: bool) {
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
         let _ = self.engine.send(AudioCommand::Stop);
         self.transport.playing = false;
         self.transport.recording = false;
 
-        let UndoSnapshot { project: loaded } = snapshot;
-
-        // Fast path: structure-identical undo (the common case for
-        // fader/knob/transport edits). Drives the engine surgically
-        // without tearing down plugin instances.
-        if allow_diff && crate::update::try_diff_replay(self, &loaded) {
-            return;
-        }
-
-        // Slow path: structural change. Stash the snapshot and mark it an
-        // undo so the `AllCleared` handler runs the full replay with the
-        // undo branches (`io.restoring_undo`; it clears the flag after the
-        // replay). The handler puts `project_path` back because
-        // `replay_loaded_project` clears it on entry.
-        self.io.loading = true;
-        self.io.pending_load = Some(Box::new(loaded));
-        self.io.restoring_undo = true;
-
-        let _ = self.engine.send(AudioCommand::ClearAll);
+        let UndoSnapshot { project: target } = snapshot;
+        let current = crate::update::build_project_file(self);
+        let project_path = self.io.project_path.clone();
+        let ctx = ReconcileCtx {
+            origin: Origin::Undo,
+            project_dir: project_path.as_deref(),
+            midi_notes: &target.midi_notes,
+            plugin_states: &target.plugin_states,
+            live: LiveCarry {
+                derived_counter_floor: LiveCarry::derived_counter_floor(self, Origin::Undo),
+            },
+        };
+        // Every domain, in table order, by diff against `current`: the
+        // transport / compose globals and the tempo map before any entity;
+        // the routing edges, clips, plugin instances, tracks and busses the
+        // target lacks, removed in that order; the entities, their plugin
+        // state and order; the routing edges; the clips and what derives
+        // from them; the app-side content; external instruments, lanes and
+        // freeze last. See `docs/design/A-13-reconcile.md`.
+        reconcile_all(self, Some(&current), &target.file, &ctx);
     }
 
     /// Restore the compose section→clip map from `file` and reserve the
     /// derived-clip counter past everything restored — the one rule a
-    /// disk load and both undo paths share (FU-H2a, ARCH-01 A-6). Runs
+    /// disk load and an undo share (FU-H2a, ARCH-01 A-6). Runs
     /// after the MIDI and audio clips are restored.
     ///
     /// The map is the file's (`ProjectFile::derived_clips`), not a
     /// rebuild from the mirror: a snapshot taken while a re-derived clip's
     /// `MidiClipCreated` echo was in flight holds that clip's entry but
-    /// not the clip, and on the diff replay (`echoes_in_flight`) the
-    /// engine still has the clip and the echo will land — dropping the
-    /// entry would orphan it. After a full replay (a disk load or a
-    /// slow-path undo) the engine holds only the replayed clips, so there
+    /// not the clip, and on an undo (`echoes_in_flight`) the engine
+    /// still has the clip and the echo will land — dropping the entry
+    /// would orphan it. After a disk load the engine holds only the
+    /// replayed clips, so there
     /// an entry whose clip is not mirrored can never be satisfied and is
     /// dropped (left in, it would also suspend the UPD-05 freeze check on
     /// its track forever, see `revalidate_frozen_content`). A file saved
@@ -452,7 +440,7 @@ impl crate::Resonance {
     /// no stale bindings behind.
     ///
     /// `fresh`: tracks the restore has just added to the engine (ARCH-01
-    /// A-13i — on the diff path, those `old` did not have or had with a
+    /// A-13i — on an undo, those `old` did not have or had with a
     /// different shape). Each gets the after-`ClearAll` treatment on its
     /// own: it starts online, and no empty `SetTrackDeviceParams` is sent
     /// for it when no device is selected.

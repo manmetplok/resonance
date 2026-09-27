@@ -11,7 +11,10 @@ master `1853dd1e`), §11 the sixth (A-13f, group 6 step 1, against
 master `fde89f24`), §12 the seventh (A-13g, group 6 step 2, against
 master `645d49e1`), §13 the eighth (A-13h, group 6 step 3, against master
 `91ec9867`), §14 the ninth (A-13i, group 6 step 4, against master
-`815af005`). Later slices move one group at a time.
+`815af005`), §15 the last (A-13j, delete the fallback, against master
+`73bd9ad1`). Sections 1–14 describe the code as each slice left it;
+`Origin::UndoFull`, `try_diff_replay` and `io.restoring_undo` in them
+are gone since A-13j.
 
 ## 1. The problem
 
@@ -1682,3 +1685,199 @@ undo put back under the id before it landed
 (`tests/timeline/clip_delete_echo_owed.rs`). An unowed `ClipDeleted` of an
 unknown id (the vocal-audio re-install's delete of a cancelled load) is a
 no-op on the mirror.
+
+## 15. A-13j: the fallback deleted
+
+Written against master `73bd9ad1` (after A-13i and B-1).
+
+Since A-13i every undo already took the diff path; the full-replay undo
+was reachable only through a test hook. A-13j deletes it. No user-visible
+behaviour changes beyond what §14 already recorded.
+
+### What went
+
+| Deleted | Where |
+|---|---|
+| `structurally_compatible` (always `true`), `id_set_eq` (only it used it) | `replay_diff.rs` |
+| `try_diff_replay` — its body is now `begin_restore_from_snapshot`'s | `replay_diff.rs` |
+| `restore_from_snapshot(snapshot, allow_diff)` and its `ClearAll` branch (`io.loading` / `pending_load` / flag set by an undo) | `undo/snapshot.rs` |
+| `test_begin_full_restore_from_snapshot`, `test_restoring_undo` | `test_support/project.rs` |
+| `io.restoring_undo`, its read in `all_cleared`, and FU-A7a's two clears (`ProjectLoaded(Ok)`, `begin_instantiate`) | `state/project_io.rs`, `engine_events/project_io.rs`, `update/project_io/{mod,instantiate}.rs` |
+| `Origin::UndoFull`; `UndoDiff` renamed `Undo` | `reconcile/mod.rs` |
+| `References`' third body and `ReferenceMonitorSource` (its `Live` variant served only `UndoFull`); `restore_references` now always takes the monitor from the file | `reconcile/restored.rs`, `replay/restore.rs` |
+| `MissingPlugins`' dismiss-on-undo arm | `reconcile/restored.rs` |
+| `TakeGroups`' `UndoFull` arm (full `clear()` on an undo) | `reconcile/app_side.rs` |
+| `LiveCarry::project_path` and `LiveCarry`'s lifetime | `reconcile/mod.rs` |
+| `after_clear_all` on `apply_freeze_restore` / `reconcile_freeze_statuses` (an undo is never after a `ClearAll`) | `update/freeze.rs` |
+
+**`LiveCarry::project_path`: verified.** Its only reader was `Freeze`'s
+undo arm. The full replay `take()`s `io.project_path`, which is why it
+was carried; the undo builds `ctx.project_dir` from the same
+`io.project_path` clone, so `Freeze` now passes `ctx.project_dir`.
+`replay_loaded_project` still clears `io.project_path` for its duration
+(`all_cleared` puts it back): no domain reads it — every one resolves
+against `loaded.project_dir` — but the test helpers that call the replay
+directly (without `all_cleared`) would then keep the previous path, so
+the line stayed rather than change what they leave behind.
+
+### One entry point
+
+`reconcile::reconcile_all(r, old: Option<&ProjectFile>, new, ctx)` (was
+`reconcile_all_stages`) clears `io.reconcile_trace` and runs `DOMAINS`.
+It `debug_assert`s that `old.is_some()` exactly when `ctx.origin` is
+`Undo`. Two callers:
+
+* **Disk load / template** — `replay_loaded_project`, from `all_cleared`
+  after the load's `ClearAll`: the vocal side-table clear, `SetProjectDir`,
+  then `reconcile_all(r, None, file, ctx)` under `Origin::DiskLoad`. The
+  disk-load tail (patch resend, scroll reset, relink modal, job
+  completion) stays in `all_cleared`, now unconditional: every
+  `pending_load` is a disk load.
+* **Undo / redo** — `begin_restore_from_snapshot`: `Stop`, build the live
+  file, then `reconcile_all(r, Some(&current), &target.file, ctx)` under
+  `Origin::Undo`, synchronously.
+
+`replay_diff.rs` keeps only `midi_notes_equal` (used by `MidiClips` and
+the snapshot equality).
+
+### What is left per origin
+
+Every remaining `Origin` / `after_clear_all()` branch is a real rule
+between a disk load and an undo, not a leftover of the fallback:
+
+| Domain | Disk load | Undo |
+|---|---|---|
+| `Transport` | playhead to 0 | playhead stays |
+| `TransientUi` | selection, drags, confirms reset | kept (removal domains prune what names a removed entity) |
+| `DrumPatterns` | empty file keeps the seeded bank; drum-roll focus reset | `clear_on_empty`; focus kept |
+| `SectionChordTrim` | trims | no (the snapshot is already trimmed) |
+| `Pool` | `ReserveAssetIds` | no (allocator monotonic in a session) |
+| `TrackGroups` | every effective mute / solo sent | only what differs |
+| `TakeGroups` | `clear()` (drops the peak cache) | `clear_for_snapshot()` |
+| `DerivedClips` | drops entries whose clip was not loaded; scans the bundle | keeps every entry (echo may be in flight); counter floor |
+| `References` | `restore_references` (monitor from the file) | `reconcile_references` (monitor untouched) |
+| `ExternalInstruments` | map rebuilt, no empty `SetTrackDeviceParams` | stale cleared, offline flags kept (fresh tracks as a load) |
+| `MissingPlugins` | `reset()` | nothing (below) |
+| `Freeze` | `reset()` + rehydrate | `apply_freeze_restore` |
+
+### MissingPlugins: the default taken (the user may overrule)
+
+The full-replay undo re-added every plugin on every history step and so
+dismissed the missing-plugin warning rather than re-raise it each time.
+That rule went with `UndoFull`. The undo now leaves the warning alone:
+it re-adds only the plugin instances the live state lacks, and a missing
+one among them is refused by the engine as on a load, which re-raises the
+warning **unless the user already dismissed it for this project**
+(`MissingPluginsState::dismissed`, reset by the next disk load). So:
+undoing the removal of a missing plugin warns once, and never again after
+a dismiss. **This is a default, not a decision** — the alternative (an
+undo never raises the warning) is one line in `MissingPlugins::reconcile`
+(`dismiss()` under `Origin::Undo` when a re-added plugin is refused, or
+unconditionally) if the user prefers it.
+
+### Tests
+
+Removed (they tested only the full-replay undo, which no longer exists):
+
+* `reconcile_order::a_full_undo_runs_every_domain_in_table_order` —
+  replaced by `a_structural_undo_runs_every_domain_in_table_order_without_a_clear`
+  (the same track-add shape now runs the table under `Undo`, no `ClearAll`).
+* `freeze_persist::a_full_replay_undo_reattaches_every_restored_freeze` —
+  its rule (re-attach every freeze after a `ClearAll`) is `UndoFull`-only;
+  the undo arm is `a_diff_path_undo_and_redo_reconcile_the_engine_source`,
+  the disk load's rehydrate the fixture of the same module.
+* `replay_diff.rs`: the eleven `structurally_compatible` / `id_set_eq`
+  tests (`empty_projects_are_structurally_compatible`,
+  `scalar_only_track_diff_is_compatible`,
+  `added_removed_renumbered_and_retyped_tracks_are_compatible`,
+  `added_plugin_is_compatible`, `plugin_reorder_is_compatible`,
+  `plugin_clap_identity_change_is_compatible`, `id_set_eq_ignores_order`,
+  `track_reorder_alone_is_compatible`, `audio_file_path_change_is_compatible`,
+  `legacy_drum_group_id_set_change_is_compatible`,
+  `bus_set_change_is_compatible`). `midi_notes_equal_field_wise` stays.
+* The full-replay halves of `undo_snapshot_fixed_point::automation_lanes_restore_identically_through_both_paths`
+  (a duplicate of its track-delete undo half) and of
+  `a6_a_pending_echo_entry_restores_through_both_paths` (now
+  `…_through_an_undo`; its drop rule is a disk-load rule, below).
+
+Moved to a disk load (they test something a disk load still does):
+
+* `reference_echo_races::a_full_replay_restore_cancels_an_in_flight_load`
+  → `a_disk_load_cancels_an_in_flight_load` (the real `ProjectLoaded` →
+  `ClearAll` → `AllCleared` round trip through the fixture's player).
+* `clip_fade_gain_handlers::restore_into_full_replay_path_reapplies_fade_gain`
+  → `a_disk_load_reapplies_fade_gain`.
+* `control_mutation_gate_loading::a_control_edit_during_a_slow_path_undo_is_busy`
+  → `a_control_edit_during_a_project_load_is_busy`, plus
+  `a_control_edit_right_after_a_structural_undo_is_accepted` (no window).
+* `undo_snapshot_fixed_point::derived_clips_with_a_pending_echo_survive_both_restore_paths`
+  → `…_survive_an_undo_and_drop_on_a_load`: its second half replays the
+  snapshot as a disk load, which drops the entry whose clip it did not
+  load.
+* `undo_restore_flag` (rewritten for disk load vs undo): the disk-load test
+  stays (now checks the `DiskLoad` trace); `an_undo_slow_path_takes_the_undo_branches`
+  → `an_undo_takes_the_undo_branches_in_place` (no `ClearAll`, `Undo`
+  trace, freeze retired, no patch resend, path kept, a stray `AllCleared`
+  replays nothing); FU-A7a's two supersede tests →
+  `an_undo_during_a_{project_load,template_instantiate}s_clear_is_refused`
+  — the race has no undo side left, so the successor pins the other order:
+  an undo while a load's `ClearAll` is in flight is refused
+  (`can_undo_redo_now` needs `!io.loading`) and the load replays as a disk
+  load.
+
+Converted to a structural undo (a track added after the snapshot, now
+restored in place): `freeze_stale_on_content::a_full_replay_undo_keeps_the_frozen_content_baseline`
+→ `a_structural_undo_keeps_the_frozen_content_baseline`, and the "slow
+path" halves of `undo_snapshot_fixed_point`'s `check_both_paths` (five
+fixtures), `vocal_lyric_shapes_…`, `a_lyric_normalising_restore_…`,
+`freeze_states_…`, `reference_content_…` and
+`a6_derived_clips_restore_…_across_a_section_resize` — each through one
+helper, `restore_over_a_track_add`, asserting no `ClearAll` and the fixed
+point.
+
+### Found, not fixed
+
+* **An undo across a landed derived-clip echo leaves an orphan entry.**
+  Snapshot S is taken while a re-derived clip's `MidiClipCreated` is in
+  flight (S has the map entry, not the clip); the echo lands; an undo to
+  S deletes the clip (`ClipRemovals`: in `old`, not in `new`) but
+  `DerivedClips` keeps the entry, since on an undo it assumes an unmirrored
+  clip's echo is still coming. The full-replay undo used to drop it (§14
+  listed this among the full-path-only steps). Harmless until it matters:
+  the entry suspends the UPD-05 freeze check on its track until the next
+  regenerate replaces it. Fix: on an undo, drop an entry whose clip is in
+  `old`'s MIDI clips but not `new`'s (the restore removed it; nothing will
+  echo it back). Not done here because it makes the restored map differ
+  from the snapshot's, which the fixed point then has to allow for.
+* **Each undo builds the live file twice**: `try_undo` / `try_redo` take
+  `snapshot_for_undo()` for the other stack, then
+  `begin_restore_from_snapshot` builds `current` again. Passing the first
+  one's file in saves one `build_project_file` (~0.3 ms debug on the demo)
+  per history step.
+* `detach_and_delete_cache_in` existed for a directory other than
+  `io.project_path`'s (the full replay had taken it); the undo now passes
+  that same path, so it can likely fold into `detach_and_delete_cache`
+  (check `test_apply_freeze_restore`'s caller first).
+
+### Epic A "Done when" (refactor-intent.md), checked on this branch
+
+| Item | Status | Check |
+|---|---|---|
+| `UndoExtras`, `pending_undo_extras`, `finalize_undo_restore` deleted | ✔ | `grep -rn "UndoExtras\|pending_undo_extras\|finalize_undo_restore" resonance-app/src --include='*.rs'` — comments only, no code |
+| Both restore paths go through one `Reconcile` driver | ✔ | `grep -rn "reconcile_all(" resonance-app/src` — one definition (`reconcile/mod.rs`), two callers (`replay/mod.rs` disk load, `undo/snapshot.rs` undo); `try_diff_replay` / `structurally_compatible` / `UndoFull` have no hits |
+| `classify.rs` has no catch-all arms | ✔ | `grep -nE '\(_\) => UndoAction::(Skip\|Record)' resonance-app/src/undo/classify.rs` empty; `arch-invariants::undo_classification_has_no_catch_all_arms` green |
+| `Resonance` ≤ 40 fields | ✔ (40) | field lines between `pub struct Resonance {` and its `}` in `resonance-app/src/lib.rs`: 40 |
+| Fixed-point test green throughout | ✔ | `cargo test -p resonance-app --test io -- undo_snapshot_fixed_point` — 18/18 |
+
+### A-14 (delta snapshots): not worth it now
+
+Its precondition — one diff engine, not two — holds. But the reconcile
+driver diffs a `ProjectFile` into engine commands, not into a file delta,
+so a delta snapshot would need a second diff (file → file patch) anyway.
+And the cost it would cut is small already: plugin blobs (A9-2) and MIDI
+notes (A-9) are `Arc`-shared between consecutive snapshots, so a history
+entry costs the `ProjectFile` skeleton, and `snapshot_cost_probe_on_demo_project`
+measures `snapshot_for_undo` at ~0.28 ms (debug, demo project with six
+1 MiB blobs). Revisit only if a probe on a large project shows history
+memory or snapshot time mattering; the double build above is the cheaper
+win first.

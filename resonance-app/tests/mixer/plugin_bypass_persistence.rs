@@ -232,7 +232,7 @@ fn a_project_written_before_the_field_existed_loads_as_running() {
 ///
 /// The first cut of this todo classified `SetPluginBypass` as
 /// `UndoAction::Record` and stopped there, which looks right and is not:
-/// undo restores through `try_diff_replay`, and the diff copied only
+/// undo restored through the diff replay, and the diff copied only
 /// `plugin_name` per slot. So an undo pushed its entry, replayed, and
 /// changed nothing at all — the flag stayed put and the engine was never
 /// told.

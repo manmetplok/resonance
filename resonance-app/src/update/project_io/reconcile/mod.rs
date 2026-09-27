@@ -1,18 +1,12 @@
 //! The `Reconcile` driver (ARCH-01 A-13, design `docs/design/A-13-reconcile.md`).
 //!
-//! A project reaches the app through two restore paths: the full replay
-//! after `ClearAll` (`replay_loaded_project` — a disk load or an undo's
-//! structural fallback) and the undo diff replay (`try_diff_replay`). Every
-//! project domain is restored by one [`Reconcile`] impl that both paths
-//! run through [`reconcile_all_stages`], in the one order [`DOMAINS`]
-//! lists.
-//!
-//! Since A-13f no domain is restored inline by either path: each entry
-//! point is its setup (the ctx; on the full path the vocal side-table
-//! clear and `SetProjectDir`), then `reconcile_all_stages`. What still
-//! differs is how they get there: an undo always takes the diff path since
-//! A-13i (`structurally_compatible` accepts every pair; A-13j deletes it
-//! and the undo's `ClearAll` fallback), a disk load the full path.
+//! A project reaches the app through [`reconcile_all`], from two callers:
+//! a disk load (or template instantiate) after `ClearAll`
+//! (`replay_loaded_project`, `old = None`) and an undo/redo
+//! (`restore_from_snapshot`, `old = Some(current)`, no `ClearAll`). Every
+//! project domain is restored by one [`Reconcile`] impl, in the one order
+//! [`DOMAINS`] lists. Since A-13j there is no third path: the undo's
+//! `ClearAll` fallback is gone, and `Origin::UndoFull` with it.
 //! The [`Stage`]s group the table and document why each group sits where
 //! it does; `DOMAINS` is sorted by stage.
 
@@ -39,27 +33,24 @@ use crate::Resonance;
 /// Which restore is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// A disk load or template instantiate, after `ClearAll`.
+    /// A disk load or template instantiate, after `ClearAll`; `old` is
+    /// `None`.
     DiskLoad,
-    /// An undo/redo's full replay after `ClearAll` (the structural
-    /// fallback). Unlike a disk load, live state that survives the clear
-    /// (freeze statuses, the reference monitor, the derived-clip counter)
-    /// is kept.
-    UndoFull,
-    /// An undo/redo's diff replay: no `ClearAll`, the engine still holds
-    /// everything.
-    UndoDiff,
+    /// An undo/redo: no `ClearAll`, the engine still holds everything, and
+    /// `old` is the live state's file. Every domain diffs against it.
+    Undo,
 }
 
 impl Origin {
-    /// An undo/redo, on either path.
+    /// An undo/redo.
     pub fn is_undo(self) -> bool {
-        !matches!(self, Origin::DiskLoad)
+        matches!(self, Origin::Undo)
     }
 
-    /// The engine was emptied by `ClearAll` before this restore.
+    /// The engine was emptied by `ClearAll` before this restore: a disk
+    /// load. Named for what the domains that read it care about.
     pub fn after_clear_all(self) -> bool {
-        !matches!(self, Origin::UndoDiff)
+        matches!(self, Origin::DiskLoad)
     }
 }
 
@@ -68,8 +59,9 @@ impl Origin {
 pub struct ReconcileCtx<'a> {
     pub origin: Origin,
     /// The directory project-relative paths resolve against:
-    /// `LoadedProject::project_dir` on the full paths, the live
-    /// `io.project_path` on the diff path (`None` for an untitled project).
+    /// `LoadedProject::project_dir` on a disk load, the live
+    /// `io.project_path` on an undo (`None` for an untitled project). Its
+    /// sibling `.freeze` directory holds the freeze caches an undo retires.
     pub project_dir: Option<&'a Path>,
     /// The target's MIDI notes per clip id (`LoadedProject::midi_notes`),
     /// which the `ProjectFile` does not carry. Read by `MidiClips`.
@@ -80,34 +72,25 @@ pub struct ReconcileCtx<'a> {
     pub plugin_states: &'a HashMap<PluginInstanceId, Arc<[u8]>>,
     /// Live state an undo keeps, captured by the entry point before
     /// anything is restored.
-    pub live: LiveCarry<'a>,
+    pub live: LiveCarry,
 }
 
 /// Live state an undo/redo restore keeps but the restore itself would
-/// overwrite before the domain that needs it runs (ARCH-01 A-13b). Each
-/// entry point captures it at its top — before `replay_loaded_project`
-/// takes `io.project_path` and `ComposeSections` resets the derived
-/// counter — and hands it to every domain through the ctx.
+/// overwrite before the domain that needs it runs (ARCH-01 A-13b). The
+/// undo captures it before anything is restored (`ComposeSections` resets
+/// the derived counter) and hands it to every domain through the ctx.
 ///
 /// Live state a restore does *not* overwrite before its domain runs stays
-/// in `Resonance` and is read there under the origin: the freeze statuses
-/// (nothing in the replay touches them until `Freeze`) and the reference
-/// A/B monitor (`restore_references` takes it out of `r.reference`
-/// itself).
+/// in `Resonance` and is read there under the origin (the freeze statuses:
+/// nothing touches them before `Freeze`).
 #[derive(Debug, Clone, Copy, Default)]
-pub struct LiveCarry<'a> {
-    /// The live project's `.rproj` path, whose sibling directory holds the
-    /// freeze caches an undo retires. The full replay `take()`s
-    /// `io.project_path` (the `AllCleared` handler puts it back after), so
-    /// it is carried here; the diff path clones it. `None` for an untitled
-    /// project.
-    pub project_path: Option<&'a Path>,
+pub struct LiveCarry {
     /// The derived-clip id counter before the restore, which an undo never
     /// lowers (ARCH-01 A-6). `None` on a disk load.
     pub derived_counter_floor: Option<u64>,
 }
 
-impl LiveCarry<'_> {
+impl LiveCarry {
     /// The derived-counter floor for a restore of `origin`: the live
     /// counter on an undo, none on a disk load.
     pub(crate) fn derived_counter_floor(r: &Resonance, origin: Origin) -> Option<u64> {
@@ -121,8 +104,8 @@ pub(crate) trait Reconcile {
     const NAME: &'static str;
 
     /// Drive the app (and engine) state of this domain to `new`. `old` is
-    /// the file the live state was built from on the diff path, `None`
-    /// after a `ClearAll`.
+    /// the file the live state was built from on an undo, `None` after a
+    /// disk load's `ClearAll`.
     fn reconcile(
         r: &mut Resonance,
         old: Option<&ProjectFile>,
@@ -131,10 +114,10 @@ pub(crate) trait Reconcile {
     );
 }
 
-/// Groups of [`DOMAINS`], declared in the order both paths run them.
-/// They used to mark the points in each path's inline code where a group
-/// was valid; since A-13f nothing runs between two stages, so they only
-/// group the table (collapsing them is A-13j's).
+/// Groups of [`DOMAINS`], declared in the order they run. They used to
+/// mark the points in each restore path's inline code where a group was
+/// valid; since A-13f nothing runs between two stages, so they only group
+/// the table and document why it is in the order it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     /// Transport / master scalars, the transient UI a full replay resets,
@@ -266,15 +249,22 @@ pub(crate) const DOMAINS: &[Domain] = &[
     domain::<restored::Freeze>(Stage::Tail),
 ];
 
-/// Run every [`DOMAINS`] entry, in table order — every [`Stage`] in
-/// sequence. The whole restore on both paths since A-13f: no per-path
-/// code is left between two stages.
-pub(crate) fn reconcile_all_stages(
+/// Drive the app and engine to `new`: every [`DOMAINS`] entry, in table
+/// order — every [`Stage`] in sequence. The one restore (ARCH-01 A-13j):
+/// a disk load passes `old = None` after its `ClearAll`, an undo/redo
+/// `old = Some(current)`. Clears `io.reconcile_trace` first.
+pub(crate) fn reconcile_all(
     r: &mut Resonance,
     old: Option<&ProjectFile>,
     new: &ProjectFile,
     ctx: &ReconcileCtx<'_>,
 ) {
+    debug_assert_eq!(
+        old.is_some(),
+        ctx.origin.is_undo(),
+        "an undo diffs against the live file; a disk load has none"
+    );
+    r.io.reconcile_trace.clear();
     for d in DOMAINS {
         r.io.reconcile_trace.push((ctx.origin, d.name));
         (d.run)(r, old, new, ctx);

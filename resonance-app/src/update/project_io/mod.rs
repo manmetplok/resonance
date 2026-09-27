@@ -30,9 +30,8 @@ pub use replay::replay_loaded_project;
 pub use replay::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use replay::{
     restore_drum_patterns, restore_performance, restore_pool, restore_quantize,
-    restore_references, ReferenceMonitorSource,
+    restore_references,
 };
-pub use replay_diff::try_diff_replay;
 pub use serialize::{build_project_file, plugin_states_for_save};
 pub use templates::{
     builtin_templates, compute_summary, ensure_templates_dir, scan_templates_in,
@@ -364,14 +363,6 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             r.transport.recording = false;
             r.io.loading = true;
             r.io.pending_load = Some(loaded);
-            // FU-A7a: this may land while an undo/redo's slow path still
-            // has its own `ClearAll` in flight (nothing gates a GUI open
-            // on `io.loading`). `pending_load` above already replaced the
-            // undo's snapshot with this disk load; the flag must follow it
-            // or the eventual `AllCleared` would replay this disk project
-            // through the undo branches instead (no patch resend, no
-            // frozen-track rehydrate, no relink modal, no job completion).
-            r.io.restoring_undo = false;
             r.session.undo.clear();
             r.plugin_mirror.state_cache.clear();
             // Both are re-seeded from the incoming file by the

@@ -44,7 +44,7 @@ pub mod viewport;
 pub mod vocal_tuning;
 
 pub(crate) use project_io::{
-    build_project_file, plugin_states_for_save, replay_loaded_project, try_diff_replay,
+    build_project_file, plugin_states_for_save, replay_loaded_project,
 };
 
 impl crate::Resonance {

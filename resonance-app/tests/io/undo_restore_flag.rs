@@ -1,34 +1,30 @@
-//! `io.restoring_undo` tells an undo's full replay from a disk load
-//! (ARCH-01 A-7; it replaced the `pending_undo_extras` marker).
+//! A disk load and an undo/redo take different restores (ARCH-01 A-13j;
+//! this file guarded `io.restoring_undo`, the flag that told them apart
+//! when both went through `ClearAll → AllCleared`, A-7 / FU-A7a).
 //!
-//! Both go through the same `ClearAll → AllCleared → replay_loaded_project`
-//! pipeline, and branch on the flag:
+//! Since A-13j an undo never sends `ClearAll`: it runs the `Reconcile`
+//! driver in place, synchronously, under `Origin::Undo`, and only a disk
+//! load or template instantiate leaves a `pending_load` for `AllCleared`.
+//! So the `AllCleared` handler needs no flag, and:
 //!
 //!   * a disk load re-attaches each frozen track's cache (`rehydrate`,
 //!     `SetTrackFrozenSource`) and re-sends every external instrument's
-//!     patch (`ResendExternalInstrumentPatches`);
-//!   * an undo's slow path reconciles freeze against the live statuses
-//!     (`apply_freeze_restore`: undoing a freeze deletes its cache) and
-//!     never re-fires MIDI patches.
+//!     patch (`ResendExternalInstrumentPatches`), under `Origin::DiskLoad`;
+//!   * an undo reconciles freeze against the live statuses
+//!     (`apply_freeze_restore`: undoing a freeze deletes its cache), never
+//!     re-fires MIDI patches, keeps the project path and leaves no loading
+//!     window.
 //!
-//! The flag is set only where the undo slow path sends `ClearAll`, and
-//! cleared by the `AllCleared` handler after the replay; the diff replay
-//! never sets it.
-//!
-//! FU-A7a: a GUI `ProjectLoaded(Ok)` (there is no `io.loading` gate on
-//! Open / Open Recent / Ctrl+O — only `refuse_project_switch_during_render`,
-//! which checks an offline render, not an in-flight undo) or a template's
-//! `begin_instantiate` can land while an undo's slow-path `ClearAll` is
-//! still in flight. Both replace `io.pending_load` without touching
-//! `io.restoring_undo`, so the disk/template project would otherwise
-//! replay through the undo branches. The control API is not exposed to
-//! this: `busy_guard` (`update/control/project.rs`) refuses `project.open`
-//! / `project.new` while `io.loading` is set, and the undo slow path sets
-//! `io.loading` in the same statement as `io.restoring_undo`.
+//! FU-A7a's race — a disk load or template landing while an undo's
+//! `ClearAll` was in flight, whose replay then took the undo branches — has
+//! no undo side left; its successor here is the other order: an undo
+//! requested while a disk load's `ClearAll` is in flight is refused
+//! (`can_undo_redo_now` requires `!io.loading`), and the load replays as a
+//! disk load.
 
 use std::path::Path;
 
-use resonance_app::message::{Message, ProjectIoMessage};
+use resonance_app::message::{Message, ProjectIoMessage, TrackMessage};
 use resonance_app::project::{LoadedProject, ProjectFile, ProjectTrack};
 use resonance_app::state::FreezeStatus;
 use resonance_app::update::project_io::begin_instantiate;
@@ -152,16 +148,11 @@ fn disk_load() -> Loaded {
         midi_notes: Default::default(),
         plugin_states: Default::default(),
     };
-    assert!(!app.test_restoring_undo(), "a fresh app has no undo in flight");
     let _ = app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
         Box::new(loaded),
     ))));
     let cmds = drain(&rx);
     assert!(cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)));
-    assert!(
-        !app.test_restoring_undo(),
-        "a disk load must not mark its replay as an undo"
-    );
     app.test_apply_engine_event(AudioEvent::AllCleared);
     let load_cmds = drain(&rx);
     Loaded {
@@ -172,6 +163,11 @@ fn disk_load() -> Loaded {
         load_cmds,
         _tmp: tmp,
     }
+}
+
+fn traced_as(app: &Resonance, origin: Origin) -> bool {
+    let trace = app.test_reconcile_trace();
+    !trace.is_empty() && trace.iter().all(|(o, _)| *o == origin)
 }
 
 #[test]
@@ -186,62 +182,48 @@ fn a_disk_load_takes_the_disk_load_branches() {
         resent_patches(&l.load_cmds),
         "a disk load re-sends external-instrument patches"
     );
-    assert!(!l.app.test_restoring_undo());
+    assert!(traced_as(&l.app, Origin::DiskLoad));
 }
 
 #[test]
-fn an_undo_slow_path_takes_the_undo_branches() {
+fn an_undo_takes_the_undo_branches_in_place() {
     let mut l = disk_load();
     let _ = drain(&l.rx);
 
-    // The fast path never raises the flag: nothing waits for `AllCleared`.
-    let same = l.app.test_snapshot_for_undo();
-    l.app.test_begin_restore_from_snapshot(same);
-    let cmds = drain(&l.rx);
-    assert!(!cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)));
-    assert!(!l.app.test_restoring_undo(), "the diff replay must not set the flag");
-
-    // Undo of the freeze: the target has track 1 live. An extra live track
-    // forces the structural fallback.
+    // Undo of the freeze: the target has track 1 live. An extra track makes
+    // it structural — the shape that used to take the `ClearAll` fallback.
     let mut snapshot = l.app.test_snapshot_for_undo();
     snapshot.project.file.tracks[0].freeze = TrackFreezeState::unfrozen();
     l.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&l.rx);
-    l.app.test_begin_full_restore_from_snapshot(snapshot);
+    l.app.test_begin_restore_from_snapshot(snapshot);
     let cmds = drain(&l.rx);
     assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change must take the slow path"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "an undo never clears the engine"
     );
-    assert!(
-        l.app.test_restoring_undo(),
-        "the slow path marks the pending replay as an undo"
-    );
-
-    l.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let cmds = drain(&l.rx);
-    assert!(
-        !l.app.test_restoring_undo(),
-        "the AllCleared handler clears the flag after the replay"
-    );
+    assert!(traced_as(&l.app, Origin::Undo), "the restore ran, synchronously, as an undo");
     assert!(
         !resent_patches(&cmds),
         "an undo must never re-fire external-instrument patches"
     );
     assert!(!attached(&cmds, 1), "an undo does not rehydrate");
-    // The undo branch reconciles against the live statuses: undoing the
-    // freeze retires its cache. A disk load wipes the statuses first and
-    // would leave the file alone.
+    // The undo reconciles against the live statuses: undoing the freeze
+    // retires its cache. A disk load wipes the statuses first and would
+    // leave the file alone.
     assert_eq!(l.app.test_freeze_status(1), FreezeStatus::Idle);
     assert!(!l.cache.exists(), "undoing a freeze deletes its cache");
     assert_eq!(
         l.app.test_project_path(),
         Some(l.project.as_path()),
-        "the undo replay keeps the project path"
+        "the undo keeps the project path"
     );
+    // Nothing is pending, so a stray `AllCleared` replays nothing.
+    l.app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(drain(&l.rx).is_empty(), "no replay was left pending");
+    assert!(traced_as(&l.app, Origin::Undo));
 
-    // A later disk load after the undo completed is a disk load again.
-    let _ = drain(&l.rx);
+    // A later disk load is a disk load.
     let loaded = LoadedProject {
         file: ProjectFile::default(),
         project_dir: l.project.clone(),
@@ -251,30 +233,9 @@ fn an_undo_slow_path_takes_the_undo_branches() {
     let _ = l.app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
         Box::new(loaded),
     ))));
-    assert!(!l.app.test_restoring_undo());
     l.app.test_apply_engine_event(AudioEvent::AllCleared);
     assert!(resent_patches(&drain(&l.rx)));
-}
-
-/// Force the undo slow (structural) path and leave its `ClearAll` in
-/// flight: `io.loading` and `io.restoring_undo` are up, `AllCleared` has
-/// not been delivered yet. Mirrors the setup half of
-/// `an_undo_slow_path_takes_the_undo_branches`.
-fn start_undo_slow_path(l: &mut Loaded) {
-    let mut snapshot = l.app.test_snapshot_for_undo();
-    snapshot.project.file.tracks[0].freeze = TrackFreezeState::unfrozen();
-    l.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&l.rx);
-    l.app.test_begin_full_restore_from_snapshot(snapshot);
-    let cmds = drain(&l.rx);
-    assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "the structural change must take the slow path"
-    );
-    assert!(
-        l.app.test_restoring_undo(),
-        "the slow path's ClearAll must be in flight with the flag up"
-    );
+    assert!(traced_as(&l.app, Origin::DiskLoad));
 }
 
 /// A second, distinct on-disk project with one frozen track (id 3), used to
@@ -304,85 +265,63 @@ fn other_project(dir: &Path) -> LoadedProject {
     }
 }
 
-/// FU-A7a: a GUI `ProjectLoaded(Ok)` landing while an undo's slow-path
-/// `ClearAll` is still in flight replaces `pending_load` with the disk
-/// project. It must also clear `restoring_undo`, so the eventual
-/// `AllCleared` takes the disk-load branches (patch resend, rehydrate,
-/// `Origin::DiskLoad`) for the project that actually ends up loaded —
-/// never the undo branches.
+/// Request an undo while the load's `ClearAll` is in flight, then deliver
+/// `AllCleared` and assert the replay that ran is `other`'s, as a disk load.
+fn undo_mid_load_is_refused(l: &mut Loaded) {
+    let before = l.app.test_reconcile_trace().to_vec();
+    let _ = l.app.update(Message::Undo);
+    let cmds = drain(&l.rx);
+    assert!(
+        cmds.is_empty(),
+        "an undo during a load's ClearAll must be refused, got {cmds:?}"
+    );
+    assert_eq!(l.app.test_reconcile_trace(), before.as_slice(), "no restore ran");
+
+    l.app.test_apply_engine_event(AudioEvent::AllCleared);
+    let cmds = drain(&l.rx);
+    assert!(
+        resent_patches(&cmds),
+        "the load must re-send external-instrument patches"
+    );
+    assert!(
+        attached(&cmds, 3),
+        "the load must rehydrate its own frozen track"
+    );
+    assert!(traced_as(&l.app, Origin::DiskLoad), "the replay is a disk load");
+}
+
+/// FU-A7a's successor: an undo requested while a GUI `ProjectLoaded(Ok)`'s
+/// `ClearAll` is in flight is refused, and the eventual `AllCleared`
+/// replays the opened project through the disk-load branches.
 #[test]
-fn a_project_load_superseding_an_in_flight_undo_takes_the_disk_load_branches() {
+fn an_undo_during_a_project_loads_clear_is_refused() {
     let mut l = disk_load();
+    // An undoable edit, so the refusal is not just an empty history.
+    let _ = l.app.update(Message::Track(TrackMessage::SetTrackVolume(2, -6.0)));
+    assert!(l.app.test_can_undo(), "the edit is undoable");
     let _ = drain(&l.rx);
-    start_undo_slow_path(&mut l);
 
     let tmp_dir = l.project.parent().unwrap().to_path_buf();
     let other = other_project(&tmp_dir);
     let _ = l.app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
         Box::new(other),
     ))));
-    let _ = drain(&l.rx); // the second ClearAll this handler sends
-
-    assert!(
-        !l.app.test_restoring_undo(),
-        "a disk load superseding an in-flight undo must clear the flag"
-    );
-
-    l.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let cmds = drain(&l.rx);
-    assert!(
-        resent_patches(&cmds),
-        "the superseding disk load must re-send external-instrument patches"
-    );
-    assert!(
-        attached(&cmds, 3),
-        "the superseding disk load must rehydrate its own frozen track"
-    );
-    assert!(
-        l.app
-            .test_reconcile_trace()
-            .iter()
-            .all(|(origin, _)| *origin == Origin::DiskLoad),
-        "the replay that actually ran must be tagged DiskLoad, not UndoFull"
-    );
+    let _ = drain(&l.rx); // the ClearAll this handler sends
+    undo_mid_load_is_refused(&mut l);
 }
 
-/// FU-A7a, template variant: `begin_instantiate` landing mid-undo must also
-/// clear the flag, so the template it loads (not the superseded undo
-/// snapshot) takes the disk-load branches.
+/// The template variant: `begin_instantiate` in flight, then an undo.
 #[test]
-fn a_template_instantiate_superseding_an_in_flight_undo_takes_the_disk_load_branches() {
+fn an_undo_during_a_template_instantiates_clear_is_refused() {
     let mut l = disk_load();
+    let _ = l.app.update(Message::Track(TrackMessage::SetTrackVolume(2, -6.0)));
     let _ = drain(&l.rx);
-    start_undo_slow_path(&mut l);
 
     let tmp_dir = l.project.parent().unwrap().to_path_buf();
     let other = other_project(&tmp_dir);
     begin_instantiate(&mut l.app, Box::new(other));
-    let _ = drain(&l.rx); // the second ClearAll `begin_instantiate` sends
-
-    assert!(
-        !l.app.test_restoring_undo(),
-        "a template instantiate superseding an in-flight undo must clear the flag"
-    );
-
-    l.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let cmds = drain(&l.rx);
-    assert!(
-        resent_patches(&cmds),
-        "the superseding template must re-send external-instrument patches"
-    );
-    assert!(
-        attached(&cmds, 3),
-        "the superseding template must rehydrate its own frozen track"
-    );
-    assert!(
-        l.app
-            .test_reconcile_trace()
-            .iter()
-            .all(|(origin, _)| *origin == Origin::DiskLoad),
-        "the replay that actually ran must be tagged DiskLoad, not UndoFull"
-    );
+    let _ = drain(&l.rx); // the ClearAll `begin_instantiate` sends
+    undo_mid_load_is_refused(&mut l);
     assert_eq!(
         l.app.test_project_path(),
         None,

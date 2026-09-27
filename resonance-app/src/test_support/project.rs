@@ -228,24 +228,12 @@ impl Resonance {
         self.session.dirty = false;
     }
 
-    /// Test-only: restore a previously captured snapshot, exercising the
-    /// fast (`try_diff_replay`) restore path when the snapshot is
-    /// structure-identical to the current state. Used to prove that an
-    /// undo/redo of a scalar clip edit (e.g. fade/gain) is applied
-    /// surgically without a full reload (todo #321, doc #156).
+    /// Test-only: restore a previously captured snapshot as an undo/redo
+    /// does — in place, by diff against the live state (`reconcile_all`
+    /// with `Origin::Undo`), synchronously and without a `ClearAll`.
     #[doc(hidden)]
     pub fn test_begin_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
         self.begin_restore_from_snapshot(snapshot);
-    }
-
-    /// Test-only: restore a snapshot through the undo's full path
-    /// (`ClearAll` → `AllCleared` → `replay_loaded_project`,
-    /// `Origin::UndoFull`) whatever its shape. Since ARCH-01 A-13i no
-    /// snapshot pair falls back on its own; this keeps the full path's
-    /// guards running until A-13j deletes it.
-    #[doc(hidden)]
-    pub fn test_begin_full_restore_from_snapshot(&mut self, snapshot: crate::undo::UndoSnapshot) {
-        self.restore_from_snapshot(snapshot, false);
     }
 
     /// Test-only: route a message through the *full* `update()` entry,
@@ -270,14 +258,6 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_can_undo(&self) -> bool {
         self.session.undo.can_undo()
-    }
-
-    /// Test-only: whether the pending `AllCleared` replay is an undo/redo's
-    /// full restore (`io.restoring_undo`, ARCH-01 A-7) rather than a disk
-    /// load or template.
-    #[doc(hidden)]
-    pub fn test_restoring_undo(&self) -> bool {
-        self.io.restoring_undo
     }
 
     /// Test-only: the `Reconcile` domains the last restore ran, in order,

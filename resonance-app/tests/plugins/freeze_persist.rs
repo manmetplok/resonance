@@ -489,48 +489,6 @@ mod undo_reattach {
         }
     }
 
-    /// A full-replay undo (`ClearAll` → `AllCleared`) back to a state with
-    /// frozen tracks re-attaches every decodable cache, keeps an
-    /// undecodable one `Stale` with nothing attached, and retires the cache
-    /// of a freeze the undo takes back.
-    #[test]
-    fn a_full_replay_undo_reattaches_every_restored_freeze() {
-        let mut l = load();
-        let snapshot = l.app.test_snapshot_for_undo();
-        // After the snapshot: track 3 is frozen (a freeze the undo retires)
-        // the full path is forced (since A-13i no shape falls back on its own).
-        let cache_3 = l.freeze_dir.join("freeze_3.wav");
-        write_cache_wav(&cache_3, 48_000, 64);
-        l.app.test_set_freeze_status(
-            3,
-            FreezeStatus::Frozen {
-                cache_ref: frozen_ref("freeze_3.wav", 3, FreezeCacheStatus::Frozen),
-            },
-        );
-        l.app.test_add_track(9_999, TrackType::Audio);
-        let _ = drain(&l.rx);
-
-        l.app.test_begin_full_restore_from_snapshot(snapshot);
-        let cmds = drain(&l.rx);
-        assert!(
-            cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-            "a structural change takes the full replay"
-        );
-        l.app.test_apply_engine_event(AudioEvent::AllCleared);
-        let cmds = drain(&l.rx);
-
-        assert!(matches!(l.app.test_freeze_status(1), FreezeStatus::Frozen { .. }));
-        assert!(attached(&cmds, 1), "the restored Frozen track plays its cache");
-        assert!(matches!(l.app.test_freeze_status(2), FreezeStatus::Stale { .. }));
-        assert!(attached(&cmds, 2), "a restored Stale track still plays its cache");
-        assert!(matches!(l.app.test_freeze_status(4), FreezeStatus::Stale { .. }));
-        assert!(!attached(&cmds, 4), "an undecodable cache attaches nothing");
-        assert_eq!(l.app.test_freeze_status(3), FreezeStatus::Idle);
-        assert!(!attached(&cmds, 3), "a track the undo unfreezes attaches nothing");
-        assert!(unfrozen(&cmds, 3), "the retired freeze is detached");
-        assert!(!cache_3.exists(), "and its cache deleted");
-    }
-
     /// The diff path: undoing a freeze detaches it; redoing it — with the
     /// cache back on disk, as a re-render leaves it — re-attaches the cache.
     /// A track that stays frozen across the restore is left alone: its

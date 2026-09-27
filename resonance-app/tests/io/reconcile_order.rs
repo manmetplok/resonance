@@ -1,10 +1,10 @@
 //! One domain order for every restore (ARCH-01 A-13).
 //!
-//! The migrated project domains are restored by `Reconcile` impls that the
-//! driver runs from one table, `reconcile::DOMAINS`, on all three origins:
-//! a disk load and an undo's full replay (`replay_loaded_project`, after
-//! `ClearAll`) and an undo's diff replay (`try_diff_replay`). Since A-13f
-//! both run the whole table through `reconcile_all_stages`; the guard is
+//! The project domains are restored by `Reconcile` impls that the driver
+//! runs from one table, `reconcile::DOMAINS`, on both origins: a disk load
+//! (`replay_loaded_project`, after `ClearAll`) and an undo/redo (in place,
+//! by diff). Both run the whole table through `reconcile_all` (one entry
+//! point since A-13j); the guard is
 //! that the domains each restore actually ran (`io.reconcile_trace`) are
 //! exactly the table, in table order, under the right origin. A domain
 //! restored inline by one path, or run out of sequence, fails here; the
@@ -103,26 +103,27 @@ fn a_diff_undo_runs_every_domain_in_table_order() {
         !drain(&l.rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
         "an unchanged shape takes the diff path"
     );
-    assert_eq!(l.app.test_reconcile_trace(), expected(Origin::UndoDiff).as_slice());
+    assert_eq!(l.app.test_reconcile_trace(), expected(Origin::Undo).as_slice());
 }
 
+/// A structural undo (a track the snapshot lacks) used to take the full
+/// `ClearAll` replay under `Origin::UndoFull`; since A-13j there is no such
+/// path, and it runs the same table under `Origin::Undo`, in place.
 #[test]
-fn a_full_undo_runs_every_domain_in_table_order() {
+fn a_structural_undo_runs_every_domain_in_table_order_without_a_clear() {
     let mut l = disk_load();
     let snapshot = l.app.test_snapshot_for_undo();
-    // The full path, forced (since A-13i no shape falls back on its own).
     l.app.test_add_track(9_999, TrackType::Audio);
     let _ = drain(&l.rx);
-    l.app.test_begin_full_restore_from_snapshot(snapshot);
+    l.app.test_begin_restore_from_snapshot(snapshot);
     assert!(
-        drain(&l.rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change takes the full path"
+        !drain(&l.rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "no undo sends ClearAll"
     );
-    l.app.test_apply_engine_event(AudioEvent::AllCleared);
-    assert_eq!(l.app.test_reconcile_trace(), expected(Origin::UndoFull).as_slice());
+    assert_eq!(l.app.test_reconcile_trace(), expected(Origin::Undo).as_slice());
 }
 
-/// `Globals` runs before `Timeline` on the full path: every transport
+/// `Globals` runs before `Timeline` on a disk load: every transport
 /// scalar goes out before `SetTempoEvents` (A-13c; `SetTimeSignature` used
 /// to follow it — the two write independent fields of the engine's tempo
 /// map, see `globals::Transport`). `SetBpm` still precedes the events, whose

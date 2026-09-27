@@ -672,7 +672,7 @@ fn slow_path_undo(app: &mut Resonance) {
 
 #[test]
 fn a_render_in_flight_across_a_full_replay_fails_its_job() {
-    // UPD-08: a slow-path undo (or project load) wipes the per-lane epoch
+    // UPD-08: an undo (or project load) wipes the per-lane epoch
     // map. The render queued before it then arrives stale and is dropped
     // — and with nothing else ever coming for the lane, the job waiting
     // on it used to stay `pending` forever (every `job.wait` timed out).

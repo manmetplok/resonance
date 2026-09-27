@@ -11,16 +11,17 @@
 //!   `restore_drum_patterns`, `restore_tempo_events`, `replay_take_groups`)
 //!   used both here and by the diff-based undo replay path.
 //!
-//! Domains migrated to the `Reconcile` driver (`super::reconcile`, ARCH-01
-//! A-13) are not restored inline here: all [`replay_loaded_project`] does
-//! is `SetProjectDir` and every `Stage` in sequence (`reconcile_all_stages`)
-//! — the same stages, in the same sequence, `try_diff_replay` runs.
+//! Every domain is restored by the `Reconcile` driver
+//! (`super::reconcile`, ARCH-01 A-13): all [`replay_loaded_project`] does
+//! is its disk-load setup (the vocal side-table clear, `SetProjectDir`) and
+//! `reconcile_all` with `old = None` — the same driver an undo/redo runs
+//! with `old = Some(current)`.
 
 mod restore;
 
 use resonance_audio::types::*;
 
-use super::reconcile::{reconcile_all_stages, LiveCarry, Origin, ReconcileCtx};
+use super::reconcile::{reconcile_all, LiveCarry, Origin, ReconcileCtx};
 use crate::project::LoadedProject;
 use crate::Resonance;
 
@@ -32,37 +33,25 @@ pub use super::reconcile::{migrate_auto_name, sort_plugins_by_saved_order};
 pub(crate) use restore::{
     replay_take_groups, restore_drum_patterns, restore_performance, restore_pool,
     restore_pool_assets, restore_quantize, restore_track_groups,
-    reconcile_references, restore_references, restore_tempo_events, ReferenceMonitorSource,
+    reconcile_references, restore_references, restore_tempo_events,
 };
 
-/// Replay a loaded project into the engine and rebuild GUI state. Called
-/// after `AudioEvent::AllCleared` confirms the engine is empty.
+/// Replay a loaded project into the engine and rebuild GUI state — a disk
+/// load or template instantiate. Called after `AudioEvent::AllCleared`
+/// confirms the engine is empty; an undo/redo never comes here (A-13j).
 pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     let project = &loaded.file;
-    // `io.restoring_undo` marks an undo/redo's full replay (set at its
-    // `ClearAll`, cleared by `all_cleared` after this returns); the
-    // replay reads it only through the ctx.
-    let origin = if r.io.restoring_undo {
-        Origin::UndoFull
-    } else {
-        Origin::DiskLoad
-    };
-    r.io.reconcile_trace.clear();
-    // Will be set by the caller (OpenPathSelected); an undo/redo's caller
-    // puts this one back. The freeze restore needs it meanwhile, so the
-    // ctx carries it.
-    let live_project_path = r.io.project_path.take();
+    // The caller owns the path: `all_cleared` held it across the replay
+    // and puts it back after (a template lands untitled). The domains
+    // resolve against `loaded.project_dir`, never `io.project_path`.
+    r.io.project_path = None;
     let ctx = ReconcileCtx {
-        origin,
+        origin: Origin::DiskLoad,
         project_dir: Some(&loaded.project_dir),
         midi_notes: &loaded.midi_notes,
         plugin_states: &loaded.plugin_states,
         live: LiveCarry {
-            project_path: live_project_path.as_deref(),
-            // An undo/redo never lowers the derived-clip id counter
-            // (ARCH-01 A-6); `load_from_project` resets it, so remember it
-            // here.
-            derived_counter_floor: LiveCarry::derived_counter_floor(r, origin),
+            derived_counter_floor: LiveCarry::derived_counter_floor(r, Origin::DiskLoad),
         },
     };
 
@@ -87,5 +76,5 @@ pub fn replay_loaded_project(r: &mut Resonance, loaded: Box<LoadedProject>) {
     // references and app-side content; external instruments, lanes, the
     // missing-plugin warning and freeze last. See
     // `docs/design/A-13-reconcile.md` for why each sits where it does.
-    reconcile_all_stages(r, None, project, &ctx);
+    reconcile_all(r, None, project, &ctx);
 }

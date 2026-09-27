@@ -3,13 +3,15 @@
 //! `build_project_file(restore(snapshot_for_undo(app))) == snapshot.file`,
 //! and the whole snapshot (`ProjectFile` + MIDI notes; the former
 //! `UndoExtras` side-car is gone since A-7) comes back `same_state`,
-//! through BOTH restore paths:
+//! through the undo restore (`reconcile_all` with `Origin::Undo`, in place)
+//! over two kinds of change:
 //!
-//!   * the structure-preserving diff replay (`try_diff_replay`), reached
-//!     when only scalars changed since the snapshot;
-//!   * the full `ClearAll → AllCleared → replay_loaded_project` pipeline
-//!     (with `io.restoring_undo` set), forced here by adding a track after
-//!     the snapshot.
+//!   * scalar edits only ("fast path" below, the name it had when it was
+//!     the only diff-restorable shape);
+//!   * the same edits plus a track added after the snapshot ("structural"
+//!     below). Until A-13j that shape was forced down the full
+//!     `ClearAll → AllCleared → replay_loaded_project` fallback, which is
+//!     gone; it now pins the structural diff against every fixture.
 //!
 //! Every fixture (the demo project and each built-in template) is first
 //! taken through one round of edits per domain — transport, mixer, tempo
@@ -414,6 +416,21 @@ fn drain(rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
     cmds
 }
 
+/// Add a track after the snapshot, then restore it: a structural undo
+/// (the track goes), restored in place like every undo since A-13j.
+/// Returns the commands the restore sent.
+fn restore_over_a_track_add(f: &mut Fixture, snapshot: &UndoSnapshot) -> Vec<AudioCommand> {
+    f.app.test_add_track(9_999, TrackType::Audio);
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural undo restores in place, without ClearAll"
+    );
+    cmds
+}
+
 fn pretty(file: &ProjectFile) -> String {
     serde_json::to_string_pretty(file).expect("ProjectFile serializes")
 }
@@ -609,8 +626,7 @@ fn assert_seeded(snapshot: &UndoSnapshot, h: &Handles) {
 
 /// Each restore path hands the engine the decoded cache of every track the
 /// snapshot has frozen, exactly once (FU-A4a): the round-1 edit left the
-/// frozen track live, so neither path's engine holds its source, and the
-/// full path's `ClearAll` dropped every source anyway.
+/// frozen track live, so the engine holds no source for it.
 fn assert_freeze_attached(path: &str, cmds: &[AudioCommand], snapshot: &ProjectFile) {
     for pt in snapshot.tracks.iter().filter(|pt| pt.freeze.is_frozen) {
         let attaches = cmds
@@ -636,7 +652,7 @@ fn external_of(file: &ProjectFile, t: TrackId) -> Option<&ProjectExternalInstrum
 }
 
 /// Each restore path re-asserts the snapshot's external-instrument config
-/// exactly once per external track (A1-2 (3): the slow path used to do it
+/// exactly once per external track (A1-2 (3): the full path used to do it
 /// twice, from the replay and again from the old `UndoExtras`), with the config
 /// the snapshot's `ProjectFile` carries, and binds the selected device's
 /// params once.
@@ -694,7 +710,8 @@ fn assert_external_restored(path: &str, cmds: &[AudioCommand], snapshot: &Projec
     );
 }
 
-/// Run both restore paths against `f` and assert the fixed point after each.
+/// Run both kinds of restore against `f` and assert the fixed point after
+/// each.
 fn check_both_paths(mut f: Fixture) {
     let h = handles(&f.app);
     edit_every_domain(&mut f, &h, 0);
@@ -717,31 +734,18 @@ fn check_both_paths(mut f: Fixture) {
     );
     assert_external_restored("fast path", &cmds, &snapshot.project.file);
     assert_freeze_attached("fast path", &cmds, &snapshot.project.file);
-    assert_fixed_point(&f, "fast path (try_diff_replay)", &snapshot);
+    assert_fixed_point(&f, "fast path (scalar edits only)", &snapshot);
 
-    // -- Slow path: forced (since A-13i no shape falls back on its own). --
+    // -- Structural: the same edits plus a track the snapshot lacks. --
     edit_every_domain(&mut f, &h, 1);
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    let cmds = drain(&f.rx);
-    assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change must fall back to the full clear-and-replay"
-    );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let cmds = drain(&f.rx);
-    assert_external_restored("slow path", &cmds, &snapshot.project.file);
-    assert_freeze_attached("slow path", &cmds, &snapshot.project.file);
+    let cmds = restore_over_a_track_add(&mut f, &snapshot);
+    assert_external_restored("structural", &cmds, &snapshot.project.file);
+    assert_freeze_attached("structural", &cmds, &snapshot.project.file);
     assert!(
         f.app.test_project_path() == Some(f.project.as_path()),
-        "the undo replay must keep the project path"
+        "the undo must keep the project path"
     );
-    assert_fixed_point(
-        &f,
-        "slow path (ClearAll → replay_loaded_project)",
-        &snapshot,
-    );
+    assert_fixed_point(&f, "structural (a track removed)", &snapshot);
 }
 
 // ---------------------------------------------------------------------------
@@ -814,13 +818,13 @@ fn unmirrored_derived(app: &Resonance) -> Vec<ClipId> {
 /// still pending carries its `derived_clips` entry but not the clip. The
 /// fast path used to rebuild the map from the mirror and drop the entry —
 /// so the echo then landed an orphan the next regeneration duplicated —
-/// while the slow path copied the snapshot's map verbatim, leaving an
+/// while the full path copied the snapshot's map verbatim, leaving an
 /// entry for a clip `ClearAll` had wiped (which also blinds the UPD-05
-/// freeze check on that track for good). Both paths now take the
-/// snapshot's map, and the slow path drops only the entries whose clip
-/// cannot arrive any more.
+/// freeze check on that track for good). An undo now takes the snapshot's
+/// map, and a disk load of that file (the full replay left since A-13j)
+/// drops only the entries whose clip cannot arrive any more.
 #[test]
-fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
+fn derived_clips_with_a_pending_echo_survive_an_undo_and_drop_on_a_load() {
     let mut f = fixture("derived-pending", load_demo);
     let h = handles(&f.app);
     let (Some(d), Some(p)) = (h.definition, h.pattern) else {
@@ -894,16 +898,14 @@ fn derived_clips_with_a_pending_echo_survive_both_restore_paths() {
     }
     assert!(unmirrored_derived(&f.app).is_empty(), "the echo landed");
 
-    // Slow path: the snapshot lacks that clip, so `ClearAll` wipes it and
-    // nothing will ever re-create it — the entry must not survive.
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    // A disk load of the snapshot's file: the file lacks that clip, the
+    // load's `ClearAll` wipes it and nothing will ever re-create it — the
+    // entry must not survive.
+    f.app.test_replay_loaded_project_from(snapshot.project.clone());
     assert_eq!(
         unmirrored_derived(&f.app),
         Vec::<ClipId>::new(),
-        "the slow path leaves no entry for a clip ClearAll wiped"
+        "a disk load leaves no entry for a clip it did not load"
     );
     for (key, id) in &file_derived(&snapshot) {
         if !pending.contains(id) {
@@ -942,7 +944,7 @@ fn lyric_shapes(n: usize) -> Vec<(&'static str, Option<Vec<String>>)> {
     ]
 }
 
-/// Each lyric shape round-trips through BOTH restore paths to the same
+/// Each lyric shape round-trips through both kinds of undo to the same
 /// live side-table — the canonical form of the snapshot's file — and a
 /// restore never reads as a change against its own snapshot.
 #[test]
@@ -977,24 +979,20 @@ fn vocal_lyric_shapes_restore_identically_through_both_paths() {
         let fast = f.app.compose_state().vocal_audio.clip_lyrics.clone();
         assert_fixed_point(&f, &format!("{shape}: fast path"), &snapshot);
 
-        // Slow path.
+        // Structural.
         f.app.test_set_clip_lyrics(clip, other.clone());
-        f.app.test_add_track(9_999, TrackType::Audio);
-        let _ = drain(&f.rx);
-        f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-        f.app.test_apply_engine_event(AudioEvent::AllCleared);
-        let _ = drain(&f.rx);
-        let slow = f.app.compose_state().vocal_audio.clip_lyrics.clone();
-        assert_fixed_point(&f, &format!("{shape}: slow path"), &snapshot);
+        restore_over_a_track_add(&mut f, &snapshot);
+        let structural = f.app.compose_state().vocal_audio.clip_lyrics.clone();
+        assert_fixed_point(&f, &format!("{shape}: structural"), &snapshot);
 
-        assert_eq!(fast, slow, "{shape}: both paths restore the same lyrics");
+        assert_eq!(fast, structural, "{shape}: both undos restore the same lyrics");
     }
 }
 
 /// A restore that normalises the lyric table — here an all-empty entry,
 /// which a slur toggled on and off again leaves behind, comes back as no
 /// entry — must not read as a content change to the UPD-05 freeze check:
-/// the frozen vocal track stays frozen through both paths.
+/// the frozen vocal track stays frozen through both kinds of undo.
 #[test]
 fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
     let mut f = fixture(
@@ -1045,13 +1043,10 @@ fn a_lyric_normalising_restore_leaves_a_frozen_vocal_track_frozen() {
     f.app.test_update(Message::Tick);
     assert!(frozen(&f.app), "fast path: the vocal track stays frozen");
 
-    // Slow path.
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
+    // Structural.
+    restore_over_a_track_add(&mut f, &snapshot);
     f.app.test_update(Message::Tick);
-    assert!(frozen(&f.app), "slow path: the vocal track stays frozen");
+    assert!(frozen(&f.app), "structural: the vocal track stays frozen");
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,7 +1095,7 @@ struct LaneTargets {
     gain: AutomationTarget,
     plugin: AutomationTarget,
     master: AutomationTarget,
-    /// Lives on `doomed`, the track the slow-path round deletes.
+    /// Lives on `doomed`, the track the track-delete round deletes.
     pan: AutomationTarget,
     device: AutomationTarget,
     /// Absent from the snapshot; the edits add it.
@@ -1151,9 +1146,9 @@ fn assert_lanes_restored(app: &Resonance, path: &str, snapshot: &UndoSnapshot) {
 }
 
 /// Automation lanes on every kind of target — a track, a plugin param,
-/// the master, a track the slow path deletes, an external device param —
-/// round-trip through BOTH restore paths to the snapshot file's lanes,
-/// and each path re-sends the engine exactly the lanes that differ.
+/// the master, a track the edits delete, an external device param —
+/// round-trip through both kinds of undo to the snapshot file's lanes, and
+/// each re-sends the engine exactly the lanes that differ.
 #[test]
 fn automation_lanes_restore_identically_through_both_paths() {
     let mut f = fixture("automation-lanes", load_demo);
@@ -1200,8 +1195,8 @@ fn automation_lanes_restore_identically_through_both_paths() {
 
     // What each restore must re-send: every edited lane plus the deleted
     // one, and clear only the added one. The fast path leaves the
-    // untouched pan lane alone; the slow path re-sends it, since the
-    // track delete dropped it.
+    // untouched pan lane alone; the track-delete undo re-sends it, since
+    // the track delete dropped it.
     let expected = |with_pan: bool| {
         let mut set: Vec<String> = [&l.gain, &l.plugin, &l.master, &l.device]
             .into_iter()
@@ -1260,24 +1255,10 @@ fn automation_lanes_restore_identically_through_both_paths() {
     assert_lanes_restored(&f.app, "track-delete undo", &snapshot);
     assert_fixed_point(&f, "lanes: track-delete undo", &snapshot);
 
-    // -- Slow path (forced: no shape falls back on its own since A-13i). --
-    delete_doomed(&mut f);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    let mut cmds = drain(&f.rx);
-    assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "the full restore clears the engine"
-    );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    cmds.extend(drain(&f.rx));
-    assert_eq!(lane_commands(&cmds), expected(true), "slow path: engine lane traffic");
-    assert_lanes_restored(&f.app, "slow path", &snapshot);
-    assert_fixed_point(&f, "lanes: slow path", &snapshot);
-
     assert_eq!(
         fast,
         f.app.test_automation().lanes,
-        "both paths restore the same lanes"
+        "both undos restore the same lanes"
     );
 }
 
@@ -1538,7 +1519,7 @@ fn freeze_statuses(app: &Resonance, t: &FreezeTracks) -> Vec<FreezeStatus> {
 
 /// Every freeze shape — frozen throughout, a freeze undone, a freeze
 /// re-established whose cache is gone, stale, failed — restores to the
-/// same live state through BOTH restore paths, derived from the snapshot's
+/// same live state through both kinds of undo, derived from the snapshot's
 /// `ProjectTrack.freeze` alone, with the cache of the undone freeze
 /// deleted and the UPD-05 content baseline of the kept one intact.
 #[test]
@@ -1594,32 +1575,27 @@ fn freeze_states_restore_identically_through_both_paths() {
     }
     let fast = freeze_statuses(&f.app, &t);
 
-    // -- Slow path: the same edits plus an extra track. --
+    // -- Structural: the same edits plus an extra track. --
     write_freeze_cache(&f, t.missing);
     set_frozen(&mut f, t.missing);
     edit_freeze(&mut f, &t);
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    let mut cmds = drain(&f.rx);
-    assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change forces the full clear-and-replay"
-    );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    cmds.extend(drain(&f.rx));
-    assert_freeze_restored(&mut f, "slow path", &t, &cmds, kept_baseline);
-    // `ClearAll` dropped every engine source: each restored freeze with a
-    // cache on disk is re-attached, the one whose cache is gone is not.
-    assert_eq!(attaches(&cmds, t.kept), 1, "slow path: kept is re-attached");
-    assert_eq!(attaches(&cmds, t.stale), 1, "slow path: stale still plays its cache");
-    assert_eq!(attaches(&cmds, t.missing), 0, "slow path: missing has no cache");
-    assert_eq!(attaches(&cmds, t.undone), 0, "slow path: undone is live");
+    let cmds = restore_over_a_track_add(&mut f, &snapshot);
+    assert_freeze_restored(&mut f, "structural", &t, &cmds, kept_baseline);
+    // As on the fast path: the engine still holds the sources of the tracks
+    // frozen throughout, and the re-frozen one has no cache to attach.
+    for (id, what) in [
+        (t.kept, "kept"),
+        (t.stale, "stale"),
+        (t.missing, "missing"),
+        (t.undone, "undone"),
+    ] {
+        assert_eq!(attaches(&cmds, id), 0, "structural: {what} attaches nothing");
+    }
 
     assert_eq!(
         fast,
         freeze_statuses(&f.app, &t),
-        "both paths restore the same freeze state"
+        "both undos restore the same freeze state"
     );
 }
 
@@ -1868,7 +1844,7 @@ fn reference_restore_problems(
 /// Reference content edited every way the panel can — trim, loudness
 /// match, a remove, a load, a new selection — between snapshot and
 /// restore, with the A/B switch and loop-to-mix flipped as well, restores
-/// the content through BOTH paths, leaves the monitor where the user put
+/// the content through both kinds of undo, leaves the monitor where the user put
 /// it, and keeps the engine in step with the panel.
 #[test]
 fn reference_content_restores_and_monitor_state_stays_through_both_paths() {
@@ -1929,24 +1905,22 @@ fn reference_content_restores_and_monitor_state_stays_through_both_paths() {
     );
     let fast = reference_restore_problems(&f, &engine, &snapshot, monitor);
 
-    // -- Slow path: the same edits plus an extra track. --
+    // -- Structural: the same edits plus an extra track. --
     dirty(&mut f, &mut engine);
     f.app.test_add_track(9_999, TrackType::Audio);
     let _ = sync_refs(&f, &mut engine);
     let monitor = ref_monitor(&f.app);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
     let cmds = sync_refs(&f, &mut engine);
     assert!(
-        cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change forces the full clear-and-replay"
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "a structural undo restores in place"
     );
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let _ = sync_refs(&f, &mut engine);
-    let slow = reference_restore_problems(&f, &engine, &snapshot, monitor);
+    let structural = reference_restore_problems(&f, &engine, &snapshot, monitor);
 
     assert!(
-        fast.is_empty() && slow.is_empty(),
-        "fast path: {fast:#?}\nslow path: {slow:#?}"
+        fast.is_empty() && structural.is_empty(),
+        "fast path: {fast:#?}\nstructural: {structural:#?}"
     );
 }
 
@@ -2044,7 +2018,7 @@ fn assert_counter_monotonic(app: &Resonance, path: &str, before: u64) {
 }
 
 /// A section resize re-derives the section's lanes between the snapshot
-/// and the restore; both paths must bring back the snapshot's map, and
+/// and the restore; both kinds of undo must bring back the snapshot's map, and
 /// neither may rewind the counter past the ids the resize issued.
 #[test]
 fn a6_derived_clips_restore_through_both_paths_across_a_section_resize() {
@@ -2086,8 +2060,8 @@ fn a6_derived_clips_restore_through_both_paths_across_a_section_resize() {
     assert_eq!(derived_map(&f.app), at_snapshot, "fast path: the snapshot's map");
     assert_counter_monotonic(&f.app, "fast path", before);
 
-    // -- Slow path: resize the section (re-derives its lanes), plus a
-    // track so the structural fallback is certain. --
+    // -- Structural: resize the section (re-derives its lanes), plus a
+    // track. --
     let length = f
         .app
         .compose_state()
@@ -2104,29 +2078,23 @@ fn a6_derived_clips_restore_through_both_paths_across_a_section_resize() {
     assert_ne!(
         derived_map(&f.app),
         at_snapshot,
-        "the resize must re-derive a lane under a fresh id, or the slow-path counter check is vacuous"
+        "the resize must re-derive a lane under a fresh id, or the structural counter check is vacuous"
     );
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
     let before = derived_counter(&f.app);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    assert!(drain(&f.rx)
-        .iter()
-        .any(|c| matches!(c, AudioCommand::ClearAll)));
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let _ = drain(&f.rx);
-    assert_eq!(derived_map(&f.app), at_snapshot, "slow path: the snapshot's map");
-    assert_counter_monotonic(&f.app, "slow path", before);
-    assert_fixed_point(&f, "slow path after a resize", &snapshot);
+    restore_over_a_track_add(&mut f, &snapshot);
+    assert_eq!(derived_map(&f.app), at_snapshot, "structural: the snapshot's map");
+    assert_counter_monotonic(&f.app, "structural", before);
+    assert_fixed_point(&f, "structural after a resize", &snapshot);
 }
 
-/// FU-H2a through both paths, restated for A-6: the map a restore brings
-/// back is the one live at snapshot time (now read from the snapshot's
-/// file), a pending entry survives the diff replay, the full replay keeps
-/// exactly the entries whose clip it replayed, and the counter stays past
-/// the pending clip once its echo lands.
+/// FU-H2a restated for A-6: the map a restore brings back is the one live
+/// at snapshot time (now read from the snapshot's file), a pending entry
+/// survives the undo, and the counter stays past the pending clip once its
+/// echo lands. (Its full-replay half, keep exactly the entries whose clip
+/// was replayed, is a disk-load rule since A-13j, pinned by
+/// `derived_clips_with_a_pending_echo_survive_an_undo_and_drop_on_a_load`.)
 #[test]
-fn a6_a_pending_echo_entry_restores_through_both_paths() {
+fn a6_a_pending_echo_entry_restores_through_an_undo() {
     let mut f = fixture("a6-pending", load_demo);
     let h = handles(&f.app);
     let (Some(d), Some(p)) = (h.definition, h.pattern) else {
@@ -2192,21 +2160,6 @@ fn a6_a_pending_echo_entry_restores_through_both_paths() {
     }
     assert!(unmirrored_derived(&f.app).is_empty(), "the echo landed");
     assert_counter_monotonic(&f.app, "fast path, echo landed", before);
-
-    // Slow path.
-    f.app.test_add_track(9_999, TrackType::Audio);
-    let _ = drain(&f.rx);
-    let before = derived_counter(&f.app);
-    f.app.test_begin_full_restore_from_snapshot(snapshot.clone());
-    f.app.test_apply_engine_event(AudioEvent::AllCleared);
-    let _ = drain(&f.rx);
-    let expected: DerivedMap = at_snapshot
-        .iter()
-        .filter(|(_, id)| !pending.contains(id))
-        .map(|(k, v)| (*k, *v))
-        .collect();
-    assert_eq!(derived_map(&f.app), expected, "slow path drops only the wiped clip's entry");
-    assert_counter_monotonic(&f.app, "slow path", before);
 }
 
 /// Save to disk, optionally edit the written `project.json`, and load it

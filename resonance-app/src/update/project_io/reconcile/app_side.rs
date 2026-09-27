@@ -245,8 +245,8 @@ impl Reconcile for TakeGroups {
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         match ctx.origin {
-            Origin::DiskLoad | Origin::UndoFull => r.take_groups.clear(),
-            Origin::UndoDiff => r.take_groups.clear_for_snapshot(),
+            Origin::DiskLoad => r.take_groups.clear(),
+            Origin::Undo => r.take_groups.clear_for_snapshot(),
         }
         replay_take_groups(r, new, ctx.project_dir.unwrap_or(Path::new("")));
     }

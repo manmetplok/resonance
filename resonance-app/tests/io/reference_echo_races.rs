@@ -13,14 +13,14 @@ use std::path::{Path, PathBuf};
 
 use crossbeam_channel::{unbounded, Receiver as EventRx, Sender as EventTx};
 
-use resonance_app::message::Message;
+use resonance_app::message::{Message, ProjectIoMessage};
 use resonance_app::project::{LoadedProject, ProjectReference, ProjectReferenceMarker};
 use resonance_app::reference::{ReferenceMessage, ReferenceStatus};
 use resonance_app::update::project_io::BuiltinTemplateId;
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
 use resonance_audio::types::{
-    AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId, TrackType,
+    AudioCommand, AudioEvent, ReferenceAnalysisStage, ReferenceId,
 };
 use resonance_audio::{
     handle_add_ref_marker, handle_remove_ref_marker, handle_remove_reference_track,
@@ -421,28 +421,36 @@ fn undoing_a_later_edit_keeps_a_load_whose_echo_is_in_flight() {
     assert_eq!(st.entries[0].status, ReferenceStatus::Loaded, "and its echo lands");
 }
 
-/// The same through the full clear-and-replay path: a structural change
-/// alongside the load sends the restore through `ClearAll`.
+/// A project opened while a load's first echo is still in flight: the
+/// disk load's `ClearAll` drops the engine's copy and the restore drops the
+/// pending entry, so the echo lands nowhere. (This used to be pinned on an
+/// undo's full clear-and-replay path, which A-13j deleted; the disk load
+/// is what still clears.)
 #[test]
-fn a_full_replay_restore_cancels_an_in_flight_load() {
-    let mut f = Fixture::new("full-replay-pending");
+fn a_disk_load_cancels_an_in_flight_load() {
+    let mut f = Fixture::new("disk-load-pending");
     let a = f.file("a");
-    let snapshot = f.app.test_snapshot_for_undo();
     f.user(ReferenceMessage::LoadRequested(a.clone()));
     let id = f.engine.last_load();
-    f.app.test_add_track(9_999, TrackType::Audio);
-    f.pump();
 
-    f.app.test_begin_full_restore_from_snapshot(snapshot);
+    let file = BuiltinTemplateId::Empty.build().file;
+    let _ = f.app.update(Message::ProjectIo(ProjectIoMessage::ProjectLoaded(Ok(
+        Box::new(LoadedProject {
+            file,
+            project_dir: f.root.join("other.rproj"),
+            midi_notes: HashMap::new(),
+            plugin_states: HashMap::new(),
+        }),
+    ))));
     f.pump();
-    assert!(listed_paths(&f.app).is_empty(), "the restore drops the load");
+    assert!(listed_paths(&f.app).is_empty(), "the load drops the pending reference");
     assert!(!f.engine.holds(id), "ClearAll dropped the engine's copy");
     f.worker(progress(id));
     f.worker(loaded(id, &a));
 
     assert!(
         listed_paths(&f.app).is_empty(),
-        "the in-flight echo landed after the full replay: {:?}",
+        "the in-flight echo landed after the disk load: {:?}",
         listed_paths(&f.app)
     );
 }

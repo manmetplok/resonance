@@ -112,10 +112,10 @@ impl Reconcile for Transport {
 
 /// Transient UI state a replay after `ClearAll` resets so the project
 /// starts clean: the selected clip and plugin, an in-flight clip drag or
-/// trim, and the delete-track / quit confirmations. The diff path keeps
-/// them — nothing it restores removes the entities they name (the shape is
-/// unchanged). The scroll position is not reset here: a slow-path undo must
-/// not move the view, and a disk load scrolls in `all_cleared` (FU-V3a).
+/// trim, and the delete-track / quit confirmations. An undo keeps them —
+/// what names an entity it removes is pruned by the removal domains
+/// (A-13h/i). The scroll position is not reset here: an undo must not move
+/// the view, and a disk load scrolls in `all_cleared` (FU-V3a).
 pub(crate) struct TransientUi;
 
 impl Reconcile for TransientUi {

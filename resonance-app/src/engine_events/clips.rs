@@ -23,7 +23,7 @@ pub(super) fn imported(
     if r.io.restore_echoes.clip_deletion_owed(clip_id) {
         return;
     }
-    // A stale import — queued in a project that a load or slow-path undo
+    // A stale import — queued in a project that a load or an undo
     // has since replaced — names a track this project doesn't have, or an
     // id that is another track's clip here. Drop it rather than overwrite
     // that clip's waveform or add a phantom clip (code review UPD-09; the

@@ -205,7 +205,7 @@ pub struct ProjectFile {
     /// position (`ComposeState::rebuild_derived_clips`). `Some` is
     /// authoritative — an entry whose clip is not in `midi_clips` (an
     /// install whose engine echo was pending, or a clip the user deleted)
-    /// is kept by a diff-replay undo and dropped by a full replay; see
+    /// is kept by an undo and dropped by a disk load; see
     /// `Resonance::restore_derived_clips`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub derived_clips: Option<Vec<crate::project::sections::ProjectDerivedClip>>,

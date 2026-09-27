@@ -3,7 +3,8 @@
 //! A-13h / A-13i across busses, plugin instances, tracks and clips too, so
 //! no undo falls back to `ClearAll` any more.
 //!
-//! `structurally_compatible` used to send any change in the id sets of
+//! `structurally_compatible` (deleted with the fallback in A-13j) used to
+//! send any change in the id sets of
 //! section definitions and placements, drum patterns, track groups and
 //! arrangement markers down the `ClearAll` fallback, which re-instantiates
 //! every plugin. Their domains restore them whole on both paths (since
@@ -11,7 +12,7 @@
 //! makes one such edit through the real message path on the demo project,
 //! then walks undo and redo over it and asserts, after every step:
 //!
-//! * no `ClearAll` went out, and every domain ran under `Origin::UndoDiff`
+//! * no `ClearAll` went out, and every domain ran under `Origin::Undo`
 //!   (the reconcile trace) — the diff path was taken;
 //! * `build_project_file` equals the target snapshot's file, and the whole
 //!   snapshot (notes included) is `same_state` — the fixed point.
@@ -392,8 +393,8 @@ fn step_lands_on(
         "{what}: every domain must have run"
     );
     assert!(
-        trace.iter().all(|(o, _)| *o == Origin::UndoDiff),
-        "{what}: every domain must run under UndoDiff: {trace:?}"
+        trace.iter().all(|(o, _)| *o == Origin::Undo),
+        "{what}: every domain must run under Undo: {trace:?}"
     );
     let restored = f.app.test_build_project_file();
     if restored != target.project.file {
