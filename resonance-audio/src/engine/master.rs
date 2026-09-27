@@ -58,7 +58,8 @@ pub(crate) fn handle_add_plugin_to_master(
                 instance_id,
                 crate::clap_host::PluginSlot::new(instance),
             );
-            ctx.master.write().plugin_ids.push(instance_id);
+            ctx.shared
+                .edit_master(|master| master.plugin_ids.push(instance_id));
             let _ = ctx.event_tx.send(AudioEvent::MasterPluginAdded {
                 instance_id,
                 plugin_name,
@@ -80,10 +81,10 @@ pub(crate) fn handle_add_plugin_to_master(
 }
 
 pub(crate) fn handle_remove_plugin_from_master(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
-    ctx.master
-        .write()
-        .plugin_ids
-        .retain(|&id| id != instance_id);
+    if ctx.shared.graph.load().master.plugin_ids.contains(&instance_id) {
+        ctx.shared
+            .edit_master(|master| master.plugin_ids.retain(|&id| id != instance_id));
+    }
     let removed = ctx.plugins.write().shift_remove(&instance_id);
     drop(removed);
     let _ = ctx
@@ -96,7 +97,14 @@ pub(crate) fn handle_move_plugin_in_master(
     instance_id: PluginInstanceId,
     to_index: usize,
 ) {
-    let moved = ctx.master.write().move_plugin(instance_id, to_index);
+    // A plugin that is not on the chain publishes nothing.
+    let on_chain = ctx.shared.graph.load().master.plugin_ids.contains(&instance_id);
+    let moved = on_chain
+        .then(|| {
+            ctx.shared
+                .edit_master(|master| master.move_plugin(instance_id, to_index))
+        })
+        .flatten();
     match moved {
         // Report the *clamped* index so the app mirrors what the engine
         // actually did rather than what was requested.

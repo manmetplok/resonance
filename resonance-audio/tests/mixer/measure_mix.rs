@@ -43,8 +43,6 @@ const FRAMES: usize = (SR as usize) * 4;
 struct EngineState {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -58,8 +56,6 @@ impl EngineState {
         Self {
             shared: Arc::new(SharedState::default()),
             tracks: Arc::new(RwLock::new(IndexMap::new())),
-            busses: Arc::new(RwLock::new(IndexMap::new())),
-            master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -122,8 +118,6 @@ impl EngineState {
             source,
             &self.shared,
             &self.tracks,
-            &self.busses,
-            &self.master,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -275,7 +269,7 @@ fn measurement_writes_no_files_and_leaves_the_renderer_free() {
 #[test]
 fn bus_target_folds_in_every_member_track_and_excludes_the_others() {
     let state = EngineState::new();
-    state.busses.write().insert(7, Bus::new(7, "drum bus".into()));
+    state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "drum bus".into()))));
     state.add_track(1, TrackOutput::Bus(7));
     state.add_track(2, TrackOutput::Bus(7));
     state.add_track(3, TrackOutput::Master);

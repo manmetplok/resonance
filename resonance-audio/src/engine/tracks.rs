@@ -527,15 +527,16 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
         retire_removed_track(track, &ctx.shared.retired);
     }
 
-    // Clear busses
-    ctx.busses.write().clear();
+    // Clear busses (the old graph, and the busses only it held, are
+    // retired and dropped by the engine loop's sweep).
+    ctx.shared.edit_busses(|busses| busses.clear());
 
     // Clear aux sends (and publish the now-empty table to the render path)
     state.aux_sends.clear();
     super::busses::publish_aux_sends(ctx, state);
 
     // Clear master FX chain
-    ctx.master.write().plugin_ids.clear();
+    ctx.shared.edit_master(|master| master.plugin_ids.clear());
     // A cleared project has no audio to click: land the bypass on
     // "engaged" outright rather than fading there.
     ctx.shared.master_fx_bypass.set_bypassed_settled(false);

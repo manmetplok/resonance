@@ -2,10 +2,9 @@
 //! `AudioCommand::MovePluginInMaster`.
 //!
 //! The master twin of `bus_plugin_move.rs`, over the same shape: a plain
-//! `Vec<PluginInstanceId>` the engine owns behind its master write lock,
-//! not a track chain's lock-free `ArcSwap` snapshot. So this is a
-//! straight `Vec` edit — the reorder itself, the clamp, and the "not on
-//! this chain" answer.
+//! `Vec<PluginInstanceId>` the engine edits on a copy and publishes in a
+//! new render graph (ARCH-02 A2-5). So this is a straight `Vec` edit —
+//! the reorder itself, the clamp, and the "not on this chain" answer.
 //!
 //! Order matters more here than anywhere else: a limiter holding a
 //! ceiling has to be last, because anything after it can push the sum

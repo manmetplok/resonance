@@ -48,7 +48,7 @@ pub(crate) struct BlockInputs<'a> {
     /// Channel count of the interleaved output buffer.
     pub(crate) channels: usize,
     pub(crate) tracks: &'a IndexMap<TrackId, Track>,
-    pub(crate) busses: &'a IndexMap<BusId, Bus>,
+    pub(crate) busses: &'a IndexMap<BusId, Arc<Bus>>,
     pub(crate) clips: &'a [AudioClip],
     pub(crate) midi_clips: &'a [Arc<MidiClip>],
     pub(crate) plugins: &'a PluginMap,

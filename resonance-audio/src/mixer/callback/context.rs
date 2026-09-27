@@ -52,8 +52,6 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) channels: usize,
     pub(crate) shared: &'a SharedState,
     pub(crate) tracks: &'a RwLock<IndexMap<TrackId, Track>>,
-    pub(crate) busses: &'a RwLock<IndexMap<BusId, Bus>>,
-    pub(crate) master: &'a RwLock<MasterBus>,
     pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
     pub(crate) plugins: &'a RwLock<PluginMap>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,

@@ -5,10 +5,8 @@
 
 use std::sync::atomic::Ordering;
 
-
 use crate::bypass::{run_faded, BypassFade, FadeStage, FxDryScratch};
 use crate::clap_host::{PluginMap, StereoBufMut};
-use crate::cycle_load::{try_read_counted, LockMissCounters, StateMap};
 use crate::engine::SharedState;
 use crate::types::*;
 
@@ -18,8 +16,10 @@ use super::common::{latch_transport, TransportSnap};
 /// place. De-interleaves into the borrowed `scratch_l`/`scratch_r` pair
 /// (the per-track mix buffers are free at this point in `mix_audio`),
 /// processes each plugin in order, then re-interleaves back into `data`.
-/// Silently no-ops when the chain is empty, the read lock is contended,
-/// or a plugin's instance is momentarily locked by the control thread.
+/// Silently no-ops when the chain is empty or a plugin's instance is
+/// momentarily locked by the control thread. `master` is the chain from
+/// the block's render graph (code review ARCH-02 A2-5) — a wait-free
+/// load, so the pass can no longer be skipped for a contended lock.
 ///
 /// `chain` is the master's own bypass and each slot carries its own, both
 /// crossfaded exactly as in the per-track chains (`crate::bypass`) — so
@@ -31,8 +31,7 @@ use super::common::{latch_transport, TransportSnap};
 pub(super) fn apply_master_fx_chain(
     data: &mut [f32],
     channels: usize,
-    master: &parking_lot::RwLock<MasterBus>,
-    misses: &LockMissCounters,
+    master: &MasterBus,
     plugins_guard: &PluginMap,
     scratch_l: &mut [f32],
     scratch_r: &mut [f32],
@@ -54,10 +53,7 @@ pub(super) fn apply_master_fx_chain(
     if chain_stage == FadeStage::Dry {
         return;
     }
-    let Some(master_guard) = try_read_counted(master, StateMap::Master, misses) else {
-        return;
-    };
-    if master_guard.plugin_ids.is_empty() {
+    if master.plugin_ids.is_empty() {
         return;
     }
     // De-interleave into scratch pair. Mono output shares L across R so
@@ -83,7 +79,7 @@ pub(super) fn apply_master_fx_chain(
         chain_dry,
         |buf_l, buf_r| {
             let mut ran = false;
-            for &plugin_id in &master_guard.plugin_ids {
+            for &plugin_id in &master.plugin_ids {
                 let Some(slot) = plugins_guard.get(&plugin_id) else {
                     continue;
                 };

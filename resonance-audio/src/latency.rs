@@ -163,13 +163,17 @@ pub fn chain_latencies(
 /// plugin latencies (0 while the bus's FX are bypassed — the mixer
 /// skips the whole chain). One entry per bus; [`compensation_delays`]
 /// over this list yields the bus-stage delays and `max_bus_chain`.
-pub fn bus_chain_latencies(
-    busses: &IndexMap<BusId, Bus>,
+///
+/// Generic over the element so the render graph's `Arc<Bus>` map and a
+/// plain `Bus` map both work.
+pub fn bus_chain_latencies<B: std::borrow::Borrow<Bus>>(
+    busses: &IndexMap<BusId, B>,
     plugin_latency: impl Fn(PluginInstanceId) -> u64,
 ) -> Vec<(BusId, u64)> {
     busses
         .iter()
         .map(|(&id, bus)| {
+            let bus: &Bus = bus.borrow();
             let lat = if bus.fx_bypassed() {
                 0
             } else {

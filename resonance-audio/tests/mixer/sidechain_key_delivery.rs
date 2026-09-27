@@ -283,8 +283,6 @@ fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
         TWO_CHUNKS,
         &state.shared,
         &state.tracks,
-        &state.busses,
-        &state.master,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -347,7 +345,7 @@ fn a_sub_tracks_inserts_receive_the_key() {
 fn a_busses_inserts_receive_the_key() {
     let state = fixture();
     state.add_bus(BUS, "Group");
-    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(MONITOR_ID);
+    state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(MONITOR_ID)).unwrap();
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Master);
@@ -360,7 +358,7 @@ fn a_busses_inserts_receive_the_key() {
 #[test]
 fn the_master_chain_receives_the_key() {
     let state = fixture();
-    state.master.write().plugin_ids.push(MONITOR_ID);
+    state.shared.edit_master(|master| master.plugin_ids.push(MONITOR_ID));
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Master);
@@ -403,7 +401,7 @@ fn a_bus_can_be_the_key_source() {
     state.set_output(TAP_A, TrackOutput::Bus(BUS));
     // The bus is captured pre-fader too, so it can feed a key without
     // being audible itself.
-    state.busses.read().get(&BUS).unwrap().set_volume(0.0);
+    state.shared.graph.load().bus(BUS).unwrap().set_volume(0.0);
     state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
@@ -421,7 +419,7 @@ fn a_bus_can_be_the_key_source() {
     state.add_bus(BUS, "Group");
     state.set_output(TAP_A, TrackOutput::Bus(BUS));
     state.tracks.read().get(&TAP_A).unwrap().set_volume(1.0);
-    state.busses.read().get(&BUS).unwrap().set_volume(0.0);
+    state.shared.graph.load().bus(BUS).unwrap().set_volume(0.0);
     state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
@@ -489,8 +487,6 @@ fn the_key_is_one_block_old() {
         TWO_CHUNKS,
         &state.shared,
         &state.tracks,
-        &state.busses,
-        &state.master,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -606,7 +602,7 @@ fn a_muted_key_bus_still_keys_in_the_mixdown() {
     state.add_bus(BUS, "Ghost");
     state.set_output(TAP_A, TrackOutput::Bus(BUS));
     state.tracks.read().get(&TAP_A).unwrap().set_volume(1.0);
-    state.busses.read().get(&BUS).unwrap().set_muted(true);
+    state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
     state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
@@ -627,8 +623,8 @@ fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
         .write()
         .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
     state.add_bus(BUS, "Ghost");
-    state.busses.read().get(&BUS).unwrap().set_muted(true);
-    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(PROBE_ID);
+    state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
+    state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
     state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
     let consumer_bypass = |v: bool| {
@@ -669,8 +665,8 @@ fn a_muted_key_bus_whose_consumer_chain_is_dormant_does_not_render() {
         .write()
         .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
     state.add_bus(BUS, "Ghost");
-    state.busses.read().get(&BUS).unwrap().set_muted(true);
-    state.busses.write().get_mut(&BUS).unwrap().plugin_ids.push(PROBE_ID);
+    state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
+    state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
     state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
     let probe_calls = || calls.swap(0, std::sync::atomic::Ordering::Relaxed);

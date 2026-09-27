@@ -175,8 +175,6 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
 struct Engine {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -188,8 +186,6 @@ impl Engine {
         let e = Engine {
             shared: Arc::new(SharedState::default()),
             tracks: Arc::new(RwLock::new(IndexMap::new())),
-            busses: Arc::new(RwLock::new(IndexMap::new())),
-            master: Arc::new(RwLock::new(MasterBus::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -203,7 +199,7 @@ impl Engine {
 
     fn add_master_fx(&self, slot: PluginSlot) {
         self.plugins.write().insert(FX_ID, slot);
-        self.master.write().plugin_ids.push(FX_ID);
+        self.shared.edit_master(|master| master.plugin_ids.push(FX_ID));
     }
 
     fn add_track_fx(&self, slot: PluginSlot) {
@@ -228,8 +224,6 @@ impl Engine {
             &AtomicBool::new(cancel),
             &self.shared,
             &self.tracks,
-            &self.busses,
-            &self.master,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -244,8 +238,6 @@ impl Engine {
             &self.shared,
             &AtomicBool::new(false),
             &self.tracks,
-            &self.busses,
-            &self.master,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -437,8 +429,6 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         &e.shared,
         &AtomicBool::new(false),
         &e.tracks,
-        &e.busses,
-        &e.master,
         &e.clips,
         &e.plugins,
         &e.tempo_map,

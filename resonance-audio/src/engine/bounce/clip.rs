@@ -50,8 +50,6 @@ pub fn to_audio_clip(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -130,7 +128,7 @@ pub fn to_audio_clip(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
+    let latency_comp = build_latency_comp(shared, tracks, plugins);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it gives the bounced
@@ -143,8 +141,6 @@ pub fn to_audio_clip(
     let ctx = ChunkCtx {
         shared,
         tracks,
-        busses,
-        master,
         clips,
         plugins,
         tempo_map: &bounce_tm,

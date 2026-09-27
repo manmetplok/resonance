@@ -31,8 +31,6 @@ const REF_DC: f32 = -0.9;
 struct EngineState {
     shared: Arc<SharedState>,
     tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: Arc<RwLock<MasterBus>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -68,8 +66,6 @@ fn engine_with_dc_clip() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         tracks: Arc::new(RwLock::new(tracks)),
-        busses: Arc::new(RwLock::new(IndexMap::new())),
-        master: Arc::new(RwLock::new(MasterBus::new())),
         clips: Arc::new(RwLock::new(vec![clip])),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -106,8 +102,6 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
         path_str.clone(),
         &state.shared,
         &state.tracks,
-        &state.busses,
-        &state.master,
         &state.clips,
         &state.plugins,
         &state.tempo_map,

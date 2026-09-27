@@ -24,15 +24,13 @@ pub(super) fn handle_poll_peaks(ctx: &HandlerCtx) {
         })
         .unwrap_or_default();
     let bus_peaks = ctx
+        .shared
+        .graph
+        .load()
         .busses
-        .try_read()
-        .map(|guard| {
-            guard
-                .values()
-                .map(|b| (b.id, b.swap_peak_l(), b.swap_peak_r()))
-                .collect()
-        })
-        .unwrap_or_default();
+        .values()
+        .map(|b| (b.id, b.swap_peak_l(), b.swap_peak_r()))
+        .collect();
     let master_peak_l =
         f32::from_bits(ctx.shared.master_peak_l_bits.swap(0, Ordering::AcqRel));
     let master_peak_r =

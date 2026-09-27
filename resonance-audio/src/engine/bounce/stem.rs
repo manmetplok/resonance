@@ -207,7 +207,7 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
 pub fn stem_filter_with_keys(
     source: StemSource,
     tracks: &IndexMap<TrackId, Track>,
-    busses: &IndexMap<BusId, Bus>,
+    busses: &IndexMap<BusId, Arc<Bus>>,
     routes: &[SidechainRoute],
 ) -> StemFilter {
     match source {
@@ -301,7 +301,7 @@ pub fn stem_filter_with_keys(
 /// mix it belongs to.
 fn add_key_sources(
     tracks: &IndexMap<TrackId, Track>,
-    busses: &IndexMap<BusId, Bus>,
+    busses: &IndexMap<BusId, Arc<Bus>>,
     routes: &[SidechainRoute],
     own_bus: Option<BusId>,
     set: &mut HashSet<TrackId>,
@@ -538,8 +538,6 @@ pub fn render_stem(
     render_end: SamplePos,
     shared: &Arc<SharedState>,
     tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
-    busses: &Arc<RwLock<IndexMap<BusId, Bus>>>,
-    master: &Arc<RwLock<MasterBus>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -566,7 +564,7 @@ pub fn render_stem(
         // the slice silently falls back to its own input.
         let routes = shared.sidechain_routes.load();
         let filter =
-            stem_filter_with_keys(source, &tracks_guard, &busses.read(), &routes);
+            stem_filter_with_keys(source, &tracks_guard, &shared.graph.load().busses, &routes);
         // A tap whose parent is FROZEN has no separable signal at all
         // (ba todo #1248) — refuse rather than hand back the whole kit.
         if let Some(message) = frozen_fan_out_refusal(&filter, &tracks_guard) {
@@ -582,13 +580,13 @@ pub fn render_stem(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, busses, plugins);
+    let latency_comp = build_latency_comp(shared, tracks, plugins);
     // Stems that include the master FX chain (the master stem) are
     // shifted by its latency on top of the track/bus comp; pre-rolling
     // and trimming both keeps every stem mutually sample-aligned and
     // preserves the master stem's tail (doc #260 finding #8).
     let master_latency = if filter.include_master_fx {
-        master_fx_latency(shared, master, plugins)
+        master_fx_latency(shared, plugins)
     } else {
         0
     };
@@ -604,8 +602,6 @@ pub fn render_stem(
     let ctx = ChunkCtx {
         shared,
         tracks,
-        busses,
-        master,
         clips,
         plugins,
         tempo_map: &bounce_tm,

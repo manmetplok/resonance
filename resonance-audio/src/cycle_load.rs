@@ -26,15 +26,16 @@
 //! into its report line.
 //!
 //! State-lock contention is attributed per map (code review ARCH-02,
-//! A2-1): every `try_read` the callback makes on `tracks` / `busses` /
-//! `master` / `clips` / `plugins` goes through
+//! A2-1): every `try_read` the callback makes on `tracks` / `clips` /
+//! `plugins` goes through
 //! [`try_read_counted`], so a miss bumps that map's slot in
 //! [`LockMissCounters`] whichever branch (playing, stopped, count-in,
-//! live-MIDI pickup, master FX) made it. `render_skip_cycles` stays the
+//! live-MIDI pickup) made it. `render_skip_cycles` stays the
 //! "a playing block was dropped" total; the per-map counters say *which*
 //! lock a UI edit or worker thread was holding at the time. The MIDI
-//! clips left this table with A2-4: they are read from the published
-//! render graph (`engine::render_graph`), a load that cannot miss.
+//! clips (A2-4), the busses and the master chain (A2-5) left this table:
+//! they are read from the published render graph
+//! (`engine::render_graph`), a load that cannot miss.
 //!
 //! RT-safety: `record` does arithmetic and relaxed atomic stores only.
 //! The summary line is *not* formatted or printed on the audio thread:
@@ -76,21 +77,17 @@ pub const LOAD_EMA_ALPHA: f32 = 0.05;
 #[repr(usize)]
 pub enum StateMap {
     Tracks = 0,
-    Busses = 1,
-    Master = 2,
-    Clips = 3,
-    Plugins = 4,
+    Clips = 1,
+    Plugins = 2,
 }
 
 /// Number of [`StateMap`] variants.
-pub const STATE_MAP_COUNT: usize = 5;
+pub const STATE_MAP_COUNT: usize = 3;
 
 impl StateMap {
     /// Every map, in counter order.
     pub const ALL: [StateMap; STATE_MAP_COUNT] = [
         StateMap::Tracks,
-        StateMap::Busses,
-        StateMap::Master,
         StateMap::Clips,
         StateMap::Plugins,
     ];
@@ -99,8 +96,6 @@ impl StateMap {
     pub fn name(self) -> &'static str {
         match self {
             StateMap::Tracks => "tracks",
-            StateMap::Busses => "busses",
-            StateMap::Master => "master",
             StateMap::Clips => "clips",
             StateMap::Plugins => "plugins",
         }
@@ -121,8 +116,6 @@ impl LockMissCounters {
     pub const fn new() -> Self {
         Self {
             counts: [
-                AtomicU64::new(0),
-                AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
                 AtomicU64::new(0),
