@@ -37,6 +37,10 @@ pub(crate) struct ParamSnapshot {
     /// so `ModDest::UnisonDetune` can move it on a sounding voice.
     pub unison_detune: f32,
 
+    /// The `analog` knob, 0..1. (`osc_phase_random` is not here: it is read
+    /// at note-on, the only moment it acts.)
+    pub analog: f32,
+
     pub filter_enabled: bool,
     pub filter_type: FilterType,
     pub filter_cutoff: f32,
@@ -129,6 +133,8 @@ impl ParamSnapshot {
             osc2_pan: params.osc2.pan.value(),
 
             unison_detune: params.unison.detune.value(),
+
+            analog: params.analog.drift.value(),
 
             filter_enabled: params.filter.enabled.value(),
             filter_type: FilterType::from_int(params.filter.filter_type.value()),

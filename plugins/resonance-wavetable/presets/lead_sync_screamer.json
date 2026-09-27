@@ -20,6 +20,7 @@
     "mod_8_src": 0, "mod_8_dst": 0, "mod_8_amt": 0.0,
     "chorus_enabled": 0, "chorus_rate": 1.0, "chorus_depth": 0.3, "chorus_mix": 0.5,
     "delay_enabled": 1, "delay_time_l": 250.0, "delay_time_r": 333.0, "delay_feedback": 0.4, "delay_mix": 0.25,
-    "dist_enabled": 1, "dist_drive": 3.5, "dist_mix": 0.4
+    "dist_enabled": 1, "dist_drive": 3.5, "dist_mix": 0.4,
+    "osc_phase_random": 0.0, "analog": 0.0
   }
 }
