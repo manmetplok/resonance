@@ -59,11 +59,13 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs. Parameters are addressed by string id everywhere that
+/// three LFOs; 93 until the distortion character work added `dist_mode`,
+/// `dist_oversample`, `dist_tone`, `dist_auto_gain`, `dist_bits`,
+/// `dist_crush_rate` and `voice_drive`. Parameters are addressed by string id everywhere that
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+pub const PARAM_COUNT: usize = 100;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -234,10 +236,17 @@ impl WavetableParams {
             87 => &self.delay.time_r,
             88 => &self.delay.feedback,
             89 => &self.delay.mix,
-            // Distortion (90..93)
+            // Distortion (90..100)
             90 => &self.distortion.enabled,
             91 => &self.distortion.drive,
             92 => &self.distortion.mix,
+            93 => &self.distortion.mode,
+            94 => &self.distortion.oversample,
+            95 => &self.distortion.tone,
+            96 => &self.distortion.auto_gain,
+            97 => &self.distortion.bits,
+            98 => &self.distortion.crush_rate,
+            99 => &self.distortion.voice_drive,
             _ => &self.master_volume, // fallback
         }
     }

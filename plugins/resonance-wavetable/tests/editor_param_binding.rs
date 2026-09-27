@@ -63,7 +63,7 @@ fn call_args<'a>(line: &'a str, callee: &str) -> Option<Vec<&'a str>> {
 // Every parameter, listed once
 // ---------------------------------------------------------------------------
 
-/// Every `FloatParam` in the synth. All 51 are drawn by a knob or a
+/// Every `FloatParam` in the synth. All 55 are drawn by a knob or a
 /// slider, so this list is also the set of controls under test.
 fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     let mut out: Vec<(String, &FloatParam)> = vec![
@@ -86,6 +86,10 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
         ("delay.mix".into(), &p.delay.mix),
         ("distortion.drive".into(), &p.distortion.drive),
         ("distortion.mix".into(), &p.distortion.mix),
+        ("distortion.tone".into(), &p.distortion.tone),
+        ("distortion.bits".into(), &p.distortion.bits),
+        ("distortion.crush_rate".into(), &p.distortion.crush_rate),
+        ("distortion.voice_drive".into(), &p.distortion.voice_drive),
     ];
     for (name, osc) in [("osc1", &p.osc1), ("osc2", &p.osc2)] {
         out.push((format!("{name}.position"), &osc.position));
@@ -123,6 +127,8 @@ fn int_knob_params(p: &WavetableParams) -> Vec<(String, &IntParam)> {
         ("lfo1.shape".into(), &p.lfo1.shape),
         ("lfo2.shape".into(), &p.lfo2.shape),
         ("lfo3.shape".into(), &p.lfo3.shape),
+        ("distortion.mode".into(), &p.distortion.mode),
+        ("distortion.oversample".into(), &p.distortion.oversample),
     ]
 }
 
@@ -132,8 +138,8 @@ fn the_control_list_covers_every_float_parameter() {
     let floats = float_params(&p);
     assert_eq!(
         floats.len(),
-        51,
-        "the synth declares 51 FloatParams; the control list must name all of them"
+        55,
+        "the synth declares 55 FloatParams; the control list must name all of them"
     );
 
     // Every listed parameter is one `param_at` really exposes...
@@ -152,17 +158,21 @@ fn the_control_list_covers_every_float_parameter() {
     }
 
     // ...and the counts add up, which is what proves nothing was left out:
-    // 51 floats + 29 ints + 13 bools is the whole parameter list.
+    // 55 floats + 31 ints + 14 bools is the whole parameter list.
     //
     // Was 51/26/10 == 87 when this guard was written. ba todo #1324 (LFO tempo
     // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, so the
     // whole list is 93. The float count is deliberately unchanged — #1324 added
     // no float — which is what makes this a real check rather than a tautology.
+    //
+    // The distortion character work then added four floats (`dist_tone`,
+    // `dist_bits`, `dist_crush_rate`, `voice_drive`), two ints (`dist_mode`,
+    // `dist_oversample`) and one bool (`dist_auto_gain`): 100.
     let mut ids: Vec<&str> = floats.iter().map(|(_, p)| p.id()).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 51, "the control list repeats a parameter");
-    assert_eq!(51 + 29 + 13, PARAM_COUNT);
+    assert_eq!(ids.len(), 55, "the control list repeats a parameter");
+    assert_eq!(55 + 31 + 14, PARAM_COUNT);
 }
 
 // ---------------------------------------------------------------------------
@@ -217,8 +227,8 @@ fn no_control_call_site_restates_a_param_fact() {
         }
     }
 
-    assert_eq!(knobs, 29, "expected 29 float knob cells across the five tabs");
-    assert_eq!(int_knobs, 3, "expected 3 plain int knob cells");
+    assert_eq!(knobs, 33, "expected 33 float knob cells across the five tabs");
+    assert_eq!(int_knobs, 5, "expected 5 plain int knob cells");
     assert_eq!(sliders, 2, "expected the balance and mod-amount sliders");
 }
 
@@ -490,6 +500,12 @@ fn every_knob_used_to_reset_to_its_range_minimum() {
         "delay.time_l".into(),
         "delay.time_r".into(),
         "distortion.mix".into(),
+        // Added with the distortion modes, after the migration; listed
+        // because the old gesture would have got them wrong too.
+        // (`voice_drive` defaults to its minimum, so it is absent.)
+        "distortion.bits".into(),
+        "distortion.crush_rate".into(),
+        "distortion.tone".into(),
         "filter.cutoff".into(),
         // The three `lfoN_depth` are absent on purpose: ba todo #1354 set
         // their declared default to 0.0, which *is* their range minimum, so
@@ -555,9 +571,11 @@ fn the_declared_skew_reaches_the_arc() {
             }
         }
     }
+    // 15 when this was written; the distortion modes added two more
+    // (`dist_tone`, `dist_crush_rate`).
     assert_eq!(
-        skewed, 15,
-        "15 float params declare a skew the old editor ignored"
+        skewed, 17,
+        "17 float params declare a skew the old editor would have ignored"
     );
 }
 
@@ -645,7 +663,7 @@ fn no_readout_doubles_up_the_declared_unit() {
 }
 
 // ---------------------------------------------------------------------------
-// The 23 factory presets are untouched by the migration
+// The factory presets are untouched by the migration
 // ---------------------------------------------------------------------------
 
 #[test]

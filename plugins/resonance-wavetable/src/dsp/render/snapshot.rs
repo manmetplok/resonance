@@ -5,6 +5,9 @@
 //! per-sample kernel performs zero atomic loads against the shared
 //! [`WavetableParams`] and contains no `Param::value()` call at all.
 
+use resonance_dsp::OversampleFactor;
+
+use crate::dsp::effects::{DistMode, DistSettings};
 use crate::dsp::filter::FilterType;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
@@ -81,6 +84,13 @@ pub(crate) struct ParamSnapshot {
     pub dist_enabled: bool,
     pub dist_drive: f32,
     pub dist_mix: f32,
+    pub dist_settings: DistSettings,
+    /// True when some effective mod slot targets `ModDest::DistDrive`, so
+    /// the render loop has to track the newest voice's value for it.
+    pub dist_drive_routed: bool,
+
+    /// Per-voice pre-filter drive (0 = bypass).
+    pub voice_drive: f32,
 
     pub chorus_enabled: bool,
     pub chorus_rate: f32,
@@ -109,6 +119,10 @@ impl ParamSnapshot {
             dest: ModDest::from_int(params.mod_slots[i].destination.value()),
             amount: params.mod_slots[i].amount.value(),
         });
+
+        let dist_drive_routed = mod_slots
+            .iter()
+            .any(|s| s.dest == ModDest::DistDrive && s.is_effective());
 
         Self {
             master_vol: params.master_volume.value(),
@@ -183,6 +197,17 @@ impl ParamSnapshot {
             dist_enabled: params.distortion.enabled.value(),
             dist_drive: params.distortion.drive.value(),
             dist_mix: params.distortion.mix.value(),
+            dist_settings: DistSettings {
+                mode: DistMode::from_int(params.distortion.mode.value()),
+                oversample: OversampleFactor::from_int(params.distortion.oversample.value()),
+                tone_hz: params.distortion.tone.value(),
+                auto_gain: params.distortion.auto_gain.value(),
+                bits: params.distortion.bits.value(),
+                crush_rate: params.distortion.crush_rate.value(),
+            },
+            dist_drive_routed,
+
+            voice_drive: params.distortion.voice_drive.value(),
 
             chorus_enabled: params.chorus.enabled.value(),
             chorus_rate: params.chorus.rate.value(),

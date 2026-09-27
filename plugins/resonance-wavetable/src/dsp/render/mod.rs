@@ -31,7 +31,6 @@ mod snapshot;
 
 use resonance_plugin::{EventIterator, NoteEvent, TempoInfo};
 
-use crate::dsp::effects::Distortion;
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::voice::VoiceState;
@@ -50,6 +49,12 @@ use self::snapshot::ParamSnapshot;
 /// Must stay a power of two: the control-rate test compiles to an AND rather
 /// than a divmod.
 const FILTER_COEFF_INTERVAL: u32 = 16;
+
+/// How far a full-scale (±1.0) `ModDest::DistDrive` modulation moves the
+/// master drive, in octaves: log2(20), so +1.0 takes the minimum drive of 1
+/// to the maximum of 20. The offset is exponential because drive is a gain
+/// — equal steps of modulation should sound like equal steps of dirt.
+const DIST_DRIVE_MOD_OCTAVES: f32 = 4.321_928;
 
 impl SynthEngine {
     /// Render a full stereo block into `left` / `right`, draining MIDI events
@@ -72,6 +77,7 @@ impl SynthEngine {
     ) {
         let snap = ParamSnapshot::capture(params, self.sample_rate);
         self.retarget_smoothers(&snap);
+        self.distortion.configure(snap.dist_settings);
         let plan = self.plan_block(&snap, tempo);
 
         let mut next_event = events.next_event();
@@ -215,16 +221,25 @@ impl SynthEngine {
             rng,
             active,
             active_len,
+            dist_drive_mod,
             ..
         } = self;
 
         let mut mix_l = 0.0f32;
         let mut mix_r = 0.0f32;
+        let mut newest_age = 0u64;
         for &vi in active.iter().take(*active_len) {
             let voice = &mut voices[vi as usize];
             if let Some((l, r)) = kernel::render_voice(voice, snap, plan, wavetables, rng, ctx) {
                 mix_l += l;
                 mix_r += r;
+                // The master drive is global: take the newest sounding
+                // voice's modulation for it (last-note priority). Skipped
+                // outright when nothing routes there.
+                if snap.dist_drive_routed && voice.age >= newest_age {
+                    newest_age = voice.age;
+                    *dist_drive_mod = voice.cached_mods.dist_drive;
+                }
             }
         }
         (mix_l, mix_r)
@@ -238,10 +253,15 @@ impl SynthEngine {
         let (mut mix_l, mut mix_r) = (l, r);
 
         if snap.dist_enabled {
-            let (dl, dr) = Distortion::process(
+            let mut drive = self.fx_smoothers.dist_drive.next();
+            if snap.dist_drive_routed {
+                drive = (drive * (self.dist_drive_mod * DIST_DRIVE_MOD_OCTAVES).exp2())
+                    .clamp(1.0, 20.0);
+            }
+            let (dl, dr) = self.distortion.process(
                 mix_l,
                 mix_r,
-                self.fx_smoothers.dist_drive.next(),
+                drive,
                 self.fx_smoothers.dist_mix.next(),
             );
             mix_l = dl;

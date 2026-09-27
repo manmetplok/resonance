@@ -2,7 +2,7 @@
 use resonance_dsp::SimpleRng;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
-use crate::dsp::effects::{Chorus, StereoDelay};
+use crate::dsp::effects::{Chorus, DistortionStage, StereoDelay};
 use crate::params::WavetableParams;
 use crate::viz::{ScopeCollector, WavetableVizState};
 use crate::dsp::voice::{Voice, VoiceState, MAX_VOICES};
@@ -38,6 +38,10 @@ pub struct SynthEngine {
     pub wavetables: Vec<Wavetable>,
 
     // Effects
+    pub(crate) distortion: DistortionStage,
+    /// This sample's `ModDest::DistDrive` offset: the newest sounding
+    /// voice's, held while nothing sounds (see `ModState::dist_drive`).
+    pub(crate) dist_drive_mod: f32,
     pub(crate) chorus: Chorus,
     pub(crate) delay: StereoDelay,
 
@@ -127,6 +131,8 @@ impl SynthEngine {
             global_lfo2: crate::dsp::lfo::MultiLfo::new(),
             global_lfo3: crate::dsp::lfo::MultiLfo::new(),
             wavetables: Vec::new(),
+            distortion: DistortionStage::new(44100.0),
+            dist_drive_mod: 0.0,
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
@@ -164,7 +170,10 @@ impl SynthEngine {
         // burning multi-seconds on additive synthesis.
         self.wavetables = crate::dsp::wavetable::load_bundled();
 
-        // Init effects
+        // Init effects. The distortion stage designs its oversampling
+        // filters here, off the audio thread.
+        self.distortion = DistortionStage::new(sample_rate);
+        self.dist_drive_mod = 0.0;
         self.chorus = Chorus::new(sample_rate);
         self.delay = StereoDelay::new(sample_rate);
 
@@ -196,6 +205,8 @@ impl SynthEngine {
         self.global_lfo1.reset_phase();
         self.global_lfo2.reset_phase();
         self.global_lfo3.reset_phase();
+        self.distortion.reset();
+        self.dist_drive_mod = 0.0;
         self.chorus.reset();
         self.delay.reset();
     }
