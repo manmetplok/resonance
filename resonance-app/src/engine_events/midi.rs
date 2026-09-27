@@ -30,13 +30,20 @@ pub(super) fn clip_created(
     if r.midi_clips.iter().any(|c| c.id == clip_id) {
         return;
     }
-    // While recording, a new clip is the one a live MIDI recording opens
-    // on its first note: an undoable edit, snapshotted before it lands
-    // (STATE-02). Outside recording it echoes an app-issued edit whose
-    // message already recorded its own entry.
-    if r.transport.recording {
-        r.record_recording_edit();
-    }
+    // Every app-issued clip create (compose canvas, MIDI import, reconcile
+    // restore, ...) allocates its own id and mirrors the clip into
+    // `midi_clips` synchronously, before the engine's echo can arrive —
+    // so an echo that gets past the idempotent check above was never
+    // mirrored: the engine invented this clip itself. That happens for a
+    // live MIDI capture's first note, whether the transport is actually
+    // recording (a take) or just playing on an armed instrument track
+    // (FU-D6a, D-6 §8 item 4 / §7a decision 5) — `handle_record_midi_event`
+    // uses the same lazy-open-on-first-note path either way. Both are
+    // undoable like a recorded take, snapshotted before the clip lands
+    // (STATE-02); `record_recording_edit`'s `CoalesceKey::Recording` folds
+    // every armed track's capture in one run into a single entry, the same
+    // as a multi-track Record session.
+    r.record_recording_edit();
     r.midi_clips.push(MidiClipState {
         id: clip_id,
         track_id,
