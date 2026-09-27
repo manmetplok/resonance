@@ -10,6 +10,7 @@ pub mod effects;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
+pub mod filter_models;
 pub mod lfo;
 pub mod modulation;
 pub mod oscillator;

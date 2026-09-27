@@ -19,7 +19,7 @@ impl ModSlotParams {
 
         Self {
             source: IntParam::new(src_id, src_name, 0, IntRange::Linear { min: 0, max: 8 }),
-            destination: IntParam::new(dst_id, dst_name, 0, IntRange::Linear { min: 0, max: 11 }),
+            destination: IntParam::new(dst_id, dst_name, 0, IntRange::Linear { min: 0, max: 12 }),
             amount: FloatParam::new(
                 amt_id,
                 amt_name,

@@ -63,7 +63,11 @@ pub struct WavetableParams {
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+///
+/// 93 -> 95 when the filter models landed: `filter_model` and `filter_fm`,
+/// appended at the end of the table (93, 94) rather than beside the other
+/// filter params so the indices of everything already listed stay put.
+pub const PARAM_COUNT: usize = 95;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -238,6 +242,9 @@ impl WavetableParams {
             90 => &self.distortion.enabled,
             91 => &self.distortion.drive,
             92 => &self.distortion.mix,
+            // Filter models (93..95)
+            93 => &self.filter.model,
+            94 => &self.filter.fm,
             _ => &self.master_volume, // fallback
         }
     }

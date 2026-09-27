@@ -1,5 +1,7 @@
 use resonance_plugin::*;
 
+use crate::dsp::filter_models::FilterModel;
+
 pub struct FilterParams {
     pub filter_type: IntParam,
     pub cutoff: FloatParam,
@@ -8,6 +10,13 @@ pub struct FilterParams {
     pub keytrack: FloatParam,
     pub enabled: BoolParam,
     pub drive: FloatParam,
+    /// Which circuit the filter emulates ([`FilterModel`]). Default
+    /// `Clean SVF` is the original filter, bit for bit.
+    pub model: IntParam,
+    /// Audio-rate cutoff modulation by oscillator 2, 0..1 of
+    /// `FILTER_FM_OCTAVES`. Zero (the default) takes the control-rate
+    /// coefficient path unchanged.
+    pub fm: FloatParam,
 }
 
 impl FilterParams {
@@ -63,6 +72,23 @@ impl FilterParams {
             drive: FloatParam::new(
                 "filter_drive",
                 "Filter Drive",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_value_to_string(formatters::v2s_f32_percentage(0)),
+            model: IntParam::new(
+                "filter_model",
+                "Filter Model",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: FilterModel::LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(&FilterModel::LABELS),
+            fm: FloatParam::new(
+                "filter_fm",
+                "Filter FM",
                 0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )

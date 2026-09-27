@@ -6,6 +6,7 @@
 //! [`WavetableParams`] and contains no `Param::value()` call at all.
 
 use crate::dsp::filter::FilterType;
+use crate::dsp::filter_models::FilterModel;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use crate::params::WavetableParams;
@@ -44,6 +45,8 @@ pub(crate) struct ParamSnapshot {
     pub filter_env_depth: f32,
     pub filter_keytrack: f32,
     pub filter_drive: f32,
+    pub filter_model: FilterModel,
+    pub filter_fm: f32,
 
     pub amp_attack: f32,
     pub amp_decay: f32,
@@ -137,6 +140,8 @@ impl ParamSnapshot {
             filter_env_depth: params.filter.env_depth.value(),
             filter_keytrack: params.filter.keytrack.value(),
             filter_drive: params.filter.drive.value(),
+            filter_model: FilterModel::from_int(params.filter.model.value()),
+            filter_fm: params.filter.fm.value(),
 
             amp_attack: params.amp_env.attack.value(),
             amp_decay: params.amp_env.decay.value(),

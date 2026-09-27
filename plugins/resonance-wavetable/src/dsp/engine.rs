@@ -3,6 +3,7 @@ use resonance_dsp::SimpleRng;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
 use crate::dsp::effects::{Chorus, StereoDelay};
+use crate::dsp::filter_models::FilterModel;
 use crate::params::WavetableParams;
 use crate::viz::{ScopeCollector, WavetableVizState};
 use crate::dsp::voice::{Voice, VoiceState, MAX_VOICES};
@@ -68,6 +69,12 @@ pub struct SynthEngine {
 
     // Same de-zipper treatment for the FX-chain parameters.
     pub(crate) fx_smoothers: FxSmoothers,
+
+    /// The filter model the last block rendered with. A change clears every
+    /// voice's filter state (see `plan_block`), so the newly selected
+    /// circuit starts from rest instead of from whatever it held the last
+    /// time it ran.
+    pub(crate) filter_model: FilterModel,
 }
 
 /// Per-sample smoothers for the continuous FX parameters, retargeted from
@@ -142,6 +149,7 @@ impl SynthEngine {
             // and always was the real one.)
             master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
             fx_smoothers: FxSmoothers::new(),
+            filter_model: FilterModel::Clean,
         }
     }
 

@@ -38,6 +38,10 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/bass_acid_squelch.json"),
     },
     PresetEntry {
+        name: "Bass — Ladder FM Growl",
+        json: include_str!("../presets/bass_ladder_fm_growl.json"),
+    },
+    PresetEntry {
         name: "Bass — Wobble",
         json: include_str!("../presets/bass_wobble.json"),
     },

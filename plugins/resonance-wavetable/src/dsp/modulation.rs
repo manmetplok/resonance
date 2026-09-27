@@ -90,12 +90,13 @@ pub enum ModDest {
     UnisonDetune = 9,
     Osc1Pan = 10,
     Osc2Pan = 11,
+    FilterFm = 12,
 }
 
 impl ModDest {
     /// Display names, indexed by the parameter's integer value. See
     /// [`ModSource::LABELS`] for why these live next to the discriminants.
-    pub const LABELS: [&'static str; 12] = [
+    pub const LABELS: [&'static str; 13] = [
         "None",
         "Osc1 Position",
         "Osc2 Position",
@@ -108,6 +109,7 @@ impl ModDest {
         "Unison Detune",
         "Osc1 Pan",
         "Osc2 Pan",
+        "Filter FM",
     ];
 
     pub fn from_int(v: i32) -> Self {
@@ -123,6 +125,7 @@ impl ModDest {
             9 => Self::UnisonDetune,
             10 => Self::Osc1Pan,
             11 => Self::Osc2Pan,
+            12 => Self::FilterFm,
             _ => Self::None,
         }
     }
@@ -202,6 +205,8 @@ pub struct ModState {
     pub unison_detune: f32,
     pub osc1_pan: f32,
     pub osc2_pan: f32,
+    /// Offset added to the `filter_fm` amount (0..1 scale).
+    pub filter_fm: f32,
 }
 
 impl ModState {
@@ -300,6 +305,7 @@ pub fn evaluate_mod_matrix(
             ModDest::UnisonDetune => state.unison_detune += mod_value,
             ModDest::Osc1Pan => state.osc1_pan += mod_value,
             ModDest::Osc2Pan => state.osc2_pan += mod_value,
+            ModDest::FilterFm => state.filter_fm += mod_value,
             ModDest::None => {}
         }
     }

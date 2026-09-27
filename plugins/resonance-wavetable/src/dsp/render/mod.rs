@@ -13,6 +13,12 @@
 //! triggered voices force an immediate coefficient refresh via
 //! `Voice::filter_dirty`.
 //!
+//! The one exception is filter FM: a voice whose FM depth is non-zero also
+//! re-derives its cutoff gain every sample from oscillator 2, through the
+//! cheap `tan`/`exp2` approximations in
+//! [`filter_models`](crate::dsp::filter_models). Depth zero — the default —
+//! skips that path entirely.
+//!
 //! The block is rendered in four phases, one module each:
 //!
 //! * [`snapshot`] — read every parameter once ([`ParamSnapshot`]).

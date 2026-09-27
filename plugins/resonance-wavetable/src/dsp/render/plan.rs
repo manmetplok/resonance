@@ -53,6 +53,11 @@ pub(crate) struct BlockPlan {
     /// implies at the host's tempo (ba todo #1324).
     pub lfo_rates: [f32; 3],
 
+    /// Lower bound of the filter-FM cutoff sweep, as `π·20 Hz/fs` — the
+    /// same 20 Hz floor `set_coeffs` clamps to, resolved once instead of
+    /// divided out per sample.
+    pub filter_w_min: f32,
+
     pub sample_rate: f32,
 }
 
@@ -101,6 +106,17 @@ impl SynthEngine {
             self.global_lfo3.set_phase(p);
         }
 
+        // Switching filter model mid-note: the circuit being switched to
+        // has been frozen since it last ran, so start every voice's filters
+        // from rest. Never taken while the model stays put, which keeps the
+        // clean path's state untouched block to block.
+        if snap.filter_model != self.filter_model {
+            self.filter_model = snap.filter_model;
+            for voice in &mut self.voices {
+                voice.clear_filters();
+            }
+        }
+
         self.refresh_active();
         self.seed_voice_lfo_rates(lfo_rates, true);
 
@@ -127,6 +143,7 @@ impl SynthEngine {
                 self.sample_rate,
             ),
             lfo_rates,
+            filter_w_min: std::f32::consts::PI * 20.0 / self.sample_rate,
             sample_rate: self.sample_rate,
         }
     }

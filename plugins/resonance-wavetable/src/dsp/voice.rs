@@ -1,6 +1,7 @@
 /// Per-voice state for the wavetable synthesizer.
 use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
+use crate::dsp::filter_models::CharacterFilter;
 use crate::dsp::lfo::MultiLfo;
 use crate::dsp::oscillator::TableTap;
 
@@ -98,6 +99,16 @@ pub struct Voice {
     // Per-voice stereo filter
     pub filter_l: StateVariableFilter,
     pub filter_r: StateVariableFilter,
+    // The same pair for the character models. Only one pair runs at a
+    // time — `snap.filter_model` picks — and the engine clears both when
+    // the model changes, so neither resumes from stale state.
+    pub char_l: CharacterFilter,
+    pub char_r: CharacterFilter,
+    // Filter FM, refreshed with the coefficients at control rate: the base
+    // cutoff as `π·fc/fs` and the FM depth in octaves. Zero depth keeps the
+    // per-sample coefficient path switched off.
+    pub filter_w: f32,
+    pub filter_fm_oct: f32,
 
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
@@ -153,6 +164,10 @@ impl Voice {
             lfo3: MultiLfo::new(),
             filter_l: StateVariableFilter::new(),
             filter_r: StateVariableFilter::new(),
+            char_l: CharacterFilter::new(),
+            char_r: CharacterFilter::new(),
+            filter_w: 0.0,
+            filter_fm_oct: 0.0,
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
             filter_dirty: true,
@@ -209,8 +224,7 @@ impl Voice {
             self.lfo3.reset_phase();
         }
 
-        self.filter_l.clear();
-        self.filter_r.clear();
+        self.clear_filters();
         self.filter_dirty = true;
         self.mod_dirty = true;
         self.osc_setup_dirty = true;
@@ -221,6 +235,14 @@ impl Voice {
             self.unison[u].reset();
         }
         distribute_unison(&mut self.unison, self.unison_count, spread);
+    }
+
+    /// Zero every filter's state, clean and character alike.
+    pub fn clear_filters(&mut self) {
+        self.filter_l.clear();
+        self.filter_r.clear();
+        self.char_l.clear();
+        self.char_r.clear();
     }
 
     /// Take a held voice over for a legato note: move the pitch target
