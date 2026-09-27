@@ -14,6 +14,7 @@ use resonance_plugin::*;
 
 use crate::dsp::modulation::NUM_MOD_SLOTS;
 
+pub mod analog;
 pub mod env;
 pub mod filter;
 pub mod fx;
@@ -23,6 +24,7 @@ pub mod modulation;
 pub mod osc;
 pub mod unison;
 
+pub use analog::AnalogParams;
 pub use env::EnvParams;
 pub use filter::FilterParams;
 pub use fx::{ChorusParams, DelayParams, DistortionParams};
@@ -44,6 +46,7 @@ pub struct WavetableParams {
     pub osc1: OscParams,
     pub osc2: OscParams,
     pub unison: UnisonParams,
+    pub analog: AnalogParams,
     pub amp_env: EnvParams,
     pub mod_env: EnvParams,
     pub filter: FilterParams,
@@ -59,11 +62,12 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs. Parameters are addressed by string id everywhere that
+/// three LFOs; 95 since `osc_phase_random` + `analog` (analog
+/// instability) were appended. Parameters are addressed by string id everywhere that
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 93;
+pub const PARAM_COUNT: usize = 95;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -116,6 +120,9 @@ impl WavetableParams {
 
             // Unison
             unison: UnisonParams::new(),
+
+            // Analog instability
+            analog: AnalogParams::new(),
 
             // Envelopes
             amp_env: EnvParams::new("amp", "Amp", 0.005, 0.3, 0.8, 0.3),
@@ -238,6 +245,9 @@ impl WavetableParams {
             90 => &self.distortion.enabled,
             91 => &self.distortion.drive,
             92 => &self.distortion.mix,
+            // Analog (93..95)
+            93 => &self.analog.phase_random,
+            94 => &self.analog.drift,
             _ => &self.master_volume, // fallback
         }
     }

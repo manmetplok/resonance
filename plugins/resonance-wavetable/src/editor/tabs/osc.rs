@@ -263,6 +263,10 @@ fn draw_unison_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             int_knob(ui, "Voices", &app.params.unison.voices);
             float_knob(ui, "Detune", &app.params.unison.detune);
             float_knob(ui, "Spread", &app.params.unison.spread);
+            // Analog instability sits with unison: both are per-sub-voice
+            // character (start phase and pitch drift act on every sub-voice).
+            float_knob(ui, "Phase", &app.params.analog.phase_random);
+            float_knob(ui, "Analog", &app.params.analog.drift);
         });
     });
 }

@@ -74,6 +74,10 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/keys_cathedral_organ.json"),
     },
     PresetEntry {
+        name: "Keys — Vintage Poly",
+        json: include_str!("../presets/keys_vintage_poly.json"),
+    },
+    PresetEntry {
         name: "Arp — Formant Talker",
         json: include_str!("../presets/arp_formant_talker.json"),
     },

@@ -1,4 +1,5 @@
 /// Per-voice state for the wavetable synthesizer.
+use crate::dsp::analog::{AnalogRng, DriftCoeffs, DriftWalk};
 use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
 use crate::dsp::lfo::MultiLfo;
@@ -54,6 +55,11 @@ pub struct UnisonSubVoice {
     /// Control-rate cached oscillator setup, refreshed by the render loop.
     pub osc1_setup: OscSetup,
     pub osc2_setup: OscSetup,
+    /// Per-oscillator analog pitch drift, `[-1, 1]`, scaled into cents by
+    /// the `analog` knob when the `OscSetup` is rebuilt. The two
+    /// oscillators drift independently, as two VCOs would.
+    pub osc1_drift: DriftWalk,
+    pub osc2_drift: DriftWalk,
 }
 
 impl UnisonSubVoice {
@@ -65,6 +71,8 @@ impl UnisonSubVoice {
             pan_offset: 0.0,
             osc1_setup: OscSetup::default(),
             osc2_setup: OscSetup::default(),
+            osc1_drift: DriftWalk::default(),
+            osc2_drift: DriftWalk::default(),
         }
     }
 
@@ -102,6 +110,14 @@ pub struct Voice {
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
     pub unison_count: usize,
+
+    // Analog instability (see `dsp::analog`). The voice's own PRNG, seeded
+    // per note-on from the engine's, drives its sub-voices' drift walks.
+    // `analog_cutoff` / `analog_level` are this note's static spreads,
+    // `[-1, 1]`, scaled by the `analog` knob where they are applied.
+    pub analog_rng: AnalogRng,
+    pub analog_cutoff: f32,
+    pub analog_level: f32,
 
     // Set by `trigger()`, cleared by the render loop the first time the
     // voice runs through the filter stage. Used to force an immediate
@@ -155,6 +171,9 @@ impl Voice {
             filter_r: StateVariableFilter::new(),
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
+            analog_rng: AnalogRng::default(),
+            analog_cutoff: 0.0,
+            analog_level: 0.0,
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
@@ -221,6 +240,31 @@ impl Voice {
             self.unison[u].reset();
         }
         distribute_unison(&mut self.unison, self.unison_count, spread);
+    }
+
+    /// Draw this note's analog character: reseed the voice PRNG, start every
+    /// sub-voice's drift walks, pick the static cutoff / level spreads, and
+    /// set the oscillator start phases.
+    ///
+    /// Called right after [`Self::trigger`] (never after a legato
+    /// take-over, whose phases and drift carry on). `phase_random` is the
+    /// `osc_phase_random` knob: each start phase is a uniform draw scaled by
+    /// it, so 0 leaves `trigger`'s reset-to-zero phases exactly as they were
+    /// and 1 is a fully random start — the free-running oscillator of an
+    /// analog poly, where a key finds its VCO wherever it happens to be.
+    /// The draws are the same whatever the knobs say.
+    pub fn seed_analog(&mut self, seed: u32, phase_random: f32, coeffs: &DriftCoeffs) {
+        let rng = &mut self.analog_rng;
+        *rng = AnalogRng::new(seed);
+        self.analog_cutoff = rng.bipolar();
+        self.analog_level = rng.bipolar();
+        let phase_random = phase_random as f64;
+        for sub in self.unison.iter_mut() {
+            sub.osc1_drift.start(rng, coeffs);
+            sub.osc2_drift.start(rng, coeffs);
+            sub.osc1_phase = rng.unit() as f64 * phase_random;
+            sub.osc2_phase = rng.unit() as f64 * phase_random;
+        }
     }
 
     /// Take a held voice over for a legato note: move the pitch target
