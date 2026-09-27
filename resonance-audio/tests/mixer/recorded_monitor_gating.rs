@@ -83,7 +83,7 @@ fn recorded_mode_stays_live_outside_covered_spans() {
     // At/after the take's end.
     assert!(!recorded_monitor_gate(&track, &takes, 12_000, 512));
     // No takes at all — nothing gates.
-    assert!(!recorded_monitor_gate(&track, &[], 5_000, 512));
+    assert!(!recorded_monitor_gate(&track, &[] as &[AudioClip], 5_000, 512));
 }
 
 #[test]

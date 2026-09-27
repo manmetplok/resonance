@@ -27,7 +27,7 @@
 //! `ClipLoadFailed`, carrying the ticket it was issued), and the engine
 //! thread redeems it in the same step that checks the clip list and
 //! publishes the clip. Until B-5 the worker redeemed under
-//! `ctx.clips.write()` and `DeleteClip` withdrew under the same lock, so
+//! the clip list's write lock and `DeleteClip` withdrew under the same lock, so
 //! "the load is cancelled" and "the clip is not in the list" were one
 //! atomic step; now both are engine-thread sequencing — a `DeleteClip` is
 //! applied wholly before or wholly after a `ClipLoaded`, never between its

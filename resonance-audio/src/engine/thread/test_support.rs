@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use ringbuf::traits::Split;
 
 use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
@@ -37,7 +37,6 @@ use super::{engine_thread, EngineThreadParams, HandlerCtx, HandlerState};
 /// rebuilt per call in [`Self::with_ctx`] instead.
 pub struct EngineHandlerHarness {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>>,
@@ -88,7 +87,6 @@ impl EngineHandlerHarness {
 
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
                 crate::latency::LatencyComp::empty(),
@@ -139,7 +137,6 @@ impl EngineHandlerHarness {
             cmd_tx_retry,
             event_tx,
             shared: Arc::new(SharedState::default()),
-            clips_arc: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
                 crate::latency::LatencyComp::empty(),
@@ -175,7 +172,6 @@ impl EngineHandlerHarness {
     fn with_ctx<R>(&mut self, f: impl FnOnce(&HandlerCtx, &mut HandlerState) -> R) -> R {
         let ctx = HandlerCtx {
             shared: &self.shared,
-            clips: &self.clips,
             tempo_map: &self.tempo_map,
             latency_comp: &self.latency_comp,
             automation: &self.automation,
@@ -264,7 +260,7 @@ impl EngineHandlerHarness {
     /// handler itself only spawns the worker; this runs what it runs,
     /// without the thread, so a test needs no wait.
     pub fn analyze_clip_pitch(&mut self, clip_id: ClipId) {
-        let result = crate::engine::vocal_analysis::analyse_clip_pitch(&self.clips, clip_id, 48_000);
+        let result = crate::engine::vocal_analysis::analyse_clip_pitch(&self.shared, clip_id, 48_000);
         if let Some(msg) = result {
             self.with_ctx(|ctx, state| crate::engine::internal::dispatch_internal(ctx, state, msg));
         }
@@ -348,19 +344,50 @@ impl EngineHandlerHarness {
         target_track_id: TrackId,
         target_clip_id: ClipId,
     ) -> Arc<std::sync::atomic::AtomicBool> {
+        self.bounce_track_to_audio_after(source_track_id, target_track_id, target_clip_id, || {})
+    }
+
+    /// [`Self::bounce_track_to_audio`] with its worker parked until the
+    /// returned sender is dropped (or sent to), so a test can flip the
+    /// cancel token before a single chunk renders.
+    pub fn bounce_track_to_audio_parked(
+        &mut self,
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        target_clip_id: ClipId,
+    ) -> (Arc<std::sync::atomic::AtomicBool>, std::sync::mpsc::Sender<()>) {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let cancel = self.bounce_track_to_audio_after(
+            source_track_id,
+            target_track_id,
+            target_clip_id,
+            move || {
+                let _ = release_rx.recv();
+            },
+        );
+        (cancel, release_tx)
+    }
+
+    fn bounce_track_to_audio_after(
+        &mut self,
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        target_clip_id: ClipId,
+        before: impl FnOnce() + Send + 'static,
+    ) -> Arc<std::sync::atomic::AtomicBool> {
         self.with_ctx(|ctx, _| {
-            crate::engine::bounce::to_audio_clip_spawn(
+            crate::engine::bounce::to_audio_clip_spawn_after(
                 source_track_id,
                 target_track_id,
                 target_clip_id,
                 "bounce".into(),
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.clips),
                 Arc::clone(ctx.tempo_map),
                 ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
                 ctx.cmd_tx_retry.clone(),
+                before,
             )
         })
     }
@@ -696,7 +723,7 @@ impl EngineHandlerHarness {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             self.apply_worker_results();
-            if self.clips.read().len() >= expected {
+            if self.shared.clips().len() >= expected {
                 return true;
             }
             if std::time::Instant::now() >= deadline {
@@ -797,44 +824,38 @@ impl EngineHandlerHarness {
     /// Frame count of each audio clip in the engine's list, by id, in list
     /// order — enough to tell two loads of one id from different WAVs apart.
     pub fn clip_frame_counts(&self) -> Vec<(ClipId, u64)> {
-        self.clips
-            .read()
+        self.shared
+            .clips()
             .iter()
             .map(|c| (c.id, c.source.frame_count()))
             .collect()
     }
 
-    /// Move the engine's audio clips out of the harness, for handing to a
-    /// renderer.
-    ///
-    /// Draining rather than copying because [`AudioClip`] is deliberately
-    /// not `Clone` (a mapped source is shared through an `Arc`, an in-RAM
-    /// one would be duplicated wholesale). A test that needs to render the
-    /// same restored state twice — live and bounced — rebuilds the harness
-    /// twice, which is also the more honest reload.
+    /// Copies of the engine's audio clips (the render graph's list), for
+    /// handing to a renderer. Cheap: a copy shares its audio (ARCH-02
+    /// B-5). The engine keeps its own.
     pub fn take_clips(&mut self) -> Vec<AudioClip> {
-        std::mem::take(&mut *self.clips.write())
+        self.shared.clips().iter().map(|c| (**c).clone()).collect()
     }
 
     // -- take removal (ba todo #1397) ------------------------------------
 
-    /// Push a recorded take's clip into the shared clip list, where
+    /// Push a recorded take's clip into the render graph's clip list, where
     /// `roll_audio_pass` puts it as a cycle-record pass rolls. A take group
     /// on its own proves nothing about audibility: the clip is what plays.
     pub fn push_clip(&mut self, clip: AudioClip) {
-        self.clips.write().push(clip);
+        self.shared.edit_clips(|clips| clips.push(Arc::new(clip)));
     }
 
-    /// A copy of the engine's clip `clip_id` (cheap: the audio is shared),
-    /// if it holds one.
-    pub fn clip(&self, clip_id: ClipId) -> Option<AudioClip> {
-        self.clips.read().iter().find(|c| c.id == clip_id).cloned()
+    /// The engine's clip `clip_id` (the published `Arc`), if it holds one.
+    pub fn clip(&self, clip_id: ClipId) -> Option<Arc<AudioClip>> {
+        self.shared.clips().iter().find(|c| c.id == clip_id).cloned()
     }
 
-    /// Clip ids in the shared clip list — the render's actual input —
-    /// ascending.
+    /// Clip ids in the render graph's clip list — the render's actual
+    /// input — ascending.
     pub fn clip_ids(&self) -> Vec<ClipId> {
-        let mut ids: Vec<ClipId> = self.clips.read().iter().map(|c| c.id).collect();
+        let mut ids: Vec<ClipId> = self.shared.clips().iter().map(|c| c.id).collect();
         ids.sort_unstable();
         ids
     }
@@ -1126,7 +1147,6 @@ impl EngineHandlerHarness {
                 None,
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.clips),
                 Arc::clone(ctx.tempo_map),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
@@ -1134,10 +1154,27 @@ impl EngineHandlerHarness {
         });
     }
 
-    /// The engine's clip list, so a test can hold its lock to park a
-    /// worker that reads it.
-    pub fn clips_lock(&self) -> Arc<RwLock<Vec<AudioClip>>> {
-        Arc::clone(&self.clips)
+    /// [`Self::measure_master`] with its worker parked until the returned
+    /// sender is dropped (or sent to) — for pinning what happens between
+    /// the spawn and the worker's render.
+    pub fn measure_master_parked(&mut self, measure_id: u64) -> std::sync::mpsc::Sender<()> {
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        self.with_ctx(|ctx, _| {
+            crate::engine::bounce::measure_mix_spawn_after(
+                measure_id,
+                vec![StemSource::Master],
+                None,
+                MeasureSource::Render,
+                Arc::clone(ctx.shared),
+                Arc::clone(ctx.tempo_map),
+                ctx.sample_rate,
+                ctx.event_tx.clone(),
+                move || {
+                    let _ = release_rx.recv();
+                },
+            )
+        });
+        release_tx
     }
 
     /// Render one block of `track_id` through the **real** `render_block`,
@@ -1151,7 +1188,7 @@ impl EngineHandlerHarness {
     /// recording, as a raw pass playing at full gain.
     pub fn render_track(&self, track_id: TrackId, playhead: u64, frames: usize) -> Vec<f32> {
         let table = self.published_comp_table();
-        let clips = self.clips.read();
+        let clips = self.shared.clips();
         let out = crate::mixer::render_take_comp_borrowed_for_test(
             vec![Track::new(track_id, "harness".into())],
             &clips,

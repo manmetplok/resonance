@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
+
+use resonance_audio::test_support::SharedState;
 
 use resonance_audio::types::{AudioClip, AudioEvent, ClipSource, FadeCurve};
 use resonance_audio::{
@@ -44,7 +45,8 @@ fn sample_clip(id: u64, track_id: u64, frames: usize) -> AudioClip {
 
 #[test]
 fn set_fade_mutates_and_emits_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_fade_in_place(
@@ -78,7 +80,7 @@ fn set_fade_mutates_and_emits_event() {
         "exactly one event should be emitted"
     );
 
-    let clips = clips.read();
+    let clips = clips.clips();
     assert_eq!(clips[0].fade_in_frames, 200);
     assert_eq!(clips[0].fade_in_curve, FadeCurve::Linear);
     assert_eq!(clips[0].fade_out_frames, 300);
@@ -88,7 +90,8 @@ fn set_fade_mutates_and_emits_event() {
 #[test]
 fn set_fade_clamps_to_clip_duration() {
     // 500-frame clip; ask for fades far longer than the audible region.
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 500)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 500)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_fade_in_place(
@@ -113,14 +116,15 @@ fn set_fade_clamps_to_clip_duration() {
         other => panic!("expected ClipFadeChanged, got {other:?}"),
     }
 
-    let clips = clips.read();
+    let clips = clips.clips();
     assert_eq!(clips[0].fade_in_frames, 500);
     assert_eq!(clips[0].fade_out_frames, 500);
 }
 
 #[test]
 fn set_fade_missing_clip_emits_no_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_fade_in_place(
@@ -137,14 +141,15 @@ fn set_fade_missing_clip_emits_no_event() {
         event_rx.try_recv().is_err(),
         "ClipFadeChanged must not be emitted when the clip lookup misses"
     );
-    let clips = clips.read();
+    let clips = clips.clips();
     assert_eq!(clips[0].fade_in_frames, 0);
     assert_eq!(clips[0].fade_out_frames, 0);
 }
 
 #[test]
 fn set_gain_mutates_and_emits_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_gain_in_place(&clips, &event_tx, 7, -6.0);
@@ -160,12 +165,13 @@ fn set_gain_mutates_and_emits_event() {
         event_rx.try_recv().is_err(),
         "exactly one event should be emitted"
     );
-    assert_eq!(clips.read()[0].gain_db, -6.0);
+    assert_eq!(clips.clips()[0].gain_db, -6.0);
 }
 
 #[test]
 fn set_gain_clamps_to_range() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     // Way over the ceiling.
@@ -176,7 +182,7 @@ fn set_gain_clamps_to_range() {
         }
         other => panic!("expected ClipGainChanged, got {other:?}"),
     }
-    assert_eq!(clips.read()[0].gain_db, MAX_CLIP_GAIN_DB);
+    assert_eq!(clips.clips()[0].gain_db, MAX_CLIP_GAIN_DB);
 
     // Way under the floor.
     set_clip_gain_in_place(&clips, &event_tx, 1, -1000.0);
@@ -186,12 +192,13 @@ fn set_gain_clamps_to_range() {
         }
         other => panic!("expected ClipGainChanged, got {other:?}"),
     }
-    assert_eq!(clips.read()[0].gain_db, MIN_CLIP_GAIN_DB);
+    assert_eq!(clips.clips()[0].gain_db, MIN_CLIP_GAIN_DB);
 }
 
 #[test]
 fn set_gain_nan_falls_back_to_unity() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_gain_in_place(&clips, &event_tx, 1, f32::NAN);
@@ -201,12 +208,13 @@ fn set_gain_nan_falls_back_to_unity() {
         }
         other => panic!("expected ClipGainChanged, got {other:?}"),
     }
-    assert_eq!(clips.read()[0].gain_db, 0.0);
+    assert_eq!(clips.clips()[0].gain_db, 0.0);
 }
 
 #[test]
 fn set_gain_missing_clip_emits_no_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_gain_in_place(&clips, &event_tx, /* clip_id */ 999, -3.0);
@@ -215,5 +223,5 @@ fn set_gain_missing_clip_emits_no_event() {
         event_rx.try_recv().is_err(),
         "ClipGainChanged must not be emitted when the clip lookup misses"
     );
-    assert_eq!(clips.read()[0].gain_db, 0.0);
+    assert_eq!(clips.clips()[0].gain_db, 0.0);
 }

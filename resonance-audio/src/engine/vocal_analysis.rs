@@ -14,13 +14,13 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 use resonance_dsp::{detect_f0, segment_notes, F0Config, SegmentConfig};
 
 use crate::types::*;
 
 use super::internal::EngineInternal;
 use super::thread::{HandlerCtx, HandlerState};
+use super::SharedState;
 
 /// Engine handler for [`AudioCommand::AnalyzeClipPitch`]. Spawns a worker
 /// thread that snapshots the clip's mono mix and runs f0 detection + note
@@ -36,14 +36,13 @@ pub(crate) fn handle_analyze_clip_pitch(
     _state: &mut HandlerState,
     clip_id: ClipId,
 ) {
-    let clips_arc = Arc::clone(ctx.clips);
     let shared = Arc::clone(ctx.shared);
     let sample_rate = ctx.sample_rate;
 
     let spawn_result = std::thread::Builder::new()
         .name("resonance-pitch".into())
         .spawn(move || {
-            if let Some(result) = analyse_clip_pitch(&clips_arc, clip_id, sample_rate) {
+            if let Some(result) = analyse_clip_pitch(&shared, clip_id, sample_rate) {
                 shared.inbox.post(result);
             }
         });
@@ -54,19 +53,16 @@ pub(crate) fn handle_analyze_clip_pitch(
     }
 }
 
-/// The worker half: read the clip's mono mix, run the DSP, and return the
-/// [`EngineInternal::PitchAnalysed`] to post. `None` — nothing to post —
-/// when the clip does not exist.
+/// The worker half: read the clip's mono mix from the published render
+/// graph (no lock — the clip `Arc` pins its audio while the mix is taken),
+/// run the DSP, and return the [`EngineInternal::PitchAnalysed`] to post.
+/// `None` — nothing to post — when the clip does not exist.
 pub(crate) fn analyse_clip_pitch(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     clip_id: ClipId,
     sample_rate: u32,
 ) -> Option<EngineInternal> {
-    let mono = {
-        let guard = clips.read();
-        let clip = guard.iter().find(|c| c.id == clip_id)?;
-        mono_mix(clip.source.as_frames())
-    };
+    let mono = mono_mix(shared.graph.load().clip(clip_id)?.source.as_frames());
     let (contour, notes) = analyze_pitch(&mono, sample_rate);
     Some(EngineInternal::PitchAnalysed {
         clip_id,
@@ -90,11 +86,7 @@ pub(crate) fn apply_pitch_analysis(
     contour: Vec<F0Frame>,
     notes: Vec<NoteBlob>,
 ) {
-    {
-        let mut guard = ctx.clips.write();
-        let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
-            return;
-        };
+    let stored = ctx.shared.edit_clip(clip_id, |clip| {
         let tuning = clip.vocal_tuning_mut();
         tuning.contour = contour.clone();
         tuning.notes = notes.clone();
@@ -105,6 +97,9 @@ pub(crate) fn apply_pitch_analysis(
         // this the mixer would keep serving audio retuned to the old
         // notes until the next export.
         clip.tuning_render_cache = None;
+    });
+    if stored.is_none() {
+        return;
     }
 
     let _ = ctx.event_tx.send(AudioEvent::ClipPitchDetected {

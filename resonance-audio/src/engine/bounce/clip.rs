@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 
 use crate::types::*;
 
@@ -55,7 +54,6 @@ pub fn to_audio_clip(
     name: String,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
@@ -127,7 +125,7 @@ pub fn to_audio_clip(
     // Refresh the vocal-tuning render caches so the chunk loop below mixes
     // corrected audio for any retuned clip — identical to live playback,
     // which reads the same caches through `mix_track_clips` (todo #358).
-    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
     reset_plugins(shared);
 
@@ -145,7 +143,7 @@ pub fn to_audio_clip(
     let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
-        clips,
+        tuning: &tuning,
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,
@@ -276,6 +274,6 @@ pub fn to_audio_clip(
 /// ([`EngineInternal::BouncedClip`]): add its clip to the timeline, then
 /// emit its `TrackBounceCompleted`. Engine thread.
 pub(crate) fn apply_bounced_clip(ctx: &HandlerCtx, clip: AudioClip, completed: AudioEvent) {
-    ctx.clips.write().push(clip);
+    ctx.shared.edit_clips(|clips| clips.push(Arc::new(clip)));
     let _ = ctx.event_tx.send(completed);
 }

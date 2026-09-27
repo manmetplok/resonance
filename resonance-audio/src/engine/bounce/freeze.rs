@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 use thiserror::Error;
 
 use resonance_common::{
@@ -141,7 +140,6 @@ pub fn to_freeze_cache(
     path: String,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
@@ -157,7 +155,7 @@ pub fn to_freeze_cache(
 
     // Refresh vocal-tuning render caches so a retuned clip on the frozen
     // track is captured corrected, identical to live playback (todo #358).
-    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
     // Resolve source + sub-tracks (multi-output instruments like
     // resonance-drums spawn sibling tracks fed by parent output ports).
@@ -196,7 +194,7 @@ pub fn to_freeze_cache(
     // cache timeline-aligned so it plays back from sample 0 with no
     // stored offset.
     let render_end = {
-        let clips_guard = clips.read();
+        let clips_guard = shared.clips();
         let graph = shared.graph.load();
         let midi_guard = &graph.midi_clips;
         let tm = tempo_map.load();
@@ -246,7 +244,7 @@ pub fn to_freeze_cache(
     let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
-        clips,
+        tuning: &tuning,
         tempo_map: &bounce_tm,
         automation: &baked,
         sample_rate,

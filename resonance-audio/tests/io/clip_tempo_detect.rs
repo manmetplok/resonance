@@ -14,7 +14,8 @@
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
+
+use resonance_audio::test_support::SharedState;
 
 use resonance_audio::detect_clip_tempo_in_place;
 use resonance_audio::types::{AudioClip, AudioEvent, ClipSource, WarpAlgorithm};
@@ -85,7 +86,8 @@ fn sample_clip(id: u64, track_id: u64, stereo: Vec<f32>) -> AudioClip {
 #[test]
 fn detect_tempo_emits_plausible_bpm_for_loaded_loop() {
     let stereo = to_stereo(&click_train(120.0, SR as f32, 12.0));
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, stereo)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, stereo)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     detect_clip_tempo_in_place(&clips, &event_tx, SR, /* clip_id */ 7);
@@ -111,7 +113,7 @@ fn detect_tempo_emits_plausible_bpm_for_loaded_loop() {
     );
 
     // Analysis only: the clip is never mutated.
-    let clips = clips.read();
+    let clips = clips.clips();
     assert!(!clips[0].warp_enabled);
     assert_eq!(clips[0].original_bpm, None);
 }
@@ -119,7 +121,8 @@ fn detect_tempo_emits_plausible_bpm_for_loaded_loop() {
 #[test]
 fn detect_tempo_missing_clip_emits_no_event() {
     let stereo = to_stereo(&click_train(120.0, SR as f32, 4.0));
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, stereo)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, stereo)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     detect_clip_tempo_in_place(&clips, &event_tx, SR, /* clip_id */ 999);
@@ -135,7 +138,8 @@ fn detect_tempo_on_silence_emits_zero() {
     // A silent clip still emits an event (the clip was found); the
     // detector reports a zero estimate for material with no onsets.
     let silent = vec![0.0f32; (SR as usize) * 5 * 2];
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(3, 100, silent)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(3, 100, silent)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     detect_clip_tempo_in_place(&clips, &event_tx, SR, /* clip_id */ 3);

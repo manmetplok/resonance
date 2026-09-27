@@ -10,7 +10,8 @@
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
+
+use resonance_audio::test_support::SharedState;
 
 use resonance_audio::types::{AudioClip, AudioEvent, ClipSource, WarpAlgorithm, WarpMarker};
 use resonance_audio::{set_clip_warp_in_place, set_clip_warp_markers_in_place};
@@ -43,7 +44,8 @@ fn sample_clip(id: u64, track_id: u64, frames: usize) -> AudioClip {
 
 #[test]
 fn set_warp_mutates_and_emits_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_warp_in_place(
@@ -77,7 +79,7 @@ fn set_warp_mutates_and_emits_event() {
         "exactly one event should be emitted"
     );
 
-    let clips = clips.read();
+    let clips = clips.clips();
     assert!(clips[0].warp_enabled);
     assert_eq!(clips[0].original_bpm, Some(120.0));
     assert_eq!(clips[0].transpose_semitones, -3.0);
@@ -86,7 +88,8 @@ fn set_warp_mutates_and_emits_event() {
 
 #[test]
 fn set_warp_missing_clip_emits_no_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_warp_in_place(
@@ -104,7 +107,7 @@ fn set_warp_missing_clip_emits_no_event() {
         "ClipWarpChanged must not be emitted when the clip lookup misses"
     );
     // The real clip is untouched at its defaults.
-    let clips = clips.read();
+    let clips = clips.clips();
     assert!(!clips[0].warp_enabled);
     assert_eq!(clips[0].original_bpm, None);
     assert_eq!(clips[0].warp_algorithm, WarpAlgorithm::Transient);
@@ -112,7 +115,8 @@ fn set_warp_missing_clip_emits_no_event() {
 
 #[test]
 fn set_warp_markers_mutates_and_emits_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     let markers = vec![
@@ -142,12 +146,13 @@ fn set_warp_markers_mutates_and_emits_event() {
         event_rx.try_recv().is_err(),
         "exactly one event should be emitted"
     );
-    assert_eq!(clips.read()[0].warp_markers, markers);
+    assert_eq!(clips.clips()[0].warp_markers, markers);
 }
 
 #[test]
 fn set_warp_markers_sorts_by_timeline_beat() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(7, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(7, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     // Deliberately out of order on `timeline_beat`.
@@ -177,7 +182,7 @@ fn set_warp_markers_sorts_by_timeline_beat() {
         other => panic!("expected ClipWarpMarkersChanged, got {other:?}"),
     }
 
-    let stored: Vec<f64> = clips.read()[0]
+    let stored: Vec<f64> = clips.clips()[0]
         .warp_markers
         .iter()
         .map(|m| m.timeline_beat)
@@ -187,7 +192,8 @@ fn set_warp_markers_sorts_by_timeline_beat() {
 
 #[test]
 fn set_warp_markers_missing_clip_emits_no_event() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sample_clip(1, 100, 1000)]));
+    let clips = SharedState::default();
+    clips.edit_clips(|c| c.extend([sample_clip(1, 100, 1000)].map(Arc::new)));
     let (event_tx, event_rx) = unbounded::<AudioEvent>();
 
     set_clip_warp_markers_in_place(
@@ -204,5 +210,5 @@ fn set_warp_markers_missing_clip_emits_no_event() {
         event_rx.try_recv().is_err(),
         "ClipWarpMarkersChanged must not be emitted when the clip lookup misses"
     );
-    assert!(clips.read()[0].warp_markers.is_empty());
+    assert!(clips.clips()[0].warp_markers.is_empty());
 }

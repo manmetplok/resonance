@@ -20,7 +20,6 @@
 
 use std::ops::Range;
 
-use parking_lot::RwLock;
 use std::sync::atomic::Ordering;
 
 use crate::engine::reference::ABMeters;
@@ -41,15 +40,15 @@ use crate::mixer::render_core::BlockScratch;
 /// cpal everywhere).
 pub(crate) type MixFn = Box<dyn FnMut(&mut [f32], usize) + Send + 'static>;
 
-/// Everything one audio callback reads: the engine's shared state, the
-/// locks it may try to read, the wait-free snapshots it may load, and the
-/// stream geometry. All borrowed and `Copy`.
+/// Everything one audio callback reads: the engine's shared state (the
+/// render graph among it — no lock since ARCH-02 B-5), the wait-free
+/// snapshots it may load, and the stream geometry. All borrowed and
+/// `Copy`.
 #[derive(Clone, Copy)]
 pub(crate) struct CallbackInputs<'a> {
     /// Channel count of the interleaved output buffer.
     pub(crate) channels: usize,
     pub(crate) shared: &'a SharedState,
-    pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,
     pub(crate) latency_comp: &'a arc_swap::ArcSwap<LatencyComp>,
     pub(crate) automation: &'a arc_swap::ArcSwap<AutomationSnapshot>,
@@ -63,6 +62,13 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) buf_frames: usize,
     /// The graph quantum, used as the monitor ring's jitter margin.
     pub(crate) quantum: usize,
+    /// Test hook (`MixAudioHarness::render_lock_contended`): render this
+    /// playing block as a skipped one — silence, playhead advanced,
+    /// `render_skip_cycles` bumped — the way a lock-contended block did
+    /// before ARCH-02 B-5 removed the last lock. Never set by the engine;
+    /// B-6 deletes it with the skip path and the lock-miss counters.
+    #[cfg(feature = "test-internals")]
+    pub(crate) force_render_skip: bool,
 }
 
 /// The engine's pre-allocated scratch, mutably borrowed for one callback.

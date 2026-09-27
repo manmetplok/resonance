@@ -68,6 +68,7 @@ pub fn render_aux_with_comp_for_test(
     let busses_guard: IndexMap<BusId, Arc<Bus>> =
         busses.into_iter().map(|b| (b.id, Arc::new(b))).collect();
     let plugins_guard: PluginMap = IndexMap::new();
+    let clips: Vec<Arc<AudioClip>> = clips.into_iter().map(Arc::new).collect();
     let midi_clips: Vec<Arc<MidiClip>> = Vec::new();
     let tempo_map = TempoMap::default();
     let active_busses = busses_guard.len();
@@ -144,7 +145,7 @@ pub fn render_aux_with_comp_for_test(
 pub struct RenderBenchHarness {
     tracks: TrackMap,
     busses: IndexMap<BusId, Arc<Bus>>,
-    clips: Vec<AudioClip>,
+    clips: Vec<Arc<AudioClip>>,
     midi_clips: Vec<Arc<MidiClip>>,
     plugins: PluginMap,
     tempo_map: TempoMap,
@@ -184,7 +185,7 @@ impl RenderBenchHarness {
         Self {
             tracks,
             busses,
-            clips,
+            clips: clips.into_iter().map(Arc::new).collect(),
             midi_clips: midi_clips.into_iter().map(Arc::new).collect(),
             plugins: IndexMap::new(),
             tempo_map,
@@ -265,7 +266,6 @@ impl RenderBenchHarness {
     }
 }
 
-
 /// Render one block through the real [`render_block`] with an explicit
 /// take-comp table, on either the live or the offline (bounce) strategy.
 /// Returns the interleaved-stereo master output.
@@ -287,6 +287,7 @@ pub fn render_take_comp_for_test(
     sample_rate: u32,
     live: bool,
 ) -> Vec<f32> {
+    let clips: Vec<Arc<AudioClip>> = clips.into_iter().map(Arc::new).collect();
     render_take_comp_borrowed_for_test(
         tracks,
         &clips,
@@ -298,17 +299,13 @@ pub fn render_take_comp_for_test(
     )
 }
 
-/// [`render_take_comp_for_test`] over a **borrowed** clip list.
-///
-/// `AudioClip` is deliberately not `Clone`, so the owned entry point above
-/// consumes the clips and can render a given set exactly once. A caller
-/// that holds the clips in shared engine state — `EngineHandlerHarness`,
-/// which renders what the engine would actually play, before and after a
-/// command — needs to render the same list repeatedly instead.
+/// [`render_take_comp_for_test`] over a **borrowed** clip list — the
+/// render graph's own, for `EngineHandlerHarness`, which renders what the
+/// engine would actually play, before and after a command.
 #[doc(hidden)]
 pub fn render_take_comp_borrowed_for_test(
     tracks: Vec<Track>,
-    clips: &[AudioClip],
+    clips: &[Arc<AudioClip>],
     take_comp: &crate::mixer::CompRenderTable,
     playhead: u64,
     frames: usize,

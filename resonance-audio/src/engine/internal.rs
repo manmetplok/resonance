@@ -4,7 +4,7 @@
 //! wrote: the clip-load worker pushed its finished clip, the pitch
 //! analyser stored its contour, the offline renderers attached their
 //! retune caches and the bounce-in-place worker pushed its bounced clip —
-//! each under `clips.write()`, from its own thread. Since B-5 only the
+//! each under the clip list's write lock, from its own thread. Since B-5 only the
 //! engine control thread publishes the render graph, so a worker does its
 //! heavy work (mmap, decimation, f0 detection, FFT resynthesis, the
 //! render) on its own thread and hands the *result* to the engine thread
@@ -34,6 +34,7 @@ use crate::types::{AudioClip, AudioEvent, ClipId, F0Frame, NoteBlob};
 
 use super::clips::ClipLoadEcho;
 use super::thread::{HandlerCtx, HandlerState};
+use super::vocal_render::TuningCaches;
 
 /// A clip-load worker's finished clip (`clips::submit_clip_load`).
 #[derive(Debug)]
@@ -68,6 +69,10 @@ pub(crate) enum EngineInternal {
         contour: Vec<F0Frame>,
         notes: Vec<NoteBlob>,
     },
+    /// An offline renderer (bounce / export / stem / freeze) built the
+    /// vocal-tuning retune caches it renders with; attach them to the live
+    /// clips too ([`super::vocal_render::apply_tuning_caches`]).
+    TuningCachesBuilt(TuningCaches),
     /// The offline bounce-in-place finished: add its clip to the timeline
     /// and report `TrackBounceCompleted`
     /// ([`super::bounce::apply_bounced_clip`]).
@@ -130,6 +135,9 @@ pub(crate) fn dispatch_internal(ctx: &HandlerCtx, state: &mut HandlerState, msg:
             contour,
             notes,
         } => super::vocal_analysis::apply_pitch_analysis(ctx, clip_id, contour, notes),
+        EngineInternal::TuningCachesBuilt(caches) => {
+            super::vocal_render::apply_tuning_caches(ctx, &caches)
+        }
         EngineInternal::BouncedClip { clip, completed } => {
             super::bounce::apply_bounced_clip(ctx, *clip, *completed)
         }

@@ -19,7 +19,6 @@ use std::sync::Arc;
 use clap_sys::events::{clap_event_param_value, clap_input_events, CLAP_EVENT_PARAM_VALUE};
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{
     __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache, AutomationSnapshot,
@@ -173,7 +172,6 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
 
 struct Engine {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -182,13 +180,12 @@ impl Engine {
     fn with_clip(data: Vec<f32>) -> Self {
         let e = Engine {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
         e.shared.edit_tracks(|m| {
             m.insert(1, std::sync::Arc::new(Track::with_type(1, "t".into(), TrackType::Audio)));
         });
-        e.clips.write().push(audio_clip(data));
+        e.shared.edit_clips(|c| c.push(Arc::new(audio_clip(data))));
         e
     }
 
@@ -218,7 +215,6 @@ impl Engine {
             settings,
             &AtomicBool::new(cancel),
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             automation,
             SR,
@@ -230,7 +226,6 @@ impl Engine {
             path.to_string_lossy().into_owned(),
             &self.shared,
             &AtomicBool::new(false),
-            &self.clips,
             &self.tempo_map,
             automation,
             SR,
@@ -419,7 +414,6 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         true,
         &e.shared,
         &AtomicBool::new(false),
-        &e.clips,
         &e.tempo_map,
         SR,
         &tx,

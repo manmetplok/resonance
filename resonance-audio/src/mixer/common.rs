@@ -113,6 +113,10 @@ impl TransportContinuity {
     /// jump, as before. Every contended block used to flush, cutting
     /// sustained notes during heavy UI edits. The MIDI clips come from the
     /// render graph, which is always readable, so `lost` is always known.
+    ///
+    /// Since ARCH-02 B-5 no block is lock-contended; only the
+    /// `test-internals` skip hook reaches this (B-6 deletes both).
+    #[cfg(feature = "test-internals")]
     pub(crate) fn skipped(&mut self, from: u64, to: u64, committed: bool, lost: bool) {
         if committed && self.expected == Some(from) {
             self.expected = Some(to);

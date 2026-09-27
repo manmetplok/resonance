@@ -202,9 +202,9 @@ fn resolve_spans(group: &TakeGroup, clip_of: &HashMap<u64, ClipId>) -> Vec<CompS
 /// Shared verbatim by the live mixer and the offline bounce (both reach it
 /// through [`render_block`](super::render_core::render_block)), so playback
 /// and a bounced WAV render the comp identically. Allocation-free.
-pub fn mix_track_comp(
+pub fn mix_track_comp<C: std::borrow::Borrow<AudioClip>>(
     track_comp: &TrackComp,
-    clips: &[AudioClip],
+    clips: &[C],
     playhead: u64,
     frames: usize,
     track_buf_l: &mut [f32],
@@ -216,7 +216,11 @@ pub fn mix_track_comp(
     let mut has_audio = false;
 
     for (i, span) in spans.iter().enumerate() {
-        let Some(clip) = clips.iter().find(|c| c.id == span.clip_id) else {
+        let Some(clip) = clips
+            .iter()
+            .map(|c| -> &AudioClip { c.borrow() })
+            .find(|c| c.id == span.clip_id)
+        else {
             continue;
         };
 

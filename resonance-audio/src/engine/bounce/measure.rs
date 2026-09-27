@@ -43,7 +43,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 
 use resonance_metering::lufs::block_accumulator::BLOCK_HOP_SECS;
 use resonance_metering::offline::{
@@ -83,7 +82,6 @@ pub fn measure_mix(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: &Arc<SharedState>,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -94,7 +92,6 @@ pub fn measure_mix(
         range,
         source,
         shared,
-        clips,
         tempo_map,
         sample_rate,
         event_tx,
@@ -112,7 +109,6 @@ fn measure_mix_holding(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: &Arc<SharedState>,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -164,7 +160,8 @@ fn measure_mix_holding(
     // extent plus the shared FX tail (code review ENG-07) — so the
     // reported loudness is the exported file's.
     let Some((start, end)) = range.or_else(|| {
-        stem_project_range(clips, &shared.graph.load().midi_clips, tempo_map, sample_rate)
+        let graph = shared.graph.load();
+        stem_project_range(&graph.clips, &graph.midi_clips, tempo_map, sample_rate)
             .map(|(s, e)| (s, e + super::super::bounce_common::offline_tail_frames(sample_rate)))
     }) else {
         fail("No audio to measure".into());
@@ -182,7 +179,6 @@ fn measure_mix_holding(
             start,
             end,
             shared,
-            clips,
             tempo_map,
             sample_rate,
         ) {
@@ -216,10 +212,38 @@ pub(crate) fn measure_mix_spawn(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
+) {
+    measure_mix_spawn_after(
+        measure_id,
+        targets,
+        range,
+        source,
+        shared,
+        tempo_map,
+        sample_rate,
+        event_tx,
+        || {},
+    );
+}
+
+/// [`measure_mix_spawn`], with the worker running `before` first — a
+/// test's way to park the worker before its render (it used to hold the
+/// clip list's write lock for that; the list has no lock since ARCH-02
+/// B-5).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn measure_mix_spawn_after(
+    measure_id: u64,
+    targets: Vec<StemSource>,
+    range: Option<(SamplePos, SamplePos)>,
+    source: MeasureSource,
+    shared: Arc<SharedState>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    sample_rate: u32,
+    event_tx: Sender<AudioEvent>,
+    before: impl FnOnce() + Send + 'static,
 ) {
     // Take the renderer here, on the engine thread, like the file-writing
     // spawn paths (FU-F1b): the transport handlers are then ordered
@@ -242,6 +266,7 @@ pub(crate) fn measure_mix_spawn(
     std::thread::Builder::new()
         .name("measure-mix".into())
         .spawn(move || {
+            before();
             // Panic supervision: a panicking render must still emit the
             // path's terminal error event (see `crate::supervise`). The
             // exclusive `OfflineRenderGuard` moves into
@@ -257,7 +282,6 @@ pub(crate) fn measure_mix_spawn(
                         range,
                         source,
                         &shared,
-                        &clips,
                         &tempo_map,
                         sample_rate,
                         &event_tx,

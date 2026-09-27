@@ -15,8 +15,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{
     attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
     render_stem, snapshot_tuning_jobs, SharedState, StemSource,
@@ -75,7 +73,6 @@ fn detected_pitch(mono: &[f32]) -> Option<f32> {
 
 struct Engine {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -83,7 +80,6 @@ impl Engine {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         }
     }
@@ -95,7 +91,7 @@ impl Engine {
     }
 
     fn push_clip(&self, clip: AudioClip) {
-        self.clips.write().push(clip);
+        self.shared.edit_clips(|c| c.push(Arc::new(clip)));
     }
 
     fn render(&self, source: StemSource, start: u64, end: u64) -> Vec<f32> {
@@ -104,7 +100,6 @@ impl Engine {
             start,
             end,
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             SR,
         )
@@ -214,17 +209,22 @@ fn tuning_does_not_mutate_source_pcm() {
     // Render (builds the corrected cache), then confirm the clip's *source*
     // PCM is byte-identical to the freshly-synthesised reference.
     let _ = eng.render(StemSource::Track(1), 0, frames as u64);
-    let clips = eng.clips.read();
-    let clip = &clips[0];
+    let clips = eng.shared.clips();
     assert_eq!(
-        clip.source.as_frames(),
+        clips[0].source.as_frames(),
         original.as_slice(),
         "the original ClipSource PCM must be untouched by tuning"
     );
+    // The render reads the retune through an overlay of derived caches
+    // (and posts them for the engine thread to attach — ARCH-02 B-5); the
+    // retuned clip it renders holds a derived cache beside its source.
+    let overlay = ensure_tuning_caches(&eng.shared, SR);
+    let rendered = overlay.apply(&clips);
     assert!(
-        clip.tuning_render_cache.is_some(),
+        rendered[0].tuning_render_cache.is_some(),
         "the retuned clip should hold a derived render cache"
     );
+    assert_eq!(rendered[0].source.as_frames(), original.as_slice());
 }
 
 // ---- zero-overhead: an untuned clip renders unchanged --------------------
@@ -247,7 +247,7 @@ fn untuned_clip_renders_without_cache_and_keeps_pitch() {
     );
 
     assert!(
-        eng.clips.read()[0].tuning_render_cache.is_none(),
+        eng.shared.clips()[0].tuning_render_cache.is_none(),
         "an untuned clip must not allocate a render cache"
     );
 }
@@ -273,9 +273,10 @@ fn identity_tuning_keeps_zero_overhead_path() {
     assert!(!vt.has_edits(), "default edits are identity");
     eng.push_clip(tone_clip(1, 1, f0, frames, Some(vt)));
 
-    let built = ensure_tuning_caches(&eng.clips, SR);
-    assert_eq!(built, 0, "identity tuning must build no cache");
-    assert!(eng.clips.read()[0].tuning_render_cache.is_none());
+    let overlay = ensure_tuning_caches(&eng.shared, SR);
+    assert_eq!(overlay.rebuilt(), 0, "identity tuning must build no cache");
+    assert!(overlay.is_empty(), "nothing to patch or post");
+    assert!(eng.shared.clips()[0].tuning_render_cache.is_none());
 }
 
 // ---- the off-lock cache pass (code review ARCH-02 A2-3) ------------------
@@ -294,9 +295,8 @@ fn cache_pass_fixture() -> Engine {
     eng
 }
 
-fn caches(eng: &Engine) -> Vec<(ClipId, Option<Vec<f32>>)> {
-    eng.clips
-        .read()
+fn caches(clips: &[Arc<AudioClip>]) -> Vec<(ClipId, Option<Vec<f32>>)> {
+    clips
         .iter()
         .map(|c| (c.id, c.tuning_render_cache.as_deref().map(<[f32]>::to_vec)))
         .collect()
@@ -307,20 +307,22 @@ fn three_phase_cache_pass_matches_the_single_call_bitwise() {
     let single = cache_pass_fixture();
     let phased = cache_pass_fixture();
 
-    let built_single = ensure_tuning_caches(&single.clips, SR);
+    let overlay = ensure_tuning_caches(&single.shared, SR);
+    let built_single = overlay.rebuilt();
 
-    let jobs = snapshot_tuning_jobs(&phased.clips);
+    let mut list = phased.shared.clips().to_vec();
+    let jobs = snapshot_tuning_jobs(&list);
     // Two retunes plus one stale clear; the plain clip is not a job.
     assert_eq!(jobs.len(), 3);
     assert_eq!(jobs.iter().filter(|j| j.retune.is_some()).count(), 2);
     assert_eq!(jobs.iter().find(|j| j.clip_id == 3).map(|j| j.retune.is_none()), Some(true));
     let built = build_tuning_caches(jobs, SR);
-    let built_phased = attach_tuning_caches(&phased.clips, built);
+    let built_phased = attach_tuning_caches(&mut list, &built);
 
     assert_eq!(built_single, 2);
     assert_eq!(built_phased, 2);
-    let a = caches(&single);
-    let b = caches(&phased);
+    let a = caches(&overlay.apply(&single.shared.clips()));
+    let b = caches(&list);
     assert_eq!(a, b, "the phased pass must produce the identical caches");
     assert!(a[0].1.is_some() && a[1].1.is_some());
     assert!(a[2].1.is_none(), "stale cache cleared");
@@ -328,16 +330,15 @@ fn three_phase_cache_pass_matches_the_single_call_bitwise() {
 }
 
 #[test]
-fn resynthesis_completes_while_another_thread_holds_the_clips_read_lock() {
-    // The freeze worker used to take `clips.write()` for the whole FFT
-    // pass: with a reader pinning the lock the pass could not even start,
-    // and any engine-thread write queued behind the pass. Now the snapshot
-    // shares the lock with the reader and the resynthesis needs no lock
-    // at all — so the worker finishes both *while* this thread still
-    // holds a read guard. (With the old shape this join would deadlock.)
+fn resynthesis_runs_off_the_published_graph_and_attaches_copy_on_write() {
+    // The freeze worker used to take the clip list's write lock for the
+    // whole FFT pass (A2-3 shrank it to the attach). Since ARCH-02 B-5 the
+    // worker reads the published graph — an `Arc` it holds, no lock — and
+    // never attaches at all: the engine thread does, copy-on-write, so the
+    // graph a reader pinned is never touched.
     let eng = cache_pass_fixture();
-    let pinned = eng.clips.read();
-    let clips = Arc::clone(&eng.clips);
+    let pinned = eng.shared.clips();
+    let clips = eng.shared.clips();
     let built = std::thread::spawn(move || {
         let jobs = snapshot_tuning_jobs(&clips);
         build_tuning_caches(jobs, SR)
@@ -345,24 +346,31 @@ fn resynthesis_completes_while_another_thread_holds_the_clips_read_lock() {
     .join()
     .expect("worker");
     assert_eq!(built.len(), 3);
-    drop(pinned);
 
-    // The attach is the only part that needs the write, and it is one
-    // assignment per clip.
-    assert_eq!(attach_tuning_caches(&eng.clips, built), 2);
-    assert!(eng.clips.read()[0].tuning_render_cache.is_some());
+    let mut list = pinned.to_vec();
+    assert_eq!(attach_tuning_caches(&mut list, &built), 2);
+    assert!(list[0].tuning_render_cache.is_some());
+    assert!(
+        pinned[0].tuning_render_cache.is_none(),
+        "the pinned graph's clip is not mutated by the attach"
+    );
+    assert!(
+        Arc::ptr_eq(&list[3], &pinned[3]),
+        "a clip the pass leaves alone is shared, not copied"
+    );
 }
 
 #[test]
 fn attach_skips_a_clip_removed_since_the_snapshot() {
     let eng = cache_pass_fixture();
-    let jobs = snapshot_tuning_jobs(&eng.clips);
+    let mut list = eng.shared.clips().to_vec();
+    let jobs = snapshot_tuning_jobs(&list);
     let built = build_tuning_caches(jobs, SR);
     // Clip 2 is deleted between snapshot and attach (an engine-thread
     // edit landing mid-pass).
-    eng.clips.write().retain(|c| c.id != 2);
-    assert_eq!(attach_tuning_caches(&eng.clips, built), 1);
-    let after = caches(&eng);
+    list.retain(|c| c.id != 2);
+    assert_eq!(attach_tuning_caches(&mut list, &built), 1);
+    let after = caches(&list);
     assert_eq!(after.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![1, 3, 4]);
     assert!(after[0].1.is_some());
     assert!(after[1].1.is_none());

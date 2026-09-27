@@ -26,7 +26,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
 use resonance_audio::types::*;
@@ -41,7 +40,6 @@ const FRAMES: usize = (SR as usize) * 4;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     tx: Sender<AudioEvent>,
     rx: Receiver<AudioEvent>,
@@ -52,7 +50,6 @@ impl EngineState {
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             tx,
             rx,
@@ -76,7 +73,7 @@ impl EngineState {
             frame[0] = s;
             frame[1] = s;
         }
-        self.clips.write().push(AudioClip {
+        self.shared.edit_clips(|c| c.push(Arc::new(AudioClip {
             id,
             track_id: track,
             start_sample: 0,
@@ -96,7 +93,7 @@ impl EngineState {
             warp_algorithm: WarpAlgorithm::default(),
             warp_markers: Vec::new(),
             tuning_render_cache: None,
-        });
+        })));
     }
 
     fn measure(&self, targets: Vec<StemSource>, source: MeasureSource) {
@@ -112,7 +109,6 @@ impl EngineState {
             None,
             source,
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             SR,
             &self.tx,
@@ -241,9 +237,9 @@ fn repeated_measurement_returns_identical_numbers() {
 #[test]
 fn measurement_writes_no_files_and_leaves_the_renderer_free() {
     let state = two_track_project();
-    let before = state.clips.read().len();
+    let before = state.shared.clips().len();
     state.measured(vec![StemSource::Master]);
-    assert_eq!(state.clips.read().len(), before, "no clip was added");
+    assert_eq!(state.shared.clips().len(), before, "no clip was added");
     assert!(
         !state.shared.playing.load(Ordering::SeqCst),
         "transport untouched"

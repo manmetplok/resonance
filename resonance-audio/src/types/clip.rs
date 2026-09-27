@@ -475,9 +475,15 @@ pub fn compute_waveform_peaks(data: &[f32]) -> Vec<(f32, f32)> {
 /// and empty (fully trimmed) clips cover nothing. `O(clips)`,
 /// allocation-free — safe on both the audio callback and the engine
 /// control thread.
-pub fn audio_clip_covers(clips: &[AudioClip], track_id: TrackId, start: u64, end: u64) -> bool {
+pub fn audio_clip_covers<C: std::borrow::Borrow<AudioClip>>(
+    clips: &[C],
+    track_id: TrackId,
+    start: u64,
+    end: u64,
+) -> bool {
     start < end
         && clips.iter().any(|clip| {
+            let clip: &AudioClip = clip.borrow();
             clip.track_id == track_id && clip.start_sample < end && clip.end_sample() > start
         })
 }

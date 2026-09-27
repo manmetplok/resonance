@@ -279,16 +279,16 @@ pub struct SharedState {
     /// Counted by `mix_audio`, folded into the load meter's report.
     pub monitor_shortfall_cycles: AtomicU64,
     /// Lifetime count of playing cycles the arrangement render skipped
-    /// because a state lock (clips/plugins)
-    /// was write-held at callback time — a full quantum of silence in
-    /// the mix each, audible as a stutter with no graph xrun. Counted
-    /// by `mix_audio`'s contended branch, folded into the load report.
+    /// because a state lock was write-held at callback time — a full
+    /// quantum of silence in the mix each, audible as a stutter with no
+    /// graph xrun. Folded into the load report. Since ARCH-02 B-5 there
+    /// is no such lock (every project map is in the render graph), so
+    /// only the `test-internals` skip hook still counts here; B-6 deletes
+    /// it.
     pub render_skip_cycles: AtomicU64,
     /// Lifetime `try_read` misses per state map (code review ARCH-02,
-    /// A2-1): which of the still-locked maps the callback found write-held or
-    /// writer-queued, across every branch that takes one. Read by the
-    /// load meter for the per-window report; a UI meter can read them
-    /// next to `dsp_load_ema_bits`.
+    /// A2-1). Empty since B-5 moved the last locked map (clips) into the
+    /// render graph — `StateMap` has no variants left; B-6 deletes this.
     pub lock_misses: crate::cycle_load::LockMissCounters,
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
@@ -313,9 +313,10 @@ pub struct SharedState {
     pub retired: retire::Retired,
     /// The immutable render graph (code review ARCH-02 A2-4): built and
     /// published by the engine thread, `load()`ed once per block by the
-    /// callback and once per chunk by the offline renderers. Holds the
-    /// MIDI clips (B-1), busses and the master chain (B-2) today; the
-    /// other project maps move in over B-3…B-5.
+    /// callback and once per chunk by the offline renderers. Holds every
+    /// project map the renderers read: MIDI clips (B-1), busses and the
+    /// master chain (B-2), tracks (B-3), plugin instances (B-4) and audio
+    /// clips (B-5).
     pub graph: render_graph::RenderGraphSlot,
     /// Worker results waiting for the engine thread to apply them (code
     /// review ARCH-02 B-5): a finished clip load, a pitch analysis, a
@@ -449,6 +450,26 @@ impl SharedState {
         f: impl FnOnce(&mut TrackMap, &mut IndexMap<BusId, Arc<Bus>>) -> R,
     ) -> R {
         self.graph.edit_tracks_and_busses(&self.retired, f)
+    }
+
+    /// [`RenderGraphSlot::edit_clips`], retiring the replaced graph (and
+    /// with it every clip the edit removed) onto this state's queue.
+    /// Engine thread.
+    pub fn edit_clips<R>(&self, f: impl FnOnce(&mut Vec<Arc<AudioClip>>) -> R) -> R {
+        self.graph.edit_clips(&self.retired, f)
+    }
+
+    /// [`RenderGraphSlot::edit_clip`], retiring the replaced graph onto
+    /// this state's queue. Engine thread.
+    pub fn edit_clip<R>(&self, clip_id: ClipId, f: impl FnOnce(&mut AudioClip) -> R) -> Option<R> {
+        self.graph.edit_clip(&self.retired, clip_id, f)
+    }
+
+    /// The published audio clip list (an `Arc` clone, like
+    /// [`Self::tracks`]). Holding it keeps the listed clips' audio alive;
+    /// it never blocks an edit.
+    pub fn clips(&self) -> Arc<[Arc<AudioClip>]> {
+        Arc::clone(&self.graph.load().clips)
     }
 
     /// The published track map (an `Arc` clone — keep it for as long as
@@ -762,15 +783,9 @@ impl AudioEngine {
 
         let shared_audio = Arc::clone(&shared);
 
-        let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
-            Arc::new(parking_lot::RwLock::new(Vec::new()));
-
-        let clips_audio = Arc::clone(&clips);
-
         let tempo_map: Arc<arc_swap::ArcSwap<TempoMap>> =
             Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
         let tempo_audio = Arc::clone(&tempo_map);
-
 
         // Plugin-delay-compensation table: published by the engine
         // thread on topology changes, loaded wait-free by the audio
@@ -803,7 +818,6 @@ impl AudioEngine {
         let make_mixer = |native_backend: bool| -> (crate::mixer::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
-            let clips_audio = Arc::clone(&clips_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
             let automation_audio = Arc::clone(&automation_audio);
@@ -906,7 +920,6 @@ impl AudioEngine {
                         mixer::CallbackInputs {
                             channels,
                             shared: &shared_audio,
-                            clips: &clips_audio,
                             tempo_map: &tempo_audio,
                             latency_comp: &latency_comp_audio,
                             automation: &automation_audio,
@@ -915,6 +928,8 @@ impl AudioEngine {
                             live_midi_fwd: &live_midi_fwd,
                             buf_frames: audio_buf_frames,
                             quantum: audio_quantum,
+                            #[cfg(feature = "test-internals")]
+                            force_render_skip: false,
                         },
                         &mut mixer::CallbackScratch {
                             data,
@@ -1083,7 +1098,6 @@ impl AudioEngine {
 
         // Spawn the engine control thread
         let shared_ctrl = Arc::clone(&shared);
-        let clips_ctrl = Arc::clone(&clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
         let latency_comp_ctrl = Arc::clone(&latency_comp);
         let automation_ctrl = Arc::clone(&automation);
@@ -1097,7 +1111,6 @@ impl AudioEngine {
                     cmd_tx_retry,
                     event_tx,
                     shared: shared_ctrl,
-                    clips_arc: clips_ctrl,
                     tempo_map: tempo_ctrl,
                     latency_comp: latency_comp_ctrl,
                     automation: automation_ctrl,

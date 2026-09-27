@@ -13,7 +13,6 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver};
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{AutomationSnapshot, FreezeError, SharedState, freeze_terminal_event, to_freeze_cache_spawn};
 use resonance_audio::types::*;
@@ -23,14 +22,12 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        clips: Arc::new(RwLock::new(Vec::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -76,7 +73,7 @@ fn state_with_tone_track() -> EngineState {
     state.shared.edit_tracks(|m| {
         m.insert(1, std::sync::Arc::new(Track::with_type(1, "track".into(), TrackType::Audio)));
     });
-    state.clips.write().push(audio_clip(1, 1, tone(SR as usize)));
+    state.shared.edit_clips(|c| c.push(Arc::new(audio_clip(1, 1, tone(SR as usize)))));
     state
 }
 
@@ -97,7 +94,6 @@ fn drive_freeze(
         track_id,
         path.to_string_lossy().into_owned(),
         Arc::clone(&state.shared),
-        Arc::clone(&state.clips),
         Arc::clone(&state.tempo_map),
         Arc::new(AutomationSnapshot::default()),
         SR,

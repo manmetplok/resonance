@@ -1,16 +1,28 @@
 //! Playing branch: load the render graph and the other wait-free tables,
-//! take the remaining state lock (clips), render the
-//! arrangement (stitched across a loop seam when one falls inside this
-//! buffer) and hand the buffer to the master passes.
+//! render the arrangement (stitched across a loop seam when one falls
+//! inside this buffer) and hand the buffer to the master passes.
+//!
+//! Since ARCH-02 B-5 every project map is in the render graph, so a
+//! playing block can no longer be skipped for a busy lock: there is no
+//! lock. The skipped-block path (silent advance, `render_skip_cycles`,
+//! `TransportContinuity::skipped`) survives only behind the
+//! `test-internals` hook `CallbackInputs::force_render_skip`, which keeps
+//! its goldens honest until B-6 deletes it with the lock-miss counters.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use crate::cycle_load::{try_read_counted, StateMap};
-use crate::mixer::common::{advance_playhead_silent, commit_playhead, panic_instrument_tracks};
+#[cfg(feature = "test-internals")]
+use std::sync::atomic::Ordering;
+
+#[cfg(feature = "test-internals")]
+use crate::mixer::common::advance_playhead_silent;
+use crate::mixer::common::{commit_playhead, panic_instrument_tracks};
+#[cfg(feature = "test-internals")]
 use crate::mixer::midi_events::collect_midi_events;
 use crate::mixer::render_core::BlockInputs;
-use crate::types::{snapshot_top_level_solo, MidiClip, PendingNoteEvent, TempoMap};
+#[cfg(feature = "test-internals")]
+use crate::types::{PendingNoteEvent, TempoMap};
+use crate::types::{snapshot_top_level_solo, AudioClip, MidiClip};
 
 use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
 use super::master_pass::{run_master_passes, MasterTail};
@@ -19,6 +31,7 @@ use super::seam;
 /// Whether any MIDI clip has a NoteOff in `[playhead, playhead + frames)`
 /// — what a skipped block would have lost. Uses the callback's
 /// pre-allocated note buffer; allocation-free.
+#[cfg(feature = "test-internals")]
 fn any_note_off_in(
     clips: &[Arc<MidiClip>],
     playhead: u64,
@@ -44,6 +57,42 @@ fn any_note_off_in(
     })
 }
 
+/// A playing block that renders nothing: advance the playhead to avoid
+/// desync, count a render skip, and tell the continuity tracker what the
+/// block dropped. This was the lock-contended branch; since ARCH-02 B-5
+/// nothing contends, and only the `test-internals` hook reaches it (B-6
+/// deletes it).
+#[cfg(feature = "test-internals")]
+fn skip_playing_block(
+    inputs: &CallbackInputs<'_>,
+    scratch: &mut CallbackScratch<'_>,
+    timing: &BlockTiming<'_>,
+    midi_clips: &[Arc<MidiClip>],
+    playhead: u64,
+    frames: usize,
+) {
+    let shared = inputs.shared;
+    shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
+    let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
+    let committed = commit_playhead(shared, playhead, new_playhead);
+    // Flush on the next block only if this one dropped something a held
+    // voice needed (FU-M3b): a seam's panic (it wrapped) or a timeline
+    // NoteOff — checked right here against the graph.
+    let wrapped = new_playhead != playhead + frames as u64;
+    let lost = wrapped
+        || any_note_off_in(
+            midi_clips,
+            playhead,
+            frames,
+            timing.map,
+            inputs.sample_rate,
+            scratch.note_event_buf,
+        );
+    scratch
+        .continuity
+        .skipped(playhead, new_playhead, committed, lost);
+}
+
 /// `playhead` is the callback's single observation of the transport for
 /// this block (`mix_audio` loads it once); both publishes below are
 /// conditional on it still being current, so a reposition from the control
@@ -58,48 +107,24 @@ pub(super) fn render_playing_block(
 ) {
     let shared = inputs.shared;
 
-    // The render graph (MIDI clips, busses, master chain, tracks, plugin
-    // instances — code review ARCH-02 A2-4…A2-7): one wait-free load for
-    // the block, held through the master pass. It never fails, so it has
-    // no miss counter and can never be the reason a block is skipped.
-    // Holding it also keeps every plugin it lists alive for the block: a
-    // removed instance is destroyed by the engine's retire sweep after
-    // this guard is gone, never by this thread.
+    // The render graph (audio and MIDI clips, busses, master chain,
+    // tracks, plugin instances — code review ARCH-02 A2-4…A2-8): one
+    // wait-free load for the block, held through the master pass. It
+    // never fails, so the block always renders. Holding it also keeps
+    // every clip and plugin it lists alive for the block: a removed one is
+    // freed by the engine's retire sweep after this guard is gone, never
+    // by this thread.
     let graph = shared.graph.load();
     let midi_clips: &[Arc<MidiClip>] = &graph.midi_clips;
+    let clips: &[Arc<AudioClip>] = &graph.clips;
     let tracks = &*graph.tracks;
     let plugins = &*graph.plugins;
 
-    // The clip map is the last one behind a lock (B-5); a miss is
-    // attributed (`SharedState::lock_misses`) and skips the block.
-    let misses = &shared.lock_misses;
-    let clips_guard = try_read_counted(inputs.clips, StateMap::Clips, misses);
-    let Some(clips_guard) = clips_guard else {
-        // Lock contended -- advance playhead to avoid desync, output
-        // silence this buffer.
-        shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
-        let new_playhead = advance_playhead_silent(shared, playhead, frames as u64);
-        let committed = commit_playhead(shared, playhead, new_playhead);
-        // Flush on the next block only if this one dropped something a
-        // held voice needed (FU-M3b): a seam's panic (it wrapped) or a
-        // timeline NoteOff — checked right here against the graph, which
-        // a contended map can no longer withhold (FU-A4a's deferred check
-        // is gone with the MIDI-clip lock).
-        let wrapped = new_playhead != playhead + frames as u64;
-        let lost = wrapped
-            || any_note_off_in(
-                midi_clips,
-                playhead,
-                frames,
-                timing.map,
-                inputs.sample_rate,
-                scratch.note_event_buf,
-            );
-        scratch
-            .continuity
-            .skipped(playhead, new_playhead, committed, lost);
+    #[cfg(feature = "test-internals")]
+    if inputs.force_render_skip {
+        skip_playing_block(inputs, scratch, timing, midi_clips, playhead, frames);
         return;
-    };
+    }
 
     let active_busses = graph.busses.len().min(scratch.bus_bufs.len());
 
@@ -119,8 +144,7 @@ pub(super) fn render_playing_block(
     scratch.sidechain.begin_block(&sidechain_guard);
 
     // Playhead discontinuity (code review MIX-06): a seek / relocate, or
-    // a block that advanced without rendering (lock contention, the A/B
-    // reference), means NoteOffs were never collected for whatever is
+    // a block that advanced without rendering (the A/B reference), means NoteOffs were never collected for whatever is
     // held. Flush every instrument from here — the audio thread owns the
     // MIDI stash, so a contended instrument gets the panic parked rather
     // than skipped — and drop captured keys, which belong to the old
@@ -145,7 +169,7 @@ pub(super) fn render_playing_block(
         channels: inputs.channels,
         tracks,
         busses: &graph.busses,
-        clips: &clips_guard,
+        clips,
         midi_clips,
         plugins,
         tempo_map: timing.map,

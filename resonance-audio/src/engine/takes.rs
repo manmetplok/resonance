@@ -469,7 +469,8 @@ fn claimed_take_clips(store: &std::collections::HashMap<TakeGroupId, TakeGroup>)
 /// destroyed (ba todo #1397).
 ///
 /// **This is what makes a removal silent.** A take's recording is an
-/// ordinary [`AudioClip`](crate::types::AudioClip) in `ctx.clips` — the
+/// ordinary [`AudioClip`](crate::types::AudioClip) in the render graph's
+/// clip list — the
 /// pass's own `roll_audio_pass` pushes it there as it rolls — and it stays
 /// inaudible only because
 /// [`publish_take_comp`]'s table marks it *governed*, which makes the clip
@@ -509,10 +510,16 @@ fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) 
     }
     // One engine-thread step: the clip list and the park move together,
     // and no finished load can be applied in between (ARCH-02 B-5).
-    let mut clips = ctx.clips.write();
-    match clips.iter().position(|clip| clip.id == clip_ref) {
-        Some(pos) => state.take_clip_park.hold(clips.remove(pos)),
-        None => state.take_clip_park.claim(clip_ref),
+    if super::clips::clip_exists(ctx, clip_ref) {
+        let parked = ctx.shared.edit_clips(|clips| {
+            let pos = clips.iter().position(|clip| clip.id == clip_ref)?;
+            Some(clips.remove(pos))
+        });
+        if let Some(clip) = parked {
+            state.take_clip_park.hold(clip);
+        }
+    } else {
+        state.take_clip_park.claim(clip_ref);
     }
 }
 
@@ -525,9 +532,8 @@ fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) 
 /// in-flight load then lands in the clip list exactly as it would have had
 /// the removal never happened.
 fn unpark_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
-    let mut clips = ctx.clips.write();
     if let Some(clip) = state.take_clip_park.release(clip_ref) {
-        clips.push(clip);
+        ctx.shared.edit_clips(|clips| clips.push(clip));
     }
 }
 

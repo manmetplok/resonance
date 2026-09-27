@@ -427,17 +427,16 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// the retire sweep drops on this thread once no block pins it — and
 /// reports `TrackRemoved` then `TrackBounceCancelled`.
 pub(crate) fn remove_cancelled_bounce_target(ctx: &HandlerCtx, target_track_id: TrackId) {
-    let removed_clip_ids: Vec<ClipId> = {
-        let clips = ctx.clips.read();
-        clips
-            .iter()
-            .filter(|c| c.track_id == target_track_id)
-            .map(|c| c.id)
-            .collect()
-    };
+    let removed_clip_ids: Vec<ClipId> = ctx
+        .shared
+        .graph
+        .load()
+        .clips_on(target_track_id)
+        .map(|c| c.id)
+        .collect();
     if !removed_clip_ids.is_empty() {
-        let mut clips = ctx.clips.write();
-        clips.retain(|c| c.track_id != target_track_id);
+        ctx.shared
+            .edit_clips(|clips| clips.retain(|c| c.track_id != target_track_id));
     }
     for clip_id in removed_clip_ids {
         let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });

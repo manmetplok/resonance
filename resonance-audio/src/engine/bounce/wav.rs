@@ -19,7 +19,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 use thiserror::Error;
 
 use crate::types::*;
@@ -335,7 +334,6 @@ pub(crate) fn run_export(
     reporter: ExportReporter,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
@@ -356,11 +354,11 @@ pub(crate) fn run_export(
 
     // Refresh the vocal-tuning render caches so the export mixes corrected
     // audio for any retuned clip, identical to live playback (todo #358).
-    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
     // Compute project range from audio clips + MIDI clips.
     let (render_start, render_end) = {
-        let clips_guard = clips.read();
+        let clips_guard = shared.clips();
         let graph = shared.graph.load();
         let midi_guard = &graph.midi_clips;
         let tm = tempo_map.load();
@@ -439,7 +437,7 @@ pub(crate) fn run_export(
     let render_stop = render_end + comp_latency;
     let ctx = ChunkCtx {
         shared,
-        clips,
+        tuning: &tuning,
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,

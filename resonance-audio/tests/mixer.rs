@@ -67,6 +67,8 @@ mod recording_start_latch;
 mod recording_whole_frame_push;
 #[path = "mixer/reference_monitor.rs"]
 mod reference_monitor;
+#[path = "mixer/render_graph_clips.rs"]
+mod render_graph_clips;
 #[path = "mixer/render_graph_plugins.rs"]
 mod render_graph_plugins;
 #[path = "mixer/render_graph_publish.rs"]

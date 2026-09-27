@@ -180,10 +180,14 @@ struct PendingMsg {
 ///    for "no take exists here"), and `gate_recorded: false` tracks are
 ///    byte-identical to the pre-mode behaviour.
 #[allow(clippy::too_many_arguments)]
-pub fn emit_outbound_notes<S: OutboundNoteSink, C: std::borrow::Borrow<MidiClip>>(
+pub fn emit_outbound_notes<
+    S: OutboundNoteSink,
+    C: std::borrow::Borrow<MidiClip>,
+    A: std::borrow::Borrow<AudioClip>,
+>(
     output_tracks: &[OutboundTrack],
     midi_clips: &[C],
-    audio_clips: &[AudioClip],
+    audio_clips: &[A],
     tempo: &TempoMap,
     sample_rate: u32,
     last: u64,
@@ -415,11 +419,10 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
 
     let tempo = ctx.tempo_map.load();
     let graph = ctx.shared.graph.load();
-    let audio_clips = ctx.clips.read();
     emit_outbound_notes(
         &output_tracks,
         &graph.midi_clips,
-        &audio_clips,
+        &graph.clips,
         &tempo,
         ctx.sample_rate,
         last,

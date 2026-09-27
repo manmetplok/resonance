@@ -98,12 +98,12 @@ fn drain_streams_to_disk_without_growing_memory() {
     // ring's outstanding samples are all consumable.
     drop(prod);
     let (tx, _rx) = crossbeam_channel::unbounded();
-    let clips = parking_lot::RwLock::new(Vec::new());
-    rec.finalize_recording(48_000, &clips, &tx);
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
+    rec.finalize_recording(48_000, &mut clips, &tx);
 
     let source = ClipSource::open_wav(&wav_path).expect("mmap finalized wav");
     assert_eq!(source.frame_count(), 48_000 * 10);
-    let clip_count = clips.read().len();
+    let clip_count = clips.len();
     assert_eq!(clip_count, 1);
 
     let _ = std::fs::remove_dir_all(&project_dir);
@@ -162,8 +162,8 @@ fn drain_preserves_channel_alignment_for_six_channel_input() {
 
     drop(prod);
     let (tx, _rx) = crossbeam_channel::unbounded();
-    let clips = parking_lot::RwLock::new(Vec::new());
-    rec.finalize_recording(48_000, &clips, &tx);
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
+    rec.finalize_recording(48_000, &mut clips, &tx);
 
     let source = ClipSource::open_wav(&wav_path).expect("mmap finalized wav");
     assert_eq!(source.frame_count(), total_frames as u64);

@@ -15,8 +15,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{SharedState, StemSource, apply_take_shift, render_stem};
 use resonance_audio::types::*;
 
@@ -24,7 +22,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -32,7 +29,6 @@ impl EngineState {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         }
     }
@@ -43,7 +39,7 @@ impl EngineState {
         let mut samples = vec![0.0f32; frames * 2];
         samples[at * 2] = 1.0;
         samples[at * 2 + 1] = 1.0;
-        self.clips.write().push(AudioClip {
+        self.shared.edit_clips(|c| c.push(Arc::new(AudioClip {
             id,
             track_id: track,
             start_sample: start,
@@ -63,7 +59,7 @@ impl EngineState {
             warp_algorithm: WarpAlgorithm::default(),
             warp_markers: Vec::new(),
             tuning_render_cache: None,
-        });
+        })));
     }
 
     fn render_track_stem(&self, track: TrackId, frames: u64) -> Vec<f32> {
@@ -72,7 +68,6 @@ impl EngineState {
             0,
             frames,
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             SR,
         )

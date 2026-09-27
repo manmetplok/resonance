@@ -310,22 +310,22 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
             tracks.shift_remove(sid);
         }
     });
-    // Remove clips -- collect removed clips so dealloc happens outside
-    // lock.
-    let removed_clips: Vec<_> = {
-        let mut clips_guard = ctx.clips.write();
-        let mut removed = Vec::new();
-        let mut i = 0;
-        while i < clips_guard.len() {
-            if clips_guard[i].track_id == track_id {
-                removed.push(clips_guard.swap_remove(i));
-            } else {
-                i += 1;
+    // Remove the track's clips. `swap_remove`, as always: the surviving
+    // clips' list order is part of the render (the clip mix sums in list
+    // order). The removed clips ride out on the replaced graph and drop on
+    // this thread's retire sweep (ARCH-02 B-5). No clips, no publish.
+    if ctx.shared.graph.load().clips_on(track_id).next().is_some() {
+        ctx.shared.edit_clips(|clips| {
+            let mut i = 0;
+            while i < clips.len() {
+                if clips[i].track_id == track_id {
+                    clips.swap_remove(i);
+                } else {
+                    i += 1;
+                }
             }
-        }
-        removed
-    };
-    drop(removed_clips);
+        });
+    }
     state.rec.buffers.remove(&track_id);
     state.midi_hw.midi_inputs.remove_track(track_id);
     state.midi_hw.midi_outputs.remove_track(track_id);
@@ -534,15 +534,22 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     // "engaged" outright rather than fading there.
     ctx.shared.master_fx_bypass.set_bypassed_settled(false);
 
-    // Fence queued imports first: a worker that has not yet taken the clip
-    // lock sees the new generation and drops its result (UPD-09).
+    // Fence queued imports first: a clip load applied after this sees the
+    // new generation and drops (UPD-09, FU-D7c — `clips::apply_clip_loaded`
+    // runs on this thread, so it is wholly before or after this). A
+    // pool-import worker in the middle of sending an event it judged
+    // current finishes that send before the fence lets this go on to
+    // `AllCleared` (FU-M4a).
     state
         .clear_generation
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    drop(state.pool_import_fence.lock());
 
-    // Clear clips -- collect to drop outside lock
-    let removed_clips: Vec<_> = ctx.clips.write().drain(..).collect();
-    drop(removed_clips);
+    // Clear clips. The old graph (and the clips — mmaps, in-RAM audio —
+    // only it held) is retired and dropped by the engine loop's sweep.
+    if !ctx.shared.graph.load().clips.is_empty() {
+        ctx.shared.edit_clips(|clips| clips.clear());
+    }
 
     // Clear MIDI clips. The old graph (and the clips only it held) is
     // retired and dropped by the engine loop's sweep.

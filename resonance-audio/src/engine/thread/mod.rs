@@ -1,8 +1,9 @@
 //! Engine control thread: owns the command/event loop and the
 //! per-command handler dispatch. All mutable engine state that must
-//! outlive a single command lives in [`HandlerState`]; the shared
-//! references to `Arc<RwLock<...>>` project state, the event sender, and
-//! the retry-command sender live in [`HandlerCtx`].
+//! outlive a single command lives in [`HandlerState`]; the shared state
+//! (the published render graph among it — no project map is behind a
+//! lock since ARCH-02 B-5), the event sender, and the retry-command
+//! sender live in [`HandlerCtx`].
 //!
 //! Handlers are free functions in the submodules (`transport`, `tracks`,
 //! `clips`, `midi`, `plugins`, `busses`). They take `&HandlerCtx` +
@@ -22,7 +23,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 use indexmap::IndexMap;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 
 use crate::clap_host::{ClapBundle, PluginMap};
 use crate::midi_clock::{
@@ -42,11 +43,10 @@ use super::{
 };
 
 /// Read-only handle to shared project state and channels. Passed by
-/// reference into every handler so they can lock the relevant maps and
-/// emit events without taking ownership.
+/// reference into every handler so they can read and publish the render
+/// graph and emit events without taking ownership.
 pub(crate) struct HandlerCtx<'a> {
     pub shared: &'a Arc<SharedState>,
-    pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
     pub latency_comp: &'a Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     /// Parameter-automation snapshot published to the audio callback and
@@ -77,6 +77,13 @@ impl HandlerCtx<'_> {
     /// `shared.edit_plugins`.
     pub fn plugins(&self) -> Arc<PluginMap> {
         self.shared.plugins()
+    }
+
+    /// The published audio clip list (code review ARCH-02 B-5). An `Arc`
+    /// clone of the current graph's list, like [`Self::tracks`]. Edits go
+    /// through `shared.edit_clips` / `shared.edit_clip`.
+    pub fn clips(&self) -> Arc<[Arc<AudioClip>]> {
+        self.shared.clips()
     }
 }
 
@@ -139,8 +146,18 @@ pub(crate) struct HandlerState {
     /// (`clips::submit_clip_load`, FU-D7c) all capture it when queued and
     /// drop their result if it changed meanwhile, so a load or import
     /// never lands in the project that replaced its own (code review
-    /// UPD-09). Shared with the import workers.
+    /// UPD-09). Shared with the pool-import workers; a clip load carries
+    /// its generation back and is compared on this thread
+    /// (`clips::apply_clip_loaded`, ARCH-02 B-5).
     pub clear_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// `ImportAudioToPool`'s project fence (FU-M4a): the pool-import
+    /// worker holds it while it re-checks [`Self::clear_generation`] and
+    /// sends an event; `ClearAll` takes it once right after bumping the
+    /// generation. So an event the worker judged current is sent before
+    /// `ClearAll` can go on to emit `AllCleared`. It used to be a read of
+    /// the clip list's lock, which B-5 removed (code review ARCH-02); it
+    /// guards no data.
+    pub pool_import_fence: std::sync::Arc<Mutex<()>>,
     /// The `SetProjectDir` clip-id reservation scan still running on its
     /// worker (FU-M12b); see `clips::settle_clip_id_scan`.
     pub clip_id_scan: Option<std::thread::JoinHandle<Option<ClipId>>>,
@@ -248,8 +265,8 @@ pub(crate) struct HandlerState {
     /// BUG 1).
     ///
     /// `LoadClipFromWav` hands the mmap + waveform work to a worker
-    /// thread, so a clip is not in `ctx.clips` when the command that
-    /// created it returns. A client that places a clip and immediately
+    /// thread, so a clip is not in the render graph's clip list when the
+    /// command that created it returns. A client that places a clip and immediately
     /// trims it — the only way to make one asset serve several sections,
     /// and what the whole arrangement flow does — used to hit the
     /// handlers' "missing lookup ⇒ no-op" convention: the trim vanished,
@@ -306,6 +323,7 @@ impl HandlerState {
             bundles: Vec::new(),
             imports: ImportQueue::default(),
             clear_generation: Default::default(),
+            pool_import_fence: Default::default(),
             clip_id_scan: None,
             frozen_conversions: Vec::new(),
             project_dir: None,
@@ -348,7 +366,8 @@ pub(crate) fn publish_automation_snapshot(
 /// Construction parameters for [`engine_thread`].
 ///
 /// A plain positional parameter list here used to run to 22 arguments,
-/// several sharing a type (three `Sender`s, five `Arc<RwLock<…>>>`s) —
+/// several sharing a type (three `Sender`s, five `Arc<RwLock<…>>>`s, all
+/// since moved into the render graph) —
 /// nothing stopped two same-typed arguments from being passed in the
 /// wrong order at the call site; the compiler can't catch a transposed
 /// pair when both sides typecheck. Field-name construction makes that
@@ -361,7 +380,6 @@ pub(crate) struct EngineThreadParams {
     pub cmd_tx_retry: Sender<AudioCommand>,
     pub event_tx: Sender<AudioEvent>,
     pub shared: Arc<SharedState>,
-    pub clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     pub latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     pub automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
@@ -386,7 +404,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         cmd_tx_retry,
         event_tx,
         shared,
-        clips_arc,
         tempo_map,
         latency_comp,
         automation,
@@ -404,7 +421,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
-        clips: &clips_arc,
         tempo_map: &tempo_map,
         latency_comp: &latency_comp,
         automation: &automation,

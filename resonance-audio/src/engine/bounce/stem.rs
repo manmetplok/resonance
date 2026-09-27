@@ -40,7 +40,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
-use parking_lot::RwLock;
 use thiserror::Error;
 
 use crate::types::*;
@@ -485,12 +484,12 @@ fn add_sub_tracks(parent: TrackId, tracks: &TrackMap, set: &mut HashSet<TrackId>
 ///
 /// Returns `None` when there is nothing to render.
 pub fn stem_project_range(
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
+    clips: &[Arc<AudioClip>],
     midi_clips: &[Arc<MidiClip>],
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
 ) -> Option<(SamplePos, SamplePos)> {
-    let clips_guard = clips.read();
+    let clips_guard = clips;
     let midi_guard = midi_clips;
     let tm = tempo_map.load();
 
@@ -536,7 +535,6 @@ pub fn render_stem(
     render_start: SamplePos,
     render_end: SamplePos,
     shared: &Arc<SharedState>,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
 ) -> Result<Vec<f32>, StemError> {
@@ -552,7 +550,7 @@ pub fn render_stem(
 
     // Refresh vocal-tuning render caches so each stem mixes corrected audio
     // for any retuned clip, identical to live playback (todo #358).
-    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
     let filter = {
         let tracks_guard = shared.tracks();
@@ -598,7 +596,7 @@ pub fn render_stem(
     let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
-        clips,
+        tuning: &tuning,
         tempo_map: &bounce_tm,
         automation: &automation,
         sample_rate,

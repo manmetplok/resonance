@@ -8,7 +8,6 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 use hound::{SampleFormat, WavSpec, WavWriter};
-use parking_lot::RwLock;
 use thiserror::Error;
 
 use crate::types::*;
@@ -17,6 +16,7 @@ use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
 
 use super::internal::{EngineInternal, LoadedClip};
 use super::thread::{HandlerCtx, HandlerState};
+use super::SharedState;
 
 /// How long a clip edit waits for its clip to finish loading before it
 /// is given up on. Loading is an mmap plus a waveform decimation on a
@@ -117,9 +117,10 @@ pub(crate) fn defer_clip_command(state: &mut HandlerState, clip_id: ClipId, comm
     });
 }
 
-/// True when `clip_id` is already in the engine's clip list.
+/// True when `clip_id` is already in the engine's clip list (the
+/// published render graph's).
 pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
-    ctx.clips.read().iter().any(|c| c.id == clip_id)
+    ctx.shared.graph.load().clip(clip_id).is_some()
 }
 
 /// Refuse a mandatory-id create that collides with a live clip, audio or
@@ -131,8 +132,10 @@ pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
 /// allocator for this space (`ComposeState::fresh_derived_clip_id`), so a
 /// collision here means a caller bug, not a race to recover from.
 pub(crate) fn reject_if_clip_id_in_use(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
-    let taken = ctx.clips.read().iter().any(|c| c.id == clip_id)
-        || ctx.shared.graph.load().midi_clip(clip_id).is_some();
+    let taken = {
+        let graph = ctx.shared.graph.load();
+        graph.clip(clip_id).is_some() || graph.midi_clip(clip_id).is_some()
+    };
     if taken {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "clip id {clip_id} is already in use; refusing the create rather than replacing the live clip"
@@ -159,8 +162,8 @@ pub(crate) fn poll_deferred_clip_commands(ctx: &HandlerCtx, state: &mut HandlerS
             .partition(|d| matches!(d.command, AudioCommand::DeleteClip { .. }));
     state.deferred_clip_commands = rest;
     let (ready, expired) = {
-        let clips = ctx.clips.read();
-        let landed = |clip_id: ClipId| clips.iter().any(|c| c.id == clip_id);
+        let graph = ctx.shared.graph.load();
+        let landed = |clip_id: ClipId| graph.clip(clip_id).is_some();
         partition_deferred_clip_commands(
             &mut state.deferred_clip_commands,
             landed,
@@ -264,10 +267,11 @@ pub(crate) fn handle_move_clip(
     new_start_sample: u64,
     new_track_id: TrackId,
 ) {
-    let mut clips = ctx.clips.write();
-    if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+    let moved = ctx.shared.edit_clip(clip_id, |clip| {
         clip.start_sample = new_start_sample;
         clip.track_id = new_track_id;
+    });
+    if moved.is_some() {
         let _ = ctx.event_tx.send(AudioEvent::ClipMoved {
             clip_id,
             new_start_sample,
@@ -283,15 +287,17 @@ pub(crate) fn handle_trim_clip(
     trim_start_frames: u64,
     trim_end_frames: u64,
 ) {
-    let mut clips = ctx.clips.write();
-    if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
+    let trimmed = ctx.shared.edit_clip(clip_id, |clip| {
         clip.start_sample = new_start_sample;
         clip.trim_start_frames = trim_start_frames;
         clip.trim_end_frames = trim_end_frames;
+        clip.duration_frames()
+    });
+    if let Some(new_duration_samples) = trimmed {
         let _ = ctx.event_tx.send(AudioEvent::ClipTrimmed {
             clip_id,
             new_start_sample,
-            new_duration_samples: clip.duration_frames(),
+            new_duration_samples,
             trim_start_frames,
             trim_end_frames,
         });
@@ -312,24 +318,38 @@ pub(crate) fn handle_split_clip(
     new_clip_id: ClipId,
     at_sample: u64,
 ) {
-    let mut clips = ctx.clips.write();
-    let Some(index) = clips.iter().position(|c| c.id == clip_id) else {
+    // Head and tail in ONE published graph: a block never sees the
+    // shortened head without its tail, or both halves overlapping.
+    let split = ctx.shared.edit_clips(|clips| {
+        let index = clips.iter().position(|c| c.id == clip_id)?;
+        let (head_trim_end, tail) = {
+            let clip = &clips[index];
+            let tail = clip.split_tail(new_clip_id, at_sample)?;
+            (clip.split_head_trim_end(at_sample), tail)
+        };
+        let head = Arc::make_mut(&mut clips[index]);
+        head.trim_end_frames = head_trim_end;
+        head.fade_out_frames = 0;
+        let head_echo = (
+            head.start_sample,
+            head.trim_start_frames,
+            head.duration_frames(),
+            head_trim_end,
+        );
+        let tail_echo = (
+            tail.track_id,
+            tail.start_sample,
+            tail.duration_frames(),
+            tail.name.clone(),
+            crate::types::compute_waveform_peaks(tail.source.as_frames()),
+        );
+        clips.push(Arc::new(tail));
+        Some((head_echo, tail_echo))
+    });
+    let Some(((head_start, head_trim_start, head_duration, head_trim_end), tail_echo)) = split
+    else {
         return;
     };
-    let (head_trim_end, tail) = {
-        let clip = &clips[index];
-        let Some(tail) = clip.split_tail(new_clip_id, at_sample) else {
-            return;
-        };
-        (clip.split_head_trim_end(at_sample), tail)
-    };
-
-    let head = &mut clips[index];
-    head.trim_end_frames = head_trim_end;
-    head.fade_out_frames = 0;
-    let head_start = head.start_sample;
-    let head_trim_start = head.trim_start_frames;
-    let head_duration = head.duration_frames();
     let _ = ctx.event_tx.send(AudioEvent::ClipTrimmed {
         clip_id,
         new_start_sample: head_start,
@@ -338,15 +358,7 @@ pub(crate) fn handle_split_clip(
         trim_end_frames: head_trim_end,
     });
 
-    let (track_id, start_sample, duration_samples, name) = (
-        tail.track_id,
-        tail.start_sample,
-        tail.duration_frames(),
-        tail.name.clone(),
-    );
-    let waveform_peaks = crate::types::compute_waveform_peaks(tail.source.as_frames());
-    clips.push(tail);
-    drop(clips);
+    let (track_id, start_sample, duration_samples, name, waveform_peaks) = tail_echo;
     let _ = ctx.event_tx.send(AudioEvent::ClipImported {
         clip_id: new_clip_id,
         track_id,
@@ -393,7 +405,11 @@ pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, state: &mut HandlerState, cli
     }
     state.deferred_clip_commands.retain(|d| d.clip_id != clip_id);
     state.clip_load_tickets.withdraw(clip_id);
-    ctx.clips.write().retain(|c| c.id != clip_id);
+    if clip_exists(ctx, clip_id) {
+        // The clip (and its audio) rides out on the replaced graph and
+        // drops on the engine loop's retire sweep.
+        ctx.shared.edit_clips(|clips| clips.retain(|c| c.id != clip_id));
+    }
     let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
     // A delete parked behind a split of this clip lost its split with the
     // retain above.
@@ -438,7 +454,7 @@ pub(crate) fn handle_set_clip_fade(
     fade_out_curve: FadeCurve,
 ) {
     set_clip_fade_in_place(
-        ctx.clips,
+        ctx.shared,
         ctx.event_tx,
         clip_id,
         fade_in_frames,
@@ -449,7 +465,7 @@ pub(crate) fn handle_set_clip_fade(
 }
 
 pub(crate) fn handle_set_clip_gain(ctx: &HandlerCtx, clip_id: ClipId, gain_db: f32) {
-    set_clip_gain_in_place(ctx.clips, ctx.event_tx, clip_id, gain_db);
+    set_clip_gain_in_place(ctx.shared, ctx.event_tx, clip_id, gain_db);
 }
 
 pub(crate) fn handle_set_clip_warp(
@@ -461,7 +477,7 @@ pub(crate) fn handle_set_clip_warp(
     warp_algorithm: WarpAlgorithm,
 ) {
     set_clip_warp_in_place(
-        ctx.clips,
+        ctx.shared,
         ctx.event_tx,
         clip_id,
         warp_enabled,
@@ -476,14 +492,14 @@ pub(crate) fn handle_set_clip_warp_markers(
     clip_id: ClipId,
     markers: Vec<WarpMarker>,
 ) {
-    set_clip_warp_markers_in_place(ctx.clips, ctx.event_tx, clip_id, markers);
+    set_clip_warp_markers_in_place(ctx.shared, ctx.event_tx, clip_id, markers);
 }
 
 /// Handle `AudioCommand::DetectClipTempo`. Thin wrapper over
 /// [`detect_clip_tempo_in_place`], passing the engine's project sample
 /// rate through. See that helper for the behaviour contract.
 pub(crate) fn handle_detect_clip_tempo(ctx: &HandlerCtx, clip_id: ClipId) {
-    detect_clip_tempo_in_place(ctx.clips, ctx.event_tx, ctx.sample_rate, clip_id);
+    detect_clip_tempo_in_place(ctx.shared, ctx.event_tx, ctx.sample_rate, clip_id);
 }
 
 /// Apply fade lengths/curves to the audio clip with `clip_id` and emit
@@ -493,9 +509,10 @@ pub(crate) fn handle_detect_clip_tempo(ctx: &HandlerCtx, clip_id: ClipId) {
 /// a missing-clip lookup never emits a ghost event (mirroring
 /// [`handle_move_clip`] / the MIDI clip handlers). The clamped values are
 /// what gets stored and emitted, keeping the app mirror in sync.
+/// Publishes through `shared`'s render graph; engine thread.
 #[allow(clippy::too_many_arguments)]
 pub fn set_clip_fade_in_place(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     event_tx: &Sender<AudioEvent>,
     clip_id: ClipId,
     fade_in_frames: u64,
@@ -503,8 +520,7 @@ pub fn set_clip_fade_in_place(
     fade_out_frames: u64,
     fade_out_curve: FadeCurve,
 ) {
-    let mut guard = clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+    let stored = shared.edit_clip(clip_id, |clip| {
         // A fade can't be longer than the clip is audible.
         let max = clip.duration_frames();
         let fade_in_frames = fade_in_frames.min(max);
@@ -513,6 +529,9 @@ pub fn set_clip_fade_in_place(
         clip.fade_in_curve = fade_in_curve;
         clip.fade_out_frames = fade_out_frames;
         clip.fade_out_curve = fade_out_curve;
+        (fade_in_frames, fade_out_frames)
+    });
+    if let Some((fade_in_frames, fade_out_frames)) = stored {
         let _ = event_tx.send(AudioEvent::ClipFadeChanged {
             clip_id,
             fade_in_frames,
@@ -529,19 +548,17 @@ pub fn set_clip_fade_in_place(
 /// before being stored/emitted. Same missing-clip invariant as
 /// [`set_clip_fade_in_place`].
 pub fn set_clip_gain_in_place(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     event_tx: &Sender<AudioEvent>,
     clip_id: ClipId,
     gain_db: f32,
 ) {
-    let mut guard = clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        let gain_db = if gain_db.is_nan() {
-            0.0
-        } else {
-            gain_db.clamp(MIN_CLIP_GAIN_DB, MAX_CLIP_GAIN_DB)
-        };
-        clip.gain_db = gain_db;
+    let gain_db = if gain_db.is_nan() {
+        0.0
+    } else {
+        gain_db.clamp(MIN_CLIP_GAIN_DB, MAX_CLIP_GAIN_DB)
+    };
+    if shared.edit_clip(clip_id, |clip| clip.gain_db = gain_db).is_some() {
         let _ = event_tx.send(AudioEvent::ClipGainChanged { clip_id, gain_db });
     }
 }
@@ -552,7 +569,7 @@ pub fn set_clip_gain_in_place(
 /// source is read on the render path. Same missing-clip invariant as
 /// [`set_clip_fade_in_place`]: a lookup miss emits no ghost event.
 pub fn set_clip_warp_in_place(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     event_tx: &Sender<AudioEvent>,
     clip_id: ClipId,
     warp_enabled: bool,
@@ -560,12 +577,13 @@ pub fn set_clip_warp_in_place(
     transpose_semitones: f32,
     warp_algorithm: WarpAlgorithm,
 ) {
-    let mut guard = clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
+    let stored = shared.edit_clip(clip_id, |clip| {
         clip.warp_enabled = warp_enabled;
         clip.original_bpm = original_bpm;
         clip.transpose_semitones = transpose_semitones;
         clip.warp_algorithm = warp_algorithm;
+    });
+    if stored.is_some() {
         let _ = event_tx.send(AudioEvent::ClipWarpChanged {
             clip_id,
             warp_enabled,
@@ -584,15 +602,16 @@ pub fn set_clip_warp_in_place(
 /// stored and emitted. Same missing-clip invariant as
 /// [`set_clip_fade_in_place`].
 pub fn set_clip_warp_markers_in_place(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     event_tx: &Sender<AudioEvent>,
     clip_id: ClipId,
     mut markers: Vec<WarpMarker>,
 ) {
-    let mut guard = clips.write();
-    if let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) {
-        markers.sort_by(|a, b| a.timeline_beat.total_cmp(&b.timeline_beat));
-        clip.warp_markers = markers.clone();
+    markers.sort_by(|a, b| a.timeline_beat.total_cmp(&b.timeline_beat));
+    if shared
+        .edit_clip(clip_id, |clip| clip.warp_markers = markers.clone())
+        .is_some()
+    {
         let _ = event_tx.send(AudioEvent::ClipWarpMarkersChanged { clip_id, markers });
     }
 }
@@ -606,17 +625,17 @@ pub fn set_clip_warp_markers_in_place(
 /// This is analysis only: the clip is never mutated. The app decides
 /// whether to act on the estimate (e.g. via `AudioCommand::SetClipWarp`
 /// to set `original_bpm`). Same missing-clip invariant as
-/// [`set_clip_warp_in_place`]: a lookup miss emits no ghost event. The
-/// clip read lock is released before the event is sent.
+/// [`set_clip_warp_in_place`]: a lookup miss emits no ghost event. Reads
+/// the published graph; publishes nothing.
 pub fn detect_clip_tempo_in_place(
-    clips: &RwLock<Vec<AudioClip>>,
+    shared: &SharedState,
     event_tx: &Sender<AudioEvent>,
     sample_rate: u32,
     clip_id: ClipId,
 ) {
     let mono = {
-        let guard = clips.read();
-        match guard.iter().find(|c| c.id == clip_id) {
+        let graph = shared.graph.load();
+        match graph.clip(clip_id) {
             Some(clip) => clip
                 .source
                 .as_frames()
@@ -700,7 +719,7 @@ pub(crate) fn handle_load_take_clip_from_wav(
     path: PathBuf,
     name: String,
 ) {
-    if ctx.clips.read().iter().any(|c| c.id == clip_id) {
+    if clip_exists(ctx, clip_id) {
         // Still raise the allocator: the reservation must hold whether or
         // not this particular load had anything left to do.
         reserve_clip_id(&mut state.next_clip_id, clip_id);
@@ -833,7 +852,7 @@ fn submit_clip_load(
 ///
 /// Every check that decides whether the load lands runs here, in one
 /// engine-thread step with the publish and the echo. Until ARCH-02 B-5 the
-/// worker made them itself while holding `ctx.clips.write()`, and each
+/// worker made them itself while holding the clip list's write lock, and each
 /// ordering guarantee below came from that lock; now it comes from the
 /// fact that every command that could change the answer (`DeleteClip`,
 /// `ClearAll`, `RemoveTake`, a second load's submit) also runs on this
@@ -882,11 +901,11 @@ pub(crate) fn apply_clip_loaded(ctx: &HandlerCtx, state: &mut HandlerState, load
     if clip_exists(ctx, clip_id) {
         return;
     }
-    let Some(clip) = state.take_clip_park.deliver(clip) else {
+    let Some(clip) = state.take_clip_park.deliver(Arc::new(clip)) else {
         return;
     };
     let (track_id, start_sample, name) = (clip.track_id, clip.start_sample, clip.name.clone());
-    ctx.clips.write().push(clip);
+    ctx.shared.edit_clips(|clips| clips.push(clip));
     if echo == ClipLoadEcho::Timeline {
         let _ = ctx.event_tx.send(AudioEvent::ClipImported {
             clip_id,
@@ -950,8 +969,8 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
     }
     let mut entries: Vec<(ClipId, String, Action)> = Vec::new();
     {
-        let clips_guard = ctx.clips.read();
-        for clip in clips_guard.iter() {
+        let clips = ctx.clips();
+        for clip in clips.iter() {
             let rel = format!("audio/clip_{}.wav", clip.id);
             let target = project_dir.join(&rel);
             let action = match &clip.source {
@@ -1013,10 +1032,9 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
             .join("audio")
             .join(format!("clip_{clip_id}.wav"));
         if let Ok(source) = ClipSource::open_wav(&target) {
-            let mut clips_guard = ctx.clips.write();
-            if let Some(clip) = clips_guard.iter_mut().find(|c| c.id == clip_id) {
-                clip.source = source;
-            }
+            // The replaced source (the old mapping, or the in-RAM samples)
+            // rides out on the replaced graph: freed by the retire sweep.
+            ctx.shared.edit_clip(clip_id, |clip| clip.source = source);
         }
     }
 
@@ -1051,7 +1069,7 @@ pub(crate) fn handle_persist_clip_wavs(ctx: &HandlerCtx, state: &HandlerState) {
     };
     let audio_dir = project_dir.join("audio");
     let pending: Vec<(ClipId, PathBuf, ClipSource)> = {
-        let clips = ctx.clips.read();
+        let clips = ctx.clips();
         clips
             .iter()
             .filter_map(|clip| {
@@ -1089,10 +1107,7 @@ pub(crate) fn handle_persist_clip_wavs(ctx: &HandlerCtx, state: &HandlerState) {
         drop(source);
         match ClipSource::open_wav(&target) {
             Ok(mapped) => {
-                let mut clips = ctx.clips.write();
-                if let Some(clip) = clips.iter_mut().find(|c| c.id == clip_id) {
-                    clip.source = mapped;
-                }
+                ctx.shared.edit_clip(clip_id, |clip| clip.source = mapped);
             }
             Err(e) => {
                 // Never leave a file the clip isn't mapped to: a later

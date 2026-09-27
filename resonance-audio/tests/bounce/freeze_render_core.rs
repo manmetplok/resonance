@@ -11,8 +11,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, SharedState};
 use resonance_audio::types::*;
 
@@ -20,14 +18,12 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        clips: Arc::new(RwLock::new(Vec::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -74,10 +70,7 @@ fn state_with_tone_track() -> EngineState {
     state.shared.edit_tracks(|m| {
         m.insert(1, std::sync::Arc::new(Track::with_type(1, "track".into(), TrackType::Audio)));
     });
-    state
-        .clips
-        .write()
-        .push(audio_clip(1, 1, 0, tone(SR as usize)));
+    state.shared.edit_clips(|c| c.push(Arc::new(audio_clip(1, 1, 0, tone(SR as usize)))));
     state
 }
 
@@ -109,7 +102,6 @@ fn known_track_renders_non_silent_wav() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -150,11 +142,11 @@ fn freeze_does_not_mutate_source_clips() {
     let _ = std::fs::remove_file(&path);
 
     // Snapshot the source clip before freezing.
-    let before: Vec<f32> = match &state.clips.read()[0].source {
+    let before: Vec<f32> = match &state.shared.clips()[0].source {
         ClipSource::Memory(v) => v.to_vec(),
         _ => unreachable!(),
     };
-    let clip_count_before = state.clips.read().len();
+    let clip_count_before = state.shared.clips().len();
     let track_count_before = state.shared.tracks().len();
 
     to_freeze_cache(
@@ -162,7 +154,6 @@ fn freeze_does_not_mutate_source_clips() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -171,9 +162,9 @@ fn freeze_does_not_mutate_source_clips() {
     .expect("freeze must succeed");
 
     // No clip / track was added, removed, or mutated.
-    assert_eq!(state.clips.read().len(), clip_count_before);
+    assert_eq!(state.shared.clips().len(), clip_count_before);
     assert_eq!(state.shared.tracks().len(), track_count_before);
-    let after: Vec<f32> = match &state.clips.read()[0].source {
+    let after: Vec<f32> = match &state.shared.clips()[0].source {
         ClipSource::Memory(v) => v.to_vec(),
         _ => unreachable!(),
     };
@@ -194,10 +185,7 @@ fn fingerprint_changes_when_notes_change() {
         });
         // A tone clip so the render range is non-empty, plus a MIDI clip
         // whose note drives the fingerprint.
-        state
-            .clips
-            .write()
-            .push(audio_clip(1, 1, 0, tone(SR as usize)));
+        state.shared.edit_clips(|c| c.push(Arc::new(audio_clip(1, 1, 0, tone(SR as usize)))));
         let clip = MidiClip {
             id: 1,
             track_id: 1,
@@ -221,7 +209,6 @@ fn fingerprint_changes_when_notes_change() {
             path.to_string_lossy().into_owned(),
             &state.shared,
             &AtomicBool::new(false),
-            &state.clips,
             &state.tempo_map,
             &AutomationSnapshot::default(),
             SR,
@@ -256,7 +243,6 @@ fn cancel_aborts_and_removes_partial_file() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &cancel,
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -289,7 +275,6 @@ fn cancelling_another_renders_token_does_not_abort_the_freeze() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -327,7 +312,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         path_other.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -349,7 +333,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &freeze_cancel,
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -373,7 +356,6 @@ fn freeze_refuses_while_transport_playing() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -397,7 +379,6 @@ fn missing_source_track_errors() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

@@ -69,7 +69,7 @@ fn three_loop_passes_yield_three_takes_with_no_dropped_frames() {
     .unwrap();
     rec.buffers.insert(7, buf);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2u64; // pass 0 already holds clip id 1
 
     // Feed one loop's worth of audio and roll at the seam, three times.
@@ -78,7 +78,7 @@ fn three_loop_passes_yield_three_takes_with_no_dropped_frames() {
         let rolled = rec.roll_audio_pass(
             sr,
             /* clip_start_sample */ 0,
-            &clips,
+            &mut clips,
             &audio_dir,
             &mut next_clip_id,
             /* reopen */ true,
@@ -91,7 +91,7 @@ fn three_loop_passes_yield_three_takes_with_no_dropped_frames() {
     }
 
     // Exactly three retained takes — the fourth writer is open but empty.
-    let guard = clips.read();
+    let guard = clips;
     assert_eq!(guard.len(), passes as usize, "expected one clip per pass");
 
     // Every take is a distinct clip with its own on-disk WAV holding a full
@@ -148,18 +148,18 @@ fn trailing_pass_rolls_without_reopening_and_clears_buffers() {
         RecordingState::create_track_buf(&project_dir, 1, 1, sr, sr, 0, false).unwrap();
     rec.buffers.insert(1, buf);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2u64;
 
     // One seam roll (reopen) then a final trailing roll at stop (no reopen).
     push_ramp(&mut prod, 0, loop_frames);
-    let _ = rec.roll_audio_pass(sr, 0, &clips, &audio_dir, &mut next_clip_id, true);
+    let _ = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut next_clip_id, true);
     push_ramp(&mut prod, loop_frames, loop_frames);
     drop(prod); // emulate the input stream closing on stop
-    let trailing = rec.roll_audio_pass(sr, 0, &clips, &audio_dir, &mut next_clip_id, false);
+    let trailing = rec.roll_audio_pass(sr, 0, &mut clips, &audio_dir, &mut next_clip_id, false);
 
     assert_eq!(trailing.len(), 1, "trailing pass should emit one take");
-    assert_eq!(clips.read().len(), 2, "two passes -> two takes");
+    assert_eq!(clips.len(), 2, "two passes -> two takes");
     assert!(
         rec.buffers.is_empty(),
         "the trailing (no-reopen) roll must close out the per-track buffers"
@@ -213,13 +213,13 @@ fn a_punched_in_pass_reports_the_extent_it_recorded_not_its_slot() {
     let buf = RecordingState::create_track_buf(&project_dir, 7, 1, sr, sr, 0, false).unwrap();
     rec.buffers.insert(7, buf);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2u64;
 
     // Pass 0's writer starts at the punch-in, exactly as
     // `finalize_loop_record_pass` positions it.
     push_ramp(&mut prod, 0, recorded);
-    let rolled = rec.roll_audio_pass(sr, punch_in, &clips, &audio_dir, &mut next_clip_id, true);
+    let rolled = rec.roll_audio_pass(sr, punch_in, &mut clips, &audio_dir, &mut next_clip_id, true);
     assert_eq!(rolled.len(), 1, "one armed track, one take");
 
     let extent = rolled[0].extent();
@@ -272,12 +272,12 @@ fn a_pass_cut_short_at_stop_reports_the_shorter_extent() {
     let buf = RecordingState::create_track_buf(&project_dir, 7, 1, sr, sr, 0, false).unwrap();
     rec.buffers.insert(7, buf);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2u64;
 
     push_ramp(&mut prod, 0, recorded);
     drop(prod); // the input stream closes at stop
-    let rolled = rec.roll_audio_pass(sr, slot.start, &clips, &audio_dir, &mut next_clip_id, false);
+    let rolled = rec.roll_audio_pass(sr, slot.start, &mut clips, &audio_dir, &mut next_clip_id, false);
     assert_eq!(rolled.len(), 1);
 
     let extent = rolled[0].extent();
@@ -822,7 +822,6 @@ fn a_mixed_project_reserves_off_its_audio_takes_only() {
         "the audio group's clip_refs (300, 301) still have to be cleared"
     );
 }
-
 
 // ---------------------------------------------------------------------------
 // `ClearAll` resets the take-group state (todo #1394, covered by #1399)
@@ -2425,7 +2424,7 @@ fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
         .unwrap();
     rec.buffers.insert(7, buf);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2u64;
     let mut fed = 0u64;
     let mut take_lengths = Vec::new();
@@ -2441,7 +2440,7 @@ fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
         fed += frames;
         let last = pass + 1 == passes.len();
         let rolled =
-            rec.roll_audio_pass(engine_sr, 0, &clips, &audio_dir, &mut next_clip_id, !last);
+            rec.roll_audio_pass(engine_sr, 0, &mut clips, &audio_dir, &mut next_clip_id, !last);
         assert_eq!(rolled.len(), 1, "pass {pass} produced one take");
         take_lengths.push(rolled[0].duration_samples);
     }
@@ -2457,7 +2456,7 @@ fn loop_record_seams_at_a_mismatched_device_rate_lose_and_click_nothing() {
     }
 
     // Lay the takes end to end, in pass order.
-    let guard = clips.read();
+    let guard = clips;
     let mut ids: Vec<u64> = guard.iter().map(|c| c.id).collect();
     ids.sort_unstable();
     let mut joined = Vec::new();

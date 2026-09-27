@@ -3,6 +3,8 @@
 //! crossfade, the anti-click edge ramp, and the recorded-playback monitor
 //! gate that decides whether the live input joins them.
 
+use std::borrow::Borrow;
+
 use crate::mixer::take_comp::CompRenderTable;
 use crate::types::*;
 
@@ -20,9 +22,9 @@ use crate::types::*;
 /// preparing a take is untouched. Block granularity matches the
 /// monitor stream itself (~a few ms). Cheap: two relaxed atomic loads,
 /// and the `O(clips)` span scan only runs for `Recorded` tracks.
-pub fn recorded_monitor_gate(
+pub fn recorded_monitor_gate<C: Borrow<AudioClip>>(
     track: &Track,
-    clips: &[AudioClip],
+    clips: &[C],
     playhead: u64,
     frames: usize,
 ) -> bool {
@@ -52,8 +54,8 @@ pub fn recorded_monitor_gate(
 /// reach it through `render_block`), so playback and bounced WAV render
 /// identically. Allocation-free and `O(1)` per output frame (the
 /// per-clip crossfade scan is `O(clips)`, run once per clip per block).
-pub fn mix_track_clips(
-    clips: &[AudioClip],
+pub fn mix_track_clips<C: Borrow<AudioClip>>(
+    clips: &[C],
     track_id: TrackId,
     playhead: u64,
     frames: usize,
@@ -85,8 +87,8 @@ pub fn mix_track_clips(
 /// governance check, so a project without take lanes renders exactly as it
 /// did before.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn mix_track_clips_governed(
-    clips: &[AudioClip],
+pub(crate) fn mix_track_clips_governed<C: Borrow<AudioClip>>(
+    clips: &[C],
     track_id: TrackId,
     playhead: u64,
     frames: usize,
@@ -100,6 +102,7 @@ pub(crate) fn mix_track_clips_governed(
     let governed = !take_comp.is_empty();
 
     for clip in clips.iter() {
+        let clip: &AudioClip = clip.borrow();
         if clip.track_id != track_id {
             continue;
         }
@@ -236,9 +239,9 @@ fn clip_fade_gain_coef(
 /// start; the tail length is the span a later-starting clip covers up to
 /// `clip`'s end. Each is capped at the clip's visible duration so a clip
 /// overlapped on both sides cannot fade past its own length.
-fn clip_crossfade_lengths(
+fn clip_crossfade_lengths<C: Borrow<AudioClip>>(
     clip: &AudioClip,
-    clips: &[AudioClip],
+    clips: &[C],
     clip_frames: u64,
     take_comp: &CompRenderTable,
 ) -> (u64, u64) {
@@ -248,6 +251,7 @@ fn clip_crossfade_lengths(
     let mut head = 0u64;
     let mut tail = 0u64;
     for other in clips.iter() {
+        let other: &AudioClip = other.borrow();
         if other.id == clip.id || other.track_id != clip.track_id {
             continue;
         }

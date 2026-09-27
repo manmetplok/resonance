@@ -276,14 +276,15 @@ pub(crate) fn handle_import_audio_to_pool(
     let event_tx = ctx.event_tx.clone();
     let engine_rate = ctx.sample_rate;
     // Project fence (FU-M4a, like UPD-09's clip imports): `ClearAll` bumps
-    // the generation before it takes the clip write lock and sends
-    // `AllCleared` after it. Every event of this batch is sent under a read
-    // of that lock after re-checking the generation, so a batch outlived by
-    // its project stops emitting before `AllCleared` and never lands in the
-    // new project's pool. Its unresolved files each get one final
+    // the generation, then takes `pool_import_fence` once, and sends
+    // `AllCleared` after it. Every event of this batch is sent holding that
+    // fence after re-checking the generation, so a batch outlived by its
+    // project stops emitting before `AllCleared` and never lands in the
+    // new project's pool. (The fence used to be a read of the clip list's
+    // lock; the clip list is in the render graph since ARCH-02 B-5.) Its unresolved files each get one final
     // `ImportFailed` ("cancelled") instead, so the import modal's rows and
     // any control-API import job waiting on them resolve (FU-A4b).
-    let clips_fence = std::sync::Arc::clone(ctx.clips);
+    let fence = std::sync::Arc::clone(&state.pool_import_fence);
     let clear_generation = std::sync::Arc::clone(&state.clear_generation);
     let generation = clear_generation.load(std::sync::atomic::Ordering::SeqCst);
 
@@ -318,7 +319,7 @@ pub(crate) fn handle_import_audio_to_pool(
                             import_one_to_pool(asset_id, path, dir, rate)
                         },
                         |ev| {
-                            let _fence = clips_fence.read();
+                            let _fence = fence.lock();
                             if stale() {
                                 // The WAV went into the old project's folder
                                 // and nothing will reference it.

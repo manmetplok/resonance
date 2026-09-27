@@ -199,7 +199,7 @@ pub mod test_support {
     };
     pub use crate::engine::vocal_render::{
         attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
-        retune_clip, snapshot_tuning_jobs, TuningJob,
+        retune_clip, snapshot_tuning_jobs, TuningCaches, TuningJob, TuningOverlay,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::platform::{

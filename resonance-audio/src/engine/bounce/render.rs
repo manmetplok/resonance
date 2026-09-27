@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, MutexGuard};
 
 use crate::clap_host::SyncClapInstance;
 use crate::latency::LatencyComp;
@@ -16,6 +16,7 @@ use crate::limits::MAX_PLUGIN_OUTPUT_PORTS;
 use crate::mixer;
 use crate::types::*;
 
+use super::super::vocal_render::TuningOverlay;
 use super::super::{SharedState, MAX_BUSSES};
 
 pub const BOUNCE_CHUNK: usize = 1024;
@@ -135,33 +136,25 @@ impl ChunkScratch {
     }
 }
 
-/// Read-only context shared by every chunk in a bounce run. Holds
-/// references to the engine's locked state so the render loop can
-/// re-acquire each lock per chunk (matching live playback's contention
-/// pattern).
+/// Read-only context shared by every chunk in a bounce run.
 ///
-/// Lock scope (code review ARCH-02): [`render_chunk`] holds the map read
-/// guard still behind a lock (clips) for one
-/// `BOUNCE_CHUNK` — every plugin's `process()` on
-/// every track — and releases them between chunks. That never stalls
-/// the live callback: every caller runs under an
-/// [`OfflineRenderGuard`](super::OfflineRenderGuard), and while that
-/// gate is up `mix_audio` outputs silence without `try_read`ing any
-/// map. What a chunk-long guard *does* cost is engine-thread latency —
-/// a clip / note / track edit dispatched mid-render queues behind the
-/// chunk (a few ms) — which is the price of the offline render seeing
-/// edits at chunk granularity rather than snapshotting the project. The
-/// graph-publishing migration (ARCH-02 A2-4…) removes the guards one map
-/// at a time: the MIDI clips, busses, master chain, tracks and plugin
-/// instances are already a per-chunk `shared.graph.load()` with no
-/// guard, so a note, bus, track or plugin add / remove never queues
-/// behind a chunk. (A plugin *instance* is still locked per `process()`
-/// through `lock_plugin_for_bounce`; the graph a chunk pinned keeps a
-/// removed instance alive until the chunk ends, and the engine's retire
-/// sweep — not this worker — destroys it.)
+/// No map lock (code review ARCH-02): [`render_chunk`] loads the
+/// published render graph once per chunk — audio and MIDI clips, busses,
+/// master chain, tracks, plugin instances — so the offline render sees
+/// edits at chunk granularity, as it did through the per-chunk read
+/// guards, and an engine-thread edit never queues behind a chunk (the
+/// last guard, the audio clips', went in B-5). A plugin *instance* is
+/// still locked per `process()` through `lock_plugin_for_bounce`; the
+/// graph a chunk pinned keeps a removed instance or clip alive until the
+/// chunk ends, and the engine's retire sweep — not this worker — frees it.
 pub(super) struct ChunkCtx<'a> {
     pub shared: &'a Arc<SharedState>,
-    pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
+    /// The vocal-tuning retune caches this render built
+    /// ([`ensure_tuning_caches`](crate::engine::vocal_render::ensure_tuning_caches)),
+    /// patched over each chunk's clips until the engine thread has
+    /// attached them to the live ones. Empty for a render that builds
+    /// none.
+    pub tuning: &'a TuningOverlay,
     pub tempo_map: &'a TempoMap,
     pub sample_rate: u32,
     pub master_vol: f32,
@@ -325,12 +318,11 @@ pub(super) fn render_chunk(
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
 
-    let clips_guard = ctx.clips.read();
-    // The render graph (MIDI clips, busses, master chain, tracks,
-    // plugins), loaded once for the chunk (ARCH-02 A2-4…A2-7): no
-    // guard, so no
-    // engine-thread edit of those ever queues behind the chunk.
+    // The render graph (audio and MIDI clips, busses, master chain,
+    // tracks, plugins), loaded once for the chunk (ARCH-02 A2-4…A2-8): no
+    // guard, so no engine-thread edit ever queues behind the chunk.
     let graph = ctx.shared.graph.load();
+    let clips = ctx.tuning.apply(&graph.clips);
     let tracks_guard = &*graph.tracks;
     let plugins_guard = &*graph.plugins;
 
@@ -376,7 +368,7 @@ pub(super) fn render_chunk(
             channels: 2,
             tracks: tracks_guard,
             busses: &graph.busses,
-            clips: &clips_guard,
+            clips: &clips,
             midi_clips: &graph.midi_clips,
             plugins: plugins_guard,
             tempo_map: ctx.tempo_map,
@@ -442,7 +434,7 @@ pub(super) fn render_chunk(
         }
     }
 
-    drop(clips_guard);
+    drop(clips);
 
     if include_master_fx {
         // A master-gain automation lane ramps across the chunk (start..end

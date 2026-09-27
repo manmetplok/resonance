@@ -279,7 +279,6 @@ fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
         0,
         TWO_CHUNKS,
         &state.shared,
-        &state.clips,
         &state.tempo_map,
         SR,
     )
@@ -481,7 +480,6 @@ fn the_key_is_one_block_old() {
         0,
         TWO_CHUNKS,
         &state.shared,
-        &state.clips,
         &state.tempo_map,
         SR,
     )

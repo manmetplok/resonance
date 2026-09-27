@@ -2,9 +2,9 @@
 //! (ba todo #1255).
 //!
 //! `mix_audio` runs on the realtime audio thread, so everything under this
-//! module is allocation-free and lock-free (the render graph is one
-//! wait-free load; the clip lock, the last state lock, is `try_read`
-//! only, and a contended block drops out rather than waiting).
+//! module is allocation-free and lock-free: the render graph (every
+//! project map since ARCH-02 B-5) is one wait-free load, so no block
+//! ever waits on, or drops out for, a state lock.
 //!
 //! The top-level function only sequences the block: pick up live MIDI,
 //! clear the output, snapshot tempo / transport, read the monitor ring,
