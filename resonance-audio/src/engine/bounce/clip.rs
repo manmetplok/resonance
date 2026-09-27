@@ -15,7 +15,6 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::bounce_common::midi_render_range;
@@ -55,7 +54,6 @@ pub fn to_audio_clip(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
@@ -129,11 +127,11 @@ pub fn to_audio_clip(
     // which reads the same caches through `mix_track_clips` (todo #358).
     super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
 
-    reset_plugins(plugins, shared);
+    reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, plugins);
+    let latency_comp = build_latency_comp(shared);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it gives the bounced
@@ -146,7 +144,6 @@ pub fn to_audio_clip(
     let ctx = ChunkCtx {
         shared,
         clips,
-        plugins,
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,

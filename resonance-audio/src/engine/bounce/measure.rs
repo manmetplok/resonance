@@ -52,7 +52,6 @@ use resonance_metering::offline::{
 };
 use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, TruePeakMeter};
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -85,7 +84,6 @@ pub fn measure_mix(
     source: MeasureSource,
     shared: &Arc<SharedState>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -97,7 +95,6 @@ pub fn measure_mix(
         source,
         shared,
         clips,
-        plugins,
         tempo_map,
         sample_rate,
         event_tx,
@@ -116,7 +113,6 @@ fn measure_mix_holding(
     source: MeasureSource,
     shared: &Arc<SharedState>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -187,7 +183,6 @@ fn measure_mix_holding(
             end,
             shared,
             clips,
-            plugins,
             tempo_map,
             sample_rate,
         ) {
@@ -222,7 +217,6 @@ pub(crate) fn measure_mix_spawn(
     source: MeasureSource,
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
@@ -264,7 +258,6 @@ pub(crate) fn measure_mix_spawn(
                         source,
                         &shared,
                         &clips,
-                        &plugins,
                         &tempo_map,
                         sample_rate,
                         &event_tx,

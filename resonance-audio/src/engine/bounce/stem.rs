@@ -43,7 +43,6 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -538,7 +537,6 @@ pub fn render_stem(
     render_end: SamplePos,
     shared: &Arc<SharedState>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
 ) -> Result<Vec<f32>, StemError> {
@@ -575,17 +573,17 @@ pub fn render_stem(
     // track/bus stems render their source regardless of mute/solo.
     let respect_mute_solo = filter.include_master_fx;
 
-    reset_plugins(plugins, shared);
+    reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, plugins);
+    let latency_comp = build_latency_comp(shared);
     // Stems that include the master FX chain (the master stem) are
     // shifted by its latency on top of the track/bus comp; pre-rolling
     // and trimming both keeps every stem mutually sample-aligned and
     // preserves the master stem's tail (doc #260 finding #8).
     let master_latency = if filter.include_master_fx {
-        master_fx_latency(shared, plugins)
+        master_fx_latency(shared)
     } else {
         0
     };
@@ -601,7 +599,6 @@ pub fn render_stem(
     let ctx = ChunkCtx {
         shared,
         clips,
-        plugins,
         tempo_map: &bounce_tm,
         automation: &automation,
         sample_rate,

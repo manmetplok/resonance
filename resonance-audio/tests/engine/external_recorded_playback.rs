@@ -12,10 +12,9 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{AutomationSnapshot, PluginMap, SharedState, to_freeze_cache};
+use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_freeze_cache};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -23,7 +22,6 @@ const SR: u32 = 48_000;
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -31,7 +29,6 @@ fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         clips: Arc::new(RwLock::new(Vec::new())),
-        plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -87,7 +84,6 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

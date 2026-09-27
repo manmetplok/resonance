@@ -2,9 +2,6 @@
 //! arrangement has been rendered: master FX, metronome, master volume and
 //! the A/B mix meter.
 
-
-use parking_lot::RwLockReadGuard;
-
 use crate::clap_host::PluginMap;
 use crate::engine::AutomationSnapshot;
 use crate::mixer::automation_apply::auto_master_volume;
@@ -17,11 +14,8 @@ use super::seam::Seam;
 
 /// What the master passes need from the block that just rendered.
 pub(super) struct MasterTail<'a> {
-    /// Taken by value so the read lock is released at exactly the point
-    /// the FX chain no longer needs it — before the click and volume
-    /// passes, which is a meaningful window on the realtime thread.
-    pub(super) plugins_guard:
-        RwLockReadGuard<'a, PluginMap>,
+    /// The plugin instances, from the block's render graph.
+    pub(super) plugins: &'a PluginMap,
     /// The master insert chain, from the block's render graph.
     pub(super) master: &'a MasterBus,
     pub(super) sidechain_routes: &'a [SidechainRoute],
@@ -51,7 +45,7 @@ pub(super) fn run_master_passes(
         scratch.data,
         channels,
         tail.master,
-        &tail.plugins_guard,
+        tail.plugins,
         scratch.track_buf_l,
         scratch.track_buf_r,
         scratch.fx_dry,
@@ -61,8 +55,6 @@ pub(super) fn run_master_passes(
         &shared.master_fx_bypass,
         inputs.sample_rate,
     );
-
-    drop(tail.plugins_guard);
 
     // Metronome click synthesis. When a loop seam split the callback, the
     // mapping from output frame index to timeline frame changes at the

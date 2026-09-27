@@ -19,10 +19,9 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{AutomationSnapshot, PluginMap, SharedState, to_freeze_cache, to_wav};
+use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_freeze_cache, to_wav};
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
 
@@ -31,7 +30,6 @@ const SR: u32 = 48_000;
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -39,7 +37,6 @@ fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         clips: Arc::new(RwLock::new(Vec::new())),
-        plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -121,7 +118,6 @@ fn bounce(state: &EngineState, name: &str) -> Vec<f32> {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         SR,
         &event_tx,
@@ -142,7 +138,6 @@ fn freeze_track1(state: &EngineState, name: &str) -> FrozenSource {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

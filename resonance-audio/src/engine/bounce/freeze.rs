@@ -22,7 +22,6 @@ use resonance_common::{
     compute_fingerprint, FreezeCacheRef, FreezeCacheStatus, FreezeFingerprintBuilder,
 };
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -143,7 +142,6 @@ pub fn to_freeze_cache(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
@@ -234,11 +232,11 @@ pub fn to_freeze_cache(
     let mut writer =
         hound::WavWriter::create(output.temp(), spec).map_err(FreezeError::CreateWav)?;
 
-    reset_plugins(plugins, shared);
+    reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, plugins);
+    let latency_comp = build_latency_comp(shared);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it re-aligns the cache
@@ -249,7 +247,6 @@ pub fn to_freeze_cache(
     let ctx = ChunkCtx {
         shared,
         clips,
-        plugins,
         tempo_map: &bounce_tm,
         automation: &baked,
         sample_rate,

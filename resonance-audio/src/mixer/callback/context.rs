@@ -23,7 +23,6 @@ use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::atomic::Ordering;
 
-use crate::clap_host::PluginMap;
 use crate::engine::reference::ABMeters;
 use crate::engine::{AutomationSnapshot, SharedState};
 use crate::latency::LatencyComp;
@@ -51,7 +50,6 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) channels: usize,
     pub(crate) shared: &'a SharedState,
     pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
-    pub(crate) plugins: &'a RwLock<PluginMap>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,
     pub(crate) latency_comp: &'a arc_swap::ArcSwap<LatencyComp>,
     pub(crate) automation: &'a arc_swap::ArcSwap<AutomationSnapshot>,

@@ -34,11 +34,10 @@ use clap_sys::ext::audio_ports::{
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_audio::test_support::{
-    render_stem, PluginMap, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
+    render_stem, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
 };
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
@@ -232,7 +231,6 @@ pub fn multi_out_instrument(levels: [f32; PORTS]) -> PluginSlot {
 pub struct EngineState {
     pub shared: Arc<SharedState>,
     pub clips: Arc<RwLock<Vec<AudioClip>>>,
-    pub plugins: Arc<RwLock<PluginMap>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -251,13 +249,11 @@ impl EngineState {
         let state = Self {
             shared: Arc::new(SharedState::default()),
             clips: Arc::new(RwLock::new(Vec::new())),
-            plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
-        state
-            .plugins
-            .write()
-            .insert(INSTRUMENT_ID, multi_out_instrument(levels));
+        state.shared.edit_plugins(|p| {
+            p.insert(INSTRUMENT_ID, Arc::new(multi_out_instrument(levels)))
+        });
 
         let mut parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
         parent.set_output(TrackOutput::Master);
@@ -312,9 +308,8 @@ impl EngineState {
     /// assert that freezing one instrument leaves another alone.
     pub fn add_unfrozen_sibling(&self, parent: TrackId, tap: TrackId) {
         let id = INSTRUMENT_ID + parent;
-        self.plugins
-            .write()
-            .insert(id, multi_out_instrument(PORT_LEVELS));
+        self.shared
+            .edit_plugins(|p| p.insert(id, Arc::new(multi_out_instrument(PORT_LEVELS))));
         let mut track = Track::with_type(parent, "Other Kit".into(), TrackType::Instrument);
         track.set_output(TrackOutput::Master);
         track.push_plugin(id);
@@ -341,7 +336,6 @@ impl EngineState {
             FRAMES,
             &self.shared,
             &self.clips,
-            &self.plugins,
             &self.tempo_map,
             SR,
         )

@@ -47,7 +47,6 @@ use super::{
 pub(crate) struct HandlerCtx<'a> {
     pub shared: &'a Arc<SharedState>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
-    pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
     pub latency_comp: &'a Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     /// Parameter-automation snapshot published to the audio callback and
@@ -69,6 +68,15 @@ impl HandlerCtx<'_> {
     /// `shared.edit_tracks` / `shared.edit_track`.
     pub fn tracks(&self) -> Arc<TrackMap> {
         self.shared.tracks()
+    }
+
+    /// The published plugin map (code review ARCH-02 B-4). An `Arc`
+    /// clone of the current graph's map, like [`Self::tracks`]: a lookup
+    /// never blocks an edit or the audio callback, and the instance is
+    /// still reached through its own mutex. Add / remove go through
+    /// `shared.edit_plugins`.
+    pub fn plugins(&self) -> Arc<PluginMap> {
+        self.shared.plugins()
     }
 }
 
@@ -333,7 +341,7 @@ pub(crate) fn publish_automation_snapshot(
     ctx: &HandlerCtx,
     lanes: &automation::AutomationLanes,
 ) {
-    let snapshot = automation::AutomationSnapshot::build(lanes, &ctx.plugins.read());
+    let snapshot = automation::AutomationSnapshot::build(lanes, &ctx.plugins());
     super::retire::publish(ctx.automation, Arc::new(snapshot), &ctx.shared.retired);
 }
 
@@ -355,7 +363,6 @@ pub(crate) struct EngineThreadParams {
     pub shared: Arc<SharedState>,
     pub clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
-    pub plugins_arc: Arc<RwLock<PluginMap>>,
     pub latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     pub automation: Arc<arc_swap::ArcSwap<automation::AutomationSnapshot>>,
     pub monitor_prod: Arc<Mutex<ringbuf::HeapProd<f32>>>,
@@ -381,7 +388,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         shared,
         clips_arc,
         tempo_map,
-        plugins_arc,
         latency_comp,
         automation,
         monitor_prod,
@@ -399,7 +405,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     let ctx = HandlerCtx {
         shared: &shared,
         clips: &clips_arc,
-        plugins: &plugins_arc,
         tempo_map: &tempo_map,
         latency_comp: &latency_comp,
         automation: &automation,
@@ -697,30 +702,22 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         }
     }
 
-    // Shutdown ordering: drop every live CLAP plugin instance BEFORE
-    // `state` falls out of scope and `state.bundles` (`Vec<ClapBundle>`)
-    // dlclose's each `.clap` shared library. `plugins_arc` is shared
-    // with the main thread (`Resonance.engine.plugins`) and with the
-    // cpal output-stream callback closure — both keep the `Arc` alive
-    // past this thread's exit, so the `ClapInstance` values inside
-    // wouldn't otherwise drop here. Without this step:
-    //   - the audio callback (still running until `_stream` is dropped
-    //     during the main thread's `Resonance` teardown) iterates the
-    //     map and calls `(*plugin).process` against a now-unloaded
-    //     library — segfault on the `cpal_alsa_out` thread; and
-    //   - when `Resonance` finally drops, the `Arc` hits refcount 0
-    //     on the main thread, every `ClapInstance::drop` runs
-    //     `close_gui` / `stop_processing` / `deactivate` / `destroy`
-    //     against freed function pointers — segfault on exit.
-    // Clearing the map here runs each `ClapInstance::drop` while the
-    // libraries are still mapped in. The IndexMap is then empty when
-    // bundles unload during `state` drop a few lines down.
-    //
-    // Pattern mirrors `engine::plugins::handle_remove_plugin`: swap
-    // the contents out under the write lock, then drop the swapped-
-    // out IndexMap with the lock released so the audio callback's
-    // `try_read` isn't held off any longer than the swap itself.
-    let drained_plugins: PluginMap =
-        std::mem::take(&mut *plugins_arc.write());
-    drop(drained_plugins);
+    // Shutdown ordering: destroy every live CLAP plugin instance HERE,
+    // on the engine thread, before `state` (and its `Vec<ClapBundle>`)
+    // drops. The render graph lives in `SharedState`, which the main
+    // thread (`AudioEngine::shared`) and the output-stream callback both
+    // keep alive past this thread's exit — left in the graph, the
+    // instances would be destroyed by whichever of them let go last:
+    // the main thread during `Resonance` teardown, or the audio thread
+    // (the original on-exit segfault, `clap_plugin_drop_order.rs`).
+    // Unpublishing them and waiting out the retire sweep runs each
+    // `ClapInstance::drop` (`close_gui` / `stop_processing` /
+    // `deactivate` / `destroy`) on this thread; a block still in flight
+    // only delays that by one callback.
+    if !plugins::release_all_plugins(ctx.shared, std::time::Duration::from_secs(2)) {
+        tracing::warn!(
+            "engine: shutdown: a plugin instance was still pinned after 2 s; \
+             its last owner will destroy it"
+        );
+    }
 }

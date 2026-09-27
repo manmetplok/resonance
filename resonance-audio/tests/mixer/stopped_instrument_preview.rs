@@ -12,6 +12,7 @@
 use crate::note_recorder;
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Instant;
 
 use note_recorder::{note_recorder, Recorder};
@@ -42,7 +43,7 @@ fn stopped_harness() -> (MixAudioHarness, Recorder) {
         true,
     );
     let (slot, rec) = note_recorder(SR);
-    h.plugins().write().insert(INSTRUMENT, slot);
+    h.edit_plugins(|p| p.insert(INSTRUMENT, Arc::new(slot)));
     h.shared()
         .master_volume_bits
         .store(1.0f32.to_bits(), Ordering::Relaxed);
@@ -97,7 +98,7 @@ fn preview_notes_while_stopped_never_pile_up_for_play() {
     }
     assert!(!rec.lock().any_held(), "every preview note was released");
     {
-        let plugins = h.plugins().read();
+        let plugins = h.plugins();
         let inst = plugins.get(&INSTRUMENT).unwrap().lock();
         assert!(
             inst.0.__pending_notes_for_test().is_empty(),
@@ -148,7 +149,7 @@ fn an_idle_instrument_is_not_processed_while_stopped() {
 #[test]
 fn a_full_queue_evicts_a_note_on_rather_than_drop_a_note_off() {
     let (h, _rec) = stopped_harness();
-    let plugins = h.plugins().read();
+    let plugins = h.plugins();
     let mut inst = plugins.get(&INSTRUMENT).unwrap().lock();
     for i in 0..1_000u32 {
         inst.0.queue_note_on((i % 128) as u8, 1.0, 0);

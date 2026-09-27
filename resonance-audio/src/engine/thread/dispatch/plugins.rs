@@ -37,9 +37,9 @@ pub(super) fn dispatch_plugins(
             to_index,
         } => plugins::handle_move_plugin(ctx, track_id, instance_id, to_index),
         AudioCommand::ScanPlugins => {
-            scan::scan_plugins(ctx.plugins, &ctx.tracks(), &mut state.bundles, ctx.event_tx)
+            scan::scan_plugins(ctx.shared, &ctx.tracks(), &mut state.bundles, ctx.event_tx)
         }
-        // Additive by construction: it never touches `ctx.plugins`, which
+        // Additive by construction: it never touches the plugin map, which
         // is what lets it run with instances live (ba todo #1307).
         AudioCommand::RescanPlugins => scan::rescan_plugins(&mut state.bundles, ctx.event_tx),
         AudioCommand::SetPluginParam {

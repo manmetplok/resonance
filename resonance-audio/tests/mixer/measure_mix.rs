@@ -26,10 +26,9 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, PluginMap, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
+use resonance_audio::test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -43,7 +42,6 @@ const FRAMES: usize = (SR as usize) * 4;
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     tx: Sender<AudioEvent>,
     rx: Receiver<AudioEvent>,
@@ -55,7 +53,6 @@ impl EngineState {
         Self {
             shared: Arc::new(SharedState::default()),
             clips: Arc::new(RwLock::new(Vec::new())),
-            plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             tx,
             rx,
@@ -116,7 +113,6 @@ impl EngineState {
             source,
             &self.shared,
             &self.clips,
-            &self.plugins,
             &self.tempo_map,
             SR,
             &self.tx,

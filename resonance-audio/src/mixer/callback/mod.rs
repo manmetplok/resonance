@@ -2,7 +2,8 @@
 //! (ba todo #1255).
 //!
 //! `mix_audio` runs on the realtime audio thread, so everything under this
-//! module is allocation-free and lock-free (the state locks are `try_read`
+//! module is allocation-free and lock-free (the render graph is one
+//! wait-free load; the clip lock, the last state lock, is `try_read`
 //! only, and a contended block drops out rather than waiting).
 //!
 //! The top-level function only sequences the block: pick up live MIDI,
@@ -71,7 +72,6 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
             inputs.live_midi_rx,
             inputs.live_midi_fwd,
             inputs.shared,
-            inputs.plugins,
             scratch.midi_stash,
             inputs.sample_rate,
             scratch.data.len() / inputs.channels.max(1),

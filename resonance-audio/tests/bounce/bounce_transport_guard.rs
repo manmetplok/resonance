@@ -12,16 +12,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{AutomationSnapshot, PluginMap, SharedState, to_audio_clip};
+use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_audio_clip};
 use resonance_audio::types::*;
 
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -29,7 +27,6 @@ fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         clips: Arc::new(RwLock::new(Vec::new())),
-        plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -44,7 +41,6 @@ fn run_bounce(state: &EngineState) -> AudioEvent {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         48_000,

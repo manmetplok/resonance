@@ -79,7 +79,7 @@ pub(crate) fn flush_live_note_stash(ctx: &HandlerCtx, state: &mut HandlerState) 
     if pending.is_empty() {
         return;
     }
-    let plugins_guard = ctx.plugins.read();
+    let plugins_guard = ctx.plugins();
     for id in pending {
         match plugins_guard.get(&id) {
             Some(mutex) => {
@@ -111,7 +111,7 @@ pub(crate) fn handle_send_note_on(
             return;
         }
         if let Some(&inst_id) = track.plugins().first() {
-            let plugins_guard = ctx.plugins.read();
+            let plugins_guard = ctx.plugins();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
                 deliver_or_stash(
                     &mut state.live_note_stash,
@@ -151,7 +151,7 @@ pub(crate) fn handle_send_note_off(
             return;
         }
         if let Some(&inst_id) = track.plugins().first() {
-            let plugins_guard = ctx.plugins.read();
+            let plugins_guard = ctx.plugins();
             if let Some(mutex) = plugins_guard.get(&inst_id) {
                 deliver_or_stash(
                     &mut state.live_note_stash,

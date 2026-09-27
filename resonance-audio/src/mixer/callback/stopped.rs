@@ -3,7 +3,6 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::common::panic_instrument_tracks;
 use crate::mixer::master::apply_master_volume_and_peaks;
 use crate::mixer::monitor::{mix_idle_instruments, mix_monitor_passthrough};
@@ -24,22 +23,17 @@ pub(super) fn render_stopped_block(
     let shared = inputs.shared;
     let flush = scratch.continuity.was_rolling();
     let monitor_on = monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed);
-    let misses = &shared.lock_misses;
-    // Tracks come from the render graph (ARCH-02 A2-6): a load that
-    // cannot miss.
+    // Tracks and plugins come from the render graph (ARCH-02 A2-6/A2-7):
+    // a load that cannot miss, so a pending stop flush always runs here.
     let graph = shared.graph.load();
     let tracks_guard = &*graph.tracks;
-    let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-    let Some(plugins_guard) = plugins_guard else {
-        // Contended: a pending stop flush stays armed for the next block.
-        return;
-    };
+    let plugins_guard = &*graph.plugins;
     // The transport just stopped (code review MIX-06). The engine's own
     // Stop panic `try_lock`s each instrument and skips one the audio
     // thread was holding; this one is issued from the audio thread, whose
     // MIDI stash parks it on contention instead of losing it.
     if flush {
-        panic_instrument_tracks(tracks_guard, &plugins_guard, scratch.midi_stash, false);
+        panic_instrument_tracks(tracks_guard, plugins_guard, scratch.midi_stash, false);
         scratch.continuity.stopped();
     }
     let any_monitor = monitor_on
@@ -47,7 +41,7 @@ pub(super) fn render_stopped_block(
             scratch.data,
             inputs.channels,
             tracks_guard,
-            &plugins_guard,
+            plugins_guard,
             scratch.monitor_temp,
             monitor.frames,
             monitor.input_channels,
@@ -65,7 +59,7 @@ pub(super) fn render_stopped_block(
         inputs.channels,
         frames,
         tracks_guard,
-        &plugins_guard,
+        plugins_guard,
         scratch.midi_stash,
         scratch.track_buf_l,
         scratch.track_buf_r,

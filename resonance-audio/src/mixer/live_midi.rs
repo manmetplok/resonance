@@ -4,7 +4,6 @@
 //! a controller reaches its instrument within one quantum whichever branch
 //! renders the block (doc #260 finding #16).
 
-use crate::cycle_load::{try_read_counted, StateMap};
 use crate::engine::SharedState;
 use crate::midi_hardware::LiveMidiEvent;
 use crate::types::*;
@@ -34,19 +33,17 @@ pub fn live_instrument_for(
 /// offset to 0 at small quanta) — then forward the event to the engine
 /// thread for recording + MIDI-thru bookkeeping.
 ///
-/// Lock discipline: the tracks come from the render graph (a load that
-/// cannot miss, ARCH-02 A2-6); when the plugins read lock is contended
-/// (a UI edit in flight) the events simply stay in the channel for the
-/// next callback ~1 quantum later — never dropped, never delivered
-/// twice, and plugin/bookkeeping ordering never splits across threads.
-/// A contended *instrument mutex* parks the note in the mixer's
-/// [`MidiStash`], exactly like timeline MIDI.
+/// Lock discipline: the tracks and plugin instances come from the render
+/// graph (a load that cannot miss, ARCH-02 A2-6/A2-7), so every queued
+/// event is delivered by the first callback that sees it — never
+/// dropped, never delivered twice, and plugin/bookkeeping ordering never
+/// splits across threads. A contended *instrument mutex* parks the note
+/// in the mixer's [`MidiStash`], exactly like timeline MIDI.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn pickup_live_midi(
     live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
     live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
     shared: &SharedState,
-    plugins: &parking_lot::RwLock<crate::clap_host::PluginMap>,
     midi_stash: &mut MidiStash,
     sample_rate: u32,
     frames: usize,
@@ -56,13 +53,7 @@ pub(super) fn pickup_live_midi(
     }
     let graph = shared.graph.load();
     let tracks_guard = &*graph.tracks;
-    let plugins_guard = try_read_counted(plugins, StateMap::Plugins, &shared.lock_misses);
-    let Some(plugins_guard) = plugins_guard else {
-        // Contended: leave the events queued; the next callback (one
-        // quantum away) picks them up — still far inside the old
-        // engine-cadence latency budget.
-        return;
-    };
+    let plugins_guard = &*graph.plugins;
     let now = std::time::Instant::now();
     for ev in live_midi_rx.try_iter() {
         let (track_id, is_note_on, note, velocity, arrival) = match &ev {

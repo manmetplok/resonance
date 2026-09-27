@@ -9,7 +9,6 @@
 
 use std::sync::atomic::Ordering;
 
-use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::click::render_count_in_clicks;
 use crate::mixer::master::apply_master_volume_and_peaks;
 use crate::mixer::monitor::mix_monitor_passthrough;
@@ -31,28 +30,24 @@ pub(super) fn render_count_in_block(
 
     // Monitor pass-through so the performer can hear themselves warm up
     // during the count-in. Mirrors the playing=false monitor branch but is
-    // best-effort on lock contention — dropping monitor audio for one
-    // buffer is acceptable; losing the count-in tick is not.
+    // read entirely from the render graph (tracks and plugins, ARCH-02
+    // B-3/B-4), a load that cannot fail, so it never drops a buffer.
     if monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
-        let misses = &shared.lock_misses;
         let graph = shared.graph.load();
-        let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-        if let Some(plugins_guard) = plugins_guard {
-            mix_monitor_passthrough(
-                scratch.data,
-                inputs.channels,
-                &graph.tracks,
-                &plugins_guard,
-                scratch.monitor_temp,
-                monitor.frames,
-                monitor.input_channels,
-                scratch.track_buf_l,
-                scratch.track_buf_r,
-                scratch.fx_dry,
-                timing.transport,
-                inputs.sample_rate,
-            );
-        }
+        mix_monitor_passthrough(
+            scratch.data,
+            inputs.channels,
+            &graph.tracks,
+            &graph.plugins,
+            scratch.monitor_temp,
+            monitor.frames,
+            monitor.input_channels,
+            scratch.track_buf_l,
+            scratch.track_buf_r,
+            scratch.fx_dry,
+            timing.transport,
+            inputs.sample_rate,
+        );
     }
 
     // Metronome click synthesis using a count-in-local timeline. Beats are

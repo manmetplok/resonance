@@ -30,29 +30,25 @@
 //! binary that is already resident rather than mapping it in afresh.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 
-use crate::clap_host::{ClapBundle, PluginMap};
+use crate::clap_host::ClapBundle;
 use crate::types::*;
 
 /// The startup scan: drop everything, reload everything.
 pub(crate) fn scan_plugins(
-    plugins: &Arc<RwLock<PluginMap>>,
+    shared: &super::SharedState,
     tracks: &TrackMap,
     bundles: &mut Vec<ClapBundle>,
     event_tx: &Sender<AudioEvent>,
 ) {
-    // Drop all existing plugin instances before clearing bundles: an
-    // instance is created by, and calls back into, its bundle's factory.
-    {
-        let mut plugins_guard = plugins.write();
-        let removed: Vec<_> = plugins_guard.drain(..).collect();
-        drop(plugins_guard);
-        drop(removed);
-    }
+    // Unpublish every existing plugin instance. The engine loop's retire
+    // sweep destroys them once no block pins them (ARCH-02 B-4) — after
+    // `bundles.clear()` below, which is safe because a bundle's library
+    // is never unloaded (`ClapBundle`'s `Drop`), so the instance's
+    // `destroy` still has its code to call into.
+    shared.edit_plugins(|plugins| plugins.clear());
     // `clear_plugins` publishes a new empty chain via `ArcSwap::store`
     // (shared by every copy of the track), so reading the published track
     // map is enough — no render-graph publish.

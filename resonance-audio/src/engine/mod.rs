@@ -449,6 +449,20 @@ impl SharedState {
         Arc::clone(&self.graph.load().tracks)
     }
 
+    /// [`RenderGraphSlot::edit_plugins`], retiring the replaced graph —
+    /// and every slot the edit removed — onto this state's queue. Engine
+    /// thread.
+    pub fn edit_plugins<R>(&self, f: impl FnOnce(&mut PluginMap) -> R) -> R {
+        self.graph.edit_plugins(&self.retired, f)
+    }
+
+    /// The published plugin map (an `Arc` clone, like [`Self::tracks`]).
+    /// Holding it pins the slots it lists; drop it before the engine
+    /// loop's next sweep is expected to free a removed one.
+    pub fn plugins(&self) -> Arc<PluginMap> {
+        Arc::clone(&self.graph.load().plugins)
+    }
+
     /// Whether an offline renderer (export, stem export, bounce in place,
     /// freeze, offline measurement) currently owns the live plugin
     /// instances — the one gate the audio callback and the transport
@@ -748,11 +762,6 @@ impl AudioEngine {
             Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
         let tempo_audio = Arc::clone(&tempo_map);
 
-        // Plugin instances shared between engine thread and audio callback
-        let plugins: Arc<
-            parking_lot::RwLock<PluginMap>,
-        > = Arc::new(parking_lot::RwLock::new(IndexMap::new()));
-        let plugins_audio = Arc::clone(&plugins);
 
         // Plugin-delay-compensation table: published by the engine
         // thread on topology changes, loaded wait-free by the audio
@@ -786,7 +795,6 @@ impl AudioEngine {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
             let clips_audio = Arc::clone(&clips_audio);
-            let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
             let latency_comp_audio = Arc::clone(&latency_comp_audio);
             let automation_audio = Arc::clone(&automation_audio);
@@ -890,7 +898,6 @@ impl AudioEngine {
                             channels,
                             shared: &shared_audio,
                             clips: &clips_audio,
-                            plugins: &plugins_audio,
                             tempo_map: &tempo_audio,
                             latency_comp: &latency_comp_audio,
                             automation: &automation_audio,
@@ -1069,7 +1076,6 @@ impl AudioEngine {
         let shared_ctrl = Arc::clone(&shared);
         let clips_ctrl = Arc::clone(&clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
-        let plugins_ctrl = Arc::clone(&plugins);
         let latency_comp_ctrl = Arc::clone(&latency_comp);
         let automation_ctrl = Arc::clone(&automation);
 
@@ -1084,7 +1090,6 @@ impl AudioEngine {
                     shared: shared_ctrl,
                     clips_arc: clips_ctrl,
                     tempo_map: tempo_ctrl,
-                    plugins_arc: plugins_ctrl,
                     latency_comp: latency_comp_ctrl,
                     automation: automation_ctrl,
                     monitor_prod: monitor_prod_audio,

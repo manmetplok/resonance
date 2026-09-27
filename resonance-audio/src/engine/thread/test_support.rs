@@ -15,13 +15,11 @@
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use indexmap::IndexMap;
 use parking_lot::{Mutex, RwLock};
 use ringbuf::traits::Split;
 
 use resonance_common::{CompSegment, TakeGroup, TakeGroupId, TakeId};
 
-use crate::clap_host::PluginMap;
 use crate::engine::{
     automation::AutomationSnapshot, busses, master, plugins, takes, tracks, transport,
     OfflineRenderGuard, SharedState,
@@ -40,7 +38,6 @@ use super::{engine_thread, EngineThreadParams, HandlerCtx, HandlerState};
 pub struct EngineHandlerHarness {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     latency_comp: Arc<arc_swap::ArcSwap<crate::latency::LatencyComp>>,
     automation: Arc<arc_swap::ArcSwap<AutomationSnapshot>>,
@@ -92,7 +89,6 @@ impl EngineHandlerHarness {
         Self {
             shared: Arc::new(SharedState::default()),
             clips: Arc::new(RwLock::new(Vec::new())),
-            plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
                 crate::latency::LatencyComp::empty(),
@@ -145,7 +141,6 @@ impl EngineHandlerHarness {
             shared: Arc::new(SharedState::default()),
             clips_arc: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
-            plugins_arc: Arc::new(RwLock::new(IndexMap::new())),
             latency_comp: Arc::new(arc_swap::ArcSwap::from_pointee(
                 crate::latency::LatencyComp::empty(),
             )),
@@ -181,7 +176,6 @@ impl EngineHandlerHarness {
         let ctx = HandlerCtx {
             shared: &self.shared,
             clips: &self.clips,
-            plugins: &self.plugins,
             tempo_map: &self.tempo_map,
             latency_comp: &self.latency_comp,
             automation: &self.automation,
@@ -349,7 +343,6 @@ impl EngineHandlerHarness {
                 "bounce".into(),
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.clips),
-                Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
                 ctx.automation.load_full(),
                 ctx.sample_rate,
@@ -533,7 +526,7 @@ impl EngineHandlerHarness {
 
     /// Run the real `AddPlugin` handler (ARCH-04 D-1's
     /// `EngineErrorKind::Internal` guard: `id` already live in
-    /// `ctx.plugins` refuses the add rather than replacing the instance).
+    /// `ctx.plugins()` refuses the add rather than replacing the instance).
     pub fn add_plugin(
         &mut self,
         track_id: TrackId,
@@ -580,11 +573,11 @@ impl EngineHandlerHarness {
             .unwrap_or_default()
     }
 
-    /// How many live CLAP instances `ctx.plugins` holds, across every
+    /// How many live CLAP instances `ctx.plugins()` holds, across every
     /// track/bus/master chain. Used to confirm a refused duplicate-id add
     /// did not insert (or replace) an instance.
     pub fn plugin_instance_count(&self) -> usize {
-        self.plugins.read().len()
+        self.shared.plugins().len()
     }
 
     /// The frozen source the callback would read for `track_id`.
@@ -1090,7 +1083,6 @@ impl EngineHandlerHarness {
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.clips),
-                Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),

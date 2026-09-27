@@ -54,10 +54,8 @@ pub(crate) fn handle_add_plugin_to_master(
             let params = instance.query_params();
             let has_gui = instance.has_gui();
             let has_sidechain_input = instance.has_sidechain_input();
-            ctx.plugins.write().insert(
-                instance_id,
-                crate::clap_host::PluginSlot::new(instance),
-            );
+            let slot = std::sync::Arc::new(crate::clap_host::PluginSlot::new(instance));
+            ctx.shared.edit_plugins(|plugins| plugins.insert(instance_id, slot));
             ctx.shared
                 .edit_master(|master| master.plugin_ids.push(instance_id));
             let _ = ctx.event_tx.send(AudioEvent::MasterPluginAdded {
@@ -85,8 +83,7 @@ pub(crate) fn handle_remove_plugin_from_master(ctx: &HandlerCtx, instance_id: Pl
         ctx.shared
             .edit_master(|master| master.plugin_ids.retain(|&id| id != instance_id));
     }
-    let removed = ctx.plugins.write().shift_remove(&instance_id);
-    drop(removed);
+    super::plugins::remove_plugin_slots(ctx.shared, &[instance_id]);
     let _ = ctx
         .event_tx
         .send(AudioEvent::MasterPluginRemoved { instance_id });

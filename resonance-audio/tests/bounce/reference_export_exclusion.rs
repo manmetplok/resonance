@@ -11,10 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{to_wav, PluginMap, SharedState, CLIP_DECLICK_FRAMES};
+use resonance_audio::test_support::{to_wav, SharedState, CLIP_DECLICK_FRAMES};
 use resonance_audio::types::*;
 use resonance_audio::{
     handle_reference_analyzed, handle_set_ab_source, handle_set_active_reference,
@@ -31,7 +30,6 @@ const REF_DC: f32 = -0.9;
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -67,7 +65,6 @@ fn engine_with_dc_clip() -> EngineState {
     EngineState {
         shared,
         clips: Arc::new(RwLock::new(vec![clip])),
-        plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -102,7 +99,6 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
         path_str.clone(),
         &state.shared,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         SR,
         &event_tx,
