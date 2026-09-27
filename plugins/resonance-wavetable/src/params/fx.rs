@@ -1,10 +1,21 @@
 use resonance_plugin::*;
 
+use crate::dsp::effects::ChorusMode;
+
 pub struct ChorusParams {
     pub enabled: BoolParam,
+    /// Ignored by the three Juno modes, which run at the hardware's fixed
+    /// rates — see [`ChorusMode::uses_rate`].
     pub rate: FloatParam,
+    /// In the BBD modes, 50 % is the modelled circuit's own delay swing.
     pub depth: FloatParam,
     pub mix: FloatParam,
+    /// Which circuit the chorus models. Values are [`ChorusMode`]
+    /// discriminants; `Classic` (the default) is the original chorus,
+    /// bit-identical.
+    pub mode: IntParam,
+    /// BBD hiss level. Read only by the BBD modes; 0 adds nothing.
+    pub noise: FloatParam,
 }
 
 pub struct DelayParams {
@@ -48,6 +59,23 @@ impl ChorusParams {
                 "chorus_mix",
                 "Chorus Mix",
                 0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_value_to_string(formatters::v2s_f32_percentage(0)),
+            mode: IntParam::new(
+                "chorus_mode",
+                "Chorus Mode",
+                ChorusMode::DEFAULT as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: (ChorusMode::LABELS.len() - 1) as i32,
+                },
+            )
+            .with_choices(&ChorusMode::LABELS),
+            noise: FloatParam::new(
+                "chorus_noise",
+                "Chorus Noise",
+                0.0,
                 FloatRange::Linear { min: 0.0, max: 1.0 },
             )
             .with_value_to_string(formatters::v2s_f32_percentage(0)),

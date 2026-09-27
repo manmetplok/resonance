@@ -62,12 +62,13 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs; 95 since `osc_phase_random` + `analog` (analog
-/// instability) were appended. Parameters are addressed by string id everywhere that
-/// persists (presets, saved state, CLAP param ids are hashed from the id),
-/// so inserting into the middle of [`WavetableParams::param_at`] only
-/// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 95;
+/// three LFOs; 97 since the BBD chorus (`chorus_mode`, `chorus_noise`) and
+/// analog instability (`osc_phase_random`, `analog`) were added. Parameters
+/// are addressed by string id everywhere that persists (presets, saved
+/// state, CLAP param ids are hashed from the id), so inserting into the
+/// middle of [`WavetableParams::param_at`] only changes the order a host
+/// lists them in.
+pub const PARAM_COUNT: usize = 97;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -230,24 +231,26 @@ impl WavetableParams {
                     _ => &self.mod_slots[slot_idx].amount,
                 }
             }
-            // Chorus (81..85)
+            // Chorus (81..87)
             81 => &self.chorus.enabled,
             82 => &self.chorus.rate,
             83 => &self.chorus.depth,
             84 => &self.chorus.mix,
-            // Delay (85..90)
-            85 => &self.delay.enabled,
-            86 => &self.delay.time_l,
-            87 => &self.delay.time_r,
-            88 => &self.delay.feedback,
-            89 => &self.delay.mix,
-            // Distortion (90..93)
-            90 => &self.distortion.enabled,
-            91 => &self.distortion.drive,
-            92 => &self.distortion.mix,
-            // Analog (93..95)
-            93 => &self.analog.phase_random,
-            94 => &self.analog.drift,
+            85 => &self.chorus.mode,
+            86 => &self.chorus.noise,
+            // Delay (87..92)
+            87 => &self.delay.enabled,
+            88 => &self.delay.time_l,
+            89 => &self.delay.time_r,
+            90 => &self.delay.feedback,
+            91 => &self.delay.mix,
+            // Distortion (92..95)
+            92 => &self.distortion.enabled,
+            93 => &self.distortion.drive,
+            94 => &self.distortion.mix,
+            // Analog (95..97)
+            95 => &self.analog.phase_random,
+            96 => &self.analog.drift,
             _ => &self.master_volume, // fallback
         }
     }

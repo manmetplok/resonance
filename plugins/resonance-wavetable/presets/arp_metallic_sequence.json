@@ -18,7 +18,7 @@
     "mod_6_src": 0, "mod_6_dst": 0, "mod_6_amt": 0.0,
     "mod_7_src": 0, "mod_7_dst": 0, "mod_7_amt": 0.0,
     "mod_8_src": 0, "mod_8_dst": 0, "mod_8_amt": 0.0,
-    "chorus_enabled": 0, "chorus_rate": 1.0, "chorus_depth": 0.3, "chorus_mix": 0.5,
+    "chorus_enabled": 0, "chorus_rate": 1.0, "chorus_depth": 0.3, "chorus_mix": 0.5, "chorus_mode": 0, "chorus_noise": 0.0,
     "delay_enabled": 1, "delay_time_l": 188.0, "delay_time_r": 375.0, "delay_feedback": 0.55, "delay_mix": 0.35,
     "dist_enabled": 0, "dist_drive": 1.0, "dist_mix": 0.5,
     "osc_phase_random": 0.0, "analog": 0.0

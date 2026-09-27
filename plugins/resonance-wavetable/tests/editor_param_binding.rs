@@ -63,7 +63,7 @@ fn call_args<'a>(line: &'a str, callee: &str) -> Option<Vec<&'a str>> {
 // Every parameter, listed once
 // ---------------------------------------------------------------------------
 
-/// Every `FloatParam` in the synth. All 53 are drawn by a knob or a
+/// Every `FloatParam` in the synth. All 54 are drawn by a knob or a
 /// slider, so this list is also the set of controls under test.
 fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     let mut out: Vec<(String, &FloatParam)> = vec![
@@ -82,6 +82,7 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
         ("chorus.rate".into(), &p.chorus.rate),
         ("chorus.depth".into(), &p.chorus.depth),
         ("chorus.mix".into(), &p.chorus.mix),
+        ("chorus.noise".into(), &p.chorus.noise),
         ("delay.time_l".into(), &p.delay.time_l),
         ("delay.time_r".into(), &p.delay.time_r),
         ("delay.feedback".into(), &p.delay.feedback),
@@ -112,10 +113,11 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     out
 }
 
-/// The `IntParam`s the editor draws as a knob. The other 19 int params
+/// The `IntParam`s the editor draws as a knob. The other 20 int params
 /// are drawn by a different control kind — the wavetable name row
-/// (`oscN_wavetable`), the filter-type chips (`filter_type`) and the mod
-/// matrix's two combo pills (16) — and are not knobs to migrate.
+/// (`oscN_wavetable`), the filter-type chips (`filter_type`), the chorus
+/// mode selector (`chorus_mode`) and the mod matrix's two combo pills
+/// (16) — and are not knobs to migrate.
 fn int_knob_params(p: &WavetableParams) -> Vec<(String, &IntParam)> {
     vec![
         ("max_voices".into(), &p.max_voices),
@@ -134,8 +136,8 @@ fn the_control_list_covers_every_float_parameter() {
     let floats = float_params(&p);
     assert_eq!(
         floats.len(),
-        53,
-        "the synth declares 53 FloatParams; the control list must name all of them"
+        54,
+        "the synth declares 54 FloatParams; the control list must name all of them"
     );
 
     // Every listed parameter is one `param_at` really exposes...
@@ -154,19 +156,20 @@ fn the_control_list_covers_every_float_parameter() {
     }
 
     // ...and the counts add up, which is what proves nothing was left out:
-    // 53 floats + 29 ints + 13 bools is the whole parameter list.
+    // 54 floats + 30 ints + 13 bools is the whole parameter list.
     //
     // Was 51/26/10 == 87 when this guard was written. ba todo #1324 (LFO tempo
     // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, so the
     // whole list is 93. The float count is deliberately unchanged — #1324 added
     // no float — which is what makes this a real check rather than a tautology.
-    // Analog instability then added two floats (`osc_phase_random`, `analog`),
-    // taking it to 53/29/13 == 95.
+    // Analog instability then added two floats (`osc_phase_random`, `analog`)
+    // and the BBD chorus `chorus_noise` (float) and `chorus_mode` (int):
+    // 54/30/13 == 97.
     let mut ids: Vec<&str> = floats.iter().map(|(_, p)| p.id()).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 53, "the control list repeats a parameter");
-    assert_eq!(53 + 29 + 13, PARAM_COUNT);
+    assert_eq!(ids.len(), 54, "the control list repeats a parameter");
+    assert_eq!(54 + 30 + 13, PARAM_COUNT);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +224,7 @@ fn no_control_call_site_restates_a_param_fact() {
         }
     }
 
-    assert_eq!(knobs, 31, "expected 31 float knob cells across the five tabs");
+    assert_eq!(knobs, 32, "expected 32 float knob cells across the five tabs");
     assert_eq!(int_knobs, 3, "expected 3 plain int knob cells");
     assert_eq!(sliders, 2, "expected the balance and mod-amount sliders");
 }

@@ -5,6 +5,7 @@
 //! per-sample kernel performs zero atomic loads against the shared
 //! [`WavetableParams`] and contains no `Param::value()` call at all.
 
+use crate::dsp::effects::ChorusMode;
 use crate::dsp::filter::FilterType;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
@@ -90,6 +91,8 @@ pub(crate) struct ParamSnapshot {
     pub chorus_rate: f32,
     pub chorus_depth: f32,
     pub chorus_mix: f32,
+    pub chorus_mode: ChorusMode,
+    pub chorus_noise: f32,
 
     pub delay_enabled: bool,
     pub delay_time_l: f32,
@@ -194,6 +197,8 @@ impl ParamSnapshot {
             chorus_rate: params.chorus.rate.value(),
             chorus_depth: params.chorus.depth.value(),
             chorus_mix: params.chorus.mix.value(),
+            chorus_mode: ChorusMode::from_int(params.chorus.mode.value()),
+            chorus_noise: params.chorus.noise.value(),
 
             delay_enabled: params.delay.enabled.value(),
             delay_time_l: params.delay.time_l.value(),
