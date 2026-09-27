@@ -80,9 +80,6 @@ pub(crate) struct TransportContinuity {
     /// The last block's `commit_playhead` lost: the control thread moved
     /// the transport under it. Flush regardless of where it moved to.
     repositioned: bool,
-    /// A block skipped since the last render dropped a NoteOff (or a
-    /// seam panic) the instruments never saw (FU-M3b).
-    lost_events: bool,
 }
 
 impl TransportContinuity {
@@ -90,11 +87,9 @@ impl TransportContinuity {
     /// does NOT continue the previous rendered block, so held voices must
     /// be flushed first. A block skipped in between (the A/B reference,
     /// an offline render) never updated `expected`, so the advance it
-    /// made reads as a jump too — its NoteOffs were never collected. A
-    /// lock-contended block reports itself through [`Self::skipped`] and
-    /// forces a flush only if it actually lost a NoteOff.
+    /// made reads as a jump too — its NoteOffs were never collected.
     pub(crate) fn jumped(&self, playhead: u64) -> bool {
-        self.repositioned || self.lost_events || self.expected.is_some_and(|e| e != playhead)
+        self.repositioned || self.expected.is_some_and(|e| e != playhead)
     }
 
     /// A playing block rendered and published its advance to `next`;
@@ -102,26 +97,6 @@ impl TransportContinuity {
     pub(crate) fn rendered(&mut self, next: u64, committed: bool) {
         self.expected = Some(next);
         self.repositioned = !committed;
-        self.lost_events = false;
-    }
-
-    /// A lock-contended playing block advanced `from` → `to` silently
-    /// (FU-M3b). If it continued the last rendered block and its advance
-    /// stuck, playback stays continuous and the next block flushes only
-    /// when `lost` — a NoteOff (or a loop seam's panic) fell inside it.
-    /// Otherwise `expected` stays behind and the next block reads as a
-    /// jump, as before. Every contended block used to flush, cutting
-    /// sustained notes during heavy UI edits. The MIDI clips come from the
-    /// render graph, which is always readable, so `lost` is always known.
-    ///
-    /// Since ARCH-02 B-5 no block is lock-contended; only the
-    /// `test-internals` skip hook reaches this (B-6 deletes both).
-    #[cfg(feature = "test-internals")]
-    pub(crate) fn skipped(&mut self, from: u64, to: u64, committed: bool, lost: bool) {
-        if committed && self.expected == Some(from) {
-            self.expected = Some(to);
-            self.lost_events |= lost;
-        }
     }
 
     /// Whether the transport was rolling when it stopped — the stopped
@@ -136,10 +111,11 @@ impl TransportContinuity {
     }
 }
 
-/// Fallback playhead advance used when the audio callback couldn't acquire
-/// its locks. No audio is rendered on that path, so we only need to move
-/// the playhead forward and wrap at the loop seam — stuck notes and audio
-/// content leakage aren't possible when we're outputting silence. The
+/// Playhead advance for a playing block that renders nothing — the A/B
+/// reference branch (`callback/reference.rs`), which plays the reference
+/// track instead of the arrangement. Only the playhead moves, wrapping at
+/// the loop seam; the next rendered block reads the advance as a jump
+/// (see [`TransportContinuity::jumped`]) and flushes held voices. The
 /// wrap carries the overshoot past `loop_in` exactly like the rendering
 /// path's `loop_in + tail_frames` (code review MIX-11); a bare snap to
 /// `loop_in` lost up to a buffer of timeline per pass. The sample-accurate

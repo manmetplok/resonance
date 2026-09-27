@@ -11,7 +11,12 @@
 //! while the engine republishes, which needs a counting global
 //! allocator (`tests/sidechain_taps.rs` has the precedent). The counter
 //! is thread-local so the engine-side frees are not mistaken for
-//! callback-side ones.
+//! callback-side ones. The A2-9 hammer (`render_graph_hammer`) lives here
+//! for the same reason: "the render thread drops nothing the retire queue
+//! owns" is a free count on that thread.
+
+#[path = "retire_queue/render_graph_hammer.rs"]
+mod render_graph_hammer;
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;

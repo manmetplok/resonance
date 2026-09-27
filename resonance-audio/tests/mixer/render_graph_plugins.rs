@@ -28,7 +28,7 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 
 use resonance_audio::test_support::{
-    EngineHandlerHarness, MixAudioHarness, PluginSlot, SharedState, STATE_MAP_COUNT,
+    EngineHandlerHarness, MixAudioHarness, PluginSlot, SharedState,
     __instance_from_raw_for_test,
 };
 use resonance_audio::types::*;
@@ -458,12 +458,6 @@ fn hammer(log: &DestroyLog, bypass: bool) -> Hammered {
     let (edits, adds, editor_thread) = editor.join().expect("editor");
 
     assert!(adds > 0, "the editor actually added and removed plugins ({edits} edits)");
-    assert_eq!(
-        h.shared().render_skip_cycles.load(Ordering::Relaxed),
-        0,
-        "no block was skipped across {edits} concurrent plugin edits"
-    );
-    assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
     assert!(h.shared().retired.is_empty(), "the editor's sweeps freed everything");
     let destroys = destroyed(log);
     assert_eq!(destroys.len() as u64, adds, "every scratch instance destroyed, once");

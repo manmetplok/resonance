@@ -44,8 +44,6 @@ macro_rules! run_callback {
                 live_midi_fwd: &$h.live_fwd_tx,
                 buf_frames: $h.buf_frames,
                 quantum: $h.quantum,
-                #[cfg(feature = "test-internals")]
-                force_render_skip: $h.force_render_skip,
             },
             &mut CallbackScratch {
                 data: &mut $h.data,
@@ -84,8 +82,6 @@ pub struct MixAudioHarness {
     /// engine control thread's Seek / Stop race against the callback
     /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
-    /// Set for one callback by [`Self::render_lock_contended`].
-    force_render_skip: bool,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
     latency_comp: arc_swap::ArcSwap<crate::latency::LatencyComp>,
     automation: arc_swap::ArcSwap<AutomationSnapshot>,
@@ -145,15 +141,16 @@ impl MixAudioHarness {
     /// that edits it through the real handlers (`EngineHandlerHarness`,
     /// playing the engine thread) while this renders on another thread,
     /// as the audio callback does (code review ARCH-02 B-5's clip hammer).
-    /// Default tempo map, native monitor drain, bus buffers for the busses
-    /// the graph holds now.
+    /// Default tempo map, native monitor drain, and — like the engine's
+    /// own callback — bus buffers for [`MAX_BUSSES`](crate::limits::MAX_BUSSES),
+    /// so a bus the handlers add while this renders is rendered too.
     pub fn on_shared(
         shared: Arc<SharedState>,
         frames: usize,
         channels: usize,
         sample_rate: u32,
     ) -> Self {
-        let bus_count = shared.graph.load().busses.len().max(1);
+        let bus_count = crate::limits::MAX_BUSSES.max(shared.graph.load().busses.len());
         Self::build(
             shared,
             bus_count,
@@ -184,7 +181,6 @@ impl MixAudioHarness {
         let (live_fwd_tx, live_fwd_rx) = crossbeam_channel::unbounded();
         Self {
             shared,
-            force_render_skip: false,
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
             latency_comp: arc_swap::ArcSwap::from_pointee(crate::latency::LatencyComp::empty()),
             automation: arc_swap::ArcSwap::from_pointee(AutomationSnapshot::default()),
@@ -395,30 +391,17 @@ impl MixAudioHarness {
         self.data = vec![0.0; frames * self.channels];
     }
 
-    /// Run one audio callback whose playing branch skips the block — the
-    /// shape a lock-contended block had (silence out, playhead advanced,
-    /// `render_skip_cycles` bumped) before ARCH-02 B-5 moved the last
-    /// locked map into the render graph. Nothing can contend any more, so
-    /// this forces it through the `test-internals` hook; B-6 deletes both.
-    pub fn render_lock_contended(&mut self) -> &[f32] {
-        self.force_render_skip = true;
-        run_callback!(self);
-        self.force_render_skip = false;
-        &self.data
-    }
-
     /// Every scalar the callback publishes back into shared state, in a
     /// fixed order, so a parity test can fold them into its hash: playhead,
-    /// master peaks, the two stutter counters, the audition playhead, and
-    /// the reference cursor.
-    pub fn side_effects(&self) -> [u64; 7] {
+    /// master peaks, the monitor-shortfall counter, the audition playhead,
+    /// and the reference cursor.
+    pub fn side_effects(&self) -> [u64; 6] {
         use std::sync::atomic::Ordering;
         [
             self.shared.playhead.load(Ordering::Relaxed),
             self.shared.master_peak_l_bits.load(Ordering::Relaxed) as u64,
             self.shared.master_peak_r_bits.load(Ordering::Relaxed) as u64,
             self.shared.monitor_shortfall_cycles.load(Ordering::Relaxed),
-            self.shared.render_skip_cycles.load(Ordering::Relaxed),
             self.shared.audition_pos_bits.load(Ordering::Relaxed),
             self.shared.reference.cursor_for_test(),
         ]

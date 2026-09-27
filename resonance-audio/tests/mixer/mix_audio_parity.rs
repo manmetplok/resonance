@@ -3,7 +3,7 @@
 //!
 //! `mix_audio` is the entry point the realtime thread calls: it picks up
 //! live MIDI, reads the monitor ring, then takes one of the reference-A/B,
-//! count-in, stopped-monitor, playing or lock-contended branches, stitches
+//! count-in, stopped-monitor or playing branches, stitches
 //! the render across the loop seam, and runs the master FX / metronome /
 //! master-volume / metering passes. Decomposing it is only correct if the
 //! samples it produces — and the state it publishes back — stay **bit**
@@ -13,8 +13,7 @@
 //! locks, scratch, monitor ring and channels the engine hands the
 //! callback) and hashes the raw `f32::to_bits()` of every output sample
 //! together with the callback's published side effects: playhead, master
-//! peaks, per-track VU peaks and ramp state, the shortfall / render-skip
-//! counters, the audition position and the reference cursor. The expected
+//! peaks, per-track VU peaks and ramp state, the shortfall counter, the audition position and the reference cursor. The expected
 //! hashes were captured from the pre-refactor callback.
 //!
 //! If one of these hashes changes, the callback's behaviour changed. That
@@ -301,7 +300,7 @@ fn playing_blocks_with_loop_seam_are_bit_identical() {
         let out = h.render().to_vec();
         heard |= out.iter().any(|&s| s != 0.0);
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
@@ -319,7 +318,7 @@ fn playing_blocks_with_loop_seam_are_bit_identical() {
         h.push_monitor(&input_block(600 + block));
         let out = h.render().to_vec();
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
@@ -360,7 +359,7 @@ fn count_in_blocks_are_bit_identical() {
         let out = h.render().to_vec();
         heard |= out.iter().any(|&s| s != 0.0);
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
@@ -371,7 +370,7 @@ fn count_in_blocks_are_bit_identical() {
         h.push_monitor(&input_block(300 + block));
         let out = h.render().to_vec();
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
@@ -406,7 +405,7 @@ fn stopped_monitor_blocks_are_bit_identical() {
         let out = h.render().to_vec();
         heard |= out.iter().any(|&s| s != 0.0);
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
@@ -419,20 +418,20 @@ fn stopped_monitor_blocks_are_bit_identical() {
         h.push_monitor(&input_block(700 + block));
         let out = h.render().to_vec();
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
     }
 
     // Starved ring: a monitoring shortfall, counted and fed to the drain.
     let out = h.render().to_vec();
     hash.feed(&out);
-    hash.feed_u64(&h.side_effects());
+    hash.feed_u64(&effects(&h));
     // Monitoring off: the branch exits without touching the output.
     h.shared().monitoring.store(false, Ordering::Relaxed);
     h.push_monitor(&input_block(500));
     let out = h.render().to_vec();
     hash.feed(&out);
-    hash.feed_u64(&h.side_effects());
+    hash.feed_u64(&effects(&h));
     assert!(heard, "monitoring must produce audio");
 
     let got = hash.finish();
@@ -464,14 +463,14 @@ fn reference_monitor_blocks_are_bit_identical() {
         let out = h.render().to_vec();
         heard |= out.iter().any(|&s| s != 0.0);
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
     }
     // Recording suppresses the reference monitor: back to the real mix.
     h.shared().recording.store(true, Ordering::Relaxed);
     for _ in 0..2u32 {
         let out = h.render().to_vec();
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
     }
     assert!(heard, "reference monitor must produce audio");
@@ -484,19 +483,21 @@ fn reference_monitor_blocks_are_bit_identical() {
     );
 }
 
-/// The lock-contended branch and the audition overlay: a UI edit holding
-/// the clips write lock silences the arrangement and advances the playhead
-/// (bumping `render_skip_cycles`), while the audition preview — summed
-/// after the arrangement, independent of transport — must still be
-/// audible. Also drives the live-MIDI pickup pass.
+/// The audition overlay: the audition preview is summed after the
+/// arrangement, independent of transport, so it stays audible over a
+/// playing arrangement that crosses a loop seam mid-block. Also drives the
+/// live-MIDI pickup pass.
+///
+/// Until ARCH-02 B-6 the first five blocks were lock-contended (silent
+/// arrangement, playhead advanced by the skip path); no block can be
+/// skipped any more, so every block renders.
 #[test]
-fn contended_and_audition_blocks_are_bit_identical() {
-    // Re-blessed for code review MIX-03 (the last uncontended block
-    // crosses the loop seam, where the PDC lines now stay continuous).
-    // Re-blessed for code review MIX-11: the contended blocks cross the
-    // loop seam, and the silent advance now carries the overshoot past
-    // loop_in instead of snapping to it.
-    const EXPECTED: u64 = 0x40ea_d698_e423_5ccb;
+fn audition_blocks_are_bit_identical() {
+    // Captured on the pre-B-6 callback (skip path still present) with
+    // this exact scenario, so deleting the skip path is pinned as a
+    // no-op for rendered blocks. Replaces the contended scenario's
+    // 0x40ea_d698_e423_5ccb.
+    const EXPECTED: u64 = 0xf1d5_aaa8_7cc5_cb25;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);
@@ -507,34 +508,43 @@ fn contended_and_audition_blocks_are_bit_identical() {
         .loop_out
         .store((BLOCK * 3 + 17) as u64, Ordering::Relaxed);
     h.start_audition(noise(BLOCK * 5, 71), true);
+    // The same overlay with the transport stopped: the audition alone.
+    let mut alone = harness(false);
+    alone.start_audition(noise(BLOCK * 5, 71), true);
 
     let mut hash = BitHash::new();
-    let mut heard = false;
-    for _ in 0..5u32 {
-        let out = h.render_lock_contended().to_vec();
-        heard |= out.iter().any(|&s| s != 0.0);
-        hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
-    }
-    // Uncontended again: the arrangement returns under the same overlay.
-    for _ in 0..3u32 {
+    let mut arrangement_heard = false;
+    for _ in 0..8u32 {
         let out = h.render().to_vec();
+        let overlay = alone.render();
+        assert!(overlay.iter().any(|&s| s != 0.0), "the audition must be audible");
+        assert!(out.iter().any(|&s| s != 0.0), "no block may be silent");
+        arrangement_heard |= out != overlay;
         hash.feed(&out);
-        hash.feed_u64(&h.side_effects());
+        hash.feed_u64(&effects(&h));
         hash.feed_pairs(&h.take_track_peaks());
         hash.feed_pairs(&h.track_last_gains());
     }
-    assert!(heard, "audition overlay must be audible while contended");
-    assert_eq!(
-        h.shared().render_skip_cycles.load(Ordering::Relaxed),
-        5,
-        "every contended block must count a render skip"
+    assert!(arrangement_heard, "the arrangement must render under the overlay");
+    assert!(
+        h.shared().audition_pos_bits.load(Ordering::Relaxed) != 0,
+        "the audition must have advanced"
     );
 
     let got = hash.finish();
     assert_eq!(
         got, EXPECTED,
-        "contended/audition output changed (got {got:#018x}) — mix_audio is \
-         no longer bit-identical"
+        "audition output changed (got {got:#018x}) — mix_audio is no longer \
+         bit-identical"
     );
+}
+
+/// The callback's published side effects as the goldens above were
+/// captured: seven words, the fifth of which was the render-skip counter
+/// (`render_skip_cycles`, deleted with the skip path in ARCH-02 B-6). It
+/// was 0 on every branch these constants pin, so a literal 0 in its slot
+/// keeps them valid unchanged.
+fn effects(h: &MixAudioHarness) -> [u64; 7] {
+    let [playhead, peak_l, peak_r, shortfalls, audition, reference] = h.side_effects();
+    [playhead, peak_l, peak_r, shortfalls, 0, audition, reference]
 }

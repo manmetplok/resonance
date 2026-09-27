@@ -107,47 +107,6 @@ fn continuous_playback_never_flushes() {
     );
 }
 
-/// A lock-contended block advances the playhead without rendering, so
-/// a NoteOff that fell in it was never collected: the next rendered
-/// block flushes.
-#[test]
-fn a_block_skipped_under_lock_contention_flushes_on_the_next_render() {
-    // A one-quarter note: NoteOff at 24 000 samples, inside block 187
-    // ([23 936, 24 064)).
-    let (mut h, rec) = harness(1);
-    for _ in 0..187 {
-        h.render();
-    }
-    assert!(rec.lock().held[60]);
-    h.render_lock_contended();
-    let calls_before = rec.lock().calls;
-    h.render();
-    assert!(rec.lock().panicked_in(calls_before));
-    assert!(!rec.lock().any_held(), "the skipped NoteOff must not leave the note hanging");
-}
-
-/// ...but a contended block that lost no NoteOff is not a discontinuity:
-/// a sustained note survives it (FU-M3b — every contended block used to
-/// flush, cutting held notes during heavy UI edits).
-#[test]
-fn a_contended_block_without_a_note_off_does_not_cut_a_sustained_note() {
-    let (mut h, rec) = harness(16);
-    for _ in 0..3 {
-        h.render();
-    }
-    for _ in 0..5 {
-        h.render_lock_contended();
-        h.render();
-    }
-    let rec = rec.lock();
-    assert!(rec.held[60], "the pad still sounds");
-    assert!(
-        rec.events.iter().all(|e| e.on),
-        "no NoteOff / panic reached the instrument: {:?}",
-        rec.events.iter().filter(|e| !e.on).count()
-    );
-}
-
 /// An edit elsewhere in clip 1 — what a piano-roll drag publishes.
 fn edit_far_note(h: &MixAudioHarness, i: u64) {
     h.edit_midi_clip(1, |clip| {
@@ -162,9 +121,9 @@ fn edit_far_note(h: &MixAudioHarness, i: u64) {
 }
 
 /// The MIDI clips come from the published render graph (code review
-/// ARCH-02 A2-4), so a MIDI edit can no longer make a block skip: a
-/// NoteOff due in the block right after an edit is delivered as a plain
-/// event, with no skip and no flush. (Until A2-4 the MIDI-clip lock could
+/// ARCH-02 A2-4), so a MIDI edit can no longer make a block skip (since
+/// B-6 there is no skip path at all): a NoteOff due in the block right
+/// after an edit is delivered as a plain event, with no flush. (Until A2-4 the MIDI-clip lock could
 /// be the contended map, and FU-A4a deferred the block's NoteOff check to
 /// the next block that held it.)
 #[test]
@@ -178,7 +137,6 @@ fn a_note_off_right_after_a_midi_edit_lands_without_a_skip() {
     edit_far_note(&h, 0);
     let calls_before = rec.lock().calls;
     h.render();
-    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
     assert!(!rec.lock().panicked_in(calls_before), "no flush was needed");
     assert!(!rec.lock().any_held(), "the NoteOff itself was delivered");
 }
@@ -195,7 +153,6 @@ fn midi_clip_edits_during_playback_do_not_cut_a_sustained_note() {
         edit_far_note(&h, i);
         h.render();
     }
-    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
     let rec = rec.lock();
     assert!(rec.held[60], "the pad still sounds");
     assert!(

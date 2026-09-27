@@ -62,13 +62,6 @@ pub(crate) struct CallbackInputs<'a> {
     pub(crate) buf_frames: usize,
     /// The graph quantum, used as the monitor ring's jitter margin.
     pub(crate) quantum: usize,
-    /// Test hook (`MixAudioHarness::render_lock_contended`): render this
-    /// playing block as a skipped one — silence, playhead advanced,
-    /// `render_skip_cycles` bumped — the way a lock-contended block did
-    /// before ARCH-02 B-5 removed the last lock. Never set by the engine;
-    /// B-6 deletes it with the skip path and the lock-miss counters.
-    #[cfg(feature = "test-internals")]
-    pub(crate) force_render_skip: bool,
 }
 
 /// The engine's pre-allocated scratch, mutably borrowed for one callback.

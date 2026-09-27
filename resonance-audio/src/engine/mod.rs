@@ -278,18 +278,6 @@ pub struct SharedState {
     /// audible as a click/stutter in the monitored signal only.
     /// Counted by `mix_audio`, folded into the load meter's report.
     pub monitor_shortfall_cycles: AtomicU64,
-    /// Lifetime count of playing cycles the arrangement render skipped
-    /// because a state lock was write-held at callback time — a full
-    /// quantum of silence in the mix each, audible as a stutter with no
-    /// graph xrun. Folded into the load report. Since ARCH-02 B-5 there
-    /// is no such lock (every project map is in the render graph), so
-    /// only the `test-internals` skip hook still counts here; B-6 deletes
-    /// it.
-    pub render_skip_cycles: AtomicU64,
-    /// Lifetime `try_read` misses per state map (code review ARCH-02,
-    /// A2-1). Empty since B-5 moved the last locked map (clips) into the
-    /// render graph — `StateMap` has no variants left; B-6 deletes this.
-    pub lock_misses: crate::cycle_load::LockMissCounters,
     /// The load meter's report hand-off to the engine loop, which
     /// formats and prints it — never the audio thread.
     pub cycle_report: crate::cycle_load::CycleReportSlot,
@@ -558,8 +546,6 @@ impl Default for SharedState {
             dsp_load_peak_bits: AtomicU32::new(0),
             dsp_overrun_cycles: AtomicU64::new(0),
             monitor_shortfall_cycles: AtomicU64::new(0),
-            render_skip_cycles: AtomicU64::new(0),
-            lock_misses: crate::cycle_load::LockMissCounters::new(),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
             output_stream_errors: Default::default(),
@@ -928,8 +914,6 @@ impl AudioEngine {
                             live_midi_fwd: &live_midi_fwd,
                             buf_frames: audio_buf_frames,
                             quantum: audio_quantum,
-                            #[cfg(feature = "test-internals")]
-                            force_render_skip: false,
                         },
                         &mut mixer::CallbackScratch {
                             data,
