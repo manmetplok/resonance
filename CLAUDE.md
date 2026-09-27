@@ -20,7 +20,7 @@ time; the script builds with cargo and runs them concurrently, which is 24s
 against 157s for the same tests. It also launches each binary from its own
 crate root, which the golden-image tests need.
 
-Five things to know before adding tests:
+Six things to know before adding tests:
 
 - **Build the app with `Resonance::new_for_test()`**, not `Resonance::new()`.
   The real constructor opens an audio stream, probes devices, loads whatever
@@ -37,6 +37,12 @@ Five things to know before adding tests:
   is only for process-global state (a `#[global_allocator]`, an rlimit, a
   global latch). Its engine internals are `resonance_audio::test_support`,
   behind the `test-internals` feature that tests get via dev-dependency.
+- **Rendering is parallel in the app, serial in tests.** The mixer runs
+  track and bus jobs on a worker pool (`resonance-audio/src/render_pool`,
+  realtime-multithreading.md); output is bit-identical at any thread count.
+  Hermetic tests render serially unless `RESONANCE_RENDER_THREADS=<n>` is
+  set — run the suite with `RESONANCE_RENDER_THREADS=8` after touching the
+  render path, and every golden must still hold.
 - **Re-bless goldens with `RESONANCE_BLESS=1`**, e.g.
   `RESONANCE_BLESS=1 cargo test -p resonance-app --test mixer`. This machine is
   canonical for golden images.
