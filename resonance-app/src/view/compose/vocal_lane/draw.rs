@@ -299,7 +299,7 @@ impl<'a> VocalLaneCanvas<'a> {
         let range_span = (hi.saturating_sub(lo)).max(1) as f32;
         let total_ticks = clip.duration_ticks.max(1) as f32;
 
-        for note in &clip.notes {
+        for note in clip.notes.iter() {
             let t = note.start_tick as f32 / total_ticks;
             let dur_t = (note.duration_ticks as f32 / total_ticks).max(0.005);
             let pitch_norm = ((note.note.saturating_sub(lo)) as f32 / range_span).clamp(0.0, 1.0);

@@ -252,7 +252,7 @@ impl<'a> ComposeTrackCanvas<'a> {
         let cell_h = self.cell_height(clip_area);
         let total_ticks = self.section_total_ticks() as f64;
         let (win_lo, win_hi) = self.visible_tick_range(clip_area);
-        for note in &clip.notes {
+        for note in clip.notes.iter() {
             let note_start_tick = clip_start_tick + note.start_tick as f64;
             let note_end_tick = note_start_tick + note.duration_ticks as f64;
             if note_end_tick <= 0.0 || note_start_tick >= total_ticks {

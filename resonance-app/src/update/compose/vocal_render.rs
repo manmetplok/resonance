@@ -460,7 +460,7 @@ pub(super) fn rerender_vocal_audio(
             );
             return Task::none();
         }
-        let notes: Vec<MidiNote> = clip.notes.clone();
+        let notes: Vec<MidiNote> = clip.notes.as_ref().clone();
         (notes, clip.name.clone())
     };
     let lyrics = r

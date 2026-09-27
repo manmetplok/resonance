@@ -77,7 +77,7 @@ fn push_midi_clip(app: &mut Resonance, id: u64, start_bar: u64) {
         start_sample: (start_bar - 1) * BAR,
         duration_ticks: 4 * 960,
         name: format!("part {id}"),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

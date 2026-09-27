@@ -47,7 +47,7 @@ fn clip(notes: Vec<MidiNote>) -> Vec<MidiClipState> {
         start_sample: 0,
         duration_ticks: 16 * BAR,
         name: "long clip".to_owned(),
-        notes,
+        notes: notes.into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     }]

@@ -3,6 +3,7 @@
 
 use resonance_audio::types::*;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// One control-originated MIDI-note edit that was applied to
 /// `app.midi_clips` optimistically (synchronously, at handler time) and
@@ -166,7 +167,12 @@ pub struct MidiClipState {
     pub start_sample: SamplePos,
     pub duration_ticks: u64,
     pub name: String,
-    pub notes: Vec<MidiNote>,
+    /// Shared (`Arc`) so an undo snapshot's `LoadedProject::midi_notes`
+    /// holds a reference, not a copy — an edit to one clip's notes uses
+    /// `Arc::make_mut`, which clones only that clip's vector (copy-on-write
+    /// against any snapshot still holding it); every other clip's notes
+    /// stay pointer-shared across snapshots (ARCH-09 A9-3).
+    pub notes: Arc<Vec<MidiNote>>,
     pub trim_start_ticks: u64,
     pub trim_end_ticks: u64,
 }

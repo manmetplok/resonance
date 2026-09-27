@@ -624,7 +624,7 @@ pub(crate) fn save_current_as_template_in(
     let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
         .midi_clips
         .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
         .collect();
 
     let created_secs = std::time::SystemTime::now()

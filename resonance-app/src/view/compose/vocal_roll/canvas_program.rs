@@ -103,7 +103,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                                 state.drag = Some(DragMode::MoveNote {
                                     note_index: i,
                                     start_tick_offset: tick_offset,
-                                    notes: self.clip.notes.clone(),
+                                    notes: self.clip.notes.as_ref().clone(),
                                 });
                                 return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::SelectNote {
                                         note_index: Some(i),

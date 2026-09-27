@@ -48,11 +48,13 @@ impl UndoSnapshot {
     pub(crate) fn same_state(&self, other: &UndoSnapshot) -> bool {
         let notes_equal = self.project.midi_notes.len() == other.project.midi_notes.len()
             && self.project.midi_notes.iter().all(|(id, notes)| {
-                other
-                    .project
-                    .midi_notes
-                    .get(id)
-                    .is_some_and(|o| crate::update::project_io::replay_diff::midi_notes_equal(notes, o))
+                other.project.midi_notes.get(id).is_some_and(|o| {
+                    // A clip nothing touched between the two snapshots
+                    // shares the same `Arc` (ARCH-09 A9-3) — check that
+                    // before the element-wise compare.
+                    Arc::ptr_eq(notes, o)
+                        || crate::update::project_io::replay_diff::midi_notes_equal(notes, o)
+                })
             });
         notes_equal && self.project.file == other.project.file
     }
@@ -199,10 +201,13 @@ impl crate::Resonance {
             let _ = self.engine.send(AudioCommand::PersistClipWavs);
         }
         let file = self.undo_project_file();
-        let midi_notes: HashMap<ClipId, Vec<MidiNote>> = self
+        // A refcount bump per clip, not a copy (ARCH-09 A9-3): a clip
+        // `Arc::make_mut` hasn't touched since the last snapshot hands back
+        // the same pointer.
+        let midi_notes: HashMap<ClipId, Arc<Vec<MidiNote>>> = self
             .midi_clips
             .iter()
-            .map(|mc| (mc.id, mc.notes.clone()))
+            .map(|mc| (mc.id, Arc::clone(&mc.notes)))
             .collect();
         // Only snapshot blobs for plugins that currently exist — stale
         // entries for removed plugins would bloat the snapshot and are
@@ -251,7 +256,8 @@ impl crate::Resonance {
         let notes_equal = before.project.midi_notes.len() == self.midi_clips.len()
             && self.midi_clips.iter().all(|mc| {
                 before.project.midi_notes.get(&mc.id).is_some_and(|o| {
-                    crate::update::project_io::replay_diff::midi_notes_equal(&mc.notes, o)
+                    Arc::ptr_eq(&mc.notes, o)
+                        || crate::update::project_io::replay_diff::midi_notes_equal(&mc.notes, o)
                 })
             });
         if !notes_equal {

@@ -68,7 +68,7 @@ fn overlapping_quiet_and_same_tick_notes_round_trip_exactly() {
     let loaded = project::load_project(&dir).expect("load");
     let _ = std::fs::remove_dir_all(&dir);
 
-    let mut by_id: HashMap<u64, Vec<MidiNote>> = loaded.midi_notes;
+    let mut by_id: HashMap<u64, std::sync::Arc<Vec<MidiNote>>> = loaded.midi_notes;
     let back = by_id.remove(&3).expect("clip notes loaded");
     assert!(
         resonance_app::update::project_io::replay_diff::midi_notes_equal(&notes, &back),

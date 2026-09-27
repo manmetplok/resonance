@@ -22,6 +22,15 @@ impl Resonance {
         self.midi_clips.push(clip);
     }
 
+    /// Test-only: mutable access to the GUI-side MIDI clip list, for a
+    /// test that needs to edit a clip's notes in place (e.g. via
+    /// `Arc::make_mut(&mut clip.notes)`) without a message round-trip
+    /// (ARCH-09 A9-3's pointer-sharing guard).
+    #[doc(hidden)]
+    pub fn test_midi_clips_mut(&mut self) -> &mut Vec<state::MidiClipState> {
+        &mut self.midi_clips
+    }
+
     /// Test-only: the note selection of the clip open in the MIDI editor,
     /// or `None` when no editor is open.
     #[doc(hidden)]

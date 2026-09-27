@@ -17,6 +17,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use resonance_audio::types::{AudioCommand, ClipId, MidiNote, TrackId, TrackType};
 
@@ -268,7 +269,7 @@ impl Reconcile for MidiClips {
     const NAME: &'static str = "midi_clips";
 
     fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-        let target_notes = |id: ClipId| -> Vec<MidiNote> {
+        let target_notes = |id: ClipId| -> Arc<Vec<MidiNote>> {
             ctx.midi_notes.get(&id).cloned().unwrap_or_default()
         };
         let Some(old) = old else {
@@ -280,17 +281,19 @@ impl Reconcile for MidiClips {
         };
         let old_by_id: HashMap<u64, &ProjectMidiClip> =
             old.midi_clips.iter().map(|c| (c.id, c)).collect();
-        let live_notes: HashMap<ClipId, Vec<MidiNote>> = r
+        // A refcount bump per clip, not a copy (ARCH-09 A9-3) — the same
+        // pointer `target_notes` hands back when nothing changed.
+        let live_notes: HashMap<ClipId, Arc<Vec<MidiNote>>> = r
             .midi_clips
             .iter()
-            .map(|mc| (mc.id, mc.notes.clone()))
+            .map(|mc| (mc.id, Arc::clone(&mc.notes)))
             .collect();
         let kept = kept_midi_clips(Some(old), new);
         for pmc in &new.midi_clips {
             match old_by_id.get(&pmc.id) {
                 Some(&omc) if kept.contains(&pmc.id) => {
-                    let live = live_notes.get(&pmc.id).map(Vec::as_slice).unwrap_or(&[]);
-                    apply_midi_clip(r, omc, pmc, live, target_notes(pmc.id));
+                    let live = live_notes.get(&pmc.id).cloned().unwrap_or_default();
+                    apply_midi_clip(r, omc, pmc, &live, target_notes(pmc.id));
                 }
                 _ => load_midi_clip(r, pmc, target_notes(pmc.id)),
             }
@@ -300,13 +303,13 @@ impl Reconcile for MidiClips {
     }
 }
 
-fn load_midi_clip(r: &mut Resonance, pmc: &ProjectMidiClip, notes: Vec<MidiNote>) {
+fn load_midi_clip(r: &mut Resonance, pmc: &ProjectMidiClip, notes: Arc<Vec<MidiNote>>) {
     let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
         clip_id: pmc.id,
         track_id: pmc.track_id,
         start_sample: pmc.start_sample,
         duration_ticks: pmc.duration_ticks,
-        notes: notes.clone(),
+        notes: notes.as_ref().clone(),
         name: pmc.name.clone(),
         trim_start_ticks: pmc.trim_start_ticks,
         trim_end_ticks: pmc.trim_end_ticks,
@@ -327,10 +330,14 @@ fn apply_midi_clip(
     r: &mut Resonance,
     omc: &ProjectMidiClip,
     pmc: &ProjectMidiClip,
-    live_notes: &[MidiNote],
-    notes: Vec<MidiNote>,
+    live_notes: &Arc<Vec<MidiNote>>,
+    notes: Arc<Vec<MidiNote>>,
 ) {
-    let notes_changed = !crate::update::project_io::replay_diff::midi_notes_equal(&notes, live_notes);
+    // The common case — an undo that didn't touch this clip's notes — is a
+    // pointer compare: `target_notes` and `live_notes` are the same `Arc`
+    // whenever nothing upstream cloned it (ARCH-09 A9-3).
+    let notes_changed = !Arc::ptr_eq(&notes, live_notes)
+        && !crate::update::project_io::replay_diff::midi_notes_equal(&notes, live_notes);
     let trim_changed =
         omc.trim_start_ticks != pmc.trim_start_ticks || omc.trim_end_ticks != pmc.trim_end_ticks;
     let moved = omc.start_sample != pmc.start_sample || omc.track_id != pmc.track_id;
@@ -346,7 +353,7 @@ fn apply_midi_clip(
             track_id: pmc.track_id,
             start_sample: pmc.start_sample,
             duration_ticks: pmc.duration_ticks,
-            notes: notes.clone(),
+            notes: notes.as_ref().clone(),
             name: pmc.name.clone(),
             trim_start_ticks: pmc.trim_start_ticks,
             trim_end_ticks: pmc.trim_end_ticks,

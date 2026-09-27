@@ -30,7 +30,7 @@ fn a_removed_track_leaves_no_clip_lane_or_group_member_behind() {
         start_sample: 0,
         duration_ticks: 3840,
         name: "gone".into(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
@@ -40,7 +40,7 @@ fn a_removed_track_leaves_no_clip_lane_or_group_member_behind() {
         start_sample: 0,
         duration_ticks: 3840,
         name: "kept".into(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

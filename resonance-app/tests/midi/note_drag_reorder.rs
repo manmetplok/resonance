@@ -41,7 +41,7 @@ fn clip() -> MidiClipState {
         start_sample: 0,
         duration_ticks: 1920,
         name: "clip".to_owned(),
-        notes: vec![note(60, 0), note(62, 480)],
+        notes: vec![note(60, 0), note(62, 480)].into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     }

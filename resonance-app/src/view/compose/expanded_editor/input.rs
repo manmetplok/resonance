@@ -57,7 +57,7 @@ impl<'a> ExpandedEditorCanvas<'a> {
                                 start_tick_offset: note_tick - click_tick as i64,
                                 clip_id: clip.id,
                                 clip_offset: offset,
-                                notes: clip.notes.clone(),
+                                notes: clip.notes.as_ref().clone(),
                             }
                         }
                     });

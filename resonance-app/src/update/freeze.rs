@@ -677,7 +677,7 @@ impl Resonance {
             notes.extend_from_slice(&clip.duration_ticks.to_le_bytes());
             notes.extend_from_slice(&clip.trim_start_ticks.to_le_bytes());
             notes.extend_from_slice(&clip.trim_end_ticks.to_le_bytes());
-            for n in &clip.notes {
+            for n in clip.notes.iter() {
                 notes.push(n.note);
                 notes.extend_from_slice(&n.velocity.to_bits().to_le_bytes());
                 notes.extend_from_slice(&n.start_tick.to_le_bytes());
@@ -764,7 +764,7 @@ impl Resonance {
             clip.trim_start_ticks.hash(&mut h);
             clip.trim_end_ticks.hash(&mut h);
             clip.notes.len().hash(&mut h);
-            for n in &clip.notes {
+            for n in clip.notes.iter() {
                 n.note.hash(&mut h);
                 n.velocity.to_bits().hash(&mut h);
                 n.start_tick.hash(&mut h);
