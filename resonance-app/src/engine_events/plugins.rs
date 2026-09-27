@@ -305,16 +305,29 @@ fn ensure_subtracks(
     }
 }
 
-pub(super) fn track_removed(
+/// The `PluginRemoved` echo. Swallowed when a diff restore or a live
+/// delete already mirrored it — the id may by now be an instance a later
+/// restore re-added (ARCH-01 A-13h) — mirrored otherwise.
+pub(super) fn track_removed_echo(
     r: &mut Resonance,
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
-    // A diff restore's removal, already mirrored — and the slot may by now
-    // be one a later restore re-added under the same id (ARCH-01 A-13h).
     if r.io.restore_echoes.settle_plugin_removed(instance_id) {
         return;
     }
+    track_removed(r, track_id, instance_id);
+}
+
+/// Mirror a track plugin's removal: the slot, its cached blob, parked
+/// params, side-index entry, selection and key route. Called by the live
+/// delete at once (STATE-10 shape, FU-A13c) and by [`track_removed_echo`]
+/// for a removal nobody mirrored yet.
+pub(crate) fn track_removed(
+    r: &mut Resonance,
+    track_id: TrackId,
+    instance_id: PluginInstanceId,
+) {
     if r.ui.mixer.selected_plugin == Some(instance_id) {
         r.ui.mixer.selected_plugin = None;
     }
@@ -679,15 +692,27 @@ pub(crate) fn mirror_bus_plugin_move(
     bus.plugins.insert(to, slot);
 }
 
-pub(super) fn bus_removed(
+/// The `BusPluginRemoved` echo. Swallowed when a diff restore or a live
+/// delete already mirrored it (ARCH-01 A-13h).
+pub(super) fn bus_removed_echo(
     r: &mut Resonance,
     bus_id: BusId,
     instance_id: PluginInstanceId,
 ) {
-    // A diff restore's removal, already mirrored (ARCH-01 A-13h).
     if r.io.restore_echoes.settle_plugin_removed(instance_id) {
         return;
     }
+    bus_removed(r, bus_id, instance_id);
+}
+
+/// Mirror a bus plugin's removal. Called by the live delete at once
+/// (STATE-10 shape, FU-A13c) and by [`bus_removed_echo`] for a removal
+/// nobody mirrored yet.
+pub(crate) fn bus_removed(
+    r: &mut Resonance,
+    bus_id: BusId,
+    instance_id: PluginInstanceId,
+) {
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         bus.plugins.retain(|p| p.instance_id != instance_id);
     }
@@ -791,11 +816,19 @@ pub(crate) fn mirror_master_plugin_move(
     r.master.plugins.insert(to, slot);
 }
 
-pub(super) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
-    // A diff restore's removal, already mirrored (ARCH-01 A-13h).
+/// The `MasterPluginRemoved` echo. Swallowed when a diff restore or a
+/// live delete already mirrored it (ARCH-01 A-13h).
+pub(super) fn master_removed_echo(r: &mut Resonance, instance_id: PluginInstanceId) {
     if r.io.restore_echoes.settle_plugin_removed(instance_id) {
         return;
     }
+    master_removed(r, instance_id);
+}
+
+/// Mirror a master plugin's removal. Called by the live delete at once
+/// (STATE-10 shape, FU-A13c) and by [`master_removed_echo`] for a removal
+/// nobody mirrored yet.
+pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master.plugins.retain(|p| p.instance_id != instance_id);
     if r.ui.mixer.selected_plugin == Some(instance_id) {
         r.ui.mixer.selected_plugin = None;

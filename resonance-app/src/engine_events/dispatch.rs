@@ -426,7 +426,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::PluginRemoved {
             track_id,
             instance_id,
-        } => plugins::track_removed(r, track_id, instance_id),
+        } => plugins::track_removed_echo(r, track_id, instance_id),
         E::PluginMoved {
             track_id,
             instance_id,
@@ -481,7 +481,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::BusPluginRemoved {
             bus_id,
             instance_id,
-        } => plugins::bus_removed(r, bus_id, instance_id),
+        } => plugins::bus_removed_echo(r, bus_id, instance_id),
         E::BusPluginMoved {
             bus_id,
             instance_id,
@@ -505,7 +505,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             has_gui,
             has_sidechain_input,
         ),
-        E::MasterPluginRemoved { instance_id } => plugins::master_removed(r, instance_id),
+        E::MasterPluginRemoved { instance_id } => plugins::master_removed_echo(r, instance_id),
         E::MasterPluginMoved {
             instance_id,
             to_index,

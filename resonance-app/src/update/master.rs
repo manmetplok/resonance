@@ -97,8 +97,15 @@ pub fn handle(r: &mut Resonance, m: MasterMessage) -> Task<Message> {
             r.insert_plugin_index(instance_id, crate::state::PluginLocator::Master);
         }
         MasterMessage::RemovePluginFromMaster(instance_id) => {
+            // Mirror the removal now, not on the `MasterPluginRemoved`
+            // echo, so an undo pressed before the echo lands sees it
+            // (STATE-10 shape, ARCH-01 FU-A13c). The echo is owed, so a
+            // late one cannot drop an instance an undo re-added under
+            // this id (A-13h).
             let _ = r.engine
                 .send(AudioCommand::RemovePluginFromMaster { instance_id });
+            r.io.restore_echoes.expect_plugin_removed(instance_id);
+            crate::engine_events::plugins::master_removed(r, instance_id);
         }
         MasterMessage::MovePluginInMaster {
             instance_id,

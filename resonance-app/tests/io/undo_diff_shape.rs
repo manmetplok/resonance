@@ -1561,6 +1561,48 @@ fn a_re_added_plugins_params_follow_a_second_restore_before_its_echo() {
     settle(&mut f, late, &added, "undo remove, undo param, then the echoes");
 }
 
+/// STATE-10 on the diff path (FU-A13c): a live plugin delete (track, bus
+/// or master chain) mirrors at once and owes its `*PluginRemoved` echo, so
+/// an undo pressed before that echo re-adds the instance under its id and
+/// the late echo must not remove it again.
+fn plugin_delete_before_echo_keeps_the_plugin(tag: &str, chain: TestChain) {
+    let mut f = fixture(tag);
+    let s0 = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = *chain_ids(&f.app, chain).last().expect("the EQ landed");
+    let _ = drain(&f.rx);
+    let _ = f.app.update(remove_from(chain, eq));
+    assert!(
+        !chain_ids(&f.app, chain).contains(&eq),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo plugin delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s0, "the delete's echo, then the undo's");
+    assert!(chain_ids(&f.app, chain).contains(&eq));
+}
+
+#[test]
+fn undoing_a_track_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin(
+        "track-plugin-delete-early-undo",
+        TestChain::Track(AUDIO_TRACK),
+    );
+}
+
+#[test]
+fn undoing_a_bus_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin(
+        "bus-plugin-delete-early-undo",
+        TestChain::Bus(DRUM_BUS),
+    );
+}
+
+#[test]
+fn undoing_a_master_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin("master-plugin-delete-early-undo", TestChain::Master);
+}
+
 // ---------------------------------------------------------------------------
 // Tracks (A-13i)
 // ---------------------------------------------------------------------------
