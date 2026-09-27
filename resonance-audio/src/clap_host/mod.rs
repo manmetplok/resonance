@@ -394,6 +394,17 @@ impl PluginSlot {
     }
 }
 
+impl std::fmt::Debug for PluginSlot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never locks the instance: `Debug` of a render graph must be
+        // safe to take while the audio thread processes it.
+        f.debug_struct("PluginSlot")
+            .field("bypassed", &self.bypass.bypassed())
+            .field("bypass_param", &self.bypass_param)
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::ops::Deref for PluginSlot {
     type Target = Mutex<SyncClapInstance>;
 
@@ -405,4 +416,11 @@ impl std::ops::Deref for PluginSlot {
 
 /// The engine's live plugin instances, keyed by instance id. One entry
 /// per slot across every track, sub-track, bus and master chain.
-pub type PluginMap = IndexMap<PluginInstanceId, PluginSlot>;
+///
+/// Published as a field of the render graph (code review ARCH-02 B-4):
+/// the map is immutable once published and each slot is an `Arc`, so a
+/// copy-on-write edit of the map shares every untouched slot — and its
+/// instance mutex — with the graph the audio thread may still be
+/// reading. A removed slot's last owner is the engine thread's retire
+/// queue, never a reader (see `engine::render_graph`).
+pub type PluginMap = IndexMap<PluginInstanceId, std::sync::Arc<PluginSlot>>;

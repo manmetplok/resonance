@@ -26,15 +26,16 @@
 //! into its report line.
 //!
 //! State-lock contention is attributed per map (code review ARCH-02,
-//! A2-1): every `try_read` the callback makes on `clips` / `plugins`
+//! A2-1): every `try_read` the callback makes on `clips`
 //! goes through
 //! [`try_read_counted`], so a miss bumps that map's slot in
-//! [`LockMissCounters`] whichever branch (playing, stopped, count-in,
-//! live-MIDI pickup) made it. `render_skip_cycles` stays the
+//! [`LockMissCounters`] (only the playing branch still takes one).
+//! `render_skip_cycles` stays the
 //! "a playing block was dropped" total; the per-map counters say *which*
 //! lock a UI edit or worker thread was holding at the time. The MIDI
-//! clips (A2-4), the busses and the master chain (A2-5) and the tracks
-//! (A2-6) left this table: they are read from the published render graph
+//! clips (A2-4), the busses and the master chain (A2-5), the tracks
+//! (A2-6) and the plugin instances (A2-7) left this table: they are read
+//! from the published render graph
 //! (`engine::render_graph`), a load that cannot miss.
 //!
 //! RT-safety: `record` does arithmetic and relaxed atomic stores only.
@@ -77,24 +78,21 @@ pub const LOAD_EMA_ALPHA: f32 = 0.05;
 #[repr(usize)]
 pub enum StateMap {
     Clips = 0,
-    Plugins = 1,
 }
 
 /// Number of [`StateMap`] variants.
-pub const STATE_MAP_COUNT: usize = 2;
+pub const STATE_MAP_COUNT: usize = 1;
 
 impl StateMap {
     /// Every map, in counter order.
     pub const ALL: [StateMap; STATE_MAP_COUNT] = [
         StateMap::Clips,
-        StateMap::Plugins,
     ];
 
     /// Short name for the report line.
     pub fn name(self) -> &'static str {
         match self {
             StateMap::Clips => "clips",
-            StateMap::Plugins => "plugins",
         }
     }
 }
@@ -112,7 +110,7 @@ pub struct LockMissCounters {
 impl LockMissCounters {
     pub const fn new() -> Self {
         Self {
-            counts: [AtomicU64::new(0), AtomicU64::new(0)],
+            counts: [AtomicU64::new(0)],
         }
     }
 

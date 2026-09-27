@@ -22,7 +22,6 @@ use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 use thiserror::Error;
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -337,7 +336,6 @@ pub(crate) fn run_export(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
@@ -430,19 +428,18 @@ pub(crate) fn run_export(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, plugins);
+    let latency_comp = build_latency_comp(shared);
     // Render extra frames and drop the same number from the front:
     // plugin-delay compensation shifts every track by the pipeline
     // latency, and the master FX chain (which this export path runs,
     // unlike live PDC) shifts the summed mix by its own latency on top.
     // Trimming both re-aligns the file with the timeline and the extra
     // tail catches the delayed final samples (doc #260 finding #8).
-    let comp_latency = latency_comp.max_latency() + master_fx_latency(shared, plugins);
+    let comp_latency = latency_comp.max_latency() + master_fx_latency(shared);
     let render_stop = render_end + comp_latency;
     let ctx = ChunkCtx {
         shared,
         clips,
-        plugins,
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,
@@ -464,7 +461,7 @@ pub(crate) fn run_export(
         // meters without writing anything. `reset_plugins` (CLAP `reset`,
         // code review ENG-04) before each pass makes the render
         // deterministic so pass 2 reproduces the measured pass exactly.
-        reset_plugins(plugins, shared);
+        reset_plugins(shared);
         let mut measure = LoudnessMeasure::new(sample_rate);
         match render_range(
             &ctx,
@@ -496,7 +493,7 @@ pub(crate) fn run_export(
         // PASS 2 — apply: re-render, trim by `gain_db`, brick-wall limit
         // true peaks to the ceiling, feed the sink, and re-measure the
         // limited output for the achieved loudness report.
-        reset_plugins(plugins, shared);
+        reset_plugins(shared);
         let mut limiter = TruePeakLimiter::new(sample_rate as f32, gain_db, normalize.ceiling_dbtp);
         let mut remeasure = LoudnessMeasure::new(sample_rate);
         let mut stage: Vec<f32> = Vec::new();
@@ -549,7 +546,7 @@ pub(crate) fn run_export(
         (lufs, measured.true_peak_dbtp)
     } else {
         // Single pass — byte-for-byte the pre-normalization export.
-        reset_plugins(plugins, shared);
+        reset_plugins(shared);
         let outcome = render_range(
             &ctx,
             &mut scratch,

@@ -73,15 +73,9 @@ pub(crate) fn handle_remove_bus(ctx: &HandlerCtx, bus_id: BusId) {
     } else {
         Vec::new()
     };
-    // Drop plugin instances off the audio path.
-    {
-        let mut plugins_guard = ctx.plugins.write();
-        for pid in &removed_plugins {
-            if let Some(inst) = plugins_guard.shift_remove(pid) {
-                drop(inst);
-            }
-        }
-    }
+    // Unpublish the bus's plugin instances; the retire sweep destroys
+    // them off the audio path.
+    super::plugins::remove_plugin_slots(ctx.shared, &removed_plugins);
     let _ = ctx.event_tx.send(AudioEvent::BusRemoved { bus_id });
 }
 
@@ -161,10 +155,8 @@ pub(crate) fn handle_add_plugin_to_bus(
             let params = instance.query_params();
             let has_gui = instance.has_gui();
             let has_sidechain_input = instance.has_sidechain_input();
-            ctx.plugins.write().insert(
-                instance_id,
-                crate::clap_host::PluginSlot::new(instance),
-            );
+            let slot = Arc::new(crate::clap_host::PluginSlot::new(instance));
+            ctx.shared.edit_plugins(|plugins| plugins.insert(instance_id, slot));
             ctx.shared
                 .edit_bus(bus_id, |bus| bus.plugin_ids.push(instance_id));
             let _ = ctx.event_tx.send(AudioEvent::BusPluginAdded {
@@ -203,8 +195,7 @@ pub(crate) fn handle_remove_plugin_from_bus(
         ctx.shared
             .edit_bus(bus_id, |bus| bus.plugin_ids.retain(|&id| id != instance_id));
     }
-    let removed = ctx.plugins.write().shift_remove(&instance_id);
-    drop(removed);
+    super::plugins::remove_plugin_slots(ctx.shared, &[instance_id]);
     let _ = ctx.event_tx.send(AudioEvent::BusPluginRemoved {
         bus_id,
         instance_id,

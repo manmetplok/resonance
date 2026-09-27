@@ -28,7 +28,6 @@ use thiserror::Error;
 
 use resonance_common::FreezeCacheRef;
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::SharedState;
@@ -240,7 +239,6 @@ pub fn to_wav(
     path: String,
     shared: &Arc<SharedState>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -258,7 +256,6 @@ pub fn to_wav(
         shared,
         &cancel,
         clips,
-        plugins,
         tempo_map,
         &automation,
         sample_rate,
@@ -278,7 +275,6 @@ pub fn export_for_test(
     cancel: &AtomicBool,
     shared: &Arc<SharedState>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::AutomationSnapshot,
     sample_rate: u32,
@@ -291,7 +287,6 @@ pub fn export_for_test(
         shared,
         cancel,
         clips,
-        plugins,
         tempo_map,
         automation,
         sample_rate,
@@ -323,7 +318,6 @@ pub(crate) fn export_spawn(
     reporter: ExportReporter,
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -356,7 +350,6 @@ pub(crate) fn export_spawn(
                         &shared,
                         &cancel_render,
                         &clips,
-                        &plugins,
                         &tempo_map,
                         &automation,
                         sample_rate,
@@ -384,7 +377,6 @@ pub(crate) fn to_audio_clip_spawn(
     name: String,
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -413,7 +405,6 @@ pub(crate) fn to_audio_clip_spawn(
                         &shared,
                         &cancel_render,
                         &clips,
-                        &plugins,
                         &tempo_map,
                         &automation,
                         sample_rate,
@@ -446,7 +437,6 @@ pub fn to_freeze_cache_spawn(
     cache_path: String,
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -475,7 +465,6 @@ pub fn to_freeze_cache_spawn(
                         &shared,
                         &cancel_render,
                         &clips,
-                        &plugins,
                         &tempo_map,
                         &automation,
                         sample_rate,

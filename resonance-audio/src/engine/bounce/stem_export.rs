@@ -30,7 +30,6 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 
-use crate::clap_host::PluginMap;
 use crate::types::*;
 
 use super::super::SharedState;
@@ -56,7 +55,6 @@ pub fn export_stems(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
-    plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -126,7 +124,6 @@ pub fn export_stems(
             render_end,
             shared,
             clips,
-            plugins,
             tempo_map,
             engine_rate,
         );
@@ -171,7 +168,6 @@ pub(crate) fn export_stems_spawn(
     include_fx_tail: bool,
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
     event_tx: Sender<AudioEvent>,
@@ -199,7 +195,6 @@ pub(crate) fn export_stems_spawn(
                         &shared,
                         &cancel_render,
                         &clips,
-                        &plugins,
                         &tempo_map,
                         engine_rate,
                         &event_tx,

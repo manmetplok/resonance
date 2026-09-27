@@ -424,8 +424,8 @@ fn snapshot_for_one_lane(
 
     // #1304 replaced the bare `Mutex<SyncClapInstance>` in the plugin map with
     // `PluginSlot` (which derefs to that mutex, so every call site reads the same).
-    let mut plugins: IndexMap<u64, PluginSlot> = IndexMap::new();
-    plugins.insert(7, PluginSlot::new(instance));
+    let mut plugins: IndexMap<u64, std::sync::Arc<PluginSlot>> = IndexMap::new();
+    plugins.insert(7, std::sync::Arc::new(PluginSlot::new(instance)));
 
     let mut lanes: AutomationLanes = AutomationLanes::new();
     let target = AutomationTarget::PluginParam {

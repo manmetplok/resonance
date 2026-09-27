@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 use ringbuf::traits::{Producer, Split};
 
@@ -39,7 +38,6 @@ macro_rules! run_callback {
                 channels: $h.channels,
                 shared: &*$h.shared,
                 clips: &$h.clips,
-                plugins: &$h.plugins,
                 tempo_map: &$h.tempo_map,
                 latency_comp: &$h.latency_comp,
                 automation: &$h.automation,
@@ -87,7 +85,6 @@ pub struct MixAudioHarness {
     /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
     clips: RwLock<Vec<AudioClip>>,
-    plugins: RwLock<PluginMap>,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
     latency_comp: arc_swap::ArcSwap<crate::latency::LatencyComp>,
     automation: arc_swap::ArcSwap<AutomationSnapshot>,
@@ -150,7 +147,6 @@ impl MixAudioHarness {
         Self {
             shared,
             clips: RwLock::new(clips),
-            plugins: RwLock::new(IndexMap::new()),
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
             latency_comp: arc_swap::ArcSwap::from_pointee(crate::latency::LatencyComp::empty()),
             automation: arc_swap::ArcSwap::from_pointee(AutomationSnapshot::default()),
@@ -239,10 +235,20 @@ impl MixAudioHarness {
         self.shared.edit_master(f)
     }
 
-    /// The plugin instances the callback drives — empty until a test
-    /// inserts a hand-rolled CLAP instance (`__instance_from_raw_for_test`).
-    pub fn plugins(&self) -> &RwLock<PluginMap> {
-        &self.plugins
+    /// The plugin instances the callback drives, as published in the
+    /// current render graph — empty until a test inserts a hand-rolled
+    /// CLAP instance (`__instance_from_raw_for_test`) through
+    /// [`Self::edit_plugins`].
+    pub fn plugins(&self) -> Arc<PluginMap> {
+        self.shared.plugins()
+    }
+
+    /// Edit the plugin map and publish the new render graph, as a plugin
+    /// add / remove handler on the engine thread does (removed slots are
+    /// retired onto `shared.retired`). Callable from a second thread
+    /// while blocks render.
+    pub fn edit_plugins<R>(&self, f: impl FnOnce(&mut PluginMap) -> R) -> R {
+        self.shared.edit_plugins(f)
     }
 
     /// Publish a new automation snapshot (as the engine thread does on a
@@ -388,7 +394,6 @@ impl MixAudioHarness {
         }
         match map {
             StateMap::Clips => with_map!(self.clips),
-            StateMap::Plugins => with_map!(self.plugins),
         }
         &self.data
     }

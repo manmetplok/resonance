@@ -19,6 +19,7 @@
 use crate::note_recorder;
 
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use note_recorder::{note_recorder, Recorder};
 use resonance_audio::test_support::MixAudioHarness;
@@ -62,7 +63,7 @@ fn harness(quarters: u64) -> (MixAudioHarness, Recorder) {
         true,
     );
     let (slot, rec) = note_recorder(SR);
-    h.plugins().write().insert(INSTRUMENT, slot);
+    h.edit_plugins(|p| p.insert(INSTRUMENT, Arc::new(slot)));
     h.shared().playing.store(true, Ordering::Relaxed);
     (h, rec)
 }

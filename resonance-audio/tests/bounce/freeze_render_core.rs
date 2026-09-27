@@ -11,10 +11,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
-use resonance_audio::test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, PluginMap, SharedState};
+use resonance_audio::test_support::{AutomationSnapshot, run_supervised, to_freeze_cache, SharedState};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -22,7 +21,6 @@ const SR: u32 = 48_000;
 struct EngineState {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -30,7 +28,6 @@ fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
         clips: Arc::new(RwLock::new(Vec::new())),
-        plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -113,7 +110,6 @@ fn known_track_renders_non_silent_wav() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -167,7 +163,6 @@ fn freeze_does_not_mutate_source_clips() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -227,7 +222,6 @@ fn fingerprint_changes_when_notes_change() {
             &state.shared,
             &AtomicBool::new(false),
             &state.clips,
-            &state.plugins,
             &state.tempo_map,
             &AutomationSnapshot::default(),
             SR,
@@ -263,7 +257,6 @@ fn cancel_aborts_and_removes_partial_file() {
         &state.shared,
         &cancel,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -297,7 +290,6 @@ fn cancelling_another_renders_token_does_not_abort_the_freeze() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -336,7 +328,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -359,7 +350,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         &state.shared,
         &freeze_cancel,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -384,7 +374,6 @@ fn freeze_refuses_while_transport_playing() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,
@@ -409,7 +398,6 @@ fn missing_source_track_errors() {
         &state.shared,
         &AtomicBool::new(false),
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

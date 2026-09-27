@@ -15,12 +15,11 @@
 
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_audio::test_support::{
     attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
-    render_stem, snapshot_tuning_jobs, PluginMap, SharedState, StemSource,
+    render_stem, snapshot_tuning_jobs, SharedState, StemSource,
 };
 use resonance_audio::analyze_pitch;
 use resonance_audio::types::*;
@@ -77,7 +76,6 @@ fn detected_pitch(mono: &[f32]) -> Option<f32> {
 struct Engine {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -86,7 +84,6 @@ impl Engine {
         Self {
             shared: Arc::new(SharedState::default()),
             clips: Arc::new(RwLock::new(Vec::new())),
-            plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         }
     }
@@ -108,7 +105,6 @@ impl Engine {
             end,
             &self.shared,
             &self.clips,
-            &self.plugins,
             &self.tempo_map,
             SR,
         )

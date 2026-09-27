@@ -249,10 +249,7 @@ fn key_monitor_with_calls(calls: Option<Arc<AtomicUsize>>) -> PluginSlot {
 /// pins the documented tap point.
 fn fixture() -> EngineState {
     let state = EngineState::with_port_levels([0.0, KEY_LEVEL, 0.0]);
-    state
-        .plugins
-        .write()
-        .insert(MONITOR_ID, key_monitor());
+    state.shared.edit_plugins(|p| p.insert(MONITOR_ID, Arc::new(key_monitor())));
     for tap in [TAP_A, TAP_B] {
         state.shared.tracks().get(&tap).unwrap().set_volume(0.0);
     }
@@ -283,7 +280,6 @@ fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
         TWO_CHUNKS,
         &state.shared,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         SR,
     )
@@ -486,7 +482,6 @@ fn the_key_is_one_block_old() {
         TWO_CHUNKS,
         &state.shared,
         &state.clips,
-        &state.plugins,
         &state.tempo_map,
         SR,
     )
@@ -616,10 +611,8 @@ fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
     const PROBE_ID: PluginInstanceId = 901;
     let state = fixture();
     let calls = Arc::new(AtomicUsize::new(0));
-    state
-        .plugins
-        .write()
-        .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
+    let probe = Arc::new(key_monitor_with_calls(Some(Arc::clone(&calls))));
+    state.shared.edit_plugins(|p| p.insert(PROBE_ID, probe));
     state.add_bus(BUS, "Ghost");
     state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
     state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
@@ -627,8 +620,8 @@ fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
     route(&state, SendSource::Bus(BUS));
     let consumer_bypass = |v: bool| {
         state
-            .plugins
-            .read()
+            .shared
+            .plugins()
             .get(&MONITOR_ID)
             .unwrap()
             .bypass
@@ -658,10 +651,8 @@ fn a_muted_key_bus_whose_consumer_chain_is_dormant_does_not_render() {
     const PROBE_ID: PluginInstanceId = 901;
     let state = fixture();
     let calls = Arc::new(AtomicUsize::new(0));
-    state
-        .plugins
-        .write()
-        .insert(PROBE_ID, key_monitor_with_calls(Some(Arc::clone(&calls))));
+    let probe = Arc::new(key_monitor_with_calls(Some(Arc::clone(&calls))));
+    state.shared.edit_plugins(|p| p.insert(PROBE_ID, probe));
     state.add_bus(BUS, "Ghost");
     state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
     state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
@@ -723,7 +714,7 @@ fn live_fixture(extra: impl FnOnce(&mut Vec<Track>, &MixAudioHarnessPlugins)) ->
         true,
     );
     for (id, slot) in plugins.0 {
-        h.plugins().write().insert(id, slot);
+        h.edit_plugins(|p| p.insert(id, Arc::new(slot)));
     }
     use std::sync::atomic::Ordering;
     h.shared().playing.store(true, Ordering::Relaxed);
@@ -783,10 +774,8 @@ fn a_solo_suppressed_key_source_still_keys_live() {
         other.push_plugin(OTHER_ID);
         tracks.push(other);
     });
-    h.plugins().write().insert(
-        OTHER_ID,
-        multi_out_harness::multi_out_instrument([KEY_LEVEL, 0.0, 0.0]),
-    );
+    let other = Arc::new(multi_out_harness::multi_out_instrument([KEY_LEVEL, 0.0, 0.0]));
+    h.edit_plugins(|p| p.insert(OTHER_ID, other));
     h.tracks().get(&PARENT).unwrap().set_soloed(true);
     live_route(&h, SendSource::Track(OTHER));
 

@@ -449,7 +449,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// lost (code review MIX-06).
 fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
     let tracks_guard = ctx.tracks();
-    let plugins_guard = ctx.plugins.read();
+    let plugins_guard = ctx.plugins();
     let mut silent_l = [0.0f32; 64];
     let mut silent_r = [0.0f32; 64];
     for track in tracks_guard.values() {

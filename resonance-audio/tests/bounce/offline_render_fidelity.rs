@@ -19,12 +19,11 @@ use std::sync::Arc;
 use clap_sys::events::{clap_event_param_value, clap_input_events, CLAP_EVENT_PARAM_VALUE};
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_audio::test_support::{
     __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache, AutomationSnapshot,
-    PluginMap, PluginSlot, ResolvedParamLane, SharedState, StemBitDepth, StemSource, StemTarget,
+    PluginSlot, ResolvedParamLane, SharedState, StemBitDepth, StemSource, StemTarget,
     CLIP_DECLICK_FRAMES,
 };
 use resonance_audio::types::*;
@@ -175,7 +174,6 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
 struct Engine {
     shared: Arc<SharedState>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
-    plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -185,7 +183,6 @@ impl Engine {
         let e = Engine {
             shared: Arc::new(SharedState::default()),
             clips: Arc::new(RwLock::new(Vec::new())),
-            plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
         e.shared.edit_tracks(|m| {
@@ -196,12 +193,12 @@ impl Engine {
     }
 
     fn add_master_fx(&self, slot: PluginSlot) {
-        self.plugins.write().insert(FX_ID, slot);
+        self.shared.edit_plugins(|p| p.insert(FX_ID, Arc::new(slot)));
         self.shared.edit_master(|master| master.plugin_ids.push(FX_ID));
     }
 
     fn add_track_fx(&self, slot: PluginSlot) {
-        self.plugins.write().insert(FX_ID, slot);
+        self.shared.edit_plugins(|p| p.insert(FX_ID, Arc::new(slot)));
         let _ = self.shared.tracks()[&1].push_plugin(FX_ID);
     }
 
@@ -222,7 +219,6 @@ impl Engine {
             &AtomicBool::new(cancel),
             &self.shared,
             &self.clips,
-            &self.plugins,
             &self.tempo_map,
             automation,
             SR,
@@ -235,7 +231,6 @@ impl Engine {
             &self.shared,
             &AtomicBool::new(false),
             &self.clips,
-            &self.plugins,
             &self.tempo_map,
             automation,
             SR,
@@ -425,7 +420,6 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         &e.shared,
         &AtomicBool::new(false),
         &e.clips,
-        &e.plugins,
         &e.tempo_map,
         SR,
         &tx,

@@ -111,10 +111,10 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
     let (mut chains, bus_chains, master_latency) = {
-        // One graph for tracks, busses and master, so the table is built
-        // from a single consistent topology.
+        // One graph for tracks, busses, master and plugins, so the table
+        // is built from a single consistent topology.
         let graph = ctx.shared.graph.load();
-        let plugins_guard = ctx.plugins.read();
+        let plugins_guard = &graph.plugins;
         let latency_of = |id: crate::types::PluginInstanceId| {
             plugins_guard
                 .get(&id)
@@ -228,7 +228,7 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
 pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalInstruments) {
     let mut any_restarted = false;
     {
-        let plugins_guard = ctx.plugins.read();
+        let plugins_guard = ctx.plugins();
         for (&instance_id, mutex) in plugins_guard.iter() {
             let Some(mut inst) = mutex.try_lock() else {
                 continue;
@@ -295,7 +295,7 @@ pub fn service_host_restart_request(
     )
 }
 
-/// Refuse an add whose id is already live in `ctx.plugins`, rather than
+/// Refuse an add whose id is already live in `ctx.plugins()`, rather than
 /// silently replacing the instance it names — shared by the track, bus
 /// and master add paths (ARCH-04 D-1).
 ///
@@ -316,7 +316,7 @@ pub(crate) fn reject_if_plugin_id_in_use(
     id: PluginInstanceId,
     clap_plugin_id: &str,
 ) -> bool {
-    if ctx.plugins.read().contains_key(&id) {
+    if ctx.plugins().contains_key(&id) {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(format!(
             "plugin instance id {id} ({clap_plugin_id}) is already in use; refusing the add \
              rather than replacing the live instance"
@@ -324,6 +324,57 @@ pub(crate) fn reject_if_plugin_id_in_use(
         true
     } else {
         false
+    }
+}
+
+/// Unpublish the plugin instances `ids` from the render graph in one
+/// edit (code review ARCH-02 B-4). Ids the graph does not hold are
+/// ignored, and nothing is published when it holds none of them.
+///
+/// Nothing is destroyed here: `edit_plugins` retires each removed slot,
+/// and the engine loop's sweep runs its `ClapInstance::drop` once no
+/// block or offline chunk pins it — so neither this thread's caller nor
+/// the audio thread ever pays for a deactivate / destroy inline.
+pub(crate) fn remove_plugin_slots(shared: &super::SharedState, ids: &[PluginInstanceId]) {
+    let any_live = {
+        let graph = shared.graph.load();
+        ids.iter().any(|id| graph.plugins.contains_key(id))
+    };
+    if !any_live {
+        return;
+    }
+    shared.edit_plugins(|plugins| {
+        for id in ids {
+            plugins.shift_remove(id);
+        }
+    });
+}
+
+/// Unpublish every plugin instance and wait — sweeping the retire
+/// queue — until each one has been destroyed on the calling (engine)
+/// thread, or `timeout` passes. Returns whether every instance went.
+///
+/// For engine shutdown, where no later sweep will come: a block still
+/// in flight holds the previous graph (and with it the slots) for at
+/// most one callback, so this normally returns after a sweep or two.
+pub(crate) fn release_all_plugins(shared: &super::SharedState, timeout: std::time::Duration) -> bool {
+    let released: Vec<std::sync::Weak<crate::clap_host::PluginSlot>> =
+        shared.edit_plugins(|plugins| {
+            plugins
+                .drain(..)
+                .map(|(_, slot)| Arc::downgrade(&slot))
+                .collect()
+        });
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        shared.retired.sweep();
+        if released.iter().all(|slot| slot.strong_count() == 0) {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
 
@@ -377,10 +428,11 @@ pub(crate) fn handle_add_plugin(
             let output_port_count = instance.output_port_count();
             let output_port_names = instance.output_port_names();
 
-            ctx.plugins.write().insert(
-                instance_id,
-                crate::clap_host::PluginSlot::new(instance),
-            );
+            // Publish the slot first, then name it on the chain: a block
+            // between the two sees the slot unused, never a chain id with
+            // no instance behind it.
+            let slot = Arc::new(crate::clap_host::PluginSlot::new(instance));
+            ctx.shared.edit_plugins(|plugins| plugins.insert(instance_id, slot));
 
             // `push_plugin` publishes the new chain via `ArcSwap::store`
             // (shared by every copy of the track), so no render-graph
@@ -426,10 +478,9 @@ pub(crate) fn handle_remove_plugin(
             .retired
             .retire(track.retain_plugins(|&id| id != instance_id));
     }
-    // Remove from map then drop outside the write lock so the audio
-    // callback isn't blocked during plugin deactivation.
-    let removed = ctx.plugins.write().shift_remove(&instance_id);
-    drop(removed);
+    // Unpublish the instance. The slot is retired, not dropped: the
+    // engine loop's sweep destroys it once no block pins it (B-4).
+    remove_plugin_slots(ctx.shared, &[instance_id]);
     let _ = ctx.event_tx.send(AudioEvent::PluginRemoved {
         track_id,
         instance_id,
@@ -480,7 +531,7 @@ pub(crate) fn handle_set_plugin_param(
     param_id: u32,
     value: f64,
 ) {
-    if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             inst.0.set_param(param_id, value);
             // `set_param` only queues; the queue is drained inside
@@ -576,7 +627,7 @@ pub(crate) fn handle_set_plugin_bypass(
     bypassed: bool,
 ) {
     let own_bypass_param = {
-        let plugins_guard = ctx.plugins.read();
+        let plugins_guard = ctx.plugins();
         let Some(slot) = plugins_guard.get(&instance_id) else {
             let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::not_found(format!(
                 "Cannot bypass plugin {}: no such plugin instance",
@@ -654,7 +705,7 @@ fn debug_assert_editor_deadlock_rule() {
 pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     debug_assert_editor_deadlock_rule();
     let mut outcome = Err(PluginEditorFailure::UnknownInstance);
-    if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
         // open_gui is a main-thread operation; the audio thread holds
         // a different lock. Block briefly if the audio thread is
         // mid-process and retry.
@@ -686,7 +737,7 @@ pub(crate) fn handle_open_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIns
 
 pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
     debug_assert_editor_deadlock_rule();
-    if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             // Whether this actually closed an open editor or was a
             // no-op, the reported state below is the same: closed.
@@ -711,7 +762,7 @@ pub(crate) fn handle_close_plugin_editor(ctx: &HandlerCtx, instance_id: PluginIn
 }
 
 pub(crate) fn handle_save_plugin_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
-    if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(inst) = mutex.try_lock() {
             let data = inst.0.save_state();
             if let Some(data) = data {
@@ -733,7 +784,7 @@ pub(crate) fn handle_load_plugin_state(
     instance_id: PluginInstanceId,
     data: Vec<u8>,
 ) {
-    if let Some(mutex) = ctx.plugins.read().get(&instance_id) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
             if let Some(event) = reload_plugin_state(&mut inst.0, instance_id, &data) {
                 let _ = ctx.event_tx.send(event);
@@ -777,7 +828,7 @@ pub fn reload_plugin_state(
 
 pub(crate) fn handle_save_all_plugin_states(ctx: &HandlerCtx) {
     let mut states = Vec::new();
-    let plugins_guard = ctx.plugins.read();
+    let plugins_guard = ctx.plugins();
     let mut retry = false;
     for (&instance_id, mutex) in plugins_guard.iter() {
         if let Some(inst) = mutex.try_lock() {

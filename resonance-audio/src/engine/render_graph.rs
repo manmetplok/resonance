@@ -9,8 +9,8 @@
 //! wait-free [`load`](RenderGraphSlot::load) and never fails.
 //!
 //! Migration state: `midi_clips` (B-1), `busses` and `master` (B-2),
-//! `tracks` (B-3). `plugins` and `clips` join as fields in B-4…B-5;
-//! until then they stay behind their locks.
+//! `tracks` (B-3), `plugins` (B-4). `clips` joins in B-5; until then it
+//! stays behind its lock.
 //!
 //! Ownership and threading:
 //!
@@ -20,7 +20,10 @@
 //!   remove / re-route / MIDI-binding edits, `ClearAll`).
 //!   Each edit copies the element list (`O(n)` `Arc` clones),
 //!   copy-on-writes the one element it changes (`Arc::make_mut` — the
-//!   published graph still shares it), and publishes. No worker thread
+//!   published graph still shares it), and publishes. Plugin add /
+//!   remove (track, bus and master chains, track and bus removal,
+//!   `ClearAll`, the startup scan, shutdown) edit the plugin map the
+//!   same way. No worker thread
 //!   writes the graph — the offline bounce-in-place's cancel posts
 //!   `AudioCommand::BounceTargetCancelled` so the engine thread removes
 //!   its target track. The `edit` mutex serialises the
@@ -48,6 +51,30 @@
 //!   held). A removed track therefore needs no retiring of its own: it
 //!   rides out on the replaced graph and drops, with its frozen cache and
 //!   insert chain, on the engine thread.
+//! - **Plugin instances** (B-4). The map holds `Arc<PluginSlot>`, so a
+//!   copy of the map shares every slot — and the instance `Mutex` a
+//!   block's `process()` locks — with the graph a reader still holds.
+//!   The render path still `try_lock`s the *instance* (the offline
+//!   renderers `try_lock_with_backoff`), but reaching it is a plain map
+//!   lookup on the loaded graph. `ClapInstance::drop` (editor teardown,
+//!   deactivate, destroy) must never run on the audio thread, so
+//!   [`RenderGraphSlot::edit_plugins`] retires every slot an edit
+//!   removed onto the same queue, *individually*: the sweep drops a slot
+//!   only once the queue is its sole owner (`strong_count == 1`) — after
+//!   every graph that listed it has been swept and no reader holds a
+//!   clone of it. Whatever a reader pinned, it only ever releases a
+//!   reference the queue still shares, so the destructor runs in the
+//!   engine loop's sweep. A slot outlives its removal by up to one sweep
+//!   tick (~16 ms) after the last reader lets go; bundles are never
+//!   unloaded (`ClapBundle`'s `Drop`), so a late destroy is always safe.
+//! - **Chain order stays where it was.** A track's insert chain is the
+//!   `ArcSwap<Vec<PluginInstanceId>>` in its shared `TrackRuntime`
+//!   (published without a graph edit); bus and master chains are graph
+//!   structure already. A block that sees a chain id its graph's plugin
+//!   map lacks skips that slot, and a map entry no chain names is never
+//!   processed — so add (map, then chain) and remove (chain, then map)
+//!   each risk at most one block in which the slot is silent, never one
+//!   in which a freed instance is reachable.
 //! - **Readers**: the audio callback `load()`s once per block; bounce /
 //!   freeze / stem workers load once per chunk (they keep seeing edits at
 //!   chunk granularity, as they did through the per-chunk read guards).
@@ -58,7 +85,10 @@ use arc_swap::ArcSwap;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
 
-use crate::types::{Bus, BusId, ClipId, MasterBus, MidiClip, Track, TrackId, TrackMap};
+use crate::clap_host::{PluginMap, PluginSlot};
+use crate::types::{
+    Bus, BusId, ClipId, MasterBus, MidiClip, PluginInstanceId, Track, TrackId, TrackMap,
+};
 
 use super::retire::{self, Retired};
 
@@ -76,6 +106,9 @@ pub struct RenderGraph {
     /// Every track and sub-track, in insertion order (the order stems,
     /// latency comp and the monitor-source pick walk them in).
     pub tracks: Arc<TrackMap>,
+    /// Every live plugin instance, across every track, sub-track, bus
+    /// and master chain. The chains name slots by id; this owns them.
+    pub plugins: Arc<PluginMap>,
 }
 
 impl Default for RenderGraph {
@@ -85,6 +118,7 @@ impl Default for RenderGraph {
             busses: Arc::new(IndexMap::new()),
             master: Arc::new(MasterBus::default()),
             tracks: Arc::new(TrackMap::new()),
+            plugins: Arc::new(PluginMap::new()),
         }
     }
 }
@@ -103,6 +137,11 @@ impl RenderGraph {
     /// The track with `track_id`, if any.
     pub fn track(&self, track_id: TrackId) -> Option<&Track> {
         self.tracks.get(&track_id).map(|t| &**t)
+    }
+
+    /// The plugin slot with `instance_id`, if any.
+    pub fn plugin(&self, instance_id: PluginInstanceId) -> Option<&PluginSlot> {
+        self.plugins.get(&instance_id).map(|p| &**p)
     }
 }
 
@@ -127,6 +166,7 @@ impl std::fmt::Debug for RenderGraphSlot {
             .field("busses", &graph.busses.len())
             .field("master_plugins", &graph.master.plugin_ids.len())
             .field("tracks", &graph.tracks.len())
+            .field("plugins", &graph.plugins.len())
             .finish()
     }
 }
@@ -283,6 +323,30 @@ impl RenderGraphSlot {
             g.tracks = Arc::new(tracks);
             g.busses = Arc::new(busses);
         });
+        out
+    }
+
+    /// Edit the plugin map (insert, remove, drain) and publish the
+    /// result. `f` gets a copy of the map whose slots are shared with the
+    /// published graph. Always publishes. Engine thread.
+    ///
+    /// Drop discipline: every slot the published map held that `f`'s map
+    /// no longer holds (removed, or replaced under the same id) is
+    /// retired onto `retired` on its own, so its `ClapInstance` is
+    /// destroyed by the engine loop's sweep once nothing else owns it —
+    /// never by a reader that pinned an older graph, and never inside
+    /// this call (see the module docs).
+    pub fn edit_plugins<R>(&self, retired: &Retired, f: impl FnOnce(&mut PluginMap) -> R) -> R {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        let mut plugins = (*current.plugins).clone();
+        let out = f(&mut plugins);
+        for (id, slot) in current.plugins.iter() {
+            if !plugins.get(id).is_some_and(|kept| Arc::ptr_eq(kept, slot)) {
+                retired.retire(Arc::clone(slot));
+            }
+        }
+        self.publish_locked(&current, retired, |g| g.plugins = Arc::new(plugins));
         out
     }
 

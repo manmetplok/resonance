@@ -270,7 +270,7 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
     // on the parent AND those sub-tracks -- one flat id list. A parent's
     // `RemoveTrack` takes its sub-tracks with it (below), and their
     // plugin chains must go the same way: left out of this list, a
-    // sub-track's instances would never be removed from `ctx.plugins` at
+    // sub-track's instances would never be removed from `ctx.plugins()` at
     // all (no track left to name them from), leaking (never dropped,
     // never deactivated) past the delete (FU-A13g; the diff-restore path
     // already got this right by removing each sub-track with its own
@@ -293,19 +293,12 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
         }
         (sub_ids, plugin_ids)
     };
-    // Remove plugins for this track and its sub-tracks -- extract under
-    // write lock, then drop instances outside the lock so audio callback
-    // isn't blocked. No echo for any of them: a track removal takes its
+    // Unpublish the plugins of this track and its sub-tracks in one
+    // graph edit; the retire sweep destroys them once no block pins
+    // them (B-4). No echo for any of them: a track removal takes its
     // whole chain silently (`TrackRemoved` below covers it), the same
     // contract the parent's own plugins already had (ba todo #1311).
-    let removed_plugins: Vec<_> = {
-        let mut plugins_guard = ctx.plugins.write();
-        plugin_ids
-            .iter()
-            .filter_map(|pid| plugins_guard.shift_remove(pid))
-            .collect()
-    };
-    drop(removed_plugins);
+    super::plugins::remove_plugin_slots(ctx.shared, &plugin_ids);
     // Drop the parent track and its sub-tracks in one published graph.
     // The removed tracks (with their frozen caches and insert chains)
     // ride out on the replaced graph, which the retire sweep drops on
@@ -516,13 +509,11 @@ pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {
     state.rec.input_stream = None;
     state.rec.buffers.clear();
 
-    // Drop all plugin instances outside the write lock
-    {
-        let mut plugins_guard = ctx.plugins.write();
-        let removed: Vec<_> = plugins_guard.drain(..).collect();
-        drop(plugins_guard);
-        drop(removed);
-    }
+    // Unpublish every plugin instance. The retire sweep destroys them
+    // once no block pins them (B-4) — after `state.bundles` is cleared
+    // below, which is safe: a bundle's library is never unloaded
+    // (`ClapBundle`'s `Drop`).
+    ctx.shared.edit_plugins(|plugins| plugins.clear());
 
     // Clear tracks. The old graph (and the tracks, frozen caches and
     // chains only it held) is retired and dropped by the engine loop's
