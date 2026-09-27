@@ -230,7 +230,7 @@ impl<'a> ComposeTrackCanvas<'a> {
             c.track_id.hash(&mut ch);
             c.start_sample.hash(&mut ch);
             c.duration_ticks.hash(&mut ch);
-            for n in &c.notes {
+            for n in c.notes.iter() {
                 n.note.hash(&mut ch);
                 n.start_tick.hash(&mut ch);
                 n.duration_ticks.hash(&mut ch);

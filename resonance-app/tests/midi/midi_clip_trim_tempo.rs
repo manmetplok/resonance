@@ -57,7 +57,7 @@ fn build_app_with_tempo_ramp_clip(duration_ticks: u64) -> Resonance {
         start_sample: 0,
         duration_ticks,
         name: "test".to_string(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
@@ -272,7 +272,7 @@ fn flat_tempo_right_edge_trim_matches_scalar_projection() {
         start_sample: 0,
         duration_ticks,
         name: "test".to_string(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

@@ -33,7 +33,8 @@ fn app_with_clip(start_sample: u64) -> Resonance {
             velocity: 0.8,
             start_tick: 0,
             duration_ticks: TPQ,
-        }],
+        }]
+        .into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

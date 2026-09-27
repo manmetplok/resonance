@@ -308,3 +308,116 @@ fn consecutive_snapshots_share_plugin_state_blobs() {
         "two snapshots of an unchanged plugin must point at the same blob"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Notes as Arc<Vec<MidiNote>> (ARCH-09 A9-3)
+// ---------------------------------------------------------------------------
+
+const NOTE_PROBE_CLIPS: u64 = 20;
+const NOTE_PROBE_NOTES_PER_CLIP: usize = 100; // 20 * 100 = 2_000 notes.
+
+/// A synthetic project with `NOTE_PROBE_CLIPS` MIDI clips of
+/// `NOTE_PROBE_NOTES_PER_CLIP` notes each (2 000 notes total), no plugins,
+/// no active project — just enough for `snapshot_for_undo` to walk
+/// `midi_clips`.
+fn app_with_2000_notes() -> resonance_app::Resonance {
+    let (mut app, _task) = resonance_app::Resonance::new_for_test();
+    for clip_id in 0..NOTE_PROBE_CLIPS {
+        let notes: Vec<resonance_audio::types::MidiNote> = (0..NOTE_PROBE_NOTES_PER_CLIP)
+            .map(|i| resonance_audio::types::MidiNote {
+                note: 60,
+                velocity: 0.8,
+                start_tick: i as u64 * 120,
+                duration_ticks: 100,
+            })
+            .collect();
+        app.test_push_midi_clip(resonance_app::state::MidiClipState {
+            id: clip_id,
+            track_id: 1,
+            start_sample: 0,
+            duration_ticks: NOTE_PROBE_NOTES_PER_CLIP as u64 * 120,
+            name: format!("clip {clip_id}"),
+            notes: notes.into(),
+            trim_start_ticks: 0,
+            trim_end_ticks: 0,
+        });
+    }
+    app
+}
+
+/// Same shape as `snapshot_cost_probe_on_demo_project`, but on a synthetic
+/// 2 000-note project with no plugins — isolates the note-vector cost
+/// `snapshot_for_undo` pays per snapshot. Before ARCH-09 A9-3 every
+/// snapshot deep-copied all 2 000 notes; after, an untouched clip's notes
+/// are a refcount bump. Prints, never asserts on time.
+#[test]
+fn snapshot_cost_probe_on_2000_note_project() {
+    use std::hint::black_box;
+    use std::time::Instant;
+
+    let app = app_with_2000_notes();
+
+    const N: u32 = 200;
+    let t = Instant::now();
+    for _ in 0..N {
+        black_box(app.test_snapshot_for_undo());
+    }
+    let per_snapshot = t.elapsed() / N;
+
+    eprintln!(
+        "snapshot cost probe: {NOTE_PROBE_CLIPS} midi clips x {NOTE_PROBE_NOTES_PER_CLIP} notes \
+         ({} notes total); snapshot_for_undo = {per_snapshot:?}",
+        NOTE_PROBE_CLIPS as usize * NOTE_PROBE_NOTES_PER_CLIP,
+    );
+}
+
+/// ARCH-09 A9-3's done-when: snapshot a 2 000-note project 200 times,
+/// editing one clip's notes each time via `Arc::make_mut`. Every *other*
+/// clip's notes must stay pointer-shared with the previous snapshot across
+/// every consecutive pair, and only the edited clip's notes may change
+/// pointer (copy-on-write against the snapshot still holding the old Arc).
+#[test]
+fn undo_snapshot_shares_unedited_clip_notes_by_pointer() {
+    use std::sync::Arc;
+
+    let mut app = app_with_2000_notes();
+    const EDITED: u64 = 7;
+
+    let mut prev = app.test_snapshot_for_undo();
+    for i in 0..200u64 {
+        {
+            let clip = app
+                .test_midi_clips_mut()
+                .iter_mut()
+                .find(|c| c.id == EDITED)
+                .expect("edited clip exists");
+            Arc::make_mut(&mut clip.notes).push(resonance_audio::types::MidiNote {
+                note: 61,
+                velocity: 0.5,
+                start_tick: NOTE_PROBE_NOTES_PER_CLIP as u64 * 120 + i,
+                duration_ticks: 10,
+            });
+        }
+        let snap = app.test_snapshot_for_undo();
+        assert_eq!(
+            prev.project.midi_notes.len(),
+            snap.project.midi_notes.len(),
+            "no clip was added or removed"
+        );
+        for (id, notes) in &prev.project.midi_notes {
+            let next = &snap.project.midi_notes[id];
+            if *id == EDITED {
+                assert!(
+                    !Arc::ptr_eq(notes, next),
+                    "edit {i}: the edited clip's notes must get a fresh Arc"
+                );
+            } else {
+                assert!(
+                    Arc::ptr_eq(notes, next),
+                    "edit {i}: clip {id}'s notes must stay pointer-shared — nothing touched it"
+                );
+            }
+        }
+        prev = snap;
+    }
+}

@@ -190,7 +190,7 @@ pub fn seed_demo_content(app: &mut Resonance) {
             start_sample: (start_bar * bar_samples) as SamplePos,
             duration_ticks: total_ticks,
             name: name.to_string(),
-            notes,
+            notes: std::sync::Arc::new(notes),
             trim_start_ticks: 0,
             trim_end_ticks: 0,
         }
@@ -367,7 +367,7 @@ fn seed_demo_vocal_melody(
         start_sample: 0,
         duration_ticks,
         name: format!("{} \u{00B7} Lead Vocal", def.name),
-        notes: midi_notes,
+        notes: std::sync::Arc::new(midi_notes),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

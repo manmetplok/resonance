@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId, TICKS_PER_QUARTER_NOTE};
 
@@ -540,7 +541,7 @@ const CLAP_MASTERING: &str = "com.resonance.mastering";
 #[derive(Debug, Clone)]
 pub struct BuiltinProject {
     pub file: ProjectFile,
-    pub midi_notes: HashMap<ClipId, Vec<MidiNote>>,
+    pub midi_notes: HashMap<ClipId, Arc<Vec<MidiNote>>>,
 }
 
 impl BuiltinProject {
@@ -938,7 +939,7 @@ fn build_vocal_songwriting() -> BuiltinProject {
     };
 
     let mut midi_notes = HashMap::new();
-    midi_notes.insert(VOCAL_CLIP, notes);
+    midi_notes.insert(VOCAL_CLIP, Arc::new(notes));
 
     BuiltinProject { file, midi_notes }
 }

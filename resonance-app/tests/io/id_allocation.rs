@@ -608,7 +608,7 @@ fn save_and_reload(f: &mut Fixture) {
         .app
         .test_midi_clips()
         .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
         .collect();
     project::save_project(&f.project, &file, &[], &midi_clips).expect("save");
     let loaded = project::load_project(&f.project).expect("reload");

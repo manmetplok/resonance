@@ -117,7 +117,8 @@ fn app() -> Resonance {
                 start_tick: 960,
                 duration_ticks: 960,
             },
-        ],
+        ]
+        .into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

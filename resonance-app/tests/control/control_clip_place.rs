@@ -946,7 +946,7 @@ fn a_midi_clip_is_refused_with_a_pointer_to_notes() {
         start_sample: 0,
         duration_ticks: 1920,
         name: "part".to_owned(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

@@ -293,7 +293,8 @@ fn a_frozen_track_whose_generated_clip_was_deleted_still_goes_stale() {
             velocity: 0.8,
             start_tick: 0,
             duration_ticks: 480,
-        }],
+        }]
+        .into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
@@ -377,7 +378,7 @@ fn a_reopen_reserves_past_derived_clip_wavs_on_disk() {
         .app
         .test_midi_clips()
         .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
         .collect();
     let dir = s._root.path().join("reopened.rproj");
     std::fs::create_dir_all(dir.join("audio")).expect("bundle dir");

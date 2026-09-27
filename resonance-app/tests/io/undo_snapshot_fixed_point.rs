@@ -517,7 +517,7 @@ fn canonical_lyrics(snapshot: &UndoSnapshot) -> HashMap<ClipId, Vec<String>> {
         .iter()
         .filter(|pmc| !pmc.vocal_lyrics.is_empty())
         .map(|pmc| {
-            let n = snapshot.project.midi_notes.get(&pmc.id).map_or(0, Vec::len);
+            let n = snapshot.project.midi_notes.get(&pmc.id).map_or(0, |notes| notes.len());
             let mut lyrics = pmc.vocal_lyrics.clone();
             lyrics.resize(n, String::new());
             (pmc.id, lyrics)
@@ -2298,7 +2298,7 @@ fn save_and_reload(
         .app
         .test_midi_clips()
         .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
         .collect();
     let dir = f.root.join(format!("{tag}.rproj"));
     std::fs::create_dir_all(dir.join("audio")).expect("create reload dir");
@@ -2352,7 +2352,7 @@ fn diverge_from_positional_rebuild(
         start_sample: vocal_start,
         duration_ticks: 960,
         name: "hand-drawn".into(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

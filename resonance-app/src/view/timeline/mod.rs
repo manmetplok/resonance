@@ -652,7 +652,7 @@ impl<'a> TimelineCanvas<'a> {
             // the frozen-render silhouette) read; velocity is not drawn
             // and is deliberately excluded.
             c.notes.len().hash(&mut midi_h);
-            for n in &c.notes {
+            for n in c.notes.iter() {
                 n.note.hash(&mut midi_h);
                 n.start_tick.hash(&mut midi_h);
                 n.duration_ticks.hash(&mut midi_h);

@@ -137,7 +137,7 @@ pub(crate) fn install_derived_midi_clip(
             start_sample: clip.start_sample,
             duration_ticks: clip.duration_ticks,
             name: clip.name.to_owned(),
-            notes: clip.notes,
+            notes: std::sync::Arc::new(clip.notes),
             trim_start_ticks: 0,
             trim_end_ticks: 0,
         });

@@ -37,7 +37,7 @@ fn app_with_clip(notes: Vec<MidiNote>) -> Resonance {
         start_sample: 0,
         duration_ticks: 4 * TPQ,
         name: "clip".to_owned(),
-        notes,
+        notes: notes.into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

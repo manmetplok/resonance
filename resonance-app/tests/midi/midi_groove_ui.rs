@@ -42,7 +42,7 @@ fn app_with_open_clip(count: usize) -> (Resonance, Receiver<AudioCommand>) {
         start_sample: 0,
         duration_ticks: 4 * 480,
         name: "test".to_string(),
-        notes: (0..count).map(|i| note(i as u64 * 117)).collect(),
+        notes: (0..count).map(|i| note(i as u64 * 117)).collect::<Vec<_>>().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

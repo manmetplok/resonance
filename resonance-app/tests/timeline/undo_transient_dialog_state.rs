@@ -340,7 +340,8 @@ fn add_external_track_with_clip(app: &mut Resonance, id: resonance_audio::types:
             velocity: 0.8,
             start_tick: 0,
             duration_ticks: 480,
-        }],
+        }]
+        .into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

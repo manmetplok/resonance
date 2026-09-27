@@ -116,7 +116,7 @@ pub(super) fn handle_create_midi_clip(
             start_sample,
             duration_ticks,
             name,
-            notes: Vec::new(),
+            notes: std::sync::Arc::new(Vec::new()),
             trim_start_ticks: 0,
             trim_end_ticks: 0,
         });

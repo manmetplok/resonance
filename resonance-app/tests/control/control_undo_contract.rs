@@ -85,7 +85,7 @@ fn track_delete_of_a_track_with_a_clip_is_one_revision_and_one_entry() {
         start_sample: 0,
         duration_ticks: 3840,
         name: "clip".into(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

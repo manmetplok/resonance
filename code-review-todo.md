@@ -99,6 +99,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-13i (ARCH-01) | Diff-path add/remove of tracks (sub-tracks, type change) + clips; `clip_removals`; per-track fresh/kept; gate always true — no undo takes `ClearAll` | opus | merged | c630788a |
 | refactor-intent A-13j (ARCH-01) | Undo `ClearAll` fallback deleted; one `reconcile_all` (DiskLoad / Undo); −416 net lines. **Epic A done** (all five done-when checks verified) | opus | merged | 423ed8c1 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
+| refactor-intent A-9 (ARCH-09) | `MidiClipState.notes` / `LoadedProject.midi_notes` as `Arc<Vec<MidiNote>>`; snapshots share unedited clips' notes; `ptr_eq` fast paths. **ARCH-09 done** (A-14 skipped) | sonnet | merged | 7f07712f |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
 | refactor-intent A-12b (ARCH-06) | A6-2 batch 2: PresetState (8), ModalState (7); `Resonance` 79 → 66 fields | sonnet | merged | 7c9af9de |
@@ -1914,7 +1915,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Make `EngineHandlerHarness` the preferred surface for new engine tests so future helpers do not need re-exporting.
 - **Verification / done-when:** `cargo test -p resonance-audio --no-run 2>&1 | grep -c Executable` ≤ 10; `run-tests.py` wall clock recorded before/after; `grep -rn '__test_support' resonance-app/src` returns only `#[cfg(feature)]`-gated lines.
 
-### [ ] ARCH-04 — (partial: A4-1..3 @0c09001c — `state/ids.rs`, collision test found+fixed a real engine hint-bump track/group collision; A4-4 app-owned ids → epic) Entity ids are allocated in two places with hand-partitioned bases
+### [ ] ARCH-04 — (partial: D-1..D-5 plugin/send/bus/track/reference ids app-owned, D-6 design, D-7a assets, D-7c CreateMidiClip; D-7b/d/e/f blocked on the D-6 human decisions) Entity ids are allocated in two places with hand-partitioned bases
 - **Severity:** medium
 - **Category:** api-design
 - **Location:** engine allocators: `resonance-audio/src/engine/thread/mod.rs` + `engine/*.rs` (`next_clip_id`, `next_track_id`, `next_plugin_id`, `next_bus_id`, `next_send_id`, `next_group_id`, `next_take_group_id`, `next_asset_id`, …); app allocators: `resonance-app/src/state/plugin_index.rs:158` (`allocate_control_plugin_id`, base `CONTROL_PLUGIN_ID_BASE = 3_000_000_000` in `resonance-audio/src/types/mod.rs:34`), `resonance-app/src/state/aux_sends.rs:121` (`CONTROL_SEND_ID_BASE = 2_000_000_000`), `resonance-app/src/compose/state.rs:31` (`DERIVED_CLIP_ID_BASE = 1 << 40`), plus `next_return_bus_id`, `next_sub_track_id`, `next_lane_id`; the `AudioCommand::ReserveAssetIds` command (`types/commands.rs:95`) and the hint-vs-base rule in `engine/plugins.rs:244-265`.
@@ -1927,7 +1928,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: demo seeding (`demo.rs`) and templates construct entities before the engine echoes; they need the allocator too.
 - **Verification / done-when:** `grep -rn 'next_[a-z_]*_id' resonance-audio/src/engine` empty; `grep -rn '_ID_BASE' resonance-app resonance-audio` empty; a test loads a project, adds one of each entity via GUI and via control, saves, reloads, and asserts no id reuse.
 
-### [ ] ARCH-05 — (partial: tracing facade, RT print fix, invariants @9dcd3bcd + full app sweep @359709b8 — no eprintln left in library crates; error taxonomy A5-3/4 open → epic) No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
+### [x] ARCH-05 — (done: Epic C — C-1..C-5, typed EngineError + thiserror, no pub Result<_, String> in audio/common, invariant) No error taxonomy or logging facade: `String` errors and `eprintln!` everywhere
 - **Severity:** medium
 - **Category:** consistency
 - **Location:** `resonance-audio/src/types/events.rs` (`Error(String)`, `BounceError(String)`, `TrackBounceError(String)`, `StemExportError(String)`, …); `Result<_, String>` counts: audio 41, app 27, common 23, amp 65, plugin 8; `eprintln!` counts: app 49, audio 34; only `resonance-mcp` and `resonance-svs` use `tracing`, only `resonance-control` and `resonance-music-theory` use `thiserror`; `resonance-app/src/engine_events/dispatch.rs:56` logs an engine report with `eprintln!` because "no UI surface yet".
@@ -1939,7 +1940,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Convert `Result<_, String>` in `resonance-audio` and `resonance-common` to the new type behind `thiserror`; leave plugin crates for last (their strings are mostly internal).
 - **Verification / done-when:** `grep -rn 'eprintln!' resonance-app/src resonance-audio/src` empty; no `AudioEvent` variant carries a bare `String` error; `resonance-app/src/update/control/reply.rs` maps `EngineErrorKind` → `ErrorKind` exhaustively with no wildcard arm.
 
-### [ ] ARCH-06 — (partial: A6-1 landed @3492f217, message.rs 1771→1051 lines; Resonance sub-states A6-2/3 + exhaustive undo_action A6-4 open) `Resonance` and `message.rs` are the hub files every change touches
+### [x] ARCH-06 — (done: A-10 exhaustive undo_action + invariant, A-11 message enums moved, A-12a–g Resonance 88 → 40 fields) `Resonance` and `message.rs` are the hub files every change touches
 - **Severity:** medium
 - **Category:** modularity
 - **Location:** `resonance-app/src/lib.rs` (989 lines, `Resonance` with 89 fields; 85 commits/300), `resonance-app/src/message.rs` (1821 lines, 31 sub-enums, 406 variants; 128 commits/300), `resonance-app/src/undo/classify.rs` (543 lines, 30 commits), `resonance-app/src/engine_events/dispatch.rs` (72 commits).
@@ -1951,7 +1952,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Move undo classification beside the enum: `impl TrackMessage { fn undo_action(&self) -> UndoAction }` with an exhaustive match (no `_`), so adding a variant fails to compile until classified. Delete the sub-enum catch-alls in `classify.rs` as each domain migrates.
 - **Verification / done-when:** `message.rs` < 300 lines; `Resonance` ≤ 40 fields; `grep -nE '\(_\) => UndoAction::Skip' resonance-app/src/undo/classify.rs` empty.
 
-### [ ] ARCH-07 — (partial: A7-1/A7-2 landed @cae04146 — 8 plugins dropped resonance-common, allow-list invariant; A7-3 feature-gating open) `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
+### [x] ARCH-07 — (done: A7-3 `model`/`decode` features, plugins default-features = false, invariant) `resonance-common` is a domain-model crate wearing a primitives label, and every plugin links it
 - **Severity:** medium
 - **Category:** layering
 - **Location:** `resonance-common/src/` (`take.rs` 733, `audio_probe.rs` 402, `midi_map.rs` 334, `device_definition.rs` 328, `automation.rs`, `freeze.rs`, `external_instrument.rs`, `track_group.rs`, `device_registry.rs`); `resonance-common/Cargo.toml` deps (symphonia, serde_json, dirs, time); every `plugins/*/Cargo.toml` depends on it but the plugins import only `flush_denormals`, `scan_directory`, `registry`, `drum_map`, `decode_wav_*`.
@@ -1975,7 +1976,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Fix the `latency.rs` header to describe the `clap_host_latency.changed` path.
 - **Verification / done-when:** `grep -l 'wayland-plugin-gui' plugins/*/Cargo.toml` empty; `resonance-plugin/Cargo.toml` has no `iced` dependency; `grep -n "doesn't implement" resonance-audio/src/latency.rs` empty.
 
-### [ ] ARCH-09 — (partial: A9-1/A9-2 @018839d9 — plugin blobs shared via Arc, cheap gesture check, snapshot 425→289 µs; A9-3 `Arc<Vec<MidiNote>>` + PartialEq on ProjectFile open) Undo snapshots deep-copy the whole project per edit
+### [x] ARCH-09 — (done: A9-1/A9-2, A-8 PartialEq, A-9 Arc notes; A-14 delta snapshots judged not worth it) Undo snapshots deep-copy the whole project per edit
 - **Severity:** low
 - **Category:** modularity
 - **Location:** `resonance-app/src/undo/snapshot.rs:178-230` (`snapshot_for_undo` calls `build_project_file` and clones every MIDI note vec, automation lane, chord track, and plugin state blob), `resonance-app/src/undo/history.rs:68` (capacity 200 via `resonance_audio::DEFAULT_HISTORY_CAPACITY`, oddly owned by the audio crate at `resonance-audio/src/limits.rs:60`).

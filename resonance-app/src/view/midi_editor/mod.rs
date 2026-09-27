@@ -253,7 +253,7 @@ impl PianoRollCanvas<'_> {
     pub(crate) fn fingerprint(&self, state: &PianoRollState) -> PianoRollFingerprint {
         use std::hash::{Hash, Hasher};
         let mut nh = std::collections::hash_map::DefaultHasher::new();
-        for n in &self.clip.notes {
+        for n in self.clip.notes.iter() {
             n.note.hash(&mut nh);
             n.start_tick.hash(&mut nh);
             n.duration_ticks.hash(&mut nh);

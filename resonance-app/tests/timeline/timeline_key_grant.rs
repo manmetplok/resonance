@@ -25,7 +25,7 @@ fn app() -> Resonance {
         start_sample: 0,
         duration_ticks: 1920,
         name: "Clip".to_owned(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
