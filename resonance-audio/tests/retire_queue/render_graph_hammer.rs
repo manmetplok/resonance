@@ -54,9 +54,17 @@ use crate::deallocs_here;
 
 const SR: u32 = 48_000;
 const BLOCK: usize = 128;
-/// The loop the transport cycles: two seconds, so the clips laid out
-/// inside it are always in play and the seam is crossed every ~750 blocks.
+/// The loop the transport cycles: two seconds, so the seam is crossed
+/// every 750 blocks. A whole number of blocks, so every seam is the
+/// aligned kind (a full head, a zero-frame tail sub-render).
 const LOOP_LEN: u64 = 2 * SR as u64;
+/// Where the loop starts: a block-aligned point the base clip is already
+/// past its head at. A loop starting on the base clip's first frame
+/// re-enters its head every pass, and a clip head always gets the
+/// `CLIP_DECLICK_FRAMES` anti-click ramp — so the first frame after each
+/// wrap would carry none of the base level, by design (FU-B6b,
+/// `tests/mixer/bus_first_block_loop_seam.rs`).
+const LOOP_IN: u64 = 64 * BLOCK as u64;
 
 const BASE_TRACK: TrackId = 1;
 const BASE_CLIP: ClipId = 1;
@@ -64,11 +72,17 @@ const BASE_CLIP: ClipId = 1;
 /// and pass-through inserts it reaches the output unchanged.
 const BASE_LEVEL: f32 = 0.1;
 /// Every other source is a positive constant far below it: at most ~600
-/// loaded clips at `LOAD_LEVEL` (plus their sends at -6 dB) and eight
-/// instruments at `INSTRUMENT_LEVEL` sum to < 0.03, so a block without the
-/// base track reads well under `BASE_LEVEL` and one with it never does.
+/// loaded clips at `LOAD_LEVEL`, eight instruments at `INSTRUMENT_LEVEL`
+/// and [`MAX_SENDS`] -6 dB sends of either sum to < 0.04, so a block
+/// without the base track reads well under `BASE_LEVEL` and one with it
+/// never does.
 const LOAD_LEVEL: f32 = 2e-5;
 const INSTRUMENT_LEVEL: f32 = 1e-3;
+/// Live aux sends are capped here (FU-B6b). Unbounded, they piled up to
+/// ~1,700 over a run — an instrument track with a few hundred sends alone
+/// outweighs the base level — and the floor check below stopped being able
+/// to tell the base track from everything else.
+const MAX_SENDS: usize = 32;
 /// Audio tracks 2..=16, instrument tracks 17..=24.
 const AUDIO_TRACKS: std::ops::RangeInclusive<TrackId> = 2..=16;
 const INSTRUMENT_TRACKS: std::ops::RangeInclusive<TrackId> = 17..=24;
@@ -307,10 +321,8 @@ struct Engine {
     next_send: SendId,
     loads: u64,
     edits: u64,
-    /// Blocks the callback has rendered, and the count at each scratch
-    /// bus's creation.
+    /// Blocks the callback has rendered.
     rendered: Arc<AtomicU64>,
-    bus_born: std::collections::HashMap<BusId, u64>,
     /// Times the base track was routed onto a scratch bus, and times a
     /// `RemoveBus` re-routed it back to the master.
     base_via_bus: u64,
@@ -424,7 +436,11 @@ impl Engine {
         }
     }
 
+    /// Add a -6 dB post-fader send, unless [`MAX_SENDS`] are already live.
     fn add_send(&mut self, track_id: TrackId, dest: BusId) {
+        if self.shared().aux_sends.load().len() >= MAX_SENDS {
+            return;
+        }
         self.next_send += 1;
         self.dispatch(AudioCommand::AddAuxSend {
             id: self.next_send,
@@ -589,31 +605,21 @@ impl Engine {
                 }
             }
             12 => {
-                if scratch_busses.len() < 6 {
+                let born = (scratch_busses.len() < 6).then(|| {
                     self.next_bus += 1;
                     let id = self.next_bus;
                     self.dispatch(AudioCommand::AddBus { id, name: None });
                     if !crowded {
                         self.probes.add_to_bus(&shared, id);
                     }
-                    self.bus_born.insert(id, self.rendered.load(Ordering::Acquire));
-                }
-                // The base track itself goes through a scratch bus — one
-                // that has rendered a block already. FU-B6a fixed the
-                // dip this used to guard (a new bus's last gains started
-                // at 0, so a track routed onto it during its very first
-                // rendered block ramped in from silence); the "aged"
-                // requirement stays because routing onto a bus born this
-                // exact pass can still, rarely, coincide with an aligned
-                // loop-seam block (the seam's zero-frame tail sub-render)
-                // and shave a hair off the base level under heavy
-                // contention — not reproduced in isolation, mechanism not
-                // pinned yet (FU-B6b).
-                let now = self.rendered.load(Ordering::Acquire);
-                let aged = busses.iter().copied().find(|b| {
-                    self.bus_born.get(b).is_some_and(|&born| born + 2 <= now)
+                    id
                 });
-                if let Some(id) = aged {
+                // The base track itself goes through a scratch bus: the
+                // one born this pass when there is one, so the bus's very
+                // first rendered block often carries it — which must not
+                // dip (FU-B6a; `tests/mixer/bus_first_block_gain.rs`,
+                // `bus_first_block_loop_seam.rs`).
+                if let Some(id) = born.or_else(|| scratch_busses.last().copied()) {
                     self.dispatch(AudioCommand::SetTrackOutput {
                         track_id: BASE_TRACK,
                         output: TrackOutput::Bus(id),
@@ -750,6 +756,9 @@ struct Rendered {
     /// dropped out for part of the block), and the lowest such sample.
     dips: u64,
     first_dip: Option<(u64, f32)>,
+    /// Checked blocks that wrapped the loop, so the floor above was held
+    /// across a seam too.
+    wraps: u64,
     /// Heap frees inside `render()` — a retired value dropped by the
     /// callback would land here.
     frees: u64,
@@ -770,14 +779,13 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
         loads: 0,
         edits: 0,
         rendered: Arc::new(AtomicU64::new(0)),
-        bus_born: Default::default(),
         base_via_bus: 0,
         base_rerouted: 0,
     };
     let shared = engine.h.shared_arc();
     let arm = |shared: &SharedState| {
-        shared.loop_in.store(0, Ordering::Relaxed);
-        shared.loop_out.store(LOOP_LEN, Ordering::Relaxed);
+        shared.loop_in.store(LOOP_IN, Ordering::Relaxed);
+        shared.loop_out.store(LOOP_IN + LOOP_LEN, Ordering::Relaxed);
         shared.loop_enabled.store(true, Ordering::Relaxed);
         shared.playing.store(true, Ordering::Relaxed);
     };
@@ -796,6 +804,7 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
         let stop = Arc::clone(&stop);
         let rendered = Arc::clone(&rendered);
         std::thread::spawn(move || {
+            let transport = Arc::clone(&shared);
             let mut cb = MixAudioHarness::on_shared(shared, BLOCK, 2, SR);
             let mut seen = Rendered {
                 thread: Some(std::thread::current().id()),
@@ -804,11 +813,15 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
             let mut ramped_in: Option<u64> = None;
             while !stop.load(Ordering::Acquire) {
                 let before_epoch = epoch.load(Ordering::Acquire);
+                let before_playhead = transport.playhead.load(Ordering::Acquire);
                 let before_frees = deallocs_here();
                 let out = cb.render();
                 seen.frees += deallocs_here() - before_frees;
                 if before_epoch % 2 == 0 && epoch.load(Ordering::Acquire) == before_epoch {
                     seen.checked += 1;
+                    if transport.playhead.load(Ordering::Acquire) < before_playhead {
+                        seen.wraps += 1;
+                    }
                     if !out.iter().any(|&s| s != 0.0) {
                         seen.silent += 1;
                         seen.first_silent.get_or_insert(seen.blocks);
@@ -880,13 +893,14 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
     let _ = std::fs::remove_dir_all(&dir);
 
     eprintln!(
-        "A2-9 hammer: {} edits ({} clip loads) in {edit_time:?}; {} blocks rendered, {} checked; \
-         {} probes created; {} MIDI events delivered; base via a scratch bus {}x, re-routed by \
-         RemoveBus {}x",
+        "A2-9 hammer: {} edits ({} clip loads) in {edit_time:?}; {} blocks rendered, {} checked \
+         ({} wrapping the loop); {} probes created; {} MIDI events delivered; base via a scratch \
+         bus {}x, re-routed by RemoveBus {}x",
         engine.edits,
         engine.loads,
         seen.blocks,
         seen.checked,
+        seen.wraps,
         engine.probes.created,
         engine.probes.events.load(Ordering::Relaxed),
         engine.base_via_bus,
@@ -897,6 +911,7 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
         "the callback rendered through the edits ({} checked blocks)",
         seen.checked
     );
+    assert!(seen.wraps > 0, "no checked block wrapped the loop");
     assert_eq!(
         seen.silent, 0,
         "{} of {} checked blocks were silent (first: block {:?})",
