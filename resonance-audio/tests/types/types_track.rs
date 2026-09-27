@@ -25,21 +25,21 @@ fn track_output_defaults_to_master() {
 
 #[test]
 fn track_output_roundtrip_master() {
-    let track = Track::new(1, "T1".to_string());
+    let mut track = Track::new(1, "T1".to_string());
     track.set_output(TrackOutput::Master);
     assert_eq!(track.output(), TrackOutput::Master);
 }
 
 #[test]
 fn track_output_roundtrip_bus() {
-    let track = Track::new(1, "T1".to_string());
+    let mut track = Track::new(1, "T1".to_string());
     track.set_output(TrackOutput::Bus(42));
     assert_eq!(track.output(), TrackOutput::Bus(42));
 }
 
 #[test]
 fn track_output_roundtrip_various_bus_ids() {
-    let track = Track::new(1, "T1".to_string());
+    let mut track = Track::new(1, "T1".to_string());
     for id in [1u64, 7, 100, 1_000_000, u64::MAX - 1] {
         track.set_output(TrackOutput::Bus(id));
         assert_eq!(track.output(), TrackOutput::Bus(id));
@@ -53,7 +53,7 @@ fn track_output_master_sentinel_is_u64_max() {
     // bus-id allocator (`TrackRegistry::allocate_bus_id`, ARCH-04 D-3)
     // starts at 1 and grows, so this is safe in practice but worth
     // pinning in a test.
-    let track = Track::new(1, "T1".to_string());
+    let mut track = Track::new(1, "T1".to_string());
     track.set_output(TrackOutput::Master);
     assert_eq!(track.output(), TrackOutput::Master);
     track.set_output(TrackOutput::Bus(5));

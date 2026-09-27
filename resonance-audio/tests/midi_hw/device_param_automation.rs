@@ -109,12 +109,12 @@ fn nrpn_param(id: &str, msb: u8, lsb: u8) -> DeviceParam {
 }
 
 /// A one-track map: track `id` on MIDI channel `channel`, carrying `params`.
-fn tracks_with(id: TrackId, channel: u8, params: Vec<DeviceParam>) -> IndexMap<TrackId, Track> {
+fn tracks_with(id: TrackId, channel: u8, params: Vec<DeviceParam>) -> IndexMap<TrackId, std::sync::Arc<Track>> {
     let mut track = Track::new(id, "Synth".to_string());
     track.midi_output_channel = Some(channel);
     track.set_device_params(params);
     let mut map = IndexMap::new();
-    map.insert(id, track);
+    map.insert(id, std::sync::Arc::new(track));
     map
 }
 
@@ -140,7 +140,7 @@ fn lanes_of(lanes: Vec<AutomationLane>) -> AutomationLanes {
 
 /// Drive the emitter across `frames` with a fresh memo and return the
 /// captured messages — the unit of work a sequence of engine polls performs.
-fn drive(lanes: &AutomationLanes, tracks: &IndexMap<TrackId, Track>, frames: &[u64]) -> Vec<Msg> {
+fn drive(lanes: &AutomationLanes, tracks: &IndexMap<TrackId, std::sync::Arc<Track>>, frames: &[u64]) -> Vec<Msg> {
     let mut memo: HashMap<TrackId, HashMap<String, u16>> = HashMap::new();
     let mut sink = CaptureSink::default();
     for &f in frames {

@@ -1,8 +1,8 @@
 //! The whole audio callback against render-graph edits published
-//! concurrently (code review ARCH-02 A2-4/A2-5, refactor todos B-1/B-2).
+//! concurrently (code review ARCH-02 A2-4…A2-6, refactor todos B-1…B-3).
 //!
-//! Before A2-4 the playing branch `try_read` the MIDI-clip, bus and
-//! master locks, and an edit on the engine thread (or a writer queued
+//! Before A2-4 the playing branch `try_read` the MIDI-clip, bus,
+//! master and track locks, and an edit on the engine thread (or a writer queued
 //! behind a worker's read guard) made it render silence for the block —
 //! or, for the master lock, drop the master FX pass. Those maps now come
 //! from the published render graph, so an edit racing the callback can
@@ -70,7 +70,7 @@ fn playing_harness() -> MixAudioHarness {
         .map(|id| {
             // Track 1 plays the audio clip; the rest are instrument
             // tracks whose MIDI the render walks every block.
-            let t = if id == 1 {
+            let mut t = if id == 1 {
                 Track::new(id, "audio".into())
             } else {
                 Track::with_type(id, format!("t{id}"), TrackType::Instrument)
@@ -161,7 +161,7 @@ fn bus_harness() -> MixAudioHarness {
     let tracks: Vec<Track> = [(1, DRUMS), (2, VERB)]
         .into_iter()
         .map(|(id, bus)| {
-            let t = Track::new(id, format!("t{id}"));
+            let mut t = Track::new(id, format!("t{id}"));
             t.set_output(TrackOutput::Bus(bus));
             t
         })
@@ -287,4 +287,175 @@ fn bus_and_master_edits_published_while_the_callback_renders_never_skip_a_block(
     );
     h.shared().retired.sweep();
     assert!(h.shared().retired.is_empty());
+}
+
+/// A scratch track the track editor keeps adding, moving and removing.
+const SCRATCH_TRACK: TrackId = 99;
+
+/// A playing project with two audio tracks straight to master, each on a
+/// non-unity fader and pan, so the per-track gain ramp (and the last
+/// gains it carries between blocks) shapes the output.
+fn track_harness() -> MixAudioHarness {
+    let tracks: Vec<Track> = [(1, 0.7, -0.5), (2, 0.4, 0.3)]
+        .into_iter()
+        .map(|(id, volume, pan)| {
+            let t = Track::new(id, format!("t{id}"));
+            t.set_volume(volume);
+            t.set_pan(pan);
+            t
+        })
+        .collect();
+    let h = MixAudioHarness::new(
+        tracks,
+        Vec::new(),
+        vec![audio_clip(1, 1), audio_clip(2, 2)],
+        Vec::new(),
+        Vec::new(),
+        TempoMap::default(),
+        BLOCK,
+        2,
+        SR,
+        true,
+    );
+    h.shared().playing.store(true, Ordering::Relaxed);
+    h
+}
+
+/// Track edits (ARCH-02 A2-6, refactor todo B-3) — a track added, moved
+/// and removed, the table rotated, copy-on-write edits of both audible
+/// tracks (a MIDI binding, a same-route re-route), and fader / pan / mute /
+/// solo writes through the published tracks — published as fast as the
+/// editor can while the callback renders. None of them changes what the
+/// project sounds like (the scratch track has no clips; every live-state
+/// write stores the value already there), so the output must be
+/// bit-identical to an unedited run: a track copy that lost its live state
+/// (the fader ramp's last gains) would restart its ramp.
+#[test]
+fn track_edits_published_while_the_callback_renders_never_skip_a_block() {
+    let reference = render_blocks(&mut track_harness());
+
+    let mut h = track_harness();
+    let shared = h.shared_arc();
+    let stop = Arc::new(AtomicBool::new(false));
+    let editor = {
+        let shared = Arc::clone(&shared);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut edits = 0u64;
+            while !stop.load(Ordering::Acquire) {
+                match edits % 6 {
+                    0 => shared.edit_tracks(|tracks| {
+                        if tracks.shift_remove(&SCRATCH_TRACK).is_none() {
+                            tracks.insert(
+                                SCRATCH_TRACK,
+                                Arc::new(Track::new(SCRATCH_TRACK, "scratch".into())),
+                            );
+                        }
+                    }),
+                    // Reorder: rotate the whole table by one.
+                    1 => shared.edit_tracks(|tracks| tracks.move_index(0, tracks.len() - 1)),
+                    2 => {
+                        shared
+                            .edit_track(1, |t| t.midi_input_channel = Some((edits % 16) as u8))
+                            .expect("audible track never leaves");
+                    }
+                    3 => {
+                        shared
+                            .edit_track(2, |t| t.set_output(TrackOutput::Master))
+                            .expect("audible track never leaves");
+                    }
+                    4 => shared.edit_tracks(|_| {}),
+                    _ => {}
+                }
+                // Fader / pan / mute / solo "moves" to the values they
+                // already have: written through the published tracks, no
+                // graph published.
+                let graph = shared.graph.load();
+                for t in graph.tracks.values() {
+                    t.set_volume(t.volume());
+                    t.set_pan(t.pan());
+                    t.set_muted(t.muted());
+                    t.set_soloed(t.soloed());
+                }
+                drop(graph);
+                edits += 1;
+                if edits.is_multiple_of(64) {
+                    // The engine loop's 16 ms tick.
+                    shared.retired.sweep();
+                }
+            }
+            edits
+        })
+    };
+
+    let hammered = render_blocks(&mut h);
+    stop.store(true, Ordering::Release);
+    let edits = editor.join().expect("editor");
+
+    assert!(edits > 0, "the editor actually raced the callback");
+    assert_eq!(
+        h.shared().render_skip_cycles.load(Ordering::Relaxed),
+        0,
+        "no block was skipped across {edits} concurrent track edits"
+    );
+    assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
+    assert!(
+        hammered == reference,
+        "the edits changed the rendered audio (first diff at sample {:?})",
+        hammered.iter().zip(&reference).position(|(a, b)| a != b)
+    );
+    h.shared().retired.sweep();
+    assert!(h.shared().retired.is_empty());
+}
+
+/// Audible per-track edits — fader, pan, mute and solo actually moving —
+/// under render. The audio changes (that is the point), but no block is
+/// skipped and no lock is missed, and none of them publishes a graph.
+#[test]
+fn audible_track_edits_under_render_never_skip_a_block() {
+    let mut h = track_harness();
+    let shared = h.shared_arc();
+    let published = shared.graph.load_full();
+    let stop = Arc::new(AtomicBool::new(false));
+    let editor = {
+        let shared = Arc::clone(&shared);
+        let stop = Arc::clone(&stop);
+        std::thread::spawn(move || {
+            let mut edits = 0u64;
+            while !stop.load(Ordering::Acquire) {
+                let graph = shared.graph.load();
+                let one = graph.track(1).expect("track 1");
+                let two = graph.track(2).expect("track 2");
+                match edits % 4 {
+                    0 => one.set_volume(0.2 + (edits % 10) as f32 / 10.0),
+                    1 => two.set_pan((edits % 21) as f32 / 10.0 - 1.0),
+                    2 => two.set_muted(!two.muted()),
+                    // Solo only ever lands on track 1, so track 1 always
+                    // sounds and every block has signal.
+                    _ => one.set_soloed(!one.soloed()),
+                }
+                drop(graph);
+                edits += 1;
+            }
+            edits
+        })
+    };
+    // Not `render_blocks`: a solo flip can land between the block's
+    // `any_solo` scan and a track's own `soloed()` read, so a block may
+    // legitimately ramp everything toward silence — that is the live-state
+    // race the atomics always had, not a dropped block. The skip counter
+    // below is what tells a dropped block apart.
+    for _ in 0..BUS_BLOCKS {
+        h.render();
+    }
+    stop.store(true, Ordering::Release);
+    let edits = editor.join().expect("editor");
+
+    assert!(edits > 0);
+    assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
+    assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
+    assert!(
+        Arc::ptr_eq(&published, &h.shared().graph.load_full()),
+        "no live-state write published a graph"
+    );
 }

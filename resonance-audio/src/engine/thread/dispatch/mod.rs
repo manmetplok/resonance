@@ -139,6 +139,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::BounceTrackToAudio { .. }
         | AudioCommand::BounceTrackRealtimeToAudio { .. }
         | AudioCommand::CancelBounce
+        | AudioCommand::BounceTargetCancelled { .. }
         | AudioCommand::ExportStems { .. }
         | AudioCommand::CancelStemExport
         | AudioCommand::MeasureMix { .. }

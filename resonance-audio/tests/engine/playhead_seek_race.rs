@@ -31,7 +31,7 @@ const CH: usize = 2;
 const CLIP_BLOCKS: usize = 400;
 
 fn fixture() -> MixAudioHarness {
-    let track = Track::new(1, "clips".into());
+    let mut track = Track::new(1, "clips".into());
     track.set_output(TrackOutput::Master);
     let clip = AudioClip {
         id: 1,

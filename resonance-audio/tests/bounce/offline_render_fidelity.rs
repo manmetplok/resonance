@@ -174,7 +174,6 @@ fn fake_fx(delay: usize) -> (PluginSlot, *mut FakeFx) {
 
 struct Engine {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -185,14 +184,13 @@ impl Engine {
     fn with_clip(data: Vec<f32>) -> Self {
         let e = Engine {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
-        e.tracks
-            .write()
-            .insert(1, Track::with_type(1, "t".into(), TrackType::Audio));
+        e.shared.edit_tracks(|m| {
+            m.insert(1, std::sync::Arc::new(Track::with_type(1, "t".into(), TrackType::Audio)));
+        });
         e.clips.write().push(audio_clip(data));
         e
     }
@@ -204,7 +202,7 @@ impl Engine {
 
     fn add_track_fx(&self, slot: PluginSlot) {
         self.plugins.write().insert(FX_ID, slot);
-        let _ = self.tracks.read()[&1].push_plugin(FX_ID);
+        let _ = self.shared.tracks()[&1].push_plugin(FX_ID);
     }
 
     fn export(&self, path: &Path, settings: &ExportSettings, cancel: bool) -> Vec<AudioEvent> {
@@ -223,7 +221,6 @@ impl Engine {
             settings,
             &AtomicBool::new(cancel),
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -237,7 +234,6 @@ impl Engine {
             path.to_string_lossy().into_owned(),
             &self.shared,
             &AtomicBool::new(false),
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -428,7 +424,6 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         true,
         &e.shared,
         &AtomicBool::new(false),
-        &e.tracks,
         &e.clips,
         &e.plugins,
         &e.tempo_map,

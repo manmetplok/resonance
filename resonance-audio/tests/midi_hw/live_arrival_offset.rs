@@ -130,18 +130,18 @@ use resonance_audio::types::{Track, TrackId, TrackType};
 
 #[test]
 fn live_instrument_resolution_mirrors_the_engine_path() {
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let mut tracks: IndexMap<TrackId, std::sync::Arc<Track>> = IndexMap::new();
     // Instrument track with an instrument in slot 0.
     let inst = Track::with_type(1, "inst".into(), TrackType::Instrument);
     inst.push_plugin(42);
     inst.push_plugin(43); // FX after the instrument — never the target
-    tracks.insert(1, inst);
+    tracks.insert(1, std::sync::Arc::new(inst));
     // Instrument track with an empty chain.
-    tracks.insert(2, Track::with_type(2, "empty".into(), TrackType::Instrument));
+    tracks.insert(2, std::sync::Arc::new(Track::with_type(2, "empty".into(), TrackType::Instrument)));
     // Audio track with plugins: never accepts live MIDI.
     let audio = Track::new(3, "audio".into());
     audio.push_plugin(7);
-    tracks.insert(3, audio);
+    tracks.insert(3, std::sync::Arc::new(audio));
 
     assert_eq!(live_instrument_for(&tracks, 1), Some(42));
     assert_eq!(live_instrument_for(&tracks, 2), None);

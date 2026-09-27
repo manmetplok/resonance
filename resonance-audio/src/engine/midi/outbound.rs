@@ -8,7 +8,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use indexmap::IndexMap;
 use resonance_common::device_definition::MidiBinding;
 use resonance_common::{lane_value_to_binding_value, AutomationTarget};
 
@@ -115,7 +114,7 @@ pub struct OutboundTrack {
 /// a "bounce in place" run can isolate the source by muting the others.
 /// Pure over the tracks map so the flag derivation (`Recorded` + not
 /// armed ⇒ gated) is unit-testable.
-pub fn outbound_track_snapshot(tracks: &IndexMap<TrackId, Track>) -> Vec<OutboundTrack> {
+pub fn outbound_track_snapshot(tracks: &TrackMap) -> Vec<OutboundTrack> {
     tracks
         .values()
         .filter(|t| t.midi_output_device.load_full().is_some() && !t.muted())
@@ -400,7 +399,7 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
     // each one's Recorded-span gating flag. Any held notes on a
     // newly-muted track still get their NoteOff because the held-notes
     // map is consulted unconditionally inside `emit_outbound_notes`.
-    let output_tracks = outbound_track_snapshot(&ctx.tracks.read());
+    let output_tracks = outbound_track_snapshot(&ctx.tracks());
     if output_tracks.is_empty() {
         // Every output track disappeared (unassigned, deleted or muted)
         // while notes were sounding: release them here, because nothing
@@ -497,7 +496,7 @@ impl DeviceParamMidiSink for MidiOutputRegistry {
 /// [`poll_timeline_to_midi_output`].
 pub fn emit_device_param_automation<S: DeviceParamMidiSink>(
     lanes: &AutomationLanes,
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     frame: u64,
     last_values: &mut HashMap<TrackId, HashMap<String, u16>>,
     sink: &mut S,
@@ -573,7 +572,7 @@ pub(crate) fn poll_device_param_automation(ctx: &HandlerCtx, state: &mut Handler
         return;
     }
     let frame = ctx.shared.playhead.load(Ordering::Relaxed);
-    let tracks = ctx.tracks.read();
+    let tracks = ctx.tracks();
     emit_device_param_automation(
         &state.automation_lanes,
         &tracks,

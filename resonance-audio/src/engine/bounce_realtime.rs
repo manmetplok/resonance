@@ -131,7 +131,7 @@ pub(crate) fn handle_bounce_track_realtime(
     // Validate that source + target both exist, and that the source is
     // an instrument track (otherwise there's nothing to bounce).
     {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         let Some(source) = tracks_guard.get(&source_track_id) else {
             let _ = ctx.event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(
                 "Source track not found",
@@ -156,7 +156,7 @@ pub(crate) fn handle_bounce_track_realtime(
     // ids (source + sub-tracks of source) so we know which to leave
     // unmuted during the bounce.
     let (mute_snapshot, in_filter): (HashMap<TrackId, bool>, Vec<TrackId>) = {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         let snapshot: HashMap<TrackId, bool> = tracks_guard
             .values()
             .map(|t| (t.id, t.muted()))
@@ -179,7 +179,7 @@ pub(crate) fn handle_bounce_track_realtime(
     // target's previous input device name so we can restore it when the
     // bounce ends.
     let prev_target_input_device = {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         let prev = tracks_guard
             .get(&target_track_id)
             .and_then(|t| t.input_device_name.load_full().map(|a| (*a).clone()));
@@ -191,7 +191,7 @@ pub(crate) fn handle_bounce_track_realtime(
         prev
     };
     {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         for t in tracks_guard.values() {
             let allow = in_filter.contains(&t.id) || t.id == target_track_id;
             t.set_muted(!allow);
@@ -312,30 +312,7 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
         // discarded). The clip was emitted via `RecordingFinished`
         // during `handle_pause`'s `finalize_recording` if any audio
         // made it to disk; clean that up too.
-        let removed_clip_ids: Vec<ClipId> = {
-            let clips = ctx.clips.read();
-            clips
-                .iter()
-                .filter(|c| c.track_id == bounce.target_track_id)
-                .map(|c| c.id)
-                .collect()
-        };
-        {
-            let mut clips = ctx.clips.write();
-            clips.retain(|c| c.track_id != bounce.target_track_id);
-        }
-        for clip_id in removed_clip_ids {
-            let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
-        }
-        if let Some(track) = ctx.tracks.write().shift_remove(&bounce.target_track_id) {
-            super::tracks::retire_removed_track(track, &ctx.shared.retired);
-        }
-        let _ = ctx.event_tx.send(AudioEvent::TrackRemoved {
-            track_id: bounce.target_track_id,
-        });
-        let _ = ctx.event_tx.send(AudioEvent::TrackBounceCancelled {
-            target_track_id: bounce.target_track_id,
-        });
+        remove_cancelled_bounce_target(ctx, bounce.target_track_id);
         return;
     }
 
@@ -427,7 +404,7 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
     // Mute the source so subsequent playback uses the bounced audio,
     // not the live external instrument.
     {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         if let Some(source) = tracks_guard.get(&bounce.source_track_id) {
             source.set_muted(true);
         }
@@ -438,6 +415,42 @@ pub(crate) fn poll_pending_bounce(ctx: &HandlerCtx, state: &mut HandlerState) {
         target_track_id: bounce.target_track_id,
         clip: None,
     });
+}
+
+/// Tear down a cancelled bounce's target track, on the engine thread —
+/// the realtime path's cancel (above) and the offline bounce-in-place
+/// worker's, which posts `AudioCommand::BounceTargetCancelled` rather than
+/// edit the render graph from its own thread (code review ARCH-02 B-3).
+///
+/// Removes the target's clips (reporting each `ClipDeleted`), unpublishes
+/// the track — the removed track rides out on the replaced graph, which
+/// the retire sweep drops on this thread once no block pins it — and
+/// reports `TrackRemoved` then `TrackBounceCancelled`.
+pub(crate) fn remove_cancelled_bounce_target(ctx: &HandlerCtx, target_track_id: TrackId) {
+    let removed_clip_ids: Vec<ClipId> = {
+        let clips = ctx.clips.read();
+        clips
+            .iter()
+            .filter(|c| c.track_id == target_track_id)
+            .map(|c| c.id)
+            .collect()
+    };
+    if !removed_clip_ids.is_empty() {
+        let mut clips = ctx.clips.write();
+        clips.retain(|c| c.track_id != target_track_id);
+    }
+    for clip_id in removed_clip_ids {
+        let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
+    }
+    if ctx.tracks().contains_key(&target_track_id) {
+        ctx.shared.edit_tracks(|tracks| {
+            tracks.shift_remove(&target_track_id);
+        });
+    }
+    let _ = ctx.event_tx.send(AudioEvent::TrackRemoved {
+        track_id: target_track_id,
+    });
+    let _ = ctx.event_tx.send(AudioEvent::TrackBounceCancelled { target_track_id });
 }
 
 /// Reverse the `mute`/`record_armed`/`input_device_name` mutations that
@@ -451,7 +464,7 @@ fn restore_after_bounce(
     target_track_id: TrackId,
     prev_target_input_device: Option<String>,
 ) {
-    let tracks_guard = ctx.tracks.read();
+    let tracks_guard = ctx.tracks();
     for t in tracks_guard.values() {
         if let Some(prev) = mute_snapshot.get(&t.id) {
             t.set_muted(*prev);

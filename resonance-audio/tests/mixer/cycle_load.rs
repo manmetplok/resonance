@@ -146,15 +146,15 @@ fn quiet_mode_reports_per_map_lock_misses_as_window_delta() {
     // pass) is noteworthy — it is a dropout the graph never reports.
     let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
     assert_eq!(report.lock_skips_window, 0);
-    assert_eq!(report.lock_misses_window, [0, 1, 2]);
-    assert_eq!(report.lock_misses_lifetime, [0, 1, 2]);
+    assert_eq!(report.lock_misses_window, [1, 2]);
+    assert_eq!(report.lock_misses_lifetime, [1, 2]);
 
-    // Next window: one more on tracks only; the others read zero.
-    shared.lock_misses.record(StateMap::Tracks);
+    // Next window: one more on clips only; the other reads zero.
+    shared.lock_misses.record(StateMap::Clips);
     let start2 = start + budget() * (cycles as u32 + 1);
     let report = drive(&mut meter, &shared, start2, cycles, budget() / 100).expect("report");
-    assert_eq!(report.lock_misses_window, [1, 0, 0]);
-    assert_eq!(report.lock_misses_lifetime, [1, 1, 2]);
+    assert_eq!(report.lock_misses_window, [1, 0]);
+    assert_eq!(report.lock_misses_lifetime, [2, 2]);
 
     // And silent again once nothing moves.
     let start3 = start2 + budget() * (cycles as u32 + 1);
@@ -176,8 +176,8 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         shortfalls_lifetime: 4,
         lock_skips_window: 5,
         lock_skips_lifetime: 6,
-        lock_misses_window: [1, 2, 3],
-        lock_misses_lifetime: [7, 8, 9],
+        lock_misses_window: [1, 2],
+        lock_misses_lifetime: [7, 8],
     };
     slot.publish(&report);
     assert_eq!(slot.take_new(&mut seen), Some(report.clone()));
@@ -193,7 +193,7 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
 /// A minimal playing project: one track, one clip, so the playing
 /// branch takes every map read guard still behind a lock.
 fn playing_harness() -> MixAudioHarness {
-    let track = Track::new(1, "clips".into());
+    let mut track = Track::new(1, "clips".into());
     track.set_output(TrackOutput::Master);
     let clip = AudioClip {
         id: 1,
@@ -246,15 +246,16 @@ fn callback_attributes_a_contended_block_to_the_map_that_missed() {
     // A write-held clips map (the UI-edit shape).
     assert!(h.render_lock_contended().iter().all(|&s| s == 0.0));
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 1);
-    assert_eq!(h.shared().lock_misses.snapshot(), [0, 1, 0]);
+    assert_eq!(h.shared().lock_misses.snapshot(), [1, 0]);
     assert_eq!(h.shared().lock_misses.get(StateMap::Clips), 1);
 
     // The ARCH-02 shape: a read guard held on a worker thread with a
     // writer queued behind it. Only that map's counter moves, and the
     // block is still skipped as a whole.
-    // (The busses and the master chain are read from the published render
-    // graph since ARCH-02 A2-5 — a load that cannot miss, so they are no
-    // longer in this table and a master-FX pass can no longer be dropped.)
+    // (The busses and the master chain (ARCH-02 A2-5) and the tracks
+    // (A2-6) are read from the published render graph — a load that cannot
+    // miss, so they are no longer in this table and a master-FX pass can no
+    // longer be dropped.)
     for (i, map) in StateMap::ALL.iter().enumerate() {
         let before = h.shared().lock_misses.snapshot();
         let skips_before = h.shared().render_skip_cycles.load(Ordering::Relaxed);
@@ -280,7 +281,7 @@ fn stopped_branch_counts_its_misses_without_a_render_skip() {
     let mut h = playing_harness();
     h.shared().playing.store(false, Ordering::Relaxed);
     h.render_with_queued_writer(StateMap::Plugins);
-    assert_eq!(h.shared().lock_misses.snapshot(), [0, 0, 1]);
+    assert_eq!(h.shared().lock_misses.snapshot(), [0, 1]);
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
 }
 
@@ -344,11 +345,11 @@ fn line_format_is_stable() {
         shortfalls_lifetime: 3,
         lock_skips_window: 1,
         lock_skips_lifetime: 6,
-        lock_misses_window: [0, 1, 0],
-        lock_misses_lifetime: [2, 4, 1],
+        lock_misses_window: [1, 0],
+        lock_misses_lifetime: [4, 1],
     });
     assert_eq!(
         line,
-        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6) | lock misses tracks 0 clips 1 plugins 0 (lifetime 2/4/1)"
+        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6) | lock misses clips 1 plugins 0 (lifetime 4/1)"
     );
 }

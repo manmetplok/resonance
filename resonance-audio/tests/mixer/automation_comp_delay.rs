@@ -75,7 +75,7 @@ fn track_gain_automation_is_evaluated_at_the_comp_delayed_position() {
     // — not at the raw block end 32.
     let fade_end = 2 * BLOCK as u64;
     let comp = LatencyComp::new(DELAY, &[(TRACK, DELAY)], 0, &[]);
-    let track = Track::new(TRACK, "t".into());
+    let mut track = Track::new(TRACK, "t".into());
     track.set_output(TrackOutput::Master);
 
     let (data, _busses) = render_aux_with_comp_for_test(
@@ -134,7 +134,7 @@ fn zero_latency_comp_keeps_raw_evaluation() {
     // With no comp delay the shift is 0 and evaluation stays at the raw
     // block positions — the common no-latency case is bit-identical.
     let fade_end = 2 * BLOCK as u64;
-    let track = Track::new(TRACK, "t".into());
+    let mut track = Track::new(TRACK, "t".into());
     track.set_output(TrackOutput::Master);
     let (data, _busses) = render_aux_with_comp_for_test(
         vec![track],

@@ -30,7 +30,7 @@ fn bus_stem_fed_only_by_sub_tracks_is_not_silent() {
     state.set_output(10, TrackOutput::Bus(7));
     state.set_output(11, TrackOutput::Bus(7));
 
-    let filter = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let filter = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(
         filter.contains(10) && filter.contains(11),
         "both taps feed the bus: {:?}",
@@ -64,7 +64,7 @@ fn bus_stem_still_includes_a_routed_parents_sub_tracks() {
     state.add_bus(7, "Kit Bus");
     state.set_output(1, TrackOutput::Bus(7));
 
-    let filter = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let filter = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(filter.contains(1), "the routed parent");
     assert!(
         filter.contains(10) && filter.contains(11),
@@ -103,7 +103,7 @@ fn parent_and_sub_track_on_one_bus_are_not_summed_twice() {
     state.set_output(10, TrackOutput::Bus(7));
     state.set_output(11, TrackOutput::Bus(7));
 
-    let filter = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let filter = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert_eq!(
         filter.set.len(),
         3,

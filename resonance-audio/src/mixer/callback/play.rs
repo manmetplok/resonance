@@ -1,7 +1,7 @@
-//! Playing branch: take the state locks, load the render graph and the
-//! other wait-free tables, render the arrangement (stitched across a loop
-//! seam when one falls inside this buffer) and hand the buffer to the
-//! master passes.
+//! Playing branch: load the render graph and the other wait-free tables,
+//! take the remaining state locks (clips, plugins), render the
+//! arrangement (stitched across a loop seam when one falls inside this
+//! buffer) and hand the buffer to the master passes.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -58,23 +58,21 @@ pub(super) fn render_playing_block(
 ) {
     let shared = inputs.shared;
 
-    // The render graph (MIDI clips, busses, master chain — code review
-    // ARCH-02 A2-4/A2-5): one wait-free load for the block, held through
-    // the master pass. It never fails, so it has no miss counter and can
-    // never be the reason a block is skipped.
+    // The render graph (MIDI clips, busses, master chain, tracks — code
+    // review ARCH-02 A2-4…A2-6): one wait-free load for the block, held
+    // through the master pass. It never fails, so it has no miss counter
+    // and can never be the reason a block is skipped.
     let graph = shared.graph.load();
     let midi_clips: &[Arc<MidiClip>] = &graph.midi_clips;
+    let tracks = &*graph.tracks;
 
     // Every map still behind a lock is tried, so each one that misses is
     // attributed (`SharedState::lock_misses`); the render decision stays
     // all-or-nothing.
     let misses = &shared.lock_misses;
-    let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
     let clips_guard = try_read_counted(inputs.clips, StateMap::Clips, misses);
     let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-    let (Some(tracks_guard), Some(clips_guard), Some(plugins_guard)) =
-        (tracks_guard, clips_guard, plugins_guard)
-    else {
+    let (Some(clips_guard), Some(plugins_guard)) = (clips_guard, plugins_guard) else {
         // Lock contended -- advance playhead to avoid desync, output
         // silence this buffer.
         shared.render_skip_cycles.fetch_add(1, Ordering::Relaxed);
@@ -126,7 +124,7 @@ pub(super) fn render_playing_block(
     // than skipped — and drop captured keys, which belong to the old
     // position.
     if scratch.continuity.jumped(playhead) {
-        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
+        panic_instrument_tracks(tracks, &plugins_guard, scratch.midi_stash, false);
         scratch.sidechain.clear();
     }
 
@@ -143,14 +141,14 @@ pub(super) fn render_playing_block(
 
     let block = BlockInputs {
         channels: inputs.channels,
-        tracks: &tracks_guard,
+        tracks,
         busses: &graph.busses,
         clips: &clips_guard,
         midi_clips,
         plugins: &plugins_guard,
         tempo_map: timing.map,
         sample_rate: inputs.sample_rate,
-        any_solo: any_top_level_solo(tracks_guard.values()),
+        any_solo: any_top_level_solo(tracks.values().map(|t| &**t)),
         active_busses,
         aux_sends: &aux_guard,
         sidechain_routes: &sidechain_guard,

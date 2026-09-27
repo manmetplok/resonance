@@ -38,7 +38,6 @@ macro_rules! run_callback {
             CallbackInputs {
                 channels: $h.channels,
                 shared: &*$h.shared,
-                tracks: &$h.tracks,
                 clips: &$h.clips,
                 plugins: &$h.plugins,
                 tempo_map: &$h.tempo_map,
@@ -87,7 +86,6 @@ pub struct MixAudioHarness {
     /// engine control thread's Seek / Stop race against the callback
     /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
-    tracks: RwLock<IndexMap<TrackId, Track>>,
     clips: RwLock<Vec<AudioClip>>,
     plugins: RwLock<PluginMap>,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
@@ -135,12 +133,12 @@ impl MixAudioHarness {
         sample_rate: u32,
         native_drain: bool,
     ) -> Self {
-        let tracks: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
         let bus_count = busses.len().max(1);
         let shared = Arc::new(SharedState::default());
         shared.aux_sends.store(Arc::new(aux_sends));
         shared.edit_midi_clips(|v| v.extend(midi_clips.into_iter().map(Arc::new)));
         shared.edit_busses(|m| m.extend(busses.into_iter().map(|b| (b.id, Arc::new(b)))));
+        shared.edit_tracks(|m| m.extend(tracks.into_iter().map(|t| (t.id, Arc::new(t)))));
         // Room for a few blocks of the widest input we drive, matching the
         // engine's ring sizing policy.
         let ring = ringbuf::HeapRb::<f32>::new(frames * MAX_MONITOR_CHANNELS * 4);
@@ -151,7 +149,6 @@ impl MixAudioHarness {
         let (live_fwd_tx, live_fwd_rx) = crossbeam_channel::unbounded();
         Self {
             shared,
-            tracks: RwLock::new(tracks),
             clips: RwLock::new(clips),
             plugins: RwLock::new(IndexMap::new()),
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
@@ -201,10 +198,25 @@ impl MixAudioHarness {
         Arc::clone(&self.shared)
     }
 
-    /// The track table the callback reads, for a test that mutes / solos
-    /// / re-routes between blocks as the engine control thread would.
-    pub fn tracks(&self) -> &RwLock<IndexMap<TrackId, Track>> {
-        &self.tracks
+    /// The track map in the render graph the callback reads, for a test
+    /// that mutes / solos between blocks as the engine control thread
+    /// would (those setters write the track's shared live state and
+    /// publish nothing).
+    pub fn tracks(&self) -> Arc<TrackMap> {
+        self.shared.tracks()
+    }
+
+    /// Edit the track map (add / remove / reorder) and publish the new
+    /// render graph, as a track handler on the engine thread does.
+    /// Callable from a second thread while blocks render.
+    pub fn edit_tracks<R>(&self, f: impl FnOnce(&mut TrackMap) -> R) -> R {
+        self.shared.edit_tracks(f)
+    }
+
+    /// Edit the track `track_id` (re-route it, …) and publish the new
+    /// render graph. `None` if there is no such track.
+    pub fn edit_track<R>(&self, track_id: TrackId, f: impl FnOnce(&mut Track) -> R) -> Option<R> {
+        self.shared.edit_track(track_id, f)
     }
 
     /// The bus `bus_id` in the render graph the callback reads, for a
@@ -375,7 +387,6 @@ impl MixAudioHarness {
             }};
         }
         match map {
-            StateMap::Tracks => with_map!(self.tracks),
             StateMap::Clips => with_map!(self.clips),
             StateMap::Plugins => with_map!(self.plugins),
         }
@@ -404,8 +415,8 @@ impl MixAudioHarness {
     /// exactly like the engine thread's meter poll, so consecutive calls
     /// report per-block peaks.
     pub fn take_track_peaks(&self) -> Vec<(f32, f32)> {
-        self.tracks
-            .read()
+        self.shared
+            .tracks()
             .values()
             .map(|t| (t.swap_peak_l(), t.swap_peak_r()))
             .collect()
@@ -414,7 +425,7 @@ impl MixAudioHarness {
     /// The gain each track's ramp ended the last block on, so a parity
     /// hash also covers the ramp state carried between blocks.
     pub fn track_last_gains(&self) -> Vec<(f32, f32)> {
-        self.tracks.read().values().map(|t| t.last_gains()).collect()
+        self.shared.tracks().values().map(|t| t.last_gains()).collect()
     }
 }
 

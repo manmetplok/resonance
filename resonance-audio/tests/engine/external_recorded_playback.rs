@@ -22,7 +22,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -31,7 +30,6 @@ struct EngineState {
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        tracks: Arc::new(RwLock::new(IndexMap::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -75,7 +73,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, data: Vec<f32>) -> AudioClip {
 
 fn peak_of_render(track: Track, name: &str) -> f32 {
     let state = empty_engine_state();
-    state.tracks.write().insert(1, track);
+    state.shared.edit_tracks(|m| { m.insert(1, std::sync::Arc::new(track)); });
     state
         .clips
         .write()
@@ -88,7 +86,6 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,

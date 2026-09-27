@@ -103,7 +103,7 @@ pub(crate) fn handle_send_note_on(
     sample_offset: u32,
 ) {
     let channel = {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         let Some(track) = tracks_guard.get(&track_id) else {
             return;
         };
@@ -143,7 +143,7 @@ pub(crate) fn handle_send_note_off(
     sample_offset: u32,
 ) {
     let channel = {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         let Some(track) = tracks_guard.get(&track_id) else {
             return;
         };
@@ -177,7 +177,7 @@ pub(crate) fn handle_send_note_off(
 /// The Thru channel for a track's hardware MIDI output, mirroring the
 /// `handle_send_note_on` guards: only MIDI-accepting tracks emit Thru.
 fn thru_channel(ctx: &HandlerCtx, track_id: TrackId) -> Option<u8> {
-    let tracks_guard = ctx.tracks.read();
+    let tracks_guard = ctx.tracks();
     let track = tracks_guard.get(&track_id)?;
     if !track.track_type.accepts_midi() {
         return None;
@@ -270,7 +270,7 @@ pub(crate) fn handle_record_midi_event(
     }
     // Only record into instrument tracks that are armed.
     let armed = {
-        let tracks = ctx.tracks.read();
+        let tracks = ctx.tracks();
         match tracks.get(&track_id) {
             Some(t) => t.track_type.accepts_midi() && t.record_armed(),
             None => return,

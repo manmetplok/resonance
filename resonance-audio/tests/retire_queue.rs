@@ -255,7 +255,7 @@ fn engine_handlers_retire_every_replaced_snapshot() {
 /// One track, one clip, playing: every block loads the automation,
 /// comp, aux, sidechain and take-comp snapshots and the audition source.
 fn playing_harness() -> MixAudioHarness {
-    let track = Track::new(1, "clips".into());
+    let mut track = Track::new(1, "clips".into());
     track.set_output(TrackOutput::Master);
     let clip = AudioClip {
         id: 1,

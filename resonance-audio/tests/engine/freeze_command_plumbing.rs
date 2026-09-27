@@ -24,7 +24,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -33,7 +32,6 @@ struct EngineState {
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        tracks: Arc::new(RwLock::new(IndexMap::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -78,10 +76,9 @@ fn audio_clip(id: ClipId, track_id: TrackId, data: Vec<f32>) -> AudioClip {
 /// Engine state with a single audio track (id 1) carrying a 1-second tone.
 fn state_with_tone_track() -> EngineState {
     let state = empty_engine_state();
-    state
-        .tracks
-        .write()
-        .insert(1, Track::with_type(1, "track".into(), TrackType::Audio));
+    state.shared.edit_tracks(|m| {
+        m.insert(1, std::sync::Arc::new(Track::with_type(1, "track".into(), TrackType::Audio)));
+    });
     state.clips.write().push(audio_clip(1, 1, tone(SR as usize)));
     state
 }
@@ -103,7 +100,6 @@ fn drive_freeze(
         track_id,
         path.to_string_lossy().into_owned(),
         Arc::clone(&state.shared),
-        Arc::clone(&state.tracks),
         Arc::clone(&state.clips),
         Arc::clone(&state.plugins),
         Arc::clone(&state.tempo_map),

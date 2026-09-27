@@ -3,7 +3,6 @@
 //! "panic" routine that flushes voices on instrument plugins at the
 //! loop seam.
 
-use indexmap::IndexMap;
 use std::sync::atomic::Ordering;
 
 use crate::clap_host::{PluginMap, SyncClapInstance};
@@ -289,7 +288,7 @@ pub(super) fn ramped_stereo_peaks(
 /// be parked; a parked seam panic keeps them (FU-A4a, see
 /// `MidiStash::request_seam_panic`).
 pub(super) fn panic_instrument_tracks(
-    tracks_guard: &IndexMap<TrackId, Track>,
+    tracks_guard: &TrackMap,
     plugins_guard: &PluginMap,
     midi_stash: &mut super::midi_stash::MidiStash,
     at_seam: bool,

@@ -16,7 +16,7 @@ use resonance_common::PlaybackSource;
 #[test]
 fn sets_track_field_and_echoes_event() {
     let mut tracks = IndexMap::new();
-    tracks.insert(1, Track::new(1, "ext".into()));
+    tracks.insert(1, std::sync::Arc::new(Track::new(1, "ext".into())));
     let (tx, rx) = unbounded();
 
     set_track_playback_source_in_place(&tracks, &tx, 1, PlaybackSource::Recorded);
@@ -35,7 +35,7 @@ fn sets_track_field_and_echoes_event() {
 #[test]
 fn round_trips_back_to_live() {
     let mut tracks = IndexMap::new();
-    tracks.insert(1, Track::new(1, "ext".into()));
+    tracks.insert(1, std::sync::Arc::new(Track::new(1, "ext".into())));
     let (tx, rx) = unbounded();
 
     set_track_playback_source_in_place(&tracks, &tx, 1, PlaybackSource::Recorded);
@@ -59,7 +59,7 @@ fn round_trips_back_to_live() {
 #[test]
 fn unknown_track_is_a_silent_noop() {
     let mut tracks = IndexMap::new();
-    tracks.insert(1, Track::new(1, "ext".into()));
+    tracks.insert(1, std::sync::Arc::new(Track::new(1, "ext".into())));
     let (tx, rx) = unbounded();
 
     set_track_playback_source_in_place(&tracks, &tx, 99, PlaybackSource::Recorded);

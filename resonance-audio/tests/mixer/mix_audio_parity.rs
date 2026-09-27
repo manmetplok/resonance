@@ -199,24 +199,24 @@ fn tempo(metronome: bool) -> TempoMap {
 /// busses and three aux sends covering pre-fader, post-fader and
 /// bus-sourced taps.
 fn project() -> (Vec<Track>, Vec<Bus>, Vec<AudioClip>, Vec<AuxSend>) {
-    let t1 = Track::new(1, "clips".into());
+    let mut t1 = Track::new(1, "clips".into());
     t1.set_output(TrackOutput::Master);
     t1.set_volume(0.8);
     t1.set_pan(-0.3);
 
-    let t2 = Track::new(2, "to-bus".into());
+    let mut t2 = Track::new(2, "to-bus".into());
     t2.set_output(TrackOutput::Bus(FEEDER));
     t2.set_volume(1.2);
     t2.set_pan(0.45);
 
-    let t3 = Track::new(3, "monitored".into());
+    let mut t3 = Track::new(3, "monitored".into());
     t3.set_output(TrackOutput::Master);
     t3.set_monitor_enabled(true);
     t3.set_record_armed(true);
     t3.set_input_port(1);
     t3.set_volume(0.9);
 
-    let t4 = Track::new(4, "muted".into());
+    let mut t4 = Track::new(4, "muted".into());
     t4.set_output(TrackOutput::Master);
     t4.set_muted(true);
 

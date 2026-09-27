@@ -31,12 +31,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use resonance_common::ExternalInstrument;
 
 use crate::midi_hardware::{enumerate_midi_outputs, MidiOutputRegistry};
 use crate::platform;
-use crate::types::{AudioEvent, Track, TrackId};
+use crate::types::{AudioEvent, TrackId, TrackMap};
 
 use super::thread::{HandlerCtx, HandlerState};
 
@@ -55,7 +54,7 @@ pub type ExternalInstruments = HashMap<TrackId, ExternalInstrument>;
 /// `mark_external_tracks` re-asserts the flag when the track lands.
 pub fn set_external_instrument_in_place(
     instruments: &mut ExternalInstruments,
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     event_tx: &Sender<AudioEvent>,
     config: ExternalInstrument,
 ) {
@@ -70,7 +69,7 @@ pub fn set_external_instrument_in_place(
 /// table. Called after a track is added so a `SetExternalInstrument` that
 /// arrived before its track existed still marks it (the app allocates the id
 /// and enables the mode without waiting for the `InstrumentTrackAdded` echo).
-pub fn mark_external_tracks(instruments: &ExternalInstruments, tracks: &IndexMap<TrackId, Track>) {
+pub fn mark_external_tracks(instruments: &ExternalInstruments, tracks: &TrackMap) {
     for track_id in instruments.keys() {
         if let Some(track) = tracks.get(track_id) {
             track.set_external(true);
@@ -84,7 +83,7 @@ pub fn mark_external_tracks(instruments: &ExternalInstruments, tracks: &IndexMap
 /// ⇒ no event" convention.
 pub fn clear_external_instrument_in_place(
     instruments: &mut ExternalInstruments,
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     event_tx: &Sender<AudioEvent>,
     track_id: TrackId,
 ) {
@@ -192,7 +191,7 @@ pub fn check_external_instrument_devices_in_place(
 /// which has to resolve the same `(channel, device)` pair the realtime send
 /// needs.
 fn track_midi_out(ctx: &HandlerCtx, track_id: TrackId) -> (u8, Option<String>) {
-    let tracks = ctx.tracks.read();
+    let tracks = ctx.tracks();
     match tracks.get(&track_id) {
         Some(t) => (
             t.midi_output_channel.unwrap_or(0),
@@ -238,7 +237,7 @@ pub(crate) fn handle_check_devices(
         return;
     }
     let (midi_out_device, return_input_device) = {
-        let tracks = ctx.tracks.read();
+        let tracks = ctx.tracks();
         match tracks.get(&track_id) {
             Some(t) => (
                 t.midi_output_device.load_full().map(|n| (*n).clone()),

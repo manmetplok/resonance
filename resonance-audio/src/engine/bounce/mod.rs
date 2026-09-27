@@ -23,7 +23,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 
@@ -240,7 +239,6 @@ pub fn freeze_terminal_event(
 pub fn to_wav(
     path: String,
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -259,7 +257,6 @@ pub fn to_wav(
         ExportReporter::Bounce,
         shared,
         &cancel,
-        tracks,
         clips,
         plugins,
         tempo_map,
@@ -280,7 +277,6 @@ pub fn export_for_test(
     settings: &ExportSettings,
     cancel: &AtomicBool,
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -294,7 +290,6 @@ pub fn export_for_test(
         ExportReporter::Export,
         shared,
         cancel,
-        tracks,
         clips,
         plugins,
         tempo_map,
@@ -327,7 +322,6 @@ pub(crate) fn export_spawn(
     settings: ExportSettings,
     reporter: ExportReporter,
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -361,7 +355,6 @@ pub(crate) fn export_spawn(
                         reporter,
                         &shared,
                         &cancel_render,
-                        &tracks,
                         &clips,
                         &plugins,
                         &tempo_map,
@@ -390,13 +383,13 @@ pub(crate) fn to_audio_clip_spawn(
     target_clip_id: ClipId,
     name: String,
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
+    cmd_tx: Sender<AudioCommand>,
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
@@ -419,13 +412,13 @@ pub(crate) fn to_audio_clip_spawn(
                         name,
                         &shared,
                         &cancel_render,
-                        &tracks,
                         &clips,
                         &plugins,
                         &tempo_map,
                         &automation,
                         sample_rate,
                         &event_tx,
+                        &cmd_tx,
                     );
                 },
                 |message| {
@@ -452,7 +445,6 @@ pub fn to_freeze_cache_spawn(
     track_id: TrackId,
     cache_path: String,
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -482,7 +474,6 @@ pub fn to_freeze_cache_spawn(
                         cache_path,
                         &shared,
                         &cancel_render,
-                        &tracks,
                         &clips,
                         &plugins,
                         &tempo_map,

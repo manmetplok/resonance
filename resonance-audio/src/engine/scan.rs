@@ -33,7 +33,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use crate::clap_host::{ClapBundle, PluginMap};
@@ -42,7 +41,7 @@ use crate::types::*;
 /// The startup scan: drop everything, reload everything.
 pub(crate) fn scan_plugins(
     plugins: &Arc<RwLock<PluginMap>>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    tracks: &TrackMap,
     bundles: &mut Vec<ClapBundle>,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -54,11 +53,10 @@ pub(crate) fn scan_plugins(
         drop(plugins_guard);
         drop(removed);
     }
-    // `clear_plugins` publishes a new empty chain via `ArcSwap::store`,
-    // so a read guard on the tracks map is enough — write-locking it
-    // here used to silence the audio callback for whatever block
-    // straddled the scan.
-    for track in tracks.read().values() {
+    // `clear_plugins` publishes a new empty chain via `ArcSwap::store`
+    // (shared by every copy of the track), so reading the published track
+    // map is enough — no render-graph publish.
+    for track in tracks.values() {
         // The old chain is dropped here on the scan thread, not by the
         // callback: a tiny `Vec`, but the rule is uniform (MIX-04).
         drop(track.clear_plugins());

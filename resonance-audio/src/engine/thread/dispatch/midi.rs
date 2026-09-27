@@ -18,7 +18,7 @@ pub(super) fn dispatch_midi(
             // track exists. Re-assert the stored modes now that it does.
             external_instrument::mark_external_tracks(
                 &state.external_instruments,
-                &ctx.tracks.read(),
+                &ctx.tracks(),
             );
         }
         AudioCommand::AddVocalTrack { id, name } => midi::handle_add_vocal_track(ctx, id, name),
@@ -158,7 +158,7 @@ pub(super) fn dispatch_midi(
         AudioCommand::SetExternalInstrument { config } => {
             external_instrument::set_external_instrument_in_place(
                 &mut state.external_instruments,
-                &ctx.tracks.read(),
+                &ctx.tracks(),
                 ctx.event_tx,
                 config,
             )
@@ -166,7 +166,7 @@ pub(super) fn dispatch_midi(
         AudioCommand::ClearExternalInstrument { track_id } => {
             external_instrument::clear_external_instrument_in_place(
                 &mut state.external_instruments,
-                &ctx.tracks.read(),
+                &ctx.tracks(),
                 ctx.event_tx,
                 track_id,
             )

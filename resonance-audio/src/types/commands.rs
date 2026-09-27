@@ -627,6 +627,15 @@ pub enum AudioCommand {
     /// realtime path. In both cases the freshly-added target track is
     /// removed and a `TrackBounceCancelled` event is emitted.
     CancelBounce,
+    /// **Engine-internal** — not sent by the GUI. Posted by the offline
+    /// bounce-in-place worker (via the engine's retry-command channel)
+    /// when its render was cancelled: the engine thread, the render
+    /// graph's only writer (code review ARCH-02 B-3), removes the
+    /// freshly-added target track and any clips on it, then emits
+    /// `TrackRemoved` and `TrackBounceCancelled`.
+    BounceTargetCancelled {
+        target_track_id: TrackId,
+    },
     /// Offline "export stems": render several mix slices (one track, one
     /// bus, or the whole master) to separate WAV files. Every target is
     /// rendered over ONE shared range so the stems share a zero origin

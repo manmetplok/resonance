@@ -19,7 +19,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 
@@ -337,7 +336,6 @@ pub(crate) fn run_export(
     reporter: ExportReporter,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -432,7 +430,7 @@ pub(crate) fn run_export(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, plugins);
+    let latency_comp = build_latency_comp(shared, plugins);
     // Render extra frames and drop the same number from the front:
     // plugin-delay compensation shifts every track by the pipeline
     // latency, and the master FX chain (which this export path runs,
@@ -443,7 +441,6 @@ pub(crate) fn run_export(
     let render_stop = render_end + comp_latency;
     let ctx = ChunkCtx {
         shared,
-        tracks,
         clips,
         plugins,
         tempo_map: &bounce_tm,

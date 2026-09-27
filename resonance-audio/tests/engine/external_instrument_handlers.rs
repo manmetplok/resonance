@@ -30,11 +30,11 @@ const TRACK: u64 = 7;
 /// A one-track table for the handlers that mirror external mode onto the
 /// shared track state. External tracks are created as `Instrument` (the
 /// app's `AddExternalInstrumentTrack` sends `AddInstrumentTrack`).
-fn track_table() -> IndexMap<TrackId, Track> {
+fn track_table() -> IndexMap<TrackId, std::sync::Arc<Track>> {
     let mut tracks = IndexMap::new();
     tracks.insert(
         TRACK,
-        Track::with_type(TRACK, "ext".into(), TrackType::Instrument),
+        std::sync::Arc::new(Track::with_type(TRACK, "ext".into(), TrackType::Instrument)),
     );
     tracks
 }

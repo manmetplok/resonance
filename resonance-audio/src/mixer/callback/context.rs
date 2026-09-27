@@ -20,7 +20,6 @@
 
 use std::ops::Range;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 use std::sync::atomic::Ordering;
 
@@ -51,7 +50,6 @@ pub(crate) struct CallbackInputs<'a> {
     /// Channel count of the interleaved output buffer.
     pub(crate) channels: usize,
     pub(crate) shared: &'a SharedState,
-    pub(crate) tracks: &'a RwLock<IndexMap<TrackId, Track>>,
     pub(crate) clips: &'a RwLock<Vec<AudioClip>>,
     pub(crate) plugins: &'a RwLock<PluginMap>,
     pub(crate) tempo_map: &'a arc_swap::ArcSwap<TempoMap>,

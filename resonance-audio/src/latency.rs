@@ -61,7 +61,7 @@ use parking_lot::Mutex;
 use resonance_dsp::DelayLine;
 
 use crate::limits::MAX_COMP_LATENCY;
-use crate::types::{Bus, BusId, PluginInstanceId, Track, TrackId, TrackType};
+use crate::types::{Bus, BusId, PluginInstanceId, TrackId, TrackMap, TrackType};
 
 /// The latency one chain slot actually contributes, given the plugin's
 /// reported latency and whether the mixer skips it (ba doc #275 finding
@@ -111,7 +111,7 @@ pub fn slot_latency(reported: u64, host_bypassed: bool) -> u64 {
 /// - a frozen parent skips its instrument fan-out, so its sub-tracks
 ///   don't inherit the parent-instrument latency.
 pub fn chain_latencies(
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     plugin_latency: impl Fn(PluginInstanceId) -> u64,
 ) -> Vec<(TrackId, u64)> {
     tracks

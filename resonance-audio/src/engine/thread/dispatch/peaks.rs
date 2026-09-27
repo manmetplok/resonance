@@ -8,21 +8,16 @@ use crate::types::*;
 use super::super::HandlerCtx;
 
 /// Snapshot and clear every peak meter (per-track, per-bus, master L/R)
-/// and dispatch a `PeakSnapshot` event. Runs on the engine thread, so the
-/// `try_read` calls compete only with the audio callback's brief
-/// `try_read` — same window as the old direct getter but now off the GUI
-/// thread, and the GUI side reads its result via the regular event queue.
+/// and dispatch a `PeakSnapshot` event. Runs on the engine thread and
+/// reads the published render graph (tracks, busses — no lock since
+/// ARCH-02 A2-6), and the GUI side reads its result via the regular event
+/// queue.
 pub(super) fn handle_poll_peaks(ctx: &HandlerCtx) {
     let track_peaks = ctx
-        .tracks
-        .try_read()
-        .map(|guard| {
-            guard
-                .values()
-                .map(|t| (t.id, t.swap_peak_l(), t.swap_peak_r()))
-                .collect()
-        })
-        .unwrap_or_default();
+        .tracks()
+        .values()
+        .map(|t| (t.id, t.swap_peak_l(), t.swap_peak_r()))
+        .collect();
     let bus_peaks = ctx
         .shared
         .graph

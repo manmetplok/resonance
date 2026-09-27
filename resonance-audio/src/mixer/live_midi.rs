@@ -4,7 +4,8 @@
 //! a controller reaches its instrument within one quantum whichever branch
 //! renders the block (doc #260 finding #16).
 
-use crate::cycle_load::{try_read_counted, LockMissCounters, StateMap};
+use crate::cycle_load::{try_read_counted, StateMap};
+use crate::engine::SharedState;
 use crate::midi_hardware::LiveMidiEvent;
 use crate::types::*;
 
@@ -15,7 +16,7 @@ use super::midi_stash::MidiStash;
 /// `handle_send_note_on` resolution; `None` for audio tracks or an
 /// empty chain (the event is still forwarded for MIDI-thru/recording).
 pub fn live_instrument_for(
-    tracks: &indexmap::IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     track_id: TrackId,
 ) -> Option<PluginInstanceId> {
     let track = tracks.get(&track_id)?;
@@ -33,7 +34,8 @@ pub fn live_instrument_for(
 /// offset to 0 at small quanta) — then forward the event to the engine
 /// thread for recording + MIDI-thru bookkeeping.
 ///
-/// Lock discipline: when the tracks/plugins read locks are contended
+/// Lock discipline: the tracks come from the render graph (a load that
+/// cannot miss, ARCH-02 A2-6); when the plugins read lock is contended
 /// (a UI edit in flight) the events simply stay in the channel for the
 /// next callback ~1 quantum later — never dropped, never delivered
 /// twice, and plugin/bookkeeping ordering never splits across threads.
@@ -43,9 +45,8 @@ pub fn live_instrument_for(
 pub(super) fn pickup_live_midi(
     live_midi_rx: &crossbeam_channel::Receiver<LiveMidiEvent>,
     live_midi_fwd: &crossbeam_channel::Sender<LiveMidiEvent>,
-    tracks: &parking_lot::RwLock<indexmap::IndexMap<TrackId, Track>>,
+    shared: &SharedState,
     plugins: &parking_lot::RwLock<crate::clap_host::PluginMap>,
-    misses: &LockMissCounters,
     midi_stash: &mut MidiStash,
     sample_rate: u32,
     frames: usize,
@@ -53,9 +54,10 @@ pub(super) fn pickup_live_midi(
     if live_midi_rx.is_empty() {
         return;
     }
-    let tracks_guard = try_read_counted(tracks, StateMap::Tracks, misses);
-    let plugins_guard = try_read_counted(plugins, StateMap::Plugins, misses);
-    let (Some(tracks_guard), Some(plugins_guard)) = (tracks_guard, plugins_guard) else {
+    let graph = shared.graph.load();
+    let tracks_guard = &*graph.tracks;
+    let plugins_guard = try_read_counted(plugins, StateMap::Plugins, &shared.lock_misses);
+    let Some(plugins_guard) = plugins_guard else {
         // Contended: leave the events queued; the next callback (one
         // quantum away) picks them up — still far inside the old
         // engine-cadence latency budget.
@@ -76,7 +78,7 @@ pub(super) fn pickup_live_midi(
                 arrival,
             } => (*track_id, false, *note, 0.0, *arrival),
         };
-        if let Some(inst_id) = live_instrument_for(&tracks_guard, track_id) {
+        if let Some(inst_id) = live_instrument_for(tracks_guard, track_id) {
             if let Some(mutex) = plugins_guard.get(&inst_id) {
                 let offset = crate::engine::midi::live_arrival_sample_offset(
                     arrival,

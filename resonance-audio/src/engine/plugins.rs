@@ -111,7 +111,8 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
 /// the audio callback.
 pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstruments) {
     let (mut chains, bus_chains, master_latency) = {
-        let tracks_guard = ctx.tracks.read();
+        // One graph for tracks, busses and master, so the table is built
+        // from a single consistent topology.
         let graph = ctx.shared.graph.load();
         let plugins_guard = ctx.plugins.read();
         let latency_of = |id: crate::types::PluginInstanceId| {
@@ -130,7 +131,7 @@ pub(crate) fn refresh_latency_comp(ctx: &HandlerCtx, external: &ExternalInstrume
                 .unwrap_or(0)
         };
         (
-            crate::latency::chain_latencies(&tracks_guard, latency_of),
+            crate::latency::chain_latencies(&graph.tracks, latency_of),
             crate::latency::bus_chain_latencies(&graph.busses, latency_of),
             crate::latency::master_chain_latency(
                 &graph.master.plugin_ids,
@@ -381,10 +382,10 @@ pub(crate) fn handle_add_plugin(
                 crate::clap_host::PluginSlot::new(instance),
             );
 
-            // `push_plugin` publishes the new chain via `ArcSwap::store`,
-            // so we only need a read guard — the audio thread is not
-            // blocked while the chain edit happens.
-            if let Some(track) = ctx.tracks.read().get(&track_id) {
+            // `push_plugin` publishes the new chain via `ArcSwap::store`
+            // (shared by every copy of the track), so no render-graph
+            // publish — the audio thread is not blocked by the edit.
+            if let Some(track) = ctx.tracks().get(&track_id) {
                 ctx.shared.retired.retire(track.push_plugin(instance_id));
             }
 
@@ -416,10 +417,11 @@ pub(crate) fn handle_remove_plugin(
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
-    // `retain_plugins` publishes a new chain via `ArcSwap::store`, so
-    // we only need a read guard on the tracks map — the audio thread
-    // is never blocked on the chain edit.
-    if let Some(track) = ctx.tracks.read().get(&track_id) {
+    // `retain_plugins` publishes a new chain via `ArcSwap::store` (shared
+    // by every copy of the track), so reading the published track map is
+    // enough — no render-graph publish, and the audio thread is never
+    // blocked on the chain edit.
+    if let Some(track) = ctx.tracks().get(&track_id) {
         ctx.shared
             .retired
             .retire(track.retain_plugins(|&id| id != instance_id));
@@ -442,13 +444,12 @@ pub(crate) fn handle_move_plugin(
 ) {
     // Same shape as `handle_remove_plugin`: `move_plugin` builds the
     // reordered Vec here on the engine thread and publishes it with one
-    // `ArcSwap::store`, so a read guard on the tracks map is enough. The
+    // `ArcSwap::store`, so reading the published track map is enough. The
     // audio thread is never blocked on the edit and never allocates, and
     // no lock is held across a `process()` call — the plugin instances
     // themselves are untouched, only the order they are visited in.
     let moved = ctx
-        .tracks
-        .read()
+        .tracks()
         .get(&track_id)
         .and_then(|track| {
             track.move_plugin_into(instance_id, to_index, |old| ctx.shared.retired.retire(old))

@@ -201,23 +201,23 @@ fn comp() -> LatencyComp {
 /// crossfade, two frozen sources, a mute-automated track), two busses, and
 /// three aux sends covering pre-fader, post-fader and bus-sourced taps.
 fn project() -> (Vec<Track>, Vec<Bus>, Vec<AudioClip>, Vec<AuxSend>) {
-    let t1 = Track::new(1, "clips".into());
+    let mut t1 = Track::new(1, "clips".into());
     t1.set_output(TrackOutput::Master);
     t1.set_volume(0.8);
     t1.set_pan(-0.3);
 
-    let t2 = Track::new(2, "to-bus".into());
+    let mut t2 = Track::new(2, "to-bus".into());
     t2.set_output(TrackOutput::Bus(FEEDER));
     t2.set_volume(1.2);
     t2.set_pan(0.45);
 
-    let t3 = Track::new(3, "frozen".into());
+    let mut t3 = Track::new(3, "frozen".into());
     t3.set_output(TrackOutput::Bus(FEEDER));
     t3.set_volume(0.5);
     t3.frozen_source
         .store(Some(Arc::new(frozen(77, BLOCK * 4, SR))));
 
-    let t4 = Track::new(4, "frozen-resampled".into());
+    let mut t4 = Track::new(4, "frozen-resampled".into());
     t4.set_output(TrackOutput::Master);
     t4.set_pan(0.2);
     // A cache rendered at a different rate, converted the way the engine
@@ -225,7 +225,7 @@ fn project() -> (Vec<Track>, Vec<Bus>, Vec<AudioClip>, Vec<AuxSend>) {
     t4.frozen_source
         .store(Some(Arc::new(frozen(91, BLOCK * 4, 44_100).at_rate(SR))));
 
-    let t5 = Track::new(5, "mute-automated".into());
+    let mut t5 = Track::new(5, "mute-automated".into());
     t5.set_output(TrackOutput::Master);
 
     let feeder = Bus::new(FEEDER, "Feeder".into());

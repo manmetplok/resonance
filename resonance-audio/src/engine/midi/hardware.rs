@@ -3,14 +3,14 @@
 //! and mirrors the chosen device + channel onto the engine-side track.
 //!
 //! The audio thread reads `Track::midi_output_device` lock-free via
-//! arc-swap so the swap done here is visible to the next mix block
-//! immediately, without waiting for the tracks-map write lock to drop.
+//! arc-swap (shared by every copy of the track) so the swap done here is
+//! visible to the next mix block immediately; the engine-thread-only
+//! bindings (input device / channels) are a copy-on-write track edit
+//! published in a new render graph.
 
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
-use parking_lot::RwLock;
 use resonance_common::DeviceParam;
 
 use crate::midi_hardware::{enumerate_midi_inputs, enumerate_midi_outputs};
@@ -55,14 +55,12 @@ pub(crate) fn handle_set_track_midi_input(
 ) {
     // Persist the desired config on the engine-side track for
     // subsequent saves and for the registry's reconnect-on-replug
-    // path. Plain field write — only the engine thread reads it.
-    {
-        let mut tracks = ctx.tracks.write();
-        if let Some(t) = tracks.get_mut(&track_id) {
-            t.midi_input_device = device.clone();
-            t.midi_input_channel = channel;
-        }
-    }
+    // path. Structural (only the engine thread reads it): a
+    // copy-on-write edit of the track, published in a new render graph.
+    ctx.shared.edit_track(track_id, |t| {
+        t.midi_input_device = device.clone();
+        t.midi_input_channel = channel;
+    });
     if let Err(e) = state
         .midi_hw
         .midi_inputs
@@ -80,19 +78,17 @@ pub(crate) fn handle_set_track_midi_output(
     channel: Option<u8>,
 ) {
     // Mirror onto the engine-side track. The audio thread reads
-    // `midi_output_device` via arc-swap (no lock), so the swap is
-    // visible to the next mix block immediately even though the map
-    // itself is held under a write lock for the channel update.
-    {
-        let mut tracks = ctx.tracks.write();
-        if let Some(t) = tracks.get_mut(&track_id) {
-            match &device {
-                Some(name) => t.midi_output_device.store(Some(Arc::new(name.clone()))),
-                None => t.midi_output_device.store(None),
-            }
-            t.midi_output_channel = channel;
+    // `midi_output_device` via arc-swap (shared by every copy of the
+    // track), so the swap is visible to the next mix block immediately;
+    // the channel (engine-thread only) is a copy-on-write edit published
+    // in a new render graph.
+    ctx.shared.edit_track(track_id, |t| {
+        match &device {
+            Some(name) => t.midi_output_device.store(Some(Arc::new(name.clone()))),
+            None => t.midi_output_device.store(None),
         }
-    }
+        t.midi_output_channel = channel;
+    });
     if let Err(e) = state.midi_hw.midi_outputs.set_track_output(track_id, device) {
         let _ = ctx.event_tx.send(AudioEvent::Error(e.into()));
     }
@@ -103,7 +99,7 @@ pub(crate) fn handle_set_track_device_params(
     track_id: TrackId,
     params: Vec<DeviceParam>,
 ) {
-    set_track_device_params_in_place(ctx.tracks, ctx.event_tx, track_id, params);
+    set_track_device_params_in_place(&ctx.tracks(), ctx.event_tx, track_id, params);
 }
 
 /// Store the device preset's automatable parameters on the engine-side
@@ -115,18 +111,17 @@ pub(crate) fn handle_set_track_device_params(
 /// [`super::super::clips::set_clip_fade_in_place`] and the other per-track
 /// setters).
 ///
-/// Takes only a read guard on the tracks map: [`Track::set_device_params`]
-/// publishes the new map through an `ArcSwap` store on `&self`, so the
-/// audio thread sees it on the next block without ever contending on the
-/// tracks-map write lock.
+/// Reads the published track map only: [`Track::set_device_params`]
+/// publishes the new map through an `ArcSwap` store on `&self` (shared by
+/// every copy of the track), so the audio thread sees it on the next block
+/// without a render-graph publish.
 pub fn set_track_device_params_in_place(
-    tracks: &RwLock<IndexMap<TrackId, Track>>,
+    tracks: &TrackMap,
     event_tx: &Sender<AudioEvent>,
     track_id: TrackId,
     params: Vec<DeviceParam>,
 ) {
-    let guard = tracks.read();
-    if let Some(track) = guard.get(&track_id) {
+    if let Some(track) = tracks.get(&track_id) {
         let param_ids = track.set_device_params(params);
         let _ = event_tx.send(AudioEvent::TrackDeviceParamsApplied { track_id, param_ids });
     }

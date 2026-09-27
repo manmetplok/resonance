@@ -19,8 +19,9 @@
 //! this queue is — until the sweep, which runs on the engine thread.
 //!
 //! Threading: publishers and the sweep both run on the engine control
-//! thread (a worker occasionally publishes, e.g. a cancelled realtime
-//! bounce removing its target track), so the queue is a plain `Mutex`.
+//! thread (no worker publishes the render graph since ARCH-02 B-3 — a
+//! cancelled offline bounce posts its target-track removal back to the
+//! engine thread), so the queue is a plain `Mutex`.
 //! The audio thread never touches it — the only thing that would need a
 //! lock-free path is retiring *from* the callback, and nothing does that:
 //! every `Arc` the callback holds is one the engine handed it and still

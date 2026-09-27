@@ -415,9 +415,9 @@ fn snapshot_gates_recorded_unarmed_tracks_only() {
     armed.set_playback_source(PlaybackSource::Recorded);
     armed.set_record_armed(true); // punch-in: stays fully live
 
-    tracks.insert(1, live);
-    tracks.insert(2, recorded);
-    tracks.insert(3, armed);
+    tracks.insert(1, std::sync::Arc::new(live));
+    tracks.insert(2, std::sync::Arc::new(recorded));
+    tracks.insert(3, std::sync::Arc::new(armed));
 
     let snap = outbound_track_snapshot(&tracks);
     assert_eq!(
@@ -448,9 +448,9 @@ fn snapshot_skips_muted_and_deviceless_tracks() {
 
     let muted = output_track(1);
     muted.set_muted(true);
-    tracks.insert(1, muted);
+    tracks.insert(1, std::sync::Arc::new(muted));
     // No MIDI output device configured — not an outbound track at all.
-    tracks.insert(2, Track::new(2, "plain".into()));
+    tracks.insert(2, std::sync::Arc::new(Track::new(2, "plain".into())));
 
     assert!(outbound_track_snapshot(&tracks).is_empty());
 }

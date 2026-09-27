@@ -30,7 +30,6 @@ const REF_DC: f32 = -0.9;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -38,8 +37,10 @@ struct EngineState {
 
 /// One audio track carrying a single in-memory DC clip at `MIX_DC`.
 fn engine_with_dc_clip() -> EngineState {
-    let mut tracks = IndexMap::new();
-    tracks.insert(1, Track::new(1, "audio".into()));
+    let shared = Arc::new(SharedState::default());
+    shared.edit_tracks(|m| {
+        m.insert(1, Arc::new(Track::new(1, "audio".into())));
+    });
 
     let clip = AudioClip {
         id: 1,
@@ -64,8 +65,7 @@ fn engine_with_dc_clip() -> EngineState {
     };
 
     EngineState {
-        shared: Arc::new(SharedState::default()),
-        tracks: Arc::new(RwLock::new(tracks)),
+        shared,
         clips: Arc::new(RwLock::new(vec![clip])),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -101,7 +101,6 @@ fn bounce_excludes_the_reference_and_renders_the_mix() {
     to_wav(
         path_str.clone(),
         &state.shared,
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,

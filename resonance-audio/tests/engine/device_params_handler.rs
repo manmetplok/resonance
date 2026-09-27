@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
 use indexmap::IndexMap;
-use parking_lot::RwLock;
 
 use resonance_audio::set_track_device_params_in_place;
 use resonance_audio::types::{AudioEvent, Track, TrackId};
@@ -33,10 +32,10 @@ fn cc_param(id: &str, cc: u8) -> DeviceParam {
 }
 
 /// A tracks map holding a single track with the given id.
-fn tracks_with(track_id: TrackId) -> Arc<RwLock<IndexMap<TrackId, Track>>> {
+fn tracks_with(track_id: TrackId) -> IndexMap<TrackId, Arc<Track>> {
     let mut map = IndexMap::new();
-    map.insert(track_id, Track::new(track_id, "Synth".to_string()));
-    Arc::new(RwLock::new(map))
+    map.insert(track_id, Arc::new(Track::new(track_id, "Synth".to_string())));
+    map
 }
 
 #[test]
@@ -53,7 +52,7 @@ fn set_track_device_params_updates_map_and_emits_event() {
 
     // The engine-side map is updated, keyed by param id.
     {
-        let guard = tracks.read();
+        let guard = &tracks;
         let track = guard.get(&7).unwrap();
         assert_eq!(track.device_params().len(), 2);
         assert_eq!(
@@ -85,7 +84,7 @@ fn empty_params_clears_map_and_still_confirms() {
     set_track_device_params_in_place(&tracks, &tx, 3, vec![]);
 
     {
-        let guard = tracks.read();
+        let guard = &tracks;
         assert!(guard.get(&3).unwrap().device_params().is_empty());
     }
 
@@ -111,5 +110,5 @@ fn unknown_track_is_silent_no_op() {
         rx.try_recv().is_err(),
         "an unknown track id must not emit a ghost event"
     );
-    assert!(tracks.read().get(&1).unwrap().device_params().is_empty());
+    assert!((&tracks).get(&1).unwrap().device_params().is_empty());
 }
