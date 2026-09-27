@@ -201,6 +201,14 @@ impl<T> SwapFader<T> {
         self.fade_out_remaining > 0
     }
 
+    /// True when no fade is in progress: [`Self::next`] would return a
+    /// gain of exactly 1.0 and the current active payload for every
+    /// sample, so a caller may process a whole block against
+    /// [`Self::active_mut`] without ticking.
+    pub fn is_settled(&self) -> bool {
+        self.fade_out_remaining == 0 && self.fade_in_remaining == 0
+    }
+
     /// Per-sample tick: returns this sample's fade gain and the payload
     /// it applies to. Performs the swap on the sample where the
     /// fade-out reaches zero, so that (silent) sample and everything

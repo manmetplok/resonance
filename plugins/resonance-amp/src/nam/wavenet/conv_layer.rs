@@ -75,6 +75,12 @@ pub(super) enum LayerGating {
 /// where `mid_ch = 2*bottleneck` when the layer's gating mode is gated or
 /// blended, else `bottleneck`. In A1 models `bottleneck == channels` and all
 /// groups are 1, so this degenerates to the historical dense layout.
+///
+/// The block-GEMM weights (`w_conv`, `w_input_mixin`, `layer1x1`,
+/// `head1x1`) are read in the reference `[out][in]` layout described on
+/// each field and transposed to lane-padded `[in][out]` once validation
+/// has passed (`build::transpose_for_block_gemm`); FiLM weights stay as
+/// read.
 pub(super) struct WaveNetLayer {
     /// Combined filter+gate conv weights per kernel tap. With
     /// `groups_input == 1`, w_conv[tap] is the dense row-major
@@ -87,6 +93,8 @@ pub(super) struct WaveNetLayer {
 
     /// Input mixin weights (condition mixing). None if condition_size == 0.
     pub(super) w_input_mixin: Option<Vec<f32>>,
+    /// Input mixin input width (the stack's `condition_size`).
+    pub(super) condition_size: usize,
 
     /// Layer 1x1 residual conv (bottleneck -> channels). None when the
     /// config has no layer1x1, which requires bottleneck == channels.

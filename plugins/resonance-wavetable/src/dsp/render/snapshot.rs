@@ -5,7 +5,11 @@
 //! per-sample kernel performs zero atomic loads against the shared
 //! [`WavetableParams`] and contains no `Param::value()` call at all.
 
+use resonance_dsp::OversampleFactor;
+
+use crate::dsp::effects::{ChorusMode, DistMode, DistSettings};
 use crate::dsp::filter::FilterType;
+use crate::dsp::filter_models::FilterModel;
 use crate::dsp::lfo::{LfoMode, LfoShape, SyncDivision};
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use crate::params::WavetableParams;
@@ -37,6 +41,10 @@ pub(crate) struct ParamSnapshot {
     /// so `ModDest::UnisonDetune` can move it on a sounding voice.
     pub unison_detune: f32,
 
+    /// The `analog` knob, 0..1. (`osc_phase_random` is not here: it is read
+    /// at note-on, the only moment it acts.)
+    pub analog: f32,
+
     pub filter_enabled: bool,
     pub filter_type: FilterType,
     pub filter_cutoff: f32,
@@ -44,6 +52,8 @@ pub(crate) struct ParamSnapshot {
     pub filter_env_depth: f32,
     pub filter_keytrack: f32,
     pub filter_drive: f32,
+    pub filter_model: FilterModel,
+    pub filter_fm: f32,
 
     pub amp_attack: f32,
     pub amp_decay: f32,
@@ -81,11 +91,20 @@ pub(crate) struct ParamSnapshot {
     pub dist_enabled: bool,
     pub dist_drive: f32,
     pub dist_mix: f32,
+    pub dist_settings: DistSettings,
+    /// True when some effective mod slot targets `ModDest::DistDrive`, so
+    /// the render loop has to track the newest voice's value for it.
+    pub dist_drive_routed: bool,
+
+    /// Per-voice pre-filter drive (0 = bypass).
+    pub voice_drive: f32,
 
     pub chorus_enabled: bool,
     pub chorus_rate: f32,
     pub chorus_depth: f32,
     pub chorus_mix: f32,
+    pub chorus_mode: ChorusMode,
+    pub chorus_noise: f32,
 
     pub delay_enabled: bool,
     pub delay_time_l: f32,
@@ -110,6 +129,10 @@ impl ParamSnapshot {
             amount: params.mod_slots[i].amount.value(),
         });
 
+        let dist_drive_routed = mod_slots
+            .iter()
+            .any(|s| s.dest == ModDest::DistDrive && s.is_effective());
+
         Self {
             master_vol: params.master_volume.value(),
             osc_balance: params.osc_balance.value(),
@@ -130,6 +153,8 @@ impl ParamSnapshot {
 
             unison_detune: params.unison.detune.value(),
 
+            analog: params.analog.drift.value(),
+
             filter_enabled: params.filter.enabled.value(),
             filter_type: FilterType::from_int(params.filter.filter_type.value()),
             filter_cutoff: params.filter.cutoff.value(),
@@ -137,6 +162,8 @@ impl ParamSnapshot {
             filter_env_depth: params.filter.env_depth.value(),
             filter_keytrack: params.filter.keytrack.value(),
             filter_drive: params.filter.drive.value(),
+            filter_model: FilterModel::from_int(params.filter.model.value()),
+            filter_fm: params.filter.fm.value(),
 
             amp_attack: params.amp_env.attack.value(),
             amp_decay: params.amp_env.decay.value(),
@@ -183,11 +210,24 @@ impl ParamSnapshot {
             dist_enabled: params.distortion.enabled.value(),
             dist_drive: params.distortion.drive.value(),
             dist_mix: params.distortion.mix.value(),
+            dist_settings: DistSettings {
+                mode: DistMode::from_int(params.distortion.mode.value()),
+                oversample: OversampleFactor::from_int(params.distortion.oversample.value()),
+                tone_hz: params.distortion.tone.value(),
+                auto_gain: params.distortion.auto_gain.value(),
+                bits: params.distortion.bits.value(),
+                crush_rate: params.distortion.crush_rate.value(),
+            },
+            dist_drive_routed,
+
+            voice_drive: params.distortion.voice_drive.value(),
 
             chorus_enabled: params.chorus.enabled.value(),
             chorus_rate: params.chorus.rate.value(),
             chorus_depth: params.chorus.depth.value(),
             chorus_mix: params.chorus.mix.value(),
+            chorus_mode: ChorusMode::from_int(params.chorus.mode.value()),
+            chorus_noise: params.chorus.noise.value(),
 
             delay_enabled: params.delay.enabled.value(),
             delay_time_l: params.delay.time_l.value(),

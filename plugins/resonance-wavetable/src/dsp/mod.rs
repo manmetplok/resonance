@@ -6,10 +6,12 @@
 //! to bake the bundled wavetables into `$OUT_DIR/wavetables.bin`; it is
 //! deliberately not declared as a module here.
 
+pub mod analog;
 pub mod effects;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
+pub mod filter_models;
 pub mod lfo;
 pub mod modulation;
 pub mod oscillator;

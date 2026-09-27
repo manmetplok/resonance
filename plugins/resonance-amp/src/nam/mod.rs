@@ -1,5 +1,6 @@
 /// NAM (Neural Amp Modeler) model inference.
 pub mod activations;
+pub(crate) mod gemm;
 pub mod lstm;
 pub mod parse;
 pub mod wavenet;
@@ -8,6 +9,18 @@ pub mod wavenet;
 /// time so `process_sample` is allocation-free.
 pub trait NamInference: Send {
     fn process_sample(&mut self, input: f32) -> f32;
+
+    /// Process a block: `output[i]` is what `process_sample(input[i])`
+    /// would return, in order. Stream-equivalent to the per-sample call
+    /// (up to f32 accumulation order) for any block split. The default
+    /// runs sample by sample; the WaveNet overrides it with a block
+    /// forward pass whose matrix products amortise across frames.
+    fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
+        for (o, &x) in output.iter_mut().zip(input) {
+            *o = self.process_sample(x);
+        }
+    }
+
     fn reset(&mut self);
 }
 
