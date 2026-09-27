@@ -240,7 +240,15 @@ fn sh_trace_free(p: &WavetableParams, chunk: usize, total_samples: usize) -> Vec
 }
 
 /// Same, but with an explicit rolling transport for the synced case.
-fn sh_trace_synced(p: &WavetableParams, bpm: f32, chunk: usize, total_samples: usize) -> Vec<f32> {
+/// Returns the trace plus the actual number of samples rendered (a multiple
+/// of `chunk`, so it can overshoot `total_samples` by up to `chunk - 1` --
+/// callers computing an exact expected step count need the real figure).
+fn sh_trace_synced(
+    p: &WavetableParams,
+    bpm: f32,
+    chunk: usize,
+    total_samples: usize,
+) -> (Vec<f32>, usize) {
     let mut e = engine();
     let mut out = Vec::new();
     let mut rendered = 0usize;
@@ -257,7 +265,7 @@ fn sh_trace_synced(p: &WavetableParams, bpm: f32, chunk: usize, total_samples: u
         rendered += chunk;
         out.push(e.mod_sample_hold.value());
     }
-    out
+    (out, rendered)
 }
 
 /// Sample indices (in units of `chunk`) where consecutive readings differ.
@@ -271,7 +279,9 @@ fn transitions(trace: &[f32]) -> Vec<usize> {
 }
 
 /// Assert `trace`'s transitions land close to every multiple of
-/// `period_samples`, within `expected_cycles` ± 1.
+/// `period_samples`, within `expected_cycles` ± 1. Used for the free-rate
+/// test, which has no exact closed form for how many cycles a given sample
+/// count covers relative to where `sh_trace_free`'s polling happens to land.
 fn assert_steps_at_rate(trace: &[f32], chunk: usize, period_samples: f32, expected_cycles: usize) {
     let jumps = transitions(trace);
     assert!(
@@ -290,6 +300,16 @@ fn assert_steps_at_rate(trace: &[f32], chunk: usize, period_samples: f32, expect
     }
 }
 
+/// The exact number of cycle boundaries crossed between sample 0 and
+/// `rendered_samples`, for the synced case: `SampleHoldGen::anchor_synced`
+/// and `advance` between them redraw exactly once per crossing (see their
+/// doc comments), starting from `anchor_cycle == None` at cycle 0, so this
+/// is simply how many whole periods fit in `rendered_samples` -- no
+/// simulation needed, and no ± slop to allow for.
+fn exact_expected_steps(rendered_samples: usize, period_samples: f32) -> usize {
+    (rendered_samples as f32 / period_samples).floor() as usize
+}
+
 #[test]
 fn sample_hold_steps_at_the_free_rate() {
     let p = WavetableParams::new();
@@ -304,30 +324,52 @@ fn sample_hold_steps_at_the_free_rate() {
     assert_steps_at_rate(&trace, chunk, period_samples, cycles);
 }
 
+/// This machine's real block size: PipeWire runs 48 kHz / quantum 128 (see
+/// project memory on the pinned audio config). 120 BPM at a 1/16 note is a
+/// 6000-sample cycle, and 6000 / 128 = 46.875 -- not an integer, but the
+/// point of this test is that it doesn't need to be: any block size,
+/// including the ones that divide the cycle cleanly, must still see exactly
+/// one redraw per cycle. 32 is kept because it's what first exposed the
+/// bug (6000 / 32 = 187.5 exactly, aliasing every *other* wrap onto a block
+/// boundary); 101 (coprime with 6000) is kept as the no-resonance control.
 #[test]
 fn sample_hold_steps_at_the_synced_rate() {
-    let p = WavetableParams::new();
-    p.mod_sh.sync.set_value(true);
-    p.mod_sh.division.set_plain(SyncDivision::Sixteenth as i32 as f64);
-    p.mod_sh.slew.set_value(0.0);
-
     let bpm = 120.0;
     let rate_hz = sync_rate_hz(bpm, SyncDivision::Sixteenth.beats(4.0));
-    let period_samples = SR / rate_hz;
-    // A chunk size that shares no clean rational relationship with the
-    // 6000-sample period: `set_phase` re-anchors both `phase` and
-    // `prev_phase` to the same value at every block boundary, so a wrap
-    // whose true moment lands exactly on one goes undetected (`phase <
-    // prev_phase` is trivially false when they were just set equal). 32
-    // divides 6000 into an exact half-integer (187.5), so every *other*
-    // wrap landed exactly on a chunk boundary and silently vanished --
-    // a chunking artifact of this test, not an engine bug (the free-rate
-    // test above has no periodic re-anchor and is unaffected by chunk
-    // size). A prime chunk size cannot resonate like that.
-    let chunk = 101usize;
-    let cycles = 5usize;
-    let trace = sh_trace_synced(&p, bpm, chunk, (period_samples as usize) * cycles);
-    assert_steps_at_rate(&trace, chunk, period_samples, cycles);
+    let period_samples = SR / rate_hz; // 6000.0
+
+    for chunk in [32usize, 128, 101] {
+        let p = WavetableParams::new();
+        p.mod_sh.sync.set_value(true);
+        p.mod_sh.division.set_plain(SyncDivision::Sixteenth as i32 as f64);
+        p.mod_sh.slew.set_value(0.0);
+
+        // 5.5 cycles: comfortably mid-cycle at the stopping point for every
+        // chunk size, so the exact expected count below can't be thrown
+        // off by a chunk's overshoot landing within float rounding of a
+        // cycle boundary.
+        let requested = (period_samples * 5.5) as usize;
+        let (trace, rendered) = sh_trace_synced(&p, bpm, chunk, requested);
+        let expected = exact_expected_steps(rendered, period_samples);
+
+        let jumps = transitions(&trace);
+        assert_eq!(
+            jumps.len(),
+            expected,
+            "chunk {chunk}: expected exactly {expected} steps over {rendered} samples \
+             ({} cycles), got {} at {jumps:?}",
+            rendered as f32 / period_samples,
+            jumps.len(),
+        );
+        for w in jumps.windows(2) {
+            let spacing = ((w[1] - w[0]) * chunk) as f32;
+            assert!(
+                (spacing - period_samples).abs() < period_samples * 0.05 + 2.0 * chunk as f32,
+                "chunk {chunk}: step spacing {spacing} samples far from the expected \
+                 period {period_samples}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

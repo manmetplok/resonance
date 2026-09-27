@@ -288,6 +288,12 @@ pub struct MultiLfo {
     phase_inc: f32,
     prev_phase: f32,
     sh_value: f32,
+    /// Absolute cycle index (`floor(song_pos_beats / cycle_beats)`) at the
+    /// last [`Self::anchor_synced`] call. `None` while free-running/
+    /// retriggered (nothing to compare) or before the first anchor. See
+    /// that method for what this buys over the plain phase reset
+    /// [`Self::set_phase`] does.
+    anchor_cycle: Option<i64>,
 }
 
 impl MultiLfo {
@@ -297,6 +303,7 @@ impl MultiLfo {
             phase_inc: 0.0,
             prev_phase: 0.0,
             sh_value: 0.0,
+            anchor_cycle: None,
         }
     }
 
@@ -307,6 +314,7 @@ impl MultiLfo {
     pub fn reset_phase(&mut self) {
         self.phase = 0.0;
         self.prev_phase = 0.0;
+        self.anchor_cycle = None;
     }
 
     /// Jump the phase to an absolute position, without treating the jump as
@@ -316,6 +324,10 @@ impl MultiLfo {
     /// song position. `prev_phase` follows the new phase so the S&H latch
     /// (which fires on `phase < prev_phase`) does not mistake a locate for a
     /// wrap and re-roll on every block.
+    ///
+    /// Superseded for that job by [`Self::anchor_synced`], which does the
+    /// same phase reset but does not lose a wrap that coincides with the
+    /// reset; kept as the plain primitive underneath it.
     pub fn set_phase(&mut self, phase: f32) {
         let p = if phase.is_finite() {
             phase - phase.floor()
@@ -324,6 +336,51 @@ impl MultiLfo {
         };
         self.phase = p;
         self.prev_phase = p;
+    }
+
+    /// Re-anchor to the host transport for tempo-synced mode, latching a
+    /// fresh S&H value if a whole cycle elapsed since the last anchor —
+    /// including one whose wrap coincided exactly with this block boundary.
+    ///
+    /// [`Self::set_phase`] resets `phase` *and* `prev_phase` to the same
+    /// value every block, which is what makes sync survive a tempo change
+    /// or a locate — but it throws away the continuity [`Self::advance`]'s
+    /// `phase < prev_phase` check relies on to notice a wrap. A wrap whose
+    /// true instant falls exactly on a block boundary was therefore
+    /// silently absorbed: at a 128-sample quantum, 120 BPM, 1/4 note is
+    /// exactly 187.5 blocks, so every *other* wrap landed on one and this
+    /// synced S&H stepped at half the configured rate. Comparing the
+    /// absolute cycle index survives the reset regardless of where the
+    /// wrap falls; [`Self::advance`] bumps the same counter for the wraps
+    /// it catches mid-block, so the two mechanisms cannot double-draw for
+    /// the same wrap.
+    ///
+    /// `song_pos_beats` is `None` while this LFO isn't synced (the caller's
+    /// job to gate by mode) or the transport is stopped, in which case this
+    /// forgets the cycle count and leaves phase untouched — consistent with
+    /// "nothing to anchor to" elsewhere in this module.
+    pub fn anchor_synced(
+        &mut self,
+        shape: LfoShape,
+        rng: &mut SimpleRng,
+        song_pos_beats: Option<f64>,
+        cycle_beats: f32,
+    ) {
+        let Some(pos) = song_pos_beats else {
+            self.anchor_cycle = None;
+            return;
+        };
+        if cycle_beats <= 0.0 || !pos.is_finite() {
+            return;
+        }
+        let cycle = (pos / cycle_beats as f64).floor() as i64;
+        if let Some(prev) = self.anchor_cycle {
+            if cycle != prev && matches!(shape, LfoShape::SampleAndHold) {
+                self.sh_value = random_bipolar(rng);
+            }
+        }
+        self.anchor_cycle = Some(cycle);
+        self.set_phase(sync_phase(pos, cycle_beats));
     }
 
     /// Value at the current phase, in -1..1, **without** advancing.
@@ -370,6 +427,17 @@ impl MultiLfo {
         self.prev_phase = self.phase;
         self.phase += self.phase_inc;
         self.phase -= self.phase.floor();
+        let wrapped = self.phase < self.prev_phase;
+
+        // Keep the cycle count [`Self::anchor_synced`] compares against
+        // current for a wrap caught here, mid-block, so a later anchor
+        // does not see the *same* wrap as unaccounted-for and redraw it a
+        // second time. A no-op (the `None` branch) unless synced.
+        if wrapped {
+            if let Some(c) = self.anchor_cycle {
+                self.anchor_cycle = Some(c + 1);
+            }
+        }
 
         // Latch a new S&H value when the phase wrapped on this advance.
         // Done after the value read so the value held for *this* sample
@@ -380,7 +448,7 @@ impl MultiLfo {
         // unconditionally inside the SH branch even when the phase
         // hadn't wrapped — multiplied across 32 voices × 3 LFOs that
         // was a few million unused RNG calls per second).
-        if matches!(shape, LfoShape::SampleAndHold) && self.phase < self.prev_phase {
+        if matches!(shape, LfoShape::SampleAndHold) && wrapped {
             self.sh_value = (rng.next_u32() as f32 / u32::MAX as f32) * 2.0 - 1.0;
         }
     }
@@ -452,6 +520,8 @@ pub struct SampleHoldGen {
     prev_phase: f32,
     target: f32,
     value: f32,
+    /// See [`MultiLfo::anchor_cycle`], which this mirrors exactly.
+    anchor_cycle: Option<i64>,
 }
 
 impl SampleHoldGen {
@@ -462,6 +532,7 @@ impl SampleHoldGen {
             prev_phase: 0.0,
             target: 0.0,
             value: 0.0,
+            anchor_cycle: None,
         }
     }
 
@@ -472,11 +543,13 @@ impl SampleHoldGen {
     pub fn reset_phase(&mut self) {
         self.phase = 0.0;
         self.prev_phase = 0.0;
+        self.anchor_cycle = None;
     }
 
     /// Jump the phase to an absolute position without treating it as a
     /// cycle wrap — see [`MultiLfo::set_phase`], which this mirrors for the
-    /// tempo-synced case.
+    /// tempo-synced case. Superseded for that job by
+    /// [`Self::anchor_synced`]; kept as the plain primitive underneath it.
     pub fn set_phase(&mut self, phase: f32) {
         let p = if phase.is_finite() {
             phase - phase.floor()
@@ -485,6 +558,30 @@ impl SampleHoldGen {
         };
         self.phase = p;
         self.prev_phase = p;
+    }
+
+    /// Re-anchor to the host transport for tempo-synced mode, latching a
+    /// fresh random target if a whole cycle elapsed since the last anchor.
+    /// See [`MultiLfo::anchor_synced`] for why this, rather than
+    /// [`Self::set_phase`], is what a synced clock needs — the two mirror
+    /// each other exactly, down to the RNG-stream separation (`rng` here is
+    /// always `SynthEngine::mod_rng`, never the LFOs' own).
+    pub fn anchor_synced(&mut self, rng: &mut SimpleRng, song_pos_beats: Option<f64>, cycle_beats: f32) {
+        let Some(pos) = song_pos_beats else {
+            self.anchor_cycle = None;
+            return;
+        };
+        if cycle_beats <= 0.0 || !pos.is_finite() {
+            return;
+        }
+        let cycle = (pos / cycle_beats as f64).floor() as i64;
+        if let Some(prev) = self.anchor_cycle {
+            if cycle != prev {
+                self.target = random_bipolar(rng);
+            }
+        }
+        self.anchor_cycle = Some(cycle);
+        self.set_phase(sync_phase(pos, cycle_beats));
     }
 
     /// Current (possibly slewed) value, in -1..1, without advancing.
@@ -504,6 +601,11 @@ impl SampleHoldGen {
 
         if self.phase < self.prev_phase {
             self.target = random_bipolar(rng);
+            // Keep in step with `anchor_synced`'s count -- see
+            // `MultiLfo::advance`'s identical line.
+            if let Some(c) = self.anchor_cycle {
+                self.anchor_cycle = Some(c + 1);
+            }
         }
         self.value += (self.target - self.value) * slew_coeff;
     }

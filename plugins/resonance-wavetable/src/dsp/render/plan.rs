@@ -10,7 +10,7 @@ use resonance_plugin::TempoInfo;
 use crate::dsp::analog::{self, DriftCoeffs};
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::envelope::EnvCoeffs;
-use crate::dsp::lfo::TransportPlan;
+use crate::dsp::lfo::{LfoMode, TransportPlan};
 use crate::dsp::render::snapshot::ParamSnapshot;
 use crate::dsp::voice::VoiceState;
 
@@ -116,26 +116,52 @@ impl SynthEngine {
         // A synced LFO re-anchors on the song position every block rather
         // than integrating its own phase, so it stays locked through a tempo
         // change or a locate instead of drifting from wherever it happened
-        // to be.
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo1_mode, snap.lfo1_division) {
-            self.global_lfo1.set_phase(p);
-        }
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo2_mode, snap.lfo2_division) {
-            self.global_lfo2.set_phase(p);
-        }
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo3_mode, snap.lfo3_division) {
-            self.global_lfo3.set_phase(p);
-        }
+        // to be. Called unconditionally (not just `if Some`): `anchor_synced`
+        // needs the `None` case too, to forget its cycle count while not
+        // synced or the transport is stopped.
+        //
+        // `synced_pos` replaces `TransportPlan::lfo_anchor_phase` here
+        // because `anchor_synced` needs the raw song position to track the
+        // absolute cycle count across the reset, not just the derived
+        // phase -- see its doc comment for why the reset alone drops a wrap
+        // that lands exactly on a block boundary.
+        let synced_pos = |mode: LfoMode| {
+            (mode == LfoMode::Sync)
+                .then(|| transport.song_pos_beats)
+                .flatten()
+        };
+        self.global_lfo1.anchor_synced(
+            snap.lfo1_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo1_mode),
+            snap.lfo1_division.beats(transport.beats_per_bar),
+        );
+        self.global_lfo2.anchor_synced(
+            snap.lfo2_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo2_mode),
+            snap.lfo2_division.beats(transport.beats_per_bar),
+        );
+        self.global_lfo3.anchor_synced(
+            snap.lfo3_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo3_mode),
+            snap.lfo3_division.beats(transport.beats_per_bar),
+        );
 
         // Same treatment for the S&H generator's own clock: `mod_sh_mode` is
         // `Sync`/`Free` only (it has no per-voice retrigger to be `Retrig`
-        // for), but it is otherwise exactly the LFOs' tempo-sync path.
+        // for), but it is otherwise exactly the LFOs' tempo-sync path. Draws
+        // from `mod_rng`, never `rng` -- see the field comment on
+        // `SynthEngine::mod_rng`.
         let sh_rate_hz =
             transport.lfo_rate_hz(snap.mod_sh_mode, snap.mod_sh_division, snap.mod_sh_rate);
         self.mod_sample_hold.set_rate(sh_rate_hz, self.sample_rate);
-        if let Some(p) = transport.lfo_anchor_phase(snap.mod_sh_mode, snap.mod_sh_division) {
-            self.mod_sample_hold.set_phase(p);
-        }
+        self.mod_sample_hold.anchor_synced(
+            &mut self.mod_rng,
+            synced_pos(snap.mod_sh_mode),
+            snap.mod_sh_division.beats(transport.beats_per_bar),
+        );
         let sh_slew_coeff = crate::dsp::lfo::sh_slew_coeff(snap.mod_sh_slew, self.sample_rate);
 
         // Switching filter model mid-note: the circuit being switched to
