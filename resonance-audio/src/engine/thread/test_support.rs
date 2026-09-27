@@ -662,6 +662,7 @@ impl EngineHandlerHarness {
     /// with [`Self::take_held_imports`]. For pinning a completion order
     /// the real pool would only produce by chance (FU-A13e). Do not mix
     /// with [`Self::settle_imports`], whose barrier jobs would be held too.
+    #[cfg(feature = "test-internals")]
     pub fn hold_imports(&mut self) {
         self.state.imports.hold();
     }
@@ -669,6 +670,7 @@ impl EngineHandlerHarness {
     /// The jobs parked since [`Self::hold_imports`] (or the last call), in
     /// submission order. Calling one runs that worker job to completion on
     /// the calling thread — publish, echo and all.
+    #[cfg(feature = "test-internals")]
     pub fn take_held_imports(&mut self) -> Vec<Box<dyn FnOnce() + Send + 'static>> {
         self.state.imports.take_held()
     }
