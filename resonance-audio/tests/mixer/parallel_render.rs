@@ -10,8 +10,9 @@
 //! - a stateful effect on every chain (a one-pole filter), so a job that
 //!   rendered the wrong buffer, or a chain run twice or skipped, shows up
 //!   in every later block rather than just one;
-//! - busses fed by tracks and by another bus's aux send, pre- and
-//!   post-fader sends, so the reduction's order is exercised;
+//! - five busses over three levels, two per level so bus jobs run in
+//!   parallel too, fed by tracks and by other busses' aux sends, pre- and
+//!   post-fader, so both reductions' orders are exercised;
 //! - sidechain keys from an audible track and from a MUTED one (rendered
 //!   key-only), read by filters that fold the key into their output;
 //! - a multi-output instrument whose sub-tracks run their own chains, one
@@ -50,6 +51,12 @@ const BLOCKS: usize = 32;
 
 const FEEDER: BusId = 10;
 const RETURN: BusId = 20;
+/// Three more busses so every bus level holds two busses, which then run
+/// as parallel jobs: level 0 = FEEDER, GROUP; level 1 = RETURN (from
+/// FEEDER), MID (from GROUP and FEEDER); level 2 = SUM (from MID, RETURN).
+const GROUP: BusId = 60;
+const MID: BusId = 70;
+const SUM: BusId = 80;
 const PARENT: TrackId = 50;
 const TAP_A: TrackId = 51;
 const TAP_B: TrackId = 52;
@@ -247,6 +254,9 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
         if (3..=5).contains(&id) {
             t.set_output(TrackOutput::Bus(FEEDER));
         }
+        if id == 10 || id == 12 {
+            t.set_output(TrackOutput::Bus(GROUP));
+        }
         if id == MUTED_KEY {
             t.set_muted(true);
         }
@@ -257,7 +267,7 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
         }
         tracks.push(t);
     }
-    let mut parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
+    let parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
     parent.push_plugin(INSTRUMENT);
     parent.push_plugin(fx_id(PARENT));
     plugins.push((INSTRUMENT, multi_out_instrument([0.2, 0.25, 0.125])));
@@ -277,27 +287,37 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
     let mut feeder = Bus::new(FEEDER, "feeder".into());
     feeder.plugin_ids.push(fx_id(FEEDER));
     plugins.push((fx_id(FEEDER), filter(0.4)));
-    let mut ret = Bus::new(RETURN, "return".into());
-    ret.plugin_ids.push(fx_id(RETURN));
-    plugins.push((fx_id(RETURN), filter(0.15)));
-    let send = |id, source, level_db, pre_fader| AuxSend {
+    let mut busses = vec![feeder];
+    for (id, coef) in [(RETURN, 0.15), (GROUP, 0.3), (MID, 0.22), (SUM, 0.12)] {
+        let mut bus = Bus::new(id, format!("bus{id}"));
+        bus.plugin_ids.push(fx_id(id));
+        bus.set_volume(0.9);
+        plugins.push((fx_id(id), filter(coef)));
+        busses.push(bus);
+    }
+    let send = |id, source, dest, level_db, pre_fader| AuxSend {
         id,
         source,
-        dest: RETURN,
+        dest,
         level_db,
         pre_fader,
         enabled: true,
     };
     let sends = vec![
-        send(1, SendSource::Track(1), -6.0, true),
-        send(2, SendSource::Track(2), -3.0, false),
-        send(3, SendSource::Bus(FEEDER), -9.0, false),
-        send(4, SendSource::Track(PARENT), -12.0, false),
+        send(1, SendSource::Track(1), RETURN, -6.0, true),
+        send(2, SendSource::Track(2), RETURN, -3.0, false),
+        send(3, SendSource::Bus(FEEDER), RETURN, -9.0, false),
+        send(4, SendSource::Track(PARENT), RETURN, -12.0, false),
+        send(5, SendSource::Bus(GROUP), MID, -2.0, false),
+        send(6, SendSource::Bus(FEEDER), MID, -4.0, true),
+        send(7, SendSource::Bus(MID), SUM, -1.0, false),
+        send(8, SendSource::Bus(RETURN), SUM, -5.0, false),
+        send(9, SendSource::Track(9), SUM, -8.0, true),
     ];
 
     let mut h = MixAudioHarness::new(
         tracks,
-        vec![feeder, ret],
+        busses,
         clips,
         Vec::new(),
         sends,
@@ -323,12 +343,14 @@ fn fixture(threads: usize, shuffle_seed: u64) -> MixAudioHarness {
         route(fx_id(7), SendSource::Track(MUTED_KEY)),
         route(fx_id(9), SendSource::Track(TAP_B)),
         route(fx_id(RETURN), SendSource::Bus(FEEDER)),
+        route(fx_id(SUM), SendSource::Bus(GROUP)),
+        route(fx_id(GROUP), SendSource::Bus(SUM)),
     ]));
     h.set_latency_comp(LatencyComp::new(
         48,
         &[(1, 48), (7, 16), (TAP_A, 32), (PARENT, 8)],
         24,
-        &[(FEEDER, 24)],
+        &[(FEEDER, 24), (GROUP, 10), (MID, 4)],
     ));
     let frozen = noise((BLOCKS + 8) * BLOCK * 2, 99);
     let frames = frozen.len() as u64 / 2;

@@ -181,20 +181,22 @@ impl TrackSlots {
 /// Jobs need `&mut` access to the slots they own while other threads hold
 /// other slots, and which slots a job owns is decided by the track graph,
 /// not by a split the borrow checker can see. This is that split, taken on
-/// trust from the ownership rule in the module docs: a job touches only
-/// its own track's slot and its sub-tracks' slots.
-pub(crate) struct SlotCells<'a> {
-    ptr: *mut TrackSlot,
+/// trust from the ownership rule in the module docs: a track job touches
+/// only its own track's slot and its sub-tracks' slots. The bus pass uses
+/// the same view over its buffers, where a bus job owns its own bus and
+/// only reads busses finished at an earlier level.
+pub(crate) struct SlotCells<'a, T = TrackSlot> {
+    ptr: *mut T,
     len: usize,
-    _slots: PhantomData<&'a mut [TrackSlot]>,
+    _slots: PhantomData<&'a mut [T]>,
 }
 
-// SAFETY: the cells hand a slot to one job at a time (see `get`), and a
-// `TrackSlot` is plain owned data.
-unsafe impl Sync for SlotCells<'_> {}
+// SAFETY: the cells hand an element to one job at a time (see `get`),
+// and only ever to threads the pool joins before the borrow ends.
+unsafe impl<T: Send> Sync for SlotCells<'_, T> {}
 
-impl<'a> SlotCells<'a> {
-    pub(crate) fn new(slots: &'a mut [TrackSlot]) -> Self {
+impl<'a, T> SlotCells<'a, T> {
+    pub(crate) fn new(slots: &'a mut [T]) -> Self {
         Self {
             ptr: slots.as_mut_ptr(),
             len: slots.len(),
@@ -206,18 +208,31 @@ impl<'a> SlotCells<'a> {
         self.len
     }
 
-    /// Slot `idx`.
+    /// Element `idx`, mutably.
     ///
     /// # Safety
     ///
-    /// The calling job must own `idx` — it is the job's own top-level
-    /// track or one of that track's sub-tracks — and must not hold another
-    /// reference to the same slot while this one lives.
+    /// The calling job must own `idx` — for the track pass, its own
+    /// top-level track or one of that track's sub-tracks; for the bus
+    /// pass, its own bus — and must not hold another reference to the
+    /// same element while this one lives.
     #[allow(clippy::mut_from_ref)]
-    pub(crate) unsafe fn get(&self, idx: usize) -> &mut TrackSlot {
+    pub(crate) unsafe fn get(&self, idx: usize) -> &mut T {
         assert!(idx < self.len, "slot {idx} out of {}", self.len);
         // SAFETY: in bounds (checked); exclusive per the contract.
         unsafe { &mut *self.ptr.add(idx) }
+    }
+
+    /// Element `idx`, shared.
+    ///
+    /// # Safety
+    ///
+    /// Nothing may write `idx` while this lives: it belongs to a job that
+    /// finished before the current run started.
+    pub(crate) unsafe fn get_ref(&self, idx: usize) -> &T {
+        assert!(idx < self.len, "slot {idx} out of {}", self.len);
+        // SAFETY: in bounds (checked); read-only per the contract.
+        unsafe { &*self.ptr.add(idx) }
     }
 }
 

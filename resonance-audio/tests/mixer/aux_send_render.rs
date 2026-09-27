@@ -232,3 +232,43 @@ fn bus_to_bus_send_taps_post_fader() {
         bufs[1].0[STEADY]
     );
 }
+
+/// The bus pass runs busses level by level on the render pool
+/// (realtime-multithreading.md §4.5), yet a return fed by two sources must
+/// still add their sends in source-INDEX order, as the old index-order
+/// loop did. Here bus 1 is fed by bus 0 (level 1) and bus 2 by nothing
+/// (level 0), and both send into bus 3: a level-order push would add bus
+/// 2's send first. The levels are chosen so float addition order shows:
+/// (-1e8 + 1e8) + 1 = 1, but (-1e8 + 1) + 1e8 = 0 in f32.
+#[test]
+fn sends_into_a_return_add_in_source_index_order_across_levels() {
+    const B0: BusId = 30;
+    const B1: BusId = 31;
+    const B2: BusId = 32;
+    const B3: BusId = 33;
+    let level_track = |id: TrackId, output: TrackOutput, level: f32| {
+        let (track, mut clip) = dc_track(id, output);
+        clip.source = ClipSource::memory(vec![level; FRAMES * 4 * 2]);
+        (track, clip)
+    };
+    let (ta, ca) = level_track(1, TrackOutput::Bus(B0), 1.0e8);
+    let (tb, cb) = level_track(2, TrackOutput::Bus(B2), 1.0);
+    let (tc, cc) = level_track(3, TrackOutput::Bus(B3), -1.0e8);
+    let busses = [B0, B1, B2, B3]
+        .into_iter()
+        .map(|id| Bus::new(id, format!("b{id}")))
+        .collect();
+    let sends = vec![
+        aux(1, SendSource::Bus(B0), B1, 0.0, true),
+        aux(2, SendSource::Bus(B1), B3, 0.0, true),
+        aux(3, SendSource::Bus(B2), B3, 0.0, true),
+    ];
+    let (_master, bufs) =
+        render_aux_for_test(vec![ta, tb, tc], busses, vec![ca, cb, cc], sends, FRAMES, SR);
+    let b3 = &bufs[3];
+    assert_eq!(
+        (b3.0[STEADY], b3.1[STEADY]),
+        (1.0, 1.0),
+        "bus 3 = (track + bus 1's send) + bus 2's send, in that order"
+    );
+}

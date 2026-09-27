@@ -143,8 +143,8 @@ pub(crate) fn render_track_pass(
 /// Re-borrow the whole slot range once every job is done.
 fn slots_of<'s>(cells: &'s SlotCells<'_>) -> impl Fn(usize) -> &'s TrackSlot + 's {
     // SAFETY: called only after the pool's join, when no job holds a
-    // slot any more; shared reads only.
-    move |idx| unsafe { &*(cells.get(idx) as *const TrackSlot) }
+    // slot any more.
+    move |idx| unsafe { cells.get_ref(idx) }
 }
 
 /// Summarize the job phase for the load report.

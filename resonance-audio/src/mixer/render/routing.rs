@@ -7,7 +7,7 @@ use resonance_dsp::db_to_linear;
 use crate::mixer::common::{sum_to_output, sum_to_stereo};
 use crate::types::*;
 
-use super::context::{BlockCtx, BlockScratch, BusBufs, GainRamp, OutputTargets};
+use super::context::{BlockCtx, BusBufs, GainRamp, OutputTargets};
 
 /// Sum a post-fader stereo signal into its destination: the target bus's
 /// summing buffer, or the interleaved master output.
@@ -99,79 +99,59 @@ pub(crate) fn apply_track_aux_sends(
     }
 }
 
-/// Aux sends sourced from a bus, tapped after its own fader so post-fader
-/// reflects the bus level (the pre-fader buffer is still intact —
-/// `sum_to_output` only read it). The tapped signal lands in the
-/// destination's summing buffer, which is only re-read if that bus is
-/// processed later in this pass: return busses are created after their
-/// feeder busses, so their index is higher and the "returns after feeders"
-/// ordering holds. A send to an earlier-indexed bus (already flushed this
-/// block) is skipped by the natural ordering — its signal would otherwise
-/// be summed into a buffer that's already gone to master.
-pub(crate) fn apply_bus_aux_sends(
-    bus_id: BusId,
-    bus_idx: usize,
-    gains: GainRamp,
+/// Aux sends INTO bus `dst_idx` from the busses before it, tapped after
+/// each source's own fader so post-fader reflects the source bus's level
+/// (its pre-fader buffer is intact — the sum into master only reads it).
+///
+/// The bus pass runs busses level by level (realtime-multithreading.md
+/// §4.5), so instead of each source pushing its sends as it finishes, each
+/// destination pulls them just before it runs: every source is a
+/// lower-indexed bus of an earlier level, and they are added in source
+/// index order — exactly the order the one serial index-order loop added
+/// them in, so the sum is bit-identical. `source(i)` is bus `i`'s
+/// finished buffer and fader ramp when it reached the mix this block.
+///
+/// Only lower-indexed sources count: return busses are created after their
+/// feeder busses, so the "returns after feeders" ordering holds, and a send
+/// to an earlier-indexed bus (whose own output is already decided) has no
+/// audible effect — it never had one in the serial loop either.
+pub(crate) fn pull_bus_aux_sends<'b>(
+    dst_idx: usize,
+    dst: &mut (Vec<f32>, Vec<f32>),
+    source: impl Fn(usize) -> Option<(&'b (Vec<f32>, Vec<f32>), GainRamp)>,
     ctx: &BlockCtx<'_>,
-    scratch: &mut BlockScratch<'_>,
 ) {
     let frames = ctx.inputs.frames;
-    let (bus_gain_l, bus_gain_r) = gains;
-    for send in ctx.inputs.aux_sends {
-        if !send.enabled || send.source != SendSource::Bus(bus_id) {
+    for (src_idx, src_bus) in ctx.inputs.busses.values().enumerate().take(dst_idx) {
+        let Some(((src_l, src_r), gains)) = source(src_idx) else {
             continue;
+        };
+        let (bus_gain_l, bus_gain_r) = gains;
+        for send in ctx.inputs.aux_sends {
+            if !send.enabled || send.source != SendSource::Bus(src_bus.id) {
+                continue;
+            }
+            if ctx.inputs.busses.get_index_of(&send.dest) != Some(dst_idx) {
+                continue;
+            }
+            let send_lin = db_to_linear(send.level_db);
+            let (send_gain_l, send_gain_r) = if send.pre_fader {
+                ((send_lin, send_lin), (send_lin, send_lin))
+            } else {
+                (
+                    (bus_gain_l.0 * send_lin, bus_gain_l.1 * send_lin),
+                    (bus_gain_r.0 * send_lin, bus_gain_r.1 * send_lin),
+                )
+            };
+            sum_to_stereo(
+                &mut dst.0,
+                &mut dst.1,
+                frames,
+                src_l,
+                src_r,
+                send_gain_l,
+                send_gain_r,
+            );
         }
-        let Some(dst_idx) = ctx
-            .inputs
-            .busses
-            .get_index_of(&send.dest)
-            .filter(|idx| *idx < ctx.inputs.active_busses && *idx != bus_idx)
-        else {
-            continue;
-        };
-        let send_lin = db_to_linear(send.level_db);
-        let (send_gain_l, send_gain_r) = if send.pre_fader {
-            ((send_lin, send_lin), (send_lin, send_lin))
-        } else {
-            (
-                (bus_gain_l.0 * send_lin, bus_gain_l.1 * send_lin),
-                (bus_gain_r.0 * send_lin, bus_gain_r.1 * send_lin),
-            )
-        };
-        sum_bus_to_bus(
-            scratch.bus_bufs,
-            bus_idx,
-            dst_idx,
-            frames,
-            send_gain_l,
-            send_gain_r,
-        );
     }
-}
-
-/// Sum bus `src_idx`'s summing buffer into bus `dst_idx`'s, scaled by the
-/// (possibly ramped) `gain_l`/`gain_r`. The two indices are required to
-/// differ — a bus can never aux-send to itself (cyclic-route validation
-/// rejects it) — so a disjoint `split_at_mut` lets both buffers be
-/// borrowed at once without allocating a temporary.
-#[inline]
-fn sum_bus_to_bus(
-    bus_bufs: &mut BusBufs,
-    src_idx: usize,
-    dst_idx: usize,
-    frames: usize,
-    gain_l: (f32, f32),
-    gain_r: (f32, f32),
-) {
-    if src_idx == dst_idx {
-        return;
-    }
-    let (src, dst) = if src_idx < dst_idx {
-        let (left, right) = bus_bufs.split_at_mut(dst_idx);
-        (&left[src_idx], &mut right[0])
-    } else {
-        let (left, right) = bus_bufs.split_at_mut(src_idx);
-        (&right[0], &mut left[dst_idx])
-    };
-    sum_to_stereo(&mut dst.0, &mut dst.1, frames, &src.0, &src.1, gain_l, gain_r);
 }
