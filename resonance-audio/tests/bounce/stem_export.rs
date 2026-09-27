@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{SharedState, StemBitDepth, StemSource, StemTarget, export_stems};
 use resonance_audio::types::*;
@@ -30,7 +29,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -38,7 +36,6 @@ impl EngineState {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         }
     }
@@ -51,11 +48,11 @@ impl EngineState {
 
     /// Push a constant-`value` DC clip on `track` over `[start, start+frames)`.
     fn add_dc_clip(&self, id: ClipId, track: TrackId, start: u64, frames: usize, value: f32) {
-        self.clips.write().push(AudioClip {
+        self.shared.edit_clips(|c| c.push(Arc::new(AudioClip {
             id,
             track_id: track,
             start_sample: start,
-            source: ClipSource::Memory(vec![value; frames * 2]),
+            source: ClipSource::memory(vec![value; frames * 2]),
             name: "dc".into(),
             trim_start_frames: 0,
             trim_end_frames: 0,
@@ -71,7 +68,7 @@ impl EngineState {
             warp_algorithm: WarpAlgorithm::default(),
             warp_markers: Vec::new(),
             tuning_render_cache: None,
-        });
+        })));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -115,7 +112,6 @@ impl EngineState {
             include_fx_tail,
             &self.shared,
             cancel,
-            &self.clips,
             &self.tempo_map,
             SR,
             event_tx,

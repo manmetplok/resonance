@@ -1,15 +1,14 @@
 //! [`MixAudioHarness`]: the whole audio callback over owned state.
 //!
-//! Mirrors the engine's `make_mixer` closure — the same locks, the same
-//! pre-allocated scratch, the same monitor ring and live-MIDI channels —
+//! Mirrors the engine's `make_mixer` closure — the same render graph, the
+//! same pre-allocated scratch, the same monitor ring and live-MIDI channels —
 //! so `tests/mixer/mix_audio_parity.rs` can drive every branch of
 //! [`mix_audio`] (reference monitor, count-in, stopped-monitor, playing,
-//! loop seam, lock contention, audition overlay) without an audio device,
+//! loop seam, a skipped block, audition overlay) without an audio device,
 //! a CLAP plugin or the engine thread.
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
 use ringbuf::traits::{Producer, Split};
 
 use crate::clap_host::PluginMap;
@@ -37,7 +36,6 @@ macro_rules! run_callback {
             CallbackInputs {
                 channels: $h.channels,
                 shared: &*$h.shared,
-                clips: &$h.clips,
                 tempo_map: &$h.tempo_map,
                 latency_comp: &$h.latency_comp,
                 automation: &$h.automation,
@@ -46,6 +44,8 @@ macro_rules! run_callback {
                 live_midi_fwd: &$h.live_fwd_tx,
                 buf_frames: $h.buf_frames,
                 quantum: $h.quantum,
+                #[cfg(feature = "test-internals")]
+                force_render_skip: $h.force_render_skip,
             },
             &mut CallbackScratch {
                 data: &mut $h.data,
@@ -71,8 +71,8 @@ macro_rules! run_callback {
 /// [`mix_audio`] — the whole callback, not just the render core — can be
 /// driven from an integration test.
 ///
-/// Mirrors the engine's `make_mixer` closure: the same locks, the same
-/// pre-allocated scratch, the same monitor ring and live-MIDI channels.
+/// Mirrors the engine's `make_mixer` closure: the same render graph, the
+/// same pre-allocated scratch, the same monitor ring and live-MIDI channels.
 /// The test drives branch selection through [`Self::shared`] (transport,
 /// count-in, loop, monitoring flags) exactly as the engine control thread
 /// would, then hashes [`Self::render`]'s output and the side effects the
@@ -84,7 +84,8 @@ pub struct MixAudioHarness {
     /// engine control thread's Seek / Stop race against the callback
     /// (`tests/engine/playhead_seek_race.rs`).
     shared: Arc<SharedState>,
-    clips: RwLock<Vec<AudioClip>>,
+    /// Set for one callback by [`Self::render_lock_contended`].
+    force_render_skip: bool,
     tempo_map: arc_swap::ArcSwap<TempoMap>,
     latency_comp: arc_swap::ArcSwap<crate::latency::LatencyComp>,
     automation: arc_swap::ArcSwap<AutomationSnapshot>,
@@ -134,8 +135,45 @@ impl MixAudioHarness {
         let shared = Arc::new(SharedState::default());
         shared.aux_sends.store(Arc::new(aux_sends));
         shared.edit_midi_clips(|v| v.extend(midi_clips.into_iter().map(Arc::new)));
+        shared.edit_clips(|v| v.extend(clips.into_iter().map(Arc::new)));
         shared.edit_busses(|m| m.extend(busses.into_iter().map(|b| (b.id, Arc::new(b)))));
         shared.edit_tracks(|m| m.extend(tracks.into_iter().map(|t| (t.id, Arc::new(t)))));
+        Self::build(shared, bus_count, tempo_map, frames, channels, sample_rate, native_drain)
+    }
+
+    /// The callback over an engine's *existing* shared state — for a test
+    /// that edits it through the real handlers (`EngineHandlerHarness`,
+    /// playing the engine thread) while this renders on another thread,
+    /// as the audio callback does (code review ARCH-02 B-5's clip hammer).
+    /// Default tempo map, native monitor drain, bus buffers for the busses
+    /// the graph holds now.
+    pub fn on_shared(
+        shared: Arc<SharedState>,
+        frames: usize,
+        channels: usize,
+        sample_rate: u32,
+    ) -> Self {
+        let bus_count = shared.graph.load().busses.len().max(1);
+        Self::build(
+            shared,
+            bus_count,
+            TempoMap::default(),
+            frames,
+            channels,
+            sample_rate,
+            true,
+        )
+    }
+
+    fn build(
+        shared: Arc<SharedState>,
+        bus_count: usize,
+        tempo_map: TempoMap,
+        frames: usize,
+        channels: usize,
+        sample_rate: u32,
+        native_drain: bool,
+    ) -> Self {
         // Room for a few blocks of the widest input we drive, matching the
         // engine's ring sizing policy.
         let ring = ringbuf::HeapRb::<f32>::new(frames * MAX_MONITOR_CHANNELS * 4);
@@ -146,7 +184,7 @@ impl MixAudioHarness {
         let (live_fwd_tx, live_fwd_rx) = crossbeam_channel::unbounded();
         Self {
             shared,
-            clips: RwLock::new(clips),
+            force_render_skip: false,
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
             latency_comp: arc_swap::ArcSwap::from_pointee(crate::latency::LatencyComp::empty()),
             automation: arc_swap::ArcSwap::from_pointee(AutomationSnapshot::default()),
@@ -357,44 +395,15 @@ impl MixAudioHarness {
         self.data = vec![0.0; frames * self.channels];
     }
 
-    /// Run one audio callback while a UI edit "holds" the clips write
-    /// lock, so the arrangement render takes its lock-contended branch
-    /// (silence out, playhead advanced, `render_skip_cycles` bumped).
+    /// Run one audio callback whose playing branch skips the block — the
+    /// shape a lock-contended block had (silence out, playhead advanced,
+    /// `render_skip_cycles` bumped) before ARCH-02 B-5 moved the last
+    /// locked map into the render graph. Nothing can contend any more, so
+    /// this forces it through the `test-internals` hook; B-6 deletes both.
     pub fn render_lock_contended(&mut self) -> &[f32] {
-        let _held = self.clips.write();
+        self.force_render_skip = true;
         run_callback!(self);
-        &self.data
-    }
-
-    /// Run one audio callback while `map` is *read*-held on a worker
-    /// thread with a writer queued behind it — the offline-render / load-
-    /// worker shape from code review ARCH-02: parking_lot's task-fair
-    /// policy fails the callback's `try_read` on that one map only. The
-    /// writer is released after the block.
-    pub fn render_with_queued_writer(&mut self, map: crate::cycle_load::StateMap) -> &[f32] {
-        use crate::cycle_load::StateMap;
-        macro_rules! with_map {
-            ($lock:expr) => {{
-                let lock = &$lock;
-                let reader = lock.read();
-                std::thread::scope(|s| {
-                    s.spawn(|| {
-                        let _w = lock.write();
-                    });
-                    // A queued writer is exactly what makes `try_read`
-                    // fail, so this is the deterministic "writer parked"
-                    // signal, not a sleep.
-                    while lock.try_read().is_some() {
-                        std::thread::yield_now();
-                    }
-                    run_callback!(self);
-                    drop(reader);
-                });
-            }};
-        }
-        match map {
-            StateMap::Clips => with_map!(self.clips),
-        }
+        self.force_render_skip = false;
         &self.data
     }
 

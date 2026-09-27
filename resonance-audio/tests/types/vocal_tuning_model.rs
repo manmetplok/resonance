@@ -13,7 +13,7 @@ fn make_clip(frames: usize) -> AudioClip {
         track_id: 1,
         start_sample: 0,
         // Distinct non-zero samples so we can assert the PCM is untouched.
-        source: ClipSource::Memory((0..frames * 2).map(|i| i as f32 * 0.001).collect()),
+        source: ClipSource::memory((0..frames * 2).map(|i| i as f32 * 0.001).collect()),
         name: "vox".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

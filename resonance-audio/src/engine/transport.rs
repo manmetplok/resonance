@@ -369,9 +369,10 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
             // of the legacy single trimmed clip.
             finalize_loop_record_pass(ctx, state, false);
         } else {
-            state
-                .rec
-                .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+            // The takes join the render graph's clip list in one publish.
+            let rec = &mut state.rec;
+            ctx.shared
+                .edit_clips(|clips| rec.finalize_recording(ctx.sample_rate, clips, ctx.event_tx));
         }
         state.rec.input_stream = None;
     }
@@ -409,9 +410,10 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
             // of the legacy single trimmed clip.
             finalize_loop_record_pass(ctx, state, false);
         } else {
-            state
-                .rec
-                .finalize_recording(ctx.sample_rate, ctx.clips.as_ref(), ctx.event_tx);
+            // The takes join the render graph's clip list in one publish.
+            let rec = &mut state.rec;
+            ctx.shared
+                .edit_clips(|clips| rec.finalize_recording(ctx.sample_rate, clips, ctx.event_tx));
         }
         state.rec.input_stream = None;
     }
@@ -605,14 +607,11 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
 
     // -- Audio takes --
     super::clips::settle_clip_id_scan(state, true);
-    let rolled = state.rec.roll_audio_pass(
-        ctx.sample_rate,
-        clip_start,
-        ctx.clips.as_ref(),
-        &audio_dir,
-        &mut state.next_clip_id,
-        reopen,
-    );
+    // The pass's takes join the render graph's clip list in one publish.
+    let (rec, next_clip_id) = (&mut state.rec, &mut state.next_clip_id);
+    let rolled = ctx.shared.edit_clips(|clips| {
+        rec.roll_audio_pass(ctx.sample_rate, clip_start, clips, &audio_dir, next_clip_id, reopen)
+    });
     let mut captured_any = false;
     for take in rolled {
         let content = TakeContent::Audio {

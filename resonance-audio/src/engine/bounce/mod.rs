@@ -23,7 +23,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 use thiserror::Error;
 
 use resonance_common::FreezeCacheRef;
@@ -45,11 +44,12 @@ mod stem_export;
 mod wav;
 
 pub use clip::to_audio_clip;
+pub(crate) use clip::apply_bounced_clip;
 pub use freeze::{read_freeze_cache, to_freeze_cache, FreezeError, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use render::{chunk_span, BOUNCE_CHUNK, MIN_CLAP_FRAMES};
 pub use measure::{measure_mix, measure_rendered_buffer};
-pub(crate) use measure::measure_mix_spawn;
+pub(crate) use measure::{measure_mix_spawn, measure_mix_spawn_after};
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;
 pub(crate) use stem_export::export_stems_spawn;
@@ -238,7 +238,6 @@ pub fn freeze_terminal_event(
 pub fn to_wav(
     path: String,
     shared: &Arc<SharedState>,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -255,7 +254,6 @@ pub fn to_wav(
         ExportReporter::Bounce,
         shared,
         &cancel,
-        clips,
         tempo_map,
         &automation,
         sample_rate,
@@ -274,7 +272,6 @@ pub fn export_for_test(
     settings: &ExportSettings,
     cancel: &AtomicBool,
     shared: &Arc<SharedState>,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::AutomationSnapshot,
     sample_rate: u32,
@@ -286,7 +283,6 @@ pub fn export_for_test(
         ExportReporter::Export,
         shared,
         cancel,
-        clips,
         tempo_map,
         automation,
         sample_rate,
@@ -317,7 +313,6 @@ pub(crate) fn export_spawn(
     settings: ExportSettings,
     reporter: ExportReporter,
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -349,7 +344,6 @@ pub(crate) fn export_spawn(
                         reporter,
                         &shared,
                         &cancel_render,
-                        &clips,
                         &tempo_map,
                         &automation,
                         sample_rate,
@@ -376,12 +370,44 @@ pub(crate) fn to_audio_clip_spawn(
     target_clip_id: ClipId,
     name: String,
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
     cmd_tx: Sender<AudioCommand>,
+) -> Arc<AtomicBool> {
+    to_audio_clip_spawn_after(
+        source_track_id,
+        target_track_id,
+        target_clip_id,
+        name,
+        shared,
+        tempo_map,
+        automation,
+        sample_rate,
+        event_tx,
+        cmd_tx,
+        || {},
+    )
+}
+
+/// [`to_audio_clip_spawn`], with the worker running `before` first — a
+/// test's way to park the worker before its render (it used to hold the
+/// clip list's write lock for that; the list has no lock since ARCH-02
+/// B-5).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn to_audio_clip_spawn_after(
+    source_track_id: TrackId,
+    target_track_id: TrackId,
+    target_clip_id: ClipId,
+    name: String,
+    shared: Arc<SharedState>,
+    tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<super::AutomationSnapshot>,
+    sample_rate: u32,
+    event_tx: Sender<AudioEvent>,
+    cmd_tx: Sender<AudioCommand>,
+    before: impl FnOnce() + Send + 'static,
 ) -> Arc<AtomicBool> {
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_render = Arc::clone(&cancel);
@@ -390,6 +416,7 @@ pub(crate) fn to_audio_clip_spawn(
     std::thread::Builder::new()
         .name("bounce-in-place".into())
         .spawn(move || {
+            before();
             // Panic supervision: a panicking render must still emit the
             // path's terminal error event (see `crate::supervise`).
             let panic_tx = event_tx.clone();
@@ -404,7 +431,6 @@ pub(crate) fn to_audio_clip_spawn(
                         name,
                         &shared,
                         &cancel_render,
-                        &clips,
                         &tempo_map,
                         &automation,
                         sample_rate,
@@ -436,7 +462,6 @@ pub fn to_freeze_cache_spawn(
     track_id: TrackId,
     cache_path: String,
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<super::AutomationSnapshot>,
     sample_rate: u32,
@@ -464,7 +489,6 @@ pub fn to_freeze_cache_spawn(
                         cache_path,
                         &shared,
                         &cancel_render,
-                        &clips,
                         &tempo_map,
                         &automation,
                         sample_rate,

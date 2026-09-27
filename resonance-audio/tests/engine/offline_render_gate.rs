@@ -35,7 +35,7 @@ fn dc_clip(id: ClipId, track_id: TrackId, frames: usize) -> AudioClip {
         id,
         track_id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.25; frames * CH]),
+        source: ClipSource::memory(vec![0.25; frames * CH]),
         name: format!("c{id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -247,11 +247,9 @@ fn record_is_refused_with_an_error_while_an_offline_render_is_in_progress() {
 #[test]
 fn a_play_right_after_a_measurement_is_refused_before_its_worker_runs() {
     let mut h = EngineHandlerHarness::new();
-    // Park the worker at its first clip-list read, holding the renderer.
-    let clips = h.clips_lock();
-    let parked = clips.write();
+    // Park the worker before its render, holding the renderer.
+    let parked = h.measure_master_parked(7);
 
-    h.measure_master(7);
     h.play();
     assert!(!h.is_playing(), "Play must not start under a spawned measurement");
     assert!(h.drain_events().iter().any(|e| matches!(e, AudioEvent::TransportRefused)));

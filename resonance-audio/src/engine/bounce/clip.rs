@@ -13,11 +13,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 
 use crate::types::*;
 
 use super::super::bounce_common::midi_render_range;
+use super::super::internal::EngineInternal;
+use super::super::thread::HandlerCtx;
 use super::super::SharedState;
 use super::render::{
     build_latency_comp, chunk_span, render_chunk, reset_plugins, ChunkCtx, ChunkScratch,
@@ -53,7 +54,6 @@ pub fn to_audio_clip(
     name: String,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
@@ -125,7 +125,7 @@ pub fn to_audio_clip(
     // Refresh the vocal-tuning render caches so the chunk loop below mixes
     // corrected audio for any retuned clip — identical to live playback,
     // which reads the same caches through `mix_track_clips` (todo #358).
-    super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
     reset_plugins(shared);
 
@@ -143,7 +143,7 @@ pub fn to_audio_clip(
     let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
-        clips,
+        tuning: &tuning,
         tempo_map: &bounce_tm,
         sample_rate,
         master_vol,
@@ -232,7 +232,7 @@ pub fn to_audio_clip(
         id: target_clip_id,
         track_id: target_track_id,
         start_sample: render_start,
-        source: ClipSource::Memory(output),
+        source: ClipSource::memory(output),
         name: name.clone(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -249,9 +249,11 @@ pub fn to_audio_clip(
         warp_markers: Vec::new(),
         tuning_render_cache: None,
     };
-    clips.write().push(clip);
-
-    let _ = event_tx.send(AudioEvent::TrackBounceCompleted {
+    // The engine thread — the render graph's only writer (code review
+    // ARCH-02 B-5) — adds the clip and then reports `TrackBounceCompleted`
+    // ([`apply_bounced_clip`]), so the app still never hears of a bounce
+    // whose clip the engine does not hold yet.
+    let completed = AudioEvent::TrackBounceCompleted {
         source_track_id,
         target_track_id,
         clip: Some(BouncedClipData {
@@ -261,5 +263,17 @@ pub fn to_audio_clip(
             name,
             waveform_peaks,
         }),
+    };
+    shared.inbox.post(EngineInternal::BouncedClip {
+        clip: Box::new(clip),
+        completed: Box::new(completed),
     });
+}
+
+/// Apply a finished offline bounce-in-place
+/// ([`EngineInternal::BouncedClip`]): add its clip to the timeline, then
+/// emit its `TrackBounceCompleted`. Engine thread.
+pub(crate) fn apply_bounced_clip(ctx: &HandlerCtx, clip: AudioClip, completed: AudioEvent) {
+    ctx.shared.edit_clips(|clips| clips.push(Arc::new(clip)));
+    let _ = ctx.event_tx.send(completed);
 }

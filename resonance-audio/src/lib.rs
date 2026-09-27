@@ -199,7 +199,7 @@ pub mod test_support {
     };
     pub use crate::engine::vocal_render::{
         attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
-        retune_clip, snapshot_tuning_jobs, TuningJob,
+        retune_clip, snapshot_tuning_jobs, TuningCaches, TuningJob, TuningOverlay,
     };
     pub use crate::limits::MAX_COMP_LATENCY;
     pub use crate::platform::{
@@ -417,7 +417,7 @@ pub use engine::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 /// command boundary (cache store + `ClipPitchDetected` emission, plus the
 /// pure DSP mapping) without spinning up the engine thread.
 #[cfg(feature = "test-internals")]
-pub use engine::{analyze_clip_pitch_in_place, analyze_pitch};
+pub use engine::analyze_pitch;
 
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk

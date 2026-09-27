@@ -37,7 +37,7 @@ fn fixture() -> MixAudioHarness {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.1; CLIP_BLOCKS * BLOCK * CH]),
+        source: ClipSource::memory(vec![0.1; CLIP_BLOCKS * BLOCK * CH]),
         name: "c1".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

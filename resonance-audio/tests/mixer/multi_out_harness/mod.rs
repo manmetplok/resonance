@@ -34,7 +34,6 @@ use clap_sys::ext::audio_ports::{
 use clap_sys::id::clap_id;
 use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{
     render_stem, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
@@ -230,7 +229,6 @@ pub fn multi_out_instrument(levels: [f32; PORTS]) -> PluginSlot {
 
 pub struct EngineState {
     pub shared: Arc<SharedState>,
-    pub clips: Arc<RwLock<Vec<AudioClip>>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -248,7 +246,6 @@ impl EngineState {
     pub fn with_port_levels(levels: [f32; PORTS]) -> Self {
         let state = Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         };
         state.shared.edit_plugins(|p| {
@@ -335,7 +332,6 @@ impl EngineState {
             0,
             FRAMES,
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             SR,
         )

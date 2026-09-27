@@ -16,8 +16,6 @@
 
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{SharedState, StemBitDepth, StemSource, render_stem, stem_filter, stem_project_range, write_stem_wav};
 use resonance_audio::types::*;
 
@@ -28,7 +26,6 @@ const STEADY: usize = resonance_audio::test_support::CLIP_DECLICK_FRAMES as usiz
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
@@ -36,7 +33,6 @@ impl EngineState {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            clips: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
         }
     }
@@ -49,11 +45,11 @@ impl EngineState {
 
     /// Push a constant-`value` DC clip on `track` over `[start, start+frames)`.
     fn add_dc_clip(&self, id: ClipId, track: TrackId, start: u64, frames: usize, value: f32) {
-        self.clips.write().push(AudioClip {
+        self.shared.edit_clips(|c| c.push(Arc::new(AudioClip {
             id,
             track_id: track,
             start_sample: start,
-            source: ClipSource::Memory(vec![value; frames * 2]),
+            source: ClipSource::memory(vec![value; frames * 2]),
             name: "dc".into(),
             trim_start_frames: 0,
             trim_end_frames: 0,
@@ -69,7 +65,7 @@ impl EngineState {
             warp_algorithm: WarpAlgorithm::default(),
             warp_markers: Vec::new(),
             tuning_render_cache: None,
-        });
+        })));
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -79,7 +75,6 @@ impl EngineState {
             start,
             end,
             &self.shared,
-            &self.clips,
             &self.tempo_map,
             SR,
         )
@@ -260,7 +255,7 @@ fn two_track_stems_over_shared_range_are_equal_length_and_aligned() {
     state.add_dc_clip(2, 2, 800, 400, 0.25); // track 2: frames [800,1200)
 
     let (start, end) = stem_project_range(
-        &state.clips,
+        &state.shared.graph.load().clips,
         &state.shared.graph.load().midi_clips,
         &state.tempo_map,
         SR,

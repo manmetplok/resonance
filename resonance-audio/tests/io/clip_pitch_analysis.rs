@@ -2,10 +2,13 @@
 //! (`engine/vocal_analysis.rs`) at the command boundary without spinning
 //! up the engine thread:
 //!
-//! * `analyze_clip_pitch_in_place` reads a clip's mono mix, runs f0
-//!   detection + note segmentation, stores the result in the clip's
-//!   `VocalTuning` cache, and emits exactly one `ClipPitchDetected` whose
-//!   payload mirrors the cache.
+//! * `AnalyzeClipPitch` (both halves, via
+//!   `EngineHandlerHarness::analyze_clip_pitch`: the worker's analysis,
+//!   then the engine thread's application of its posted result — code
+//!   review ARCH-02 B-5) reads a clip's mono mix, runs f0 detection + note
+//!   segmentation, stores the result in the clip's `VocalTuning` cache,
+//!   and emits exactly one `ClipPitchDetected` whose payload mirrors the
+//!   cache.
 //! * The missing-clip lookup is a silent no-op (no cache write, no event).
 //! * `analyze_pitch` (the pure DSP mapping) turns a mono sine into a
 //!   contour and a note blob at the right MIDI pitch.
@@ -15,13 +18,10 @@
 //! one sustained note.
 
 use std::f32::consts::TAU;
-use std::sync::Arc;
 
-use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
-
+use resonance_audio::analyze_pitch;
+use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::{AudioClip, AudioEvent, ClipSource, FadeCurve};
-use resonance_audio::{analyze_clip_pitch_in_place, analyze_pitch};
 
 const SR: u32 = 48_000;
 const A3_HZ: f32 = 220.0;
@@ -46,7 +46,7 @@ fn sine_clip(id: u64, freq: f32, dur_secs: f32) -> AudioClip {
         id,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(stereo_sine(freq, dur_secs, 0.5)),
+        source: ClipSource::memory(stereo_sine(freq, dur_secs, 0.5)),
         name: format!("clip_{id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -69,14 +69,15 @@ fn sine_clip(id: u64, freq: f32, dur_secs: f32) -> AudioClip {
 fn analyze_fills_cache_and_emits_matching_event() {
     let dur = 0.6;
     let total_frames = (SR as f32 * dur) as u64;
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sine_clip(7, A3_HZ, dur)]));
-    let (event_tx, event_rx) = unbounded::<AudioEvent>();
+    let mut engine = EngineHandlerHarness::new();
+    engine.push_clip(sine_clip(7, A3_HZ, dur));
 
-    analyze_clip_pitch_in_place(&clips, &event_tx, 7, SR);
+    engine.analyze_clip_pitch(7);
 
     // Exactly one event, and it is the analysis result for clip 7.
-    let (notes, contour) = match event_rx.try_recv() {
-        Ok(AudioEvent::ClipPitchDetected {
+    let mut events = engine.drain_events().into_iter();
+    let (notes, contour) = match events.next() {
+        Some(AudioEvent::ClipPitchDetected {
             clip_id,
             notes,
             contour,
@@ -86,10 +87,7 @@ fn analyze_fills_cache_and_emits_matching_event() {
         }
         other => panic!("expected ClipPitchDetected, got {other:?}"),
     };
-    assert!(
-        event_rx.try_recv().is_err(),
-        "exactly one event per analysis"
-    );
+    assert!(events.next().is_none(), "exactly one event per analysis");
 
     // The contour has voiced frames anchored inside the clip's audio.
     assert!(!contour.is_empty(), "a 0.6 s sine yields analysis frames");
@@ -128,8 +126,8 @@ fn analyze_fills_cache_and_emits_matching_event() {
     );
 
     // The emitted payload mirrors exactly what was cached on the clip.
-    let guard = clips.read();
-    let tuning = guard[0]
+    let clip = engine.clip(7).expect("clip 7 is still there");
+    let tuning = clip
         .vocal_tuning
         .as_ref()
         .expect("analysis attaches a VocalTuning cache");
@@ -139,18 +137,15 @@ fn analyze_fills_cache_and_emits_matching_event() {
 
 #[test]
 fn missing_clip_is_a_silent_no_op() {
-    let clips: Arc<RwLock<Vec<AudioClip>>> = Arc::new(RwLock::new(vec![sine_clip(1, A3_HZ, 0.4)]));
-    let (event_tx, event_rx) = unbounded::<AudioEvent>();
+    let mut engine = EngineHandlerHarness::new();
+    engine.push_clip(sine_clip(1, A3_HZ, 0.4));
 
     // Clip id 99 does not exist.
-    analyze_clip_pitch_in_place(&clips, &event_tx, 99, SR);
+    engine.analyze_clip_pitch(99);
 
+    assert!(engine.drain_events().is_empty(), "an unknown clip emits no event");
     assert!(
-        event_rx.try_recv().is_err(),
-        "an unknown clip emits no event"
-    );
-    assert!(
-        clips.read()[0].vocal_tuning.is_none(),
+        engine.clip(1).expect("clip 1").vocal_tuning.is_none(),
         "an unknown clip leaves every existing clip's cache untouched"
     );
 }

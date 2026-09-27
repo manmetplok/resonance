@@ -152,12 +152,12 @@ fn write_failure_keeps_the_audio_on_disk_and_reports_it() {
     assert_eq!(reported.len(), 1, "one error per failed take: {reported:?}");
     assert!(reported[0].contains("clip_1.wav"), "{}", reported[0]);
 
-    let clips = parking_lot::RwLock::new(Vec::new());
-    let emitted = rec.finalize_recording(SR, &clips, &tx);
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
+    let emitted = rec.finalize_recording(SR, &mut clips, &tx);
     assert_eq!(emitted, 1, "the salvaged take must become a clip");
     assert!(errors(&rx).is_empty(), "the failure is reported only once");
 
-    let clips = clips.read();
+    let clips = clips;
     let got = frames_of(&clips[0]);
     assert!(
         (9_000..=10_100).contains(&got.len()),
@@ -178,25 +178,25 @@ fn write_failure_in_a_cycle_record_pass_keeps_that_take_and_the_next() {
     let audio_dir = dir.join("audio");
     let (tx, rx) = unbounded();
     let (mut rec, mut prod) = session(&dir, 1);
-    let clips = parking_lot::RwLock::new(Vec::new());
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
     let mut next_clip_id = 2;
 
     with_file_cap(|| feed(&mut rec, &mut prod, 0, SR as usize));
     // Loop seam: the damaged pass rolls into a take, a fresh writer opens.
-    let first = rec.roll_audio_pass(SR, 0, &clips, &audio_dir, &mut next_clip_id, true);
+    let first = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut next_clip_id, true);
     assert_eq!(first.len(), 1, "salvaged pass must still produce a take");
     assert!((9_000..=10_100).contains(&first[0].duration_samples));
 
     // The next pass records normally into its own file.
     feed(&mut rec, &mut prod, 0, 20_000);
-    let second = rec.roll_audio_pass(SR, 0, &clips, &audio_dir, &mut next_clip_id, false);
+    let second = rec.roll_audio_pass(SR, 0, &mut clips, &audio_dir, &mut next_clip_id, false);
     assert_eq!(second.len(), 1);
     assert_ne!(second[0].clip_id, first[0].clip_id);
     assert_eq!(second[0].duration_samples, 20_000);
 
     rec.poll_write_errors(&tx);
     assert_eq!(errors(&rx).len(), 1);
-    assert_eq!(clips.read().len(), 2);
+    assert_eq!(clips.len(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -233,10 +233,10 @@ fn failed_header_repair_keeps_the_take_in_memory_and_says_so() {
         reported[0]
     );
 
-    let clips = parking_lot::RwLock::new(Vec::new());
-    let emitted = rec.finalize_recording(SR, &clips, &tx);
+    let mut clips: Vec<std::sync::Arc<resonance_audio::types::AudioClip>> = Vec::new();
+    let emitted = rec.finalize_recording(SR, &mut clips, &tx);
     assert_eq!(emitted, 1, "the take must survive a failed header repair");
-    let clips = clips.read();
+    let clips = clips;
     assert!(clips[0].source.mapped_path().is_none(), "held in memory");
     let got = frames_of(&clips[0]);
     assert!(

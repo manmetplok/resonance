@@ -104,7 +104,7 @@ fn clip(
         id,
         track_id,
         start_sample,
-        source: ClipSource::Memory(noise(frames * 2, seed)),
+        source: ClipSource::memory(noise(frames * 2, seed)),
         name: format!("c{id}"),
         trim_start_frames: 0,
         trim_end_frames: 0,

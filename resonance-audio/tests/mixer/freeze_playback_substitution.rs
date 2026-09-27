@@ -19,7 +19,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crossbeam_channel::unbounded;
-use parking_lot::RwLock;
 
 use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_freeze_cache, to_wav};
 use resonance_audio::types::*;
@@ -29,14 +28,12 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        clips: Arc::new(RwLock::new(Vec::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -57,7 +54,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, start_sample: u64, data: Vec<f32>) 
         id,
         track_id,
         start_sample,
-        source: ClipSource::Memory(data),
+        source: ClipSource::memory(data),
         name: "tone".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -83,7 +80,7 @@ fn state_with_tone_track(frames: usize) -> EngineState {
     state.shared.edit_tracks(|m| {
         m.insert(1, std::sync::Arc::new(Track::with_type(1, "track".into(), TrackType::Audio)));
     });
-    state.clips.write().push(audio_clip(1, 1, 0, tone(frames)));
+    state.shared.edit_clips(|c| c.push(Arc::new(audio_clip(1, 1, 0, tone(frames)))));
     state
 }
 
@@ -117,7 +114,6 @@ fn bounce(state: &EngineState, name: &str) -> Vec<f32> {
     to_wav(
         path.to_string_lossy().into_owned(),
         &state.shared,
-        &state.clips,
         &state.tempo_map,
         SR,
         &event_tx,
@@ -137,7 +133,6 @@ fn freeze_track1(state: &EngineState, name: &str) -> FrozenSource {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

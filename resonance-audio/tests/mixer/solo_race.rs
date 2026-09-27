@@ -30,7 +30,7 @@ fn audio_clip(id: ClipId, track_id: TrackId) -> AudioClip {
         id,
         track_id,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.1; 2 * SR as usize * 60]),
+        source: ClipSource::memory(vec![0.1; 2 * SR as usize * 60]),
         name: "a".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,

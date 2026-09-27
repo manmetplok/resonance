@@ -9,8 +9,8 @@
 //! wait-free [`load`](RenderGraphSlot::load) and never fails.
 //!
 //! Migration state: `midi_clips` (B-1), `busses` and `master` (B-2),
-//! `tracks` (B-3), `plugins` (B-4). `clips` joins in B-5; until then it
-//! stays behind its lock.
+//! `tracks` (B-3), `plugins` (B-4), `clips` (B-5) — every project map the
+//! renderers read; none is behind a lock any more.
 //!
 //! Ownership and threading:
 //!
@@ -23,12 +23,15 @@
 //!   published graph still shares it), and publishes. Plugin add /
 //!   remove (track, bus and master chains, track and bus removal,
 //!   `ClearAll`, the startup scan, shutdown) edit the plugin map the
-//!   same way. No worker thread
-//!   writes the graph — the offline bounce-in-place's cancel posts
+//!   same way, and audio-clip CRUD, recording, take parking and the
+//!   project-save remaps edit the clip list the same way (B-5). No worker
+//!   thread writes the graph — the offline bounce-in-place's cancel posts
 //!   `AudioCommand::BounceTargetCancelled` so the engine thread removes
-//!   its target track. The `edit` mutex serialises the
-//!   read-modify-publish so a stray second writer could never lose an
-//!   update; the audio thread never touches it.
+//!   its target track, and the clip-load, pitch-analysis, bounce and
+//!   retune-cache workers post their results on `SharedState::inbox`
+//!   (`engine::internal`) for the engine thread to apply. The `edit`
+//!   mutex serialises the read-modify-publish so a stray second writer
+//!   could never lose an update; the audio thread never touches it.
 //! - **Bus live state.** A bus's fader, pan, mute, role, chain-bypass
 //!   fade, meters and last gains are atomics shared by every
 //!   copy-on-write copy of it (`Bus`'s `Clone`), so an edit never loses a
@@ -48,7 +51,10 @@
 //!   `SharedState::retired`, and the engine loop's sweep drops it once no
 //!   reader pins it — so the audio thread is never the last owner of a
 //!   graph (or of a clip, bus, track or chain only that graph still
-//!   held). A removed track therefore needs no retiring of its own: it
+//!   held). That includes an audio clip's samples: a removed or replaced
+//!   clip — its mmap, or its in-RAM `Arc<[f32]>` and retune cache — is
+//!   freed when the sweep drops the last graph that listed it, on the
+//!   engine thread. A removed track therefore needs no retiring of its own: it
 //!   rides out on the replaced graph and drops, with its frozen cache and
 //!   insert chain, on the engine thread.
 //! - **Plugin instances** (B-4). The map holds `Arc<PluginSlot>`, so a
@@ -87,7 +93,8 @@ use parking_lot::Mutex;
 
 use crate::clap_host::{PluginMap, PluginSlot};
 use crate::types::{
-    Bus, BusId, ClipId, MasterBus, MidiClip, PluginInstanceId, Track, TrackId, TrackMap,
+    AudioClip, Bus, BusId, ClipId, MasterBus, MidiClip, PluginInstanceId, Track, TrackId,
+    TrackMap,
 };
 
 use super::retire::{self, Retired};
@@ -98,6 +105,10 @@ use super::retire::{self, Retired};
 pub struct RenderGraph {
     /// Every MIDI clip on the timeline, in insertion order.
     pub midi_clips: Arc<[Arc<MidiClip>]>,
+    /// Every audio clip the render plays — timeline clips and take
+    /// recordings — in list order (the order the clip mix sums them in,
+    /// so it is part of the graph: an edit must keep it exactly).
+    pub clips: Arc<[Arc<AudioClip>]>,
     /// Every bus, in insertion order — the mixer gives bus `i` the
     /// `i`-th bus buffer, so the order is part of the graph.
     pub busses: Arc<IndexMap<BusId, Arc<Bus>>>,
@@ -115,6 +126,7 @@ impl Default for RenderGraph {
     fn default() -> Self {
         Self {
             midi_clips: Arc::from(Vec::new()),
+            clips: Arc::from(Vec::new()),
             busses: Arc::new(IndexMap::new()),
             master: Arc::new(MasterBus::default()),
             tracks: Arc::new(TrackMap::new()),
@@ -127,6 +139,19 @@ impl RenderGraph {
     /// The MIDI clip with `clip_id`, if any.
     pub fn midi_clip(&self, clip_id: ClipId) -> Option<&MidiClip> {
         self.midi_clips.iter().find(|c| c.id == clip_id).map(|c| &**c)
+    }
+
+    /// The audio clip with `clip_id`, if any.
+    pub fn clip(&self, clip_id: ClipId) -> Option<&AudioClip> {
+        self.clips.iter().find(|c| c.id == clip_id).map(|c| &**c)
+    }
+
+    /// Every audio clip on `track_id`, in list order.
+    pub fn clips_on(&self, track_id: TrackId) -> impl Iterator<Item = &AudioClip> {
+        self.clips
+            .iter()
+            .filter(move |c| c.track_id == track_id)
+            .map(|c| &**c)
     }
 
     /// The bus with `bus_id`, if any.
@@ -163,6 +188,7 @@ impl std::fmt::Debug for RenderGraphSlot {
         let graph = self.graph.load();
         f.debug_struct("RenderGraphSlot")
             .field("midi_clips", &graph.midi_clips.len())
+            .field("clips", &graph.clips.len())
             .field("busses", &graph.busses.len())
             .field("master_plugins", &graph.master.plugin_ids.len())
             .field("tracks", &graph.tracks.len())
@@ -222,6 +248,45 @@ impl RenderGraphSlot {
         let mut clips = current.midi_clips.to_vec();
         let out = f(Arc::make_mut(&mut clips[index]));
         self.publish_locked(&current, retired, |g| g.midi_clips = clips.into());
+        Some(out)
+    }
+
+    /// Edit the audio clip list and publish the result. `f` gets a copy of
+    /// the list (the clips are shared with the published graph until
+    /// `Arc::make_mut`ed — a clip copy shares its samples, see
+    /// [`AudioClip`]). Always publishes. Engine thread.
+    ///
+    /// A clip `f` removes or replaces rides out on the replaced graph,
+    /// which the retire sweep drops on the engine thread — so its audio is
+    /// never freed by a reader (see the module docs).
+    pub fn edit_clips<R>(
+        &self,
+        retired: &Retired,
+        f: impl FnOnce(&mut Vec<Arc<AudioClip>>) -> R,
+    ) -> R {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        let mut clips = current.clips.to_vec();
+        let out = f(&mut clips);
+        self.publish_locked(&current, retired, |g| g.clips = clips.into());
+        out
+    }
+
+    /// Edit the one audio clip with `clip_id` (copy-on-write) and publish.
+    /// `None` — and nothing published — when there is no such clip.
+    /// Engine thread.
+    pub fn edit_clip<R>(
+        &self,
+        retired: &Retired,
+        clip_id: ClipId,
+        f: impl FnOnce(&mut AudioClip) -> R,
+    ) -> Option<R> {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        let index = current.clips.iter().position(|c| c.id == clip_id)?;
+        let mut clips = current.clips.to_vec();
+        let out = f(Arc::make_mut(&mut clips[index]));
+        self.publish_locked(&current, retired, |g| g.clips = clips.into());
         Some(out)
     }
 

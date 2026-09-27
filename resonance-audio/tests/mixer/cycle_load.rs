@@ -1,9 +1,9 @@
 //! Behaviour coverage for the per-cycle DSP load meter
 //! (`src/cycle_load.rs`): load math against the cycle budget,
 //! over-budget counting, quiet-mode report gating, monitor-shortfall
-//! window deltas, the per-map lock-miss attribution (code review
-//! ARCH-02 A2-1), the audio→engine report hand-off, and the stderr
-//! line format.
+//! window deltas, the (now empty) per-map lock-miss table (code review
+//! ARCH-02 A2-1; B-5 moved the last locked map into the render graph),
+//! the audio→engine report hand-off, and the stderr line format.
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -134,31 +134,13 @@ fn quiet_mode_reports_render_lock_skips_as_window_delta() {
 }
 
 #[test]
-fn quiet_mode_reports_per_map_lock_misses_as_window_delta() {
-    let shared = SharedState::default();
-    let mut meter = CycleLoadMeter::new(false);
-    let start = Instant::now();
-    let cycles = (QUIET_REPORT_INTERVAL.as_secs_f64() / budget().as_secs_f64()) as usize + 50;
-    shared.lock_misses.record(StateMap::Clips);
-    shared.lock_misses.record(StateMap::Clips);
-    shared.lock_misses.record(StateMap::Clips);
-    // A miss alone (no render skip: e.g. the stopped branch's monitor
-    // pass) is noteworthy — it is a dropout the graph never reports.
-    let report = drive(&mut meter, &shared, start, cycles, budget() / 100).expect("report");
-    assert_eq!(report.lock_skips_window, 0);
-    assert_eq!(report.lock_misses_window, [3]);
-    assert_eq!(report.lock_misses_lifetime, [3]);
-
-    // Next window: one more on clips only; the other reads zero.
-    shared.lock_misses.record(StateMap::Clips);
-    let start2 = start + budget() * (cycles as u32 + 1);
-    let report = drive(&mut meter, &shared, start2, cycles, budget() / 100).expect("report");
-    assert_eq!(report.lock_misses_window, [1]);
-    assert_eq!(report.lock_misses_lifetime, [4]);
-
-    // And silent again once nothing moves.
-    let start3 = start2 + budget() * (cycles as u32 + 1);
-    assert_eq!(drive(&mut meter, &shared, start3, cycles, budget() / 100), None);
+fn no_state_map_is_left_behind_a_lock() {
+    // ARCH-02 B-5 moved the audio clips — the last `RwLock`-guarded map
+    // the callback `try_read` — into the render graph. The table is empty
+    // until B-6 deletes it.
+    assert_eq!(STATE_MAP_COUNT, 0);
+    assert!(StateMap::ALL.is_empty());
+    assert_eq!(SharedState::default().lock_misses.snapshot(), [0u64; 0]);
 }
 
 #[test]
@@ -176,22 +158,21 @@ fn report_slot_hands_each_report_to_the_engine_loop_once() {
         shortfalls_lifetime: 4,
         lock_skips_window: 5,
         lock_skips_lifetime: 6,
-        lock_misses_window: [1],
-        lock_misses_lifetime: [7],
+        lock_misses_window: [],
+        lock_misses_lifetime: [],
     };
     slot.publish(&report);
     assert_eq!(slot.take_new(&mut seen), Some(report.clone()));
     assert_eq!(slot.take_new(&mut seen), None, "same report is not re-printed");
 
     let mut next = report.clone();
-    next.lock_misses_window = [0; STATE_MAP_COUNT];
+    next.lock_skips_window = 0;
     slot.publish(&next);
     assert_eq!(slot.take_new(&mut seen), Some(next));
     assert_eq!(slot.take_new(&mut seen), None);
 }
 
-/// A minimal playing project: one track, one clip, so the playing
-/// branch takes every map read guard still behind a lock.
+/// A minimal playing project: one track, one clip.
 fn playing_harness() -> MixAudioHarness {
     let mut track = Track::new(1, "clips".into());
     track.set_output(TrackOutput::Master);
@@ -199,7 +180,7 @@ fn playing_harness() -> MixAudioHarness {
         id: 1,
         track_id: 1,
         start_sample: 0,
-        source: ClipSource::Memory(vec![0.1; 64 * FRAMES * 2]),
+        source: ClipSource::memory(vec![0.1; 64 * FRAMES * 2]),
         name: "c1".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -235,57 +216,33 @@ fn playing_harness() -> MixAudioHarness {
 }
 
 #[test]
-fn callback_attributes_a_contended_block_to_the_map_that_missed() {
+fn a_playing_block_always_renders_and_never_misses() {
+    // Every map the playing branch reads is in the render graph (ARCH-02
+    // B-5 moved the last one, the clips): a load that cannot miss, so
+    // nothing is counted and nothing is skipped.
     let mut h = playing_harness();
-
-    // Uncontended: the block renders, nothing is counted.
-    assert!(h.render().iter().any(|&s| s != 0.0));
+    for _ in 0..4 {
+        assert!(h.render().iter().any(|&s| s != 0.0));
+    }
     assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
 
-    // A write-held clips map (the UI-edit shape).
+    // The skipped-block path survives only behind the test hook (B-6
+    // deletes it): silence, one skip counted, still no lock miss.
     assert!(h.render_lock_contended().iter().all(|&s| s == 0.0));
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 1);
-    assert_eq!(h.shared().lock_misses.snapshot(), [1]);
-    assert_eq!(h.shared().lock_misses.get(StateMap::Clips), 1);
-
-    // The ARCH-02 shape: a read guard held on a worker thread with a
-    // writer queued behind it. Only that map's counter moves, and the
-    // block is still skipped as a whole.
-    // (The busses and the master chain (ARCH-02 A2-5), the tracks (A2-6)
-    // and the plugin instances (A2-7) are read from the published render
-    // graph — a load that cannot miss, so they are no longer in this table
-    // and a master-FX pass can no longer be dropped.)
-    for (i, map) in StateMap::ALL.iter().enumerate() {
-        let before = h.shared().lock_misses.snapshot();
-        let skips_before = h.shared().render_skip_cycles.load(Ordering::Relaxed);
-        assert!(h.render_with_queued_writer(*map).iter().all(|&s| s == 0.0));
-        let after = h.shared().lock_misses.snapshot();
-        let mut expected = before;
-        expected[i] += 1;
-        assert_eq!(after, expected, "only {} should have missed", map.name());
-        assert_eq!(
-            h.shared().render_skip_cycles.load(Ordering::Relaxed),
-            skips_before + 1
-        );
-    }
-
-    // Back to uncontended: the counters hold, nothing new.
-    let before = h.shared().lock_misses.snapshot();
+    assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
     assert!(h.render().iter().any(|&s| s != 0.0));
-    assert_eq!(h.shared().lock_misses.snapshot(), before);
 }
 
 #[test]
 fn stopped_branch_takes_no_state_lock() {
     // The stopped branch reads tracks and plugin instances from the
-    // render graph (ARCH-02 A2-6/A2-7) and never touches the clip map, so
-    // a contended clip lock can neither miss nor skip there. (Until B-4 it
-    // `try_read` the plugin map and dropped its monitor / live-note pass
-    // on a miss.)
+    // render graph (ARCH-02 A2-6/A2-7) and never touches the clip list, so
+    // it can neither miss nor skip.
     let mut h = playing_harness();
     h.shared().playing.store(false, Ordering::Relaxed);
-    h.render_with_queued_writer(StateMap::Clips);
+    h.render();
     assert_eq!(h.shared().lock_misses.snapshot(), [0; STATE_MAP_COUNT]);
     assert_eq!(h.shared().render_skip_cycles.load(Ordering::Relaxed), 0);
 }
@@ -350,11 +307,12 @@ fn line_format_is_stable() {
         shortfalls_lifetime: 3,
         lock_skips_window: 1,
         lock_skips_lifetime: 6,
-        lock_misses_window: [1],
-        lock_misses_lifetime: [4],
+        lock_misses_window: [],
+        lock_misses_lifetime: [],
     });
+    // No locked map is left (ARCH-02 B-5), so no lock-miss segment.
     assert_eq!(
         line,
-        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6) | lock misses clips 1 (lifetime 4)"
+        "audio: dsp load avg 3.2% peak 41.0% | over-budget cycles 2 (lifetime 15) | monitor shortfalls 0 (lifetime 3) | render lock-skips 1 (lifetime 6)"
     );
 }

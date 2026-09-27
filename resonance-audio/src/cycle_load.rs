@@ -25,18 +25,18 @@
 //! stream still met its deadline); the meter only folds the counter
 //! into its report line.
 //!
-//! State-lock contention is attributed per map (code review ARCH-02,
-//! A2-1): every `try_read` the callback makes on `clips`
-//! goes through
-//! [`try_read_counted`], so a miss bumps that map's slot in
-//! [`LockMissCounters`] (only the playing branch still takes one).
-//! `render_skip_cycles` stays the
-//! "a playing block was dropped" total; the per-map counters say *which*
-//! lock a UI edit or worker thread was holding at the time. The MIDI
-//! clips (A2-4), the busses and the master chain (A2-5), the tracks
-//! (A2-6) and the plugin instances (A2-7) left this table: they are read
-//! from the published render graph
-//! (`engine::render_graph`), a load that cannot miss.
+//! State-lock contention used to be attributed per map (code review
+//! ARCH-02, A2-1): every `try_read` the callback made on a project map
+//! went through a counting wrapper that bumped that map's slot in
+//! [`LockMissCounters`]. One by one the maps left the table for the
+//! published render graph (`engine::render_graph`), a load that cannot
+//! miss: the MIDI clips (A2-4), the busses and the master chain (A2-5),
+//! the tracks (A2-6), the plugin instances (A2-7) and, last, the audio
+//! clips (A2-8 / B-5). [`StateMap`] has no variants left, so the counters
+//! are a zero-length table and the report line no longer prints them;
+//! `render_skip_cycles` is only moved by the `test-internals` skip hook.
+//! B-6 deletes `StateMap`, `LockMissCounters`, the lock-miss fields of
+//! [`CycleLoadReport`] and `render_skip_cycles`.
 //!
 //! RT-safety: `record` does arithmetic and relaxed atomic stores only.
 //! The summary line is *not* formatted or printed on the audio thread:
@@ -48,8 +48,6 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-
-use parking_lot::{RwLock, RwLockReadGuard};
 
 use crate::engine::SharedState;
 
@@ -71,35 +69,28 @@ pub const QUIET_PEAK_THRESHOLD: f32 = 0.75;
 pub const LOAD_EMA_ALPHA: f32 = 0.05;
 
 /// The `RwLock`-guarded project maps the audio callback still `try_read`s
-/// (each ARCH-02 step moves one onto the render graph and out of here).
-/// Index into [`LockMissCounters`]; the order is the one every report
-/// line and `[u64; STATE_MAP_COUNT]` snapshot uses.
+/// (each ARCH-02 step moved one onto the render graph and out of here).
+/// None are left since B-5 moved the audio clips: an uninhabited enum,
+/// kept (with the zero-length counter table) only until B-6 deletes the
+/// machinery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(usize)]
-pub enum StateMap {
-    Clips = 0,
-}
+pub enum StateMap {}
 
 /// Number of [`StateMap`] variants.
-pub const STATE_MAP_COUNT: usize = 1;
+pub const STATE_MAP_COUNT: usize = 0;
 
 impl StateMap {
     /// Every map, in counter order.
-    pub const ALL: [StateMap; STATE_MAP_COUNT] = [
-        StateMap::Clips,
-    ];
+    pub const ALL: [StateMap; STATE_MAP_COUNT] = [];
 
     /// Short name for the report line.
     pub fn name(self) -> &'static str {
-        match self {
-            StateMap::Clips => "clips",
-        }
+        match self {}
     }
 }
 
-/// Lifetime `try_read` misses per state map, bumped by the audio thread
-/// through [`try_read_counted`] and read by the load meter / the UI. A
-/// miss means the map was write-held, or a writer was queued behind a
+/// Lifetime `try_read` misses per state map, read by the load meter / the
+/// UI. Zero-length since B-5 (see [`StateMap`]). A miss meant the map was write-held, or a writer was queued behind a
 /// long-lived reader (parking_lot's task-fair policy fails `try_read`
 /// in that state too), at the instant the callback asked.
 #[derive(Debug, Default)]
@@ -110,41 +101,25 @@ pub struct LockMissCounters {
 impl LockMissCounters {
     pub const fn new() -> Self {
         Self {
-            counts: [AtomicU64::new(0)],
+            counts: [],
         }
     }
 
     /// One more miss on `map`. Relaxed: the counters are diagnostics.
     #[inline]
     pub fn record(&self, map: StateMap) {
-        self.counts[map as usize].fetch_add(1, Ordering::Relaxed);
+        match map {}
     }
 
     /// Lifetime misses on `map`.
     pub fn get(&self, map: StateMap) -> u64 {
-        self.counts[map as usize].load(Ordering::Relaxed)
+        match map {}
     }
 
     /// Every counter, in [`StateMap`] order.
     pub fn snapshot(&self) -> [u64; STATE_MAP_COUNT] {
         std::array::from_fn(|i| self.counts[i].load(Ordering::Relaxed))
     }
-}
-
-/// `RwLock::try_read` that attributes a miss to `map`. The one way the
-/// audio callback takes a state-map read guard, so no miss goes
-/// uncounted. Never blocks, never allocates.
-#[inline]
-pub(crate) fn try_read_counted<'a, T>(
-    lock: &'a RwLock<T>,
-    map: StateMap,
-    misses: &LockMissCounters,
-) -> Option<RwLockReadGuard<'a, T>> {
-    let guard = lock.try_read();
-    if guard.is_none() {
-        misses.record(map);
-    }
-    guard
 }
 
 /// One report-window summary, ready for formatting.
@@ -434,8 +409,8 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         .iter()
         .map(u64::to_string)
         .collect();
-    format!(
-        "audio: dsp load avg {:.1}% peak {:.1}% | over-budget cycles {} (lifetime {}) | monitor shortfalls {} (lifetime {}) | render lock-skips {} (lifetime {}) | lock misses {} (lifetime {})",
+    let mut line = format!(
+        "audio: dsp load avg {:.1}% peak {:.1}% | over-budget cycles {} (lifetime {}) | monitor shortfalls {} (lifetime {}) | render lock-skips {} (lifetime {})",
         report.avg * 100.0,
         report.peak * 100.0,
         report.overruns_window,
@@ -444,7 +419,14 @@ pub fn format_cycle_load_line(report: &CycleLoadReport) -> String {
         report.shortfalls_lifetime,
         report.lock_skips_window,
         report.lock_skips_lifetime,
-        misses.join(" "),
-        misses_lifetime.join("/"),
-    )
+    );
+    // No locked map is left since ARCH-02 B-5 — nothing to print.
+    if !misses.is_empty() {
+        line.push_str(&format!(
+            " | lock misses {} (lifetime {})",
+            misses.join(" "),
+            misses_lifetime.join("/"),
+        ));
+    }
+    line
 }

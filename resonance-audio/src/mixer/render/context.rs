@@ -49,7 +49,7 @@ pub(crate) struct BlockInputs<'a> {
     pub(crate) channels: usize,
     pub(crate) tracks: &'a TrackMap,
     pub(crate) busses: &'a IndexMap<BusId, Arc<Bus>>,
-    pub(crate) clips: &'a [AudioClip],
+    pub(crate) clips: &'a [Arc<AudioClip>],
     pub(crate) midi_clips: &'a [Arc<MidiClip>],
     pub(crate) plugins: &'a PluginMap,
     pub(crate) tempo_map: &'a TempoMap,

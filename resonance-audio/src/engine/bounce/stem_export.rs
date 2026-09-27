@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use parking_lot::RwLock;
 
 use crate::types::*;
 
@@ -54,7 +53,6 @@ pub fn export_stems(
     include_fx_tail: bool,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    clips: &Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
     event_tx: &Sender<AudioEvent>,
@@ -75,7 +73,10 @@ pub fn export_stems(
         )));
         return;
     }
-    let Some((start, end)) = range.or_else(|| stem_project_range(clips, &shared.graph.load().midi_clips, tempo_map, engine_rate))
+    let Some((start, end)) = range.or_else(|| {
+        let graph = shared.graph.load();
+        stem_project_range(&graph.clips, &graph.midi_clips, tempo_map, engine_rate)
+    })
     else {
         let _ = event_tx.send(AudioEvent::StemExportError(EngineError::unsupported(
             "No audio to export",
@@ -123,7 +124,6 @@ pub fn export_stems(
             start,
             render_end,
             shared,
-            clips,
             tempo_map,
             engine_rate,
         );
@@ -167,7 +167,6 @@ pub(crate) fn export_stems_spawn(
     bit_depth: StemBitDepth,
     include_fx_tail: bool,
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     engine_rate: u32,
     event_tx: Sender<AudioEvent>,
@@ -194,7 +193,6 @@ pub(crate) fn export_stems_spawn(
                         include_fx_tail,
                         &shared,
                         &cancel_render,
-                        &clips,
                         &tempo_map,
                         engine_rate,
                         &event_tx,

@@ -317,11 +317,9 @@ fn assert_target_torn_down(events: Vec<AudioEvent>) {
 fn a_cancelled_offline_bounce_hands_the_target_removal_to_the_engine_thread() {
     let mut h = bounce_fixture();
 
-    // Park the worker before its chunk loop (its tuning-cache pass reads
-    // the clip list), so the cancel is seen before a single chunk renders.
-    let clips = h.clips_lock();
-    let parked = clips.write();
-    let cancel = h.bounce_track_to_audio(1, 2, 99);
+    // Park the worker before its render, so the cancel is seen before a
+    // single chunk renders.
+    let (cancel, parked) = h.bounce_track_to_audio_parked(1, 2, 99);
     cancel.store(true, Ordering::Relaxed);
     drop(parked);
 

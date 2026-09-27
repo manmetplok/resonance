@@ -469,7 +469,8 @@ fn claimed_take_clips(store: &std::collections::HashMap<TakeGroupId, TakeGroup>)
 /// destroyed (ba todo #1397).
 ///
 /// **This is what makes a removal silent.** A take's recording is an
-/// ordinary [`AudioClip`](crate::types::AudioClip) in `ctx.clips` — the
+/// ordinary [`AudioClip`](crate::types::AudioClip) in the render graph's
+/// clip list — the
 /// pass's own `roll_audio_pass` pushes it there as it rolls — and it stays
 /// inaudible only because
 /// [`publish_take_comp`]'s table marks it *governed*, which makes the clip
@@ -497,22 +498,28 @@ fn claimed_take_clips(store: &std::collections::HashMap<TakeGroupId, TakeGroup>)
 /// take's life its `clip_ref` names a clip that is on its way in from a
 /// worker and is in no list yet. Returning early there is what made a
 /// removal inside that window park nothing and let the worker publish an
-/// ungoverned recording — audible at full gain on top of the comp. The
-/// claim is taken under the same `ctx.clips` write lock the worker's
-/// publish takes, so the two orderings are the only two there are: either
-/// this finds the clip and parks it, or the worker finds the claim and
+/// ungoverned recording — audible at full gain on top of the comp. This
+/// and the load's application (`clips::apply_clip_loaded`) are both
+/// engine-thread steps, so the two orderings are the only two there are:
+/// either this finds the clip and parks it, or the load finds the claim and
 /// delivers into the park. See
 /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark).
 fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
     if claimed_take_clips(&state.take_groups).contains(&clip_ref) {
         return;
     }
-    // Held across both branches: the clip list and the park have to move
-    // together, or the window this closes re-opens.
-    let mut clips = ctx.clips.write();
-    match clips.iter().position(|clip| clip.id == clip_ref) {
-        Some(pos) => state.take_clip_park.hold(clips.remove(pos)),
-        None => state.take_clip_park.claim(clip_ref),
+    // One engine-thread step: the clip list and the park move together,
+    // and no finished load can be applied in between (ARCH-02 B-5).
+    if super::clips::clip_exists(ctx, clip_ref) {
+        let parked = ctx.shared.edit_clips(|clips| {
+            let pos = clips.iter().position(|clip| clip.id == clip_ref)?;
+            Some(clips.remove(pos))
+        });
+        if let Some(clip) = parked {
+            state.take_clip_park.hold(clip);
+        }
+    } else {
+        state.take_clip_park.claim(clip_ref);
     }
 }
 
@@ -525,11 +532,8 @@ fn park_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) 
 /// in-flight load then lands in the clip list exactly as it would have had
 /// the removal never happened.
 fn unpark_take_clip(ctx: &HandlerCtx, state: &mut HandlerState, clip_ref: ClipId) {
-    // The clip lock first, always: the load worker takes it before the
-    // park's, and one order is what keeps the two from deadlocking.
-    let mut clips = ctx.clips.write();
     if let Some(clip) = state.take_clip_park.release(clip_ref) {
-        clips.push(clip);
+        ctx.shared.edit_clips(|clips| clips.push(clip));
     }
 }
 

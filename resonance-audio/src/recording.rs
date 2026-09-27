@@ -405,8 +405,10 @@ impl RecordingState {
 
     /// Finalize recording: drain any pending ring data, flush the
     /// streaming resamplers, close each WAV writer, memory-map the
-    /// resulting files, and push an `AudioClip` per track into the
-    /// shared clip map. Emits `RecordingFinished` events with the
+    /// resulting files, and push an `AudioClip` per track onto `clips` —
+    /// the engine passes the render graph's clip list being edited
+    /// (`SharedState::edit_clips`, code review ARCH-02 B-5), which it
+    /// publishes when this returns. Emits `RecordingFinished` events with the
     /// incrementally-accumulated waveform peaks.
     /// Returns the number of audio clips that were actually emitted
     /// (one per armed track that captured at least one frame). Callers
@@ -415,7 +417,7 @@ impl RecordingState {
     pub fn finalize_recording(
         &mut self,
         _output_sample_rate: u32,
-        clips: &parking_lot::RwLock<Vec<AudioClip>>,
+        clips: &mut Vec<std::sync::Arc<AudioClip>>,
         event_tx: &Sender<AudioEvent>,
     ) -> usize {
         self.drain_ring_to_buffers();
@@ -504,10 +506,7 @@ impl RecordingState {
                 warp_markers: Vec::new(),
                 tuning_render_cache: None,
             };
-            {
-                let mut guard = clips.write();
-                guard.push(clip);
-            }
+            clips.push(std::sync::Arc::new(clip));
 
             let _ = event_tx.send(AudioEvent::RecordingFinished {
                 clip_id,
@@ -543,7 +542,7 @@ impl RecordingState {
         &mut self,
         engine_sample_rate: u32,
         clip_start_sample: SamplePos,
-        clips: &parking_lot::RwLock<Vec<AudioClip>>,
+        clips: &mut Vec<std::sync::Arc<AudioClip>>,
         audio_dir: &Path,
         next_clip_id: &mut ClipId,
         reopen: bool,
@@ -636,7 +635,7 @@ impl RecordingState {
                 warp_markers: Vec::new(),
                 tuning_render_cache: None,
             };
-            clips.write().push(clip);
+            clips.push(std::sync::Arc::new(clip));
             rolled.push(RolledAudioTake {
                 track_id: *track_id,
                 clip_id: finished_clip_id,
@@ -995,7 +994,7 @@ fn repair_wav_data_len(path: &Path) -> Result<WavRepair, RecordingError> {
 /// file.
 fn take_clip_source(path: &Path, salvaged: &mut Option<Vec<f32>>) -> Result<ClipSource, String> {
     match salvaged.take() {
-        Some(samples) => Ok(ClipSource::Memory(samples)),
+        Some(samples) => Ok(ClipSource::memory(samples)),
         None => ClipSource::open_wav(path).map_err(|e| e.to_string()),
     }
 }

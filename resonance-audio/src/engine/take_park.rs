@@ -1,10 +1,10 @@
 //! Where a removed take's recording goes — and how a removal wins the race
 //! against a take-clip load that has not landed yet (ba todo #1397, #1403).
 //!
-//! # Why this is shared rather than engine-thread-local
+//! # How a removal and an in-flight load agree
 //!
-//! A take's recording is an ordinary [`AudioClip`] in the engine's shared
-//! clip list, and it is inaudible only because the published comp table
+//! A take's recording is an ordinary [`AudioClip`] in the engine's clip
+//! list, and it is inaudible only because the published comp table
 //! marks it *governed*. Removing the take stops it being governed, so
 //! `takes::park_take_clip` lifts the clip **out of** the list: taking it
 //! out of the render's input cannot be forgotten out of a skip list the way
@@ -13,9 +13,9 @@
 //! That works only for a clip the list already holds. Since ba todo #1402 a
 //! project load also *loads* a take's recording, and that load is
 //! asynchronous: `clips::submit_clip_load` hands the mmap and the peak
-//! decimation to a worker, which publishes the finished `AudioClip` some
+//! decimation to a worker, whose finished `AudioClip` reaches the list some
 //! milliseconds later. A `RemoveTake` dispatched inside that window used to
-//! find nothing to park and park nothing — and the worker then published a
+//! find nothing to park and park nothing — and the load then published a
 //! recording no comp table governs, which plays raw at full gain on the
 //! ordinary clip path, on top of the comp. That is #1397's "deleting a take
 //! makes it **louder**" returning through a timing window rather than a
@@ -25,39 +25,43 @@
 //! The submit-time early return in
 //! [`clips::handle_load_take_clip_from_wav`](crate::engine::clips) cannot
 //! close it — it is advisory, and by definition cannot see a load already
-//! in flight. The check that *binds* is the duplicate check inside the
-//! worker's `clips.write()`, so the removal has to interlock with **that**.
-//! Hence this park is shared: the engine thread and the load worker both
-//! reach it, and both touch it while holding the clip list's write lock, so
-//! "the clip is not in the list" and "the park claims it" become one atomic
-//! step. There is no window left for the two to disagree in.
+//! in flight. The check that *binds* is the one applied with the finished
+//! load (`clips::apply_clip_loaded`), so the removal has to agree with
+//! **that**: a removal that finds no clip leaves a *claim*, and the load,
+//! when it is applied, [`deliver`](TakeClipPark::deliver)s into the park
+//! instead of the list.
 //!
-//! # The locking contract
+//! # Engine-thread sequencing (code review ARCH-02 B-5)
 //!
-//! * Every mutation below is made **while holding `ctx.clips.write()`**,
-//!   which is what makes the park and the clip list agree.
-//! * Nothing ever acquires `ctx.clips` while holding the park's own lock.
-//!   The one order is clips → park, so the two can never deadlock.
+//! Until B-5 the load worker published its clip itself, under the clip
+//! list's write lock, so this park was shared with the worker and every
+//! mutation had to be made while holding the clip list's write lock — that lock
+//! is what made "the clip is not in the list" and "the park claims it" one
+//! atomic step. The worker now posts its result to the engine thread, and
+//! the park, the clip list edit and the load's delivery all run there: a
+//! removal (`park_take_clip`) and a load's application
+//! (`apply_clip_loaded`) are two engine-thread steps, each applied wholly
+//! before or wholly after the other. So the two orderings are still the
+//! only two there are — either the removal finds the clip in the list and
+//! parks it, or the load finds the claim and delivers into the park — and
+//! the park needs no lock, and no lock order, at all.
 //!
 //! [`AudioClip`]: crate::types::AudioClip
 
 use std::collections::HashMap;
-
-use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::types::{AudioClip, ClipId};
 
 /// What the park knows about one removed take's recording.
-// One `AudioClip` (a few hundred bytes) against an empty variant, in a map
-// that holds a handful of entries at most — a removal or two per session.
-// Boxing to even the variants out would put an allocation on the removal
-// path to save nothing measurable.
-#[allow(clippy::large_enum_variant)]
 enum Parked {
-    /// The recording itself, lifted out of the shared clip list. This is
-    /// what makes an undo instant: `RestoreTakeGroups` hands it straight
-    /// back with no file to re-open.
-    Held(AudioClip),
+    /// The recording itself, lifted out of the clip list (the very `Arc`
+    /// the render graph listed). This is what makes an undo instant:
+    /// `RestoreTakeGroups` hands it straight back with no file to
+    /// re-open. Dropped only on the engine thread (`ClearAll` clears the
+    /// park there), and never the last owner a reader could leave it to:
+    /// graphs that still list it are retired and swept on this thread.
+    Held(Arc<AudioClip>),
     /// The removal got there first — the clip was not in the list yet
     /// because its `LoadTakeClipFromWav` was still in flight. The claim
     /// stands until something re-claims the take, and the load, when it
@@ -65,8 +69,8 @@ enum Parked {
     Claimed,
 }
 
-/// Recordings of takes that have been removed, held out of the shared clip
-/// list so they cannot sound — plus the ids of removed takes whose
+/// Recordings of takes that have been removed, held out of the clip list
+/// so they cannot sound — plus the ids of removed takes whose
 /// recording is still on its way in from a worker.
 ///
 /// Parked rather than dropped, and never deleted from disk: a removal is
@@ -77,18 +81,16 @@ enum Parked {
 /// empty park with the orphaned WAV left on disk.
 #[derive(Default)]
 pub(crate) struct TakeClipPark {
-    entries: Mutex<HashMap<ClipId, Parked>>,
+    entries: HashMap<ClipId, Parked>,
 }
 
 impl TakeClipPark {
-    /// Park a recording the shared clip list *did* hold.
+    /// Park a recording the clip list *did* hold.
     ///
     /// Overwrites any standing claim for the id, which is the point: the
     /// claim was a promise to capture exactly this clip.
-    ///
-    /// Call while holding `ctx.clips.write()`.
-    pub(crate) fn hold(&self, clip: AudioClip) {
-        self.entries.lock().insert(clip.id, Parked::Held(clip));
+    pub(crate) fn hold(&mut self, clip: Arc<AudioClip>) {
+        self.entries.insert(clip.id, Parked::Held(clip));
     }
 
     /// Claim `clip_id` for the park without a recording to put in it — the
@@ -112,11 +114,8 @@ impl TakeClipPark {
     /// ids are never reused within a session: `next_clip_id` only ever
     /// rises, and the one thing that resets it (`ClearAll`) empties this
     /// park in the same breath.
-    ///
-    /// Call while holding `ctx.clips.write()`.
-    pub(crate) fn claim(&self, clip_id: ClipId) {
+    pub(crate) fn claim(&mut self, clip_id: ClipId) {
         self.entries
-            .lock()
             .entry(clip_id)
             .or_insert(Parked::Claimed);
     }
@@ -129,10 +128,8 @@ impl TakeClipPark {
     /// visible. Returns `None` when the park only had a claim, in which
     /// case dropping the claim is itself the restore: the load that is
     /// still in flight now lands in the clip list as it always would have.
-    ///
-    /// Call while holding `ctx.clips.write()`.
-    pub(crate) fn release(&self, clip_id: ClipId) -> Option<AudioClip> {
-        match self.entries.lock().remove(&clip_id) {
+    pub(crate) fn release(&mut self, clip_id: ClipId) -> Option<Arc<AudioClip>> {
+        match self.entries.remove(&clip_id) {
             Some(Parked::Held(clip)) => Some(clip),
             Some(Parked::Claimed) | None => None,
         }
@@ -146,13 +143,13 @@ impl TakeClipPark {
     /// load was in flight: it is stored rather than dropped, so the undo of
     /// that removal is as instant as any other and never re-reads the WAV.
     ///
-    /// Call while holding `ctx.clips.write()`, from the load worker.
-    pub(crate) fn deliver(&self, clip: AudioClip) -> Option<AudioClip> {
-        let mut entries = self.entries.lock();
-        match entries.get(&clip.id) {
+    /// Called by `clips::apply_clip_loaded`, in the same engine-thread step
+    /// as the duplicate check and the publish.
+    pub(crate) fn deliver(&mut self, clip: Arc<AudioClip>) -> Option<Arc<AudioClip>> {
+        match self.entries.get(&clip.id) {
             None => Some(clip),
             Some(_) => {
-                entries.insert(clip.id, Parked::Held(clip));
+                self.entries.insert(clip.id, Parked::Held(clip));
                 None
             }
         }
@@ -164,8 +161,8 @@ impl TakeClipPark {
     /// un-park into a project that never had these takes, and keeping the
     /// park across a load would hold the previous project's WAV mappings
     /// open.
-    pub(crate) fn clear(&self) {
-        self.entries.lock().clear();
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
     }
 
     /// Clip ids whose recording the park is actually holding, ascending.
@@ -176,7 +173,6 @@ impl TakeClipPark {
     pub(crate) fn held_ids(&self) -> Vec<ClipId> {
         let mut ids: Vec<ClipId> = self
             .entries
-            .lock()
             .iter()
             .filter(|(_, parked)| matches!(parked, Parked::Held(_)))
             .map(|(id, _)| *id)

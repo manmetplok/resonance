@@ -12,8 +12,6 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_freeze_cache};
 use resonance_audio::types::*;
 
@@ -21,14 +19,12 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        clips: Arc::new(RwLock::new(Vec::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -49,7 +45,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, data: Vec<f32>) -> AudioClip {
         id,
         track_id,
         start_sample: 0,
-        source: ClipSource::Memory(data),
+        source: ClipSource::memory(data),
         name: "take".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -71,10 +67,7 @@ fn audio_clip(id: ClipId, track_id: TrackId, data: Vec<f32>) -> AudioClip {
 fn peak_of_render(track: Track, name: &str) -> f32 {
     let state = empty_engine_state();
     state.shared.edit_tracks(|m| { m.insert(1, std::sync::Arc::new(track)); });
-    state
-        .clips
-        .write()
-        .push(audio_clip(1, 1, tone(SR as usize)));
+    state.shared.edit_clips(|c| c.push(Arc::new(audio_clip(1, 1, tone(SR as usize)))));
 
     let path = std::env::temp_dir().join(format!("resonance_ext_playback_{name}.wav"));
     let _ = std::fs::remove_file(&path);
@@ -83,7 +76,6 @@ fn peak_of_render(track: Track, name: &str) -> f32 {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         SR,

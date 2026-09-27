@@ -6,7 +6,7 @@
 //! plus `compute_waveform_peaks` (an O(n) decimation across the whole
 //! sample buffer) — is memory-bandwidth bound, so running more than a
 //! handful at once only makes every one of them slower while the audio
-//! callback still has to get its `clips.try_read()` in. It used to run
+//! callback competes for the same memory bandwidth. It used to run
 //! on the engine control thread, which stalled the command queue for
 //! hundreds of milliseconds on a project with many large clips.
 //!

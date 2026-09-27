@@ -43,7 +43,7 @@ fn dc_clip(
         id,
         track_id: TRACK,
         start_sample: start,
-        source: ClipSource::Memory(vec![1.0; frames * 2]),
+        source: ClipSource::memory(vec![1.0; frames * 2]),
         name: "dc".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -224,7 +224,7 @@ fn declick_removes_the_step_at_a_trim_point() {
     // A clip trimmed mid-waveform: the source is constant 0.5, so the first
     // audible frame would step 0 -> 0.5 without a declick.
     let mut clip = dc_clip(1, 0, LONG, 0, FadeCurve::default(), 0, FadeCurve::default(), 0.0);
-    clip.source = ClipSource::Memory(vec![0.5; LONG * 2]);
+    clip.source = ClipSource::memory(vec![0.5; LONG * 2]);
     clip.trim_start_frames = 1000;
     clip.trim_end_frames = 1000;
     let audible = LONG - 2000;

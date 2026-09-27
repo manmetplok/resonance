@@ -84,7 +84,7 @@ fn an_in_ram_clip_survives_a_full_reload_after_persist() {
     let dir = project_dir("memory");
     let mut h = EngineHandlerHarness::new();
     h.set_project_dir(dir.clone());
-    h.push_clip(clip(7, ClipSource::Memory(pcm(0.5))));
+    h.push_clip(clip(7, ClipSource::memory(pcm(0.5))));
 
     h.persist_clip_wavs();
     assert!(clip_wav(&dir, 7).is_file(), "persist writes clip_7.wav");
@@ -128,7 +128,7 @@ fn a_mapped_clip_is_remapped_onto_its_persisted_file() {
     let mut h = EngineHandlerHarness::new();
     h.set_project_dir(dir.clone());
     h.push_clip(clip(9, ClipSource::open_wav(&take).unwrap()));
-    h.push_clip(clip(10, ClipSource::Memory(pcm(0.1))));
+    h.push_clip(clip(10, ClipSource::memory(pcm(0.1))));
 
     h.persist_clip_wavs();
 
@@ -151,7 +151,7 @@ fn an_existing_clip_wav_is_never_overwritten() {
     transcode_to_wav(&clip_wav(&dir, 5), &pcm(0.9), 48_000).unwrap();
     let mut h = EngineHandlerHarness::new();
     h.set_project_dir(dir.clone());
-    h.push_clip(clip(5, ClipSource::Memory(pcm(0.2))));
+    h.push_clip(clip(5, ClipSource::memory(pcm(0.2))));
 
     h.persist_clip_wavs();
 
@@ -163,7 +163,7 @@ fn an_existing_clip_wav_is_never_overwritten() {
 #[test]
 fn without_a_project_dir_nothing_is_written() {
     let mut h = EngineHandlerHarness::new();
-    h.push_clip(clip(1, ClipSource::Memory(pcm(0.5))));
+    h.push_clip(clip(1, ClipSource::memory(pcm(0.5))));
     h.persist_clip_wavs();
     assert!(h.drain_events().is_empty(), "silent: no event, no error");
     assert!(h.take_clips()[0].source.mapped_path().is_none());

@@ -12,21 +12,17 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use parking_lot::RwLock;
-
 use resonance_audio::test_support::{AutomationSnapshot, SharedState, to_audio_clip};
 use resonance_audio::types::*;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    clips: Arc<RwLock<Vec<AudioClip>>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
 }
 
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        clips: Arc::new(RwLock::new(Vec::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
     }
 }
@@ -40,7 +36,6 @@ fn run_bounce(state: &EngineState) -> AudioEvent {
         "bounced".into(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.clips,
         &state.tempo_map,
         &AutomationSnapshot::default(),
         48_000,
@@ -68,7 +63,7 @@ fn bounce_in_place_refuses_while_transport_playing() {
         other => panic!("expected TrackBounceError, got {other:?}"),
     }
     // The renderer must not have produced a clip.
-    assert!(state.clips.read().is_empty());
+    assert!(state.shared.clips().is_empty());
 }
 
 #[test]

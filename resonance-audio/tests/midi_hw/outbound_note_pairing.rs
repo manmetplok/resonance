@@ -86,7 +86,7 @@ fn run_windows(midi_clips: &[MidiClip], end: u64, step: u64) -> Vec<Msg> {
     while last < end {
         let curr = (last + step).min(end);
         emit_outbound_notes(
-            &tracks, midi_clips, &[], &tempo, SR, last, curr, &mut held, &mut sink,
+            &tracks, midi_clips, &[] as &[AudioClip], &tempo, SR, last, curr, &mut held, &mut sink,
         );
         last = curr;
     }

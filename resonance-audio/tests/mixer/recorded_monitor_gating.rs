@@ -24,7 +24,7 @@ fn take_on(track_id: TrackId, start: u64, frames: usize) -> AudioClip {
         id: 100,
         track_id,
         start_sample: start,
-        source: ClipSource::Memory(vec![0.0; frames * 2]),
+        source: ClipSource::memory(vec![0.0; frames * 2]),
         name: "take".into(),
         trim_start_frames: 0,
         trim_end_frames: 0,
@@ -83,7 +83,7 @@ fn recorded_mode_stays_live_outside_covered_spans() {
     // At/after the take's end.
     assert!(!recorded_monitor_gate(&track, &takes, 12_000, 512));
     // No takes at all — nothing gates.
-    assert!(!recorded_monitor_gate(&track, &[], 5_000, 512));
+    assert!(!recorded_monitor_gate(&track, &[] as &[AudioClip], 5_000, 512));
 }
 
 #[test]
