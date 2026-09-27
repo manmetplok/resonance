@@ -9,6 +9,8 @@
 //! frozen track's content with the baseline its cache was rendered from
 //! after every dispatch.
 
+use resonance_app::compose::messages::{ChordInspectorMsg, MotifSourceKind};
+use resonance_app::compose::ComposeMessage;
 use resonance_app::message::{ArrangementMessage, Message, TrackMessage, TransportMessage};
 use resonance_app::state::FreezeStatus;
 use resonance_app::Resonance;
@@ -43,6 +45,16 @@ fn progression(app: &mut Resonance, section_id: resonance_control::ids::SectionD
 /// A project whose track 10 carries a generated bass part in a 4-bar
 /// section, frozen with that content.
 fn frozen_generated_track() -> (Resonance, Receiver<AudioCommand>, resonance_control::ids::SectionDefinitionId) {
+    frozen_generated_track_with_options(None)
+}
+
+/// [`frozen_generated_track`] with the `generate.part` `options` given
+/// explicitly, so a caller can pick a non-default generator style (e.g.
+/// `{"style": "Motif"}`) while keeping everything else — section, chords,
+/// seed, freeze status — identical.
+fn frozen_generated_track_with_options(
+    options: Option<serde_json::Value>,
+) -> (Resonance, Receiver<AudioCommand>, resonance_control::ids::SectionDefinitionId) {
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     app.test_set_active_project(true);
     app.test_set_project_path(std::path::PathBuf::from("/tmp/freeze-stale-content.rprj"));
@@ -74,7 +86,7 @@ fn frozen_generated_track() -> (Resonance, Receiver<AudioCommand>, resonance_con
             beats_per_chord: None,
             sevenths: None,
             seed: Some(42),
-            options: None,
+            options,
         },
     )
     .result()
@@ -99,9 +111,11 @@ fn frozen_generated_track() -> (Resonance, Receiver<AudioCommand>, resonance_con
 
 /// Play the engine's part: echo every `LoadMidiClipDirect` it was sent
 /// back as `MidiClipCreated`, then let a Tick run the post-dispatch checks.
-fn echo_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
+/// Returns the commands that were drained, so a caller can confirm a
+/// re-derive actually happened (a delete + load pair) rather than assume it.
+fn echo_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) -> Vec<AudioCommand> {
     let loads: Vec<AudioCommand> = rx.try_iter().collect();
-    for cmd in loads {
+    for cmd in loads.clone() {
         // The engine echoes every MIDI delete (a re-derived slot is a
         // delete + load under one id); the delete echo is owed (A-13i).
         if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
@@ -131,6 +145,7 @@ fn echo_clip_loads(app: &mut Resonance, rx: &Receiver<AudioCommand>) {
         }
     }
     let _ = app.update(Message::Tick);
+    loads
 }
 
 fn is_frozen(app: &Resonance) -> bool {
@@ -149,14 +164,49 @@ fn a_mixer_edit_leaves_the_track_frozen() {
     assert!(is_frozen(&app), "volume is not a freeze input");
 }
 
+/// `SetTrackName` was originally assumed to tear a derived clip down and
+/// re-install it (its name embeds the track name), so a rename looked like
+/// a natural exercise for "a re-derive that reproduces the same notes
+/// doesn't read as a change". It doesn't: `TrackMessage::SetTrackName`
+/// (`update/track.rs`) only writes `TrackState::name` and never touches
+/// `compose.derived_clips` or the MIDI clips, so this test used to pass
+/// vacuously — it emitted no engine commands at all and would have stayed
+/// green even with the echo-pending skip in `revalidate_frozen_content`
+/// deleted outright (confirmed by instrumenting the rename and by cutting
+/// that skip; see the FU-A13j field note in `docs/design/A-13-reconcile.md`
+/// §15). Renamed and rewritten to drive an action that genuinely
+/// re-derives: switching a chord-lane's motif source to the kind it
+/// already has. `ChordInspectorMsg::SetMotifSourceKind` (`chord_inspector.rs`)
+/// only writes `def.motif_source` on an actual Generated↔Manual switch —
+/// picking the current kind hits its `_ => false` arm — but it calls
+/// `propagate_motif_change` unconditionally regardless, which re-derives
+/// every Motif-style lane in the section from the same chords, scale and
+/// seed, i.e. produces byte-identical notes.
 #[test]
-fn a_rename_that_rederives_the_same_notes_leaves_the_track_frozen() {
-    let (mut app, rx, _) = frozen_generated_track();
-    // The derived clip's name embeds the track name, so a rename tears the
-    // clip down and re-installs it — with the same notes.
-    let _ = app.update(Message::Track(TrackMessage::SetTrackName(TRACK, "Low end".into())));
-    assert!(is_frozen(&app), "the re-derived clip's echo is still pending");
-    echo_clip_loads(&mut app, &rx);
+fn a_no_op_motif_source_switch_that_rederives_the_same_notes_leaves_the_track_frozen() {
+    let (mut app, rx, section_id) =
+        frozen_generated_track_with_options(Some(serde_json::json!({ "style": "Motif" })));
+    let definition_id: u64 = section_id.into();
+
+    // The section's motif source already defaults to `Generated`; picking
+    // it again is the no-op arm.
+    let _ = app.update(Message::Compose(ComposeMessage::ChordInspector {
+        definition_id,
+        msg: ChordInspectorMsg::SetMotifSourceKind(MotifSourceKind::Generated),
+    }));
+    let loads = echo_clip_loads(&mut app, &rx);
+    assert!(
+        loads
+            .iter()
+            .any(|c| matches!(c, AudioCommand::DeleteMidiClip { .. })),
+        "expected the no-op motif-source switch to tear down the old clip, got {loads:?}"
+    );
+    assert!(
+        loads
+            .iter()
+            .any(|c| matches!(c, AudioCommand::LoadMidiClipDirect { .. })),
+        "expected the no-op motif-source switch to re-install the clip, got {loads:?}"
+    );
     assert!(is_frozen(&app), "same content, still a valid freeze");
 }
 
