@@ -276,9 +276,10 @@ fn input_block(seed: u32) -> Vec<f32> {
 /// master pass, the metronome and the mix meter all run.
 #[test]
 fn playing_blocks_with_loop_seam_are_bit_identical() {
-    // Re-blessed for code review MIX-03: the PDC lines now carry their
-    // tail across the loop seam instead of warming up from silence.
-    const EXPECTED: u64 = 0x17d0_3079_dca4_3989;
+    // Re-blessed for FU-B6a: the feeder bus's first live block now renders
+    // flat at its target gain instead of ramping in from the
+    // construction-time 0 (0x17d0_3079_dca4_3989 → this).
+    const EXPECTED: u64 = 0x2398_b5cf_f7a9_daa0;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(true);
@@ -449,7 +450,10 @@ fn stopped_monitor_blocks_are_bit_identical() {
 /// to the normal mix.
 #[test]
 fn reference_monitor_blocks_are_bit_identical() {
-    const EXPECTED: u64 = 0x062f_20fa_7cba_3b99;
+    // Re-blessed for FU-B6a: the feeder bus's first live block now renders
+    // flat at its target gain instead of ramping in from the
+    // construction-time 0 (0x062f_20fa_7cba_3b99 → this).
+    const EXPECTED: u64 = 0x95f7_6315_fdcf_4bac;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);
@@ -497,7 +501,10 @@ fn audition_blocks_are_bit_identical() {
     // this exact scenario, so deleting the skip path is pinned as a
     // no-op for rendered blocks. Replaces the contended scenario's
     // 0x40ea_d698_e423_5ccb.
-    const EXPECTED: u64 = 0xf1d5_aaa8_7cc5_cb25;
+    // Re-blessed for FU-B6a: the feeder bus's first live block now renders
+    // flat at its target gain instead of ramping in from the
+    // construction-time 0 (0xf1d5_aaa8_7cc5_cb25 → this).
+    const EXPECTED: u64 = 0x01ec_d73b_9f26_15b6;
 
     use std::sync::atomic::Ordering;
     let mut h = harness(false);
