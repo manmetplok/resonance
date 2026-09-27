@@ -81,6 +81,7 @@ master and updates this table. Agents do **not** edit this file.
 | FU-A13g (from A-13i) | Engine `RemoveTrack` drops sub-tracks' plugin instances (no extra echoes; app contract unchanged). Also fixed: non-test `cargo build` broken by FU-A13e/f's ungated harness methods | sonnet + orchestrator | merged | e6bb2fee |
 | FU-A13j (from A-13j) | Undo keeps a derived-map entry only if its clip is mirrored or its echo is in flight at undo time (`pending_derived_echoes(old)`); UPD-05 no longer suspended by an orphan | opus | merged | c7bf238d |
 | FU-A13d (from A-13h) | Re-added plugin after a missing one lands in its engine slot: owed add echoes; `PluginLoadFailed` re-positions later slots | opus | merged | 20ae3c90 |
+| FU-A13i/k (from A-13i/j) | Stale `TrackFxBypassChanged`/`TrackPlaybackSourceChanged` for a removal-owed track ignored (only scalars the engine echoes); undo/redo build the live file once (1.92 → 1.36 ms per round trip, debug) | sonnet | merged | b018127d |
 | FU-D4a (from D-4) | Startup default track sent by the app (`send_startup_default_track`); engine no longer creates one unprompted | sonnet | merged | b14fe4e9 |
 | FU-D7c (from D-7c) | `submit_clip_load` checks `clear_generation` under the clips write lock (echo sent under it too); `LoadClipFromWav`/`LoadTakeClipFromWav` can't land in the next project | sonnet | merged | 04339a6e |
 | FU-A10a (from A-10) | Coalesced undo: track name, drum group name + 5 knobs, vocal theme / line text; `BounceInPlace` → Skip + recorded `BounceInPlaceOffline` | sonnet | merged | a8a5f234 |
