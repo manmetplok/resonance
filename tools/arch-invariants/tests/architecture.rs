@@ -1071,6 +1071,66 @@ fn audio_callback_never_logs() {
     );
 }
 
+/// Epic B's done-when (code review ARCH-02; refactor-intent.md → Epic B):
+/// the audio callback reads the project through the published render
+/// graph (`engine/render_graph.rs`, one wait-free `ArcSwap` load), never
+/// through a lock a control-thread writer can hold. So nothing under
+/// `resonance-audio/src/engine/` or `src/mixer/` names an `RwLock` (which
+/// also covers `HandlerCtx` and the offline `ChunkCtx`), nothing under
+/// `mixer/` `try_read`s, and nothing under `engine/` takes a `.write()`
+/// guard. Doc comments are cut off by `code_lines`, so the modules may
+/// still tell the history. [`ENGINE_WRITE_ALLOWED`] lists the files that
+/// may keep a `.write()` — empty since B-6: the plugin instance lock is a
+/// `Mutex` in `PluginSlot`, not a write guard.
+///
+/// Exercised 2026-09-27: added `let _l = parking_lot::RwLock::new(0);
+/// let _g = _l.write(); let _r = _l.try_read();` to
+/// `resonance-audio/src/mixer/callback/play.rs` (→ `RwLock`, `try_read`)
+/// and the first two to `resonance-audio/src/engine/tracks.rs` (→
+/// `RwLock`, `.write()`) → failed on those four; reverted.
+const ENGINE_WRITE_ALLOWED: &[&str] = &[];
+
+#[test]
+fn engine_and_mixer_take_no_state_lock() {
+    let root = workspace_root();
+    let mut violations = Vec::new();
+    for (dir, forbid_try_read, forbid_write) in [
+        ("resonance-audio/src/engine", false, true),
+        ("resonance-audio/src/mixer", true, false),
+    ] {
+        let mut files = Vec::new();
+        rust_files(&root.join(dir), &mut files);
+        assert!(!files.is_empty(), "{dir} moved? update this test");
+        for file in files {
+            let rel = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            for (n, code) in code_lines(&file) {
+                if code.contains("RwLock") {
+                    violations.push(format!(
+                        "{rel}:{n}: `RwLock` — publish through the render graph (`engine/render_graph.rs`) instead"
+                    ));
+                }
+                if forbid_try_read && code.contains("try_read") {
+                    violations.push(format!(
+                        "{rel}:{n}: `try_read` on the audio path — load the render graph instead"
+                    ));
+                }
+                if forbid_write
+                    && code.contains(".write()")
+                    && !ENGINE_WRITE_ALLOWED.contains(&rel.as_str())
+                {
+                    violations.push(format!(
+                        "{rel}:{n}: `.write()` guard in the engine — edit through `SharedState::edit_*` instead"
+                    ));
+                }
+            }
+        }
+    }
+    report(
+        "ARCH-02 / Epic B: no RwLock in engine/ or mixer/, no try_read in mixer/, no .write() in engine/",
+        &violations,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Error taxonomy (ARCH-05 epic C, C-5): no new `Result<_, String>` in a
 // `pub fn` of resonance-audio or resonance-common.
