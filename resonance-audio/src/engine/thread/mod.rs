@@ -210,21 +210,21 @@ pub(crate) struct HandlerState {
     /// the id allocators beside it: `ClearAll` empties it, and a project
     /// reload starts from an empty park with the orphaned WAV left on disk.
     ///
-    /// Behind an `Arc` — the only field here that is not purely
-    /// engine-thread-local — because the clip-load worker has to be able to
-    /// see it (ba todo #1403): a removal racing a `LoadTakeClipFromWav`
-    /// that is still in flight parks a *claim*, and the worker delivers the
-    /// finished clip into the park rather than into the render's input.
-    /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark) states the
-    /// locking contract that keeps the two in step.
-    pub take_clip_park: Arc<crate::engine::take_park::TakeClipPark>,
+    /// A removal racing a `LoadTakeClipFromWav` that is still in flight
+    /// parks a *claim* (ba todo #1403), and the finished load, applied on
+    /// this thread, is delivered into the park rather than into the
+    /// render's input. Engine-thread only since ARCH-02 B-5 (the load
+    /// worker no longer publishes);
+    /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark) argues the
+    /// ordering.
+    pub take_clip_park: crate::engine::take_park::TakeClipPark,
     /// The live ticket of every audio-clip load still on a worker
     /// (code review FU-A13e): `DeleteClip` withdraws an id's ticket so a
     /// load submitted before it never publishes, whatever order the
-    /// workers finish in. Shared with the load workers, like
+    /// workers finish in. Engine-thread only since ARCH-02 B-5, like
     /// [`Self::take_clip_park`]; see
     /// [`ClipLoadTickets`](crate::engine::clip_loads::ClipLoadTickets).
-    pub clip_load_tickets: Arc<crate::engine::clip_loads::ClipLoadTickets>,
+    pub clip_load_tickets: crate::engine::clip_loads::ClipLoadTickets,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -321,8 +321,8 @@ impl HandlerState {
             reference: super::reference::ReferencePlayer::new(),
             loop_record_session: None,
             take_groups: HashMap::new(),
-            take_clip_park: Arc::new(crate::engine::take_park::TakeClipPark::default()),
-            clip_load_tickets: Arc::default(),
+            take_clip_park: Default::default(),
+            clip_load_tickets: Default::default(),
             automation_lanes: automation::AutomationLanes::new(),
             external_instruments: external_instrument::ExternalInstruments::new(),
             pending_latency_ping: None,
@@ -459,9 +459,23 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     // its own event loop can run a second allocation — so nothing can
     // ever race it for id 1 again.
     loop {
-        match cmd_rx.recv_timeout(std::time::Duration::from_millis(16)) {
-            Ok(AudioCommand::ShutDown) => break,
-            Ok(cmd) => {
+        // Wake for a command, a worker result on the engine inbox (code
+        // review ARCH-02 B-5: a finished clip load, a pitch analysis, a
+        // bounced clip, an offline render's retune caches — see
+        // `engine::internal`), or the 16 ms housekeeping tick.
+        let next = crossbeam_channel::select! {
+            recv(cmd_rx) -> cmd => Some(cmd),
+            recv(ctx.shared.inbox.receiver()) -> msg => {
+                if let Ok(msg) = msg {
+                    super::internal::dispatch_internal(&ctx, &mut state, msg);
+                }
+                None
+            }
+            default(std::time::Duration::from_millis(16)) => None,
+        };
+        match next {
+            Some(Ok(AudioCommand::ShutDown)) => break,
+            Some(Ok(cmd)) => {
                 // Commands that change the track/bus/plugin topology can
                 // change per-chain latency; republish the plugin-delay-
                 // compensation table after they run. Checked before
@@ -472,9 +486,12 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                     plugins::refresh_latency_comp(&ctx, &state.external_instruments);
                 }
             }
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+            Some(Err(crossbeam_channel::RecvError)) => break,
+            None => {}
         }
+        // Everything else the workers posted since, so a burst (a project
+        // load's clip loads) lands in one pass rather than one per wake.
+        super::internal::drain_internal(&ctx, &mut state);
 
         // Service plugin-initiated `clap_host_latency.changed()` /
         // `request_restart()` callbacks: cycle the flagged instances'

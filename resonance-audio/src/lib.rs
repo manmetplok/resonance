@@ -417,7 +417,7 @@ pub use engine::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 /// command boundary (cache store + `ClipPitchDetected` emission, plus the
 /// pure DSP mapping) without spinning up the engine thread.
 #[cfg(feature = "test-internals")]
-pub use engine::{analyze_clip_pitch_in_place, analyze_pitch};
+pub use engine::analyze_pitch;
 
 /// Test surface for the bounce path's MIDI event collection. Exposed so
 /// integration tests can drive the chunk-by-chunk note-event walk

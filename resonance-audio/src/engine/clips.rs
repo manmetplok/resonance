@@ -15,6 +15,7 @@ use crate::types::*;
 
 use resonance_dsp::tempo::{detect_tempo_default, TempoEstimate};
 
+use super::internal::{EngineInternal, LoadedClip};
 use super::thread::{HandlerCtx, HandlerState};
 
 /// How long a clip edit waits for its clip to finish loading before it
@@ -370,9 +371,10 @@ pub(crate) fn handle_split_clip(
 ///   landed later, survived it or was dropped by the second's duplicate
 ///   check. The engine ended with no clip, or with the wrong load's. Now
 ///   the delete withdraws the id's load ticket
-///   ([`ClipLoadTickets`](super::clip_loads::ClipLoadTickets)) under the
-///   same `ctx.clips.write()` the workers publish under, so every load
-///   submitted before it is cancelled and every load after it is not.
+///   ([`ClipLoadTickets`](super::clip_loads::ClipLoadTickets)) on the
+///   engine thread, where every finished load is also applied
+///   ([`apply_clip_loaded`]), so every load submitted before it is
+///   cancelled and every load after it is not.
 /// * **FU-A13f.** A clip whose load never succeeds (missing media) never
 ///   lands, so its parked delete timed out without an echo, and the app's
 ///   `RestoreEchoes` ledger kept owing it forever. Now a delete of an id
@@ -390,11 +392,8 @@ pub(crate) fn handle_delete_clip(ctx: &HandlerCtx, state: &mut HandlerState, cli
         return;
     }
     state.deferred_clip_commands.retain(|d| d.clip_id != clip_id);
-    {
-        let mut clips = ctx.clips.write();
-        state.clip_load_tickets.withdraw(clip_id);
-        clips.retain(|c| c.id != clip_id);
-    }
+    state.clip_load_tickets.withdraw(clip_id);
+    ctx.clips.write().retain(|c| c.id != clip_id);
     let _ = ctx.event_tx.send(AudioEvent::ClipDeleted { clip_id });
     // A delete parked behind a split of this clip lost its split with the
     // retain above.
@@ -643,7 +642,7 @@ pub fn detect_clip_tempo_in_place(
 /// not cosmetic. `ClipImported` is what makes a clip appear in
 /// `Resonance::clips`, and a take clip must not (ba todo #1396) — see
 /// [`AudioCommand::LoadTakeClipFromWav`](crate::types::AudioCommand::LoadTakeClipFromWav).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClipLoadEcho {
     /// Emit `AudioEvent::ClipImported`, so the app mirrors a timeline clip.
     Timeline,
@@ -689,9 +688,9 @@ pub(crate) fn handle_load_clip_from_wav(
 /// the O(n) peak decimation on the undo/redo replay, where every take clip
 /// is already loaded. It cannot be the guarantee, because the load it
 /// guards is asynchronous — two restores in quick succession would both
-/// look at a list the first one's worker has not published into yet. The
-/// binding check is the one in [`submit_clip_load`], under the same write
-/// lock as the push.
+/// look at a list the first one's load has not landed in yet. The binding
+/// check is the one in [`apply_clip_loaded`], in the same engine-thread
+/// step as the push.
 pub(crate) fn handle_load_take_clip_from_wav(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -742,16 +741,16 @@ fn submit_clip_load(
     reserve_clip_id(&mut state.next_clip_id, clip_id);
 
     // The heavy work — `ClipSource::open_wav` (which pre-touches every
-    // page of the mmap), `compute_waveform_peaks` (an O(n) decimation
-    // across the whole sample buffer), and the brief `clips.write()` to
-    // publish — used to run synchronously on the engine thread. Project
-    // load fires one `LoadClipFromWav` per audio clip, so on a project
-    // with many large clips the engine command queue stalled for
-    // hundreds of milliseconds while the audio thread's `clips.try_read`
-    // periodically lost the race and emitted silence. Spawning a
-    // short-lived worker keeps the engine thread free for the next
-    // command and pushes the write lock contention down to the
-    // unavoidable single-element-`push` step.
+    // page of the mmap) and `compute_waveform_peaks` (an O(n) decimation
+    // across the whole sample buffer) — used to run synchronously on the
+    // engine thread. Project load fires one `LoadClipFromWav` per audio
+    // clip, so on a project with many large clips the engine command
+    // queue stalled for hundreds of milliseconds. A worker does it now and
+    // posts the finished clip back ([`EngineInternal::ClipLoaded`]); the
+    // engine thread applies it in [`apply_clip_loaded`] — every check that
+    // decides whether it lands, the publish and the echo, as one
+    // engine-thread step (code review ARCH-02 B-5: only this thread edits
+    // the render graph).
     //
     // Concurrency is bounded by `MAX_CONCURRENT_IMPORTS` worker threads
     // in `state.imports` (shared with the import path). Requests past
@@ -762,31 +761,15 @@ fn submit_clip_load(
     // then missing from the bundle written by the next save. `submit`
     // only enqueues (unbounded channel, lazy worker spawn), so the
     // engine thread still returns immediately regardless of backlog.
-    let clips_arc = Arc::clone(ctx.clips);
-    let thread_event_tx = ctx.event_tx.clone();
+    let shared = Arc::clone(ctx.shared);
     let engine_rate = ctx.sample_rate;
-    // The take-clip park, so the publish below can see a removal that
-    // happened while this load was in flight (ba todo #1403).
-    let park = Arc::clone(&state.take_clip_park);
-    // Project fence (FU-D7c, like UPD-09's pool imports and the freeze
-    // conversions in `settle_frozen_conversions`): `handle_clear_all`
-    // bumps `clear_generation` before it takes `ctx.clips`' write lock to
-    // drain it. Capturing the generation now and re-checking it under the
-    // very same write lock the push and the drain both use means: if a
-    // `ClearAll` landed between submit and here, either its drain already
-    // ran and this load observes the bumped generation (and drops), or
-    // this load's push+send happens first, entirely inside the lock the
-    // drain then blocks on — so the drain still removes it before
-    // `AllCleared` goes out. Either way the app never keeps a clip (or a
-    // `ClipImported`/take-park delivery) that belonged to the project this
-    // load was issued against.
-    let clear_generation = Arc::clone(&state.clear_generation);
-    let generation = clear_generation.load(Ordering::SeqCst);
+    // Project fence (FU-D7c): `handle_clear_all` bumps `clear_generation`.
+    // The load carries the generation it was submitted under, and
+    // `apply_clip_loaded` compares it on this thread — see there.
+    let generation = state.clear_generation.load(Ordering::SeqCst);
     // This load's ticket (FU-A13e): superseded by a later load of the
     // id, withdrawn by a `DeleteClip` — either way it must not publish.
-    // Redeemed under the same write lock the delete withdraws under.
-    let tickets = Arc::clone(&state.clip_load_tickets);
-    let ticket = tickets.issue(clip_id);
+    let ticket = state.clip_load_tickets.issue(clip_id);
 
     let submit_result = state.imports.submit(move || {
         // `open_wav_at_rate` resamples to the engine rate when the
@@ -805,7 +788,7 @@ fn submit_clip_load(
                     track_id,
                     start_sample,
                     source,
-                    name: name.clone(),
+                    name,
                     trim_start_frames,
                     trim_end_frames,
                     fade_in_frames: 0,
@@ -821,101 +804,117 @@ fn submit_clip_load(
                     warp_markers: Vec::new(),
                     tuning_render_cache: None,
                 };
-                {
-                    // The duplicate check that actually binds, taken under
-                    // the same write lock as the push so an id can never be
-                    // pushed twice by two loads racing each other. The
-                    // take-restore path can genuinely issue a second load
-                    // for a clip whose first load is still in flight (an
-                    // undo replay landing on the heels of a project load),
-                    // and a duplicated `AudioClip` would double the take's
-                    // level everywhere the comp reads it. Pinned by
-                    // `loop_record_takes.rs::two_take_clip_loads_racing_each_other_still_leave_one_clip`,
-                    // which dispatches twice with no wait between — the
-                    // case the submit-time early return cannot see.
-                    //
-                    // The timeline path shares this worker: a duplicate
-                    // `LoadClipFromWav` is dropped, and drops its
-                    // `ClipImported` echo with it. Since FU-A13e two loads
-                    // of one id both in flight never get this far — the
-                    // later one's ticket supersedes the earlier's — so this
-                    // only catches a load arriving after the id's clip has
-                    // already landed. The app's reload-in-place is a
-                    // `DeleteClip` first (A-13i), which removes the landed
-                    // clip and cancels any load still in flight.
-                    let mut clips = clips_arc.write();
-                    // Redeemed before any early return, so a load that is
-                    // dropped for another reason still retires its ticket.
-                    let live = tickets.redeem(clip_id, ticket);
-                    // The `ClearAll` fence (FU-D7c): checked under the same
-                    // write lock `handle_clear_all` drains under, so this
-                    // can never land in — or echo into — a project that
-                    // isn't the one this load was submitted against. See
-                    // the comment on `generation` above for why the lock
-                    // makes this race-free rather than best-effort.
-                    if clear_generation.load(Ordering::SeqCst) != generation {
-                        return;
-                    }
-                    // Cancelled by a `DeleteClip`, or superseded by a later
-                    // load of the id (FU-A13e): the delete already echoed,
-                    // and a load that lands after it must not resurrect
-                    // the clip — nor echo a `ClipImported` for it.
-                    if !live {
-                        return;
-                    }
-                    if clips.iter().any(|c| c.id == clip_id) {
-                        return;
-                    }
-                    // The removal interlock, and the second thing this
-                    // lock binds (ba todo #1403). `park_take_clip` makes a
-                    // take removal silent by lifting the recording *out of*
-                    // this list — which parks nothing when the recording is
-                    // still in flight, i.e. exactly here. It therefore
-                    // leaves a claim instead, taken under this same lock,
-                    // and the finished clip goes to the park rather than to
-                    // the render's input: an ungoverned take clip is the
-                    // "deleting a take makes it louder" bug (ba doc #292).
-                    //
-                    // Unconditional, not gated on `echo`: only take clips
-                    // are ever parked, so this is a no-op on the timeline
-                    // path, and leaving it unconditional means no future
-                    // caller can route a load around it.
-                    let Some(clip) = park.deliver(clip) else {
-                        return;
-                    };
-                    clips.push(clip);
-                    // Sent while still holding the write lock: `ClearAll`
-                    // blocks on the same lock to drain, so if this send
-                    // happens at all, it is strictly before `ClearAll` can
-                    // emit `AllCleared` — the app never sees this echo
-                    // arrive after its mirror has already been wiped.
-                    if echo == ClipLoadEcho::Timeline {
-                        let _ = thread_event_tx.send(AudioEvent::ClipImported {
-                            clip_id,
-                            track_id,
-                            start_sample,
-                            duration_samples,
-                            name,
-                            waveform_peaks,
-                        });
-                    }
-                }
+                shared.inbox.post(EngineInternal::ClipLoaded(Box::new(LoadedClip {
+                    clip,
+                    ticket,
+                    generation,
+                    echo,
+                    duration_samples,
+                    waveform_peaks,
+                })));
             }
-            Err(e) => {
-                // Retire the ticket either way; a load already cancelled
-                // by its delete has nobody left to report the failure to.
-                if tickets.redeem(clip_id, ticket) {
-                    let _ = thread_event_tx.send(AudioEvent::Error(EngineError::io(format!(
-                        "Failed to load clip WAV: {e}"
-                    ))));
-                }
-            }
+            Err(e) => shared.inbox.post(EngineInternal::ClipLoadFailed {
+                clip_id,
+                ticket,
+                error: e.to_string(),
+            }),
         }
     });
     if let Err(e) = submit_result {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
             "Failed to spawn clip-load thread: {}",
             e
+        ))));
+    }
+}
+
+/// Apply a clip-load worker's finished clip ([`EngineInternal::ClipLoaded`]).
+/// Engine thread.
+///
+/// Every check that decides whether the load lands runs here, in one
+/// engine-thread step with the publish and the echo. Until ARCH-02 B-5 the
+/// worker made them itself while holding `ctx.clips.write()`, and each
+/// ordering guarantee below came from that lock; now it comes from the
+/// fact that every command that could change the answer (`DeleteClip`,
+/// `ClearAll`, `RemoveTake`, a second load's submit) also runs on this
+/// thread, so it is applied wholly before or wholly after this, never in
+/// the middle:
+///
+/// * **Ticket (FU-A13e).** Redeemed before any early return, so a load
+///   dropped for another reason still retires its ticket. A `DeleteClip`
+///   applied before this withdrew the ticket → dropped, and the delete
+///   already echoed; one applied after it removes the clip this pushed. A
+///   later load of the id superseded the ticket at *its* submit → this
+///   one is dropped and the later one lands — last submitted wins, in
+///   whatever order the workers finish.
+/// * **`ClearAll` fence (FU-D7c).** A `ClearAll` applied before this bumped
+///   `clear_generation` → dropped, no echo. One applied after it drains
+///   the clip this pushed, and its `AllCleared` goes out after this
+///   `ClipImported` (both sent from this thread, in order) — so the app
+///   never keeps a clip, an echo or a take-park delivery from the project
+///   the load was submitted against.
+/// * **Duplicate id.** Two loads of one id both in flight never get this
+///   far (the later ticket supersedes the earlier), so this only catches a
+///   load of an id whose clip already landed; it is dropped, echo and all.
+///   The app's reload-in-place is a `DeleteClip` first (A-13i).
+///   Pinned by `loop_record_takes.rs::two_take_clip_loads_racing_each_other_still_leave_one_clip`.
+/// * **Take park (ba todo #1403).** A `RemoveTake` applied before this,
+///   while the load was in flight, left a claim; the clip goes to the park
+///   rather than the render's input (an ungoverned take clip is the
+///   "deleting a take makes it louder" bug, ba doc #292). Unconditional,
+///   not gated on `echo`: only take clips are ever claimed, so it is a
+///   no-op on the timeline path, and no future caller can route a load
+///   around it.
+pub(crate) fn apply_clip_loaded(ctx: &HandlerCtx, state: &mut HandlerState, loaded: LoadedClip) {
+    let LoadedClip {
+        clip,
+        ticket,
+        generation,
+        echo,
+        duration_samples,
+        waveform_peaks,
+    } = loaded;
+    let clip_id = clip.id;
+    let live = state.clip_load_tickets.redeem(clip_id, ticket);
+    if state.clear_generation.load(Ordering::SeqCst) != generation || !live {
+        return;
+    }
+    if clip_exists(ctx, clip_id) {
+        return;
+    }
+    let Some(clip) = state.take_clip_park.deliver(clip) else {
+        return;
+    };
+    let (track_id, start_sample, name) = (clip.track_id, clip.start_sample, clip.name.clone());
+    ctx.clips.write().push(clip);
+    if echo == ClipLoadEcho::Timeline {
+        let _ = ctx.event_tx.send(AudioEvent::ClipImported {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_samples,
+            name,
+            waveform_peaks,
+        });
+    }
+}
+
+/// A clip-load worker could not open its WAV
+/// ([`EngineInternal::ClipLoadFailed`]). Engine thread.
+///
+/// Retires the ticket either way; the failure is reported only while the
+/// load is still wanted — one already cancelled by its `DeleteClip` (which
+/// echoed) or superseded by a later load has nobody left to report to.
+pub(crate) fn apply_clip_load_failed(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    clip_id: ClipId,
+    ticket: u64,
+    error: String,
+) {
+    if state.clip_load_tickets.redeem(clip_id, ticket) {
+        let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
+            "Failed to load clip WAV: {error}"
         ))));
     }
 }

@@ -18,6 +18,8 @@ use parking_lot::RwLock;
 use crate::types::*;
 
 use super::super::bounce_common::midi_render_range;
+use super::super::internal::EngineInternal;
+use super::super::thread::HandlerCtx;
 use super::super::SharedState;
 use super::render::{
     build_latency_comp, chunk_span, render_chunk, reset_plugins, ChunkCtx, ChunkScratch,
@@ -249,9 +251,11 @@ pub fn to_audio_clip(
         warp_markers: Vec::new(),
         tuning_render_cache: None,
     };
-    clips.write().push(clip);
-
-    let _ = event_tx.send(AudioEvent::TrackBounceCompleted {
+    // The engine thread — the render graph's only writer (code review
+    // ARCH-02 B-5) — adds the clip and then reports `TrackBounceCompleted`
+    // ([`apply_bounced_clip`]), so the app still never hears of a bounce
+    // whose clip the engine does not hold yet.
+    let completed = AudioEvent::TrackBounceCompleted {
         source_track_id,
         target_track_id,
         clip: Some(BouncedClipData {
@@ -261,5 +265,17 @@ pub fn to_audio_clip(
             name,
             waveform_peaks,
         }),
+    };
+    shared.inbox.post(EngineInternal::BouncedClip {
+        clip: Box::new(clip),
+        completed: Box::new(completed),
     });
+}
+
+/// Apply a finished offline bounce-in-place
+/// ([`EngineInternal::BouncedClip`]): add its clip to the timeline, then
+/// emit its `TrackBounceCompleted`. Engine thread.
+pub(crate) fn apply_bounced_clip(ctx: &HandlerCtx, clip: AudioClip, completed: AudioEvent) {
+    ctx.clips.write().push(clip);
+    let _ = ctx.event_tx.send(completed);
 }

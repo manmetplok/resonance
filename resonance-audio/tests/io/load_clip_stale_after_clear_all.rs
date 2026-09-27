@@ -72,7 +72,10 @@ fn a_clip_load_outlived_by_its_project_never_lands_after_clear_all() {
     // Queued after the clear: belongs to the new project and must land.
     engine.load_clip_from_wav(8, 1, 0, current_wav.clone(), "current".into());
 
-    let clips_arc = engine.clips_lock();
+    // Both loads finish and their results are applied on the (harness's)
+    // engine thread, in whatever order — the stale one after the clear.
+    engine.settle_imports(Duration::from_secs(300));
+    let ids = engine.clip_ids();
     let events = engine.finish_and_drain_events(Duration::from_secs(300));
 
     let stale_events: Vec<&AudioEvent> = events
@@ -84,7 +87,6 @@ fn a_clip_load_outlived_by_its_project_never_lands_after_clear_all() {
         "a clip load outlived by its project must never echo ClipImported: {stale_events:?}"
     );
 
-    let ids: Vec<u64> = clips_arc.read().iter().map(|c| c.id).collect();
     assert!(
         !ids.contains(&7),
         "a clip load outlived by its project must never land in the engine's clip list: {ids:?}"

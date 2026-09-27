@@ -54,6 +54,8 @@ pub(crate) fn rcu_tempo<F: FnOnce(&mut TempoMap)>(ctx: &thread::HandlerCtx, f: F
 pub(crate) mod retire;
 pub use retire::Retired;
 
+pub(crate) mod internal;
+
 pub(crate) mod render_graph;
 pub use render_graph::{RenderGraph, RenderGraphSlot};
 
@@ -111,10 +113,10 @@ mod thread;
 pub use thread::test_support::EngineHandlerHarness;
 mod tracks;
 mod transport;
-mod vocal_analysis;
+pub(crate) mod vocal_analysis;
 pub use plugins::affects_latency;
 pub use tracks::set_track_playback_source_in_place;
-pub use vocal_analysis::{analyze_clip_pitch_in_place, analyze_pitch};
+pub use vocal_analysis::analyze_pitch;
 pub mod vocal_render;
 
 /// Shared state between the engine control thread and the audio callback.
@@ -315,6 +317,12 @@ pub struct SharedState {
     /// MIDI clips (B-1), busses and the master chain (B-2) today; the
     /// other project maps move in over B-3…B-5.
     pub graph: render_graph::RenderGraphSlot,
+    /// Worker results waiting for the engine thread to apply them (code
+    /// review ARCH-02 B-5): a finished clip load, a pitch analysis, a
+    /// bounced clip, an offline render's retune caches. Workers post; only
+    /// the engine loop drains — see [`internal`]. The audio thread never
+    /// touches it.
+    pub(crate) inbox: internal::EngineInbox,
     /// Latched true while any chain latency exceeds `MAX_COMP_LATENCY`
     /// (the comp clamp is engaging and alignment for that chain is
     /// degraded). Used to emit the warning once per engagement instead
@@ -538,6 +546,7 @@ impl Default for SharedState {
             plugins_dead_after_reset: parking_lot::Mutex::new(Vec::new()),
             retired: retire::Retired::new(),
             graph: render_graph::RenderGraphSlot::new(),
+            inbox: internal::EngineInbox::default(),
             comp_clamp_engaged: AtomicBool::new(false),
             master_latency_samples: AtomicU64::new(0),
             capture_latency_samples: AtomicU64::new(0),

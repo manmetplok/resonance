@@ -45,6 +45,7 @@ mod stem_export;
 mod wav;
 
 pub use clip::to_audio_clip;
+pub(crate) use clip::apply_bounced_clip;
 pub use freeze::{read_freeze_cache, to_freeze_cache, FreezeError, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use render::{chunk_span, BOUNCE_CHUNK, MIN_CLAP_FRAMES};

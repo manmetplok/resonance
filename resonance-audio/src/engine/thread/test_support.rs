@@ -257,6 +257,19 @@ impl EngineHandlerHarness {
         self.tempo_map.load().bpm
     }
 
+    /// `AudioCommand::AnalyzeClipPitch`, both halves, on the calling
+    /// thread: the worker's analysis
+    /// (`vocal_analysis::analyse_clip_pitch`), then the engine thread's
+    /// application of its result through the real inbox dispatch. The
+    /// handler itself only spawns the worker; this runs what it runs,
+    /// without the thread, so a test needs no wait.
+    pub fn analyze_clip_pitch(&mut self, clip_id: ClipId) {
+        let result = crate::engine::vocal_analysis::analyse_clip_pitch(&self.clips, clip_id, 48_000);
+        if let Some(msg) = result {
+            self.with_ctx(|ctx, state| crate::engine::internal::dispatch_internal(ctx, state, msg));
+        }
+    }
+
     /// Run the real `AudioCommand::PersistClipWavs` handler (FU-V5b).
     pub fn persist_clip_wavs(&mut self) {
         self.with_ctx(|ctx, state| crate::engine::clips::handle_persist_clip_wavs(ctx, state));
@@ -661,17 +674,28 @@ impl EngineHandlerHarness {
         });
     }
 
+    /// Apply every worker result waiting on the engine inbox (a finished
+    /// clip load, a pitch analysis, a bounced clip, retune caches), in
+    /// order, through the real engine-thread handlers — what the engine
+    /// loop does on every pass (code review ARCH-02 B-5: workers post,
+    /// only the engine thread publishes).
+    pub fn apply_worker_results(&mut self) {
+        self.with_ctx(crate::engine::internal::drain_internal);
+    }
+
     /// Block until the engine's clip list holds `expected` clips, or
-    /// `timeout` elapses; reports whether it got there.
+    /// `timeout` elapses; reports whether it got there. Applies worker
+    /// results as they arrive, as the engine loop would.
     ///
     /// Clip loading is handed to a worker (`ImportQueue`) so the control
     /// thread never blocks on an mmap, which means "the command was
     /// dispatched" and "the clip is in the list" are two different moments.
     /// A test that renders without waiting would race the worker and read
     /// silence for reasons that have nothing to do with what it asserts.
-    pub fn wait_for_clips(&self, expected: usize, timeout: std::time::Duration) -> bool {
+    pub fn wait_for_clips(&mut self, expected: usize, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         loop {
+            self.apply_worker_results();
             if self.clips.read().len() >= expected {
                 return true;
             }
@@ -692,6 +716,10 @@ impl EngineHandlerHarness {
     /// dequeued, and a worker sitting in the barrier has finished its
     /// previous job — once every worker is in one, nothing earlier is
     /// still running. Panics after `timeout` (a hang guard, not pacing).
+    ///
+    /// Then applies what the finished jobs posted to the engine inbox
+    /// ([`Self::apply_worker_results`]), so their clips have landed (or
+    /// been dropped) by the time this returns.
     pub fn settle_imports(&mut self, timeout: std::time::Duration) {
         use std::sync::{Condvar, Mutex as StdMutex};
         // (workers arrived, released)
@@ -724,6 +752,8 @@ impl EngineHandlerHarness {
             !wait.timed_out(),
             "clip-import jobs still running after {timeout:?}"
         );
+        drop(g);
+        self.apply_worker_results();
     }
 
     /// From now on, park every job submitted to the clip-import pool
@@ -751,9 +781,11 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| super::dispatch::dispatch(ctx, state, cmd));
     }
 
-    /// One engine-loop pass of the parked-clip-edit replay
-    /// (`clips::poll_deferred_clip_commands`).
+    /// One engine-loop pass: apply the worker results waiting on the
+    /// inbox ([`Self::apply_worker_results`]), then the parked-clip-edit
+    /// replay (`clips::poll_deferred_clip_commands`).
     pub fn poll_deferred_clip_commands(&mut self) {
+        self.apply_worker_results();
         self.with_ctx(crate::engine::clips::poll_deferred_clip_commands);
     }
 
@@ -791,6 +823,12 @@ impl EngineHandlerHarness {
     /// on its own proves nothing about audibility: the clip is what plays.
     pub fn push_clip(&mut self, clip: AudioClip) {
         self.clips.write().push(clip);
+    }
+
+    /// A copy of the engine's clip `clip_id` (cheap: the audio is shared),
+    /// if it holds one.
+    pub fn clip(&self, clip_id: ClipId) -> Option<AudioClip> {
+        self.clips.read().iter().find(|c| c.id == clip_id).cloned()
     }
 
     /// Clip ids in the shared clip list — the render's actual input —
@@ -1022,7 +1060,13 @@ impl EngineHandlerHarness {
     /// Panics if the workers are still running after `timeout`: a safety
     /// net against a wedged worker hanging the suite, not a pacing knob,
     /// so pass something far above the work's worst case.
-    pub fn finish_and_drain_events(self, timeout: std::time::Duration) -> Vec<AudioEvent> {
+    ///
+    /// Worker results already on the engine inbox are applied first; a
+    /// clip load still running when this is called never reaches the
+    /// engine thread (it is dropped with the harness), so a test that
+    /// wants its echo settles the imports first.
+    pub fn finish_and_drain_events(mut self, timeout: std::time::Duration) -> Vec<AudioEvent> {
+        self.apply_worker_results();
         let event_rx = self.event_rx.clone();
         drop(self);
         let deadline = std::time::Instant::now() + timeout;

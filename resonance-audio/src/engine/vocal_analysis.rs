@@ -7,21 +7,26 @@
 //! engine glue that pulls the clip's PCM, maps the DSP outputs into the
 //! `VocalTuning` cache representation, and runs the whole thing on a
 //! short-lived worker thread so the realtime mixer never sees the cost.
+//! The worker only *computes*: it posts the result to the engine thread
+//! ([`EngineInternal::PitchAnalysed`]), which stores it on the clip and
+//! emits the event (code review ARCH-02 B-5 — only the engine thread edits
+//! the render graph).
 
 use std::sync::Arc;
 
-use crossbeam_channel::Sender;
 use parking_lot::RwLock;
 use resonance_dsp::{detect_f0, segment_notes, F0Config, SegmentConfig};
 
 use crate::types::*;
 
+use super::internal::EngineInternal;
 use super::thread::{HandlerCtx, HandlerState};
 
 /// Engine handler for [`AudioCommand::AnalyzeClipPitch`]. Spawns a worker
-/// thread that snapshots the clip's mono mix, runs f0 detection + note
-/// segmentation off the realtime thread, stores the result in the clip's
-/// [`VocalTuning`] cache, and emits `AudioEvent::ClipPitchDetected`.
+/// thread that snapshots the clip's mono mix and runs f0 detection + note
+/// segmentation off the realtime thread ([`analyse_clip_pitch`]); the
+/// result comes back through the engine inbox and is applied by
+/// [`apply_pitch_analysis`].
 ///
 /// `state` is unused today (analysis allocates no engine-thread ids) but
 /// kept in the signature so the handler matches the dispatch convention
@@ -32,13 +37,15 @@ pub(crate) fn handle_analyze_clip_pitch(
     clip_id: ClipId,
 ) {
     let clips_arc = Arc::clone(ctx.clips);
-    let event_tx = ctx.event_tx.clone();
+    let shared = Arc::clone(ctx.shared);
     let sample_rate = ctx.sample_rate;
 
     let spawn_result = std::thread::Builder::new()
         .name("resonance-pitch".into())
         .spawn(move || {
-            analyze_clip_pitch_in_place(&clips_arc, &event_tx, clip_id, sample_rate);
+            if let Some(result) = analyse_clip_pitch(&clips_arc, clip_id, sample_rate) {
+                shared.inbox.post(result);
+            }
         });
     if let Err(e) = spawn_result {
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
@@ -47,38 +54,44 @@ pub(crate) fn handle_analyze_clip_pitch(
     }
 }
 
-/// Analyse the clip with `clip_id` end-to-end: read its mono mix under a
-/// brief read lock, run the DSP off-lock, write the contour/notes into the
-/// clip's [`VocalTuning`] cache, then emit `ClipPitchDetected`.
-///
-/// The clip is looked up twice (before and after the heavy DSP) so the
-/// `clips` write lock is held only for the final store, never across the
-/// detector. A clip deleted while analysis was in flight makes this a
-/// silent no-op — no cache write and no event, mirroring the missing-clip
-/// branch of the other clip handlers.
-pub fn analyze_clip_pitch_in_place(
+/// The worker half: read the clip's mono mix, run the DSP, and return the
+/// [`EngineInternal::PitchAnalysed`] to post. `None` — nothing to post —
+/// when the clip does not exist.
+pub(crate) fn analyse_clip_pitch(
     clips: &RwLock<Vec<AudioClip>>,
-    event_tx: &Sender<AudioEvent>,
     clip_id: ClipId,
     sample_rate: u32,
-) {
-    // Snapshot the mono mix under a short read lock, then drop it so the
-    // mixer is never blocked while the detector runs.
+) -> Option<EngineInternal> {
     let mono = {
         let guard = clips.read();
-        let Some(clip) = guard.iter().find(|c| c.id == clip_id) else {
-            return;
-        };
+        let clip = guard.iter().find(|c| c.id == clip_id)?;
         mono_mix(clip.source.as_frames())
     };
-
     let (contour, notes) = analyze_pitch(&mono, sample_rate);
+    Some(EngineInternal::PitchAnalysed {
+        clip_id,
+        contour,
+        notes,
+    })
+}
 
-    // Store the freshly detected geometry. Re-analysis replaces the
-    // cached contour/notes; any prior per-note edits are dropped along
-    // with the old blobs (the geometry they referenced no longer exists).
+/// The engine half ([`EngineInternal::PitchAnalysed`]): store the freshly
+/// detected geometry on the clip's [`VocalTuning`] cache, then emit
+/// `ClipPitchDetected`. Engine thread.
+///
+/// A clip deleted while the analysis was in flight makes this a silent
+/// no-op — no cache write and no event, mirroring the missing-clip branch
+/// of the other clip handlers. Re-analysis replaces the cached
+/// contour/notes; any prior per-note edits are dropped along with the old
+/// blobs (the geometry they referenced no longer exists).
+pub(crate) fn apply_pitch_analysis(
+    ctx: &HandlerCtx,
+    clip_id: ClipId,
+    contour: Vec<F0Frame>,
+    notes: Vec<NoteBlob>,
+) {
     {
-        let mut guard = clips.write();
+        let mut guard = ctx.clips.write();
         let Some(clip) = guard.iter_mut().find(|c| c.id == clip_id) else {
             return;
         };
@@ -94,7 +107,7 @@ pub fn analyze_clip_pitch_in_place(
         clip.tuning_render_cache = None;
     }
 
-    let _ = event_tx.send(AudioEvent::ClipPitchDetected {
+    let _ = ctx.event_tx.send(AudioEvent::ClipPitchDetected {
         clip_id,
         notes,
         contour,
