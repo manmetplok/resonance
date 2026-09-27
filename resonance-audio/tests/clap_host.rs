@@ -40,3 +40,5 @@ mod plugin_load_failure;
 mod plugin_output_scrub;
 #[path = "clap_host/plugin_rescan.rs"]
 mod plugin_rescan;
+#[path = "clap_host/sub_track_plugin_removal.rs"]
+mod sub_track_plugin_removal;

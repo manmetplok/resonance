@@ -277,39 +277,56 @@ pub(crate) fn handle_create_sub_track(
 }
 
 pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, track_id: TrackId) {
-    // Remove plugins for this track -- extract under write lock, then
-    // drop instances outside the lock so audio callback isn't blocked.
-    let removed_plugins: Vec<_> = {
-        let plugin_ids = ctx
-            .tracks
-            .read()
-            .get(&track_id)
-            .map(|t| t.plugin_chain_snapshot());
-        if let Some(ids) = plugin_ids {
-            let mut plugins_guard = ctx.plugins.write();
-            ids.iter()
-                .filter_map(|pid| plugins_guard.shift_remove(pid))
-                .collect()
-        } else {
-            Vec::new()
-        }
-    };
-    drop(removed_plugins);
-    // Drop the parent track and any sub-tracks fed by it in one pass
-    // under the same write lock.
-    let (removed_sub_ids, removed_tracks): (Vec<TrackId>, Vec<Track>) = {
-        let mut tracks_guard = ctx.tracks.write();
-        let mut removed = Vec::new();
-        removed.extend(tracks_guard.shift_remove(&track_id));
+    // Find every sub-track this parent feeds, and every plugin instance
+    // on the parent AND those sub-tracks -- one flat id list. A parent's
+    // `RemoveTrack` takes its sub-tracks with it (below), and their
+    // plugin chains must go the same way: left out of this list, a
+    // sub-track's instances would never be removed from `ctx.plugins` at
+    // all (no track left to name them from), leaking (never dropped,
+    // never deactivated) past the delete (FU-A13g; the diff-restore path
+    // already got this right by removing each sub-track with its own
+    // `RemoveTrack` before the parent's).
+    let (sub_ids, plugin_ids): (Vec<TrackId>, Vec<PluginInstanceId>) = {
+        let tracks_guard = ctx.tracks.read();
         let sub_ids: Vec<TrackId> = tracks_guard
             .values()
             .filter(|t| matches!(t.sub_track_of, Some((p, _)) if p == track_id))
             .map(|t| t.id)
             .collect();
+        let mut plugin_ids: Vec<PluginInstanceId> = tracks_guard
+            .get(&track_id)
+            .map(|t| t.plugin_chain_snapshot().iter().copied().collect())
+            .unwrap_or_default();
+        for sid in &sub_ids {
+            if let Some(t) = tracks_guard.get(sid) {
+                plugin_ids.extend(t.plugin_chain_snapshot().iter().copied());
+            }
+        }
+        (sub_ids, plugin_ids)
+    };
+    // Remove plugins for this track and its sub-tracks -- extract under
+    // write lock, then drop instances outside the lock so audio callback
+    // isn't blocked. No echo for any of them: a track removal takes its
+    // whole chain silently (`TrackRemoved` below covers it), the same
+    // contract the parent's own plugins already had (ba todo #1311).
+    let removed_plugins: Vec<_> = {
+        let mut plugins_guard = ctx.plugins.write();
+        plugin_ids
+            .iter()
+            .filter_map(|pid| plugins_guard.shift_remove(pid))
+            .collect()
+    };
+    drop(removed_plugins);
+    // Drop the parent track and any sub-tracks fed by it in one pass
+    // under the same write lock.
+    let removed_tracks: Vec<Track> = {
+        let mut tracks_guard = ctx.tracks.write();
+        let mut removed = Vec::new();
+        removed.extend(tracks_guard.shift_remove(&track_id));
         for sid in &sub_ids {
             removed.extend(tracks_guard.shift_remove(sid));
         }
-        (sub_ids, removed)
+        removed
     };
     for track in removed_tracks {
         retire_removed_track(track, &ctx.shared.retired);
@@ -335,7 +352,7 @@ pub(crate) fn handle_remove_track(ctx: &HandlerCtx, state: &mut HandlerState, tr
     state.midi_hw.midi_outputs.remove_track(track_id);
     state.midi_recording.remove(&track_id);
     let _ = ctx.event_tx.send(AudioEvent::TrackRemoved { track_id });
-    for sid in removed_sub_ids {
+    for sid in sub_ids {
         let _ = ctx
             .event_tx
             .send(AudioEvent::TrackRemoved { track_id: sid });
