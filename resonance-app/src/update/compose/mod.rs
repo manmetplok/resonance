@@ -116,7 +116,7 @@ pub(crate) fn install_derived_midi_clip(
     // silently invalidated every cached id whenever anything re-derived
     // the lane, including a track rename (the generated name embeds the
     // track's name, so renaming re-derives).
-    let clip_id = reused.unwrap_or_else(|| r.compose.fresh_derived_clip_id());
+    let clip_id = reused.unwrap_or_else(|| r.media.ids.clips.allocate());
     let _ = r.engine.send(AudioCommand::LoadMidiClipDirect {
         clip_id,
         track_id: clip.track_id,

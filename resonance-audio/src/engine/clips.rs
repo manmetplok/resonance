@@ -129,7 +129,7 @@ pub(crate) fn clip_exists(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
 /// (and emits `EngineErrorKind::Internal`) when the id is already taken,
 /// the same "refuse rather than replace the live entity" shape as
 /// `engine::tracks::reject_if_track_id_in_use`. The app is the only
-/// allocator for this space (`ComposeState::fresh_derived_clip_id`), so a
+/// allocator for this space (`EntityIds::clips` in the app), so a
 /// collision here means a caller bug, not a race to recover from.
 pub(crate) fn reject_if_clip_id_in_use(ctx: &HandlerCtx, clip_id: ClipId) -> bool {
     let taken = {

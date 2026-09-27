@@ -391,9 +391,9 @@ fn apply_midi_clip(
 /// body on every origin.
 ///
 /// Last in `Clips`: reads the audio clips, the section placements
-/// (`Globals`) and the tempo map (`Timeline`), and reserves the derived-id
-/// counter past every audio clip id — after `DerivedClips` set the counter.
-/// Nothing in `Content` or `Tail` reads the map or the counter.
+/// (`Globals`) and the tempo map (`Timeline`). The clip-id counter was
+/// already raised past every audio clip by `DerivedClips` (D-7b).
+/// Nothing in `Content` or `Tail` reads the map.
 pub(crate) struct VocalAudioClips;
 
 impl Reconcile for VocalAudioClips {

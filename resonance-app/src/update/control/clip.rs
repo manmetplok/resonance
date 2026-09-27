@@ -293,7 +293,7 @@ fn place(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
             // so the result is complete before the engine has echoed
             // anything. Routed through `update()` so the placement records
             // its own undo entry, exactly like the import path does.
-            let clip_id = app.compose.fresh_derived_clip_id();
+            let clip_id = app.media.ids.clips.allocate();
             let task = super::run_via_update(
                 app,
                 Message::Pool(PoolMessage::PlacePooledAsset {
@@ -522,7 +522,7 @@ fn split(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         );
     }
 
-    let new_clip_id = app.compose.fresh_derived_clip_id();
+    let new_clip_id = app.media.ids.clips.allocate();
     let task = super::run_via_update(
         app,
         Message::Clip(ClipMessage::SplitClipAt {

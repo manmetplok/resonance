@@ -39,4 +39,4 @@ pub use section::{
     ChordState, EditSectionForm, EntryLength, NewSectionForm, PatternEntry, SectionDefinitionState,
     SectionPlacementState, SelectedLane,
 };
-pub use state::{ComposeState, RailPanelKey, DERIVED_CLIP_ID_BASE};
+pub use state::{ComposeState, RailPanelKey};

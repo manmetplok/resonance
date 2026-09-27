@@ -50,10 +50,11 @@ impl Reconcile for AutomationLanes {
     }
 }
 
-/// The derived-clip map (`(section, placement, track) → ClipId`) and its
-/// id counter, from `ProjectFile::derived_clips` (ARCH-01 A-6), through
+/// The derived-clip map (`(section, placement, track) → ClipId`), from
+/// `ProjectFile::derived_clips` (ARCH-01 A-6), and the raise of the app's
+/// clip-id counter past everything restored (D-7b), through
 /// [`Resonance::restore_derived_clips`]. After the MIDI and audio clips
-/// are restored: it filters against them and reserves the counter past
+/// are restored: it filters against them and raises the counter past
 /// them.
 ///
 /// **The keep-rule depends on the origin.** An entry whose clip the
@@ -68,14 +69,14 @@ impl Reconcile for AutomationLanes {
 /// in, such an entry suspends the UPD-05 freeze check on its track until
 /// the next regenerate replaces it.
 ///
-/// **The counter floor is live state.** `ComposeState::load_from_project`
-/// resets the counter before this runs, so the entry points carry the
-/// live value in [`LiveCarry::derived_counter_floor`](super::LiveCarry)
-/// and an undo never lowers it; a disk load has none.
+/// **The counter is never lowered** (D-7b, `EntityIds::clips`): it lives
+/// outside every restored state, so no origin resets it and none needs a
+/// floor carried across the restore (A-13b's `LiveCarry`, now gone).
+/// This domain only raises it.
 ///
-/// **A disk load scans the bundle.** Derived-range `audio/clip_<id>.wav`
-/// files no loaded clip names (a deleted vocal render a backup still
-/// references) are reserved past too (FU-A6c).
+/// **A disk load scans the bundle.** `audio/clip_<id>.wav` files no loaded
+/// clip names (a deleted vocal render a backup still references) are
+/// reserved past too (FU-A6c).
 ///
 /// A file without the field (saved before A-6) gets the positional
 /// rebuild, which reads the tempo map — hence after `Timeline` on both
@@ -90,14 +91,14 @@ impl Reconcile for DerivedClips {
             (Origin::Undo, Some(old)) => pending_derived_echoes(old),
             _ => HashSet::new(),
         };
-        r.restore_derived_clips(new, &echoes_in_flight, ctx.live.derived_counter_floor);
-        // A disk load also clears the derived-range WAVs in the bundle
-        // that no loaded clip names (FU-A6c). An undo needs no scan: it
-        // never lowers the live counter, which a load or Save As already
-        // reserved past them.
+        r.restore_derived_clips(new, &echoes_in_flight);
+        // A disk load also clears the clip WAVs in the bundle that no
+        // loaded clip names (FU-A6c). An undo needs no scan: the counter
+        // was already raised past them by the load or Save As that pointed
+        // the session at this bundle, and nothing lowers it.
         if ctx.origin == Origin::DiskLoad {
             if let Some(dir) = ctx.project_dir {
-                r.compose.reserve_derived_clip_ids_on_disk(dir);
+                r.seed_clip_ids_on_disk(dir);
             }
         }
     }

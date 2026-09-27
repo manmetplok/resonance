@@ -22,9 +22,7 @@ use super::section::{
 };
 use super::vocal_svs::SvsRenderCache;
 
-/// Starting point for app-allocated derived clip ids; see
-/// [`crate::state::ids`] for the partition it belongs to.
-pub use crate::state::ids::DERIVED_CLIP_ID_BASE;
+use crate::state::ids::CLIP_ID_BASE;
 
 /// Sample tolerance when re-associating a loaded clip with the bar it was
 /// generated for (see [`ComposeState::rebuild_derived_clips`]). Generation
@@ -249,13 +247,6 @@ pub struct ComposeState {
     /// syllable sings. See
     /// [`PronunciationState`](crate::compose::vocal_svs::PronunciationState).
     pub pronunciation: crate::compose::vocal_svs::PronunciationState,
-    /// Monotonic id used when allocating fresh `ClipId`s for derived
-    /// clips. Kept in the high range so it never collides with engine-
-    /// allocated ids coming from `CreateMidiClip`. Not project state: a
-    /// load resets it and reserves past the loaded clips, and an undo
-    /// never lowers it (ARCH-01 A-6), so an id the redo stack still names
-    /// is never re-issued.
-    pub next_derived_clip_id: u64,
     /// Per-vocal-lane bulk lyric buffer. Backs the multi-line text editor
     /// that lets the user type a whole section's lyrics at once. Holds
     /// cursor + selection state so editing isn't reset on each repaint.
@@ -345,7 +336,6 @@ impl Default for ComposeState {
             derived_clips: HashMap::new(),
             vocal_audio: VocalAudioRegistry::default(),
             pronunciation: crate::compose::vocal_svs::PronunciationState::default(),
-            next_derived_clip_id: DERIVED_CLIP_ID_BASE,
             vocal_bulk_lyrics: HashMap::new(),
             expression_curves: HashMap::new(),
             expression_dock: ExpressionDockState::default(),
@@ -434,17 +424,6 @@ impl ComposeState {
         self.expression_curves
             .entry((definition_id, track_id))
             .or_default()
-    }
-
-    /// Allocate a fresh clip id to use with `LoadMidiClipDirect` /
-    /// `LoadClipFromWav`. See [`DERIVED_CLIP_ID_BASE`] for why these live
-    /// in the high range: the engine never moves its own clip counter
-    /// for an id there (FU-A6a), so this counter is the range's only
-    /// allocator and needs no in-use scan.
-    pub fn fresh_derived_clip_id(&mut self) -> ClipId {
-        let id = self.next_derived_clip_id;
-        self.next_derived_clip_id += 1;
-        id
     }
 
     /// The user deleted `clip_id` from the timeline: drop every derived
@@ -694,9 +673,10 @@ impl ComposeState {
                 arrangement: arrangement_from_project(d),
             })
             .collect();
-        // Start each load with an empty derived-clip map and counter;
-        // `Resonance::restore_derived_clips` refills both once the MIDI
-        // clips are in place (an undo keeps its live counter as a floor).
+        // Start each load with an empty derived-clip map;
+        // `Resonance::restore_derived_clips` refills it once the MIDI clips
+        // are in place. The clip-id counter is not compose state and is
+        // never reset (D-7b, `EntityIds::clips`).
         self.derived_clips.clear();
         self.vocal_audio.clear();
         self.pronunciation.clear();
@@ -705,7 +685,6 @@ impl ComposeState {
         // the dock tool state reset.
         self.expression_curves.clear();
         self.expression_dock = ExpressionDockState::default();
-        self.next_derived_clip_id = DERIVED_CLIP_ID_BASE;
         let definitions = &self.definitions;
         self.placements = placements
             .iter()
@@ -747,16 +726,11 @@ impl ComposeState {
         self.next_id = self.next_id.max(max_id);
     }
 
-    /// After loading a project, repopulate `derived_clips` by matching
-    /// loaded MIDI clips to (placement, lane-generator) pairs by start
-    /// sample + track id, and bump `next_derived_clip_id` past every
-    /// clip id that already lives in the derived range.
-    ///
-    /// Without this, the first regenerate after load would allocate a
-    /// fresh id starting at [`DERIVED_CLIP_ID_BASE`] — colliding with a
-    /// derived clip already saved with that id. The engine would then
-    /// hold two clips at the same id, and the second regenerate's
-    /// `DeleteMidiClip` would wipe both (taking out an unrelated lane).
+    /// After loading a project saved before A-6 (no
+    /// `ProjectFile::derived_clips`), repopulate `derived_clips` by
+    /// matching loaded MIDI clips to (placement, lane-generator) pairs by
+    /// start sample + track id. The clip-id counter is raised past the
+    /// loaded clips by the caller, `Resonance::restore_derived_clips`.
     ///
     /// `drum_track_ids` is the set of tracks with `instrument_type ==
     /// InstrumentType::Drum`. **Drum lanes have no `lane_generators`
@@ -770,8 +744,8 @@ impl ComposeState {
     /// orphaned). Claiming drum-track clips here is what makes a
     /// regenerate after a load *replace* rather than *duplicate*.
     ///
-    /// For drum tracks the id must additionally live in the derived range
-    /// ([`DERIVED_CLIP_ID_BASE`]): a hand-drawn clip that merely happens
+    /// For drum tracks the id must additionally sit at or above
+    /// [`CLIP_ID_BASE`]: a hand-drawn clip that merely happens
     /// to start on a section boundary is the user's, and must never be
     /// silently deleted by the next generate. Lane-generator tracks keep
     /// their historical name-free, range-free rule.
@@ -796,7 +770,7 @@ impl ComposeState {
                 continue;
             };
             let is_generated_drum_clip =
-                drum_track_ids.contains(&clip.track_id) && clip.id >= DERIVED_CLIP_ID_BASE;
+                drum_track_ids.contains(&clip.track_id) && clip.id >= CLIP_ID_BASE;
             let entry = self.placements.iter().find_map(|p| {
                 if p.start_bar != start_bar {
                     return None;
@@ -812,8 +786,6 @@ impl ComposeState {
                     .insert((def_id, placement_id, clip.track_id), clip.id);
             }
         }
-
-        self.reserve_derived_clip_ids(midi_clips.iter().map(|c| c.id));
     }
 
     /// `derived_clips` in its file form (`ProjectFile::derived_clips`):
@@ -854,54 +826,6 @@ impl ComposeState {
             .collect()
     }
 
-    /// Bump `next_derived_clip_id` past every id in `ids` that lives in
-    /// the derived range, so a later allocation cannot collide with a
-    /// clip that already exists.
-    ///
-    /// Must be fed **every** kind of derived clip, not just MIDI. The
-    /// SVS-rendered vocal *audio* clips draw from the same counter (see
-    /// `fresh_derived_clip_id`), and for a while only the MIDI clips
-    /// were counted: after a load the allocator happily re-issued the id
-    /// of a live vocal audio clip, so one id was simultaneously a MIDI
-    /// clip on one track and an audio clip on another, and a client
-    /// holding an id across a render silently addressed the wrong object
-    /// — or one of a different type (ba doc #271 V5).
-    pub(crate) fn reserve_derived_clip_ids(&mut self, ids: impl Iterator<Item = ClipId>) {
-        let max_used = ids.filter(|id| *id >= DERIVED_CLIP_ID_BASE).max();
-        if let Some(m) = max_used {
-            self.next_derived_clip_id = self.next_derived_clip_id.max(m.saturating_add(1));
-        }
-    }
-
-    /// Reserve the counter past every `audio/clip_<id>.wav` in the
-    /// derived range under the project dir `dir` (code review FU-A6c).
-    ///
-    /// A vocal render's WAV is `clip_<id>.wav` with a derived id, and it
-    /// outlives its clip: a backup, the autosave or an older undo state
-    /// can still name it after the clip is gone from the saved file. The
-    /// counter is reset on every load and reserved only past the file's
-    /// clips, so without this a reopen re-issued such an id and the next
-    /// render overwrote the WAV (STATE-12 for the derived range). The
-    /// engine's STATE-08 scan covers the ids below the range and skips
-    /// this one since FU-A6a, because the app is its only allocator.
-    ///
-    /// Not persisted in `ProjectFile`: a monotonic value there would break
-    /// the undo fixed point (A-6 §3). A missing or unreadable `audio/`
-    /// reserves nothing.
-    pub(crate) fn reserve_derived_clip_ids_on_disk(&mut self, dir: &std::path::Path) {
-        let Ok(entries) = std::fs::read_dir(dir.join("audio")) else {
-            return;
-        };
-        self.reserve_derived_clip_ids(entries.flatten().filter_map(|e| {
-            let name = e.file_name();
-            let digits = name.to_str()?.strip_prefix("clip_")?.strip_suffix(".wav")?;
-            if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-                return None;
-            }
-            digits.parse::<ClipId>().ok()
-        }));
-    }
-
     /// Counterpart of [`rebuild_derived_clips`] for the SVS-rendered
     /// audio clips that sit on `TrackType::Vocal` tracks. Audio clips
     /// land in `r.clips` after project load with no marker for "this
@@ -923,11 +847,6 @@ impl ComposeState {
         tempo_map: &resonance_audio::types::TempoMap,
     ) {
         self.vocal_audio.clips.clear();
-
-        // Reserve before the track filter below: an audio clip in the
-        // derived range must never be re-issued, whether or not this
-        // rebuild claims it as a vocal lane's clip.
-        self.reserve_derived_clip_ids(audio_clips.iter().map(|c| c.id));
 
         for clip in audio_clips {
             if !vocal_track_ids.contains(&clip.track_id) {

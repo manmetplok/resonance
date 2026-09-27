@@ -585,7 +585,7 @@ pub(crate) fn create_clip_with_notes(
         .max()
         .unwrap_or(0);
     let duration_ticks = whole_bars_ticks(app, start_sample, length_ticks);
-    let clip_id = app.compose.fresh_derived_clip_id();
+    let clip_id = app.media.ids.clips.allocate();
     let create = app.update(Message::MidiClip(MidiClipMessage::CreateEmptyClip {
         clip_id,
         track_id,

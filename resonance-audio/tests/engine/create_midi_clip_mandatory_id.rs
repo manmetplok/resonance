@@ -1,6 +1,6 @@
 //! D-7c: `AudioCommand::CreateMidiClip` takes a mandatory `clip_id` — the
-//! app allocates it (`ComposeState::fresh_derived_clip_id`, the general
-//! clip allocator) and the engine no longer draws one from `next_clip_id`
+//! app allocates it (`EntityIds::clips`, the app's one clip allocator
+//! since D-7b) and the engine no longer draws one from `next_clip_id`
 //! for this command. What the engine still owes the app is refusing a
 //! collision instead of silently replacing the live clip — the same shape
 //! as `bus_id_duplicate_rejected.rs` (ARCH-04 D-3) and

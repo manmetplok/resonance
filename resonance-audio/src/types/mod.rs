@@ -54,11 +54,11 @@ pub type SendId = u64;
 /// the project pool and may back zero, one, or many clips.
 pub type AssetId = u64;
 
-/// First clip id the app allocates itself — the clips it derives from
-/// chords, drum patterns and vocal renders, and the other clips it must
-/// name before the engine echoes (`ComposeState::fresh_derived_clip_id`).
-/// Engine clips (GUI-drawn MIDI clips, recordings, imports) count up from
-/// 1, and every path that hands the engine a concrete clip id
+/// First clip id the app allocates itself — every clip it names (drawn,
+/// derived, imported, split, bounce targets, vocal renders), from its one
+/// clip allocator (`EntityIds::clips` in `resonance-app`, whose name for
+/// this value is `CLIP_ID_BASE` since D-7b). Engine clips (recordings,
+/// take passes) count up from 1 until D-7d, and every path that hands the engine a concrete clip id
 /// (`LoadMidiClipDirect`, `LoadClipFromWav`, the take restore, the
 /// STATE-08 `audio/clip_<id>.wav` scan) bumps `next_clip_id` only for ids
 /// *below* this base, as for tracks. Before that rule (FU-A6a) the first

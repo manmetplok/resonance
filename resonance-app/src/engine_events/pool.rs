@@ -195,7 +195,7 @@ fn place_clip(
     peaks: Vec<(f32, f32)>,
     track_id: TrackId,
 ) -> ClipId {
-    let clip_id = r.compose.fresh_derived_clip_id();
+    let clip_id = r.media.ids.clips.allocate();
     place_clip_with_id(
         r,
         clip_id,

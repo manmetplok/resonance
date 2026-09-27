@@ -73,7 +73,7 @@ pub(super) fn handle_vocal_audio_ready(
             unlink_superseded_take(&old_path, installed);
         }
 
-        let audio_clip_id = r.compose.fresh_derived_clip_id();
+        let audio_clip_id = r.media.ids.clips.allocate();
         let _ = r.engine.send(AudioCommand::LoadClipFromWav {
             clip_id: audio_clip_id,
             track_id,

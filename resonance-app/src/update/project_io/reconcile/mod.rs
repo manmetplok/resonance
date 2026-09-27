@@ -72,32 +72,6 @@ pub struct ReconcileCtx<'a> {
     /// (`LoadedProject::plugin_states`), which the `ProjectFile` does not
     /// carry either. Read by the entity domains' plugin chains.
     pub plugin_states: &'a HashMap<PluginInstanceId, Arc<[u8]>>,
-    /// Live state an undo keeps, captured by the entry point before
-    /// anything is restored.
-    pub live: LiveCarry,
-}
-
-/// Live state an undo/redo restore keeps but the restore itself would
-/// overwrite before the domain that needs it runs (ARCH-01 A-13b). The
-/// undo captures it before anything is restored (`ComposeSections` resets
-/// the derived counter) and hands it to every domain through the ctx.
-///
-/// Live state a restore does *not* overwrite before its domain runs stays
-/// in `Resonance` and is read there under the origin (the freeze statuses:
-/// nothing touches them before `Freeze`).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct LiveCarry {
-    /// The derived-clip id counter before the restore, which an undo never
-    /// lowers (ARCH-01 A-6). `None` on a disk load.
-    pub derived_counter_floor: Option<u64>,
-}
-
-impl LiveCarry {
-    /// The derived-counter floor for a restore of `origin`: the live
-    /// counter on an undo, none on a disk load.
-    pub(crate) fn derived_counter_floor(r: &Resonance, origin: Origin) -> Option<u64> {
-        origin.is_undo().then_some(r.compose.next_derived_clip_id)
-    }
 }
 
 /// One project domain's restore, shared by every [`Origin`].
