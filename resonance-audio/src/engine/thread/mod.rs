@@ -201,6 +201,13 @@ pub(crate) struct HandlerState {
     /// [`TakeClipPark`](crate::engine::take_park::TakeClipPark) states the
     /// locking contract that keeps the two in step.
     pub take_clip_park: Arc<crate::engine::take_park::TakeClipPark>,
+    /// The live ticket of every audio-clip load still on a worker
+    /// (code review FU-A13e): `DeleteClip` withdraws an id's ticket so a
+    /// load submitted before it never publishes, whatever order the
+    /// workers finish in. Shared with the load workers, like
+    /// [`Self::take_clip_park`]; see
+    /// [`ClipLoadTickets`](crate::engine::clip_loads::ClipLoadTickets).
+    pub clip_load_tickets: Arc<crate::engine::clip_loads::ClipLoadTickets>,
     /// Parameter-automation lanes, one per [`AutomationTarget`]. Held
     /// engine-thread-local; written by the `SetAutomationLane` /
     /// `ClearAutomationLane` / `SetAutomationReadEnabled` handlers.
@@ -298,6 +305,7 @@ impl HandlerState {
             loop_record_session: None,
             take_groups: HashMap::new(),
             take_clip_park: Arc::new(crate::engine::take_park::TakeClipPark::default()),
+            clip_load_tickets: Arc::default(),
             automation_lanes: automation::AutomationLanes::new(),
             external_instruments: external_instrument::ExternalInstruments::new(),
             pending_latency_ping: None,

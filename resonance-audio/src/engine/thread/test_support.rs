@@ -657,6 +657,50 @@ impl EngineHandlerHarness {
         );
     }
 
+    /// From now on, park every job submitted to the clip-import pool
+    /// (clip loads, pool imports) instead of running it; hand them over
+    /// with [`Self::take_held_imports`]. For pinning a completion order
+    /// the real pool would only produce by chance (FU-A13e). Do not mix
+    /// with [`Self::settle_imports`], whose barrier jobs would be held too.
+    pub fn hold_imports(&mut self) {
+        self.state.imports.hold();
+    }
+
+    /// The jobs parked since [`Self::hold_imports`] (or the last call), in
+    /// submission order. Calling one runs that worker job to completion on
+    /// the calling thread — publish, echo and all.
+    pub fn take_held_imports(&mut self) -> Vec<Box<dyn FnOnce() + Send + 'static>> {
+        self.state.imports.take_held()
+    }
+
+    /// Run `cmd` through the engine thread's real top-level dispatch — the
+    /// same routing, load-race deferral (ba doc #276 BUG 1) and handler
+    /// the live engine gives it.
+    pub fn dispatch(&mut self, cmd: AudioCommand) {
+        self.with_ctx(|ctx, state| super::dispatch::dispatch(ctx, state, cmd));
+    }
+
+    /// One engine-loop pass of the parked-clip-edit replay
+    /// (`clips::poll_deferred_clip_commands`).
+    pub fn poll_deferred_clip_commands(&mut self) {
+        self.with_ctx(crate::engine::clips::poll_deferred_clip_commands);
+    }
+
+    /// How many clip edits are parked waiting for their clip.
+    pub fn deferred_clip_command_count(&self) -> usize {
+        self.state.deferred_clip_commands.len()
+    }
+
+    /// Frame count of each audio clip in the engine's list, by id, in list
+    /// order — enough to tell two loads of one id from different WAVs apart.
+    pub fn clip_frame_counts(&self) -> Vec<(ClipId, u64)> {
+        self.clips
+            .read()
+            .iter()
+            .map(|c| (c.id, c.source.frame_count()))
+            .collect()
+    }
+
     /// Move the engine's audio clips out of the harness, for handing to a
     /// renderer.
     ///
