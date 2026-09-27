@@ -99,6 +99,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent A-13i (ARCH-01) | Diff-path add/remove of tracks (sub-tracks, type change) + clips; `clip_removals`; per-track fresh/kept; gate always true — no undo takes `ClearAll` | opus | merged | c630788a |
 | refactor-intent A-13j (ARCH-01) | Undo `ClearAll` fallback deleted; one `reconcile_all` (DiskLoad / Undo); −416 net lines. **Epic A done** (all five done-when checks verified) | opus | merged | 423ed8c1 |
 | refactor-intent A-8 (ARCH-09) | A9-3 cheap half: `PartialEq` on ProjectFile tree; gesture check 677 → ~287 µs | sonnet | merged | cc2fd3b4 |
+| refactor-intent A-9 (ARCH-09) | `MidiClipState.notes` / `LoadedProject.midi_notes` as `Arc<Vec<MidiNote>>`; snapshots share unedited clips' notes; `ptr_eq` fast paths. **ARCH-09 done** (A-14 skipped) | sonnet | merged | 7f07712f |
 | refactor-intent A-10 (ARCH-06) | A6-4 exhaustive `undo_action` per enum + invariant; bounce-dialog / drum-manager UI variants Record → Skip | opus | merged | fd8a3c6e |
 | refactor-intent A-12a (ARCH-06) | A6-2 batch 1: PluginCatalog, MidiDevices, Banners, InputDevices; `Resonance` 90 → 79 fields | sonnet | merged | 62086b6b |
 | refactor-intent A-12b (ARCH-06) | A6-2 batch 2: PresetState (8), ModalState (7); `Resonance` 79 → 66 fields | sonnet | merged | 7c9af9de |
@@ -1975,7 +1976,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Fix the `latency.rs` header to describe the `clap_host_latency.changed` path.
 - **Verification / done-when:** `grep -l 'wayland-plugin-gui' plugins/*/Cargo.toml` empty; `resonance-plugin/Cargo.toml` has no `iced` dependency; `grep -n "doesn't implement" resonance-audio/src/latency.rs` empty.
 
-### [ ] ARCH-09 — (partial: A9-1/A9-2, A-8 PartialEq on ProjectFile; A-9 `Arc<Vec<MidiNote>>` in progress; A-14 delta snapshots judged not worth it) Undo snapshots deep-copy the whole project per edit
+### [x] ARCH-09 — (done: A9-1/A9-2, A-8 PartialEq, A-9 Arc notes; A-14 delta snapshots judged not worth it) Undo snapshots deep-copy the whole project per edit
 - **Severity:** low
 - **Category:** modularity
 - **Location:** `resonance-app/src/undo/snapshot.rs:178-230` (`snapshot_for_undo` calls `build_project_file` and clones every MIDI note vec, automation lane, chord track, and plugin state blob), `resonance-app/src/undo/history.rs:68` (capacity 200 via `resonance_audio::DEFAULT_HISTORY_CAPACITY`, oddly owned by the audio crate at `resonance-audio/src/limits.rs:60`).
