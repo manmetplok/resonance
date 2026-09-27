@@ -69,7 +69,12 @@ impl MidiClipMessage {
 pub fn handle(r: &mut Resonance, m: MidiClipMessage) -> Task<Message> {
     match m {
         MidiClipMessage::DeleteMidiClip(id) => {
-            let _ = r.engine.send(AudioCommand::DeleteMidiClip { clip_id: id });
+            // Mirror the delete now, not on the `MidiClipDeleted` echo, so
+            // an undo pressed before the echo lands sees it (STATE-10
+            // shape, ARCH-01 FU-A13h). The echo is owed, so a late one
+            // cannot drop a clip an undo re-added under this id (A-13i).
+            crate::engine_events::midi::send_mirrored_delete(r, id);
+            crate::engine_events::midi::clip_deleted(r, id);
             r.compose.forget_deleted_derived_clip(id);
             if r.ui.interaction.selected_midi_clip == Some(id) {
                 r.ui.interaction.selected_midi_clip = None;

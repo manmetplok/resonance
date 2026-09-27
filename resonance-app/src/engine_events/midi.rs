@@ -89,7 +89,10 @@ pub(super) fn clip_deleted_echo(r: &mut Resonance, clip_id: ClipId) {
     clip_deleted(r, clip_id);
 }
 
-pub(super) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
+/// Mirror a MIDI clip's deletion: the clip and its lyric side-table entry.
+/// Called by the live delete at once (STATE-10 shape, FU-A13h) and by
+/// [`clip_deleted_echo`] for a removal nobody mirrored yet.
+pub(crate) fn clip_deleted(r: &mut Resonance, clip_id: ClipId) {
     r.midi_clips.retain(|c| c.id != clip_id);
     // Drop the lyric side-table entry — keeping it would only leak
     // memory and risk collisions if a future clip is allocated the

@@ -64,10 +64,17 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         PluginMessage::RemovePluginFromTrack(track_id, instance_id) => {
+            // Mirror the removal now, not on the `PluginRemoved` echo, so
+            // an undo pressed before the echo lands sees it (STATE-10
+            // shape, ARCH-01 FU-A13c). The echo is owed, so a late one
+            // cannot drop an instance an undo re-added under this id
+            // (A-13h).
             let _ = r.engine.send(AudioCommand::RemovePlugin {
                 track_id,
                 instance_id,
             });
+            r.io.restore_echoes.expect_plugin_removed(instance_id);
+            crate::engine_events::plugins::track_removed(r, track_id, instance_id);
         }
         PluginMessage::MovePluginInTrack {
             track_id,

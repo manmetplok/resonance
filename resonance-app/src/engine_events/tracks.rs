@@ -381,12 +381,21 @@ pub(super) fn bus_added(r: &mut Resonance, bus_id: BusId, name: String) {
     r.ui.view_caches.rebuild_output(&r.registry.busses);
 }
 
-pub(super) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
-    // A diff restore's removal, already mirrored — and the bus may by now
-    // be one a later restore re-added under the same id (ARCH-01 A-13h).
+/// The `BusRemoved` echo. Swallowed when a diff restore or a live delete
+/// already mirrored it — the id may by now be a bus a later restore
+/// re-added (ARCH-01 A-13h) — mirrored otherwise.
+pub(super) fn bus_removed_echo(r: &mut Resonance, bus_id: BusId) {
     if r.io.restore_echoes.settle_bus_removed(bus_id) {
         return;
     }
+    bus_removed(r, bus_id);
+}
+
+/// Mirror a bus's removal: its plugin chain, sends and key routes,
+/// selection, and the tracks it fed falling back to master. Called by the
+/// live delete at once (STATE-10 shape, FU-A13c) and by [`bus_removed_echo`]
+/// for a removal nobody mirrored yet.
+pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     // A bus can be either end of a send edge, so drop both directions.
     for send_id in r.aux.drop_sends_touching_bus(bus_id) {
         let _ = r.engine.send(AudioCommand::RemoveAuxSend { send_id });

@@ -1197,6 +1197,32 @@ fn a_bus_restore_survives_the_previous_restores_late_echoes() {
     settle(&mut f, late, &s0, "undo bus add, then three restores' echoes");
 }
 
+/// STATE-10 on the diff path (FU-A13c): a live bus delete mirrors at once
+/// and owes its `BusRemoved` echo, so an undo pressed before that echo
+/// re-adds the bus under its id and the late echo must not remove it
+/// again.
+#[test]
+fn undoing_a_bus_delete_before_its_echo_keeps_the_bus() {
+    let mut f = fixture("bus-delete-early-undo");
+    let ids = bus_ids(&f.app);
+    let s1 = edit(&mut f, Message::Bus(BusMessage::AddBus));
+    let bus = bus_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the add landed a bus");
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Bus(BusMessage::RemoveBus(bus)));
+    assert!(
+        !bus_ids(&f.app).contains(&bus),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s1, "undo bus delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s1, "the delete's echo, then the undo's");
+    assert!(bus_ids(&f.app).contains(&bus));
+}
+
 // ---------------------------------------------------------------------------
 // Plugin instances on a track, a bus and the master (A-13h)
 // ---------------------------------------------------------------------------
@@ -1560,6 +1586,48 @@ fn a_re_added_plugins_params_follow_a_second_restore_before_its_echo() {
     late.extend(step_lands_on(&mut f, Message::Undo, &turned_up, "undo remove"));
     late.extend(step_lands_on(&mut f, Message::Undo, &added, "undo param"));
     settle(&mut f, late, &added, "undo remove, undo param, then the echoes");
+}
+
+/// STATE-10 on the diff path (FU-A13c): a live plugin delete (track, bus
+/// or master chain) mirrors at once and owes its `*PluginRemoved` echo, so
+/// an undo pressed before that echo re-adds the instance under its id and
+/// the late echo must not remove it again.
+fn plugin_delete_before_echo_keeps_the_plugin(tag: &str, chain: TestChain) {
+    let mut f = fixture(tag);
+    let s0 = edit(&mut f, add_to(chain, scanned("eq")));
+    let eq = *chain_ids(&f.app, chain).last().expect("the EQ landed");
+    let _ = drain(&f.rx);
+    let _ = f.app.update(remove_from(chain, eq));
+    assert!(
+        !chain_ids(&f.app, chain).contains(&eq),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo plugin delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s0, "the delete's echo, then the undo's");
+    assert!(chain_ids(&f.app, chain).contains(&eq));
+}
+
+#[test]
+fn undoing_a_track_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin(
+        "track-plugin-delete-early-undo",
+        TestChain::Track(AUDIO_TRACK),
+    );
+}
+
+#[test]
+fn undoing_a_bus_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin(
+        "bus-plugin-delete-early-undo",
+        TestChain::Bus(DRUM_BUS),
+    );
+}
+
+#[test]
+fn undoing_a_master_plugin_delete_before_its_echo_keeps_the_plugin() {
+    plugin_delete_before_echo_keeps_the_plugin("master-plugin-delete-early-undo", TestChain::Master);
 }
 
 // ---------------------------------------------------------------------------
@@ -2370,6 +2438,31 @@ fn undoing_a_clip_delete_before_its_echo_keeps_the_clip() {
     let late: Vec<_> = delete.into_iter().chain(undo).collect();
     settle(&mut f, late, &s0, "the delete's echo, then the undo's");
     assert!(audio_clip_ids(&f.app).contains(&AUDIO_CLIP));
+}
+
+/// FU-A13h: unlike the audio-clip GUI delete (STATE-10), the GUI MIDI-clip
+/// delete used to mirror only on the `MidiClipDeleted` echo — an undo
+/// pressed before that echo saw a mirror that still held the clip (a
+/// no-op restore) and the late echo then deleted it out from under the
+/// undo. Mirroring at once and owing the echo (as the audio-clip delete
+/// does) fixes it.
+#[test]
+fn undoing_a_midi_clip_delete_before_its_echo_keeps_the_clip() {
+    let mut f = fixture("midi-clip-delete-early-undo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let _ = drain(&f.rx);
+    let _ = f
+        .app
+        .update(Message::MidiClip(MidiClipMessage::DeleteMidiClip(BASS_CLIP)));
+    assert!(
+        !midi_clip_ids(&f.app).contains(&BASS_CLIP),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo MIDI clip delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s0, "the delete's echo, then the undo's");
+    assert!(midi_clip_ids(&f.app).contains(&BASS_CLIP));
 }
 
 /// A kept MIDI clip whose notes changed is reloaded under its id
