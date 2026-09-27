@@ -337,7 +337,12 @@ pub(super) fn render_chunk(
     let plugins_guard = ctx.plugins.read();
 
     let active_busses = graph.busses.len().min(scratch.bus_bufs.len());
-    let any_solo = any_top_level_solo(tracks_guard.values().map(|t| &**t));
+    // Snapshot solo once (FU-B3a): a bounce can run concurrently with live
+    // playback, so the control thread can flip a track's solo mid-chunk.
+    // `any_solo` and each track's own flag read later in `track_silenced`
+    // must come from this one scan, or the export can render an all-silent
+    // chunk the same way the live callback could.
+    let any_solo = snapshot_top_level_solo(tracks_guard.values().map(|t| &**t));
 
     // Aux-send snapshot: the offline bounce taps + sums sends identically
     // to the live path so a bounced/exported WAV matches playback.

@@ -440,14 +440,16 @@ fn audible_track_edits_under_render_never_skip_a_block() {
             edits
         })
     };
-    // Not `render_blocks`: a solo flip can land between the block's
-    // `any_solo` scan and a track's own `soloed()` read, so a block may
-    // legitimately ramp everything toward silence — that is the live-state
-    // race the atomics always had, not a dropped block. The skip counter
-    // below is what tells a dropped block apart.
-    for _ in 0..BUS_BLOCKS {
-        h.render();
-    }
+    // `render_blocks` (FU-B3a): a solo flip landing between the block's
+    // `any_solo` scan and track 1's own disposition used to be able to
+    // silence a block outright — the scan and the later per-track read
+    // were two independent atomic loads. Both now come from the one
+    // snapshot `RenderStrategy::track_disposition` latches per block (see
+    // `Track::block_soloed`), so track 1 — the only track solo ever lands
+    // on here — is guaranteed audible in every block, exactly as
+    // `render_blocks` asserts. See `solo_race.rs` for the dedicated
+    // regression test.
+    render_blocks(&mut h);
     stop.store(true, Ordering::Release);
     let edits = editor.join().expect("editor");
 

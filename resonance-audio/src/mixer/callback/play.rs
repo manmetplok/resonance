@@ -10,7 +10,7 @@ use crate::cycle_load::{try_read_counted, StateMap};
 use crate::mixer::common::{advance_playhead_silent, commit_playhead, panic_instrument_tracks};
 use crate::mixer::midi_events::collect_midi_events;
 use crate::mixer::render_core::BlockInputs;
-use crate::types::{any_top_level_solo, MidiClip, PendingNoteEvent, TempoMap};
+use crate::types::{snapshot_top_level_solo, MidiClip, PendingNoteEvent, TempoMap};
 
 use super::context::{BlockTiming, CallbackInputs, CallbackScratch, MonitorRead};
 use super::master_pass::{run_master_passes, MasterTail};
@@ -148,7 +148,10 @@ pub(super) fn render_playing_block(
         plugins: &plugins_guard,
         tempo_map: timing.map,
         sample_rate: inputs.sample_rate,
-        any_solo: any_top_level_solo(tracks.values().map(|t| &**t)),
+        // Snapshot solo once for the whole block (FU-B3a): every later
+        // per-track check reads `block_soloed()`, latched by this same
+        // scan, instead of re-reading `soloed()` against a stale `any_solo`.
+        any_solo: snapshot_top_level_solo(tracks.values().map(|t| &**t)),
         active_busses,
         aux_sends: &aux_guard,
         sidechain_routes: &sidechain_guard,
