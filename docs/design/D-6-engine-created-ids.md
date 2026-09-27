@@ -471,6 +471,21 @@ D-7c, D-7d and D-7e.
 
 ---
 
+### 7a. Decisions (user, 2026-09-27)
+
+1. **Clip names:** per-track numbering. The engine sends a bare kind
+   ("Recording" / "Take" / "MIDI Take"); the app numbers per track
+   ("Recording 3"). Raw ids never appear in names.
+2. **Clip counter:** never reset — not by undo, `ClearAll` or a disk load. A
+   second project in the same session simply starts at higher ids.
+3. **Record start with no ids left:** roll without recording (today's
+   input-stream-failure behaviour) with an error banner.
+4. **Grant sizes:** fixed — 1024 clip ids (refill below 512), 64 take-group
+   ids (refill below 32).
+5. **Live MIDI on plain Play:** each captured take records one undo entry of
+   its own, like a recorded take (§8's "live MIDI records no undo entry" item
+   becomes a todo, not a question).
+
 ## 8. Found along the way (not fixed here)
 
 1. **`AudioCommand::ImportClip` has no app sender**; only

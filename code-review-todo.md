@@ -1917,7 +1917,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   3. Make `EngineHandlerHarness` the preferred surface for new engine tests so future helpers do not need re-exporting.
 - **Verification / done-when:** `cargo test -p resonance-audio --no-run 2>&1 | grep -c Executable` ≤ 10; `run-tests.py` wall clock recorded before/after; `grep -rn '__test_support' resonance-app/src` returns only `#[cfg(feature)]`-gated lines.
 
-### [ ] ARCH-04 — (partial: D-1..D-5 plugin/send/bus/track/reference ids app-owned, D-6 design, D-7a assets, D-7c CreateMidiClip; D-7b/d/e/f blocked on the D-6 human decisions) Entity ids are allocated in two places with hand-partitioned bases
+### [ ] ARCH-04 — (partial: D-1..D-5 plugin/send/bus/track/reference ids app-owned, D-6 design, D-7a assets, D-7c CreateMidiClip; D-6 decisions made 2026-09-27; D-7b/d/e/f in progress) Entity ids are allocated in two places with hand-partitioned bases
 - **Severity:** medium
 - **Category:** api-design
 - **Location:** engine allocators: `resonance-audio/src/engine/thread/mod.rs` + `engine/*.rs` (`next_clip_id`, `next_track_id`, `next_plugin_id`, `next_bus_id`, `next_send_id`, `next_group_id`, `next_take_group_id`, `next_asset_id`, …); app allocators: `resonance-app/src/state/plugin_index.rs:158` (`allocate_control_plugin_id`, base `CONTROL_PLUGIN_ID_BASE = 3_000_000_000` in `resonance-audio/src/types/mod.rs:34`), `resonance-app/src/state/aux_sends.rs:121` (`CONTROL_SEND_ID_BASE = 2_000_000_000`), `resonance-app/src/compose/state.rs:31` (`DERIVED_CLIP_ID_BASE = 1 << 40`), plus `next_return_bus_id`, `next_sub_track_id`, `next_lane_id`; the `AudioCommand::ReserveAssetIds` command (`types/commands.rs:95`) and the hint-vs-base rule in `engine/plugins.rs:244-265`.

@@ -17,14 +17,19 @@ rather than a shell one-liner:
   is not one.
 * **Failure reporting.** A parallel run interleaves output, so each binary's
   output is captured and only failures are printed, whole, at the end.
+* **Non-test build.** Test builds turn on dev-dependency features (e.g.
+  resonance-audio's `test-internals`), so code that only compiles with them
+  passes the suite while a plain `cargo build` is broken. A `cargo check` of
+  the same crates without test targets runs first to catch that.
 
 Usage:
-    scripts/run-tests.py [-jN] [-p CRATE]... [--no-build] [--] [libtest args]
+    scripts/run-tests.py [-jN] [-p CRATE]... [--no-build] [--no-check] [--] [libtest args]
 
     -jN            concurrent binaries (default: half the cores, since each
                    binary parallelises its own tests across threads too)
     -p CRATE       restrict to a crate; repeatable. Default: whole workspace.
     --no-build     skip the cargo build step and reuse what is on disk
+    --no-check     skip the plain (non-test) `cargo check`
     trailing args  passed through to every test binary (e.g. --nocapture)
 
 Exit status is non-zero if any binary failed.
@@ -84,6 +89,22 @@ def build_and_enumerate(crates: list[str], build: bool) -> list[tuple[str, str]]
     return found
 
 
+def check_non_test(crates: list[str]) -> None:
+    """`cargo check` the crates in scope without test targets or dev features."""
+    cmd = ["cargo", "check"]
+    if crates:
+        for c in crates:
+            cmd += ["-p", c]
+    else:
+        cmd.append("--workspace")
+    started = time.monotonic()
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        sys.exit(f"non-test build (cargo check) failed ({proc.returncode})")
+    print(f"non-test check passed in {time.monotonic() - started:.0f}s")
+
+
 def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
     proc = subprocess.run(
         [exe, *extra],
@@ -101,9 +122,13 @@ def main() -> int:
     parser.add_argument("-j", type=int, default=default_jobs, dest="jobs")
     parser.add_argument("-p", action="append", default=[], dest="crates")
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--no-check", action="store_true")
     args, extra = parser.parse_known_args()
     if extra and extra[0] == "--":
         extra = extra[1:]
+
+    if not args.no_check and not args.no_build:
+        check_non_test(args.crates)
 
     binaries = build_and_enumerate(args.crates, build=not args.no_build)
     if not binaries:
