@@ -1,5 +1,6 @@
-//! The silent playhead advance (lock-contended blocks, and every block
-//! while A/B monitors the reference) must wrap at the loop seam the way
+//! The silent playhead advance (every block while A/B monitors the
+//! reference; lock-contended blocks used it too until ARCH-02 B-6 deleted
+//! the skip path) must wrap at the loop seam the way
 //! the rendering path does: `loop_in + overshoot`, not a bare snap to
 //! `loop_in` that loses up to a buffer of timeline per pass (code review
 //! MIX-11).
@@ -33,19 +34,25 @@ fn harness() -> MixAudioHarness {
     h
 }
 
+/// The reference A/B branch: every playing block advances silently.
+fn reference_harness() -> MixAudioHarness {
+    let h = harness();
+    h.enable_reference(vec![0.1; SR as usize * 2]);
+    h
+}
+
 #[test]
-fn lock_contended_block_at_the_seam_carries_the_overshoot() {
-    let mut h = harness();
+fn reference_block_past_the_seam_carries_the_overshoot() {
+    let mut h = reference_harness();
     // 1 950 + 128 = 2 078: 78 frames past loop_out.
     h.shared().playhead.store(1_950, Ordering::Release);
-    h.render_lock_contended();
+    h.render();
     assert_eq!(h.shared().playhead.load(Ordering::Acquire), 1_078);
 }
 
 #[test]
 fn reference_block_at_the_seam_carries_the_overshoot() {
-    let mut h = harness();
-    h.enable_reference(vec![0.1; SR as usize * 2]);
+    let mut h = reference_harness();
     h.shared().playhead.store(1_900, Ordering::Release);
     h.render();
     assert_eq!(h.shared().playhead.load(Ordering::Acquire), 1_028);
@@ -53,18 +60,18 @@ fn reference_block_at_the_seam_carries_the_overshoot() {
 
 #[test]
 fn landing_exactly_on_loop_out_wraps_to_loop_in() {
-    let mut h = harness();
+    let mut h = reference_harness();
     h.shared().playhead.store(2_000 - BLOCK as u64, Ordering::Release);
-    h.render_lock_contended();
+    h.render();
     assert_eq!(h.shared().playhead.load(Ordering::Acquire), 1_000);
 }
 
 #[test]
 fn a_loop_shorter_than_a_buffer_stays_inside_the_loop() {
-    let mut h = harness();
+    let mut h = reference_harness();
     h.shared().loop_out.store(1_050, Ordering::Relaxed);
     h.shared().playhead.store(1_040, Ordering::Release);
-    h.render_lock_contended();
+    h.render();
     let p = h.shared().playhead.load(Ordering::Acquire);
     assert!((1_000..1_050).contains(&p), "playhead {p} must stay in the loop");
 }

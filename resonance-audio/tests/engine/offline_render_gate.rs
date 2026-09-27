@@ -106,18 +106,12 @@ fn stopped_monitoring_falls_silent_while_an_offline_render_holds_the_plugins() {
     );
 
     let guard = OfflineRenderGuard::mark(&h.shared_arc());
-    let skips_before = h.shared().render_skip_cycles.load(Ordering::Relaxed);
     h.push_monitor(&input_block());
     let out = h.render().to_vec();
     assert!(
         !any_signal(&out),
         "the monitor pass runs the track's plugin chain — it must not run \
          while an offline render owns the plugin instances"
-    );
-    assert_eq!(
-        h.shared().render_skip_cycles.load(Ordering::Relaxed),
-        skips_before,
-        "the gate is not a lock contention and must not count as a dropout"
     );
 
     drop(guard);

@@ -15,8 +15,8 @@
 //! - [`count_in`]: the playhead is pinned and the count-in metronome plays
 //!   over monitored input.
 //! - [`stopped`]: no transport, but armed tracks still monitor.
-//! - [`play`]: the arrangement render — including the lock-contended
-//!   fallback that outputs silence and advances the playhead.
+//! - [`play`]: the arrangement render from the published render graph
+//!   (a wait-free load: a playing block always renders).
 //! - [`master_pass`]: the whole-buffer tail of a playing block (master FX,
 //!   metronome, master volume, mix meter).
 //! - [`seam`]: loop-seam detection and the one-or-two sub-block stitch the
