@@ -27,6 +27,8 @@ mod automation_render;
 mod aux_send_render;
 #[path = "mixer/bus_first_block_gain.rs"]
 mod bus_first_block_gain;
+#[path = "mixer/bus_first_block_loop_seam.rs"]
+mod bus_first_block_loop_seam;
 #[path = "mixer/bypass_settle_race.rs"]
 mod bypass_settle_race;
 #[path = "mixer/clip_fade_gain_render.rs"]
