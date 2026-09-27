@@ -164,6 +164,13 @@ pub struct ProjectIoState {
 /// went through `ClearAll`, whose `AllCleared` arrived after the echo; now
 /// the diff restore re-adds the entity under the same id at once, and the
 /// late echo of the live delete would remove it again.
+///
+/// A track's own removal-owed flag (`track_removal_owed`) also gates its
+/// *scalar* echoes (`TrackFxBypassChanged`, `TrackPlaybackSourceChanged`,
+/// FU-A13i): one sent to the old incarnation of an id can otherwise land
+/// after a later restore re-added a fresh track under that id and
+/// overwrite the value the restore just set, since neither carries an
+/// instance-generation marker of its own to tell old from new.
 #[derive(Debug, Default)]
 pub struct RestoreEchoes {
     removed_busses: std::collections::HashMap<resonance_audio::types::BusId, u32>,

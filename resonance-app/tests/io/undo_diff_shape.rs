@@ -357,6 +357,12 @@ fn echo_of(cmd: AudioCommand) -> Option<AudioEvent> {
         AudioCommand::AddVocalTrack { id, .. } => AudioEvent::VocalTrackAdded { track_id: id },
         AudioCommand::DeleteClip { clip_id } => AudioEvent::ClipDeleted { clip_id },
         AudioCommand::DeleteMidiClip { clip_id } => AudioEvent::MidiClipDeleted { clip_id },
+        AudioCommand::SetTrackFxBypass { track_id, bypassed } => {
+            AudioEvent::TrackFxBypassChanged { track_id, bypassed }
+        }
+        AudioCommand::SetTrackPlaybackSource { track_id, source } => {
+            AudioEvent::TrackPlaybackSourceChanged { track_id, source }
+        }
         _ => return None,
     })
 }
@@ -2406,6 +2412,78 @@ fn undoing_a_track_delete_before_its_echo_keeps_the_track() {
     let late: Vec<_> = delete.into_iter().chain(undo).collect();
     settle(&mut f, late, &added, "the delete's echo, then the undo's");
     assert!(track_ids(&f.app).contains(&t));
+}
+
+/// FU-A13i: a scalar echo carries no per-track generation of its own, so a
+/// `TrackFxBypassChanged` sent for a toggle made right before a delete can
+/// still be in flight when an undo re-adds the track under the same id.
+/// Guarded the same way as a stale `*TrackAdded` echo (`stale_track_echo`
+/// in `engine_events::tracks`): while the delete's own `TrackRemoved` is
+/// still owed, no echo naming this id is trusted, so the toggle's stale
+/// value cannot clobber the restore's.
+#[test]
+fn a_late_track_fx_bypass_echo_does_not_clobber_a_re_added_track() {
+    let mut f = fixture("track-scalar-late-echo");
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddTrack));
+
+    // Toggle bypass on: mirrors true at once and sends the command, but
+    // its echo is held rather than answered here — this is the toggle
+    // that predates the delete below.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Track(TrackMessage::ToggleTrackFxBypass(t)));
+    let stale_bypass_on = drain(&f.rx);
+    assert!(
+        sent(&stale_bypass_on)
+            .contains(&format!("SetTrackFxBypass {{ track_id: {t}, bypassed: true }}")),
+        "the toggle sends the bypass command: {:?}",
+        sent(&stale_bypass_on)
+    );
+    let stale_bypass_on: Vec<_> = stale_bypass_on
+        .into_iter()
+        .filter(|c| matches!(c, AudioCommand::SetTrackFxBypass { .. }))
+        .collect();
+
+    // Toggle back off — a real edit, echoed normally: the delete below,
+    // and the undo's target, both see the track with bypass off.
+    let off = edit(&mut f, Message::Track(TrackMessage::ToggleTrackFxBypass(t)));
+
+    // Delete the track: mirrors at once (STATE-10) and owes its
+    // `TrackRemoved` echo — held, not answered.
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Track(TrackMessage::RequestRemoveTrack(t)));
+    let delete = drain(&f.rx);
+
+    // Undo the delete: a diff restore re-adds the track fresh under the
+    // same id, mirroring bypass = false (`off`'s value) at once.
+    let undo = step_lands_on(&mut f, Message::Undo, &off, "undo delete");
+
+    // The delete's own removal is still owed — its `TrackRemoved` echo
+    // hasn't landed — so the toggle-on echo that predates it is exactly
+    // the "late echo of the old incarnation" case the ledger must filter.
+    assert!(
+        !f.app.test_restore_echoes_settled(),
+        "the delete's TrackRemoved echo must still be owed"
+    );
+    for event in engine_answer(&mut f, stale_bypass_on[0].clone()) {
+        f.app.test_apply_engine_event(event);
+    }
+    let bypassed_now = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|tr| tr.id == t)
+        .map(|tr| tr.fx_bypassed);
+    assert_eq!(
+        bypassed_now,
+        Some(false),
+        "a stale bypass-on echo from before the delete must not clobber the re-added track's restored (off) value"
+    );
+
+    // Flush the rest in the order they were actually sent and confirm the
+    // ledger settles cleanly.
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &off, "the delete's echo, then the undo's");
 }
 
 /// FU-A13a for a re-added member: the entity domain adds the track with
