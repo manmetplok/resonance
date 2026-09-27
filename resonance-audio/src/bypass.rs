@@ -16,13 +16,18 @@
 //!   `SetTrackFxBypass` / `SetBusFxBypass` / `SetMasterFxBypass` /
 //!   `SetPluginBypass` command lands.
 //! - `pos` is where the fade currently sits, in frames, `0` (fully wet)
-//!   ..= `fade_frames(sample_rate)` (fully dry). Only the audio thread
-//!   writes it, once per rendered block, from [`BypassFade::stage`].
+//!   ..= `fade_frames(sample_rate)` (fully dry). The audio thread writes
+//!   it once per rendered block, from [`BypassFade::stage`];
+//!   [`BypassFade::set_bypassed_settled`] also writes it directly, from
+//!   the engine thread, to land both without a transition.
 //!
-//! Both are plain atomics: reading a bypass state never locks and never
-//! allocates, and the fade needs no per-slot heap state at all — the
-//! crossfade borrows a pre-allocated [`FxDryScratch`] from the block's
-//! scratch set.
+//! The two are packed into a single atomic (`BypassFade` itself), not two
+//! independent ones: a block reading them while the engine thread settles
+//! a bypass must never observe the new target paired with the stale
+//! position, or vice versa — see the struct docs and FU-B4a. Reading or
+//! writing a bypass state never locks and never allocates, and the fade
+//! needs no per-slot heap state at all — the crossfade borrows a
+//! pre-allocated [`FxDryScratch`] from the block's scratch set.
 //!
 //! # Settled vs. fading
 //!
@@ -44,7 +49,7 @@
 //! bypassing it leaves the comp table completely untouched, which is the
 //! alignment-preserving path for latency-carrying plugins.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Length of every bypass crossfade, in milliseconds. Long enough that
 /// even a full-scale polarity flip between wet and dry stays inaudible,
@@ -101,14 +106,41 @@ impl FadeStage {
     }
 }
 
+/// `(target, position)` packed into the low 33 bits of a `u64`: bit 32 is
+/// the target flag, bits 0..32 are the fade position in frames. Packing
+/// the pair is the whole fix for FU-B4a — see [`BypassFade`].
+const TARGET_BIT: u64 = 1 << 32;
+
+#[inline]
+const fn pack(bypassed: bool, pos: u32) -> u64 {
+    (if bypassed { TARGET_BIT } else { 0 }) | pos as u64
+}
+
+#[inline]
+const fn unpack(state: u64) -> (bool, u32) {
+    (state & TARGET_BIT != 0, state as u32)
+}
+
 /// The bypass state of one chain or one chain slot: a target flag plus
-/// the crossfade position the audio thread walks towards it.
+/// the crossfade position the audio thread walks towards it, packed into
+/// a single atomic.
+///
+/// # Why one atomic, not two
+///
+/// The target and the position must land *together*: [`set_bypassed_settled`]
+/// (Self::set_bypassed_settled) restores both to the same end state in one
+/// step, and a block concurrently mid-[`stage`](Self::stage) must never be
+/// able to observe the new target paired with the old position (or vice
+/// versa) — a torn pair like that reads as a genuine, but bogus,
+/// in-flight fade, and the audio thread would spend [`BYPASS_FADE_MS`]
+/// crossfading against a settle that was supposed to be silent (FU-B4a;
+/// `tests/mixer/bypass_settle_race.rs` hammers exactly this). Two separate
+/// atomics can't give that guarantee no matter what order they're written
+/// in; one `AtomicU64` written with a single `store` (settle) or a single
+/// `compare_exchange` (target-only or position-only updates) always can.
 #[derive(Debug)]
 pub struct BypassFade {
-    bypassed: AtomicBool,
-    /// Fade position in frames, `0` = fully wet, `fade_frames()` = fully
-    /// dry. Written only by the rendering thread.
-    pos: AtomicU32,
+    state: AtomicU64,
 }
 
 impl Default for BypassFade {
@@ -121,8 +153,7 @@ impl BypassFade {
     /// A settled, engaged (not bypassed) state.
     pub const fn new() -> Self {
         Self {
-            bypassed: AtomicBool::new(false),
-            pos: AtomicU32::new(0),
+            state: AtomicU64::new(pack(false, 0)),
         }
     }
 
@@ -130,29 +161,51 @@ impl BypassFade {
     /// has got to.
     #[inline]
     pub fn bypassed(&self) -> bool {
-        self.bypassed.load(Ordering::Relaxed)
+        unpack(self.state.load(Ordering::Relaxed)).0
     }
 
     /// Set the target. The rendering thread fades towards it; nothing
-    /// switches instantly.
+    /// switches instantly. Leaves the current position untouched — a
+    /// compare-exchange retry loop so a concurrent [`stage`](Self::stage)
+    /// advancing the position is never lost.
     #[inline]
     pub fn set_bypassed(&self, v: bool) {
-        self.bypassed.store(v, Ordering::Relaxed);
+        let mut cur = self.state.load(Ordering::Relaxed);
+        loop {
+            let (bypassed, pos) = unpack(cur);
+            if bypassed == v {
+                return;
+            }
+            match self.state.compare_exchange_weak(
+                cur,
+                pack(v, pos),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(actual) => cur = actual,
+            }
+        }
     }
 
     /// Set the target *and* land the fade on it immediately, with no
     /// transition. For state that is being restored rather than changed —
     /// project load / replay — where there is no audio to click.
+    ///
+    /// One atomic store of the packed pair: a block reading concurrently
+    /// through [`stage`](Self::stage) can only ever observe the state from
+    /// entirely before this call or entirely after it, never a mix of the
+    /// two (FU-B4a).
     pub fn set_bypassed_settled(&self, v: bool) {
-        self.bypassed.store(v, Ordering::Relaxed);
-        self.pos.store(if v { u32::MAX } else { 0 }, Ordering::Relaxed);
+        let pos = if v { u32::MAX } else { 0 };
+        self.state.store(pack(v, pos), Ordering::Relaxed);
     }
 
     /// The fade position in frames (clamped to this sample rate's fade
     /// length). Test/diagnostic surface; the render path reads it through
     /// [`stage`](Self::stage).
     pub fn position(&self, sample_rate: u32) -> u32 {
-        self.pos.load(Ordering::Relaxed).min(fade_frames(sample_rate))
+        unpack(self.state.load(Ordering::Relaxed)).1.min(fade_frames(sample_rate))
     }
 
     /// The settled stage — what this bypass means with no transition in
@@ -173,34 +226,59 @@ impl BypassFade {
     /// doc). Must be called at most once per rendered block per fade —
     /// it is the only thing that moves the position.
     ///
-    /// Allocation-free and lock-free; safe on the audio thread.
+    /// Allocation-free and lock-free; safe on the audio thread. Reads and
+    /// writes the packed `(target, position)` pair through a
+    /// compare-exchange retry loop, so a concurrent [`set_bypassed`]/
+    /// [`set_bypassed_settled`] from the control thread is never torn
+    /// against and never silently lost.
     pub fn stage(&self, sample_rate: u32, frames: usize, live: bool) -> FadeStage {
         if !live {
             return self.settled_stage();
         }
-        let target = self.bypassed();
         let len = fade_frames(sample_rate);
-        let pos = self.pos.load(Ordering::Relaxed).min(len);
-        let goal = if target { len } else { 0 };
-        if pos == goal {
-            // Keep a `set_bypassed_settled` sentinel (or a sample-rate
-            // change) from leaving an out-of-range position behind.
-            if self.pos.load(Ordering::Relaxed) != pos {
-                self.pos.store(pos, Ordering::Relaxed);
-            }
-            return self.settled_stage();
-        }
         let step = frames.min(u32::MAX as usize) as u32;
-        let next = if target {
-            pos.saturating_add(step).min(len)
-        } else {
-            pos.saturating_sub(step)
-        };
-        self.pos.store(next, Ordering::Relaxed);
-        let inv = 1.0 / len as f32;
-        FadeStage::Fade {
-            from: pos as f32 * inv,
-            to: next as f32 * inv,
+        let mut cur = self.state.load(Ordering::Relaxed);
+        loop {
+            let (target, raw_pos) = unpack(cur);
+            let pos = raw_pos.min(len);
+            let goal = if target { len } else { 0 };
+            if pos == goal {
+                if raw_pos != pos {
+                    // Keep a `set_bypassed_settled` sentinel (or a
+                    // sample-rate change) from leaving an out-of-range
+                    // position behind. Best-effort: if this loses the
+                    // race to a concurrent write, that write already
+                    // moved the position somewhere valid, so there is
+                    // nothing left to correct.
+                    let _ = self.state.compare_exchange_weak(
+                        cur,
+                        pack(target, pos),
+                        Ordering::Relaxed,
+                        Ordering::Relaxed,
+                    );
+                }
+                return if target { FadeStage::Dry } else { FadeStage::Wet };
+            }
+            let next = if target {
+                pos.saturating_add(step).min(len)
+            } else {
+                pos.saturating_sub(step)
+            };
+            match self.state.compare_exchange_weak(
+                cur,
+                pack(target, next),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    let inv = 1.0 / len as f32;
+                    return FadeStage::Fade {
+                        from: pos as f32 * inv,
+                        to: next as f32 * inv,
+                    };
+                }
+                Err(actual) => cur = actual,
+            }
         }
     }
 }
