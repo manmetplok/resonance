@@ -7,12 +7,12 @@
 
 use plugin_gui_core::egui;
 
-use crate::editor::display_waves;
+use crate::editor::display_waves::DisplayTable;
 use crate::editor::theme;
 
 /// Draw the waveform viewer for the given oscillator into a reserved rect.
 ///
-/// `wavetable_idx` is the current wavetable selection for this osc.
+/// `table` is what this osc currently plays (a bundled or a user table).
 /// `position` is the raw param value (0..1) for frame morph position.
 /// `live_position` is the post-mod osc position from the viz snapshot, used
 /// to draw the live marker; pass the same value as `position` if you don't
@@ -20,7 +20,7 @@ use crate::editor::theme;
 pub fn draw(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    wavetable_idx: usize,
+    table: &DisplayTable,
     position: f32,
     live_position: f32,
 ) {
@@ -45,7 +45,7 @@ pub fn draw(
         egui::Stroke::new(0.5, theme::BORDER),
     );
 
-    let frames = display_waves::frame_count(wavetable_idx);
+    let frames = table.frame_count();
     if frames == 0 {
         return;
     }
@@ -58,8 +58,8 @@ pub fn draw(
     let t = f_float - f_lo as f32;
 
     const N_POINTS: usize = 256;
-    let samples_lo = display_waves::display_samples(wavetable_idx, f_lo, N_POINTS);
-    let samples_hi = display_waves::display_samples(wavetable_idx, f_hi, N_POINTS);
+    let samples_lo = table.samples(f_lo, N_POINTS);
+    let samples_hi = table.samples(f_hi, N_POINTS);
 
     // Draw low-alpha neighbour (lo) and next neighbour (hi) when blending.
     if t > 0.0001 {

@@ -1,11 +1,5 @@
 # Resonance — collaboration notes
 
-Work in this repo is driven through the `ba-*` agents
-(`.claude/agents/ba-*.md`): `ba-architect` scopes todos, `ba-developer`
-implements them, `ba-planner` triages the backlog, `ba-researcher`
-gathers external knowledge, and `ba-reverse-engineer` keeps the platform
-registry in sync.
-
 ## Driving the DAW from an agent
 
 `resonance-mcp` exposes the running app's control surface as MCP tools;
@@ -26,7 +20,7 @@ time; the script builds with cargo and runs them concurrently, which is 24s
 against 157s for the same tests. It also launches each binary from its own
 crate root, which the golden-image tests need.
 
-Five things to know before adding tests (background in ba doc #285):
+Five things to know before adding tests:
 
 - **Build the app with `Resonance::new_for_test()`**, not `Resonance::new()`.
   The real constructor opens an audio stream, probes devices, loads whatever

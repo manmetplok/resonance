@@ -4,8 +4,8 @@
 //! - `conv_layer` — `WaveNetLayer` and the 1x1 conv primitives it composes from.
 //! - `film` — FiLM (feature-wise linear modulation) block.
 //! - `head` — dense MLP layer used by the output head.
-//! - `ring` — dilated-conv state ring buffer.
-//! - `model` — the `WaveNetModel` orchestrator (load + per-sample inference).
+//! - `history` — dilated-conv input history (linear, block-windowed).
+//! - `model` — the `WaveNetModel` orchestrator (load + block inference).
 //! - `params` — typed full A2 config surface (parse-only for now).
 //! - `slimmable` — packed-weight slice extraction for slimmable models.
 //!
@@ -18,7 +18,7 @@ mod film;
 mod head;
 mod model;
 pub mod params;
-mod ring;
+mod history;
 pub mod slimmable;
 
 pub use model::WaveNetModel;

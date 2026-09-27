@@ -2,15 +2,24 @@
 use resonance_dsp::SimpleRng;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
-use crate::dsp::effects::{Chorus, StereoDelay};
+use crate::dsp::analog::{AnalogRng, DriftCoeffs};
+use crate::dsp::effects::{Chorus, DistortionStage, StereoDelay};
+use crate::dsp::filter_models::FilterModel;
 use crate::params::WavetableParams;
 use crate::viz::{ScopeCollector, WavetableVizState};
+use crate::dsp::user_table::UserTable;
 use crate::dsp::voice::{Voice, VoiceState, MAX_VOICES};
-use crate::dsp::wavetable::Wavetable;
+use crate::dsp::wavetable::{Wavetable, NUM_WAVETABLES, USER_WAVETABLE_INDEX};
+
+/// Oscillators, and so user-table slots.
+pub const NUM_OSCS: usize = 2;
 
 /// Depth of the mono held-note stack. More keys than this held at once is
 /// not a real playing situation; the oldest simply stop being returned to.
 const HELD_NOTES: usize = 16;
+
+/// Fixed seed of the analog-instability PRNG, so a render is reproducible.
+const ANALOG_SEED: u32 = 0x9E37_79B9;
 
 pub struct SynthEngine {
     pub(crate) voices: Vec<Voice>,
@@ -41,10 +50,23 @@ pub struct SynthEngine {
     // Flips ±1.0 on every fresh voice trigger, feeding `ModSource::Alternate`.
     mod_alternate: f32,
 
-    // Wavetable data
+    // Wavetable data: the `NUM_WAVETABLES` bundled tables, then one slot per
+    // oscillator for its user table. A user slot holds a view of
+    // `user_tables[osc]` when one is installed and a copy of bundled table 0
+    // otherwise — which is what an oscillator set to the user index plays
+    // until a table arrives (or when a project's table could not be found).
     pub wavetables: Vec<Wavetable>,
 
+    /// Storage behind the user slots' views. Only ever replaced through
+    /// [`SynthEngine::install_user_table`], which rewrites the matching view
+    /// in the same call.
+    user_tables: [Option<Box<UserTable>>; NUM_OSCS],
+
     // Effects
+    pub(crate) distortion: DistortionStage,
+    /// This sample's `ModDest::DistDrive` offset: the newest sounding
+    /// voice's, held while nothing sounds (see `ModState::dist_drive`).
+    pub(crate) dist_drive_mod: f32,
     pub(crate) chorus: Chorus,
     pub(crate) delay: StereoDelay,
 
@@ -56,8 +78,17 @@ pub struct SynthEngine {
     // this, `Alternate` excepted -- it just flips). Kept apart from `rng`
     // above so a note-on drawing a random value cannot shift the sample
     // count the LFOs' own S&H shape consumes from *its* RNG -- that stream
-    // is pinned bit-exact by `render_block_regression.rs`.
+    // is pinned bit-exact by `render_block_regression.rs`. Also kept apart
+    // from `analog_rng` below, for the same reason in the other direction:
+    // turning `analog` up must not reshuffle a Random/S&H mod source, and a
+    // patch using the new mod sources must not reseed the drift.
     pub(crate) mod_rng: SimpleRng,
+
+    // Analog instability: the source of each note-on's voice seed, kept
+    // apart from the S&H `rng` so turning `analog` up cannot reshuffle an
+    // S&H LFO's sequence. Reseeded on `initialize`/`reset`.
+    analog_rng: AnalogRng,
+    pub(crate) drift_coeffs: DriftCoeffs,
 
     // Last note for portamento
     last_note: Option<u8>,
@@ -83,6 +114,12 @@ pub struct SynthEngine {
 
     // Same de-zipper treatment for the FX-chain parameters.
     pub(crate) fx_smoothers: FxSmoothers,
+
+    /// The filter model the last block rendered with. A change clears every
+    /// voice's filter state (see `plan_block`), so the newly selected
+    /// circuit starts from rest instead of from whatever it held the last
+    /// time it ran.
+    pub(crate) filter_model: FilterModel,
 }
 
 /// Per-sample smoothers for the continuous FX parameters, retargeted from
@@ -146,10 +183,15 @@ impl SynthEngine {
             // `note_on`) lands on +1.0.
             mod_alternate: -1.0,
             wavetables: Vec::new(),
+            user_tables: [None, None],
+            distortion: DistortionStage::new(44100.0),
+            dist_drive_mod: 0.0,
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
             mod_rng: SimpleRng::new(1337),
+            analog_rng: AnalogRng::new(ANALOG_SEED),
+            drift_coeffs: DriftCoeffs::for_sample_rate(44100.0),
             last_note: None,
             held: [0; HELD_NOTES],
             held_len: 0,
@@ -162,6 +204,7 @@ impl SynthEngine {
             // and always was the real one.)
             master_vol_smoother: Smoother::new(SmoothingStyle::Linear(5.0)),
             fx_smoothers: FxSmoothers::new(),
+            filter_model: FilterModel::Clean,
         }
     }
 
@@ -177,14 +220,26 @@ impl SynthEngine {
         self.voice_counter = 0;
         self.last_note = None;
         self.held_len = 0;
+        self.analog_rng = AnalogRng::new(ANALOG_SEED);
+        self.drift_coeffs = DriftCoeffs::for_sample_rate(sample_rate);
 
         // Load pre-generated wavetables from the bundled blob. Generation
         // happens once at plugin build time (see `build.rs`), not on every
         // `initialize()` — this keeps plugin instantiation fast instead of
         // burning multi-seconds on additive synthesis.
         self.wavetables = crate::dsp::wavetable::load_bundled();
+        // The user slots, sized once here so installing a table later is a
+        // slot write — never a push — on the audio thread.
+        self.wavetables.reserve_exact(NUM_OSCS);
+        for osc in 0..NUM_OSCS {
+            let view = self.user_view(osc);
+            self.wavetables.push(view);
+        }
 
-        // Init effects
+        // Init effects. The distortion stage designs its oversampling
+        // filters here, off the audio thread.
+        self.distortion = DistortionStage::new(sample_rate);
+        self.dist_drive_mod = 0.0;
         self.chorus = Chorus::new(sample_rate);
         self.delay = StereoDelay::new(sample_rate);
 
@@ -205,6 +260,60 @@ impl SynthEngine {
         self.active_len = n;
     }
 
+    /// Install (`Some`) or remove (`None`) oscillator `osc`'s user table,
+    /// returning the one it displaces.
+    ///
+    /// Audio-thread safe: two slot writes, no allocation and no free — the
+    /// displaced table is handed back so the caller can retire it off the
+    /// audio thread. A sounding voice carries on at its phase into the new
+    /// table, exactly as it does when `oscN_wavetable` changes.
+    pub fn install_user_table(
+        &mut self,
+        osc: usize,
+        table: Option<Box<UserTable>>,
+    ) -> Option<Box<UserTable>> {
+        let old = std::mem::replace(&mut self.user_tables[osc], table);
+        // Before `initialize()` the slots don't exist yet; it builds them
+        // from `user_tables`. The view of `old`'s storage is overwritten
+        // before `old` can go anywhere, so no view outlives its table.
+        let slot = NUM_WAVETABLES + osc;
+        if slot < self.wavetables.len() {
+            self.wavetables[slot] = self.user_view(osc);
+        }
+        old
+    }
+
+    /// Oscillator `osc`'s installed user table, if any.
+    pub fn user_table(&self, osc: usize) -> Option<&UserTable> {
+        self.user_tables[osc].as_deref()
+    }
+
+    /// What oscillator `osc`'s user slot reads: its table, or bundled table 0.
+    fn user_view(&self, osc: usize) -> Wavetable {
+        match &self.user_tables[osc] {
+            // SAFETY: the view is only ever stored in the engine's own user
+            // slot for `osc`, and `install_user_table` — the only thing that
+            // takes the table out of `user_tables[osc]` — rewrites that slot
+            // before handing the table back.
+            Some(t) => unsafe { t.view() },
+            None => self.wavetables[0],
+        }
+    }
+
+    /// The `wavetables` slot oscillator `osc` reads for an `oscN_wavetable`
+    /// value of `index`, or `None` when there is nothing to read (out of
+    /// range, or before `initialize()`).
+    pub(crate) fn resolve_wavetable(&self, osc: usize, index: usize) -> Option<usize> {
+        let slot = if index == USER_WAVETABLE_INDEX {
+            NUM_WAVETABLES + osc
+        } else if index < NUM_WAVETABLES {
+            index
+        } else {
+            return None;
+        };
+        (slot < self.wavetables.len()).then_some(slot)
+    }
+
     pub fn reset(&mut self) {
         for v in &mut self.voices {
             v.kill();
@@ -213,11 +322,14 @@ impl SynthEngine {
         self.voice_counter = 0;
         self.last_note = None;
         self.held_len = 0;
+        self.analog_rng = AnalogRng::new(ANALOG_SEED);
         self.global_lfo1.reset_phase();
         self.global_lfo2.reset_phase();
         self.global_lfo3.reset_phase();
         self.mod_sample_hold.reset_phase();
         self.mod_alternate = -1.0;
+        self.distortion.reset();
+        self.dist_drive_mod = 0.0;
         self.chorus.reset();
         self.delay.reset();
     }
@@ -267,6 +379,11 @@ impl SynthEngine {
             params.lfo3.retrigger.value() && !params.lfo3.sync.value(),
             random_value,
             self.mod_alternate,
+        );
+        voice.seed_analog(
+            self.analog_rng.next_u32(),
+            params.analog.phase_random.value(),
+            &self.drift_coeffs,
         );
 
         self.last_note = Some(note);
@@ -339,6 +456,25 @@ impl SynthEngine {
             .iter()
             .filter(|v| v.state != VoiceState::Idle)
             .map(|v| (v.note, v.current_pitch))
+    }
+
+    /// Resolved osc 1 frequency, in Hz, of every sounding unison
+    /// sub-voice, in slot order — read back from the `OscSetup` the kernel
+    /// is actually using.
+    ///
+    /// Like [`Self::sounding_voices`], a read-only view for tests and
+    /// diagnostics (it is how the analog-drift tests measure pitch without
+    /// estimating it from audio). Not used on the audio path.
+    pub fn sounding_osc1_freqs(&self) -> impl Iterator<Item = (u8, f32)> + '_ {
+        let sr = self.sample_rate as f64;
+        self.voices
+            .iter()
+            .filter(|v| v.state != VoiceState::Idle)
+            .flat_map(move |v| {
+                v.unison[..v.unison_count]
+                    .iter()
+                    .map(move |u| (v.note, (u.osc1_setup.phase_inc * sr) as f32))
+            })
     }
 
     /// Publish the latest audio-thread state to the shared viz atomics.

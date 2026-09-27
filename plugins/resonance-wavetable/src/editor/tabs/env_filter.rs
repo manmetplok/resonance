@@ -3,6 +3,8 @@
 
 use plugin_gui_core::{egui, widgets};
 
+use crate::dsp::filter::FilterType;
+use crate::dsp::filter_models::FilterModel;
 use crate::editor::theme;
 use crate::editor::viz::{envelope, filter_response};
 use crate::editor::WavetableEditorApp;
@@ -150,6 +152,16 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             });
         });
 
+        // Model chips — which circuit the filter emulates.
+        let model = app.params.filter.model.value();
+        ui.horizontal_wrapped(|ui| {
+            for (i, label) in FilterModel::LABELS.iter().enumerate() {
+                if widgets::chip_button(ui, label, i as i32 == model) {
+                    app.params.filter.model.set_plain(i as f64);
+                }
+            }
+        });
+
         // Filter-type chips. Limited to the four types the DSP exposes.
         let types = ["Lowpass", "Highpass", "Bandpass", "Notch"];
         let current = app.params.filter.filter_type.value();
@@ -161,6 +173,17 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 }
             }
         });
+        // A model that cannot produce the picked type says so, rather than
+        // the chip silently doing nothing.
+        let model = FilterModel::from_int(model);
+        let picked = FilterType::from_int(current);
+        if model.effective_type(picked) != picked {
+            ui.label(
+                egui::RichText::new(format!("{} is lowpass-only", model.label()))
+                    .color(theme::TEXT_3)
+                    .size(10.5),
+            );
+        }
 
         // Response graph.
         let avail_inner = ui.available_width();
@@ -169,6 +192,7 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         filter_response::draw(
             ui,
             rect,
+            model,
             app.params.filter.filter_type.value(),
             app.params.filter.cutoff.value(),
             app.params.filter.resonance.value(),
@@ -184,6 +208,7 @@ fn draw_filter_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             float_knob(ui, "Env", &app.params.filter.env_depth);
             float_knob(ui, "Key", &app.params.filter.keytrack);
             float_knob(ui, "Drive", &app.params.filter.drive);
+            float_knob(ui, "FM", &app.params.filter.fm);
         });
     });
 }

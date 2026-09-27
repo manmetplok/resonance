@@ -1,6 +1,6 @@
 use resonance_plugin::*;
 
-use crate::dsp::modulation::ModSource;
+use crate::dsp::modulation::{ModDest, ModSource};
 
 pub struct ModSlotParams {
     pub source: IntParam,
@@ -29,7 +29,15 @@ impl ModSlotParams {
                     max: (ModSource::LABELS.len() - 1) as i32,
                 },
             ),
-            destination: IntParam::new(dst_id, dst_name, 0, IntRange::Linear { min: 0, max: 11 }),
+            destination: IntParam::new(
+                dst_id,
+                dst_name,
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: (ModDest::LABELS.len() - 1) as i32,
+                },
+            ),
             amount: FloatParam::new(
                 amt_id,
                 amt_name,

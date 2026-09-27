@@ -8,10 +8,12 @@ mod editor;
 pub mod dsp;
 pub mod params;
 pub mod presets;
+pub mod user_wavetable;
 pub mod viz;
 
 use dsp::engine::SynthEngine;
 use params::{WavetableParams, PARAM_COUNT};
+use user_wavetable::{UserTableSwap, UserWavetables};
 use viz::WavetableVizState;
 
 pub struct ResonanceWavetable {
@@ -30,6 +32,25 @@ pub struct ResonanceWavetable {
     /// the plugin instance. Cloned into the editor factory when the host
     /// opens the GUI.
     viz: Arc<WavetableVizState>,
+    /// Per-oscillator user wavetables: what is loaded, and the mailboxes the
+    /// loader posts finished tables through. Shared with the editor (which
+    /// requests loads) and chained behind `presets` as extra state.
+    user_tables: Arc<UserWavetables>,
+    /// Audio-thread half of the user-table hand-off.
+    user_swap: UserTableSwap,
+}
+
+impl ResonanceWavetable {
+    /// The user-wavetable state, for driving imports without the editor
+    /// (tests, a future control surface).
+    pub fn user_wavetables(&self) -> &Arc<UserWavetables> {
+        &self.user_tables
+    }
+
+    /// The synth engine, read-only.
+    pub fn engine(&self) -> &SynthEngine {
+        &self.engine
+    }
 }
 
 impl ResonancePlugin for ResonanceWavetable {
@@ -54,11 +75,16 @@ impl ResonancePlugin for ResonanceWavetable {
     const MIDI_INPUT: bool = true;
 
     fn new() -> Self {
+        let user_tables = Arc::new(UserWavetables::new());
         Self {
             params: Arc::new(WavetableParams::new()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            // The preset identity wraps the user-table saver: chaining is
+            // why `with_extra` exists.
+            presets: resonance_plugin::presets::PresetSession::with_extra(user_tables.clone()),
             engine: SynthEngine::new(),
             viz: Arc::new(WavetableVizState::new()),
+            user_tables,
+            user_swap: UserTableSwap::new(),
         }
     }
 
@@ -72,6 +98,11 @@ impl ResonancePlugin for ResonanceWavetable {
 
     fn initialize(&mut self, sample_rate: f32, max_buffer_size: u32) -> bool {
         self.engine.initialize(sample_rate);
+        // The janitor that frees displaced user tables off the audio thread,
+        // and any table restored before activation, installed now rather
+        // than on the first block.
+        self.user_swap.prepare();
+        self.user_swap.apply(&self.user_tables, &mut self.engine);
         // Publish the host's real audio config so the editor's status bar
         // reports it instead of printing invented literals.
         self.viz.store_io_config(sample_rate, max_buffer_size);
@@ -102,6 +133,11 @@ impl ResonancePlugin for ResonanceWavetable {
         let right = &mut main.right[..frames];
         resonance_dsp::flush_denormals();
 
+        // Pick up a freshly imported (or cleared) user wavetable. A
+        // non-blocking mailbox take and two slot writes; the displaced
+        // table leaves for the janitor thread.
+        self.user_swap.apply(&self.user_tables, &mut self.engine);
+
         // The engine drains `events` with sample-accurate timing internally
         // and snapshots every atomic parameter once for the whole block --
         // the per-sample kernel reads only from stack locals from there on.
@@ -116,7 +152,8 @@ impl ResonancePlugin for ResonanceWavetable {
 
     /// The loaded-preset identity rides along with the parameter values,
     /// on both bridge paths, so reopening a saved project shows the preset
-    /// the sound came from instead of a blank picker.
+    /// the sound came from instead of a blank picker. The user wavetables
+    /// ride behind it (`user_wavetable::state`).
     fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
         Some(self.presets.clone())
     }
@@ -127,6 +164,7 @@ impl ResonancePlugin for ResonanceWavetable {
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.user_tables.clone(),
         )))
     }
 }

@@ -7,6 +7,7 @@
 
 use resonance_plugin::TempoInfo;
 
+use crate::dsp::analog::{self, DriftCoeffs};
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::envelope::EnvCoeffs;
 use crate::dsp::lfo::TransportPlan;
@@ -60,6 +61,23 @@ pub(crate) struct BlockPlan {
     /// by the whole block rather than one per sample.
     pub sh_slew_coeff: f32,
 
+    /// Lower bound of the filter-FM cutoff sweep, as `π·20 Hz/fs` — the
+    /// same 20 Hz floor `set_coeffs` clamps to, resolved once instead of
+    /// divided out per sample.
+    pub filter_w_min: f32,
+    /// Analog instability, scaled by the `analog` knob. At the default of 0
+    /// `analog_on` is false — the drift walk is never stepped and never
+    /// dirties the `OscSetup` cache — and the three spreads are exact zeros,
+    /// so the terms they scale add `±0.0` / multiply by `1.0`.
+    pub analog_on: bool,
+    /// Drift walk `[-1, 1]` to semitones.
+    pub drift_semis: f32,
+    /// Per-note cutoff spread `[-1, 1]` to octaves.
+    pub cutoff_spread_oct: f32,
+    /// Per-note level spread `[-1, 1]` to a fraction of the level.
+    pub level_spread: f32,
+    pub drift: DriftCoeffs,
+
     pub sample_rate: f32,
 }
 
@@ -72,9 +90,10 @@ impl SynthEngine {
         tempo: Option<TempoInfo>,
     ) -> BlockPlan {
         // Missing wavetable indices fall back to `None` and silently skip
-        // that oscillator's output.
-        let wt1_idx = (snap.osc1_wt < self.wavetables.len()).then_some(snap.osc1_wt);
-        let wt2_idx = (snap.osc2_wt < self.wavetables.len()).then_some(snap.osc2_wt);
+        // that oscillator's output. The user index resolves to the
+        // oscillator's own user slot.
+        let wt1_idx = self.resolve_wavetable(0, snap.osc1_wt);
+        let wt2_idx = self.resolve_wavetable(1, snap.osc2_wt);
         let oscs_active =
             (snap.osc1_enabled && wt1_idx.is_some()) || (snap.osc2_enabled && wt2_idx.is_some());
 
@@ -119,6 +138,17 @@ impl SynthEngine {
         }
         let sh_slew_coeff = crate::dsp::lfo::sh_slew_coeff(snap.mod_sh_slew, self.sample_rate);
 
+        // Switching filter model mid-note: the circuit being switched to
+        // has been frozen since it last ran, so start every voice's filters
+        // from rest. Never taken while the model stays put, which keeps the
+        // clean path's state untouched block to block.
+        if snap.filter_model != self.filter_model {
+            self.filter_model = snap.filter_model;
+            for voice in &mut self.voices {
+                voice.clear_filters();
+            }
+        }
+
         self.refresh_active();
         self.seed_voice_lfo_rates(lfo_rates, true);
 
@@ -146,6 +176,12 @@ impl SynthEngine {
             ),
             lfo_rates,
             sh_slew_coeff,
+            filter_w_min: std::f32::consts::PI * 20.0 / self.sample_rate,
+            analog_on: snap.analog > 0.0,
+            drift_semis: snap.analog * analog::DRIFT_MAX_CENTS / 100.0,
+            cutoff_spread_oct: snap.analog * analog::CUTOFF_SPREAD_OCT,
+            level_spread: snap.analog * analog::LEVEL_SPREAD,
+            drift: self.drift_coeffs,
             sample_rate: self.sample_rate,
         }
     }
