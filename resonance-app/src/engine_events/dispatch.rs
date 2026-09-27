@@ -371,7 +371,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             tracks::playback_source_changed(r, track_id, source)
         }
         E::BusAdded { bus_id, name } => tracks::bus_added(r, bus_id, name),
-        E::BusRemoved { bus_id } => tracks::bus_removed(r, bus_id),
+        E::BusRemoved { bus_id } => tracks::bus_removed_echo(r, bus_id),
         E::BusFxBypassChanged { bus_id, bypassed } => {
             tracks::bus_fx_bypass_changed(r, bus_id, bypassed)
         }

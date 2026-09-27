@@ -1196,6 +1196,32 @@ fn a_bus_restore_survives_the_previous_restores_late_echoes() {
     settle(&mut f, late, &s0, "undo bus add, then three restores' echoes");
 }
 
+/// STATE-10 on the diff path (FU-A13c): a live bus delete mirrors at once
+/// and owes its `BusRemoved` echo, so an undo pressed before that echo
+/// re-adds the bus under its id and the late echo must not remove it
+/// again.
+#[test]
+fn undoing_a_bus_delete_before_its_echo_keeps_the_bus() {
+    let mut f = fixture("bus-delete-early-undo");
+    let ids = bus_ids(&f.app);
+    let s1 = edit(&mut f, Message::Bus(BusMessage::AddBus));
+    let bus = bus_ids(&f.app)
+        .into_iter()
+        .find(|id| !ids.contains(id))
+        .expect("the add landed a bus");
+    let _ = drain(&f.rx);
+    let _ = f.app.update(Message::Bus(BusMessage::RemoveBus(bus)));
+    assert!(
+        !bus_ids(&f.app).contains(&bus),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s1, "undo bus delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s1, "the delete's echo, then the undo's");
+    assert!(bus_ids(&f.app).contains(&bus));
+}
+
 // ---------------------------------------------------------------------------
 // Plugin instances on a track, a bus and the master (A-13h)
 // ---------------------------------------------------------------------------

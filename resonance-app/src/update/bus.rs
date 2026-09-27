@@ -1,5 +1,5 @@
 use iced::Task;
-use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, ScannedPlugin, TrackOutput};
+use resonance_audio::types::{AudioCommand, BusId, PluginInstanceId, ScannedPlugin};
 
 use crate::message::Message;
 use crate::util::db_to_gain;
@@ -112,12 +112,15 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
             }
         }
         BusMessage::RemoveBus(bus_id) => {
+            // Mirror the removal now, not on the `BusRemoved` echo, so an
+            // undo pressed before the echo lands sees it (STATE-10 shape,
+            // ARCH-01 FU-A13c). The echo is owed, so a late one cannot
+            // drop a bus an undo re-added under this id (A-13h).
+            // `engine_events::tracks::bus_removed` also falls the bus's
+            // tracks back to master, so nothing else is needed here.
             let _ = r.engine.send(AudioCommand::RemoveBus { bus_id });
-            for track in &mut r.registry.tracks {
-                if track.output == TrackOutput::Bus(bus_id) {
-                    track.output = TrackOutput::Master;
-                }
-            }
+            r.io.restore_echoes.expect_bus_removed(bus_id);
+            crate::engine_events::tracks::bus_removed(r, bus_id);
         }
         BusMessage::SetBusVolume(bus_id, vol_db) => {
             let _ = r.engine.send(AudioCommand::SetBusVolume {
