@@ -128,6 +128,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent B-4 (ARCH-02) | plugin map → `RenderGraph` (`Arc<PluginSlot>` shares the instance mutex); removed slots retired per-slot, `ClapInstance::drop` only on the engine sweep (thread-probed); `release_all_plugins` at shutdown; `StateMap` 2 → 1 | opus | merged | bb8fdd28 |
 | FU-B4a (from B-4) | `BypassFade` (target, position) packed into one `AtomicU64`; settled toggle is one store, live paths CAS — no torn pair / spurious crossfade (was ~3% of racing blocks) | sonnet | merged | 4dc228ef |
 | refactor-intent B-5 (ARCH-02) | clips → `RenderGraph` (`ClipSource::Memory(Arc<[f32]>)`); workers post `EngineInternal` messages to the engine thread; ticket/fence/take-park/deferral/V6 guarantees re-argued as engine-thread sequencing; **no `RwLock` left in resonance-audio** | opus | merged | a316feab |
+| refactor-intent B-6 (ARCH-02) | A2-9 hammer (500 clips, ~72k edits, 0 render-thread frees, every probe destroyed on the sweep); lock-miss/skip machinery deleted; invariant `engine_and_mixer_take_no_state_lock`. **Epic B done**; full suite 369/369 | opus | merged | 0270ac55 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
@@ -1887,7 +1888,7 @@ The workspace is in unusually good structural shape for its size (~112k LOC app,
   Pitfall: `replay_diff.rs` currently has structural-compatibility gating (`structurally_compatible`); keep the gate but make it the *only* thing that differs between the two paths.
 - **Verification / done-when:** `UndoExtras` no longer exists; `grep -l chord_track resonance-app/src/project/model.rs` non-empty; a new field added to a domain state type compiles only after its `Reconcile` impl is updated (exhaustive struct destructuring in `diff`); `message.rs` churn drops (track commits/300 after a quarter).
 
-### [ ] ARCH-02 — Audio callback shares RwLock'd project maps with the control thread; contention is a designed dropout
+### [x] ARCH-02 — Audio callback shares RwLock'd project maps with the control thread; contention is a designed dropout
 - **Severity:** high
 - **Category:** concurrency-model
 - **Location:** `resonance-audio/src/engine/mod.rs:583-607` (`Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>>` etc.), `resonance-audio/src/mixer/callback/play.rs:32-36` (five `try_read`s per block), `mixer/callback/mod.rs:5-7` ("a contended block drops out rather than waiting"), 61 `.write()` sites under `resonance-audio/src/engine/`, e.g. `engine/plugins.rs:324` (`ctx.plugins.write().insert(...)` after instantiate), `engine/bounce/render.rs:71` (`try_lock_with_backoff`, a spin/sleep workaround for the same contention from the bounce side).
