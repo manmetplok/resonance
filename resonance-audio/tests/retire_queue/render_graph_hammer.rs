@@ -307,10 +307,8 @@ struct Engine {
     next_send: SendId,
     loads: u64,
     edits: u64,
-    /// Blocks the callback has rendered, and the count at each scratch
-    /// bus's creation.
+    /// Blocks the callback has rendered.
     rendered: Arc<AtomicU64>,
-    bus_born: std::collections::HashMap<BusId, u64>,
     /// Times the base track was routed onto a scratch bus, and times a
     /// `RemoveBus` re-routed it back to the master.
     base_via_bus: u64,
@@ -589,6 +587,7 @@ impl Engine {
                 }
             }
             12 => {
+                let mut fresh_id = None;
                 if scratch_busses.len() < 6 {
                     self.next_bus += 1;
                     let id = self.next_bus;
@@ -596,20 +595,14 @@ impl Engine {
                     if !crowded {
                         self.probes.add_to_bus(&shared, id);
                     }
-                    self.bus_born.insert(id, self.rendered.load(Ordering::Acquire));
+                    fresh_id = Some(id);
                 }
-                // The base track itself goes through a scratch bus — one
-                // that has rendered a block already. A bus's gain ramp
-                // starts from 0 (`BusRuntime`'s last gains), so a track
-                // re-routed onto a bus in its very first block fades in
-                // over that block: a one-block dip that is the mixer's
-                // declick, not a publishing fault (reported as a
-                // follow-up).
-                let now = self.rendered.load(Ordering::Acquire);
-                let aged = busses.iter().copied().find(|b| {
-                    self.bus_born.get(b).is_some_and(|&born| born + 2 <= now)
-                });
-                if let Some(id) = aged {
+                // The base track itself goes through a scratch bus —
+                // preferring one just created this very pass. FU-B6a
+                // initializes a new bus's last gains to its target gain
+                // instead of 0, so routing onto it during its first
+                // rendered block no longer ramps in from silence.
+                if let Some(id) = fresh_id.or_else(|| pick(&busses)) {
                     self.dispatch(AudioCommand::SetTrackOutput {
                         track_id: BASE_TRACK,
                         output: TrackOutput::Bus(id),
@@ -766,7 +759,6 @@ fn a_500_clip_project_under_heavy_edits_renders_every_block_and_frees_nothing_on
         loads: 0,
         edits: 0,
         rendered: Arc::new(AtomicU64::new(0)),
-        bus_born: Default::default(),
         base_via_bus: 0,
         base_rerouted: 0,
     };

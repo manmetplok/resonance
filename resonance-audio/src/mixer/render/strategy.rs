@@ -436,8 +436,16 @@ impl RenderStrategy<'_> {
         let muted = bus.muted() || auto_mute.unwrap_or(false);
         match self {
             Self::Live { .. } => {
+                // A bus that has never completed a live block has no real
+                // "previous gain" to ramp from: `last_gains()` is either
+                // its zero construction placeholder or a target it was
+                // given before it ever rendered (fader/mute set right
+                // after `AddBus`, or a diff-path undo re-add). Muted and
+                // never rendered stays silent outright, same as an
+                // already-faded-down muted bus (FU-B6a).
+                let never_rendered = !bus.rendered_once();
                 let (bus_last_l, bus_last_r) = bus.last_gains();
-                if muted && bus_last_l == 0.0 && bus_last_r == 0.0 {
+                if muted && (never_rendered || (bus_last_l == 0.0 && bus_last_r == 0.0)) {
                     return None;
                 }
                 let (bus_target_l, bus_target_r) = if muted {
@@ -446,6 +454,16 @@ impl RenderStrategy<'_> {
                     (gl_end, gr_end)
                 } else {
                     bus_stereo_gains(bus)
+                };
+                // First-ever live block: render flat at the target rather
+                // than ramping in from the placeholder above — otherwise a
+                // track re-routed onto this brand-new bus dips for one
+                // block while the bus fades in from silence it never
+                // actually had.
+                let (bus_last_l, bus_last_r) = if never_rendered {
+                    (bus_target_l, bus_target_r)
+                } else {
+                    (bus_last_l, bus_last_r)
                 };
                 Some(((bus_last_l, bus_target_l), (bus_last_r, bus_target_r)))
             }

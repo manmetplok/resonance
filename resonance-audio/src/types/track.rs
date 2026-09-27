@@ -657,6 +657,18 @@ struct BusRuntime {
     /// gains, used by the mixer's per-sample gain ramp.
     last_gain_l_bits: AtomicU32,
     last_gain_r_bits: AtomicU32,
+    /// Whether this bus has ever completed a live block that reached
+    /// master (FU-B6a). A freshly created bus has no real "previous
+    /// gain" to ramp from — `last_gain_*_bits` above is either its
+    /// zero construction placeholder or a target it was given before it
+    /// ever rendered (e.g. its fader/mute set right after `AddBus`, or a
+    /// diff-path undo re-add). See
+    /// [`crate::mixer::render::strategy::RenderStrategy::bus_disposition`],
+    /// which uses this to make a bus's first live block render flat at
+    /// its target gain instead of ramping in from that placeholder — the
+    /// fix for a track re-routed onto a brand-new bus dipping for one
+    /// block while the bus faded in from silence it never actually had.
+    rendered_once: AtomicBool,
 }
 
 /// A copy of the bus's structure (id, name, insert chain) that shares
@@ -690,6 +702,7 @@ impl Bus {
                 peak_r_bits: AtomicU32::new(0),
                 last_gain_l_bits: AtomicU32::new(0),
                 last_gain_r_bits: AtomicU32::new(0),
+                rendered_once: AtomicBool::new(false),
             }),
         }
     }
@@ -797,6 +810,17 @@ impl Bus {
     pub fn set_last_gains(&self, l: f32, r: f32) {
         self.runtime.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
         self.runtime.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
+    }
+
+    /// See [`BusRuntime::rendered_once`] (FU-B6a).
+    pub(crate) fn rendered_once(&self) -> bool {
+        self.runtime.rendered_once.load(Ordering::Relaxed)
+    }
+
+    /// Mark that this bus has now completed a live block that reached
+    /// master. See [`Self::rendered_once`].
+    pub(crate) fn mark_rendered_once(&self) {
+        self.runtime.rendered_once.store(true, Ordering::Relaxed);
     }
 }
 

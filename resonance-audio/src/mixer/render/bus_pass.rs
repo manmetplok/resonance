@@ -141,6 +141,7 @@ fn render_one_bus(
     }
     if strategy.is_live() {
         bus.set_last_gains(bus_gain_l.1, bus_gain_r.1);
+        bus.mark_rendered_once();
     }
 
     apply_bus_aux_sends(bus.id, bus_idx, (bus_gain_l, bus_gain_r), ctx, scratch);
