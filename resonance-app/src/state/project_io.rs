@@ -141,9 +141,12 @@ pub struct ProjectIoState {
 /// the `*Added` echo of an instance a later restore removed would push a
 /// phantom slot.
 ///
-/// The engine answers every `RemoveBus` / `RemovePlugin*` / `MovePlugin*`
-/// (an unknown id included), on one FIFO thread, so each expectation is
-/// consumed exactly once, in order. The rule the handlers apply:
+/// The engine answers every `RemoveBus` / `RemovePlugin*` (an unknown id
+/// included) and every `MovePlugin*` of an instance its chain holds, on
+/// one FIFO thread, so each expectation is consumed exactly once, in
+/// order. A move of an instance whose add failed is answered with an
+/// error instead; its expectation is dropped when the `PluginLoadFailed`
+/// lands (`forget_plugin_moves`, FU-A13d). The rule the handlers apply:
 ///
 /// * a removal / move echo that matches an expectation is swallowed (the
 ///   restore already mirrored it);
@@ -166,6 +169,7 @@ pub struct RestoreEchoes {
     removed_busses: std::collections::HashMap<resonance_audio::types::BusId, u32>,
     removed_plugins: std::collections::HashMap<resonance_audio::types::PluginInstanceId, u32>,
     moves: std::collections::HashMap<(resonance_audio::types::PluginInstanceId, usize), u32>,
+    added_plugins: std::collections::HashMap<resonance_audio::types::PluginInstanceId, u32>,
     removed_tracks: std::collections::HashMap<resonance_audio::types::TrackId, u32>,
     deleted_clips: std::collections::HashMap<resonance_audio::types::ClipId, u32>,
     deleted_midi_clips: std::collections::HashMap<resonance_audio::types::ClipId, u32>,
@@ -233,6 +237,29 @@ impl RestoreEchoes {
         settle(&mut self.moves, (id, to_index))
     }
 
+    /// A restore added this instance to a chain it kept and counted it as
+    /// live when it named the chain's engine indices (FU-A13d). Owed until
+    /// the instance's `*PluginAdded` or `PluginLoadFailed` arrives: the
+    /// engine answers every add with exactly one of the two.
+    pub fn expect_plugin_added(&mut self, id: resonance_audio::types::PluginInstanceId) {
+        owe(&mut self.added_plugins, id);
+    }
+
+    /// The instance's `*PluginAdded` or `PluginLoadFailed` arrived: `true`
+    /// when a restore's add was owed it. A `PluginLoadFailed` that settles
+    /// one means the restore's moves counted a plugin the engine does not
+    /// have, and the chain has to be put right.
+    pub fn settle_plugin_added(&mut self, id: resonance_audio::types::PluginInstanceId) -> bool {
+        settle(&mut self.added_plugins, id)
+    }
+
+    /// The instance a restore added failed to load: every move the
+    /// restore sent for it is answered with an error, not an echo, so none
+    /// of them is owed any more.
+    pub fn forget_plugin_moves(&mut self, id: resonance_audio::types::PluginInstanceId) {
+        self.moves.retain(|(moved, _), _| *moved != id);
+    }
+
     /// `RemoveTrack` was sent and mirrored (by a restore or a live delete).
     /// The engine answers with one `TrackRemoved` for the track and one for
     /// each sub-track it still held under it; each is owed separately.
@@ -287,6 +314,7 @@ impl RestoreEchoes {
         self.removed_busses.is_empty()
             && self.removed_plugins.is_empty()
             && self.moves.is_empty()
+            && self.added_plugins.is_empty()
             && self.removed_tracks.is_empty()
             && self.deleted_clips.is_empty()
             && self.deleted_midi_clips.is_empty()

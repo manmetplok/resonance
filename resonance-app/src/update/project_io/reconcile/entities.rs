@@ -110,6 +110,7 @@ impl Reconcile for Tracks {
                 clap_plugin_id: pp.clap_plugin_id.clone(),
                 id: pp.instance_id,
             });
+            expect_added(r, &added);
             if let Some(t) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
                 t.plugins.extend(added);
             }
@@ -185,6 +186,7 @@ impl Reconcile for Busses {
                 clap_plugin_id: pp.clap_plugin_id.clone(),
                 id: pp.instance_id,
             });
+            expect_added(r, &added);
             if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
                 bus.plugins.extend(added);
             }
@@ -230,6 +232,7 @@ impl Reconcile for Master {
                 id: pp.instance_id,
             }
         });
+        expect_added(r, &added);
         r.master.plugins.extend(added);
     }
 }
@@ -600,6 +603,17 @@ fn replay_plugins<'p>(
         gui_plugins.push(slot);
     }
     gui_plugins
+}
+
+/// The diff arms' fresh instances on a kept chain: [`EntityOrder`] counts
+/// each as live when it names engine indices, before the engine has said
+/// whether it loaded. Owed until its `*PluginAdded` / `PluginLoadFailed`;
+/// a failure re-positions the rest of its chain (FU-A13d,
+/// `engine_events::plugins::load_failed`).
+fn expect_added(r: &mut Resonance, added: &[PluginSlotState]) {
+    for slot in added {
+        r.io.restore_echoes.expect_plugin_added(slot.instance_id);
+    }
 }
 
 /// Reorder `plugins` to match the saved instance-id sequence, leaving
@@ -995,9 +1009,11 @@ fn order_live_chains(r: &mut Resonance, old: &ProjectFile, new: &ProjectFile) {
 /// app's chain but not in the engine's, and moving one sends nothing.
 /// Kept slots go first because they are the ones known to exist: a fresh
 /// slot is `Available` until its echo says otherwise, so a fresh plugin
-/// that turns out missing is still counted, and pass 2 can then place a
-/// later fresh plugin one engine slot off. That needs two plugins re-added
-/// by one restore, one of them missing and out of append order; the
+/// that turns out missing is still counted, and pass 2 then names every
+/// later slot it moves one engine index too high. The restore owes each
+/// fresh instance's add echo ([`expect_added`]); when it is a
+/// `PluginLoadFailed` instead, `engine_events::plugins::load_failed`
+/// re-positions every live slot after the missing one (FU-A13d). The
 /// recovery path re-positions the missing one if it ever loads.
 ///
 /// Sends nothing for a chain already in order. Ids in `target` that are
