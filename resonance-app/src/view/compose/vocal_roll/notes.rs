@@ -232,7 +232,7 @@ impl VocalRollCanvas<'_> {
             // Find the note covering t (or the previous note for gaps).
             let mut prev: Option<&resonance_audio::types::MidiNote> = None;
             let mut cur: Option<&resonance_audio::types::MidiNote> = None;
-            for n in &self.clip.notes {
+            for n in self.clip.notes.iter() {
                 if n.start_tick <= t {
                     prev = cur;
                     cur = Some(n);

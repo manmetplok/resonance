@@ -160,7 +160,7 @@ fn a_diff_undo_sends_tempo_before_the_clips_and_only_changed_scalars() {
         start_sample: 0,
         duration_ticks: 3840,
         name: "clip".to_string(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
@@ -450,7 +450,7 @@ fn app_with_routing() -> Resonance {
         start_sample: 0,
         duration_ticks: 3840,
         name: "clip".to_string(),
-        notes: Vec::new(),
+        notes: Vec::new().into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });

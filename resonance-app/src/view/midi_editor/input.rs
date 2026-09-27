@@ -194,7 +194,7 @@ pub(super) fn handle_event(
                                     super::DragMode::MoveNote {
                                         note_index: i,
                                         start_tick_offset: tick_offset,
-                                        notes: canvas.clip.notes.clone(),
+                                        notes: canvas.clip.notes.as_ref().clone(),
                                     }
                                 }
                             });

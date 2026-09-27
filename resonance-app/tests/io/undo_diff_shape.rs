@@ -2893,12 +2893,14 @@ fn a_midi_note_restore_keeps_the_clips_lyrics_through_its_echoes() {
         "the snapshot carries the lyrics, or this test is vacuous"
     );
     let mut fewer_notes = with_lyrics.clone();
-    fewer_notes
-        .project
-        .midi_notes
-        .get_mut(&BASS_CLIP)
-        .expect("the clip's notes")
-        .pop();
+    std::sync::Arc::make_mut(
+        fewer_notes
+            .project
+            .midi_notes
+            .get_mut(&BASS_CLIP)
+            .expect("the clip's notes"),
+    )
+    .pop();
 
     for (target, what) in [(&fewer_notes, "drop a note"), (&with_lyrics, "put it back")] {
         let _ = drain(&f.rx);

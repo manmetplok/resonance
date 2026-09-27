@@ -42,7 +42,7 @@ fn clip(id: u64, track_id: u64, notes: Vec<MidiNote>) -> MidiClipState {
         start_sample: 0,
         duration_ticks: 3840,
         name: format!("clip {id}"),
-        notes,
+        notes: notes.into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     }
@@ -104,7 +104,7 @@ fn track_canvas_fingerprint_changes_on_note_edit() {
     let before = track_canvas(&tracks, &clips, &tempo).fingerprint();
 
     let mut edited = clips_fixture();
-    edited[0].notes[0].note = 62;
+    std::sync::Arc::make_mut(&mut edited[0].notes)[0].note = 62;
     let after = track_canvas(&tracks, &edited, &tempo).fingerprint();
     assert_ne!(before, after, "a note edit must repaint the lane grid");
 }
@@ -391,7 +391,7 @@ fn expanded_editor_fingerprint_changes_on_own_track_note_edit() {
     let before = expanded_canvas(&clips, &tempo).fingerprint();
 
     let mut edited = clips_fixture();
-    edited[0].notes[1].start_tick += 240; // clip 10 is on track 1
+    std::sync::Arc::make_mut(&mut edited[0].notes)[1].start_tick += 240; // clip 10 is on track 1
     let after = expanded_canvas(&edited, &tempo).fingerprint();
     assert_ne!(before, after, "editing the edited track's notes repaints");
 }
@@ -403,7 +403,7 @@ fn expanded_editor_fingerprint_ignores_other_tracks_clips() {
     let before = expanded_canvas(&clips, &tempo).fingerprint();
 
     let mut churned = clips_fixture();
-    churned[1].notes[0].note = 50; // clip 11 is on track 2, not rendered
+    std::sync::Arc::make_mut(&mut churned[1].notes)[0].note = 50; // clip 11 is on track 2, not rendered
     let after = expanded_canvas(&churned, &tempo).fingerprint();
     assert_eq!(
         before, after,

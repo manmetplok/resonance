@@ -92,7 +92,7 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
     let midi_clips: Vec<(ClipId, Vec<MidiNote>)> = r
         .midi_clips
         .iter()
-        .map(|mc| (mc.id, mc.notes.clone()))
+        .map(|mc| (mc.id, mc.notes.as_ref().clone()))
         .collect();
 
     // A manual save requested while this one collected starts its own

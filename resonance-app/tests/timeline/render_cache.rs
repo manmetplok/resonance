@@ -34,7 +34,7 @@ fn clip() -> MidiClipState {
         start_sample: 48_000,
         duration_ticks: 3840,
         name: "riff".into(),
-        notes: vec![note(60, 0, 480), note(64, 480, 480)],
+        notes: vec![note(60, 0, 480), note(64, 480, 480)].into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     }
@@ -138,23 +138,23 @@ fn every_drawn_midi_clip_facet_changes_the_fingerprint() {
             ..clip()
         }),
         ("note pitch", MidiClipState {
-            notes: vec![note(61, 0, 480), note(64, 480, 480)],
+            notes: vec![note(61, 0, 480), note(64, 480, 480)].into(),
             ..clip()
         }),
         ("note start", MidiClipState {
-            notes: vec![note(60, 120, 480), note(64, 480, 480)],
+            notes: vec![note(60, 120, 480), note(64, 480, 480)].into(),
             ..clip()
         }),
         ("note duration", MidiClipState {
-            notes: vec![note(60, 0, 960), note(64, 480, 480)],
+            notes: vec![note(60, 0, 960), note(64, 480, 480)].into(),
             ..clip()
         }),
         ("note added", MidiClipState {
-            notes: vec![note(60, 0, 480), note(64, 480, 480), note(67, 960, 480)],
+            notes: vec![note(60, 0, 480), note(64, 480, 480), note(67, 960, 480)].into(),
             ..clip()
         }),
         ("note removed", MidiClipState {
-            notes: vec![note(60, 0, 480)],
+            notes: vec![note(60, 0, 480)].into(),
             ..clip()
         }),
     ];

@@ -212,7 +212,7 @@ impl VocalLaneCanvas<'_> {
                     clip.id.hash(&mut h);
                     clip.duration_ticks.hash(&mut h);
                     clip.notes.len().hash(&mut h);
-                    for n in &clip.notes {
+                    for n in clip.notes.iter() {
                         n.note.hash(&mut h);
                         n.start_tick.hash(&mut h);
                         n.duration_ticks.hash(&mut h);

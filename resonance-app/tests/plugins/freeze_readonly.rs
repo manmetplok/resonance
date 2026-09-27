@@ -74,7 +74,7 @@ fn midi_clip(id: u64, track_id: TrackId, notes: Vec<MidiNote>) -> MidiClipState 
         start_sample: 0,
         duration_ticks: 1920,
         name: "clip".to_string(),
-        notes,
+        notes: notes.into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     }

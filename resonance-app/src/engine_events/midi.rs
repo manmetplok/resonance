@@ -1,5 +1,7 @@
 //! App-side handlers for MIDI clip + note events from the engine.
 
+use std::sync::Arc;
+
 use resonance_audio::quantize::GrooveTemplate;
 use resonance_audio::types::*;
 
@@ -41,7 +43,7 @@ pub(super) fn clip_created(
         start_sample,
         duration_ticks,
         name,
-        notes,
+        notes: Arc::new(notes),
         trim_start_ticks,
         trim_end_ticks,
     });
@@ -121,7 +123,7 @@ pub(crate) fn insert_note_sorted(r: &mut Resonance, clip_id: ClipId, note: MidiN
     let pos = clip
         .notes
         .partition_point(|n| n.start_tick <= note.start_tick);
-    clip.notes.insert(pos, note);
+    Arc::make_mut(&mut clip.notes).insert(pos, note);
     // Keep the lyric side-table aligned — insert a blank lyric
     // at the same index so subsequent indices still reference the
     // right note. If the side-table is shorter than the notes vec
@@ -155,7 +157,7 @@ pub(super) fn note_removed(r: &mut Resonance, clip_id: ClipId, note_index: usize
 pub(crate) fn remove_note_at(r: &mut Resonance, clip_id: ClipId, note_index: usize) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
-            clip.notes.remove(note_index);
+            Arc::make_mut(&mut clip.notes).remove(note_index);
             if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
                 if note_index < lyrics.len() {
                     lyrics.remove(note_index);
@@ -289,7 +291,7 @@ pub(crate) fn optimistic_resize_note(
 pub(crate) fn optimistic_set_notes(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNote>) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         let new_len = notes.len();
-        clip.notes = notes;
+        clip.notes = Arc::new(notes);
         if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
             lyrics.resize(new_len, String::new());
         }
@@ -343,7 +345,8 @@ pub(crate) fn apply_note_move(
             // same stable sort over the post-move start ticks.
             let mut ticks: Vec<u64> = clip.notes.iter().map(|n| n.start_tick).collect();
             ticks[note_index] = new_start_tick;
-            move_note_resorted(&mut clip.notes, note_index, new_start_tick, new_note);
+            let notes = Arc::make_mut(&mut clip.notes);
+            move_note_resorted(notes, note_index, new_start_tick, new_note);
             let mut perm: Vec<usize> = (0..ticks.len()).collect();
             perm.sort_by_key(|&i| ticks[i]);
             // perm[new_i] == old_i.
@@ -400,7 +403,7 @@ pub(crate) fn apply_note_resize(
 ) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
-            clip.notes[note_index].duration_ticks = new_duration_ticks;
+            Arc::make_mut(&mut clip.notes)[note_index].duration_ticks = new_duration_ticks;
         }
     }
 }
@@ -427,7 +430,7 @@ pub(crate) fn apply_note_velocity(
 ) {
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         if note_index < clip.notes.len() {
-            clip.notes[note_index].velocity = velocity;
+            Arc::make_mut(&mut clip.notes)[note_index].velocity = velocity;
         }
     }
 }
@@ -453,7 +456,7 @@ pub(super) fn notes_edited(r: &mut Resonance, clip_id: ClipId, notes: Vec<MidiNo
     }
     if let Some(clip) = r.midi_clips.iter_mut().find(|c| c.id == clip_id) {
         let new_len = notes.len();
-        clip.notes = notes;
+        clip.notes = Arc::new(notes);
         if let Some(lyrics) = r.compose.vocal_audio.clip_lyrics.get_mut(&clip_id) {
             if lyrics.len() != new_len {
                 lyrics.resize(new_len, String::new());

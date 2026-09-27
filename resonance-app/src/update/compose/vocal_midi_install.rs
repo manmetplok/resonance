@@ -61,7 +61,7 @@ impl VocalMidiInstall<'_> {
                     start_sample,
                     duration_ticks: self.duration_ticks,
                     name: self.name.to_string(),
-                    notes: self.midi_notes.to_vec(),
+                    notes: std::sync::Arc::new(self.midi_notes.to_vec()),
                     trim_start_ticks: 0,
                     trim_end_ticks: 0,
                 });

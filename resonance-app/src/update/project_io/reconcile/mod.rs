@@ -64,8 +64,10 @@ pub struct ReconcileCtx<'a> {
     /// sibling `.freeze` directory holds the freeze caches an undo retires.
     pub project_dir: Option<&'a Path>,
     /// The target's MIDI notes per clip id (`LoadedProject::midi_notes`),
-    /// which the `ProjectFile` does not carry. Read by `MidiClips`.
-    pub midi_notes: &'a HashMap<ClipId, Vec<MidiNote>>,
+    /// which the `ProjectFile` does not carry. Read by `MidiClips`. `Arc`
+    /// so an unchanged clip's notes reach `MidiClipState::notes` by
+    /// pointer, not a copy (ARCH-09 A9-3).
+    pub midi_notes: &'a HashMap<ClipId, Arc<Vec<MidiNote>>>,
     /// The target's plugin state blobs per instance id
     /// (`LoadedProject::plugin_states`), which the `ProjectFile` does not
     /// carry either. Read by the entity domains' plugin chains.

@@ -987,8 +987,10 @@ pub struct LoadedProject {
     /// The replay step needs this to resolve `ProjectClip.audio_file`
     /// into the absolute path it hands the engine.
     pub project_dir: PathBuf,
-    /// MIDI notes per clip id, read from the sibling `.mid` files.
-    pub midi_notes: HashMap<ClipId, Vec<MidiNote>>,
+    /// MIDI notes per clip id, read from the sibling `.mid` files. `Arc`
+    /// so it slots straight into `MidiClipState::notes` (ARCH-09 A9-3)
+    /// without a copy per clip.
+    pub midi_notes: HashMap<ClipId, Arc<Vec<MidiNote>>>,
     /// Opaque plugin state blobs. Shared (`Arc`) with
     /// `Resonance::plugin_mirror.state_cache` so undo snapshots — which are
     /// `LoadedProject`s — hold references, not copies (ARCH-09 A9-2).

@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use resonance_audio::midi_io;
 use resonance_audio::types::{ClipId, MidiNote, PluginInstanceId};
@@ -423,7 +424,7 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
 
     // Read MIDI clip files. Missing files are logged and replaced
     // with empty note lists so the rest of the project still loads.
-    let mut midi_notes: HashMap<ClipId, Vec<MidiNote>> = HashMap::new();
+    let mut midi_notes: HashMap<ClipId, Arc<Vec<MidiNote>>> = HashMap::new();
     for mc in &file.midi_clips {
         // The inline copy is lossless (code review STATE-06); the `.mid`
         // is the fallback for projects saved before it existed.
@@ -437,17 +438,17 @@ pub fn load_project(path: &Path) -> Result<LoadedProject, String> {
                     duration_ticks: n.duration_ticks,
                 })
                 .collect();
-            midi_notes.insert(mc.id, notes);
+            midi_notes.insert(mc.id, Arc::new(notes));
             continue;
         }
         let mid_path = project_dir.join(&mc.midi_file);
         match midi_io::read_midi_file(&mid_path) {
             Ok(notes) => {
-                midi_notes.insert(mc.id, notes);
+                midi_notes.insert(mc.id, Arc::new(notes));
             }
             Err(e) => {
                 tracing::warn!("could not load midi file {}: {e}", mc.midi_file);
-                midi_notes.insert(mc.id, Vec::new());
+                midi_notes.insert(mc.id, Arc::new(Vec::new()));
             }
         }
     }

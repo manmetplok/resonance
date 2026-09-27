@@ -213,7 +213,7 @@ impl TimelineCanvas<'_> {
         if !clip.notes.is_empty() && note_area_h > 2.0 && w > 2.0 {
             let mut min_note: u8 = 127;
             let mut max_note: u8 = 0;
-            for note in &clip.notes {
+            for note in clip.notes.iter() {
                 if note.note < min_note {
                     min_note = note.note;
                 }
@@ -232,7 +232,7 @@ impl TimelineCanvas<'_> {
                     a: 0.85,
                     ..theme::ACCENT_SOFT
                 };
-                for note in &clip.notes {
+                for note in clip.notes.iter() {
                     let note_start_in_clip =
                         note.start_tick as f32 - clip.trim_start_ticks as f32;
                     if note_start_in_clip + note.duration_ticks as f32 <= 0.0 {

@@ -484,7 +484,8 @@ fn bounce_is_one_revision_bump_and_one_undo_entry() {
             velocity: 0.8,
             start_tick: 0,
             duration_ticks: 480,
-        }],
+        }]
+        .into(),
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
