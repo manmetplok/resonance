@@ -2162,6 +2162,130 @@ fn a6_a_pending_echo_entry_restores_through_an_undo() {
     assert_counter_monotonic(&f.app, "fast path, echo landed", before);
 }
 
+/// FU-A13j: an undo across a *landed* echo leaves no orphan entry. The
+/// snapshot is taken while a re-derived clip's `MidiClipCreated` is in
+/// flight (it holds the entry, not the clip); the echo lands; the undo
+/// then removes the clip (the snapshot has none) and nothing will ever
+/// echo it back — so the entry must go too. Left in, it names a clip the
+/// mirror lacks, which UPD-05 reads as "echo pending" and skips the track
+/// for good: a content change after the undo left a frozen track `Frozen`.
+#[test]
+fn a6_an_undo_across_a_landed_echo_drops_the_entry_and_keeps_upd05() {
+    let mut f = fixture("a6-landed", load_demo);
+    let h = handles(&f.app);
+    let (Some(d), Some(p)) = (h.definition, h.pattern) else {
+        panic!("the demo has a section and a drum pattern");
+    };
+    // Freeze every track the section derives onto, so whichever one the
+    // arrangement edit re-derives is frozen at the snapshot.
+    let tracks: Vec<TrackId> = derived_map(&f.app)
+        .keys()
+        .filter(|(def, _, _)| *def == d)
+        .map(|(_, _, t)| *t)
+        .collect();
+    for &t in &tracks {
+        write_freeze_cache(&f, t);
+        set_frozen(&mut f, t);
+    }
+    let _ = drain(&f.rx);
+    f.app
+        .test_dispatch(Message::Compose(ComposeMessage::Arrangement(
+            ArrangementMessage::AddEntry {
+                definition_id: d,
+                pattern_id: p,
+            },
+        )));
+    let pending_loads = drain(&f.rx);
+    let pending = unmirrored_derived(&f.app);
+    assert!(!pending.is_empty(), "vacuous: no pending echo");
+    let track = derived_map(&f.app)
+        .iter()
+        .find(|(_, id)| pending.contains(id))
+        .map(|(&(_, _, t), _)| t)
+        .expect("a pending entry");
+    assert!(
+        matches!(f.app.test_freeze_status(track), FreezeStatus::Frozen { .. }),
+        "the re-derived track is frozen at the snapshot (UPD-05 waits for the echo)"
+    );
+    let snapshot = f.app.test_snapshot_for_undo();
+
+    // The echo lands.
+    for cmd in pending_loads {
+        if let AudioCommand::DeleteMidiClip { clip_id } = &cmd {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipDeleted { clip_id: *clip_id });
+        }
+        if let AudioCommand::LoadMidiClipDirect {
+            clip_id,
+            track_id,
+            start_sample,
+            duration_ticks,
+            notes,
+            name,
+            trim_start_ticks,
+            trim_end_ticks,
+        } = cmd
+        {
+            f.app.test_apply_engine_event(AudioEvent::MidiClipCreated {
+                clip_id,
+                track_id,
+                start_sample,
+                duration_ticks,
+                name,
+                notes,
+                trim_start_ticks,
+                trim_end_ticks,
+            });
+        }
+    }
+    assert!(unmirrored_derived(&f.app).is_empty(), "the echo landed");
+
+    // Undo to the snapshot: its file has the entry but not the clip.
+    f.app.test_begin_restore_from_snapshot(snapshot.clone());
+    echo_midi_clip_loads(&mut f.app, &f.rx);
+    assert!(
+        !f.app.test_midi_clips().iter().any(|mc| pending.contains(&mc.id)),
+        "the undo removes the clip the snapshot does not hold"
+    );
+    assert_eq!(
+        unmirrored_derived(&f.app),
+        Vec::<ClipId>::new(),
+        "no entry may name a clip the restore removed and nothing will echo back"
+    );
+    for (key, id) in &file_derived(&snapshot) {
+        if !pending.contains(id) {
+            assert_eq!(
+                derived_map(&f.app).get(key),
+                Some(id),
+                "every other entry of the snapshot is kept"
+            );
+        }
+    }
+    assert_eq!(
+        f.app.test_build_project_file().derived_clips.map(|v| v.len()),
+        Some(file_derived(&snapshot).len() - pending.len()),
+        "the restored map is the snapshot's minus the dropped entries"
+    );
+
+    // UPD-05 runs on the track again: the restored `Frozen` status is
+    // checked against its content, and a tempo edit invalidates it.
+    f.app.test_set_freeze_status(
+        track,
+        FreezeStatus::Frozen {
+            cache_ref: freeze_ref(track, FreezeCacheStatus::Frozen),
+        },
+    );
+    f.app
+        .test_dispatch(Message::Transport(TransportMessage::SetBpmText("141".into())));
+    f.app.test_dispatch(Message::Transport(TransportMessage::CommitBpm));
+    echo_midi_clip_loads(&mut f.app, &f.rx);
+    f.app.test_update(Message::Tick);
+    assert!(
+        matches!(f.app.test_freeze_status(track), FreezeStatus::Stale { .. }),
+        "a content change after the undo invalidates the freeze: {:?}",
+        f.app.test_freeze_status(track)
+    );
+}
+
 /// Save to disk, optionally edit the written `project.json`, and load it
 /// into a fresh app the way `ProjectLoaded` does.
 fn save_and_reload(

@@ -1754,7 +1754,7 @@ between a disk load and an undo, not a leftover of the fallback:
 | `Pool` | `ReserveAssetIds` | no (allocator monotonic in a session) |
 | `TrackGroups` | every effective mute / solo sent | only what differs |
 | `TakeGroups` | `clear()` (drops the peak cache) | `clear_for_snapshot()` |
-| `DerivedClips` | drops entries whose clip was not loaded; scans the bundle | keeps every entry (echo may be in flight); counter floor |
+| `DerivedClips` | drops entries whose clip was not loaded; scans the bundle | keeps an unmirrored entry only while its echo is in flight now (FU-A13j); counter floor |
 | `References` | `restore_references` (monitor from the file) | `reconcile_references` (monitor untouched) |
 | `ExternalInstruments` | map rebuilt, no empty `SetTrackDeviceParams` | stale cleared, offline flags kept (fresh tracks as a load) |
 | `MissingPlugins` | `reset()` | nothing (below) |
@@ -1849,6 +1849,17 @@ point.
   `old`'s MIDI clips but not `new`'s (the restore removed it; nothing will
   echo it back). Not done here because it makes the restored map differ
   from the snapshot's, which the fixed point then has to allow for.
+  **Fixed as FU-A13j** — with a tighter rule than this sketch: an entry
+  whose clip is not mirrored after the restore is kept only if its echo
+  is in flight *now*, i.e. `old`'s map names the clip and `old`'s MIDI
+  clips lack it (`pending_derived_echoes`, the same test as UPD-05's
+  "echo pending" skip). The sketch would still keep an entry whose clip
+  is in neither `old` nor `new` (the clip was deleted after the snapshot
+  by a path that did not reach the snapshot's copy of the map); this
+  drops it too. Only a target whose map names a clip that neither it nor
+  the live mirror holds, nor any in-flight echo will bring, is affected,
+  so the fixed point over ordinary edits is unchanged (19/19). Pinned by
+  `undo_snapshot_fixed_point::a6_an_undo_across_a_landed_echo_drops_the_entry_and_keeps_upd05`.
 * **Each undo builds the live file twice**: `try_undo` / `try_redo` take
   `snapshot_for_undo()` for the other stack, then
   `begin_restore_from_snapshot` builds `current` again. Passing the first
