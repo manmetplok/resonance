@@ -39,7 +39,14 @@ fn settled_bypass_never_tears_against_a_concurrent_render() {
     let settler = {
         let fade = Arc::clone(&fade);
         let stop = Arc::clone(&stop);
+        let stages_seen = Arc::clone(&stages_seen);
         std::thread::spawn(move || {
+            // Start toggling only once the renderer is running: under load
+            // the scheduler can otherwise finish every toggle before the
+            // renderer thread first runs, and the race never happens.
+            while stages_seen.load(Ordering::Relaxed) == 0 {
+                std::hint::spin_loop();
+            }
             let mut toggles = 0u64;
             let mut v = false;
             while toggles < ITERATIONS {
