@@ -65,9 +65,10 @@ impl SynthEngine {
         tempo: Option<TempoInfo>,
     ) -> BlockPlan {
         // Missing wavetable indices fall back to `None` and silently skip
-        // that oscillator's output.
-        let wt1_idx = (snap.osc1_wt < self.wavetables.len()).then_some(snap.osc1_wt);
-        let wt2_idx = (snap.osc2_wt < self.wavetables.len()).then_some(snap.osc2_wt);
+        // that oscillator's output. The user index resolves to the
+        // oscillator's own user slot.
+        let wt1_idx = self.resolve_wavetable(0, snap.osc1_wt);
+        let wt2_idx = self.resolve_wavetable(1, snap.osc2_wt);
         let oscs_active =
             (snap.osc1_enabled && wt1_idx.is_some()) || (snap.osc2_enabled && wt2_idx.is_some());
 

@@ -6,10 +6,10 @@
 
 use plugin_gui_core::egui;
 
-use crate::editor::display_waves;
+use crate::editor::display_waves::DisplayTable;
 use crate::editor::theme;
 
-pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, wavetable_idx: usize, position: f32) {
+pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, table: &DisplayTable, position: f32) {
     let painter = ui.painter_at(rect);
 
     painter.rect_filled(rect, 2.0, theme::PANEL);
@@ -20,7 +20,7 @@ pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, wavetable_idx: usize, position:
         egui::StrokeKind::Inside,
     );
 
-    let frames = display_waves::frame_count(wavetable_idx);
+    let frames = table.frame_count();
     if frames == 0 {
         return;
     }
@@ -38,7 +38,7 @@ pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, wavetable_idx: usize, position:
 
     for s in 0..strip_count {
         let frame = s * stride;
-        let samples = display_waves::display_samples(wavetable_idx, frame, N_POINTS_PER_FRAME);
+        let samples = table.samples(frame, N_POINTS_PER_FRAME);
         let x0 = rect.left() + pad + s as f32 * strip_w;
         let mut points: Vec<egui::Pos2> = Vec::with_capacity(N_POINTS_PER_FRAME);
         for (i, sample) in samples.iter().enumerate() {

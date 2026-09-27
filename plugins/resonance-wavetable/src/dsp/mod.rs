@@ -14,5 +14,6 @@ pub mod lfo;
 pub mod modulation;
 pub mod oscillator;
 pub mod render;
+pub mod user_table;
 pub mod voice;
 pub mod wavetable;

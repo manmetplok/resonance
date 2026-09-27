@@ -5195,15 +5195,21 @@ dependencies = [
 name = "resonance-wavetable"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clack-extensions",
  "clack-host",
  "clack-plugin",
  "criterion",
+ "hound",
+ "parking_lot",
  "plugin-gui-core",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-plugin",
+ "rfd",
+ "rustfft",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

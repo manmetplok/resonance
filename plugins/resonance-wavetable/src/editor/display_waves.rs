@@ -12,7 +12,10 @@
 //! (wavetable, frame) combination.
 
 use std::f32::consts::TAU;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+
+use crate::dsp::wavetable::{USER_WAVETABLE_INDEX, WAVETABLE_SIZE};
+use crate::user_wavetable::UserSlotInfo;
 
 const N_POINTS: usize = 256;
 
@@ -50,6 +53,75 @@ pub fn wavetable_name(index: usize) -> &'static str {
 
 pub fn frame_count(wt_index: usize) -> usize {
     FRAME_COUNTS.get(wt_index).copied().unwrap_or(0)
+}
+
+/// The name shown for an `oscN_wavetable` value: a bundled table's, or the
+/// user table's file name.
+pub fn selection_name(index: usize, user: &UserSlotInfo) -> String {
+    if index != USER_WAVETABLE_INDEX {
+        return wavetable_name(index).to_string();
+    }
+    if user.is_loaded() {
+        format!("User · {}", user.name)
+    } else {
+        // What the engine plays for an empty user slot.
+        format!("User (none · plays {})", wavetable_name(0))
+    }
+}
+
+/// What the wave views draw for one oscillator: a bundled table's
+/// representative shapes, or a user table's imported frames.
+pub enum DisplayTable {
+    Bundled(usize),
+    User(Arc<[f32]>),
+}
+
+impl DisplayTable {
+    /// The table an `oscN_wavetable` value plays — an empty user slot plays
+    /// bundled table 0, and is drawn as such.
+    pub fn for_selection(index: usize, user: &UserSlotInfo) -> Self {
+        if index != USER_WAVETABLE_INDEX {
+            return Self::Bundled(index);
+        }
+        match &user.frames {
+            Some(frames) => Self::User(frames.clone()),
+            None => Self::Bundled(0),
+        }
+    }
+
+    pub fn frame_count(&self) -> usize {
+        match self {
+            Self::Bundled(i) => frame_count(*i),
+            Self::User(frames) => frames.len() / WAVETABLE_SIZE,
+        }
+    }
+
+    /// `n_points` samples of `frame`, peak-normalised like the bundled
+    /// shapes.
+    pub fn samples(&self, frame: usize, n_points: usize) -> Vec<f32> {
+        match self {
+            Self::Bundled(i) => display_samples(*i, frame, n_points),
+            Self::User(frames) => {
+                let count = frames.len() / WAVETABLE_SIZE;
+                if count == 0 || n_points == 0 {
+                    return vec![0.0; n_points];
+                }
+                let off = frame.min(count - 1) * WAVETABLE_SIZE;
+                let cycle = &frames[off..off + WAVETABLE_SIZE];
+                let mut out: Vec<f32> = (0..n_points)
+                    .map(|i| cycle[(i * WAVETABLE_SIZE / n_points).min(WAVETABLE_SIZE - 1)])
+                    .collect();
+                let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+                if peak > 0.001 {
+                    let inv = 1.0 / peak;
+                    for s in out.iter_mut() {
+                        *s *= inv;
+                    }
+                }
+                out
+            }
+        }
+    }
 }
 
 /// Returns a representative waveform for (wavetable, frame).
