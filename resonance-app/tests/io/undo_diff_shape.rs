@@ -41,6 +41,9 @@ struct Fixture {
     /// The engine's sub-tracks, by parent (`CreateSubTrack` has no echo;
     /// `RemoveTrack` of a parent answers for each one still under it).
     subs: HashMap<u64, u64>,
+    /// The engine's plugin chains, when a test models them
+    /// ([`EngineChains`]); `None` answers every add / move as `echo_of`.
+    chains: Option<EngineChains>,
 }
 
 impl Drop for Fixture {
@@ -67,6 +70,7 @@ fn fixture(tag: &str) -> Fixture {
         rx,
         root,
         subs: HashMap::new(),
+        chains: None,
     };
     echo_midi_clip_loads(&mut f);
     f.app.test_set_active_project(true);
@@ -108,6 +112,9 @@ fn echo(f: &mut Fixture, mut cmds: Vec<AudioCommand>) {
 /// tests need: which sub-tracks sit under which parent, and an audio
 /// clip's length (the WAV's, which the load reports; the mirror has it).
 fn engine_answer(f: &mut Fixture, cmd: AudioCommand) -> Vec<AudioEvent> {
+    if let Some(events) = f.chains.as_mut().and_then(|c| c.answer(&cmd)) {
+        return events;
+    }
     match cmd {
         AudioCommand::CreateSubTrack {
             sub_id,
@@ -1628,6 +1635,330 @@ fn undoing_a_bus_plugin_delete_before_its_echo_keeps_the_plugin() {
 #[test]
 fn undoing_a_master_plugin_delete_before_its_echo_keeps_the_plugin() {
     plugin_delete_before_echo_keeps_the_plugin("master-plugin-delete-early-undo", TestChain::Master);
+}
+
+// ---------------------------------------------------------------------------
+// A re-added plugin that turns out missing (FU-A13d)
+// ---------------------------------------------------------------------------
+
+/// A chain the engine keeps, as [`EngineChains`] names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ChainKey {
+    Track(u64),
+    Bus(u64),
+    Master,
+}
+
+impl From<TestChain> for ChainKey {
+    fn from(chain: TestChain) -> Self {
+        match chain {
+            TestChain::Track(id) => ChainKey::Track(id),
+            TestChain::Bus(id) => ChainKey::Bus(id),
+            TestChain::Master => ChainKey::Master,
+        }
+    }
+}
+
+/// The engine's own plugin chains, which the app only mirrors: an add
+/// appends, unless the plugin is not installed, when it answers
+/// `PluginLoadFailed` and the chain never holds the instance; a move is
+/// remove + insert at the clamped index and echoes that index; a move of
+/// an instance the chain does not hold answers with an error, not an echo
+/// (`handle_move_plugin`). This is what the pinned command lists cannot
+/// show: where the plugins actually end up, and so what the user hears.
+struct EngineChains {
+    chains: HashMap<ChainKey, Vec<u64>>,
+    /// `clap_plugin_id`s whose `.clap` is gone from this machine.
+    uninstalled: HashSet<String>,
+}
+
+impl EngineChains {
+    /// The engine as the app left it: every chain's live slots, in order.
+    fn of(app: &Resonance) -> Self {
+        let mut keys: Vec<TestChain> = app
+            .test_registry()
+            .tracks
+            .iter()
+            .map(|t| TestChain::Track(t.id))
+            .collect();
+        keys.extend(app.test_registry().busses.iter().map(|b| TestChain::Bus(b.id)));
+        keys.push(TestChain::Master);
+        let chains = keys
+            .into_iter()
+            .map(|chain| {
+                let live = app
+                    .test_chain_slots(chain)
+                    .into_iter()
+                    .filter(|(_, _, missing)| !missing)
+                    .map(|(id, _, _)| id)
+                    .collect();
+                (ChainKey::from(chain), live)
+            })
+            .collect();
+        Self {
+            chains,
+            uninstalled: HashSet::new(),
+        }
+    }
+
+    fn chain(&self, chain: TestChain) -> Vec<u64> {
+        self.chains.get(&chain.into()).cloned().unwrap_or_default()
+    }
+
+    /// The engine's answer when it differs from `echo_of`'s, having
+    /// applied `cmd` to the chains.
+    fn answer(&mut self, cmd: &AudioCommand) -> Option<Vec<AudioEvent>> {
+        let (key, clap_file_path, clap_plugin_id, id) = match cmd {
+            AudioCommand::AddPlugin {
+                track_id,
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            } => (ChainKey::Track(*track_id), clap_file_path, clap_plugin_id, *id),
+            AudioCommand::AddPluginToBus {
+                bus_id,
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            } => (ChainKey::Bus(*bus_id), clap_file_path, clap_plugin_id, *id),
+            AudioCommand::AddPluginToMaster {
+                clap_file_path,
+                clap_plugin_id,
+                id,
+            } => (ChainKey::Master, clap_file_path, clap_plugin_id, *id),
+            AudioCommand::RemovePlugin {
+                track_id,
+                instance_id,
+            } => {
+                self.remove(ChainKey::Track(*track_id), *instance_id);
+                return None;
+            }
+            AudioCommand::RemovePluginFromBus {
+                bus_id,
+                instance_id,
+            } => {
+                self.remove(ChainKey::Bus(*bus_id), *instance_id);
+                return None;
+            }
+            AudioCommand::RemovePluginFromMaster { instance_id } => {
+                self.remove(ChainKey::Master, *instance_id);
+                return None;
+            }
+            AudioCommand::MovePlugin {
+                track_id,
+                instance_id,
+                to_index,
+            } => {
+                let to = self.move_to(ChainKey::Track(*track_id), *instance_id, *to_index);
+                return Some(to.map_or_else(Vec::new, |to_index| {
+                    vec![AudioEvent::PluginMoved {
+                        track_id: *track_id,
+                        instance_id: *instance_id,
+                        to_index,
+                    }]
+                }));
+            }
+            AudioCommand::MovePluginInBus {
+                bus_id,
+                instance_id,
+                to_index,
+            } => {
+                let to = self.move_to(ChainKey::Bus(*bus_id), *instance_id, *to_index);
+                return Some(to.map_or_else(Vec::new, |to_index| {
+                    vec![AudioEvent::BusPluginMoved {
+                        bus_id: *bus_id,
+                        instance_id: *instance_id,
+                        to_index,
+                    }]
+                }));
+            }
+            AudioCommand::MovePluginInMaster {
+                instance_id,
+                to_index,
+            } => {
+                let to = self.move_to(ChainKey::Master, *instance_id, *to_index);
+                return Some(to.map_or_else(Vec::new, |to_index| {
+                    vec![AudioEvent::MasterPluginMoved {
+                        instance_id: *instance_id,
+                        to_index,
+                    }]
+                }));
+            }
+            AudioCommand::RemoveTrack { track_id } => {
+                self.chains.remove(&ChainKey::Track(*track_id));
+                return None;
+            }
+            AudioCommand::RemoveBus { bus_id } => {
+                self.chains.remove(&ChainKey::Bus(*bus_id));
+                return None;
+            }
+            _ => return None,
+        };
+        if self.uninstalled.contains(clap_plugin_id) {
+            return Some(vec![AudioEvent::PluginLoadFailed {
+                instance_id: Some(id),
+                clap_plugin_id: clap_plugin_id.clone(),
+                clap_file_path: clap_file_path.clone(),
+                reason: "not installed".to_owned(),
+            }]);
+        }
+        self.chains.entry(key).or_default().push(id);
+        None
+    }
+
+    fn remove(&mut self, key: ChainKey, id: u64) {
+        if let Some(chain) = self.chains.get_mut(&key) {
+            chain.retain(|&p| p != id);
+        }
+    }
+
+    /// `None` when the chain does not hold `id` (the engine's error).
+    fn move_to(&mut self, key: ChainKey, id: u64, to_index: usize) -> Option<usize> {
+        let chain = self.chains.get_mut(&key)?;
+        let from = chain.iter().position(|&p| p == id)?;
+        let to = to_index.min(chain.len() - 1);
+        let moved = chain.remove(from);
+        chain.insert(to, moved);
+        Some(to)
+    }
+}
+
+/// Where, in the chain one restore re-adds two plugins to, the one that
+/// turns out missing sits.
+#[derive(Debug, Clone, Copy)]
+enum MissingAt {
+    /// `[m, b, (the chain's own plugins), a, c]`.
+    Start,
+    /// `[(own), a, m, b, c]` — the order the plugins were added in.
+    Middle,
+    /// `[(own), a, b, c, m]`.
+    End,
+}
+
+/// FU-A13d. On `chain`, add `a`, `m`, `b` and `c` and arrange them as
+/// `at` says; remove `m`, then `b`; uninstall `m`; then restore the state
+/// with all four in one step, so one restore re-adds both `m` and `b` and
+/// `m`'s add fails.
+///
+/// The restore appends both and then moves each into place, naming
+/// **engine** indices; a slot whose plugin is missing is not in the
+/// engine's chain. `m` is not known to be missing until its
+/// `PluginLoadFailed` arrives, after the restore has sent every move, so
+/// a move that counted `m` ahead of it is one engine slot off. After the
+/// echoes the engine's chain must be the mirror's with `m` skipped, and
+/// nothing may still be owed (the move of `m` itself is answered with an
+/// error, never an echo).
+fn missing_plugin_re_add_walk(tag: &str, chain: TestChain, at: MissingAt) {
+    let mut f = fixture(tag);
+    f.chains = Some(EngineChains::of(&f.app));
+    let own = chain_ids(&f.app, chain);
+    let e = own.len();
+    let add = |f: &mut Fixture, name: &str| {
+        let _ = edit(f, add_to(chain, scanned(name)));
+        *chain_ids(&f.app, chain).last().expect("the plugin landed")
+    };
+    let a = add(&mut f, "a");
+    let m = add(&mut f, "m");
+    let b = add(&mut f, "b");
+    let c = add(&mut f, "c");
+    match at {
+        MissingAt::Start => {
+            let _ = edit(&mut f, move_in(chain, m, 0));
+            let _ = edit(&mut f, move_in(chain, b, 1));
+        }
+        MissingAt::Middle => {}
+        MissingAt::End => {
+            let _ = edit(&mut f, move_in(chain, m, e + 3));
+        }
+    }
+    let full = f.app.test_snapshot_for_undo();
+    let want: Vec<u64> = match at {
+        MissingAt::Start => [m, b].into_iter().chain(own.iter().copied()).chain([a, c]).collect(),
+        MissingAt::Middle => own.iter().copied().chain([a, m, b, c]).collect(),
+        MissingAt::End => own.iter().copied().chain([a, b, c, m]).collect(),
+    };
+    assert_eq!(chain_ids(&f.app, chain), want, "{at:?}: the arrangement landed");
+    let engine = |f: &Fixture| f.chains.as_ref().expect("modelled").chain(chain);
+    assert_eq!(engine(&f), want, "{at:?}: the engine agrees before anything is missing");
+
+    let _ = edit(&mut f, remove_from(chain, m));
+    let _ = edit(&mut f, remove_from(chain, b));
+    f.chains
+        .as_mut()
+        .expect("modelled")
+        .uninstalled
+        .insert("com.resonance.m".to_owned());
+
+    let _ = drain(&f.rx);
+    f.app.test_begin_restore_from_snapshot(full);
+    let cmds = drain(&f.rx);
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::ClearAll)),
+        "{at:?}: must take the diff path"
+    );
+    assert!(
+        f.app.test_reconcile_trace().iter().all(|(o, _)| *o == Origin::Undo),
+        "{at:?}: every domain runs under Undo"
+    );
+    assert_eq!(chain_ids(&f.app, chain), want, "{at:?}: the restore mirrored the order");
+    echo(&mut f, cmds);
+
+    assert_eq!(
+        chain_ids(&f.app, chain),
+        want,
+        "{at:?}: m keeps its slot in the app's chain"
+    );
+    assert!(
+        f.app
+            .test_chain_slots(chain)
+            .iter()
+            .any(|(id, _, missing)| *id == m && *missing),
+        "{at:?}: m's slot is marked missing"
+    );
+    let live: Vec<u64> = want.iter().copied().filter(|&id| id != m).collect();
+    assert_eq!(
+        engine(&f),
+        live,
+        "{at:?}: the engine's chain is the app's with the missing slot skipped \
+         (a={a}, m={m}, b={b}, c={c}, own={own:?})"
+    );
+    assert!(
+        f.app.test_restore_echoes_settled(),
+        "{at:?}: every owed echo was consumed"
+    );
+}
+
+#[test]
+fn a_re_added_plugin_after_a_missing_one_lands_in_its_engine_slot_on_a_track() {
+    for at in [MissingAt::Start, MissingAt::Middle, MissingAt::End] {
+        missing_plugin_re_add_walk(
+            &format!("missing-re-add-track-{at:?}"),
+            TestChain::Track(AUDIO_TRACK),
+            at,
+        );
+    }
+}
+
+#[test]
+fn a_re_added_plugin_after_a_missing_one_lands_in_its_engine_slot_on_a_bus() {
+    for at in [MissingAt::Start, MissingAt::Middle, MissingAt::End] {
+        missing_plugin_re_add_walk(
+            &format!("missing-re-add-bus-{at:?}"),
+            TestChain::Bus(DRUM_BUS),
+            at,
+        );
+    }
+}
+
+#[test]
+fn a_re_added_plugin_after_a_missing_one_lands_in_its_engine_slot_on_the_master() {
+    for at in [MissingAt::Start, MissingAt::Middle, MissingAt::End] {
+        missing_plugin_re_add_walk(
+            &format!("missing-re-add-master-{at:?}"),
+            TestChain::Master,
+            at,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

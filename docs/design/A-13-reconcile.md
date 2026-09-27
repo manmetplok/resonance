@@ -1294,7 +1294,31 @@ until its echo says otherwise, so a fresh plugin that turns out missing is
 counted, and pass 2 can then place a *later* fresh plugin one engine slot
 off. That needs two plugins re-added by one restore, one of them missing
 and out of append order; the recovery path re-positions the missing one if
-it ever loads. Recorded, not fixed.
+it ever loads.
+
+**Fixed (FU-A13d).** The engine only says a plugin is missing after the
+restore has sent every move, so the fix is on the failure: the diff arms
+of `tracks` / `busses` / `master` owe each fresh instance's add echo
+(`RestoreEchoes::expect_plugin_added`, settled by `*PluginAdded` or
+`PluginLoadFailed`). A `PluginLoadFailed` that settles one
+(`engine_events::plugins::load_failed`) forgets the moves the restore sent
+for that instance (the engine answers a move of an instance it lacks with
+an error, never an echo, so they were owed forever), and re-sends a
+`MovePlugin*` for every live slot after the missing one, left to right,
+at its engine index over the now-marked chain, each echo owed. Pass 2
+runs left to right, so only slots after the missing one were miscounted;
+the engine runs the re-sends after the restore's commands, so they land
+on whatever those made. Cases found (fresh `m` missing, fresh `b`, kept
+`a` / `c`, the chain's own plugins `E`):
+
+| target | engine before the fix | after |
+|---|---|---|
+| `[m, b, E, a, c]` | `[E, b, a, c]`; `[a, b, c]` with no `E` (`b` named index 1) | `[b, E, a, c]` |
+| `[E, a, m, b, c]` | `[E, a, c, b]` (`b` named len(`E`) + 2) | `[E, a, b, c]` |
+| `[E, a, b, c, m]` | right (nothing moved past `m`) | unchanged |
+
+Guard: `undo_diff_shape::a_re_added_plugin_after_a_missing_one_lands_in_its_engine_slot_*`
+(track, bus, master), which models the engine's chains.
 
 ### Echoes the restore owes: `io.restore_echoes`
 
@@ -1390,7 +1414,8 @@ User-visible:
   deletes it. Pre-existing (the gate saw equal shapes before too). The fix
   is STATE-10's — mirror the delete at once — and the echo it then owes is
   exactly what `RestoreEchoes` records; worth a follow-up.
-* **`order_chain` with two fresh plugins, one missing** — see above.
+* **`order_chain` with two fresh plugins, one missing** — see above
+  (fixed, FU-A13d).
 
 ### What this changes for A-13i / A-13j
 

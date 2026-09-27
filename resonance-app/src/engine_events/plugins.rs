@@ -21,6 +21,9 @@ pub(super) fn track_added(
     output_port_count: usize,
     output_port_names: Vec<String>,
 ) {
+    // The add a diff restore owed, first: the echo answers it whether or
+    // not the instance is still wanted (FU-A13d).
+    r.io.restore_echoes.settle_plugin_added(instance_id);
     // A diff restore removed this instance after adding it, before this
     // echo arrived: the engine has already dropped it (ARCH-01 A-13h).
     if r.io.restore_echoes.plugin_removal_owed(instance_id)
@@ -434,12 +437,22 @@ pub(super) fn load_failed(
     clap_file_path: String,
     reason: String,
 ) {
+    // A diff restore's add (FU-A13d): the restore counted this instance
+    // as live when it named the chain's engine indices.
+    let restored =
+        instance_id.is_some_and(|instance_id| r.io.restore_echoes.settle_plugin_added(instance_id));
     let marked = instance_id.is_some_and(|instance_id| {
         // Not `with_plugin_mut`: its `debug_assert` treats an unknown id
         // as a bug, and here an id with no slot is an ordinary outcome —
         // the plugin was removed while the add was in flight.
         mark_slot_missing(r, instance_id, &reason)
     });
+    if let Some(instance_id) = instance_id.filter(|_| restored) {
+        r.io.restore_echoes.forget_plugin_moves(instance_id);
+        if marked {
+            reposition_after_missing(r, instance_id);
+        }
+    }
     if marked {
         r.missing_plugins.note_failure();
     } else {
@@ -456,6 +469,77 @@ pub(super) fn load_failed(
                 format!(" ({clap_file_path})")
             }
         ));
+    }
+}
+
+/// Put every live slot after `missing` back where the app's chain says,
+/// now that `missing` is known to be absent from the engine's (FU-A13d).
+///
+/// A diff restore re-adds the plugins its target has and the live chain
+/// lacks, then moves each into place by **engine** index
+/// ([`crate::plugin_chain::engine_slot_index`]). A fresh instance is
+/// `Available` until its echo lands, so every move that restore named for
+/// a slot after one that then fails to load counted it, and is one engine
+/// slot too far right: two plugins re-added by one restore, the first of
+/// them missing, came back in swapped order in the engine while the
+/// mixer showed them right.
+///
+/// The moves only ever misplace slots after the missing one (the reorder
+/// runs left to right, so a slot moved past it stays past it), and the
+/// engine runs these after every command the restore sent, so moving
+/// each of those slots, left to right, to its engine index restores the
+/// order whatever the engine made of the earlier moves. The mirror is
+/// already in that order: each echo is owed and swallowed rather than
+/// replayed as an app index. A fresh plugin further right that fails
+/// too is still counted here; its own failure runs this again.
+fn reposition_after_missing(r: &mut Resonance, missing: PluginInstanceId) {
+    let Some(&locator) = r.plugin_mirror.index.get(&missing) else {
+        return;
+    };
+    let chain: &[PluginSlotState] = match locator {
+        PluginLocator::Track(track_id) => r
+            .registry
+            .tracks
+            .iter()
+            .find(|t| t.id == track_id)
+            .map_or(&[], |t| t.plugins.as_slice()),
+        PluginLocator::Bus(bus_id) => r
+            .registry
+            .busses
+            .iter()
+            .find(|b| b.id == bus_id)
+            .map_or(&[], |b| b.plugins.as_slice()),
+        PluginLocator::Master => r.master.plugins.as_slice(),
+    };
+    let Some(at) = chain.iter().position(|p| p.instance_id == missing) else {
+        return;
+    };
+    let moves: Vec<(PluginInstanceId, usize)> = chain
+        .iter()
+        .enumerate()
+        .skip(at + 1)
+        .filter(|(_, p)| !p.availability.is_missing())
+        .map(|(i, p)| (p.instance_id, crate::plugin_chain::engine_slot_index(chain, i)))
+        .collect();
+    for (instance_id, to_index) in moves {
+        let cmd = match locator {
+            PluginLocator::Track(track_id) => AudioCommand::MovePlugin {
+                track_id,
+                instance_id,
+                to_index,
+            },
+            PluginLocator::Bus(bus_id) => AudioCommand::MovePluginInBus {
+                bus_id,
+                instance_id,
+                to_index,
+            },
+            PluginLocator::Master => AudioCommand::MovePluginInMaster {
+                instance_id,
+                to_index,
+            },
+        };
+        let _ = r.engine.send(cmd);
+        r.io.restore_echoes.expect_plugin_moved(instance_id, to_index);
     }
 }
 
@@ -596,6 +680,7 @@ pub(super) fn bus_added(
 ) {
     // A diff restore removed this instance, or its whole bus, after
     // adding it (ARCH-01 A-13h) — see `track_added`.
+    r.io.restore_echoes.settle_plugin_added(instance_id);
     if r.io.restore_echoes.plugin_removal_owed(instance_id)
         || r.io.restore_echoes.bus_removal_owed(bus_id)
     {
@@ -740,6 +825,7 @@ pub(super) fn master_added(
     has_sidechain_input: bool,
 ) {
     // See `track_added` (ARCH-01 A-13h).
+    r.io.restore_echoes.settle_plugin_added(instance_id);
     if r.io.restore_echoes.plugin_removal_owed(instance_id) {
         return;
     }
