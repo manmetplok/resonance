@@ -35,9 +35,18 @@ fn bounce_gain_endpoints(static_gains: (f32, f32), auto: AutoGain) -> ((f32, f32
 /// one mute/solo resolution shared by the live mixer and the bounce (code
 /// review MIX-07), so an export can never disagree with playback about
 /// who is heard. `muted` already folds in any mute automation.
+///
+/// Reads `track.block_soloed()` — the snapshot `snapshot_top_level_solo`
+/// latched at the top of this block — rather than `track.soloed()`
+/// directly (FU-B3a). `any_solo` and every track's own flag must come
+/// from the same instant: a live re-read here could straddle a solo
+/// toggle against the moment `any_solo` was computed and silence the
+/// whole block (the aggregate says "someone is soloed" while this track's
+/// fresh read says "not me", and every other track was decided the same
+/// stale way).
 #[inline]
 pub(crate) fn track_silenced(track: &Track, muted: bool, any_solo: bool) -> bool {
-    muted || (any_solo && !track.soloed())
+    muted || (any_solo && !track.block_soloed())
 }
 
 /// Whether a sub-track is silenced this block. Sub-tracks follow their

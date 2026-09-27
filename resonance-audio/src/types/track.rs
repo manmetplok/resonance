@@ -116,6 +116,14 @@ struct TrackRuntime {
     /// gains per sample to avoid zipper noise on fader/pan/mute changes.
     last_gain_l_bits: AtomicU32,
     last_gain_r_bits: AtomicU32,
+    /// This track's own solo flag, latched once at the top of the current
+    /// render block (FU-B3a). `soloed()` reads the live, control-thread
+    /// -written flag directly and can flip mid-block; `block_soloed()`
+    /// reads this instead, so a disposition decided partway through the
+    /// block can never disagree with the `any_solo` aggregate the same
+    /// block computed from the same scan. Written only by the audio
+    /// thread, once per block, before any disposition is decided.
+    block_soloed: AtomicBool,
     /// 0-indexed starting input channel on the track's input device. For
     /// mono tracks this is the single channel captured and duplicated to
     /// L/R; for stereo tracks it's the L channel and `port_index + 1` is
@@ -197,6 +205,7 @@ impl Track {
                 peak_r_bits: AtomicU32::new(0),
                 last_gain_l_bits: AtomicU32::new(0),
                 last_gain_r_bits: AtomicU32::new(0),
+                block_soloed: AtomicBool::new(false),
                 input_port_bits: AtomicU32::new(0),
                 plugin_chain: ArcSwap::from_pointee(Vec::new()),
                 device_params: ArcSwap::from_pointee(HashMap::new()),
@@ -276,6 +285,22 @@ impl Track {
 
     pub fn set_soloed(&self, v: bool) {
         self.runtime.soloed.store(v, Ordering::Relaxed);
+    }
+
+    /// This track's solo flag as latched by [`snapshot_top_level_solo`] at
+    /// the top of the current render block (FU-B3a). Audio thread only;
+    /// use this instead of [`Track::soloed`] anywhere a disposition must
+    /// agree with the block's `any_solo` aggregate — the two are read from
+    /// the same scan and can never disagree mid-block the way two
+    /// independent `soloed()` reads can.
+    pub(crate) fn block_soloed(&self) -> bool {
+        self.runtime.block_soloed.load(Ordering::Relaxed)
+    }
+
+    /// Latch this block's solo snapshot. Audio thread only; see
+    /// [`snapshot_top_level_solo`].
+    fn set_block_soloed(&self, v: bool) {
+        self.runtime.block_soloed.store(v, Ordering::Relaxed);
     }
 
     pub fn fx_bypassed(&self) -> bool {
@@ -554,12 +579,40 @@ impl Track {
 
 /// Whether any top-level track is soloed. Sub-tracks follow their
 /// parent's solo state, so they're excluded from the scan. Shared by
-/// the live mixer and the bounce renderer so solo semantics match.
+/// the live mixer and the bounce renderer so solo semantics match. A
+/// pure query with no side effect — used outside a render block (tests,
+/// UI-adjacent code) where there is no later per-track re-read to race
+/// against. Render blocks use [`snapshot_top_level_solo`] instead.
 pub fn any_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
     tracks
         .into_iter()
         .filter(|t| t.sub_track_of.is_none())
         .any(|t| t.soloed())
+}
+
+/// The block-scoped counterpart of [`any_top_level_solo`] (FU-B3a): reads
+/// each top-level track's `soloed()` exactly once, latches it onto the
+/// track via `set_block_soloed` for [`Track::block_soloed`] to read back
+/// later in the same block, and returns the aggregate computed from that
+/// same pass. Every render path that later asks "is *this* track soloed"
+/// mid-block (`track_silenced`, the monitor / idle-instrument passes) must
+/// read `block_soloed()`, never `soloed()` directly — two independent
+/// `soloed()` reads (one folded into `any_solo` here, one taken later for
+/// a single track) can straddle a solo toggle from the control thread and
+/// disagree about whether that track is the one keeping the aggregate
+/// true, rendering an all-silent block. Call once, at the very top of the
+/// block, before any track's disposition is decided. Audio thread only —
+/// not `&Arc<Track>` sharing-safe across concurrent blocks, but a track
+/// only ever renders on the one callback / bounce-worker thread that owns
+/// its graph snapshot for that block.
+pub fn snapshot_top_level_solo<'a>(tracks: impl IntoIterator<Item = &'a Track>) -> bool {
+    let mut any_solo = false;
+    for t in tracks.into_iter().filter(|t| t.sub_track_of.is_none()) {
+        let soloed = t.soloed();
+        t.set_block_soloed(soloed);
+        any_solo |= soloed;
+    }
+    any_solo
 }
 
 /// An audio bus: an intermediate summing point with its own plugin

@@ -142,4 +142,4 @@ pub use tempo::{
     TempoMap, TempoPoint, DEFAULT_BPM, MAX_BPM, MIN_BPM, TICKS_PER_QUARTER_NOTE,
     TICKS_PER_WHOLE_NOTE,
 };
-pub use track::{any_top_level_solo, Bus, MasterBus, Track, TrackMap};
+pub use track::{any_top_level_solo, snapshot_top_level_solo, Bus, MasterBus, Track, TrackMap};

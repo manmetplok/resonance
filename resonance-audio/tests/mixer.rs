@@ -77,6 +77,8 @@ mod sidechain_key_delivery;
 mod silent_advance_loop_seam;
 #[path = "mixer/solo_predicate.rs"]
 mod solo_predicate;
+#[path = "mixer/solo_race.rs"]
+mod solo_race;
 #[path = "mixer/stem_bus_sub_track_render.rs"]
 mod stem_bus_sub_track_render;
 #[path = "mixer/stem_render.rs"]
