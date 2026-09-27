@@ -325,6 +325,27 @@ impl crate::Resonance {
     /// step, and `RestoreTakeGroups` was deliberately made silent so a
     /// restore does not come up dirty.
     pub(crate) fn begin_restore_from_snapshot(&mut self, snapshot: UndoSnapshot) {
+        let current = crate::update::build_project_file(self);
+        self.restore_from_snapshot_against(&current, snapshot);
+    }
+
+    /// The body of [`Self::begin_restore_from_snapshot`], taking the live
+    /// `ProjectFile` to diff against as a parameter rather than building it.
+    ///
+    /// `try_undo` / `try_redo` already build one — `snapshot_for_undo`, for
+    /// the entry pushed onto the other stack — before calling this, and
+    /// nothing mutates `self`'s project state in between (only the undo
+    /// history's own bookkeeping), so that file is still exactly the live
+    /// state. Calling through [`Self::begin_restore_from_snapshot`] instead
+    /// would rebuild an identical one (FU-A13k: ~0.3 ms debug on the demo
+    /// project, once per history step); this lets them pass the one they
+    /// already have. `test_begin_restore_from_snapshot` has no such file in
+    /// hand, so it goes through the building wrapper above instead.
+    fn restore_from_snapshot_against(
+        &mut self,
+        current: &crate::project::ProjectFile,
+        snapshot: UndoSnapshot,
+    ) {
         use crate::update::project_io::reconcile::{reconcile_all, LiveCarry, Origin, ReconcileCtx};
 
         // Pause playback and stop recording. Recording should already be
@@ -334,7 +355,6 @@ impl crate::Resonance {
         self.transport.recording = false;
 
         let UndoSnapshot { project: target } = snapshot;
-        let current = crate::update::build_project_file(self);
         let project_path = self.io.project_path.clone();
         let ctx = ReconcileCtx {
             origin: Origin::Undo,
@@ -352,7 +372,7 @@ impl crate::Resonance {
         // state and order; the routing edges; the clips and what derives
         // from them; the app-side content; external instruments, lanes and
         // freeze last. See `docs/design/A-13-reconcile.md`.
-        reconcile_all(self, Some(&current), &target.file, &ctx);
+        reconcile_all(self, Some(current), &target.file, &ctx);
     }
 
     /// Restore the compose section→clip map from `file` and reserve the
@@ -564,8 +584,10 @@ impl crate::Resonance {
 
     /// Attempt to undo. No-ops (returning false) if the history is empty
     /// or an in-flight operation blocks undo/redo. On success the current
-    /// state is pushed onto the redo stack before the snapshot is
-    /// restored.
+    /// state is pushed onto the redo stack and the popped snapshot is
+    /// restored (the restore runs first — see `restore_from_snapshot_against`
+    /// — but nothing observes the difference: the push only touches the
+    /// undo history's own bookkeeping).
     pub(crate) fn try_undo(&mut self) -> Option<String> {
         if !self.can_undo_redo_now() || !self.session.undo.can_undo() {
             return None;
@@ -574,11 +596,15 @@ impl crate::Resonance {
         // An import whose entry this undo pops must not place its clip
         // when the file lands later (code review UPD-04).
         self.media.pool_import.drop_undone(self.session.undo.undo_len());
+        // Built once (FU-A13k): `restore_from_snapshot_against` diffs
+        // against this same file instead of rebuilding it, since nothing
+        // between here and there mutates the project (only the undo
+        // history's own bookkeeping, pushed right after).
         let current = self.snapshot_for_undo();
+        self.restore_from_snapshot_against(&current.project.file, snapshot);
         // The action just undone is what a redo would re-apply, so its
         // label travels with the state pushed onto the redo stack.
         self.session.undo.push_redo(current, label.clone());
-        self.begin_restore_from_snapshot(snapshot);
         // An undo changes the song like any committed edit — remote
         // control clients detect it through the revision counter
         // (doc #265, todo #1147).
@@ -592,9 +618,10 @@ impl crate::Resonance {
             return None;
         }
         let (snapshot, label) = self.session.undo.pop_redo()?;
+        // Built once (FU-A13k) — see `try_undo`.
         let current = self.snapshot_for_undo();
+        self.restore_from_snapshot_against(&current.project.file, snapshot);
         self.session.undo.push_undo(current, label.clone());
-        self.begin_restore_from_snapshot(snapshot);
         // Symmetric to `try_undo`: a redo is a committed edit for remote
         // revision-tracking purposes.
         self.bump_revision();
