@@ -2439,6 +2439,31 @@ fn undoing_a_clip_delete_before_its_echo_keeps_the_clip() {
     assert!(audio_clip_ids(&f.app).contains(&AUDIO_CLIP));
 }
 
+/// FU-A13h: unlike the audio-clip GUI delete (STATE-10), the GUI MIDI-clip
+/// delete used to mirror only on the `MidiClipDeleted` echo — an undo
+/// pressed before that echo saw a mirror that still held the clip (a
+/// no-op restore) and the late echo then deleted it out from under the
+/// undo. Mirroring at once and owing the echo (as the audio-clip delete
+/// does) fixes it.
+#[test]
+fn undoing_a_midi_clip_delete_before_its_echo_keeps_the_clip() {
+    let mut f = fixture("midi-clip-delete-early-undo");
+    let s0 = f.app.test_snapshot_for_undo();
+    let _ = drain(&f.rx);
+    let _ = f
+        .app
+        .update(Message::MidiClip(MidiClipMessage::DeleteMidiClip(BASS_CLIP)));
+    assert!(
+        !midi_clip_ids(&f.app).contains(&BASS_CLIP),
+        "the delete mirrors immediately, before its echo"
+    );
+    let delete = drain(&f.rx);
+    let undo = step_lands_on(&mut f, Message::Undo, &s0, "undo MIDI clip delete before its echo");
+    let late: Vec<_> = delete.into_iter().chain(undo).collect();
+    settle(&mut f, late, &s0, "the delete's echo, then the undo's");
+    assert!(midi_clip_ids(&f.app).contains(&BASS_CLIP));
+}
+
 /// A kept MIDI clip whose notes changed is reloaded under its id
 /// (`DeleteMidiClip` + `LoadMidiClipDirect`). The delete's echo is owed:
 /// before A-13i it dropped the mirror's clip and its lyric side-table
