@@ -115,6 +115,7 @@ master and updates this table. Agents do **not** edit this file.
 | refactor-intent D-7c (ARCH-04) | `CreateMidiClip { clip_id }` from `fresh_derived_clip_id`; engine rejects clip-id collisions across audio+MIDI; dead `ImportClip` deleted | sonnet | merged | 37b049a4 |
 | refactor-intent D-7a (ARCH-04) | App-owned asset ids (`ImportAudioToPool { files }`); `next_asset_id`/`ReserveAssetIds` gone; imports keyed by asset id (fixes same-path swap); `create_new` refuses overwrite; on-disk `asset_*.wav` seeding | sonnet | merged | 75986451 |
 | refactor-intent B-1 (ARCH-02) | `midi_clips` → `RenderGraph` (`SharedState::graph`, ArcSwap via `retire::publish`); callback does one `load()`; `StateMap::MidiClips` gone | opus | merged | 7ae6fecf |
+| refactor-intent B-2 (ARCH-02) | busses + master → `RenderGraph`; `BusRuntime` shares live state across COW copies; master FX pass can no longer be skipped on a busy lock; `StateMap` 5 → 3 | opus | merged | eb6538e8 |
 
 **Campaign result (2026-09-26, full suite green: 369/369 binaries @ 06c90633):** 138/145 findings fixed; 7 open — all architecture items, each with its first steps landed (see `arch-migration-plan.md`); 89 follow-ups done, 5 open (macOS-only or needing a product decision).
 
