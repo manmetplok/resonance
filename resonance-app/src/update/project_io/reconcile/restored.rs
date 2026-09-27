@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use resonance_audio::types::TrackId;
+use resonance_audio::types::{ClipId, TrackId};
 
 use super::entities::kept_tracks;
 use super::{Origin, Reconcile, ReconcileCtx};
@@ -16,6 +16,21 @@ use crate::Resonance;
 fn fresh_tracks(old: Option<&ProjectFile>, new: &ProjectFile) -> HashSet<TrackId> {
     let kept = kept_tracks(old, new);
     new.tracks.iter().map(|t| t.id).filter(|id| !kept.contains(id)).collect()
+}
+
+/// The derived clips whose `MidiClipCreated` echo is in flight at the
+/// moment `live` was built: every map entry naming a clip the mirror does
+/// not hold (the test UPD-05's "echo pending" suspension applies,
+/// `Resonance::revalidate_frozen_content`). `live` is the undo's `old`,
+/// built from the live state just before the restore.
+fn pending_derived_echoes(live: &ProjectFile) -> HashSet<ClipId> {
+    let mirrored: HashSet<ClipId> = live.midi_clips.iter().map(|mc| mc.id).collect();
+    live.derived_clips
+        .iter()
+        .flatten()
+        .map(|e| e.clip_id)
+        .filter(|id| !mirrored.contains(id))
+        .collect()
 }
 
 /// Parameter-automation lanes (epic #14 / epic #40): the engine and the
@@ -41,10 +56,17 @@ impl Reconcile for AutomationLanes {
 /// are restored: it filters against them and reserves the counter past
 /// them.
 ///
-/// **The keep-rule depends on the origin.** On an undo the engine still
-/// holds every clip and an in-flight `MidiClipCreated` echo will land, so
-/// every entry is kept; after a disk load's `ClearAll` only the replayed
-/// clips exist, so an entry whose clip was not replayed is dropped.
+/// **The keep-rule depends on the origin.** An entry whose clip the
+/// restore mirrored is always kept. One whose clip is not mirrored is
+/// kept only while its `MidiClipCreated` echo is still in flight *now*:
+/// on an undo, an entry of the live map (`old`) whose clip the live
+/// mirror lacks — the engine still holds that clip and the echo will
+/// land (FU-H2a). Any other unmirrored entry is dropped: after a disk
+/// load's `ClearAll` only the replayed clips exist, and on an undo to a
+/// snapshot taken while an echo was in flight that has since landed, the
+/// restore removed the clip and nothing will echo it back (FU-A13j). Left
+/// in, such an entry suspends the UPD-05 freeze check on its track until
+/// the next regenerate replaces it.
 ///
 /// **The counter floor is live state.** `ComposeState::load_from_project`
 /// resets the counter before this runs, so the entry points carry the
@@ -63,9 +85,12 @@ pub(crate) struct DerivedClips;
 impl Reconcile for DerivedClips {
     const NAME: &'static str = "derived_clips";
 
-    fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-        let echoes_in_flight = ctx.origin == Origin::Undo;
-        r.restore_derived_clips(new, echoes_in_flight, ctx.live.derived_counter_floor);
+    fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
+        let echoes_in_flight = match (ctx.origin, old) {
+            (Origin::Undo, Some(old)) => pending_derived_echoes(old),
+            _ => HashSet::new(),
+        };
+        r.restore_derived_clips(new, &echoes_in_flight, ctx.live.derived_counter_floor);
         // A disk load also clears the derived-range WAVs in the bundle
         // that no loaded clip names (FU-A6c). An undo needs no scan: it
         // never lowers the live counter, which a load or Save As already

@@ -363,14 +363,18 @@ impl crate::Resonance {
     /// The map is the file's (`ProjectFile::derived_clips`), not a
     /// rebuild from the mirror: a snapshot taken while a re-derived clip's
     /// `MidiClipCreated` echo was in flight holds that clip's entry but
-    /// not the clip, and on an undo (`echoes_in_flight`) the engine
-    /// still has the clip and the echo will land — dropping the entry
-    /// would orphan it. After a disk load the engine holds only the
-    /// replayed clips, so there
-    /// an entry whose clip is not mirrored can never be satisfied and is
-    /// dropped (left in, it would also suspend the UPD-05 freeze check on
-    /// its track forever, see `revalidate_frozen_content`). A file saved
-    /// before the field existed gets the positional rebuild.
+    /// not the clip. An entry whose clip is not mirrored after the restore
+    /// is kept only if that clip is in `echoes_in_flight` — the echoes
+    /// still pending when the restore began (an undo's live map entries
+    /// the live mirror lacked): the engine still has the clip and the
+    /// echo will land, so dropping the entry would orphan it (FU-H2a).
+    /// Every other unmirrored entry can never be satisfied and is
+    /// dropped — after a disk load (`echoes_in_flight` empty) the engine
+    /// holds only the replayed clips, and after an undo across an echo
+    /// that has since landed the restore removed the clip (FU-A13j).
+    /// Left in, it would suspend the UPD-05 freeze check on its track
+    /// (see `revalidate_frozen_content`). A file saved before the field
+    /// existed gets the positional rebuild.
     ///
     /// The counter is not snapshot state. `counter_floor` is the live
     /// counter an undo started from (`None` for a disk load): an undo
@@ -382,7 +386,7 @@ impl crate::Resonance {
     pub(crate) fn restore_derived_clips(
         &mut self,
         file: &crate::project::ProjectFile,
-        echoes_in_flight: bool,
+        echoes_in_flight: &std::collections::HashSet<ClipId>,
         counter_floor: Option<u64>,
     ) {
         match &file.derived_clips {
@@ -390,7 +394,10 @@ impl crate::Resonance {
                 let midi_clips = &self.midi_clips;
                 self.compose.derived_clips = entries
                     .iter()
-                    .filter(|e| echoes_in_flight || midi_clips.iter().any(|mc| mc.id == e.clip_id))
+                    .filter(|e| {
+                        echoes_in_flight.contains(&e.clip_id)
+                            || midi_clips.iter().any(|mc| mc.id == e.clip_id)
+                    })
                     .map(|e| ((e.definition_id, e.placement_id, e.track_id), e.clip_id))
                     .collect();
             }
