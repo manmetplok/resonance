@@ -745,3 +745,115 @@ fn sync_follows_the_master_pitch() {
     assert!(synced < -40.0, "synced slave is not periodic at the master: {synced:.1} dB");
     assert!(free > 0.0, "the free-running slave should sit off the master's series");
 }
+
+// ---------------------------------------------------------------------------
+// Alongside the rest of the synth: user tables and filter FM
+// ---------------------------------------------------------------------------
+
+#[test]
+fn interaction_and_warp_work_on_user_tables() {
+    use resonance_plugin::{OutputBuffer, ResonancePlugin};
+    use resonance_wavetable::dsp::wavetable::{USER_WAVETABLE_INDEX, WAVETABLE_SIZE};
+    use resonance_wavetable::ResonanceWavetable;
+
+    // Two frames rich enough that a wrong table or a no-op mode shows.
+    let frames: Vec<f32> = (0..2 * WAVETABLE_SIZE)
+        .map(|i| {
+            let t = std::f32::consts::TAU * i as f32 / WAVETABLE_SIZE as f32;
+            0.6 * t.sin() + 0.3 * (5.0 * t).sin() + 0.1 * (11.0 * t).cos()
+        })
+        .collect();
+    let render_plugin = |set: &dyn Fn(&ResonanceWavetable)| -> Vec<f32> {
+        let mut plugin = ResonanceWavetable::new();
+        for osc in 0..2 {
+            plugin
+                .user_wavetables()
+                .restore_frames(osc, "", "frames", frames.clone())
+                .unwrap();
+        }
+        plugin.initialize(SR, BLOCK as u32);
+        let param = |id: &str| {
+            (0..plugin.param_count())
+                .map(|i| plugin.param(i))
+                .find(|p| p.id() == id)
+                .unwrap_or_else(|| panic!("no param `{id}`"))
+        };
+        param("osc1_wavetable").set_plain(USER_WAVETABLE_INDEX as f64);
+        param("osc2_wavetable").set_plain(USER_WAVETABLE_INDEX as f64);
+        param("osc2_enabled").set_plain(1.0);
+        param("osc2_coarse").set_plain(7.0);
+        set(&plugin);
+        let mut out = Vec::new();
+        let (mut left, mut right) = (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]);
+        for block in 0..8 {
+            let on = [NoteEvent::NoteOn {
+                note: 60,
+                velocity: 1.0,
+                timing: 0,
+            }];
+            let events: &[NoteEvent] = if block == 0 { &on } else { &[] };
+            let mut iter = EventIterator::new(events);
+            let mut outs = [OutputBuffer {
+                left: &mut left,
+                right: &mut right,
+            }];
+            plugin.process(&mut outs, BLOCK, &mut iter, None);
+            out.extend_from_slice(&left);
+        }
+        assert!(plugin.engine().user_table(0).is_some(), "the user table never landed");
+        out
+    };
+    let set_id = |plugin: &ResonanceWavetable, id: &str, v: f64| {
+        (0..plugin.param_count())
+            .map(|i| plugin.param(i))
+            .find(|p| p.id() == id)
+            .unwrap()
+            .set_plain(v);
+    };
+
+    let reference = render_plugin(&|_| {});
+    assert_sane("user tables, Sum", &reference);
+    for mode in 1..4 {
+        let out = render_plugin(&|p| {
+            set_id(p, "osc_mix_mode", mode as f64);
+            set_id(p, "osc_mod_amount", 0.5);
+        });
+        assert_sane(&format!("user tables, mode {mode}"), &out);
+        assert_ne!(out, reference, "mode {mode} did nothing on a user table");
+    }
+    for warp in 1..WarpMode::LABELS.len() {
+        let out = render_plugin(&|p| {
+            set_id(p, "osc1_warp_mode", warp as f64);
+            set_id(p, "osc1_warp_amount", 0.6);
+        });
+        assert_sane(&format!("user tables, warp {warp}"), &out);
+        assert_ne!(out, reference, "warp {warp} did nothing on a user table");
+    }
+}
+
+#[test]
+fn a_muted_modulator_still_drives_filter_fm() {
+    // Filter FM reads osc2's raw signal. Under an interaction mode osc2
+    // runs while muted, so it keeps modulating the filter; in Sum a muted
+    // osc2 is silent everywhere, the filter included.
+    let base = |mode: i32| {
+        let p = bare_params();
+        p.osc2.enabled.set_value(false);
+        p.filter.enabled.set_value(true);
+        p.filter.cutoff.set_value(800.0);
+        p.osc_mix.mode.set_value(mode);
+        p
+    };
+    for (mode, drives) in [(0, false), (MODE_FM, true), (MODE_RING, true), (MODE_SYNC, true)] {
+        let dry = base(mode);
+        let wet = base(mode);
+        wet.filter.fm.set_value(0.8);
+        let (a, b) = (render_bits(&dry, 48), render_bits(&wet, 48));
+        assert_eq!(
+            a != b,
+            drives,
+            "mode {mode}: filter FM from a muted osc2 should be {}",
+            if drives { "active" } else { "silent" }
+        );
+    }
+}

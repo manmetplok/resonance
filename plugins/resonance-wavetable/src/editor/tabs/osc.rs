@@ -5,7 +5,8 @@
 use plugin_gui_core::{egui, widgets};
 
 use crate::dsp::warp::{Warp, WarpMode};
-use crate::editor::display_waves;
+use crate::dsp::wavetable::USER_WAVETABLE_INDEX;
+use crate::editor::display_waves::{self, DisplayTable};
 use crate::editor::theme;
 use crate::editor::viz::{frame_strip, waveform};
 use crate::editor::WavetableEditorApp;
@@ -24,11 +25,14 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
 
     ui.add_space(2.0);
 
-    // Bottom row: Unison, Sub · Noise and Global cards.
-    ui.columns(3, |cols| {
+    // Bottom row: Unison (five knobs, so half the width) beside the Sub ·
+    // Noise and Global cards, which share the other half.
+    ui.columns(2, |cols| {
         draw_unison_card(&mut cols[0], app);
-        draw_sub_noise_card(&mut cols[1], app);
-        draw_global_card(&mut cols[2], app);
+        cols[1].columns(2, |cols| {
+            draw_sub_noise_card(&mut cols[0], app);
+            draw_global_card(&mut cols[1], app);
+        });
     });
 }
 
@@ -89,14 +93,31 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             });
         });
 
-        let (osc_params, warp_params, live_pos) = if app.selected_osc == 0 {
-            (&app.params.osc1, &app.params.osc1_warp, app.snapshot.osc1_position_live)
+        let osc = app.selected_osc;
+        // A clone of the Arc, so `app` stays free for the load bookkeeping.
+        let params = app.params.clone();
+        let (osc_params, warp_params, live_pos) = if osc == 0 {
+            (&params.osc1, &params.osc1_warp, app.snapshot.osc1_position_live)
         } else {
-            (&app.params.osc2, &app.params.osc2_warp, app.snapshot.osc2_position_live)
+            (&params.osc2, &params.osc2_warp, app.snapshot.osc2_position_live)
         };
+
+        let user = app.user_tables.info(osc);
+        // A "Load…" this editor asked for has finished: select the user
+        // table if it landed. Selecting only then means a failed import
+        // leaves the oscillator on whatever it was playing.
+        if let Some(requested) = app.pending_user_load[osc] {
+            if user.generation >= requested {
+                if user.generation == requested && user.error.is_none() && user.is_loaded() {
+                    osc_params.wavetable.set_plain(USER_WAVETABLE_INDEX as f64);
+                }
+                app.pending_user_load[osc] = None;
+            }
+        }
 
         let wt_idx = osc_params.wavetable.value() as usize;
         let position = osc_params.position.value();
+        let table = DisplayTable::for_selection(wt_idx, &user);
         // The display runs the frame through the same phase map the DSP
         // reads with, so the drawn cycle is the warped one.
         let warp = Warp::resolve(
@@ -107,13 +128,19 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         // Wave display.
         let avail = ui.available_width();
         let (_id, rect) = ui.allocate_space(egui::vec2(avail, 170.0));
-        waveform::draw(ui, rect, wt_idx, position, live_pos, &warp);
+        waveform::draw(ui, rect, &table, position, live_pos, &warp);
 
         // Frame strip.
         let (_id2, strip_rect) = ui.allocate_space(egui::vec2(avail, 24.0));
-        frame_strip::draw(ui, strip_rect, wt_idx, position);
+        frame_strip::draw(ui, strip_rect, &table, position);
 
-        // Wavetable category row.
+        // Wavetable category row. ▶ reaches the user slot only once this
+        // oscillator has a table to put there.
+        let last = if user.is_loaded() {
+            USER_WAVETABLE_INDEX
+        } else {
+            USER_WAVETABLE_INDEX - 1
+        };
         ui.horizontal(|ui| {
             if ui
                 .add(
@@ -126,7 +153,7 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 osc_params.wavetable.set_plain((wt_idx - 1) as f64);
             }
             ui.label(
-                egui::RichText::new(display_waves::wavetable_name(wt_idx))
+                egui::RichText::new(display_waves::selection_name(wt_idx, &user))
                     .color(theme::TEXT_1)
                     .size(12.0)
                     .strong(),
@@ -137,12 +164,23 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                         .frame(false),
                 )
                 .clicked()
-                && wt_idx + 1 < display_waves::WAVETABLE_NAMES.len()
+                && wt_idx < last
             {
                 osc_params.wavetable.set_plain((wt_idx + 1) as f64);
             }
+            ui.add_space(6.0);
+            if ui
+                .add_enabled(
+                    !user.loading,
+                    egui::Button::new(egui::RichText::new("Load…").size(11.0)),
+                )
+                .on_hover_text("Import a WAV as this oscillator's wavetable")
+                .clicked()
+            {
+                load_clicked(app, osc);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let frames = display_waves::frame_count(wt_idx);
+                let frames = table.frame_count();
                 let frame_idx = ((position * (frames.saturating_sub(1)).max(1) as f32)
                     .round() as usize)
                     .min(frames.saturating_sub(1));
@@ -154,7 +192,45 @@ fn draw_osc_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 );
             });
         });
+
+        // User-table status: the loaded file, a load in flight, or why the
+        // last one failed (including a project whose file has gone missing,
+        // which plays bundled table 0 until it is re-imported).
+        let status = if user.loading {
+            Some(("Loading…".to_string(), theme::TEXT_3))
+        } else if let Some(e) = &user.error {
+            Some((format!("User table: {e}"), theme::WARN))
+        } else if user.is_loaded() {
+            Some((
+                format!("User table: {} · {} frames", user.name, user.num_frames()),
+                theme::TEXT_3,
+            ))
+        } else {
+            None
+        };
+        if let Some((text, color)) = status {
+            ui.label(egui::RichText::new(text).color(color).size(10.5));
+        }
     });
+}
+
+/// "Load…": pick a WAV and import it into oscillator `osc` in the background.
+fn load_clicked(app: &mut WavetableEditorApp, osc: usize) {
+    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
+    // thread, or the AppKit main thread under the Cocoa runtime, where a
+    // modal panel is the supported path and the runtime's reentrancy
+    // guard skips nested paints (macos-editor-plan.md §3h). The import
+    // itself runs on a loader thread; the table is selected once it lands.
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("Wavetable (WAV)", &["wav"])
+        .pick_file()
+    else {
+        return;
+    };
+    let generation = app
+        .user_tables
+        .request_file(osc, path.to_string_lossy().into_owned());
+    app.pending_user_load[osc] = Some(generation);
 }
 
 fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
@@ -168,6 +244,8 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
         };
         let title = if app.selected_osc == 0 { "Osc 1" } else { "Osc 2" };
         let wt_idx = osc_params.wavetable.value() as usize;
+        let user = app.user_tables.info(app.selected_osc);
+        let table = DisplayTable::for_selection(wt_idx, &user);
 
         ui.horizontal(|ui| {
             ui.label(
@@ -179,8 +257,8 @@ fn draw_params_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             ui.label(
                 egui::RichText::new(format!(
                     "{} · {} frames",
-                    display_waves::wavetable_name(wt_idx),
-                    display_waves::frame_count(wt_idx)
+                    display_waves::selection_name(wt_idx, &user),
+                    table.frame_count()
                 ))
                 .color(theme::TEXT_3)
                 .size(11.0),
@@ -267,6 +345,10 @@ fn draw_unison_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
             int_knob(ui, "Voices", &app.params.unison.voices);
             float_knob(ui, "Detune", &app.params.unison.detune);
             float_knob(ui, "Spread", &app.params.unison.spread);
+            // Analog instability sits with unison: both are per-sub-voice
+            // character (start phase and pitch drift act on every sub-voice).
+            float_knob(ui, "Phase", &app.params.analog.phase_random);
+            float_knob(ui, "Analog", &app.params.analog.drift);
         });
     });
 }
@@ -275,7 +357,9 @@ fn draw_sub_noise_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
     panel(ui, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
         panel_title(ui, "SUB · NOISE");
-        ui.horizontal(|ui| {
+        // Wraps at the editor's minimum width, where a quarter of the body
+        // is narrower than three knob cells.
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             float_knob(ui, "Sub", &app.params.sub.level);
             float_knob(ui, "Noise", &app.params.noise.level);
@@ -305,7 +389,8 @@ fn draw_global_card(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 );
             });
         });
-        ui.horizontal(|ui| {
+        // Wraps at the editor's minimum width, like the Sub · Noise row.
+        ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
             float_knob(ui, "Master", &app.params.master_volume);
             float_knob(ui, "Glide", &app.params.glide_time);

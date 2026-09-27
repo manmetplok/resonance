@@ -1,9 +1,10 @@
 //! Isolated cost of the NAM matrix-vector kernel.
 //!
-//! `matvec` is the innermost loop of the WaveNet forward pass — every
-//! dilated conv tap, every 1x1 rechannel and every head layer bottoms out
-//! here — so its throughput sets the amp's whole CPU cost. The shapes below
-//! are the ones a stock "standard" NAM capture actually issues.
+//! `matvec` was the innermost loop of the sample-serial WaveNet forward
+//! pass. The block forward pass now runs the convs through the block GEMM
+//! (`nam::gemm`, measured end-to-end by `amp_dsp`); `matvec` remains on
+//! the per-frame FiLM and head-MLP paths and in the LSTM. The shapes below
+//! are the ones a stock "standard" NAM capture issues.
 
 use std::hint::black_box;
 

@@ -15,6 +15,8 @@
 
 use resonance_dsp::{constant_power_pan, SimpleRng};
 
+use crate::dsp::effects::voice_saturate;
+use crate::dsp::filter_models::{self, FilterModel};
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::modulation::{self, ModState};
 use crate::dsp::osc_mix::{self, OscMixMode, PM_DEPTH_CYCLES, SYNC_SWEEP_SEMITONES};
@@ -31,12 +33,24 @@ use crate::dsp::wavetable::Wavetable;
 /// an amount of +1.0 can open a stack from 0 to fully detuned.
 const UNISON_DETUNE_MOD_CENTS: f32 = 100.0;
 
+/// Octaves of cutoff swing a full-scale oscillator sample produces at
+/// `filter_fm` = 100 %: the cutoff moves between `fc/16` and `16·fc` (then
+/// clamped to 20 Hz .. 0.49·fs) at the modulator's rate.
+pub const FILTER_FM_OCTAVES: f32 = 4.0;
+
+/// Upper bound of the filter-FM sweep, `π·0.49`: the same 0.49·fs ceiling
+/// `set_coeffs` clamps to, and inside `tan_fast`'s accurate range.
+const FILTER_FM_W_MAX: f32 = std::f32::consts::PI * 0.49;
+
 /// The handful of values that change from sample to sample but are shared by
 /// every voice in that sample.
 pub(crate) struct SampleCtx {
     /// True on the samples where the control-rate grid ticks: the modulation
     /// matrix and the filter coefficients are refreshed only then.
     pub coeff_tick: bool,
+    /// True on the samples where the analog drift walk steps (every
+    /// [`DRIFT_INTERVAL`](crate::dsp::analog::DRIFT_INTERVAL) samples).
+    pub drift_tick: bool,
     /// True when LFO *shapes* must actually be evaluated this sample — a
     /// control tick, or a sample a voice was triggered on. LFO phases advance
     /// every sample regardless.
@@ -44,6 +58,10 @@ pub(crate) struct SampleCtx {
     /// Global (non-retriggered) LFO values, already scaled by depth. Zero
     /// when `lfo_vals_needed` is false, in which case nothing consumes them.
     pub global_lfo: [f32; 3],
+    /// The `ModSource::SampleHold` generator's current value, shared by
+    /// every voice this sample. Same zero-when-unneeded contract as
+    /// `global_lfo`.
+    pub sample_hold_val: f32,
 }
 
 /// Render one voice's contribution to this sample.
@@ -88,37 +106,62 @@ pub(crate) fn render_voice(
     // runs unchanged on silence.
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
+    let mut fm_src = 0.0f32;
     let ch = &plan.character;
     if plan.oscs_active || ch.sub_active {
+        if plan.oscs_active && plan.analog_on && ctx.drift_tick {
+            step_analog_drift(voice, plan);
+        }
         refresh_osc_setups(voice, snap, plan, wavetables, &mods);
     }
     if plan.oscs_active {
         // Block-constant choice: a patch using no interaction mode and no
         // warp stays on the original kernel below, untouched.
-        let (l, r) = if ch.kernel {
+        let (l, r, fm) = if ch.kernel {
             character::osc_kernel(voice, snap, plan, wavetables)
         } else {
             osc_kernel(voice, snap, plan, wavetables)
         };
         osc_l = l;
         osc_r = r;
+        fm_src = fm;
     }
-    // Sub and noise join before the filter. Skipped outright at level zero,
-    // so an unused source costs a predicted branch and draws no RNG.
+    // Sub and noise join before the voice drive and the filter. Skipped
+    // outright at level zero, so an unused source costs a predicted branch
+    // and draws no RNG.
     if ch.sub_active || ch.noise_active {
         let s = character::sub_noise(voice, plan, rng);
         osc_l += s * ch.centre_l;
         osc_r += s * ch.centre_r;
     }
 
+    // Per-voice pre-filter drive. Resolved per sample from the block's param
+    // and the control-rate mod cache (an add and a clamp); at 0 — the
+    // default, with nothing routed to it — the voice path is untouched.
+    let voice_drive = (snap.voice_drive + mods.voice_drive).clamp(0.0, 1.0);
+    if voice_drive > 0.0 {
+        let (l, r) = voice_saturate(osc_l, osc_r, voice_drive);
+        osc_l = l;
+        osc_r = r;
+    }
+
     // Filter. Coefficients are refreshed at control rate or immediately when
-    // a voice was just triggered.
+    // a voice was just triggered; with filter FM on, the cutoff is then
+    // re-applied every sample on top of that.
     if snap.filter_enabled {
         if ctx.coeff_tick || voice.filter_dirty {
             refresh_filter_coeffs(voice, snap, plan, &mods, mod_env_val);
         }
-        osc_l = voice.filter_l.process(osc_l, snap.filter_type);
-        osc_r = voice.filter_r.process(osc_r, snap.filter_type);
+        if voice.filter_fm_oct > 0.0 {
+            apply_filter_fm(voice, snap.filter_model, plan, fm_src);
+        }
+        if snap.filter_model == FilterModel::Clean {
+            osc_l = voice.filter_l.process(osc_l, snap.filter_type);
+            osc_r = voice.filter_r.process(osc_r, snap.filter_type);
+        } else {
+            osc_l = voice.char_l.process(osc_l, snap.filter_type);
+            osc_r = voice.char_r.process(osc_r, snap.filter_type);
+        }
     } else {
         voice.last_filter_cutoff = snap.filter_cutoff;
     }
@@ -176,7 +219,7 @@ fn advance_voice_lfos(
 
 /// Re-evaluate the modulation matrix into the voice's cache, at control rate.
 ///
-/// The slot evaluation is non-trivial (11 destinations x up to
+/// The slot evaluation is non-trivial (13 destinations x up to
 /// `NUM_MOD_SLOTS` branches) and its inputs — LFO values, the mod envelope,
 /// key tracking, velocity — are all sub-audio-rate, so it runs at the same
 /// control rate as the filter coefficients. `mod_dirty` forces an immediate
@@ -200,6 +243,9 @@ fn refresh_voice_mods(
         mod_env_val,
         voice.velocity,
         voice.current_pitch,
+        voice.random_value,
+        ctx.sample_hold_val,
+        voice.alternate_value,
     );
     // Only the oscillator-facing destinations invalidate the cached per-unison
     // setup; a filter LFO sweeping every tick must not force an oscillator
@@ -209,6 +255,22 @@ fn refresh_voice_mods(
     }
     voice.cached_mods = fresh;
     voice.mod_dirty = false;
+}
+
+/// Step every sounding sub-voice's drift walks and mark the `OscSetup`
+/// cache dirty, since the pitch they feed has moved.
+///
+/// Runs only while `analog` is up, and only every `DRIFT_INTERVAL` samples:
+/// with the knob at 0 the cache keeps its once-per-block (or per control
+/// tick, under pitch modulation) rebuild rate untouched.
+#[inline]
+fn step_analog_drift(voice: &mut Voice, plan: &BlockPlan) {
+    let rng = &mut voice.analog_rng;
+    for sub in voice.unison[..voice.unison_count].iter_mut() {
+        sub.osc1_drift.step(rng, &plan.drift);
+        sub.osc2_drift.step(rng, &plan.drift);
+    }
+    voice.osc_setup_dirty = true;
 }
 
 /// Rebuild the per-unison [`OscSetup`] caches, but only when one of their
@@ -239,8 +301,10 @@ fn refresh_osc_setups(
     // are 0.0 and these reduce to the block-constant expressions they
     // replaced, term for term.
     let balance = (snap.osc_balance + mods.osc_balance).clamp(-1.0, 1.0);
-    let osc1_level = plan.osc1_level * (1.0 - balance.max(0.0));
-    let osc2_level = plan.osc2_level * (1.0 - balance.min(0.0).abs());
+    // The analog level spread multiplies by exactly 1.0 at `analog` = 0.
+    let analog_gain = 1.0 + voice.analog_level * plan.level_spread;
+    let osc1_level = plan.osc1_level * (1.0 - balance.max(0.0)) * analog_gain;
+    let osc2_level = plan.osc2_level * (1.0 - balance.min(0.0).abs()) * analog_gain;
     // Full-scale modulation sweeps the detune param's whole 0..100 ct range.
     let detune_cents =
         (snap.unison_detune + mods.unison_detune * UNISON_DETUNE_MOD_CENTS).clamp(0.0, 100.0);
@@ -284,7 +348,8 @@ fn refresh_osc_setups(
             + snap.osc2_coarse
             + snap.osc2_fine / 100.0
             + detune
-            + mods.osc2_pitch;
+            + mods.osc2_pitch
+            + sub.osc2_drift.value * plan.drift_semis;
         let pitch2 = match &character {
             Some(c) if c.slave_semitones != 0.0 => pitch2 + c.slave_semitones,
             _ => pitch2,
@@ -296,7 +361,8 @@ fn refresh_osc_setups(
                 + snap.osc1_coarse
                 + snap.osc1_fine / 100.0
                 + detune
-                + mods.osc1_pitch;
+                + mods.osc1_pitch
+                + sub.osc1_drift.value * plan.drift_semis;
             let freq = midi_to_freq(pitch);
             let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
             let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan).clamp(-1.0, 1.0);
@@ -406,15 +472,21 @@ fn plan_biased_tap(
 /// [`OscSetup`] by [`refresh_osc_setups`]. Anything added here is paid once
 /// per unison per oscillator per sample, so it is the one function in the
 /// crate where that cost has to be argued for explicitly.
+///
+/// The third value is oscillator 2's raw signal — before level and pan,
+/// summed over the unison stack — which is the filter-FM modulator. It
+/// costs one add per unison sub-voice, cheaper than the branch that would
+/// skip it, and the caller drops it unless filter FM is on.
 #[inline]
 fn osc_kernel(
     voice: &mut Voice,
     snap: &ParamSnapshot,
     plan: &BlockPlan,
     wavetables: &[Wavetable],
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
+    let mut osc2_raw = 0.0f32;
 
     let wt1 = plan.wt1_idx.map(|i| &wavetables[i]);
     let wt2 = plan.wt2_idx.map(|i| &wavetables[i]);
@@ -436,7 +508,9 @@ fn osc_kernel(
         if snap.osc2_enabled {
             if let Some(wt) = wt2 {
                 let s = &sub.osc2_setup;
-                let sample = oscillator::read_tap(wt, &s.tap, sub.osc2_phase) * s.level;
+                let raw = oscillator::read_tap(wt, &s.tap, sub.osc2_phase);
+                osc2_raw += raw;
+                let sample = raw * s.level;
                 osc_l += sample * s.pan_l;
                 osc_r += sample * s.pan_r;
                 sub.osc2_phase += s.phase_inc;
@@ -446,7 +520,7 @@ fn osc_kernel(
     }
 
     let unison_scale = 1.0 / (voice.unison_count as f32).sqrt();
-    (osc_l * unison_scale, osc_r * unison_scale)
+    (osc_l * unison_scale, osc_r * unison_scale, osc2_raw)
 }
 
 /// Recompute the voice's stereo filter coefficients from cutoff, key
@@ -465,17 +539,71 @@ fn refresh_filter_coeffs(
 ) {
     let key_offset = snap.filter_keytrack * (voice.current_pitch - 60.0) / 12.0;
     let env_offset = snap.filter_env_depth * mod_env_val;
-    let cutoff =
-        snap.filter_cutoff * 2.0f32.powf(key_offset + env_offset * 5.0 + mods.filter_cutoff * 5.0);
+    // The analog cutoff spread is the last term so that at `analog` = 0 it
+    // adds an exact ±0.0 to the same sum as before.
+    let cutoff = snap.filter_cutoff
+        * 2.0f32.powf(
+            key_offset
+                + env_offset * 5.0
+                + mods.filter_cutoff * 5.0
+                + voice.analog_cutoff * plan.cutoff_spread_oct,
+        );
     let cutoff = cutoff.clamp(20.0, 20000.0);
     let reso = (snap.filter_reso + mods.filter_resonance).clamp(0.0, 1.0);
 
-    voice
-        .filter_l
-        .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
-    voice
-        .filter_r
-        .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+    if snap.filter_model == FilterModel::Clean {
+        voice
+            .filter_l
+            .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+        voice
+            .filter_r
+            .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+    } else {
+        let (sr, drive) = (plan.sample_rate, snap.filter_drive);
+        let model = snap.filter_model;
+        voice.char_l.set_coeffs(model, cutoff, reso, sr, drive);
+        voice.char_r.set_coeffs(model, cutoff, reso, sr, drive);
+    }
+
+    let fm = (snap.filter_fm + mods.filter_fm).clamp(0.0, 1.0);
+    voice.filter_fm_oct = fm * FILTER_FM_OCTAVES;
+    voice.filter_w =
+        std::f32::consts::PI * cutoff.min(plan.sample_rate * 0.49) / plan.sample_rate;
+
     voice.last_filter_cutoff = cutoff;
     voice.filter_dirty = false;
+}
+
+/// Audio-rate filter FM: move this sample's cutoff by
+/// `filter_fm_oct × osc2` octaves around the control-rate cutoff and
+/// re-derive the coefficients from it.
+///
+/// Only called while the voice's FM depth is non-zero, so its cost — an
+/// `exp2`, a `tan` and a divide or four, all via the cheap approximations in
+/// [`filter_models`] — is never paid by a patch that does not use it.
+/// Resonance and drive are left as the control-rate refresh set them.
+///
+/// Oscillator 2 is the modulator, not the oscillator mix: the mix contains
+/// the filter's own input, which makes the depth follow the osc levels and
+/// balance and the result chaotic, while osc 2 is a pitch-tracked,
+/// ratio-tunable (coarse/fine) modulator. It is taken before its level, so
+/// turning osc 2's level to zero leaves it running as a silent FM source.
+/// With osc 2 disabled the modulator is zero and FM does nothing — except
+/// under an oscillator-interaction mode (FM, ring, sync), where osc 2 runs
+/// for osc 1's sake even while muted and so keeps feeding this too (its
+/// warped, and as a sync slave polyBLEP-corrected, raw signal; see
+/// `character::osc_kernel`).
+#[inline]
+fn apply_filter_fm(voice: &mut Voice, model: FilterModel, plan: &BlockPlan, osc2_sum: f32) {
+    // The unison mean, so a stack sweeps no further than a single voice.
+    let m = osc2_sum / voice.unison_count as f32;
+    let w = voice.filter_w * filter_models::exp2_fast(voice.filter_fm_oct * m);
+    let g = filter_models::tan_fast(w.clamp(plan.filter_w_min, FILTER_FM_W_MAX));
+    if model == FilterModel::Clean {
+        voice.filter_l.set_g(g);
+        voice.filter_r.set_g(g);
+    } else {
+        voice.char_l.set_g(g);
+        voice.char_r.set_g(g);
+    }
 }

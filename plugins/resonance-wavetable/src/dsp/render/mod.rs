@@ -13,6 +13,12 @@
 //! triggered voices force an immediate coefficient refresh via
 //! `Voice::filter_dirty`.
 //!
+//! The one exception is filter FM: a voice whose FM depth is non-zero also
+//! re-derives its cutoff gain every sample from oscillator 2, through the
+//! cheap `tan`/`exp2` approximations in
+//! [`filter_models`](crate::dsp::filter_models). Depth zero — the default —
+//! skips that path entirely.
+//!
 //! The block is rendered in four phases, one module each:
 //!
 //! * [`snapshot`] — read every parameter once ([`ParamSnapshot`]).
@@ -35,7 +41,7 @@ mod snapshot;
 
 use resonance_plugin::{EventIterator, NoteEvent, TempoInfo};
 
-use crate::dsp::effects::Distortion;
+use crate::dsp::analog::DRIFT_INTERVAL;
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::voice::VoiceState;
@@ -54,6 +60,12 @@ use self::snapshot::ParamSnapshot;
 /// Must stay a power of two: the control-rate test compiles to an AND rather
 /// than a divmod.
 const FILTER_COEFF_INTERVAL: u32 = 16;
+
+/// How far a full-scale (±1.0) `ModDest::DistDrive` modulation moves the
+/// master drive, in octaves: log2(20), so +1.0 takes the minimum drive of 1
+/// to the maximum of 20. The offset is exponential because drive is a gain
+/// — equal steps of modulation should sound like equal steps of dirt.
+const DIST_DRIVE_MOD_OCTAVES: f32 = 4.321_928;
 
 impl SynthEngine {
     /// Render a full stereo block into `left` / `right`, draining MIDI events
@@ -76,6 +88,7 @@ impl SynthEngine {
     ) {
         let snap = ParamSnapshot::capture(params, self.sample_rate);
         self.retarget_smoothers(&snap);
+        self.distortion.configure(snap.dist_settings);
         let plan = self.plan_block(&snap, tempo);
 
         let mut next_event = events.next_event();
@@ -83,7 +96,7 @@ impl SynthEngine {
         for sample_id in 0..frames {
             let triggered_here =
                 self.drain_events(sample_id, &plan, params, events, &mut next_event);
-            let ctx = self.advance_global_lfos(&snap, sample_id, triggered_here);
+            let ctx = self.advance_global_lfos(&snap, &plan, sample_id, triggered_here);
 
             let (mix_l, mix_r) = self.mix_voices(&snap, &plan, &ctx);
             let (mix_l, mix_r) = self.apply_block_effects(&snap, mix_l, mix_r);
@@ -173,10 +186,12 @@ impl SynthEngine {
     fn advance_global_lfos(
         &mut self,
         snap: &ParamSnapshot,
+        plan: &BlockPlan,
         sample_id: usize,
         triggered_here: bool,
     ) -> SampleCtx {
         let coeff_tick = (sample_id as u32 & (FILTER_COEFF_INTERVAL - 1)) == 0;
+        let drift_tick = (sample_id as u32 & (DRIFT_INTERVAL - 1)) == 0;
         let lfo_vals_needed = coeff_tick || triggered_here;
 
         let global_lfo = if lfo_vals_needed {
@@ -188,14 +203,29 @@ impl SynthEngine {
         } else {
             [0.0, 0.0, 0.0]
         };
+        // Same gate as the three LFOs above: the mod matrix (the only
+        // consumer) only ever reads this on a sample where `lfo_vals_needed`
+        // holds, so there is nothing to gain from computing it otherwise --
+        // and `sample_hold_val` mirrors `global_lfo` in zeroing when unread.
+        let sample_hold_val = if lfo_vals_needed {
+            self.mod_sample_hold.value()
+        } else {
+            0.0
+        };
         self.global_lfo1.advance(snap.lfo1_shape, &mut self.rng);
         self.global_lfo2.advance(snap.lfo2_shape, &mut self.rng);
         self.global_lfo3.advance(snap.lfo3_shape, &mut self.rng);
+        // Draws from `mod_rng`, never `rng` -- see the field comment on
+        // `SynthEngine::mod_rng`.
+        self.mod_sample_hold
+            .advance(&mut self.mod_rng, plan.sh_slew_coeff);
 
         SampleCtx {
             coeff_tick,
+            drift_tick,
             lfo_vals_needed,
             global_lfo,
+            sample_hold_val,
         }
     }
 
@@ -219,16 +249,25 @@ impl SynthEngine {
             rng,
             active,
             active_len,
+            dist_drive_mod,
             ..
         } = self;
 
         let mut mix_l = 0.0f32;
         let mut mix_r = 0.0f32;
+        let mut newest_age = 0u64;
         for &vi in active.iter().take(*active_len) {
             let voice = &mut voices[vi as usize];
             if let Some((l, r)) = kernel::render_voice(voice, snap, plan, wavetables, rng, ctx) {
                 mix_l += l;
                 mix_r += r;
+                // The master drive is global: take the newest sounding
+                // voice's modulation for it (last-note priority). Skipped
+                // outright when nothing routes there.
+                if snap.dist_drive_routed && voice.age >= newest_age {
+                    newest_age = voice.age;
+                    *dist_drive_mod = voice.cached_mods.dist_drive;
+                }
             }
         }
         (mix_l, mix_r)
@@ -242,10 +281,15 @@ impl SynthEngine {
         let (mut mix_l, mut mix_r) = (l, r);
 
         if snap.dist_enabled {
-            let (dl, dr) = Distortion::process(
+            let mut drive = self.fx_smoothers.dist_drive.next();
+            if snap.dist_drive_routed {
+                drive = (drive * (self.dist_drive_mod * DIST_DRIVE_MOD_OCTAVES).exp2())
+                    .clamp(1.0, 20.0);
+            }
+            let (dl, dr) = self.distortion.process(
                 mix_l,
                 mix_r,
-                self.fx_smoothers.dist_drive.next(),
+                drive,
                 self.fx_smoothers.dist_mix.next(),
             );
             mix_l = dl;
@@ -253,11 +297,13 @@ impl SynthEngine {
         }
 
         if snap.chorus_enabled {
-            let (cl, cr) = self.chorus.process(
+            let (cl, cr) = self.chorus.process_mode(
                 mix_l,
                 mix_r,
+                snap.chorus_mode,
                 snap.chorus_rate,
                 self.fx_smoothers.chorus_depth.next(),
+                snap.chorus_noise,
                 self.fx_smoothers.chorus_mix.next(),
             );
             mix_l = cl;
@@ -335,6 +381,9 @@ impl SynthEngine {
         if !snap.chorus_enabled {
             self.fx_smoothers.chorus_depth.skip(n);
             self.fx_smoothers.chorus_mix.skip(n);
+            // Nothing is heard from a disabled chorus, so a mode change
+            // made while it is off lands without the switch crossfade.
+            self.chorus.set_mode_immediate(snap.chorus_mode);
         }
         if !snap.delay_enabled {
             self.fx_smoothers.delay_time_l.skip(n);

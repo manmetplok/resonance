@@ -1,5 +1,5 @@
 //! Real-time-safety audit of the NAM inference hot path (ba todo #1113):
-//! `process_sample` must not touch the heap for ANY loadable model — the
+//! `process_sample` / `process_block` must not touch the heap for ANY loadable model — the
 //! full A2 feature set (bottleneck, blended gating, grouped convs,
 //! head1x1, all FiLM sites, windowed heads, condition_dsp, slimmable
 //! full-slice) and the legacy A1 path alike. All scratch is preallocated
@@ -127,6 +127,28 @@ fn process_sample_never_allocates_across_all_model_kinds() {
             after - before,
             0,
             "{name}: process_sample must not touch the allocator (counted {} calls over 4096 samples)",
+            after - before
+        );
+
+        // The block path the amp actually runs, at a host-sized block
+        // and one past the WaveNet's internal chunk; long enough for
+        // every layer history to rewind.
+        let input: Vec<f32> = (0..1000).map(|n| ((n as f32) * 0.013).sin() * 0.4).collect();
+        let mut output = vec![0.0f32; input.len()];
+        let before = ALLOC_CALLS.load(Ordering::Relaxed);
+        for _ in 0..40 {
+            for block in [128, 1000] {
+                for (i, o) in input.chunks(block).zip(output.chunks_mut(block)) {
+                    model.process_block(i, o);
+                }
+            }
+        }
+        let after = ALLOC_CALLS.load(Ordering::Relaxed);
+        assert!(output.iter().all(|v| v.is_finite()), "{name}: block output must stay finite");
+        assert_eq!(
+            after - before,
+            0,
+            "{name}: process_block must not touch the allocator (counted {} calls)",
             after - before
         );
     }

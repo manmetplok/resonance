@@ -1,6 +1,8 @@
 /// Per-voice state for the wavetable synthesizer.
+use crate::dsp::analog::{AnalogRng, DriftCoeffs, DriftWalk};
 use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
+use crate::dsp::filter_models::CharacterFilter;
 use crate::dsp::lfo::MultiLfo;
 use crate::dsp::oscillator::TableTap;
 use crate::dsp::sub_noise::{NoiseGen, SubOsc};
@@ -74,6 +76,11 @@ pub struct UnisonSubVoice {
     /// are zero on the default path.
     pub osc1_carry: f32,
     pub osc2_carry: f32,
+    /// Per-oscillator analog pitch drift, `[-1, 1]`, scaled into cents by
+    /// the `analog` knob when the `OscSetup` is rebuilt. The two
+    /// oscillators drift independently, as two VCOs would.
+    pub osc1_drift: DriftWalk,
+    pub osc2_drift: DriftWalk,
 }
 
 impl UnisonSubVoice {
@@ -87,6 +94,8 @@ impl UnisonSubVoice {
             osc2_setup: OscSetup::default(),
             osc1_carry: 0.0,
             osc2_carry: 0.0,
+            osc1_drift: DriftWalk::default(),
+            osc2_drift: DriftWalk::default(),
         }
     }
 
@@ -132,6 +141,16 @@ pub struct Voice {
     // Per-voice stereo filter
     pub filter_l: StateVariableFilter,
     pub filter_r: StateVariableFilter,
+    // The same pair for the character models. Only one pair runs at a
+    // time — `snap.filter_model` picks — and the engine clears both when
+    // the model changes, so neither resumes from stale state.
+    pub char_l: CharacterFilter,
+    pub char_r: CharacterFilter,
+    // Filter FM, refreshed with the coefficients at control rate: the base
+    // cutoff as `π·fc/fs` and the FM depth in octaves. Zero depth keeps the
+    // per-sample coefficient path switched off.
+    pub filter_w: f32,
+    pub filter_fm_oct: f32,
 
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
@@ -144,6 +163,13 @@ pub struct Voice {
     pub sub: SubOsc,
     pub sub_inc: f64,
     pub noise: NoiseGen,
+    // Analog instability (see `dsp::analog`). The voice's own PRNG, seeded
+    // per note-on from the engine's, drives its sub-voices' drift walks.
+    // `analog_cutoff` / `analog_level` are this note's static spreads,
+    // `[-1, 1]`, scaled by the `analog` knob where they are applied.
+    pub analog_rng: AnalogRng,
+    pub analog_cutoff: f32,
+    pub analog_level: f32,
 
     // Set by `trigger()`, cleared by the render loop the first time the
     // voice runs through the filter stage. Used to force an immediate
@@ -162,6 +188,17 @@ pub struct Voice {
     // every `FILTER_COEFF_INTERVAL` samples (and once on trigger via
     // `mod_dirty`); read by-value per sample inside the render loop.
     pub cached_mods: crate::dsp::modulation::ModState,
+
+    // Drawn at trigger, held for the note's life: backs both
+    // `ModSource::RandomBipolar` (read as-is) and `RandomUnipolar` (remapped
+    // in `evaluate_mod_matrix`). Not redrawn by `legato()`, for the same
+    // reason velocity isn't touched there — changing it under a held note
+    // would step the modulation mid-note.
+    pub random_value: f32,
+
+    // ±1.0, flipped by the engine on every fresh trigger; backs
+    // `ModSource::Alternate`. Also left alone by `legato()`.
+    pub alternate_value: f32,
 
     // Guards the per-unison `OscSetup` caches. The render loop rebuilds them
     // when this is set, or when `current_pitch` has moved away from
@@ -195,15 +232,24 @@ impl Voice {
             lfo3: MultiLfo::new(),
             filter_l: StateVariableFilter::new(),
             filter_r: StateVariableFilter::new(),
+            char_l: CharacterFilter::new(),
+            char_r: CharacterFilter::new(),
+            filter_w: 0.0,
+            filter_fm_oct: 0.0,
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
             mix_setup: MixSetup::default(),
             sub: SubOsc::default(),
             sub_inc: 0.0,
             noise: NoiseGen::default(),
+            analog_rng: AnalogRng::default(),
+            analog_cutoff: 0.0,
+            analog_level: 0.0,
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
+            random_value: 0.0,
+            alternate_value: 1.0,
             osc_setup_dirty: true,
             osc_setup_pitch: f32::NAN,
             last_filter_cutoff: 8000.0,
@@ -230,6 +276,8 @@ impl Voice {
         lfo1_retrigger: bool,
         lfo2_retrigger: bool,
         lfo3_retrigger: bool,
+        random_value: f32,
+        alternate_value: f32,
     ) {
         let was_idle = self.state == VoiceState::Idle;
         self.state = VoiceState::Playing;
@@ -244,6 +292,8 @@ impl Voice {
 
         self.amp_env.trigger();
         self.mod_env.trigger();
+        self.random_value = random_value;
+        self.alternate_value = alternate_value;
 
         if lfo1_retrigger {
             self.lfo1.reset_phase();
@@ -255,8 +305,7 @@ impl Voice {
             self.lfo3.reset_phase();
         }
 
-        self.filter_l.clear();
-        self.filter_r.clear();
+        self.clear_filters();
         self.sub = SubOsc::default();
         self.noise = NoiseGen::default();
         self.filter_dirty = true;
@@ -269,6 +318,39 @@ impl Voice {
             self.unison[u].reset();
         }
         distribute_unison(&mut self.unison, self.unison_count, spread);
+    }
+
+    /// Zero every filter's state, clean and character alike.
+    pub fn clear_filters(&mut self) {
+        self.filter_l.clear();
+        self.filter_r.clear();
+        self.char_l.clear();
+        self.char_r.clear();
+    }
+
+    /// Draw this note's analog character: reseed the voice PRNG, start every
+    /// sub-voice's drift walks, pick the static cutoff / level spreads, and
+    /// set the oscillator start phases.
+    ///
+    /// Called right after [`Self::trigger`] (never after a legato
+    /// take-over, whose phases and drift carry on). `phase_random` is the
+    /// `osc_phase_random` knob: each start phase is a uniform draw scaled by
+    /// it, so 0 leaves `trigger`'s reset-to-zero phases exactly as they were
+    /// and 1 is a fully random start — the free-running oscillator of an
+    /// analog poly, where a key finds its VCO wherever it happens to be.
+    /// The draws are the same whatever the knobs say.
+    pub fn seed_analog(&mut self, seed: u32, phase_random: f32, coeffs: &DriftCoeffs) {
+        let rng = &mut self.analog_rng;
+        *rng = AnalogRng::new(seed);
+        self.analog_cutoff = rng.bipolar();
+        self.analog_level = rng.bipolar();
+        let phase_random = phase_random as f64;
+        for sub in self.unison.iter_mut() {
+            sub.osc1_drift.start(rng, coeffs);
+            sub.osc2_drift.start(rng, coeffs);
+            sub.osc1_phase = rng.unit() as f64 * phase_random;
+            sub.osc2_phase = rng.unit() as f64 * phase_random;
+        }
     }
 
     /// Take a held voice over for a legato note: move the pitch target

@@ -3,9 +3,11 @@
 
 use super::super::super::activations::Activation;
 use super::super::super::parse::{WaveNetConfig, WeightReader};
-use super::super::conv_layer::WaveNetLayer;
+use super::super::conv_layer::{Conv1x1, WaveNetLayer};
 use super::super::params::GatingMode;
-use super::{validate, weights, WaveNetModel};
+use super::super::super::gemm::transpose_grouped;
+use super::super::head::HeadRechannel;
+use super::{validate, weights, WaveNetModel, MAX_BLOCK};
 
 /// Scratch-buffer widths derived from the config (each the max over all
 /// stacks of the relevant per-stack width).
@@ -166,6 +168,39 @@ fn max_film_out(stacks: &[Vec<WaveNetLayer>]) -> usize {
         .max(1)
 }
 
+/// Transpose every block-GEMM weight (rechannels, dilated-conv taps, input
+/// mixins, layer1x1, head1x1, head-rechannel taps) from the reference
+/// `[out][in]` per-group layout to lane-padded `[in][out]`, the layout
+/// [`grouped_gemm_acc`](super::super::super::gemm::grouped_gemm_acc)
+/// consumes. Runs once, after the dimension validation. FiLM and head-MLP
+/// weights stay `[out][in]`: they run per frame through the matvec.
+fn transpose_for_block_gemm(
+    rechannels: &mut [Conv1x1],
+    stacks: &mut [Vec<WaveNetLayer>],
+    head_rechannels: &mut [HeadRechannel],
+) {
+    for rc in rechannels {
+        rc.weight = transpose_grouped(&rc.weight, rc.out_ch, rc.in_ch, 1);
+    }
+    for layer in stacks.iter_mut().flatten() {
+        let mid = layer.mid_ch;
+        for w in &mut layer.w_conv {
+            *w = transpose_grouped(w, mid, layer.channels, layer.groups_input);
+        }
+        if let Some(w) = &mut layer.w_input_mixin {
+            *w = transpose_grouped(w, mid, layer.condition_size, layer.groups_input_mixin);
+        }
+        for c in [&mut layer.layer1x1, &mut layer.head1x1].into_iter().flatten() {
+            c.weight = transpose_grouped(&c.weight, c.out_ch, c.in_ch, c.groups);
+        }
+    }
+    for hr in head_rechannels {
+        for w in &mut hr.taps {
+            *w = transpose_grouped(w, hr.out_ch, hr.in_ch, 1);
+        }
+    }
+}
+
 impl WaveNetModel {
     pub fn from_config_and_weights(
         config: WaveNetConfig,
@@ -191,11 +226,11 @@ impl WaveNetModel {
         let out_channels = output_channels(&config);
 
         let num_stacks = config.stacks.len();
-        let mut rechannels = Vec::with_capacity(num_stacks);
+        let mut rechannels: Vec<Conv1x1> = Vec::with_capacity(num_stacks);
         let mut stacks = Vec::with_capacity(num_stacks);
         let mut head_rechannels = Vec::with_capacity(num_stacks);
-        let mut ring_buffers = Vec::with_capacity(num_stacks);
-        let mut head_rings = Vec::with_capacity(num_stacks);
+        let mut histories = Vec::with_capacity(num_stacks);
+        let mut head_histories = Vec::with_capacity(num_stacks);
 
         let mut prev_ch = config.input_size;
         for (si, stack_cfg) in config.stacks.iter().enumerate() {
@@ -203,9 +238,9 @@ impl WaveNetModel {
                 weights::read_stack(reader, si, stack_cfg, prev_ch, config.has_layer1x1, fast)?;
             rechannels.push(parts.rechannel);
             stacks.push(parts.layers);
-            ring_buffers.push(parts.rings);
+            histories.push(parts.rings);
             head_rechannels.push(parts.head_rechannel);
-            head_rings.push(parts.head_ring);
+            head_histories.push(parts.head_ring);
             prev_ch = stack_cfg.channels;
         }
 
@@ -232,13 +267,12 @@ impl WaveNetModel {
 
         let max_film_ss = max_film_out(&stacks);
 
-        // Scratch buffers, also used as representative slices for the
-        // load-time dimension validation below.
+        // Per-frame representative slices for the load-time dimension
+        // validation below.
         let scratch_activation = vec![0.0f32; dims.max_ch];
         let scratch_conv_out = vec![0.0f32; dims.max_mid];
         let scratch_skip = vec![0.0f32; dims.max_skip];
         let scratch_head_buf = vec![0.0f32; dims.max_head_buf];
-        let scratch_head_input = vec![0.0f32; head_size.max(dims.max_stack_head)];
         let scratch_film_ss = vec![0.0f32; max_film_ss];
 
         validate::validate_dims(
@@ -255,35 +289,39 @@ impl WaveNetModel {
             },
         )?;
 
-        let condition_buf = condition_dsp
-            .as_ref()
-            .map_or(Vec::new(), |cd| vec![0.0f32; cd.out_channels()]);
+        transpose_for_block_gemm(&mut rechannels, &mut stacks, &mut head_rechannels);
+
+        // Without a condition_dsp the condition is the raw (mono) input.
+        let cond_w = condition_dsp.as_ref().map_or(1, |cd| cd.out_channels());
+        let head_w = head_size.max(dims.max_stack_head);
+        let block = |width: usize| vec![0.0f32; MAX_BLOCK * width];
 
         Ok(Self {
             condition_dsp,
-            condition_buf,
             in_channels: config.input_size,
             head_size,
             out_channels,
             rechannels,
             stacks,
             head_rechannels,
-            ring_buffers,
-            head_rings,
+            histories,
+            head_histories,
             head_layers,
             head_scale,
             head_activation,
-            activation: scratch_activation,
-            conv_out: scratch_conv_out,
-            mixin_buf: vec![0.0; dims.max_mid],
-            pre_act_buf: vec![0.0; dims.max_bn],
-            residual_buf: vec![0.0; dims.max_ch],
-            skip_accum: scratch_skip,
-            head1x1_buf: vec![0.0; dims.max_skip],
+            cond: block(cond_w),
+            cond_w,
+            act: block(dims.max_ch),
+            act_next: block(dims.max_ch),
+            z: block(dims.max_mid),
+            mixin: block(dims.max_mid),
+            conv_tmp: block(dims.max_ch.max(dims.max_skip)),
+            film_in: block(dims.max_ch),
+            skip: block(dims.max_skip),
+            head: block(head_w),
+            head_w,
             film_ss_buf: scratch_film_ss,
-            film_pre_buf: vec![0.0; dims.max_ch],
-            rechannel_buf: vec![0.0; dims.max_ch],
-            head_input: scratch_head_input,
+            pre_act_buf: vec![0.0; dims.max_bn],
             head_buf_a: scratch_head_buf,
             head_buf_b: vec![0.0; dims.max_head_buf],
         })

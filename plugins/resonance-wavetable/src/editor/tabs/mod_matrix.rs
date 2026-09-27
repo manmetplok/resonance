@@ -1,20 +1,20 @@
 //! Modulation matrix tab — numbered rows of source → destination with a
 //! bipolar amount slider per row.
 
-use plugin_gui_core::egui;
+use plugin_gui_core::{egui, widgets};
 
 use crate::editor::theme;
 use crate::editor::WavetableEditorApp;
 use crate::dsp::modulation::{ModDest, ModSlot, ModSource, NUM_MOD_SLOTS};
 use resonance_plugin::param::Param;
 
-use super::{float_slider, readout};
+use super::{float_knob, float_slider, int_knob, readout};
 
 // Label tables live next to the enum discriminants in `dsp::modulation` so
 // the picker cannot drift from what the DSP actually matches on. Which of
 // them this build can act on is decided there too — see
 // `ModSource::unavailable_reason` / `ModDest::unavailable_reason`.
-const SOURCE_NAMES: [&str; 9] = ModSource::LABELS;
+const SOURCE_NAMES: [&str; ModSource::LABELS.len()] = ModSource::LABELS;
 const DEST_NAMES: [&str; ModDest::LABELS.len()] = ModDest::LABELS;
 
 /// Marker appended to an option the DSP cannot act on.
@@ -192,6 +192,53 @@ pub fn draw(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
                 });
             });
         }
+    });
+
+    ui.add_space(10.0);
+    draw_sample_hold_panel(ui, app);
+}
+
+/// Controls for the global `ModSource::SampleHold` generator
+/// (`dsp::lfo::SampleHoldGen`): its own clock, separate from LFO 1-3, so it
+/// gets its own small panel rather than a ninth LFO card.
+fn draw_sample_hold_panel(ui: &mut egui::Ui, app: &mut WavetableEditorApp) {
+    let panel = egui::Frame::default()
+        .fill(theme::BG_2)
+        .stroke(egui::Stroke::new(1.0, theme::LINE_2))
+        .corner_radius(theme::RADIUS_PANEL)
+        .inner_margin(egui::Margin::same(12));
+    let avail_w = ui.available_width();
+    panel.show(ui, |ui| {
+        ui.set_min_width(avail_w - 24.0);
+        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("SAMPLE & HOLD SOURCE")
+                    .color(theme::TEXT_3)
+                    .size(10.5)
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let sync = app.params.mod_sh.sync.value();
+                if let Some(i) = widgets::segmented(ui, &["Free", "Sync"], sync as usize) {
+                    app.params.mod_sh.sync.set_plain(i as f64);
+                }
+            });
+        });
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+            let sh = &app.params.mod_sh;
+            // Only one of these is live at a time -- a synced clock ignores
+            // its rate param entirely, same as the LFOs.
+            if sh.sync.value() {
+                int_knob(ui, "Div", &sh.division);
+            } else {
+                float_knob(ui, "Rate", &sh.rate);
+            }
+            float_knob(ui, "Slew", &sh.slew);
+        });
     });
 }
 

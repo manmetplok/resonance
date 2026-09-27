@@ -12,6 +12,7 @@ use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, Ru
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 
 use crate::params::WavetableParams;
+use crate::user_wavetable::UserWavetables;
 use crate::viz::WavetableVizState;
 
 use super::app::WavetableEditorApp;
@@ -24,6 +25,7 @@ pub struct WavetableEditorFactory {
     params: Arc<WavetableParams>,
     viz: Arc<WavetableVizState>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    user_tables: Arc<UserWavetables>,
 }
 
 impl WavetableEditorFactory {
@@ -31,11 +33,13 @@ impl WavetableEditorFactory {
         params: Arc<WavetableParams>,
         viz: Arc<WavetableVizState>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        user_tables: Arc<UserWavetables>,
     ) -> Self {
         Self {
             params,
             viz,
             presets,
+            user_tables,
         }
     }
 }
@@ -61,6 +65,7 @@ impl EditorFactory for WavetableEditorFactory {
             self.params.clone(),
             self.viz.clone(),
             self.presets.clone(),
+            self.user_tables.clone(),
         );
         let runtime = RuntimeEditor::new(
             app,

@@ -34,6 +34,12 @@ pub const WAVETABLE_SIZE: usize = 2048;
 pub const NUM_OCTAVES: usize = 12;
 pub const NUM_WAVETABLES: usize = 10;
 
+/// The `oscN_wavetable` value that selects that oscillator's *user* table —
+/// one past the bundled ones, so every bundled index keeps its meaning. Only
+/// live once a table has been imported: until then the oscillator plays
+/// bundled table 0 (see [`crate::dsp::engine::SynthEngine::install_user_table`]).
+pub const USER_WAVETABLE_INDEX: usize = NUM_WAVETABLES;
+
 /// Number of `f32`s spanned by all mip levels of one frame.
 pub const FRAME_STRIDE: usize = NUM_OCTAVES * WAVETABLE_SIZE;
 
@@ -46,6 +52,26 @@ pub struct Wavetable {
 }
 
 impl Wavetable {
+    /// A view over caller-owned mip data laid out like the bundle
+    /// (`num_frames × NUM_OCTAVES × WAVETABLE_SIZE`) — how a runtime-built
+    /// [`crate::dsp::user_table::UserTable`] is read by the same oscillator
+    /// code as the bundled tables.
+    ///
+    /// # Safety
+    ///
+    /// The descriptor claims `'static` but borrows `data`: it must not be
+    /// read after `data` is freed. The engine upholds this by keeping user
+    /// views only in its own table slots and overwriting a slot in the same
+    /// call that takes its storage out.
+    pub unsafe fn from_raw_parts(data: &[f32], num_frames: usize) -> Self {
+        assert_eq!(data.len(), num_frames * FRAME_STRIDE, "not a whole number of frames");
+        Self {
+            // SAFETY: the lifetime extension is the caller's contract above.
+            data: unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) },
+            num_frames,
+        }
+    }
+
     #[inline]
     pub fn num_frames(&self) -> usize {
         self.num_frames

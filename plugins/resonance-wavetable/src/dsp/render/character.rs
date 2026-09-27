@@ -143,15 +143,25 @@ fn read_osc(wt: &Wavetable, s: &OscSetup, phase: f64, carry: &mut f32, predict: 
 /// osc2's) and every per-oscillator product are those of the default
 /// kernel, so a warp at amount zero, FM or ring at amount zero, all render
 /// the default kernel's samples exactly.
+///
+/// The third value is the filter-FM modulator, as in the default kernel:
+/// osc2's raw signal summed over the unison stack. Here it is summed
+/// whenever osc2 *runs* — so a muted FM modulator or a muted sync slave
+/// still drives filter FM, which is the same rule as for the interaction
+/// itself: `enabled` decides what is heard, not what osc2 does. The synced
+/// slave contributes its polyBLEP-corrected signal. With osc2 running only
+/// because it is heard (Sum plus a warp) this is exactly the default
+/// kernel's sum.
 #[inline]
 pub(super) fn osc_kernel(
     voice: &mut Voice,
     snap: &ParamSnapshot,
     plan: &BlockPlan,
     wavetables: &[Wavetable],
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
+    let mut osc2_raw = 0.0f32;
 
     let wt1 = plan.wt1_idx.map(|i| &wavetables[i]);
     let wt2 = plan.wt2_idx.map(|i| &wavetables[i]);
@@ -239,6 +249,7 @@ pub(super) fn osc_kernel(
         // ---- osc2 mix and advance ----
         if let (Some(_), true) = (wt2, osc2_runs) {
             let s = &sub.osc2_setup;
+            osc2_raw += v2;
             if snap.osc2_enabled {
                 let sample = v2 * s.level;
                 osc_l += sample * s.pan_l;
@@ -255,7 +266,7 @@ pub(super) fn osc_kernel(
     }
 
     let unison_scale = 1.0 / (voice.unison_count as f32).sqrt();
-    (osc_l * unison_scale, osc_r * unison_scale)
+    (osc_l * unison_scale, osc_r * unison_scale, osc2_raw)
 }
 
 /// One sample of the sub oscillator and the noise source, summed at their

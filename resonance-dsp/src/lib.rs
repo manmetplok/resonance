@@ -12,6 +12,7 @@ pub mod formant;
 mod granular;
 mod interp;
 mod lfo;
+mod oversample;
 mod pan;
 pub mod pitch;
 pub mod pitch_rt;
@@ -39,6 +40,7 @@ pub use interp::{
     read_linear_wrapped,
 };
 pub use lfo::Lfo;
+pub use oversample::{halfband_coefs, Halfband, OversampleFactor, Oversampler};
 pub use pan::{constant_power_pan, stereo_balance};
 pub use pitch::{detect_f0, F0Config, F0Frame, YinDetector};
 pub use pitch_rt::{PitchEstimate, PitchTracker};

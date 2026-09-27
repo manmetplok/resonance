@@ -1,12 +1,19 @@
-//! SVF magnitude response curve with live modulated cutoff marker.
+//! Filter magnitude response curve with live modulated cutoff marker.
+//!
+//! The clean SVF keeps its original approximate curve; the character models
+//! draw their analog prototype's small-signal response
+//! ([`filter_models::response_db`]).
 
 use plugin_gui_core::egui;
 
+use crate::dsp::filter::FilterType;
+use crate::dsp::filter_models::{self, FilterModel};
 use crate::editor::theme;
 
 pub fn draw(
     ui: &mut egui::Ui,
     rect: egui::Rect,
+    model: FilterModel,
     filter_type: i32,
     cutoff: f32,
     resonance: f32,
@@ -60,7 +67,12 @@ pub fn draw(
     for i in 0..N {
         let t = i as f32 / (N - 1) as f32;
         let freq = 20.0 * (1000.0_f32).powf(t * 1.0); // 20..20k, log
-        let mag_db = svf_magnitude_db(filter_type, freq, cutoff, q) + drive * 6.0;
+        let mag_db = if model == FilterModel::Clean {
+            svf_magnitude_db(filter_type, freq, cutoff, q)
+        } else {
+            let ft = FilterType::from_int(filter_type);
+            filter_models::response_db(model, ft, freq, cutoff, resonance)
+        } + drive * 6.0;
         let x = left + freq_to_x(freq, width);
         let y = top + db_to_y(mag_db, height);
         points.push(egui::pos2(x, y));

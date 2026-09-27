@@ -14,13 +14,31 @@ pub enum ModSource {
     KeyTrack = 6,
     ModWheel = 7,
     Aftertouch = 8,
+    /// Per-voice uniform draw in -1..1 at trigger, held for the note's life.
+    /// Appended here (rather than slotted in alphabetically) because preset
+    /// files store `ModSource` as a bare integer — see [`Self::from_int`].
+    RandomBipolar = 9,
+    /// The same per-voice draw as [`Self::RandomBipolar`], remapped to
+    /// 0..1. One RNG pull per note-on feeds both, rather than two —
+    /// there is nothing for a second draw to buy here, and it would be
+    /// one more thing that could drift out of sync between the pair.
+    RandomUnipolar = 10,
+    /// Free-running, clocked by [`crate::params::WavetableParams::mod_sh`]:
+    /// a global "fifth LFO" shared by every voice, distinct from an LFO's
+    /// own [`crate::dsp::lfo::LfoShape::SampleAndHold`] *shape* (which
+    /// stairsteps that LFO's own rate). This one has its own rate/sync and
+    /// an optional slew that turns the classic stepped random into a
+    /// slowly drifting source.
+    SampleHold = 11,
+    /// Round-robin: flips ±1 on every voice trigger.
+    Alternate = 12,
 }
 
 impl ModSource {
     /// Display names, indexed by the parameter's integer value. The editor's
     /// source picker reads this array so the labels can never drift from the
     /// discriminants the DSP matches on.
-    pub const LABELS: [&'static str; 9] = [
+    pub const LABELS: [&'static str; 13] = [
         "None",
         "LFO 1",
         "LFO 2",
@@ -30,6 +48,10 @@ impl ModSource {
         "Key Track",
         "Mod Wheel",
         "Aftertouch",
+        "Random",
+        "Random Uni",
+        "S&H",
+        "Alternate",
     ];
 
     pub fn from_int(v: i32) -> Self {
@@ -42,6 +64,10 @@ impl ModSource {
             6 => Self::KeyTrack,
             7 => Self::ModWheel,
             8 => Self::Aftertouch,
+            9 => Self::RandomBipolar,
+            10 => Self::RandomUnipolar,
+            11 => Self::SampleHold,
+            12 => Self::Alternate,
             _ => Self::None,
         }
     }
@@ -90,17 +116,24 @@ pub enum ModDest {
     UnisonDetune = 9,
     Osc1Pan = 10,
     Osc2Pan = 11,
+    /// The master distortion's drive. The master bus is global, not per
+    /// voice — see [`ModState::dist_drive`] for how a per-voice matrix
+    /// drives it.
+    DistDrive = 12,
+    /// Per-voice pre-filter saturation (`voice_drive`).
+    VoiceDrive = 13,
+    FilterFm = 14,
     /// The oscillator-interaction amount: PM index, ring depth or sync
     /// sweep, per `osc_mix_mode`.
-    OscModAmount = 12,
-    Osc1Warp = 13,
-    Osc2Warp = 14,
+    OscModAmount = 15,
+    Osc1Warp = 16,
+    Osc2Warp = 17,
 }
 
 impl ModDest {
     /// Display names, indexed by the parameter's integer value. See
     /// [`ModSource::LABELS`] for why these live next to the discriminants.
-    pub const LABELS: [&'static str; 15] = [
+    pub const LABELS: [&'static str; 18] = [
         "None",
         "Osc1 Position",
         "Osc2 Position",
@@ -113,6 +146,9 @@ impl ModDest {
         "Unison Detune",
         "Osc1 Pan",
         "Osc2 Pan",
+        "Dist Drive",
+        "Voice Drive",
+        "Filter FM",
         "Osc Mod Amount",
         "Osc1 Warp",
         "Osc2 Warp",
@@ -131,9 +167,12 @@ impl ModDest {
             9 => Self::UnisonDetune,
             10 => Self::Osc1Pan,
             11 => Self::Osc2Pan,
-            12 => Self::OscModAmount,
-            13 => Self::Osc1Warp,
-            14 => Self::Osc2Warp,
+            12 => Self::DistDrive,
+            13 => Self::VoiceDrive,
+            14 => Self::FilterFm,
+            15 => Self::OscModAmount,
+            16 => Self::Osc1Warp,
+            17 => Self::Osc2Warp,
             _ => Self::None,
         }
     }
@@ -213,6 +252,24 @@ pub struct ModState {
     pub unison_detune: f32,
     pub osc1_pan: f32,
     pub osc2_pan: f32,
+    /// Offset to the master distortion's drive, in octaves of drive over
+    /// the param's 1..20 range at full scale (see
+    /// `render::DIST_DRIVE_MOD_OCTAVES`).
+    ///
+    /// Every voice accumulates this like any other destination, but the
+    /// stage it drives sits on the summed master bus, so only one value can
+    /// be used per sample: the render loop takes the **most recently
+    /// triggered** sounding voice's (last-note priority, the way a mono
+    /// synth resolves the same conflict). For a global source — a free or
+    /// synced LFO — every voice holds the same value and the choice is
+    /// moot; for a per-voice one (velocity, key track, the mod envelope, a
+    /// retriggered LFO) it follows the newest note. With no voice
+    /// sounding the last value is held so a release tail does not jump.
+    pub dist_drive: f32,
+    /// Offset to `voice_drive` (0..1), per voice.
+    pub voice_drive: f32,
+    /// Offset added to the `filter_fm` amount (0..1 scale).
+    pub filter_fm: f32,
     /// Added to `osc_mod_amount` (0..1 range; full scale sweeps it all).
     pub osc_mod_amount: f32,
     /// Added to `oscN_warp_amount` (full scale sweeps from 0 to either end).
@@ -273,6 +330,14 @@ impl ModSlot {
 }
 
 /// Evaluate all modulation slots and return accumulated ModState.
+///
+/// `random_bipolar` and `alternate` are per-voice: drawn/flipped once at
+/// trigger and held for the note's life (see `Voice::random_value` /
+/// `Voice::alternate_value`). `sample_hold_val` is the engine-global S&H
+/// generator's current (possibly slewed) value, shared by every voice for
+/// this control tick — the same relationship a free-running LFO has to the
+/// voices reading it.
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate_mod_matrix(
     slots: &[ModSlot],
     lfo1_val: f32,
@@ -281,6 +346,9 @@ pub fn evaluate_mod_matrix(
     mod_env_val: f32,
     velocity: f32,
     note: f32,
+    random_bipolar: f32,
+    sample_hold_val: f32,
+    alternate: f32,
 ) -> ModState {
     let mut state = ModState::default();
     let key_track = (note - 60.0) / 60.0; // normalized around middle C
@@ -303,6 +371,15 @@ pub fn evaluate_mod_matrix(
             ModSource::Env2 => mod_env_val * 2.0 - 1.0, // 0..1 -> -1..1
             ModSource::Velocity => velocity * 2.0 - 1.0,
             ModSource::KeyTrack => key_track,
+            ModSource::RandomBipolar => random_bipolar,
+            // Deliberately not remapped through `key_track`'s -1..1
+            // convention: the whole point of offering both is a source
+            // that is naturally 0..1, for destinations a symmetric random
+            // would fight (e.g. always brightening a filter rather than
+            // sometimes darkening it).
+            ModSource::RandomUnipolar => random_bipolar * 0.5 + 0.5,
+            ModSource::SampleHold => sample_hold_val,
+            ModSource::Alternate => alternate,
             // Unreachable: filtered by `is_effective` above. Kept exhaustive
             // so #1301 has to come back here when CC delivery lands.
             ModSource::ModWheel | ModSource::Aftertouch | ModSource::None => 0.0,
@@ -322,6 +399,9 @@ pub fn evaluate_mod_matrix(
             ModDest::UnisonDetune => state.unison_detune += mod_value,
             ModDest::Osc1Pan => state.osc1_pan += mod_value,
             ModDest::Osc2Pan => state.osc2_pan += mod_value,
+            ModDest::DistDrive => state.dist_drive += mod_value,
+            ModDest::VoiceDrive => state.voice_drive += mod_value,
+            ModDest::FilterFm => state.filter_fm += mod_value,
             ModDest::OscModAmount => state.osc_mod_amount += mod_value,
             ModDest::Osc1Warp => state.osc1_warp += mod_value,
             ModDest::Osc2Warp => state.osc2_warp += mod_value,

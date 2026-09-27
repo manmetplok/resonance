@@ -110,9 +110,9 @@ pub(super) fn validate_config(config: &WaveNetConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// Cap on one dilated-conv (or head) state ring, in f32 slots (frame
-/// capacity x channels; the power-of-two rounding in `RingBuffer::new` at
-/// most doubles it). Unlike the width fields, kernel sizes and dilations
+/// Cap on one dilated-conv (or head) state history, in f32 slots (frame
+/// lookback x channels; the rewind slack `History::new` adds at most
+/// doubles it, plus four internal blocks of frames). Unlike the width fields, kernel sizes and dilations
 /// are not naturally bounded by the file's weight count — a ring stores
 /// history, not weights — so this is a hard cap: real NAM models stay
 /// under ~2^17 (receptive field ~2048 x at most a few dozen channels),
