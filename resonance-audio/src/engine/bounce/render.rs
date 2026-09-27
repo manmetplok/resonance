@@ -328,8 +328,9 @@ pub(super) fn render_chunk(
     freeze_raw: bool,
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
-    // CLAP `thread-check`: this thread drives `process()` now.
-    crate::clap_host::thread_check::mark_audio_thread();
+    // CLAP `thread-check`: this thread renders for the chunk (a bounce
+    // thread makes main-thread calls between chunks, so only a scope).
+    let _audio = crate::clap_host::thread_check::AudioThreadScope::enter();
 
     // The render graph (audio and MIDI clips, busses, master chain,
     // tracks, plugins), loaded once for the chunk (ARCH-02 A2-4…A2-8): no

@@ -132,7 +132,14 @@ impl ClapInstance {
             try_push: Some(discard_output_event),
         };
 
-        unsafe { flush_fn(self.plugin, &in_events, &out_events) };
+        {
+            // `params.flush` is `[active ? audio-thread : main-thread]`;
+            // see `AudioThreadScope`.
+            let _audio = self
+                .active
+                .then(super::thread_check::AudioThreadScope::enter);
+            unsafe { flush_fn(self.plugin, &in_events, &out_events) };
+        }
 
         // Reclaim the scratch buffer for reuse (keeps process() allocation-free).
         self.param_event_buf = event_ctx.param_events;

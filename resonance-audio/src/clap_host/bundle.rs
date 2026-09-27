@@ -20,6 +20,7 @@ use clap_sys::ext::gui::{clap_plugin_gui, CLAP_EXT_GUI};
 use clap_sys::ext::latency::{clap_plugin_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::params::{clap_plugin_params, CLAP_EXT_PARAMS};
 use clap_sys::ext::state::{clap_plugin_state, CLAP_EXT_STATE};
+use clap_sys::ext::thread_pool::{clap_plugin_thread_pool, CLAP_EXT_THREAD_POOL};
 use clap_sys::factory::plugin_factory::{clap_plugin_factory, CLAP_PLUGIN_FACTORY_ID};
 use clap_sys::host::clap_host;
 
@@ -271,6 +272,9 @@ pub(super) fn build_instance(
     host_data: Pin<Box<HostData>>,
     sample_rate: u32,
 ) -> Result<ClapInstance, ClapBundleError> {
+    host_data
+        .plugin
+        .store(plugin as *mut clap_plugin, std::sync::atomic::Ordering::Release);
     // Init
     if let Some(init_fn) = unsafe { (*plugin).init } {
         let ok = unsafe { init_fn(plugin) };
@@ -283,6 +287,17 @@ pub(super) fn build_instance(
     }
 
     // Query extensions before activation
+    // CLAP `thread-pool`: the plugin's task entry point, for the host's
+    // `request_exec` (`clap_host::thread_pool`).
+    unsafe {
+        if let Some(get_ext) = (*plugin).get_extension {
+            let ext = get_ext(plugin, CLAP_EXT_THREAD_POOL.as_ptr())
+                as *const clap_plugin_thread_pool;
+            if let Some(exec) = ext.as_ref().and_then(|ext| ext.exec) {
+                let _ = host_data.thread_pool_exec.set(exec);
+            }
+        }
+    }
     let params_ext = unsafe {
         if let Some(get_ext) = (*plugin).get_extension {
             let ext = get_ext(plugin, CLAP_EXT_PARAMS.as_ptr());
@@ -409,6 +424,8 @@ pub(super) fn build_instance(
 
     // Start processing
     if let Some(start) = unsafe { (*plugin).start_processing } {
+        // `[audio-thread]` in CLAP; see `AudioThreadScope`.
+        let _audio = super::thread_check::AudioThreadScope::enter();
         let ok = unsafe { start(plugin) };
         if !ok {
             if let Some(deactivate) = unsafe { (*plugin).deactivate } {

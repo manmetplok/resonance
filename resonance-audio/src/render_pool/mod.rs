@@ -41,8 +41,9 @@ pub mod sched;
 
 use std::cell::UnsafeCell;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread::{JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
@@ -287,6 +288,11 @@ struct Shared {
     task: UnsafeCell<Task>,
     shuffle: UnsafeCell<Shuffle>,
     parked: Box<[AtomicBool]>,
+    /// The workers' handles, for a plugin's sub-task request to wake
+    /// parked ones (it reaches the pool only through [`CURRENT_POOL`]).
+    threads: OnceLock<Box<[Thread]>>,
+    /// Plugin sub-tasks (CLAP `thread-pool`) — see [`exec_plugin_tasks`].
+    sub: SubTasks,
     /// Packed [`Sched`] the workers should run at; 0 until the caller has
     /// published its own.
     sched_want: AtomicU64,
@@ -299,7 +305,8 @@ struct Shared {
 
 // SAFETY: `task` and `shuffle` are written only by the caller while the
 // epoch is closed and no worker is registered, and read by workers only
-// while registered in an open epoch (module docs). Everything else is
+// while registered in an open epoch (module docs); `sub.task` likewise,
+// under the sub-task epoch and the `sub.busy` claim. Everything else is
 // atomic.
 unsafe impl Sync for Shared {}
 unsafe impl Send for Shared {}
@@ -333,6 +340,8 @@ impl RenderPool {
             parked: (0..config.workers)
                 .map(|_| AtomicBool::new(false))
                 .collect(),
+            threads: OnceLock::new(),
+            sub: SubTasks::new(),
             sched_want: AtomicU64::new(0),
             sched_errno: AtomicU64::new(0),
             follow_caller_sched: config.follow_caller_sched,
@@ -356,6 +365,7 @@ impl RenderPool {
                 Err(_) => break,
             }
         }
+        let _ = shared.threads.set(threads.clone().into_boxed_slice());
         Self {
             shared,
             threads,
@@ -426,6 +436,9 @@ impl RenderPool {
     ) -> RunStats {
         let caller_only = caller_only.min(n);
         let shared_jobs = n - caller_only;
+        // A plugin in one of these jobs may hand work back to the pool
+        // (CLAP `thread-pool`): point this thread at it for the run.
+        let _current = self.usable().then(|| CurrentPool::enter(&self.shared));
         if shared_jobs <= 1 || !self.usable() {
             for index in 0..n {
                 job(index, caller);
@@ -490,7 +503,10 @@ impl RenderPool {
         let wait_start = Instant::now();
         let mut spins = 0u32;
         while s.done.load(Ordering::Acquire) < n {
-            spin(&mut spins);
+            // Waiting on a job whose plugin split its work: help with it.
+            if !help_sub_tasks(s) {
+                spin(&mut spins);
+            }
         }
         RunStats {
             join_wait_ns: wait_start.elapsed().as_nanos() as u64,
@@ -595,6 +611,8 @@ fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
     crate::clap_host::thread_check::mark_audio_thread();
     resonance_dsp::flush_denormals();
     let s = &*shared;
+    // A plugin running on this worker may split its work into sub-tasks.
+    let _current = CurrentPool::enter(s);
     let mut seen = 0u64;
     let mut applied_sched = 0u64;
     loop {
@@ -610,6 +628,9 @@ fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
                 if epoch & 1 == 1 && epoch != seen {
                     break 'wait epoch;
                 }
+                if help_sub_tasks(s) {
+                    continue 'wait;
+                }
                 if spins % YIELD_EVERY != YIELD_EVERY - 1 || spin_start.elapsed() < s.spin {
                     spin(&mut spins);
                     continue;
@@ -620,7 +641,11 @@ fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
                 // that makes `park` return at once.
                 s.parked[index].store(true, Ordering::SeqCst);
                 let epoch = s.epoch.load(Ordering::SeqCst);
-                if !(epoch & 1 == 1 && epoch != seen) && !s.shutdown.load(Ordering::SeqCst) {
+                let sub_open = s.sub.epoch.load(Ordering::SeqCst) & 1 == 1;
+                if !(epoch & 1 == 1 && epoch != seen)
+                    && !sub_open
+                    && !s.shutdown.load(Ordering::SeqCst)
+                {
                     std::thread::park();
                 }
                 s.parked[index].store(false, Ordering::Relaxed);
@@ -683,4 +708,177 @@ fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
         }
         s.active.fetch_sub(1, Ordering::SeqCst);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin sub-tasks (CLAP `thread-pool`, realtime-multithreading.md §5 P4)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// The pool the calling thread renders for: set on every worker, and
+    /// on a caller for the length of a run.
+    static CURRENT_POOL: Cell<*const Shared> = const { Cell::new(std::ptr::null()) };
+}
+
+/// Scoped [`CURRENT_POOL`] entry; restores the previous value on drop.
+struct CurrentPool(*const Shared);
+
+impl CurrentPool {
+    fn enter(shared: &Shared) -> Self {
+        Self(CURRENT_POOL.with(|c| c.replace(shared)))
+    }
+}
+
+impl Drop for CurrentPool {
+    fn drop(&mut self) {
+        CURRENT_POOL.with(|c| c.set(self.0));
+    }
+}
+
+/// A plugin sub-task batch: `run(i)` for `i in 0..n`.
+type SubJob<'f> = dyn Fn(u32) + Sync + 'f;
+
+struct SubTask {
+    job: *const SubJob<'static>,
+    n: usize,
+}
+
+/// One plugin's sub-task batch at a time, on the same epoch / claim /
+/// join protocol as the main runs (module docs), claimed first through
+/// `busy` so two plugins asking at once cannot share it.
+struct SubTasks {
+    busy: AtomicBool,
+    epoch: AtomicU64,
+    next: AtomicUsize,
+    done: AtomicUsize,
+    active: AtomicUsize,
+    task: UnsafeCell<SubTask>,
+}
+
+impl SubTasks {
+    fn new() -> Self {
+        Self {
+            busy: AtomicBool::new(false),
+            epoch: AtomicU64::new(0),
+            next: AtomicUsize::new(0),
+            done: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
+            task: UnsafeCell::new(SubTask {
+                job: std::ptr::null::<fn(u32)>() as *const SubJob<'static>,
+                n: 0,
+            }),
+        }
+    }
+}
+
+/// Run a plugin's `thread-pool` request: `task(i)` for every `i` in
+/// `0..n`, returning once all are done. Called from inside a plugin's
+/// `process()`.
+///
+/// On a thread rendering for a pool, the tasks are shared out: the
+/// calling thread runs them too, and idle workers — plus a caller waiting
+/// at its join — pick them up. With no pool (a serial render), or while
+/// another plugin's batch holds the pool's sub-task channel, the calling
+/// thread runs them all itself: CLAP only requires that the host executed
+/// every task. Allocation-free and lock-free.
+pub(crate) fn exec_plugin_tasks(n: u32, task: &SubJob<'_>) {
+    let n = n as usize;
+    let current = CURRENT_POOL.with(|c| c.get());
+    // SAFETY: a set pointer is the `Shared` of a pool this thread is
+    // rendering for right now, kept alive by the run or the worker.
+    let Some(s) = (unsafe { current.as_ref() }) else {
+        return (0..n).for_each(|i| task(i as u32));
+    };
+    let sub = &s.sub;
+    if n <= 1
+        || sub
+            .busy
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+    {
+        return (0..n).for_each(|i| task(i as u32));
+    }
+    // SAFETY: `busy` is ours and the previous batch's close waited for
+    // `active == 0`, so nobody reads `task`; the close below outlives
+    // every helper's use of the erased borrow.
+    unsafe {
+        *sub.task.get() = SubTask {
+            job: std::mem::transmute::<*const SubJob<'_>, *const SubJob<'static>>(task),
+            n,
+        };
+    }
+    sub.next.store(0, Ordering::Relaxed);
+    sub.done.store(0, Ordering::Relaxed);
+    let epoch = sub.epoch.load(Ordering::Relaxed) + 1;
+    sub.epoch.store(epoch, Ordering::SeqCst);
+    let _close = CloseSubOnDrop(sub, epoch);
+
+    if let Some(threads) = s.threads.get() {
+        let mut to_wake = n - 1;
+        for (flag, thread) in s.parked.iter().zip(threads.iter()) {
+            if to_wake == 0 {
+                break;
+            }
+            if flag.load(Ordering::SeqCst) {
+                thread.unpark();
+                to_wake -= 1;
+            }
+        }
+    }
+    loop {
+        let claim = sub.next.fetch_add(1, Ordering::AcqRel);
+        if claim >= n {
+            break;
+        }
+        task(claim as u32);
+        sub.done.fetch_add(1, Ordering::Release);
+    }
+    let mut spins = 0u32;
+    while sub.done.load(Ordering::Acquire) < n {
+        spin(&mut spins);
+    }
+}
+
+/// Closes a sub-task batch, waits for its helpers to leave, and frees the
+/// channel — on the normal path and when a task panics on the requester.
+struct CloseSubOnDrop<'a>(&'a SubTasks, u64);
+
+impl Drop for CloseSubOnDrop<'_> {
+    fn drop(&mut self) {
+        let sub = self.0;
+        sub.epoch.store(self.1 + 1, Ordering::SeqCst);
+        let mut spins = 0u32;
+        while sub.active.load(Ordering::SeqCst) != 0 {
+            spin(&mut spins);
+        }
+        sub.busy.store(false, Ordering::Release);
+    }
+}
+
+/// Help with an open sub-task batch, if there is one. Returns whether
+/// this thread took part.
+fn help_sub_tasks(s: &Shared) -> bool {
+    let sub = &s.sub;
+    let epoch = sub.epoch.load(Ordering::Acquire);
+    if epoch & 1 == 0 {
+        return false;
+    }
+    sub.active.fetch_add(1, Ordering::SeqCst);
+    if sub.epoch.load(Ordering::SeqCst) != epoch {
+        sub.active.fetch_sub(1, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: registered in the open sub-task epoch.
+    let task = unsafe { &*sub.task.get() };
+    let job = unsafe { &*task.job };
+    loop {
+        let claim = sub.next.fetch_add(1, Ordering::AcqRel);
+        if claim >= task.n {
+            break;
+        }
+        let _ = catch_unwind(AssertUnwindSafe(|| job(claim as u32)));
+        sub.done.fetch_add(1, Ordering::Release);
+    }
+    sub.active.fetch_sub(1, Ordering::SeqCst);
+    true
 }

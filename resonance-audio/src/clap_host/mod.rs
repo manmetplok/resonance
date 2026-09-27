@@ -32,6 +32,7 @@ mod params;
 mod process;
 mod state;
 pub(crate) mod thread_check;
+mod thread_pool;
 
 pub use bundle::ClapBundle;
 pub use bundle::bundle_binary_path;
@@ -47,6 +48,7 @@ use std::sync::atomic::{AtomicBool, AtomicI8, AtomicUsize, Ordering};
 use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
 use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
 use clap_sys::ext::thread_check::CLAP_EXT_THREAD_CHECK;
+use clap_sys::ext::thread_pool::CLAP_EXT_THREAD_POOL;
 use clap_sys::host::clap_host;
 use clap_sys::version::CLAP_VERSION;
 use indexmap::IndexMap;
@@ -117,6 +119,15 @@ pub(super) struct HostData {
     /// Written before `gui_closed` is set and read after it is taken, so
     /// the release/acquire pair on `gui_closed` publishes it.
     gui_closed_was_destroyed: AtomicBool,
+    /// The instance this host serves, from the moment it is created — the
+    /// `thread-pool` extension hands it back to the plugin's `exec`.
+    pub(super) plugin: std::sync::atomic::AtomicPtr<clap_sys::plugin::clap_plugin>,
+    /// The plugin's `clap_plugin_thread_pool.exec`, queried after `init`.
+    pub(super) thread_pool_exec:
+        std::sync::OnceLock<unsafe extern "C" fn(*const clap_sys::plugin::clap_plugin, u32)>,
+    /// True while the plugin is inside `process()`: the only time CLAP
+    /// lets it use the host's thread pool.
+    pub(super) in_process: AtomicBool,
 }
 
 impl HostData {
@@ -161,6 +172,9 @@ unsafe extern "C" fn host_get_extension(
     }
     if id == CLAP_EXT_THREAD_CHECK.to_bytes() {
         return thread_check::host_thread_check_ptr();
+    }
+    if id == CLAP_EXT_THREAD_POOL.to_bytes() {
+        return thread_pool::host_thread_pool_ptr();
     }
     ptr::null()
 }
@@ -264,6 +278,9 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         },
         gui_closed: AtomicBool::new(false),
         gui_closed_was_destroyed: AtomicBool::new(false),
+        plugin: std::sync::atomic::AtomicPtr::new(ptr::null_mut()),
+        thread_pool_exec: std::sync::OnceLock::new(),
+        in_process: AtomicBool::new(false),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {

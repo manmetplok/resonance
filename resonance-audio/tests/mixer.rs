@@ -59,6 +59,8 @@ mod monitor_fallback_resample;
 mod monitor_ring_alignment;
 #[path = "mixer/parallel_render.rs"]
 mod parallel_render;
+#[path = "mixer/plugin_thread_pool.rs"]
+mod plugin_thread_pool;
 #[path = "mixer/playhead_discontinuity_flush.rs"]
 mod playhead_discontinuity_flush;
 #[path = "mixer/recorded_monitor_gating.rs"]

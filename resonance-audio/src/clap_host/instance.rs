@@ -620,6 +620,8 @@ impl ClapInstance {
         // SAFETY: `self.plugin` is the live plugin this instance owns;
         // `active` holds, and `&mut self` means no process() runs.
         if let Some(reset) = unsafe { (*self.plugin).reset } {
+            // `[audio-thread]` in CLAP; see `AudioThreadScope`.
+            let _audio = super::thread_check::AudioThreadScope::enter();
             unsafe { reset(self.plugin) };
         }
     }
@@ -643,6 +645,8 @@ impl Drop for ClapInstance {
         let _ = self.close_gui();
         if self.active {
             if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+                // `[audio-thread]` in CLAP; see `AudioThreadScope`.
+                let _audio = super::thread_check::AudioThreadScope::enter();
                 unsafe { stop(self.plugin) };
             }
             if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {

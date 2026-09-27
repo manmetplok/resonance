@@ -215,8 +215,9 @@ impl ClapInstance {
     /// (`self.active == false`) and `Drop` skips the deactivate it would
     /// otherwise run.
     fn cycle_activation(&mut self, while_deactivated: impl FnOnce(&mut Self) -> bool) -> bool {
-        // Stop processing
+        // Stop processing (`[audio-thread]`; see `AudioThreadScope`)
         if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+            let _audio = super::thread_check::AudioThreadScope::enter();
             unsafe { stop(self.plugin) };
         }
         // Deactivate
@@ -257,9 +258,12 @@ impl ClapInstance {
         // becomes readable.
         self.requery_latency();
 
-        // Start processing
+        // Start processing (`[audio-thread]`; see `AudioThreadScope`)
         if let Some(start) = unsafe { (*self.plugin).start_processing } {
-            let ok = unsafe { start(self.plugin) };
+            let ok = {
+                let _audio = super::thread_check::AudioThreadScope::enter();
+                unsafe { start(self.plugin) }
+            };
             if !ok {
                 // Deactivate since we can't start processing
                 if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {
@@ -288,12 +292,16 @@ impl ClapInstance {
         if !self.active {
             return false;
         }
-        if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
-            unsafe { stop(self.plugin) };
-        }
-        let started = match unsafe { (*self.plugin).start_processing } {
-            Some(start) => unsafe { start(self.plugin) },
-            None => true,
+        let started = {
+            // Both `[audio-thread]`; see `AudioThreadScope`.
+            let _audio = super::thread_check::AudioThreadScope::enter();
+            if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+                unsafe { stop(self.plugin) };
+            }
+            match unsafe { (*self.plugin).start_processing } {
+                Some(start) => unsafe { start(self.plugin) },
+                None => true,
+            }
         };
         if started {
             return true;
