@@ -31,6 +31,7 @@ mod snapshot;
 
 use resonance_plugin::{EventIterator, NoteEvent, TempoInfo};
 
+use crate::dsp::analog::DRIFT_INTERVAL;
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::voice::VoiceState;
@@ -179,6 +180,7 @@ impl SynthEngine {
         triggered_here: bool,
     ) -> SampleCtx {
         let coeff_tick = (sample_id as u32 & (FILTER_COEFF_INTERVAL - 1)) == 0;
+        let drift_tick = (sample_id as u32 & (DRIFT_INTERVAL - 1)) == 0;
         let lfo_vals_needed = coeff_tick || triggered_here;
 
         let global_lfo = if lfo_vals_needed {
@@ -196,6 +198,7 @@ impl SynthEngine {
 
         SampleCtx {
             coeff_tick,
+            drift_tick,
             lfo_vals_needed,
             global_lfo,
         }
@@ -269,11 +272,13 @@ impl SynthEngine {
         }
 
         if snap.chorus_enabled {
-            let (cl, cr) = self.chorus.process(
+            let (cl, cr) = self.chorus.process_mode(
                 mix_l,
                 mix_r,
+                snap.chorus_mode,
                 snap.chorus_rate,
                 self.fx_smoothers.chorus_depth.next(),
+                snap.chorus_noise,
                 self.fx_smoothers.chorus_mix.next(),
             );
             mix_l = cl;
@@ -351,6 +356,9 @@ impl SynthEngine {
         if !snap.chorus_enabled {
             self.fx_smoothers.chorus_depth.skip(n);
             self.fx_smoothers.chorus_mix.skip(n);
+            // Nothing is heard from a disabled chorus, so a mode change
+            // made while it is off lands without the switch crossfade.
+            self.chorus.set_mode_immediate(snap.chorus_mode);
         }
         if !snap.delay_enabled {
             self.fx_smoothers.delay_time_l.skip(n);

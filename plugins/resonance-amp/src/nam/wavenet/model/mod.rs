@@ -29,8 +29,7 @@
 //! - [`build`] — `from_config_and_weights` orchestration + scratch sizing.
 //! - [`weights`] — flat-weight-stream readers (stack / layer / head).
 //! - [`validate`] — config-shape and load-time dimension validation.
-//! - [`forward`] — the per-sample forward pass, split into per-stage
-//!   methods.
+//! - [`forward`] — the block forward pass, split into per-stage methods.
 
 mod build;
 mod forward;
@@ -41,7 +40,13 @@ use super::super::activations::Activation;
 use super::super::NamInference;
 use super::conv_layer::{Conv1x1, WaveNetLayer};
 use super::head::{DenseLayer, HeadRechannel};
-use super::ring::RingBuffer;
+use super::history::History;
+
+/// Frames per internal block. Host blocks are split into chunks of at most
+/// this many frames; 64 keeps every frame-major scratch block of the
+/// standard architecture within a few KB, so a whole layer's working set
+/// stays in L1.
+pub(super) const MAX_BLOCK: usize = 64;
 
 pub struct WaveNetModel {
     /// A2 condition_dsp sub-network: a nested WaveNet that transforms the
@@ -51,10 +56,6 @@ pub struct WaveNetModel {
     /// outer flat stream. `None` = the condition is the raw input (the
     /// reference `_process_condition` passthrough).
     condition_dsp: Option<Box<WaveNetModel>>,
-    /// Nested condition output, `condition_dsp.out_channels()` wide
-    /// (empty when there is no condition_dsp). Preallocated; refreshed
-    /// once per sample before the stack loop.
-    condition_buf: Vec<f32>,
     /// Number of input channels (`config.input_size`; the engine processes
     /// mono, so this is 1 for every loadable file — recorded for the
     /// reference's condition_dsp input-width validation).
@@ -80,11 +81,12 @@ pub struct WaveNetModel {
     rechannels: Vec<Conv1x1>,
     stacks: Vec<Vec<WaveNetLayer>>,
     head_rechannels: Vec<HeadRechannel>,
-    ring_buffers: Vec<Vec<RingBuffer>>,
+    /// Per-layer dilated-conv input history.
+    histories: Vec<Vec<History>>,
     /// Per-stack history of past skip-accumulator frames for windowed head
     /// rechannels (`Some` iff `head_kernel_size > 1`; the kernel-1 path is
-    /// memoryless and skips the ring entirely).
-    head_rings: Vec<Option<RingBuffer>>,
+    /// memoryless and keeps none).
+    head_histories: Vec<Option<History>>,
 
     // Head MLP (may be empty)
     head_layers: Vec<DenseLayer>,
@@ -93,28 +95,48 @@ pub struct WaveNetModel {
     /// construction (A1: fast tanh).
     head_activation: Activation,
 
-    // Pre-allocated scratch buffers (sized for max needed)
-    activation: Vec<f32>,
-    conv_out: Vec<f32>,  // mid_ch sized; holds the activated z (bottleneck)
-    mixin_buf: Vec<f32>, // mid_ch sized
-    /// Pre-activation copy of the primary half, for blended gating
-    /// (bottleneck sized).
-    pre_act_buf: Vec<f32>,
-    residual_buf: Vec<f32>,
-    /// Skip accumulator: `head1x1.out_channels` wide for stacks with an
-    /// active head1x1, else bottleneck wide.
-    skip_accum: Vec<f32>,
-    /// Per-layer head1x1 output (head1x1.out_channels sized).
-    head1x1_buf: Vec<f32>,
+    // Block scratch, frame-major: frame `t` of an `n`-frame block occupies
+    // `[t * width .. t * width + width]`, with `width` the tensor's width
+    // at that point of the pass (so every block is a dense matrix the
+    // GEMM reads directly). Each is `MAX_BLOCK` frames of the widest
+    // width it ever holds.
+    /// Condition per frame, `cond_w` wide: the condition_dsp output, or the
+    /// raw input (width 1) without one.
+    cond: Vec<f32>,
+    cond_w: usize,
+    /// Layer input / residual stream (stack channels wide).
+    act: Vec<f32>,
+    /// Rechannel output, swapped with `act` (max_ch wide).
+    act_next: Vec<f32>,
+    /// Conv + mixin output z (mid_ch wide); holds the activated z in
+    /// the first `bottleneck` columns of each frame after activation.
+    z: Vec<f32>,
+    /// Input-mixin output when a post-FiLM has to see it on its own
+    /// (mid_ch wide).
+    mixin: Vec<f32>,
+    /// layer1x1 / head1x1 output when a post-FiLM has to see it on its
+    /// own (max(channels, skip) wide).
+    conv_tmp: Vec<f32>,
+    /// FiLM-modulated copies for the const-input sites (conv_pre input,
+    /// input_mixin_pre condition); max_ch wide.
+    film_in: Vec<f32>,
+    /// Skip accumulator (skip_ch wide).
+    skip: Vec<f32>,
+    /// Head rechannel outputs, `head_w` wide for every stack: after the
+    /// last stack (and the head MLP) its first `out_channels` columns are
+    /// the pre-`head_scale` model output. Zeroed per block, so columns a
+    /// narrower stack leaves unwritten read as zero.
+    head: Vec<f32>,
+    head_w: usize,
+
+    // Per-frame scratch.
     /// FiLM scale/shift scratch, sized for the widest active FiLM conv
     /// output (`max out_ch` = up to twice the widest modulated tensor).
     film_ss_buf: Vec<f32>,
-    /// FiLM output scratch for the const-input sites (conv_pre input copy,
-    /// input_mixin_pre modulated condition); max(channels, condition_size)
-    /// sized.
-    film_pre_buf: Vec<f32>,
-    rechannel_buf: Vec<f32>,
-    head_input: Vec<f32>, // head_size sized, accumulated across stacks
+    /// Pre-activation copy of the primary half, for blended gating
+    /// (bottleneck sized).
+    pre_act_buf: Vec<f32>,
+    /// Head MLP ping-pong buffers.
     head_buf_a: Vec<f32>,
     head_buf_b: Vec<f32>,
 }
@@ -133,43 +155,57 @@ impl WaveNetModel {
         self.out_channels
     }
 
-    /// Multi-channel inference used for nested condition_dsp models: runs
-    /// one input sample and writes the `out_channels()` head-scaled output
-    /// channels into `out` (which must be at least that wide).
-    /// Allocation-free; shares the forward pass with `process_sample`.
+    /// Multi-channel inference of one sample: writes the `out_channels()`
+    /// head-scaled output channels into `out` (at least that wide).
     pub fn process_sample_into(&mut self, input: f32, out: &mut [f32]) {
-        self.forward(input);
-        let n = self.out_channels;
-        for (o, v) in out[..n].iter_mut().zip(&self.head_input[..n]) {
-            *o = v * self.head_scale;
+        self.process_block_into(&[input], out);
+    }
+
+    /// Multi-channel block inference used for nested condition_dsp models:
+    /// runs `input.len()` samples and writes, frame-major, the
+    /// `out_channels()` head-scaled output channels of each into `out`
+    /// (at least `input.len() * out_channels()` long). Allocation-free.
+    pub fn process_block_into(&mut self, input: &[f32], out: &mut [f32]) {
+        let oc = self.out_channels;
+        for (inp, o) in input.chunks(MAX_BLOCK).zip(out.chunks_mut(MAX_BLOCK * oc)) {
+            self.forward_block(inp);
+            for t in 0..inp.len() {
+                let row = &self.head[t * self.head_w..][..oc];
+                for (d, v) in o[t * oc..][..oc].iter_mut().zip(row) {
+                    *d = v * self.head_scale;
+                }
+            }
         }
     }
 }
 
 impl NamInference for WaveNetModel {
     fn process_sample(&mut self, input: f32) -> f32 {
-        self.forward(input);
-        self.head_input[0] * self.head_scale
+        self.forward_block(&[input]);
+        self.head[0] * self.head_scale
+    }
+
+    fn process_block(&mut self, input: &[f32], output: &mut [f32]) {
+        for (inp, out) in input.chunks(MAX_BLOCK).zip(output.chunks_mut(MAX_BLOCK)) {
+            self.forward_block(inp);
+            for (t, o) in out.iter_mut().enumerate() {
+                *o = self.head[t * self.head_w] * self.head_scale;
+            }
+        }
     }
 
     fn reset(&mut self) {
-        // Nested condition_dsp state (its rings, recursively) must clear
-        // too, or the first samples after reset would see a stale
+        // Nested condition_dsp state (its histories, recursively) must
+        // clear too, or the first samples after reset would see a stale
         // condition.
         if let Some(cd) = &mut self.condition_dsp {
             cd.reset();
         }
-        self.condition_buf.fill(0.0);
-        for stack_rings in &mut self.ring_buffers {
-            for ring in stack_rings {
-                ring.reset();
-            }
+        for h in self.histories.iter_mut().flatten() {
+            h.reset();
         }
-        for ring in self.head_rings.iter_mut().flatten() {
-            ring.reset();
+        for h in self.head_histories.iter_mut().flatten() {
+            h.reset();
         }
-        self.activation.fill(0.0);
-        self.skip_accum.fill(0.0);
-        self.head_input.fill(0.0);
     }
 }

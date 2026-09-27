@@ -2,6 +2,7 @@
 use resonance_dsp::SimpleRng;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
+use crate::dsp::analog::{AnalogRng, DriftCoeffs};
 use crate::dsp::effects::{Chorus, DistortionStage, StereoDelay};
 use crate::params::WavetableParams;
 use crate::viz::{ScopeCollector, WavetableVizState};
@@ -11,6 +12,9 @@ use crate::dsp::wavetable::Wavetable;
 /// Depth of the mono held-note stack. More keys than this held at once is
 /// not a real playing situation; the oldest simply stop being returned to.
 const HELD_NOTES: usize = 16;
+
+/// Fixed seed of the analog-instability PRNG, so a render is reproducible.
+const ANALOG_SEED: u32 = 0x9E37_79B9;
 
 pub struct SynthEngine {
     pub(crate) voices: Vec<Voice>,
@@ -47,6 +51,12 @@ pub struct SynthEngine {
 
     // RNG for S&H LFO
     pub(crate) rng: SimpleRng,
+
+    // Analog instability: the source of each note-on's voice seed, kept
+    // apart from the S&H `rng` so turning `analog` up cannot reshuffle an
+    // S&H LFO's sequence. Reseeded on `initialize`/`reset`.
+    analog_rng: AnalogRng,
+    pub(crate) drift_coeffs: DriftCoeffs,
 
     // Last note for portamento
     last_note: Option<u8>,
@@ -136,6 +146,8 @@ impl SynthEngine {
             chorus: Chorus::new(44100.0),
             delay: StereoDelay::new(44100.0),
             rng: SimpleRng::new(42),
+            analog_rng: AnalogRng::new(ANALOG_SEED),
+            drift_coeffs: DriftCoeffs::for_sample_rate(44100.0),
             last_note: None,
             held: [0; HELD_NOTES],
             held_len: 0,
@@ -163,6 +175,8 @@ impl SynthEngine {
         self.voice_counter = 0;
         self.last_note = None;
         self.held_len = 0;
+        self.analog_rng = AnalogRng::new(ANALOG_SEED);
+        self.drift_coeffs = DriftCoeffs::for_sample_rate(sample_rate);
 
         // Load pre-generated wavetables from the bundled blob. Generation
         // happens once at plugin build time (see `build.rs`), not on every
@@ -202,6 +216,7 @@ impl SynthEngine {
         self.voice_counter = 0;
         self.last_note = None;
         self.held_len = 0;
+        self.analog_rng = AnalogRng::new(ANALOG_SEED);
         self.global_lfo1.reset_phase();
         self.global_lfo2.reset_phase();
         self.global_lfo3.reset_phase();
@@ -247,6 +262,11 @@ impl SynthEngine {
             params.lfo1.retrigger.value() && !params.lfo1.sync.value(),
             params.lfo2.retrigger.value() && !params.lfo2.sync.value(),
             params.lfo3.retrigger.value() && !params.lfo3.sync.value(),
+        );
+        voice.seed_analog(
+            self.analog_rng.next_u32(),
+            params.analog.phase_random.value(),
+            &self.drift_coeffs,
         );
 
         self.last_note = Some(note);
@@ -319,6 +339,25 @@ impl SynthEngine {
             .iter()
             .filter(|v| v.state != VoiceState::Idle)
             .map(|v| (v.note, v.current_pitch))
+    }
+
+    /// Resolved osc 1 frequency, in Hz, of every sounding unison
+    /// sub-voice, in slot order — read back from the `OscSetup` the kernel
+    /// is actually using.
+    ///
+    /// Like [`Self::sounding_voices`], a read-only view for tests and
+    /// diagnostics (it is how the analog-drift tests measure pitch without
+    /// estimating it from audio). Not used on the audio path.
+    pub fn sounding_osc1_freqs(&self) -> impl Iterator<Item = (u8, f32)> + '_ {
+        let sr = self.sample_rate as f64;
+        self.voices
+            .iter()
+            .filter(|v| v.state != VoiceState::Idle)
+            .flat_map(move |v| {
+                v.unison[..v.unison_count]
+                    .iter()
+                    .map(move |u| (v.note, (u.osc1_setup.phase_inc * sr) as f32))
+            })
     }
 
     /// Publish the latest audio-thread state to the shared viz atomics.

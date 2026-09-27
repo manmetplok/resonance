@@ -23,10 +23,12 @@
 //!     state only converges asymptotically under zero input — so the
 //!     LSTM suite feeds EXACTLY the reference count
 //!     ([`LSTM_PREWARM_SAMPLES_48K`]) rather than the generous constant.
-//! - 64-sample blocks: the engine is sample-serial, so block size cannot
-//!   change its output; the reference's blocked processing is likewise
-//!   stream-equivalent. This is why the harness has no block-size
-//!   dimension to vary — sample-serial processing IS every block size.
+//! - 64-sample blocks: the reference's blocked processing is
+//!   stream-equivalent, and so is the engine's: `process_block` over any
+//!   split is BIT-identical to sample-serial `process_sample`
+//!   ([`assert_block_split_invariance`]). The parity renders therefore run
+//!   sample-serially and the block-size dimension is checked once,
+//!   exactly, instead of per tolerance.
 //! - The reference computes in f64 (`NAM_SAMPLE = double`) with one final
 //!   f32 cast per sample; this engine is f32 throughout, so comparisons
 //!   use a small tolerance, never bit equality. Per-suite tolerances and
@@ -162,4 +164,48 @@ pub fn assert_reference_parity(model: &str, reference: &str, tol: f32) {
         report.max_err,
         report.max_err_index
     );
+}
+
+/// Block splits the invariance check renders with: single frames, odd
+/// sizes that straddle the WaveNet's internal 64-frame chunks and the
+/// processor's tile height, and sizes past one internal chunk.
+pub const BLOCK_SPLITS: [usize; 7] = [1, 3, 8, 63, 65, 128, 1000];
+
+/// Render `input` through a freshly loaded, reset and prewarmed model in
+/// `process_block` calls of `block` frames each.
+pub fn run_nam_model_blocked(model_path: &str, input: &[f32], block: usize) -> Vec<f32> {
+    let LoadedModel { mut model, .. } = load_model_from_file(model_path)
+        .unwrap_or_else(|e| panic!("failed to load {model_path}: {e}"));
+    model.reset();
+    let zeros = vec![0.0f32; PREWARM_SAMPLES];
+    let mut sink = vec![0.0f32; PREWARM_SAMPLES];
+    for (z, s) in zeros.chunks(block).zip(sink.chunks_mut(block)) {
+        model.process_block(z, s);
+    }
+    let mut out = vec![0.0f32; input.len()];
+    for (i, o) in input.chunks(block).zip(out.chunks_mut(block)) {
+        model.process_block(i, o);
+    }
+    out
+}
+
+/// `process_block` must be stream-equivalent to `process_sample` for
+/// every split, bit for bit: each frame runs the same operations in the
+/// same order regardless of how many frames share a block. The prewarm
+/// plus the input run long enough that every layer history rewinds.
+pub fn assert_block_split_invariance(model_path: &str, input: &[f32]) {
+    let serial = run_nam_model(model_path, input);
+    for block in BLOCK_SPLITS {
+        let blocked = run_nam_model_blocked(model_path, input, block);
+        if let Some(i) = serial
+            .iter()
+            .zip(&blocked)
+            .position(|(a, b)| a.to_bits() != b.to_bits())
+        {
+            panic!(
+                "{model_path}: process_block({block}) diverges from process_sample at sample {i}: {} vs {}",
+                blocked[i], serial[i]
+            );
+        }
+    }
 }

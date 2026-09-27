@@ -46,6 +46,10 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/pad_warm_analog.json"),
     },
     PresetEntry {
+        name: "Pad — Juno Chorus",
+        json: include_str!("../presets/pad_juno_chorus.json"),
+    },
+    PresetEntry {
         name: "Pad — Glass Shimmer",
         json: include_str!("../presets/pad_glass_shimmer.json"),
     },
@@ -79,6 +83,10 @@ pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {
         name: "Keys — Cathedral Organ",
         json: include_str!("../presets/keys_cathedral_organ.json"),
+    },
+    PresetEntry {
+        name: "Keys — Vintage Poly",
+        json: include_str!("../presets/keys_vintage_poly.json"),
     },
     PresetEntry {
         name: "Arp — Formant Talker",
