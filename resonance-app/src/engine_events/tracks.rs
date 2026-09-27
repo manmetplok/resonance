@@ -28,16 +28,21 @@ fn drop_duplicate_track_added(r: &mut Resonance, track_id: TrackId) {
     }
 }
 
-/// The `*TrackAdded` echo of a track whose removal echo is still owed
-/// (ARCH-01 A-13i): FIFO puts it before that removal, which a diff restore
-/// (or a live delete) has already mirrored, so the track it announces is
-/// already gone — mirroring it would push a phantom.
-fn stale_add_echo(r: &Resonance, track_id: TrackId) -> bool {
+/// Any echo naming a track whose removal echo is still owed (ARCH-01
+/// A-13i): FIFO puts it before that removal, which a diff restore (or a
+/// live delete) has already mirrored, so it names the *old* incarnation of
+/// this id — one that's either already gone (a `*TrackAdded`, which would
+/// push a phantom) or has since been replaced by a fresh one a later
+/// restore put back under the same id (a scalar echo like
+/// `TrackFxBypassChanged` / `TrackPlaybackSourceChanged`, which would
+/// clobber that fresh track's restored value). Either way, not trusted
+/// until the owed removal is heard from.
+fn stale_track_echo(r: &Resonance, track_id: TrackId) -> bool {
     r.io.restore_echoes.track_removal_owed(track_id)
 }
 
 pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
-    if stale_add_echo(r, track_id) {
+    if stale_track_echo(r, track_id) {
         return;
     }
     // Idempotent: skip if the track already exists (created by project load).
@@ -57,7 +62,7 @@ pub(super) fn added(r: &mut Resonance, track_id: TrackId) {
 }
 
 pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
-    if stale_add_echo(r, track_id) {
+    if stale_track_echo(r, track_id) {
         return;
     }
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
@@ -78,7 +83,7 @@ pub(super) fn instrument_added(r: &mut Resonance, track_id: TrackId) {
 }
 
 pub(super) fn vocal_added(r: &mut Resonance, track_id: TrackId) {
-    if stale_add_echo(r, track_id) {
+    if stale_track_echo(r, track_id) {
         return;
     }
     if r.registry.tracks.iter().any(|t| t.id == track_id) {
@@ -347,6 +352,15 @@ pub(super) fn finalize_bounce(
 }
 
 pub(super) fn fx_bypass_changed(r: &mut Resonance, track_id: TrackId, bypassed: bool) {
+    // A late echo of a command sent to the *old* incarnation of this id
+    // (ARCH-01 A-13i): FIFO puts it before the removal a diff restore or a
+    // live delete already mirrored, so — as for a stale `*TrackAdded` echo
+    // (`stale_track_echo`) — it names an instance that either no longer
+    // exists or has already been replaced by a fresh one under the same
+    // id, whose own restored value this must not clobber.
+    if stale_track_echo(r, track_id) {
+        return;
+    }
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         track.fx_bypassed = bypassed;
     }
@@ -357,11 +371,19 @@ pub(super) fn fx_bypass_changed(r: &mut Resonance, track_id: TrackId, bypassed: 
 /// either from the inspector toggle or from the auto-switch after a
 /// recorded take lands. Engine-owned state like monitor/arm; the mirror
 /// simply follows.
+///
+/// Guarded the same way as [`fx_bypass_changed`] (ARCH-01 A-13i): a late
+/// echo naming a track whose removal is still owed predates that removal
+/// and must not overwrite whatever a later restore mirrored under the
+/// same id.
 pub(super) fn playback_source_changed(
     r: &mut Resonance,
     track_id: TrackId,
     source: resonance_common::PlaybackSource,
 ) {
+    if stale_track_echo(r, track_id) {
+        return;
+    }
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         track.playback_source = source;
     }
