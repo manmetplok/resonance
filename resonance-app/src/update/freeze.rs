@@ -312,7 +312,7 @@ fn detach_and_delete_cache(r: &mut Resonance, track_id: TrackId) {
 }
 
 /// [`detach_and_delete_cache`] with the freeze-cache directory given — a
-/// full-replay undo runs while `io.project_path` is unset.
+/// restore passes its own (`ReconcileCtx::project_dir`).
 fn detach_and_delete_cache_in(r: &mut Resonance, track_id: TrackId, dir: Option<&Path>) {
     let _ = r.engine.send(AudioCommand::UnfreezeTrack { track_id });
     if let (Some(dir), Some(name)) = (
@@ -511,8 +511,8 @@ impl Resonance {
 
     /// Reconcile freeze state after an undo/redo restore drove the project
     /// back to `tracks` — the snapshot's `ProjectTrack.freeze`, read through
-    /// [`FreezeStatus::from_persisted`] (ARCH-01 A-4). Both restore paths
-    /// call it with the live statuses still in place, so it can see which
+    /// [`FreezeStatus::from_persisted`] (ARCH-01 A-4). The undo restore
+    /// calls it with the live statuses still in place, so it can see which
     /// caches the restore retires. The rendered cache is not part of undo
     /// history, so:
     ///
@@ -520,12 +520,12 @@ impl Resonance {
     ///   freeze) has its cache detached from the engine and deleted from
     ///   disk;
     /// - a track the target has frozen (`Frozen` or `Stale`) whose engine
-    ///   source is not attached — every one after a `ClearAll`
-    ///   (`after_clear_all`), and on the diff path each one that was not
-    ///   frozen before the restore — has its cache decoded and re-attached
+    ///   source is not attached — each one that was not frozen before the
+    ///   restore, or that the restore re-added (`fresh`) — has its cache
+    ///   decoded and re-attached
     ///   (`SetTrackFrozenSource`), as a disk load does; an undecodable or
     ///   missing cache leaves it `Stale` with nothing attached (FU-A4a);
-    /// - a track that stays frozen across a diff-path restore keeps the
+    /// - a track that stays frozen across the restore keeps the
     ///   source the engine already holds (no re-decode); restored `Frozen`,
     ///   it is downgraded to `Stale` if its cache file is gone.
     ///
@@ -537,12 +537,11 @@ impl Resonance {
     /// freeze directory holds the caches.
     /// `fresh`: tracks the restore has just added to the engine (ARCH-01
     /// A-13i), which hold no frozen source whatever their live status says
-    /// — each gets the after-`ClearAll` treatment on its own.
+    /// — each has its cache attached as a disk load does.
     pub(crate) fn apply_freeze_restore(
         &mut self,
         tracks: &[crate::project::ProjectTrack],
         project_path: Option<&Path>,
-        after_clear_all: bool,
         fresh: &std::collections::HashSet<TrackId>,
     ) {
         let target = tracks
@@ -550,7 +549,7 @@ impl Resonance {
             .map(|t| (t.id, FreezeStatus::from_persisted(&t.freeze)))
             .filter(|(_, status)| *status != FreezeStatus::Idle)
             .collect();
-        self.reconcile_freeze_statuses(target, project_path, after_clear_all, fresh);
+        self.reconcile_freeze_statuses(target, project_path, fresh);
     }
 
     /// The body of [`Self::apply_freeze_restore`], on a target already in
@@ -559,24 +558,20 @@ impl Resonance {
         &mut self,
         target: std::collections::HashMap<TrackId, FreezeStatus>,
         project_path: Option<&Path>,
-        after_clear_all: bool,
         fresh: &std::collections::HashSet<TrackId>,
     ) {
         let dir = project_path.map(freeze_cache_dir_for);
         // The tracks whose engine source is attached right now: a live
         // `Frozen` / `Stale` status plays its cache (the engine attaches on
-        // `FreezeCompleted`, a load or restore on decode), unless a
-        // `ClearAll` has just rebuilt every engine track without one.
-        let attached: std::collections::HashSet<TrackId> = if after_clear_all {
-            Default::default()
-        } else {
-            self.freeze
-                .statuses
-                .iter()
-                .filter(|(id, status)| status.is_frozen() && !fresh.contains(id))
-                .map(|(id, _)| *id)
-                .collect()
-        };
+        // `FreezeCompleted`, a load or restore on decode), unless the
+        // restore has just re-added the track without one.
+        let attached: std::collections::HashSet<TrackId> = self
+            .freeze
+            .statuses
+            .iter()
+            .filter(|(id, status)| status.is_frozen() && !fresh.contains(id))
+            .map(|(id, _)| *id)
+            .collect();
         // Detach + delete caches for tracks that are no longer frozen.
         let no_longer_frozen: Vec<TrackId> = self
             .freeze

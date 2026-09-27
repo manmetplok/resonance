@@ -122,8 +122,8 @@ fn engine_echo_lands_the_track_in_external_mode() {
 
 #[test]
 fn undo_removes_track_and_external_state_redo_restores_both() {
-    // Real (idle) engine so the undo slow-path (`ClearAll` → `AllCleared` →
-    // replay) can be pumped synchronously via `test_apply_engine_event`.
+    // Real (idle) engine, whose echoes the test pumps synchronously via
+    // `test_apply_engine_event`.
     let mut app = app_with_project();
 
     // Learn the allocated id via a throwaway capture, then rebuild the app so

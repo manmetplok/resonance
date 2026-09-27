@@ -17,7 +17,7 @@ use resonance_app::state::ClipState;
 use resonance_app::undo::{classify, UndoAction};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, FadeCurve, TrackType};
+use resonance_audio::types::{AudioCommand, FadeCurve, TrackType};
 
 const SR: u32 = 48_000;
 const ZOOM: f32 = 100.0; // px per second (default)
@@ -522,10 +522,11 @@ fn restore_skips_clips_whose_fade_gain_is_unchanged() {
 }
 
 #[test]
-fn restore_into_full_replay_path_reapplies_fade_gain() {
-    // The full clear-and-replay restore also brings fade/gain back, from
-    // the snapshot's `ProjectFile` (`replay_audio_clips`), and it is the
-    // path a structural change — here, an added track — forces.
+fn a_disk_load_reapplies_fade_gain() {
+    // The disk load's replay after `ClearAll` brings fade/gain back from
+    // the file (`AudioClips`). This used to be pinned on an undo's full
+    // clear-and-replay path, which A-13j deleted; a disk load is what still
+    // replays a clip from scratch.
     let (mut app, rx) = app_with_clip();
     app.test_dispatch(Message::Clip(ClipMessage::SetClipFadeInMs {
         clip_id: 7,
@@ -539,19 +540,13 @@ fn restore_into_full_replay_path_reapplies_fade_gain() {
         clip_id: 7,
         gain_db: 2.0,
     }));
-    let snapshot = app.test_snapshot_for_undo();
+    let saved = app.test_snapshot_for_undo();
 
     app.test_dispatch(Message::Clip(ClipMessage::ResetClipFadeGain { clip_id: 7 }));
     app.test_add_track(42, TrackType::Audio);
     let _ = drain(&rx);
 
-    // Forced: since A-13i no shape falls back on its own.
-    app.test_begin_full_restore_from_snapshot(snapshot);
-    assert!(
-        drain(&rx).iter().any(|c| matches!(c, AudioCommand::ClearAll)),
-        "a structural change forces the full replay"
-    );
-    app.test_apply_engine_event(AudioEvent::AllCleared);
+    app.test_replay_loaded_project_from(saved.project);
 
     let c = clip_of(&app, 7);
     assert_eq!(c.fade_in_frames, 12_000);

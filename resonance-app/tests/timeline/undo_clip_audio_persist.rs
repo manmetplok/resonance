@@ -1,7 +1,7 @@
-//! A full-reload undo must find the audio of every clip it restores
+//! An undo that re-adds a clip must find the audio of every clip it restores
 //! (code review FU-V5b).
 //!
-//! The slow path reloads each audio clip from `audio/clip_<id>.wav`, the
+//! A restore reloads each audio clip it re-adds from `audio/clip_<id>.wav`, the
 //! only name an undo snapshot records — and before the fix that file was
 //! written only by a save. A clip that lived in RAM (a bounce, a pool
 //! placement) or in a vocal render's `vocal_*.wav` came back silent when

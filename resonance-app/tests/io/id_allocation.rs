@@ -965,9 +965,8 @@ fn every_bus_add_path_gets_a_unique_app_id_including_across_undo() {
 /// ARCH-04 D-2: every send add path — the plain GUI "Add send",
 /// `track.add_send`, and the send half of `CreateReturnFromSend` — now
 /// goes through the same app allocator (`AuxSendState::allocate_send_id`).
-/// A send add is not structural (`RoutingRemovals` / `Sends` reconcile it
-/// on the diff path, `structurally_compatible` never looks at
-/// `ProjectFile::sends`), so undo here never sends `ClearAll` —
+/// `RoutingRemovals` / `Sends` reconcile a send add on an undo, which
+/// never sends `ClearAll` (A-13j) —
 /// `RemoveAuxSend` lands directly, and the mirror drops the
 /// send synchronously inside `update()`.
 #[test]
@@ -1101,7 +1100,7 @@ fn every_track_add_path_gets_a_unique_app_id_including_across_undo() {
 /// (`ReferenceState::alloc_engine_id`), and the engine refuses a collision
 /// (`EngineErrorKind::Internal`) rather than inventing one. References sit
 /// outside the `Fixture`/`FakeEngine`/`add_round` machinery above (no base,
-/// no engine counter, not part of `structurally_compatible`), so this test
+/// no engine counter), so this test
 /// is self-contained: it drives the real `ReferenceMessage::LoadRequested`
 /// path through an add, an undo, a fresh add, and a save/reload, and checks
 /// every id handed to `LoadReferenceTrack` is a set throughout — the same
@@ -1151,10 +1150,8 @@ fn every_reference_load_gets_a_unique_app_id_including_across_undo_and_reload() 
     let second_id = sent_id(&rx);
     assert_ne!(first_id, second_id, "two loads must not share an id");
 
-    // Undo the second load: a reference add is not structural
-    // (`structurally_compatible` never looks at `ProjectFile::references`),
-    // so this takes the fast diff-replay path (`reconcile_references`), not
-    // `ClearAll` + full restore.
+    // Undo the second load: an undo restores in place
+    // (`reconcile_references`), never through `ClearAll` (A-13j).
     let _ = app.update(Message::Undo);
     assert!(
         !std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(c, AudioCommand::ClearAll)),
@@ -1273,10 +1270,9 @@ fn asset_ids_stay_unique_across_undo_and_above_an_orphaned_wav_after_reload() {
     app.test_apply_engine_event(asset_imported(first_id, "/imports/first.wav"));
     assert_eq!(app.test_pool().max_asset_id(), Some(1));
 
-    // Undo the import: a pool asset add/remove is not structural
-    // (`structurally_compatible` never looks at `pool_assets`), so this
-    // takes the fast diff-replay path, not `ClearAll` + full restore — and
-    // the diff path leaves the (session-monotonic) counter alone.
+    // Undo the import: an undo restores in place, never through
+    // `ClearAll` (A-13j) — and it leaves the (session-monotonic) counter
+    // alone.
     let _ = app.update(Message::Undo);
     assert!(app.test_pool().assets.is_empty(), "undo removed the imported asset");
 

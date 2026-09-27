@@ -227,88 +227,78 @@ fn report_clips_without_audio(r: &mut Resonance, save: &crate::project::SaveColl
 pub(super) fn all_cleared(r: &mut Resonance) -> Task<Message> {
     let mut task = Task::none();
     if let Some(loaded) = r.io.pending_load.take() {
-        // Extract project_path before replay (replay clears it)
+        // Every `pending_load` is a disk load or template instantiate: an
+        // undo/redo restores in place since ARCH-01 A-13j and never sends
+        // `ClearAll`. Extract project_path before replay (replay clears it).
         let path = r.io.project_path.clone();
-        // `io.restoring_undo` marks this clear/replay as a history restore
-        // rather than a fresh disk load; `replay_loaded_project` reads it
-        // (e.g. freeze: a disk load re-attaches each frozen track's cache,
-        // ba todo #577; an undo reconciles, ARCH-01 A-4), so it is cleared
-        // only after the replay. An undo has nothing left to do here: the
-        // replay restored everything from the snapshot's `ProjectFile`.
         crate::update::replay_loaded_project(r, loaded);
         r.io.project_path = path;
         r.io.loading = false;
-        let restored_undo = std::mem::take(&mut r.io.restoring_undo);
-        if !restored_undo {
-            // Fresh project load (not an undo): re-send Bank Select +
-            // Program Change for every external-instrument track from its
-            // restored config, so a freshly-powered synth lands on its saved
-            // patch and any offline MIDI output is reported. Undo deliberately
-            // skips this (the fast path's `restore_external_instruments`
-            // never sends it, the slow path takes the other branch) so it
-            // never re-fires MIDI; here, replaying the saved project, we
-            // want it.
-            let _ = r
-                .engine
-                .send(AudioCommand::ResendExternalInstrumentPatches);
+        // Re-send Bank Select + Program Change for every
+        // external-instrument track from its restored config, so a
+        // freshly-powered synth lands on its saved patch and any offline
+        // MIDI output is reported. An undo never re-fires MIDI: it does not
+        // come here, and `restore_external_instruments` never sends it.
+        let _ = r
+            .engine
+            .send(AudioCommand::ResendExternalInstrumentPatches);
 
-            // A new project starts at its beginning. The horizontal
-            // offset is the outer `Scrollable`'s, so scroll it for real
-            // and mark the report that follows as the echo of this
-            // `scroll_to` (not a manual scroll); state and widget then
-            // agree from the next frame (code review FU-V3a).
-            r.viewport.scroll_offset = 0.0;
-            r.viewport.scroll_offset_y = 0.0;
-            r.viewport.follow_pending_x = Some(0.0);
-            task = iced::widget::operation::scroll_to(
-                crate::state::ARRANGE_SCROLL_ID,
-                iced::widget::scrollable::AbsoluteOffset {
-                    x: Some(0.0),
-                    y: None,
-                },
-            );
+        // A new project starts at its beginning. The horizontal
+        // offset is the outer `Scrollable`'s, so scroll it for real
+        // and mark the report that follows as the echo of this
+        // `scroll_to` (not a manual scroll); state and widget then
+        // agree from the next frame (code review FU-V3a).
+        r.viewport.scroll_offset = 0.0;
+        r.viewport.scroll_offset_y = 0.0;
+        r.viewport.follow_pending_x = Some(0.0);
+        task = iced::widget::operation::scroll_to(
+            crate::state::ARRANGE_SCROLL_ID,
+            iced::widget::scrollable::AbsoluteOffset {
+                x: Some(0.0),
+                y: None,
+            },
+        );
 
-            // A genuine project load (not an undo/redo replay) whose media
-            // pool references files that aren't on disk: surface the
-            // missing-files relink modal so the user can locate them (doc
-            // #175, todo #607). Undo/redo replays skip this — reopening the
-            // modal on every history step would be noise.
-            if r.media.pool.has_missing() {
-                let targets: Vec<resonance_audio::types::AssetId> =
-                    r.media.pool.missing_assets().map(|a| a.id).collect();
-                r.media.relink.open_modal(targets);
+        // A project load whose media pool references files that aren't
+        // on disk: surface the missing-files relink modal so the user can
+        // locate them (doc #175, todo #607). An undo/redo does not come
+        // here — reopening the modal on every history step would be
+        // noise.
+        if r.media.pool.has_missing() {
+            let targets: Vec<resonance_audio::types::AssetId> =
+                r.media.pool.missing_assets().map(|a| a.id).collect();
+            r.media.relink.open_modal(targets);
+        }
+
+        // A control-initiated `project.new` (doc #265, todo #1151)
+        // or `project.open` (todo #1149) resolves here: the engine
+        // confirmed the clear and the project replayed, so a readback
+        // right after `job.wait` sees it (code review UPD-02). A
+        // template instantiation always lands with no path, while a
+        // disk load restores one. No-op when no control job carries
+        // the token.
+        let recovery = crate::update::project_io::recovery::finish_load(r);
+        match r.io.project_path.as_ref() {
+            None => {
+                r.control.jobs.complete_token(
+                    &crate::control_jobs::JobToken::ProjectNew,
+                    serde_json::json!({ "path": null, "revision": r.revision() }),
+                );
             }
-
-            // A control-initiated `project.new` (doc #265, todo #1151)
-            // or `project.open` (todo #1149) resolves here: the engine
-            // confirmed the clear and the project replayed, so a readback
-            // right after `job.wait` sees it (code review UPD-02). A
-            // template instantiation always lands with no path, while a
-            // disk load restores one. No-op when no control job carries
-            // the token.
-            let recovery = crate::update::project_io::recovery::finish_load(r);
-            match r.io.project_path.as_ref() {
-                None => {
-                    r.control.jobs.complete_token(
-                        &crate::control_jobs::JobToken::ProjectNew,
-                        serde_json::json!({ "path": null, "revision": r.revision() }),
-                    );
+            Some(path) => {
+                let path = path.display().to_string();
+                let mut result = serde_json::json!({ "path": path, "revision": r.revision() });
+                // Code review FU-M12a: say whether the autosave was
+                // recovered, or merely exists (`recover_autosave`).
+                if recovery.recovered {
+                    result["recovered_autosave"] = true.into();
                 }
-                Some(path) => {
-                    let path = path.display().to_string();
-                    let mut result = serde_json::json!({ "path": path, "revision": r.revision() });
-                    // Code review FU-M12a: say whether the autosave was
-                    // recovered, or merely exists (`recover_autosave`).
-                    if recovery.recovered {
-                        result["recovered_autosave"] = true.into();
-                    }
-                    if recovery.autosave_available {
-                        result["autosave_available"] = true.into();
-                    }
-                    r.control
-                        .jobs
-                        .complete_token(&crate::control_jobs::JobToken::ProjectLoad, result);
+                if recovery.autosave_available {
+                    result["autosave_available"] = true.into();
                 }
+                r.control
+                    .jobs
+                    .complete_token(&crate::control_jobs::JobToken::ProjectLoad, result);
             }
         }
     }

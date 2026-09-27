@@ -8,9 +8,7 @@ use resonance_audio::types::TrackId;
 use super::entities::kept_tracks;
 use super::{Origin, Reconcile, ReconcileCtx};
 use crate::project::ProjectFile;
-use crate::update::project_io::replay::{
-    reconcile_references, restore_references, ReferenceMonitorSource,
-};
+use crate::update::project_io::replay::{reconcile_references, restore_references};
 use crate::Resonance;
 
 /// The tracks of `new` this restore added to the engine rather than kept
@@ -43,9 +41,9 @@ impl Reconcile for AutomationLanes {
 /// are restored: it filters against them and reserves the counter past
 /// them.
 ///
-/// **The keep-rule depends on the origin.** On the diff path the engine
-/// still holds every clip and an in-flight `MidiClipCreated` echo will
-/// land, so every entry is kept; after a `ClearAll` only the replayed
+/// **The keep-rule depends on the origin.** On an undo the engine still
+/// holds every clip and an in-flight `MidiClipCreated` echo will land, so
+/// every entry is kept; after a disk load's `ClearAll` only the replayed
 /// clips exist, so an entry whose clip was not replayed is dropped.
 ///
 /// **The counter floor is live state.** `ComposeState::load_from_project`
@@ -66,7 +64,7 @@ impl Reconcile for DerivedClips {
     const NAME: &'static str = "derived_clips";
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-        let echoes_in_flight = ctx.origin == Origin::UndoDiff;
+        let echoes_in_flight = ctx.origin == Origin::Undo;
         r.restore_derived_clips(new, echoes_in_flight, ctx.live.derived_counter_floor);
         // A disk load also clears the derived-range WAVs in the bundle
         // that no loaded clip names (FU-A6c). An undo needs no scan: it
@@ -85,8 +83,9 @@ impl Reconcile for DerivedClips {
 /// bindings, through [`Resonance::restore_external_instruments`]. Before
 /// `AutomationLanes`, so a `DeviceParam` lane lands on known bindings.
 ///
-/// After a `ClearAll` the map is rebuilt from scratch and a track with no
-/// device selected sends no `SetTrackDeviceParams`; on the diff path stale
+/// After a disk load's `ClearAll` the map is rebuilt from scratch and a
+/// track with no device selected sends no `SetTrackDeviceParams`; on an
+/// undo stale
 /// tracks (a removed one included) are cleared on the engine and every live
 /// offline flag survives — except on a fresh track, which gets the
 /// after-`ClearAll` rule on its own (A-13i).
@@ -115,14 +114,12 @@ impl Reconcile for ExternalInstruments {
 /// `reference_settings`; the monitor state (A/B source, loop-to-mix,
 /// meters) is not undo state.
 ///
-/// **Three bodies.** After a `ClearAll` the engine's references and its id
-/// allocator are gone, so [`restore_references`] re-registers every entry
-/// and re-sends the whole `ReferencePlayer` state: a disk load takes the
-/// monitor from the file, a full-replay undo keeps the live one (still in
-/// `r.reference.monitor` — nothing in the replay touches it before this).
-/// On the diff path the engine still holds every reference, so
+/// **Two bodies.** After a disk load's `ClearAll` the engine's references
+/// are gone, so [`restore_references`] re-registers every entry and
+/// re-sends the whole `ReferencePlayer` state, the monitor taken from the
+/// file. On an undo the engine still holds every reference, so
 /// [`reconcile_references`] matches by path, keeps ids and analysis, and
-/// sends only what changed.
+/// sends only what changed; the live monitor is left alone.
 pub(crate) struct References;
 
 impl Reconcile for References {
@@ -130,9 +127,8 @@ impl Reconcile for References {
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         match ctx.origin {
-            Origin::DiskLoad => restore_references(r, new, ReferenceMonitorSource::File),
-            Origin::UndoFull => restore_references(r, new, ReferenceMonitorSource::Live),
-            Origin::UndoDiff => reconcile_references(r, new),
+            Origin::DiskLoad => restore_references(r, new),
+            Origin::Undo => reconcile_references(r, new),
         }
     }
 }
@@ -143,11 +139,12 @@ impl Reconcile for References {
 /// A disk load starts with a clean slate: every slot is re-added
 /// optimistically and the engine's refusals (`PluginAdded` never arrives,
 /// an error does — handled later, as engine events) raise the warning
-/// again for *this* project. A full-replay undo re-adds the same plugins
-/// and gets the same refusals, so it dismisses the warning for the
-/// project instead of re-raising the modal on every history step — the
-/// same reason the missing-FILE modal is opened only for disk loads. The
-/// diff path re-adds nothing, so it leaves the warning as it is.
+/// again for *this* project. An undo leaves the warning as it is: it
+/// re-adds only the plugin instances the live state lacks, and a missing
+/// one among them re-raises the warning through the same refusal unless
+/// the user already dismissed it for this project (A-13j keeps that, the
+/// default of design doc §15; the full-replay undo used to dismiss it
+/// outright, since it re-added every plugin on every history step).
 ///
 /// Runs in the Tail rather than before the plugins are re-added: the
 /// refusals are asynchronous engine events handled after the restore
@@ -158,10 +155,8 @@ impl Reconcile for MissingPlugins {
     const NAME: &'static str = "missing_plugins";
 
     fn reconcile(r: &mut Resonance, _: Option<&ProjectFile>, _: &ProjectFile, ctx: &ReconcileCtx<'_>) {
-        match ctx.origin {
-            Origin::DiskLoad => r.missing_plugins.reset(),
-            Origin::UndoFull => r.missing_plugins.dismiss(),
-            Origin::UndoDiff => {}
+        if ctx.origin == Origin::DiskLoad {
+            r.missing_plugins.reset();
         }
     }
 }
@@ -175,19 +170,17 @@ impl Reconcile for MissingPlugins {
 /// track's cache to the engine (`SetTrackFrozenSource`, ba todo #577)
 /// against `ctx.project_dir`, or loads it `Stale` when the cache is gone.
 ///
-/// **Undo/redo, both paths**, reconciles against the live statuses through
+/// **Undo/redo** reconciles against the live statuses through
 /// [`apply_freeze_restore`]: the cache of a freeze the restore undoes is
 /// detached and deleted, a restored `Frozen` whose cache is gone becomes
 /// `Stale`, and the UPD-05 baselines survive (FU-H2b). The statuses are
 /// live state an undo keeps; they stay in `r.freeze` (nothing in either
 /// restore touches them before this runs), and the caches live beside the
-/// live project path, carried in `ctx.live` because the full replay has
-/// taken `io.project_path` by now.
+/// live project path (`ctx.project_dir` on an undo).
 ///
 /// It also reconciles the engine's frozen sources (FU-A4a): each track the
-/// target has frozen whose source the engine does not hold — every one
-/// after a `ClearAll` (`origin.after_clear_all()`); on the diff path, those
-/// that were not frozen before, and each fresh track (A-13i: added by this
+/// target has frozen whose source the engine does not hold — those that
+/// were not frozen before, and each fresh track (A-13i: added by this
 /// restore, so it holds no source) — has its cache decoded and attached as
 /// `rehydrate_frozen_tracks` does, an undecodable one going `Stale`. A
 /// removed frozen track's cache is detached and deleted, as the live
@@ -202,12 +195,7 @@ impl Reconcile for Freeze {
 
     fn reconcile(r: &mut Resonance, old: Option<&ProjectFile>, new: &ProjectFile, ctx: &ReconcileCtx<'_>) {
         if ctx.origin.is_undo() {
-            r.apply_freeze_restore(
-                &new.tracks,
-                ctx.live.project_path,
-                ctx.origin.after_clear_all(),
-                &fresh_tracks(old, new),
-            );
+            r.apply_freeze_restore(&new.tracks, ctx.project_dir, &fresh_tracks(old, new));
             return;
         }
         r.freeze.reset();

@@ -316,7 +316,7 @@ fn bump_render_epoch(
     track_id: TrackId,
 ) -> u64 {
     // Epochs come from a process-wide counter as well as the lane's own:
-    // a full replay (undo, project load) clears the per-lane map back to
+    // a restore (undo, project load) clears the per-lane map back to
     // nothing, and a render queued before it would otherwise carry the
     // same epoch as the first one queued after it and install over it
     // (code review VIEW-19).

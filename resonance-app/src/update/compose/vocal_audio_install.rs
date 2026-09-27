@@ -98,7 +98,7 @@ pub(super) fn handle_vocal_audio_ready(
 ///
 /// A stale completion normally has a successor: a later request bumped
 /// the epoch *and* queued a render, whose event will complete every job
-/// covering the lane. But a replay (slow-path undo, project load) wipes
+/// covering the lane. But a restore (undo, project load) wipes
 /// the epoch table, and a track/section delete bumps it without queuing
 /// anything — then the stale event is the last one the lane will ever
 /// see, and a `vocal.render` job waiting on it would hang until its

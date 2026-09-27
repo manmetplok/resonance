@@ -3,8 +3,9 @@
 //! Each undoable action snapshots the declarative project state using the
 //! same shape that save/load already understands (`ProjectFile` plus
 //! in-memory MIDI notes and cached plugin state blobs). On undo/redo the
-//! audio engine is driven back into sync through `replay_loaded_project`,
-//! the exact same code path used when opening a project from disk.
+//! audio engine is driven back into sync by the `Reconcile` driver that
+//! also restores a project opened from disk — diffing against the live
+//! state instead of starting from a `ClearAll` (ARCH-01 A-13).
 //!
 //! Phase 1 scope: data types, a bounded history stack, and a snapshot
 //! builder on `Resonance`. Message interception, keyboard shortcuts, and

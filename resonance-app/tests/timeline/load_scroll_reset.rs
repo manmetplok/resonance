@@ -5,7 +5,7 @@
 //! outer `Scrollable`, so state claimed "at the start" while the view sat
 //! wherever it was until its next scroll report — and follow, culling and
 //! drop placement all read the wrong offset meanwhile. The same reset also
-//! ran on a slow-path undo, which has no business moving the view. Now a
+//! ran on an undo, which has no business moving the view. Now a
 //! disk load issues a real `scroll_to(0)` (state and widget agree), and an
 //! undo replay leaves the scroll alone.
 

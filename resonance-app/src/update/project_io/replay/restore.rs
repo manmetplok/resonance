@@ -372,23 +372,13 @@ pub(crate) fn restore_pool_assets(
     }
 }
 
-/// Where [`restore_references`] takes the A/B *monitor* state from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReferenceMonitorSource {
-    /// A disk load: the monitor the project was saved with.
-    File,
-    /// An undo/redo: the live monitor, untouched (the snapshot carries it
-    /// cleared — monitor state is not undo state, ARCH-01 A-5).
-    Live,
-}
-
-/// Restore the reference A/B block after a `ClearAll` — a disk load or
-/// the full-replay undo path. Wipes the previous references, then for each
+/// Restore the reference A/B block after a disk load's `ClearAll`. Wipes the previous references, then for each
 /// saved entry re-issues `LoadReferenceTrack` (so the PCM / waveform are
 /// rebuilt) and re-seeds the GUI mirror with the durable facts — name,
 /// path, cached loudness and the user's markers — that the re-decode does
 /// not itself carry back. The content (entries, selection, loudness match,
-/// trim) comes from `project`; the monitor state from `monitor`.
+/// trim) and the monitor state (A/B source, loop-to-mix) come from
+/// `project`.
 ///
 /// A reference whose file has gone missing is kept as a `Missing` entry
 /// (name + path preserved) and is *not* sent to the engine, so the panel
@@ -406,17 +396,11 @@ pub(crate) enum ReferenceMonitorSource {
 ///
 /// Everything the engine's `ReferencePlayer` holds is re-sent, monitor
 /// state included: `ClearAll` reset it to its defaults.
-pub(crate) fn restore_references(
-    r: &mut Resonance,
-    project: &ProjectFile,
-    monitor: ReferenceMonitorSource,
-) {
-    // Drop the previous project's references (entries + settings + any
-    // in-flight load bookkeeping), keeping only the live monitor state an
-    // undo leaves alone. The engine's own reference state was already
-    // emptied by `ClearAll` (it keeps no id allocator of its own to reset,
-    // ARCH-04 D-5).
-    let live_monitor = std::mem::take(&mut r.reference.monitor);
+pub(crate) fn restore_references(r: &mut Resonance, project: &ProjectFile) {
+    // Drop the previous project's references (entries + settings + monitor
+    // + any in-flight load bookkeeping). The engine's own reference state
+    // was already emptied by `ClearAll` (it keeps no id allocator of its
+    // own to reset, ARCH-04 D-5).
     let next_engine_id = r.reference.next_engine_id;
     let next_marker_id = r.reference.next_marker_id;
     r.reference = crate::reference::ReferenceState::default();
@@ -440,17 +424,14 @@ pub(crate) fn restore_references(
         db: settings.trim_db,
     });
 
-    r.reference.monitor = match monitor {
-        ReferenceMonitorSource::Live => live_monitor,
-        ReferenceMonitorSource::File => crate::reference::ReferenceMonitorState {
-            ab_source: if settings.ab_source_is_reference {
-                ABSource::Reference
-            } else {
-                ABSource::Mix
-            },
-            loop_to_mix: settings.loop_to_mix,
-            ..Default::default()
+    r.reference.monitor = crate::reference::ReferenceMonitorState {
+        ab_source: if settings.ab_source_is_reference {
+            ABSource::Reference
+        } else {
+            ABSource::Mix
         },
+        loop_to_mix: settings.loop_to_mix,
+        ..Default::default()
     };
     let _ = r.engine.send(AudioCommand::SetABSource {
         source: r.reference.monitor.ab_source,
@@ -461,7 +442,7 @@ pub(crate) fn restore_references(
 }
 
 /// Reconcile the reference A/B *content* to `project` without a
-/// `ClearAll` — the diff-replay undo path, where the engine still holds
+/// `ClearAll` — the undo restore, where the engine still holds
 /// every live reference. The monitor state is not touched (ARCH-01 A-5).
 ///
 /// Live entries are matched to the saved ones by path, in order. A match
