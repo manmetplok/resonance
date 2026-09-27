@@ -35,13 +35,13 @@ pub(super) fn render_count_in_block(
     // buffer is acceptable; losing the count-in tick is not.
     if monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed) {
         let misses = &shared.lock_misses;
-        let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
+        let graph = shared.graph.load();
         let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-        if let (Some(tracks_guard), Some(plugins_guard)) = (tracks_guard, plugins_guard) {
+        if let Some(plugins_guard) = plugins_guard {
             mix_monitor_passthrough(
                 scratch.data,
                 inputs.channels,
-                &tracks_guard,
+                &graph.tracks,
                 &plugins_guard,
                 scratch.monitor_temp,
                 monitor.frames,

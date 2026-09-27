@@ -57,10 +57,10 @@ fn dc_clip(id: ClipId, track_id: TrackId, frames: usize) -> AudioClip {
 /// One track carrying a DC clip (for the playing branch) and one armed,
 /// monitor-enabled track (for the stopped-monitor branch).
 fn fixture() -> MixAudioHarness {
-    let clips = Track::new(1, "clips".into());
+    let mut clips = Track::new(1, "clips".into());
     clips.set_output(TrackOutput::Master);
 
-    let monitored = Track::new(2, "monitored".into());
+    let mut monitored = Track::new(2, "monitored".into());
     monitored.set_output(TrackOutput::Master);
     monitored.set_monitor_enabled(true);
     monitored.set_record_armed(true);

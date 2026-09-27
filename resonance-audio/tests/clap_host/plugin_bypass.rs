@@ -584,12 +584,12 @@ fn track_with_plugins(id: u64, ty: TrackType, plugins: &[PluginInstanceId]) -> T
 fn a_bypassed_slot_leaves_its_chains_latency_and_the_rest_realigns() {
     // Two tracks: one with a 500-sample plugin plus a 128-sample plugin,
     // one with nothing. The mix is aligned to the longest chain.
-    let tracks: IndexMap<TrackId, Track> = [
+    let tracks: IndexMap<TrackId, std::sync::Arc<Track>> = [
         track_with_plugins(1, TrackType::Audio, &[10, 11]),
         track_with_plugins(2, TrackType::Audio, &[]),
     ]
     .into_iter()
-    .map(|t| (t.id, t))
+    .map(|t| (t.id, std::sync::Arc::new(t)))
     .collect();
     let reported: HashMap<PluginInstanceId, u64> = [(10, 500), (11, 128)].into_iter().collect();
 
@@ -625,12 +625,12 @@ fn a_slot_bypassed_through_its_own_parameter_keeps_the_comp_table_still() {
     // The alignment-preserving path: the plugin keeps running and keeps
     // reporting its latency, so bypassing it changes no delay at all and
     // no delay line is reset.
-    let tracks: IndexMap<TrackId, Track> = [
+    let tracks: IndexMap<TrackId, std::sync::Arc<Track>> = [
         track_with_plugins(1, TrackType::Audio, &[10]),
         track_with_plugins(2, TrackType::Audio, &[]),
     ]
     .into_iter()
-    .map(|t| (t.id, t))
+    .map(|t| (t.id, std::sync::Arc::new(t)))
     .collect();
     let engaged = chain_latencies(&tracks, |_| slot_latency(500, false));
     // `host_bypassed` is false for an own-parameter bypass, whatever the
@@ -644,10 +644,10 @@ fn a_slot_bypassed_through_its_own_parameter_keeps_the_comp_table_still() {
 fn the_instrument_still_counts_when_only_a_later_slot_is_bypassed() {
     // Instrument tracks keep slot 0 running under whole-chain bypass; the
     // per-slot rule must compose with that rather than replace it.
-    let tracks: IndexMap<TrackId, Track> =
+    let tracks: IndexMap<TrackId, std::sync::Arc<Track>> =
         [track_with_plugins(1, TrackType::Instrument, &[10, 11])]
             .into_iter()
-            .map(|t| (t.id, t))
+            .map(|t| (t.id, std::sync::Arc::new(t)))
             .collect();
     let reported: HashMap<PluginInstanceId, u64> = [(10, 64), (11, 500)].into_iter().collect();
     let fx_bypassed = |id: PluginInstanceId| {

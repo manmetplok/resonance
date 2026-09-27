@@ -64,7 +64,7 @@ pub fn render_aux_with_comp_for_test(
     latency: crate::latency::LatencyComp,
     automation: crate::engine::AutomationSnapshot,
 ) -> (Vec<f32>, Vec<(Vec<f32>, Vec<f32>)>) {
-    let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+    let tracks_guard: TrackMap = tracks.into_iter().map(|t| (t.id, Arc::new(t))).collect();
     let busses_guard: IndexMap<BusId, Arc<Bus>> =
         busses.into_iter().map(|b| (b.id, Arc::new(b))).collect();
     let plugins_guard: PluginMap = IndexMap::new();
@@ -142,7 +142,7 @@ pub fn render_aux_with_comp_for_test(
 /// `benches/render_path.rs`; not part of the public API.
 #[doc(hidden)]
 pub struct RenderBenchHarness {
-    tracks: IndexMap<TrackId, Track>,
+    tracks: TrackMap,
     busses: IndexMap<BusId, Arc<Bus>>,
     clips: Vec<AudioClip>,
     midi_clips: Vec<Arc<MidiClip>>,
@@ -177,7 +177,7 @@ impl RenderBenchHarness {
         frames: usize,
         sample_rate: u32,
     ) -> Self {
-        let tracks: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+        let tracks: TrackMap = tracks.into_iter().map(|t| (t.id, Arc::new(t))).collect();
         let busses: IndexMap<BusId, Arc<Bus>> =
             busses.into_iter().map(|b| (b.id, Arc::new(b))).collect();
         let bus_count = busses.len();
@@ -315,7 +315,7 @@ pub fn render_take_comp_borrowed_for_test(
     sample_rate: u32,
     live: bool,
 ) -> Vec<f32> {
-    let tracks_guard: IndexMap<TrackId, Track> = tracks.into_iter().map(|t| (t.id, t)).collect();
+    let tracks_guard: TrackMap = tracks.into_iter().map(|t| (t.id, Arc::new(t))).collect();
     let busses_guard: IndexMap<BusId, Arc<Bus>> = IndexMap::new();
     let plugins_guard: PluginMap = IndexMap::new();
     let midi_clips: Vec<Arc<MidiClip>> = Vec::new();

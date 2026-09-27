@@ -47,22 +47,24 @@ pub(crate) fn handle_add_bus(ctx: &HandlerCtx, id: BusId, name: Option<String>) 
 }
 
 pub(crate) fn handle_remove_bus(ctx: &HandlerCtx, bus_id: BusId) {
-    // First: unassign any track that was routed here so no dangling
-    // references survive the removal.
-    {
-        let tracks_guard = ctx.tracks.read();
-        for track in tracks_guard.values() {
-            if track.output() == TrackOutput::Bus(bus_id) {
-                track.set_output(TrackOutput::Master);
-            }
-        }
-    }
-    // Unpublish the bus first, keeping its plugin ids to tear down. The
+    // Re-route every track that fed this bus to master and unpublish the
+    // bus in ONE graph (code review ARCH-02 B-3): a block sees the bus
+    // with its feeders or neither, never a feeder pointing at a bus that
+    // is gone. (The mixer's fall-back-to-master for a missing bus stays as
+    // a defensive net; no published graph can reach it any more.) The
     // removed bus lives on in the replaced graph, which the retire sweep
-    // drops once no reader pins it.
-    let removed_plugins: Vec<PluginInstanceId> = if ctx.shared.graph.load().bus(bus_id).is_some()
-    {
-        ctx.shared.edit_busses(|busses| {
+    // drops once no reader pins it. Keep its plugin ids to tear down.
+    let routed_here = |g: &crate::engine::RenderGraph| {
+        g.bus(bus_id).is_some()
+            || g.tracks.values().any(|t| t.output() == TrackOutput::Bus(bus_id))
+    };
+    let removed_plugins: Vec<PluginInstanceId> = if routed_here(&ctx.shared.graph.load()) {
+        ctx.shared.edit_tracks_and_busses(|tracks, busses| {
+            for track in tracks.values_mut() {
+                if track.output() == TrackOutput::Bus(bus_id) {
+                    Arc::make_mut(track).set_output(TrackOutput::Master);
+                }
+            }
             busses
                 .shift_remove(&bus_id)
                 .map(|bus| bus.plugin_ids.clone())
@@ -115,9 +117,9 @@ pub(crate) fn handle_set_bus_name(ctx: &HandlerCtx, bus_id: BusId, name: String)
 }
 
 pub(crate) fn handle_set_track_output(ctx: &HandlerCtx, track_id: TrackId, output: TrackOutput) {
-    if let Some(track) = ctx.tracks.read().get(&track_id) {
-        track.set_output(output);
-    }
+    // Structural (ARCH-02 B-3): a copy-on-write edit of the track,
+    // published in a new render graph.
+    ctx.shared.edit_track(track_id, |track| track.set_output(output));
 }
 
 pub(crate) fn handle_add_plugin_to_bus(
@@ -320,7 +322,7 @@ fn validate_aux_send_route(
     // Source must exist (a track or a bus, depending on the variant).
     match source {
         SendSource::Track(tid) => {
-            if !ctx.tracks.read().contains_key(&tid) {
+            if !ctx.tracks().contains_key(&tid) {
                 reject(format!("Aux send source track {tid} does not exist"));
                 return false;
             }

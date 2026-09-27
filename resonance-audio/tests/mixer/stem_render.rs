@@ -29,7 +29,6 @@ const STEADY: usize = resonance_audio::test_support::CLIP_DECLICK_FRAMES as usiz
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -39,7 +38,6 @@ impl EngineState {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -47,9 +45,9 @@ impl EngineState {
     }
 
     fn add_track(&self, id: TrackId, output: TrackOutput) {
-        let t = Track::new(id, format!("track {id}"));
+        let mut t = Track::new(id, format!("track {id}"));
         t.set_output(output);
-        self.tracks.write().insert(id, t);
+        self.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(t)); });
     }
 
     /// Push a constant-`value` DC clip on `track` over `[start, start+frames)`.
@@ -84,7 +82,6 @@ impl EngineState {
             start,
             end,
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -104,10 +101,10 @@ fn track_filter_includes_track_and_its_sub_tracks() {
     // Sub-track of track 1 (multi-output instrument sibling).
     {
         let sub = Track::new_sub_track(10, "sub".into(), 1, 1);
-        state.tracks.write().insert(10, sub);
+        state.shared.edit_tracks(|m| { m.insert(10, std::sync::Arc::new(sub)); });
     }
 
-    let f = stem_filter(StemSource::Track(1), &state.tracks.read());
+    let f = stem_filter(StemSource::Track(1), &state.shared.tracks());
     assert!(f.contains(1), "the track itself contributes");
     assert!(f.contains(10), "its sub-track contributes");
     assert!(!f.contains(2), "an unrelated track does not");
@@ -123,10 +120,10 @@ fn bus_filter_includes_tracks_routed_to_bus_with_sub_tracks() {
     state.add_track(3, TrackOutput::Bus(7));
     {
         let sub = Track::new_sub_track(11, "sub".into(), 1, 1);
-        state.tracks.write().insert(11, sub);
+        state.shared.edit_tracks(|m| { m.insert(11, std::sync::Arc::new(sub)); });
     }
 
-    let f = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let f = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(f.contains(1), "track routed to the bus contributes");
     assert!(f.contains(3), "second track routed to the bus contributes");
     assert!(f.contains(11), "sub-track of a routed track contributes");
@@ -150,12 +147,12 @@ fn bus_filter_includes_sub_tracks_routed_to_it_on_their_own() {
     state.add_track(1, TrackOutput::Master);
     state.add_track(2, TrackOutput::Master);
     for (id, port) in [(10u64, 1u32), (11, 2), (12, 3)] {
-        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        let mut sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
         sub.set_output(TrackOutput::Bus(7));
-        state.tracks.write().insert(id, sub);
+        state.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(sub)); });
     }
 
-    let f = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let f = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(f.contains(10), "sub-track routed to the bus contributes");
     assert!(f.contains(11));
     assert!(f.contains(12));
@@ -188,25 +185,25 @@ fn bus_filter_excludes_a_sub_track_routed_to_a_different_bus() {
         (10u64, 1u32, TrackOutput::Bus(7)),
         (11, 2, TrackOutput::Bus(8)),
     ] {
-        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        let mut sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
         sub.set_output(out);
-        state.tracks.write().insert(id, sub);
+        state.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(sub)); });
     }
 
-    let seven = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let seven = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(
         seven.contains(10) && !seven.contains(11),
         "bus 7 gets only its own tap: {:?}",
         seven.set
     );
-    let eight = stem_filter(StemSource::Bus(8), &state.tracks.read());
+    let eight = stem_filter(StemSource::Bus(8), &state.shared.tracks());
     assert!(
         eight.contains(11) && !eight.contains(10),
         "and bus 8 only its own — the shared parent does not drag the \
          sibling tap along: {:?}",
         eight.set
     );
-    let track = stem_filter(StemSource::Track(1), &state.tracks.read());
+    let track = stem_filter(StemSource::Track(1), &state.shared.tracks());
     assert!(
         track.contains(10) && track.contains(11),
         "both taps still belong to their instrument's own stem"
@@ -225,15 +222,15 @@ fn bus_filter_counts_a_parent_and_its_sub_track_once() {
     state.shared.edit_busses(|b| b.insert(7, Arc::new(Bus::new(7, "drum bus".into()))));
     state.add_track(1, TrackOutput::Bus(7));
     for (id, port) in [(10u64, 1u32), (11, 2)] {
-        let sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
+        let mut sub = Track::new_sub_track(id, format!("tap {port}"), 1, port);
         // Tap 1 duplicates the parent's destination; tap 2 rides along.
         if port == 1 {
             sub.set_output(TrackOutput::Bus(7));
         }
-        state.tracks.write().insert(id, sub);
+        state.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(sub)); });
     }
 
-    let f = stem_filter(StemSource::Bus(7), &state.tracks.read());
+    let f = stem_filter(StemSource::Bus(7), &state.shared.tracks());
     assert!(f.contains(1) && f.contains(10) && f.contains(11));
     assert_eq!(
         f.set.len(),
@@ -249,7 +246,7 @@ fn master_filter_includes_everything_with_master_fx() {
     state.add_track(1, TrackOutput::Master);
     state.add_track(2, TrackOutput::Bus(7));
 
-    let f = stem_filter(StemSource::Master, &state.tracks.read());
+    let f = stem_filter(StemSource::Master, &state.shared.tracks());
     assert!(f.all, "master contributes every track");
     assert!(f.contains(1) && f.contains(2) && f.contains(999));
     assert!(f.include_master_fx, "master stem applies master FX/volume");

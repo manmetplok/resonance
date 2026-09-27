@@ -254,7 +254,7 @@ fn fixture() -> EngineState {
         .write()
         .insert(MONITOR_ID, key_monitor());
     for tap in [TAP_A, TAP_B] {
-        state.tracks.read().get(&tap).unwrap().set_volume(0.0);
+        state.shared.tracks().get(&tap).unwrap().set_volume(0.0);
     }
     state
         .shared
@@ -282,7 +282,6 @@ fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
         0,
         TWO_CHUNKS,
         &state.shared,
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -317,7 +316,7 @@ fn assert_keyed(got: f32, expected: f32, chain: &str) {
 #[test]
 fn an_instrument_tracks_inserts_receive_the_key() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Track(PARENT));
@@ -329,10 +328,10 @@ fn an_instrument_tracks_inserts_receive_the_key() {
 #[test]
 fn a_sub_tracks_inserts_receive_the_key() {
     let state = fixture();
-    state.tracks.read().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
     // TAP_B carries the monitor, so it must reach master to be measured;
     // TAP_A stays at fader zero and keys anyway.
-    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&TAP_B).unwrap().set_volume(1.0);
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Track(PARENT));
@@ -384,7 +383,7 @@ fn the_master_chain_receives_the_key() {
 #[test]
 fn a_sub_track_can_be_the_key_source() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Track(PARENT));
@@ -402,7 +401,7 @@ fn a_bus_can_be_the_key_source() {
     // The bus is captured pre-fader too, so it can feed a key without
     // being audible itself.
     state.shared.graph.load().bus(BUS).unwrap().set_volume(0.0);
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
     let got = render_second_chunk(&state, StemSource::Master);
@@ -418,9 +417,9 @@ fn a_bus_can_be_the_key_source() {
     let state = fixture();
     state.add_bus(BUS, "Group");
     state.set_output(TAP_A, TrackOutput::Bus(BUS));
-    state.tracks.read().get(&TAP_A).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&TAP_A).unwrap().set_volume(1.0);
     state.shared.graph.load().bus(BUS).unwrap().set_volume(0.0);
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
     let got = render_second_chunk(&state, StemSource::Master);
@@ -441,7 +440,7 @@ fn a_bus_can_be_the_key_source() {
 #[test]
 fn an_unrouted_plugin_gets_no_key() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
 
     let got = render_second_chunk(&state, StemSource::Track(PARENT));
     assert!(
@@ -455,7 +454,7 @@ fn an_unrouted_plugin_gets_no_key() {
 #[test]
 fn a_disabled_route_delivers_no_key() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     state
         .shared
         .sidechain_routes
@@ -478,7 +477,7 @@ fn a_disabled_route_delivers_no_key() {
 #[test]
 fn the_key_is_one_block_old() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Track(TAP_A));
 
     let out = render_stem(
@@ -486,7 +485,6 @@ fn the_key_is_one_block_old() {
         0,
         TWO_CHUNKS,
         &state.shared,
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -528,8 +526,8 @@ fn a_key_source_outside_the_stem_still_keys() {
     // The monitor sits on TAP_B and is keyed from TAP_A, its sibling.
     // Rendering TAP_B's stem holds TAP_A out of the mix — but it must
     // still be captured, or the key is silence.
-    state.tracks.read().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
-    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&TAP_B).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&TAP_B).unwrap().set_volume(1.0);
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Track(TAP_B));
@@ -544,7 +542,7 @@ fn a_key_source_outside_the_stem_does_not_join_it() {
     let state = fixture();
     // No monitor plugin at all: TAP_B is silent on its own. Keying
     // something from TAP_A must not put TAP_A's audio in this stem.
-    state.tracks.read().get(&TAP_B).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&TAP_B).unwrap().set_volume(1.0);
     route(&state, SendSource::Track(TAP_A));
 
     let got = render_second_chunk(&state, StemSource::Track(TAP_B));
@@ -569,8 +567,8 @@ fn a_key_source_outside_the_stem_does_not_join_it() {
 #[test]
 fn a_muted_key_source_still_keys_in_the_mixdown() {
     let state = fixture();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
-    let tap = state.tracks.read();
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    let tap = state.shared.tracks();
     let tap = tap.get(&TAP_A).unwrap();
     // Audible if it leaked: the mix would read KEY_LEVEL twice.
     tap.set_volume(1.0);
@@ -586,8 +584,8 @@ fn a_muted_key_source_still_keys_in_the_mixdown() {
 fn a_solo_suppressed_key_source_still_keys_in_the_mixdown() {
     let state = fixture();
     state.add_unfrozen_sibling(multi_out_harness::SIBLING, multi_out_harness::SIBLING_TAP);
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
-    state.tracks.read().get(&PARENT).unwrap().set_soloed(true);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().set_soloed(true);
     // The sibling kit's tap carries PORT_LEVELS[1] == KEY_LEVEL.
     route(&state, SendSource::Track(multi_out_harness::SIBLING_TAP));
 
@@ -601,9 +599,9 @@ fn a_muted_key_bus_still_keys_in_the_mixdown() {
     let state = fixture();
     state.add_bus(BUS, "Ghost");
     state.set_output(TAP_A, TrackOutput::Bus(BUS));
-    state.tracks.read().get(&TAP_A).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&TAP_A).unwrap().set_volume(1.0);
     state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
 
     let got = render_second_chunk(&state, StemSource::Master);
@@ -625,7 +623,7 @@ fn a_muted_key_bus_whose_consumer_is_bypassed_does_not_render() {
     state.add_bus(BUS, "Ghost");
     state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
     state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
     let consumer_bypass = |v: bool| {
         state
@@ -667,10 +665,10 @@ fn a_muted_key_bus_whose_consumer_chain_is_dormant_does_not_render() {
     state.add_bus(BUS, "Ghost");
     state.shared.graph.load().bus(BUS).unwrap().set_muted(true);
     state.shared.edit_bus(BUS, |bus| bus.plugin_ids.push(PROBE_ID)).unwrap();
-    state.tracks.read().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
+    state.shared.tracks().get(&PARENT).unwrap().push_plugin(MONITOR_ID);
     route(&state, SendSource::Bus(BUS));
     let probe_calls = || calls.swap(0, std::sync::atomic::Ordering::Relaxed);
-    let with_parent = |f: &dyn Fn(&Track)| f(state.tracks.read().get(&PARENT).unwrap());
+    let with_parent = |f: &dyn Fn(&Track)| f(state.shared.tracks().get(&PARENT).unwrap());
 
     with_parent(&|t| t.fx_bypass().set_bypassed_settled(true));
     render_second_chunk(&state, StemSource::Master);
@@ -694,13 +692,13 @@ const LIVE_BLOCK: usize = 128;
 /// The kit + key monitor on the live callback: PARENT hosts the
 /// instrument and the monitor, both taps sub-tracks at fader zero.
 fn live_fixture(extra: impl FnOnce(&mut Vec<Track>, &MixAudioHarnessPlugins)) -> MixAudioHarness {
-    let parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
+    let mut parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
     parent.set_output(TrackOutput::Master);
     parent.push_plugin(multi_out_harness::INSTRUMENT_ID);
     parent.push_plugin(MONITOR_ID);
     let mut tracks = vec![parent];
     for (id, port) in [(TAP_A, 1u32), (TAP_B, 2)] {
-        let sub = Track::new_sub_track(id, format!("Tap {port}"), PARENT, port);
+        let mut sub = Track::new_sub_track(id, format!("Tap {port}"), PARENT, port);
         sub.set_output(TrackOutput::Master);
         sub.set_volume(0.0);
         tracks.push(sub);
@@ -760,7 +758,7 @@ fn settle(h: &mut MixAudioHarness) -> Vec<f32> {
 fn a_muted_key_source_still_keys_live() {
     let mut h = live_fixture(|_, _| {});
     {
-        let tracks = h.tracks().read();
+        let tracks = h.tracks();
         let tap = tracks.get(&TAP_A).unwrap();
         tap.set_volume(1.0);
         tap.set_muted(true);
@@ -780,7 +778,7 @@ fn a_solo_suppressed_key_source_still_keys_live() {
     const OTHER: TrackId = 2;
     const OTHER_ID: PluginInstanceId = 101;
     let mut h = live_fixture(|tracks, _| {
-        let other = Track::with_type(OTHER, "Other".into(), TrackType::Instrument);
+        let mut other = Track::with_type(OTHER, "Other".into(), TrackType::Instrument);
         other.set_output(TrackOutput::Master);
         other.push_plugin(OTHER_ID);
         tracks.push(other);
@@ -789,7 +787,7 @@ fn a_solo_suppressed_key_source_still_keys_live() {
         OTHER_ID,
         multi_out_harness::multi_out_instrument([KEY_LEVEL, 0.0, 0.0]),
     );
-    h.tracks().read().get(&PARENT).unwrap().set_soloed(true);
+    h.tracks().get(&PARENT).unwrap().set_soloed(true);
     live_route(&h, SendSource::Track(OTHER));
 
     let out = settle(&mut h);

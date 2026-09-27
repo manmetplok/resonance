@@ -32,7 +32,6 @@ fn dispatch_export(
         settings,
         reporter,
         Arc::clone(ctx.shared),
-        Arc::clone(ctx.tracks),
         Arc::clone(ctx.clips),
         Arc::clone(ctx.plugins),
         Arc::clone(ctx.tempo_map),
@@ -77,14 +76,17 @@ pub(super) fn dispatch_bounce(
                 target_clip_id,
                 name,
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.tracks),
                 Arc::clone(ctx.clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
                 ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
+                ctx.cmd_tx_retry.clone(),
             ));
+        }
+        AudioCommand::BounceTargetCancelled { target_track_id } => {
+            bounce_realtime::remove_cancelled_bounce_target(ctx, target_track_id);
         }
         AudioCommand::BounceTrackRealtimeToAudio {
             source_track_id,
@@ -122,7 +124,6 @@ pub(super) fn dispatch_bounce(
                 bit_depth,
                 include_fx_tail,
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.tracks),
                 Arc::clone(ctx.clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),
@@ -141,7 +142,6 @@ pub(super) fn dispatch_bounce(
             range,
             source,
             Arc::clone(ctx.shared),
-            Arc::clone(ctx.tracks),
             Arc::clone(ctx.clips),
             Arc::clone(ctx.plugins),
             Arc::clone(ctx.tempo_map),
@@ -160,7 +160,6 @@ pub(super) fn dispatch_bounce(
                 track_id,
                 cache_path,
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.tracks),
                 Arc::clone(ctx.clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),

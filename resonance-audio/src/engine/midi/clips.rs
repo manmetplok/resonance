@@ -28,8 +28,8 @@ pub(crate) fn handle_add_instrument_track(ctx: &HandlerCtx, id: TrackId, name: O
         return;
     }
     let name = name.unwrap_or_else(|| format!("Instrument {}", id));
-    let track = Track::with_type(id, name, TrackType::Instrument);
-    ctx.tracks.write().insert(id, track);
+    let track = Arc::new(Track::with_type(id, name, TrackType::Instrument));
+    ctx.shared.edit_tracks(|tracks| tracks.insert(id, track));
     let _ = ctx
         .event_tx
         .send(AudioEvent::InstrumentTrackAdded { track_id: id });
@@ -44,8 +44,8 @@ pub(crate) fn handle_add_vocal_track(ctx: &HandlerCtx, id: TrackId, name: Option
         return;
     }
     let name = name.unwrap_or_else(|| format!("Vocal {}", id));
-    let track = Track::with_type(id, name, TrackType::Vocal);
-    ctx.tracks.write().insert(id, track);
+    let track = Arc::new(Track::with_type(id, name, TrackType::Vocal));
+    ctx.shared.edit_tracks(|tracks| tracks.insert(id, track));
     let _ = ctx
         .event_tx
         .send(AudioEvent::VocalTrackAdded { track_id: id });

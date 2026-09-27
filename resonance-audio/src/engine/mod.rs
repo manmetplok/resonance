@@ -277,7 +277,7 @@ pub struct SharedState {
     /// Counted by `mix_audio`, folded into the load meter's report.
     pub monitor_shortfall_cycles: AtomicU64,
     /// Lifetime count of playing cycles the arrangement render skipped
-    /// because a state lock (tracks/clips/plugins)
+    /// because a state lock (clips/plugins)
     /// was write-held at callback time — a full quantum of silence in
     /// the mix each, audible as a stutter with no graph xrun. Counted
     /// by `mix_audio`'s contended branch, folded into the load report.
@@ -420,6 +420,33 @@ impl SharedState {
     /// this state's queue. Engine thread.
     pub fn edit_master<R>(&self, f: impl FnOnce(&mut MasterBus) -> R) -> R {
         self.graph.edit_master(&self.retired, f)
+    }
+
+    /// [`RenderGraphSlot::edit_tracks`], retiring the replaced graph onto
+    /// this state's queue. Engine thread.
+    pub fn edit_tracks<R>(&self, f: impl FnOnce(&mut TrackMap) -> R) -> R {
+        self.graph.edit_tracks(&self.retired, f)
+    }
+
+    /// [`RenderGraphSlot::edit_track`], retiring the replaced graph onto
+    /// this state's queue. Engine thread.
+    pub fn edit_track<R>(&self, track_id: TrackId, f: impl FnOnce(&mut Track) -> R) -> Option<R> {
+        self.graph.edit_track(&self.retired, track_id, f)
+    }
+
+    /// [`RenderGraphSlot::edit_tracks_and_busses`], retiring the replaced
+    /// graph onto this state's queue. Engine thread.
+    pub fn edit_tracks_and_busses<R>(
+        &self,
+        f: impl FnOnce(&mut TrackMap, &mut IndexMap<BusId, Arc<Bus>>) -> R,
+    ) -> R {
+        self.graph.edit_tracks_and_busses(&self.retired, f)
+    }
+
+    /// The published track map (an `Arc` clone — keep it for as long as
+    /// the caller reads, it never blocks an edit).
+    pub fn tracks(&self) -> Arc<TrackMap> {
+        Arc::clone(&self.graph.load().tracks)
     }
 
     /// Whether an offline renderer (export, stem export, bounce in place,
@@ -712,12 +739,9 @@ impl AudioEngine {
 
         let shared_audio = Arc::clone(&shared);
 
-        let tracks: Arc<parking_lot::RwLock<IndexMap<TrackId, Track>>> =
-            Arc::new(parking_lot::RwLock::new(IndexMap::new()));
         let clips: Arc<parking_lot::RwLock<Vec<AudioClip>>> =
             Arc::new(parking_lot::RwLock::new(Vec::new()));
 
-        let tracks_audio = Arc::clone(&tracks);
         let clips_audio = Arc::clone(&clips);
 
         let tempo_map: Arc<arc_swap::ArcSwap<TempoMap>> =
@@ -761,7 +785,6 @@ impl AudioEngine {
         let make_mixer = |native_backend: bool| -> (crate::mixer::MixFn, ringbuf::HeapProd<f32>) {
             // Clone captures that the closure needs to own
             let shared_audio = Arc::clone(&shared_audio);
-            let tracks_audio = Arc::clone(&tracks_audio);
             let clips_audio = Arc::clone(&clips_audio);
             let plugins_audio = Arc::clone(&plugins_audio);
             let tempo_audio = Arc::clone(&tempo_audio);
@@ -866,7 +889,6 @@ impl AudioEngine {
                         mixer::CallbackInputs {
                             channels,
                             shared: &shared_audio,
-                            tracks: &tracks_audio,
                             clips: &clips_audio,
                             plugins: &plugins_audio,
                             tempo_map: &tempo_audio,
@@ -1045,7 +1067,6 @@ impl AudioEngine {
 
         // Spawn the engine control thread
         let shared_ctrl = Arc::clone(&shared);
-        let tracks_ctrl = Arc::clone(&tracks);
         let clips_ctrl = Arc::clone(&clips);
         let tempo_ctrl = Arc::clone(&tempo_map);
         let plugins_ctrl = Arc::clone(&plugins);
@@ -1061,7 +1082,6 @@ impl AudioEngine {
                     cmd_tx_retry,
                     event_tx,
                     shared: shared_ctrl,
-                    tracks_arc: tracks_ctrl,
                     clips_arc: clips_ctrl,
                     tempo_map: tempo_ctrl,
                     plugins_arc: plugins_ctrl,

@@ -25,9 +25,12 @@ pub(super) fn render_stopped_block(
     let flush = scratch.continuity.was_rolling();
     let monitor_on = monitor.frames > 0 && shared.monitoring.load(Ordering::Relaxed);
     let misses = &shared.lock_misses;
-    let tracks_guard = try_read_counted(inputs.tracks, StateMap::Tracks, misses);
+    // Tracks come from the render graph (ARCH-02 A2-6): a load that
+    // cannot miss.
+    let graph = shared.graph.load();
+    let tracks_guard = &*graph.tracks;
     let plugins_guard = try_read_counted(inputs.plugins, StateMap::Plugins, misses);
-    let (Some(tracks_guard), Some(plugins_guard)) = (tracks_guard, plugins_guard) else {
+    let Some(plugins_guard) = plugins_guard else {
         // Contended: a pending stop flush stays armed for the next block.
         return;
     };
@@ -36,14 +39,14 @@ pub(super) fn render_stopped_block(
     // thread was holding; this one is issued from the audio thread, whose
     // MIDI stash parks it on contention instead of losing it.
     if flush {
-        panic_instrument_tracks(&tracks_guard, &plugins_guard, scratch.midi_stash, false);
+        panic_instrument_tracks(tracks_guard, &plugins_guard, scratch.midi_stash, false);
         scratch.continuity.stopped();
     }
     let any_monitor = monitor_on
         && mix_monitor_passthrough(
             scratch.data,
             inputs.channels,
-            &tracks_guard,
+            tracks_guard,
             &plugins_guard,
             scratch.monitor_temp,
             monitor.frames,
@@ -61,7 +64,7 @@ pub(super) fn render_stopped_block(
         scratch.data,
         inputs.channels,
         frames,
-        &tracks_guard,
+        tracks_guard,
         &plugins_guard,
         scratch.midi_stash,
         scratch.track_buf_l,

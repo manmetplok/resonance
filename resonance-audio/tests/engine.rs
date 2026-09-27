@@ -56,6 +56,8 @@ mod midi_clip_handlers;
 mod render_graph_midi;
 #[path = "engine/render_graph_busses.rs"]
 mod render_graph_busses;
+#[path = "engine/render_graph_tracks.rs"]
+mod render_graph_tracks;
 #[path = "engine/midi_map_command_plumbing.rs"]
 mod midi_map_command_plumbing;
 #[path = "engine/offline_render_gate.rs"]

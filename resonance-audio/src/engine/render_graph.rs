@@ -8,19 +8,22 @@
 //! edit and publishes it through an `ArcSwap`, so a reader does one
 //! wait-free [`load`](RenderGraphSlot::load) and never fails.
 //!
-//! Migration state: `midi_clips` (B-1), `busses` and `master` (B-2).
-//! `tracks`, `plugins` and `clips` join as fields in B-3…B-5; until then
-//! they stay behind their locks.
+//! Migration state: `midi_clips` (B-1), `busses` and `master` (B-2),
+//! `tracks` (B-3). `plugins` and `clips` join as fields in B-4…B-5;
+//! until then they stay behind their locks.
 //!
 //! Ownership and threading:
 //!
 //! - **Writers** are the engine control thread's handlers (MIDI clip and
 //!   note CRUD, the bulk edits, live MIDI recording, bus add / remove /
-//!   rename / insert-chain edits, master insert-chain edits, `ClearAll`).
+//!   rename / insert-chain edits, master insert-chain edits, track add /
+//!   remove / re-route / MIDI-binding edits, `ClearAll`).
 //!   Each edit copies the element list (`O(n)` `Arc` clones),
 //!   copy-on-writes the one element it changes (`Arc::make_mut` — the
 //!   published graph still shares it), and publishes. No worker thread
-//!   writes the graph. The `edit` mutex serialises the
+//!   writes the graph — the offline bounce-in-place's cancel posts
+//!   `AudioCommand::BounceTargetCancelled` so the engine thread removes
+//!   its target track. The `edit` mutex serialises the
 //!   read-modify-publish so a stray second writer could never lose an
 //!   update; the audio thread never touches it.
 //! - **Bus live state.** A bus's fader, pan, mute, role, chain-bypass
@@ -29,10 +32,22 @@
 //!   meter write or a fade position the audio thread made on the copy
 //!   being replaced. The setters for those write through the published
 //!   bus and publish nothing.
+//! - **Track live state**, likewise: fader, pan, mute, solo, arm,
+//!   monitor, mono, input port, the chain-bypass fade, meters, last
+//!   gains, the insert chain, device params, input / MIDI-out device and
+//!   the frozen cache are shared by every copy of a track (`Track`'s
+//!   `Clone`); their setters write through and publish nothing. Routing
+//!   (`Track::output`) and the hardware-MIDI bindings are structural and
+//!   go through [`RenderGraphSlot::edit_track`] — so a bus removal and
+//!   the re-route of its feeders are one publish
+//!   ([`RenderGraphSlot::edit_tracks_and_busses`]).
 //! - **The replaced graph** goes through [`retire::publish`] onto
 //!   `SharedState::retired`, and the engine loop's sweep drops it once no
 //!   reader pins it — so the audio thread is never the last owner of a
-//!   graph (or of a clip, bus or chain only that graph still held).
+//!   graph (or of a clip, bus, track or chain only that graph still
+//!   held). A removed track therefore needs no retiring of its own: it
+//!   rides out on the replaced graph and drops, with its frozen cache and
+//!   insert chain, on the engine thread.
 //! - **Readers**: the audio callback `load()`s once per block; bounce /
 //!   freeze / stem workers load once per chunk (they keep seeing edits at
 //!   chunk granularity, as they did through the per-chunk read guards).
@@ -43,7 +58,7 @@ use arc_swap::ArcSwap;
 use indexmap::IndexMap;
 use parking_lot::Mutex;
 
-use crate::types::{Bus, BusId, ClipId, MasterBus, MidiClip};
+use crate::types::{Bus, BusId, ClipId, MasterBus, MidiClip, Track, TrackId, TrackMap};
 
 use super::retire::{self, Retired};
 
@@ -58,6 +73,9 @@ pub struct RenderGraph {
     pub busses: Arc<IndexMap<BusId, Arc<Bus>>>,
     /// The master insert chain.
     pub master: Arc<MasterBus>,
+    /// Every track and sub-track, in insertion order (the order stems,
+    /// latency comp and the monitor-source pick walk them in).
+    pub tracks: Arc<TrackMap>,
 }
 
 impl Default for RenderGraph {
@@ -66,6 +84,7 @@ impl Default for RenderGraph {
             midi_clips: Arc::from(Vec::new()),
             busses: Arc::new(IndexMap::new()),
             master: Arc::new(MasterBus::default()),
+            tracks: Arc::new(TrackMap::new()),
         }
     }
 }
@@ -79,6 +98,11 @@ impl RenderGraph {
     /// The bus with `bus_id`, if any.
     pub fn bus(&self, bus_id: BusId) -> Option<&Bus> {
         self.busses.get(&bus_id).map(|b| &**b)
+    }
+
+    /// The track with `track_id`, if any.
+    pub fn track(&self, track_id: TrackId) -> Option<&Track> {
+        self.tracks.get(&track_id).map(|t| &**t)
     }
 }
 
@@ -102,6 +126,7 @@ impl std::fmt::Debug for RenderGraphSlot {
             .field("midi_clips", &graph.midi_clips.len())
             .field("busses", &graph.busses.len())
             .field("master_plugins", &graph.master.plugin_ids.len())
+            .field("tracks", &graph.tracks.len())
             .finish()
     }
 }
@@ -204,6 +229,60 @@ impl RenderGraphSlot {
         let mut master = (*current.master).clone();
         let out = f(&mut master);
         self.publish_locked(&current, retired, |g| g.master = Arc::new(master));
+        out
+    }
+
+    /// Edit the track map (add, remove, clear, reorder) and publish the
+    /// result. `f` gets a copy of the map whose tracks are shared with the
+    /// published graph until `Arc::make_mut`ed. Always publishes. Engine
+    /// thread.
+    pub fn edit_tracks<R>(&self, retired: &Retired, f: impl FnOnce(&mut TrackMap) -> R) -> R {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        let mut tracks = (*current.tracks).clone();
+        let out = f(&mut tracks);
+        self.publish_locked(&current, retired, |g| g.tracks = Arc::new(tracks));
+        out
+    }
+
+    /// Edit the one track with `track_id` (copy-on-write; the copy shares
+    /// the published track's live state) and publish. `None` — and
+    /// nothing published — when there is no such track. Engine thread.
+    pub fn edit_track<R>(
+        &self,
+        retired: &Retired,
+        track_id: TrackId,
+        f: impl FnOnce(&mut Track) -> R,
+    ) -> Option<R> {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        if !current.tracks.contains_key(&track_id) {
+            return None;
+        }
+        let mut tracks = (*current.tracks).clone();
+        let out = f(Arc::make_mut(tracks.get_mut(&track_id)?));
+        self.publish_locked(&current, retired, |g| g.tracks = Arc::new(tracks));
+        Some(out)
+    }
+
+    /// Edit the track map and the bus map together and publish both in
+    /// ONE graph — for an edit whose halves must never be seen apart by
+    /// a block (a bus removal and the re-route of the tracks that fed
+    /// it). Always publishes. Engine thread.
+    pub fn edit_tracks_and_busses<R>(
+        &self,
+        retired: &Retired,
+        f: impl FnOnce(&mut TrackMap, &mut IndexMap<BusId, Arc<Bus>>) -> R,
+    ) -> R {
+        let _edit = self.edit.lock();
+        let current = self.graph.load_full();
+        let mut tracks = (*current.tracks).clone();
+        let mut busses = (*current.busses).clone();
+        let out = f(&mut tracks, &mut busses);
+        self.publish_locked(&current, retired, |g| {
+            g.tracks = Arc::new(tracks);
+            g.busses = Arc::new(busses);
+        });
         out
     }
 

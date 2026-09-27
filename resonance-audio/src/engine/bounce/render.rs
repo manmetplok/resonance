@@ -8,7 +8,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use indexmap::IndexMap;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 
 use crate::clap_host::{PluginMap, SyncClapInstance};
@@ -142,7 +141,7 @@ impl ChunkScratch {
 /// pattern).
 ///
 /// Lock scope (code review ARCH-02): [`render_chunk`] holds the map read
-/// guards still behind locks (tracks, clips, plugins) for one
+/// guards still behind locks (clips, plugins) for one
 /// `BOUNCE_CHUNK` — every plugin's `process()` on
 /// every track — and releases them between chunks. That never stalls
 /// the live callback: every caller runs under an
@@ -153,12 +152,11 @@ impl ChunkScratch {
 /// chunk (a few ms) — which is the price of the offline render seeing
 /// edits at chunk granularity rather than snapshotting the project. The
 /// graph-publishing migration (ARCH-02 A2-4…) removes the guards one map
-/// at a time: the MIDI clips, busses and master chain are already a
-/// per-chunk `shared.graph.load()` with no guard, so a note or bus edit
-/// never queues behind a chunk.
+/// at a time: the MIDI clips, busses, master chain and tracks are already
+/// a per-chunk `shared.graph.load()` with no guard, so a note, bus or
+/// track edit never queues behind a chunk.
 pub(super) struct ChunkCtx<'a> {
     pub shared: &'a Arc<SharedState>,
-    pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a TempoMap,
@@ -190,10 +188,8 @@ pub(super) struct ChunkCtx<'a> {
 /// the bounce thread — allocation is fine here.
 pub(super) fn build_latency_comp(
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     plugins: &Arc<RwLock<PluginMap>>,
 ) -> LatencyComp {
-    let tracks_guard = tracks.read();
     let graph = shared.graph.load();
     let plugins_guard = plugins.read();
     let latency_of = |id: PluginInstanceId| {
@@ -210,7 +206,7 @@ pub(super) fn build_latency_comp(
             })
             .unwrap_or(0)
     };
-    let mut chains = crate::latency::chain_latencies(&tracks_guard, latency_of);
+    let mut chains = crate::latency::chain_latencies(&graph.tracks, latency_of);
     let offsets = shared.external_offsets.load();
     crate::latency::add_external_offsets(&mut chains, |id| {
         offsets.get(&id).copied().unwrap_or(0)
@@ -332,16 +328,16 @@ pub(super) fn render_chunk(
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
 
-    let tracks_guard = ctx.tracks.read();
     let clips_guard = ctx.clips.read();
-    // The render graph (MIDI clips, busses, master chain), loaded once
-    // for the chunk (ARCH-02 A2-4/A2-5): no guard, so no engine-thread
-    // edit of those ever queues behind the chunk.
+    // The render graph (MIDI clips, busses, master chain, tracks), loaded
+    // once for the chunk (ARCH-02 A2-4…A2-6): no guard, so no
+    // engine-thread edit of those ever queues behind the chunk.
     let graph = ctx.shared.graph.load();
+    let tracks_guard = &*graph.tracks;
     let plugins_guard = ctx.plugins.read();
 
     let active_busses = graph.busses.len().min(scratch.bus_bufs.len());
-    let any_solo = any_top_level_solo(tracks_guard.values());
+    let any_solo = any_top_level_solo(tracks_guard.values().map(|t| &**t));
 
     // Aux-send snapshot: the offline bounce taps + sums sends identically
     // to the live path so a bounced/exported WAV matches playback.
@@ -375,7 +371,7 @@ pub(super) fn render_chunk(
     mixer::render_block(
         mixer::BlockInputs {
             channels: 2,
-            tracks: &tracks_guard,
+            tracks: tracks_guard,
             busses: &graph.busses,
             clips: &clips_guard,
             midi_clips: &graph.midi_clips,
@@ -445,7 +441,6 @@ pub(super) fn render_chunk(
 
     drop(plugins_guard);
     drop(clips_guard);
-    drop(tracks_guard);
 
     if include_master_fx {
         // A master-gain automation lane ramps across the chunk (start..end

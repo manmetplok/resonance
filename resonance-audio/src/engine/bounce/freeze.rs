@@ -15,7 +15,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 use thiserror::Error;
 
@@ -143,7 +142,6 @@ pub fn to_freeze_cache(
     path: String,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -166,7 +164,7 @@ pub fn to_freeze_cache(
     // Resolve source + sub-tracks (multi-output instruments like
     // resonance-drums spawn sibling tracks fed by parent output ports).
     let filter_set: HashSet<TrackId> = {
-        let tracks_guard = tracks.read();
+        let tracks_guard = shared.tracks();
         if !tracks_guard.contains_key(&source_track_id) {
             return Err(FreezeError::SourceTrackNotFound(source_track_id));
         }
@@ -186,7 +184,7 @@ pub fn to_freeze_cache(
     // plugin-parameter lanes of every plugin the frozen tracks run. Gain /
     // pan / mute lanes stay out — `freeze_raw` renders pre-fader, and the
     // live mixer still applies those lanes to the frozen track on playback.
-    let baked = baked_automation(&filter_set, tracks, automation);
+    let baked = baked_automation(&filter_set, &shared.tracks(), automation);
 
     // Compute the fingerprint of the frozen inputs before rendering so
     // the returned ref records exactly what was captured. (Engine-side
@@ -194,7 +192,7 @@ pub fn to_freeze_cache(
     // plugin chain / instrument selection + the baked plugin automation.
     // The app layer recomputes its own fingerprint to detect staleness.)
     let render_fingerprint =
-        compute_track_fingerprint(&filter_set, source_track_id, tracks, shared, &baked);
+        compute_track_fingerprint(&filter_set, source_track_id, shared, &baked);
 
     // Project range: [0, latest clip/MIDI end]. Starting at 0 keeps the
     // cache timeline-aligned so it plays back from sample 0 with no
@@ -240,7 +238,7 @@ pub fn to_freeze_cache(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, plugins);
+    let latency_comp = build_latency_comp(shared, plugins);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it re-aligns the cache
@@ -250,7 +248,6 @@ pub fn to_freeze_cache(
     let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
-        tracks,
         clips,
         plugins,
         tempo_map: &bounce_tm,
@@ -418,11 +415,10 @@ pub fn read_freeze_cache(
 /// review ENG-08). Mix lanes are left out — see the call site.
 fn baked_automation(
     filter_set: &HashSet<TrackId>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
+    tracks_guard: &TrackMap,
     automation: &crate::engine::AutomationSnapshot,
 ) -> crate::engine::AutomationSnapshot {
     let mut baked = crate::engine::AutomationSnapshot::default();
-    let tracks_guard = tracks.read();
     for track in filter_set.iter().filter_map(|id| tracks_guard.get(id)) {
         for id in track.plugins().iter() {
             if let Some(lanes) = automation.plugin_params.get(id) {
@@ -442,7 +438,6 @@ fn baked_automation(
 fn compute_track_fingerprint(
     filter_set: &HashSet<TrackId>,
     source_track_id: TrackId,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     shared: &SharedState,
     baked: &crate::engine::AutomationSnapshot,
 ) -> u64 {
@@ -473,7 +468,7 @@ fn compute_track_fingerprint(
     }
 
     let (instrument_id, plugin_params) = {
-        let tracks_guard = tracks.read();
+        let tracks_guard = shared.tracks();
         match tracks_guard.get(&source_track_id) {
             Some(track) => {
                 let chain = track.plugins();

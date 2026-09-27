@@ -32,7 +32,7 @@ fn the_parent_fader_trims_the_whole_kit() {
         at_master(BOTH_TAPS)
     );
 
-    state.tracks.read().get(&PARENT).unwrap().set_volume(0.5);
+    state.shared.tracks().get(&PARENT).unwrap().set_volume(0.5);
     let trimmed = kit_level(&state);
     assert!(
         (trimmed - at_master(BOTH_TAPS) * 0.5).abs() < 1e-6,
@@ -47,7 +47,7 @@ fn the_parent_fader_trims_the_whole_kit() {
 fn a_parent_at_unity_changes_nothing() {
     let state = EngineState::new();
     let before = state.render(StemSource::Track(PARENT));
-    state.tracks.read().get(&PARENT).unwrap().set_volume(1.0);
+    state.shared.tracks().get(&PARENT).unwrap().set_volume(1.0);
     let after = state.render(StemSource::Track(PARENT));
     assert_eq!(before, after, "unity trim must not perturb a sample");
 }
@@ -57,8 +57,8 @@ fn a_parent_at_unity_changes_nothing() {
 #[test]
 fn the_trim_composes_with_the_taps_own_fader() {
     let state = EngineState::new();
-    state.tracks.read().get(&PARENT).unwrap().set_volume(0.5);
-    state.tracks.read().get(&TAP_A).unwrap().set_volume(0.5);
+    state.shared.tracks().get(&PARENT).unwrap().set_volume(0.5);
+    state.shared.tracks().get(&TAP_A).unwrap().set_volume(0.5);
 
     let got = peak(&state.render(StemSource::Track(TAP_A)));
     let expect = at_master(PORT_LEVELS[1]) * 0.25;
@@ -74,7 +74,7 @@ fn the_trim_composes_with_the_taps_own_fader() {
 #[test]
 fn a_parent_at_zero_silences_the_kit() {
     let state = EngineState::new();
-    state.tracks.read().get(&PARENT).unwrap().set_volume(0.0);
+    state.shared.tracks().get(&PARENT).unwrap().set_volume(0.0);
     assert!(
         kit_level(&state) < 1e-9,
         "a parent fader at -inf must silence its taps"

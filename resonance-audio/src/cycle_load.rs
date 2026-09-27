@@ -26,15 +26,15 @@
 //! into its report line.
 //!
 //! State-lock contention is attributed per map (code review ARCH-02,
-//! A2-1): every `try_read` the callback makes on `tracks` / `clips` /
-//! `plugins` goes through
+//! A2-1): every `try_read` the callback makes on `clips` / `plugins`
+//! goes through
 //! [`try_read_counted`], so a miss bumps that map's slot in
 //! [`LockMissCounters`] whichever branch (playing, stopped, count-in,
 //! live-MIDI pickup) made it. `render_skip_cycles` stays the
 //! "a playing block was dropped" total; the per-map counters say *which*
 //! lock a UI edit or worker thread was holding at the time. The MIDI
-//! clips (A2-4), the busses and the master chain (A2-5) left this table:
-//! they are read from the published render graph
+//! clips (A2-4), the busses and the master chain (A2-5) and the tracks
+//! (A2-6) left this table: they are read from the published render graph
 //! (`engine::render_graph`), a load that cannot miss.
 //!
 //! RT-safety: `record` does arithmetic and relaxed atomic stores only.
@@ -76,18 +76,16 @@ pub const LOAD_EMA_ALPHA: f32 = 0.05;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum StateMap {
-    Tracks = 0,
-    Clips = 1,
-    Plugins = 2,
+    Clips = 0,
+    Plugins = 1,
 }
 
 /// Number of [`StateMap`] variants.
-pub const STATE_MAP_COUNT: usize = 3;
+pub const STATE_MAP_COUNT: usize = 2;
 
 impl StateMap {
     /// Every map, in counter order.
     pub const ALL: [StateMap; STATE_MAP_COUNT] = [
-        StateMap::Tracks,
         StateMap::Clips,
         StateMap::Plugins,
     ];
@@ -95,7 +93,6 @@ impl StateMap {
     /// Short name for the report line.
     pub fn name(self) -> &'static str {
         match self {
-            StateMap::Tracks => "tracks",
             StateMap::Clips => "clips",
             StateMap::Plugins => "plugins",
         }
@@ -115,11 +112,7 @@ pub struct LockMissCounters {
 impl LockMissCounters {
     pub const fn new() -> Self {
         Self {
-            counts: [
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-                AtomicU64::new(0),
-            ],
+            counts: [AtomicU64::new(0), AtomicU64::new(0)],
         }
     }
 

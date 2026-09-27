@@ -42,7 +42,7 @@ fn db_lin(db: f32) -> f32 {
 /// [`STEADY`] on. The clip outlasts the block so only its head declick
 /// falls inside the render window.
 fn dc_track(id: TrackId, output: TrackOutput) -> (Track, AudioClip) {
-    let track = Track::new(id, format!("t{id}"));
+    let mut track = Track::new(id, format!("t{id}"));
     track.set_output(output);
     let clip = AudioClip {
         id,

@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use crate::clap_host::PluginMap;
@@ -56,7 +55,6 @@ pub fn export_stems(
     include_fx_tail: bool,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -127,7 +125,6 @@ pub fn export_stems(
             start,
             render_end,
             shared,
-            tracks,
             clips,
             plugins,
             tempo_map,
@@ -173,7 +170,6 @@ pub(crate) fn export_stems_spawn(
     bit_depth: StemBitDepth,
     include_fx_tail: bool,
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -202,7 +198,6 @@ pub(crate) fn export_stems_spawn(
                         include_fx_tail,
                         &shared,
                         &cancel_render,
-                        &tracks,
                         &clips,
                         &plugins,
                         &tempo_map,

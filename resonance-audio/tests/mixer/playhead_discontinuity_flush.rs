@@ -31,7 +31,7 @@ const INSTRUMENT: PluginInstanceId = 300;
 /// One instrument track playing a single key-60 note from the top of the
 /// song for `quarters` quarter notes (120 bpm: 24 000 samples each).
 fn harness(quarters: u64) -> (MixAudioHarness, Recorder) {
-    let track = Track::with_type(1, "Synth".into(), TrackType::Instrument);
+    let mut track = Track::with_type(1, "Synth".into(), TrackType::Instrument);
     track.set_output(TrackOutput::Master);
     track.push_plugin(INSTRUMENT);
     let clip = MidiClip {

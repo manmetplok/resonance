@@ -47,7 +47,7 @@ pub(crate) type OutputTargets<'a> = (&'a mut [f32], &'a mut BusBufs);
 pub(crate) struct BlockInputs<'a> {
     /// Channel count of the interleaved output buffer.
     pub(crate) channels: usize,
-    pub(crate) tracks: &'a IndexMap<TrackId, Track>,
+    pub(crate) tracks: &'a TrackMap,
     pub(crate) busses: &'a IndexMap<BusId, Arc<Bus>>,
     pub(crate) clips: &'a [AudioClip],
     pub(crate) midi_clips: &'a [Arc<MidiClip>],

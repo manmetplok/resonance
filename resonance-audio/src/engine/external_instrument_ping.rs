@@ -225,7 +225,7 @@ impl PendingLatencyPing {
 /// (device + port) from the shared track table. Mirrors the resolution the
 /// other external-instrument handlers do.
 fn track_routing(ctx: &HandlerCtx, track_id: TrackId) -> (u8, Option<String>, Option<String>, u16) {
-    let tracks = ctx.tracks.read();
+    let tracks = ctx.tracks();
     match tracks.get(&track_id) {
         Some(t) => (
             t.midi_output_channel.unwrap_or(0),

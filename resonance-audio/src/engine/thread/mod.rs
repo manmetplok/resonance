@@ -46,7 +46,6 @@ use super::{
 /// emit events without taking ownership.
 pub(crate) struct HandlerCtx<'a> {
     pub shared: &'a Arc<SharedState>,
-    pub tracks: &'a Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub clips: &'a Arc<RwLock<Vec<AudioClip>>>,
     pub plugins: &'a Arc<RwLock<PluginMap>>,
     pub tempo_map: &'a Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -61,6 +60,16 @@ pub(crate) struct HandlerCtx<'a> {
     pub sample_rate: u32,
     pub buf_frames: usize,
     pub quantum: usize,
+}
+
+impl HandlerCtx<'_> {
+    /// The published track map (code review ARCH-02 B-3). An `Arc`
+    /// clone of the current graph's map: reading it never blocks an edit
+    /// or the audio callback. Structural edits go through
+    /// `shared.edit_tracks` / `shared.edit_track`.
+    pub fn tracks(&self) -> Arc<TrackMap> {
+        self.shared.tracks()
+    }
 }
 
 /// Per-track state for ongoing live MIDI recording. Kept on the
@@ -344,7 +353,6 @@ pub(crate) struct EngineThreadParams {
     pub cmd_tx_retry: Sender<AudioCommand>,
     pub event_tx: Sender<AudioEvent>,
     pub shared: Arc<SharedState>,
-    pub tracks_arc: Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub clips_arc: Arc<RwLock<Vec<AudioClip>>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     pub plugins_arc: Arc<RwLock<PluginMap>>,
@@ -371,7 +379,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         cmd_tx_retry,
         event_tx,
         shared,
-        tracks_arc,
         clips_arc,
         tempo_map,
         plugins_arc,
@@ -391,7 +398,6 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     let mut state = HandlerState::new(sample_rate, live_midi_tx, live_control_tx, clock_tx);
     let ctx = HandlerCtx {
         shared: &shared,
-        tracks: &tracks_arc,
         clips: &clips_arc,
         plugins: &plugins_arc,
         tempo_map: &tempo_map,

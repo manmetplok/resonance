@@ -13,7 +13,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use crate::clap_host::PluginMap;
@@ -38,6 +37,12 @@ use super::render::{
 /// half-rendered target track. The token belongs to this render alone
 /// (see `HandlerState::bounce_cancel`), so it is never cleared here.
 ///
+/// `cmd_tx` is the engine's own command channel. This runs on a worker,
+/// and a worker never edits the render graph (code review ARCH-02 B-3):
+/// the cancel teardown is posted back as the engine-internal
+/// [`AudioCommand::BounceTargetCancelled`], and the engine thread removes
+/// the target track and emits `TrackRemoved` + `TrackBounceCancelled`.
+///
 /// Public so integration tests can drive the renderer directly without
 /// going through the full engine command path; production callers
 /// route through [`AudioCommand::BounceTrackToAudio`].
@@ -49,13 +54,13 @@ pub fn to_audio_clip(
     name: String,
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &super::super::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
+    cmd_tx: &Sender<AudioCommand>,
 ) {
     // Same guard as the realtime bounce path: the offline renderer
     // shares plugin instances with the live mixer, so rendering while
@@ -71,7 +76,7 @@ pub fn to_audio_clip(
     // Resolve source + sub-tracks (multi-output instruments like
     // resonance-drums spawn sibling tracks fed by parent output ports).
     let filter_set: HashSet<TrackId> = {
-        let tracks_guard = tracks.read();
+        let tracks_guard = shared.tracks();
         if !tracks_guard.contains_key(&source_track_id) {
             let _ = event_tx.send(AudioEvent::TrackBounceError(EngineError::not_found(format!(
                 "Source track {source_track_id} not found"
@@ -128,7 +133,7 @@ pub fn to_audio_clip(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, plugins);
+    let latency_comp = build_latency_comp(shared, plugins);
     // Render `max_latency` extra frames and drop the same number from
     // the front: plugin-delay compensation shifts every contributing
     // track by the pipeline latency, so trimming it gives the bounced
@@ -140,7 +145,6 @@ pub fn to_audio_clip(
     let mut skip_frames = comp_latency as usize;
     let ctx = ChunkCtx {
         shared,
-        tracks,
         clips,
         plugins,
         tempo_map: &bounce_tm,
@@ -168,19 +172,14 @@ pub fn to_audio_clip(
     while pos < render_stop {
         if cancel.load(Ordering::Relaxed) {
             // Cooperative cancel: tear down the half-rendered target
-            // track + clip allocation and report back. The clip wasn't
-            // pushed yet (we only push at the very end), so we just
-            // need to remove the freshly-added empty target track.
-            // The token is this render's own, so it is not cleared —
-            // a later render starts with a fresh one.
-            if let Some(track) = tracks.write().shift_remove(&target_track_id) {
-                super::super::tracks::retire_removed_track(track, &shared.retired);
-            }
-            let _ = event_tx.send(AudioEvent::TrackRemoved {
-                track_id: target_track_id,
-            });
-            let _ = event_tx
-                .send(AudioEvent::TrackBounceCancelled { target_track_id });
+            // track. The clip wasn't pushed yet (we only push at the very
+            // end), so only the freshly-added empty target track goes —
+            // removed by the engine thread, the render graph's only
+            // writer, which also reports `TrackRemoved` and
+            // `TrackBounceCancelled` (in that order, as before). The token
+            // is this render's own, so it is not cleared — a later render
+            // starts with a fresh one.
+            let _ = cmd_tx.send(AudioCommand::BounceTargetCancelled { target_track_id });
             return;
         }
 

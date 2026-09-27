@@ -105,14 +105,14 @@ fn realistic_harness(notes_per_track: usize) -> RenderBenchHarness {
 
     for t in 0..6u64 {
         let id = t + 1;
-        let track = Track::with_type(id, format!("inst{t}"), TrackType::Instrument);
+        let mut track = Track::with_type(id, format!("inst{t}"), TrackType::Instrument);
         track.set_output(TrackOutput::Bus((t % 4) + 1));
         tracks.push(track);
         midi_clips.push(midi_clip(id, id, notes_per_track));
     }
     for t in 6..8u64 {
         let id = t + 1;
-        let track = Track::with_type(id, format!("vox{t}"), TrackType::Audio);
+        let mut track = Track::with_type(id, format!("vox{t}"), TrackType::Audio);
         track.set_output(TrackOutput::Bus((t % 4) + 1));
         tracks.push(track);
         // Four takes across the arrangement.

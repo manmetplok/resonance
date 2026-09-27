@@ -21,7 +21,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -30,7 +29,6 @@ struct EngineState {
 fn empty_engine_state() -> EngineState {
     EngineState {
         shared: Arc::new(SharedState::default()),
-        tracks: Arc::new(RwLock::new(IndexMap::new())),
         clips: Arc::new(RwLock::new(Vec::new())),
         plugins: Arc::new(RwLock::new(IndexMap::new())),
         tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -76,10 +74,9 @@ fn audio_clip(id: ClipId, track_id: TrackId, start_sample: u64, data: Vec<f32>) 
 /// tone clip from sample 0.
 fn state_with_tone_track() -> EngineState {
     let state = empty_engine_state();
-    state
-        .tracks
-        .write()
-        .insert(1, Track::with_type(1, "track".into(), TrackType::Audio));
+    state.shared.edit_tracks(|m| {
+        m.insert(1, std::sync::Arc::new(Track::with_type(1, "track".into(), TrackType::Audio)));
+    });
     state
         .clips
         .write()
@@ -115,7 +112,6 @@ fn known_track_renders_non_silent_wav() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -163,14 +159,13 @@ fn freeze_does_not_mutate_source_clips() {
         _ => unreachable!(),
     };
     let clip_count_before = state.clips.read().len();
-    let track_count_before = state.tracks.read().len();
+    let track_count_before = state.shared.tracks().len();
 
     to_freeze_cache(
         1,
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -182,7 +177,7 @@ fn freeze_does_not_mutate_source_clips() {
 
     // No clip / track was added, removed, or mutated.
     assert_eq!(state.clips.read().len(), clip_count_before);
-    assert_eq!(state.tracks.read().len(), track_count_before);
+    assert_eq!(state.shared.tracks().len(), track_count_before);
     let after: Vec<f32> = match &state.clips.read()[0].source {
         ClipSource::Memory(v) => v.clone(),
         _ => unreachable!(),
@@ -199,10 +194,9 @@ fn fingerprint_changes_when_notes_change() {
     // this). Use MIDI clips so the note data feeds the fingerprint.
     fn fingerprint_with_note(pitch: u8) -> u64 {
         let state = empty_engine_state();
-        state
-            .tracks
-            .write()
-            .insert(1, Track::with_type(1, "t".into(), TrackType::Audio));
+        state.shared.edit_tracks(|m| {
+            m.insert(1, std::sync::Arc::new(Track::with_type(1, "t".into(), TrackType::Audio)));
+        });
         // A tone clip so the render range is non-empty, plus a MIDI clip
         // whose note drives the fingerprint.
         state
@@ -232,7 +226,6 @@ fn fingerprint_changes_when_notes_change() {
             path.to_string_lossy().into_owned(),
             &state.shared,
             &AtomicBool::new(false),
-            &state.tracks,
             &state.clips,
             &state.plugins,
             &state.tempo_map,
@@ -269,7 +262,6 @@ fn cancel_aborts_and_removes_partial_file() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &cancel,
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -304,7 +296,6 @@ fn cancelling_another_renders_token_does_not_abort_the_freeze() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -344,7 +335,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         path_other.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -368,7 +358,6 @@ fn a_pending_cancel_survives_another_render_starting() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &freeze_cancel,
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -394,7 +383,6 @@ fn freeze_refuses_while_transport_playing() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,
@@ -420,7 +408,6 @@ fn missing_source_track_errors() {
         path.to_string_lossy().into_owned(),
         &state.shared,
         &AtomicBool::new(false),
-        &state.tracks,
         &state.clips,
         &state.plugins,
         &state.tempo_map,

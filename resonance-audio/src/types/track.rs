@@ -2,7 +2,7 @@
 //! audio callback.
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption, Guard};
 use resonance_common::{DeviceParam, PlaybackSource};
@@ -11,19 +11,69 @@ use crate::bypass::BypassFade;
 
 use super::{BusId, FrozenSource, PluginInstanceId, TrackId, TrackOutput, TrackType};
 
-/// Sentinel value used in `Track::output_bus_bits` to encode
-/// `TrackOutput::Master` (so the enum can live in a single AtomicU64
-/// for lock-free reads on the audio thread).
-const TRACK_OUTPUT_MASTER: u64 = u64::MAX;
+/// Every track, keyed by id, in insertion order — the render graph's
+/// track map (code review ARCH-02 B-3). Position matters: stems, the
+/// monitor source pick and latency comp walk it in this order.
+pub type TrackMap = indexmap::IndexMap<TrackId, Arc<Track>>;
 
 /// A track containing audio clips or MIDI clips.
 ///
-/// Hot-path fields (volume, muted, monitor_enabled, record_armed) are atomic
-/// so the audio callback can read them without taking a write lock.
+/// A track lives in the published render graph (code review ARCH-02 B-3)
+/// as an `Arc<Track>`; a structural edit (routing, hardware-MIDI
+/// bindings) copy-on-writes it and publishes a new graph. The *live*
+/// state — fader, pan, mute, solo, arm, monitor, the chain-bypass fade,
+/// meters, last gains, input port, insert chain, device params — is in a
+/// `TrackRuntime` every copy shares (see the `Clone` impl), as are the
+/// three `pub` `ArcSwapOption` slots, so a setter writes through the
+/// published track without publishing, and the audio thread's meter /
+/// ramp writes to a graph being replaced are never lost.
 #[derive(Debug)]
 pub struct Track {
     pub id: TrackId,
     pub track_type: TrackType,
+    pub name: String,
+    /// Output destination. Structural (part of the graph snapshot, not a
+    /// live atomic) since B-3, so a bus removal and the re-route of the
+    /// tracks that fed it land in one published graph: a block sees
+    /// either the bus and its feeders or neither.
+    output: TrackOutput,
+    runtime: Arc<TrackRuntime>,
+    /// Hardware capture device the track records / monitors from.
+    /// Shared by every copy-on-write copy; edited in place, no publish.
+    pub input_device_name: Arc<ArcSwapOption<String>>,
+    /// When set, this track is a sub-track fed by a non-main output port
+    /// of `parent_track_id`'s instrument plugin. Sub-tracks never run
+    /// their own plugin chain or receive MIDI events — the mixer drives
+    /// them entirely from the parent plugin's `process_multi` output.
+    /// The tuple is `(parent_track_id, output_port_index)` where index 0
+    /// is reserved for the parent's own main output.
+    pub sub_track_of: Option<(TrackId, u32)>,
+    /// Hardware MIDI input device name. The engine control thread
+    /// reads this when applying `SetTrackMidiInput`; the audio callback
+    /// never touches it.
+    pub midi_input_device: Option<String>,
+    /// Channel filter for hardware MIDI input. `None` = omni.
+    pub midi_input_channel: Option<u8>,
+    /// Hardware MIDI output device name. Read on the audio thread to
+    /// decide whether timeline notes should also be ferried to the
+    /// engine thread for hardware send-out — kept in an
+    /// `ArcSwapOption<String>` (shared by every copy) so the audio
+    /// thread reads are cheap and edits never publish.
+    pub midi_output_device: Arc<ArcSwapOption<String>>,
+    /// Channel that hardware MIDI output uses. None = channel 1.
+    /// Only read on the engine control thread.
+    pub midi_output_channel: Option<u8>,
+    /// Optional frozen source buffer for this track. When set, the mixer
+    /// plays the cached audio instead of running the live synth/FX chain.
+    /// An `ArcSwapOption` shared by every copy, so the audio thread
+    /// reads it wait-free and a freeze publish needs no graph publish.
+    pub frozen_source: Arc<ArcSwapOption<FrozenSource>>,
+}
+
+/// The live, atomically-updated half of a [`Track`], shared by every
+/// copy-on-write copy of it.
+#[derive(Debug)]
+struct TrackRuntime {
     volume_bits: AtomicU32,
     pan_bits: AtomicU32,
     muted: AtomicBool,
@@ -34,17 +84,13 @@ pub struct Track {
     /// crossfades over a few milliseconds rather than switching the path
     /// on a sample boundary (see [`BypassFade`]).
     fx_bypass: BypassFade,
-    pub name: String,
     record_armed: AtomicBool,
     monitor_enabled: AtomicBool,
     /// External-instrument playback source (doc #257): `false` = `Live`
     /// (default, exactly the pre-mode behaviour), `true` = `Recorded` —
     /// recorded takes gate the MIDI-out and monitor mix over the spans they
-    /// cover. Stored as an atomic bool so both the audio callback (monitor
-    /// gate) and the engine control thread (outbound MIDI gate) read it
-    /// lock-free; accessed through the typed
-    /// [`playback_source`](Self::playback_source) /
-    /// [`set_playback_source`](Self::set_playback_source) pair.
+    /// cover. Accessed through the typed
+    /// [`Track::playback_source`] / [`Track::set_playback_source`] pair.
     playback_source_recorded: AtomicBool,
     /// True when this track is in external-instrument mode (doc #169): its
     /// "instrument" is outboard hardware reached over MIDI, so it has no
@@ -70,16 +116,6 @@ pub struct Track {
     /// gains per sample to avoid zipper noise on fader/pan/mute changes.
     last_gain_l_bits: AtomicU32,
     last_gain_r_bits: AtomicU32,
-    /// Output destination, encoded as `u64::MAX` for `Master` or a bus id.
-    /// Stored as an atomic so the audio thread can read the routing
-    /// without taking a write lock while the UI edits it.
-    output_bus_bits: AtomicU64,
-    /// Hardware capture device the track records / monitors from.
-    /// Stored in an `ArcSwapOption` so the engine thread can edit it
-    /// from a `tracks.read()` guard — write-locking the tracks map
-    /// silenced the audio callback for whatever block straddled the
-    /// edit because the mixer's own `try_read` would fail.
-    pub input_device_name: ArcSwapOption<String>,
     /// 0-indexed starting input channel on the track's input device. For
     /// mono tracks this is the single channel captured and duplicated to
     /// L/R; for stereo tracks it's the L channel and `port_index + 1` is
@@ -89,37 +125,13 @@ pub struct Track {
     /// For instrument tracks, the first plugin is the instrument; the
     /// rest are effects.
     ///
-    /// Wrapped in `ArcSwap` so the audio thread can load the chain
-    /// without ever blocking on a `tracks.write()` guard the UI is
-    /// holding to add/remove/reorder plugins. Mutations build a new
-    /// `Vec` and publish it with a single atomic store; readers see
-    /// either the pre-edit or post-edit chain, never a torn one.
-    /// Access via `plugins()` / `push_plugin()` / `retain_plugins()` /
-    /// `clear_plugins()` / `set_plugin_chain()`; the field is private
-    /// so the `&mut Vec` mutation pattern can no longer compile.
+    /// Wrapped in `ArcSwap` so the audio thread loads the chain
+    /// wait-free while the engine thread adds/removes/reorders plugins.
+    /// Mutations build a new `Vec` and publish it with a single atomic
+    /// store; readers see either the pre-edit or post-edit chain, never a
+    /// torn one. Access via `plugins()` / `push_plugin()` /
+    /// `retain_plugins()` / `clear_plugins()` / `set_plugin_chain()`.
     plugin_chain: ArcSwap<Vec<PluginInstanceId>>,
-    /// When set, this track is a sub-track fed by a non-main output port
-    /// of `parent_track_id`'s instrument plugin. Sub-tracks never run
-    /// their own plugin chain or receive MIDI events — the mixer drives
-    /// them entirely from the parent plugin's `process_multi` output.
-    /// The tuple is `(parent_track_id, output_port_index)` where index 0
-    /// is reserved for the parent's own main output.
-    pub sub_track_of: Option<(TrackId, u32)>,
-    /// Hardware MIDI input device name. The engine control thread
-    /// reads this when applying `SetTrackMidiInput`; the audio callback
-    /// never touches it.
-    pub midi_input_device: Option<String>,
-    /// Channel filter for hardware MIDI input. `None` = omni.
-    pub midi_input_channel: Option<u8>,
-    /// Hardware MIDI output device name. Read on the audio thread to
-    /// decide whether timeline notes should also be ferried to the
-    /// engine thread for hardware send-out — kept in an
-    /// `ArcSwapOption<String>` so the audio thread reads are cheap
-    /// and edits never touch a mutex.
-    pub midi_output_device: ArcSwapOption<String>,
-    /// Channel that hardware MIDI output uses. None = channel 1.
-    /// Only read on the engine control thread.
-    pub midi_output_channel: Option<u8>,
     /// Automatable device parameters of the device preset selected on this
     /// external-instrument track, keyed by [`DeviceParam::id`]. Set via
     /// `AudioCommand::SetTrackDeviceParams` when a preset is selected
@@ -128,16 +140,35 @@ pub struct Track {
     /// E3) to find the bound CC/NRPN + value range, so the engine never
     /// reaches back across the command/event boundary for a definition.
     ///
-    /// Wrapped in `ArcSwap` like [`plugin_chain`](Self::plugin_chain) so
-    /// the audio thread reads the map lock-free while the control thread
-    /// swaps in a fresh one — readers see either the pre- or post-edit
-    /// map, never a torn one. Empty when no device is selected.
+    /// Wrapped in `ArcSwap` like `plugin_chain` so the audio thread reads
+    /// the map lock-free while the control thread swaps in a fresh one —
+    /// readers see either the pre- or post-edit map, never a torn one.
+    /// Empty when no device is selected.
     device_params: ArcSwap<HashMap<String, DeviceParam>>,
-    /// Optional frozen source buffer for this track. When set, the mixer
-    /// plays the cached audio instead of running the live synth/FX chain.
-    /// Wrapped in `ArcSwapOption` so the audio thread can read without
-    /// blocking on the engine control thread's edits.
-    pub frozen_source: ArcSwapOption<FrozenSource>,
+}
+
+/// A copy of the track's structure (id, type, name, routing, MIDI
+/// bindings) that shares the original's live state — the copy-on-write
+/// step of a render-graph edit (`Arc::make_mut`). Not an independent
+/// track: a fader move, a meter write, a plugin-chain or frozen-cache
+/// publish on either is seen by both.
+impl Clone for Track {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            track_type: self.track_type,
+            name: self.name.clone(),
+            output: self.output,
+            runtime: Arc::clone(&self.runtime),
+            input_device_name: Arc::clone(&self.input_device_name),
+            sub_track_of: self.sub_track_of,
+            midi_input_device: self.midi_input_device.clone(),
+            midi_input_channel: self.midi_input_channel,
+            midi_output_device: Arc::clone(&self.midi_output_device),
+            midi_output_channel: self.midi_output_channel,
+            frozen_source: Arc::clone(&self.frozen_source),
+        }
+    }
 }
 
 impl Track {
@@ -149,42 +180,44 @@ impl Track {
         Self {
             id,
             track_type,
-            volume_bits: AtomicU32::new(1.0f32.to_bits()),
-            pan_bits: AtomicU32::new(0.0f32.to_bits()),
-            muted: AtomicBool::new(false),
-            soloed: AtomicBool::new(false),
-            fx_bypass: BypassFade::new(),
             name,
-            record_armed: AtomicBool::new(false),
-            monitor_enabled: AtomicBool::new(false),
-            playback_source_recorded: AtomicBool::new(false),
-            external: AtomicBool::new(false),
-            mono: AtomicBool::new(true),
-            peak_l_bits: AtomicU32::new(0),
-            peak_r_bits: AtomicU32::new(0),
-            last_gain_l_bits: AtomicU32::new(0),
-            last_gain_r_bits: AtomicU32::new(0),
-            output_bus_bits: AtomicU64::new(TRACK_OUTPUT_MASTER),
-            input_device_name: ArcSwapOption::const_empty(),
-            input_port_bits: AtomicU32::new(0),
-            plugin_chain: ArcSwap::from_pointee(Vec::new()),
+            output: TrackOutput::Master,
+            runtime: Arc::new(TrackRuntime {
+                volume_bits: AtomicU32::new(1.0f32.to_bits()),
+                pan_bits: AtomicU32::new(0.0f32.to_bits()),
+                muted: AtomicBool::new(false),
+                soloed: AtomicBool::new(false),
+                fx_bypass: BypassFade::new(),
+                record_armed: AtomicBool::new(false),
+                monitor_enabled: AtomicBool::new(false),
+                playback_source_recorded: AtomicBool::new(false),
+                external: AtomicBool::new(false),
+                mono: AtomicBool::new(true),
+                peak_l_bits: AtomicU32::new(0),
+                peak_r_bits: AtomicU32::new(0),
+                last_gain_l_bits: AtomicU32::new(0),
+                last_gain_r_bits: AtomicU32::new(0),
+                input_port_bits: AtomicU32::new(0),
+                plugin_chain: ArcSwap::from_pointee(Vec::new()),
+                device_params: ArcSwap::from_pointee(HashMap::new()),
+            }),
+            input_device_name: Arc::new(ArcSwapOption::const_empty()),
             sub_track_of: None,
             midi_input_device: None,
             midi_input_channel: None,
-            midi_output_device: ArcSwapOption::const_empty(),
+            midi_output_device: Arc::new(ArcSwapOption::const_empty()),
             midi_output_channel: None,
-            device_params: ArcSwap::from_pointee(HashMap::new()),
-            frozen_source: ArcSwapOption::const_empty(),
+            frozen_source: Arc::new(ArcSwapOption::const_empty()),
         }
     }
 
     /// The track's 0-indexed starting input channel.
     pub fn input_port(&self) -> u16 {
-        (self.input_port_bits.load(Ordering::Relaxed) & 0xFFFF) as u16
+        (self.runtime.input_port_bits.load(Ordering::Relaxed) & 0xFFFF) as u16
     }
 
     pub fn set_input_port(&self, port: u16) {
-        self.input_port_bits.store(port as u32, Ordering::Relaxed);
+        self.runtime.input_port_bits.store(port as u32, Ordering::Relaxed);
     }
 
     /// Construct a sub-track feeding from `parent_track_id`'s output port
@@ -203,88 +236,84 @@ impl Track {
     }
 
     pub fn output(&self) -> TrackOutput {
-        match self.output_bus_bits.load(Ordering::Relaxed) {
-            TRACK_OUTPUT_MASTER => TrackOutput::Master,
-            bus_id => TrackOutput::Bus(bus_id),
-        }
+        self.output
     }
 
-    pub fn set_output(&self, output: TrackOutput) {
-        let encoded = match output {
-            TrackOutput::Master => TRACK_OUTPUT_MASTER,
-            TrackOutput::Bus(id) => id,
-        };
-        self.output_bus_bits.store(encoded, Ordering::Relaxed);
+    /// Re-route the track. Structural: on a published track this runs
+    /// inside a render-graph edit (`SharedState::edit_track`), so the
+    /// callback sees the new route from the next graph it loads.
+    pub fn set_output(&mut self, output: TrackOutput) {
+        self.output = output;
     }
 
     pub fn volume(&self) -> f32 {
-        f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+        f32::from_bits(self.runtime.volume_bits.load(Ordering::Relaxed))
     }
 
     pub fn set_volume(&self, v: f32) {
-        self.volume_bits.store(v.to_bits(), Ordering::Relaxed);
+        self.runtime.volume_bits.store(v.to_bits(), Ordering::Relaxed);
     }
 
     pub fn pan(&self) -> f32 {
-        f32::from_bits(self.pan_bits.load(Ordering::Relaxed))
+        f32::from_bits(self.runtime.pan_bits.load(Ordering::Relaxed))
     }
 
     pub fn set_pan(&self, v: f32) {
-        self.pan_bits.store(v.to_bits(), Ordering::Relaxed);
+        self.runtime.pan_bits.store(v.to_bits(), Ordering::Relaxed);
     }
 
     pub fn muted(&self) -> bool {
-        self.muted.load(Ordering::Relaxed)
+        self.runtime.muted.load(Ordering::Relaxed)
     }
 
     pub fn set_muted(&self, v: bool) {
-        self.muted.store(v, Ordering::Relaxed);
+        self.runtime.muted.store(v, Ordering::Relaxed);
     }
 
     pub fn soloed(&self) -> bool {
-        self.soloed.load(Ordering::Relaxed)
+        self.runtime.soloed.load(Ordering::Relaxed)
     }
 
     pub fn set_soloed(&self, v: bool) {
-        self.soloed.store(v, Ordering::Relaxed);
+        self.runtime.soloed.store(v, Ordering::Relaxed);
     }
 
     pub fn fx_bypassed(&self) -> bool {
-        self.fx_bypass.bypassed()
+        self.runtime.fx_bypass.bypassed()
     }
 
     /// Ask for the chain to be bypassed (or re-engaged). The mixer
     /// crossfades to the new state over [`crate::bypass::BYPASS_FADE_MS`];
     /// nothing switches on this call.
     pub fn set_fx_bypassed(&self, v: bool) {
-        self.fx_bypass.set_bypassed(v);
+        self.runtime.fx_bypass.set_bypassed(v);
     }
 
     /// The chain-level bypass crossfade, for the render path.
     pub fn fx_bypass(&self) -> &BypassFade {
-        &self.fx_bypass
+        &self.runtime.fx_bypass
     }
 
     pub fn record_armed(&self) -> bool {
-        self.record_armed.load(Ordering::Relaxed)
+        self.runtime.record_armed.load(Ordering::Relaxed)
     }
 
     pub fn set_record_armed(&self, v: bool) {
-        self.record_armed.store(v, Ordering::Relaxed);
+        self.runtime.record_armed.store(v, Ordering::Relaxed);
     }
 
     pub fn monitor_enabled(&self) -> bool {
-        self.monitor_enabled.load(Ordering::Relaxed)
+        self.runtime.monitor_enabled.load(Ordering::Relaxed)
     }
 
     pub fn set_monitor_enabled(&self, v: bool) {
-        self.monitor_enabled.store(v, Ordering::Relaxed);
+        self.runtime.monitor_enabled.store(v, Ordering::Relaxed);
     }
 
     /// External-instrument playback source (doc #257). `Live` is the
     /// default and means exactly the pre-mode behaviour.
     pub fn playback_source(&self) -> PlaybackSource {
-        if self.playback_source_recorded.load(Ordering::Relaxed) {
+        if self.runtime.playback_source_recorded.load(Ordering::Relaxed) {
             PlaybackSource::Recorded
         } else {
             PlaybackSource::Live
@@ -292,7 +321,7 @@ impl Track {
     }
 
     pub fn set_playback_source(&self, source: PlaybackSource) {
-        self.playback_source_recorded
+        self.runtime.playback_source_recorded
             .store(source == PlaybackSource::Recorded, Ordering::Relaxed);
     }
 
@@ -301,11 +330,11 @@ impl Track {
     /// branch: an external track renders like an audio track even though
     /// its type is `Instrument`.
     pub fn is_external(&self) -> bool {
-        self.external.load(Ordering::Relaxed)
+        self.runtime.external.load(Ordering::Relaxed)
     }
 
     pub fn set_external(&self, v: bool) {
-        self.external.store(v, Ordering::Relaxed);
+        self.runtime.external.store(v, Ordering::Relaxed);
     }
 
     /// True when this track's sound is generated in-process by an
@@ -333,11 +362,11 @@ impl Track {
     }
 
     pub fn mono(&self) -> bool {
-        self.mono.load(Ordering::Relaxed)
+        self.runtime.mono.load(Ordering::Relaxed)
     }
 
     pub fn set_mono(&self, v: bool) {
-        self.mono.store(v, Ordering::Relaxed);
+        self.runtime.mono.store(v, Ordering::Relaxed);
     }
 
     /// Borrow the current plugin chain. The returned [`Guard`] derefs to
@@ -346,7 +375,7 @@ impl Track {
     /// the chain via a single atomic load, so a concurrent mutation
     /// just publishes a new chain that future loads will see.
     pub fn plugins(&self) -> Guard<Arc<Vec<PluginInstanceId>>> {
-        self.plugin_chain.load()
+        self.runtime.plugin_chain.load()
     }
 
     /// Cheap `Arc` clone of the current plugin chain. Useful when the
@@ -354,7 +383,7 @@ impl Track {
     /// engine-thread "collect plugin ids before draining" pattern) and
     /// outlive any borrow of `&self`.
     pub fn plugin_chain_snapshot(&self) -> Arc<Vec<PluginInstanceId>> {
-        self.plugin_chain.load_full()
+        self.runtime.plugin_chain.load_full()
     }
 
     /// Append `id` to the chain. Copy-on-write: clones the current
@@ -366,11 +395,11 @@ impl Track {
     /// the old chain is never its last owner (code review MIX-04); a
     /// caller with no such concern can simply drop it.
     pub fn push_plugin(&self, id: PluginInstanceId) -> Arc<Vec<PluginInstanceId>> {
-        let current = self.plugin_chain.load_full();
+        let current = self.runtime.plugin_chain.load_full();
         let mut next = (*current).clone();
         next.push(id);
         drop(current);
-        self.plugin_chain.swap(Arc::new(next))
+        self.runtime.plugin_chain.swap(Arc::new(next))
     }
 
     /// Drop every plugin id where `pred` returns false. Copy-on-write
@@ -380,11 +409,11 @@ impl Track {
         &self,
         mut pred: impl FnMut(&PluginInstanceId) -> bool,
     ) -> Arc<Vec<PluginInstanceId>> {
-        let current = self.plugin_chain.load_full();
+        let current = self.runtime.plugin_chain.load_full();
         let mut next = (*current).clone();
         next.retain(|id| pred(id));
         drop(current);
-        self.plugin_chain.swap(Arc::new(next))
+        self.runtime.plugin_chain.swap(Arc::new(next))
     }
 
     /// Move `instance_id` to `to_index`, shifting the plugins between its
@@ -413,7 +442,7 @@ impl Track {
         to_index: usize,
         retire: impl FnOnce(Arc<Vec<PluginInstanceId>>),
     ) -> Option<usize> {
-        let current = self.plugin_chain.load_full();
+        let current = self.runtime.plugin_chain.load_full();
         let from = current.iter().position(|&id| id == instance_id)?;
         // `from` was found, so the chain is non-empty and this cannot wrap.
         let to = to_index.min(current.len() - 1);
@@ -424,7 +453,7 @@ impl Track {
         let id = next.remove(from);
         next.insert(to, id);
         drop(current);
-        retire(self.plugin_chain.swap(Arc::new(next)));
+        retire(self.runtime.plugin_chain.swap(Arc::new(next)));
         Some(to)
     }
 
@@ -433,7 +462,7 @@ impl Track {
     /// chain before re-instantiating the saved instances. Returns the
     /// replaced chain like [`push_plugin`](Self::push_plugin).
     pub fn set_plugin_chain(&self, ids: Vec<PluginInstanceId>) -> Arc<Vec<PluginInstanceId>> {
-        self.plugin_chain.swap(Arc::new(ids))
+        self.runtime.plugin_chain.swap(Arc::new(ids))
     }
 
     /// Empty the chain. Convenience wrapper over
@@ -449,14 +478,14 @@ impl Track {
     /// the `ArcSwap` snapshot is a single atomic load, so holding the
     /// guard never blocks a concurrent [`set_device_params`](Self::set_device_params).
     pub fn device_params(&self) -> Guard<Arc<HashMap<String, DeviceParam>>> {
-        self.device_params.load()
+        self.runtime.device_params.load()
     }
 
     /// Look up one device param by id. Cheap clone of the stored
     /// [`DeviceParam`] (or `None`), so the caller can drop the map guard
     /// before using it — handy on the render path.
     pub fn device_param(&self, param_id: &str) -> Option<DeviceParam> {
-        self.device_params.load().get(param_id).cloned()
+        self.runtime.device_params.load().get(param_id).cloned()
     }
 
     /// Replace the whole device-parameter map with `params`, keying each
@@ -474,7 +503,7 @@ impl Track {
             }
             map.insert(p.id.clone(), p);
         }
-        self.device_params.store(Arc::new(map));
+        self.runtime.device_params.store(Arc::new(map));
         order
     }
 
@@ -488,38 +517,38 @@ impl Track {
     /// reader observes a coherent peak value rather than racing against
     /// concurrent block updates from the audio callback.
     pub fn update_peak_l(&self, v: f32) {
-        self.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
+        self.runtime.peak_l_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// Atomically update peak R to the max of the current and new value.
     /// See [`update_peak_l`](Self::update_peak_l) for the non-negative invariant.
     pub fn update_peak_r(&self, v: f32) {
-        self.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
+        self.runtime.peak_r_bits.fetch_max(v.to_bits(), Ordering::AcqRel);
     }
 
     /// Read and clear peak L, returning the peak since last call.
     pub fn swap_peak_l(&self) -> f32 {
-        f32::from_bits(self.peak_l_bits.swap(0, Ordering::AcqRel))
+        f32::from_bits(self.runtime.peak_l_bits.swap(0, Ordering::AcqRel))
     }
 
     /// Read and clear peak R, returning the peak since last call.
     pub fn swap_peak_r(&self) -> f32 {
-        f32::from_bits(self.peak_r_bits.swap(0, Ordering::AcqRel))
+        f32::from_bits(self.runtime.peak_r_bits.swap(0, Ordering::AcqRel))
     }
 
     /// Effective stereo gains at the end of the previous audio block.
     pub fn last_gains(&self) -> (f32, f32) {
         (
-            f32::from_bits(self.last_gain_l_bits.load(Ordering::Relaxed)),
-            f32::from_bits(self.last_gain_r_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.runtime.last_gain_l_bits.load(Ordering::Relaxed)),
+            f32::from_bits(self.runtime.last_gain_r_bits.load(Ordering::Relaxed)),
         )
     }
 
     /// Record the effective stereo gains this block ended on. Audio
     /// thread only.
     pub fn set_last_gains(&self, l: f32, r: f32) {
-        self.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
-        self.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
+        self.runtime.last_gain_l_bits.store(l.to_bits(), Ordering::Relaxed);
+        self.runtime.last_gain_r_bits.store(r.to_bits(), Ordering::Relaxed);
     }
 }
 

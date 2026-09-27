@@ -231,7 +231,6 @@ pub fn multi_out_instrument(levels: [f32; PORTS]) -> PluginSlot {
 
 pub struct EngineState {
     pub shared: Arc<SharedState>,
-    pub tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     pub clips: Arc<RwLock<Vec<AudioClip>>>,
     pub plugins: Arc<RwLock<PluginMap>>,
     pub tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -251,7 +250,6 @@ impl EngineState {
     pub fn with_port_levels(levels: [f32; PORTS]) -> Self {
         let state = Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -261,20 +259,20 @@ impl EngineState {
             .write()
             .insert(INSTRUMENT_ID, multi_out_instrument(levels));
 
-        let parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
+        let mut parent = Track::with_type(PARENT, "Kit".into(), TrackType::Instrument);
         parent.set_output(TrackOutput::Master);
         parent.push_plugin(INSTRUMENT_ID);
-        state.tracks.write().insert(PARENT, parent);
+        state.shared.edit_tracks(|m| { m.insert(PARENT, std::sync::Arc::new(parent)); });
         for (id, port) in [(TAP_A, 1u32), (TAP_B, 2)] {
-            let sub = Track::new_sub_track(id, format!("Tap {port}"), PARENT, port);
+            let mut sub = Track::new_sub_track(id, format!("Tap {port}"), PARENT, port);
             sub.set_output(TrackOutput::Master);
-            state.tracks.write().insert(id, sub);
+            state.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(sub)); });
         }
         state
     }
 
     pub fn set_output(&self, id: TrackId, output: TrackOutput) {
-        self.tracks.read().get(&id).unwrap().set_output(output);
+        self.shared.edit_track(id, |t| t.set_output(output));
     }
 
     /// Attach a freeze cache to `id`, as `SetTrackFrozenSource` does
@@ -297,8 +295,8 @@ impl EngineState {
             FreezeCacheStatus::Frozen,
         );
         let source = FrozenSource::new(cache_ref, samples, SR, frames as u64);
-        self.tracks
-            .read()
+        self.shared
+            .tracks()
             .get(&id)
             .unwrap()
             .frozen_source
@@ -307,7 +305,7 @@ impl EngineState {
 
     /// Drop `id`'s freeze cache, as an unfreeze does.
     pub fn unfreeze(&self, id: TrackId) {
-        self.tracks.read().get(&id).unwrap().frozen_source.store(None);
+        self.shared.tracks().get(&id).unwrap().frozen_source.store(None);
     }
 
     /// Add a SECOND multi-output instrument with one tap, so a test can
@@ -317,13 +315,13 @@ impl EngineState {
         self.plugins
             .write()
             .insert(id, multi_out_instrument(PORT_LEVELS));
-        let track = Track::with_type(parent, "Other Kit".into(), TrackType::Instrument);
+        let mut track = Track::with_type(parent, "Other Kit".into(), TrackType::Instrument);
         track.set_output(TrackOutput::Master);
         track.push_plugin(id);
-        self.tracks.write().insert(parent, track);
-        let sub = Track::new_sub_track(tap, "Other Tap 1".into(), parent, 1);
+        self.shared.edit_tracks(|m| { m.insert(parent, std::sync::Arc::new(track)); });
+        let mut sub = Track::new_sub_track(tap, "Other Tap 1".into(), parent, 1);
         sub.set_output(TrackOutput::Master);
-        self.tracks.write().insert(tap, sub);
+        self.shared.edit_tracks(|m| { m.insert(tap, std::sync::Arc::new(sub)); });
     }
 
     pub fn add_bus(&self, id: BusId, name: &str) {
@@ -342,7 +340,6 @@ impl EngineState {
             0,
             FRAMES,
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,

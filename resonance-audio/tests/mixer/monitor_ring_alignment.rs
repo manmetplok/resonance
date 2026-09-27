@@ -224,7 +224,7 @@ const MIX09_BLOCK: usize = 64;
 /// channel `c` carries `c + 1` — so a whole-frame read hands the track
 /// exactly 1.0 and a torn one hands it something else.
 fn wide_input_harness(in_ch: usize) -> MixAudioHarness {
-    let t = Track::new(1, "mon".into());
+    let mut t = Track::new(1, "mon".into());
     t.set_output(TrackOutput::Master);
     t.set_monitor_enabled(true);
     t.set_mono(true);

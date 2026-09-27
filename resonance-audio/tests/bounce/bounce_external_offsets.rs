@@ -25,7 +25,6 @@ const SR: u32 = 48_000;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -35,7 +34,6 @@ impl EngineState {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -77,7 +75,6 @@ impl EngineState {
             0,
             frames,
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -100,9 +97,9 @@ fn nonzero_frames(data: &[f32]) -> Vec<usize> {
 fn offline_render_folds_external_offset_like_live_playback() {
     const OFFSET: i64 = 40;
     let state = EngineState::new();
-    let t = Track::new(1, "ext".into());
+    let mut t = Track::new(1, "ext".into());
     t.set_output(TrackOutput::Master);
-    state.tracks.write().insert(1, t);
+    state.shared.edit_tracks(|m| { m.insert(1, std::sync::Arc::new(t)); });
     // Recorded external take: the true event was at frame 60, captured
     // one round trip (40 smp) late — content sits at frame 100.
     state.add_impulse_clip(10, 1, 0, 256, 100);
@@ -137,9 +134,9 @@ fn offline_offset_delays_sibling_tracks_to_match() {
     const OFFSET: i64 = 40;
     let state = EngineState::new();
     for id in [1u64, 2] {
-        let t = Track::new(id, format!("t{id}"));
+        let mut t = Track::new(id, format!("t{id}"));
         t.set_output(TrackOutput::Master);
-        state.tracks.write().insert(id, t);
+        state.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(t)); });
     }
     state.add_impulse_clip(10, 1, 0, 256, 100);
     state.add_impulse_clip(11, 2, 0, 256, 60);

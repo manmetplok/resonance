@@ -26,7 +26,7 @@ const INSTRUMENT: PluginInstanceId = 300;
 /// One instrument track, transport stopped, no input device and no
 /// monitoring — the piano-roll / controller preview situation.
 fn stopped_harness() -> (MixAudioHarness, Recorder) {
-    let track = Track::with_type(TRACK, "Synth".into(), TrackType::Instrument);
+    let mut track = Track::with_type(TRACK, "Synth".into(), TrackType::Instrument);
     track.set_output(TrackOutput::Master);
     track.push_plugin(INSTRUMENT);
     let h = MixAudioHarness::new(

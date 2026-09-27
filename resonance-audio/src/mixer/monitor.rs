@@ -16,7 +16,6 @@
 //!   master so the performer can hear themselves; the playing-back
 //!   timeline path mixes monitor input inside `render_core` instead.
 
-use indexmap::IndexMap;
 
 use crate::bypass::{run_faded, FadeStage, FxDryScratch};
 use crate::clap_host::PluginMap;
@@ -269,7 +268,7 @@ fn run_track_chain(
 pub(super) fn mix_monitor_passthrough(
     data: &mut [f32],
     channels: usize,
-    tracks_guard: &IndexMap<TrackId, Track>,
+    tracks_guard: &TrackMap,
     plugins_guard: &PluginMap,
     monitor_temp: &[f32],
     monitor_frames: usize,
@@ -280,11 +279,11 @@ pub(super) fn mix_monitor_passthrough(
     transport_snap: Option<TransportSnap>,
     sample_rate: u32,
 ) -> bool {
-    let any_solo = any_top_level_solo(tracks_guard.values());
+    let any_solo = any_top_level_solo(tracks_guard.values().map(|t| &**t));
     let is_audible =
         |t: &&Track| -> bool { t.monitor_enabled() && !t.muted() && (!any_solo || t.soloed()) };
     let mut mixed_any = false;
-    for track in tracks_guard.values().filter(|t| is_audible(t)) {
+    for track in tracks_guard.values().map(|t| &**t).filter(|t| is_audible(t)) {
         mixed_any = true;
         let processed_frames = process_monitor_track(
             track,
@@ -341,7 +340,7 @@ pub(super) fn mix_idle_instruments(
     data: &mut [f32],
     channels: usize,
     frames: usize,
-    tracks_guard: &IndexMap<TrackId, Track>,
+    tracks_guard: &TrackMap,
     plugins_guard: &PluginMap,
     midi_stash: &mut MidiStash,
     track_buf_l: &mut [f32],
@@ -351,7 +350,7 @@ pub(super) fn mix_idle_instruments(
     sample_rate: u32,
     monitored: bool,
 ) -> bool {
-    let any_solo = any_top_level_solo(tracks_guard.values());
+    let any_solo = any_top_level_solo(tracks_guard.values().map(|t| &**t));
     let frames = frames.min(track_buf_l.len()).min(track_buf_r.len());
     let mut mixed_any = false;
     for track in tracks_guard.values() {

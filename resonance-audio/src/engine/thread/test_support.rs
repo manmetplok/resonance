@@ -39,7 +39,6 @@ use super::{engine_thread, EngineThreadParams, HandlerCtx, HandlerState};
 /// rebuilt per call in [`Self::with_ctx`] instead.
 pub struct EngineHandlerHarness {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -51,9 +50,10 @@ pub struct EngineHandlerHarness {
     /// handler emitted ([`EngineHandlerHarness::drain_events`]).
     event_rx: Receiver<AudioEvent>,
     cmd_tx_retry: Sender<AudioCommand>,
-    /// Held only so `cmd_tx_retry` never reports disconnected; nothing
-    /// drains it.
-    _cmd_rx_retry: Receiver<AudioCommand>,
+    /// Keeps `cmd_tx_retry` connected, and lets a test read what a
+    /// worker posted back to the engine
+    /// ([`EngineHandlerHarness::take_retry_commands`]).
+    cmd_rx_retry: Receiver<AudioCommand>,
     state: HandlerState,
     /// Test-only convenience counter for [`Self::import_audio_to_pool`]'s
     /// `Vec<String>` shorthand (D-7a moved asset-id allocation to the app,
@@ -80,7 +80,7 @@ impl EngineHandlerHarness {
     /// one that actually runs the real thread's startup.
     pub fn new() -> Self {
         let (event_tx, event_rx) = crossbeam_channel::unbounded::<AudioEvent>();
-        let (cmd_tx_retry, _cmd_rx_retry) = crossbeam_channel::unbounded::<AudioCommand>();
+        let (cmd_tx_retry, cmd_rx_retry) = crossbeam_channel::unbounded::<AudioCommand>();
         let (live_midi_tx, _) = crossbeam_channel::unbounded();
         let (live_control_tx, _) = crossbeam_channel::unbounded();
         let (clock_tx, _) = crossbeam_channel::unbounded();
@@ -91,7 +91,6 @@ impl EngineHandlerHarness {
 
         Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -105,7 +104,7 @@ impl EngineHandlerHarness {
             event_tx,
             event_rx,
             cmd_tx_retry,
-            _cmd_rx_retry,
+            cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
             next_test_asset_id: 1,
         }
@@ -144,7 +143,6 @@ impl EngineHandlerHarness {
             cmd_tx_retry,
             event_tx,
             shared: Arc::new(SharedState::default()),
-            tracks_arc: Arc::new(RwLock::new(IndexMap::new())),
             clips_arc: Arc::new(RwLock::new(Vec::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
             plugins_arc: Arc::new(RwLock::new(IndexMap::new())),
@@ -182,7 +180,6 @@ impl EngineHandlerHarness {
     fn with_ctx<R>(&mut self, f: impl FnOnce(&HandlerCtx, &mut HandlerState) -> R) -> R {
         let ctx = HandlerCtx {
             shared: &self.shared,
-            tracks: &self.tracks,
             clips: &self.clips,
             plugins: &self.plugins,
             tempo_map: &self.tempo_map,
@@ -321,9 +318,76 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| tracks::settle_frozen_conversions(ctx, state, wait));
     }
 
-    /// Insert `track` into the live track table, as `AddTrack` would.
+    /// Insert `track` into the live track table (published in the render
+    /// graph), as `AddTrack` would.
     pub fn push_track(&mut self, track: Track) {
-        self.tracks.write().insert(track.id, track);
+        self.shared.edit_tracks(|tracks| tracks.insert(track.id, Arc::new(track)));
+    }
+
+    /// Every command a worker posted back on the engine's retry channel
+    /// since the last call (e.g. the offline bounce-in-place's
+    /// `BounceTargetCancelled`), in order. Feed them to
+    /// [`Self::dispatch`] to run them as the engine loop would.
+    pub fn take_retry_commands(&self) -> Vec<AudioCommand> {
+        self.cmd_rx_retry.try_iter().collect()
+    }
+
+    /// Run the real `AudioCommand::BounceTrackToAudio` spawn path: the
+    /// offline bounce-in-place on its worker thread. Returns the render's
+    /// cancel token (what `CancelBounce` flips).
+    pub fn bounce_track_to_audio(
+        &mut self,
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+        target_clip_id: ClipId,
+    ) -> Arc<std::sync::atomic::AtomicBool> {
+        self.with_ctx(|ctx, _| {
+            crate::engine::bounce::to_audio_clip_spawn(
+                source_track_id,
+                target_track_id,
+                target_clip_id,
+                "bounce".into(),
+                Arc::clone(ctx.shared),
+                Arc::clone(ctx.clips),
+                Arc::clone(ctx.plugins),
+                Arc::clone(ctx.tempo_map),
+                ctx.automation.load_full(),
+                ctx.sample_rate,
+                ctx.event_tx.clone(),
+                ctx.cmd_tx_retry.clone(),
+            )
+        })
+    }
+
+    /// Arm a realtime bounce of `source_track_id` into `target_track_id`
+    /// as `BounceTrackRealtimeToAudio` would once its recording stream is
+    /// open, with its cancel token already flipped, and run the engine
+    /// loop's `poll_pending_bounce` hook once — the realtime path's cancel
+    /// teardown, without an input device.
+    pub fn cancel_pending_realtime_bounce(
+        &mut self,
+        source_track_id: TrackId,
+        target_track_id: TrackId,
+    ) {
+        let mute_snapshot = self
+            .shared
+            .tracks()
+            .values()
+            .map(|t| (t.id, t.muted()))
+            .collect();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.state.bounce_cancel = Some(Arc::clone(&cancel));
+        self.state.pending_bounce = Some(crate::engine::bounce_realtime::PendingBounce {
+            source_track_id,
+            target_track_id,
+            start_at: 0,
+            stop_at: 48_000,
+            mute_snapshot,
+            prev_target_input_device: None,
+            last_emitted_pct: 0,
+            cancel,
+        });
+        self.with_ctx(crate::engine::bounce_realtime::poll_pending_bounce);
     }
 
     /// Run the real `MovePluginInMaster` handler (ARCH-05/C-1's
@@ -347,13 +411,13 @@ impl EngineHandlerHarness {
     /// The live track ids, in insertion order. Used to confirm a refused
     /// duplicate-id `AddTrack` left the registry exactly as it was.
     pub fn test_track_ids(&self) -> Vec<TrackId> {
-        self.tracks.read().keys().copied().collect()
+        self.shared.tracks().keys().copied().collect()
     }
 
     /// A live track's name, if it exists. Used to confirm a refused
     /// duplicate-id `AddTrack` did not rename the track it collided with.
     pub fn test_track_name(&self, id: TrackId) -> Option<String> {
-        self.tracks.read().get(&id).map(|t| t.name.clone())
+        self.shared.tracks().get(&id).map(|t| t.name.clone())
     }
 
     /// Run the real `AddBus` handler (ARCH-05/C-1's `EngineError::busy`
@@ -450,6 +514,18 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, _state| master::handle_remove_plugin_from_master(ctx, instance_id));
     }
 
+    /// Run the real `AudioCommand::SetTrackOutput` handler.
+    pub fn set_track_output(&mut self, track_id: TrackId, output: TrackOutput) {
+        self.with_ctx(|ctx, _state| busses::handle_set_track_output(ctx, track_id, output));
+    }
+
+    /// Run the real `AudioCommand::CreateSubTrack` handler.
+    pub fn create_sub_track(&mut self, sub_id: TrackId, parent_track_id: TrackId, port: u32) {
+        self.with_ctx(|ctx, _state| {
+            tracks::handle_create_sub_track(ctx, sub_id, parent_track_id, port, format!("sub {sub_id}"))
+        });
+    }
+
     /// Run the real `AudioCommand::SetBusVolume` handler.
     pub fn set_bus_volume(&mut self, id: BusId, volume: f32) {
         self.with_ctx(|ctx, _state| busses::handle_set_bus_volume(ctx, id, volume));
@@ -497,8 +573,8 @@ impl EngineHandlerHarness {
     /// has appended. Used to confirm a refused duplicate-id add left the
     /// chain exactly as it was.
     pub fn track_plugin_ids(&self, track_id: TrackId) -> Vec<PluginInstanceId> {
-        self.tracks
-            .read()
+        self.shared
+            .tracks()
             .get(&track_id)
             .map(|t| t.plugins().as_ref().clone())
             .unwrap_or_default()
@@ -513,7 +589,7 @@ impl EngineHandlerHarness {
 
     /// The frozen source the callback would read for `track_id`.
     pub fn frozen_source(&self, track_id: TrackId) -> Option<Arc<FrozenSource>> {
-        self.tracks.read().get(&track_id)?.frozen_source.load_full()
+        self.shared.tracks().get(&track_id)?.frozen_source.load_full()
     }
 
     /// Replay one command from a captured project-load command stream
@@ -1013,7 +1089,6 @@ impl EngineHandlerHarness {
                 None,
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
-                Arc::clone(ctx.tracks),
                 Arc::clone(ctx.clips),
                 Arc::clone(ctx.plugins),
                 Arc::clone(ctx.tempo_map),

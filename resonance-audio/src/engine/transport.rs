@@ -194,7 +194,7 @@ pub(crate) fn begin_recording_stream(
         captures_audio: bool,
     }
     let armed_tracks: Vec<ArmedInfo> = {
-        let tracks_guard = ctx.tracks.read();
+        let tracks_guard = ctx.tracks();
         tracks_guard
             .values()
             .filter(|t| t.record_armed())
@@ -448,7 +448,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
 /// all-notes-off, parked in its MIDI stash on contention rather than
 /// lost (code review MIX-06).
 fn panic_all_instrument_plugins(ctx: &HandlerCtx) {
-    let tracks_guard = ctx.tracks.read();
+    let tracks_guard = ctx.tracks();
     let plugins_guard = ctx.plugins.read();
     let mut silent_l = [0.0f32; 64];
     let mut silent_r = [0.0f32; 64];

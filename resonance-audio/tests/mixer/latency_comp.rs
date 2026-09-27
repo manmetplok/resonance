@@ -62,26 +62,26 @@ fn chain_latencies_sum_track_and_parent_instrument_bus_stage_separate() {
     // Plugin latencies: 1 → 100, 2 → 50, 3 → 7, 4 → 30.
     let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (3, 7), (4, 30)].into();
 
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let mut tracks: IndexMap<TrackId, std::sync::Arc<Track>> = IndexMap::new();
     // Track 10: two FX, routed to master → 150.
     let t10 = Track::new(10, "fx".into());
     t10.push_plugin(1);
     t10.push_plugin(2);
-    tracks.insert(10, t10);
+    tracks.insert(10, std::sync::Arc::new(t10));
     // Track 11: no FX, routed to bus 5 (which carries plugin 3). The
     // bus chain is *not* part of the track stage — it shows up in
     // `bus_chain_latencies` and is equalized by the bus-stage delays.
-    let t11 = Track::new(11, "to bus".into());
+    let mut t11 = Track::new(11, "to bus".into());
     t11.set_output(TrackOutput::Bus(5));
-    tracks.insert(11, t11);
+    tracks.insert(11, std::sync::Arc::new(t11));
     // Track 12: instrument (plugin 4) → 30.
     let t12 = Track::new(12, "parent".into());
     t12.push_plugin(4);
-    tracks.insert(12, t12);
+    tracks.insert(12, std::sync::Arc::new(t12));
     // Track 13: sub-track of 12 port 1, own FX plugin 2 → 30 + 50 = 80.
     let t13 = Track::new_sub_track(13, "sub".into(), 12, 1);
     t13.push_plugin(2);
-    tracks.insert(13, t13);
+    tracks.insert(13, std::sync::Arc::new(t13));
 
     let mut busses: IndexMap<BusId, Bus> = IndexMap::new();
     let mut bus = Bus::new(5, "bus".into());
@@ -105,12 +105,12 @@ fn chain_latencies_sum_track_and_parent_instrument_bus_stage_separate() {
 fn frozen_track_excludes_own_chain_but_keeps_downstream_bus() {
     // Instrument 100 + FX 50 on the track, plugin 7 on its output bus.
     let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (3, 7)].into();
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
-    let t = Track::with_type(10, "inst".into(), TrackType::Instrument);
+    let mut tracks: IndexMap<TrackId, std::sync::Arc<Track>> = IndexMap::new();
+    let mut t = Track::with_type(10, "inst".into(), TrackType::Instrument);
     t.push_plugin(1);
     t.push_plugin(2);
     t.set_output(TrackOutput::Bus(5));
-    tracks.insert(10, t);
+    tracks.insert(10, std::sync::Arc::new(t));
     let mut busses: IndexMap<BusId, Bus> = IndexMap::new();
     let mut bus = Bus::new(5, "bus".into());
     bus.plugin_ids.push(3);
@@ -136,20 +136,20 @@ fn frozen_track_excludes_own_chain_but_keeps_downstream_bus() {
 #[test]
 fn fx_bypass_excludes_effects_but_not_the_instrument() {
     let lat: HashMap<u64, u64> = [(1u64, 100u64), (2, 50), (4, 30)].into();
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let mut tracks: IndexMap<TrackId, std::sync::Arc<Track>> = IndexMap::new();
     // Audio track: every plugin is an effect — bypass drops them all.
     let audio = Track::new(10, "audio".into());
     audio.push_plugin(1);
     audio.push_plugin(2);
     audio.set_fx_bypassed(true);
-    tracks.insert(10, audio);
+    tracks.insert(10, std::sync::Arc::new(audio));
     // Instrument track: the instrument (first plugin) keeps running
     // under FX bypass; only the effect after it is skipped.
     let inst = Track::with_type(11, "inst".into(), TrackType::Instrument);
     inst.push_plugin(4);
     inst.push_plugin(2);
     inst.set_fx_bypassed(true);
-    tracks.insert(11, inst);
+    tracks.insert(11, std::sync::Arc::new(inst));
     let chains: HashMap<TrackId, u64> =
         chain_latencies(&tracks, |id| lat.get(&id).copied().unwrap_or(0))
             .into_iter()
@@ -177,13 +177,13 @@ fn bypassed_bus_chain_contributes_zero() {
 #[test]
 fn frozen_parent_drops_parent_instrument_for_sub_tracks() {
     let lat: HashMap<u64, u64> = [(2u64, 50u64), (4, 30)].into();
-    let mut tracks: IndexMap<TrackId, Track> = IndexMap::new();
+    let mut tracks: IndexMap<TrackId, std::sync::Arc<Track>> = IndexMap::new();
     let parent = Track::with_type(12, "parent".into(), TrackType::Instrument);
     parent.push_plugin(4);
-    tracks.insert(12, parent);
+    tracks.insert(12, std::sync::Arc::new(parent));
     let sub = Track::new_sub_track(13, "sub".into(), 12, 1);
     sub.push_plugin(2);
-    tracks.insert(13, sub);
+    tracks.insert(13, std::sync::Arc::new(sub));
 
     let resolve = |id| lat.get(&id).copied().unwrap_or(0);
     let chains: HashMap<TrackId, u64> =
@@ -609,7 +609,7 @@ fn apply_dry_is_noop_without_bus_stage_latency() {
 /// An impulse clip: interleaved-stereo silence with a single `1.0`
 /// frame at `at`, so post-render positions are exactly assertable.
 fn impulse_track(id: TrackId, output: TrackOutput, at: usize, frames: usize) -> (Track, AudioClip) {
-    let track = Track::new(id, format!("t{id}"));
+    let mut track = Track::new(id, format!("t{id}"));
     track.set_output(output);
     let mut samples = vec![0.0f32; frames * 2];
     samples[at * 2] = 1.0;

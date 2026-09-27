@@ -76,7 +76,6 @@ fn detected_pitch(mono: &[f32]) -> Option<f32> {
 
 struct Engine {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -86,7 +85,6 @@ impl Engine {
     fn new() -> Self {
         Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -94,9 +92,9 @@ impl Engine {
     }
 
     fn add_master_track(&self, id: TrackId) {
-        let t = Track::new(id, format!("track {id}"));
+        let mut t = Track::new(id, format!("track {id}"));
         t.set_output(TrackOutput::Master);
-        self.tracks.write().insert(id, t);
+        self.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(t)); });
     }
 
     fn push_clip(&self, clip: AudioClip) {
@@ -109,7 +107,6 @@ impl Engine {
             start,
             end,
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,

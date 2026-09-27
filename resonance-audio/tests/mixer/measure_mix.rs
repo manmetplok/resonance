@@ -42,7 +42,6 @@ const FRAMES: usize = (SR as usize) * 4;
 
 struct EngineState {
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -55,7 +54,6 @@ impl EngineState {
         let (tx, rx) = crossbeam_channel::unbounded();
         Self {
             shared: Arc::new(SharedState::default()),
-            tracks: Arc::new(RwLock::new(IndexMap::new())),
             clips: Arc::new(RwLock::new(Vec::new())),
             plugins: Arc::new(RwLock::new(IndexMap::new())),
             tempo_map: Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default())),
@@ -65,9 +63,9 @@ impl EngineState {
     }
 
     fn add_track(&self, id: TrackId, output: TrackOutput) {
-        let t = Track::new(id, format!("track {id}"));
+        let mut t = Track::new(id, format!("track {id}"));
         t.set_output(output);
-        self.tracks.write().insert(id, t);
+        self.shared.edit_tracks(|m| { m.insert(id, std::sync::Arc::new(t)); });
     }
 
     /// Push a steady 220 Hz sine clip of the given amplitude on `track`,
@@ -117,7 +115,6 @@ impl EngineState {
             None,
             source,
             &self.shared,
-            &self.tracks,
             &self.clips,
             &self.plugins,
             &self.tempo_map,
@@ -317,12 +314,11 @@ fn track_target_folds_in_its_sub_tracks() {
     let state = EngineState::new();
     state.add_track(1, TrackOutput::Master);
     state.add_track(2, TrackOutput::Master);
-    state
-        .tracks
-        .write()
-        .insert(10, Track::new_sub_track(10, "kick".into(), 1, 1));
+    state.shared.edit_tracks(|m| {
+        m.insert(10, std::sync::Arc::new(Track::new_sub_track(10, "kick".into(), 1, 1)));
+    });
 
-    let filter = stem_filter(StemSource::Track(1), &state.tracks.read());
+    let filter = stem_filter(StemSource::Track(1), &state.shared.tracks());
     assert!(filter.contains(1), "the instrument track itself");
     assert!(
         filter.contains(10),

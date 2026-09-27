@@ -293,7 +293,7 @@ fn unfreezing_the_parent_makes_the_tap_renderable_again() {
 #[test]
 fn a_soloed_kits_taps_are_in_the_mixdown() {
     let state = EngineState::new();
-    state.tracks.read().get(&PARENT).unwrap().set_soloed(true);
+    state.shared.tracks().get(&PARENT).unwrap().set_soloed(true);
 
     let mix = peak(&state.render(StemSource::Master));
     assert!(
@@ -310,8 +310,8 @@ fn a_soloed_kits_taps_are_in_the_mixdown() {
 fn solo_still_suppresses_other_kits_and_a_muted_tap() {
     let state = EngineState::new();
     state.add_unfrozen_sibling(SIBLING, SIBLING_TAP);
-    state.tracks.read().get(&PARENT).unwrap().set_soloed(true);
-    state.tracks.read().get(&TAP_B).unwrap().set_muted(true);
+    state.shared.tracks().get(&PARENT).unwrap().set_soloed(true);
+    state.shared.tracks().get(&TAP_B).unwrap().set_muted(true);
 
     let mix = peak(&state.render(StemSource::Master));
     assert!(

@@ -187,7 +187,7 @@ impl StemFilter {
 ///
 /// Sidechain-free shorthand for [`stem_filter_with_keys`]; a slice whose
 /// plugins are keyed from outside it needs that one instead.
-pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> StemFilter {
+pub fn stem_filter(source: StemSource, tracks: &TrackMap) -> StemFilter {
     stem_filter_with_keys(source, tracks, &IndexMap::new(), &[])
 }
 
@@ -206,7 +206,7 @@ pub fn stem_filter(source: StemSource, tracks: &IndexMap<TrackId, Track>) -> Ste
 /// captured, dropped before the fader so they never join the mix.
 pub fn stem_filter_with_keys(
     source: StemSource,
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     busses: &IndexMap<BusId, Arc<Bus>>,
     routes: &[SidechainRoute],
 ) -> StemFilter {
@@ -300,7 +300,7 @@ pub fn stem_filter_with_keys(
 /// audible here anyway, and marking it key-only would drop it from the
 /// mix it belongs to.
 fn add_key_sources(
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     busses: &IndexMap<BusId, Arc<Bus>>,
     routes: &[SidechainRoute],
     own_bus: Option<BusId>,
@@ -384,7 +384,7 @@ fn add_key_sources(
 /// other sub-tracks, so a tap routed to a different bus stays out of this
 /// one.
 fn add_fan_out_parents(
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
     set: &mut HashSet<TrackId>,
 ) -> HashSet<TrackId> {
     let parents: Vec<TrackId> = set
@@ -439,7 +439,7 @@ fn add_fan_out_parents(
 /// output — and is deliberately left alone.
 fn frozen_fan_out_refusal(
     filter: &StemFilter,
-    tracks: &IndexMap<TrackId, Track>,
+    tracks: &TrackMap,
 ) -> Option<String> {
     // Walk `tracks` rather than the `HashSet` so the message is
     // deterministic when more than one frozen parent is involved.
@@ -470,7 +470,7 @@ fn frozen_fan_out_refusal(
 }
 
 /// Insert every sub-track fed by `parent` into `set`.
-fn add_sub_tracks(parent: TrackId, tracks: &IndexMap<TrackId, Track>, set: &mut HashSet<TrackId>) {
+fn add_sub_tracks(parent: TrackId, tracks: &TrackMap, set: &mut HashSet<TrackId>) {
     for t in tracks.values() {
         if let Some((p, _)) = t.sub_track_of {
             if p == parent {
@@ -537,7 +537,6 @@ pub fn render_stem(
     render_start: SamplePos,
     render_end: SamplePos,
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -558,7 +557,7 @@ pub fn render_stem(
     super::super::vocal_render::ensure_tuning_caches(clips, sample_rate);
 
     let filter = {
-        let tracks_guard = tracks.read();
+        let tracks_guard = shared.tracks();
         // Key sources are part of the render even when they are not part
         // of the stem (ba doc #277) — without them every keyed plugin in
         // the slice silently falls back to its own input.
@@ -580,7 +579,7 @@ pub fn render_stem(
 
     let bounce_tm = (**tempo_map.load()).clone();
     let master_vol = f32::from_bits(shared.master_volume_bits.load(Ordering::Relaxed));
-    let latency_comp = build_latency_comp(shared, tracks, plugins);
+    let latency_comp = build_latency_comp(shared, plugins);
     // Stems that include the master FX chain (the master stem) are
     // shifted by its latency on top of the track/bus comp; pre-rolling
     // and trimming both keeps every stem mutually sample-aligned and
@@ -601,7 +600,6 @@ pub fn render_stem(
     let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
-        tracks,
         clips,
         plugins,
         tempo_map: &bounce_tm,

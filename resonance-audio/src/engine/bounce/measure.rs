@@ -43,7 +43,6 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use crossbeam_channel::Sender;
-use indexmap::IndexMap;
 use parking_lot::RwLock;
 
 use resonance_metering::lufs::block_accumulator::BLOCK_HOP_SECS;
@@ -85,7 +84,6 @@ pub fn measure_mix(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -98,7 +96,6 @@ pub fn measure_mix(
         range,
         source,
         shared,
-        tracks,
         clips,
         plugins,
         tempo_map,
@@ -118,7 +115,6 @@ fn measure_mix_holding(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: &Arc<SharedState>,
-    tracks: &Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: &Arc<RwLock<Vec<AudioClip>>>,
     plugins: &Arc<RwLock<PluginMap>>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -190,7 +186,6 @@ fn measure_mix_holding(
             start,
             end,
             shared,
-            tracks,
             clips,
             plugins,
             tempo_map,
@@ -226,7 +221,6 @@ pub(crate) fn measure_mix_spawn(
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
     shared: Arc<SharedState>,
-    tracks: Arc<RwLock<IndexMap<TrackId, Track>>>,
     clips: Arc<RwLock<Vec<AudioClip>>>,
     plugins: Arc<RwLock<PluginMap>>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
@@ -269,7 +263,6 @@ pub(crate) fn measure_mix_spawn(
                         range,
                         source,
                         &shared,
-                        &tracks,
                         &clips,
                         &plugins,
                         &tempo_map,
