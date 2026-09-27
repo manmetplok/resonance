@@ -10,7 +10,7 @@
 //! holding the pre-take state, recorded like any other edit: it marks the
 //! project dirty, bumps the control revision and clears the redo stack.
 
-use resonance_app::message::{Message, TrackMessage};
+use resonance_app::message::{Message, TrackMessage, TransportMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_audio::types::{AudioEvent, MidiNote, TrackType};
@@ -189,10 +189,24 @@ fn a_live_midi_recording_is_undoable_and_dirty() {
 }
 
 #[test]
-fn a_midi_clip_created_outside_recording_is_not_recorded_again() {
-    // A `MidiClipCreated` echo of an app-issued edit is already covered by
-    // that message's own history entry.
+fn a_midi_clip_created_echo_of_an_already_mirrored_edit_is_not_recorded_again() {
+    // An app-issued create (compose canvas, MIDI import, reconcile
+    // restore, ...) mirrors the clip into `midi_clips` synchronously,
+    // before its own message's engine command can round-trip — so the
+    // echo arrives on a clip the idempotent check above already knows
+    // about. That message's own dispatch already recorded its own
+    // history entry; the echo must not record a second one.
     let mut app = app();
+    app.test_push_midi_clip(resonance_app::state::MidiClipState {
+        id: CLIP,
+        track_id: TRACK,
+        start_sample: 0,
+        duration_ticks: 0,
+        name: "clip".into(),
+        notes: std::sync::Arc::new(Vec::new()),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    });
     app.test_apply_engine_event(AudioEvent::MidiClipCreated {
         clip_id: CLIP,
         track_id: TRACK,
@@ -206,6 +220,150 @@ fn a_midi_clip_created_outside_recording_is_not_recorded_again() {
     assert_eq!(entries(&app), 0);
 }
 
+// ---------------------------------------------------------------------------
+// FU-D6a: live MIDI captured during plain Play (armed instrument track, no
+// Record) records one undo entry per captured take, exactly like a
+// recorded take (D-6 §8 item 4 / §7a decision 5). Before this fix
+// `clip_created` only called `record_recording_edit` when
+// `transport.recording` was set, so a capture taken during plain Play had
+// no undo entry of its own: Ctrl+Z could not remove it, and it never
+// marked the project dirty.
+// ---------------------------------------------------------------------------
+
+fn live_clip_created(clip_id: u64, track_id: u64) -> AudioEvent {
+    AudioEvent::MidiClipCreated {
+        clip_id,
+        track_id,
+        start_sample: 0,
+        duration_ticks: 0,
+        name: format!("MIDI Take {clip_id}"),
+        notes: Vec::new(),
+        trim_start_ticks: 0,
+        trim_end_ticks: 0,
+    }
+}
+
+#[test]
+fn a_live_captured_clip_during_plain_play_is_undoable_and_dirty() {
+    let mut app = app();
+    app.test_set_dirty(false);
+    let revision = app.revision();
+
+    // Plain Play: no `RecordingStarted`, `transport.recording` stays
+    // false — the same lazy-open-on-first-note path the engine uses for
+    // an armed instrument track during ordinary playback.
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    app.test_apply_engine_event(AudioEvent::MidiNoteAdded {
+        clip_id: CLIP,
+        note: MidiNote {
+            note: 60,
+            velocity: 1.0,
+            start_tick: 0,
+            duration_ticks: 0,
+        },
+    });
+
+    assert!(app.is_dirty(), "a live capture must mark the project dirty");
+    assert_eq!(app.revision(), revision + 1, "one revision bump per capture");
+    assert_eq!(entries(&app), 1, "the whole capture is one undo entry");
+    assert!(app.test_midi_clips().iter().any(|c| c.id == CLIP));
+    assert!(
+        app.test_undo_history().test_undo_entries()[0]
+            .project
+            .file
+            .midi_clips
+            .is_empty(),
+        "the entry holds the pre-capture state"
+    );
+}
+
+#[test]
+fn undo_removes_only_the_live_captured_clip_and_redo_restores_it() {
+    let mut app = app();
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    assert_eq!(entries(&app), 1);
+
+    let _ = app.update(Message::Undo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        !app.test_midi_clips().iter().any(|c| c.id == CLIP),
+        "undo removes the captured clip"
+    );
+    assert!(app.test_undo_history().can_redo());
+
+    let _ = app.update(Message::Redo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(
+        app.test_midi_clips().iter().any(|c| c.id == CLIP),
+        "redo brings the captured clip back"
+    );
+}
+
+#[test]
+fn an_edit_before_the_capture_survives_undoing_the_capture() {
+    let mut app = app();
+    let _ = app.update(Message::Track(TrackMessage::SetTrackVolume(TRACK, -6.0)));
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    assert_eq!(entries(&app), 2, "the fader move and the capture are two entries");
+
+    // The one Ctrl+Z removes exactly the captured take.
+    let _ = app.update(Message::Undo);
+    app.test_apply_engine_event(AudioEvent::AllCleared);
+    assert!(!app.test_midi_clips().iter().any(|c| c.id == CLIP));
+    assert!(
+        (volume(&app) - -6.0).abs() < 1e-4,
+        "the earlier fader move is not undone by the capture's undo"
+    );
+}
+
+#[test]
+fn two_separate_play_sessions_are_two_undo_entries() {
+    let mut app = app();
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    let _ = app.update(Message::Transport(TransportMessage::Stop));
+
+    // A second Play is a new capture run: it must not coalesce into the
+    // first session's entry just because nothing else broke the run
+    // (plain Play has no `RecordingStarted` echo to do that for it).
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP + 1, TRACK));
+
+    assert_eq!(entries(&app), 2, "each Play session's capture is its own entry");
+}
+
+#[test]
+fn several_armed_tracks_captured_in_one_play_run_land_in_one_entry() {
+    let mut app = app();
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    app.test_apply_engine_event(live_clip_created(CLIP + 1, TRACK + 1));
+
+    assert_eq!(
+        entries(&app),
+        1,
+        "one Play run, one entry, like a multi-track Record session"
+    );
+}
+
+#[test]
+fn a_redundant_play_while_already_playing_does_not_split_the_capture() {
+    let mut app = app();
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP, TRACK));
+    // A duplicate Play dispatched while already playing (e.g. a repeated
+    // control call) must not look like a new run and split the capture: a
+    // second armed track opening its own clip later in the same run still
+    // belongs in the one entry.
+    let _ = app.update(Message::Transport(TransportMessage::Play));
+    app.test_apply_engine_event(live_clip_created(CLIP + 1, TRACK + 1));
+
+    assert_eq!(entries(&app), 1);
+}
+
 /// A take that lands while a drag gesture is open (FU-A2a). The gesture's
 /// pre-drag snapshot used to be committed *after* the take's entry, so
 /// undoing the drag restored a state that predates the take — the take
@@ -214,7 +372,6 @@ fn a_midi_clip_created_outside_recording_is_not_recorded_again() {
 /// undone newest first.
 #[test]
 fn a_take_landing_mid_drag_survives_undoing_the_drag() {
-    use resonance_app::message::TransportMessage;
     use resonance_app::state::LoopDragTarget;
 
     let mut app = app();

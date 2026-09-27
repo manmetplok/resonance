@@ -76,6 +76,17 @@ impl TransportMessage {
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
         TransportMessage::Play => {
+            // A fresh Play (not already playing) starts a new live-MIDI
+            // capture run (FU-D6a): break any coalesce run so a capture in
+            // this run doesn't merge into one from an earlier run (or a
+            // preceding Record session — `RecordingStarted` breaks that
+            // boundary on its own echo, but plain Play has no such echo).
+            // Guarded on the transition so a redundant Play dispatched
+            // while already playing (e.g. a duplicate control call) does
+            // not split an in-progress capture into two entries.
+            if !r.transport.playing {
+                r.session.undo.break_coalesce();
+            }
             // In Compose mode with a selected section, auto-loop that section
             if r.ui.view_mode == ViewMode::Compose {
                 if let Some((placement, definition)) =
