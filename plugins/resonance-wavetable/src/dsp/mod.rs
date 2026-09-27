@@ -6,6 +6,7 @@
 //! to bake the bundled wavetables into `$OUT_DIR/wavetables.bin`; it is
 //! deliberately not declared as a module here.
 
+pub mod analog;
 pub mod effects;
 pub mod engine;
 pub mod envelope;

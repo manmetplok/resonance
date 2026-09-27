@@ -14,6 +14,7 @@ use resonance_plugin::*;
 
 use crate::dsp::modulation::NUM_MOD_SLOTS;
 
+pub mod analog;
 pub mod env;
 pub mod filter;
 pub mod fx;
@@ -23,6 +24,7 @@ pub mod modulation;
 pub mod osc;
 pub mod unison;
 
+pub use analog::AnalogParams;
 pub use env::EnvParams;
 pub use filter::FilterParams;
 pub use fx::{ChorusParams, DelayParams, DistortionParams};
@@ -44,6 +46,7 @@ pub struct WavetableParams {
     pub osc1: OscParams,
     pub osc2: OscParams,
     pub unison: UnisonParams,
+    pub analog: AnalogParams,
     pub amp_env: EnvParams,
     pub mod_env: EnvParams,
     pub filter: FilterParams,
@@ -59,15 +62,20 @@ pub struct WavetableParams {
 /// Total number of parameters.
 ///
 /// 87 until ba todo #1324 added `lfoN_sync` + `lfoN_division` to each of the
-/// three LFOs. Parameters are addressed by string id everywhere that
+/// three LFOs; 97 once the BBD chorus (`chorus_mode`, `chorus_noise`) and
+/// analog instability (`osc_phase_random`, `analog`) were added; 104 since
+/// the distortion character work added `dist_mode`, `dist_oversample`,
+/// `dist_tone`, `dist_auto_gain`, `dist_bits`, `dist_crush_rate` and
+/// `voice_drive`. Parameters are addressed by string id everywhere that
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
 ///
-/// 93 -> 95 when the filter models landed: `filter_model` and `filter_fm`,
-/// appended at the end of the table (93, 94) rather than beside the other
-/// filter params so the indices of everything already listed stay put.
-pub const PARAM_COUNT: usize = 95;
+/// 104 -> 106 when the filter models landed: `filter_model` and
+/// `filter_fm`, appended at the end of the table (104, 105) rather than
+/// beside the other filter params so the indices of everything already
+/// listed stay put.
+pub const PARAM_COUNT: usize = 106;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -120,6 +128,9 @@ impl WavetableParams {
 
             // Unison
             unison: UnisonParams::new(),
+
+            // Analog instability
+            analog: AnalogParams::new(),
 
             // Envelopes
             amp_env: EnvParams::new("amp", "Amp", 0.005, 0.3, 0.8, 0.3),
@@ -227,24 +238,37 @@ impl WavetableParams {
                     _ => &self.mod_slots[slot_idx].amount,
                 }
             }
-            // Chorus (81..85)
+            // Chorus (81..87)
             81 => &self.chorus.enabled,
             82 => &self.chorus.rate,
             83 => &self.chorus.depth,
             84 => &self.chorus.mix,
-            // Delay (85..90)
-            85 => &self.delay.enabled,
-            86 => &self.delay.time_l,
-            87 => &self.delay.time_r,
-            88 => &self.delay.feedback,
-            89 => &self.delay.mix,
-            // Distortion (90..93)
-            90 => &self.distortion.enabled,
-            91 => &self.distortion.drive,
-            92 => &self.distortion.mix,
-            // Filter models (93..95)
-            93 => &self.filter.model,
-            94 => &self.filter.fm,
+            85 => &self.chorus.mode,
+            86 => &self.chorus.noise,
+            // Delay (87..92)
+            87 => &self.delay.enabled,
+            88 => &self.delay.time_l,
+            89 => &self.delay.time_r,
+            90 => &self.delay.feedback,
+            91 => &self.delay.mix,
+            // Distortion (92..95)
+            92 => &self.distortion.enabled,
+            93 => &self.distortion.drive,
+            94 => &self.distortion.mix,
+            // Analog (95..97)
+            95 => &self.analog.phase_random,
+            96 => &self.analog.drift,
+            // Distortion character (97..104)
+            97 => &self.distortion.mode,
+            98 => &self.distortion.oversample,
+            99 => &self.distortion.tone,
+            100 => &self.distortion.auto_gain,
+            101 => &self.distortion.bits,
+            102 => &self.distortion.crush_rate,
+            103 => &self.distortion.voice_drive,
+            // Filter models (104..106)
+            104 => &self.filter.model,
+            105 => &self.filter.fm,
             _ => &self.master_volume, // fallback
         }
     }

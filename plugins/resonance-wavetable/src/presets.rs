@@ -50,6 +50,10 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/pad_warm_analog.json"),
     },
     PresetEntry {
+        name: "Pad — Juno Chorus",
+        json: include_str!("../presets/pad_juno_chorus.json"),
+    },
+    PresetEntry {
         name: "Pad — Glass Shimmer",
         json: include_str!("../presets/pad_glass_shimmer.json"),
     },
@@ -74,8 +78,19 @@ pub const PRESETS: &[PresetEntry] = &[
         json: include_str!("../presets/keys_electric_piano.json"),
     },
     PresetEntry {
+        // Showcases the drive stages: per-voice pre-filter drive (pushed
+        // harder by velocity through the mod matrix — slot 1 → Voice Drive)
+        // into a 2x-oversampled tube stage, tone rolled off, auto gain on.
+        name: "Keys — Driven Chords",
+        json: include_str!("../presets/keys_driven_chords.json"),
+    },
+    PresetEntry {
         name: "Keys — Cathedral Organ",
         json: include_str!("../presets/keys_cathedral_organ.json"),
+    },
+    PresetEntry {
+        name: "Keys — Vintage Poly",
+        json: include_str!("../presets/keys_vintage_poly.json"),
     },
     PresetEntry {
         name: "Arp — Formant Talker",

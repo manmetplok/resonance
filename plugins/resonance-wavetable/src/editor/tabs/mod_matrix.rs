@@ -14,8 +14,8 @@ use super::{float_slider, readout};
 // the picker cannot drift from what the DSP actually matches on. Which of
 // them this build can act on is decided there too — see
 // `ModSource::unavailable_reason` / `ModDest::unavailable_reason`.
-const SOURCE_NAMES: [&str; 9] = ModSource::LABELS;
-const DEST_NAMES: [&str; 13] = ModDest::LABELS;
+const SOURCE_NAMES: [&str; ModSource::LABELS.len()] = ModSource::LABELS;
+const DEST_NAMES: [&str; ModDest::LABELS.len()] = ModDest::LABELS;
 
 /// Marker appended to an option the DSP cannot act on.
 const UNAVAILABLE_MARK: &str = "⚠";

@@ -90,13 +90,19 @@ pub enum ModDest {
     UnisonDetune = 9,
     Osc1Pan = 10,
     Osc2Pan = 11,
-    FilterFm = 12,
+    /// The master distortion's drive. The master bus is global, not per
+    /// voice — see [`ModState::dist_drive`] for how a per-voice matrix
+    /// drives it.
+    DistDrive = 12,
+    /// Per-voice pre-filter saturation (`voice_drive`).
+    VoiceDrive = 13,
+    FilterFm = 14,
 }
 
 impl ModDest {
     /// Display names, indexed by the parameter's integer value. See
     /// [`ModSource::LABELS`] for why these live next to the discriminants.
-    pub const LABELS: [&'static str; 13] = [
+    pub const LABELS: [&'static str; 15] = [
         "None",
         "Osc1 Position",
         "Osc2 Position",
@@ -109,6 +115,8 @@ impl ModDest {
         "Unison Detune",
         "Osc1 Pan",
         "Osc2 Pan",
+        "Dist Drive",
+        "Voice Drive",
         "Filter FM",
     ];
 
@@ -125,7 +133,9 @@ impl ModDest {
             9 => Self::UnisonDetune,
             10 => Self::Osc1Pan,
             11 => Self::Osc2Pan,
-            12 => Self::FilterFm,
+            12 => Self::DistDrive,
+            13 => Self::VoiceDrive,
+            14 => Self::FilterFm,
             _ => Self::None,
         }
     }
@@ -205,6 +215,22 @@ pub struct ModState {
     pub unison_detune: f32,
     pub osc1_pan: f32,
     pub osc2_pan: f32,
+    /// Offset to the master distortion's drive, in octaves of drive over
+    /// the param's 1..20 range at full scale (see
+    /// `render::DIST_DRIVE_MOD_OCTAVES`).
+    ///
+    /// Every voice accumulates this like any other destination, but the
+    /// stage it drives sits on the summed master bus, so only one value can
+    /// be used per sample: the render loop takes the **most recently
+    /// triggered** sounding voice's (last-note priority, the way a mono
+    /// synth resolves the same conflict). For a global source — a free or
+    /// synced LFO — every voice holds the same value and the choice is
+    /// moot; for a per-voice one (velocity, key track, the mod envelope, a
+    /// retriggered LFO) it follows the newest note. With no voice
+    /// sounding the last value is held so a release tail does not jump.
+    pub dist_drive: f32,
+    /// Offset to `voice_drive` (0..1), per voice.
+    pub voice_drive: f32,
     /// Offset added to the `filter_fm` amount (0..1 scale).
     pub filter_fm: f32,
 }
@@ -305,6 +331,8 @@ pub fn evaluate_mod_matrix(
             ModDest::UnisonDetune => state.unison_detune += mod_value,
             ModDest::Osc1Pan => state.osc1_pan += mod_value,
             ModDest::Osc2Pan => state.osc2_pan += mod_value,
+            ModDest::DistDrive => state.dist_drive += mod_value,
+            ModDest::VoiceDrive => state.voice_drive += mod_value,
             ModDest::FilterFm => state.filter_fm += mod_value,
             ModDest::None => {}
         }

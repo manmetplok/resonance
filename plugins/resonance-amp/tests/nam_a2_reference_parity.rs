@@ -51,6 +51,23 @@ fn wavenet_condition_dsp_matches_reference() {
     );
 }
 
+/// Every A2 fixture — FiLM, gating/blending, grouped convs, head1x1,
+/// windowed heads, condition_dsp between them — renders bit-identically
+/// through `process_block` at every split (see
+/// `common::assert_block_split_invariance`).
+#[test]
+fn block_processing_matches_sample_serial_bit_for_bit() {
+    let input = common::read_f32(&common::fixture_path("input.f32"));
+    for model in [
+        "A2.nam",
+        "slimmable_wavenet.nam",
+        "wavenet_a2_max.nam",
+        "wavenet_condition_dsp.nam",
+    ] {
+        common::assert_block_split_invariance(&common::fixture_path(model), &input);
+    }
+}
+
 /// The Lite-slice reference vectors must stay distinct from the Full
 /// renders they sit next to: if a regeneration ever overwrote a `slim0`
 /// vector with a full-size render (or vice versa), the future Lite
