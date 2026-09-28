@@ -165,8 +165,11 @@ impl Default for SuppressorConfig {
         Self {
             enabled: false,
             depth_db: 6.0,
-            selectivity_db: 6.0,
-            sharpness_q: 8.0,
+            // Q 24 / T 5 is the exit-criterion configuration (W12 T1/T2):
+            // a Q 10 resonance +15 dB is cut 7.8 dB while broadband noise
+            // moves < 0.2 dB. `defaults_meet_the_exit_criterion` pins it.
+            selectivity_db: 5.0,
+            sharpness_q: 24.0,
             attack_ms: 10.0,
             release_ms: 100.0,
             low_hz: 1000.0,

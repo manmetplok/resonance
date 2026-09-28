@@ -220,31 +220,38 @@ const DUR: usize = 6 * 48_000;
 
 // --- T1: a synthetic resonance is cut. -------------------------------
 
-#[test]
-fn t1_resonance_at_3k2_is_cut_at_least_6_db() {
+/// T1 on `cfg`: returns the 1/12-oct cut at 3.2 kHz after asserting
+/// that the neighbouring bands barely move.
+fn resonance_cut(cfg: &SuppressorConfig) -> f64 {
     let mut x = bell(&pink(1, DUR), 3200.0, 10.0, 15.0);
     scale_to_rms_db(&mut x, -18.0);
-    let (ol, _) = run(&cfg_t1(), &x, &x);
+    let (ol, _) = run(cfg, &x, &x);
     assert_not_silent(&ol, "t1");
     let (i, o) = aligned(&x, &ol, 0.5);
     let (pi, po) = (psd(i), psd(o));
     let (f1, f2) = (3200.0 * 2f32.powf(-1.0 / 24.0), 3200.0 * 2f32.powf(1.0 / 24.0));
     let cut = band_db(&pi, f1, f2) - band_db(&po, f1, f2);
     eprintln!("t1: 1/12-oct cut at 3.2 kHz = {cut:.2} dB");
-    assert!(cut >= 6.0, "resonance cut only {cut:.2} dB");
     // Local, not a broad dip: 1/3-oct bands ±1 oct away barely move.
     for fc in [1600.0f32, 6400.0] {
         let (a, b) = (fc * 2f32.powf(-1.0 / 6.0), fc * 2f32.powf(1.0 / 6.0));
         let d = band_db(&po, a, b) - band_db(&pi, a, b);
         assert!(d.abs() < 1.0, "band at {fc} Hz moved {d:.2} dB");
     }
+    cut
+}
+
+#[test]
+fn t1_resonance_at_3k2_is_cut_at_least_6_db() {
+    let cut = resonance_cut(&cfg_t1());
+    assert!(cut >= 6.0, "resonance cut only {cut:.2} dB");
 }
 
 // --- T2: broadband signals are untouched. -----------------------------
 
-fn assert_broadband_untouched(mut x: Vec<f32>, what: &str) {
+fn assert_broadband_untouched_with(cfg: &SuppressorConfig, mut x: Vec<f32>, what: &str) {
     scale_to_rms_db(&mut x, -18.0);
-    let (ol, _) = run(&cfg_t1(), &x, &x);
+    let (ol, _) = run(cfg, &x, &x);
     assert_not_silent(&ol, what);
     let (i, o) = aligned(&x, &ol, 0.5);
     let (bands, total) = third_octave_changes(i, o);
@@ -253,6 +260,18 @@ fn assert_broadband_untouched(mut x: Vec<f32>, what: &str) {
     }
     eprintln!("{what}: total change {total:.3} dB, bands {bands:.2?}");
     assert!(total.abs() < 0.5, "{what}: 1–8 kHz total moved {total:.3} dB");
+}
+
+fn assert_broadband_untouched(x: Vec<f32>, what: &str) {
+    assert_broadband_untouched_with(&cfg_t1(), x, what);
+}
+
+/// A curved spectrum: pink through a first-order lowpass at 2 kHz, so the
+/// slope bends from −3 to −9 dB/oct across the band.
+fn curved(seed: u64) -> Vec<f32> {
+    let mut lp = OnePole::new();
+    lp.set_cutoff(2000.0, SR);
+    pink(seed, DUR).iter().map(|&v| lp.process(v)).collect()
 }
 
 #[test]
@@ -267,12 +286,32 @@ fn t2_white_noise_changes_less_than_half_a_db() {
 
 #[test]
 fn t2_curved_spectrum_changes_less_than_half_a_db() {
-    // Pink through a first-order lowpass at 2 kHz: the slope bends
-    // from −3 to −9 dB/oct across the band.
-    let mut lp = OnePole::new();
-    lp.set_cutoff(2000.0, SR);
-    let x: Vec<f32> = pink(4, DUR).iter().map(|&v| lp.process(v)).collect();
-    assert_broadband_untouched(x, "curved");
+    assert_broadband_untouched(curved(4), "curved");
+}
+
+// --- The shipped defaults meet the exit criterion. --------------------
+
+/// The defaults are the exit-criterion configuration: sharpness and
+/// selectivity are the pinned T1/T2 values, so they can never drift
+/// from it. Default depth (6 dB) caps the cut near 6 dB, so T1 is
+/// checked at depth 12, the only field the test changes. The spec's
+/// criterion is about detection, not about the depth cap.
+#[test]
+fn defaults_meet_the_exit_criterion() {
+    let d = SuppressorConfig::default();
+    assert_eq!((d.sharpness_q, d.selectivity_db), (24.0, 5.0));
+    let on = SuppressorConfig { enabled: true, ..d };
+    let cut = resonance_cut(&SuppressorConfig { depth_db: 12.0, ..on });
+    assert!(cut >= 6.0, "defaults cut the resonance only {cut:.2} dB");
+    // T2 at the full defaults, depth included.
+    assert_broadband_untouched_with(&on, pink(2, DUR), "defaults/pink");
+    assert_broadband_untouched_with(&on, white(3, DUR), "defaults/white");
+    assert_broadband_untouched_with(&on, curved(4), "defaults/curved");
+    // At the default depth the resonance is still cut by (nearly) the
+    // full cap.
+    let capped = resonance_cut(&on);
+    eprintln!("defaults: cut {cut:.2} dB at depth 12, {capped:.2} dB at depth 6");
+    assert!(capped >= 5.0, "defaults at depth 6 cut only {capped:.2} dB");
 }
 
 // --- T3 (DSP level): latency is constant. -----------------------------

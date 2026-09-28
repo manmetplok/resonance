@@ -207,13 +207,17 @@ bin power, E is forced to 0, so silence, dither and reverb tails are never
 "corrected".
 
 On noise, D has ν ≈ 2·(kernel bins / 1.5) × (time dof) degrees of freedom.
-At the default Q = 8: at 1 kHz ν ≈ 10 (σ ≈ 1.9 dB), and at 3.2 kHz
-ν ≈ 30 (σ ≈ 1.1 dB). With the default T = 6 dB and a 4 dB knee, a cut
-starts at E = 4 dB. That is a power ratio of 2.5, which noise exceeds with
-probability ≈ 2·10⁻³ at 1 kHz and far less higher up. Even those events
-land in the knee (< 0.5 dB cut) and are smoothed by attack. So the band
-average stays well inside the 0.5 dB exit bound. T2 confirms it; this
-paragraph is the reasoning, not the proof.
+This estimate was written for the draft default Q = 8: at 1 kHz
+ν ≈ 10 (σ ≈ 1.9 dB), and at 3.2 kHz ν ≈ 30 (σ ≈ 1.1 dB). With T = 6 dB
+and a 4 dB knee, a cut starts at E = 4 dB. That is a power ratio of 2.5,
+which noise exceeds with probability ≈ 2·10⁻³ at 1 kHz and far less
+higher up. Even those events land in the knee (< 0.5 dB cut) and are
+smoothed by attack. At the shipped defaults (Q 24, T 5, set after phase
+1) the kernel is narrower, so ν is about a third of that and the cuts
+start at E = 3 dB. Noise then triggers small knee cuts more often, but
+T2 measured every 1/3-oct band within 0.19 dB, well inside the 0.5 dB
+bound. The measurement is the proof; this paragraph is only the
+reasoning.
 
 ## 4. Params and their precise meaning
 
@@ -228,8 +232,8 @@ attack/release-smoothed cut.
 |---|---|---|
 | `dh_on` | bool, **off** | Off: output = input delayed by exactly L samples, bit-exact. On/off crossfades over 10 ms (the chain's `BYPASS_XFADE_SECONDS` pattern). The STFT keeps running while off, so it is always warm |
 | `dh_depth` | 0–24 dB, 6 | The cap on any single bin's cut. The steady-state rule is below |
-| `dh_selectivity` | 0–18 dB, 6 | T: how far above the reference, in dB, a peak must stand (by E, §3.3) before it is cut. Higher = only prominent peaks |
-| `dh_sharpness` | Q 3–24, 8 | The Q of each cut. The detection kernel's FWHM, and so the cut's width, is `f/Q` Hz, floored at 3 bins (70 Hz). The floor caps the effective Q at ~14 at 1 kHz and ~46 at 3.2 kHz |
+| `dh_selectivity` | 0–18 dB, 5 | T: how far above the reference, in dB, a peak must stand (by E, §3.3) before it is cut. Higher = only prominent peaks |
+| `dh_sharpness` | Q 3–24, 24 | The Q of each cut. The detection kernel's FWHM, and so the cut's width, is `f/Q` Hz, floored at 3 bins (70 Hz). The floor caps the effective Q at ~14 at 1 kHz and ~46 at 3.2 kHz |
 | `dh_attack` | 5–200 ms, 10 | Time constant (to 63 %) for a bin's cut to *deepen*. Frame-rate one-pole, `a = exp(−H/(τ·fs))`. Below one hop (5.3 ms), cuts follow frame to frame |
 | `dh_release` | 20–1000 ms, 100 | The same, for a cut to *recover* |
 | `dh_low`, `dh_high` | 200 Hz–20 kHz; **1000 / 8000** | The band in which cuts may happen. The cut weight is 1 inside and falls on a raised cosine to 0 over 1/6 octave outside each edge. If `low > high`, the two are swapped. Detection and reference still see ±½ oct beyond the band |
@@ -385,7 +389,10 @@ after skipping 0.5 s of settling.
 - **T1 — resonance is cut ≥ 6 dB.** Params: 10 s of seeded pink noise at
   −18 dBFS RMS through a +15 dB, Q 10 bell at 3.2 kHz, then the stage with
   depth 12, selectivity 5, Q 24, attack 10, release 100, band 1–8 kHz,
-  Stereo. The level in the 1/12-oct band around 3.2 kHz drops by
+  Stereo. A second test, `defaults_meet_the_exit_criterion`, runs T1 on
+  the enabled defaults with depth raised to 12, and T2 on the unchanged
+  enabled defaults, so the defaults cannot drift from the exit criterion.
+  At the default depth of 6 dB, the depth cap limits T1 to 5.8 dB. The level in the 1/12-oct band around 3.2 kHz drops by
   **≥ 6 dB** relative to the input. Measured in phase 1: 7.8 dB. An
   earlier draft pinned selectivity 6 at Q 8 and predicted ~8 dB, but
   that setting measures only 3.5 dB. The Q 8 kernel averages the Q 10
@@ -457,9 +464,12 @@ after skipping 0.5 s of settling.
 2. **Aliasing with sharp cuts at high Q.** The 3-bin floor should hold it.
    The zero-padding fallback (§2.5) keeps latency unchanged. Decide only
    if T8 fails.
-3. **Default calibration.** Depth 6 / selectivity 6 / Q 8 are reasoned,
-   not heard. T1/T2 bound them, and a listening pass should confirm them
-   before the skills quote them.
+3. **Default calibration.** The defaults are depth 6, selectivity 5,
+   Q 24 (decided after phase 1). The draft's Q 8 / T 6 cut the T1
+   resonance by only 3.5 dB. The default Q sits at the top of its range,
+   and a test pins the defaults to the exit criterion. They are measured,
+   not heard: a listening pass should confirm them before the skills
+   quote them.
 4. **F2 policy.** Is charging 2048 samples when off right, versus using
    `set_latency_samples` with a restart on `dh_on`? This note says
    constant (§5.1). The alternative saves 43 ms on masters that never use
