@@ -8,12 +8,10 @@
 
 use plugin_gui_core::egui;
 
-use crate::assistant::Genre;
 use crate::params::MasteringParams;
 use crate::viz::MasteringViz;
 
 use super::theme;
-use super::TargetSource;
 
 mod assistant;
 mod clipper;
@@ -100,9 +98,6 @@ pub(crate) fn draw_stage_panel(
     stage: StageTab,
     params: &MasteringParams,
     viz: &MasteringViz,
-    selected_genre: &mut Genre,
-    target_source: &mut TargetSource,
-    reference_path: &mut String,
 ) {
     let rect = ui.available_rect_before_wrap();
     let painter = ui.painter_at(rect);
@@ -115,14 +110,7 @@ pub(crate) fn draw_stage_panel(
     );
 
     match stage {
-        StageTab::Assistant => assistant::draw(
-            ui,
-            params,
-            &viz.assistant,
-            selected_genre,
-            target_source,
-            reference_path,
-        ),
+        StageTab::Assistant => assistant::draw(ui, params, &viz.assistant),
         StageTab::CorrectiveEq => eq::draw(ui, &params.corrective_eq, "Corrective EQ"),
         StageTab::Deharsh => deharsh::draw(ui, &params.deharsh),
         StageTab::Glue => glue::draw(ui, &params.glue_compressor),

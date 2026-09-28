@@ -302,3 +302,77 @@ pub fn analyze_stereo(
     }
     out
 }
+
+/// FFT size of [`sixth_octave_ltas`]: a balance of resolution and number
+/// of averages for a ~10 s buffer.
+pub const LTAS_FFT_SIZE: usize = 4096;
+/// Hop of [`sixth_octave_ltas`] (50 % overlap).
+pub const LTAS_HOP: usize = LTAS_FFT_SIZE / 2;
+/// Level [`sixth_octave_ltas`] reports for silence (or a buffer shorter
+/// than one frame), dB.
+pub const LTAS_FLOOR_DB: f32 = -120.0;
+
+/// The mastering assistant's long-term average spectrum: a Welch average
+/// of the mono sum `(L + R) / 2`, [`LTAS_FFT_SIZE`]-point Hann frames at
+/// 50 % overlap, averaged in power and aggregated to the
+/// [`NUM_OCTAVE_BINS`][super::NUM_OCTAVE_BINS] 1/6-octave bands of
+/// [`OctaveTable`][super::octave::OctaveTable] (so each band carries the
+/// loudest FFT bin inside it — a per-bin density, where pink noise slopes
+/// −3 dB/oct).
+///
+/// One definition for both callers: the plugin's assistant on its captured
+/// buffer and the engine's offline `master.assist` measurement on a
+/// rendered range, so the two compare the same thing against the same
+/// target bands.
+pub fn sixth_octave_ltas(sample_rate: f32, left: &[f32], right: &[f32]) -> Vec<f32> {
+    use super::octave::OctaveTable;
+    use super::NUM_OCTAVE_BINS;
+
+    let n = left.len().min(right.len());
+    if n < LTAS_FFT_SIZE {
+        return vec![LTAS_FLOOR_DB; NUM_OCTAVE_BINS];
+    }
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(LTAS_FFT_SIZE);
+
+    let window = resonance_dsp::hann_window(LTAS_FFT_SIZE);
+
+    let mut scratch = vec![Complex::new(0.0, 0.0); LTAS_FFT_SIZE];
+    let mut power_sum = vec![0.0_f64; LTAS_FFT_SIZE / 2];
+    let mut frames = 0_usize;
+
+    let mut start = 0_usize;
+    while start + LTAS_FFT_SIZE <= n {
+        for i in 0..LTAS_FFT_SIZE {
+            let mono = 0.5 * (left[start + i] + right[start + i]) * window[i];
+            scratch[i] = Complex::new(mono, 0.0);
+        }
+        fft.process(&mut scratch);
+        let norm = 4.0 / LTAS_FFT_SIZE as f32;
+        for k in 0..LTAS_FFT_SIZE / 2 {
+            let re = scratch[k].re;
+            let im = scratch[k].im;
+            let mag = (re * re + im * im).sqrt() * norm;
+            power_sum[k] += (mag as f64) * (mag as f64);
+        }
+        frames += 1;
+        start += LTAS_HOP;
+    }
+
+    if frames == 0 {
+        return vec![LTAS_FLOOR_DB; NUM_OCTAVE_BINS];
+    }
+
+    let mut mag_db = vec![LTAS_FLOOR_DB; LTAS_FFT_SIZE / 2];
+    for k in 0..LTAS_FFT_SIZE / 2 {
+        let avg_power = power_sum[k] / frames as f64;
+        let avg_mag = avg_power.sqrt() as f32;
+        mag_db[k] = 20.0 * avg_mag.max(1e-10).log10();
+    }
+
+    let table = OctaveTable::new();
+    let mut out = vec![LTAS_FLOOR_DB; NUM_OCTAVE_BINS];
+    table.aggregate(&mag_db, sample_rate, &mut out, LTAS_FLOOR_DB);
+    out
+}

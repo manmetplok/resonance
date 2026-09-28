@@ -7,6 +7,9 @@ edition = "2021"
 resonance-audio = { path = "../resonance-audio" }
 resonance-common = { path = "../resonance-common" }
 resonance-control = { path = "../resonance-control" }
+# The mastering assistant's analysis and decision engine, headless (no
+# editor), for `master.assist` (warmth-width-depth.md §7.4).
+resonance-mastering = { path = "../plugins/resonance-mastering", default-features = false }
 resonance-metering = { path = "../resonance-metering" }
 resonance-music-theory = { path = "../resonance-music-theory" }
 resonance-plugin = { path = "../resonance-plugin" }

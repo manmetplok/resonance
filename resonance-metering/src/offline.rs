@@ -194,3 +194,50 @@ pub fn clipped_samples(left: &[f32], right: &[f32]) -> u64 {
     }
     count
 }
+
+/// Peak-to-RMS ratio over the WHOLE buffer, dB — the crest factor of the
+/// measured range, not of a sliding window. `0.0` for silence.
+///
+/// Peak is `max(|L|, |R|)`, RMS is over both channels, matching
+/// [`CrestMeter`][crate::CrestMeter]'s definition but with the range as the
+/// window: that meter is a 100 ms sliding readout built for a live display,
+/// whose terminal value describes only the last 100 ms of what was pushed.
+pub fn range_crest_db(left: &[f32], right: &[f32]) -> f32 {
+    let n = left.len().min(right.len());
+    if n == 0 {
+        return 0.0;
+    }
+    let peak = sample_peak_linear(left, right);
+    let mut sum_sq = 0.0f64;
+    for i in 0..n {
+        let s = left[i].abs().max(right[i].abs()) as f64;
+        sum_sq += s * s;
+    }
+    let rms = (sum_sq / n as f64).sqrt();
+    if peak <= 0.0 || rms <= 1e-20 {
+        return 0.0;
+    }
+    20.0 * (peak as f64 / rms).log10() as f32
+}
+
+/// Pearson correlation of L against R over the WHOLE buffer, clamped to
+/// `[-1, 1]`. `0.0` for a silent or single-sided buffer — the same neutral
+/// value [`CorrelationMeter`][crate::CorrelationMeter] reports when it has
+/// nothing to say (and, like [`range_crest_db`], the range's own figure
+/// rather than that sliding meter's last window).
+pub fn range_correlation(left: &[f32], right: &[f32]) -> f32 {
+    let n = left.len().min(right.len());
+    let (mut ll, mut rr, mut lr) = (0.0f64, 0.0f64, 0.0f64);
+    for i in 0..n {
+        let l = left[i] as f64;
+        let r = right[i] as f64;
+        ll += l * l;
+        rr += r * r;
+        lr += l * r;
+    }
+    let denom_sq = ll * rr;
+    if denom_sq <= 1e-20 {
+        return 0.0;
+    }
+    (lr / denom_sq.sqrt()).clamp(-1.0, 1.0) as f32
+}

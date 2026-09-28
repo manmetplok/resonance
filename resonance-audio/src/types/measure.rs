@@ -23,7 +23,9 @@ use resonance_metering::detail::{SpectrumDetail, StereoDetail};
 use resonance_metering::RangeDynamics;
 use resonance_metering::offline::BandShares;
 
-use super::{BusId, SamplePos, StemSource};
+use std::path::PathBuf;
+
+use super::{BusId, ReferenceId, SamplePos, StemSource};
 
 /// Where the numbers in a [`MixMeasurement`] come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +47,26 @@ pub enum MeasureSource {
     ///
     /// [`AudioEvent::MixMeasureError`]: super::AudioEvent::MixMeasureError
     Live,
+    /// Measure already-decoded audio with no render at all: an audio file
+    /// or a loaded reference track, by
+    /// [`AudioCommand::MeasureAudio`][super::AudioCommand::MeasureAudio].
+    /// Every whole-buffer figure and detail exists, exactly as on
+    /// [`Render`](Self::Render). The measurement's `target` is
+    /// [`StemSource::Master`] as a placeholder — the audio belongs to no
+    /// mix slice — and its range is `0..frames` of the decoded audio.
+    Decoded,
+}
+
+/// What an [`AudioCommand::MeasureAudio`][super::AudioCommand::MeasureAudio]
+/// measures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AudioMeasureSource {
+    /// An audio file, read exactly as a clip placed from it is: through
+    /// [`ClipSource::open_wav_at_rate`][super::ClipSource::open_wav_at_rate],
+    /// so a pooled asset measures sample-for-sample like its clip.
+    File(PathBuf),
+    /// A reference track the A/B player has loaded and decoded.
+    Reference(ReferenceId),
 }
 
 /// Which opt-in details a measurement computes on top of the default
@@ -67,12 +89,16 @@ pub struct DetailSet {
     /// each return's measured gain (renders every return a track sends
     /// to, once per pass).
     pub depth: bool,
+    /// The mastering assistant's 1/6-octave mono LTAS
+    /// ([`sixth_octave_ltas`][resonance_metering::spectrum::offline::sixth_octave_ltas]),
+    /// for `master.assist`.
+    pub assist: bool,
 }
 
 impl DetailSet {
     /// True when at least one detail is requested.
     pub fn any(self) -> bool {
-        self.spectrum || self.stereo || self.dynamics || self.depth
+        self.spectrum || self.stereo || self.dynamics || self.depth || self.assist
     }
 }
 
@@ -120,6 +146,9 @@ pub struct MeasurementDetail {
     pub dynamics: Option<RangeDynamics>,
     /// See [`DepthDetail`].
     pub depth: Option<DepthDetail>,
+    /// The assistant LTAS, `NUM_OCTAVE_BINS` 1/6-octave levels, dB, 20 Hz
+    /// first. See [`DetailSet::assist`].
+    pub assist_ltas: Option<Vec<f32>>,
 }
 
 /// Everything the mix report needs about one measured slice of the mix.

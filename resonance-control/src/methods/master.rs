@@ -60,6 +60,10 @@ pub const SET_SIDECHAIN: &str = "master.set_sidechain";
 /// `master.clear_sidechain` — remove a master plugin's key route
 /// ([`ClearSidechainParams`] -> `MutationAck`).
 pub const CLEAR_SIDECHAIN: &str = "master.clear_sidechain";
+/// `master.assist` — run the mastering assistant offline over the master
+/// mix and return its suggestions WITHOUT applying them ([`AssistParams`]
+/// -> job -> [`AssistResult`]). Changes nothing.
+pub const ASSIST: &str = "master.assist";
 
 /// All `master.*` method names.
 pub const METHODS: &[&str] = &[
@@ -78,6 +82,7 @@ pub const METHODS: &[&str] = &[
     SAVE_PLUGIN_PRESET,
     SET_SIDECHAIN,
     CLEAR_SIDECHAIN,
+    ASSIST,
 ];
 
 /// Result of `master.summary`.
@@ -431,4 +436,152 @@ pub struct SetPluginBypassParams {
     /// back. The engine crossfades over a few milliseconds rather than
     /// switching, so a toggle mid-playback does not click.
     pub bypassed: bool,
+}
+
+// ---------------------------------------------------------------------------
+// The mastering assistant (warmth-width-depth.md §7.4)
+// ---------------------------------------------------------------------------
+
+/// The CLAP id of the plugin whose params `master.assist` suggests.
+pub const MASTERING_PLUGIN_ID: &str = "com.resonance.mastering";
+
+/// What `master.assist` compares the master against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum AssistMode {
+    /// A built-in genre target band (`genre` required).
+    Genre,
+    /// A reference track from the media pool (`pool_asset_id` required).
+    Reference,
+}
+
+/// A built-in genre target, the same five the plugin's assistant panel
+/// offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum AssistGenre {
+    Rock,
+    Indie,
+    Acoustic,
+    Jazz,
+    Pop,
+}
+
+/// Params for `master.assist`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistParams {
+    /// `"genre"` or `"reference"`.
+    pub mode: AssistMode,
+    /// The genre target. Required with `mode: "genre"`, refused otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<AssistGenre>,
+    /// The reference track, a `pool.list` asset id. Required with
+    /// `mode: "reference"`, refused otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_asset_id: Option<crate::ids::AssetId>,
+    /// The part of the song to analyse; defaults to the whole song and is
+    /// clamped to it, exactly as on `meter.measure`. Pick the loudest
+    /// representative section (a chorus) when the song has quiet parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<crate::methods::render::RangeSpec>,
+}
+
+/// The target a `master.assist` result was computed against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistTargetInfo {
+    pub mode: AssistMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub genre: Option<AssistGenre>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool_asset_id: Option<crate::ids::AssetId>,
+    /// Display name: the genre, or the reference's name.
+    pub label: String,
+    /// The loudness the suggestions aim at, LUFS: the genre's target, or
+    /// the reference's own integrated loudness.
+    pub target_lufs: f64,
+}
+
+/// The master as the assistant measured it (the same figures
+/// `meter.measure` reports, over the same range).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistMeasured {
+    /// `null` for silence.
+    pub lufs_integrated: Option<f64>,
+    pub true_peak_db: f64,
+    /// Peak-to-RMS over the whole range, dB.
+    pub crest_db: f64,
+    /// L/R correlation over the whole range.
+    pub correlation: f64,
+    pub measured_seconds: f64,
+}
+
+/// One param write of a suggestion.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistParamValue {
+    /// The mastering plugin's string param key (`"lim_ceiling"`,
+    /// `"tone_b0_gain"`, ...), as `master.plugin_params` lists it and
+    /// `master.set_plugin_param` accepts it.
+    pub key: String,
+    /// Plain value: a bool as 0/1, a choice as its index.
+    pub value: f64,
+}
+
+/// The assistant's suggestion for one stage.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistSuggestion {
+    /// `input_trim`, `tonal_low_shelf`, `tonal_high_shelf`, `glue`,
+    /// `imager`, `limiter`, `target_lufs` or `diagnostic`.
+    pub stage: String,
+    /// Why, with the number that justified it.
+    pub rationale: Vec<String>,
+    /// Exactly the writes the plugin's own Apply would make for this
+    /// stage. Empty means the stage needs no change (the rationale says
+    /// why); `diagnostic` never carries any.
+    pub params: Vec<AssistParamValue>,
+}
+
+/// One ISO 1/3-octave band of the master against the target band, after
+/// aligning the master's midrange (400 Hz-2.5 kHz) to the target's — a
+/// comparison of spectral SHAPE, never of level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistBandDeviation {
+    /// Band centre, Hz.
+    pub hz: f64,
+    /// Lowest on-target level, dB (relative).
+    pub lo_db: f64,
+    /// Highest on-target level, dB (relative).
+    pub hi_db: f64,
+    /// The master here, aligned, dB (relative).
+    pub measured_db: f64,
+    /// Distance outside the band: positive = above it (too much), negative
+    /// = below it (too little), 0 = inside it.
+    pub deviation_db: f64,
+}
+
+/// Job payload once a `master.assist` job completes. Nothing was applied.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct AssistResult {
+    pub target: AssistTargetInfo,
+    /// Always `com.resonance.mastering`: every key below is its param.
+    pub plugin_id: String,
+    /// Chain slot of the first `com.resonance.mastering` on the master, or
+    /// `null` when there is none — add it with `master.add_effect` before
+    /// setting any of the params.
+    pub master_slot: Option<u32>,
+    /// What the analysis read: the master output as it is NOW, after the
+    /// master chain (including any mastering plugin already on it).
+    pub measured: AssistMeasured,
+    /// Stage by stage, in the order the assistant decides them.
+    pub suggestions: Vec<AssistSuggestion>,
+    /// 31 bands, 20 Hz first.
+    pub deviations: Vec<AssistBandDeviation>,
 }

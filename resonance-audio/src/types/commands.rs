@@ -9,7 +9,7 @@ use resonance_common::{
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
 use super::{
-    ABSource, BusId, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
+    ABSource, AudioMeasureSource, BusId, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
     MidiNote, PluginInstanceId, ProbeSpec, ProbeStage, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
     StemSource, StemTarget, TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
@@ -704,6 +704,21 @@ pub enum AudioCommand {
         source: MeasureSource,
         /// Opt-in details to compute on every target (render path only).
         /// The default set computes none, and costs nothing extra.
+        detail: DetailSet,
+    },
+    /// Measure already-decoded audio — an audio file or a loaded
+    /// reference track — the way [`Self::MeasureMix`] measures a rendered
+    /// slice, with no render (warmth-width-depth.md §7.5). Needs no
+    /// offline renderer and may run while the transport rolls. Answers
+    /// with exactly one `MixMeasured` (one measurement, source
+    /// [`MeasureSource::Decoded`]) or `MixMeasureError`, echoing
+    /// `measure_id`.
+    MeasureAudio {
+        /// Opaque correlation token, echoed on the terminal event.
+        measure_id: u64,
+        /// What to measure.
+        source: AudioMeasureSource,
+        /// Opt-in details, as on [`Self::MeasureMix`].
         detail: DetailSet,
     },
     /// Probe one insert chain's harmonic signature offline

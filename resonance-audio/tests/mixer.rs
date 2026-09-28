@@ -43,6 +43,8 @@ mod graph_rate_assert;
 mod latency_comp;
 #[path = "mixer/measure_mix.rs"]
 mod measure_mix;
+#[path = "mixer/measure_reference.rs"]
+mod measure_reference;
 #[path = "mixer/midi_event_cap.rs"]
 mod midi_event_cap;
 #[path = "mixer/midi_event_window.rs"]

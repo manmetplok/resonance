@@ -61,6 +61,8 @@ mod control_jobs;
 mod control_lane_generator;
 #[path = "control/control_master.rs"]
 mod control_master;
+#[path = "control/control_master_assist.rs"]
+mod control_master_assist;
 #[path = "control/control_master_params.rs"]
 mod control_master_params;
 #[path = "control/control_meter.rs"]
@@ -71,6 +73,8 @@ mod control_meter_detail;
 mod control_meter_compare;
 #[path = "control/control_meter_probe.rs"]
 mod control_meter_probe;
+#[path = "control/control_reference.rs"]
+mod control_reference;
 #[path = "control/control_mixer_volume_db.rs"]
 mod control_mixer_volume_db;
 #[path = "control/control_mutation_gate.rs"]

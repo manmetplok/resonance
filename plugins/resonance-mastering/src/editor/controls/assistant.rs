@@ -7,23 +7,20 @@
 //! - Analyze / Clear buttons
 //! - Results block (analysis stats) and rationale list
 //! - An Apply button that commits the suggested params
+//!
+//! The target choice (mode, genre, reference path) lives in the
+//! [`Assistant`], not in the editor, so it is saved with the plugin state
+//! and survives closing the window and reopening the project.
 
 use plugin_gui_core::egui;
 
-use crate::assistant::{Assistant, Genre, Target};
+use crate::assistant::{Assistant, Genre, TargetMode};
 use crate::params::MasteringParams;
 
 use super::theme;
-use super::TargetSource;
 
-pub fn draw(
-    ui: &mut egui::Ui,
-    params: &MasteringParams,
-    assistant: &Assistant,
-    selected_genre: &mut Genre,
-    target_source: &mut TargetSource,
-    reference_path: &mut String,
-) {
+pub fn draw(ui: &mut egui::Ui, params: &MasteringParams, assistant: &Assistant) {
+    let settings = assistant.settings();
     ui.vertical(|ui| {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
@@ -68,17 +65,17 @@ pub fn draw(
             ui.add_space(12.0);
             ui.label(egui::RichText::new("Target:").color(theme::TEXT_DIM));
             if ui
-                .selectable_label(*target_source == TargetSource::Genre, "Genre preset")
+                .selectable_label(settings.mode == TargetMode::Genre, "Genre preset")
                 .clicked()
             {
-                *target_source = TargetSource::Genre;
+                assistant.set_mode(TargetMode::Genre);
             }
             ui.add_space(4.0);
             if ui
-                .selectable_label(*target_source == TargetSource::Reference, "Reference track")
+                .selectable_label(settings.mode == TargetMode::Reference, "Reference track")
                 .clicked()
             {
-                *target_source = TargetSource::Reference;
+                assistant.set_mode(TargetMode::Reference);
             }
         });
         ui.add_space(6.0);
@@ -86,32 +83,38 @@ pub fn draw(
         // Target input: genre dropdown OR reference file row
         ui.horizontal(|ui| {
             ui.add_space(12.0);
-            match *target_source {
-                TargetSource::Genre => {
+            match settings.mode {
+                TargetMode::Genre => {
                     ui.label(egui::RichText::new("Genre:").color(theme::TEXT_DIM));
                     egui::ComboBox::from_id_salt("assistant_genre")
                         .width(120.0)
-                        .selected_text(selected_genre.label())
+                        .selected_text(settings.genre.label())
                         .show_ui(ui, |ui| {
                             for &g in Genre::ALL {
                                 if ui
-                                    .selectable_label(*selected_genre == g, g.label())
+                                    .selectable_label(settings.genre == g, g.label())
                                     .clicked()
                                 {
-                                    *selected_genre = g;
+                                    assistant.set_genre(g);
                                 }
                             }
                         });
                 }
-                TargetSource::Reference => {
+                TargetMode::Reference => {
                     ui.label(egui::RichText::new("File:").color(theme::TEXT_DIM));
-                    ui.add(
-                        egui::TextEdit::singleline(reference_path)
-                            .desired_width(300.0)
-                            .hint_text("/path/to/reference.wav"),
-                    );
+                    let mut reference_path = settings.reference_path.clone();
+                    if ui
+                        .add(
+                            egui::TextEdit::singleline(&mut reference_path)
+                                .desired_width(300.0)
+                                .hint_text("/path/to/reference.wav"),
+                        )
+                        .changed()
+                    {
+                        assistant.set_reference_path(&reference_path);
+                    }
                     if ui.button("Load").clicked() {
-                        let _ = assistant.load_reference(reference_path);
+                        let _ = assistant.load_reference(&reference_path);
                     }
                     if ui.button("Clear").clicked() {
                         assistant.clear_reference();
@@ -154,22 +157,12 @@ pub fn draw(
 
             ui.add_space(24.0);
             let can_analyze = fraction > 0.2
-                && (*target_source == TargetSource::Genre || assistant.reference().is_some());
+                && (settings.mode == TargetMode::Genre || assistant.reference().is_some());
             if ui
                 .add_enabled(can_analyze, egui::Button::new("Analyze"))
                 .clicked()
             {
-                let target = match *target_source {
-                    TargetSource::Genre => Target::Genre(*selected_genre),
-                    TargetSource::Reference => {
-                        if let Some(r) = assistant.reference() {
-                            Target::Reference(r)
-                        } else {
-                            Target::Genre(*selected_genre)
-                        }
-                    }
-                };
-                let _ = assistant.analyze(target);
+                let _ = assistant.analyze(assistant.current_target());
             }
 
             ui.add_space(8.0);

@@ -249,7 +249,14 @@ fn bare_tool_like_tokens(text: &str, namespaces: &BTreeSet<String>) -> BTreeSet<
 /// Tokens shaped like `<namespace>_<word>` that are wire FIELD names, not
 /// tool names. Each must still appear as a property in some published
 /// tool's input or output schema, so a renamed field fails here too.
-const WIRE_FIELDS: &[&str] = &["clip_id", "clip_ids", "section_id", "track_id"];
+const WIRE_FIELDS: &[&str] = &[
+    "clip_id",
+    "clip_ids",
+    "pool_asset_id",
+    "reference_id",
+    "section_id",
+    "track_id",
+];
 
 /// Namespace-shaped keys of the plugin's own files (`lockstep.json`).
 const PLUGIN_FILE_KEYS: &[&str] = &["control_protocol_version"];

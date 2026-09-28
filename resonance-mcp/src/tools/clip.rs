@@ -3,7 +3,7 @@
 
 use crate::server::ResonanceMcp;
 use resonance_control::job::JobStatus;
-use resonance_control::methods::{arrangement, clip, pool};
+use resonance_control::methods::{arrangement, clip, pool, reference};
 use resonance_control::MutationAck;
 use rmcp::handler::server::tool::schema_for_output;
 use rmcp::handler::server::wrapper::Parameters;
@@ -284,5 +284,31 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(arrangement::REMOVE_BARS, &params)
             .await
+    }
+
+    #[tool(
+        description = "Load a REFERENCE TRACK — a commercial master the user supplied to compare \
+                       the mix against — onto the project's A/B reference list, from the media \
+                       pool: import the file with pool_import first, then pass its \
+                       pool_asset_id from pool_list. It appears in the GUI's reference panel, \
+                       where the user can audition it against the mix, and is saved with the \
+                       project; undoable. \
+                       \
+                       Returns reference_id. Measure the reference with meter_measure and \
+                       target {reference: reference_id}: every figure and detail block a mix \
+                       slice gets (spectrum tilt, per-band stereo width, PLR/PSR, ...), measured \
+                       from the same pooled file a clip of it would play, so the numbers \
+                       compare directly with a meter_measure of your master. It decodes in the \
+                       background: a measurement asked for in the first moment answers busy — \
+                       retry. To have the mastering assistant target it, use master_assist \
+                       with {mode: \"reference\", pool_asset_id} (it needs no load).",
+        annotations(destructive_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<reference::LoadResult>()
+    )]
+    async fn reference_load(
+        &self,
+        Parameters(params): Parameters<reference::LoadParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(reference::LOAD, &params).await
     }
 }

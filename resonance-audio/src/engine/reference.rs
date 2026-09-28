@@ -153,6 +153,12 @@ impl ReferencePlayer {
         self.entry(id).map(|e| e.pcm.is_some())
     }
 
+    /// The decoded PCM of reference `id`: `None` when no such entry is
+    /// loaded, `Some(None)` while it is still decoding.
+    pub(crate) fn entry_pcm(&self, id: ReferenceId) -> Option<Option<Arc<Vec<f32>>>> {
+        self.entry(id).map(|e| e.pcm.clone())
+    }
+
     /// Number of loaded entries. Test accessor for a refused-duplicate
     /// load's invariant: the count must not change (ARCH-04 D-5).
     #[doc(hidden)]

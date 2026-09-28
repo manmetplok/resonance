@@ -264,6 +264,57 @@ target, reaching it would have taken more limiting than the ceiling allows. Do
 not push harder here: the master needs its own glue and limiting first, and its
 PSR (see `dynamics`) should stay at 8 or more.
 
+## Reference tracks: `reference_load`
+
+A reference is a commercial master the user supplies to compare against.
+Import the file with `pool_import`, then call `reference_load` with its
+`pool_asset_id`. The reference joins the GUI's A/B reference panel and is
+saved with the project; the load is undoable. It decodes in the background,
+so a measurement asked for right away answers `busy`: retry.
+
+`meter_measure` with `target: {reference: reference_id}` measures the
+reference whole, from the same pooled file a clip of it would play. It
+reports every field and detail block a mix slice gets. `range` and
+`source: "live"` do not apply, and `meter_snapshot`, `meter_compare` and
+`meter_probe` refuse a reference target. Compare the two measurements
+directly: `tilt_db_per_oct`, the per-band `side_mid_db` and correlation,
+and `plr_db` / `psr_db`. Judge tone only at matched loudness: a commercial
+master is usually 6-10 LU louder than a mix, and louder reads brighter.
+
+## The mastering assistant: `master_assist`
+
+`master_assist` runs the `com.resonance.mastering` Assistant offline over the
+master range and returns its suggestions. **It applies nothing.** Pass
+`{mode: "genre", genre}` (rock, indie, acoustic, jazz, pop) or
+`{mode: "reference", pool_asset_id}` for a reference track from `pool_list`.
+
+- `measured` is the master as it is now, after the whole master chain. That
+  includes any mastering plugin already on it. Run the assistant before you
+  switch stages on, or read its numbers as "what is left to do".
+- `suggestions[]` goes stage by stage (`input_trim`, `tonal_low_shelf`,
+  `tonal_high_shelf`, `glue`, `imager`, `limiter`, `target_lufs`,
+  `diagnostic`). Each entry has a `rationale` and the exact `params` writes
+  as `{key, value}`: bools are 0/1 and choices are indices. An empty `params`
+  list means the stage needs nothing. To apply a stage, send each write
+  through `master_set_plugin_param` (plugin `com.resonance.mastering`,
+  `param` = key). Those are the same writes the panel's Apply makes.
+- `deviations[]` has 31 ISO 1/3-octave bands. Each compares the master's
+  spectral shape against the target band after aligning the midrange
+  (400 Hz–2.5 kHz), so level never enters into it. `deviation_db` is 0
+  inside the band, positive where there is too much and negative where
+  there is too little. A genre band is a Pestana-style slope (−4.5 to
+  −5 dB/oct over 100 Hz–4 kHz) with a tolerance: ±2 dB through the mids,
+  wider at the extremes. The shelves act only on the part outside the band,
+  so a mix inside it gets no tonal move.
+- The result also gives the chain slot of the first mastering plugin on the
+  master. A null slot means there is none yet: `master_add_effect` it before
+  setting any key.
+
+Treat each stage as a proposal. Apply one, then check the result with
+`meter_compare` at matched loudness before accepting the next. In
+particular, `input_trim` and `target_lufs` aim at the genre's loudness,
+which is a mastering target and never a mix target.
+
 ## Cost
 
 A measurement renders the slice offline — roughly what a bounce of the same

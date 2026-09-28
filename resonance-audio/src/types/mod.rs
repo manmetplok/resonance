@@ -144,7 +144,8 @@ pub use events::{
 };
 pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
 pub use measure::{
-    DepthDetail, DepthSend, DetailSet, MeasureSource, MeasurementDetail, MixMeasurement,
+    AudioMeasureSource, DepthDetail, DepthSend, DetailSet, MeasureSource, MeasurementDetail,
+    MixMeasurement,
 };
 pub use probe::{ChainProbeReport, ProbeSpec, ProbeStage, ProbedStage};
 pub use stem::{StemBitDepth, StemSource, StemTarget};

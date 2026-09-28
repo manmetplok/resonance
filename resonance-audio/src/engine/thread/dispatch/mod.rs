@@ -147,6 +147,7 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ExportStems { .. }
         | AudioCommand::CancelStemExport
         | AudioCommand::MeasureMix { .. }
+        | AudioCommand::MeasureAudio { .. }
         | AudioCommand::ProbeChain { .. }
         | AudioCommand::FreezeTrack { .. }
         | AudioCommand::CancelFreeze => bounce::dispatch_bounce(ctx, state, cmd),

@@ -52,6 +52,9 @@ pub(super) fn loaded(
     waveform_peaks: Vec<(f32, f32)>,
     length_samples: u64,
 ) {
+    // `reference.load` lists a pooled asset under the asset's name, not
+    // its `asset_N` file's; any other load takes the engine's.
+    let name = r.control.reference_names.remove(&id).unwrap_or(name);
     if let Some(entry) = r.reference.entry_mut(id) {
         entry.name = name;
         entry.path = path;
