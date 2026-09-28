@@ -9,20 +9,17 @@
 //! guarantees all 128 offs fit without reallocating on the audio
 //! thread.
 //!
-//! Needs a real `.clap` to instantiate `ClapInstance`, so this skips
-//! (rather than failing) when `target/bundled/` hasn't been built —
-//! same pattern as `tests/clap_host/clap_plugin_drop_order.rs`.
+//! Needs a real plugin binary to instantiate `ClapInstance`; see
+//! `plugin_binaries` for where it is found and why a missing one fails.
 
 use std::path::PathBuf;
 
 use resonance_audio::test_support::{ClapBundle, SyncClapInstance};
 
+use crate::plugin_binaries::plugin_binary;
+
 fn find_bundled_clap() -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("target/bundled/resonance-amp.clap"),
-        PathBuf::from("../target/bundled/resonance-amp.clap"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    plugin_binary("resonance-amp")
 }
 
 fn make_instance(bundle: &ClapBundle) -> SyncClapInstance {
@@ -41,10 +38,6 @@ fn make_instance(bundle: &ClapBundle) -> SyncClapInstance {
 #[test]
 fn all_notes_off_covers_every_key_even_when_queue_is_full() {
     let Some(bundle_path) = find_bundled_clap() else {
-        eprintln!(
-            "[skip] no bundled .clap found at target/bundled/resonance-amp.clap — \
-             run `cargo build --workspace` first to enable this regression test"
-        );
         return;
     };
     let bundle = ClapBundle::load(&bundle_path).expect("bundle load");
@@ -72,7 +65,6 @@ fn all_notes_off_covers_every_key_even_when_queue_is_full() {
 #[test]
 fn all_notes_off_on_empty_queue_covers_every_key() {
     let Some(bundle_path) = find_bundled_clap() else {
-        eprintln!("[skip] no bundled .clap found — see neighbour test for context");
         return;
     };
     let bundle = ClapBundle::load(&bundle_path).expect("bundle load");

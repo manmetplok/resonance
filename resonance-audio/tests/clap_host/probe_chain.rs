@@ -3,16 +3,17 @@
 //! clones on a worker, and leaves the live instances untouched.
 //!
 //! The empty-chain case runs everywhere. The mastering-saturator case
-//! needs the real plugin binary — `target/bundled/resonance-mastering.clap`
-//! (scripts/bundle.sh) or the debug cdylib `libresonance_mastering.so`
-//! (`cargo build -p resonance-mastering`) — and skips without one, the
-//! same pattern as `clap_all_notes_off.rs`.
+//! needs the real plugin binary (`plugin_binaries`: the debug cdylib
+//! `./scripts/run-tests.py` builds, or the bundle) and fails without one
+//! unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is set.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::*;
+
+use crate::plugin_binaries::plugin_binary;
 
 const PROBE_ID: u64 = 7_311;
 
@@ -89,15 +90,7 @@ fn a_stage_whose_live_instance_is_gone_fails_the_probe() {
 }
 
 fn mastering_binary() -> Option<PathBuf> {
-    [
-        "target/bundled/resonance-mastering.clap",
-        "../target/bundled/resonance-mastering.clap",
-        "target/debug/libresonance_mastering.so",
-        "../target/debug/libresonance_mastering.so",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
+    plugin_binary("resonance-mastering")
 }
 
 /// Set `key` to `to` wherever it appears in a JSON state.
@@ -125,10 +118,6 @@ fn set_key(value: &mut serde_json::Value, key: &str, to: &serde_json::Value) -> 
 #[test]
 fn the_mastering_saturator_in_tape_mode_shows_h2_and_the_live_instance_is_untouched() {
     let Some(path) = mastering_binary() else {
-        eprintln!(
-            "[skip] no resonance-mastering binary (scripts/bundle.sh, or cargo build -p \
-             resonance-mastering)"
-        );
         return;
     };
     let path = path.canonicalize().unwrap().to_string_lossy().into_owned();

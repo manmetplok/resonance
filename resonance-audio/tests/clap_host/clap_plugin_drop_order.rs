@@ -30,10 +30,9 @@
 //! This test reproduces the bug at the lowest possible level — load
 //! a real `.clap` bundle, create an instance, then exercise the same
 //! "drop instance via IndexMap-clear, *then* drop the bundle" pattern
-//! the engine thread now uses. Skips (rather than failing) when the
-//! workspace hasn't been built yet — the locally-bundled CLAPs live
-//! under `target/bundled/` and aren't a precondition for the rest of
-//! the test suite to run.
+//! the engine thread now uses. Needs a built plugin binary
+//! (`plugin_binaries`), and fails without one unless
+//! `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is set.
 
 use std::path::PathBuf;
 
@@ -43,22 +42,12 @@ use std::sync::Arc;
 
 use resonance_audio::test_support::{ClapBundle, PluginSlot};
 
-/// Find a locally-built CLAP bundle to load. Returns `None` if none
-/// of the candidate paths exist — the test then becomes a no-op so it
-/// doesn't false-fail when run from a fresh checkout.
+use crate::plugin_binaries::plugin_binary;
+
+/// A locally-built plugin binary to load (`plugin_binaries`: missing, it
+/// fails the test unless the env opt-out turns that into a skip).
 fn find_bundled_clap() -> Option<PathBuf> {
-    // `cargo test -p resonance-audio` runs with CWD =
-    // `resonance-audio/`. The bundled plugins live at workspace
-    // root's `target/bundled/`. Probe both layouts so the test
-    // works whether `cargo test --workspace` or
-    // `cargo test -p resonance-audio` is the entrypoint.
-    let candidates = [
-        // From workspace root.
-        PathBuf::from("target/bundled/resonance-amp.clap"),
-        // From `resonance-audio/` working directory.
-        PathBuf::from("../target/bundled/resonance-amp.clap"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    plugin_binary("resonance-amp")
 }
 
 /// Mirror of the engine thread's plugin map type.
@@ -67,10 +56,6 @@ type PluginsArc = Arc<RwLock<IndexMap<u32, PluginSlot>>>;
 #[test]
 fn dropping_plugins_before_bundles_does_not_segfault() {
     let Some(bundle_path) = find_bundled_clap() else {
-        eprintln!(
-            "[skip] no bundled .clap found at target/bundled/resonance-amp.clap — \
-             run `cargo build --workspace` first to enable this regression test"
-        );
         return;
     };
 
@@ -140,7 +125,6 @@ fn second_instance_after_first_is_destroyed_safely() {
     // against any "destroying instance A invalidates instance B"
     // ordering bug in either our code or the plugin.
     let Some(bundle_path) = find_bundled_clap() else {
-        eprintln!("[skip] no bundled .clap found — see neighbour test for context");
         return;
     };
 

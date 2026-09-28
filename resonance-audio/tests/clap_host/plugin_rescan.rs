@@ -23,10 +23,10 @@
 //! The bundle they load is one of our own: the workspace's plugin
 //! cdylibs are CLAP bundles, so symlinking one in as `<name>.clap` gives
 //! a real, loadable, first-party binary with no third-party code in the
-//! process. A build that has not produced one yet (a bare
+//! process. A build that has not produced one (a bare
 //! `cargo test -p resonance-audio` rather than `./scripts/run-tests.py`)
-//! leaves the two loaded-bundle assertions with nothing to bite on, and
-//! [`first_party_cdylib`] says so on stderr rather than passing quietly.
+//! fails the two loaded-bundle tests unless
+//! `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is set.
 
 use crossbeam_channel::unbounded;
 use resonance_audio::test_support::{rescan_plugins_in, ClapBundle};
@@ -105,36 +105,10 @@ impl Drop for ScanDir {
     }
 }
 
-/// One of the workspace's own plugin cdylibs, or `None` when this build
-/// has not produced any.
-///
-/// Looks next to the test binary (`target/<profile>/deps/..`), which is
-/// where cargo puts them.
+/// One of the workspace's own plugin binaries (`plugin_binaries`: a
+/// missing one fails the test unless the env opt-out makes it a skip).
 fn first_party_cdylib() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let profile_dir = exe.parent()?.parent()?;
-    let mut found: Vec<PathBuf> = std::fs::read_dir(profile_dir)
-        .ok()?
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("libresonance_") && n.ends_with(".so"))
-        })
-        .collect();
-    // Sorted so a run picks the same bundle every time.
-    found.sort();
-    if found.is_empty() {
-        eprintln!(
-            "plugin_rescan: no first-party plugin cdylib in {} — the \
-             already-loaded and duplicate-path assertions have nothing to \
-             bite on. Build the workspace (./scripts/run-tests.py, or \
-             cargo build --workspace) to cover them.",
-            profile_dir.display()
-        );
-    }
-    found.into_iter().next()
+    crate::plugin_binaries::plugin_binary("resonance-eq")
 }
 
 #[test]

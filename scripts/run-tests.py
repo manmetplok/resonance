@@ -21,6 +21,14 @@ rather than a shell one-liner:
   resonance-audio's `test-internals`), so code that only compiles with them
   passes the suite while a plain `cargo build` is broken. A `cargo check` of
   the same crates without test targets runs first to catch that.
+* **Plugin binaries.** Some `resonance-audio` tests load a real first-party
+  plugin (`plugin_binary("resonance-eq")` in `tests/clap_host/`). A test
+  build compiles the plugin crates but never leaves their cdylibs where a
+  test can find them (`target/debug/lib<crate>.so` is only written for a
+  crate cargo *builds*), so those plugins are `cargo build`-ed too. The
+  list is read from the tests themselves, and a test whose binary is
+  missing fails rather than skipping (unless
+  RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES=1).
 
 Usage:
     scripts/run-tests.py [-jN] [-p CRATE]... [--no-build] [--no-check] [--] [libtest args]
@@ -39,11 +47,15 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def build_and_enumerate(crates: list[str], build: bool) -> list[tuple[str, str]]:
@@ -105,6 +117,39 @@ def check_non_test(crates: list[str]) -> None:
     print(f"non-test check passed in {time.monotonic() - started:.0f}s")
 
 
+def plugin_cdylibs() -> list[str]:
+    """The plugin crates the resonance-audio tests load by binary.
+
+    Derived from the `plugin_binary("<crate>")` calls in its tests rather
+    than kept as a list here, so a new test cannot name a plugin this
+    script forgets to build.
+    """
+    found: set[str] = set()
+    pattern = re.compile(r'plugin_binary\("([a-z0-9_-]+)"\)')
+    for path in glob.glob(os.path.join(ROOT, "resonance-audio/tests/**/*.rs"), recursive=True):
+        with open(path, encoding="utf-8") as f:
+            found.update(pattern.findall(f.read()))
+    return sorted(found)
+
+
+def build_plugin_cdylibs(crates: list[str]) -> None:
+    """`cargo build` the plugins the tests in scope load (see module docs)."""
+    if crates and "resonance-audio" not in crates:
+        return
+    plugins = plugin_cdylibs()
+    if not plugins:
+        return
+    cmd = ["cargo", "build"]
+    for p in plugins:
+        cmd += ["-p", p]
+    started = time.monotonic()
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+    if proc.returncode != 0:
+        sys.stderr.write(proc.stderr)
+        sys.exit(f"plugin build failed ({proc.returncode})")
+    print(f"built {len(plugins)} plugin cdylibs in {time.monotonic() - started:.0f}s")
+
+
 def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
     proc = subprocess.run(
         [exe, *extra],
@@ -131,6 +176,8 @@ def main() -> int:
         check_non_test(args.crates)
 
     binaries = build_and_enumerate(args.crates, build=not args.no_build)
+    if not args.no_build:
+        build_plugin_cdylibs(args.crates)
     if not binaries:
         return print("no test binaries found") or 1
 

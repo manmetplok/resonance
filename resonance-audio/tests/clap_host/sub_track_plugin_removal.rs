@@ -25,30 +25,24 @@
 //! without also emitting a `PluginRemoved` for them, or the app would
 //! wait on an echo `RestoreEchoes` never learns to expect.
 //!
-//! Skips rather than fails when the workspace hasn't been bundled
-//! (`scripts/bundle.sh`) — same contract as the rest of the
-//! plugin-hosting tests under `tests/clap_host/`.
+//! Needs a built plugin binary; `plugin_binaries` finds it, and a missing
+//! one fails the test unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is
+//! set — the contract every test under `tests/clap_host/` that needs a
+//! built plugin follows.
 
 use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::AudioEvent;
 use resonance_audio::{Track, TrackId};
 
+use crate::plugin_binaries::plugin_binary;
+
 const PARENT: TrackId = 1;
 const SUB: TrackId = 2;
 const EQ_CLAP_ID: &str = "com.resonance.eq";
 
-fn bundle_path(file: &str) -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::path::PathBuf::from("target/bundled").join(file),
-        std::path::PathBuf::from("../target/bundled").join(file),
-    ];
-    candidates.into_iter().find(|p| p.exists())
-}
-
 #[test]
 fn removing_a_parent_track_drops_every_sub_track_plugin_instance() {
-    let Some(path) = bundle_path("resonance-eq.clap") else {
-        eprintln!("target/bundled/resonance-eq.clap absent — run scripts/bundle.sh; skipping");
+    let Some(path) = plugin_binary("resonance-eq") else {
         return;
     };
     let path = path.to_string_lossy().into_owned();
