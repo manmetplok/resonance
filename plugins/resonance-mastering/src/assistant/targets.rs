@@ -41,6 +41,10 @@
 //! Reference tracks (§7.5) are a separate comparison mode: they never
 //! generate a band of their own (see [`super::decide::Target`]).
 
+use std::sync::OnceLock;
+
+use resonance_metering::spectrum::octave::OctaveTable;
+
 use super::analyze::NUM_SPECTRUM_BINS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,8 +303,8 @@ pub fn genre_bands(genre: Genre) -> TargetBands {
 }
 
 /// A genre's band on the 1/6-octave analysis grid: `(lo, hi)`, indexed
-/// from the 20 Hz bin at `[0]` to the 20 kHz bin at
-/// `[NUM_SPECTRUM_BINS - 1]`.
+/// like [`band_center_hz`], from the lowest bin (20–22.4 Hz) at `[0]` to
+/// the highest (17.8–20 kHz) at `[NUM_SPECTRUM_BINS - 1]`.
 pub fn target_band(genre: Genre) -> ([f32; NUM_SPECTRUM_BINS], [f32; NUM_SPECTRUM_BINS]) {
     genre_bands(genre).on_analysis_grid()
 }
@@ -316,8 +320,13 @@ pub fn target_curve(genre: Genre) -> [f32; NUM_SPECTRUM_BINS] {
     curve
 }
 
-/// Centre frequency of the `i`th 1/6-octave bin between 20 Hz and 20 kHz.
+/// Centre frequency of the `i`th bin of the 1/6-octave analysis grid:
+/// the geometric centre of the bin's edges, exactly as the LTAS bins
+/// them (`resonance_metering`'s [`OctaveTable::center`]). The 60 bins
+/// tile 20 Hz–20 kHz edge to edge, so the centres run from ≈21.2 Hz at
+/// `[0]` to ≈18.9 kHz at `[NUM_SPECTRUM_BINS - 1]`. (This used to return
+/// the bin's lower edge, half a bin (1/12 octave) low.)
 pub fn band_center_hz(i: usize) -> f32 {
-    let ratio = (20_000.0_f32 / 20.0).powf(1.0 / NUM_SPECTRUM_BINS as f32);
-    20.0 * ratio.powi(i as i32)
+    static TABLE: OnceLock<OctaveTable> = OnceLock::new();
+    TABLE.get_or_init(OctaveTable::new).center(i)
 }
