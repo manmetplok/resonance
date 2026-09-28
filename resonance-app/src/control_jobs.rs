@@ -118,7 +118,30 @@ pub enum JobToken {
         /// measurements block each other; see
         /// [`JobBoard::has_live_offline_measure`].
         offline: bool,
+        /// For a `meter.compare` that renders a `"current"` side: which
+        /// snapshots the result is compared against, and how. `None` for
+        /// every other method.
+        compare: Option<ComparePlan>,
     },
+    /// A `meter.probe` (warmth-width-depth.md §7.3): completes on
+    /// `AudioEvent::ChainProbed`, fails on `ChainProbeError`, both of
+    /// which echo the job id as their `probe_id`. It renders nothing
+    /// shared — the engine probes a cloned chain — so it blocks nothing
+    /// and nothing blocks it.
+    Probe,
+}
+
+/// The sides of a `meter.compare` that is waiting on a render
+/// (warmth-width-depth.md §7.2). `None` on a side means "current" — the
+/// measurement the render is producing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparePlan {
+    /// Side A's snapshot id, or `None` for the render.
+    pub a: Option<u64>,
+    /// Side B's snapshot id, or `None` for the render.
+    pub b: Option<u64>,
+    /// Gain-match B to A's integrated loudness.
+    pub match_lufs: bool,
 }
 
 #[derive(Debug)]
@@ -525,6 +548,14 @@ impl JobBoard {
             Some(token @ JobToken::Measure { .. }) => Some(token.clone()),
             _ => None,
         }
+    }
+
+    /// Is `job_id` a [`JobToken::Probe`] that is still running?
+    pub fn is_live_probe(&self, job_id: u64) -> bool {
+        let table = self.table();
+        table.jobs.get(&job_id).is_some_and(|e| {
+            !e.state.is_terminal() && matches!(e.token, Some(JobToken::Probe))
+        })
     }
 
     /// Is an OFFLINE measurement job still running?

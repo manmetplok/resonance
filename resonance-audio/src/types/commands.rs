@@ -10,7 +10,7 @@ use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSo
 
 use super::{
     ABSource, BusId, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
-    MidiNote, PluginInstanceId, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
+    MidiNote, PluginInstanceId, ProbeSpec, ProbeStage, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
     StemSource, StemTarget, TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
@@ -705,6 +705,27 @@ pub enum AudioCommand {
         /// Opt-in details to compute on every target (render path only).
         /// The default set computes none, and costs nothing extra.
         detail: DetailSet,
+    },
+    /// Probe one insert chain's harmonic signature offline
+    /// (warmth-width-depth.md §7.3): clone every stage from its live
+    /// instance's saved state, drive the clones with a synthetic tone on a
+    /// worker thread, and answer with one [`AudioEvent::ChainProbed`] or
+    /// [`AudioEvent::ChainProbeError`]. The live instances are only read
+    /// (one `save_state` each, under their lock) — never processed, reset
+    /// or reloaded — so playback, automation and undo are untouched, and
+    /// it may run while the transport rolls. See `engine::probe`.
+    ///
+    /// [`AudioEvent::ChainProbed`]: super::AudioEvent::ChainProbed
+    /// [`AudioEvent::ChainProbeError`]: super::AudioEvent::ChainProbeError
+    ProbeChain {
+        /// Opaque correlation token, echoed on the terminal event.
+        probe_id: u64,
+        /// The chain's stages in processing order: instruments and
+        /// bypassed slots already left out by the caller. Empty probes the
+        /// straight wire.
+        stages: Vec<ProbeStage>,
+        /// The stimulus.
+        spec: ProbeSpec,
     },
     /// Cancel an in-flight stem export between targets. The worker polls
     /// a shared atomic and stops before the next target; stems already

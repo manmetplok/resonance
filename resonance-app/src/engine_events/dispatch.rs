@@ -114,6 +114,15 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             measure_id,
             message,
         } => crate::update::control::mix_measure_error(r, measure_id, message),
+        // Insert-chain probe (warmth-width-depth.md §7.3): only
+        // `meter.probe` issues it, so it resolves that job and nothing
+        // else.
+        E::ChainProbed { probe_id, report } => {
+            crate::update::control::chain_probed(r, probe_id, report)
+        }
+        E::ChainProbeError { probe_id, message } => {
+            crate::update::control::chain_probe_error(r, probe_id, message)
+        }
         E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
         E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
         E::ExportError { kind, message } => transport::export_error(r, kind, message),

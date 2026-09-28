@@ -144,6 +144,11 @@ pub(super) fn dispatch_bounce(
             ctx.sample_rate,
             ctx.event_tx.clone(),
         ),
+        AudioCommand::ProbeChain {
+            probe_id,
+            stages,
+            spec,
+        } => crate::engine::probe::handle_probe_chain(ctx, state, probe_id, stages, spec),
         AudioCommand::CancelStemExport => {
             // The stem-export worker polls its own token between targets.
             cancel(&state.stem_cancel);
