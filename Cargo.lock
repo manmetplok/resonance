@@ -5220,6 +5220,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "resonance-stereo"
+version = "0.1.0"
+dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
+ "plugin-gui-core",
+ "resonance-dsp",
+ "resonance-dsp-test-support",
+ "resonance-metering",
+ "resonance-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "resonance-svs"
 version = "0.1.0"
 dependencies = [
