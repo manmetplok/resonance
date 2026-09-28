@@ -6,13 +6,15 @@
 //! (`saturate`, `tape`, `transformer`, the IIR `Oversampler`), with a drive
 //! tilt (`response`), an output tilt (`tone`), parallel `mix`, and
 //! auto-gain on by default so a before/after judgement is made at matched
-//! loudness. Tape quality is Standard (shaper + filters) only; the HQ
-//! hysteresis model is slice W6b — see `params.rs` for why its switch is
-//! not declared yet.
+//! loudness. Tape mode has two qualities (decision D2, `tape_quality`):
+//! Standard, the ADAA shaper plus filters, and HQ (slice W6b), which swaps
+//! the shaper for a Jiles-Atherton hysteresis stage at 2× oversampling or
+//! more and keeps every filter.
 //!
-//! Latency is 0 at every `oversample` setting: the oversampler is the
-//! half-band IIR pair (decision D3), which has no fixed latency to
-//! report, so changing the factor never needs a host restart.
+//! Latency is 0 at every `oversample` setting and in both tape qualities:
+//! the oversampler is the half-band IIR pair (decision D3), which has no
+//! fixed latency to report, so changing the factor (or HQ forcing it up)
+//! never needs a host restart.
 
 use std::sync::Arc;
 

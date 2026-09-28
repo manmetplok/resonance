@@ -10,6 +10,8 @@
     "output": 0.0,
     "oversample": 1,
     "speed": 1,
-    "flutter": 0.0
+    "flutter": 0.0,
+    "tape_quality": 0,
+    "tape_solver": 1
   }
 }

@@ -22,6 +22,8 @@ fn extreme(mode: Mode, factor: resonance_dsp::OversampleFactor, sign: f32) -> Se
         oversample: factor,
         speed_ips: if sign > 0.0 { 30.0 } else { 7.5 },
         flutter: 1.0,
+        tape_quality: resonance_color::params::TapeQuality::Standard,
+        tape_solver: resonance_dsp::HysteresisSolver::Rk4,
     }
 }
 

@@ -26,6 +26,8 @@ const BINDINGS: [(&str, &str); PARAM_COUNT] = [
     ("oversample", "choice_segmented(ui, &p.oversample)"),
     ("speed", "choice_segmented(ui, &p.speed)"),
     ("flutter", "float_knob(ui, &p.flutter, p.flutter.name(),"),
+    ("tape_quality", "choice_segmented(ui, &p.tape_quality)"),
+    ("tape_solver", "choice_segmented(ui, &p.tape_solver)"),
 ];
 
 #[test]

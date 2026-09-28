@@ -19,8 +19,27 @@
 //! curve carries its own drive `k` (`sin(k·u)/k`, unity slope at any `k`),
 //! and `k = 0` is the identity. The knob maps linearly to
 //! `0..`[`CONSOLE_MAX_DRIVE`], so drive 0 in Console is bit-transparent.
+//!
+//! # Tape HQ (slice W6b)
+//!
+//! HQ replaces Tape's curve with the `resonance-dsp` Jiles-Atherton
+//! [`resonance_dsp::Hysteresis`] ([`tape_hq`]). The same knobs map onto
+//! the physical constants the way `JaParams::from_controls` documents:
+//!
+//! - `drive` → `a`, through the same drive law as every other mode, so
+//!   the loop's anhysteretic small-signal slope is the drive gain `G`;
+//!   the output is divided by that slope, so the level stays put as drive
+//!   moves (the same normalisation as the curves);
+//! - `bias` → `c`, the reversible fraction. This is tape bias in the
+//!   recording sense, not the Standard curve's asymmetry: low is
+//!   under-biased (a wide loop, dirtier, quiet signals lose a little
+//!   level), high is over-biased (close to the clean anhysteretic
+//!   curve). The model is symmetric, so HQ is odd-dominant where
+//!   Standard Tape is even-dominant; `tests/harmonics.rs` pins both;
+//! - `sat` → `M_s` is fixed at [`TAPE_HQ_SAT`]: there is no knob for it.
 
-use resonance_dsp::Curve;
+use resonance_dsp::hysteresis::langevin;
+use resonance_dsp::{Curve, JaParams};
 
 use crate::params::Mode;
 
@@ -124,4 +143,30 @@ pub fn transfer(mode: Mode, drive: f32, bias: f32, mix: f32, x: f32) -> f32 {
     };
     let m = mix.clamp(0.0, 1.0) as f64;
     ((1.0 - m) * x64 + m * wet) as f32
+}
+
+/// Tape HQ's fixed `sat` control (`M_s` = 1, the middle of the range).
+pub const TAPE_HQ_SAT: f64 = 0.5;
+
+/// Tape HQ: the hysteresis constants for a drive gain (see
+/// [`drive_amount`]) and the bias knob, and the output normalisation
+/// `1 / (dM_an/dH)` that holds the small-signal level at 1 across drive.
+pub fn tape_hq(amount: f32, bias: f32) -> (JaParams, f32) {
+    let b = if bias.is_nan() { 0.0 } else { bias.clamp(0.0, 1.0) };
+    let ja = JaParams::from_controls(amount as f64, TAPE_HQ_SAT, b as f64);
+    (ja, (1.0 / ja.anhysteretic_slope()) as f32)
+}
+
+/// [`transfer`] for a full settings snapshot. Tape HQ has no static
+/// curve (its output depends on where the loop has been), so it draws the
+/// centre line of the loop instead: the anhysteretic curve
+/// `M_s·L(H/a)`, normalised like the audio path.
+pub fn transfer_for(s: &super::Settings, x: f32) -> f32 {
+    if !s.is_hq() {
+        return transfer(s.mode, s.drive, s.bias, s.mix, x);
+    }
+    let (ja, norm) = tape_hq(drive_amount(Mode::Tape, s.drive), s.bias);
+    let wet = ja.m_s * langevin(x as f64 / ja.a) * norm as f64;
+    let m = s.mix.clamp(0.0, 1.0) as f64;
+    ((1.0 - m) * x as f64 + m * wet) as f32
 }
