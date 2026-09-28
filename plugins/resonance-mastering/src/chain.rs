@@ -283,8 +283,12 @@ impl Chain {
         let tonal_bands = params.tonal_eq.snapshot();
         self.tonal_eq.process_stereo(left, right, &tonal_bands);
 
+        // The imager's per-band width rides on the multiband's crossover
+        // (see `stages::multiband`); unity while the imager is off.
         let mb_cfg = params.multiband.snapshot();
-        self.multiband.process_stereo(left, right, &mb_cfg);
+        let band_width = params.imager.band_width_targets();
+        self.multiband
+            .process_stereo_with_width(left, right, &mb_cfg, &band_width);
 
         let img_cfg = params.imager.snapshot();
         self.imager.process_stereo(left, right, &img_cfg);

@@ -10,6 +10,18 @@
 //! aligned to that delay, the crossover does not introduce phase
 //! distortion between bands — the multiband is truly "transparent" when
 //! the per-band compressors are bypassed.
+//!
+//! # Per-band width
+//!
+//! The imager's per-band width (`img_b{n}_width`, warmth-width-depth.md
+//! §6.3) reuses this crossover instead of building a second one: each
+//! band's side channel is scaled by its width just before the bands are
+//! summed. The imager itself is linear and runs right after, so scaling
+//! here is the same as scaling there, and it costs no extra latency.
+//! While any width is off unity the crossover runs even with the
+//! multiband disabled (the compressors and band trims stay out of it,
+//! as they are while disabled). At unity everywhere nothing of this
+//! runs, and the stage is exactly what it was without it.
 
 pub mod delay;
 pub mod lowpass;
@@ -21,6 +33,12 @@ use crate::stages::linear_phase_eq::DesignWorker;
 use delay::DelayLine;
 use lowpass::LinearPhaseLowpass;
 use resonance_dsp::db_to_linear;
+use resonance_plugin::{Smoother, SmoothingStyle};
+
+use super::retarget;
+
+/// Ramp length of the per-band width smoothers, in milliseconds.
+const WIDTH_RAMP_MS: f32 = 10.0;
 
 /// Number of frequency bands.
 pub const NUM_BANDS: usize = 4;
@@ -131,9 +149,15 @@ pub struct Multiband {
     xd_l: Vec<f32>,
     xd_r: Vec<f32>,
 
-    /// `cfg.enabled` of the previous chunk, used to detect the enable
-    /// edge so the idled crossover filters can be restarted cleanly.
-    was_enabled: bool,
+    /// Whether the previous chunk ran the crossover network, used to
+    /// detect the edge where it restarts so the idled filters can be
+    /// restarted cleanly.
+    was_splitting: bool,
+
+    /// Per-band side gain (the imager's per-band width), smoothed per
+    /// sample. `width_tgt` mirrors the last requested target.
+    width_sm: [Smoother; NUM_BANDS],
+    width_tgt: [f32; NUM_BANDS],
 }
 
 impl Multiband {
@@ -170,7 +194,14 @@ impl Multiband {
             y3_r: vec![0.0; max_buffer],
             xd_l: vec![0.0; max_buffer],
             xd_r: vec![0.0; max_buffer],
-            was_enabled: false,
+            was_splitting: false,
+            width_sm: std::array::from_fn(|_| {
+                let mut sm = Smoother::new(SmoothingStyle::Linear(WIDTH_RAMP_MS));
+                sm.set_sample_rate(sample_rate);
+                sm.reset(1.0);
+                sm
+            }),
+            width_tgt: [1.0; NUM_BANDS],
         }
     }
 
@@ -183,7 +214,11 @@ impl Multiband {
         }
         self.delay_left.reset();
         self.delay_right.reset();
-        self.was_enabled = false;
+        self.was_splitting = false;
+        for (sm, tgt) in self.width_sm.iter_mut().zip(self.width_tgt.iter_mut()) {
+            sm.reset(1.0);
+            *tgt = 1.0;
+        }
     }
 
     /// Stage latency in samples (identical to one linear-phase lowpass;
@@ -243,6 +278,23 @@ impl Multiband {
     /// compressors are all streaming, so chunking is transparent and
     /// no frame is ever silently dropped. No allocation either way.
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &MultibandConfig) {
+        self.process_stereo_with_width(left, right, cfg, &[1.0; NUM_BANDS]);
+    }
+
+    /// [`Self::process_stereo`] with a per-band side gain (the imager's
+    /// per-band width, already `1.0` everywhere when the imager is off):
+    /// see the module docs. Values are clamped to `0..=2` and ramped.
+    pub fn process_stereo_with_width(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        cfg: &MultibandConfig,
+        width: &[f32; NUM_BANDS],
+    ) {
+        for b in 0..NUM_BANDS {
+            let w = width[b].clamp(0.0, 2.0);
+            retarget(&mut self.width_sm[b], &mut self.width_tgt[b], w);
+        }
         let total = left.len().min(right.len());
         let mut start = 0;
         while start < total {
@@ -264,10 +316,12 @@ impl Multiband {
             return;
         }
 
-        let just_enabled = cfg.enabled && !self.was_enabled;
-        self.was_enabled = cfg.enabled;
+        let widening = self.width_active();
+        let splitting = cfg.enabled || widening;
+        let just_split = splitting && !self.was_splitting;
+        self.was_splitting = splitting;
 
-        if !cfg.enabled {
+        if !splitting {
             // Bypass path: output = delayed input. The crossovers' only
             // contribution here would be their group delay, which the
             // input delay line reproduces exactly, so skip the three FIR
@@ -281,7 +335,7 @@ impl Multiband {
             return;
         }
 
-        if just_enabled {
+        if just_split {
             // The crossovers idled during bypass, so their streaming
             // state is stale. Restart them from silence: the subtraction
             // topology sums the four bands to the delayed input for any
@@ -300,8 +354,48 @@ impl Multiband {
 
         self.run_crossover_network(left, right, frames);
         self.build_band_signals(frames);
-        self.compress_bands(cfg, frames);
-        self.sum_bands(cfg, left, right, frames);
+        if cfg.enabled {
+            self.compress_bands(cfg, frames);
+        }
+        if widening {
+            self.widen_bands(frames);
+        }
+        // Disabled, the multiband contributes only its split: no band
+        // trims (the compressors were skipped above).
+        let unity = MultibandConfig::default();
+        self.sum_bands(if cfg.enabled { cfg } else { &unity }, left, right, frames);
+    }
+
+    /// True while any band's width is off unity or still ramping.
+    fn width_active(&self) -> bool {
+        self.width_sm
+            .iter()
+            .zip(&self.width_tgt)
+            .any(|(sm, &t)| t != 1.0 || sm.current() != 1.0)
+    }
+
+    /// Scale each band's side channel by its (smoothed) width, in place.
+    /// A band at rest at unity is left untouched.
+    fn widen_bands(&mut self, frames: usize) {
+        let bands: [(&mut [f32], &mut [f32]); NUM_BANDS] = [
+            (&mut self.y1_l[..frames], &mut self.y1_r[..frames]),
+            (&mut self.y2_l[..frames], &mut self.y2_r[..frames]),
+            (&mut self.y3_l[..frames], &mut self.y3_r[..frames]),
+            (&mut self.xd_l[..frames], &mut self.xd_r[..frames]),
+        ];
+        for (b, (l, r)) in bands.into_iter().enumerate() {
+            let sm = &mut self.width_sm[b];
+            if self.width_tgt[b] == 1.0 && sm.current() == 1.0 {
+                continue;
+            }
+            for i in 0..frames {
+                let w = sm.next();
+                let mid = 0.5 * (l[i] + r[i]);
+                let side = 0.5 * (l[i] - r[i]) * w;
+                l[i] = mid + side;
+                r[i] = mid - side;
+            }
+        }
     }
 
     /// Stage 1: route raw input through the delay line into `xd_*`, and
