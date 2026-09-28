@@ -607,9 +607,23 @@ impl Shuffle {
     }
 }
 
+/// Claim this thread's `arc-swap` debt-list node now, at spawn, not
+/// inside the first job. `arc-swap` hands every thread a node on its first
+/// `load` of ANY `ArcSwap` and keeps it until the thread exits; when no
+/// free node is in the global list it `Box`es a new one. The render jobs
+/// load `ArcSwap`s (a track's frozen source, the shared engine state), so
+/// without this a worker's first job allocated — on a realtime thread,
+/// mid-block. That first job can come arbitrarily late: under load the
+/// caller and the other workers may claim every job for many blocks.
+fn claim_arc_swap_node() {
+    let probe = arc_swap::ArcSwapOption::<()>::const_empty();
+    let _ = probe.load();
+}
+
 fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
     crate::clap_host::thread_check::mark_audio_thread();
     resonance_dsp::flush_denormals();
+    claim_arc_swap_node();
     let s = &*shared;
     // A plugin running on this worker may split its work into sub-tasks.
     let _current = CurrentPool::enter(s);

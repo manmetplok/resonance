@@ -122,7 +122,10 @@ fn parallel_callbacks_never_allocate_on_any_thread() {
         }
     };
     // Warm-up: first-use thread-locals, the scheduling hand-off, lazily
-    // initialised statics.
+    // initialised statics. It cannot promise that every worker has run a
+    // job — under load the caller and the others may claim them all — so
+    // a worker's per-thread first-use state must be set up at spawn, not
+    // here (render_pool's `claim_arc_swap_node`; this test caught it).
     run(&mut h, 48);
 
     ARMED.store(true, Ordering::SeqCst);
