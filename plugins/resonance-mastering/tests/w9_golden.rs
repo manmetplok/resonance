@@ -52,6 +52,16 @@ const TAU: f32 = std::f32::consts::TAU;
 //   edits now land 2048 samples later in the downstream audio, so this is
 //   a content change, not rounding.
 // - The "stripped" renders stay at or below −89.1 dB.
+//
+// Re-blessed again for review finding M1: the M/S cross pair now runs
+// on its direct pair's hop grid instead of the half-slots in between.
+// The pre- and post-fix streams were compared over 200 blocks. Only the
+// two scenarios that run the cross pair moved, and only in the window
+// where its first design crossfades in (output samples ~20k-33k): by
+// −39.9 dB re peak in `eq_mid_side_bands` and −42.7 dB in
+// `w9_sweeps_between_blocks`. That is the misaligned crossfade the fix
+// removes. Outside that window it is at most −133 dB (FFT rounding of
+// the moved cross grid) in the first, and bit-identical in the second.
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "w9_golden.f32")
 }
