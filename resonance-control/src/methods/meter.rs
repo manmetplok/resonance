@@ -61,9 +61,12 @@ pub const SNAPSHOT: &str = "meter.snapshot";
 /// `meter.compare` — loudness-matched deltas between two measurements
 /// ([`CompareParams`] -> job -> [`CompareResult`]).
 pub const COMPARE: &str = "meter.compare";
+/// `meter.probe` — harmonic signature of an insert chain
+/// ([`ProbeParams`] -> job -> [`ProbeResult`]).
+pub const PROBE: &str = "meter.probe";
 
 /// All `meter.*` method names.
-pub const METHODS: &[&str] = &[MEASURE, STEMS, SNAPSHOT, COMPARE];
+pub const METHODS: &[&str] = &[MEASURE, STEMS, SNAPSHOT, COMPARE, PROBE];
 
 /// Which slice of the mix to measure.
 ///
@@ -778,4 +781,119 @@ pub struct CompareResult {
     pub match_gain_db: f64,
     /// `B − A` for every proxy.
     pub deltas: CompareDeltas,
+}
+
+// ---------------------------------------------------------------------------
+// meter.probe (warmth-width-depth.md §7.3)
+// ---------------------------------------------------------------------------
+
+fn default_probe_freq_hz() -> f64 {
+    1_000.0
+}
+
+fn default_probe_level_dbfs() -> f64 {
+    -12.0
+}
+
+/// Params for `meter.probe`: which insert chain, and the stimulus.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeParams {
+    /// Whose insert chain: `"master"` (default), `{track_id}` or
+    /// `{bus_id}`. A track's instrument is not part of it.
+    #[serde(default)]
+    pub target: MeasureTarget,
+    /// Probe tone, Hz (default 1000), snapped to the analysis grid
+    /// (0.73 Hz at 48 kHz; the result echoes the exact value). Use e.g.
+    /// 5000 to expose aliasing: harmonics past Nyquist fold back.
+    #[serde(default = "default_probe_freq_hz")]
+    pub freq_hz: f64,
+    /// Peak level of the tone, dBFS (default -12), -80..0. Distortion
+    /// depends on it, so probe at the level the chain really sees.
+    #[serde(default = "default_probe_level_dbfs")]
+    pub level_dbfs: f64,
+    /// Also run the SMPTE pair (60 Hz + 7 kHz, 4:1, summed peak at
+    /// `level_dbfs`) and report `imd_pct` (default false).
+    #[serde(default)]
+    pub imd: bool,
+}
+
+impl Default for ProbeParams {
+    fn default() -> Self {
+        Self {
+            target: MeasureTarget::Master,
+            freq_hz: default_probe_freq_hz(),
+            level_dbfs: default_probe_level_dbfs(),
+            imd: false,
+        }
+    }
+}
+
+/// One stage the probe ran through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeStageInfo {
+    /// The plugin's CLAP id, as `*.plugin_params` reports it.
+    pub plugin_id: String,
+    /// Its index among same-id plugins on the chain.
+    pub occurrence: u32,
+    /// Its display name.
+    pub name: String,
+    /// Whether the live plugin's current state was copied into the probe's
+    /// clone. `false` means the plugin has no state extension and was
+    /// probed at its defaults.
+    pub state_copied: bool,
+}
+
+/// A slot the probe left out, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeSkipped {
+    /// The plugin's CLAP id.
+    pub plugin_id: String,
+    /// Its index among same-id plugins on the chain.
+    pub occurrence: u32,
+    /// `"bypassed"`, `"chain bypassed"` or `"missing"`.
+    pub reason: String,
+}
+
+/// Job payload once a `meter.probe` job completes: the chain's harmonic
+/// signature at the probed frequency and level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeResult {
+    /// The chain probed.
+    pub target: MeasureTarget,
+    /// The exact probe frequency, Hz.
+    pub freq_hz: f64,
+    /// The tone's input peak level, dBFS.
+    pub level_dbfs: f64,
+    /// The stages the tone went through, in order. Empty means the chain
+    /// was a straight wire.
+    pub stages: Vec<ProbeStageInfo>,
+    /// Slots on the chain that were not probed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<ProbeSkipped>,
+    /// Chain gain at the probe frequency: output fundamental minus input
+    /// level, dB.
+    pub gain_db: f64,
+    /// Total harmonic distortion over H2..H9 (in-band ones), %. Targets:
+    /// master 0.1-1, bus 0.5-3, single track 3-10.
+    pub thd_pct: f64,
+    /// H2..H9 in dBc (`h[0]` is H2), floored at -160; `null` for a
+    /// harmonic above Nyquist (it aliases instead).
+    pub h: Vec<Option<f64>>,
+    /// H2 minus H3, dB. Positive is even-dominant (the "warm" signature).
+    pub h2_h3_db: Option<f64>,
+    /// How fast the series falls, dB per order (positive = falling);
+    /// fitted over harmonics above -140 dBc. Aim for 6 or more.
+    pub decay_db_per_order: Option<f64>,
+    /// Strongest non-harmonic, non-DC bin, dBc: aliasing plus any noise
+    /// or inharmonic product. Aim for -90 or lower.
+    pub aliasing_floor_dbc: f64,
+    /// SMPTE intermodulation, %, when `imd` was asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imd_pct: Option<f64>,
+    /// Summed latency of the probed stages, samples.
+    pub latency_samples: u32,
 }

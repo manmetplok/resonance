@@ -85,14 +85,15 @@ use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_audio::types::{
-    AudioCommand, DetailSet, MeasureSource as EngineSource, MixMeasurement, SamplePos,
-    StemSource,
+    AudioCommand, ChainProbeReport, DetailSet, MeasureSource as EngineSource, MixMeasurement,
+    ProbeSpec, ProbeStage, SamplePos, StemSource,
 };
 use resonance_control::methods::meter::{
     self as proto, Bands, CompareParams, CompareResult, CompareSide, CompareSideInfo,
     CorrelationWindows, DynamicsDetail, MatchMode, MeasureDetail, MeasureParams, MeasureResult,
-    MeasureSource, MeasureTarget, SnapshotParams, SnapshotResult, SpectralPeak, SpectrumDetail,
-    StemsParams, StemsResult, StereoBand, StereoDetail, TrackMeasurement,
+    MeasureSource, MeasureTarget, ProbeParams, ProbeResult, ProbeSkipped, ProbeStageInfo,
+    SnapshotParams, SnapshotResult, SpectralPeak, SpectrumDetail, StemsParams, StemsResult,
+    StereoBand, StereoDetail, TrackMeasurement,
 };
 use resonance_control::methods::render::RangeSpec;
 use resonance_control::{Request, Response, RpcError};
@@ -112,6 +113,7 @@ pub(super) fn try_handle(
         proto::STEMS => stems(app, conn, request),
         proto::SNAPSHOT => snapshot(app, conn, request),
         proto::COMPARE => compare(app, conn, request),
+        proto::PROBE => probe(app, conn, request),
         _ => return None,
     };
     Some(handled)
@@ -457,6 +459,211 @@ fn compare_payload(
         deltas: super::meter_compare::deltas(a, b, gain.unwrap_or(0.0)),
     };
     serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// meter.probe (warmth-width-depth.md §7.3)
+// ---------------------------------------------------------------------------
+
+/// Start a probe of `target`'s insert chain.
+///
+/// The app decides which slots are in the chain because it is the one
+/// that knows each slot's bundle path, role and state: a track's
+/// instrument is not an insert and is left out silently; a missing,
+/// bypassed or chain-bypassed slot is left out and listed in `skipped`,
+/// exactly as the audio would skip it. The engine then clones what is
+/// left (see `resonance_audio::engine::probe`); nothing live is touched,
+/// so the probe needs no render guard and runs while the transport rolls.
+fn probe(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: ProbeParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let nyquist = f64::from(app.sample_rate) / 2.0;
+    if !(params.freq_hz.is_finite() && params.freq_hz >= 10.0 && params.freq_hz < nyquist) {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!(
+                    "freq_hz {} must be between 10 Hz and Nyquist ({nyquist} Hz)",
+                    params.freq_hz
+                )),
+            ),
+            Task::none(),
+        );
+    }
+    if !(params.level_dbfs.is_finite() && (-80.0..=0.0).contains(&params.level_dbfs)) {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!(
+                    "level_dbfs {} must be between -80 and 0",
+                    params.level_dbfs
+                )),
+            ),
+            Task::none(),
+        );
+    }
+    let owner = match resolve_target(app, params.target) {
+        Ok(StemSource::Master) => super::plugin_target::ChainOwner::Master,
+        Ok(StemSource::Track(id)) => super::plugin_target::ChainOwner::Track(id),
+        Ok(StemSource::Bus(id)) => super::plugin_target::ChainOwner::Bus(id),
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let (slots, entries) = match super::plugin_target::chain_slots(app, owner)
+        .and_then(|s| super::plugin_target::chain_entries(app, owner).map(|e| (s, e)))
+    {
+        Ok(chain) => chain,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let chain_bypassed = match owner {
+        super::plugin_target::ChainOwner::Master => app.master.fx_bypassed,
+        super::plugin_target::ChainOwner::Track(id) => {
+            app.registry.tracks.iter().any(|t| t.id == id && t.fx_bypassed)
+        }
+        super::plugin_target::ChainOwner::Bus(id) => {
+            app.registry.busses.iter().any(|b| b.id == id && b.fx_bypassed)
+        }
+    };
+
+    let mut stages = Vec::new();
+    let mut labels = Vec::new();
+    let mut skipped = Vec::new();
+    for (slot, entry) in slots.iter().zip(&entries) {
+        if entry.kind == resonance_control::methods::track::PluginKind::Instrument {
+            continue;
+        }
+        let reason = if slot.availability.is_missing() {
+            Some("missing")
+        } else if chain_bypassed {
+            Some("chain bypassed")
+        } else if slot.bypassed {
+            Some("bypassed")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            skipped.push(ProbeSkipped {
+                plugin_id: entry.plugin_id.clone(),
+                occurrence: entry.occurrence,
+                reason: reason.to_owned(),
+            });
+            continue;
+        }
+        stages.push(ProbeStage {
+            instance_id: slot.instance_id,
+            clap_file_path: slot.clap_file_path.clone(),
+            clap_plugin_id: slot.clap_plugin_id.clone(),
+        });
+        labels.push(ProbeStageInfo {
+            plugin_id: entry.plugin_id.clone(),
+            occurrence: entry.occurrence,
+            name: slot.plugin_name.clone(),
+            state_copied: false,
+        });
+    }
+
+    let started = app.start_control_job(
+        proto::PROBE,
+        &format!("Probe the insert chain of {}", owner_label(owner)),
+        JobToken::Probe,
+        Some(conn),
+    );
+    let probe_id = u64::from(started.job_id);
+    app.control.pending_probes.insert(
+        probe_id,
+        crate::state::PendingProbe {
+            // A bus asked for by `{track_id}` comes back as `{bus_id}`,
+            // as on `meter.measure`.
+            target: wire_target(owner_source(owner)),
+            level_dbfs: params.level_dbfs,
+            stages: labels,
+            skipped,
+        },
+    );
+    let spec = ProbeSpec {
+        freq_hz: params.freq_hz,
+        level_dbfs: params.level_dbfs,
+        imd: params.imd,
+    };
+    if app
+        .engine
+        .send(AudioCommand::ProbeChain {
+            probe_id,
+            stages,
+            spec,
+        })
+        .is_err()
+    {
+        app.control.pending_probes.remove(&probe_id);
+        app.control
+            .jobs
+            .fail(probe_id, "probe did not start (engine unavailable)");
+    }
+    (super::success(request, &started), Task::none())
+}
+
+fn owner_label(owner: super::plugin_target::ChainOwner) -> String {
+    match owner {
+        super::plugin_target::ChainOwner::Master => "the master".to_owned(),
+        super::plugin_target::ChainOwner::Track(id) => format!("track {id}"),
+        super::plugin_target::ChainOwner::Bus(id) => format!("bus {id}"),
+    }
+}
+
+fn owner_source(owner: super::plugin_target::ChainOwner) -> StemSource {
+    match owner {
+        super::plugin_target::ChainOwner::Master => StemSource::Master,
+        super::plugin_target::ChainOwner::Track(id) => StemSource::Track(id),
+        super::plugin_target::ChainOwner::Bus(id) => StemSource::Bus(id),
+    }
+}
+
+/// Resolve a `meter.probe` job from the engine's report.
+pub(crate) fn chain_probed(app: &mut Resonance, probe_id: u64, report: ChainProbeReport) {
+    let pending = app.control.pending_probes.remove(&probe_id);
+    if !app.control.jobs.is_live_probe(probe_id) {
+        return;
+    }
+    let Some(mut pending) = pending else {
+        app.control.jobs.fail(probe_id, "the probe's request was lost");
+        return;
+    };
+    for (label, stage) in pending.stages.iter_mut().zip(&report.stages) {
+        label.state_copied = stage.state_copied;
+    }
+    let h = &report.harmonics;
+    let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    let r5 = |v: f64| (v * 100_000.0).round() / 100_000.0;
+    let result = ProbeResult {
+        target: pending.target,
+        freq_hz: (h.freq_hz * 1_000.0).round() / 1_000.0,
+        level_dbfs: pending.level_dbfs,
+        stages: pending.stages,
+        skipped: pending.skipped,
+        gain_db: r2(h.fundamental_dbfs - pending.level_dbfs),
+        thd_pct: r5(h.thd_pct),
+        h: h.h.iter().map(|l| l.map(r2)).collect(),
+        h2_h3_db: h.h2_h3_db.map(r2),
+        decay_db_per_order: h.decay_db_per_order.map(r2),
+        aliasing_floor_dbc: r2(h.aliasing_floor_dbc),
+        imd_pct: report.imd_pct.map(r5),
+        latency_samples: report.latency_samples,
+    };
+    match serde_json::to_value(result) {
+        Ok(payload) => app.control.jobs.complete(probe_id, payload),
+        Err(e) => app.control.jobs.fail(probe_id, e.to_string()),
+    }
+}
+
+/// Fail a `meter.probe` job with the engine's reason.
+pub(crate) fn chain_probe_error(app: &mut Resonance, probe_id: u64, message: String) {
+    app.control.pending_probes.remove(&probe_id);
+    if app.control.jobs.is_live_probe(probe_id) {
+        app.control.jobs.fail(probe_id, message);
+    } else {
+        tracing::warn!("audio: chain probe failed: {message}");
+    }
 }
 
 /// The engine's detail flags for a wire `detail` list. Duplicates are

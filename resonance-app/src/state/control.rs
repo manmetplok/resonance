@@ -64,6 +64,21 @@ pub struct ControlEndpointState {
     /// `meter.snapshot` measurements kept for `meter.compare`
     /// (warmth-width-depth.md §7.2). Session-scoped and in memory only.
     pub meter_snapshots: MeterSnapshots,
+    /// `meter.probe` jobs waiting on the engine, keyed by job id: what the
+    /// result needs that the engine does not know (the stages' names, the
+    /// slots left out).
+    pub pending_probes: HashMap<u64, PendingProbe>,
+}
+
+/// The app-side half of a `meter.probe` in flight.
+#[derive(Debug, Clone)]
+pub struct PendingProbe {
+    pub target: resonance_control::methods::meter::MeasureTarget,
+    pub level_dbfs: f64,
+    /// Labels of the probed stages, in chain order, `state_copied` still
+    /// `false` until the engine reports.
+    pub stages: Vec<resonance_control::methods::meter::ProbeStageInfo>,
+    pub skipped: Vec<resonance_control::methods::meter::ProbeSkipped>,
 }
 
 /// The `meter.snapshot` store: full-precision engine measurements keyed

@@ -192,6 +192,36 @@ project, a restart loses them, and past 32 the least recently used is evicted,
 which reads as "not found". Two snapshots compare instantly with no render. The
 solo state is part of what was measured, so compare like with like.
 
+## Harmonic signature: `meter_probe`
+
+`meter_probe {target, freq_hz, level_dbfs, imd}` runs a sine through an insert
+chain (the master's, a bus's, or a track's inserts; a track's instrument is not
+part of it) and reports what the chain adds. Use it to set a saturator's drive
+to a THD target instead of reading a knob.
+
+It is safe to run at any time. It builds a **fresh clone** of each plugin from
+the live plugin's current saved state and probes the clones. The live plugins
+are only read, so playback, automation, undo and every plugin's running state
+are untouched. The clone gets no automation (it probes the current values), and
+a sidechain key hears silence. `stages` lists what was probed. A stage with
+`state_copied: false` has no state extension and was probed at its defaults.
+`skipped` lists bypassed and missing slots.
+
+| Field | What it means | Target |
+|---|---|---|
+| `thd_pct` | Total harmonic distortion, H2..H9, % | Master 0.1-1, bus 0.5-3, single track 3-10. |
+| `h` | H2..H9 in dBc, `h[0]` = H2 | -160 is the floor (absent). `null` means above Nyquist: that harmonic aliases instead. |
+| `h2_h3_db` | H2 minus H3, dB | Above 0 is even-dominant, the "warm" signature. Below 0 is odd-dominant: harder, edgier. |
+| `decay_db_per_order` | How fast the series falls, dB per order | 6 or more. A slow decay means high orders, which sound harsh. |
+| `aliasing_floor_dbc` | Strongest bin that is not a harmonic or DC | -90 or lower. Probe at `freq_hz: 5000` to expose aliasing: harmonics past Nyquist fold back into the audible band. |
+| `imd_pct` | SMPTE intermodulation (60 Hz + 7 kHz, 4:1), only with `imd: true` | Lower is cleaner. It rises when bass modulates the highs, which is muddy distortion. |
+| `gain_db` | Output level at the probe frequency minus the input level | A saturator with auto-gain sits near 0. |
+| `latency_samples` | Summed latency of the probed stages | Informational. |
+
+**Probe at the level the chain really sees.** Distortion rises with level, so a
+-12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
+tone's peak.
+
 ## Cost
 
 A measurement renders the slice offline — roughly what a bounce of the same

@@ -28,6 +28,7 @@ pub mod lra;
 pub mod lufs;
 pub mod offline;
 pub mod plr;
+pub mod probe;
 pub mod snapshot;
 pub mod spectrum;
 pub mod true_peak;

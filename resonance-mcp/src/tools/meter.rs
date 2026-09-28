@@ -234,4 +234,50 @@ impl ResonanceMcp {
         self.invoke_job(meter::COMPARE, &params, MEASURE_WAIT_MS)
             .await
     }
+
+    #[tool(
+        description = "Measure the harmonic signature of an insert chain: run a sine through it \
+                       offline and read THD, the harmonics and the aliasing floor. Use it to set \
+                       a saturator's drive to a THD target instead of guessing from the knob, \
+                       and to check that a character stage is even-dominant (\"warm\"). \
+                       \
+                       target: \"master\" (default), {track_id: N} or {bus_id: N}; the chain is \
+                       that owner's inserts in order (a track's instrument is not part of it; \
+                       bypassed and missing plugins are left out and listed in skipped). \
+                       freq_hz defaults to 1000 and is snapped to the analysis grid (the result \
+                       echoes the exact value); probe at 5000 to expose aliasing, since \
+                       harmonics past Nyquist fold back. level_dbfs (default -12, -80..0) is \
+                       the tone's peak: distortion depends on level, so probe at what the chain \
+                       really sees. imd: true adds the SMPTE 60 Hz + 7 kHz 4:1 pair and \
+                       imd_pct. \
+                       \
+                       SAFE TO RUN ANY TIME: the probe builds a fresh CLONE of each plugin from \
+                       the live plugin's current saved state and drives the clones on a worker \
+                       thread. The live plugins are only read (one state save each), never \
+                       processed, reset or reloaded, so playback, automation, undo and every \
+                       plugin's running state are untouched, and it works while the transport \
+                       rolls. The clone gets no automation (it probes current values) and a \
+                       sidechain key hears silence. stages lists what was probed, with \
+                       state_copied false for a plugin that has no state extension (probed at \
+                       its defaults). \
+                       \
+                       Result: {target, freq_hz, level_dbfs, stages, skipped, gain_db, thd_pct, \
+                       h, h2_h3_db, decay_db_per_order, aliasing_floor_dbc, imd_pct, \
+                       latency_samples}. h is H2..H9 in dBc (h[0] is H2), floored at -160, \
+                       null for a harmonic above Nyquist. Targets: thd_pct 0.1-1 on the \
+                       master, 0.5-3 on a bus, 3-10 on a single track; h2_h3_db above 0 is \
+                       even-dominant (warm), below 0 odd-dominant (harder, edgier); \
+                       decay_db_per_order of 6 or more; aliasing_floor_dbc of -90 or lower. \
+                       gain_db is the chain's level change at the probe frequency. Runs as a \
+                       job.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_probe(
+        &self,
+        Parameters(params): Parameters<meter::ProbeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::PROBE, &params, MEASURE_WAIT_MS)
+            .await
+    }
 }

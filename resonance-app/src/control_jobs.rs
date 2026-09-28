@@ -123,6 +123,12 @@ pub enum JobToken {
         /// every other method.
         compare: Option<ComparePlan>,
     },
+    /// A `meter.probe` (warmth-width-depth.md §7.3): completes on
+    /// `AudioEvent::ChainProbed`, fails on `ChainProbeError`, both of
+    /// which echo the job id as their `probe_id`. It renders nothing
+    /// shared — the engine probes a cloned chain — so it blocks nothing
+    /// and nothing blocks it.
+    Probe,
 }
 
 /// The sides of a `meter.compare` that is waiting on a render
@@ -542,6 +548,14 @@ impl JobBoard {
             Some(token @ JobToken::Measure { .. }) => Some(token.clone()),
             _ => None,
         }
+    }
+
+    /// Is `job_id` a [`JobToken::Probe`] that is still running?
+    pub fn is_live_probe(&self, job_id: u64) -> bool {
+        let table = self.table();
+        table.jobs.get(&job_id).is_some_and(|e| {
+            !e.state.is_terminal() && matches!(e.token, Some(JobToken::Probe))
+        })
     }
 
     /// Is an OFFLINE measurement job still running?
