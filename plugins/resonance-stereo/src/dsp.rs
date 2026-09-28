@@ -197,35 +197,15 @@ const CORRELATION_STEP: u32 = 1024;
 /// Velvet seed: fixed, so renders are deterministic.
 const VELVET_SEED: u64 = 0x5752_4544;
 
-/// A linear parameter ramp that is only retargeted when the target
-/// actually moves. `Smoother::set_target` restarts the ramp from the
-/// current value, so calling it every block with an unchanged target
-/// would approach the target geometrically and never land on it — and
-/// landing on it exactly is what makes the neutral values bit-exact.
-struct Ramp {
-    s: Smoother,
-    target: f32,
-}
-
-impl Ramp {
-    fn new(sr: f32, ms: f32, v: f32) -> Self {
-        let mut s = Smoother::new(SmoothingStyle::Linear(ms));
-        s.set_sample_rate(sr);
-        s.reset(v);
-        Self { s, target: v }
-    }
-
-    fn set(&mut self, v: f32) {
-        if v != self.target {
-            self.target = v;
-            self.s.set_target(v);
-        }
-    }
-
-    #[inline]
-    fn next(&mut self) -> f32 {
-        self.s.next()
-    }
+/// A linear parameter ramp settled on `v`. Retargeted once per block;
+/// `Smoother::set_target` leaves a ramp in flight alone when the target
+/// has not moved, so it lands exactly — which is what makes the neutral
+/// values bit-exact.
+fn ramp(sr: f32, ms: f32, v: f32) -> Smoother {
+    let mut s = Smoother::new(SmoothingStyle::Linear(ms));
+    s.set_sample_rate(sr);
+    s.reset(v);
+    s
 }
 
 /// Side-channel high-pass for the mono-maker at one of three slopes.
@@ -333,9 +313,9 @@ impl Focus {
 
 pub struct StereoDsp {
     sr: f32,
-    width: Ramp,
-    balance: Ramp,
-    rotation_deg: Ramp,
+    width: Smoother,
+    balance: Smoother,
+    rotation_deg: Smoother,
     rotation: StereoRotation,
     rotation_at: f32,
 
@@ -348,13 +328,13 @@ pub struct StereoDsp {
     micro_focus: Focus,
     micro_l: DopplerShifter,
     micro_r: DopplerShifter,
-    micro_amount: Ramp,
+    micro_amount: Smoother,
     haas_line: DelayLine,
     /// LR4 split at `focus_low`: the low band stays in time.
     haas_low: [Biquad; 2],
     haas_high: [Biquad; 2],
     haas_exclude: bool,
-    haas_delay: Ramp,
+    haas_delay: Smoother,
     haas_gain: f32,
 
     mono_on: bool,
@@ -370,7 +350,7 @@ impl StereoDsp {
     /// `initialize`. Smoothers start settled on the current params.
     pub fn new(sample_rate: f32, params: &StereoParams) -> Self {
         let sr = sample_rate.max(1.0);
-        let smoother = |ms: f32, v: f32| Ramp::new(sr, ms, v);
+        let smoother = |ms: f32, v: f32| ramp(sr, ms, v);
         let haas_max = (HAAS_MAX_MS * 0.001 * sr).ceil() as usize + 4;
         let mut micro_l = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
         let mut micro_r = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
@@ -430,9 +410,9 @@ impl StereoDsp {
 
     /// Read the params once per block and reconfigure what changed.
     fn prepare_block(&mut self, p: &StereoParams) {
-        self.width.set(p.width.value());
-        self.balance.set(p.balance.value());
-        self.rotation_deg.set(p.rotation.value());
+        self.width.set_target(p.width.value());
+        self.balance.set_target(p.balance.value());
+        self.rotation_deg.set_target(p.rotation.value());
 
         // Mono-maker.
         let mono_hz = p.mono_below.value();
@@ -492,7 +472,7 @@ impl StereoDsp {
                 if changed {
                     self.micro_focus.configure(self.sr, low, high);
                 }
-                self.micro_amount.set(amount);
+                self.micro_amount.set_target(amount);
             }
             WidenMode::Haas => {
                 if changed {
@@ -507,7 +487,7 @@ impl StereoDsp {
                         b.set_high_pass(self.sr, low, q);
                     }
                 }
-                self.haas_delay.set(haas_delay_ms(amount) * 0.001 * self.sr);
+                self.haas_delay.set_target(haas_delay_ms(amount) * 0.001 * self.sr);
             }
         }
     }
