@@ -1,25 +1,41 @@
 //! Rule-based decision engine.
 //!
-//! Takes an offline [`AnalysisResult`] plus a [`Target`] (a stored
-//! genre curve or a loaded reference track), compares the analyzed
-//! spectrum to the target, derives practical suggestions (input trim,
-//! tonal shelves, glue compressor, stereo imager, limiter), and
+//! Takes an offline [`AnalysisResult`] plus a [`Target`] (a built-in
+//! genre band or a loaded reference track), compares the analyzed
+//! spectrum to the target's band, derives practical suggestions (input
+//! trim, tonal shelves, glue compressor, stereo imager, limiter), and
 //! packages them into a [`Suggestions`] struct with human-readable
 //! rationale. The UI displays the rationale verbatim so the user can
 //! see *why* each decision was made before applying it.
+//!
+//! The spectral comparison is against a **band**, not a curve
+//! (warmth-width-depth.md §7.4, D6): wherever the analyzed spectrum lies
+//! inside the target's `[lo, hi]` it counts as on target, and only the
+//! part outside the band — the excess over `hi` or the shortfall under
+//! `lo` — drives a shelf.
 
 use super::analyze::{AnalysisResult, NUM_SPECTRUM_BINS};
 use super::reference::ReferenceTrack;
-use super::targets::{band_center_hz, target_curve, Genre};
+use super::targets::{
+    band_center_hz, target_band, target_band_center_hz, Genre, NUM_TARGET_BANDS,
+};
 use crate::params::MasteringParams;
 use crate::stages::linear_phase_eq::BandType;
+
+/// Half-width of the band around a reference track's spectrum, dB. A
+/// reference is one recording, not an average, so it gets no genre-style
+/// tolerance of its own (it generates no target, D6) — only enough slack
+/// that measurement noise between two different songs does not read as a
+/// tonal fault.
+pub const REFERENCE_TOLERANCE_DB: f32 = 1.0;
 
 /// What the decision engine should compare the analyzed input against.
 #[derive(Debug, Clone)]
 pub enum Target {
-    /// Stored genre target curve.
+    /// Built-in genre target band.
     Genre(Genre),
-    /// Ad-hoc target derived from a loaded reference track.
+    /// A loaded reference track: its spectrum ±
+    /// [`REFERENCE_TOLERANCE_DB`], and its loudness.
     Reference(ReferenceTrack),
 }
 
@@ -31,18 +47,33 @@ impl Target {
         }
     }
 
-    /// Target spectral shape (60 dB values at 1/6-octave spacing).
-    pub fn curve(&self) -> [f32; NUM_SPECTRUM_BINS] {
+    /// Target band on the 1/6-octave analysis grid: `(lo, hi)`.
+    pub fn band(&self) -> ([f32; NUM_SPECTRUM_BINS], [f32; NUM_SPECTRUM_BINS]) {
         match self {
-            Target::Genre(g) => target_curve(*g),
+            Target::Genre(g) => target_band(*g),
             Target::Reference(r) => {
-                let mut out = [0.0_f32; NUM_SPECTRUM_BINS];
+                let mut lo = [0.0_f32; NUM_SPECTRUM_BINS];
+                let mut hi = [0.0_f32; NUM_SPECTRUM_BINS];
                 let src = &r.analysis.spectrum_db;
-                let len = src.len().min(NUM_SPECTRUM_BINS);
-                out[..len].copy_from_slice(&src[..len]);
-                out
+                for i in 0..NUM_SPECTRUM_BINS {
+                    let v = src.get(i).copied().unwrap_or(0.0);
+                    lo[i] = v - REFERENCE_TOLERANCE_DB;
+                    hi[i] = v + REFERENCE_TOLERANCE_DB;
+                }
+                (lo, hi)
             }
         }
+    }
+
+    /// Target spectral shape (the band's midline, 60 values at
+    /// 1/6-octave spacing).
+    pub fn curve(&self) -> [f32; NUM_SPECTRUM_BINS] {
+        let (lo, hi) = self.band();
+        let mut out = [0.0_f32; NUM_SPECTRUM_BINS];
+        for i in 0..NUM_SPECTRUM_BINS {
+            out[i] = 0.5 * (lo[i] + hi[i]);
+        }
+        out
     }
 
     /// Target integrated loudness.
@@ -52,6 +83,24 @@ impl Target {
             Target::Reference(r) => r.analysis.integrated_lufs,
         }
     }
+}
+
+/// How one 1/3-octave band of the analyzed spectrum sits against the
+/// target band, after the midrange alignment [`build`] applies.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BandDeviation {
+    /// Band centre, Hz (exact ISO series, see
+    /// [`target_band_center_hz`]).
+    pub center_hz: f32,
+    /// Lowest on-target level, dB (relative).
+    pub lo_db: f32,
+    /// Highest on-target level, dB (relative).
+    pub hi_db: f32,
+    /// The analyzed spectrum here, aligned to the target's midrange, dB.
+    pub measured_db: f32,
+    /// How far outside the band it lies: positive above `hi`, negative
+    /// below `lo`, 0 inside.
+    pub deviation_db: f32,
 }
 
 /// Frequency boundaries (Hz) of the spectral bands the decision
@@ -109,6 +158,9 @@ pub struct Suggestions {
     pub imager_width: f32,
     pub imager_side_hpf: bool,
     pub rationale: Vec<String>,
+    /// Per-1/3-octave comparison against the target band, 20 Hz first
+    /// ([`NUM_TARGET_BANDS`] entries).
+    pub deviations: Vec<BandDeviation>,
 }
 
 impl Suggestions {
@@ -168,7 +220,7 @@ impl Suggestions {
 }
 
 pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
-    let target_curve = target.curve();
+    let (band_lo, band_hi) = target.band();
     let target_label = target.label();
     let target_lufs = target.target_lufs();
     let mut rationale = Vec::new();
@@ -179,13 +231,26 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let (low_start, low_end) = bins_for_range(LOW_BAND_HZ);
     let (high_start, high_end) = bins_for_range(HIGH_BAND_HZ);
 
-    // 1. Normalize analyzed spectrum so its midrange average matches
-    //    the target's. Without this step the absolute dB difference is
+    // 1. Align the analyzed spectrum so its midrange average matches the
+    //    band midline's. Without this step the absolute dB difference is
     //    meaningless — we only care about spectral *shape*.
     let analyzed = &analysis.spectrum_db;
+    let mut midline = [0.0_f32; NUM_SPECTRUM_BINS];
+    for i in 0..NUM_SPECTRUM_BINS {
+        midline[i] = 0.5 * (band_lo[i] + band_hi[i]);
+    }
     let analyzed_mid = mean_range(analyzed, mid_start, mid_end);
-    let target_mid = mean_range(&target_curve, mid_start, mid_end);
+    let target_mid = mean_range(&midline, mid_start, mid_end);
     let offset = target_mid - analyzed_mid;
+
+    // Per-bin distance outside the band (0 inside it).
+    let outside: Vec<f32> = (0..NUM_SPECTRUM_BINS)
+        .map(|i| {
+            let v = analyzed.get(i).copied().unwrap_or(super::analyze::FLOOR_DB) + offset;
+            outside_band(v, band_lo[i], band_hi[i])
+        })
+        .collect();
+    let deviations = band_deviations(analyzed, offset, &band_lo, &band_hi);
 
     // 2. Input trim — bring the signal close to the target loudness so
     //    that the rest of the chain (compressor, limiter) operates in a
@@ -205,34 +270,35 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         rationale.push("Input level already near target.".to_string());
     }
 
-    // 3. Measure low- and high-band divergence from the target curve.
-    let low_diff = mean_diff(analyzed, &target_curve, low_start, low_end, offset);
-    let high_diff = mean_diff(analyzed, &target_curve, high_start, high_end, offset);
+    // 3. Measure how far the low and high bands lie OUTSIDE the target
+    //    band. Anything inside it is on target and moves nothing.
+    let low_diff = mean_range(&outside, low_start, low_end);
+    let high_diff = mean_range(&outside, high_start, high_end);
 
-    // Negative `diff` means the input is *below* the target → we'd
-    // boost to match. Positive means *above* → we'd cut.
+    // Negative `diff` means the input is *below* the band → we'd boost
+    // to reach it. Positive means *above* → we'd cut.
     let tonal_low_shelf_gain_db = (-low_diff).clamp(-6.0, 6.0);
     let tonal_high_shelf_gain_db = (-high_diff).clamp(-6.0, 6.0);
 
     if tonal_low_shelf_gain_db.abs() >= 0.25 {
         rationale.push(format!(
-            "Low shelf: {:+.1} dB (input is {:.1} dB {} target in the low band)",
+            "Low shelf: {:+.1} dB (input is {:.1} dB {} the target band in the low band)",
             tonal_low_shelf_gain_db,
             low_diff.abs(),
             direction_word(low_diff),
         ));
     } else {
-        rationale.push("Low band already matches target.".to_string());
+        rationale.push("Low band is inside the target band.".to_string());
     }
     if tonal_high_shelf_gain_db.abs() >= 0.25 {
         rationale.push(format!(
-            "High shelf: {:+.1} dB (input is {:.1} dB {} target in the high band)",
+            "High shelf: {:+.1} dB (input is {:.1} dB {} the target band in the high band)",
             tonal_high_shelf_gain_db,
             high_diff.abs(),
             direction_word(high_diff),
         ));
     } else {
-        rationale.push("High band already matches target.".to_string());
+        rationale.push("High band is inside the target band.".to_string());
     }
 
     // 4. Glue compressor decision based on crest factor.
@@ -333,7 +399,67 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         imager_width,
         imager_side_hpf,
         rationale,
+        deviations,
     }
+}
+
+/// How far `v` lies outside `[lo, hi]`: positive above, negative below,
+/// 0 inside.
+fn outside_band(v: f32, lo: f32, hi: f32) -> f32 {
+    if v > hi {
+        v - hi
+    } else if v < lo {
+        v - lo
+    } else {
+        0.0
+    }
+}
+
+/// The analyzed spectrum (aligned by `offset`) against the band, read at
+/// each 1/3-octave centre by log-frequency interpolation of the 1/6-octave
+/// analysis grid.
+fn band_deviations(
+    analyzed: &[f32],
+    offset: f32,
+    band_lo: &[f32; NUM_SPECTRUM_BINS],
+    band_hi: &[f32; NUM_SPECTRUM_BINS],
+) -> Vec<BandDeviation> {
+    (0..NUM_TARGET_BANDS)
+        .map(|i| {
+            let f = target_band_center_hz(i);
+            let measured = grid_at(analyzed, f) + offset;
+            let lo = grid_at(band_lo, f);
+            let hi = grid_at(band_hi, f);
+            BandDeviation {
+                center_hz: f,
+                lo_db: lo,
+                hi_db: hi,
+                measured_db: measured,
+                deviation_db: outside_band(measured, lo, hi),
+            }
+        })
+        .collect()
+}
+
+/// A value on the 1/6-octave analysis grid at `freq`: linear in
+/// log-frequency between bin centres, held flat past either end.
+fn grid_at(values: &[f32], freq: f32) -> f32 {
+    let n = values.len().min(NUM_SPECTRUM_BINS);
+    if n == 0 {
+        return 0.0;
+    }
+    let first = band_center_hz(0);
+    let step = (band_center_hz(1) / first).log2();
+    let pos = (freq / first).log2() / step;
+    if pos <= 0.0 {
+        return values[0];
+    }
+    if pos >= (n - 1) as f32 {
+        return values[n - 1];
+    }
+    let i = pos.floor() as usize;
+    let t = pos - i as f32;
+    values[i] + (values[i + 1] - values[i]) * t
 }
 
 /// Rough makeup gain estimate: uses the estimated post-trim average
@@ -353,24 +479,6 @@ fn mean_range(values: &[f32], start: usize, end: usize) -> f32 {
         return 0.0;
     }
     let sum: f32 = values[start..end].iter().sum();
-    sum / (end - start) as f32
-}
-
-fn mean_diff(
-    analyzed: &[f32],
-    target: &[f32],
-    start: usize,
-    end: usize,
-    analyzed_offset: f32,
-) -> f32 {
-    let end = end.min(analyzed.len()).min(target.len());
-    if start >= end {
-        return 0.0;
-    }
-    let mut sum = 0.0_f32;
-    for i in start..end {
-        sum += (analyzed[i] + analyzed_offset) - target[i];
-    }
     sum / (end - start) as f32
 }
 
