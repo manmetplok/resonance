@@ -245,3 +245,53 @@ fn aliasing_floor_at_4x_is_below_minus_90_dbc() {
         assert!(x4 < off, "{}: 4x ({x4:.1}) is no cleaner than Off ({off:.1})", mode.label());
     }
 }
+
+/// The editor's worker probes on one reused `Prober` (its DSP reset per
+/// probe) instead of building a fresh DSP each time. Across a run of
+/// unlike settings — every mode, HQ in and out, every factor — each
+/// probe's window must be the fresh render's, bit for bit.
+#[test]
+fn a_reused_prober_renders_exactly_what_a_fresh_dsp_does() {
+    use resonance_color::params::TapeQuality;
+    use resonance_color::probe::{probe_settings, Prober, SETTLE_SAMPLES, WINDOW_SAMPLES};
+    let mut prober = Prober::new();
+    let mut run = Vec::new();
+    for (k, mode) in Mode::ALL.into_iter().enumerate() {
+        for factor in [OversampleFactor::Off, OversampleFactor::X4, OversampleFactor::X2] {
+            run.push(Settings {
+                mode,
+                drive: 0.3 + 0.1 * k as f32,
+                bias: 0.8 - 0.1 * k as f32,
+                tone_db: 1.5 - k as f32,
+                response_db: -3.0 + 2.0 * k as f32,
+                mix: if k % 2 == 0 { 1.0 } else { 0.6 },
+                oversample: factor,
+                flutter: 0.4,
+                auto_gain: true,
+                tape_quality: if k == 1 && factor != OversampleFactor::X2 {
+                    TapeQuality::Hq
+                } else {
+                    TapeQuality::Standard
+                },
+                ..Settings::default()
+            });
+        }
+    }
+    for s in &run {
+        let sig = prober.probe(s, PROBE_LEVEL_DBFS);
+        let fresh = render_tone(
+            &probe_settings(s),
+            48_000.0,
+            1_000.0,
+            PROBE_LEVEL_DBFS,
+            SETTLE_SAMPLES,
+            WINDOW_SAMPLES,
+        );
+        let same = prober.window().iter().zip(&fresh).all(|(a, b)| a.to_bits() == b.to_bits());
+        assert!(
+            same && prober.window().len() == fresh.len(),
+            "reused prober diverged from a fresh DSP for {s:?}"
+        );
+        assert_eq!(sig, probe(s, PROBE_LEVEL_DBFS));
+    }
+}
