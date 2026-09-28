@@ -1,0 +1,605 @@
+//! The stereo width signal path (warmth-width-depth.md §6.2).
+//!
+//! Per sample, in this order:
+//!
+//! 1. **Widen** (`widen_mode`), restricted to the focus band:
+//!    - *Decorrelate* — [`VelvetDecorrelator`]: pure side made from the
+//!      mid, `(L + s, R − s)`. The mono sum is unchanged at any amount
+//!      and any focus (up to float rounding). The default widener.
+//!    - *Diffuse* — [`AllpassDecorrelator`]: per-side ERB all-pass
+//!      cascades offset by `spread = amount / 2` of an ERB step. Mono
+//!      ripple stays small (≈ 1.4 dB at spread 0.2) but is not zero.
+//!    - *Micro-shift* — two [`DopplerShifter`] voices made from the mid,
+//!      +9 cents at 10 ms on the left and −9 cents at 15 ms on the
+//!      right, added at `amount`. Moving combs in mono, milder than
+//!      Haas.
+//!    - *Haas* — the right channel above `focus_low` (an LR4 split; the
+//!      band below stays in time) delayed by 1–30 ms and lowered 3 dB. The level offset keeps the mono comb's
+//!      notches near −11 dB instead of −∞, and the low exclude keeps the
+//!      bass in time, but static combs remain: the mode is flagged as a
+//!      mono risk ([`WidenMode::is_mono_risk`]).
+//! 2. **Width** — M/S side gain ([`apply_width`]).
+//! 3. **Mono-maker** — a high-pass on the side (6/12/24 dB/oct) at
+//!    `mono_below`: side content below the corner is removed, which is
+//!    the elliptical-EQ move of folding the bass into the mid. The mid is
+//!    untouched, so the mono sum is too.
+//! 4. **Balance**, then 5. **Rotation**.
+//! 6. **Audition**: `solo_side` replaces the output with `(S, −S)`, then
+//!    `mono_check` folds it to `(M, M)`. Both on is silence, which is the
+//!    honest answer: side cancels in mono.
+//!
+//! # Transparent defaults
+//!
+//! Every stage is skipped at its neutral value — width 1, mono-maker
+//! off, widen off, balance 0, rotation 0, auditions off — so the default
+//! plugin is a bit-exact passthrough.
+//!
+//! # Latency: none reported, by design
+//!
+//! Haas and Micro-shift add delay to the *wet* part only: Haas delays one
+//! side against the other (the offset is the effect), and Micro-shift's
+//! detuned voices sit 10–15 ms behind the dry signal, which stays in
+//! time. Neither delays the signal as a whole, so the plugin reports 0
+//! samples of latency in every mode, which is also constant (a plugin
+//! cannot report a latency change, gap F2). They are deliberately offset
+//! effects, not something PDC should undo.
+
+use resonance_dsp::{
+    apply_balance, apply_width, ms_decode, ms_encode, AllpassDecorrelator, Biquad, DelayLine,
+    DopplerShifter, StereoRotation, VelvetDecorrelator,
+};
+use resonance_metering::CorrelationMeter;
+use resonance_plugin::{Smoother, SmoothingStyle};
+
+use crate::params::{StereoParams, FOCUS_HIGH_OPEN_HZ, MONO_BELOW_OFF_HZ};
+use crate::viz::StereoViz;
+
+/// Widening algorithms, in `widen_mode` order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidenMode {
+    Off,
+    Decorrelate,
+    Diffuse,
+    MicroShift,
+    Haas,
+}
+
+impl WidenMode {
+    /// Choice labels, in range order. Haas carries its warning in its
+    /// name, so a host's automation lane, the control API's param
+    /// listing and the editor all say it.
+    pub const LABELS: &'static [&'static str] = &[
+        "Off",
+        "Decorrelate",
+        "Diffuse",
+        "Micro-shift",
+        "Haas (mono risk)",
+    ];
+
+    pub const ALL: [WidenMode; 5] = [
+        WidenMode::Off,
+        WidenMode::Decorrelate,
+        WidenMode::Diffuse,
+        WidenMode::MicroShift,
+        WidenMode::Haas,
+    ];
+
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => Self::Decorrelate,
+            2 => Self::Diffuse,
+            3 => Self::MicroShift,
+            4 => Self::Haas,
+            _ => Self::Off,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        self as i32
+    }
+
+    /// Whether the mode puts static comb filtering into the mono fold.
+    /// Only Haas does; Decorrelate keeps the mono sum exactly, and
+    /// Diffuse / Micro-shift ripple by a dB or two.
+    pub fn is_mono_risk(self) -> bool {
+        matches!(self, Self::Haas)
+    }
+
+    /// Whether the mono sum is left exactly as it was (up to rounding).
+    pub fn preserves_mono_sum(self) -> bool {
+        matches!(self, Self::Off | Self::Decorrelate)
+    }
+
+    /// One line on what `widen_amount` does in this mode, for the editor.
+    pub fn amount_hint(self, amount: f32) -> String {
+        match self {
+            Self::Off => "Widening off".to_string(),
+            Self::Decorrelate => format!(
+                "Pure side from mid at {:.0}% — mono sum unchanged",
+                amount * 100.0
+            ),
+            Self::Diffuse => format!(
+                "All-pass spread {:.2} ERB — small mono ripple",
+                diffuse_spread(amount)
+            ),
+            Self::MicroShift => format!(
+                "±{MICRO_CENTS:.0} cents voices at {:.0}% — mild moving combs in mono",
+                amount * 100.0
+            ),
+            Self::Haas => format!(
+                "Right delayed {:.1} ms, {HAAS_LEVEL_DB:.0} dB — MONO RISK: combs in the fold",
+                haas_delay_ms(amount)
+            ),
+        }
+    }
+}
+
+/// Mono-maker slopes, in `mono_slope` order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MonoSlope {
+    Db6,
+    Db12,
+    Db24,
+}
+
+impl MonoSlope {
+    pub const LABELS: &'static [&'static str] = &["6 dB/oct", "12 dB/oct", "24 dB/oct"];
+
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            0 => Self::Db6,
+            2 => Self::Db24,
+            _ => Self::Db12,
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        self as i32
+    }
+}
+
+/// Micro-shift detune per voice, in cents (left up, right down).
+pub const MICRO_CENTS: f32 = 9.0;
+/// Micro-shift crossfade window.
+pub const MICRO_WINDOW_MS: f32 = 20.0;
+/// Base delays under the window, so the voices' mean delays are
+/// 10 ms (left) and 15 ms (right).
+pub const MICRO_BASE_L_MS: f32 = 0.0;
+pub const MICRO_BASE_R_MS: f32 = 5.0;
+
+/// Haas delay range, mapped from `widen_amount` 0..1.
+pub const HAAS_MIN_MS: f32 = 1.0;
+pub const HAAS_MAX_MS: f32 = 30.0;
+/// Level of the delayed side.
+pub const HAAS_LEVEL_DB: f32 = -3.0;
+/// `focus_low` at or below this is "no low exclude" in Haas mode.
+pub const HAAS_NO_EXCLUDE_HZ: f32 = 20.0;
+
+/// Diffuse mode's all-pass sections per side.
+pub const DIFFUSE_SECTIONS: usize = AllpassDecorrelator::DEFAULT_SECTIONS;
+/// Diffuse mode's top edge when `focus_high` is open.
+pub const DIFFUSE_OPEN_HIGH_HZ: f32 = AllpassDecorrelator::DEFAULT_HIGH_HZ;
+
+/// Haas delay in ms for a `widen_amount`.
+pub fn haas_delay_ms(amount: f32) -> f32 {
+    HAAS_MIN_MS + (HAAS_MAX_MS - HAAS_MIN_MS) * amount.clamp(0.0, 1.0)
+}
+
+/// Diffuse all-pass spread (fraction of an ERB step) for a `widen_amount`.
+pub fn diffuse_spread(amount: f32) -> f32 {
+    0.5 * amount.clamp(0.0, 1.0)
+}
+
+/// Samples between goniometer points pushed to the viz.
+const GONIO_DECIMATION: u32 = 4;
+/// Samples between correlation-strip pushes (≈ 21 ms at 48 kHz).
+const CORRELATION_STEP: u32 = 1024;
+/// Velvet seed: fixed, so renders are deterministic.
+const VELVET_SEED: u64 = 0x5752_4544;
+
+/// A linear parameter ramp that is only retargeted when the target
+/// actually moves. `Smoother::set_target` restarts the ramp from the
+/// current value, so calling it every block with an unchanged target
+/// would approach the target geometrically and never land on it — and
+/// landing on it exactly is what makes the neutral values bit-exact.
+struct Ramp {
+    s: Smoother,
+    target: f32,
+}
+
+impl Ramp {
+    fn new(sr: f32, ms: f32, v: f32) -> Self {
+        let mut s = Smoother::new(SmoothingStyle::Linear(ms));
+        s.set_sample_rate(sr);
+        s.reset(v);
+        Self { s, target: v }
+    }
+
+    fn set(&mut self, v: f32) {
+        if v != self.target {
+            self.target = v;
+            self.s.set_target(v);
+        }
+    }
+
+    #[inline]
+    fn next(&mut self) -> f32 {
+        self.s.next()
+    }
+}
+
+/// Side-channel high-pass for the mono-maker at one of three slopes.
+struct SideHighPass {
+    slope: MonoSlope,
+    freq: f32,
+    /// 6 dB/oct: a one-pole low-pass subtracted from its input.
+    lp1_coeff: f32,
+    lp1_state: f32,
+    /// 12 dB/oct: one Butterworth section; 24 dB/oct: two (LR4).
+    bq: [Biquad; 2],
+}
+
+impl SideHighPass {
+    fn new() -> Self {
+        Self {
+            slope: MonoSlope::Db12,
+            freq: 0.0,
+            lp1_coeff: 0.0,
+            lp1_state: 0.0,
+            bq: [Biquad::identity(); 2],
+        }
+    }
+
+    fn configure(&mut self, sr: f32, slope: MonoSlope, freq: f32) {
+        if slope == self.slope && freq == self.freq {
+            return;
+        }
+        if slope != self.slope {
+            self.reset();
+        }
+        self.slope = slope;
+        self.freq = freq;
+        let w = (std::f32::consts::TAU * freq / sr).min(std::f32::consts::PI);
+        self.lp1_coeff = (-w).exp();
+        let q = std::f32::consts::FRAC_1_SQRT_2;
+        for b in &mut self.bq {
+            b.set_high_pass(sr, freq, q);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.lp1_state = 0.0;
+        for b in &mut self.bq {
+            b.reset();
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, s: f32) -> f32 {
+        match self.slope {
+            MonoSlope::Db6 => {
+                self.lp1_state = s + self.lp1_coeff * (self.lp1_state - s);
+                s - self.lp1_state
+            }
+            MonoSlope::Db12 => self.bq[0].process(s),
+            MonoSlope::Db24 => {
+                let y = self.bq[0].process(s);
+                self.bq[1].process(y)
+            }
+        }
+    }
+}
+
+/// Band restriction for the Micro-shift voices' input.
+struct Focus {
+    hp: Biquad,
+    lp: Biquad,
+    lp_on: bool,
+}
+
+impl Focus {
+    fn new() -> Self {
+        Self {
+            hp: Biquad::identity(),
+            lp: Biquad::identity(),
+            lp_on: false,
+        }
+    }
+
+    fn configure(&mut self, sr: f32, low: f32, high: Option<f32>) {
+        let q = std::f32::consts::FRAC_1_SQRT_2;
+        self.hp.set_high_pass(sr, low, q);
+        self.lp_on = high.is_some();
+        if let Some(h) = high {
+            self.lp.set_low_pass(sr, h, q);
+        }
+    }
+
+    fn reset(&mut self) {
+        self.hp.reset();
+        self.lp.reset();
+    }
+
+    #[inline]
+    fn process(&mut self, x: f32) -> f32 {
+        let y = self.hp.process(x);
+        if self.lp_on {
+            self.lp.process(y)
+        } else {
+            y
+        }
+    }
+}
+
+pub struct StereoDsp {
+    sr: f32,
+    width: Ramp,
+    balance: Ramp,
+    rotation_deg: Ramp,
+    rotation: StereoRotation,
+    rotation_at: f32,
+
+    mode: WidenMode,
+    /// Last configured (focus_low, focus_high, amount) per mode, so the
+    /// expensive re-layouts only run on a change.
+    configured: Option<(f32, f32, f32)>,
+    velvet: VelvetDecorrelator,
+    allpass: AllpassDecorrelator,
+    micro_focus: Focus,
+    micro_l: DopplerShifter,
+    micro_r: DopplerShifter,
+    micro_amount: Ramp,
+    haas_line: DelayLine,
+    /// LR4 split at `focus_low`: the low band stays in time.
+    haas_low: [Biquad; 2],
+    haas_high: [Biquad; 2],
+    haas_exclude: bool,
+    haas_delay: Ramp,
+    haas_gain: f32,
+
+    mono_on: bool,
+    mono: SideHighPass,
+
+    correlation: CorrelationMeter,
+    gonio_count: u32,
+    corr_count: u32,
+}
+
+impl StereoDsp {
+    /// Allocates every delay line and filter for `sample_rate`; call from
+    /// `initialize`. Smoothers start settled on the current params.
+    pub fn new(sample_rate: f32, params: &StereoParams) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |ms: f32, v: f32| Ramp::new(sr, ms, v);
+        let haas_max = (HAAS_MAX_MS * 0.001 * sr).ceil() as usize + 4;
+        let mut micro_l = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
+        let mut micro_r = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
+        micro_l.set_base_delay(sr, MICRO_BASE_L_MS);
+        micro_l.set_cents(MICRO_CENTS);
+        micro_r.set_base_delay(sr, MICRO_BASE_R_MS);
+        micro_r.set_cents(-MICRO_CENTS);
+        let amount = params.widen_amount.value();
+        Self {
+            sr,
+            width: smoother(20.0, params.width.value()),
+            balance: smoother(20.0, params.balance.value()),
+            rotation_deg: smoother(20.0, params.rotation.value()),
+            rotation: StereoRotation::new(params.rotation.value().to_radians()),
+            rotation_at: params.rotation.value(),
+            mode: params.widen_mode(),
+            configured: None,
+            velvet: VelvetDecorrelator::new(sr, VELVET_SEED),
+            allpass: AllpassDecorrelator::default(),
+            micro_focus: Focus::new(),
+            micro_l,
+            micro_r,
+            micro_amount: smoother(20.0, amount),
+            haas_line: DelayLine::new(haas_max),
+            haas_low: [Biquad::identity(); 2],
+            haas_high: [Biquad::identity(); 2],
+            haas_exclude: false,
+            haas_delay: smoother(50.0, haas_delay_ms(amount) * 0.001 * sr),
+            haas_gain: resonance_dsp::db_to_linear(HAAS_LEVEL_DB),
+            mono_on: false,
+            mono: SideHighPass::new(),
+            correlation: CorrelationMeter::new(sr),
+            gonio_count: 0,
+            corr_count: 0,
+        }
+    }
+
+    fn reset_haas_split(&mut self) {
+        for b in self.haas_low.iter_mut().chain(self.haas_high.iter_mut()) {
+            b.reset();
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.velvet.reset();
+        self.allpass.reset();
+        self.micro_focus.reset();
+        self.micro_l.reset();
+        self.micro_r.reset();
+        self.haas_line.clear();
+        self.reset_haas_split();
+        self.mono.reset();
+        self.correlation.reset();
+        self.gonio_count = 0;
+        self.corr_count = 0;
+    }
+
+    /// Read the params once per block and reconfigure what changed.
+    fn prepare_block(&mut self, p: &StereoParams) {
+        self.width.set(p.width.value());
+        self.balance.set(p.balance.value());
+        self.rotation_deg.set(p.rotation.value());
+
+        // Mono-maker.
+        let mono_hz = p.mono_below.value();
+        let was_on = self.mono_on;
+        self.mono_on = mono_hz > MONO_BELOW_OFF_HZ;
+        if self.mono_on {
+            if !was_on {
+                self.mono.reset();
+            }
+            self.mono
+                .configure(self.sr, p.mono_slope(), mono_hz.min(0.45 * self.sr));
+        }
+
+        // Widening.
+        let mode = p.widen_mode();
+        if mode != self.mode {
+            self.mode = mode;
+            self.configured = None;
+            // The incoming mode starts from silence rather than from
+            // whatever it held the last time it ran.
+            self.velvet.reset();
+            self.allpass.reset();
+            self.micro_focus.reset();
+            self.micro_l.reset();
+            self.micro_r.reset();
+            self.haas_line.clear();
+            self.reset_haas_split();
+        }
+        let amount = p.widen_amount.value();
+        let low = p.focus_low.value().min(0.45 * self.sr);
+        let high_raw = p.focus_high.value();
+        let high = (high_raw < FOCUS_HIGH_OPEN_HZ).then(|| high_raw.min(0.45 * self.sr));
+        let key = (low, high.unwrap_or(0.0), amount);
+        let changed = self.configured != Some(key);
+        self.configured = Some(key);
+        match mode {
+            WidenMode::Off => {}
+            WidenMode::Decorrelate => {
+                if changed {
+                    self.velvet.set_amount(amount);
+                    self.velvet.set_focus(self.sr, low, high.unwrap_or(0.0));
+                }
+            }
+            WidenMode::Diffuse => {
+                if changed {
+                    let top = high.unwrap_or(DIFFUSE_OPEN_HIGH_HZ.min(0.45 * self.sr));
+                    self.allpass.configure(
+                        self.sr,
+                        DIFFUSE_SECTIONS,
+                        low,
+                        top.max(low + 1.0),
+                        diffuse_spread(amount),
+                    );
+                }
+            }
+            WidenMode::MicroShift => {
+                if changed {
+                    self.micro_focus.configure(self.sr, low, high);
+                }
+                self.micro_amount.set(amount);
+            }
+            WidenMode::Haas => {
+                if changed {
+                    // At the bottom of `focus_low`'s range there is no
+                    // exclude: the whole right side is delayed.
+                    self.haas_exclude = p.focus_low.value() > HAAS_NO_EXCLUDE_HZ;
+                    let q = std::f32::consts::FRAC_1_SQRT_2;
+                    for b in &mut self.haas_low {
+                        b.set_low_pass(self.sr, low, q);
+                    }
+                    for b in &mut self.haas_high {
+                        b.set_high_pass(self.sr, low, q);
+                    }
+                }
+                self.haas_delay.set(haas_delay_ms(amount) * 0.001 * self.sr);
+            }
+        }
+    }
+
+    #[inline]
+    fn widen(&mut self, l: f32, r: f32) -> (f32, f32) {
+        match self.mode {
+            WidenMode::Off => (l, r),
+            WidenMode::Decorrelate => self.velvet.process(l, r),
+            WidenMode::Diffuse => self.allpass.process(l, r),
+            WidenMode::MicroShift => {
+                let a = self.micro_amount.next();
+                let m = self.micro_focus.process(0.5 * (l + r));
+                let vl = self.micro_l.process(m);
+                let vr = self.micro_r.process(m);
+                (l + a * vl, r + a * vr)
+            }
+            WidenMode::Haas => {
+                let (low, high) = if self.haas_exclude {
+                    let lo = self.haas_low[0].process(r);
+                    let lo = self.haas_low[1].process(lo);
+                    let hi = self.haas_high[0].process(r);
+                    let hi = self.haas_high[1].process(hi);
+                    (lo, hi)
+                } else {
+                    (0.0, r)
+                };
+                self.haas_line.push(high);
+                let d = self.haas_delay.next();
+                // `tap(0)` is the sample just pushed, so `d` reads `d` back.
+                let delayed = self.haas_line.tap_linear(d.max(0.0));
+                (l, low + self.haas_gain * delayed)
+            }
+        }
+    }
+
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32], p: &StereoParams, viz: &StereoViz) {
+        self.prepare_block(p);
+        let solo_side = p.solo_side.value();
+        let mono_check = p.mono_check.value();
+        let n = left.len().min(right.len());
+
+        for i in 0..n {
+            let (mut l, mut r) = self.widen(left[i], right[i]);
+
+            let w = self.width.next();
+            if w != 1.0 {
+                (l, r) = apply_width(l, r, w);
+            }
+
+            if self.mono_on {
+                let (m, s) = ms_encode(l, r);
+                (l, r) = ms_decode(m, self.mono.process(s));
+            }
+
+            let b = self.balance.next();
+            if b != 0.0 {
+                (l, r) = apply_balance(l, r, b);
+            }
+
+            let deg = self.rotation_deg.next();
+            if deg != self.rotation_at {
+                self.rotation_at = deg;
+                self.rotation.set_angle(deg.to_radians());
+            }
+            (l, r) = self.rotation.process(l, r);
+
+            if solo_side {
+                let s = 0.5 * (l - r);
+                (l, r) = (s, -s);
+            }
+            if mono_check {
+                let m = 0.5 * (l + r);
+                (l, r) = (m, m);
+            }
+
+            left[i] = l;
+            right[i] = r;
+
+            self.gonio_count += 1;
+            if self.gonio_count >= GONIO_DECIMATION {
+                self.gonio_count = 0;
+                viz.push_point(l, r);
+            }
+        }
+
+        self.correlation.push_stereo(&left[..n], &right[..n]);
+        self.corr_count += n as u32;
+        if self.corr_count >= CORRELATION_STEP {
+            self.corr_count %= CORRELATION_STEP;
+            viz.push_correlation(self.correlation.correlation());
+        }
+        viz.store_block(self.correlation.correlation(), self.mode);
+    }
+}
