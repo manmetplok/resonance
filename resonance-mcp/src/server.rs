@@ -66,7 +66,16 @@ reported playhead/position, and every seek, loop, clip_* and meter range you sen
 beat in the time signature's beat unit (an eighth in 6/8, a half in 2/2), so a reported \
 position can be sent straight back; a beat past the bar's last one is refused. Clip- and \
 section-relative *_beat / *_beats fields are quarter notes whatever the meter (a 6/8 bar is \
-3.0 of them).";
+3.0 of them).\n\
+\n\
+Automation is a track's, bus's or master's volume/pan/mute, or a plugin parameter, changing \
+over the song — one lane per target. Values are its real units unless you pass normalized. \
+Read lanes with automation_lanes (each is also summarized, without points, in song_tracks and \
+master_summary); write with automation_set_lane, and remove points or a whole lane with the \
+matching automation_* tools as they land. transport_set_tempo keeps a lane at its bar; \
+global_* tempo and meter events keep its sample position instead, so its bar moves. You \
+cannot hear automation: verify with automation_lanes and measure with meter_measure over the \
+range.";
 
 /// The MCP server handler: a thin, stateless translation layer over the
 /// control socket. Cloneable (the client is shared via [`Arc`]).
