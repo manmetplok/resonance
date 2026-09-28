@@ -118,7 +118,24 @@ pub enum JobToken {
         /// measurements block each other; see
         /// [`JobBoard::has_live_offline_measure`].
         offline: bool,
+        /// For a `meter.compare` that renders a `"current"` side: which
+        /// snapshots the result is compared against, and how. `None` for
+        /// every other method.
+        compare: Option<ComparePlan>,
     },
+}
+
+/// The sides of a `meter.compare` that is waiting on a render
+/// (warmth-width-depth.md §7.2). `None` on a side means "current" — the
+/// measurement the render is producing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ComparePlan {
+    /// Side A's snapshot id, or `None` for the render.
+    pub a: Option<u64>,
+    /// Side B's snapshot id, or `None` for the render.
+    pub b: Option<u64>,
+    /// Gain-match B to A's integrated loudness.
+    pub match_lufs: bool,
 }
 
 #[derive(Debug)]

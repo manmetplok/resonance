@@ -160,4 +160,78 @@ impl ResonanceMcp {
         self.invoke_job(meter::STEMS, &params, MEASURE_WAIT_MS)
             .await
     }
+
+    #[tool(
+        description = "Measure one slice of the mix (like meter_measure, render only) and KEEP \
+                       the numbers, so a later meter_compare can tell you what a change did. \
+                       Returns {snapshot_id, measurement}. Take one BEFORE a move (EQ, \
+                       saturation, width, a send), make the move, then meter_compare {a: \
+                       snapshot_id} against the current state. \
+                       \
+                       target and range as in meter_measure; the resolved sample range is \
+                       stored, and the \"current\" side of a compare re-renders exactly that \
+                       range. detail defaults to ALL of spectrum, stereo and dynamics, since a \
+                       detail the snapshot lacks has no delta; pass a narrower list to save \
+                       space. Snapshots live in the running app's memory for this session \
+                       only: not saved with the project, gone after a restart, and the least \
+                       recently used is evicted past 32. They survive opening another project, \
+                       so one song can be compared against another. Nothing is changed and it \
+                       is not an undo step.",
+        annotations(read_only_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_snapshot(
+        &self,
+        Parameters(params): Parameters<meter::SnapshotParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::SNAPSHOT, &params, MEASURE_WAIT_MS)
+            .await
+    }
+
+    #[tool(
+        description = "Loudness-matched A/B: the deltas (B minus A) of every measured proxy \
+                       between two measurements. This is THE tool for judging a warmth, width \
+                       or tone move, because louder always reads as warmer and better: with \
+                       match \"lufs\" (the default) B is gain-matched to A's integrated \
+                       loudness first, so a delta is a change in character, not in level. \
+                       \
+                       a and b are each \"current\" (render the project now) or a snapshot_id \
+                       from meter_snapshot; b defaults to \"current\". Both sides always \
+                       describe the same audio slice: a snapshot fixes the target and sample \
+                       range, and \"current\" re-renders exactly that range, so omit target \
+                       and range unless both sides are \"current\". Two snapshots compare \
+                       instantly with no render. match \"none\" compares as measured. \
+                       \
+                       Result: {target, measured_seconds, a, b (each {side, \
+                       lufs_integrated}), match, matched, match_gain_db, deltas}. \
+                       match_gain_db is the gain applied to B (a B that is 3 dB louder reads \
+                       about -3); matched is false with match \"none\" or when either side is \
+                       silent. Matching is exact arithmetic on the stored numbers: level \
+                       figures (lufs_integrated, lufs_short_max, lufs_momentary_max, \
+                       true_peak_db, sample_peak_db, the third_octave bands) move by the gain; \
+                       shape figures (lra, crest_db, correlation, mono_penalty_db, bands, \
+                       tilt_db_per_oct, centroid_hz, lowmid_presence_db, \
+                       presence_peakiness_db, air_ratio_db, plr_db, psr_db and the whole \
+                       stereo block) cannot change with a pure gain. clipped_samples is the \
+                       one delta reported AS MEASURED. deltas.spectrum carries third_octave \
+                       (per band), tilt_db_per_oct, centroid_hz, centroid_pct, \
+                       lowmid_presence_db, presence_peakiness_db, air_ratio_db; deltas.stereo \
+                       carries bands of {lo_hz, hi_hz, correlation, side_mid_db, \
+                       mono_loss_db}, balance_db, pct_below_0_3 and worst_window_correlation; \
+                       deltas.dynamics carries plr_db and psr_db. A delta is null when either \
+                       side lacks the number. Identical states compare to all zeros. \
+                       \
+                       Reading it for warmth: tilt_db_per_oct more negative, lowmid_presence_db \
+                       up 1-2, presence_peakiness_db down, centroid_pct down 5-15, and crest_db \
+                       down no more than 2 with psr_db staying at 8 or more in absolute terms.",
+        annotations(read_only_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_compare(
+        &self,
+        Parameters(params): Parameters<meter::CompareParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::COMPARE, &params, MEASURE_WAIT_MS)
+            .await
+    }
 }

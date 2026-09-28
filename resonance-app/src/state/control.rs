@@ -61,6 +61,61 @@ pub struct ControlEndpointState {
     /// and always builds a synth track). Keyed by the app-allocated id;
     /// drained by `apply_pending_control_track`.
     pub pending_tracks: HashMap<resonance_audio::types::TrackId, PendingControlTrack>,
+    /// `meter.snapshot` measurements kept for `meter.compare`
+    /// (warmth-width-depth.md §7.2). Session-scoped and in memory only.
+    pub meter_snapshots: MeterSnapshots,
+}
+
+/// The `meter.snapshot` store: full-precision engine measurements keyed
+/// by snapshot id, least recently used evicted past
+/// [`SNAPSHOT_CAPACITY`][resonance_control::methods::meter::SNAPSHOT_CAPACITY].
+///
+/// In memory only: never persisted, never part of the undo history, and
+/// not cleared by opening another project (comparing two songs is a
+/// legitimate use). Ids are never reused within a session, so an evicted
+/// id reads as "not found" rather than as someone else's numbers.
+#[derive(Debug, Default)]
+pub struct MeterSnapshots {
+    /// Most recently used last.
+    entries: Vec<(u64, resonance_audio::types::MixMeasurement)>,
+    last_id: u64,
+}
+
+impl MeterSnapshots {
+    /// Keep `measurement`, evicting the least recently used snapshot if
+    /// the store is full, and return its new id.
+    pub fn insert(&mut self, measurement: resonance_audio::types::MixMeasurement) -> u64 {
+        let capacity = resonance_control::methods::meter::SNAPSHOT_CAPACITY;
+        while self.entries.len() >= capacity {
+            self.entries.remove(0);
+        }
+        self.last_id += 1;
+        self.entries.push((self.last_id, measurement));
+        self.last_id
+    }
+
+    /// The snapshot `id`, marked as just used.
+    pub fn touch(&mut self, id: u64) -> Option<&resonance_audio::types::MixMeasurement> {
+        let at = self.entries.iter().position(|(i, _)| *i == id)?;
+        let entry = self.entries.remove(at);
+        self.entries.push(entry);
+        self.entries.last().map(|(_, m)| m)
+    }
+
+    /// The snapshot `id`, without changing its recency.
+    pub fn get(&self, id: u64) -> Option<&resonance_audio::types::MixMeasurement> {
+        self.entries.iter().find(|(i, _)| *i == id).map(|(_, m)| m)
+    }
+
+    /// How many snapshots are kept.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// No snapshots kept.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// Deferred post-mirror setup for a control-added track.

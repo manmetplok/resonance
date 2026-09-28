@@ -52,6 +52,7 @@ mod import_midi;
 mod job;
 mod master;
 mod meter;
+mod meter_compare;
 mod notes;
 /// Per-slot and whole-chain bypass, shared by all three surfaces
 /// (ba todo #1305).
