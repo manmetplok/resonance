@@ -83,6 +83,8 @@ impl ResonancePlugin for ResonanceEq {
         presets::PRESETS;
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
+    /// Key input for the dynamic bands' optional sidechain (`dyn_sc`).
+    const SIDECHAIN_INPUT: Option<u32> = Some(2);
 
     fn new() -> Self {
         Self {
@@ -141,6 +143,17 @@ impl ResonancePlugin for ResonanceEq {
         &mut self,
         outputs: &mut [OutputBuffer<'_>],
         frames: usize,
+        events: &mut EventIterator<'_>,
+        tempo: Option<TempoInfo>,
+    ) {
+        self.process_with_key(outputs, None, frames, events, tempo);
+    }
+
+    fn process_with_key(
+        &mut self,
+        outputs: &mut [OutputBuffer<'_>],
+        key: Option<KeyBuffer<'_>>,
+        frames: usize,
         _events: &mut EventIterator<'_>,
         _tempo: Option<TempoInfo>,
     ) {
@@ -173,7 +186,12 @@ impl ResonancePlugin for ResonanceEq {
             self.params.output_gain.value() + dsp.auto_gain_db(),
         ));
 
-        dsp.process_stereo(left, right, &mut self.output_gain_smoother);
+        dsp.process_stereo_keyed(
+            left,
+            right,
+            key.map(|k| (k.left, k.right)),
+            &mut self.output_gain_smoother,
+        );
 
         // Post-EQ tap: same buffer, now containing the processed signal.
         if let Some(an) = &self.analyzers {
