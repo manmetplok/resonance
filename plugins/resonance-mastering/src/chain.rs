@@ -3,21 +3,25 @@
 //! Owns every DSP stage and the metering tap, orchestrating them in
 //! processing order:
 //!
-//!   input trim → corrective EQ → glue compressor → saturator
-//!         → tonal EQ → multiband → imager → clipper → limiter
-//!         → dither → metering tap
+//!   input trim → corrective EQ → de-harsh → glue compressor
+//!         → saturator → tonal EQ → multiband → imager → clipper
+//!         → limiter → dither → (de-harsh tail delay) → metering tap
 //!
 //! The imager's per-band width is applied on the multiband's crossover
 //! bands, just before they are summed (see `stages::multiband`). Only
-//! the two linear-phase EQs, the multiband crossover and the limiter
-//! lookahead have latency, and it does not depend on which stages are
-//! on or what they are set to.
+//! the two linear-phase EQs, the de-harsh STFT frame, the multiband
+//! crossover and the limiter lookahead have latency, and it does not
+//! depend on which stages are on or what they are set to. The de-harsh
+//! delay sits either at its stage or at the chain's end, whichever keeps
+//! a project that never engages it bit-identical to the chain without it
+//! (see `stages::deharsh`).
 
 use resonance_dsp::{db_to_linear, DelayLine};
 
 use crate::dsp::MeteringCore;
 use crate::params::MasteringParams;
 use crate::stages::clipper::Clipper;
+use crate::stages::deharsh::DeharshStage;
 use crate::stages::dither::Dither;
 use crate::stages::glue_compressor::GlueCompressor;
 use crate::stages::imager::Imager;
@@ -29,6 +33,7 @@ use crate::viz::MasteringViz;
 
 pub struct Chain {
     corrective_eq: LinearPhaseEq,
+    deharsh: DeharshStage,
     glue_compressor: GlueCompressor,
     saturator: Saturator,
     tonal_eq: LinearPhaseEq,
@@ -97,12 +102,12 @@ impl Chain {
         corrective_eq.set_cross_phase_offsets([half_phase(0), half_phase(5)]);
         tonal_eq.set_cross_phase_offsets([half_phase(1), half_phase(6)]);
         let limiter = Limiter::new(sample_rate);
-        let max_latency = corrective_eq.latency()
-            + tonal_eq.latency()
-            + multiband.latency()
-            + limiter.latency();
+        let downstream_latency = tonal_eq.latency() + multiband.latency() + limiter.latency();
+        let deharsh = DeharshStage::new(sample_rate, max_buffer, downstream_latency);
+        let max_latency = corrective_eq.latency() + deharsh.latency() + downstream_latency;
         Self {
             corrective_eq,
+            deharsh,
             glue_compressor: GlueCompressor::new(sample_rate),
             saturator: Saturator::new(sample_rate),
             tonal_eq,
@@ -125,6 +130,7 @@ impl Chain {
 
     pub fn reset(&mut self) {
         self.corrective_eq.reset();
+        self.deharsh.reset();
         self.glue_compressor.reset();
         self.saturator.reset();
         self.tonal_eq.reset();
@@ -144,10 +150,11 @@ impl Chain {
     /// stage. The compressor, saturator, imager and clipper are
     /// zero-latency (the clipper's oversampling is IIR);
     /// the two linear-phase EQs and the multiband crossover each
-    /// contribute one FIR convolver's worth of delay, and the limiter
-    /// adds its lookahead.
+    /// contribute one FIR convolver's worth of delay, the de-harsh stage
+    /// one STFT frame (on or off), and the limiter adds its lookahead.
     pub fn latency(&self) -> u32 {
         (self.corrective_eq.latency()
+            + self.deharsh.latency()
             + self.tonal_eq.latency()
             + self.multiband.latency()
             + self.limiter.latency()) as u32
@@ -283,6 +290,9 @@ impl Chain {
         self.corrective_eq
             .process_stereo(left, right, &corrective_bands);
 
+        let dh_cfg = params.deharsh.snapshot();
+        self.deharsh.process_stage(left, right, &dh_cfg);
+
         let glue_cfg = params.glue_compressor.snapshot();
         self.glue_compressor.process_stereo(left, right, &glue_cfg);
 
@@ -310,5 +320,14 @@ impl Chain {
 
         let dither_cfg = params.dither.snapshot();
         self.dither.process_stereo(left, right, &dither_cfg);
+
+        // Last: the de-harsh delay, when it is spent here rather than at
+        // the stage (see `stages::deharsh`).
+        self.deharsh.process_tail(left, right);
+    }
+
+    /// Deepest current de-harsh cut, dB.
+    pub fn deharsh_max_cut_db(&self) -> f32 {
+        self.deharsh.max_cut_db()
     }
 }

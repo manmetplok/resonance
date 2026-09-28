@@ -3,6 +3,7 @@
 //! holds the saturator's character voicings.
 
 pub mod clipper;
+pub mod deharsh;
 pub mod dither;
 pub mod glue_compressor;
 pub mod imager;

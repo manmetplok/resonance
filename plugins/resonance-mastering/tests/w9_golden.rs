@@ -34,6 +34,11 @@ const MAX_PEAK_DELTA: f32 = 2.0e-4;
 const MAX_RMS_DELTA: f64 = 2.0e-5;
 const TAU: f32 = std::f32::consts::TAU;
 
+// Re-blessed once, for W12: the de-harsh latency (2048 samples, spent at
+// the chain's end while the stage is never engaged) shifted every stream.
+// Each was shown to be the pre-W12 stream behind exactly 2048 zero
+// samples, bit for bit (`docs/design/deharsh-resonance-suppressor.md`
+// §5.2).
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "w9_golden.f32")
 }

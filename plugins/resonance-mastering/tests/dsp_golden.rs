@@ -80,7 +80,7 @@ const MAX_BLOCK: usize = 640;
 /// Blocks rendered but *not* stored, so the FIR convolvers, the
 /// multiband crossover and the limiter lookahead are all past their
 /// pre-fill before the capture starts.
-const PRIME_BLOCKS: usize = 56;
+const PRIME_BLOCKS: usize = 60;
 /// Blocks stored in the golden, after the prime window.
 const CAPTURE_BLOCKS: usize = 8;
 const BLOCKS: usize = PRIME_BLOCKS + CAPTURE_BLOCKS;
@@ -94,6 +94,10 @@ const MAX_PEAK_DELTA: f32 = 2.0e-4;
 /// moves the RMS as much as the peak.
 const MAX_RMS_DELTA: f64 = 2.0e-5;
 
+// Re-blessed for W12: the de-harsh latency shifted every stream by
+// exactly 2048 samples (proven bit-exact against the pre-W12 streams,
+// `docs/design/deharsh-resonance-suppressor.md` §5.2). `PRIME_BLOCKS`
+// grew to 60 to cover it, and scenarios 8 and 9 were added.
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.f32")
 }
@@ -374,7 +378,66 @@ fn scenarios() -> Vec<Scenario> {
                 );
             }),
         },
+        // 8. De-harsh engaged from the start (W12), so its delay sits at
+        //    the stage: the glue and everything after it run on the
+        //    suppressed, delayed signal. The 2.5 kHz and 9 kHz tones
+        //    stand out of the noise bed and get cut. Every `dh_` param
+        //    is pinned.
+        Scenario {
+            name: "deharsh_inline",
+            signal: Signal::BandedMix,
+            blocks: &[512, 333],
+            setup: |p| {
+                deharsh(&p.deharsh, 9.0, 4.0, 0);
+                p.glue_compressor.on.set_value(true);
+                p.limiter.on.set_value(true);
+                p.limiter.ceiling.set_value(-6.0);
+            },
+            edit: None,
+        },
+        // 9. De-harsh switched on mid-run: the tail → inline handover
+        //    (its delay moves from the chain's end to the stage), then a
+        //    move to Mid+Side and a parallel mix, all before the capture.
+        Scenario {
+            name: "deharsh_handover",
+            signal: Signal::BandedMix,
+            blocks: &[384, 640],
+            setup: |p| {
+                deharsh(&p.deharsh, 12.0, 5.0, 0);
+                p.deharsh.on.set_value(false);
+                p.limiter.on.set_value(true);
+                p.limiter.ceiling.set_value(-6.0);
+            },
+            edit: Some(|p, block| {
+                p.deharsh.on.set_value(block >= 12);
+                if block >= 40 {
+                    p.deharsh.mode.set_value(3);
+                    p.deharsh.mix.set_value(0.7);
+                }
+            }),
+        },
     ]
+}
+
+/// Pin every de-harsh param: on, the given depth / selectivity / mode,
+/// Q 24, 10 / 100 ms, 1–8 kHz, full mix, no delta.
+fn deharsh(
+    d: &resonance_mastering::params::DeharshParams,
+    depth: f32,
+    selectivity: f32,
+    mode: i32,
+) {
+    d.on.set_value(true);
+    d.depth.set_value(depth);
+    d.selectivity.set_value(selectivity);
+    d.sharpness.set_value(24.0);
+    d.attack.set_value(10.0);
+    d.release.set_value(100.0);
+    d.low.set_value(1000.0);
+    d.high.set_value(8000.0);
+    d.mode.set_value(mode);
+    d.mix.set_value(1.0);
+    d.delta.set_value(false);
 }
 
 /// Enable one linear-phase EQ band. Types: 0=Bell 1=LowShelf

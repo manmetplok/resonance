@@ -300,24 +300,50 @@ keeps their latency when every band is off).
 ### 5.2 Consequences for the mastering plugin
 
 - `Chain::latency()` becomes the old sum plus `deharsh.latency()`: at
-  48 kHz, 18,672 → **20,720** samples (389 → 432 ms). The whole-plugin
+  48 kHz, 18,673 → **20,721** samples (389 → 432 ms). The whole-plugin
   bypass delay (`max_latency`) includes the new term.
-- **Bounces of existing projects stay bit-identical.** The bounce trims
-  `master_fx_latency` (`bounce/wav.rs`, `stem.rs`), the off path is an
-  exact delay, and every other stage is unchanged. So W9's "projects
-  saved before the change render bit-identical" holds after compensation.
-  Live playback of the master is 43 ms later, which is irrelevant on a
-  plugin that already adds ~0.4 s.
+- **Where the off-state delay sits (amended in phase 2).** A plain
+  in-place delay when off would *not* keep existing projects
+  bit-identical. Delaying the glue, saturator, tonal EQ, multiband,
+  limiter and dither input by 2048 samples moves the linear-phase FIRs'
+  hop grid against the signal, which changes their rounding. It also
+  moves the dither RNG draw each sample gets, and the block at which
+  automation lands. So the stage has two timing modes
+  (`stages/deharsh.rs`):
+  - **Inline:** the stage outputs the suppressor, and off is its
+    bit-exact delay tap.
+  - **Tail:** the stage is a wire, and the latency is a delay line after
+    dither.
+
+  The mode is decided on the first block after a reset: inline if
+  `dh_on`, tail otherwise. The first switch-on in tail mode hands over
+  once. The downstream input crossfades onto the suppressor's delayed
+  output. The tail keeps delaying until that splice has come out of the
+  downstream stages (their latency, plus half a frame), and then
+  crossfades to the direct path. Both paths carry the same timeline
+  there, and the switch falls halfway between where the splice appears
+  on each, so neither is heard. The stage then stays inline until the
+  next reset. With depth 0, a handover through tonal EQ, glue and
+  limiter differs from an inline-from-the-start render by −127 dB re
+  peak (`stages_deharsh.rs`).
+- **Bounces of existing projects stay bit-identical.** A project that
+  never engages the stage renders as the pre-W12 chain delayed by
+  exactly 2048 samples, bit for bit. The bounce trims
+  `master_fx_latency` (`bounce/wav.rs`, `stem.rs`), so its bounce is
+  bit-identical. Live playback of the master is 43 ms later, which is
+  irrelevant on a plugin that already adds ~0.4 s.
 - **`tests/dsp_golden.rs` will move.** It stores a raw output tail without
   latency compensation, so the tail shifts by 2048 samples. That is a
-  known, provable move, not a regression. Before re-blessing, the
-  implementer proves it: every existing scenario, rendered pre-change with
-  the capture window moved 2048 samples earlier, must match the
-  post-change render within the golden's epsilon. Record this in the
-  commit message. `latency_is_covered_by_the_prime_window` must still
-  pass: 56 blocks cover the new 20,720 unless the block schedule is
-  shorter, so check it and grow `PRIME_BLOCKS` if needed. Any change to
-  `PRIME_BLOCKS` itself also forces a re-bless, so do both in one commit.
+  known, provable move, not a regression. The same holds for
+  `w9_golden.rs` and `legacy_state.rs`, which also store raw output.
+  **Done in phase 2.** All 35 renders of the three files (every scenario,
+  every legacy blob, and the W9 "stripped" renders) were dumped in full
+  on the pre-W12 code and again after the change. Each post-change
+  stream is exactly 2048 zero samples followed by the pre-change stream,
+  bit for bit, on both channels. The goldens were re-blessed on that
+  proof. `dsp_golden` needed `PRIME_BLOCKS` 56 → 60 for its 384-frame
+  scenario, and gained two de-harsh scenarios (inline, and the handover
+  with Mid+Side and mix).
 
 ### 5.3 Code layout
 

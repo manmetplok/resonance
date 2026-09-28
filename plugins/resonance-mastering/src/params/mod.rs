@@ -12,6 +12,7 @@
 //! host automation lane bound to it — stays where it was.
 
 pub mod clipper;
+pub mod deharsh;
 pub mod dither;
 pub mod eq_stage;
 pub mod glue_compressor;
@@ -26,6 +27,7 @@ use resonance_plugin::formatters::v2s_f32_db;
 use resonance_plugin::*;
 
 pub use clipper::ClipperParams;
+pub use deharsh::DeharshParams;
 pub use dither::DitherParams;
 pub use eq_stage::{
     BandParams, EqStageParams, CORRECTIVE_DEFAULTS, MS_PARAMS_PER_STAGE, PARAMS_PER_STAGE,
@@ -63,23 +65,29 @@ pub const LEGACY_PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
 
 // Appended since, in the order they were added:
 //   corrective M/S → tonal M/S → imager band widths → clipper
-//                  → saturator mode/curve
+//                  → saturator mode/curve → de-harsh (W12)
 const CORR_MS_BASE: usize = LEGACY_PARAM_COUNT;
 const TONE_MS_BASE: usize = CORR_MS_BASE + MS_PARAMS_PER_STAGE;
 const IMG_BAND_BASE: usize = TONE_MS_BASE + MS_PARAMS_PER_STAGE;
 const CLIP_BASE: usize = IMG_BAND_BASE + imager::BAND_WIDTH_PARAM_COUNT;
 const SAT_MODE_BASE: usize = CLIP_BASE + clipper::PARAM_COUNT;
+const DH_BASE: usize = SAT_MODE_BASE + saturator::MODE_PARAM_COUNT;
 
-/// Total plugin param count: the 102 above, plus 4 + 4 band M/S
+/// The param count after W9: the 102 above, plus 4 + 4 band M/S
 /// selectors, 4 imager band widths, 3 clipper params and the
 /// saturator's mode and curve.
-pub const PARAM_COUNT: usize = SAT_MODE_BASE + saturator::MODE_PARAM_COUNT;
+pub const W9_PARAM_COUNT: usize = DH_BASE;
+
+/// Total plugin param count: [`W9_PARAM_COUNT`] plus the 11 de-harsh
+/// params (W12).
+pub const PARAM_COUNT: usize = DH_BASE + deharsh::PARAM_COUNT;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
     pub target_lufs: FloatParam,
     pub input_trim_db: FloatParam,
     pub corrective_eq: EqStageParams,
+    pub deharsh: DeharshParams,
     pub glue_compressor: GlueCompressorParams,
     pub saturator: SaturatorParams,
     pub tonal_eq: EqStageParams,
@@ -113,7 +121,8 @@ impl MasteringParams {
             i if i < IMG_BAND_BASE => self.tonal_eq.ms_param_at(i - TONE_MS_BASE),
             i if i < CLIP_BASE => self.imager.band_width_param_at(i - IMG_BAND_BASE),
             i if i < SAT_MODE_BASE => self.clipper.param_at(i - CLIP_BASE),
-            i if i < PARAM_COUNT => self.saturator.mode_param_at(i - SAT_MODE_BASE),
+            i if i < DH_BASE => self.saturator.mode_param_at(i - SAT_MODE_BASE),
+            i if i < PARAM_COUNT => self.deharsh.param_at(i - DH_BASE),
             _ => &self.bypass,
         }
     }
@@ -150,6 +159,7 @@ impl Default for MasteringParams {
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
             corrective_eq: EqStageParams::new("corr", CORRECTIVE_DEFAULTS),
+            deharsh: DeharshParams::default(),
             glue_compressor: GlueCompressorParams::default(),
             saturator: SaturatorParams::default(),
             tonal_eq: EqStageParams::new("tone", TONAL_DEFAULTS),

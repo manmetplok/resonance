@@ -17,6 +17,7 @@ use super::TargetSource;
 
 mod assistant;
 mod clipper;
+mod deharsh;
 mod dither;
 mod eq;
 mod glue;
@@ -33,6 +34,7 @@ pub enum StageTab {
     #[default]
     Assistant,
     CorrectiveEq,
+    Deharsh,
     Glue,
     Saturator,
     TonalEq,
@@ -47,6 +49,7 @@ pub enum StageTab {
 const TABS: &[(StageTab, &str)] = &[
     (StageTab::Assistant, "Assistant"),
     (StageTab::CorrectiveEq, "Corrective EQ"),
+    (StageTab::Deharsh, "De-harsh"),
     (StageTab::Glue, "Glue Comp"),
     (StageTab::Saturator, "Saturator"),
     (StageTab::TonalEq, "Tonal EQ"),
@@ -121,6 +124,7 @@ pub(crate) fn draw_stage_panel(
             reference_path,
         ),
         StageTab::CorrectiveEq => eq::draw(ui, &params.corrective_eq, "Corrective EQ"),
+        StageTab::Deharsh => deharsh::draw(ui, &params.deharsh),
         StageTab::Glue => glue::draw(ui, &params.glue_compressor),
         StageTab::Saturator => saturator::draw(ui, &params.saturator),
         StageTab::TonalEq => eq::draw(ui, &params.tonal_eq, "Tonal EQ"),

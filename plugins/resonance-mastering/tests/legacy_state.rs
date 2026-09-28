@@ -33,8 +33,15 @@ const MAX_BLOCK: usize = 512;
 /// Host block sizes, cycled. Uneven on purpose: the FIR stages land
 /// their hops mid-block.
 const BLOCK_SIZES: [usize; 3] = [480, 512, 333];
-/// Blocks rendered but not stored: the chain's ~18.7k samples of latency
+/// Blocks rendered but not stored: the chain's ~20.7k samples of latency
 /// is FIR pre-fill, and pinning zeros would pin nothing.
+///
+/// Re-blessed once, for W12. The de-harsh stage adds one 2048-sample
+/// STFT frame of latency even when off, and a project that never engages
+/// it spends that latency as a plain delay after dither. Every stream
+/// here was shown to be the pre-W12 stream preceded by exactly 2048
+/// zero samples, bit for bit, before the re-bless
+/// (`docs/design/deharsh-resonance-suppressor.md` §5.2).
 const PRIME_BLOCKS: usize = 56;
 /// Blocks stored in the golden.
 const CAPTURE_BLOCKS: usize = 20;
