@@ -14,13 +14,41 @@
 //! 4. Circular-shift by `FFT_SIZE / 2` so the center of symmetry lands
 //!    in the middle of the FIR.
 //! 5. Truncate to `FIR_LENGTH` taps, Hann-window to taper the edges.
+//!
+//! # Mid/side bands
+//!
+//! A band set to [`MsMode::Mid`] or [`MsMode::Side`] filters only that
+//! part of the image. With `Hm` the cascade of the stereo and mid bands
+//! and `Hs` that of the stereo and side bands, the stereo outputs are
+//!
+//! ```text
+//! L' = A·L + B·R,   R' = A·R + B·L,   A = (Hm + Hs)/2,   B = (Hm − Hs)/2
+//! ```
+//!
+//! (decode `M' = Hm·M`, `S' = Hs·S` back to L/R). Both `A` and `B` are
+//! real and zero-phase, so each is one symmetric FIR of the same length:
+//! [`FirPart::Direct`] designs `A`, [`FirPart::Cross`] designs `B`. With
+//! every band on `Stereo`, `Hm` and `Hs` are the same product taken in
+//! the same order, so `A` is bit-for-bit the plain cascade and `B` is
+//! exactly zero.
 
 use resonance_dsp::Biquad;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
-use super::band::BandConfig;
+use super::band::{BandConfig, MsMode};
 use super::convolver::FirGeometry;
+
+/// Which of the two M/S filters a designer produces (see the module
+/// docs). `Direct` is the plain cascade when no band is mid/side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FirPart {
+    /// `(Hm + Hs)/2`: applied to each channel itself.
+    #[default]
+    Direct,
+    /// `(Hm − Hs)/2`: applied to the opposite channel and added.
+    Cross,
+}
 
 /// Stateful FIR designer. Owns the inverse FFT plan and scratch
 /// buffers so we can redesign without allocating.
@@ -35,9 +63,11 @@ pub struct FirDesigner {
     /// Reusable impulse-response buffer. Returned as a borrow from
     /// [`design`], avoiding a fresh heap allocation on every call.
     h: Vec<f32>,
-    /// Reusable per-band biquad buffer so each band is designed once
-    /// per redesign instead of once per frequency bin.
-    biquads: Vec<Biquad>,
+    /// Reusable per-band biquad buffer (with each band's M/S mode) so
+    /// each band is designed once per redesign instead of once per
+    /// frequency bin.
+    biquads: Vec<(Biquad, MsMode)>,
+    part: FirPart,
 }
 
 impl FirDesigner {
@@ -47,6 +77,11 @@ impl FirDesigner {
     }
 
     pub fn with_geometry(geometry: FirGeometry) -> Self {
+        Self::with_part(geometry, FirPart::Direct)
+    }
+
+    /// A designer for one of the two M/S filters.
+    pub fn with_part(geometry: FirGeometry, part: FirPart) -> Self {
         let mut planner = FftPlanner::<f32>::new();
         let ifft = planner.plan_fft_inverse(geometry.fft_size);
         let hann = resonance_dsp::hann_window(geometry.fir_len);
@@ -61,6 +96,7 @@ impl FirDesigner {
             // (the inline fallback), where the first push must not
             // allocate.
             biquads: Vec::with_capacity(2 * super::NUM_BANDS),
+            part,
         }
     }
 
@@ -81,17 +117,32 @@ impl FirDesigner {
             bands
                 .iter()
                 .filter(|b| b.enabled)
-                .map(|b| b.to_biquad(sample_rate)),
+                .map(|b| (b.to_biquad(sample_rate), b.ms)),
         );
 
         // Compute composite magnitude response at each positive-frequency
-        // bin. The biquad chain is cascaded by multiplying magnitudes.
+        // bin. The biquad chain is cascaded by multiplying magnitudes,
+        // once for the mid and once for the side (a stereo band is in
+        // both), then combined into this designer's part.
         for k in 0..=half {
             let f = k as f32 * bin_hz;
-            let mut mag = 1.0_f32;
-            for bq in &self.biquads {
-                mag *= bq.magnitude(f, sample_rate);
+            let mut mid = 1.0_f32;
+            let mut side = 1.0_f32;
+            for (bq, ms) in &self.biquads {
+                let m = bq.magnitude(f, sample_rate);
+                match ms {
+                    MsMode::Stereo => {
+                        mid *= m;
+                        side *= m;
+                    }
+                    MsMode::Mid => mid *= m,
+                    MsMode::Side => side *= m,
+                }
             }
+            let mag = match self.part {
+                FirPart::Direct => (mid + side) * 0.5,
+                FirPart::Cross => (mid - side) * 0.5,
+            };
             self.scratch[k] = Complex::new(mag, 0.0);
             // Mirror to the negative-frequency half (Hermitian symmetry).
             if k > 0 && k < half {

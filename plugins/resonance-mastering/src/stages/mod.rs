@@ -1,13 +1,15 @@
-//! Mastering chain stages. Each sub-module owns one DSP block that fits
-//! into the mastering signal path. Later phases will add `multiband`,
-//! `imager`, `limiter`, and `dither`.
+//! Mastering chain stages. Each sub-module owns one DSP block of the
+//! mastering signal path (see `chain.rs` for the order); `sat_modes`
+//! holds the saturator's character voicings.
 
+pub mod clipper;
 pub mod dither;
 pub mod glue_compressor;
 pub mod imager;
 pub mod limiter;
 pub mod linear_phase_eq;
 pub mod multiband;
+pub mod sat_modes;
 pub mod saturator;
 
 use resonance_plugin::Smoother;

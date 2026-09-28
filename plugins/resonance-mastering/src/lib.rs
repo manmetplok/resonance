@@ -1,11 +1,19 @@
 //! Resonance Mastering — automatic mastering plugin for band music.
 //!
-//! **Phase 2:** audio passes through unchanged. The plugin is effectively
-//! a high-quality analyzer / meter built on top of the `resonance-metering`
-//! crate. Later phases add the mastering chain (EQ, compressor, saturator,
-//! multiband, M/S imager, true-peak limiter) and the one-shot master
-//! assistant that drives it from stored genre target curves or a user-
-//! loaded reference track.
+//! A fixed-order mastering chain ([`chain`]): input trim → corrective
+//! linear-phase EQ → glue compressor → saturator → tonal linear-phase EQ
+//! → linear-phase multiband compressor → M/S imager → clipper →
+//! true-peak limiter → dither, every stage off by default. The EQ bands
+//! each filter the stereo pair, the mid or the side; the imager has a
+//! global and a per-band width (on the multiband's crossover); the
+//! saturator has the original Tube↔Tape blend plus the character modes
+//! of [`stages::sat_modes`]. The latency is constant: the linear-phase
+//! stages and the limiter lookahead, whatever is switched on.
+//!
+//! Alongside it: a metering tap built on `resonance-metering` (LUFS,
+//! true peak, correlation, spectrum; [`dsp`]) and the one-shot master
+//! assistant ([`assistant`]), which suggests settings from stored genre
+//! target curves or a user-loaded reference track.
 
 use std::sync::Arc;
 

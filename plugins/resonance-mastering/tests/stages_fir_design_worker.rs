@@ -31,6 +31,7 @@ fn bell(gain_db: f32) -> [BandConfig; NUM_BANDS] {
         freq_hz: 1000.0,
         q: 1.0,
         gain_db,
+        ..BandConfig::off()
     };
     bands
 }
