@@ -10,6 +10,8 @@ pub mod audio_probe;
 #[cfg(feature = "model")]
 pub mod automation;
 #[cfg(feature = "model")]
+pub mod automation_shape;
+#[cfg(feature = "model")]
 pub mod device_definition;
 #[cfg(feature = "model")]
 pub mod device_registry;
@@ -39,6 +41,11 @@ pub use automation::{
     lane_value_to_plugin_param, lane_value_to_real, plugin_param_to_lane_value,
     real_to_lane_value, sample_lane, AutomationLane, AutomationTarget, Breakpoint, BusId,
     CurveKind, LaneId, PluginInstanceId, TrackId, GAIN_MAX_DB, GAIN_MIN_DB,
+};
+#[cfg(feature = "model")]
+pub use automation_shape::{
+    generate_shape, replace_range, BarSpan, GeneratedPoint, ShapeError, ShapeKind, ShapeOutput,
+    ShapeRequest, StepQuantizer, MAX_SHAPE_POINTS_PER_CALL,
 };
 // `device_definition::MidiBinding` (a device parameter's CC/NRPN address) is a
 // distinct concept from `midi_map::MidiBinding` (a MIDI-Learn control mapping);
