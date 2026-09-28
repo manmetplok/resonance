@@ -72,9 +72,9 @@ pub const SHAPE: &str = "automation.shape";
 /// this list in the same change that lands its app handler and its MCP
 /// tool, never before — `combined_router_exposes_every_control_method`
 /// holds the tool side to it. [`ADD_POINTS`], [`DELETE_POINTS`],
-/// [`SET_ENABLED`], [`REMOVE_LANE`] and [`SHAPE`] have wire types below
-/// but are NOT listed yet.
-pub const METHODS: &[&str] = &[LANES, SET_LANE];
+/// [`SET_ENABLED`] and [`REMOVE_LANE`] have wire types below but are NOT
+/// listed yet.
+pub const METHODS: &[&str] = &[LANES, SET_LANE, SHAPE];
 
 /// Most points one call may write (`set_lane`, `add_points`, `shape`).
 pub const MAX_POINTS_PER_CALL: usize = 2_048;
@@ -430,17 +430,24 @@ pub enum ShapeKind {
 pub struct ShapeParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
+    /// Where the curve starts, holding `from`.
     pub start: PositionSpec,
     /// The generated curve INCLUDES a point at `end` holding `to`; points
     /// already in `[start, end]` are replaced, points outside are kept.
+    /// Must lie after `start`.
     pub end: PositionSpec,
     pub shape: ShapeKind,
+    /// The value at `start`, in real units (or `0..=1` when `normalized`).
     pub from: AutomationValue,
+    /// The value at `end`, in real units (or `0..=1` when `normalized`).
     pub to: AutomationValue,
-    /// Periods over the range (`sine`, `triangle`, `square`; default 1).
+    /// Whole periods over the range (`sine`, `triangle`, `square`; at
+    /// least 1, default 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cycles: Option<f64>,
-    /// Points per bar (per-shape default).
+    pub cycles: Option<u32>,
+    /// Points per bar (per-shape default: `exp` / `sine` 16, `steps` 1,
+    /// `random_walk` 4; ignored by `ramp`, `triangle`, `square`). At
+    /// least 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolution: Option<u32>,
     /// `random_walk` seed (default 0); the seed used is echoed.

@@ -539,3 +539,74 @@ fn replace_range_with_generated_shape_output_end_to_end() {
     assert!(!result.iter().any(|p| p.value == 999.0));
     assert_eq!(result.len(), 3); // ramp start + ramp end + the far point
 }
+
+// --- values follow time, not point index ------------------------------------
+
+/// A 7/8 bar followed by a 4/4 bar, back to back.
+fn seven_eight_then_four_four() -> Vec<BarSpan> {
+    vec![
+        BarSpan {
+            start_tick: 0,
+            end_tick: TICKS_PER_BAR_7_8,
+        },
+        BarSpan {
+            start_tick: TICKS_PER_BAR_7_8,
+            end_tick: TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4,
+        },
+    ]
+}
+
+#[test]
+fn exp_over_mixed_meters_is_monotonic_and_geometric_at_the_tick_midpoint() {
+    let bars = seven_eight_then_four_four();
+    let out = generate_shape(&base_request(ShapeKind::Exp, bars)).unwrap();
+    // Per-bar placement is unchanged: 16 per bar + the end point.
+    assert_eq!(out.points.len(), 16 * 2 + 1);
+    for w in out.points.windows(2) {
+        assert!(w[1].value > w[0].value, "strictly rising: {w:?}");
+    }
+    // The span's midpoint in ticks (1800) is a grid point of the 4/4 bar
+    // (1680 + 1 * 120); an exponential sweep sits at the geometric mean
+    // of `from` and `to` halfway through in time.
+    let mid_tick = (TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4) / 2;
+    let mid = out
+        .points
+        .iter()
+        .find(|p| p.tick == mid_tick)
+        .expect("a point at the tick midpoint");
+    let geometric_mean = (300.0f64 * 4000.0).sqrt();
+    assert!(
+        (mid.value - geometric_mean).abs() < 1e-9,
+        "midpoint {} != geometric mean {geometric_mean}",
+        mid.value
+    );
+}
+
+#[test]
+fn a_short_bar_covers_less_of_a_sweep_than_a_long_one() {
+    let mut req = base_request(ShapeKind::Steps, seven_eight_then_four_four());
+    req.from = 0.0;
+    req.to = 3600.0; // one unit per tick, so value == tick
+    let out = generate_shape(&req).unwrap();
+    // One step per bar: the 4/4 bar's step starts where the 7/8 bar
+    // ends in time (1680 of 3600 ticks), not halfway.
+    assert_eq!(out.points.len(), 3);
+    assert_eq!(out.points[1].tick, TICKS_PER_BAR_7_8);
+    for p in &out.points {
+        assert!((p.value - p.tick as f64).abs() < 1e-9, "{p:?}");
+    }
+}
+
+#[test]
+fn sine_phase_follows_ticks_across_mixed_meters() {
+    let bars = seven_eight_then_four_four();
+    let span = (TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4) as f64;
+    let out = generate_shape(&base_request(ShapeKind::Sine, bars)).unwrap();
+    // Every point but the forced end point sits on the one-cycle sine of
+    // its own time fraction.
+    for p in &out.points[..out.points.len() - 1] {
+        let t = p.tick as f64 / span;
+        let expected = 300.0 + 3700.0 * (1.0 - (2.0 * std::f64::consts::PI * t).cos()) / 2.0;
+        assert!((p.value - expected).abs() < 1e-9, "{p:?} vs {expected}");
+    }
+}

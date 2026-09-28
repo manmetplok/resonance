@@ -2,9 +2,9 @@
 //! §3 D3, §4.4, §4.6). This module has no knowledge of the control API, the
 //! app or the engine — it only turns a shape request into a list of
 //! `(tick, real_value, curve)` points, plus a pure helper to splice those
-//! points into an existing sorted point list. Wiring it into
-//! `AutomationMessage::SetLane` (tick → sample-frame, real → normalized) is a
-//! later slice's job.
+//! points into an existing sorted point list. The app's `automation.shape`
+//! handler (`resonance-app/src/update/control/automation/shape.rs`) converts
+//! ticks to sample frames and real values to normalized lane values.
 //!
 //! Positions are expressed in **ticks**, not sample frames: the caller
 //! resolves bars/beats to ticks through the tempo/meter map (that logic lives
@@ -12,6 +12,10 @@
 //! [`BarSpan`]s. Spacing points evenly within each bar's own tick span, rather
 //! than evenly across the whole request, is what makes a 7/8 bar get the same
 //! point count as a 4/4 bar (§4.6).
+//!
+//! Point *placement* is per bar, but point *values* follow each point's tick
+//! position across the whole span, so a sweep progresses in time: a 7/8 bar
+//! covers 7/8 as much of an `exp` sweep as a 4/4 bar does.
 //!
 //! Every shape's output ends with a point *at* the last bar's `end_tick`
 //! holding `to` exactly (D3 in §3) — the value actually arrives, rather than
@@ -346,50 +350,34 @@ fn raw_points(
 ) -> Vec<(u64, f64)> {
     let start_tick = bars[0].start_tick;
     let end_tick = bars[bars.len() - 1].end_tick;
+    // Values follow each point's position in *time* across the whole span,
+    // not its index: a short 7/8 bar covers less of a sweep than a 4/4 bar,
+    // even though both carry the same number of points. Ticks are the time
+    // axis here; the tempo map is resolved above this crate.
+    let span = (end_tick - start_tick) as f64;
+    let frac = |tick: u64| (tick - start_tick) as f64 / span;
 
     match shape {
         ShapeKind::Ramp => vec![(start_tick, from), (end_tick, to)],
 
-        ShapeKind::Exp => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
-                .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    (tick, from * (to / from).powf(t))
-                })
-                .collect()
-        }
+        ShapeKind::Exp => grid_ticks(bars, resolution)
+            .into_iter()
+            .map(|tick| (tick, from * (to / from).powf(frac(tick))))
+            .collect(),
 
-        ShapeKind::Sine => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
-                .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    let phase = 2.0 * std::f64::consts::PI * cycles as f64 * t;
-                    let value = from + (to - from) * (1.0 - phase.cos()) / 2.0;
-                    (tick, value)
-                })
-                .collect()
-        }
+        ShapeKind::Sine => grid_ticks(bars, resolution)
+            .into_iter()
+            .map(|tick| {
+                let phase = 2.0 * std::f64::consts::PI * cycles as f64 * frac(tick);
+                let value = from + (to - from) * (1.0 - phase.cos()) / 2.0;
+                (tick, value)
+            })
+            .collect(),
 
-        ShapeKind::Steps => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
-                .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    (tick, from + (to - from) * t)
-                })
-                .collect()
-        }
+        ShapeKind::Steps => grid_ticks(bars, resolution)
+            .into_iter()
+            .map(|tick| (tick, from + (to - from) * frac(tick)))
+            .collect(),
 
         ShapeKind::RandomWalk => {
             let ticks = grid_ticks(bars, resolution);
@@ -420,7 +408,6 @@ fn raw_points(
         }
 
         ShapeKind::Triangle | ShapeKind::Square => {
-            let span = (end_tick - start_tick) as f64;
             let corners = 2 * cycles;
             (0..=corners)
                 .map(|k| {
