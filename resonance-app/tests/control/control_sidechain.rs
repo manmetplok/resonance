@@ -440,6 +440,147 @@ fn a_reverb_that_is_the_only_keyed_plugin_is_keyed_by_default() {
 }
 
 // ---------------------------------------------------------------------------
+// An unqualified clear targets the plugin that actually has a route
+// ---------------------------------------------------------------------------
+
+/// A reverb keyed by name, with a compressor after it: the unqualified
+/// `set` resolves to the compressor, but the only route is the reverb's.
+/// An unqualified `clear` must drop THAT route rather than "clearing"
+/// the compressor's non-existent one and acking.
+#[test]
+fn an_unqualified_bus_clear_drops_the_route_that_exists() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_add_track(KICK, TrackType::Instrument);
+    app.test_add_bus(BUS, "Vocal Bus");
+    bus_plugin(&mut app, 210, REVERB, true);
+    bus_plugin(&mut app, BUS_COMP, COMPRESSOR, true);
+    let _: MutationAck = call(
+        &mut app,
+        "bus.set_sidechain",
+        serde_json::json!({"bus_id": BUS, "plugin_id": REVERB, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("keying the reverb by name succeeds");
+    assert_eq!(route_for(&app, 210), Some(SendSource::Track(KICK)));
+
+    let _: MutationAck = call(
+        &mut app,
+        "bus.clear_sidechain",
+        serde_json::json!({"bus_id": BUS}),
+    )
+    .result()
+    .expect("bus.clear_sidechain succeeds");
+    assert!(
+        app.test_sidechain_routes().is_empty(),
+        "the reverb's route must be gone: {:?}",
+        app.test_sidechain_routes()
+    );
+}
+
+#[test]
+fn an_unqualified_track_clear_drops_the_route_that_exists() {
+    let mut app = app();
+    app.test_add_track(TRACK, TrackType::Audio);
+    track_plugin(&mut app, TRACK_REVERB, REVERB);
+    track_plugin(&mut app, TRACK_COMP, COMPRESSOR);
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_sidechain",
+        serde_json::json!({"track_id": TRACK, "plugin_id": REVERB, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("keying the reverb by name succeeds");
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.clear_sidechain",
+        serde_json::json!({"track_id": TRACK}),
+    )
+    .result()
+    .expect("track.clear_sidechain succeeds");
+    assert_eq!(route_for(&app, TRACK_REVERB), None, "the reverb's route must be gone");
+}
+
+#[test]
+fn an_unqualified_master_clear_drops_the_route_that_exists() {
+    let mut app = app();
+    app.test_apply_engine_event(AudioEvent::MasterPluginAdded {
+        instance_id: 301,
+        plugin_name: "EQ".to_string(),
+        clap_plugin_id: EQ.to_string(),
+        clap_file_path: "/plugins/eq.clap".to_string(),
+        params: Vec::<ParamInfo>::new(),
+        has_gui: false,
+        has_sidechain_input: true,
+    });
+    let _: MutationAck = call(
+        &mut app,
+        "master.set_sidechain",
+        serde_json::json!({"plugin_id": EQ, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("keying the master EQ by name succeeds");
+    assert_eq!(route_for(&app, 301), Some(SendSource::Track(KICK)));
+
+    let _: MutationAck = roundtrip(
+        &mut app,
+        Request::without_params(9, "master.clear_sidechain"),
+    )
+    .result()
+    .expect("master.clear_sidechain succeeds");
+    assert!(app.test_sidechain_routes().is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// The EQ's key port (dynamic bands) is secondary, like the reverb's
+// ---------------------------------------------------------------------------
+
+const EQ: &str = "com.resonance.eq";
+
+/// An EQ ahead of the compressor has a key port now (its dynamic bands'
+/// optional sidechain), but "key this bus from the kick" still means the
+/// compressor.
+#[test]
+fn an_eq_ahead_of_a_compressor_does_not_capture_the_unqualified_key() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_add_track(KICK, TrackType::Instrument);
+    app.test_add_bus(BUS, "Bass Bus");
+    bus_plugin(&mut app, 220, EQ, true);
+    bus_plugin(&mut app, BUS_COMP, COMPRESSOR, true);
+
+    let _: MutationAck = call(
+        &mut app,
+        "bus.set_sidechain",
+        serde_json::json!({"bus_id": BUS, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("bus.set_sidechain succeeds");
+    assert_eq!(route_for(&app, BUS_COMP), Some(SendSource::Track(KICK)));
+    assert_eq!(route_for(&app, 220), None, "the EQ must not be keyed");
+}
+
+/// With the EQ as the only keyed plugin, the unqualified call keys it.
+#[test]
+fn an_eq_that_is_the_only_keyed_plugin_is_keyed_by_default() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_add_track(KICK, TrackType::Instrument);
+    app.test_add_bus(BUS, "Guitar Bus");
+    bus_plugin(&mut app, 220, EQ, true);
+
+    let _: MutationAck = call(
+        &mut app,
+        "bus.set_sidechain",
+        serde_json::json!({"bus_id": BUS, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("the EQ accepts a key");
+    assert_eq!(route_for(&app, 220), Some(SendSource::Track(KICK)));
+}
+
+// ---------------------------------------------------------------------------
 // The new methods are advertised
 // ---------------------------------------------------------------------------
 

@@ -121,7 +121,8 @@ fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Me
         return not_found_bus(request, params.bus_id.0);
     };
     let chain = b.plugins.clone();
-    let instance_id = match sidechain::resolve_chain_target(
+    let instance_id = match sidechain::resolve_chain_clear_target(
+        app,
         &chain,
         params.plugin_id.as_deref(),
         params.occurrence,

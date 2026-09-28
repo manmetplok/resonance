@@ -20,7 +20,10 @@ pub const AUTO_GAIN_INDEX: usize = OUTPUT_GAIN_INDEX + 1;
 pub const EXTRA_PER_BAND: usize = 6;
 /// First index of the extra per-band block.
 pub const EXTRA_BASE: usize = AUTO_GAIN_INDEX + 1;
-pub const PARAM_COUNT: usize = EXTRA_BASE + NUM_BANDS * EXTRA_PER_BAND;
+/// First index of the per-band `dyn_sc` block, one per band, appended
+/// after the extra block so every earlier index is unchanged.
+pub const SC_BASE: usize = EXTRA_BASE + NUM_BANDS * EXTRA_PER_BAND;
+pub const PARAM_COUNT: usize = SC_BASE + NUM_BANDS;
 
 pub struct BandParams {
     pub enabled: BoolParam,
@@ -29,6 +32,11 @@ pub struct BandParams {
     pub q: FloatParam,
     /// 0=Bell, 1=LowShelf, 2=HighShelf, 3=LowCut, 4=HighCut, 5=Tilt,
     /// 6=LF Lift+Dip, 7=Air — mirror of `BandKind`.
+    ///
+    /// Note: W8 grew the range from 0–4 to 0–7, so a *normalized* value
+    /// (an automation lane, a host's 0..1 view) now lands on a different
+    /// kind than before; plain values — saved state — are unchanged.
+    /// Deliberately not migrated: there are no real users with kind lanes.
     pub kind: IntParam,
     /// 0=12 dB/oct, 1=24 dB/oct, 2=48 dB/oct — only meaningful for LowCut/HighCut.
     pub slope: IntParam,
@@ -36,7 +44,8 @@ pub struct BandParams {
     pub ms: IntParam,
     /// Dynamic band: the band's gain is pulled down by the level of its
     /// own frequency region (see `crate::dsp`). Off by default; ignored
-    /// on cut kinds.
+    /// on the kinds `BandKind::supports_dyn` excludes (the cuts, Tilt,
+    /// LF Lift+Dip).
     pub dyn_on: BoolParam,
     /// Detector level above which the dynamic band starts to cut, dBFS.
     pub dyn_threshold: FloatParam,
@@ -44,6 +53,9 @@ pub struct BandParams {
     pub dyn_ratio: FloatParam,
     pub dyn_attack: FloatParam,
     pub dyn_release: FloatParam,
+    /// Dynamic band detects on the sidechain key (the plugin's key input)
+    /// instead of its own signal, when a key is connected. Off by default.
+    pub dyn_sc: BoolParam,
 }
 
 /// Plain-old-data snapshot of a band's dynamics settings. Kept apart from
@@ -56,6 +68,8 @@ pub struct DynSnapshot {
     pub ratio: f32,
     pub attack_ms: f32,
     pub release_ms: f32,
+    /// Detect on the sidechain key when one is connected.
+    pub sidechain: bool,
 }
 
 pub struct EqParams {
@@ -89,6 +103,7 @@ impl BandParams {
             ratio: self.dyn_ratio.value(),
             attack_ms: self.dyn_attack.value(),
             release_ms: self.dyn_release.value(),
+            sidechain: self.dyn_sc.value(),
         }
     }
 
@@ -128,6 +143,10 @@ impl EqParams {
         }
         if index == AUTO_GAIN_INDEX {
             return &self.auto_gain;
+        }
+        if index >= SC_BASE {
+            let band = (index - SC_BASE).min(NUM_BANDS - 1);
+            return &self.bands[band].dyn_sc;
         }
         if index >= EXTRA_BASE {
             let off = (index - EXTRA_BASE).min(NUM_BANDS * EXTRA_PER_BAND - 1);
@@ -304,6 +323,11 @@ macro_rules! make_band {
             )
             .with_unit(" ms")
             .with_value_to_string(format_ms()),
+            dyn_sc: BoolParam::new(
+                concat!("band", $ix, "_dyn_sc"),
+                concat!("Band ", $ix, " Dyn Sidechain"),
+                false,
+            ),
         }
     };
 }

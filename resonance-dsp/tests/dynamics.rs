@@ -76,3 +76,29 @@ fn ballistics_degenerate_sample_rate_stays_finite() {
         assert!(env.is_finite() && env <= 0.0, "sr={sr}: env {env}");
     }
 }
+
+/// The ducker the delay and the reverb share: exactly unity while off,
+/// `amount × DUCK_MAX_GR_DB` down with the detector held over the
+/// threshold, and back to exactly unity once released at amount 0.
+#[test]
+fn ducker_is_transparent_off_and_settles_at_amount_times_max() {
+    let mut d = Ducker::new(48_000.0, 5.0, 50.0);
+    for _ in 0..1_000 {
+        assert_eq!(d.next_gain(0.9, -0.9, 0.0, -30.0).to_bits(), 1.0f32.to_bits());
+    }
+    let mut g = 1.0;
+    for _ in 0..48_000 {
+        g = d.next_gain(0.5, 0.1, 0.5, -30.0);
+    }
+    let got_db = 20.0 * g.log10();
+    assert!((got_db + 0.5 * DUCK_MAX_GR_DB).abs() < 0.01, "settled at {got_db} dB");
+    assert!((d.gain_reduction_db() - 0.5 * DUCK_MAX_GR_DB).abs() < 0.01);
+    // Release at amount 0: recovers, then snaps to exactly 1.0.
+    for _ in 0..48_000 {
+        g = d.next_gain(0.5, 0.1, 0.0, -30.0);
+    }
+    assert_eq!(g.to_bits(), 1.0f32.to_bits());
+    // A non-finite detector does not poison the envelope.
+    let g = d.next_gain(f32::NAN, f32::INFINITY, 1.0, -30.0);
+    assert!(g.is_finite());
+}

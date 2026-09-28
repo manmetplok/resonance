@@ -18,7 +18,8 @@
 //! - **the target must declare a key port**, or the call is refused with
 //!   the chain's keyable plugins named ([`require_key_port`]);
 //! - **an unqualified call targets the first keyable plugin**, not slot 0
-//!   ([`first_keyable`]).
+//!   ([`first_keyable`]); an unqualified *clear* targets the plugin that
+//!   actually has a route ([`clear_target`]), falling back to the same.
 //!
 //! What is NOT here is how each namespace finds its chain — a track's is
 //! `TrackState::plugins`, a bus's is `BusState::plugins`, the master's is
@@ -72,16 +73,18 @@ pub(super) fn resolve_key_source(
 }
 
 /// Plugins whose key port is secondary: they read a key (the reverb
-/// ducks its wet return from one) but are not what an unqualified
-/// "key this track from X" means. Default resolution skips them while a
-/// dynamics plugin with a key port sits anywhere on the chain.
-const SECONDARY_KEY_PLUGINS: &[&str] = &["com.resonance.reverb"];
+/// ducks its wet return from one, the EQ's dynamic bands can detect on
+/// one) but are not what an unqualified "key this track from X" means.
+/// Default resolution skips them while any other keyed plugin sits
+/// anywhere on the chain.
+const SECONDARY_KEY_PLUGINS: &[&str] = &["com.resonance.reverb", "com.resonance.eq"];
 
 /// The plugin an omitted `plugin_id` resolves to: the first plugin on
-/// `chain` that declares a sidechain (key) input and is a dynamics
-/// processor (compressor, gate, or any keyed plugin not listed in
-/// [`SECONDARY_KEY_PLUGINS`]); failing that, the first keyed plugin at
-/// all — so a reverb is chosen only when it is the only one with a key.
+/// `chain` that declares a sidechain (key) input and is not listed in
+/// [`SECONDARY_KEY_PLUGINS`] (the compressor, the gate, or any
+/// third-party keyed plugin); failing that, the first keyed plugin at
+/// all — so a reverb or an EQ is chosen only when nothing else on the
+/// chain has a key.
 ///
 /// Addressing slot 0 instead — which is what the sidechain methods used
 /// to inherit from `set_plugin_param` — sent every unqualified call at a
@@ -95,6 +98,39 @@ pub(super) fn first_keyable(chain: &[PluginSlotState]) -> Option<PluginInstanceI
         .find(|p| !SECONDARY_KEY_PLUGINS.contains(&p.clap_plugin_id.as_str()))
         .or_else(|| keyed().next())
         .map(|p| p.instance_id)
+}
+
+/// The plugin an omitted `plugin_id` on a **clear** resolves to: the
+/// first plugin on `chain` that has a key route, else
+/// [`first_keyable`].
+///
+/// Not `first_keyable` alone: a route set by name onto a secondary
+/// plugin (a reverb keyed ahead of a compressor) would otherwise be
+/// unreachable unqualified — the clear would resolve to the compressor,
+/// "clear" its absent route, and ack while the reverb stayed keyed.
+pub(super) fn clear_target(app: &Resonance, chain: &[PluginSlotState]) -> Option<PluginInstanceId> {
+    chain
+        .iter()
+        .find(|p| app.sidechain.route_for(p.instance_id).is_some())
+        .map(|p| p.instance_id)
+        .or_else(|| first_keyable(chain))
+}
+
+/// [`resolve_chain_target`] for a clear: an omitted `plugin_id` means
+/// the routed plugin ([`clear_target`]).
+pub(super) fn resolve_chain_clear_target(
+    app: &Resonance,
+    chain: &[PluginSlotState],
+    plugin_id: Option<&str>,
+    occurrence: Option<u32>,
+    host: &str,
+) -> Result<PluginInstanceId, RpcError> {
+    if plugin_id.is_none() {
+        if let Some(id) = clear_target(app, chain) {
+            return Ok(id);
+        }
+    }
+    resolve_chain_target(chain, plugin_id, occurrence, host)
 }
 
 /// Refuse a key route onto a plugin instance with no sidechain input,

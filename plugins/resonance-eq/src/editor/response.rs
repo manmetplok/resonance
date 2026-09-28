@@ -1,22 +1,22 @@
 //! Frequency-response rendering for the EQ editor.
 //!
-//! Computes the composite magnitude curve at ~256 log-spaced frequencies
-//! from 20 Hz to 20 kHz by summing (in dB) each enabled band's biquad
-//! magnitude. Also renders a faint per-band contribution curve for the
-//! selected/hovered band so the user can see what they're adjusting.
+//! Draws the composite magnitude curve at ~256 log-spaced frequencies
+//! from 20 Hz to 20 kHz (`crate::response_curve`, cached per band state):
+//! one curve while every band is Stereo, a solid mid and a dashed side
+//! curve once any band is in Mid or Side mode.
 //!
 //! The actual node interaction (hit test, drag, scroll, right-click) lives
 //! in `nodes.rs` — this file only draws.
 
 use std::sync::Arc;
 
-use resonance_dsp::Biquad;
 use plugin_gui_core::egui;
 
 use crate::analyzer::SpectrumSnapshot;
-use crate::band::{BandKind, MAX_STAGES_PER_BAND};
+use crate::band::BandKind;
 use crate::editor::{nodes, theme, AnalyzerMode, EqEditorApp};
 use crate::params::{BandSnapshot, NUM_BANDS};
+use crate::response_curve::{response_curves, ResponseCurves};
 
 const NUM_POINTS: usize = 256;
 const MIN_FREQ: f32 = 20.0;
@@ -59,7 +59,7 @@ pub fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut EqEditorApp) {
     let snapshots: [BandSnapshot; NUM_BANDS] =
         std::array::from_fn(|i| app.params.bands[i].snapshot());
 
-    draw_composite_curve(&painter, plot, &snapshots);
+    draw_composite_curve(&painter, plot, &snapshots, &mut app.curve_cache);
     nodes::draw_and_interact(ui, plot, app, &snapshots);
 }
 
@@ -234,26 +234,59 @@ fn draw_composite_curve(
     painter: &egui::Painter,
     plot: egui::Rect,
     snapshots: &[BandSnapshot; NUM_BANDS],
+    cache: &mut Option<([BandSnapshot; NUM_BANDS], ResponseCurves)>,
 ) {
-    // Build per-band coefficient caches once and reuse for every frequency
-    // sample to keep the render cheap.
-    let band_coeffs: [(usize, [Biquad; MAX_STAGES_PER_BAND]); NUM_BANDS] =
-        std::array::from_fn(|i| {
-            let mut stages = [Biquad::identity(); MAX_STAGES_PER_BAND];
-            let n = crate::band::configure_stages(&snapshots[i], VIS_SR, &mut stages);
-            (n, stages)
-        });
+    let freqs = || -> Vec<f32> {
+        (0..NUM_POINTS)
+            .map(|i| {
+                let t = i as f32 / (NUM_POINTS - 1) as f32;
+                MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t)
+            })
+            .collect()
+    };
+    // Re-evaluate only when a band moved; the curve is otherwise the same
+    // on every repaint.
+    if cache.as_ref().is_none_or(|(snaps, _)| snaps != snapshots) {
+        *cache = Some((*snapshots, response_curves(snapshots, VIS_SR, &freqs())));
+    }
+    let Some((_, curves)) = cache.as_ref() else {
+        return;
+    };
+    let to_points = |db: &[f32]| -> Vec<egui::Pos2> {
+        db.iter()
+            .enumerate()
+            .map(|(i, &mag_db)| {
+                let t = i as f32 / (NUM_POINTS - 1) as f32;
+                let freq = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t);
+                let x = plot.left() + freq_to_x(freq, plot.width());
+                let y = plot.top() + db_to_y(mag_db, plot.height());
+                egui::pos2(x, y)
+            })
+            .collect()
+    };
 
-    let mut points: Vec<egui::Pos2> = Vec::with_capacity(NUM_POINTS);
-    for i in 0..NUM_POINTS {
-        let t = i as f32 / (NUM_POINTS - 1) as f32;
-        let freq = MIN_FREQ * (MAX_FREQ / MIN_FREQ).powf(t);
-        let mag_db = composite_magnitude_db(freq, &band_coeffs);
-        let x = plot.left() + freq_to_x(freq, plot.width());
-        let y = plot.top() + db_to_y(mag_db, plot.height());
-        points.push(egui::pos2(x, y));
+    // With bands in Mid or Side mode the EQ does two different things:
+    // the side channel's curve goes dashed under the mid's, each tagged
+    // at the right edge, so a Side band is never read as a mono boost.
+    if let Some(side) = &curves.side {
+        let points = to_points(side);
+        if let Some(last) = points.last() {
+            tag(painter, *last, "S", theme::GOOD);
+        }
+        painter.extend(egui::Shape::dashed_line(
+            &points,
+            egui::Stroke::new(1.6, theme::GOOD),
+            6.0,
+            4.0,
+        ));
     }
 
+    let points = to_points(&curves.mid);
+    if curves.side.is_some() {
+        if let Some(last) = points.last() {
+            tag(painter, *last, "M", theme::ACCENT);
+        }
+    }
     // Glow underlay + solid line on top.
     painter.add(egui::Shape::line(
         points.clone(),
@@ -265,17 +298,15 @@ fn draw_composite_curve(
     ));
 }
 
-fn composite_magnitude_db(
-    freq: f32,
-    band_coeffs: &[(usize, [Biquad; MAX_STAGES_PER_BAND])],
-) -> f32 {
-    let mut total_lin = 1.0f32;
-    for (active, stages) in band_coeffs {
-        for stage in stages.iter().take(*active) {
-            total_lin *= stage.magnitude(freq, VIS_SR);
-        }
-    }
-    20.0 * total_lin.max(1e-10).log10()
+/// A one-letter curve label just left of the curve's right-hand end.
+fn tag(painter: &egui::Painter, end: egui::Pos2, text: &str, color: egui::Color32) {
+    painter.text(
+        egui::pos2(end.x - 4.0, end.y - 4.0),
+        egui::Align2::RIGHT_BOTTOM,
+        text,
+        egui::FontId::proportional(10.0),
+        color,
+    );
 }
 
 pub fn freq_to_x(freq: f32, width: f32) -> f32 {

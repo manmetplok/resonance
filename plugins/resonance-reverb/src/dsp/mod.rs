@@ -17,7 +17,7 @@
 
 mod chain;
 mod diffusion;
-mod duck;
+pub(crate) mod duck;
 mod er;
 mod fdn;
 mod modulation;

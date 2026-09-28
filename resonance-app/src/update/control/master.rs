@@ -110,7 +110,8 @@ fn clear_sidechain(app: &mut Resonance, request: &Request) -> (Response, Task<Me
         Err(e) => return reject(request, e),
     };
     let chain = app.master.plugins.clone();
-    let instance_id = match sidechain::resolve_chain_target(
+    let instance_id = match sidechain::resolve_chain_clear_target(
+        app,
         &chain,
         params.plugin_id.as_deref(),
         params.occurrence,

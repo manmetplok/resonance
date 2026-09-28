@@ -16,6 +16,7 @@ use resonance_eq::band::{
 };
 use resonance_eq::dsp::static_gain_db;
 use resonance_eq::params::{BandSnapshot, EqParams};
+use resonance_eq::response_curve::response_curves;
 use resonance_eq::ResonanceEq;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 
@@ -147,6 +148,43 @@ fn mid_bands_leave_the_side_unchanged() {
 // ---------------------------------------------------------------------------
 // Tilt
 // ---------------------------------------------------------------------------
+
+/// The editor's curve with bands in Mid or Side mode: a +12 dB Side bell
+/// is a boost only the side gets, so it must not show in the mid curve,
+/// and the mid-only cut must not show in the side curve. With every band
+/// Stereo there is one curve, the plain composite.
+#[test]
+fn the_response_view_splits_mid_and_side_once_a_band_uses_them() {
+    let freqs = [100.0f32, 1_000.0, 5_000.0];
+    let stereo = [snap(BandKind::Bell, 100.0, 6.0, BandMs::Stereo)];
+    let one = response_curves(&stereo, SR, &freqs);
+    assert!(one.side.is_none(), "all-Stereo bands draw one curve");
+    assert!((one.mid[0] - band_db(&stereo[0], SR, 100.0)).abs() < 1e-3);
+
+    let bands = [
+        snap(BandKind::Bell, 100.0, 6.0, BandMs::Stereo),
+        snap(BandKind::Bell, 1_000.0, 12.0, BandMs::Side),
+        snap(BandKind::Bell, 5_000.0, -6.0, BandMs::Mid),
+    ];
+    // Narrow M/S bells, so their skirts stay out of each other's way.
+    let bands = bands.map(|mut b| {
+        if b.ms != BandMs::Stereo {
+            b.q = 4.0;
+        }
+        b
+    });
+    let split = response_curves(&bands, SR, &freqs);
+    let side = split.side.as_ref().expect("a Side band splits the curve");
+    // The Stereo band is in both.
+    assert!((split.mid[0] - side[0]).abs() < 0.2, "{} vs {}", split.mid[0], side[0]);
+    assert!(split.mid[0] > 5.0);
+    // The Side boost only in the side curve.
+    assert!(side[1] > 11.0, "side curve at 1 kHz {}", side[1]);
+    assert!(split.mid[1].abs() < 1.0, "mid curve at 1 kHz {}", split.mid[1]);
+    // The Mid cut only in the mid curve.
+    assert!(split.mid[2] < -5.0, "mid curve at 5 kHz {}", split.mid[2]);
+    assert!(side[2].abs() < 1.0, "side curve at 5 kHz {}", side[2]);
+}
 
 /// The analog first-order tilt the section is designed from.
 fn analog_tilt_db(pivot: f32, gain_db: f32, f: f32) -> f32 {
