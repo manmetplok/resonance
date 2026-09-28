@@ -5,16 +5,14 @@
 //!
 //!   input trim → corrective EQ → de-harsh → glue compressor
 //!         → saturator → tonal EQ → multiband → imager → clipper
-//!         → limiter → dither → (de-harsh tail delay) → metering tap
+//!         → limiter → dither → metering tap
 //!
 //! The imager's per-band width is applied on the multiband's crossover
 //! bands, just before they are summed (see `stages::multiband`). Only
 //! the two linear-phase EQs, the de-harsh STFT frame, the multiband
 //! crossover and the limiter lookahead have latency, and it does not
-//! depend on which stages are on or what they are set to. The de-harsh
-//! delay sits either at its stage or at the chain's end, whichever keeps
-//! a project that never engages it bit-identical to the chain without it
-//! (see `stages::deharsh`).
+//! depend on which stages are on or what they are set to (de-harsh
+//! off is its own exact one-frame delay).
 
 use resonance_dsp::{db_to_linear, DelayLine};
 
@@ -102,9 +100,12 @@ impl Chain {
         corrective_eq.set_cross_phase_offsets([half_phase(0), half_phase(5)]);
         tonal_eq.set_cross_phase_offsets([half_phase(1), half_phase(6)]);
         let limiter = Limiter::new(sample_rate);
-        let downstream_latency = tonal_eq.latency() + multiband.latency() + limiter.latency();
-        let deharsh = DeharshStage::new(sample_rate, max_buffer, downstream_latency);
-        let max_latency = corrective_eq.latency() + deharsh.latency() + downstream_latency;
+        let deharsh = DeharshStage::new(sample_rate);
+        let max_latency = corrective_eq.latency()
+            + deharsh.latency()
+            + tonal_eq.latency()
+            + multiband.latency()
+            + limiter.latency();
         Self {
             corrective_eq,
             deharsh,
@@ -291,7 +292,7 @@ impl Chain {
             .process_stereo(left, right, &corrective_bands);
 
         let dh_cfg = params.deharsh.snapshot();
-        self.deharsh.process_stage(left, right, &dh_cfg);
+        self.deharsh.process_stereo(left, right, &dh_cfg);
 
         let glue_cfg = params.glue_compressor.snapshot();
         self.glue_compressor.process_stereo(left, right, &glue_cfg);
@@ -320,10 +321,6 @@ impl Chain {
 
         let dither_cfg = params.dither.snapshot();
         self.dither.process_stereo(left, right, &dither_cfg);
-
-        // Last: the de-harsh delay, when it is spent here rather than at
-        // the stage (see `stages::deharsh`).
-        self.deharsh.process_tail(left, right);
     }
 
     /// Deepest current de-harsh cut, dB.

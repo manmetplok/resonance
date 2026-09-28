@@ -34,11 +34,24 @@ const MAX_PEAK_DELTA: f32 = 2.0e-4;
 const MAX_RMS_DELTA: f64 = 2.0e-5;
 const TAU: f32 = std::f32::consts::TAU;
 
-// Re-blessed once, for W12: the de-harsh latency (2048 samples, spent at
-// the chain's end while the stage is never engaged) shifted every stream.
-// Each was shown to be the pre-W12 stream behind exactly 2048 zero
-// samples, bit for bit (`docs/design/deharsh-resonance-suppressor.md`
-// §5.2).
+// Re-blessed once, for W12. The de-harsh stage delays everything after
+// the corrective EQ by 2048 samples, even when off. The full pre- and
+// post-W12 streams were compared after aligning them by 2048 samples
+// (`docs/design/deharsh-resonance-suppressor.md` §5.2). No scenario here
+// uses dither.
+// - Static scenarios: at most −121.7 dB re peak, which is float
+//   rounding from the moved FIR hop grid, with two exceptions:
+//   - `imager_band_width_with_multiband`: −84.7 dB, and −97.7 dB in the
+//     captured window. The multiband compressors turn rounding into
+//     slightly different gain.
+//   - `eq_mid_side_bands`: −24.3 dB once, at sample 19295. This is
+//     inside the latency pre-fill, where the first M/S FIR designs land
+//     on a hop boundary that now meets different audio. From sample
+//     24000 (so over the whole capture) it is −131.3 dB.
+// - The automated `w9_sweeps_between_blocks`: +1.0 dB. Its block-timed
+//   edits now land 2048 samples later in the downstream audio, so this is
+//   a content change, not rounding.
+// - The "stripped" renders stay at or below −89.1 dB.
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "w9_golden.f32")
 }

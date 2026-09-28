@@ -1,13 +1,11 @@
 //! The de-harsh stage in the mastering chain (warmth-width-depth.md W12,
 //! `docs/design/deharsh-resonance-suppressor.md`): its params, the
-//! constant reported latency, bit-transparency while it is never
-//! engaged, the resonance cut through the whole chain, and the tail →
-//! inline handover (`stages::deharsh`).
+//! constant reported latency, bit-transparency while it is off, the
+//! resonance cut through the whole chain, and the editor panel.
 
 use resonance_dsp::deharsh::StftGeometry;
 use resonance_dsp::{Biquad, SimpleRng, SuppressorConfig};
 use resonance_mastering::params::{MasteringParams, PARAM_COUNT, W9_PARAM_COUNT};
-use resonance_mastering::stages::deharsh::{DeharshStage, Timing};
 use resonance_mastering::ResonanceMastering;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -169,8 +167,8 @@ fn latency_is_the_pre_w12_sum_plus_one_frame_in_every_state() {
     assert_eq!(frame(), 2048);
     assert_eq!(plugin.latency_samples() as usize, expected);
     let x = pink(1, 48_000, -18.0);
-    // Every dh param moves while audio runs, including on/off (so the
-    // tail → inline handover happens) and every mode and delta.
+    // Every dh param moves while audio runs, including on/off and every
+    // mode and delta.
     let _ = render(&mut plugin, &x, &x, 256, |p, b| {
         p.deharsh.on.set_value(b % 40 >= 10);
         p.deharsh.depth.set_value((b % 25) as f32);
@@ -195,7 +193,7 @@ fn latency_is_the_pre_w12_sum_plus_one_frame_in_every_state() {
 // --- Never engaged: bit-transparent. ----------------------------------
 
 #[test]
-fn a_never_engaged_stage_is_inert_whatever_its_other_params() {
+fn an_off_stage_is_inert_whatever_its_other_params() {
     let x = pink(2, 60_000, -12.0);
     let y = pink(3, 60_000, -14.0);
     let setup = |p: &MasteringParams| {
@@ -251,95 +249,6 @@ fn a_3k2_resonance_is_cut_at_least_6_db_through_the_chain() {
     assert!(cut >= 6.0, "chain cut the resonance only {cut:.2} dB");
     let broad = band_db(o, 1000.0, 2000.0) - band_db(i, 1000.0, 2000.0);
     assert!(broad.abs() < 0.5, "1–2 kHz moved {broad:.2} dB");
-}
-
-// --- The tail → inline handover. --------------------------------------
-
-#[test]
-fn the_handover_leaves_no_trace_on_a_transparent_chain() {
-    // Every other stage off: downstream is a pure (flat-FIR) delay, so
-    // the output must be the input delayed by the latency throughout the
-    // handover. A timeline jump or an audible splice would show up as a
-    // large error.
-    let n = 90_000;
-    let x = pink(6, n, -12.0);
-    let mut plugin = plugin_with(|p| {
-        p.deharsh.depth.set_value(0.0);
-    });
-    let lat = plugin.latency_samples() as usize;
-    let switch_block = 20;
-    let (ol, _) = render(&mut plugin, &x, &x, 256, |p, b| {
-        p.deharsh.on.set_value(b >= switch_block);
-    });
-    let mut err = 0.0f32;
-    for i in lat..n {
-        err = err.max((ol[i] - x[i - lat]).abs());
-    }
-    assert!(err < 1e-4, "handover error {err}");
-}
-
-#[test]
-fn the_handover_converges_on_the_inline_render() {
-    // With real downstream processing, compare the handover against the
-    // same material rendered inline from the start (depth 0, so the
-    // suppressor itself is transparent). Both carry the same timeline;
-    // the handover's splice must stay far below the signal.
-    let n = 120_000;
-    let x = pink(7, n, -12.0);
-    let setup = |p: &MasteringParams| {
-        p.deharsh.depth.set_value(0.0);
-        p.tonal_eq.bands[2].on.set_value(true);
-        p.tonal_eq.bands[2].gain.set_value(4.0);
-        p.glue_compressor.on.set_value(true);
-        p.limiter.on.set_value(true);
-    };
-    let mut inline = plugin_with(|p| {
-        setup(p);
-        p.deharsh.on.set_value(true);
-    });
-    let (il, _) = render(&mut inline, &x, &x, 256, |_, _| {});
-    let mut hand = plugin_with(setup);
-    let (hl, _) = render(&mut hand, &x, &x, 256, |p, b| {
-        p.deharsh.on.set_value(b >= 20);
-    });
-    let peak = il.iter().fold(0.0f32, |m, v| m.max(v.abs()));
-    assert!(peak > 0.05, "silent render");
-    let err = il
-        .iter()
-        .zip(&hl)
-        .fold(0.0f32, |m, (a, b)| m.max((a - b).abs()));
-    let rel_db = 20.0 * (err / peak).log10();
-    eprintln!("handover vs inline: peak diff {err:.2e} ({rel_db:.1} dB re peak)");
-    assert!(rel_db < -40.0, "handover differs by {rel_db:.1} dB re peak");
-}
-
-#[test]
-fn the_stage_picks_its_timing_on_the_first_block_and_hands_over_once() {
-    let mut st = DeharshStage::new(SR, 256, 10_000);
-    let off = SuppressorConfig::default();
-    let on = SuppressorConfig {
-        enabled: true,
-        ..off
-    };
-    let mut l = vec![0.0f32; 256];
-    let mut r = vec![0.0f32; 256];
-    assert_eq!(st.timing(), Timing::Unprimed);
-    st.process_stage(&mut l, &mut r, &off);
-    st.process_tail(&mut l, &mut r);
-    assert_eq!(st.timing(), Timing::Tail);
-    for _ in 0..200 {
-        st.process_stage(&mut l, &mut r, &on);
-        st.process_tail(&mut l, &mut r);
-    }
-    assert_eq!(st.timing(), Timing::Inline, "handover never finished");
-    // Off again stays inline (a plain crossfade from now on).
-    st.process_stage(&mut l, &mut r, &off);
-    st.process_tail(&mut l, &mut r);
-    assert_eq!(st.timing(), Timing::Inline);
-    // A reset re-decides; engaged on the first block means inline at once.
-    st.reset();
-    st.process_stage(&mut l, &mut r, &on);
-    assert_eq!(st.timing(), Timing::Inline);
 }
 
 // --- Editor. ----------------------------------------------------------

@@ -94,10 +94,22 @@ const MAX_PEAK_DELTA: f32 = 2.0e-4;
 /// moves the RMS as much as the peak.
 const MAX_RMS_DELTA: f64 = 2.0e-5;
 
-// Re-blessed for W12: the de-harsh latency shifted every stream by
-// exactly 2048 samples (proven bit-exact against the pre-W12 streams,
-// `docs/design/deharsh-resonance-suppressor.md` §5.2). `PRIME_BLOCKS`
-// grew to 60 to cover it, and scenarios 8 and 9 were added.
+// Re-blessed for W12. The de-harsh stage delays everything after the
+// corrective EQ by 2048 samples, even when off. The full pre- and
+// post-W12 streams were compared after aligning them by 2048 samples
+// (`docs/design/deharsh-resonance-suppressor.md` §5.2):
+// - Static scenarios with dither off: at most −122.4 dB re peak, which
+//   is float rounding.
+// - Bypass: bit-exact.
+// - `full_chain_over_ceiling` (16-bit shaped dither): at most
+//   1.22e-4 = 4 LSB (−78.0 dB re peak).
+// - The two scenarios that edit params every block,
+//   `saturator_shapers_and_imager` (−20.2 dB) and
+//   `param_sweeps_between_blocks` (−7.0 dB): their edits now land
+//   2048 samples later in the downstream audio, so these are content
+//   changes, not rounding.
+// `PRIME_BLOCKS` grew to 60 to cover the latency, and scenarios 8 and 9
+// were added.
 fn golden_path() -> PathBuf {
     golden::golden_path(env!("CARGO_MANIFEST_DIR"), "dsp_golden.f32")
 }
@@ -378,11 +390,10 @@ fn scenarios() -> Vec<Scenario> {
                 );
             }),
         },
-        // 8. De-harsh engaged from the start (W12), so its delay sits at
-        //    the stage: the glue and everything after it run on the
-        //    suppressed, delayed signal. The 2.5 kHz and 9 kHz tones
-        //    stand out of the noise bed and get cut. Every `dh_` param
-        //    is pinned.
+        // 8. De-harsh engaged from the start (W12): the glue and
+        //    everything after it run on the suppressed signal. The
+        //    2.5 kHz and 9 kHz tones stand out of the noise bed and get
+        //    cut. Every `dh_` param is pinned.
         Scenario {
             name: "deharsh_inline",
             signal: Signal::BandedMix,
@@ -395,11 +406,11 @@ fn scenarios() -> Vec<Scenario> {
             },
             edit: None,
         },
-        // 9. De-harsh switched on mid-run: the tail → inline handover
-        //    (its delay moves from the chain's end to the stage), then a
-        //    move to Mid+Side and a parallel mix, all before the capture.
+        // 9. De-harsh switched on mid-run (the 10 ms crossfade from its
+        //    delay tap), then a move to Mid+Side and a parallel mix, all
+        //    before the capture.
         Scenario {
-            name: "deharsh_handover",
+            name: "deharsh_switched_on_mid_run",
             signal: Signal::BandedMix,
             blocks: &[384, 640],
             setup: |p| {

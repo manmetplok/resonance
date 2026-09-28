@@ -36,12 +36,19 @@ const BLOCK_SIZES: [usize; 3] = [480, 512, 333];
 /// Blocks rendered but not stored: the chain's ~20.7k samples of latency
 /// is FIR pre-fill, and pinning zeros would pin nothing.
 ///
-/// Re-blessed once, for W12. The de-harsh stage adds one 2048-sample
-/// STFT frame of latency even when off, and a project that never engages
-/// it spends that latency as a plain delay after dither. Every stream
-/// here was shown to be the pre-W12 stream preceded by exactly 2048
-/// zero samples, bit for bit, before the re-bless
-/// (`docs/design/deharsh-resonance-suppressor.md` §5.2).
+/// Re-blessed once, for W12, as a deliberate exception to the rule
+/// above. The de-harsh stage sits after the corrective EQ and delays by
+/// one 2048-sample STFT frame even when off (an exact delay tap), so
+/// everything after it runs 2048 samples later against the stream. The
+/// full pre- and post-W12 streams were compared after aligning them by
+/// 2048 samples:
+/// - The three states with dither off differ by at most −121.5 dB re
+///   peak, which is float rounding: the downstream FIRs' hop grid has
+///   moved against the signal.
+/// - `PROJECT_FULL` (16-bit shaped dither) differs by at most
+///   1.22e-4 = 4 LSB at 16 bits (−77.3 dB re peak): the dither sequence
+///   now meets different samples.
+/// (`docs/design/deharsh-resonance-suppressor.md` §5.2.)
 const PRIME_BLOCKS: usize = 56;
 /// Blocks stored in the golden.
 const CAPTURE_BLOCKS: usize = 20;
