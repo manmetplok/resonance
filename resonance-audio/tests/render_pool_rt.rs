@@ -13,8 +13,17 @@
 //! by libc or another C library on its own behalf — glibc `calloc`ing a
 //! thread-local destructor entry (`rt_prep.rs`), for one. This guards
 //! the Rust side of the path, not the process's whole heap.
+//!
+//! Nor, on purpose, libtest's own main thread: past 60 s it allocates to
+//! print its "has been running for over 60 seconds" notice, which lands
+//! in the window under load. A load-time constructor marks the main
+//! thread (thread-locally, so the hook never calls `thread::current()`),
+//! and the exclusion is switched on only when the test body runs on
+//! another thread — under `--test-threads=1` libtest runs it on main
+//! itself, and main is then counted like any other thread.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,10 +35,37 @@ struct CountingAllocator;
 
 static ARMED: AtomicBool = AtomicBool::new(false);
 static ALLOCS: AtomicU64 = AtomicU64::new(0);
+/// Skip libtest's main thread (on only when the test body runs elsewhere).
+static EXCLUDE_MAIN: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static IS_PROCESS_MAIN: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Runs on the process's main thread before `main`, so before libtest has
+/// spawned anything: the one thread that gets the mark.
+extern "C" fn mark_process_main() {
+    IS_PROCESS_MAIN.with(|m| m.set(true));
+}
+
+#[used]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android", target_os = "freebsd"),
+    link_section = ".init_array"
+)]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__mod_init_func")]
+#[cfg_attr(windows, link_section = ".CRT$XCU")]
+static MARK_PROCESS_MAIN: extern "C" fn() = mark_process_main;
+
+fn on_process_main() -> bool {
+    IS_PROCESS_MAIN.try_with(Cell::get).unwrap_or(false)
+}
 
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if ARMED.load(Ordering::Relaxed) {
+        if ARMED.load(Ordering::Relaxed)
+            && !(EXCLUDE_MAIN.load(Ordering::Relaxed) && on_process_main())
+        {
             ALLOCS.fetch_add(1, Ordering::Relaxed);
         }
         unsafe { System.alloc(layout) }
@@ -140,6 +176,8 @@ fn parallel_callbacks_never_allocate_on_any_thread() {
     // whose per-thread first-use state is not set up at spawn (the
     // arc-swap node, `rt_prep`) then fails this every time, not by luck.
     h.set_render_threads(4, 0x5eed);
+    // Off when libtest runs the body on main itself (--test-threads=1).
+    EXCLUDE_MAIN.store(!on_process_main(), Ordering::SeqCst);
     ARMED.store(true, Ordering::SeqCst);
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut blocks = 0usize;
