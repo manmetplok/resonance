@@ -169,6 +169,55 @@ impl Biquad {
         self.assign_normalized(b0, b1, b2, a0, a1, a2);
     }
 
+    /// 6 dB/oct (1st order) low-pass, as a biquad with `b2 = a2 = 0`.
+    /// Paired with a 12 dB/oct Butterworth section of Q 1.0 it gives an
+    /// 18 dB/oct (3rd-order) Butterworth response.
+    pub fn set_first_order_low_pass(&mut self, sr: f32, freq: f32) {
+        let (freq, _) = clamp_params(sr, freq, 1.0);
+        self.set_first_order_analog(sr, 0.0, 1.0, 1.0 / (2.0 * PI * freq), 1.0, freq);
+    }
+
+    /// 6 dB/oct (1st order) high-pass. See [`Biquad::set_first_order_low_pass`].
+    pub fn set_first_order_high_pass(&mut self, sr: f32, freq: f32) {
+        let (freq, _) = clamp_params(sr, freq, 1.0);
+        let tau = 1.0 / (2.0 * PI * freq);
+        self.set_first_order_analog(sr, tau, 0.0, tau, 1.0, freq);
+    }
+
+    /// Bilinear transform of the first-order analog section
+    /// `H(s) = (b1·s + b0) / (a1·s + a0)`, with `s` in rad/s, prewarped so
+    /// the digital response equals the analog one exactly at
+    /// `prewarp_hz` (clamped below Nyquist).
+    ///
+    /// This is the one first-order design every other first-order shape
+    /// here reduces to, and the route for sections whose analog zero or
+    /// pole lies *above* Nyquist (an "air" shelf with a 40 kHz corner):
+    /// the bilinear map sends every left-half-plane pole inside the unit
+    /// circle whatever its frequency, so such a section is always stable,
+    /// and the prewarp point decides where in the audible band the digital
+    /// curve tracks the analog one. With `a0 / a1 > 0` (a left-half-plane
+    /// pole) the result is stable for any sample rate.
+    pub fn set_first_order_analog(
+        &mut self,
+        sr: f32,
+        b1: f32,
+        b0: f32,
+        a1: f32,
+        a0: f32,
+        prewarp_hz: f32,
+    ) {
+        let nyquist = (sr * 0.5).max(20.0);
+        let fw = prewarp_hz.clamp(1.0, nyquist * 0.95);
+        let w = 2.0 * PI * fw;
+        // s = K (1 - z^-1) / (1 + z^-1), K chosen so ω_analog(fw) maps to fw.
+        let k = w / (PI * fw / sr).tan();
+        let nb0 = b1 * k + b0;
+        let nb1 = b0 - b1 * k;
+        let na0 = a1 * k + a0;
+        let na1 = a0 - a1 * k;
+        self.assign_normalized(nb0, nb1, 0.0, na0, na1, 0.0);
+    }
+
     /// Evaluate |H(e^{jω})| at a given frequency for offline analysis
     /// (e.g. rendering the response curve in the editor). Pure function of
     /// the current coefficients; does not touch state.
