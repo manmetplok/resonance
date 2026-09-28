@@ -165,6 +165,11 @@ pub struct TrackSummary {
     #[serde(default = "default_output")]
     pub output: TrackOutput,
     pub clip_count: usize,
+    /// How many automation lanes this track (or bus) carries: its own
+    /// volume / pan / mute lanes plus every lane on a plugin it hosts.
+    /// `automation.lanes` with this `track_id` / `bus_id` lists them.
+    #[serde(default)]
+    pub automation_lanes: usize,
 }
 
 /// Routing default for peers that predate the `output` field.
@@ -239,6 +244,11 @@ pub struct TrackDetail {
     /// the control API survives save + reload.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sends: Vec<SendView>,
+    /// The track's automation lanes, compact (no points): mixer lanes
+    /// and lanes on its plugins. Read the points with `automation.lanes`.
+    /// Empty (and elided) when nothing on the track is automated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<super::automation::LaneSummary>,
     pub clips: Vec<ClipView>,
 }
 

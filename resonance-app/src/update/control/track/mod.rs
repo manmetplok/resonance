@@ -135,7 +135,10 @@ fn instance_for(
 /// falsely report an edit that never happened. The gate still backstops
 /// the non-frozen path; this pre-check just makes the rejection visible
 /// to the remote client — the same rule `notes.*` applies to note edits.
-fn frozen_reject(app: &Resonance, track_id: resonance_audio::types::TrackId) -> Option<RpcError> {
+pub(super) fn frozen_reject(
+    app: &Resonance,
+    track_id: resonance_audio::types::TrackId,
+) -> Option<RpcError> {
     app.freeze.status(track_id).is_frozen().then(|| {
         RpcError::busy(format!(
             "track {track_id} is frozen; unfreeze it before editing its plugins"

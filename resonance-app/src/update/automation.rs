@@ -61,6 +61,21 @@ pub enum AutomationMessage {
         target: AutomationTarget,
         index: usize,
     },
+    /// Replace `target`'s lane wholesale with `points` and the Read flag
+    /// `enabled`, creating it (with a freshly allocated id) when absent.
+    /// `points` is sorted on the way in. An empty `points` removes the
+    /// lane instead — an enabled empty lane would force the target to its
+    /// floor.
+    ///
+    /// The one message behind every `automation.*` point write
+    /// (automation-control-api.md §4.4): each handler computes the new
+    /// point list as a pure function and dispatches exactly one of these,
+    /// so the edit passes the gates and is undoable like any GUI edit.
+    SetLane {
+        target: AutomationTarget,
+        points: Vec<Breakpoint>,
+        enabled: bool,
+    },
     /// Set the curve kind on the breakpoint at `index`.
     SetCurveKind {
         target: AutomationTarget,
@@ -123,7 +138,29 @@ impl AutomationMessage {
             | Self::ToggleRead(_)
             | Self::AddBreakpoint { .. }
             | Self::DeleteBreakpoint { .. }
+            | Self::SetLane { .. }
             | Self::SetCurveKind { .. } => UndoAction::Record,
+        }
+    }
+
+    /// The lane this message edits, or `None` for the view-state and
+    /// gesture-boundary variants that edit no lane. The frozen-input
+    /// classifier (`gates.rs`) keys off it: a plugin-param lane on a
+    /// frozen track is an edit to the freeze's inputs.
+    pub(crate) fn edited_target(&self) -> Option<&AutomationTarget> {
+        match self {
+            Self::AddLane(target) | Self::RemoveLane(target) | Self::ToggleRead(target) => {
+                Some(target)
+            }
+            Self::AddBreakpoint { target, .. }
+            | Self::DeleteBreakpoint { target, .. }
+            | Self::SetLane { target, .. }
+            | Self::SetCurveKind { target, .. }
+            | Self::StartBreakpointDrag { target, .. }
+            | Self::DragBreakpoint { target, .. } => Some(target),
+            Self::EndBreakpointDrag | Self::CycleTrackLane(_) | Self::ToggleTrackExpanded(_) => {
+                None
+            }
         }
     }
 }
@@ -142,6 +179,11 @@ pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
         AutomationMessage::DeleteBreakpoint { target, index } => {
             delete_breakpoint(r, target, index)
         }
+        AutomationMessage::SetLane {
+            target,
+            points,
+            enabled,
+        } => set_lane(r, target, points, enabled),
         AutomationMessage::SetCurveKind {
             target,
             index,
@@ -217,6 +259,23 @@ fn remove_lane(r: &mut Resonance, target: AutomationTarget) {
         r.automation.live_values.remove(&target);
         let _ = r.engine.send(AudioCommand::ClearAutomationLane { target });
     }
+}
+
+/// Replace (or create) `target`'s lane wholesale. Keeps an existing
+/// lane's id so the engine and the arrange overlay see the same lane
+/// change rather than one lane leaving and another arriving.
+fn set_lane(r: &mut Resonance, target: AutomationTarget, points: Vec<Breakpoint>, enabled: bool) {
+    if points.is_empty() {
+        remove_lane(r, target);
+        return;
+    }
+    let id = match r.automation.lanes.get(&target) {
+        Some(lane) => lane.id,
+        None => r.automation.alloc_lane_id(),
+    };
+    let mut lane = AutomationLane::new(id, target, points);
+    lane.enabled = enabled;
+    store_lane(r, lane);
 }
 
 /// Flip the lane's Read flag. Sends the dedicated `SetAutomationReadEnabled`

@@ -28,9 +28,10 @@ use resonance_control::{Request, Response, RpcError};
 
 use super::chain_presets::{self, Chain};
 use super::effect_addressing::{self, ChainWording};
+use super::plugin_target::{self, ChainOwner};
 use super::reply::{ack, not_found_bus, reject};
 use super::sidechain;
-use super::view_model;
+use super::view_model::bus_plugin_entries;
 
 /// Handle a `bus.*` request, or `None` when `method` belongs to another
 /// namespace.
@@ -265,38 +266,6 @@ fn set_volume(app: &mut Resonance, request: &Request) -> (Response, Task<Message
 // Unlike a track's, a bus chain is a plain `Vec<PluginInstanceId>`
 // engine-side, and it has no structural slot 0: every entry is an
 // effect over the group sum.
-
-/// The bus's chain as wire entries, in processing order, each tagged
-/// with its occurrence among same-id siblings.
-///
-/// Deliberately the same [`track::PluginParamsEntry`] shape
-/// `track.plugin_params` returns, so a client reads a bus chain with the
-/// code it already has. `kind` is always `Effect`: a bus has no
-/// instrument slot.
-fn bus_plugin_entries(bus: &BusState) -> Vec<track::PluginParamsEntry> {
-    let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    bus.plugins
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let occurrence = seen
-                .entry(p.clap_plugin_id.as_str())
-                .and_modify(|n| *n += 1)
-                .or_insert(0);
-            track::PluginParamsEntry {
-                bypassed: p.bypassed,
-                plugin_id: p.clap_plugin_id.clone(),
-                name: p.plugin_name.clone(),
-                slot: i as u32,
-                occurrence: *occurrence,
-                kind: track::PluginKind::Effect,
-                status: view_model::slot_status(p),
-                unavailable_reason: p.availability.reason().map(str::to_owned),
-                params: p.params.iter().map(view_model::param_view).collect(),
-            }
-        })
-        .collect()
-}
 
 /// Bus's [`ChainWording`]: a bus chain has no instrument slot — every
 /// entry [`bus_plugin_entries`] builds is `PluginKind::Effect` — so
@@ -610,89 +579,29 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let Some(b) = find_bus(app, params.bus_id.0) else {
-        return not_found_bus(request, params.bus_id.0);
-    };
-    let entries = bus_plugin_entries(b);
-    let occurrence = params.occurrence.unwrap_or(0);
-    let entry = match &params.plugin_id {
-        Some(id) => entries
-            .iter()
-            .find(|e| &e.plugin_id == id && e.occurrence == occurrence),
-        // No id names the first plugin on the chain — unambiguous on a
-        // one-effect bus, which is the common case.
-        None => entries.first(),
-    };
-    let Some(entry) = entry else {
-        return reject(
-            request,
-            RpcError::not_found(match &params.plugin_id {
-                Some(id) => format!(
-                    "bus {} has no plugin {id:?} at occurrence {occurrence}; it carries [{}]",
-                    b.id,
-                    effect_addressing::chain_description(&entries)
-                ),
-                None => format!(
-                    "bus {} carries no plugins; add one with bus.add_effect",
-                    b.id
-                ),
-            }),
-        );
-    };
-
-    // Same initializing window `track.set_plugin_param` names (todo
-    // #1234): the slot is mirrored at dispatch, the parameter list
-    // arrives with the engine echo.
-    if entry.params.is_empty() {
-        return reject(
-            request,
-            RpcError::busy(format!(
-                "plugin {:?} is on bus {} but is still initializing — its parameter list \
-                 arrives with the engine echo, usually within a frame. Retry, or read \
-                 bus.plugin_params until its params array is non-empty. (A plugin that \
-                 genuinely exposes no parameters reports the same empty list.)",
-                entry.plugin_id, b.id
-            )),
-        );
-    }
-
-    let wanted = params.param.trim();
-    let param = super::track::find_param(&entry.params, wanted);
-    let Some(param) = param else {
-        let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} has no parameter {wanted:?} (has: [{}])",
-                entry.plugin_id,
-                known.join(", ")
-            )),
-        );
+    // The addressing every chain shares (plugin_target.rs): no id names
+    // the first plugin on the chain — unambiguous on a one-effect chain,
+    // the common case — and a plugin whose parameter list has not arrived
+    // yet answers `busy` (todo #1234).
+    let (target, param) = match plugin_target::resolve_plugin_param(
+        app,
+        ChainOwner::Bus(params.bus_id.0),
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        &params.param,
+    ) {
+        Ok(found) => found,
+        Err(e) => return reject(request, e),
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
     // tolerance (todo #1235) and choice-label resolution (todo #1290)
     // behave identically on all three chains.
-    let value = match super::track::resolve_param_value(param, &params.value) {
+    let value = match super::track::resolve_param_value(&param, &params.value) {
         Ok(value) => value,
         Err(e) => return reject(request, e),
     };
-
-    let Some(instance_id) = b
-        .plugins
-        .iter()
-        .filter(|p| p.clap_plugin_id == entry.plugin_id)
-        .nth(entry.occurrence as usize)
-        .map(|p| p.instance_id)
-    else {
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from bus {} between lookup and set",
-                entry.plugin_id, b.id
-            )),
-        );
-    };
+    let instance_id = target.instance_id;
     let param_id = param.id;
     let task = super::run_via_update(
         app,
