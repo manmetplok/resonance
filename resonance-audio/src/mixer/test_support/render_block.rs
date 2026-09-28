@@ -92,6 +92,7 @@ pub fn render_aux_with_comp_for_test(
         fan_out_only: &fan_out_only,
         key_only: &key_only,
         key_only_bus: &key_only_bus,
+        send_filter: None,
         respect_mute_solo: false,
         freeze_raw: false,
     };
@@ -345,6 +346,7 @@ pub fn render_take_comp_borrowed_for_test(
             fan_out_only: &fan_out_only,
             key_only: &key_only,
             key_only_bus: &key_only_bus,
+            send_filter: None,
             respect_mute_solo: false,
             freeze_raw: false,
         }

@@ -580,6 +580,149 @@ pub fn render_stem(
         }
         filter
     };
+    render_filtered(
+        &filter,
+        None,
+        &tuning,
+        render_start,
+        render_end,
+        shared,
+        tempo_map,
+        automation,
+        sample_rate,
+    )
+}
+
+/// Render what return bus `bus_id` makes of the sends that feed it, and
+/// nothing else (warmth-width-depth.md §7.6): every track with an
+/// enabled send into it renders in full — chain, fader, pan, automation —
+/// but reaches the mix only through its sends into `bus_id`, so the
+/// output is the return's own output (through its chain and fader, before
+/// master FX). Returns the rendered buffer and the feeders, or `None`
+/// when no track sends there.
+///
+/// Busses sending into the return are not included: their members'
+/// dry signal would ride along. What this measures is the return's
+/// output-to-input ratio, which that subset shows as well as the whole.
+#[allow(clippy::too_many_arguments)]
+pub fn render_return_stem(
+    bus_id: BusId,
+    render_start: SamplePos,
+    render_end: SamplePos,
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
+    sample_rate: u32,
+) -> Result<Option<(Vec<f32>, Vec<TrackId>)>, StemError> {
+    if shared.playing.load(Ordering::Relaxed) {
+        return Err(StemError::TransportRunning);
+    }
+    if render_end <= render_start {
+        return Err(StemError::EmptyRange);
+    }
+    let tracks = shared.tracks();
+    let feeders: Vec<TrackId> = shared
+        .aux_sends
+        .load()
+        .iter()
+        .filter(|s| s.enabled && s.dest == bus_id)
+        .filter_map(|s| match s.source {
+            SendSource::Track(t) if tracks.contains_key(&t) => Some(t),
+            _ => None,
+        })
+        .collect();
+    if feeders.is_empty() {
+        return Ok(None);
+    }
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
+    let mut set: HashSet<TrackId> = feeders.iter().copied().collect();
+    for &t in &feeders {
+        add_sub_tracks(t, &tracks, &mut set);
+    }
+    let fan_out_only = add_fan_out_parents(&tracks, &mut set);
+    let filter = StemFilter {
+        set,
+        fan_out_only,
+        key_only: HashSet::new(),
+        key_only_busses: HashSet::new(),
+        all: false,
+        include_master_fx: false,
+    };
+    let is_feeder = |id: TrackId| feeders.contains(&id);
+    let output = render_filtered(
+        &filter,
+        Some((&is_feeder, crate::mixer::SendFilter::OnlyInto(bus_id))),
+        &tuning,
+        render_start,
+        render_end,
+        shared,
+        tempo_map,
+        automation,
+        sample_rate,
+    )?;
+    Ok(Some((output, feeders)))
+}
+
+/// A track's stem with its aux sends dropped: its DRY signal alone, the
+/// energy a return's input is estimated from (warmth-width-depth.md
+/// §7.6). An ordinary track stem carries its own wet path — its sends
+/// come back through the returns — so it cannot stand in for that.
+#[allow(clippy::too_many_arguments)]
+pub fn render_dry_track_stem(
+    track_id: TrackId,
+    render_start: SamplePos,
+    render_end: SamplePos,
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
+    sample_rate: u32,
+) -> Result<Vec<f32>, StemError> {
+    if shared.playing.load(Ordering::Relaxed) {
+        return Err(StemError::TransportRunning);
+    }
+    if render_end <= render_start {
+        return Err(StemError::EmptyRange);
+    }
+    let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
+    let filter = {
+        let tracks = shared.tracks();
+        let routes = shared.sidechain_routes.load();
+        stem_filter_with_keys(
+            StemSource::Track(track_id),
+            &tracks,
+            &shared.graph.load().busses,
+            &routes,
+        )
+    };
+    let is_track = |id: TrackId| id == track_id;
+    render_filtered(
+        &filter,
+        Some((&is_track, crate::mixer::SendFilter::Dry)),
+        &tuning,
+        render_start,
+        render_end,
+        shared,
+        tempo_map,
+        automation,
+        sample_rate,
+    )
+}
+
+/// The render loop behind [`render_stem`], [`render_return_stem`] and
+/// [`render_dry_track_stem`]: `filter` over the range, latency-trimmed to
+/// the timeline.
+#[allow(clippy::too_many_arguments)]
+fn render_filtered(
+    filter: &StemFilter,
+    send_filter: Option<(&(dyn Fn(TrackId) -> bool + Sync), crate::mixer::SendFilter)>,
+    tuning: &super::super::vocal_render::TuningOverlay,
+    render_start: SamplePos,
+    render_end: SamplePos,
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
+    sample_rate: u32,
+) -> Result<Vec<f32>, StemError> {
     // The master stem honours mute/solo (it is the real mix); isolated
     // track/bus stems render their source regardless of mute/solo.
     let respect_mute_solo = filter.include_master_fx;
@@ -604,12 +747,13 @@ pub fn render_stem(
 
     let ctx = ChunkCtx {
         shared,
-        tuning: &tuning,
+        tuning,
         tempo_map: &bounce_tm,
         automation,
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        send_filter,
         hard_clip: true,
     };
     let mut scratch = ChunkScratch::new();

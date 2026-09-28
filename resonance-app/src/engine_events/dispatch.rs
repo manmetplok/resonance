@@ -124,7 +124,12 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             crate::update::control::chain_probe_error(r, probe_id, message)
         }
         E::ExportProgress { phase, fraction } => transport::export_progress(r, phase, fraction),
-        E::ExportComplete { path, bytes, .. } => transport::export_complete(r, path, bytes),
+        E::ExportComplete {
+            path,
+            achieved_lufs,
+            achieved_dbtp,
+            bytes,
+        } => transport::export_complete(r, path, achieved_lufs, achieved_dbtp, bytes),
         E::ExportError { kind, message } => transport::export_error(r, kind, message),
         E::MidiInputDevicesListed { devices } => transport::midi_input_devices(r, devices),
         E::MidiOutputDevicesListed { devices } => transport::midi_output_devices(r, devices),

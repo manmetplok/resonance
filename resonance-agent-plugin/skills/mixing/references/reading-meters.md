@@ -42,12 +42,13 @@ an EQ move the song did not need.
 
 ## Detail blocks (opt-in)
 
-Both tools take `detail`, a list of any of `"spectrum"`, `"stereo"` and
-`"dynamics"`, e.g. `detail: ["spectrum", "stereo"]`. Each named detail adds one object to
-every result (the master and every `meter_stems` entry), named after the detail.
-Without `detail` the reply is exactly the standard fields above. Details need a
-render: asking for one with `source: "live"` is refused. They cost one spectral
-analysis per entry, not an extra render.
+Both tools take `detail`, a list of any of `"spectrum"`, `"stereo"`,
+`"dynamics"` and `"depth"`, e.g. `detail: ["spectrum", "stereo"]`. Each named
+detail adds one object to every result (the master and every `meter_stems`
+entry), named after the detail. Without `detail` the reply is exactly the
+standard fields above. Details need a render: asking for one with
+`source: "live"` is refused. They cost one spectral analysis per entry, not an
+extra render, except `depth`, which also renders each return (see below).
 
 Judge any change in a detail number at **matched loudness**. A louder mix reads
 brighter and "better" in every one of these.
@@ -153,6 +154,27 @@ arrangement:
 If a track is 2 LU off this, that is the arrangement. If it is 12 LU off, ask
 whether that was deliberate.
 
+### `depth`: front-to-back staging (use it on `meter_stems`)
+
+Depth is **contrast between layers**, so read these for ordering (lead drier than
+backing, backing drier than pads) and never as absolute targets.
+
+| Field | What it means | How to read it |
+|---|---|---|
+| `drr_db_estimate` | Direct-to-reverberant **estimate**, dB, per track | Not a measurement. Per send it is minus (send level + the return's gain), summed in power over the track's sends; a pre-fader send adds the track's fader. Rough targets: front +10 or more, middle +3 to +8, back 0 or less. Higher is drier and closer. |
+| `dry_only` | The track has no enabled sends | Its `drr_db_estimate` is `null` and it ranks as the driest. |
+| `layer_hint` | `front` / `middle` / `back` | DRR tertiles across the tracks of this one `meter_stems` pass, so it is relative. `null` on `meter_measure` and on master/bus entries. |
+| `hf_tilt_db` | Energy 6-16 kHz over 1-4 kHz, dB | Should fall from front to back. Distant sources are darker. |
+| `sends` | The track's sends: `{bus_id, send_level_db, pre_fader, return_gain_db}` | `return_gain_db` is the return's gain measured in this pass (its reverb and its fader together). `null` means the return came out silent. |
+
+Caveats:
+
+- Only a track's **own** sends count. A track that feeds a bus which sends to a
+  reverb reads as dry.
+- Send levels are read at their current static values. Automated send rides are
+  not in the estimate; everything rendered does honour automation.
+- It costs one extra render per return and per sending track.
+
 ## Before and after: `meter_snapshot` and `meter_compare`
 
 Loudness confounds every judgement: a louder mix reads warmer, brighter and
@@ -221,6 +243,26 @@ a sidechain key hears silence. `stages` lists what was probed. A stage with
 **Probe at the level the chain really sees.** Distortion rises with level, so a
 -12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
 tone's peak.
+
+## Delivery: a normalized mixdown
+
+`render_mixdown` can write a loudness-normalized file: pass `platform` (or
+`normalize: {target_lufs, ceiling_dbtp}`). The mix is measured, gained to the
+target, and true-peak limited at the ceiling. The project itself is untouched.
+
+| `platform` | Target | Ceiling |
+|---|---|---|
+| `spotify`, `youtube`, `tidal` | -14 LUFS | -1 dBTP |
+| `apple` | -16 LUFS | -1 dBTP |
+| `amazon` | -14 LUFS | -2 dBTP |
+| `deezer` | -15 LUFS | -1 dBTP |
+| `club` | -8 LUFS | -0.3 dBTP |
+
+The result's `normalize` block reports `achieved_lufs` and `achieved_dbtp`,
+re-measured from the written file. If `achieved_lufs` sits clearly below the
+target, reaching it would have taken more limiting than the ceiling allows. Do
+not push harder here: the master needs its own glue and limiting first, and its
+PSR (see `dynamics`) should stay at 8 or more.
 
 ## Cost
 

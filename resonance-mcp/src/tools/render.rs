@@ -33,7 +33,20 @@ impl ResonanceMcp {
                        is the EARLIEST clip's start, which is not bar 1 unless something starts \
                        there. Do not convert file offsets into bar positions — read positions \
                        from song_tracks (clip start/length) and song_notes. See mixer_set_solo \
-                       for why a soloed bounce is an especially bad ruler.",
+                       for why a soloed bounce is an especially bad ruler. \
+                       \
+                       DELIVERY: normalize: {target_lufs, ceiling_dbtp} writes a \
+                       loudness-normalized file: the mix is measured, gained to target_lufs \
+                       integrated (-40..-5), then true-peak limited at ceiling_dbtp (-12..0). \
+                       Or pass platform instead, shorthand for a published target: spotify, \
+                       youtube and tidal -14 LUFS / -1 dBTP; apple -16 / -1; amazon -14 / -2; \
+                       deezer -15 / -1; club -8 / -0.3. Pass one of the two, not both. The \
+                       project is untouched; only the file is normalized. The result then \
+                       carries normalize {platform, target_lufs, ceiling_dbtp, achieved_lufs, \
+                       achieved_dbtp}, re-measured from the written file: achieved_lufs can \
+                       sit below the target when reaching it would take more limiting than the \
+                       ceiling allows, which is a sign the master needs its own limiting \
+                       before delivery rather than more gain here.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

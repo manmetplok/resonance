@@ -52,7 +52,9 @@ impl ResonanceMcp {
                        \
                        DETAIL (opt-in, source \"render\" only; omitted from the result unless \
                        asked for, so the default reply stays small): detail takes any of \
-                       \"spectrum\", \"stereo\", \"dynamics\" and adds one object per name. \
+                       \"spectrum\", \"stereo\", \"dynamics\", \"depth\" and adds one object \
+                       per name (depth is described on meter_stems, where it is meant to be \
+                       used). \
                        \
                        spectrum holds the warmth and harshness proxies. third_octave is 31 \
                        ISO 1/3-octave band levels, 20 Hz..20 kHz, in dB where a full-scale sine \
@@ -141,8 +143,28 @@ impl ResonanceMcp {
                        \
                        detail (e.g. [\"spectrum\", \"stereo\"]) works exactly as on \
                        meter_measure and adds its objects to the master and to every entry; it \
-                       costs one spectral \
-                       analysis per entry on top of the render. \
+                       costs one spectral analysis per entry on top of the render. \
+                       \
+                       DEPTH: detail [\"depth\"] adds a depth object per entry for judging \
+                       front-to-back staging: hf_tilt_db (energy 6-16 kHz over 1-4 kHz; falls \
+                       from front to back as sources darken), and for each track \
+                       drr_db_estimate, dry_only, layer_hint and sends. drr_db_estimate is an \
+                       ESTIMATE of the direct-to-reverberant ratio, not a measurement: per send, \
+                       minus (send level + the return's gain), summed in power over the track's \
+                       own sends, a pre-fader send adding the track's fader. The return's gain \
+                       (each sends entry's return_gain_db, with bus_id, send_level_db and \
+                       pre_fader) is measured in the same pass: every return a track sends to \
+                       is rendered once from its feeders' sends alone, against their dry \
+                       signal, so it covers the return's reverb and its fader. Send levels are \
+                       their current static values (send automation is not read); everything \
+                       rendered honours automation. A track with no sends is dry_only: true \
+                       with a null drr_db_estimate, and ranks as the driest. layer_hint is \
+                       front, middle or back from the DRR tertiles of the tracks in this pass, \
+                       so it is relative, never absolute. Check ORDERING (lead drier than \
+                       backing drier than pads); rough targets front +10 or more, middle +3 to \
+                       +8, back 0 or less. Only a track's own sends count: a track feeding a \
+                       bus that sends to a reverb reads dry. Cost: one extra render per return \
+                       and one per sending track. \
                        \
                        Read balance off lufs_integrated differences (1 LU == 1 dB). A useful \
                        starting convention, validated in the field, is drums 0 LU as the \

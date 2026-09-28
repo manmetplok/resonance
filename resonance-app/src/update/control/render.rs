@@ -29,7 +29,12 @@ use crate::control_socket::ConnId;
 use crate::message::{Message, ProjectIoMessage};
 use crate::Resonance;
 use iced::Task;
-use resonance_control::methods::render::{self as proto, MixdownParams, RangeSpec, StemsParams};
+use resonance_audio::types::{
+    AudioCommand, ExportSettings, NormalizeMode, NormalizeSpec,
+};
+use resonance_control::methods::render::{
+    self as proto, MixdownParams, NormalizeReport, RangeSpec, StemsParams,
+};
 use resonance_control::{Request, Response, RpcError};
 use std::path::Path;
 
@@ -80,6 +85,10 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
     if let Some(error) = busy_guard(app) {
         return (super::failure(request, error), Task::none());
     }
+    let normalize = match normalize_request(&params) {
+        Ok(n) => n,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
 
     let path = Path::new(&params.path);
     if !path.is_absolute() {
@@ -128,11 +137,19 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         Some(conn),
     );
 
-    // Route through the path-carrying bounce message (never the dialog).
-    let task = super::run_via_update(
-        app,
-        Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(params.path))),
-    );
+    let task = match normalize {
+        // Plain mix: the path-carrying bounce message (never the dialog).
+        None => super::run_via_update(
+            app,
+            Message::ProjectIo(ProjectIoMessage::BouncePathSelected(Some(params.path))),
+        ),
+        // Normalized: the generalized export command with a normalize
+        // stage, resolved by `ExportComplete` (`export_complete`).
+        Some(report) => {
+            start_normalized_export(app, &params.path, report);
+            Task::none()
+        }
+    };
 
     // `BouncePathSelected` sets `bouncing` and fires the engine command
     // synchronously; if it somehow didn't start, fail the job now rather
@@ -145,6 +162,76 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
     }
 
     (super::success(request, &started), task)
+}
+
+/// The normalization a mixdown asks for, as the report it will carry,
+/// or `None` for a plain mix.
+fn normalize_request(params: &MixdownParams) -> Result<Option<NormalizeReport>, RpcError> {
+    let (platform, (target_lufs, ceiling_dbtp)) = match (params.platform, params.normalize) {
+        (Some(_), Some(_)) => {
+            return Err(RpcError::invalid_params(
+                "pass `platform` or `normalize`, not both: a platform is shorthand for its \
+                 own targets",
+            ))
+        }
+        (Some(p), None) => (Some(p), p.targets()),
+        (None, Some(n)) => (None, (n.target_lufs, n.ceiling_dbtp)),
+        (None, None) => return Ok(None),
+    };
+    if !(target_lufs.is_finite() && (-40.0..=-5.0).contains(&target_lufs)) {
+        return Err(RpcError::invalid_params(format!(
+            "target_lufs {target_lufs} must be between -40 and -5"
+        )));
+    }
+    if !(ceiling_dbtp.is_finite() && (-12.0..=0.0).contains(&ceiling_dbtp)) {
+        return Err(RpcError::invalid_params(format!(
+            "ceiling_dbtp {ceiling_dbtp} must be between -12 and 0"
+        )));
+    }
+    Ok(Some(NormalizeReport {
+        platform,
+        target_lufs,
+        ceiling_dbtp,
+        achieved_lufs: None,
+        achieved_dbtp: 0.0,
+    }))
+}
+
+/// Start a normalized WAV export: the same 32-bit-float WAV at the engine
+/// rate the plain mixdown writes, with the engine's two-pass normalize
+/// stage (measure, gain to the target, true-peak limit at the ceiling,
+/// re-measure) in front of the encoder. Sets the same bounce state the
+/// plain path does, so the busy guards and the progress modal hold.
+fn start_normalized_export(app: &mut Resonance, path: &str, report: NormalizeReport) {
+    app.io.bouncing = true;
+    app.io.bounce_fraction = 0.0;
+    app.io.bounce_cancel_requested = false;
+    app.io.bounce_target = Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_owned());
+    app.control
+        .pending_normalize
+        .insert(Path::new(path).to_path_buf(), report);
+    let settings = ExportSettings {
+        normalize: NormalizeSpec {
+            enabled: true,
+            mode: NormalizeMode::IntegratedLufs,
+            target_db: report.target_lufs as f32,
+            ceiling_dbtp: report.ceiling_dbtp as f32,
+        },
+        ..ExportSettings::default_wav()
+    };
+    if app
+        .engine
+        .send(AudioCommand::ExportAudio {
+            path: path.to_owned(),
+            settings,
+        })
+        .is_err()
+    {
+        app.io.bouncing = false;
+    }
 }
 
 /// True when a range covers the whole song — no start and no end
@@ -166,6 +253,7 @@ pub(crate) fn mixdown_result(
     app: &crate::Resonance,
     path: &str,
     engine_sample_rate: u32,
+    normalize: Option<NormalizeReport>,
 ) -> serde_json::Value {
     let (duration_s, sample_rate) = match read_wav_geometry(Path::new(path)) {
         Some(geo) => (geo.duration_s(), geo.sample_rate),
@@ -179,6 +267,7 @@ pub(crate) fn mixdown_result(
         // The file is what was asked for, but nothing else in the result
         // says so (ba doc #275 P1.6).
         soloed_track_ids: super::meter::soloed_track_ids(app),
+        normalize,
     })
     .unwrap_or(serde_json::Value::Null)
 }
