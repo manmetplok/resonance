@@ -31,6 +31,8 @@ mod control_bus;
 mod control_bus_create_commit;
 #[path = "control/control_bus_effects.rs"]
 mod control_bus_effects;
+#[path = "control/control_color_plugin.rs"]
+mod control_color_plugin;
 #[path = "control/control_chain_presets.rs"]
 mod control_chain_presets;
 #[path = "control/control_clip_confirm_place_guard.rs"]

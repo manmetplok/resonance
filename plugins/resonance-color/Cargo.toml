@@ -1,0 +1,39 @@
+[package]
+name = "resonance-color"
+version = "0.1.0"
+edition = "2021"
+description = "A character/saturation CLAP plugin for tracks and busses: tube, tape, transformer, console and warm voicings with auto-gain"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# Editor ships by default so the bundled .clap has a GUI.
+# Turn it off (`--no-default-features`) for a headless DSP build.
+default = ["editor"]
+editor = ["dep:plugin-gui-core", "resonance-plugin/editor-widgets"]
+
+[dependencies]
+resonance-plugin = { path = "../../resonance-plugin" }
+resonance-dsp = { path = "../../resonance-dsp" }
+# K-weighting for the auto-gain detectors, so "matched" means matched in
+# LUFS terms and not just in raw RMS.
+resonance-metering = { path = "../../resonance-metering" }
+
+# Only the platform-neutral half of the editor stack is named here. The
+# platform GUI runtime (Wayland today, Cocoa on macOS) is selected by
+# `resonance-plugin`'s `editor-widgets` feature and reached through
+# `resonance_plugin::editor_host`; `egui` comes via `plugin_gui_core::egui`
+# (ARCH-08).
+plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+rustfft.workspace = true
+resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
+# `tests/state.rs` and `tests/host.rs` drive this plugin through a real
+# (in-process) CLAP host across the C ABI: the active-state path and the
+# latency the host reads both live on the far side of it.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
