@@ -34,6 +34,8 @@ mod export_settings;
 mod freeze_cache_read;
 #[path = "bounce/freeze_render_core.rs"]
 mod freeze_render_core;
+#[path = "bounce/measure_detail.rs"]
+mod measure_detail;
 #[path = "bounce/midi_export_project.rs"]
 mod midi_export_project;
 #[path = "bounce/offline_render_fidelity.rs"]

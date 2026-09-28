@@ -169,6 +169,23 @@ impl Biquad {
         self.assign_normalized(b0, b1, b2, a0, a1, a2);
     }
 
+    /// Second-order all-pass: unity magnitude, phase falling through −π
+    /// at `freq`; `q` sets how fast (higher = narrower transition).
+    pub fn set_all_pass(&mut self, sr: f32, freq: f32, q: f32) {
+        let (freq, q) = clamp_params(sr, freq, q);
+        let w0 = 2.0 * PI * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+
+        let b0 = 1.0 - alpha;
+        let b1 = -2.0 * cos_w0;
+        let b2 = 1.0 + alpha;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha;
+        self.assign_normalized(b0, b1, b2, a0, a1, a2);
+    }
+
     /// Band-pass with a constant 0 dB peak at `freq` (the RBJ
     /// "constant 0 dB peak gain" form). `q` sets the bandwidth.
     pub fn set_band_pass(&mut self, sr: f32, freq: f32, q: f32) {

@@ -16,7 +16,10 @@
 //!    them to the engine;
 //! 3. a swap drops the outgoing plugin's lanes;
 //! 4. a relocate (a missing plugin found again) keeps its instance id and
-//!    therefore its lanes.
+//!    therefore its lanes;
+//! 5. a swap owes the outgoing instance's removal echo, so an undo that
+//!    lands before it keeps the restored slot and lanes when it arrives,
+//!    and the debt settles (the restored instance is still adopted).
 
 use std::path::PathBuf;
 
@@ -26,7 +29,7 @@ use resonance_app::state::PluginSlotState;
 use resonance_app::update::automation::AutomationMessage;
 use resonance_app::Resonance;
 use resonance_audio::types::{
-    AudioCommand, AudioEvent, PluginInstanceId, ScannedPlugin, TrackType,
+    AudioCommand, AudioEvent, ParamInfo, PluginInstanceId, ScannedPlugin, TrackType,
 };
 use resonance_common::{AutomationLane, AutomationTarget, CurveKind};
 
@@ -328,6 +331,100 @@ fn relocating_a_missing_plugin_keeps_its_lanes() {
         output_port_names: vec!["Main".to_owned()],
     });
     assert_eq!(lanes(&f), before, "and so does the instance turning up");
+}
+
+// ---------------------------------------------------------------------------
+// 5. A late swap echo must not undo the undo
+// ---------------------------------------------------------------------------
+
+/// The engine's `PluginAdded` answer to the undo re-adding `EQ`, carrying
+/// one parameter — the fixture's slots have none, so the parameter turning
+/// up proves the echo was adopted rather than ignored as owed.
+fn eq_added() -> AudioEvent {
+    AudioEvent::PluginAdded {
+        track_id: TRACK,
+        instance_id: EQ,
+        plugin_name: EQ_ID.to_owned(),
+        clap_plugin_id: EQ_ID.to_owned(),
+        clap_file_path: format!("/plugins/{EQ_ID}.clap"),
+        params: vec![ParamInfo {
+            id: 1,
+            name: "Gain".to_owned(),
+            min_value: -24.0,
+            max_value: 24.0,
+            default_value: 0.0,
+            current_value: 3.0,
+            ..Default::default()
+        }],
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    }
+}
+
+/// Swap, undo before the engine has answered, then deliver the swap's
+/// late `PluginRemoved` for the outgoing id. The undo re-added the plugin
+/// under that same id, so an echo nobody owed would drop the restored
+/// slot and its lanes from the mirror while the engine kept it running.
+#[test]
+fn a_late_swap_removal_echo_keeps_the_plugin_an_undo_restored() {
+    let mut f = fixture("swap-late-echo");
+    let before = lanes(&f);
+    let _ = f.app.update(Message::Plugin(PluginMessage::ReplacePlugin {
+        instance_id: EQ,
+        plugin: scanned(COMP_ID),
+    }));
+    let _ = f.app.update(Message::Undo);
+    assert!(f.app.test_track_plugin_instance_ids(TRACK).contains(&EQ));
+    assert_eq!(lanes(&f), before, "undo of the swap brings the lanes back");
+
+    f.app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        track_id: TRACK,
+        instance_id: EQ,
+    });
+    assert!(
+        f.app.test_track_plugin_instance_ids(TRACK).contains(&EQ),
+        "the late echo left the restored slot alone"
+    );
+    assert_eq!(lanes(&f), before, "and its lanes");
+
+    // The echo settled the debt: the engine's answer to the undo's re-add
+    // is adopted, not swallowed as a removal still owed.
+    f.app.test_apply_engine_event(eq_added());
+    assert_eq!(f.app.test_plugin_param(EQ, 1), Some(3.0));
+}
+
+/// A missing plugin swapped for a different one: the engine has no
+/// instance to drop but still echoes the removal, so the owed echo
+/// settles and the id is not left blocked for a later re-add.
+#[test]
+fn swapping_out_a_missing_plugin_settles_its_removal_echo() {
+    let mut f = fixture("swap-missing");
+    f.app.test_apply_engine_event(AudioEvent::PluginLoadFailed {
+        instance_id: Some(EQ),
+        clap_plugin_id: EQ_ID.to_owned(),
+        clap_file_path: format!("/plugins/{EQ_ID}.clap"),
+        reason: "Failed to load plugin: no such file".to_owned(),
+    });
+    let _ = f.app.update(Message::Plugin(PluginMessage::ReplacePlugin {
+        instance_id: EQ,
+        plugin: scanned(COMP_ID),
+    }));
+    assert!(!f.app.test_track_plugin_instance_ids(TRACK).contains(&EQ));
+    f.app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        track_id: TRACK,
+        instance_id: EQ,
+    });
+
+    let _ = f.app.update(Message::Undo);
+    assert!(f.app.test_track_plugin_instance_ids(TRACK).contains(&EQ));
+    f.app.test_apply_engine_event(eq_added());
+    assert_eq!(
+        f.app.test_plugin_param(EQ, 1),
+        Some(3.0),
+        "the re-added instance is adopted: no removal debt was left behind"
+    );
 }
 
 fn scanned(plugin_id: &str) -> ScannedPlugin {

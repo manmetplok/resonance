@@ -48,7 +48,9 @@ pub(crate) use clip::apply_bounced_clip;
 pub use freeze::{read_freeze_cache, to_freeze_cache, FreezeError, FREEZE_CANCELLED_MSG};
 pub use render::try_lock_with_backoff;
 pub use render::{chunk_span, BOUNCE_CHUNK, MIN_CLAP_FRAMES};
-pub use measure::{measure_mix, measure_rendered_buffer};
+pub use measure::{
+    measure_mix, measure_mix_detailed, measure_rendered_buffer, measure_rendered_buffer_detailed,
+};
 pub(crate) use measure::{measure_mix_spawn, measure_mix_spawn_after};
 pub use stem::{render_stem, stem_filter, stem_project_range, write_stem_wav, StemFilter};
 pub use stem_export::export_stems;

@@ -161,6 +161,12 @@ fn swap(
     // has nothing to drop and this is only its echo; for a live one it
     // is what stops the plugin processing.
     let _ = r.engine.send(remove_command(locator, old_id));
+    // The removal is mirrored below, so its echo is owed, as on a live
+    // delete: an undo landing before it re-adds `old_id`, and the late
+    // echo must not drop that slot (and its lanes) again (A-13h). The
+    // engine echoes every `RemovePlugin*`, a missing instance included,
+    // so the debt always settles.
+    r.io.restore_echoes.expect_plugin_removed(old_id);
 
     // The old plugin's preserved settings go with it. Done here rather
     // than left to the `PluginRemoved` echo so that a save taken in the

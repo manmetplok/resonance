@@ -378,3 +378,34 @@ fn global_remove_params_are_a_bar_and_nothing_else() {
     assert!(caps.contains(&global::REMOVE_TEMPO_EVENT));
     assert!(caps.contains(&global::REMOVE_SIGNATURE_EVENT));
 }
+
+/// `meter.*` `detail` (warmth-width-depth.md §7.1): absent on the wire
+/// when empty, so a default request serializes exactly as before, and
+/// named in lowercase.
+#[test]
+fn meter_detail_is_omitted_when_empty_and_lowercase_when_set() {
+    use resonance_control::methods::meter::{MeasureDetail, MeasureParams, StemsParams};
+
+    assert_eq!(serde_json::to_value(MeasureParams::default()).unwrap(), json!({
+        "target": "master",
+        "source": "render"
+    }));
+    assert_eq!(
+        serde_json::to_value(StemsParams::default()).unwrap(),
+        json!({ "include_busses": false })
+    );
+
+    let params: MeasureParams =
+        serde_json::from_value(json!({ "detail": ["spectrum"] })).unwrap();
+    assert_eq!(params.detail, vec![MeasureDetail::Spectrum]);
+    assert_eq!(serde_json::to_value(&params).unwrap()["detail"], json!(["spectrum"]));
+
+    let stems: StemsParams =
+        serde_json::from_value(json!({ "detail": ["spectrum", "stereo", "dynamics"] })).unwrap();
+    assert_eq!(
+        stems.detail,
+        vec![MeasureDetail::Spectrum, MeasureDetail::Stereo, MeasureDetail::Dynamics]
+    );
+
+    assert!(serde_json::from_value::<MeasureParams>(json!({ "detail": ["warmth"] })).is_err());
+}

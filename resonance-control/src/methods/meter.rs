@@ -34,6 +34,16 @@
 //! * **`bands`** — shares of total energy, summing to 1.0. They are
 //!   relative by construction: compare them against each other or
 //!   against a reference mix, never against an absolute target.
+//!
+//! ## Opt-in detail
+//!
+//! `detail: ["spectrum", "stereo", "dynamics"]` (any subset) on either
+//! method adds a per-detail object to
+//! every result (warmth-width-depth.md §7.1) — see [`MeasureDetail`].
+//! Without `detail` the payload is exactly what it always was: the
+//! detail objects are omitted, not `null`, so the default reply stays
+//! small for token cost. Details need the whole rendered buffer, so they
+//! are refused with `source: "live"`.
 
 use crate::ids::TrackId;
 use crate::methods::render::RangeSpec;
@@ -94,9 +104,30 @@ pub enum MeasureSource {
     Live,
 }
 
+/// An opt-in detail block for `meter.measure` / `meter.stems`.
+///
+/// Each one adds its own object to every result, named after it; each
+/// costs one extra spectral analysis of the rendered buffer (shared
+/// between details), not an extra render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum MeasureDetail {
+    /// [`SpectrumDetail`]: 1/3-octave LTAS, spectral tilt, centroid,
+    /// low-mid/presence ratio, presence peakiness, air ratio and the
+    /// strongest narrow resonances — the warmth and harshness proxies.
+    Spectrum,
+    /// [`StereoDetail`]: per-band correlation, side/mid and mono loss, a
+    /// windowed-correlation summary, balance, a one-sided flag and a Haas
+    /// (static inter-channel delay) detector — width and mono safety.
+    Stereo,
+    /// [`DynamicsDetail`]: PLR and PSR.
+    Dynamics,
+}
+
 /// Params for `meter.measure`. Every field is optional: the default is
 /// the whole song's master mix, rendered offline.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MeasureParams {
     /// Defaults to `"master"`.
@@ -109,6 +140,12 @@ pub struct MeasureParams {
     /// Defaults to `"render"`.
     #[serde(default)]
     pub source: MeasureSource,
+    /// Opt-in detail blocks, any of `["spectrum", "stereo", "dynamics"]`.
+    /// Defaults to none, which
+    /// keeps the reply to the standard figures. Requires `source:
+    /// "render"`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail: Vec<MeasureDetail>,
 }
 
 /// Shares of the measured range's energy in the four AES tonal bands.
@@ -128,6 +165,140 @@ pub struct Bands {
     pub high: f32,
     /// 8 kHz - 20 kHz.
     pub air: f32,
+}
+
+/// Nominal ISO centre frequencies of [`SpectrumDetail::third_octave`],
+/// in Hz, lowest band first.
+pub const THIRD_OCTAVE_HZ: [f32; 31] = [
+    20.0, 25.0, 31.5, 40.0, 50.0, 63.0, 80.0, 100.0, 125.0, 160.0, 200.0, 250.0, 315.0, 400.0,
+    500.0, 630.0, 800.0, 1_000.0, 1_250.0, 1_600.0, 2_000.0, 2_500.0, 3_150.0, 4_000.0, 5_000.0,
+    6_300.0, 8_000.0, 10_000.0, 12_500.0, 16_000.0, 20_000.0,
+];
+
+/// One narrow resonance in [`SpectrumDetail::peaks`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SpectralPeak {
+    /// Frequency of the resonance, Hz.
+    pub freq_hz: f64,
+    /// How far its 1/6-octave band stands above the smoothed spectrum
+    /// around it (the mean level of the octave either side), dB.
+    pub excess_db: f64,
+}
+
+/// The `spectrum` detail: tonal balance and warmth proxies.
+///
+/// Numbers in detail blocks are `f64` and pre-rounded (0.1 dB for band
+/// levels, 0.01 for ratios, 1 Hz for frequencies) so they serialize
+/// short: a rounded `f32` widens to digits like `-30.100000381469727`.
+///
+/// Read off the stereo long-term average spectrum (the mean of the left
+/// and right power spectra), so unlike [`Bands`] it keeps anti-phase
+/// side content. `null` fields mean silence.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SpectrumDetail {
+    /// Level of the 31 ISO 1/3-octave bands, 20 Hz to 20 kHz (centres in
+    /// [`THIRD_OCTAVE_HZ`]), dB, where a full-scale sine in the band
+    /// reads 0. Pink noise reads FLAT here; a band with no energy reads
+    /// -120.
+    pub third_octave: Vec<f64>,
+    /// Spectral tilt over 100 Hz-10 kHz, dB/octave: the slope of the
+    /// power density (the 1/3-octave regression slope minus 3.01).
+    /// Pink noise -3.0, white 0; more negative is darker / warmer.
+    /// Commercial pop averages about -4.5 to -5.
+    pub tilt_db_per_oct: Option<f64>,
+    /// Power-weighted mean frequency, Hz. Falls as a mix gets warmer.
+    pub centroid_hz: Option<f64>,
+    /// Energy 150-500 Hz over energy 2-5 kHz, dB. Rises with warmth (or
+    /// mud), falls with harshness.
+    pub lowmid_presence_db: Option<f64>,
+    /// Spectral crest inside 2-5 kHz at 1/6-octave resolution (loudest
+    /// band over the mean), dB. 0 is perfectly even; high means a
+    /// presence resonance, the usual cause of harshness.
+    pub presence_peakiness_db: Option<f64>,
+    /// Energy 8-16 kHz over the whole 20 Hz-20 kHz energy, dB (always
+    /// negative).
+    pub air_ratio_db: Option<f64>,
+    /// Up to 5 narrow resonances, strongest first: 1/6-octave bands at
+    /// least 1 dB above the smoothed spectrum around them. Empty when
+    /// nothing stands out.
+    pub peaks: Vec<SpectralPeak>,
+}
+
+/// One of the eight [`StereoDetail::bands`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StereoBand {
+    /// Lower band edge, Hz.
+    pub lo_hz: f64,
+    /// Upper band edge, Hz.
+    pub hi_hz: f64,
+    /// L/R correlation inside the band, -1..+1. `null` when the band is
+    /// empty (under -70 dB of the signal) or one-sided (one channel 40 dB
+    /// or more below the other), where it would be 0/0.
+    pub correlation: Option<f64>,
+    /// Side over mid power inside the band, dB, clamped to +-60: -60 is
+    /// mono, 0 hard-panned or uncorrelated, +60 anti-phase. With equal
+    /// L/R energy, `correlation = (1 - rho)/(1 + rho)` where `rho =
+    /// 10^(side_mid_db/10)`. `null` for an empty band.
+    pub side_mid_db: Option<f64>,
+    /// Level the band loses folded to mono, dB (negative is a loss): 0
+    /// for mono, about -3 for uncorrelated or hard-panned content, -60
+    /// (the floor) for anti-phase. `null` for an empty band.
+    pub mono_loss_db: Option<f64>,
+}
+
+/// The 400 ms windowed correlation in [`StereoDetail`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CorrelationWindows {
+    /// Windows counted; silent and one-sided windows are skipped.
+    pub windows: u32,
+    /// Percentage of counted windows with correlation below +0.3.
+    pub pct_below_0_3: f64,
+    /// Lowest window correlation.
+    pub worst: f64,
+    /// Start of that window, seconds from the start of the measured range.
+    pub worst_at_seconds: f64,
+}
+
+/// The `stereo` detail: width and mono-safety proxies.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StereoDetail {
+    /// Eight bands with edges 20, 60, 150, 400, 1k, 2.5k, 5k, 10k, 20k Hz.
+    pub bands: Vec<StereoBand>,
+    /// Windowed correlation summary. `null` when no window could be
+    /// counted (silence, or a one-sided signal).
+    pub correlation_windows: Option<CorrelationWindows>,
+    /// Left over right energy, dB, clamped to +-60; positive leans left,
+    /// +-60 means one channel is silent. `null` for silence.
+    pub balance_db: Option<f64>,
+    /// One channel is (nearly) silent: the other is at least 40 dB louder,
+    /// i.e. hard-panned mono. Every 0/0 correlation is then `null` — read
+    /// neither the top-level `correlation` nor a band's as a width
+    /// figure; read `balance_db` for which side.
+    pub one_sided: bool,
+    /// A static delay between the channels (Haas), ms: the lag of the
+    /// strongest normalized L/R cross-correlation peak between 1 and 35
+    /// ms, when it exceeds 0.5 and beats the zero-lag correlation.
+    /// Positive means the RIGHT channel is late. A static delay of `d` ms
+    /// combs in mono with nulls at `(2k+1) * 1000/(2d)` Hz. `null` when
+    /// there is none.
+    pub haas_lag_ms: Option<f64>,
+}
+
+/// The `dynamics` detail.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DynamicsDetail {
+    /// Peak-to-loudness ratio: `true_peak_db - lufs_integrated`, dB.
+    /// `null` when `lufs_integrated` is.
+    pub plr_db: Option<f64>,
+    /// Peak-to-short-term ratio: `true_peak_db - lufs_short_max`, dB.
+    /// `null` when `lufs_short_max` is.
+    pub psr_db: Option<f64>,
 }
 
 /// Everything one measurement pass reports about one slice of the mix.
@@ -252,6 +423,16 @@ pub struct MeasureResult {
     /// every per-track metric (ba doc #275 P1.6).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub soloed_track_ids: Vec<TrackId>,
+
+    /// The `spectrum` detail, present only when `detail` asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spectrum: Option<SpectrumDetail>,
+    /// The `stereo` detail, present only when `detail` asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stereo: Option<StereoDetail>,
+    /// The `dynamics` detail, present only when `detail` asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<DynamicsDetail>,
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +440,7 @@ pub struct MeasureResult {
 // ---------------------------------------------------------------------------
 
 /// Params for `meter.stems`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StemsParams {
     /// Defaults to the whole song. Every entry is measured over this ONE
@@ -272,6 +453,10 @@ pub struct StemsParams {
     /// chain, so the entries overlap and must never be added together.
     #[serde(default)]
     pub include_busses: bool,
+    /// Opt-in detail blocks, computed for the master and every entry —
+    /// see [`MeasureParams::detail`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detail: Vec<MeasureDetail>,
 }
 
 /// One line of a [`StemsResult`] — a track (or bus) and its numbers.
