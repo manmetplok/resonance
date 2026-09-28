@@ -6,6 +6,7 @@
 //! uses.
 
 use super::value::ValueDomain;
+use super::view::lane_owner;
 use crate::update::control::plugin_target::{resolve_plugin_param, ChainOwner, PluginTarget};
 use crate::update::control::reply::{no_bus, no_track};
 use crate::update::control::track::frozen_reject;
@@ -131,6 +132,65 @@ pub(in crate::update::control) fn resolve_write_target(
         }
     }
     Ok(resolved)
+}
+
+/// True when `spec` names no owner and no lane kind — the "empty" side
+/// of `delete_points` / `remove_lane`'s "exactly one of `lane_id` or a
+/// target" check.
+fn spec_is_empty(spec: &AutomationTargetSpec) -> bool {
+    spec.track_id.is_none()
+        && spec.bus_id.is_none()
+        && !spec.master
+        && spec.control.is_none()
+        && spec.param.is_none()
+        && spec.plugin_id.is_none()
+        && spec.occurrence.is_none()
+}
+
+/// [`resolve_write_target`], widened to accept `automation.delete_points`
+/// / `automation.remove_lane`'s `lane_id` alternative
+/// (automation-control-api.md addendum): exactly one of `lane_id` (found
+/// by scanning the lane table directly — the only way to reach an
+/// orphaned lane, which has no resolvable owner) or a populated target
+/// spec. Applies the frozen-track rule (D2) to a plugin lane either way.
+pub(in crate::update::control) fn resolve_lane_or_target(
+    app: &Resonance,
+    lane_id: Option<u64>,
+    spec: &AutomationTargetSpec,
+) -> Result<AutomationTarget, RpcError> {
+    match (lane_id, spec_is_empty(spec)) {
+        (Some(_), false) => Err(RpcError::invalid_params(
+            "give either lane_id or a target (track_id / bus_id / master, plus control / \
+             param), not both",
+        )),
+        (None, true) => Err(RpcError::invalid_params(
+            "name the lane: lane_id (from automation.lanes), or a target (track_id / bus_id / \
+             master, plus control / param)",
+        )),
+        (Some(id), true) => target_by_lane_id(app, id),
+        (None, false) => Ok(resolve_write_target(app, spec)?.target),
+    }
+}
+
+/// The target of the lane with id `lane_id`, or its `not_found` — an
+/// orphaned lane has no owner to check `frozen_reject` against, so the
+/// check only applies once a live plugin lane's owner resolves.
+fn target_by_lane_id(app: &Resonance, lane_id: u64) -> Result<AutomationTarget, RpcError> {
+    let target = app
+        .automation
+        .lanes
+        .values()
+        .find(|lane| lane.id == lane_id)
+        .map(|lane| lane.target.clone())
+        .ok_or_else(|| RpcError::not_found(format!("no automation lane with id {lane_id}")))?;
+    if matches!(target, AutomationTarget::PluginParam { .. }) {
+        if let Some(ChainOwner::Track(track_id)) = lane_owner(app, &target) {
+            if let Some(e) = frozen_reject(app, track_id) {
+                return Err(e);
+            }
+        }
+    }
+    Ok(target)
 }
 
 /// The mixer lane `control` names on `owner`.

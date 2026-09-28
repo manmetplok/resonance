@@ -120,7 +120,7 @@ pub(in crate::update::control) fn resolve_points(
     Ok(out.into_iter().map(|(_, p)| p).collect())
 }
 
-/// Replace `resolved`'s lane with `points` — its COMPLETE new point list,
+/// Replace `target`'s lane with `points` — its COMPLETE new point list,
 /// sorted by frame and non-empty — by dispatching one
 /// `AutomationMessage::SetLane`, and describe the result.
 ///
@@ -130,7 +130,7 @@ pub(in crate::update::control) fn resolve_points(
 /// lane as it reads back; callers fill in `replaced` / `deleted` / `seed`.
 pub(in crate::update::control) fn commit_points(
     app: &mut Resonance,
-    resolved: &ResolvedTarget,
+    target: &AutomationTarget,
     points: Vec<Breakpoint>,
     enabled: Option<bool>,
 ) -> Result<(LaneEditResult, Task<Message>), RpcError> {
@@ -147,19 +147,19 @@ pub(in crate::update::control) fn commit_points(
         )));
     }
     let enabled = enabled
-        .or_else(|| current_lane(app, &resolved.target).map(|l| l.enabled))
+        .or_else(|| current_lane(app, target).map(|l| l.enabled))
         .unwrap_or(true);
     let task = run_via_update(
         app,
         Message::Automation(AutomationMessage::SetLane {
-            target: resolved.target.clone(),
+            target: target.clone(),
             points,
             enabled,
         }),
     );
     let result = LaneEditResult {
         revision: mutation_ack(app).revision,
-        lane: lane_view_for(app, &resolved.target),
+        lane: lane_view_for(app, target),
         removed: false,
         replaced: None,
         deleted: None,
@@ -171,10 +171,6 @@ pub(in crate::update::control) fn commit_points(
 /// Remove `target`'s lane by dispatching one `AutomationMessage::RemoveLane`;
 /// the result is `{revision, lane: null, removed: true}`. The caller has
 /// already checked the lane exists and any `confirm` gate.
-///
-/// Unused until `automation.remove_lane` / `delete_points` land (slices
-/// A4/A5); it lives here so they share the reply shape.
-#[allow(dead_code)]
 pub(in crate::update::control) fn commit_removal(
     app: &mut Resonance,
     target: &AutomationTarget,
@@ -192,4 +188,38 @@ pub(in crate::update::control) fn commit_removal(
         seed: None,
     };
     (result, task)
+}
+
+/// "lane has N points, bars X–Y" — what an unconfirmed emptying refusal
+/// (`delete_points` emptying a lane, or `remove_lane`) names
+/// (automation-control-api.md §4.4).
+pub(in crate::update::control) fn confirm_removal_summary(
+    app: &Resonance,
+    lane: &AutomationLane,
+) -> String {
+    let first_bar = crate::update::control::view_model::song_position(
+        app,
+        lane.points.first().expect("non-empty").time_frames,
+    )
+    .bar;
+    let last_bar = crate::update::control::view_model::song_position(
+        app,
+        lane.points.last().expect("non-empty").time_frames,
+    )
+    .bar;
+    format!(
+        "lane has {} point{}, bars {first_bar}\u{2013}{last_bar}; re-send with \"confirm\": \
+         true to remove it",
+        lane.points.len(),
+        if lane.points.len() == 1 { "" } else { "s" }
+    )
+}
+
+/// "no automation lane ..." — `delete_points` / `remove_lane`'s
+/// `not_found`, worded by how the call addressed the lane.
+pub(in crate::update::control) fn no_lane_error(lane_id: Option<u64>) -> RpcError {
+    match lane_id {
+        Some(id) => RpcError::not_found(format!("no automation lane with id {id}")),
+        None => RpcError::not_found("no automation lane on this target"),
+    }
 }

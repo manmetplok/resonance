@@ -71,10 +71,16 @@ pub const SHAPE: &str = "automation.shape";
 /// Built slice by slice (automation-control-api.md §6): a method joins
 /// this list in the same change that lands its app handler and its MCP
 /// tool, never before — `combined_router_exposes_every_control_method`
-/// holds the tool side to it. [`ADD_POINTS`], [`DELETE_POINTS`],
-/// [`SET_ENABLED`], [`REMOVE_LANE`] and [`SHAPE`] have wire types below
-/// but are NOT listed yet.
-pub const METHODS: &[&str] = &[LANES, SET_LANE];
+/// holds the tool side to it. [`SHAPE`] has a wire type below but is NOT
+/// listed yet.
+pub const METHODS: &[&str] = &[
+    LANES,
+    SET_LANE,
+    ADD_POINTS,
+    DELETE_POINTS,
+    SET_ENABLED,
+    REMOVE_LANE,
+];
 
 /// Most points one call may write (`set_lane`, `add_points`, `shape`).
 pub const MAX_POINTS_PER_CALL: usize = 2_048;
@@ -364,12 +370,23 @@ pub struct AddPointsParams {
 }
 
 /// Params for `automation.delete_points`: give exactly one of `indices`
-/// or `range`.
+/// or `range`, and exactly one of `lane_id` or a target (`track_id` /
+/// `bus_id` / `master`, plus `control` / `param`).
+///
+/// `lane_id` (from `automation.lanes`) is the only way to reach an
+/// orphaned lane — a plugin lane whose instance no longer exists (an
+/// older project file can carry these) has no resolvable owner, so the
+/// usual target spec cannot name it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct DeletePointsParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
+    /// Address the lane directly by id instead of a target spec — the
+    /// only way to reach an orphaned lane. Exactly one of `lane_id` or a
+    /// populated target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_id: Option<u64>,
     /// Point indices as `automation.lanes` reports them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indices: Option<Vec<u32>>,
@@ -391,12 +408,18 @@ pub struct SetEnabledParams {
     pub enabled: bool,
 }
 
-/// Params for `automation.remove_lane`.
+/// Params for `automation.remove_lane`: exactly one of `lane_id` or a
+/// target (see [`DeletePointsParams`] for why `lane_id` exists).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct RemoveLaneParams {
     #[serde(flatten)]
     pub target: AutomationTargetSpec,
+    /// Address the lane directly by id instead of a target spec — the
+    /// only way to reach an orphaned lane. Exactly one of `lane_id` or a
+    /// populated target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_id: Option<u64>,
     /// Required when the lane holds points.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub confirm: bool,
