@@ -3,14 +3,15 @@
 //!
 //! The bus and master arms live in `super::super::bus` / `master`; the
 //! rules all three share (one source, key port required, unqualified
-//! calls target the first keyable plugin) live in
+//! calls target the first keyable plugin, unqualified clears the routed
+//! one) live in
 //! [`super::super::sidechain`] so they cannot drift apart.
 
 use super::{ack, find_track, frozen_reject, instance_for, not_found_track, reject};
 use crate::message::Message;
 use crate::state::TrackState;
 use crate::update::control::sidechain::{
-    first_keyable, require_key_port, resolve_key_source, route_message,
+    clear_target, first_keyable, require_key_port, resolve_key_source, route_message,
 };
 use crate::update::control::{run_via_update, view_model};
 use crate::Resonance;
@@ -141,14 +142,24 @@ pub(super) fn clear_sidechain(
     if let Some(e) = frozen_reject(app, t.id) {
         return reject(request, e);
     }
-    let instance_id = match resolve_keyed_plugin(
-        app,
-        &t,
-        params.plugin_id.as_deref(),
-        params.occurrence,
-    ) {
-        Ok(id) => id,
-        Err(e) => return reject(request, e),
+    // No `plugin_id`: the plugin that actually has a route, which is not
+    // necessarily the one an unqualified *set* would pick.
+    let routed = params
+        .plugin_id
+        .is_none()
+        .then(|| clear_target(app, &t.plugins))
+        .flatten();
+    let instance_id = match routed {
+        Some(id) => id,
+        None => match resolve_keyed_plugin(
+            app,
+            &t,
+            params.plugin_id.as_deref(),
+            params.occurrence,
+        ) {
+            Ok(id) => id,
+            Err(e) => return reject(request, e),
+        },
     };
     let task = run_via_update(app, route_message(instance_id, None, false));
     (ack(app, request), task)

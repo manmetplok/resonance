@@ -259,9 +259,10 @@ impl ResonanceMcp {
                        \
                        The plugin is addressed like bus_set_plugin_param: bus_id plus an \
                        optional plugin_id (+ occurrence). Omitting plugin_id targets the first \
-                       DYNAMICS plugin (compressor, gate) on the bus that HAS a key port; \
-                       resonance-reverb (which ducks its wet return from a key) is chosen only \
-                       when it is the only plugin with one — name it with plugin_id otherwise. \
+                       plugin on the bus that HAS a key port other than resonance-reverb and \
+                       resonance-eq (in practice the compressor or gate); the reverb or the EQ \
+                       is chosen only when nothing else on the bus has a key port — name it with \
+                       plugin_id otherwise. \
                        Name the key source with EITHER \
                        source_track_id OR source_bus_id; any track, bus or SUB-TRACK works, and \
                        a sub-track (one tap of a multi-output drum kit) is usually the only \
@@ -270,8 +271,10 @@ impl ResonanceMcp {
                        defaults to true; false keeps the routing configured but stops delivering \
                        the key. \
                        \
-                       Only the DETECTOR changes: the key never reaches the output. Two plugins \
-                       read a key — resonance-compressor (ducking) and resonance-gate. Routing a \
+                       Only the DETECTOR changes: the key never reaches the output. Four \
+                       plugins read a key — resonance-compressor (ducking), resonance-gate, \
+                       resonance-reverb (ducks its wet return; needs duck_amount > 0) and \
+                       resonance-eq (dynamic bands with band{n}_dyn_sc on). Routing a \
                        key into a plugin with no key port is REFUSED, naming the ones on that \
                        bus that accept it. A bus may legally key a plugin on itself: the key is \
                        delivered one audio block late by design (~2.7 ms), so it cannot feed \
@@ -288,8 +291,10 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Remove a bus plugin's external sidechain key route, so its detector goes \
-                       back to reading the bus's own signal. Addressed exactly as \
-                       bus_set_sidechain. Clearing a plugin that had no route is not an error.",
+                       back to reading the bus's own signal. Addressed like bus_set_sidechain, \
+                       except that omitting plugin_id clears the first plugin on the bus that \
+                       HAS a route (falling back to bus_set_sidechain's default). Clearing a \
+                       plugin that had no route is not an error.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<MutationAck>()
     )]

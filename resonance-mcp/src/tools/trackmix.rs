@@ -575,9 +575,10 @@ impl ResonanceMcp {
                        \
                        The plugin is addressed like track_set_plugin_param: track_id plus an \
                        optional plugin_id (+ occurrence). Omitting plugin_id targets the first \
-                       DYNAMICS plugin (compressor, gate) on the track that HAS a key port (not \
-                       the instrument at slot 0 — a synth has none); resonance-reverb is chosen \
-                       only when it is the only plugin with one — name it with plugin_id \
+                       plugin on the track that HAS a key port other than resonance-reverb and \
+                       resonance-eq — in practice the compressor or gate, never the instrument \
+                       at slot 0 (a synth has none); the reverb or the EQ is chosen only when \
+                       nothing else on the track has a key port — name it with plugin_id \
                        otherwise. Name the key source with EITHER source_track_id OR \
                        source_bus_id; any track, bus or SUB-TRACK works, and a sub-track (one tap \
                        of a multi-output drum kit) is usually the only address a single kit piece \
@@ -588,10 +589,11 @@ impl ResonanceMcp {
                        \
                        Only the DETECTOR changes: the key never reaches the output, so routing a \
                        kick into a pad's compressor makes the pad duck, it does not add kick to \
-                       the pad. Three plugins currently read a key — resonance-compressor \
-                       (ducking), resonance-gate (open/close from another source) and \
+                       the pad. Four plugins currently read a key — resonance-compressor \
+                       (ducking), resonance-gate (open/close from another source), \
                        resonance-reverb (ducks its wet return; set duck_amount > 0, otherwise it \
-                       keys nothing). Routing a key into a \
+                       keys nothing) and resonance-eq (a dynamic band detects on the key while \
+                       its band{n}_dyn_sc is on). Routing a key into a \
                        plugin that has no key port is REFUSED, naming the plugins on that track \
                        that accept one. \
                        \
@@ -615,8 +617,10 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Remove a plugin's external sidechain key route, so its detector goes back \
-                       to reading the plugin's own input. Addressed exactly as \
-                       track_set_sidechain. Clearing a plugin that had no route is not an error.",
+                       to reading the plugin's own input. Addressed like track_set_sidechain, \
+                       except that omitting plugin_id clears the first plugin on the track that \
+                       HAS a route (falling back to track_set_sidechain's default). Clearing a \
+                       plugin that had no route is not an error.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<MutationAck>()
     )]
