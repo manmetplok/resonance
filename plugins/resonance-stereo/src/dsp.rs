@@ -19,8 +19,11 @@
 //!      `20·log10(1 − amount)` (−4.4 dB at 0.4, −6 dB at 0.5, −14 dB at
 //!      0.8), sweeping as the voices drift. Keep it moderate.
 //!    - *Haas* — the right channel above `focus_low` (an LR4 split; the
-//!      band below stays in time) delayed by 1–30 ms and lowered 3 dB. The level offset keeps the mono comb's
-//!      notches near −11 dB instead of −∞, and the low exclude keeps the
+//!      band below stays in time) delayed by 1–30 ms and lowered 3 dB.
+//!      The level offset keeps the mono comb's notches at
+//!      `20·log10((1 − g) / 2)` ≈ −16.7 dB (`g` = −3 dB) instead of −∞
+//!      — deeper, ≈ −21 to −23 dB, right around the exclude's LR4 corner,
+//!      where the split's phase adds in — and the low exclude keeps the
 //!      bass in time, but static combs remain: the mode is flagged as a
 //!      mono risk ([`WidenMode::is_mono_risk`]).
 //! 2. **Width** — M/S side gain ([`apply_width`]).

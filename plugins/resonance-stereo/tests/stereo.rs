@@ -422,6 +422,11 @@ fn haas_delays_the_right_side_above_the_exclude_at_a_level_offset() {
 /// 1/48-octave steps from 30 Hz to 18 kHz. Several impulses, because
 /// Micro-shift's combs move; for the time-invariant Diffuse they agree.
 fn worst_fold_notch_db(mode: WidenMode, amount: f32) -> f64 {
+    worst_fold_notch_db_with(mode, amount, |_| {})
+}
+
+/// [`worst_fold_notch_db`] with more params set by `extra`.
+fn worst_fold_notch_db_with(mode: WidenMode, amount: f32, extra: impl Fn(&StereoParams)) -> f64 {
     const IMPULSES: usize = 8;
     const SPACING: usize = 12_000;
     const LEN: usize = 4_096;
@@ -434,6 +439,7 @@ fn worst_fold_notch_db(mode: WidenMode, amount: f32) -> f64 {
         |p| {
             p.widen_mode.set_value(mode.index());
             p.widen_amount.set_value(amount);
+            extra(p);
         },
         &x,
         &x,
@@ -485,6 +491,35 @@ fn diffuse_stays_mono_safe_at_every_amount() {
     let r = correlation(&ol[4_800..], &or[4_800..]);
     assert!(r < 0.97, "Diffuse at full amount did not widen a mono source (r = {r:.3})");
     assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
+}
+
+/// Haas's level offset bounds its static combs. With no low exclude the
+/// fold is `(1 + g·e^(−jωτ)) / 2`, so the notches sit at
+/// `20·log10((1 − g) / 2)` ≈ −16.7 dB for `g` = −3 dB — what `dsp.rs`
+/// says — not at −∞. With the exclude, the LR4 split's phase around its
+/// corner deepens the notch there (to ≈ −23 dB at the default 150 Hz).
+/// Either way the combs are there, which is why the mode is flagged.
+#[test]
+fn haas_notches_the_mono_fold_as_deep_as_documented() {
+    let g = 10f64.powf(HAAS_LEVEL_DB as f64 / 20.0);
+    let said = 20.0 * ((1.0 - g) / 2.0).log10();
+    for amount in [0.2f32, 0.6] {
+        let no_exclude = |p: &StereoParams| p.focus_low.set_value(20.0);
+        let notch = worst_fold_notch_db_with(WidenMode::Haas, amount, no_exclude);
+        let excluded = worst_fold_notch_db(WidenMode::Haas, amount);
+        eprintln!(
+            "Haas amount {amount}: worst fold notch {notch:.2} dB without the exclude \
+             (documented {said:.2}), {excluded:.2} dB with it"
+        );
+        assert!(
+            (notch - said).abs() < 0.5,
+            "Haas at {amount}: the mono fold notches {notch:.2} dB, documented {said:.2}"
+        );
+        assert!(
+            excluded < said && excluded > -26.0,
+            "Haas at {amount} with the exclude: the fold notches {excluded:.2} dB"
+        );
+    }
 }
 
 /// Micro-shift's combs are as deep as documented (`micro_shift_notch_db`:
