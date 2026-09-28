@@ -34,7 +34,7 @@ pub(super) fn shape(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Err(e) => return reject(request, e),
     };
     match build(app, &params) {
-        Ok((resolved, points, seed)) => match commit_points(app, &resolved, points, None) {
+        Ok((resolved, points, seed)) => match commit_points(app, &resolved.target, points, None) {
             Ok((mut result, task)) => {
                 result.seed = seed;
                 (success(request, &result), task)

@@ -34,7 +34,7 @@ pub(super) fn set_lane(app: &mut Resonance, request: &Request) -> (Response, Tas
         Ok(points) => points,
         Err(e) => return reject(request, e),
     };
-    match commit_points(app, &resolved, points, params.enabled) {
+    match commit_points(app, &resolved.target, points, params.enabled) {
         Ok((result, task)) => (success(request, &result), task),
         Err(e) => reject(request, e),
     }

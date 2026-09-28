@@ -10,16 +10,16 @@
 //! | [`edit`] | the shared write path: points → breakpoints → ONE `SetLane` |
 //! | [`lanes`] | `automation.lanes` (read-only) |
 //! | [`set_lane`] | `automation.set_lane` |
+//! | [`add_points`] | `automation.add_points` |
+//! | [`delete_points`] | `automation.delete_points` |
+//! | [`set_enabled`] | `automation.set_enabled` |
+//! | [`remove_lane`] | `automation.remove_lane` |
 //! | [`shape`] | `automation.shape` (generator: `resonance_common::automation_shape`) |
 //!
 //! Every write computes the lane's complete new point list as a pure
 //! function and dispatches exactly one `AutomationMessage` through
 //! `update()` (see [`edit`]), so the edit passes the gates, is undoable
-//! like a GUI edit, and costs one revision. The remaining methods of
-//! §4.4 (`add_points`, `delete_points`, `set_enabled`, `remove_lane`)
-//! already have their wire types in
-//! `resonance_control::methods::automation`; each lands as a handler
-//! module here, a `try_handle` arm, a `METHODS` entry and its MCP tool.
+//! like a GUI edit, and costs one revision.
 
 use crate::message::Message;
 use crate::Resonance;
@@ -27,8 +27,12 @@ use iced::Task;
 use resonance_control::methods::automation as wire;
 use resonance_control::{Request, Response};
 
+mod add_points;
+mod delete_points;
 pub(in crate::update::control) mod edit;
 mod lanes;
+mod remove_lane;
+mod set_enabled;
 mod set_lane;
 mod shape;
 pub(in crate::update::control) mod target;
@@ -46,6 +50,10 @@ pub(super) fn try_handle(
     let out = match request.method.as_str() {
         wire::LANES => (lanes::lanes(app, request), Task::none()),
         wire::SET_LANE => set_lane::set_lane(app, request),
+        wire::ADD_POINTS => add_points::add_points(app, request),
+        wire::DELETE_POINTS => delete_points::delete_points(app, request),
+        wire::SET_ENABLED => set_enabled::set_enabled(app, request),
+        wire::REMOVE_LANE => remove_lane::remove_lane(app, request),
         wire::SHAPE => shape::shape(app, request),
         _ => return None,
     };

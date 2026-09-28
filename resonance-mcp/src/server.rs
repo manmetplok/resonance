@@ -71,8 +71,10 @@ section-relative *_beat / *_beats fields are quarter notes whatever the meter (a
 Automation is a track's, bus's or master's volume/pan/mute, or a plugin parameter, changing \
 over the song — one lane per target. Values are its real units unless you pass normalized. \
 Read lanes with automation_lanes (each is also summarized, without points, in song_tracks and \
-master_summary); write with automation_set_lane, and remove points or a whole lane with the \
-matching automation_* tools as they land. transport_set_tempo keeps a lane at its bar; \
+master_summary); write a whole lane with automation_set_lane, single points with \
+automation_add_points, and fades, rides, filter sweeps or LFO-like moves with automation_shape; \
+remove with automation_delete_points / automation_remove_lane, and switch a lane on or off with \
+automation_set_enabled. transport_set_tempo keeps a lane at its bar; \
 global_* tempo and meter events keep its sample position instead, so its bar moves. You \
 cannot hear automation: verify with automation_lanes and measure with meter_measure over the \
 range.";

@@ -23,6 +23,8 @@ mod control_automation;
 mod control_automation_render;
 #[path = "control/control_automation_shape.rs"]
 mod control_automation_shape;
+#[path = "control/control_automation_edit.rs"]
+mod control_automation_edit;
 #[path = "control/control_bus.rs"]
 mod control_bus;
 #[path = "control/control_bus_create_commit.rs"]
