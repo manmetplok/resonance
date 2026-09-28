@@ -13,7 +13,6 @@
 
 use std::path::PathBuf;
 
-use resonance_color::presets::PRESETS;
 use resonance_color::ResonanceColor;
 use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
@@ -96,33 +95,126 @@ fn render_state(state: &[u8]) -> Vec<f32> {
     out
 }
 
-fn states() -> Vec<(String, Vec<u8>)> {
-    let mut v = vec![
-        ("tape_hot_4x".to_string(), TAPE_HOT_4X.as_bytes().to_vec()),
-        ("tape_parallel_1x".to_string(), TAPE_PARALLEL_1X.as_bytes().to_vec()),
-        ("tape_default_2x".to_string(), TAPE_DEFAULT_2X.as_bytes().to_vec()),
-        ("transformer_4x".to_string(), TRANSFORMER_4X.as_bytes().to_vec()),
-    ];
-    // The bank as it stood when the golden was blessed. Named rather than
-    // enumerated, so a preset added later cannot change what this pins.
-    for name in PRE_W6B_PRESETS {
-        let p = PRESETS
-            .iter()
-            .find(|p| p.name == *name)
-            .unwrap_or_else(|| panic!("factory preset `{name}` disappeared"));
-        v.push((format!("preset {}", p.name), p.json.as_bytes().to_vec()));
-    }
-    v
-}
+// The factory presets as they stood before W6b, verbatim from the W6
+// merge (`git show 5ef6499e:plugins/resonance-color/presets/<file>`).
+// Copies, not the live bank: today's preset files carry `tape_quality`
+// and `tape_solver`, so loading them would never exercise the missing
+// keys this test exists for. A preset added or re-voiced later cannot
+// change what this pins either.
 
-/// Factory presets that existed before W6b, in bank order.
-const PRE_W6B_PRESETS: &[&str] = &[
-    "Bus — Warm Glue",
-    "Bass — Iron",
-    "Vocal — Tube Air",
-    "Drums — Tape 15",
-    "Master — Subtle Tape",
-];
+/// `presets/bus_warm_glue.json` (Bus — Warm Glue) as W6 shipped it.
+const PRESET_BUS_WARM_GLUE: &str = r#"{
+  "params": {
+    "mode": 4,
+    "drive": 0.55,
+    "bias": 0.7,
+    "response": 3.0,
+    "tone": -1.0,
+    "mix": 0.6,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 1,
+    "speed": 1,
+    "flutter": 0.0
+  }
+}
+"#;
+
+/// `presets/bass_iron.json` (Bass — Iron) as W6 shipped it.
+const PRESET_BASS_IRON: &str = r#"{
+  "params": {
+    "mode": 2,
+    "drive": 0.75,
+    "bias": 0.5,
+    "response": 4.0,
+    "tone": 0.0,
+    "mix": 1.0,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 1,
+    "speed": 1,
+    "flutter": 0.0
+  }
+}
+"#;
+
+/// `presets/vocal_tube_air.json` (Vocal — Tube Air) as W6 shipped it.
+const PRESET_VOCAL_TUBE_AIR: &str = r#"{
+  "params": {
+    "mode": 0,
+    "drive": 0.52,
+    "bias": 0.5,
+    "response": -3.0,
+    "tone": 2.0,
+    "mix": 0.85,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 1,
+    "speed": 1,
+    "flutter": 0.0
+  }
+}
+"#;
+
+/// `presets/drums_tape_15.json` (Drums — Tape 15) as W6 shipped it.
+const PRESET_DRUMS_TAPE_15: &str = r#"{
+  "params": {
+    "mode": 1,
+    "drive": 0.55,
+    "bias": 0.4,
+    "response": 0.0,
+    "tone": -0.5,
+    "mix": 0.8,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 1,
+    "speed": 1,
+    "flutter": 0.0
+  }
+}
+"#;
+
+/// `presets/master_subtle_tape.json` (Master — Subtle Tape) as W6 shipped it.
+const PRESET_MASTER_SUBTLE_TAPE: &str = r#"{
+  "params": {
+    "mode": 1,
+    "drive": 0.25,
+    "bias": 0.3,
+    "response": 0.0,
+    "tone": 0.0,
+    "mix": 0.8,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 2,
+    "speed": 2,
+    "flutter": 0.0
+  }
+}
+"#;
+
+fn states() -> Vec<(String, Vec<u8>)> {
+    let blobs = [
+        ("tape_hot_4x", TAPE_HOT_4X),
+        ("tape_parallel_1x", TAPE_PARALLEL_1X),
+        ("tape_default_2x", TAPE_DEFAULT_2X),
+        ("transformer_4x", TRANSFORMER_4X),
+        ("preset Bus — Warm Glue", PRESET_BUS_WARM_GLUE),
+        ("preset Bass — Iron", PRESET_BASS_IRON),
+        ("preset Vocal — Tube Air", PRESET_VOCAL_TUBE_AIR),
+        ("preset Drums — Tape 15", PRESET_DRUMS_TAPE_15),
+        ("preset Master — Subtle Tape", PRESET_MASTER_SUBTLE_TAPE),
+    ];
+    for (name, json) in blobs {
+        assert!(
+            !json.contains("tape_quality") && !json.contains("tape_solver"),
+            "`{name}` is not a pre-W6b blob"
+        );
+    }
+    blobs
+        .iter()
+        .map(|(name, json)| (name.to_string(), json.as_bytes().to_vec()))
+        .collect()
+}
 
 #[test]
 fn pre_w6b_state_renders_bit_identically() {
