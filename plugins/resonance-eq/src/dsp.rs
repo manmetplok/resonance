@@ -389,6 +389,18 @@ impl EqDsp {
                 d.ballistics = Ballistics::from_times(self.sample_rate, dy.attack_ms, dy.release_ms);
                 d.last = Some((dy, snapshot));
             }
+            // A changed band was just re-voiced at its static gain. If it is
+            // cutting, put the cut back now: waiting for the next revoice
+            // (up to DYN_UPDATE_SAMPLES away, and not aligned to the block)
+            // lets the first samples of the block out uncut — a spike of the
+            // whole GR on every automated block.
+            if changed && d.active && d.gr_db != 0.0 {
+                let mut s = snapshot;
+                s.gain_db -= d.gr_db;
+                configure_stages(&s, self.sample_rate, &mut self.channels[0][i]);
+                configure_stages(&s, self.sample_rate, &mut self.channels[1][i]);
+                d.applied_gr_db = d.gr_db;
+            }
         }
         self.any_dyn = self.dyn_state.iter().any(|d| d.active);
 

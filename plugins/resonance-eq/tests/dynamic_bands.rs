@@ -192,3 +192,62 @@ fn dynamic_bands_golden() {
         );
     }
 }
+
+/// Render in `block`-frame blocks, calling `per_block` with the block
+/// index before each one, so a test can move a parameter mid-render.
+fn render_moving(
+    setup: impl Fn(&EqParams),
+    per_block: impl Fn(&EqParams, usize),
+    input: impl Fn(u64) -> f32,
+    block: usize,
+    blocks: usize,
+) -> Vec<f32> {
+    let mut plugin = ResonanceEq::new();
+    setup(&plugin.params);
+    plugin.initialize(SR, block as u32);
+    let mut out = Vec::new();
+    let mut l = vec![0.0f32; block];
+    let mut r = vec![0.0f32; block];
+    let mut n = 0u64;
+    for k in 0..blocks {
+        per_block(&plugin.params, k);
+        for i in 0..block {
+            l[i] = input(n + i as u64);
+            r[i] = l[i];
+        }
+        let mut outs = [OutputBuffer {
+            left: &mut l,
+            right: &mut r,
+        }];
+        plugin.process(&mut outs, block, &mut EventIterator::empty(), None);
+        n += block as u64;
+        out.extend_from_slice(&l);
+    }
+    out
+}
+
+/// A band parameter moving every block (automation) must not drop the
+/// band's gain reduction. It used to: a changed snapshot re-voiced the
+/// band at its static gain, and the GR only came back at the next
+/// 16-sample dynamics update — so with blocks that are not a multiple of
+/// 16, the first few samples of every block went out uncut, spikes of
+/// the whole GR (+18 dB here).
+#[test]
+fn a_param_moving_every_block_keeps_the_gain_reduction() {
+    const BLOCK_100: usize = 100;
+    let amp = 0.5;
+    let wiggle = |p: &EqParams, k: usize| {
+        p.bands[5].gain.set_value(if k % 2 == 0 { 0.0 } else { 0.01 });
+    };
+    let moving = render_moving(deharsh, wiggle, sine(3_000.0, amp), BLOCK_100, 300);
+    let still = render_moving(deharsh, |_, _| {}, sine(3_000.0, amp), BLOCK_100, 300);
+    // After the attack has settled, compare peaks over the tail.
+    let tail = |x: &[f32]| x[x.len() / 2..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let (got, want) = (tail(&moving), tail(&still));
+    assert!(want > 1e-3, "the reference rendered silence");
+    let over = db(got) - db(want);
+    assert!(
+        over < 0.5,
+        "moving a param every block spiked the output {over:.2} dB over the steady cut"
+    );
+}
