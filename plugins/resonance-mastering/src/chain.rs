@@ -3,11 +3,15 @@
 //! Owns every DSP stage and the metering tap, orchestrating them in
 //! processing order:
 //!
-//!   input → corrective EQ → glue compressor → saturator
-//!         → tonal EQ → multiband → metering tap
+//!   input trim → corrective EQ → glue compressor → saturator
+//!         → tonal EQ → multiband → imager → clipper → limiter
+//!         → dither → metering tap
 //!
-//! Later phases will add stereo imaging, the true-peak limiter, and
-//! dither between the multiband and the meter.
+//! The imager's per-band width is applied on the multiband's crossover
+//! bands, just before they are summed (see `stages::multiband`). Only
+//! the two linear-phase EQs, the multiband crossover and the limiter
+//! lookahead have latency, and it does not depend on which stages are
+//! on or what they are set to.
 
 use resonance_dsp::{db_to_linear, DelayLine};
 

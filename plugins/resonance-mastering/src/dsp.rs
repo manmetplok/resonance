@@ -1,9 +1,10 @@
 //! Metering core — owns every measurement DSP struct and pumps the
 //! per-block results into the shared [`MasteringViz`].
 //!
-//! Phase 2 does not modify audio. This module is effectively a sidechain
-//! tap: the plugin's `process()` passes audio through unchanged and calls
-//! [`MeteringCore::feed`] once per block to update the meters.
+//! This module does not modify audio. It is a tap at the end of the
+//! chain: `Chain::process` calls [`MeteringCore::feed`] once per block
+//! with the processed output, so the meters show what the listener
+//! hears.
 
 use resonance_metering::{
     CorrelationMeter, CrestMeter, LraMeter, LufsMeter, MeterSnapshot, PlrMeter, SpectrumAnalyzer,
