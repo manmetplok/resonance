@@ -4,7 +4,7 @@
 //! A target is not one curve but a band: a minimum and a maximum level per
 //! ISO 1/3-octave band, 20 Hz to 20 kHz — the Tonal-Balance-Control model.
 //! A mix whose spectrum lies anywhere inside the band is on target there;
-//! the decision engine ([`super::decide`]) acts only on the parts that fall
+//! the decision engine ([`crate::decide`]) acts only on the parts that fall
 //! outside it.
 //!
 //! Values are **relative**: they describe spectral shape, normalised so the
@@ -39,13 +39,13 @@
 //!   wider band (more varied productions), pop a narrower one.
 //!
 //! Reference tracks (§7.5) are a separate comparison mode: they never
-//! generate a band of their own (see [`super::decide::Target`]).
+//! generate a band of their own (see [`crate::decide::Target`]).
 
 use std::sync::OnceLock;
 
 use resonance_metering::spectrum::octave::OctaveTable;
 
-use super::analyze::NUM_SPECTRUM_BINS;
+use crate::analyze::NUM_SPECTRUM_BINS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[derive(Default)]

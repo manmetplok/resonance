@@ -4,7 +4,7 @@
 //! The plugin's assistant panel captures 10 s of the live master and
 //! compares it against a genre band or a reference track. This is the
 //! same analysis and the same decision engine
-//! (`resonance_mastering::assistant::decide`), run on an OFFLINE render of
+//! (`resonance_mastering_assist::decide`), run on an OFFLINE render of
 //! the master range instead of a live capture, and answered with the
 //! suggestions — stage by stage, each with its rationale and the exact
 //! mastering-plugin param writes — WITHOUT applying any of them. The agent
@@ -45,9 +45,9 @@ use resonance_control::methods::master::{
     AssistParams, AssistResult, AssistSuggestion, AssistTargetInfo, MASTERING_PLUGIN_ID,
 };
 use resonance_control::{Request, Response, RpcError};
-use resonance_mastering::assistant::analyze::AnalysisResult;
-use resonance_mastering::assistant::decide::{self, Target};
-use resonance_mastering::assistant::{Genre, ReferenceTrack};
+use resonance_mastering_assist::analyze::AnalysisResult;
+use resonance_mastering_assist::decide::{self, Target};
+use resonance_mastering_assist::{Genre, ReferenceTrack};
 
 /// Handle `master.assist`, or `None` for any other method.
 pub(super) fn try_handle(

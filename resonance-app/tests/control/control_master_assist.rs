@@ -5,9 +5,10 @@
 //! Capture-mode app: the engine commands the handler sends are asserted,
 //! and the engine's answers are injected as `MixMeasured` events built
 //! from a known assistant spectrum. The payload must be exactly what the
-//! plugin's own decision engine makes of that analysis — the same stages,
-//! and param writes that replay onto a fresh set of mastering params to
-//! the state the panel's Apply produces.
+//! assistant's decision engine (`resonance-mastering-assist`, which the
+//! plugin's panel runs too) makes of that analysis — the same stages, and
+//! param writes that replay to exactly the writes the panel's Apply
+//! makes.
 
 use resonance_app::state::{PluginSlotState, PoolAsset};
 use resonance_app::Resonance;
@@ -19,12 +20,10 @@ use resonance_common::AudioFormat;
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::methods::master::{AssistMode, AssistResult};
 use resonance_control::{ErrorKind, Request, Response};
-use resonance_mastering::assistant::analyze::AnalysisResult;
-use resonance_mastering::assistant::decide::{build, param_by_key, Target, HIGH_BAND_HZ};
-use resonance_mastering::assistant::targets::{target_band, target_curve, Genre};
-use resonance_mastering::assistant::ReferenceTrack;
-use resonance_mastering::params::MasteringParams;
-use resonance_mastering::PARAM_COUNT;
+use resonance_mastering_assist::analyze::AnalysisResult;
+use resonance_mastering_assist::decide::{build, ParamSink, Target, HIGH_BAND_HZ};
+use resonance_mastering_assist::targets::{target_band, target_curve, Genre};
+use resonance_mastering_assist::ReferenceTrack;
 use resonance_metering::offline::BandShares;
 use serde_json::json;
 
@@ -81,7 +80,7 @@ fn assistant_spectrum() -> Vec<f32> {
     let (lo, hi) = target_band(Genre::Rock);
     let mut s = target_curve(Genre::Rock).to_vec();
     for (i, v) in s.iter_mut().enumerate() {
-        let f = resonance_mastering::assistant::targets::band_center_hz(i);
+        let f = resonance_mastering_assist::targets::band_center_hz(i);
         if f <= 100.0 {
             *v = hi[i] + 3.0;
         } else if f >= HIGH_BAND_HZ.0 {
@@ -150,28 +149,38 @@ fn sent(cmd_rx: &crossbeam_channel::Receiver<AudioCommand>) -> Vec<AudioCommand>
         .collect()
 }
 
-/// The wire's param writes, replayed onto fresh mastering params, give
-/// exactly the state the panel's Apply gives.
+/// Param writes by key, as the panel's Apply makes them (the mastering
+/// plugin applies through the same `ParamSink`; its own tests pin that
+/// every key resolves and that Apply writes exactly these).
+#[derive(Default)]
+struct Writes(std::cell::RefCell<std::collections::BTreeMap<String, f64>>);
+
+impl ParamSink for Writes {
+    fn set_param(&self, key: &str, value: f32) {
+        self.0.borrow_mut().insert(key.to_owned(), f64::from(value));
+    }
+}
+
+/// The wire's param writes, replayed in order, give exactly the writes
+/// the panel's Apply makes.
 fn assert_replays_like_apply(result: &AssistResult, target: &Target, analysis: &AnalysisResult) {
-    let wire = MasteringParams::default();
+    let mut wire = std::collections::BTreeMap::new();
     for suggestion in &result.suggestions {
         for write in &suggestion.params {
-            let param = param_by_key(&wire, &write.key)
-                .unwrap_or_else(|| panic!("{} is not a mastering param", write.key));
-            param.set_plain(write.value);
+            wire.insert(write.key.clone(), write.value);
         }
     }
-    let panel = MasteringParams::default();
+    let panel = Writes::default();
     build(analysis, target).apply_to(&panel);
-    for i in 0..PARAM_COUNT {
-        let (a, b) = (wire.param_at(i), panel.param_at(i));
-        assert!(
-            (a.get_plain() - b.get_plain()).abs() < 2e-3,
-            "{}: wire replay {} vs Apply {}",
-            a.id(),
-            a.get_plain(),
-            b.get_plain()
-        );
+    let panel = panel.0.into_inner();
+    assert_eq!(
+        wire.keys().collect::<Vec<_>>(),
+        panel.keys().collect::<Vec<_>>(),
+        "the wire and Apply write different params"
+    );
+    for (key, a) in &wire {
+        let b = panel[key];
+        assert!((a - b).abs() < 2e-3, "{key}: wire replay {a} vs Apply {b}");
     }
 }
 
@@ -430,7 +439,7 @@ fn the_engine_measurement_is_the_panels_analysis() {
         detail,
     );
     let wire = analysis(&m);
-    let panel = resonance_mastering::assistant::analyze::run(SR as f32, &left, &right);
+    let panel = resonance_mastering_assist::analyze::run(SR as f32, &left, &right);
     assert_eq!(wire.spectrum_db, panel.spectrum_db);
     assert_eq!(wire.crest_db, panel.crest_db);
     assert_eq!(wire.correlation, panel.correlation);

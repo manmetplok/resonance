@@ -9,13 +9,20 @@
 //! suggestions (tonal shelves, glue compressor, limiter, target LUFS).
 //! The suggestions carry human-readable rationale and can be applied
 //! to the plugin's atomic params with one call.
+//!
+//! The analysis and the decision engine are the library crate
+//! `resonance_mastering_assist` (which the app's `master.assist` uses
+//! too); they are re-exported here under their old paths. This module
+//! keeps what belongs to the plugin: the capture ring, the panel's state,
+//! decoding a reference file, and the param lookup the suggestions are
+//! applied through ([`decide::param_by_key`]).
 
-pub mod analyze;
+pub use resonance_mastering_assist::{analyze, targets};
+
 pub mod capture;
 pub mod decide;
 pub mod reference;
 pub mod state;
-pub mod targets;
 
 pub use analyze::AnalysisResult;
 pub use decide::{Suggestions, Target};
