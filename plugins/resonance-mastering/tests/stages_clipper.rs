@@ -245,3 +245,26 @@ fn enable_fades_do_not_step() {
     let moved = on.map(|i| (l[i] - input[i]).abs()).fold(0.0f32, f32::max);
     assert!(moved > 0.2, "the clipper never engaged ({moved})");
 }
+
+/// Switching the clipper back on while its fade-out is still running
+/// must pick the fade up where it is, not restart the oversamplers under
+/// a half-open crossfade (review finding M7): that dropped the wet path
+/// to the filters' cold start with the fade at ~60 %, a step of ~0.3.
+#[test]
+fn re_enabling_mid_fade_out_does_not_step() {
+    let input = sine(300.0, 1.4, 24_000);
+    let block = 64;
+    let mut c = Clipper::new(SR);
+    let (mut l, mut r) = (input.clone(), input.clone());
+    for (b, start) in (0..l.len()).step_by(block).enumerate() {
+        let end = (start + block).min(l.len());
+        // On, off for three blocks (192 samples of a 480-sample fade),
+        // on again.
+        let on = !(100..103).contains(&b);
+        let cfg = ClipperConfig { enabled: on, ..cfg(6.0, 0.0) };
+        c.process_stereo(&mut l[start..end], &mut r[start..end], &cfg);
+    }
+    assert!(peak(&l[50 * block..100 * block]) < 0.52, "was not clipping while on");
+    let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(max_step < 0.1, "a step of {max_step} in the output");
+}

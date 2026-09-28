@@ -418,3 +418,46 @@ fn bass_level_is_independent_of_sample_rate() {
         );
     }
 }
+
+/// Switching the saturator back on while its fade-out still runs picks
+/// the fade up where it is: restarting the filters and the ADAA memory
+/// under a half-open crossfade would step the output (the clipper had the
+/// same bug, review finding M7).
+#[test]
+fn re_enabling_mid_fade_out_does_not_step() {
+    use resonance_mastering::stages::saturator::SatMode;
+    let sr = 48_000.0_f32;
+    let block = 64;
+    let total = 24_000;
+    let input: Vec<f32> = (0..total)
+        .map(|i| (i as f32 / sr * 300.0 * std::f32::consts::TAU).sin() * 0.9)
+        .collect();
+    for mode in [SatMode::Blend, SatMode::Tape, SatMode::Transformer] {
+        let render = |toggle: bool| {
+            let mut s = Saturator::new(sr);
+            let (mut l, mut r) = (input.clone(), input.clone());
+            for (b, start) in (0..total).step_by(block).enumerate() {
+                let end = (start + block).min(total);
+                let cfg = SaturatorConfig {
+                    enabled: !(toggle && (100..103).contains(&b)),
+                    drive_db: 9.0,
+                    mode,
+                    ..SaturatorConfig::default()
+                };
+                s.process_stereo(&mut l[start..end], &mut r[start..end], &cfg);
+            }
+            l
+        };
+        let slope = |x: &[f32]| {
+            x[90 * block..120 * block]
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let (steady, toggled) = (slope(&render(false)), slope(&render(true)));
+        assert!(
+            toggled < steady * 1.2,
+            "{mode:?}: toggle stepped {toggled} per sample vs {steady} steady"
+        );
+    }
+}

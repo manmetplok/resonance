@@ -185,7 +185,11 @@ impl Clipper {
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &ClipperConfig) {
         let drive_db = cfg.drive_db.max(0.0);
         let softness = cfg.softness.clamp(0.0, 1.0);
-        if cfg.enabled && !self.was_enabled {
+        // Re-enabled while the fade-out still runs: the wet path is live
+        // and warm, so the fade just turns around (a restart here would
+        // drop it to the filters' cold start under a half-open fade).
+        let fading_out = self.enable_sm.current() > 0.0;
+        if cfg.enabled && !self.was_enabled && !fading_out {
             // (Re)engage from a clean state; the enable crossfade covers
             // the oversamplers settling.
             self.left.reset();
