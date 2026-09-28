@@ -14,6 +14,23 @@ fn param_enumeration_covers_declared_count() {
     }
 }
 
+/// The shared loader only writes ids it finds, so a preset that omits a
+/// parameter silently inherits whatever the previous patch left there —
+/// loading "Cathedral" over a ducked patch would keep ducking. Every
+/// factory preset must therefore name every parameter.
+#[test]
+fn every_factory_preset_is_a_full_snapshot() {
+    let plugin = ResonanceReverb::new();
+    for entry in PRESETS {
+        let value: serde_json::Value = serde_json::from_str(entry.json).unwrap();
+        let map = value["params"].as_object().unwrap();
+        for i in 0..plugin.param_count() {
+            let id = plugin.param(i).id();
+            assert!(map.contains_key(id), "preset {:?} omits `{id}`", entry.name);
+        }
+    }
+}
+
 #[test]
 fn every_factory_preset_parses() {
     assert!(!PRESETS.is_empty());

@@ -102,11 +102,31 @@ fn states() -> Vec<(String, Vec<u8>)> {
         ("project_v1".to_string(), PROJECT_V1.as_bytes().to_vec()),
         ("project_v0".to_string(), PROJECT_V0.as_bytes().to_vec()),
     ];
-    for p in PRESETS {
+    // The bank as it stood when the golden was blessed. Named rather than
+    // enumerated, so a preset added later cannot change what this pins.
+    for name in PRE_W8_PRESETS {
+        let p = PRESETS
+            .iter()
+            .find(|p| p.name == *name)
+            .unwrap_or_else(|| panic!("factory preset `{name}` disappeared"));
         v.push((format!("preset {}", p.name), p.json.as_bytes().to_vec()));
     }
     v
 }
+
+/// Factory presets that existed before W8, in bank order.
+const PRE_W8_PRESETS: &[&str] = &[
+    "Kick — Punch",
+    "Snare — Slam",
+    "Bass — Glue",
+    "Vocal — Lead",
+    "Guitar — Control",
+    "Drum Bus",
+    "Mix Bus",
+    "Master — Glue",
+    "Parallel Smash",
+    "Transparent",
+];
 
 #[test]
 fn pre_w8_state_renders_bit_identically() {

@@ -4,7 +4,8 @@
 //! - Header: plugin name, preset dropdown, live readouts, freeze indicator.
 //! - Central: impulse tail hero visualisation on the left, FDN tank view
 //!   on the right, stereo peak meters along the bottom of the central area.
-//! - Bottom: control strip with the 12 parameters.
+//! - Bottom: control strip — the room (two rows) and the return channel
+//!   (return EQ, ducking, ER/tail depth).
 
 use std::sync::Arc;
 
@@ -25,7 +26,7 @@ mod tank_view;
 mod theme;
 
 const WINDOW_W: u32 = 1320;
-const WINDOW_H: u32 = 660;
+const WINDOW_H: u32 = 780;
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -72,7 +73,7 @@ impl EditorFactory for ReverbEditorFactory {
                 title: "Resonance Reverb".to_string(),
                 app_id: "com.resonance.reverb".to_string(),
                 initial_size: (WINDOW_W, WINDOW_H),
-                min_size: (720, 560),
+                min_size: (720, 680),
                 resizable: true,
             },
         )
@@ -123,8 +124,8 @@ impl EditorApp for ReverbEditorApp {
             .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("reverb_strip")
-            .exact_size(200.0)
-            .show_inside(ui, |ui| controls::draw(ui, &self.params));
+            .exact_size(320.0)
+            .show_inside(ui, |ui| controls::draw(ui, &self.params, &self.viz));
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
     }

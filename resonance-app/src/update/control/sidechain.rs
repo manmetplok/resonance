@@ -120,7 +120,7 @@ pub(super) fn require_key_port(
     let hint = if keyable.is_empty() {
         format!(
             "no plugin on {host} declares one — add a plugin that does \
-             (com.resonance.compressor, com.resonance.gate) and route the key into that"
+             (com.resonance.compressor, com.resonance.gate, com.resonance.reverb) and route the key into that"
         )
     } else {
         format!(

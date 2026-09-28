@@ -586,8 +586,10 @@ impl ResonanceMcp {
                        \
                        Only the DETECTOR changes: the key never reaches the output, so routing a \
                        kick into a pad's compressor makes the pad duck, it does not add kick to \
-                       the pad. Two plugins currently read a key — resonance-compressor (ducking) \
-                       and resonance-gate (open/close from another source). Routing a key into a \
+                       the pad. Three plugins currently read a key — resonance-compressor \
+                       (ducking), resonance-gate (open/close from another source) and \
+                       resonance-reverb (ducks its wet return; set duck_amount > 0, otherwise it \
+                       keys nothing). Routing a key into a \
                        plugin that has no key port is REFUSED, naming the plugins on that track \
                        that accept one. \
                        \

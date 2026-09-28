@@ -1,4 +1,14 @@
-/// Resonance Reverb - An algorithmic reverb using diffusion networks and FDN.
+//! Resonance Reverb - An algorithmic reverb using diffusion networks and FDN.
+//!
+//! Besides the room itself it carries the three return-channel moves a
+//! mix reaches for a second plugin to make (warmth-width-depth.md §6.4):
+//! a wet HPF/LPF *before* the tank (return EQ), ducking of the wet return
+//! from an external sidechain key or the dry input, and an ER/tail depth
+//! balance. All three default to a no-op.
+//!
+//! The sidechain key only drives the ducker's detector; it never reaches
+//! the output. With no key connected the ducker keys off the dry input.
+
 use std::sync::Arc;
 
 use resonance_plugin::*;
@@ -11,7 +21,7 @@ pub mod viz;
 #[cfg(feature = "editor")]
 mod editor;
 
-use dsp::ReverbDsp;
+use dsp::{Ducker, ReverbDsp};
 use params::{ReverbParams, ReverbSmoothers, PARAM_COUNT};
 use viz::ReverbViz;
 
@@ -31,6 +41,8 @@ pub struct ResonanceReverb {
     /// Lock-free meters + tank energies + ER tap snapshot for the editor.
     viz: Arc<ReverbViz>,
     reverb: Option<ReverbDsp>,
+    /// Wet-return ducker; `None` until `initialize`.
+    ducker: Option<Ducker>,
 }
 
 impl ResonancePlugin for ResonanceReverb {
@@ -49,6 +61,8 @@ impl ResonancePlugin for ResonanceReverb {
         presets::PRESETS;
 
     const INPUT_CHANNELS: Option<u32> = Some(2);
+    /// Stereo key for the wet-return ducker.
+    const SIDECHAIN_INPUT: Option<u32> = Some(2);
 
     fn new() -> Self {
         Self {
@@ -57,6 +71,7 @@ impl ResonancePlugin for ResonanceReverb {
             smoothers: ReverbSmoothers::new(),
             viz: ReverbViz::new(),
             reverb: None,
+            ducker: None,
         }
     }
 
@@ -71,12 +86,16 @@ impl ResonancePlugin for ResonanceReverb {
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.smoothers.prepare(sample_rate, &self.params);
         self.reverb = Some(ReverbDsp::new(sample_rate));
+        self.ducker = Some(Ducker::new(sample_rate));
         true
     }
 
     fn reset(&mut self) {
         if let Some(reverb) = &mut self.reverb {
             reverb.clear();
+        }
+        if let Some(ducker) = &mut self.ducker {
+            ducker.clear();
         }
     }
 
@@ -87,6 +106,49 @@ impl ResonancePlugin for ResonanceReverb {
         _events: &mut EventIterator<'_>,
         _tempo: Option<TempoInfo>,
     ) {
+        self.render(outputs, frames, None);
+    }
+
+    fn process_with_key(
+        &mut self,
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
+        key: Option<KeyBuffer<'_>>,
+        frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+        self.render(outputs, frames, key.map(|k| (k.left, k.right)));
+    }
+
+    /// The loaded-preset identity rides along with the parameter values,
+    /// on both bridge paths, so reopening a saved project shows the preset
+    /// the sound came from instead of a blank picker.
+    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
+        Some(self.presets.clone())
+    }
+
+    #[cfg(feature = "editor")]
+    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
+        Some(Arc::new(editor::ReverbEditorFactory::new(
+            self.params.clone(),
+            self.viz.clone(),
+            self.presets.clone(),
+        )))
+    }
+}
+
+impl ResonanceReverb {
+    /// One block. `key` is the external sidechain when the host has
+    /// connected one; it only feeds the ducker's detector.
+    fn render(
+        &mut self,
+        outputs: &mut [resonance_plugin::OutputBuffer<'_>],
+        frames: usize,
+        key: Option<(&[f32], &[f32])>,
+    ) {
+        // Routing is a fact about the connection, not about this block
+        // having audio in it: publish it before any early return.
+        self.viz.store_key_connected(key.is_some());
         let Some(main) = outputs.first_mut() else {
             return;
         };
@@ -94,7 +156,7 @@ impl ResonancePlugin for ResonanceReverb {
         let right = &mut *main.right;
         resonance_dsp::flush_denormals();
 
-        let Some(reverb) = &mut self.reverb else {
+        let (Some(reverb), Some(ducker)) = (&mut self.reverb, &mut self.ducker) else {
             return;
         };
 
@@ -115,6 +177,9 @@ impl ResonancePlugin for ResonanceReverb {
         self.smoothers.er_time.skip(n);
         self.smoothers.mod_rate.skip(n);
         self.smoothers.mod_depth.skip(n);
+        self.smoothers.wet_hpf_freq.skip(n);
+        self.smoothers.wet_lpf_freq.skip(n);
+        self.smoothers.er_tail_balance.skip(n);
 
         reverb.set_size(self.smoothers.size.current());
         reverb.set_decay(self.smoothers.decay.current());
@@ -125,6 +190,21 @@ impl ResonancePlugin for ResonanceReverb {
         reverb.set_er_time(self.smoothers.er_time.current());
         reverb.set_mod_rate(self.smoothers.mod_rate.current());
         reverb.set_mod_depth(self.smoothers.mod_depth.current());
+        reverb.set_wet_filters(
+            self.params.wet_hpf_on.value(),
+            self.smoothers.wet_hpf_freq.current(),
+            self.params.wet_lpf_on.value(),
+            self.smoothers.wet_lpf_freq.current(),
+            self.params.wet_filter_slope.value() == 1,
+        );
+        reverb.set_er_tail_balance(self.smoothers.er_tail_balance.current());
+
+        let duck_amount = self.params.duck_amount.value();
+        let duck_threshold = self.params.duck_threshold.value();
+        ducker.prepare_block(
+            self.params.duck_attack.value(),
+            self.params.duck_release.value(),
+        );
 
         // Track peaks for the meter widgets.
         let mut in_l_peak = 0.0f32;
@@ -144,9 +224,22 @@ impl ResonancePlugin for ResonanceReverb {
 
             let (wet_l, wet_r) = reverb.process(dry_l, dry_r, diffusion, width);
 
+            // Duck the wet only. A key shorter than the block reads as
+            // silence rather than panicking. The gain is exactly 1.0
+            // while ducking is off, and `x * 1.0 == x`, so a reverb that
+            // never ducks renders as it did before the ducker existed.
+            let (det_l, det_r) = match key {
+                Some((kl, kr)) => (
+                    kl.get(i).copied().unwrap_or(0.0),
+                    kr.get(i).copied().unwrap_or(0.0),
+                ),
+                None => (dry_l, dry_r),
+            };
+            let duck = ducker.next_gain(det_l, det_r, duck_amount, duck_threshold);
+
             let dry_amount = 1.0 - mix;
-            let out_l = dry_l * dry_amount + wet_l * mix;
-            let out_r = dry_r * dry_amount + wet_r * mix;
+            let out_l = dry_l * dry_amount + wet_l * mix * duck;
+            let out_r = dry_r * dry_amount + wet_r * mix * duck;
             left[i] = out_l;
             right[i] = out_r;
             out_l_peak = out_l_peak.max(out_l.abs());
@@ -160,27 +253,12 @@ impl ResonancePlugin for ResonanceReverb {
             linear_to_db(out_l_peak),
             linear_to_db(out_r_peak),
         );
+        self.viz.store_duck_gr_db(ducker.gain_reduction_db());
         self.viz.store_channel_energies(&reverb.channel_energies());
         self.viz.store_fdn_delay_ms(&reverb.fdn_delay_ms());
         self.viz
             .store_er_taps(&reverb.er_tap_times_ms(), &reverb.er_tap_gains());
         self.viz.push_tail_rms(reverb.take_wet_rms());
-    }
-
-    /// The loaded-preset identity rides along with the parameter values,
-    /// on both bridge paths, so reopening a saved project shows the preset
-    /// the sound came from instead of a blank picker.
-    fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::ExtraStateSaver>> {
-        Some(self.presets.clone())
-    }
-
-    #[cfg(feature = "editor")]
-    fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
-        Some(Arc::new(editor::ReverbEditorFactory::new(
-            self.params.clone(),
-            self.viz.clone(),
-            self.presets.clone(),
-        )))
     }
 }
 

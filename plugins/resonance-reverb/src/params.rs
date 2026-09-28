@@ -6,7 +6,7 @@
 /// mutate smoother state through `&mut self`.
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 12;
+pub const PARAM_COUNT: usize = 22;
 
 pub struct ReverbParams {
     pub predelay: FloatParam,
@@ -21,7 +21,38 @@ pub struct ReverbParams {
     pub width: FloatParam,
     pub mix: FloatParam,
     pub freeze: BoolParam,
+    // -- Return EQ, ducking, depth (warmth-width-depth.md §6.4) ----------
+    //
+    // Appended after the original twelve so their host order and indices
+    // are unchanged. Every one defaults to a no-op: both filters off,
+    // duck amount 0, ER/tail balance centred — a project saved before
+    // they existed renders bit-identically (`tests/legacy_state.rs`).
+    /// High-pass on the reverb input, before the tank (the Abbey Road
+    /// return EQ). Off by default.
+    pub wet_hpf_on: BoolParam,
+    pub wet_hpf_freq: FloatParam,
+    /// Low-pass on the reverb input, before the tank. Off by default.
+    pub wet_lpf_on: BoolParam,
+    pub wet_lpf_freq: FloatParam,
+    /// Slope of both wet filters: 0 = 12 dB/oct, 1 = 18 dB/oct.
+    pub wet_filter_slope: IntParam,
+    /// How far the wet return is pulled down while the key (the external
+    /// sidechain, or the dry input when none is connected) is over
+    /// `duck_threshold`. 0 disables ducking; 1 is
+    /// [`crate::dsp::DUCK_MAX_GR_DB`].
+    pub duck_amount: FloatParam,
+    pub duck_threshold: FloatParam,
+    pub duck_attack: FloatParam,
+    pub duck_release: FloatParam,
+    /// Depth crossfade between early reflections and the tail. 0 is the
+    /// plugin's original balance; toward -1 the tail fades out (close,
+    /// "in the room"), toward +1 the early reflections fade out (far,
+    /// just the wash).
+    pub er_tail_balance: FloatParam,
 }
+
+/// Labels of [`ReverbParams::wet_filter_slope`].
+pub const WET_SLOPE_LABELS: &[&str] = &["12 dB/oct", "18 dB/oct"];
 
 impl ReverbParams {
     pub fn param_at(&self, index: usize) -> &dyn Param {
@@ -38,6 +69,16 @@ impl ReverbParams {
             9 => &self.width,
             10 => &self.mix,
             11 => &self.freeze,
+            12 => &self.wet_hpf_on,
+            13 => &self.wet_hpf_freq,
+            14 => &self.wet_lpf_on,
+            15 => &self.wet_lpf_freq,
+            16 => &self.wet_filter_slope,
+            17 => &self.duck_amount,
+            18 => &self.duck_threshold,
+            19 => &self.duck_attack,
+            20 => &self.duck_release,
+            21 => &self.er_tail_balance,
             _ => &self.predelay,
         }
     }
@@ -164,8 +205,119 @@ impl Default for ReverbParams {
                 .with_string_to_value(formatters::s2v_f32_percentage()),
 
             freeze: BoolParam::new("freeze", "Freeze", false),
+
+            wet_hpf_on: BoolParam::new("wet_hpf_on", "Wet HPF", false),
+            wet_hpf_freq: FloatParam::new(
+                "wet_hpf_freq",
+                "Wet HPF Freq",
+                600.0,
+                FloatRange::Skewed {
+                    min: 20.0,
+                    max: 2000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            wet_lpf_on: BoolParam::new("wet_lpf_on", "Wet LPF", false),
+            wet_lpf_freq: FloatParam::new(
+                "wet_lpf_freq",
+                "Wet LPF Freq",
+                10000.0,
+                FloatRange::Skewed {
+                    min: 1000.0,
+                    max: 20000.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" Hz")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            wet_filter_slope: IntParam::new(
+                "wet_filter_slope",
+                "Wet Filter Slope",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: WET_SLOPE_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(WET_SLOPE_LABELS),
+
+            duck_amount: FloatParam::new(
+                "duck_amount",
+                "Duck",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_unit("%")
+            .with_value_to_string(formatters::v2s_f32_percentage(0))
+            .with_string_to_value(formatters::s2v_f32_percentage()),
+
+            duck_threshold: FloatParam::new(
+                "duck_threshold",
+                "Duck Threshold",
+                -30.0,
+                FloatRange::Linear {
+                    min: -60.0,
+                    max: 0.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            duck_attack: FloatParam::new(
+                "duck_attack",
+                "Duck Attack",
+                15.0,
+                FloatRange::Skewed {
+                    min: 0.5,
+                    max: 200.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+
+            duck_release: FloatParam::new(
+                "duck_release",
+                "Duck Release",
+                200.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 2000.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(formatters::v2s_f32_rounded(0)),
+
+            er_tail_balance: FloatParam::new(
+                "er_tail_balance",
+                "ER / Tail",
+                0.0,
+                FloatRange::Linear {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            )
+            .with_value_to_string(format_balance()),
         }
     }
+}
+
+/// Readout of [`ReverbParams::er_tail_balance`]: which side it leans to.
+fn format_balance() -> std::sync::Arc<dyn Fn(f32) -> String + Send + Sync> {
+    std::sync::Arc::new(|v: f32| {
+        if v.abs() < 0.005 {
+            "Even".to_string()
+        } else if v < 0.0 {
+            format!("ER {:.0}%", -v * 100.0)
+        } else {
+            format!("Tail {:.0}%", v * 100.0)
+        }
+    })
 }
 
 /// Audio-thread-only smoothers, one per FloatParam. Lives outside the
@@ -184,6 +336,9 @@ pub struct ReverbSmoothers {
     pub mod_depth: Smoother,
     pub width: Smoother,
     pub mix: Smoother,
+    pub wet_hpf_freq: Smoother,
+    pub wet_lpf_freq: Smoother,
+    pub er_tail_balance: Smoother,
 }
 
 impl Default for ReverbSmoothers {
@@ -206,6 +361,9 @@ impl ReverbSmoothers {
             mod_depth: Smoother::new(SmoothingStyle::Linear(50.0)),
             width: Smoother::new(SmoothingStyle::Linear(50.0)),
             mix: Smoother::new(SmoothingStyle::Linear(50.0)),
+            wet_hpf_freq: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            wet_lpf_freq: Smoother::new(SmoothingStyle::Logarithmic(50.0)),
+            er_tail_balance: Smoother::new(SmoothingStyle::Linear(50.0)),
         }
     }
 
@@ -224,6 +382,9 @@ impl ReverbSmoothers {
         self.mod_depth.set_sample_rate(sample_rate);
         self.width.set_sample_rate(sample_rate);
         self.mix.set_sample_rate(sample_rate);
+        self.wet_hpf_freq.set_sample_rate(sample_rate);
+        self.wet_lpf_freq.set_sample_rate(sample_rate);
+        self.er_tail_balance.set_sample_rate(sample_rate);
 
         self.predelay.reset(params.predelay.value());
         self.er_level.reset(params.er_level.value());
@@ -236,6 +397,9 @@ impl ReverbSmoothers {
         self.mod_depth.reset(params.mod_depth.value());
         self.width.reset(params.width.value());
         self.mix.reset(params.mix.value());
+        self.wet_hpf_freq.reset(params.wet_hpf_freq.value());
+        self.wet_lpf_freq.reset(params.wet_lpf_freq.value());
+        self.er_tail_balance.reset(params.er_tail_balance.value());
     }
 
     /// Push the current atomic param values as smoother targets at
@@ -252,5 +416,8 @@ impl ReverbSmoothers {
         self.mod_depth.set_target(params.mod_depth.value());
         self.width.set_target(params.width.value());
         self.mix.set_target(params.mix.value());
+        self.wet_hpf_freq.set_target(params.wet_hpf_freq.value());
+        self.wet_lpf_freq.set_target(params.wet_lpf_freq.value());
+        self.er_tail_balance.set_target(params.er_tail_balance.value());
     }
 }
