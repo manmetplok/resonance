@@ -31,6 +31,8 @@ mod control_bus;
 mod control_bus_create_commit;
 #[path = "control/control_bus_effects.rs"]
 mod control_bus_effects;
+#[path = "control/control_color_plugin.rs"]
+mod control_color_plugin;
 #[path = "control/control_chain_presets.rs"]
 mod control_chain_presets;
 #[path = "control/control_clip_confirm_place_guard.rs"]
@@ -65,6 +67,10 @@ mod control_master_params;
 mod control_meter;
 #[path = "control/control_meter_detail.rs"]
 mod control_meter_detail;
+#[path = "control/control_meter_compare.rs"]
+mod control_meter_compare;
+#[path = "control/control_meter_probe.rs"]
+mod control_meter_probe;
 #[path = "control/control_mixer_volume_db.rs"]
 mod control_mixer_volume_db;
 #[path = "control/control_mutation_gate.rs"]

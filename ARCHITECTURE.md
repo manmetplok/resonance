@@ -59,7 +59,7 @@ Discipline:
 - `dsp.rs` is the pure-DSP boundary. It must be testable without the plugin framework. Plugins ship integration tests in `tests/` that drive `dsp.rs` directly.
 - `params.rs` defines parameters as code, not as a serialized blob. Adding a parameter is a code change, not a config change.
 - The editor is **feature-gated** (`default = ["editor"]`). Headless builds for tests/CI use `--no-default-features` and skip the egui and platform-runtime deps.
-- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 11 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
+- `editor/theme.rs` is a one-line façade, not an independent palette: every one of the 13 plugins re-exports the shared design system with `pub use plugin_gui_core::theme::lavender::*` (the canonical tokens — see above), so all editors read as one product (ba todo #1338). A plugin may add a few local constants built *from* those shared tokens (e.g. an oscilloscope trace or a gain-reduction meter colour derived from `ACCENT`/`WARM`), and could in principle replace the façade to diverge — none currently do.
 
 ## Mastering as the Reference Decomposition
 

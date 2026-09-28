@@ -153,6 +153,75 @@ arrangement:
 If a track is 2 LU off this, that is the arrangement. If it is 12 LU off, ask
 whether that was deliberate.
 
+## Before and after: `meter_snapshot` and `meter_compare`
+
+Loudness confounds every judgement: a louder mix reads warmer, brighter and
+"better" on every number above. Judge a move by comparing at matched loudness:
+
+1. `meter_snapshot` before the move. It returns a `snapshot_id` plus the stored
+   measurement, which is your baseline. By default it keeps all three detail
+   blocks.
+2. Make the move.
+3. `meter_compare {a: snapshot_id}`. `b` defaults to `"current"`, which
+   re-renders exactly the snapshot's target and sample range.
+
+The result's `deltas` are **B minus A with B gain-matched to A's integrated
+loudness** (`match: "lufs"`, the default). `match_gain_db` is the gain that was
+applied to B: a move that made things 1.5 dB louder reads about -1.5 here. That
+is the loudness you would have to give back to hear the move fairly.
+
+| Delta group | Moves with the match gain? | Read it as |
+|---|---|---|
+| `lufs_integrated`, `lufs_short_max`, `lufs_momentary_max`, `true_peak_db`, `sample_peak_db`, `third_octave` | Yes | `lufs_integrated` is ~0 by construction. `true_peak_db` up at matched loudness means peakier. A `third_octave` band up means that band grew relative to the rest. |
+| `crest_db`, `lra`, `correlation`, `mono_penalty_db`, `bands`, `tilt_db_per_oct`, `centroid_hz`, `centroid_pct`, `lowmid_presence_db`, `presence_peakiness_db`, `air_ratio_db`, `plr_db`, `psr_db`, every stereo delta | No: a pure gain cannot change them | Changes in character. |
+| `clipped_samples` | Reported as measured | A clip count cannot be re-derived at another gain. |
+
+Matching is arithmetic on the stored numbers, which is exact for a gain, so an
+unchanged state compares to all zeros and a pure +3 dB fader move compares to
+≈0 with `match_gain_db` ≈ -3.
+
+A warmer move looks like this: `tilt_db_per_oct` more negative (about -0.5 to
+-1), `lowmid_presence_db` up 1-2, `presence_peakiness_db` down, and
+`centroid_pct` down 5-15. Its cost shows as `crest_db` falling (stop past -2).
+Also check the absolute `psr_db` stays ≥ 8. For width, check that the stereo
+`side_mid_db` deltas rose above 150 Hz while the low bands' `correlation` and
+`mono_loss_db` did not get worse.
+
+Snapshots live in the app's memory for the session. They are not saved with the
+project, a restart loses them, and past 32 the least recently used is evicted,
+which reads as "not found". Two snapshots compare instantly with no render. The
+solo state is part of what was measured, so compare like with like.
+
+## Harmonic signature: `meter_probe`
+
+`meter_probe {target, freq_hz, level_dbfs, imd}` runs a sine through an insert
+chain (the master's, a bus's, or a track's inserts; a track's instrument is not
+part of it) and reports what the chain adds. Use it to set a saturator's drive
+to a THD target instead of reading a knob.
+
+It is safe to run at any time. It builds a **fresh clone** of each plugin from
+the live plugin's current saved state and probes the clones. The live plugins
+are only read, so playback, automation, undo and every plugin's running state
+are untouched. The clone gets no automation (it probes the current values), and
+a sidechain key hears silence. `stages` lists what was probed. A stage with
+`state_copied: false` has no state extension and was probed at its defaults.
+`skipped` lists bypassed and missing slots.
+
+| Field | What it means | Target |
+|---|---|---|
+| `thd_pct` | Total harmonic distortion, H2..H9, % | Master 0.1-1, bus 0.5-3, single track 3-10. |
+| `h` | H2..H9 in dBc, `h[0]` = H2 | -160 is the floor (absent). `null` means above Nyquist: that harmonic aliases instead. |
+| `h2_h3_db` | H2 minus H3, dB | Above 0 is even-dominant, the "warm" signature. Below 0 is odd-dominant: harder, edgier. |
+| `decay_db_per_order` | How fast the series falls, dB per order | 6 or more. A slow decay means high orders, which sound harsh. |
+| `aliasing_floor_dbc` | Strongest bin that is not a harmonic or DC | -90 or lower. Probe at `freq_hz: 5000` to expose aliasing: harmonics past Nyquist fold back into the audible band. |
+| `imd_pct` | SMPTE intermodulation (60 Hz + 7 kHz, 4:1), only with `imd: true` | Lower is cleaner. It rises when bass modulates the highs, which is muddy distortion. |
+| `gain_db` | Output level at the probe frequency minus the input level | A saturator with auto-gain sits near 0. |
+| `latency_samples` | Summed latency of the probed stages | Informational. |
+
+**Probe at the level the chain really sees.** Distortion rises with level, so a
+-12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
+tone's peak.
+
 ## Cost
 
 A measurement renders the slice offline — roughly what a bounce of the same

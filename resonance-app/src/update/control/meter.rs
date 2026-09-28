@@ -79,19 +79,21 @@
 //! full-length renders) is a judgement call of its own, and it belongs
 //! with `job.cancel` rather than bolted onto this handler.
 
-use crate::control_jobs::JobToken;
+use crate::control_jobs::{ComparePlan, JobToken};
 use crate::control_socket::ConnId;
 use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_audio::types::{
-    AudioCommand, DetailSet, MeasureSource as EngineSource, MixMeasurement, SamplePos,
-    StemSource,
+    AudioCommand, ChainProbeReport, DetailSet, MeasureSource as EngineSource, MixMeasurement,
+    ProbeSpec, ProbeStage, SamplePos, StemSource,
 };
 use resonance_control::methods::meter::{
-    self as proto, Bands, CorrelationWindows, DynamicsDetail, MeasureDetail, MeasureParams,
-    MeasureResult, MeasureSource, MeasureTarget, SpectralPeak, SpectrumDetail, StemsParams,
-    StemsResult, StereoBand, StereoDetail, TrackMeasurement,
+    self as proto, Bands, CompareParams, CompareResult, CompareSide, CompareSideInfo,
+    CorrelationWindows, DynamicsDetail, MatchMode, MeasureDetail, MeasureParams, MeasureResult,
+    MeasureSource, MeasureTarget, ProbeParams, ProbeResult, ProbeSkipped, ProbeStageInfo,
+    SnapshotParams, SnapshotResult, SpectralPeak, SpectrumDetail, StemsParams, StemsResult,
+    StereoBand, StereoDetail, TrackMeasurement,
 };
 use resonance_control::methods::render::RangeSpec;
 use resonance_control::{Request, Response, RpcError};
@@ -109,6 +111,9 @@ pub(super) fn try_handle(
     let handled = match request.method.as_str() {
         proto::MEASURE => measure(app, conn, request),
         proto::STEMS => stems(app, conn, request),
+        proto::SNAPSHOT => snapshot(app, conn, request),
+        proto::COMPARE => compare(app, conn, request),
+        proto::PROBE => probe(app, conn, request),
         _ => return None,
     };
     Some(handled)
@@ -236,6 +241,431 @@ fn stems(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
     )
 }
 
+// ---------------------------------------------------------------------------
+// meter.snapshot / meter.compare (warmth-width-depth.md §7.2)
+// ---------------------------------------------------------------------------
+
+/// Every detail: what a snapshot keeps by default and what the
+/// `"current"` side of a compare always renders, so every delta exists.
+const ALL_DETAIL: DetailSet = DetailSet {
+    spectrum: true,
+    stereo: true,
+    dynamics: true,
+};
+
+/// Render one slice with its details and keep the measurement.
+fn snapshot(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: SnapshotParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let target = match resolve_target(app, params.target) {
+        Ok(target) => target,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    if let Some(error) = source_guard(app, EngineSource::Render, target) {
+        return (super::failure(request, error), Task::none());
+    }
+    let range = match resolve_range(app, params.range) {
+        Ok(range) => range,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let detail = params.detail.as_deref().map_or(ALL_DETAIL, detail_set);
+    (
+        start_with(
+            app,
+            conn,
+            request,
+            proto::SNAPSHOT,
+            vec![target],
+            range,
+            EngineSource::Render,
+            detail,
+            None,
+        ),
+        Task::none(),
+    )
+}
+
+fn snapshot_id(side: CompareSide) -> Option<u64> {
+    match side {
+        CompareSide::Snapshot(id) => Some(id),
+        CompareSide::Current(_) => None,
+    }
+}
+
+fn side_of(id: Option<u64>) -> CompareSide {
+    id.map_or(CompareSide::CURRENT, CompareSide::Snapshot)
+}
+
+fn no_snapshot(id: u64) -> RpcError {
+    RpcError::not_found(format!(
+        "no snapshot {id}: snapshots live in the app's memory for this session only, and \
+         the least recently used is evicted past {}; take a new one with meter_snapshot",
+        proto::SNAPSHOT_CAPACITY
+    ))
+}
+
+/// Compare two measurements, rendering the `"current"` side if there is
+/// one. Both sides always describe the same target over the same
+/// samples: a snapshot fixes them, and `"current"` re-renders exactly
+/// the snapshot's range.
+fn compare(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: CompareParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let (ia, ib) = (snapshot_id(params.a), snapshot_id(params.b));
+    for id in [ia, ib].into_iter().flatten() {
+        if app.control.meter_snapshots.touch(id).is_none() {
+            return (super::failure(request, no_snapshot(id)), Task::none());
+        }
+    }
+    let explicit_target = match params.target.map(|t| resolve_target(app, t)).transpose() {
+        Ok(t) => t,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let explicit_range = match resolve_range(app, params.range) {
+        Ok(r) => r,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+
+    let reference = ia.or(ib).and_then(|id| app.control.meter_snapshots.get(id));
+    let (target, range) = match reference {
+        Some(r) => {
+            let slice = (r.target, (r.range_start, r.range_end));
+            if let (Some(ia), Some(ib)) = (ia, ib) {
+                let store = &app.control.meter_snapshots;
+                let slice_of = |m: &MixMeasurement| (m.target, m.range_start, m.range_end);
+                if let Some((x, y)) = store.get(ia).zip(store.get(ib)) {
+                    if slice_of(x) != slice_of(y) {
+                        return (
+                            super::failure(
+                                request,
+                                RpcError::invalid_params(format!(
+                                    "snapshots {ia} and {ib} measure different slices (target or \
+                                     range); a comparison needs the same audio on both sides"
+                                )),
+                            ),
+                            Task::none(),
+                        );
+                    }
+                }
+            }
+            let target_clash = explicit_target.is_some_and(|t| t != slice.0);
+            let range_clash = explicit_range.is_some_and(|r| r != slice.1);
+            if target_clash || range_clash {
+                return (
+                    super::failure(
+                        request,
+                        RpcError::invalid_params(
+                            "`target` / `range` differ from the snapshot's; omit them — a \
+                             snapshot fixes both, and \"current\" re-renders the same slice",
+                        ),
+                    ),
+                    Task::none(),
+                );
+            }
+            (slice.0, Some(slice.1))
+        }
+        None => (explicit_target.unwrap_or(StemSource::Master), explicit_range),
+    };
+    let plan = ComparePlan {
+        a: ia,
+        b: ib,
+        match_lufs: params.match_mode == MatchMode::Lufs,
+    };
+
+    if ia.is_some() && ib.is_some() {
+        // Nothing to render: answer from the store, as a job like every
+        // other `meter.*` so a client handles one shape.
+        let started = app.start_control_job(
+            proto::COMPARE,
+            "Compare two snapshots",
+            JobToken::Measure {
+                method: proto::COMPARE,
+                offline: false,
+                compare: Some(plan),
+            },
+            Some(conn),
+        );
+        let job = u64::from(started.job_id);
+        match compare_payload(app, plan, None) {
+            Ok(payload) => app.control.jobs.complete(job, payload),
+            Err(message) => app.control.jobs.fail(job, message),
+        }
+        return (super::success(request, &started), Task::none());
+    }
+
+    if let Some(error) = source_guard(app, EngineSource::Render, target) {
+        return (super::failure(request, error), Task::none());
+    }
+    (
+        start_with(
+            app,
+            conn,
+            request,
+            proto::COMPARE,
+            vec![target],
+            range,
+            EngineSource::Render,
+            ALL_DETAIL,
+            Some(plan),
+        ),
+        Task::none(),
+    )
+}
+
+/// The `meter.compare` payload for `plan`, `current` standing in for
+/// every side that is not a snapshot.
+fn compare_payload(
+    app: &Resonance,
+    plan: ComparePlan,
+    current: Option<&MixMeasurement>,
+) -> Result<serde_json::Value, String> {
+    let side = |id: Option<u64>| -> Result<&MixMeasurement, String> {
+        match id {
+            Some(id) => app
+                .control
+                .meter_snapshots
+                .get(id)
+                .ok_or_else(|| format!("snapshot {id} was evicted before the comparison finished")),
+            None => current.ok_or_else(|| "the engine returned no measurement".to_owned()),
+        }
+    };
+    let (a, b) = (side(plan.a)?, side(plan.b)?);
+    let gain = if plan.match_lufs {
+        super::meter_compare::match_gain_db(a, b)
+    } else {
+        None
+    };
+    let info = |id: Option<u64>, m: &MixMeasurement| CompareSideInfo {
+        side: side_of(id),
+        lufs_integrated: finite(m.lufs_integrated).map(|v| round_to(v, 100.0)),
+    };
+    let result = CompareResult {
+        target: wire_target(a.target),
+        measured_seconds: (app.sample_rate > 0)
+            .then(|| a.frames as f64 / f64::from(app.sample_rate)),
+        a: info(plan.a, a),
+        b: info(plan.b, b),
+        match_mode: if plan.match_lufs {
+            MatchMode::Lufs
+        } else {
+            MatchMode::None
+        },
+        matched: gain.is_some(),
+        match_gain_db: (gain.unwrap_or(0.0) * 100.0).round() / 100.0,
+        deltas: super::meter_compare::deltas(a, b, gain.unwrap_or(0.0)),
+    };
+    serde_json::to_value(result).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// meter.probe (warmth-width-depth.md §7.3)
+// ---------------------------------------------------------------------------
+
+/// Start a probe of `target`'s insert chain.
+///
+/// The app decides which slots are in the chain because it is the one
+/// that knows each slot's bundle path, role and state: a track's
+/// instrument is not an insert and is left out silently; a missing,
+/// bypassed or chain-bypassed slot is left out and listed in `skipped`,
+/// exactly as the audio would skip it. The engine then clones what is
+/// left (see `resonance_audio::engine::probe`); nothing live is touched,
+/// so the probe needs no render guard and runs while the transport rolls.
+fn probe(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
+    let params: ProbeParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let nyquist = f64::from(app.sample_rate) / 2.0;
+    if !(params.freq_hz.is_finite() && params.freq_hz >= 10.0 && params.freq_hz < nyquist) {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!(
+                    "freq_hz {} must be between 10 Hz and Nyquist ({nyquist} Hz)",
+                    params.freq_hz
+                )),
+            ),
+            Task::none(),
+        );
+    }
+    if !(params.level_dbfs.is_finite() && (-80.0..=0.0).contains(&params.level_dbfs)) {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!(
+                    "level_dbfs {} must be between -80 and 0",
+                    params.level_dbfs
+                )),
+            ),
+            Task::none(),
+        );
+    }
+    let owner = match resolve_target(app, params.target) {
+        Ok(StemSource::Master) => super::plugin_target::ChainOwner::Master,
+        Ok(StemSource::Track(id)) => super::plugin_target::ChainOwner::Track(id),
+        Ok(StemSource::Bus(id)) => super::plugin_target::ChainOwner::Bus(id),
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let (slots, entries) = match super::plugin_target::chain_slots(app, owner)
+        .and_then(|s| super::plugin_target::chain_entries(app, owner).map(|e| (s, e)))
+    {
+        Ok(chain) => chain,
+        Err(e) => return (super::failure(request, e), Task::none()),
+    };
+    let chain_bypassed = match owner {
+        super::plugin_target::ChainOwner::Master => app.master.fx_bypassed,
+        super::plugin_target::ChainOwner::Track(id) => {
+            app.registry.tracks.iter().any(|t| t.id == id && t.fx_bypassed)
+        }
+        super::plugin_target::ChainOwner::Bus(id) => {
+            app.registry.busses.iter().any(|b| b.id == id && b.fx_bypassed)
+        }
+    };
+
+    let mut stages = Vec::new();
+    let mut labels = Vec::new();
+    let mut skipped = Vec::new();
+    for (slot, entry) in slots.iter().zip(&entries) {
+        if entry.kind == resonance_control::methods::track::PluginKind::Instrument {
+            continue;
+        }
+        let reason = if slot.availability.is_missing() {
+            Some("missing")
+        } else if chain_bypassed {
+            Some("chain bypassed")
+        } else if slot.bypassed {
+            Some("bypassed")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            skipped.push(ProbeSkipped {
+                plugin_id: entry.plugin_id.clone(),
+                occurrence: entry.occurrence,
+                reason: reason.to_owned(),
+            });
+            continue;
+        }
+        stages.push(ProbeStage {
+            instance_id: slot.instance_id,
+            clap_file_path: slot.clap_file_path.clone(),
+            clap_plugin_id: slot.clap_plugin_id.clone(),
+        });
+        labels.push(ProbeStageInfo {
+            plugin_id: entry.plugin_id.clone(),
+            occurrence: entry.occurrence,
+            name: slot.plugin_name.clone(),
+            state_copied: false,
+        });
+    }
+
+    let started = app.start_control_job(
+        proto::PROBE,
+        &format!("Probe the insert chain of {}", owner_label(owner)),
+        JobToken::Probe,
+        Some(conn),
+    );
+    let probe_id = u64::from(started.job_id);
+    app.control.pending_probes.insert(
+        probe_id,
+        crate::state::PendingProbe {
+            // A bus asked for by `{track_id}` comes back as `{bus_id}`,
+            // as on `meter.measure`.
+            target: wire_target(owner_source(owner)),
+            level_dbfs: params.level_dbfs,
+            stages: labels,
+            skipped,
+        },
+    );
+    let spec = ProbeSpec {
+        freq_hz: params.freq_hz,
+        level_dbfs: params.level_dbfs,
+        imd: params.imd,
+    };
+    if app
+        .engine
+        .send(AudioCommand::ProbeChain {
+            probe_id,
+            stages,
+            spec,
+        })
+        .is_err()
+    {
+        app.control.pending_probes.remove(&probe_id);
+        app.control
+            .jobs
+            .fail(probe_id, "probe did not start (engine unavailable)");
+    }
+    (super::success(request, &started), Task::none())
+}
+
+fn owner_label(owner: super::plugin_target::ChainOwner) -> String {
+    match owner {
+        super::plugin_target::ChainOwner::Master => "the master".to_owned(),
+        super::plugin_target::ChainOwner::Track(id) => format!("track {id}"),
+        super::plugin_target::ChainOwner::Bus(id) => format!("bus {id}"),
+    }
+}
+
+fn owner_source(owner: super::plugin_target::ChainOwner) -> StemSource {
+    match owner {
+        super::plugin_target::ChainOwner::Master => StemSource::Master,
+        super::plugin_target::ChainOwner::Track(id) => StemSource::Track(id),
+        super::plugin_target::ChainOwner::Bus(id) => StemSource::Bus(id),
+    }
+}
+
+/// Resolve a `meter.probe` job from the engine's report.
+pub(crate) fn chain_probed(app: &mut Resonance, probe_id: u64, report: ChainProbeReport) {
+    let pending = app.control.pending_probes.remove(&probe_id);
+    if !app.control.jobs.is_live_probe(probe_id) {
+        return;
+    }
+    let Some(mut pending) = pending else {
+        app.control.jobs.fail(probe_id, "the probe's request was lost");
+        return;
+    };
+    for (label, stage) in pending.stages.iter_mut().zip(&report.stages) {
+        label.state_copied = stage.state_copied;
+    }
+    let h = &report.harmonics;
+    let r2 = |v: f64| (v * 100.0).round() / 100.0;
+    let r5 = |v: f64| (v * 100_000.0).round() / 100_000.0;
+    let result = ProbeResult {
+        target: pending.target,
+        freq_hz: (h.freq_hz * 1_000.0).round() / 1_000.0,
+        level_dbfs: pending.level_dbfs,
+        stages: pending.stages,
+        skipped: pending.skipped,
+        gain_db: r2(h.fundamental_dbfs - pending.level_dbfs),
+        thd_pct: r5(h.thd_pct),
+        h: h.h.iter().map(|l| l.map(r2)).collect(),
+        h2_h3_db: h.h2_h3_db.map(r2),
+        decay_db_per_order: h.decay_db_per_order.map(r2),
+        aliasing_floor_dbc: r2(h.aliasing_floor_dbc),
+        imd_pct: report.imd_pct.map(r5),
+        latency_samples: report.latency_samples,
+    };
+    match serde_json::to_value(result) {
+        Ok(payload) => app.control.jobs.complete(probe_id, payload),
+        Err(e) => app.control.jobs.fail(probe_id, e.to_string()),
+    }
+}
+
+/// Fail a `meter.probe` job with the engine's reason.
+pub(crate) fn chain_probe_error(app: &mut Resonance, probe_id: u64, message: String) {
+    app.control.pending_probes.remove(&probe_id);
+    if app.control.jobs.is_live_probe(probe_id) {
+        app.control.jobs.fail(probe_id, message);
+    } else {
+        tracing::warn!("audio: chain probe failed: {message}");
+    }
+}
+
 /// The engine's detail flags for a wire `detail` list. Duplicates are
 /// harmless: a detail is either on or off.
 fn detail_set(details: &[MeasureDetail]) -> DetailSet {
@@ -330,6 +760,7 @@ fn entry_name(app: &Resonance, target: StemSource, id: u64) -> String {
 /// ONE shared range in ONE pass — which is what keeps the numbers
 /// directly comparable, and what lets `meter.stems` be an enumeration
 /// rather than a second render path.
+#[allow(clippy::too_many_arguments)]
 fn start(
     app: &mut Resonance,
     conn: ConnId,
@@ -340,12 +771,29 @@ fn start(
     source: EngineSource,
     detail: DetailSet,
 ) -> Response {
+    start_with(app, conn, request, method, targets, range, source, detail, None)
+}
+
+/// [`start`], with the compare plan a `meter.compare` resolves against.
+#[allow(clippy::too_many_arguments)]
+fn start_with(
+    app: &mut Resonance,
+    conn: ConnId,
+    request: &Request,
+    method: &'static str,
+    targets: Vec<StemSource>,
+    range: Option<(SamplePos, SamplePos)>,
+    source: EngineSource,
+    detail: DetailSet,
+    compare: Option<ComparePlan>,
+) -> Response {
     let started = app.start_control_job(
         method,
         &describe(&targets, source),
         JobToken::Measure {
             method,
             offline: source == EngineSource::Render,
+            compare,
         },
         Some(conn),
     );
@@ -399,7 +847,10 @@ pub(crate) fn mix_measured(
     measure_id: u64,
     results: Vec<MixMeasurement>,
 ) {
-    let Some(JobToken::Measure { method, .. }) = app.control.jobs.live_measure(measure_id) else {
+    let Some(JobToken::Measure {
+        method, compare, ..
+    }) = app.control.jobs.live_measure(measure_id)
+    else {
         return;
     };
     // One engine pass backs both methods; the method that asked decides
@@ -412,6 +863,25 @@ pub(crate) fn mix_measured(
             .map(|m| with_solo(app, measure_result(m, app.sample_rate)))
             .and_then(|r| serde_json::to_value(r).ok()),
         proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
+        proto::SNAPSHOT => results.first().and_then(|m| {
+            let measurement = with_solo(app, measure_result(m, app.sample_rate));
+            let snapshot_id = app.control.meter_snapshots.insert(m.clone());
+            serde_json::to_value(SnapshotResult {
+                snapshot_id,
+                measurement,
+            })
+            .ok()
+        }),
+        proto::COMPARE => {
+            let Some(plan) = compare else { return };
+            match compare_payload(app, plan, results.first()) {
+                Ok(payload) => Some(payload),
+                Err(message) => {
+                    app.control.jobs.fail(measure_id, message);
+                    return;
+                }
+            }
+        }
         _ => return,
     };
     // An empty or master-less result set means the engine changed under

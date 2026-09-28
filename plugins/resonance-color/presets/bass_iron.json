@@ -1,0 +1,15 @@
+{
+  "params": {
+    "mode": 2,
+    "drive": 0.75,
+    "bias": 0.5,
+    "response": 4.0,
+    "tone": 0.0,
+    "mix": 1.0,
+    "auto_gain": 1,
+    "output": 0.0,
+    "oversample": 1,
+    "speed": 1,
+    "flutter": 0.0
+  }
+}
