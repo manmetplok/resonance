@@ -86,7 +86,11 @@ impl ResonancePlugin for ResonanceReverb {
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.smoothers.prepare(sample_rate, &self.params);
         self.reverb = Some(ReverbDsp::new(sample_rate));
-        self.ducker = Some(Ducker::new(sample_rate));
+        self.ducker = Some(Ducker::new(
+            sample_rate,
+            dsp::duck::INITIAL_ATTACK_MS,
+            dsp::duck::INITIAL_RELEASE_MS,
+        ));
         true
     }
 
@@ -201,7 +205,7 @@ impl ResonanceReverb {
 
         let duck_amount = self.params.duck_amount.value();
         let duck_threshold = self.params.duck_threshold.value();
-        ducker.prepare_block(
+        ducker.set_times(
             self.params.duck_attack.value(),
             self.params.duck_release.value(),
         );
