@@ -94,4 +94,66 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(automation::SET_LANE, &params).await
     }
+
+    #[tool(
+        description = "Generate an automation curve over a range — a sweep, fade, ride or LFO \
+                       — and write it into the lane (created if missing; undoable, one undo \
+                       entry). Target as in automation_set_lane: exactly one owner (track_id, \
+                       bus_id or master: true) and exactly one of control (\"volume\" | \"pan\" \
+                       | \"mute\") or param (plugin_id omitted = the track's instrument). \
+                       \
+                       start / end: {bar, beat} | {sample}; bars and beats are 1-based and \
+                       meter-aware. The curve starts at start holding from and INCLUDES a point \
+                       AT end. For ramp, exp, steps and random_walk that point holds to, so \
+                       the value arrives: {bar: 25} as end sweeps over bars 17-24 and lands on \
+                       the downbeat of bar 25. sine, triangle and square instead end on their \
+                       own phase — after whole cycles that is from, not to. Only points in [start, \
+                       end] (both ends included) are replaced; points outside are kept (unlike \
+                       automation_set_lane, which replaces ALL points). \
+                       \
+                       shape: \"ramp\" (2 points, the engine interpolates exactly), \"exp\" \
+                       (geometric from -> to, both > 0; for a plugin parameter such as a \
+                       cutoff in Hz, where lanes are linear in plain units; refused for \
+                       volume / pan / mute — dB is already logarithmic, use ramp), \"sine\" \
+                       and \"triangle\" (from <-> to, cycles times, default 1), \"square\" \
+                       (from / to, stepped), \"steps\" (a stair from -> to, stepped; resolution \
+                       = steps per bar), \"random_walk\" (bounded to from..to, starts at from, \
+                       deterministic from seed, default 0; the seed used is echoed). \
+                       resolution = points per bar (defaults: exp / sine 16, steps 1, \
+                       random_walk 4), spaced evenly within each bar, so a 7/8 bar gets as \
+                       many points as a 4/4 bar, while the curve's value follows time; a range \
+                       starting or ending mid-bar gets that bar's proportional share. At most \
+                       2048 points per call; past it the error names the largest resolution \
+                       that fits. Mute and stepped plugin parameters are always stepped and \
+                       rounded to their steps. \
+                       \
+                       Values are REAL units unless normalized: true (then 0..=1 for the whole \
+                       call): volume dB -60..=6 or \"-inf\" (silence), pan -1..=1, mute \
+                       true/false, a plugin parameter in its own min..=max or a choice label. \
+                       \
+                       TEMPO / METER: points are anchored at a sample. transport_set_tempo and \
+                       arrangement_insert/remove_bars keep a point at its bar; global_* tempo \
+                       and signature events keep its sample, so its bar moves. A plugin lane \
+                       on a FROZEN track is refused (unfreeze first). \
+                       \
+                       Example — open the wavetable instrument's filter over bars 17-24: \
+                       {\"track_id\": 3, \"param\": \"Filter Cutoff\", \"start\": {\"bar\": \
+                       17}, \"end\": {\"bar\": 25}, \"shape\": \"exp\", \"from\": 300, \"to\": \
+                       4000} sweeps the cutoff exponentially from 300 Hz at bar 17 to 4 kHz at \
+                       bar 25 (the end of bar 24). Then automation_lanes to read it back, and \
+                       meter_measure over bars 17-24 in two halves (17-20, 21-24) to see the \
+                       spectral / level change. \
+                       \
+                       Returns {revision, lane, seed?} — the whole lane as it reads back. You \
+                       cannot hear it: verify with automation_lanes; measure with meter_measure \
+                       over the range.",
+        annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<automation::LaneEditResult>()
+    )]
+    async fn automation_shape(
+        &self,
+        Parameters(params): Parameters<automation::ShapeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(automation::SHAPE, &params).await
+    }
 }

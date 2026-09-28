@@ -10,13 +10,14 @@
 //! | [`edit`] | the shared write path: points → breakpoints → ONE `SetLane` |
 //! | [`lanes`] | `automation.lanes` (read-only) |
 //! | [`set_lane`] | `automation.set_lane` |
+//! | [`shape`] | `automation.shape` (generator: `resonance_common::automation_shape`) |
 //!
 //! Every write computes the lane's complete new point list as a pure
 //! function and dispatches exactly one `AutomationMessage` through
 //! `update()` (see [`edit`]), so the edit passes the gates, is undoable
 //! like a GUI edit, and costs one revision. The remaining methods of
-//! §4.4 (`add_points`, `delete_points`, `set_enabled`, `remove_lane`,
-//! `shape`) already have their wire types in
+//! §4.4 (`add_points`, `delete_points`, `set_enabled`, `remove_lane`)
+//! already have their wire types in
 //! `resonance_control::methods::automation`; each lands as a handler
 //! module here, a `try_handle` arm, a `METHODS` entry and its MCP tool.
 
@@ -29,6 +30,7 @@ use resonance_control::{Request, Response};
 pub(in crate::update::control) mod edit;
 mod lanes;
 mod set_lane;
+mod shape;
 pub(in crate::update::control) mod target;
 pub(in crate::update::control) mod value;
 pub(in crate::update::control) mod view;
@@ -44,6 +46,7 @@ pub(super) fn try_handle(
     let out = match request.method.as_str() {
         wire::LANES => (lanes::lanes(app, request), Task::none()),
         wire::SET_LANE => set_lane::set_lane(app, request),
+        wire::SHAPE => shape::shape(app, request),
         _ => return None,
     };
     Some(out)

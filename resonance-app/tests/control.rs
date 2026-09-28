@@ -21,6 +21,8 @@ mod control_arrangement_global_events;
 mod control_automation;
 #[path = "control/control_automation_render.rs"]
 mod control_automation_render;
+#[path = "control/control_automation_shape.rs"]
+mod control_automation_shape;
 #[path = "control/control_bus.rs"]
 mod control_bus;
 #[path = "control/control_bus_create_commit.rs"]

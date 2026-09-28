@@ -2,9 +2,9 @@
 //! §3 D3, §4.4, §4.6). This module has no knowledge of the control API, the
 //! app or the engine — it only turns a shape request into a list of
 //! `(tick, real_value, curve)` points, plus a pure helper to splice those
-//! points into an existing sorted point list. Wiring it into
-//! `AutomationMessage::SetLane` (tick → sample-frame, real → normalized) is a
-//! later slice's job.
+//! points into an existing sorted point list. The app's `automation.shape`
+//! handler (`resonance-app/src/update/control/automation/shape.rs`) converts
+//! ticks to sample frames and real values to normalized lane values.
 //!
 //! Positions are expressed in **ticks**, not sample frames: the caller
 //! resolves bars/beats to ticks through the tempo/meter map (that logic lives
@@ -13,9 +13,17 @@
 //! than evenly across the whole request, is what makes a 7/8 bar get the same
 //! point count as a 4/4 bar (§4.6).
 //!
-//! Every shape's output ends with a point *at* the last bar's `end_tick`
-//! holding `to` exactly (D3 in §3) — the value actually arrives, rather than
-//! stopping one step short of it.
+//! Point *placement* is per bar, but point *values* follow each point's tick
+//! position across the whole span, so a sweep progresses in time: a 7/8 bar
+//! covers 7/8 as much of an `exp` sweep as a 4/4 bar does.
+//!
+//! Every shape's output ends with a point *at* the last bar's `end_tick`.
+//! For the sweeps (`ramp`, `exp`, `steps`, `random_walk`) it holds `to`
+//! exactly (D3 in §3) — the value actually arrives, rather than stopping one
+//! step short of it. The oscillators (`sine`, `triangle`, `square`) end on
+//! their own natural phase instead: after whole cycles that is `from`, so
+//! there is no spike in the last step and a triangle keeps its down leg
+//! ([`lands_on_to`]).
 
 use std::fmt;
 
@@ -53,15 +61,42 @@ pub enum ShapeKind {
 /// these per bar covered by the shape request, in order, so a shape that
 /// spans bars of different lengths (a 7/8 bar next to a 4/4 bar) still gets
 /// the same point density in each.
+///
+/// A range that starts or ends mid-bar passes that bar CLIPPED to the range,
+/// with `bar_ticks` the whole bar's length: the clipped span then gets
+/// `ceil(resolution * len / bar_ticks)` points (at least 1) rather than a
+/// whole bar's worth, so the density stays uniform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BarSpan {
     pub start_tick: u64,
     pub end_tick: u64,
+    /// The length of the whole bar this span lies in. A value at or below
+    /// the span's own length means the span IS the whole bar.
+    pub bar_ticks: u64,
 }
 
 impl BarSpan {
+    /// A whole bar, `[start_tick, end_tick)`.
+    pub fn whole(start_tick: u64, end_tick: u64) -> Self {
+        Self {
+            start_tick,
+            end_tick,
+            bar_ticks: end_tick.saturating_sub(start_tick),
+        }
+    }
+
     pub fn len_ticks(&self) -> u64 {
         self.end_tick.saturating_sub(self.start_tick)
+    }
+
+    /// How many grid points this span carries at `resolution` per bar.
+    fn points_at(&self, resolution: u32) -> usize {
+        let len = self.len_ticks();
+        if self.bar_ticks <= len {
+            return resolution as usize;
+        }
+        let n = (u128::from(resolution) * u128::from(len)).div_ceil(u128::from(self.bar_ticks));
+        (n as usize).max(1)
     }
 }
 
@@ -100,7 +135,8 @@ pub struct ShapeRequest {
     /// Real-unit value at the start of the span.
     pub from: f64,
     /// Real-unit value at the end of the span (the value the final point
-    /// holds, per D3).
+    /// holds for a sweep, per D3), or the far extreme an oscillator swings
+    /// to.
     pub to: f64,
     /// Oscillation count for `sine`/`triangle`/`square`. `None` = 1.
     pub cycles: Option<u32>,
@@ -137,7 +173,8 @@ pub struct GeneratedPoint {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShapeOutput {
     /// Generated points, sorted ascending by tick, ending with a point at
-    /// the last bar's `end_tick` holding `to` (D3).
+    /// the last bar's `end_tick` — holding `to` for a sweep (D3), the
+    /// oscillator's own value there otherwise ([`lands_on_to`]).
     pub points: Vec<GeneratedPoint>,
     /// The seed actually used, echoed back — only meaningful for
     /// `random_walk` (§4.6: "the seed used is echoed").
@@ -272,22 +309,38 @@ fn validate_bars(bars: &[BarSpan]) -> Result<(), ShapeError> {
     Ok(())
 }
 
-/// Evenly spaced grid ticks, `resolution` per bar, spaced within each bar's
-/// own tick span (so a short bar and a long bar both get `resolution`
-/// points). Point `k` of a bar sits at `start + k * len / resolution`, for
-/// `k` in `0..resolution` — i.e. it marks the start of each of `resolution`
-/// equal subdivisions, never the bar's own end (the caller adds the overall
-/// end point separately, per D3).
+/// Evenly spaced grid ticks, spaced within each bar's own tick span: a
+/// whole bar gets `resolution` points whatever its length, a partial bar
+/// its proportional share ([`BarSpan::points_at`]). Point `k` of a span
+/// with `n` points sits at `start + k * len / n`, for `k` in `0..n` — the
+/// start of each of `n` equal subdivisions, never the span's own end (the
+/// caller adds the overall end point separately).
 fn grid_ticks(bars: &[BarSpan], resolution: u32) -> Vec<u64> {
-    let mut ticks = Vec::with_capacity(bars.len() * resolution as usize);
+    let mut ticks = Vec::with_capacity(grid_point_count(bars, resolution));
     for bar in bars {
         let len = bar.len_ticks() as f64;
-        for k in 0..resolution {
-            let offset = (len * k as f64 / resolution as f64).round() as u64;
+        let n = bar.points_at(resolution);
+        for k in 0..n {
+            let offset = (len * k as f64 / n as f64).round() as u64;
             ticks.push(bar.start_tick + offset);
         }
     }
     ticks
+}
+
+/// Total points a grid-based shape generates at `resolution`: every span's
+/// grid plus the one end point.
+fn grid_point_count(bars: &[BarSpan], resolution: u32) -> usize {
+    bars.iter().map(|b| b.points_at(resolution)).sum::<usize>() + 1
+}
+
+/// Whether a shape's end point holds `to` (D3): the sweeps do; the
+/// oscillators end on their own natural phase instead.
+pub fn lands_on_to(shape: ShapeKind) -> bool {
+    match shape {
+        ShapeKind::Ramp | ShapeKind::Exp | ShapeKind::Steps | ShapeKind::RandomWalk => true,
+        ShapeKind::Sine | ShapeKind::Triangle | ShapeKind::Square => false,
+    }
 }
 
 /// Ensure the last point sits exactly at `end_tick` holding `to` (D3):
@@ -300,14 +353,28 @@ fn force_end_point(points: &mut Vec<(u64, f64)>, end_tick: u64, to: f64) {
 }
 
 /// Check the per-call point limit for a grid-based shape (`exp`/`sine`/
-/// `steps`/`random_walk`), whose count is `resolution * num_bars + 1`.
-fn check_grid_limit(count: usize, num_bars: usize) -> Result<(), ShapeError> {
+/// `steps`/`random_walk`); on refusal, name the largest resolution whose
+/// [`grid_point_count`] fits (0 when not even 1 per bar does).
+fn check_grid_limit(bars: &[BarSpan], resolution: u32) -> Result<(), ShapeError> {
+    let count = grid_point_count(bars, resolution);
     if count <= MAX_SHAPE_POINTS_PER_CALL {
         return Ok(());
     }
-    let max_value = (MAX_SHAPE_POINTS_PER_CALL - 1)
-        .checked_div(num_bars)
-        .unwrap_or(0) as u32;
+    // The count only grows with resolution: binary-search the largest fit.
+    let (mut lo, mut hi) = (0u32, resolution);
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if grid_point_count(bars, mid) <= MAX_SHAPE_POINTS_PER_CALL {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    let max_value = if lo >= 1 && grid_point_count(bars, lo) <= MAX_SHAPE_POINTS_PER_CALL {
+        lo
+    } else {
+        0
+    };
     Err(ShapeError::TooManyPoints {
         count,
         limit: MAX_SHAPE_POINTS_PER_CALL,
@@ -346,50 +413,40 @@ fn raw_points(
 ) -> Vec<(u64, f64)> {
     let start_tick = bars[0].start_tick;
     let end_tick = bars[bars.len() - 1].end_tick;
+    // Values follow each point's position in *time* across the whole span,
+    // not its index: a short 7/8 bar covers less of a sweep than a 4/4 bar,
+    // even though both carry the same number of points. Ticks are the time
+    // axis here; the tempo map is resolved above this crate.
+    let span = (end_tick - start_tick) as f64;
+    let frac = |tick: u64| (tick - start_tick) as f64 / span;
 
     match shape {
         ShapeKind::Ramp => vec![(start_tick, from), (end_tick, to)],
 
-        ShapeKind::Exp => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
-                .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    (tick, from * (to / from).powf(t))
-                })
-                .collect()
-        }
+        ShapeKind::Exp => grid_ticks(bars, resolution)
+            .into_iter()
+            .map(|tick| (tick, from * (to / from).powf(frac(tick))))
+            .collect(),
 
         ShapeKind::Sine => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
+            let sine = |t: f64| {
+                let phase = 2.0 * std::f64::consts::PI * cycles as f64 * t;
+                from + (to - from) * (1.0 - phase.cos()) / 2.0
+            };
+            let mut points: Vec<(u64, f64)> = grid_ticks(bars, resolution)
                 .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    let phase = 2.0 * std::f64::consts::PI * cycles as f64 * t;
-                    let value = from + (to - from) * (1.0 - phase.cos()) / 2.0;
-                    (tick, value)
-                })
-                .collect()
+                .map(|tick| (tick, sine(frac(tick))))
+                .collect();
+            // The end point holds the oscillator's own value there — `from`
+            // after whole cycles — not `to` (no spike in the last step).
+            points.push((end_tick, sine(1.0)));
+            points
         }
 
-        ShapeKind::Steps => {
-            let ticks = grid_ticks(bars, resolution);
-            let n = ticks.len();
-            ticks
-                .into_iter()
-                .enumerate()
-                .map(|(i, tick)| {
-                    let t = i as f64 / n as f64;
-                    (tick, from + (to - from) * t)
-                })
-                .collect()
-        }
+        ShapeKind::Steps => grid_ticks(bars, resolution)
+            .into_iter()
+            .map(|tick| (tick, from + (to - from) * frac(tick)))
+            .collect(),
 
         ShapeKind::RandomWalk => {
             let ticks = grid_ticks(bars, resolution);
@@ -420,7 +477,6 @@ fn raw_points(
         }
 
         ShapeKind::Triangle | ShapeKind::Square => {
-            let span = (end_tick - start_tick) as f64;
             let corners = 2 * cycles;
             (0..=corners)
                 .map(|k| {
@@ -457,11 +513,9 @@ pub fn generate_shape(req: &ShapeRequest) -> Result<ShapeOutput, ShapeError> {
         .unwrap_or_else(|| default_resolution(req.shape))
         .max(1);
     let seed = req.seed.unwrap_or(0);
-    let num_bars = req.bars.len();
-
     match req.shape {
         ShapeKind::Exp | ShapeKind::Sine | ShapeKind::Steps | ShapeKind::RandomWalk => {
-            check_grid_limit(resolution as usize * num_bars + 1, num_bars)?;
+            check_grid_limit(&req.bars, resolution)?;
         }
         ShapeKind::Triangle | ShapeKind::Square => {
             check_cycle_limit(2 * cycles as usize + 1, cycles)?;
@@ -472,8 +526,12 @@ pub fn generate_shape(req: &ShapeRequest) -> Result<ShapeOutput, ShapeError> {
     let mut points = raw_points(
         req.shape, req.from, req.to, cycles, resolution, seed, &req.bars,
     );
-    let end_tick = req.bars[req.bars.len() - 1].end_tick;
-    force_end_point(&mut points, end_tick, req.to);
+    // D3: the sweeps land ON `to` at the end. The oscillators (sine,
+    // triangle, square) already end on their own phase, which they keep.
+    if lands_on_to(req.shape) {
+        let end_tick = req.bars[req.bars.len() - 1].end_tick;
+        force_end_point(&mut points, end_tick, req.to);
+    }
 
     let curve = if req.stepped {
         CurveKind::Stepped
