@@ -736,6 +736,28 @@ impl EngineHandlerHarness {
         self.with_ctx(crate::engine::internal::drain_internal);
     }
 
+    /// Probe already-built instances on the real `probe-chain` worker
+    /// (`engine::probe::spawn_probe`), skipping the clone-from-live step
+    /// so a test can pass hand-rolled plugins. The terminal event lands
+    /// on [`Self::drain_events`]; the instances come back on the engine
+    /// inbox, destroyed by [`Self::apply_worker_results`].
+    pub fn probe_instances(
+        &mut self,
+        probe_id: u64,
+        chain: Vec<crate::clap_host::SyncClapInstance>,
+        spec: ProbeSpec,
+    ) {
+        let probed = (0..chain.len())
+            .map(|i| ProbedStage {
+                instance_id: i as PluginInstanceId,
+                state_copied: false,
+            })
+            .collect();
+        self.with_ctx(|ctx, _| {
+            crate::engine::probe::spawn_probe(ctx, probe_id, chain, probed, spec)
+        });
+    }
+
     /// Block until the engine's clip list holds `expected` clips, or
     /// `timeout` elapses; reports whether it got there. Applies worker
     /// results as they arrive, as the engine loop would.
