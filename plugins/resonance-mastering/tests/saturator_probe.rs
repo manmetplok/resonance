@@ -22,6 +22,7 @@ fn probe(character: f32) -> HarmonicReport {
         character,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     for (l, r) in left.chunks_mut(512).zip(right.chunks_mut(512)) {
         s.process_stereo(l, r, &cfg);

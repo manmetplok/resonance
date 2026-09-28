@@ -48,6 +48,7 @@ fn bell_cut_attenuates_centre_frequency() {
         freq_hz: 1000.0,
         q: 1.0,
         gain_db: -12.0,
+        ..BandConfig::off()
     };
     eq.process_stereo(&mut l, &mut r, &bands);
     // Measure RMS of the settled tail.
@@ -105,6 +106,7 @@ fn low_band_response_is_independent_of_sample_rate() {
         freq_hz: 30.0,
         q: 0.707,
         gain_db: 0.0,
+        ..BandConfig::off()
     };
     let freqs = [10.0_f32, 20.0, 60.0, 120.0];
     let reference = eq_response_db(48_000.0, &bands, &freqs);
@@ -154,6 +156,7 @@ fn band_change_crossfades_without_a_step() {
         freq_hz: 100.0,
         q: 0.7,
         gain_db: 6.0,
+        ..BandConfig::off()
     };
     let block = 256;
     for (b, (l, r)) in out.chunks_mut(block).zip(right.chunks_mut(block)).enumerate() {

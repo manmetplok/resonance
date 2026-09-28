@@ -23,6 +23,7 @@ fn waveshaper_clamps_loud_input() {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     let n = 1024;
     let mut left = vec![0.0_f32; n];
@@ -51,6 +52,7 @@ fn heavy_drive_introduces_distortion_harmonics() {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     let n = 4096;
     let mut left = vec![0.0_f32; n];
@@ -88,6 +90,7 @@ fn asymmetric_saturation_has_no_dc_offset() {
         character: 1.0,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     let n = 16_384;
     let mut left = vec![0.0_f32; n];
@@ -120,6 +123,7 @@ fn toggle_mid_signal_does_not_click() {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     let cfg_off = SaturatorConfig {
         enabled: false,
@@ -222,6 +226,7 @@ fn adaa_reduces_folded_harmonic_energy() {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Gritty,
+        ..SaturatorConfig::default()
     };
 
     // Two windows: the first primes the stage's filters, smoothers and
@@ -303,6 +308,7 @@ fn adaa_is_finite_at_parameter_extremes() {
                 character,
                 mix: 1.0,
                 shaper,
+                ..SaturatorConfig::default()
             };
             let n = 1024usize;
             let mut left = vec![0.0f32; n];
@@ -347,6 +353,7 @@ fn constant_input_engages_epsilon_fallback_exactly() {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Gritty,
+        ..SaturatorConfig::default()
     };
     let n = 16_384usize;
     let mut left = vec![0.25f32; n];
@@ -371,6 +378,7 @@ fn saturator_40hz_gain_db(sr: f32) -> f64 {
         character: 0.0,
         mix: 1.0,
         shaper: Shaper::Smooth,
+        ..SaturatorConfig::default()
     };
     let n = (sr * 2.0) as usize;
     let x: Vec<f32> = (0..n)
