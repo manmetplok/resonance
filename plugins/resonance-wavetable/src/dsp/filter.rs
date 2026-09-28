@@ -2,7 +2,7 @@
 /// Provides simultaneous LP, HP, BP, Notch outputs.
 /// Stable under rapid cutoff modulation.
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 #[repr(u8)]
 pub enum FilterType {
     Lowpass = 0,
@@ -82,6 +82,19 @@ impl StateVariableFilter {
 
         self.drive = drive;
         self.drive_gain = 1.0 + drive * 5.0;
+    }
+
+    /// Replace the prewarped cutoff gain `g = tan(π·fc/fs)`, keeping the
+    /// resonance and drive from the last [`set_coeffs`](Self::set_coeffs).
+    ///
+    /// The per-sample half of `set_coeffs`, for audio-rate filter FM: one
+    /// divide and no `tan()`. Never called while filter FM is off, so the
+    /// control-rate path above is exactly what it always was.
+    #[inline]
+    pub fn set_g(&mut self, g: f32) {
+        self.a1 = 1.0 / (1.0 + g * (g + self.k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
     }
 
     /// Process one sample using the most recently set coefficients.

@@ -1,6 +1,6 @@
 use resonance_plugin::*;
 
-use crate::dsp::wavetable::NUM_WAVETABLES;
+use crate::dsp::wavetable::USER_WAVETABLE_INDEX;
 
 pub struct OscParams {
     pub wavetable: IntParam,
@@ -39,9 +39,12 @@ impl OscParams {
                 wt_id,
                 wt_name,
                 default_wt,
+                // The bundled tables, then the oscillator's user table one
+                // past them — appended so every bundled index (and every
+                // preset naming one) keeps its meaning.
                 IntRange::Linear {
                     min: 0,
-                    max: (NUM_WAVETABLES - 1) as i32,
+                    max: USER_WAVETABLE_INDEX as i32,
                 },
             ),
             position: FloatParam::new(

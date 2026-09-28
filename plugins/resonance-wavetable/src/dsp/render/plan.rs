@@ -10,8 +10,11 @@ use resonance_plugin::TempoInfo;
 use crate::dsp::analog::{self, DriftCoeffs};
 use crate::dsp::engine::SynthEngine;
 use crate::dsp::envelope::EnvCoeffs;
-use crate::dsp::lfo::TransportPlan;
+use crate::dsp::lfo::{LfoMode, TransportPlan};
+use crate::dsp::osc_mix::OscMixMode;
 use crate::dsp::render::snapshot::ParamSnapshot;
+use crate::dsp::sub_noise::{NoiseType, SubWave, NOISE_TILT_HZ};
+use crate::dsp::warp::WarpMode;
 use crate::dsp::voice::VoiceState;
 
 pub(crate) struct BlockPlan {
@@ -54,6 +57,17 @@ pub(crate) struct BlockPlan {
     /// implies at the host's tempo (ba todo #1324).
     pub lfo_rates: [f32; 3],
 
+    /// One-pole slew coefficient for the `ModSource::SampleHold` generator,
+    /// resolved from `mod_sh_slew` once per block -- see
+    /// `dsp::lfo::sh_slew_coeff`. Hoisted out of the per-sample loop for the
+    /// same reason `amp_coeffs`/`mod_coeffs` are: it is one `exp()` shared
+    /// by the whole block rather than one per sample.
+    pub sh_slew_coeff: f32,
+
+    /// Lower bound of the filter-FM cutoff sweep, as `π·20 Hz/fs` — the
+    /// same 20 Hz floor `set_coeffs` clamps to, resolved once instead of
+    /// divided out per sample.
+    pub filter_w_min: f32,
     /// Analog instability, scaled by the `analog` knob. At the default of 0
     /// `analog_on` is false — the drift walk is never stepped and never
     /// dirties the `OscSetup` cache — and the three spreads are exact zeros,
@@ -66,8 +80,70 @@ pub(crate) struct BlockPlan {
     /// Per-note level spread `[-1, 1]` to a fraction of the level.
     pub level_spread: f32,
     pub drift: DriftCoeffs,
+    pub character: CharacterPlan,
 
     pub sample_rate: f32,
+}
+
+/// Block-constant switches for the oscillator-character features. All of
+/// them are off for a patch that uses none, which keeps such a patch on
+/// the original oscillator kernel — not an equivalent one, the same one —
+/// and skips the sub/noise stage entirely.
+pub(crate) struct CharacterPlan {
+    /// Take the interaction/warp kernel: an interaction mode other than
+    /// `Sum`, or a warp mode selected on either oscillator. A warp mode at
+    /// amount zero still takes it (the amount is modulatable per voice); it
+    /// then renders the same samples as the default kernel.
+    pub kernel: bool,
+    pub mix_mode: OscMixMode,
+    /// Warp modes as selected; the per-voice amount decides whether each
+    /// resolves to anything.
+    pub osc1_warp: WarpMode,
+    pub osc2_warp: WarpMode,
+
+    pub sub_active: bool,
+    pub sub_wave: SubWave,
+    pub sub_level: f32,
+    pub noise_active: bool,
+    pub noise_type: NoiseType,
+    pub noise_level: f32,
+    pub noise_color: f32,
+    /// One-pole coefficient for [`NOISE_TILT_HZ`] at the running rate.
+    pub noise_tilt_coeff: f32,
+    /// Constant-power centre gains for the (mono) sub and noise.
+    pub centre_l: f32,
+    pub centre_r: f32,
+}
+
+impl CharacterPlan {
+    fn resolve(snap: &ParamSnapshot, sample_rate: f32) -> Self {
+        let kernel = snap.osc_mix_mode != OscMixMode::Sum
+            || snap.osc1_warp_mode != WarpMode::Off
+            || snap.osc2_warp_mode != WarpMode::Off;
+        let noise_active = snap.noise_level > 0.0;
+        let noise_tilt_coeff = if noise_active {
+            1.0 - (-std::f32::consts::TAU * NOISE_TILT_HZ / sample_rate).exp()
+        } else {
+            0.0
+        };
+        let (centre_l, centre_r) = resonance_dsp::constant_power_pan(0.0);
+        Self {
+            kernel,
+            mix_mode: snap.osc_mix_mode,
+            osc1_warp: snap.osc1_warp_mode,
+            osc2_warp: snap.osc2_warp_mode,
+            sub_active: snap.sub_level > 0.0,
+            sub_wave: snap.sub_wave,
+            sub_level: snap.sub_level,
+            noise_active,
+            noise_type: snap.noise_type,
+            noise_level: snap.noise_level,
+            noise_color: snap.noise_color,
+            noise_tilt_coeff,
+            centre_l,
+            centre_r,
+        }
+    }
 }
 
 impl SynthEngine {
@@ -79,9 +155,10 @@ impl SynthEngine {
         tempo: Option<TempoInfo>,
     ) -> BlockPlan {
         // Missing wavetable indices fall back to `None` and silently skip
-        // that oscillator's output.
-        let wt1_idx = (snap.osc1_wt < self.wavetables.len()).then_some(snap.osc1_wt);
-        let wt2_idx = (snap.osc2_wt < self.wavetables.len()).then_some(snap.osc2_wt);
+        // that oscillator's output. The user index resolves to the
+        // oscillator's own user slot.
+        let wt1_idx = self.resolve_wavetable(0, snap.osc1_wt);
+        let wt2_idx = self.resolve_wavetable(1, snap.osc2_wt);
         let oscs_active =
             (snap.osc1_enabled && wt1_idx.is_some()) || (snap.osc2_enabled && wt2_idx.is_some());
 
@@ -104,15 +181,63 @@ impl SynthEngine {
         // A synced LFO re-anchors on the song position every block rather
         // than integrating its own phase, so it stays locked through a tempo
         // change or a locate instead of drifting from wherever it happened
-        // to be.
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo1_mode, snap.lfo1_division) {
-            self.global_lfo1.set_phase(p);
-        }
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo2_mode, snap.lfo2_division) {
-            self.global_lfo2.set_phase(p);
-        }
-        if let Some(p) = transport.lfo_anchor_phase(snap.lfo3_mode, snap.lfo3_division) {
-            self.global_lfo3.set_phase(p);
+        // to be. Called unconditionally (not just `if Some`): `anchor_synced`
+        // needs the `None` case too, to forget its cycle count while not
+        // synced or the transport is stopped.
+        //
+        // `synced_pos` replaces `TransportPlan::lfo_anchor_phase` here
+        // because `anchor_synced` needs the raw song position to track the
+        // absolute cycle count across the reset, not just the derived
+        // phase -- see its doc comment for why the reset alone drops a wrap
+        // that lands exactly on a block boundary.
+        let synced_pos = |mode: LfoMode| {
+            (mode == LfoMode::Sync)
+                .then(|| transport.song_pos_beats)
+                .flatten()
+        };
+        self.global_lfo1.anchor_synced(
+            snap.lfo1_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo1_mode),
+            snap.lfo1_division.beats(transport.beats_per_bar),
+        );
+        self.global_lfo2.anchor_synced(
+            snap.lfo2_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo2_mode),
+            snap.lfo2_division.beats(transport.beats_per_bar),
+        );
+        self.global_lfo3.anchor_synced(
+            snap.lfo3_shape,
+            &mut self.rng,
+            synced_pos(snap.lfo3_mode),
+            snap.lfo3_division.beats(transport.beats_per_bar),
+        );
+
+        // Same treatment for the S&H generator's own clock: `mod_sh_mode` is
+        // `Sync`/`Free` only (it has no per-voice retrigger to be `Retrig`
+        // for), but it is otherwise exactly the LFOs' tempo-sync path. Draws
+        // from `mod_rng`, never `rng` -- see the field comment on
+        // `SynthEngine::mod_rng`.
+        let sh_rate_hz =
+            transport.lfo_rate_hz(snap.mod_sh_mode, snap.mod_sh_division, snap.mod_sh_rate);
+        self.mod_sample_hold.set_rate(sh_rate_hz, self.sample_rate);
+        self.mod_sample_hold.anchor_synced(
+            &mut self.mod_rng,
+            synced_pos(snap.mod_sh_mode),
+            snap.mod_sh_division.beats(transport.beats_per_bar),
+        );
+        let sh_slew_coeff = crate::dsp::lfo::sh_slew_coeff(snap.mod_sh_slew, self.sample_rate);
+
+        // Switching filter model mid-note: the circuit being switched to
+        // has been frozen since it last ran, so start every voice's filters
+        // from rest. Never taken while the model stays put, which keeps the
+        // clean path's state untouched block to block.
+        if snap.filter_model != self.filter_model {
+            self.filter_model = snap.filter_model;
+            for voice in &mut self.voices {
+                voice.clear_filters();
+            }
         }
 
         self.refresh_active();
@@ -141,11 +266,14 @@ impl SynthEngine {
                 self.sample_rate,
             ),
             lfo_rates,
+            sh_slew_coeff,
+            filter_w_min: std::f32::consts::PI * 20.0 / self.sample_rate,
             analog_on: snap.analog > 0.0,
             drift_semis: snap.analog * analog::DRIFT_MAX_CENTS / 100.0,
             cutoff_spread_oct: snap.analog * analog::CUTOFF_SPREAD_OCT,
             level_spread: snap.analog * analog::LEVEL_SPREAD,
             drift: self.drift_coeffs,
+            character: CharacterPlan::resolve(snap, self.sample_rate),
             sample_rate: self.sample_rate,
         }
     }

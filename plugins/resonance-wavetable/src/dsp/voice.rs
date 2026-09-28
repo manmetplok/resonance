@@ -2,8 +2,11 @@
 use crate::dsp::analog::{AnalogRng, DriftCoeffs, DriftWalk};
 use crate::dsp::envelope::AdsrEnvelope;
 use crate::dsp::filter::StateVariableFilter;
+use crate::dsp::filter_models::CharacterFilter;
 use crate::dsp::lfo::MultiLfo;
 use crate::dsp::oscillator::TableTap;
+use crate::dsp::sub_noise::{NoiseGen, SubOsc};
+use crate::dsp::warp::Warp;
 
 pub const MAX_VOICES: usize = 32;
 pub const MAX_UNISON: usize = 7;
@@ -36,6 +39,18 @@ pub struct OscSetup {
     /// Constant-power pan gains for this sub-voice.
     pub pan_l: f32,
     pub pan_r: f32,
+    /// Phase warp resolved at control rate; `Off` unless a warp mode is
+    /// selected *and* its amount is non-zero.
+    pub warp: Warp,
+    /// Height of the step a wrap-jumping warp (Mirror, Formant) puts at the
+    /// cycle wrap: the warped value at phase 0 minus the one at phase 1.
+    /// Fixed per setup, so the per-sample polyBLEP needs no extra reads.
+    pub wrap_jump: f32,
+    /// Warped value at phase 0: what a hard-synced slave restarts at.
+    pub zero_value: f32,
+    /// How far the warped wave moves over the first sample after phase 0:
+    /// the slope a restarted slave leaves with, for the sync polyBLAMP.
+    pub zero_slope: f32,
 }
 
 /// One unison sub-voice: owns its own oscillator phases.
@@ -55,6 +70,12 @@ pub struct UnisonSubVoice {
     /// Control-rate cached oscillator setup, refreshed by the render loop.
     pub osc1_setup: OscSetup,
     pub osc2_setup: OscSetup,
+    /// polyBLEP residual owed to each oscillator's next sample by a
+    /// discontinuity predicted during this one (sync reset, warp wrap jump,
+    /// quantize step). Only the interaction/warp kernel writes these; they
+    /// are zero on the default path.
+    pub osc1_carry: f32,
+    pub osc2_carry: f32,
     /// Per-oscillator analog pitch drift, `[-1, 1]`, scaled into cents by
     /// the `analog` knob when the `OscSetup` is rebuilt. The two
     /// oscillators drift independently, as two VCOs would.
@@ -71,6 +92,8 @@ impl UnisonSubVoice {
             pan_offset: 0.0,
             osc1_setup: OscSetup::default(),
             osc2_setup: OscSetup::default(),
+            osc1_carry: 0.0,
+            osc2_carry: 0.0,
             osc1_drift: DriftWalk::default(),
             osc2_drift: DriftWalk::default(),
         }
@@ -79,7 +102,19 @@ impl UnisonSubVoice {
     pub fn reset(&mut self) {
         self.osc1_phase = 0.0;
         self.osc2_phase = 0.0;
+        self.osc1_carry = 0.0;
+        self.osc2_carry = 0.0;
     }
+}
+
+/// Per-voice oscillator-interaction amounts, resolved at control rate with
+/// the [`OscSetup`]s (the amount is a modulation destination).
+#[derive(Clone, Copy, Default)]
+pub struct MixSetup {
+    /// Phase-modulation depth in cycles per unit of osc2 output.
+    pub pm_depth: f64,
+    /// Ring-mod wet amount, 0..=1.
+    pub ring_wet: f32,
 }
 
 /// A single polyphonic voice.
@@ -106,11 +141,28 @@ pub struct Voice {
     // Per-voice stereo filter
     pub filter_l: StateVariableFilter,
     pub filter_r: StateVariableFilter,
+    // The same pair for the character models. Only one pair runs at a
+    // time — `snap.filter_model` picks — and the engine clears both when
+    // the model changes, so neither resumes from stale state.
+    pub char_l: CharacterFilter,
+    pub char_r: CharacterFilter,
+    // Filter FM, refreshed with the coefficients at control rate: the base
+    // cutoff as `π·fc/fs` and the FM depth in octaves. Zero depth keeps the
+    // per-sample coefficient path switched off.
+    pub filter_w: f32,
+    pub filter_fm_oct: f32,
 
     // Unison sub-voices
     pub unison: [UnisonSubVoice; MAX_UNISON],
     pub unison_count: usize,
 
+    // Oscillator interaction, the sub oscillator and the noise source. The
+    // sub's increment follows osc1's pitch, so it is refreshed alongside
+    // the `OscSetup` caches.
+    pub mix_setup: MixSetup,
+    pub sub: SubOsc,
+    pub sub_inc: f64,
+    pub noise: NoiseGen,
     // Analog instability (see `dsp::analog`). The voice's own PRNG, seeded
     // per note-on from the engine's, drives its sub-voices' drift walks.
     // `analog_cutoff` / `analog_level` are this note's static spreads,
@@ -136,6 +188,17 @@ pub struct Voice {
     // every `FILTER_COEFF_INTERVAL` samples (and once on trigger via
     // `mod_dirty`); read by-value per sample inside the render loop.
     pub cached_mods: crate::dsp::modulation::ModState,
+
+    // Drawn at trigger, held for the note's life: backs both
+    // `ModSource::RandomBipolar` (read as-is) and `RandomUnipolar` (remapped
+    // in `evaluate_mod_matrix`). Not redrawn by `legato()`, for the same
+    // reason velocity isn't touched there — changing it under a held note
+    // would step the modulation mid-note.
+    pub random_value: f32,
+
+    // ±1.0, flipped by the engine on every fresh trigger; backs
+    // `ModSource::Alternate`. Also left alone by `legato()`.
+    pub alternate_value: f32,
 
     // Guards the per-unison `OscSetup` caches. The render loop rebuilds them
     // when this is set, or when `current_pitch` has moved away from
@@ -169,14 +232,24 @@ impl Voice {
             lfo3: MultiLfo::new(),
             filter_l: StateVariableFilter::new(),
             filter_r: StateVariableFilter::new(),
+            char_l: CharacterFilter::new(),
+            char_r: CharacterFilter::new(),
+            filter_w: 0.0,
+            filter_fm_oct: 0.0,
             unison: std::array::from_fn(|_| UnisonSubVoice::new()),
             unison_count: 1,
+            mix_setup: MixSetup::default(),
+            sub: SubOsc::default(),
+            sub_inc: 0.0,
+            noise: NoiseGen::default(),
             analog_rng: AnalogRng::default(),
             analog_cutoff: 0.0,
             analog_level: 0.0,
             filter_dirty: true,
             mod_dirty: true,
             cached_mods: crate::dsp::modulation::ModState::default(),
+            random_value: 0.0,
+            alternate_value: 1.0,
             osc_setup_dirty: true,
             osc_setup_pitch: f32::NAN,
             last_filter_cutoff: 8000.0,
@@ -203,6 +276,8 @@ impl Voice {
         lfo1_retrigger: bool,
         lfo2_retrigger: bool,
         lfo3_retrigger: bool,
+        random_value: f32,
+        alternate_value: f32,
     ) {
         let was_idle = self.state == VoiceState::Idle;
         self.state = VoiceState::Playing;
@@ -217,6 +292,8 @@ impl Voice {
 
         self.amp_env.trigger();
         self.mod_env.trigger();
+        self.random_value = random_value;
+        self.alternate_value = alternate_value;
 
         if lfo1_retrigger {
             self.lfo1.reset_phase();
@@ -228,8 +305,9 @@ impl Voice {
             self.lfo3.reset_phase();
         }
 
-        self.filter_l.clear();
-        self.filter_r.clear();
+        self.clear_filters();
+        self.sub = SubOsc::default();
+        self.noise = NoiseGen::default();
         self.filter_dirty = true;
         self.mod_dirty = true;
         self.osc_setup_dirty = true;
@@ -240,6 +318,14 @@ impl Voice {
             self.unison[u].reset();
         }
         distribute_unison(&mut self.unison, self.unison_count, spread);
+    }
+
+    /// Zero every filter's state, clean and character alike.
+    pub fn clear_filters(&mut self) {
+        self.filter_l.clear();
+        self.filter_r.clear();
+        self.char_l.clear();
+        self.char_r.clear();
     }
 
     /// Draw this note's analog character: reseed the voice PRNG, start every

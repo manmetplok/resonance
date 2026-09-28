@@ -23,6 +23,8 @@ use clack_plugin::entry::SinglePluginEntry;
 use resonance_plugin::{
     stable_hash, ClapBridge, EventIterator, OutputBuffer, Param, ResonancePlugin,
 };
+use resonance_wavetable::dsp::wavetable::WAVETABLE_SIZE;
+use resonance_wavetable::user_wavetable::state as user_state;
 use resonance_wavetable::ResonanceWavetable;
 use serde_json::{json, Value};
 
@@ -424,10 +426,25 @@ fn host_value(instance: &mut PluginInstance<TestHost>, id: &str) -> f64 {
 /// beside `params`, in the shape it rides in. Named once so the tests below
 /// assert on the same keys the ones above do.
 fn non_param_state() -> Vec<(String, Value)> {
-    vec![(
-        "preset".to_string(),
-        json!({ "name": "Session Sound", "source": "user", "modified": true }),
-    )]
+    // One imported frame, embedded the way the saver writes it.
+    let frame: Vec<f32> = (0..WAVETABLE_SIZE)
+        .map(|i| (std::f32::consts::TAU * 3.0 * i as f32 / WAVETABLE_SIZE as f32).sin())
+        .collect();
+    vec![
+        (
+            "preset".to_string(),
+            json!({ "name": "Session Sound", "source": "user", "modified": true }),
+        ),
+        (
+            user_state::STATE_KEY.to_string(),
+            json!({ "osc2": {
+                "path": "/somewhere/else/growl.wav",
+                "name": "growl",
+                "frame_size": WAVETABLE_SIZE,
+                "frames": user_state::encode_frames(&frame),
+            } }),
+        ),
+    ]
 }
 
 /// A complete saved document — every parameter off its default plus the

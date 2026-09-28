@@ -16,18 +16,31 @@
 use resonance_dsp::{constant_power_pan, SimpleRng};
 
 use crate::dsp::effects::voice_saturate;
+use crate::dsp::filter_models::{self, FilterModel};
 use crate::dsp::lfo::LfoMode;
 use crate::dsp::modulation::{self, ModState};
+use crate::dsp::osc_mix::{self, OscMixMode, PM_DEPTH_CYCLES, SYNC_SWEEP_SEMITONES};
 use crate::dsp::oscillator::{self, midi_to_freq};
+use crate::dsp::render::character;
 use crate::dsp::render::plan::BlockPlan;
 use crate::dsp::render::snapshot::ParamSnapshot;
-use crate::dsp::voice::{OscSetup, Voice, VoiceState};
+use crate::dsp::voice::{MixSetup, OscSetup, Voice, VoiceState};
+use crate::dsp::warp::Warp;
 use crate::dsp::wavetable::Wavetable;
 
 /// Cents of unison detune a full-scale (±1.0) `ModDest::UnisonDetune`
 /// modulation adds — the whole range of the `unison_detune` parameter, so
 /// an amount of +1.0 can open a stack from 0 to fully detuned.
 const UNISON_DETUNE_MOD_CENTS: f32 = 100.0;
+
+/// Octaves of cutoff swing a full-scale oscillator sample produces at
+/// `filter_fm` = 100 %: the cutoff moves between `fc/16` and `16·fc` (then
+/// clamped to 20 Hz .. 0.49·fs) at the modulator's rate.
+pub const FILTER_FM_OCTAVES: f32 = 4.0;
+
+/// Upper bound of the filter-FM sweep, `π·0.49`: the same 0.49·fs ceiling
+/// `set_coeffs` clamps to, and inside `tan_fast`'s accurate range.
+const FILTER_FM_W_MAX: f32 = std::f32::consts::PI * 0.49;
 
 /// The handful of values that change from sample to sample but are shared by
 /// every voice in that sample.
@@ -45,6 +58,10 @@ pub(crate) struct SampleCtx {
     /// Global (non-retriggered) LFO values, already scaled by depth. Zero
     /// when `lfo_vals_needed` is false, in which case nothing consumes them.
     pub global_lfo: [f32; 3],
+    /// The `ModSource::SampleHold` generator's current value, shared by
+    /// every voice this sample. Same zero-when-unneeded contract as
+    /// `global_lfo`.
+    pub sample_hold_val: f32,
 }
 
 /// Render one voice's contribution to this sample.
@@ -89,14 +106,33 @@ pub(crate) fn render_voice(
     // runs unchanged on silence.
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
-    if plan.oscs_active {
-        if plan.analog_on && ctx.drift_tick {
+    let mut fm_src = 0.0f32;
+    let ch = &plan.character;
+    if plan.oscs_active || ch.sub_active {
+        if plan.oscs_active && plan.analog_on && ctx.drift_tick {
             step_analog_drift(voice, plan);
         }
         refresh_osc_setups(voice, snap, plan, wavetables, &mods);
-        let (l, r) = osc_kernel(voice, snap, plan, wavetables);
+    }
+    if plan.oscs_active {
+        // Block-constant choice: a patch using no interaction mode and no
+        // warp stays on the original kernel below, untouched.
+        let (l, r, fm) = if ch.kernel {
+            character::osc_kernel(voice, snap, plan, wavetables)
+        } else {
+            osc_kernel(voice, snap, plan, wavetables)
+        };
         osc_l = l;
         osc_r = r;
+        fm_src = fm;
+    }
+    // Sub and noise join before the voice drive and the filter. Skipped
+    // outright at level zero, so an unused source costs a predicted branch
+    // and draws no RNG.
+    if ch.sub_active || ch.noise_active {
+        let s = character::sub_noise(voice, plan, rng);
+        osc_l += s * ch.centre_l;
+        osc_r += s * ch.centre_r;
     }
 
     // Per-voice pre-filter drive. Resolved per sample from the block's param
@@ -110,13 +146,22 @@ pub(crate) fn render_voice(
     }
 
     // Filter. Coefficients are refreshed at control rate or immediately when
-    // a voice was just triggered.
+    // a voice was just triggered; with filter FM on, the cutoff is then
+    // re-applied every sample on top of that.
     if snap.filter_enabled {
         if ctx.coeff_tick || voice.filter_dirty {
             refresh_filter_coeffs(voice, snap, plan, &mods, mod_env_val);
         }
-        osc_l = voice.filter_l.process(osc_l, snap.filter_type);
-        osc_r = voice.filter_r.process(osc_r, snap.filter_type);
+        if voice.filter_fm_oct > 0.0 {
+            apply_filter_fm(voice, snap.filter_model, plan, fm_src);
+        }
+        if snap.filter_model == FilterModel::Clean {
+            osc_l = voice.filter_l.process(osc_l, snap.filter_type);
+            osc_r = voice.filter_r.process(osc_r, snap.filter_type);
+        } else {
+            osc_l = voice.char_l.process(osc_l, snap.filter_type);
+            osc_r = voice.char_r.process(osc_r, snap.filter_type);
+        }
     } else {
         voice.last_filter_cutoff = snap.filter_cutoff;
     }
@@ -198,6 +243,9 @@ fn refresh_voice_mods(
         mod_env_val,
         voice.velocity,
         voice.current_pitch,
+        voice.random_value,
+        ctx.sample_hold_val,
+        voice.alternate_value,
     );
     // Only the oscillator-facing destinations invalidate the cached per-unison
     // setup; a filter LFO sweeping every tick must not force an oscillator
@@ -261,9 +309,51 @@ fn refresh_osc_setups(
     let detune_cents =
         (snap.unison_detune + mods.unison_detune * UNISON_DETUNE_MOD_CENTS).clamp(0.0, 100.0);
 
+    // Oscillator character, resolved once per voice. `None` on a patch that
+    // uses no interaction mode and no warp, and then nothing below differs
+    // from the setups this function always built.
+    let ch = &plan.character;
+    let character = if ch.kernel {
+        let amount = (snap.osc_mod_amount + mods.osc_mod_amount).clamp(0.0, 1.0);
+        voice.mix_setup = MixSetup {
+            pm_depth: match ch.mix_mode {
+                OscMixMode::Fm => amount as f64 * PM_DEPTH_CYCLES,
+                _ => 0.0,
+            },
+            ring_wet: match ch.mix_mode {
+                OscMixMode::Ring => amount,
+                _ => 0.0,
+            },
+        };
+        Some(SetupCharacter {
+            warp1: Warp::resolve(ch.osc1_warp, snap.osc1_warp_amount + mods.osc1_warp),
+            warp2: Warp::resolve(ch.osc2_warp, snap.osc2_warp_amount + mods.osc2_warp),
+            slave_semitones: match ch.mix_mode {
+                OscMixMode::Sync => amount * SYNC_SWEEP_SEMITONES,
+                _ => 0.0,
+            },
+            pm_depth: voice.mix_setup.pm_depth,
+        })
+    } else {
+        None
+    };
+
     for u in 0..voice.unison_count {
         let sub = &mut voice.unison[u];
         let detune = sub.detune_spread * detune_cents * 0.5 / 100.0;
+
+        // Osc2's pitch first: phase-modulating osc1 widens osc1's spectrum
+        // in proportion to osc2's frequency, which osc1's mip bias needs.
+        let pitch2 = voice.current_pitch
+            + snap.osc2_coarse
+            + snap.osc2_fine / 100.0
+            + detune
+            + mods.osc2_pitch
+            + sub.osc2_drift.value * plan.drift_semis;
+        let pitch2 = match &character {
+            Some(c) if c.slave_semitones != 0.0 => pitch2 + c.slave_semitones,
+            _ => pitch2,
+        };
 
         if let Some(idx) = plan.wt1_idx {
             let wt = &wavetables[idx];
@@ -277,39 +367,101 @@ fn refresh_osc_setups(
             let pos = (snap.osc1_pos + mods.osc1_position).clamp(0.0, 1.0);
             let pan = (snap.osc1_pan + sub.pan_offset + mods.osc1_pan).clamp(-1.0, 1.0);
             let (pan_l, pan_r) = constant_power_pan(pan);
+            let (warp, bias) = match &character {
+                Some(c) => {
+                    let pm = if c.pm_depth > 0.0 {
+                        osc_mix::pm_bandwidth(c.pm_depth, midi_to_freq(pitch2), freq)
+                    } else {
+                        1.0
+                    };
+                    (c.warp1, c.warp1.bandwidth() * pm)
+                }
+                None => (Warp::default(), 1.0),
+            };
             sub.osc1_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
+                tap: plan_biased_tap(wt, pos, freq, bias, plan.sample_rate),
                 level: osc1_level,
                 pan_l,
                 pan_r,
+                warp,
+                wrap_jump: 0.0,
+                zero_value: 0.0,
+                zero_slope: 0.0,
             };
+            if character.is_some() {
+                character::finish_setup(wt, &mut sub.osc1_setup);
+            }
         }
 
         if let Some(idx) = plan.wt2_idx {
             let wt = &wavetables[idx];
-            let pitch = voice.current_pitch
-                + snap.osc2_coarse
-                + snap.osc2_fine / 100.0
-                + detune
-                + mods.osc2_pitch
-                + sub.osc2_drift.value * plan.drift_semis;
-            let freq = midi_to_freq(pitch);
+            let freq = midi_to_freq(pitch2);
             let pos = (snap.osc2_pos + mods.osc2_position).clamp(0.0, 1.0);
             let pan = (snap.osc2_pan + sub.pan_offset + mods.osc2_pan).clamp(-1.0, 1.0);
             let (pan_l, pan_r) = constant_power_pan(pan);
+            let (warp, bias) = match &character {
+                Some(c) => (c.warp2, c.warp2.bandwidth()),
+                None => (Warp::default(), 1.0),
+            };
             sub.osc2_setup = OscSetup {
                 phase_inc: oscillator::phase_inc(freq, plan.sample_rate),
-                tap: oscillator::plan_tap(wt, pos, freq, plan.sample_rate),
+                tap: plan_biased_tap(wt, pos, freq, bias, plan.sample_rate),
                 level: osc2_level,
                 pan_l,
                 pan_r,
+                warp,
+                wrap_jump: 0.0,
+                zero_value: 0.0,
+                zero_slope: 0.0,
             };
+            if character.is_some() {
+                character::finish_setup(wt, &mut sub.osc2_setup);
+            }
         }
+    }
+
+    // The sub follows osc1's pitch without the unison detune: it is one
+    // centred voice under the stack, not part of it.
+    if ch.sub_active {
+        let pitch = voice.current_pitch
+            + snap.osc1_coarse
+            + snap.osc1_fine / 100.0
+            + mods.osc1_pitch
+            + snap.sub_octave.semitones();
+        voice.sub_inc = oscillator::phase_inc(midi_to_freq(pitch), plan.sample_rate);
     }
 
     voice.osc_setup_dirty = false;
     voice.osc_setup_pitch = voice.current_pitch;
+}
+
+/// The per-voice character values [`refresh_osc_setups`] folds into each
+/// unison sub-voice's setups.
+struct SetupCharacter {
+    warp1: Warp,
+    warp2: Warp,
+    /// Sync slave offset above osc2's own pitch.
+    slave_semitones: f32,
+    pm_depth: f64,
+}
+
+/// [`oscillator::plan_tap`] with the mip selection made for `bias` times the
+/// playing frequency: a warp or phase modulation that sweeps the table up
+/// to `bias` times faster needs a level band-limited for that rate.
+///
+/// A bias of exactly 1 — every unwarped, unmodulated oscillator — plans
+/// for `freq` itself, untouched.
+#[inline]
+fn plan_biased_tap(
+    wt: &Wavetable,
+    pos: f32,
+    freq: f32,
+    bias: f32,
+    sample_rate: f32,
+) -> oscillator::TableTap {
+    let tap_freq = if bias > 1.0 { freq * bias } else { freq };
+    oscillator::plan_tap(wt, pos, tap_freq, sample_rate)
 }
 
 /// ==== THE PER-SAMPLE KERNEL ====
@@ -320,15 +472,21 @@ fn refresh_osc_setups(
 /// [`OscSetup`] by [`refresh_osc_setups`]. Anything added here is paid once
 /// per unison per oscillator per sample, so it is the one function in the
 /// crate where that cost has to be argued for explicitly.
+///
+/// The third value is oscillator 2's raw signal — before level and pan,
+/// summed over the unison stack — which is the filter-FM modulator. It
+/// costs one add per unison sub-voice, cheaper than the branch that would
+/// skip it, and the caller drops it unless filter FM is on.
 #[inline]
 fn osc_kernel(
     voice: &mut Voice,
     snap: &ParamSnapshot,
     plan: &BlockPlan,
     wavetables: &[Wavetable],
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     let mut osc_l = 0.0f32;
     let mut osc_r = 0.0f32;
+    let mut osc2_raw = 0.0f32;
 
     let wt1 = plan.wt1_idx.map(|i| &wavetables[i]);
     let wt2 = plan.wt2_idx.map(|i| &wavetables[i]);
@@ -350,7 +508,9 @@ fn osc_kernel(
         if snap.osc2_enabled {
             if let Some(wt) = wt2 {
                 let s = &sub.osc2_setup;
-                let sample = oscillator::read_tap(wt, &s.tap, sub.osc2_phase) * s.level;
+                let raw = oscillator::read_tap(wt, &s.tap, sub.osc2_phase);
+                osc2_raw += raw;
+                let sample = raw * s.level;
                 osc_l += sample * s.pan_l;
                 osc_r += sample * s.pan_r;
                 sub.osc2_phase += s.phase_inc;
@@ -360,7 +520,7 @@ fn osc_kernel(
     }
 
     let unison_scale = 1.0 / (voice.unison_count as f32).sqrt();
-    (osc_l * unison_scale, osc_r * unison_scale)
+    (osc_l * unison_scale, osc_r * unison_scale, osc2_raw)
 }
 
 /// Recompute the voice's stereo filter coefficients from cutoff, key
@@ -391,12 +551,59 @@ fn refresh_filter_coeffs(
     let cutoff = cutoff.clamp(20.0, 20000.0);
     let reso = (snap.filter_reso + mods.filter_resonance).clamp(0.0, 1.0);
 
-    voice
-        .filter_l
-        .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
-    voice
-        .filter_r
-        .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+    if snap.filter_model == FilterModel::Clean {
+        voice
+            .filter_l
+            .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+        voice
+            .filter_r
+            .set_coeffs(cutoff, reso, plan.sample_rate, snap.filter_drive);
+    } else {
+        let (sr, drive) = (plan.sample_rate, snap.filter_drive);
+        let model = snap.filter_model;
+        voice.char_l.set_coeffs(model, cutoff, reso, sr, drive);
+        voice.char_r.set_coeffs(model, cutoff, reso, sr, drive);
+    }
+
+    let fm = (snap.filter_fm + mods.filter_fm).clamp(0.0, 1.0);
+    voice.filter_fm_oct = fm * FILTER_FM_OCTAVES;
+    voice.filter_w =
+        std::f32::consts::PI * cutoff.min(plan.sample_rate * 0.49) / plan.sample_rate;
+
     voice.last_filter_cutoff = cutoff;
     voice.filter_dirty = false;
+}
+
+/// Audio-rate filter FM: move this sample's cutoff by
+/// `filter_fm_oct × osc2` octaves around the control-rate cutoff and
+/// re-derive the coefficients from it.
+///
+/// Only called while the voice's FM depth is non-zero, so its cost — an
+/// `exp2`, a `tan` and a divide or four, all via the cheap approximations in
+/// [`filter_models`] — is never paid by a patch that does not use it.
+/// Resonance and drive are left as the control-rate refresh set them.
+///
+/// Oscillator 2 is the modulator, not the oscillator mix: the mix contains
+/// the filter's own input, which makes the depth follow the osc levels and
+/// balance and the result chaotic, while osc 2 is a pitch-tracked,
+/// ratio-tunable (coarse/fine) modulator. It is taken before its level, so
+/// turning osc 2's level to zero leaves it running as a silent FM source.
+/// With osc 2 disabled the modulator is zero and FM does nothing — except
+/// under an oscillator-interaction mode (FM, ring, sync), where osc 2 runs
+/// for osc 1's sake even while muted and so keeps feeding this too (its
+/// warped, and as a sync slave polyBLEP-corrected, raw signal; see
+/// `character::osc_kernel`).
+#[inline]
+fn apply_filter_fm(voice: &mut Voice, model: FilterModel, plan: &BlockPlan, osc2_sum: f32) {
+    // The unison mean, so a stack sweeps no further than a single voice.
+    let m = osc2_sum / voice.unison_count as f32;
+    let w = voice.filter_w * filter_models::exp2_fast(voice.filter_fm_oct * m);
+    let g = filter_models::tan_fast(w.clamp(plan.filter_w_min, FILTER_FM_W_MAX));
+    if model == FilterModel::Clean {
+        voice.filter_l.set_g(g);
+        voice.filter_r.set_g(g);
+    } else {
+        voice.char_l.set_g(g);
+        voice.char_r.set_g(g);
+    }
 }

@@ -15,6 +15,7 @@ use resonance_plugin::*;
 use crate::dsp::modulation::NUM_MOD_SLOTS;
 
 pub mod analog;
+pub mod character;
 pub mod env;
 pub mod filter;
 pub mod fx;
@@ -22,15 +23,18 @@ pub mod lfo;
 pub mod mod_slot;
 pub mod modulation;
 pub mod osc;
+pub mod sample_hold;
 pub mod unison;
 
 pub use analog::AnalogParams;
+pub use character::{NoiseParams, OscMixParams, SubParams, WarpParams};
 pub use env::EnvParams;
 pub use filter::FilterParams;
 pub use fx::{ChorusParams, DelayParams, DistortionParams};
 pub use lfo::LfoParams;
 pub use mod_slot::ModSlotParams;
 pub use osc::OscParams;
+pub use sample_hold::SampleHoldParams;
 pub use unison::UnisonParams;
 
 // ---------------------------------------------------------------------------
@@ -54,9 +58,15 @@ pub struct WavetableParams {
     pub lfo2: LfoParams,
     pub lfo3: LfoParams,
     pub mod_slots: Vec<ModSlotParams>,
+    pub mod_sh: SampleHoldParams,
     pub chorus: ChorusParams,
     pub delay: DelayParams,
     pub distortion: DistortionParams,
+    pub osc_mix: OscMixParams,
+    pub osc1_warp: WarpParams,
+    pub osc2_warp: WarpParams,
+    pub sub: SubParams,
+    pub noise: NoiseParams,
 }
 
 /// Total number of parameters.
@@ -70,7 +80,20 @@ pub struct WavetableParams {
 /// persists (presets, saved state, CLAP param ids are hashed from the id),
 /// so inserting into the middle of [`WavetableParams::param_at`] only
 /// changes the order a host lists them in.
-pub const PARAM_COUNT: usize = 104;
+///
+/// 104 -> 106 when the filter models landed: `filter_model` and
+/// `filter_fm`, appended at the end of the table (104, 105) rather than
+/// beside the other filter params so the indices of everything already
+/// listed stay put.
+///
+/// 106 -> 110 for the new-mod-sources work's `ModSource::SampleHold`
+/// generator (`mod_sh_rate`, `mod_sh_slew`, `mod_sh_sync`,
+/// `mod_sh_division`), appended the same way at the very end (106..110).
+///
+/// 110 -> 122 for oscillator character: interaction (mode + amount), a warp
+/// mode + amount per oscillator, the sub oscillator (waveform, octave,
+/// level) and the noise source (type, level, colour), appended (110..122).
+pub const PARAM_COUNT: usize = 122;
 
 impl WavetableParams {
     pub fn new() -> Self {
@@ -144,11 +167,19 @@ impl WavetableParams {
 
             // Modulation matrix
             mod_slots: (0..NUM_MOD_SLOTS).map(ModSlotParams::new).collect(),
+            mod_sh: SampleHoldParams::new(),
 
             // Effects
             chorus: ChorusParams::new(),
             delay: DelayParams::new(),
             distortion: DistortionParams::new(),
+
+            // Oscillator character. All inert by default.
+            osc_mix: OscMixParams::new(),
+            osc1_warp: WarpParams::new(1),
+            osc2_warp: WarpParams::new(2),
+            sub: SubParams::new(),
+            noise: NoiseParams::new(),
         }
     }
 
@@ -261,6 +292,27 @@ impl WavetableParams {
             101 => &self.distortion.bits,
             102 => &self.distortion.crush_rate,
             103 => &self.distortion.voice_drive,
+            // Filter models (104..106)
+            104 => &self.filter.model,
+            105 => &self.filter.fm,
+            // Sample & Hold source (106..110)
+            106 => &self.mod_sh.rate,
+            107 => &self.mod_sh.slew,
+            108 => &self.mod_sh.sync,
+            109 => &self.mod_sh.division,
+            // Oscillator character (110..122)
+            110 => &self.osc_mix.mode,
+            111 => &self.osc_mix.amount,
+            112 => &self.osc1_warp.mode,
+            113 => &self.osc1_warp.amount,
+            114 => &self.osc2_warp.mode,
+            115 => &self.osc2_warp.amount,
+            116 => &self.sub.waveform,
+            117 => &self.sub.octave,
+            118 => &self.sub.level,
+            119 => &self.noise.noise_type,
+            120 => &self.noise.level,
+            121 => &self.noise.color,
             _ => &self.master_volume, // fallback
         }
     }

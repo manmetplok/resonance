@@ -63,7 +63,7 @@ fn call_args<'a>(line: &'a str, callee: &str) -> Option<Vec<&'a str>> {
 // Every parameter, listed once
 // ---------------------------------------------------------------------------
 
-/// Every `FloatParam` in the synth. All 58 are drawn by a knob or a
+/// Every `FloatParam` in the synth. All 67 are drawn by a knob or a
 /// slider, so this list is also the set of controls under test.
 fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     let mut out: Vec<(String, &FloatParam)> = vec![
@@ -79,6 +79,7 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
         ("filter.env_depth".into(), &p.filter.env_depth),
         ("filter.keytrack".into(), &p.filter.keytrack),
         ("filter.drive".into(), &p.filter.drive),
+        ("filter.fm".into(), &p.filter.fm),
         ("chorus.rate".into(), &p.chorus.rate),
         ("chorus.depth".into(), &p.chorus.depth),
         ("chorus.mix".into(), &p.chorus.mix),
@@ -93,6 +94,12 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
         ("distortion.bits".into(), &p.distortion.bits),
         ("distortion.crush_rate".into(), &p.distortion.crush_rate),
         ("distortion.voice_drive".into(), &p.distortion.voice_drive),
+        ("osc_mix.amount".into(), &p.osc_mix.amount),
+        ("osc1_warp.amount".into(), &p.osc1_warp.amount),
+        ("osc2_warp.amount".into(), &p.osc2_warp.amount),
+        ("sub.level".into(), &p.sub.level),
+        ("noise.level".into(), &p.noise.level),
+        ("noise.color".into(), &p.noise.color),
     ];
     for (name, osc) in [("osc1", &p.osc1), ("osc2", &p.osc2)] {
         out.push((format!("{name}.position"), &osc.position));
@@ -114,14 +121,18 @@ fn float_params(p: &WavetableParams) -> Vec<(String, &FloatParam)> {
     for (i, slot) in p.mod_slots.iter().enumerate() {
         out.push((format!("mod_slots[{i}].amount"), &slot.amount));
     }
+    out.push(("mod_sh.rate".into(), &p.mod_sh.rate));
+    out.push(("mod_sh.slew".into(), &p.mod_sh.slew));
     out
 }
 
-/// The `IntParam`s the editor draws as a knob. The other 20 int params
+/// The `IntParam`s the editor draws as a knob. The other 27 int params
 /// are drawn by a different control kind — the wavetable name row
-/// (`oscN_wavetable`), the filter-type chips (`filter_type`), the chorus
-/// mode selector (`chorus_mode`) and the mod matrix's two combo pills
-/// (16) — and are not knobs to migrate.
+/// (`oscN_wavetable`), the filter-type and filter-model chips
+/// (`filter_type`, `filter_model`), the chorus mode selector
+/// (`chorus_mode`), the mod matrix's two combo pills (16) and the choice
+/// selectors bound to the oscillator-character enums (6) — and are not
+/// knobs to migrate.
 fn int_knob_params(p: &WavetableParams) -> Vec<(String, &IntParam)> {
     vec![
         ("max_voices".into(), &p.max_voices),
@@ -131,6 +142,12 @@ fn int_knob_params(p: &WavetableParams) -> Vec<(String, &IntParam)> {
         ("lfo1.shape".into(), &p.lfo1.shape),
         ("lfo2.shape".into(), &p.lfo2.shape),
         ("lfo3.shape".into(), &p.lfo3.shape),
+        // Drawn plain, not via `int_knob_fmt`: declared with `with_choices`
+        // at construction, so `Param::display` already carries the label
+        // (ba todo #1289/#1292's mechanism, used here from the start rather
+        // than through the `int_knob_fmt` seam the LFOs' own Div knob is
+        // still on).
+        ("mod_sh.division".into(), &p.mod_sh.division),
         ("distortion.mode".into(), &p.distortion.mode),
         ("distortion.oversample".into(), &p.distortion.oversample),
     ]
@@ -142,8 +159,8 @@ fn the_control_list_covers_every_float_parameter() {
     let floats = float_params(&p);
     assert_eq!(
         floats.len(),
-        58,
-        "the synth declares 58 FloatParams; the control list must name all of them"
+        67,
+        "the synth declares 67 FloatParams; the control list must name all of them"
     );
 
     // Every listed parameter is one `param_at` really exposes...
@@ -162,7 +179,7 @@ fn the_control_list_covers_every_float_parameter() {
     }
 
     // ...and the counts add up, which is what proves nothing was left out:
-    // 58 floats + 32 ints + 14 bools is the whole parameter list.
+    // 67 floats + 40 ints + 15 bools is the whole parameter list.
     //
     // Was 51/26/10 == 87 when this guard was written. ba todo #1324 (LFO tempo
     // sync) added three `lfoN_sync` bools and three `lfoN_division` ints, so the
@@ -175,11 +192,23 @@ fn the_control_list_covers_every_float_parameter() {
     // The distortion character work then added four floats (`dist_tone`,
     // `dist_bits`, `dist_crush_rate`, `voice_drive`), two ints (`dist_mode`,
     // `dist_oversample`) and one bool (`dist_auto_gain`): 58/32/14 == 104.
+    //
+    // The filter models then added `filter_fm` (float) and `filter_model`
+    // (int): 59/33/14 == 106.
+    //
+    // The new-mod-sources work then added the `ModSource::SampleHold`
+    // generator's own clock: `mod_sh_rate`/`mod_sh_slew` (floats),
+    // `mod_sh_division` (int), `mod_sh_sync` (bool): 61/34/15 == 110.
+    //
+    // The oscillator-character params then added six floats (interaction
+    // amount, two warp amounts, sub level, noise level and colour) and six
+    // choice ints (interaction mode, two warp modes, sub waveform and octave,
+    // noise type): 67/40/15 == 122.
     let mut ids: Vec<&str> = floats.iter().map(|(_, p)| p.id()).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 58, "the control list repeats a parameter");
-    assert_eq!(58 + 32 + 14, PARAM_COUNT);
+    assert_eq!(ids.len(), 67, "the control list repeats a parameter");
+    assert_eq!(67 + 40 + 15, PARAM_COUNT);
 }
 
 // ---------------------------------------------------------------------------
@@ -234,8 +263,11 @@ fn no_control_call_site_restates_a_param_fact() {
         }
     }
 
-    assert_eq!(knobs, 36, "expected 36 float knob cells across the five tabs");
-    assert_eq!(int_knobs, 5, "expected 5 plain int knob cells");
+    // The oscillator-character controls added five to integration's 39: the
+    // warp amount, the interaction amount, and sub level, noise level and
+    // colour.
+    assert_eq!(knobs, 44, "expected 44 float knob cells across the five tabs");
+    assert_eq!(int_knobs, 6, "expected 6 plain int knob cells");
     assert_eq!(sliders, 2, "expected the balance and mod-amount sliders");
 }
 
@@ -457,6 +489,9 @@ fn a_controls_polarity_comes_from_its_range() {
         "amp_env.curve".into(),
         "mod_env.curve".into(),
         "filter.env_depth".into(),
+        "osc1_warp.amount".into(),
+        "osc2_warp.amount".into(),
+        "noise.color".into(),
     ];
     expected.extend((0..8).map(|i| format!("mod_slots[{i}].amount")));
     expected.sort();
@@ -521,6 +556,9 @@ fn every_knob_used_to_reset_to_its_range_minimum() {
         "lfo1.rate".into(),
         "lfo2.rate".into(),
         "lfo3.rate".into(),
+        // Same shape as the three above: default 1.0 Hz against a 0.01 Hz
+        // minimum.
+        "mod_sh.rate".into(),
         "master_volume".into(),
         "mod_env.attack".into(),
         "mod_env.decay".into(),
@@ -579,10 +617,11 @@ fn the_declared_skew_reaches_the_arc() {
         }
     }
     // 15 when this was written; the distortion modes added two more
-    // (`dist_tone`, `dist_crush_rate`).
+    // (`dist_tone`, `dist_crush_rate`); the new-mod-sources work added a
+    // third (`mod_sh_rate`, same shape as the LFO rates).
     assert_eq!(
-        skewed, 17,
-        "17 float params declare a skew the old editor would have ignored"
+        skewed, 18,
+        "18 float params declare a skew the old editor would have ignored"
     );
 }
 

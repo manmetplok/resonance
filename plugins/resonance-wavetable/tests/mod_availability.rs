@@ -92,8 +92,8 @@ fn an_unavailable_source_contributes_no_modulation() {
     ];
     let without = vec![slot(ModSource::Lfo1, ModDest::FilterCutoff, 0.5)];
 
-    let a = evaluate_mod_matrix(&with, 0.8, 0.0, 0.0, 0.4, 0.9, 72.0);
-    let b = evaluate_mod_matrix(&without, 0.8, 0.0, 0.0, 0.4, 0.9, 72.0);
+    let a = evaluate_mod_matrix(&with, 0.8, 0.0, 0.0, 0.4, 0.9, 72.0, 0.0, 0.0, 1.0);
+    let b = evaluate_mod_matrix(&without, 0.8, 0.0, 0.0, 0.4, 0.9, 72.0, 0.0, 0.0, 1.0);
     assert_eq!(a.filter_cutoff, b.filter_cutoff);
     assert_eq!(a.osc1_position, b.osc1_position);
 }
@@ -105,7 +105,7 @@ fn osc_balance_and_unison_detune_accumulate() {
         slot(ModSource::Lfo1, ModDest::OscBalance, 1.0),
         slot(ModSource::Env2, ModDest::UnisonDetune, 1.0),
     ];
-    let state = evaluate_mod_matrix(&slots, 0.75, 0.0, 0.0, 1.0, 1.0, 60.0);
+    let state = evaluate_mod_matrix(&slots, 0.75, 0.0, 0.0, 1.0, 1.0, 60.0, 0.0, 0.0, 1.0);
     assert_eq!(state.osc_balance, 0.75);
     assert_eq!(state.unison_detune, 1.0);
 }
@@ -114,8 +114,49 @@ fn osc_balance_and_unison_detune_accumulate() {
 fn available_routings_still_evaluate() {
     // Guard against the availability filter swallowing working routings.
     let slots = vec![slot(ModSource::Lfo1, ModDest::FilterCutoff, 0.5)];
-    let state = evaluate_mod_matrix(&slots, 1.0, 0.0, 0.0, 0.0, 1.0, 60.0);
+    let state = evaluate_mod_matrix(&slots, 1.0, 0.0, 0.0, 0.0, 1.0, 60.0, 0.0, 0.0, 1.0);
     assert_eq!(state.filter_cutoff, 0.5);
+}
+
+// ---------------------------------------------------------------------------
+// New sources (RandomBipolar/RandomUnipolar/SampleHold/Alternate)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn new_sources_are_available_and_evaluate() {
+    // random_bipolar = -0.4, sample_hold_val = 0.6, alternate = 1.0.
+    let random_bipolar = -0.4_f32;
+    let sample_hold_val = 0.6_f32;
+    let alternate = 1.0_f32;
+    let amount = 0.5_f32;
+
+    for (source, source_value) in [
+        (ModSource::RandomBipolar, random_bipolar),
+        (ModSource::RandomUnipolar, random_bipolar * 0.5 + 0.5),
+        (ModSource::SampleHold, sample_hold_val),
+        (ModSource::Alternate, alternate),
+    ] {
+        assert!(source.is_available(), "{} should be available", source.label());
+        let slots = vec![slot(source, ModDest::FilterCutoff, amount)];
+        let state = evaluate_mod_matrix(
+            &slots,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            60.0,
+            random_bipolar,
+            sample_hold_val,
+            alternate,
+        );
+        assert_eq!(
+            state.filter_cutoff,
+            source_value * amount,
+            "{}",
+            source.label()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

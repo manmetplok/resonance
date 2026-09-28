@@ -14,12 +14,23 @@ default = ["editor"]
 editor = ["dep:plugin-gui-core",
     # the shared preset bar (ba todo #1358) lives behind this feature
     "resonance-plugin/editor-widgets",
+    # the per-osc "Load…" file dialog for user wavetables
+    "dep:rfd",
 ]
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-dsp = { path = "../../resonance-dsp" }
 serde_json.workspace = true
+# User wavetables (`user_wavetable`): WAV decode, the FFT the runtime mip
+# builder and the single-cycle resampler run on, and the base64 the imported
+# frames are embedded in plugin state with. Not editor-gated: state restore
+# rebuilds the table headless too.
+hound.workspace = true
+rustfft.workspace = true
+base64 = "0.22"
+parking_lot.workspace = true
+tracing.workspace = true
 
 # Editor dependencies — only pulled in when the `editor` feature is on.
 # Only the platform-neutral half of the editor stack is named here. The
@@ -28,6 +39,7 @@ serde_json.workspace = true
 # `resonance_plugin::editor_host`; `egui` comes via `plugin_gui_core::egui`
 # (ARCH-08).
 plugin-gui-core = { path = "../../plugin-gui-core", optional = true }
+rfd = { workspace = true, optional = true }
 
 [build-dependencies]
 resonance-dsp = { path = "../../resonance-dsp" }

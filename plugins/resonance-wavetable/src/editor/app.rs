@@ -9,6 +9,7 @@ use std::sync::Arc;
 use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::WavetableParams;
+use crate::user_wavetable::UserWavetables;
 use crate::viz::{VizSnapshot, WavetableVizState};
 
 use super::{chrome, tabs, theme};
@@ -41,6 +42,12 @@ pub(crate) struct WavetableEditorApp {
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
     /// Most recent audio→UI viz snapshot, refreshed each frame.
     pub(crate) snapshot: VizSnapshot,
+    /// Per-osc user wavetables: what is loaded, and where "Load…" sends
+    /// its file.
+    pub(crate) user_tables: Arc<UserWavetables>,
+    /// The load each oscillator's "Load…" is waiting on (its generation);
+    /// the user table is selected once that load lands.
+    pub(crate) pending_user_load: [Option<u64>; 2],
 }
 
 impl WavetableEditorApp {
@@ -48,6 +55,7 @@ impl WavetableEditorApp {
         params: Arc<WavetableParams>,
         viz: Arc<WavetableVizState>,
         presets: std::sync::Arc<resonance_plugin::presets::PresetSession>,
+        user_tables: Arc<UserWavetables>,
     ) -> Self {
         let snapshot = viz.read_snapshot();
         // Standalone editor harness can pick an initial tab via env var so
@@ -73,6 +81,8 @@ impl WavetableEditorApp {
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             snapshot,
+            user_tables,
+            pending_user_load: [None; 2],
         }
     }
 }

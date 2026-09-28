@@ -136,6 +136,37 @@ pub(crate) fn float_slider(ui: &mut egui::Ui, width: f32, param: &FloatParam) {
     }
 }
 
+/// Segmented selector bound to a choice `IntParam` (one declared with
+/// `IntParam::with_choices`): one segment per declared label, so the
+/// control can offer exactly the values the parameter holds and nothing
+/// else.
+pub(crate) fn choice_segmented(ui: &mut egui::Ui, param: &IntParam) {
+    let labels = param.choices().unwrap_or(&[]);
+    let min = param.range().min();
+    let selected = usize::try_from(param.value() - min).unwrap_or(0);
+    if let Some(i) = widgets::segmented(ui, labels, selected) {
+        param.set_plain(f64::from(min + i as i32));
+    }
+}
+
+/// A single chip bound to a choice `IntParam` that shows the current
+/// label and steps to the next one on a click, wrapping. For the two-way
+/// switches (sub waveform, sub octave, noise type) where a full segmented
+/// row would not fit the card.
+pub(crate) fn choice_cycle(ui: &mut egui::Ui, param: &IntParam) {
+    let value = param.value();
+    let label = param.display(param.get_plain());
+    if widgets::chip_button(ui, &label, true) {
+        let range = param.range();
+        let next = if value >= range.max() {
+            range.min()
+        } else {
+            value + 1
+        };
+        param.set_plain(f64::from(next));
+    }
+}
+
 /// The readout a control shows next to a parameter — the parameter's own
 /// formatter, never a `format!` at the call site.
 pub(crate) fn readout(param: &FloatParam) -> String {
