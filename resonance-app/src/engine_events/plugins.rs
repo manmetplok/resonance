@@ -323,9 +323,9 @@ pub(super) fn track_removed_echo(
 }
 
 /// Mirror a track plugin's removal: the slot, its cached blob, parked
-/// params, side-index entry, selection and key route. Called by the live
-/// delete at once (STATE-10 shape, FU-A13c) and by [`track_removed_echo`]
-/// for a removal nobody mirrored yet.
+/// params, side-index entry, selection, key route and automation lanes.
+/// Called by the live delete at once (STATE-10 shape, FU-A13c) and by
+/// [`track_removed_echo`] for a removal nobody mirrored yet.
 pub(crate) fn track_removed(
     r: &mut Resonance,
     track_id: TrackId,
@@ -348,6 +348,36 @@ pub(crate) fn track_removed(
     // or the route is written to the next save and reloads onto whatever
     // plugin later occupies this instance id (ba todo #1311).
     r.sidechain.clear_plugin(instance_id);
+    drop_plugin_lanes(r, instance_id);
+}
+
+/// Drop every automation lane aimed at a plugin instance that has just
+/// left its chain, in the mirror and in the engine (automation-control-api
+/// D1). The engine keys lanes by target and does not prune them on a
+/// plugin removal; an orphaned lane is inert but saved, and reloads onto
+/// whatever plugin later occupies the id — the same leak #1311 closed for
+/// key routes. Track deletion does the same for a whole chain
+/// (`engine_events::tracks::drop_track_references`).
+///
+/// The removal is a recorded edit, so an undo brings the lanes back: the
+/// snapshot carries them and `restore_automation_lanes` re-sends every
+/// lane the mirror lacks. A missing plugin's restore (a relocate) keeps
+/// its instance id and never comes through here, so its lanes survive.
+pub(crate) fn drop_plugin_lanes(r: &mut Resonance, instance_id: PluginInstanceId) {
+    use resonance_common::AutomationTarget as T;
+
+    let stale: Vec<T> = r
+        .automation
+        .lanes
+        .keys()
+        .filter(|t| matches!(t, T::PluginParam { instance, .. } if *instance == instance_id))
+        .cloned()
+        .collect();
+    for target in stale {
+        r.automation.lanes.remove(&target);
+        r.automation.live_values.remove(&target);
+        let _ = r.engine.send(AudioCommand::ClearAutomationLane { target });
+    }
 }
 
 /// Mirror an engine-side chain reorder (`AudioEvent::MovePlugin` ->
@@ -811,6 +841,7 @@ pub(crate) fn bus_removed(
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
+    drop_plugin_lanes(r, instance_id);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -926,6 +957,7 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
+    drop_plugin_lanes(r, instance_id);
 }
 
 /// Drop the key route onto a plugin that has just come off a **bus** or
