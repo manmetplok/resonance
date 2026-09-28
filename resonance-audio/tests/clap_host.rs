@@ -22,6 +22,8 @@ mod clap_ffi_hardening;
 mod clap_latency_tracking;
 #[path = "clap_host/clap_note_event_order.rs"]
 mod clap_note_event_order;
+#[path = "clap_host/color_plugin_loads.rs"]
+mod color_plugin_loads;
 #[path = "clap_host/clap_thread_roles.rs"]
 mod clap_thread_roles;
 #[path = "clap_host/clap_param_flush.rs"]
