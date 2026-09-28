@@ -135,17 +135,21 @@ so probe at that level; pass it explicitly, because the tool's own default is
 -12:
 
 1. `meter_probe {target: {bus_id}, level_dbfs: -18}`.
-2. `thd_pct` under the bus band (0.5-3 %)? raise `drive` by about 0.05 and probe
-   again; over it, lower. Three or four probes is normal.
+2. `thd_pct` under the bus band (0.5-3 %)? raise the drive by about 0.05 and
+   probe again; over it, lower. Three or four probes is normal.
 3. Check the signature: `h2_h3_db` above 0 (even-dominant), `decay_db_per_order`
-   6 or more. Odd-dominant means the wrong `mode` or too little `bias`.
+   6 or more. Odd-dominant means the wrong mode or too little bias.
 4. `meter_probe {level_dbfs: -18, freq_hz: 5000}` once: `aliasing_floor_dbc`
-   must be -90 or lower. If not, raise `oversample` or lower `drive`.
+   must be -90 or lower. If not, raise the oversampling or lower the drive.
 5. Optionally, one probe at the level the bus really peaks at (its
    `true_peak_db` from the `meter_stems` pass with `include_busses: true`,
    within `level_dbfs`'s -80..0) shows how hard the loudest moments hit. It
    reads higher than the -18 figure; report it, but set the drive by the -18
    one.
+
+<!-- keys: com.resonance.color -->
+The knobs those steps turn are `drive`, `mode`, `bias` and `oversample`.
+<!-- /keys -->
 
 Verify: `meter_compare {a: snapshot_id}` on the master. Keep the move only if
 `tilt_db_per_oct` went more negative or `lowmid_presence_db` rose, and none of

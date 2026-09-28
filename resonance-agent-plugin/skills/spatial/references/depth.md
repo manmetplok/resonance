@@ -10,7 +10,7 @@ track's number against a target.
 |---|---|---|---|
 | Level | louder | quieter | the fader (the `mixing` skill's balance) |
 | Direct-to-reverberant ratio (DRR) | dry | wet | the send level into the shared room |
-| Pre-delay (pop/rock convention) | long, 20-40 ms: the voice lands before its room | short, 0-10 ms | the room's `predelay`, or a second return |
+| Pre-delay (pop/rock convention) | long, 20-40 ms: the voice lands before its room | short, 0-10 ms | the room's pre-delay, or a second return |
 | Early reflections vs tail | ER carry position | tail carries the room's size | the room's ER/tail balance |
 | High-frequency content | bright | darker | a high shelf or the colour plugin's output tilt on back parts; the room's wet low-pass |
 | Transients | sharp | softer | less compression on front parts; softer attack on back parts |
@@ -108,10 +108,12 @@ single post-fader send, so read the return's `return_gain_db` from the track's
 If one room cannot place both the front and the back, add a second return
 rather than pushing sends to extremes:
 
+<!-- keys: com.resonance.reverb -->
 | Return | Fed by | Settings |
 |---|---|---|
 | Room (shared) | everything that needs space | as above |
 | Back / wash | pads, FX, textures | longer `decay`, `er_tail_balance` +0.3 to +0.6, `wet_lpf_freq` 6-8 kHz, `predelay` 0-10 ms |
+<!-- /keys -->
 
 The back parts then send to both, or only to the wash. Keep the front on the
 shared room only.

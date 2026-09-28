@@ -104,9 +104,15 @@ enforces it:
   agent told to read a reference that has been renamed does not error, it just
   carries on without the material;
 - every plugin param key, choice label and factory preset name a skill names
-  inside a **keys block** must exist in that plugin (see *Naming plugin keys*
-  below);
-- every `SKILL.md` must call `control_hello`.
+  inside a **keys block** must exist in that plugin, and a key or preset name
+  must never appear outside one (see *Naming plugin keys* below);
+- every other one-word inline-code span under `skills/` must be something
+  real: a tool, a control method, a schema field or description word, a plugin
+  id, a skill or a workspace crate. A misspelt word fails; a word that is right
+  but none of those goes in `PROSE_TOKENS`, with its reason;
+- every `SKILL.md` must call `control_hello`, and every control method its
+  preflight names (`meter.snapshot`) must be in
+  `resonance_control::methods::capabilities()`.
 
 That last one covers what versioning cannot. The app is a separate binary from
 the MCP server, so the plugin's version says nothing about the build the user
@@ -150,26 +156,47 @@ Inside the block, **every inline-code span** must be one of that plugin's:
   `24 dB/oct`);
 - factory preset names, verbatim (`Bus — Warm Glue`, em dash included).
 
+Two rules go further than spelling:
+
+- **A label must follow its key.** Each label is checked against the nearest
+  key named before it in the same table row, list item or paragraph, so
+  `` `speed` `Tape` `` fails (`Tape` is a value of `mode`). Write
+  `` `mode` `Tape` at `speed` `15 ips` ``, not "`Tape` at `15 ips`". In a table
+  body, a label with no key before it in its row falls back to a key in its
+  column's header cell, e.g. a `| Mode (`widen_mode`) |` column of modes.
+- **A stated band range is counted.** If the text says `n = 0-3` (in the same
+  row or paragraph, or anywhere earlier in the block), every index 0-3 must give
+  a real key for each `{n}` span and index 4 must not. State a range only when
+  it is the plugin's real band count.
+
 Keep tool names and meter fields out of the block (close it, write the prose,
-open another); fenced code and nested blocks are refused. The markers are HTML
-comments, so they vanish in rendered markdown and cost the agent reading the raw
-file one line each.
+open another); fenced code, nested blocks and an inline span wrapped across two
+lines are refused. The markers are HTML comments, so they vanish in rendered
+markdown and cost the agent reading the raw file one line each.
+
+**Outside a block, a key or preset name fails**, even when it is spelled right:
+nothing there ties it to its plugin, so it would pass for the wrong plugin. Wrap
+the sentence in a block, or name the knob in plain words ("raise the drive")
+where a block above has already given its key. The few keys that are also wire
+field names quoted as such (`range`, `b`, `scale`, `target_lufs`) are listed in
+`KEY_SHAPED_WIRE_WORDS` in the lockstep test and `WIRE_WORDS` in
+`skill_keys.rs`, which must agree.
 
 The check runs in each plugin's own crate, `plugins/<name>/tests/skill_keys.rs`
 (one line: `resonance_dsp_test_support::skill_keys_test!(<crate>::<Plugin>);`),
 because reading a plugin's real table means linking it, and `resonance-mcp` may
-not depend on plugins. `agent_plugin_lockstep.rs` checks the other half: every
-block is well formed and names a plugin that has that test. A block for a new
-plugin therefore needs that one-line test first. To see what a plugin lets a
-block name:
+not depend on plugins. Each plugin checks its blocks and also scans the text
+outside every block for its own keys and preset names, from its exact table.
+`agent_plugin_lockstep.rs` checks the other half: every block is well formed
+and names a plugin whose `skill_keys.rs` calls the macro on *that* crate and
+the type its `lib.rs` implements the plugin on; and, for plugins without the
+test, it scans the text outside blocks for any `Param::new("…")` key or preset
+name in `plugins/*/src`. A block for a new plugin therefore needs that one-line
+test first. To see what a plugin lets a block name:
 
 ```sh
 RESONANCE_SKILL_KEYS_DUMP=1 cargo test -p resonance-color --test skill_keys -- --nocapture
 ```
-
-Outside a block, a key is checked only if it is snake_case inline code, and then
-only for existing in *some* plugin's source — not in the plugin the sentence is
-about. Put every key in a block.
 
 ## Writing more skills
 

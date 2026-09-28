@@ -110,7 +110,7 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
    10 kHz.
 5. **Duck the return** from the lead, keyed with `bus_set_sidechain`.
 6. **Darken the back.** Back-layer parts get less top (a high shelf or the
-   colour plugin's `tone`), front parts keep theirs.
+   colour plugin's output tilt), front parts keep theirs.
 7. **Verify the ordering.** `meter_stems` `detail: ["depth"]`: front's
    `drr_db_estimate` above middle's above back's, and `hf_tilt_db` falling
    front to back.

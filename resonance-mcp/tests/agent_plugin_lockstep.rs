@@ -7,7 +7,7 @@
 //! agent following them only finds out mid-mix, one failed tool call at
 //! a time.
 //!
-//! Two things are pinned:
+//! What is pinned:
 //!
 //! - the plugin's `lockstep.json` against
 //!   [`resonance_control::PROTOCOL_VERSION`], so bumping the protocol
@@ -31,8 +31,18 @@
 //!   so the table check itself runs in each plugin crate's
 //!   `tests/skill_keys.rs` (`resonance_dsp_test_support::skill_keys`).
 //!   What runs here is the other half: the blocks are well formed, and
-//!   every plugin a block names has that test, so no block goes
-//!   unchecked. The scans above them read the text *outside* the blocks.
+//!   every plugin a block names has that test, on its own crate and
+//!   plugin type, so no block goes unchecked;
+//! - outside the blocks, no inline-code span may be a param key or preset
+//!   name (it would be checked against no plugin), and every other
+//!   single-word span must be a tool, a control method, a schema or
+//!   description word, a plugin id, a skill or a crate;
+//! - every control method a skill's preflight names, against
+//!   `resonance_control::methods::capabilities()`: a misspelt one would
+//!   stop the skill as "app too old" on a build that has everything.
+//!
+//! The scans above the keys-block checks read the text *outside* the
+//! blocks.
 
 use resonance_mcp::ResonanceMcp;
 use std::collections::BTreeSet;
@@ -315,7 +325,7 @@ fn skills_bare_tool_names_exist() {
 #[test]
 fn allow_listed_wire_fields_exist_in_the_schemas() {
     let schemas = schema_text();
-    for field in WIRE_FIELDS {
+    for field in WIRE_FIELDS.iter().chain(KEY_SHAPED_WIRE_WORDS) {
         assert!(
             schemas.contains(&format!("\"{field}\"")),
             "{field} is allow-listed as a wire field but no published tool schema has it — \
@@ -364,28 +374,122 @@ fn first_party_param_keys() -> BTreeSet<String> {
     keys
 }
 
-/// Snake-case identifiers written as inline code (`` `lim_on` ``).
-fn backticked_snake_tokens(text: &str) -> BTreeSet<String> {
-    let mut found = BTreeSet::new();
-    for (i, span) in text.split('`').enumerate() {
-        let is_code = i % 2 == 1;
-        let snake = span.contains('_')
-            && !span.contains("__")
-            && span.starts_with(|c: char| c.is_ascii_lowercase())
-            && span
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-        if is_code && snake {
-            found.insert(span.to_owned());
+/// Every inline-code span in `text`, trimmed, outside fenced code (whose
+/// lines are tool-call sketches, not names).
+fn inline_code_spans(text: &str) -> Vec<String> {
+    // Blank fenced code first (markers included), then pair backticks
+    // across the rest: an inline span may wrap onto the next line.
+    let mut prose = String::with_capacity(text.len());
+    let mut fenced = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        } else if !fenced {
+            prose.push_str(line);
         }
+        prose.push('\n');
     }
-    found
+    prose
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .map(|span| span.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|span| !span.is_empty())
+        .collect()
 }
 
-/// Inline-code snake tokens that are neither a tool, a schema property
-/// nor a plugin param key: control-protocol method suffixes the skills
-/// quote.
-const PROSE_TOKENS: &[&str] = &["insert_bars"];
+/// The skill names (`mixing`, `song-structure`): the directories under
+/// `skills/`. Skills point at each other by name.
+fn skill_names() -> BTreeSet<String> {
+    std::fs::read_dir(plugin_dir().join("skills"))
+        .expect("read skills dir")
+        .map(|e| e.expect("read dir entry").file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// Workspace crate directory names (`resonance-mcp`, `resonance-drums`),
+/// which the skills cite as sources of truth.
+fn crate_names() -> BTreeSet<String> {
+    let root = plugin_dir().parent().expect("workspace root").to_path_buf();
+    let mut names = BTreeSet::new();
+    for dir in [root.clone(), root.join("plugins")] {
+        for entry in std::fs::read_dir(&dir).expect("read workspace dir") {
+            let path = entry.expect("read dir entry").path();
+            if path.join("Cargo.toml").is_file() {
+                names.insert(path.file_name().expect("dir name").to_string_lossy().into_owned());
+            }
+        }
+    }
+    names
+}
+
+/// A span that is one word and is meant as a name: no whitespace, and not
+/// a number, a path, a file name, a placeholder or a JSON fragment. Those
+/// are the spans [`skills_inline_identifiers_exist`] requires to be known.
+fn is_single_word_name(span: &str) -> bool {
+    const FILE_EXTENSIONS: &[&str] = &[".md", ".rs", ".json", ".rproj", ".wav", ".flac", ".mid", ".sh"];
+    !span.contains(char::is_whitespace)
+        && !span.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '-' | '+' | '±' | '−' | '.'))
+        && !span.contains(['/', '$', '{', '}', ':', '"', '=', '(', '<', '*', '[', ','])
+        && !span.starts_with("mcp__")
+        && !FILE_EXTENSIONS.iter().any(|ext| span.ends_with(ext))
+}
+
+/// Inline-code words that are no tool, capability, schema property or
+/// description word, but are still right. Keep this list short and give
+/// each entry its reason: every entry is a word the check cannot vouch
+/// for.
+const PROSE_TOKENS: &[&str] = &[
+    // `arrangement.insert_bars`, quoted by its method suffix.
+    "insert_bars",
+    // JSON literals the skills quote as values.
+    "null",
+    "true",
+    "false",
+];
+
+/// Control-protocol method names (`meter.snapshot`), as the skills'
+/// preflights quote them against `control_hello`'s `capabilities`.
+fn capabilities() -> BTreeSet<String> {
+    resonance_control::methods::capabilities()
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Whether `span` is shaped like a control method: `<namespace>.<name>`
+/// with a namespace the protocol has.
+fn is_method_shaped(span: &str, capabilities: &BTreeSet<String>) -> bool {
+    let Some((head, tail)) = span.split_once('.') else {
+        return false;
+    };
+    !tail.is_empty()
+        && capabilities.iter().any(|m| m.split_once('.').is_some_and(|(ns, _)| ns == head))
+}
+
+/// Every first-party factory preset name: the `name: "…"` literals of
+/// `plugins/*/src/presets.rs`.
+fn first_party_preset_names() -> BTreeSet<String> {
+    const MARK: &str = "name: \"";
+    let plugins = plugin_dir()
+        .parent()
+        .expect("workspace root")
+        .join("plugins");
+    let mut names = BTreeSet::new();
+    for entry in std::fs::read_dir(&plugins).expect("read plugins dir") {
+        let Ok(text) = std::fs::read_to_string(entry.expect("read dir entry").path().join("src/presets.rs")) else {
+            continue;
+        };
+        for line in text.lines() {
+            if let Some(rest) = line.trim().strip_prefix(MARK) {
+                if let Some(end) = rest.find('"') {
+                    names.insert(rest[..end].to_owned());
+                }
+            }
+        }
+    }
+    names
+}
 
 /// Every published tool description, joined — job results (`meter.*`)
 /// and generator params are untyped in the schemas and documented there.
@@ -407,46 +511,205 @@ fn contains_word(text: &str, word: &str) -> bool {
     })
 }
 
-/// FU-M5b: skills name plugin parameters (the mastering stage switches)
-/// and wire fields as inline code. Each such token must still exist — as
-/// a published tool, a property in some tool's schema or description, or
-/// a first-party plugin parameter key — or a renamed parameter leaves the
-/// skill setting something that is refused as not found.
+/// Param keys that are also wire words the skills quote outside any keys
+/// block, meaning the wire word. Each must be a property in some tool's
+/// schema ([`allow_listed_wire_fields_exist_in_the_schemas`] checks it),
+/// and the plugin-side check holds the same list
+/// (`resonance_dsp_test_support::skill_keys::WIRE_WORDS`;
+/// [`wire_word_lists_agree`] keeps the two equal).
+const KEY_SHAPED_WIRE_WORDS: &[&str] = &[
+    // `meter_compare {a, b}`: the second measurement.
+    "b",
+    // The `range` every meter_* call takes.
+    "range",
+    // `render_mixdown`'s `normalize: {target_lufs, …}` and the assistant's
+    // `target_lufs` stage.
+    "target_lufs",
+    // `section_set_scale`'s `scale`.
+    "scale",
+];
+
+/// The two halves of the outside-a-block check must excuse the same
+/// words, or one half flags what the other lets through.
 #[test]
-fn skills_inline_identifiers_exist() {
-    let published = tool_names();
-    let schemas = schema_text();
-    let descriptions = description_text();
+fn wire_word_lists_agree() {
+    const MARK: &str = "pub const WIRE_WORDS: &[&str] = &[";
+    let source = plugin_dir()
+        .parent()
+        .expect("workspace root")
+        .join("resonance-dsp-test-support/src/skill_keys.rs");
+    let text = std::fs::read_to_string(&source).expect("read skill_keys.rs");
+    let list = text
+        .split_once(MARK)
+        .and_then(|(_, rest)| rest.split_once("];"))
+        .map(|(list, _)| list)
+        .expect("skill_keys.rs declares WIRE_WORDS");
+    let theirs: BTreeSet<&str> = list.split(',').map(|w| w.trim().trim_matches('"')).filter(|w| !w.is_empty()).collect();
+    let ours: BTreeSet<&str> = KEY_SHAPED_WIRE_WORDS.iter().copied().collect();
+    assert_eq!(ours, theirs, "KEY_SHAPED_WIRE_WORDS and skill_keys::WIRE_WORDS diverged");
+}
+
+/// The param keys and preset names the scans outside keys blocks know,
+/// with a sanity check that the source scans found anything.
+fn plugin_names() -> (BTreeSet<String>, BTreeSet<String>) {
     let keys = first_party_param_keys();
     assert!(
         keys.contains("lim_on") && keys.contains("threshold"),
         "sanity check failed: the param-key scan found {} keys",
         keys.len()
     );
+    let presets = first_party_preset_names();
+    assert!(
+        presets.contains("Bus — Warm Glue") && presets.contains("Tight Room"),
+        "sanity check failed: the preset scan found {} names",
+        presets.len()
+    );
+    (keys, presets)
+}
+
+/// A key or preset outside a keys block is checked by nobody against the
+/// plugin it belongs to: this crate can only tell that *some* plugin has
+/// it, which is how `tone_b0_gain` could be cited for the EQ. So outside
+/// the blocks, every inline-code span that exactly matches any
+/// first-party param key or preset name fails, and the fix is to wrap the
+/// sentence in a block for its plugin (the plugin's `skill_keys` test then
+/// checks it properly). Keys come from the `Param::new("…")` literals, so
+/// one built by a helper or `format!` is missed here; every plugin with a
+/// `skill_keys` test runs the same check from its exact table
+/// (`skill_keys::loose_names`), which catches those. Scans `skills/` only:
+/// the README quotes keys to explain the convention.
+#[test]
+fn keys_and_presets_sit_inside_key_blocks() {
+    let (keys, presets) = plugin_names();
     let mut files = Vec::new();
-    markdown_files(&plugin_dir(), &mut files);
+    markdown_files(&plugin_dir().join("skills"), &mut files);
+
+    let mut loose = Vec::new();
+    for file in files {
+        let text = strip_key_blocks(&std::fs::read_to_string(&file).expect("read skill markdown"));
+        for span in inline_code_spans(&text) {
+            let is_key = keys.contains(&span) && !KEY_SHAPED_WIRE_WORDS.contains(&span.as_str());
+            if is_key || presets.contains(&span) {
+                loose.push(format!("{}: `{span}`", file.display()));
+            }
+        }
+    }
+    assert!(
+        loose.is_empty(),
+        "skills name plugin param keys or preset names outside a `<!-- keys: <plugin id> -->` \
+         block, where nothing checks them against their plugin. Wrap the sentence or table in a \
+         block for that plugin (resonance-agent-plugin/README.md, \"Naming plugin keys\"); if the \
+         span means a wire field of the same spelling, add it to KEY_SHAPED_WIRE_WORDS:\n{}",
+        loose.join("\n")
+    );
+}
+
+/// FU-M5b: skills name tools, wire fields and methods as inline code.
+/// Outside keys blocks, every single-word span under `skills/` must still
+/// exist — as a published tool, a control method, a property in some
+/// tool's schema, a word of some tool's description (a dotted path when
+/// each segment is), a first-party plugin id, a skill or a workspace crate
+/// — or a rename leaves the skill naming something that is refused as not
+/// found. A span shaped like a control method (`meter.snapshot`) must be
+/// one exactly. Keys and presets are
+/// [`keys_and_presets_sit_inside_key_blocks`]' business. The README is
+/// documentation for people, not a procedure, and is not scanned.
+#[test]
+fn skills_inline_identifiers_exist() {
+    let published = tool_names();
+    let methods = capabilities();
+    let schemas = schema_text();
+    let descriptions = description_text();
+    let plugin_ids: BTreeSet<String> = first_party_plugins().into_iter().map(|(id, _)| id).collect();
+    let (keys, presets) = plugin_names();
+    let (skills, crates) = (skill_names(), crate_names());
+    let mut files = Vec::new();
+    markdown_files(&plugin_dir().join("skills"), &mut files);
 
     let mut missing = Vec::new();
     for file in files {
         let text = strip_key_blocks(&std::fs::read_to_string(&file).expect("read skill markdown"));
-        for token in backticked_snake_tokens(&text) {
-            let known = published.contains(&token)
-                || schemas.contains(&format!("\"{token}\""))
-                || contains_word(&descriptions, &token)
-                || keys.contains(&token)
-                || PLUGIN_FILE_KEYS.contains(&token.as_str())
-                || PROSE_TOKENS.contains(&token.as_str());
+        for span in inline_code_spans(&text) {
+            if !is_single_word_name(&span) || keys.contains(&span) || presets.contains(&span) {
+                continue;
+            }
+            if is_method_shaped(&span, &methods) {
+                if !methods.contains(&span) {
+                    missing.push(format!("{}: `{span}` (no such control method)", file.display()));
+                }
+                continue;
+            }
+            let word_known = |word: &str| {
+                published.contains(word)
+                    || schemas.contains(&format!("\"{word}\""))
+                    || contains_word(&descriptions, word)
+            };
+            // A dotted field path (`song_summary.time_signature`) is known
+            // when each of its segments is.
+            let known = word_known(&span)
+                || (span.contains('.') && span.split('.').all(|seg| !seg.is_empty() && word_known(seg)))
+                || plugin_ids.contains(&span)
+                || skills.contains(&span)
+                || crates.contains(&span)
+                || PLUGIN_FILE_KEYS.contains(&span.as_str())
+                || PROSE_TOKENS.contains(&span.as_str());
             if !known {
-                missing.push(format!("{}: `{token}`", file.display()));
+                missing.push(format!("{}: `{span}`", file.display()));
             }
         }
     }
     assert!(
         missing.is_empty(),
-        "skills name identifiers that are no tool, schema field or first-party plugin \
-         parameter key:\n{}",
+        "skills name inline-code words that are no tool, control method, schema field, \
+         description word or plugin id. Fix the name; if it is a plugin key, label or preset, \
+         put it in a keys block; if it is right and none of those, add it to PROSE_TOKENS with \
+         its reason:\n{}",
         missing.join("\n")
     );
+}
+
+/// The section of a `SKILL.md` under its `Preflight` heading, up to the
+/// next `## ` heading.
+fn preflight_section(text: &str) -> Option<String> {
+    let mut lines = text.lines().skip_while(|l| !(l.starts_with("## ") && l.contains("Preflight")));
+    let heading = lines.next()?;
+    let body: Vec<&str> = lines.take_while(|l| !l.starts_with("## ")).collect();
+    Some(format!("{heading}\n{}", body.join("\n")))
+}
+
+/// Each skill's preflight checks named control methods against
+/// `control_hello`'s `capabilities`. A misspelt one reads as "the app is
+/// too old" and stops the skill on a build that has everything, so every
+/// method a preflight names must be a real one, and a preflight must name
+/// at least one.
+#[test]
+fn preflights_name_real_capabilities() {
+    let methods = capabilities();
+    let mut files = Vec::new();
+    markdown_files(&plugin_dir().join("skills"), &mut files);
+
+    let mut problems = Vec::new();
+    for file in files
+        .into_iter()
+        .filter(|f| f.file_name().is_some_and(|n| n == "SKILL.md"))
+    {
+        let text = std::fs::read_to_string(&file).expect("read SKILL.md");
+        let Some(section) = preflight_section(&text) else {
+            problems.push(format!("{}: no `## … Preflight` section", file.display()));
+            continue;
+        };
+        let named: Vec<String> = inline_code_spans(&section)
+            .into_iter()
+            .filter(|s| is_method_shaped(s, &methods))
+            .collect();
+        if named.is_empty() {
+            problems.push(format!("{}: the preflight names no control method", file.display()));
+        }
+        for name in named.iter().filter(|n| !methods.contains(*n)) {
+            problems.push(format!("{}: preflight names `{name}`, not a control method", file.display()));
+        }
+    }
+    assert!(problems.is_empty(), "preflights:\n{}", problems.join("\n"));
 }
 
 // ---------------------------------------------------------------------------
@@ -552,9 +815,52 @@ fn first_party_plugins() -> Vec<(String, PathBuf)> {
     out
 }
 
+/// Whether `test` (a plugin crate's `tests/skill_keys.rs`) really runs the
+/// check for the plugin in `dir`: an uncommented `skill_keys_test!` whose
+/// argument is `<this crate>::<the type lib.rs implements the plugin on>`.
+/// A macro naming another crate's plugin compiles (given the dev-dep) and
+/// passes, while this plugin's blocks go unchecked.
+fn skill_keys_test_checks(dir: &Path, test: &Path) -> Result<(), String> {
+    const MACRO: &str = "skill_keys_test!(";
+    let text = std::fs::read_to_string(test)
+        .map_err(|_| format!("{} does not exist; add the one-line `skill_keys_test!`", test.display()))?;
+    let call = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with("//"))
+        .find_map(|l| l.split_once(MACRO).map(|(_, rest)| rest))
+        .ok_or_else(|| format!("{} does not call `resonance_dsp_test_support::{MACRO}…)`", test.display()))?;
+    let arg = call.split(')').next().unwrap_or("").trim();
+    let (krate, ty) = arg
+        .rsplit_once("::")
+        .ok_or_else(|| format!("{}: write the argument as `<crate>::<Plugin>`, not `{arg}`", test.display()))?;
+    let manifest = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read plugin Cargo.toml");
+    let package = manifest
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("name = \""))
+        .and_then(|rest| rest.split('"').next())
+        .expect("plugin Cargo.toml has a package name")
+        .replace('-', "_");
+    if krate.trim_start_matches("::") != package {
+        return Err(format!(
+            "{} checks `{arg}`, which is not this crate (`{package}`): its blocks go unchecked",
+            test.display()
+        ));
+    }
+    let lib = std::fs::read_to_string(dir.join("src/lib.rs")).expect("read plugin lib.rs");
+    if !lib.contains(&format!("ResonancePlugin for {ty} ")) && !lib.contains(&format!("ResonancePlugin for {ty}\n")) {
+        return Err(format!(
+            "{} checks `{arg}`, but {} does not implement the plugin on `{ty}`",
+            test.display(),
+            dir.join("src/lib.rs").display()
+        ));
+    }
+    Ok(())
+}
+
 /// Every keys block is well formed and names a first-party plugin whose
-/// crate runs `skill_keys_test!`. A block nobody checks is worse than no
-/// block: it looks verified.
+/// crate runs `skill_keys_test!` on that plugin. A block nobody checks is
+/// worse than no block: it looks verified.
 #[test]
 fn every_keys_block_names_a_plugin_that_checks_it() {
     let plugins = first_party_plugins();
@@ -584,15 +890,8 @@ fn every_keys_block_names_a_plugin_that_checks_it() {
                 continue;
             };
             let test = dir.join("tests/skill_keys.rs");
-            let checked = std::fs::read_to_string(&test)
-                .is_ok_and(|t| t.contains("skill_keys_test!"));
-            if !checked {
-                problems.push(format!(
-                    "{}: names `{id}`, but {} does not call \
-                     `resonance_dsp_test_support::skill_keys_test!`; add it",
-                    file.display(),
-                    test.display()
-                ));
+            if let Err(why) = skill_keys_test_checks(dir, &test) {
+                problems.push(format!("{}: names `{id}`, but {why}", file.display()));
             }
         }
     }

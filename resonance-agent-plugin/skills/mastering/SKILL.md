@@ -112,7 +112,7 @@ Reach for a stage only when a number asked for it:
 | Measurement | Stage |
 |---|---|
 | A narrow resonance in `peaks`, or rumble below 30 Hz | corrective EQ |
-| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | de-harsh (`dh_on`, start at the defaults), or a corrective EQ bell for one static peak |
+| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | de-harsh (its switch, starting at the defaults), or a corrective EQ bell for one static peak |
 | The mix does not cohere; parts sit separately | glue compressor, gently |
 | Sterile (the test below) | saturator |
 | `tilt_db_per_oct` off the target slope | tonal EQ |
