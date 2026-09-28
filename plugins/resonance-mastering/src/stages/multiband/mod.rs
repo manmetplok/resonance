@@ -291,9 +291,8 @@ impl Multiband {
         cfg: &MultibandConfig,
         width: &[f32; NUM_BANDS],
     ) {
-        for b in 0..NUM_BANDS {
-            let w = width[b].clamp(0.0, 2.0);
-            retarget(&mut self.width_sm[b], &mut self.width_tgt[b], w);
+        for ((sm, tgt), w) in self.width_sm.iter_mut().zip(&mut self.width_tgt).zip(width) {
+            retarget(sm, tgt, w.clamp(0.0, 2.0));
         }
         let total = left.len().min(right.len());
         let mut start = 0;
