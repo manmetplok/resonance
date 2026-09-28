@@ -169,6 +169,31 @@ fn retargeting_mid_ramp_starts_from_the_current_value() {
     assert_eq!(s.current(), 0.0);
 }
 
+/// The per-block calling pattern: the owner re-sends the unchanged param
+/// value every block. The ramp must still land on the target exactly, on
+/// the sample it would have without the repeats.
+#[test]
+fn re_sending_the_same_target_every_block_still_lands_on_time() {
+    for make in [linear_smoother as fn() -> Smoother, log_smoother] {
+        let mut once = make();
+        once.reset(0.0);
+        once.set_target(1.0);
+        let mut every_block = make();
+        every_block.reset(0.0);
+        for i in 0..RAMP + 64 {
+            if i % 64 == 0 {
+                every_block.set_target(1.0);
+            }
+            assert_eq!(
+                every_block.next().to_bits(),
+                once.next().to_bits(),
+                "sample {i}: a repeated target restarted the ramp"
+            );
+        }
+        assert_eq!(every_block.current(), 1.0, "the ramp never landed");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Logarithmic ramps
 // ---------------------------------------------------------------------------

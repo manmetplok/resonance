@@ -57,13 +57,29 @@
 //!
 //! # Flutter
 //!
-//! Switching [`Flutter`] on inserts its ≈ 1.1 ms centre delay (W5), so the
-//! stage never switches: turning flutter on or off (or leaving Tape mode)
-//! crossfades between the undelayed and the flutter-delayed signal over
-//! [`FLUTTER_FADE_MS`]. At 0 it is bypassed outright (ToTape6-style: no
-//! delay, no interpolation). Flutter moves the whole output, like a tape
-//! transport: applying it to the wet path alone would make `mix` a
-//! chorus.
+//! Switching [`Flutter`] on inserts its ≈ 1.1 ms centre delay (W5). The
+//! stage never switches: turning flutter on or off (or entering or
+//! leaving Tape mode) glides the whole delay — centre and modulation —
+//! between 0 and its full value over [`FLUTTER_ENGAGE_MS`]
+//! ([`Flutter::process_engaged`], a smoothstep), like a transport coming
+//! up to speed: a pitch bend of at most ≈ 0.7 % (≈ 12 cents) for that
+//! quarter second. A crossfade between the undelayed and the delayed
+//! signal would instead be a comb filter for as long as it lasted. At 0
+//! it is bypassed outright (ToTape6-style: no delay, no interpolation),
+//! so flutter 0, and every mode but Tape, stays bit-exact.
+//!
+//! Flutter moves the whole output, like a tape transport: applying it to
+//! the wet path alone would make `mix` a chorus, and because dry and wet
+//! are both behind it, `mix` never combs against the delay either.
+//!
+//! **Latency.** While flutter is on the output sits ≈ 1.1 ms
+//! ([`Flutter::centre_delay_samples`], 52.9 samples at 48 kHz) behind the
+//! input. The plugin reports 0 samples: the delay exists only in Tape
+//! mode with flutter above 0, a plugin cannot report a latency change,
+//! and a tape path's own delay is part of the effect rather than
+//! something PDC should undo. Against an undelayed parallel copy of the
+//! same source (a send, a duplicated track) it combs like any short
+//! delay.
 //!
 //! # RT safety
 //!
@@ -85,8 +101,8 @@ use resonance_plugin::{Smoother, SmoothingStyle};
 use crate::params::{speed_ips, ColorParams, Mode, TapeQuality};
 use crate::viz::ColorViz;
 
-/// Crossfade length when flutter's centre delay comes or goes.
-pub const FLUTTER_FADE_MS: f32 = 30.0;
+/// How long flutter's delay takes to glide in or out.
+pub const FLUTTER_ENGAGE_MS: f32 = 250.0;
 
 /// Time constant of the auto-gain power followers. Long enough that the
 /// gain does not ride individual hits; both followers share it, so their
@@ -94,8 +110,21 @@ pub const FLUTTER_FADE_MS: f32 = 30.0;
 pub const AUTO_GAIN_TIME_S: f32 = 0.8;
 /// Auto-gain never moves the wet signal further than this, either way.
 pub const AUTO_GAIN_LIMIT_DB: f32 = 24.0;
-/// Floor added to both follower powers (−100 dBFS²): in silence the
-/// ratio drifts to 1 instead of dividing two denormals.
+/// Below this dry level (K-weighted, per channel, over
+/// [`AUTO_GAIN_GATE_TIME_S`]) the followers stop integrating and the gain
+/// holds: silence carries no information about the drive's level change.
+pub const AUTO_GAIN_GATE_DBFS: f32 = -60.0;
+/// Time constant of the gate's level detector.
+pub const AUTO_GAIN_GATE_TIME_S: f32 = 0.01;
+/// Fastest the gain may rise. Falling is not limited (a louder wet path
+/// is pulled down at once). Without it, the first hit after the
+/// followers have no history — a fresh instance — sets the gain from
+/// that hit's attack alone, which a hard drive squashes most, and the
+/// gain overshoots its steady-state value by several dB for the first
+/// tens of ms.
+pub const AUTO_GAIN_RISE_DB_PER_S: f32 = 40.0;
+/// Floor added to both follower powers (−100 dBFS²), so a follower that
+/// has never seen signal does not divide by zero.
 const AUTO_GAIN_EPS: f64 = 1.0e-10;
 
 /// Parameter de-zipper times.
@@ -296,6 +325,22 @@ struct Flags {
 }
 
 /// Stereo-linked, K-weighted RMS match of the wet path to the dry one.
+///
+/// Two slow power followers (dry, wet) whose ratio is the gain, with
+/// three guards against the gain that ratio gives when it has too little
+/// to go on:
+///
+/// - **Gate.** While the dry level is below [`AUTO_GAIN_GATE_DBFS`] the
+///   followers hold instead of decaying, so the gain after a silence is
+///   the one before it: a loop that stops and restarts comes back at its
+///   matched level instead of re-learning it from its first hit.
+/// - **Reset keeps the match.** [`AutoGain::reset`] clears the
+///   K-weighting filters but keeps the followers and the gain: a
+///   transport reset clears signal history, and the match is a property
+///   of the material and the settings, not of that history.
+/// - **Rise limit.** The gain rises at most [`AUTO_GAIN_RISE_DB_PER_S`]
+///   (it falls freely). A fresh instance starts at unity and climbs to
+///   the match, rather than jumping to what the first attack alone says.
 struct AutoGain {
     k_dry: [KWeightingFilter; 2],
     k_wet: [KWeightingFilter; 2],
@@ -303,26 +348,41 @@ struct AutoGain {
     p_wet: f64,
     coef: f64,
     limit: f64,
+    /// The gate's fast dry-power detector and its threshold (summed over
+    /// both channels).
+    p_gate: f64,
+    gate_coef: f64,
+    gate_floor: f64,
+    /// The gain last returned, and the most it may grow per sample.
+    gain: f64,
+    rise: f64,
 }
 
 impl AutoGain {
     fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0) as f64;
         Self {
             k_dry: [KWeightingFilter::new(sample_rate); 2],
             k_wet: [KWeightingFilter::new(sample_rate); 2],
             p_dry: 0.0,
             p_wet: 0.0,
-            coef: (-1.0 / (AUTO_GAIN_TIME_S as f64 * sample_rate.max(1.0) as f64)).exp(),
+            coef: (-1.0 / (AUTO_GAIN_TIME_S as f64 * sr)).exp(),
             limit: db_to_linear(AUTO_GAIN_LIMIT_DB) as f64,
+            p_gate: 0.0,
+            gate_coef: (-1.0 / (AUTO_GAIN_GATE_TIME_S as f64 * sr)).exp(),
+            gate_floor: 2.0 * 10f64.powf(AUTO_GAIN_GATE_DBFS as f64 / 10.0),
+            gain: 1.0,
+            rise: 10f64.powf(AUTO_GAIN_RISE_DB_PER_S as f64 / (20.0 * sr)),
         }
     }
 
+    /// Clear the filters' signal history; keep the learned match (see the
+    /// type docs).
     fn reset(&mut self) {
         for k in self.k_dry.iter_mut().chain(self.k_wet.iter_mut()) {
             k.reset();
         }
-        self.p_dry = 0.0;
-        self.p_wet = 0.0;
+        self.p_gate = 0.0;
     }
 
     /// Feed one frame; returns the gain that matches wet to dry.
@@ -336,15 +396,25 @@ impl AutoGain {
             pd += d * d;
             pw += w * w;
         }
-        let a = 1.0 - self.coef;
-        self.p_dry += (pd - self.p_dry) * a;
-        self.p_wet += (pw - self.p_wet) * a;
+        self.p_gate += (pd - self.p_gate) * (1.0 - self.gate_coef);
+        if self.p_gate >= self.gate_floor {
+            let a = 1.0 - self.coef;
+            self.p_dry += (pd - self.p_dry) * a;
+            self.p_wet += (pw - self.p_wet) * a;
+        }
         let g = ((self.p_dry + AUTO_GAIN_EPS) / (self.p_wet + AUTO_GAIN_EPS)).sqrt();
         if g.is_finite() {
-            g.clamp(1.0 / self.limit, self.limit) as f32
+            let g = g.clamp(1.0 / self.limit, self.limit);
+            self.gain = if g > self.gain { g.min(self.gain * self.rise) } else { g };
         } else {
-            1.0
+            // A non-finite follower (sanitised input cannot get there, but
+            // never let it lodge): start the match over.
+            self.p_dry = 0.0;
+            self.p_wet = 0.0;
+            self.p_gate = 0.0;
+            self.gain = 1.0;
         }
+        self.gain as f32
     }
 }
 
@@ -374,9 +444,9 @@ pub struct ColorDsp {
     voice: Voice,
     voice_key: (f32, f32, Mode, bool),
 
-    /// Flutter crossfade position (0 = bypassed, 1 = fully fluttered)
-    /// and step per sample; the last non-zero amount, held while fading
-    /// out so the delay does not snap away.
+    /// Flutter engage position (0 = bypassed, 1 = full delay) and step
+    /// per sample; the last non-zero amount, held while gliding out so the
+    /// modulation does not snap away.
     flutter_fade: f32,
     flutter_step: f32,
     flutter_held: f32,
@@ -422,7 +492,7 @@ impl ColorDsp {
             },
             voice_key: (f32::NAN, f32::NAN, Mode::Tube, false),
             flutter_fade: 0.0,
-            flutter_step: 1.0 / (FLUTTER_FADE_MS * 0.001 * sr).max(1.0),
+            flutter_step: 1.0 / (FLUTTER_ENGAGE_MS * 0.001 * sr).max(1.0),
             flutter_held: 0.0,
             in_peak: 0.0,
             out_peak: 0.0,
@@ -454,8 +524,9 @@ impl ColorDsp {
         self.configure(s);
     }
 
-    /// Clear every piece of signal state (filters, followers, flutter
-    /// history) and snap the smoothers to `s`.
+    /// Clear every piece of signal state (filters, flutter history) and
+    /// snap the smoothers to `s`. Auto-gain keeps its learned match (see
+    /// [`AutoGain`]).
     pub fn reset(&mut self, s: &Settings) {
         for ch in &mut self.ch {
             ch.reset();
@@ -676,13 +747,16 @@ impl ColorDsp {
             let out_db = self.output_s.next();
             let out_gain = if out_db == 0.0 { 1.0 } else { db_to_linear(out_db) };
 
-            // Flutter crossfade.
+            // Flutter engage glide.
             if flutter_on {
                 self.flutter_fade = (self.flutter_fade + self.flutter_step).min(1.0);
             } else {
                 self.flutter_fade = (self.flutter_fade - self.flutter_step).max(0.0);
             }
             let fade = self.flutter_fade;
+            // Smoothstep: the delay starts and ends its glide at rest, so
+            // the pitch bend has no corners.
+            let engage = fade * fade * (3.0 - 2.0 * fade);
             let fl_amount = self.flutter_s.next();
 
             for c in 0..2 {
@@ -705,8 +779,7 @@ impl ColorDsp {
                     y = fl.process(y);
                 } else {
                     fl.set_amount(fl_amount.max(1.0e-6));
-                    let f = fl.process(y);
-                    y = if fade >= 1.0 { f } else { y + fade * (f - y) };
+                    y = if fade >= 1.0 { fl.process(y) } else { fl.process_engaged(y, engage) };
                 }
                 if c == 0 {
                     in_peak = in_peak.max(x[0].abs());

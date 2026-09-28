@@ -7,7 +7,9 @@ mod common;
 
 use common::*;
 use resonance_plugin::{Param, ResonancePlugin};
-use resonance_stereo::dsp::{haas_delay_ms, MonoSlope, WidenMode, HAAS_LEVEL_DB};
+use resonance_stereo::dsp::{
+    haas_delay_ms, micro_shift_notch_db, MonoSlope, WidenMode, HAAS_LEVEL_DB,
+};
 use resonance_stereo::params::{index, StereoParams, PARAM_COUNT};
 use resonance_stereo::ResonanceStereo;
 
@@ -414,31 +416,235 @@ fn haas_delays_the_right_side_above_the_exclude_at_a_level_offset() {
 // The other widening modes stay sane in mono
 // ---------------------------------------------------------------------------
 
+/// The deepest dip of the mono fold's magnitude response, in dB, for a
+/// mono input through `mode` at `amount`: unit impulses 0.25 s apart,
+/// each one's fold `(L + R) / 2` read over the next 4096 samples at
+/// 1/48-octave steps from 30 Hz to 18 kHz. Several impulses, because
+/// Micro-shift's combs move; for the time-invariant Diffuse they agree.
+fn worst_fold_notch_db(mode: WidenMode, amount: f32) -> f64 {
+    worst_fold_notch_db_with(mode, amount, |_| {})
+}
+
+/// [`worst_fold_notch_db`] with more params set by `extra`.
+fn worst_fold_notch_db_with(mode: WidenMode, amount: f32, extra: impl Fn(&StereoParams)) -> f64 {
+    const IMPULSES: usize = 8;
+    const SPACING: usize = 12_000;
+    const LEN: usize = 4_096;
+    let first = 9_600;
+    let mut x = vec![0.0f32; first + IMPULSES * SPACING + LEN];
+    for k in 0..IMPULSES {
+        x[first + k * SPACING] = 1.0;
+    }
+    let (l, r) = render(
+        |p| {
+            p.widen_mode.set_value(mode.index());
+            p.widen_amount.set_value(amount);
+            extra(p);
+        },
+        &x,
+        &x,
+    );
+    let mut worst = f64::INFINITY;
+    for k in 0..IMPULSES {
+        let at = first + k * SPACING;
+        let h: Vec<f64> = (at..at + LEN).map(|i| 0.5 * (l[i] + r[i]) as f64).collect();
+        let mut f = 30.0f64;
+        while f < 18_000.0 {
+            // DFT at `f` by a rotating phasor (no per-sample trig).
+            let w = std::f64::consts::TAU * f / SR as f64;
+            let (c, sn) = (w.cos(), -w.sin());
+            let (mut pr, mut pi) = (1.0f64, 0.0f64);
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for &v in &h {
+                re += v * pr;
+                im += v * pi;
+                (pr, pi) = (pr * c - pi * sn, pr * sn + pi * c);
+            }
+            worst = worst.min(10.0 * (re * re + im * im).log10());
+            f *= 2f64.powf(1.0 / 48.0);
+        }
+    }
+    worst
+}
+
+/// Diffuse's spread is capped (`DIFFUSE_MAX_SPREAD`) where the mono
+/// fold's deepest notch is still shallow: no worse than 2.5 dB anywhere
+/// in the band at any amount. (Uncapped, amount 1 notched −14.6 dB.) It
+/// must still widen at the top of the range.
 #[test]
-fn diffuse_and_micro_shift_keep_the_mono_fold_close() {
+fn diffuse_stays_mono_safe_at_every_amount() {
+    for amount in [0.25f32, 0.5, 0.75, 1.0] {
+        let notch = worst_fold_notch_db(WidenMode::Diffuse, amount);
+        eprintln!("Diffuse amount {amount}: worst fold notch {notch:.2} dB");
+        assert!(notch > -2.5, "Diffuse at {amount}: the mono fold notches {notch:.2} dB");
+    }
     let n = 96_000;
     let x = noise(n, 0.5, 41);
-    for (mode, max_loss_db) in [(WidenMode::Diffuse, 1.5), (WidenMode::MicroShift, 1.5)] {
-        let (ol, or) = render(
-            |p| {
-                p.widen_mode.set_value(mode.index());
-                p.widen_amount.set_value(0.4);
-            },
-            &x,
-            &x,
+    let (ol, or) = render(
+        |p| {
+            p.widen_mode.set_value(WidenMode::Diffuse.index());
+            p.widen_amount.set_value(1.0);
+        },
+        &x,
+        &x,
+    );
+    let r = correlation(&ol[4_800..], &or[4_800..]);
+    assert!(r < 0.97, "Diffuse at full amount did not widen a mono source (r = {r:.3})");
+    assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
+}
+
+/// Haas's level offset bounds its static combs. With no low exclude the
+/// fold is `(1 + g·e^(−jωτ)) / 2`, so the notches sit at
+/// `20·log10((1 − g) / 2)` ≈ −16.7 dB for `g` = −3 dB — what `dsp.rs`
+/// says — not at −∞. With the exclude, the LR4 split's phase around its
+/// corner deepens the notch there (to ≈ −23 dB at the default 150 Hz).
+/// Either way the combs are there, which is why the mode is flagged.
+#[test]
+fn haas_notches_the_mono_fold_as_deep_as_documented() {
+    let g = 10f64.powf(HAAS_LEVEL_DB as f64 / 20.0);
+    let said = 20.0 * ((1.0 - g) / 2.0).log10();
+    for amount in [0.2f32, 0.6] {
+        let no_exclude = |p: &StereoParams| p.focus_low.set_value(20.0);
+        let notch = worst_fold_notch_db_with(WidenMode::Haas, amount, no_exclude);
+        let excluded = worst_fold_notch_db(WidenMode::Haas, amount);
+        eprintln!(
+            "Haas amount {amount}: worst fold notch {notch:.2} dB without the exclude \
+             (documented {said:.2}), {excluded:.2} dB with it"
         );
-        let fold_in: Vec<f32> = x.clone();
-        let fold_out: Vec<f32> = (0..n).map(|i| 0.5 * (ol[i] + or[i])).collect();
-        let change_db = 10.0 * (energy(&fold_out[4_800..]) / energy(&fold_in[4_800..])).log10();
         assert!(
-            change_db > -max_loss_db,
-            "{mode:?}: the mono fold lost {:.2} dB",
-            -change_db
+            (notch - said).abs() < 0.5,
+            "Haas at {amount}: the mono fold notches {notch:.2} dB, documented {said:.2}"
         );
-        let r = correlation(&ol[4_800..], &or[4_800..]);
-        assert!(r < 0.97, "{mode:?} did not widen a mono source (r = {r:.3})");
-        assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
+        assert!(
+            excluded < said && excluded > -26.0,
+            "Haas at {amount} with the exclude: the fold notches {excluded:.2} dB"
+        );
     }
+}
+
+/// Micro-shift's combs are as deep as documented (`micro_shift_notch_db`:
+/// the voices in antiphase with the dry leave `1 − amount`), and no
+/// deeper; the hint and the skill quote that figure.
+#[test]
+fn micro_shift_notches_the_mono_fold_as_deep_as_documented() {
+    for amount in [0.2f32, 0.4, 0.6] {
+        let notch = worst_fold_notch_db(WidenMode::MicroShift, amount);
+        let said = micro_shift_notch_db(amount) as f64;
+        eprintln!("Micro-shift amount {amount}: worst fold notch {notch:.2} dB (documented {said:.2})");
+        assert!(
+            notch > said - 0.5 && notch < said + 1.0,
+            "Micro-shift at {amount}: the mono fold notches {notch:.2} dB, documented {said:.2}"
+        );
+    }
+    let n = 96_000;
+    let x = noise(n, 0.5, 41);
+    let (ol, or) = render(
+        |p| {
+            p.widen_mode.set_value(WidenMode::MicroShift.index());
+            p.widen_amount.set_value(0.4);
+        },
+        &x,
+        &x,
+    );
+    let r = correlation(&ol[4_800..], &or[4_800..]);
+    assert!(r < 0.97, "Micro-shift did not widen a mono source (r = {r:.3})");
+    assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
+}
+
+// ---------------------------------------------------------------------------
+// Amount changes glide, they do not step per block
+// ---------------------------------------------------------------------------
+
+/// Render mono `x` in 256-sample blocks with `mode`, `widen_amount` at
+/// `from` and then `to` from block `at` on.
+fn render_amount_step(mode: WidenMode, x: &[f32], from: f32, to: f32, at: usize) -> (Vec<f32>, Vec<f32>) {
+    let mut plugin = ResonanceStereo::new();
+    plugin.params.widen_mode.set_value(mode.index());
+    plugin.params.widen_amount.set_value(from);
+    plugin.initialize(SR, MAX_BLOCK as u32);
+    plugin.reset();
+    let (mut l, mut r) = (x.to_vec(), x.to_vec());
+    for (k, (cl, cr)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+        if k == at {
+            plugin.params.widen_amount.set_value(to);
+        }
+        let frames = cl.len();
+        let mut outs = [resonance_plugin::OutputBuffer { left: cl, right: cr }];
+        plugin.process(&mut outs, frames, &mut resonance_plugin::EventIterator::empty(), None);
+    }
+    (l, r)
+}
+
+/// Decorrelate's side is `a·D(M)`: against a render at amount 1 the side
+/// ratio is the amount itself, sample by sample. A step from 0.2 to 1
+/// must ramp (20 ms, 960 samples), not land in one sample.
+#[test]
+fn a_decorrelate_amount_step_ramps_per_sample() {
+    let n = 48_000;
+    let x = noise(n, 0.5, 13);
+    let at = 40;
+    let (rl, rr) = render_amount_step(WidenMode::Decorrelate, &x, 1.0, 1.0, at);
+    let (sl, sr) = render_amount_step(WidenMode::Decorrelate, &x, 0.2, 1.0, at);
+    let side = |l: &[f32], r: &[f32], i: usize| 0.5 * (l[i] - r[i]);
+    let mut prev: Option<f32> = None;
+    let mut worst = 0.0f32;
+    for i in (at - 4) * 256..(at + 8) * 256 {
+        let reference = side(&rl, &rr, i);
+        if reference.abs() < 1e-3 {
+            continue;
+        }
+        let a = side(&sl, &sr, i) / reference;
+        if let Some(p) = prev {
+            worst = worst.max((a - p).abs());
+        }
+        prev = Some(a);
+    }
+    let ramp_step = 0.8 / 960.0;
+    assert!(
+        worst < 4.0 * ramp_step,
+        "the Decorrelate amount stepped by {worst:.4} between samples (a 20 ms ramp moves {ramp_step:.5})"
+    );
+    // …and it arrives: the tail matches the amount-1 render exactly.
+    let tail = (at + 8) * 256;
+    assert_eq!(sl[tail..], rl[tail..]);
+    assert_eq!(sr[tail..], rr[tail..]);
+}
+
+/// A Diffuse amount step re-lays-out 80 all-passes. Swapped in one go,
+/// that is a click: a 1 kHz sine through an all-pass is still a pure
+/// 1 kHz sine, so anything the switch puts above 4 kHz is the click
+/// itself. Crossfaded, that residue stays tiny — for one step and for a
+/// continuous sweep alike.
+#[test]
+fn a_diffuse_amount_change_crossfades_the_new_layout() {
+    let n = 48_000;
+    let (freq, amp) = (1_000.0f32, 0.5f32);
+    let x = sine(freq, amp, n);
+    let click_db = |r: &[f32]| {
+        let hf = band(r, 4_000.0, 4, false);
+        let peak = hf[9_600..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        20.0 * (peak / amp).max(1e-9).log10()
+    };
+    let (_, steady) = render_amount_step(WidenMode::Diffuse, &x, 0.2, 0.2, 40);
+    let (_, stepped) = render_amount_step(WidenMode::Diffuse, &x, 0.2, 1.0, 40);
+    let mut plugin = ResonanceStereo::new();
+    plugin.params.widen_mode.set_value(WidenMode::Diffuse.index());
+    plugin.params.widen_amount.set_value(0.0);
+    plugin.initialize(SR, MAX_BLOCK as u32);
+    plugin.reset();
+    let (mut sl, mut swept) = (x.clone(), x.clone());
+    for (k, (cl, cr)) in sl.chunks_mut(128).zip(swept.chunks_mut(128)).enumerate() {
+        plugin.params.widen_amount.set_value((k as f32 / 150.0).min(1.0));
+        let frames = cl.len();
+        let mut outs = [resonance_plugin::OutputBuffer { left: cl, right: cr }];
+        plugin.process(&mut outs, frames, &mut resonance_plugin::EventIterator::empty(), None);
+    }
+    let (floor, step, sweep) = (click_db(&steady), click_db(&stepped), click_db(&swept));
+    eprintln!("Diffuse HF residue: steady {floor:.1} dB, step {step:.1} dB, sweep {sweep:.1} dB");
+    // One swap left -37 dB.
+    assert!(step < -60.0, "the Diffuse amount step clicked: {step:.1} dB above 4 kHz");
+    // Block-rate swaps left -77 dB here; the steady floor is -97.
+    assert!(sweep < -85.0, "the Diffuse amount sweep zippered: {sweep:.1} dB above 4 kHz");
 }
 
 // ---------------------------------------------------------------------------

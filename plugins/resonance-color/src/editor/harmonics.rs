@@ -4,45 +4,139 @@
 //! pins and the presets were voiced to.
 //!
 //! "Live" means the bars follow every knob as it moves: the probe is a
-//! function of the settings, so it re-runs when they change (at most
-//! every [`MIN_INTERVAL`]), never per frame and never on the audio thread.
+//! function of the settings, so it re-runs when they change — never per
+//! frame, never on the audio thread, and never on the GUI thread either.
+//! A probe renders 19 200 samples through the whole chain (up to ~24 ms
+//! in Tape HQ), which is a dropped frame or two if `ui()` waits for it.
+//! [`ProbeCache`] hands the settings to a worker thread that holds only
+//! the latest request (a drag coalesces to its newest position) and
+//! probes on one reused [`Prober`]; `ui()` reads the newest result
+//! without ever waiting on the worker.
 
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
+use std::thread::JoinHandle;
 
 use plugin_gui_core::egui;
 
 use crate::dsp::Settings;
 use crate::editor::theme;
-use crate::probe::{probe, probe_settings, HarmonicSignature, BAR_ORDERS, PROBE_LEVEL_DBFS};
-
-/// Shortest time between two probe renders while a knob is dragged.
-pub const MIN_INTERVAL: Duration = Duration::from_millis(60);
+use crate::probe::{probe_settings, HarmonicSignature, Prober, BAR_ORDERS, PROBE_LEVEL_DBFS};
 
 /// The bars' floor, in dBc.
 pub const FLOOR_DBC: f64 = -100.0;
 
+/// What the editor and the probe worker share.
+#[derive(Default)]
+struct Shared {
+    /// The newest settings to probe, taken by the worker.
+    request: Mutex<Option<Settings>>,
+    wake: Condvar,
+    /// The newest finished probe and the settings it was for.
+    result: Mutex<Option<(Settings, HarmonicSignature)>>,
+    quit: AtomicBool,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// `try_lock` that treats poisoning as success (the data is plain values).
+fn try_lock<T>(m: &Mutex<T>) -> Option<MutexGuard<'_, T>> {
+    match m.try_lock() {
+        Ok(g) => Some(g),
+        Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+        Err(TryLockError::WouldBlock) => None,
+    }
+}
+
+fn worker(shared: Arc<Shared>) {
+    let mut prober = Prober::new();
+    loop {
+        let settings = {
+            let mut req = lock(&shared.request);
+            loop {
+                if shared.quit.load(Ordering::Acquire) {
+                    return;
+                }
+                if let Some(s) = req.take() {
+                    break s;
+                }
+                req = shared.wake.wait(req).unwrap_or_else(|e| e.into_inner());
+            }
+        };
+        let sig = prober.probe(&settings, PROBE_LEVEL_DBFS);
+        *lock(&shared.result) = Some((settings, sig));
+    }
+}
+
+/// The editor's side of the probe worker. The thread starts on the first
+/// request and is stopped and joined on drop, which waits for at most
+/// the one probe in flight.
 #[derive(Default)]
 pub struct ProbeCache {
-    key: Option<Settings>,
-    result: Option<HarmonicSignature>,
-    last_run: Option<Instant>,
+    shared: Arc<Shared>,
+    thread: Option<JoinHandle<()>>,
+    /// The probe settings last handed to the worker.
+    requested: Option<Settings>,
+    /// The newest result read back, and what it was for.
+    shown: Option<(Settings, HarmonicSignature)>,
 }
 
 impl ProbeCache {
-    /// The signature for `s`, re-probing when a setting the probe sees
-    /// has changed and the throttle allows.
+    /// The newest signature available for the bars; asks the worker for
+    /// `s` when a setting the probe sees has changed. Never blocks: while
+    /// a probe runs it returns the previous result (`None` before the
+    /// first one lands).
     pub fn signature(&mut self, s: &Settings) -> Option<HarmonicSignature> {
         let key = probe_settings(s);
-        let stale = self.key != Some(key);
-        let due = self
-            .last_run
-            .is_none_or(|t| t.elapsed() >= MIN_INTERVAL);
-        if stale && due {
-            self.result = Some(probe(&key, PROBE_LEVEL_DBFS));
-            self.key = Some(key);
-            self.last_run = Some(Instant::now());
+        if self.requested != Some(key) && self.ensure_worker() {
+            // The worker holds this lock only to take a request, so
+            // contention is rare; on it, try again next frame.
+            if let Some(mut req) = try_lock(&self.shared.request) {
+                *req = Some(key);
+                self.requested = Some(key);
+                self.shared.wake.notify_one();
+            }
         }
-        self.result
+        if let Some(res) = try_lock(&self.shared.result) {
+            if let Some(r) = *res {
+                self.shown = Some(r);
+            }
+        }
+        self.shown.map(|(_, sig)| sig)
+    }
+
+    /// Whether the signature [`Self::signature`] last returned was probed
+    /// for `s` (rather than for earlier settings, still being replaced).
+    pub fn is_current(&self, s: &Settings) -> bool {
+        self.shown.is_some_and(|(k, _)| k == probe_settings(s))
+    }
+
+    fn ensure_worker(&mut self) -> bool {
+        if self.thread.is_none() {
+            let shared = Arc::clone(&self.shared);
+            self.thread = std::thread::Builder::new()
+                .name("color-probe".into())
+                .spawn(move || worker(shared))
+                .ok();
+        }
+        self.thread.is_some()
+    }
+}
+
+impl Drop for ProbeCache {
+    fn drop(&mut self) {
+        self.shared.quit.store(true, Ordering::Release);
+        {
+            // Under the request lock, so the store cannot land between the
+            // worker's quit check and its wait (a lost wake-up).
+            let _req = lock(&self.shared.request);
+            self.shared.wake.notify_all();
+        }
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
     }
 }
 

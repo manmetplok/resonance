@@ -78,9 +78,9 @@ fn makeup_step_ramps_without_per_sample_discontinuity() {
     // pass on a stuck output).
     assert!(max_delta_db > 1e-4, "output gain never moved");
 
-    // The ramp converges: the per-block retarget restarts the exponential
-    // approach, so convergence is asymptotic — by the last block (~160 ms
-    // past the jump) the residual is far below 0.01 dB.
+    // The ramp converges: re-sending the unchanged target every block
+    // leaves the ramp in flight, so it lands on the target after its
+    // 20 ms, well before the last block (~160 ms past the jump).
     let settled = out.len() - BLOCK;
     for (n, &x) in out.iter().enumerate().skip(settled) {
         let gain_db = 20.0 * (x / DC).log10();
@@ -110,10 +110,14 @@ fn mix_step_ramps_without_per_sample_discontinuity() {
     process_blocks(&mut dsp, &params, &viz, POST_BLOCKS, &mut out);
 
     // Linear(20 ms) mix smoother: per-sample mix movement is 1/ramp_samples,
-    // scaled by the wet/dry gain difference.
+    // scaled by the wet/dry gain difference. The ramp's last sample snaps
+    // onto the target, which also absorbs the f32 rounding the
+    // `current += step` walk accumulated over the ramp (at most half an
+    // ulp of 1.0 per step), so the bound allows for that too.
     let ramp_samples = (SR * SMOOTH_MS / 1000.0).ceil();
     let wet_gain = 10.0_f32.powf(12.0 / 20.0);
-    let bound = DC * (wet_gain - 1.0) / ramp_samples + 1e-7;
+    let swing = DC * (wet_gain - 1.0);
+    let bound = swing / ramp_samples + swing * ramp_samples * 0.5 * f32::EPSILON + 1e-7;
 
     for n in 1..out.len() {
         let delta = (out[n] - out[n - 1]).abs();
@@ -124,7 +128,7 @@ fn mix_step_ramps_without_per_sample_discontinuity() {
         );
     }
 
-    // Fully dry after the ramp (asymptotically — see the makeup test).
+    // Fully dry after the ramp (it lands — see the makeup test).
     let settled = out.len() - BLOCK;
     for (n, &x) in out.iter().enumerate().skip(settled) {
         assert!(

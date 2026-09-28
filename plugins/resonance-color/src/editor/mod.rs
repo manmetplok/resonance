@@ -14,6 +14,8 @@
 //! both are cached and recomputed only when a setting they depend on
 //! moves ([`curve::CurveCache`], [`harmonics::ProbeCache`]) — the
 //! plugin-editor form of the view-performance rules (`ui-work.md` §11).
+//! The harmonic probe is too heavy for a frame, so it runs on a worker
+//! thread the cache owns; `ui()` only ever reads its latest result.
 //! Only the meters and the operating-point marker read live values each
 //! frame, and those are three atomics.
 

@@ -23,8 +23,11 @@
 //! measurement window (coherent sampling), so each harmonic is one
 //! single-bin DFT with no window and no leakage.
 //!
-//! Allocates (the DSP's delay lines and the render buffer): call it from
-//! the editor or a test, never from the audio thread.
+//! [`probe`] allocates (a fresh DSP's delay lines and the render
+//! buffers): call it from a test, never from the audio thread. A caller
+//! that probes repeatedly — the editor's probe worker — holds a
+//! [`Prober`], which builds its DSP and buffers once and resets the DSP
+//! per probe; the result is bit-identical to a fresh [`probe`].
 
 use std::f64::consts::TAU;
 
@@ -44,9 +47,9 @@ pub const BAR_ORDERS: usize = 7;
 
 /// Settle time before the measurement window: long enough for the DC
 /// blocker (5 Hz), the head bump and the HF-loss envelope to settle.
-const SETTLE_SAMPLES: usize = 14_400;
+pub const SETTLE_SAMPLES: usize = 14_400;
 /// 0.1 s at 48 kHz: 100 cycles of 1 kHz, 10 Hz bins.
-const WINDOW_SAMPLES: usize = 4_800;
+pub const WINDOW_SAMPLES: usize = 4_800;
 const BLOCK: usize = 480;
 
 /// One probe result.
@@ -112,12 +115,30 @@ pub fn render_tone(
     settle: usize,
     window: usize,
 ) -> Vec<f32> {
+    let mut dsp = ColorDsp::new(sample_rate, settings);
+    let mut out = Vec::with_capacity(settle + window);
+    let mut scratch = ([0.0f32; BLOCK], [0.0f32; BLOCK]);
+    render_into(&mut dsp, settings, freq, level_dbfs, settle, window, &mut scratch, &mut out);
+    out
+}
+
+/// The body of [`render_tone`] on a DSP the caller owns (already reset to
+/// `settings`), into `out` (cleared first; left channel, window only).
+#[allow(clippy::too_many_arguments)]
+fn render_into(
+    dsp: &mut ColorDsp,
+    settings: &Settings,
+    freq: f64,
+    level_dbfs: f32,
+    settle: usize,
+    window: usize,
+    (l, r): &mut ([f32; BLOCK], [f32; BLOCK]),
+    out: &mut Vec<f32>,
+) {
+    let sample_rate = dsp.sample_rate();
     let amp = 10f64.powf(level_dbfs as f64 / 20.0);
     let total = settle + window;
-    let mut dsp = ColorDsp::new(sample_rate, settings);
-    let mut out = Vec::with_capacity(total);
-    let mut l = vec![0.0f32; BLOCK];
-    let mut r = vec![0.0f32; BLOCK];
+    out.clear();
     let mut n = 0usize;
     while n < total {
         let frames = BLOCK.min(total - n);
@@ -128,10 +149,11 @@ pub fn render_tone(
             r[i] = v;
         }
         dsp.process(&mut l[..frames], &mut r[..frames], settings, None);
-        out.extend_from_slice(&l[..frames]);
+        // Keep only the measurement window.
+        let keep_from = settle.saturating_sub(n).min(frames);
+        out.extend_from_slice(&l[keep_from..frames]);
         n += frames;
     }
-    out.split_off(settle)
 }
 
 /// Amplitude of the component at `freq` in `x` (a single-bin DFT; exact
@@ -154,29 +176,77 @@ fn db(x: f64) -> f64 {
 /// The harmonic signature of `settings` for a 1 kHz sine at `level_dbfs`
 /// peak (§2.1 uses −18, [`PROBE_LEVEL_DBFS`]).
 pub fn probe(settings: &Settings, level_dbfs: f32) -> HarmonicSignature {
-    let s = probe_settings(settings);
-    let sr = PROBE_SAMPLE_RATE;
-    let x = render_tone(&s, sr, PROBE_FREQ_HZ, level_dbfs, SETTLE_SAMPLES, WINDOW_SAMPLES);
-    let amp = 10f64.powf(level_dbfs as f64 / 20.0);
-    let fund = bin_amplitude(&x, sr, PROBE_FREQ_HZ);
-    let mut h_dbc = [0.0f64; MAX_ORDER + 1];
-    let mut sum_sq = 0.0f64;
-    for (k, slot) in h_dbc.iter_mut().enumerate().skip(1) {
-        let f = PROBE_FREQ_HZ * k as f64;
-        if f >= 0.5 * sr as f64 {
-            *slot = -300.0;
-            continue;
-        }
-        let a = bin_amplitude(&x, sr, f);
-        *slot = db(a / fund.max(1e-30));
-        if k >= 2 {
-            sum_sq += a * a;
+    Prober::new().probe(settings, level_dbfs)
+}
+
+/// A reusable probe: one [`ColorDsp`] at [`PROBE_SAMPLE_RATE`] and the
+/// render buffers, built once ([`Prober::new`] allocates) and reused by
+/// every [`Prober::probe`], which only resets the DSP. Same numbers as
+/// [`probe`], bit for bit (`tests/harmonics.rs`).
+pub struct Prober {
+    dsp: ColorDsp,
+    scratch: Box<([f32; BLOCK], [f32; BLOCK])>,
+    window: Vec<f32>,
+}
+
+impl Default for Prober {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Prober {
+    pub fn new() -> Self {
+        Self {
+            dsp: ColorDsp::new(PROBE_SAMPLE_RATE, &Settings::default()),
+            scratch: Box::new(([0.0; BLOCK], [0.0; BLOCK])),
+            window: Vec::with_capacity(WINDOW_SAMPLES + BLOCK),
         }
     }
-    h_dbc[1] = 0.0;
-    HarmonicSignature {
-        h_dbc,
-        thd_pct: 100.0 * sum_sq.sqrt() / fund.max(1e-30),
-        gain_db: db(fund / amp),
+
+    /// The last probe's measurement window (left channel, after the
+    /// settle), as [`render_tone`] would render it.
+    pub fn window(&self) -> &[f32] {
+        &self.window
+    }
+
+    /// The harmonic signature of `settings` (see [`probe`]).
+    pub fn probe(&mut self, settings: &Settings, level_dbfs: f32) -> HarmonicSignature {
+        let s = probe_settings(settings);
+        let sr = PROBE_SAMPLE_RATE;
+        self.dsp.reset(&s);
+        render_into(
+            &mut self.dsp,
+            &s,
+            PROBE_FREQ_HZ,
+            level_dbfs,
+            SETTLE_SAMPLES,
+            WINDOW_SAMPLES,
+            &mut self.scratch,
+            &mut self.window,
+        );
+        let x = &self.window;
+        let amp = 10f64.powf(level_dbfs as f64 / 20.0);
+        let fund = bin_amplitude(x, sr, PROBE_FREQ_HZ);
+        let mut h_dbc = [0.0f64; MAX_ORDER + 1];
+        let mut sum_sq = 0.0f64;
+        for (k, slot) in h_dbc.iter_mut().enumerate().skip(1) {
+            let f = PROBE_FREQ_HZ * k as f64;
+            if f >= 0.5 * sr as f64 {
+                *slot = -300.0;
+                continue;
+            }
+            let a = bin_amplitude(x, sr, f);
+            *slot = db(a / fund.max(1e-30));
+            if k >= 2 {
+                sum_sq += a * a;
+            }
+        }
+        h_dbc[1] = 0.0;
+        HarmonicSignature {
+            h_dbc,
+            thd_pct: 100.0 * sum_sq.sqrt() / fund.max(1e-30),
+            gain_db: db(fund / amp),
+        }
     }
 }

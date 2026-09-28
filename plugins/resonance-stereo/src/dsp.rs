@@ -7,15 +7,23 @@
 //!      mid, `(L + s, R − s)`. The mono sum is unchanged at any amount
 //!      and any focus (up to float rounding). The default widener.
 //!    - *Diffuse* — [`AllpassDecorrelator`]: per-side ERB all-pass
-//!      cascades offset by `spread = amount / 2` of an ERB step. Mono
-//!      ripple stays small (≈ 1.4 dB at spread 0.2) but is not zero.
+//!      cascades offset by `spread = amount · DIFFUSE_MAX_SPREAD` (0.25)
+//!      of an ERB step. The mono fold's deepest notch grows with the
+//!      spread (−0.3 dB at 0.1, −1.4 dB at 0.2, −2.3 dB at the 0.25 cap;
+//!      `tests/stereo.rs`), so the cap keeps the whole amount range
+//!      mono-safe. Uncapped, spread 0.5 notched −14.6 dB.
 //!    - *Micro-shift* — two [`DopplerShifter`] voices made from the mid,
 //!      +9 cents at 10 ms on the left and −9 cents at 15 ms on the
-//!      right, added at `amount`. Moving combs in mono, milder than
-//!      Haas.
+//!      right, added at `amount`. Moving combs in mono: where the two
+//!      voices line up against the dry signal the fold dips by
+//!      `20·log10(1 − amount)` (−4.4 dB at 0.4, −6 dB at 0.5, −14 dB at
+//!      0.8), sweeping as the voices drift. Keep it moderate.
 //!    - *Haas* — the right channel above `focus_low` (an LR4 split; the
-//!      band below stays in time) delayed by 1–30 ms and lowered 3 dB. The level offset keeps the mono comb's
-//!      notches near −11 dB instead of −∞, and the low exclude keeps the
+//!      band below stays in time) delayed by 1–30 ms and lowered 3 dB.
+//!      The level offset keeps the mono comb's notches at
+//!      `20·log10((1 − g) / 2)` ≈ −16.7 dB (`g` = −3 dB) instead of −∞
+//!      — deeper, ≈ −21 to −23 dB, right around the exclude's LR4 corner,
+//!      where the split's phase adds in — and the low exclude keeps the
 //!      bass in time, but static combs remain: the mode is flagged as a
 //!      mono risk ([`WidenMode::is_mono_risk`]).
 //! 2. **Width** — M/S side gain ([`apply_width`]).
@@ -27,6 +35,15 @@
 //! 6. **Audition**: `solo_side` replaces the output with `(S, −S)`, then
 //!    `mono_check` folds it to `(M, M)`. Both on is silence, which is the
 //!    honest answer: side cancels in mono.
+//!
+//! # Parameter changes
+//!
+//! Width, balance, rotation, Micro-shift's level and Haas's delay ramp
+//! per sample (20–50 ms). Decorrelate's amount ramps per sample too (its
+//! velvet filter runs at unit amount and the ramp scales the side).
+//! Diffuse's amount and focus are an all-pass layout, 80 coefficient sets
+//! that cannot be ramped per sample at any sane cost, so a new layout is
+//! crossfaded in over [`DIFFUSE_XFADE_MS`] instead (`Diffuser`).
 //!
 //! # Transparent defaults
 //!
@@ -99,8 +116,9 @@ impl WidenMode {
     }
 
     /// Whether the mode puts static comb filtering into the mono fold.
-    /// Only Haas does; Decorrelate keeps the mono sum exactly, and
-    /// Diffuse / Micro-shift ripple by a dB or two.
+    /// Only Haas does; Decorrelate keeps the mono sum exactly, Diffuse
+    /// ripples by at most 2.3 dB, and Micro-shift's combs move (their
+    /// depth grows with the amount, see [`Self::amount_hint`]).
     pub fn is_mono_risk(self) -> bool {
         matches!(self, Self::Haas)
     }
@@ -119,12 +137,13 @@ impl WidenMode {
                 amount * 100.0
             ),
             Self::Diffuse => format!(
-                "All-pass spread {:.2} ERB — small mono ripple",
+                "All-pass spread {:.2} ERB — mono ripple under 2.5 dB",
                 diffuse_spread(amount)
             ),
             Self::MicroShift => format!(
-                "±{MICRO_CENTS:.0} cents voices at {:.0}% — mild moving combs in mono",
-                amount * 100.0
+                "±{MICRO_CENTS:.0} cents voices at {:.0}% — moving combs in mono, down to {:.0} dB",
+                amount * 100.0,
+                micro_shift_notch_db(amount)
             ),
             Self::Haas => format!(
                 "Right delayed {:.1} ms, {HAAS_LEVEL_DB:.0} dB — MONO RISK: combs in the fold",
@@ -185,9 +204,21 @@ pub fn haas_delay_ms(amount: f32) -> f32 {
     HAAS_MIN_MS + (HAAS_MAX_MS - HAAS_MIN_MS) * amount.clamp(0.0, 1.0)
 }
 
+/// Largest Diffuse all-pass spread (fraction of an ERB step), reached at
+/// `widen_amount` 1. Chosen by the mono fold's worst notch: −2.3 dB here,
+/// against −14.6 dB at the all-pass cascade's own limit of 0.5.
+pub const DIFFUSE_MAX_SPREAD: f32 = 0.25;
+
 /// Diffuse all-pass spread (fraction of an ERB step) for a `widen_amount`.
 pub fn diffuse_spread(amount: f32) -> f32 {
-    0.5 * amount.clamp(0.0, 1.0)
+    DIFFUSE_MAX_SPREAD * amount.clamp(0.0, 1.0)
+}
+
+/// The deepest dip Micro-shift's moving combs put into the mono fold at
+/// a `widen_amount`, in dB: both voices in antiphase with the dry signal
+/// leave `1 − amount` of it. Floored at −60 dB (a full null).
+pub fn micro_shift_notch_db(amount: f32) -> f32 {
+    20.0 * (1.0 - amount.clamp(0.0, 1.0)).max(1.0e-3).log10()
 }
 
 /// Samples between goniometer points pushed to the viz.
@@ -197,34 +228,113 @@ const CORRELATION_STEP: u32 = 1024;
 /// Velvet seed: fixed, so renders are deterministic.
 const VELVET_SEED: u64 = 0x5752_4544;
 
-/// A linear parameter ramp that is only retargeted when the target
-/// actually moves. `Smoother::set_target` restarts the ramp from the
-/// current value, so calling it every block with an unchanged target
-/// would approach the target geometrically and never land on it — and
-/// landing on it exactly is what makes the neutral values bit-exact.
-struct Ramp {
-    s: Smoother,
-    target: f32,
+/// A linear parameter ramp settled on `v`. Retargeted once per block;
+/// `Smoother::set_target` leaves a ramp in flight alone when the target
+/// has not moved, so it lands exactly — which is what makes the neutral
+/// values bit-exact.
+fn ramp(sr: f32, ms: f32, v: f32) -> Smoother {
+    let mut s = Smoother::new(SmoothingStyle::Linear(ms));
+    s.set_sample_rate(sr);
+    s.reset(v);
+    s
 }
 
-impl Ramp {
-    fn new(sr: f32, ms: f32, v: f32) -> Self {
-        let mut s = Smoother::new(SmoothingStyle::Linear(ms));
-        s.set_sample_rate(sr);
-        s.reset(v);
-        Self { s, target: v }
-    }
+/// Crossfade between two Diffuse all-pass layouts.
+pub const DIFFUSE_XFADE_MS: f32 = 30.0;
 
-    fn set(&mut self, v: f32) {
-        if v != self.target {
-            self.target = v;
-            self.s.set_target(v);
+/// Diffuse's all-pass cascade, re-laid-out without a step.
+///
+/// Re-laying out the cascade (a new spread or focus) swaps 80 sets of
+/// coefficients at once, and ramping them per sample would mean
+/// redesigning 80 biquads every sample. Instead a new layout goes into a
+/// copy of the live cascade (same state, new coefficients) and the output
+/// crossfades from the old cascade to the new one over
+/// [`DIFFUSE_XFADE_MS`]; both run meanwhile. A layout asked for during a
+/// fade waits for it to finish and then starts the next one, so a
+/// continuous sweep follows in crossfaded steps of at most one fade.
+struct Diffuser {
+    live: AllpassDecorrelator,
+    next: AllpassDecorrelator,
+    /// Position of the fade into `next`; `None` when not fading.
+    fade: Option<f32>,
+    step: f32,
+    /// The layout `live` has (or `next` is fading to), and the newest
+    /// one asked for while a fade runs.
+    layout: Option<(f32, f32, f32)>,
+    pending: Option<(f32, f32, f32)>,
+}
+
+impl Diffuser {
+    fn new(sr: f32) -> Self {
+        Self {
+            live: AllpassDecorrelator::default(),
+            next: AllpassDecorrelator::default(),
+            fade: None,
+            step: 1.0 / (DIFFUSE_XFADE_MS * 0.001 * sr).max(1.0),
+            layout: None,
+            pending: None,
         }
     }
 
+    fn configure(ap: &mut AllpassDecorrelator, sr: f32, (low, high, spread): (f32, f32, f32)) {
+        ap.configure(sr, DIFFUSE_SECTIONS, low, high, spread);
+    }
+
+    /// Ask for a layout. The first one since construction or
+    /// [`Self::reset`] applies at once; later ones crossfade.
+    fn request(&mut self, sr: f32, layout: (f32, f32, f32)) {
+        if self.layout.is_none() {
+            Self::configure(&mut self.live, sr, layout);
+            self.layout = Some(layout);
+            return;
+        }
+        if self.fade.is_some() {
+            self.pending = Some(layout);
+            return;
+        }
+        if self.layout != Some(layout) {
+            self.start_fade(sr, layout);
+        }
+    }
+
+    fn start_fade(&mut self, sr: f32, layout: (f32, f32, f32)) {
+        self.next = self.live;
+        Self::configure(&mut self.next, sr, layout);
+        self.layout = Some(layout);
+        self.fade = Some(0.0);
+        self.pending = None;
+    }
+
+    /// Forget the layout and the filter state: the next request applies
+    /// at once, to a silent cascade.
+    fn reset(&mut self) {
+        self.live.reset();
+        self.fade = None;
+        self.pending = None;
+        self.layout = None;
+    }
+
     #[inline]
-    fn next(&mut self) -> f32 {
-        self.s.next()
+    fn process(&mut self, sr: f32, l: f32, r: f32) -> (f32, f32) {
+        let Some(t) = self.fade else {
+            return self.live.process(l, r);
+        };
+        let (al, ar) = self.live.process(l, r);
+        let (bl, br) = self.next.process(l, r);
+        let t = (t + self.step).min(1.0);
+        let out = (al + t * (bl - al), ar + t * (br - ar));
+        if t >= 1.0 {
+            self.live = self.next;
+            self.fade = None;
+            if let Some(p) = self.pending.take() {
+                if self.layout != Some(p) {
+                    self.start_fade(sr, p);
+                }
+            }
+        } else {
+            self.fade = Some(t);
+        }
+        out
     }
 }
 
@@ -333,9 +443,9 @@ impl Focus {
 
 pub struct StereoDsp {
     sr: f32,
-    width: Ramp,
-    balance: Ramp,
-    rotation_deg: Ramp,
+    width: Smoother,
+    balance: Smoother,
+    rotation_deg: Smoother,
     rotation: StereoRotation,
     rotation_at: f32,
 
@@ -344,17 +454,19 @@ pub struct StereoDsp {
     /// expensive re-layouts only run on a change.
     configured: Option<(f32, f32, f32)>,
     velvet: VelvetDecorrelator,
-    allpass: AllpassDecorrelator,
+    /// Decorrelate's side amount, ramped per sample.
+    decor_amount: Smoother,
+    diffuse: Diffuser,
     micro_focus: Focus,
     micro_l: DopplerShifter,
     micro_r: DopplerShifter,
-    micro_amount: Ramp,
+    micro_amount: Smoother,
     haas_line: DelayLine,
     /// LR4 split at `focus_low`: the low band stays in time.
     haas_low: [Biquad; 2],
     haas_high: [Biquad; 2],
     haas_exclude: bool,
-    haas_delay: Ramp,
+    haas_delay: Smoother,
     haas_gain: f32,
 
     mono_on: bool,
@@ -370,7 +482,7 @@ impl StereoDsp {
     /// `initialize`. Smoothers start settled on the current params.
     pub fn new(sample_rate: f32, params: &StereoParams) -> Self {
         let sr = sample_rate.max(1.0);
-        let smoother = |ms: f32, v: f32| Ramp::new(sr, ms, v);
+        let smoother = |ms: f32, v: f32| ramp(sr, ms, v);
         let haas_max = (HAAS_MAX_MS * 0.001 * sr).ceil() as usize + 4;
         let mut micro_l = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
         let mut micro_r = DopplerShifter::new(sr, MICRO_BASE_R_MS.max(MICRO_BASE_L_MS), MICRO_WINDOW_MS);
@@ -389,7 +501,8 @@ impl StereoDsp {
             mode: params.widen_mode(),
             configured: None,
             velvet: VelvetDecorrelator::new(sr, VELVET_SEED),
-            allpass: AllpassDecorrelator::default(),
+            decor_amount: smoother(20.0, amount),
+            diffuse: Diffuser::new(sr),
             micro_focus: Focus::new(),
             micro_l,
             micro_r,
@@ -416,7 +529,8 @@ impl StereoDsp {
 
     pub fn reset(&mut self) {
         self.velvet.reset();
-        self.allpass.reset();
+        self.diffuse.reset();
+        self.configured = None;
         self.micro_focus.reset();
         self.micro_l.reset();
         self.micro_r.reset();
@@ -430,9 +544,9 @@ impl StereoDsp {
 
     /// Read the params once per block and reconfigure what changed.
     fn prepare_block(&mut self, p: &StereoParams) {
-        self.width.set(p.width.value());
-        self.balance.set(p.balance.value());
-        self.rotation_deg.set(p.rotation.value());
+        self.width.set_target(p.width.value());
+        self.balance.set_target(p.balance.value());
+        self.rotation_deg.set_target(p.rotation.value());
 
         // Mono-maker.
         let mono_hz = p.mono_below.value();
@@ -454,7 +568,10 @@ impl StereoDsp {
             // The incoming mode starts from silence rather than from
             // whatever it held the last time it ran.
             self.velvet.reset();
-            self.allpass.reset();
+            self.diffuse.reset();
+            // The incoming mode starts at its amount, not ramping from
+            // wherever it was left.
+            self.decor_amount.reset(p.widen_amount.value());
             self.micro_focus.reset();
             self.micro_l.reset();
             self.micro_r.reset();
@@ -472,27 +589,26 @@ impl StereoDsp {
             WidenMode::Off => {}
             WidenMode::Decorrelate => {
                 if changed {
-                    self.velvet.set_amount(amount);
                     self.velvet.set_focus(self.sr, low, high.unwrap_or(0.0));
                 }
+                // The velvet filter runs at unit amount and the ramp
+                // scales its side per sample; at a settled 0 it idles.
+                self.decor_amount.set_target(amount);
+                let active = amount > 0.0 || self.decor_amount.current() > 0.0;
+                self.velvet.set_amount(if active { 1.0 } else { 0.0 });
             }
             WidenMode::Diffuse => {
                 if changed {
                     let top = high.unwrap_or(DIFFUSE_OPEN_HIGH_HZ.min(0.45 * self.sr));
-                    self.allpass.configure(
-                        self.sr,
-                        DIFFUSE_SECTIONS,
-                        low,
-                        top.max(low + 1.0),
-                        diffuse_spread(amount),
-                    );
+                    self.diffuse
+                        .request(self.sr, (low, top.max(low + 1.0), diffuse_spread(amount)));
                 }
             }
             WidenMode::MicroShift => {
                 if changed {
                     self.micro_focus.configure(self.sr, low, high);
                 }
-                self.micro_amount.set(amount);
+                self.micro_amount.set_target(amount);
             }
             WidenMode::Haas => {
                 if changed {
@@ -507,7 +623,7 @@ impl StereoDsp {
                         b.set_high_pass(self.sr, low, q);
                     }
                 }
-                self.haas_delay.set(haas_delay_ms(amount) * 0.001 * self.sr);
+                self.haas_delay.set_target(haas_delay_ms(amount) * 0.001 * self.sr);
             }
         }
     }
@@ -516,8 +632,17 @@ impl StereoDsp {
     fn widen(&mut self, l: f32, r: f32) -> (f32, f32) {
         match self.mode {
             WidenMode::Off => (l, r),
-            WidenMode::Decorrelate => self.velvet.process(l, r),
-            WidenMode::Diffuse => self.allpass.process(l, r),
+            WidenMode::Decorrelate => {
+                let a = self.decor_amount.next();
+                let side = self.velvet.side(0.5 * (l + r));
+                if a == 0.0 {
+                    (l, r)
+                } else {
+                    let side = side * a;
+                    (l + side, r - side)
+                }
+            }
+            WidenMode::Diffuse => self.diffuse.process(self.sr, l, r),
             WidenMode::MicroShift => {
                 let a = self.micro_amount.next();
                 let m = self.micro_focus.process(0.5 * (l + r));

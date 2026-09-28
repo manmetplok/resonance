@@ -50,7 +50,17 @@ impl Smoother {
     }
 
     /// Set a new target value and begin smoothing toward it.
+    ///
+    /// A target equal to the current one is a no-op: a ramp in flight
+    /// keeps its step and lands on time. Owners call this once per block
+    /// with the param's value, and restarting the ramp every block would
+    /// make it approach the target geometrically and never land on it —
+    /// which costs every exact-at-target fast path (`mix == 1`, gain 1)
+    /// its bit-exactness.
     pub fn set_target(&mut self, target: f32) {
+        if target == self.target {
+            return;
+        }
         self.target = target;
         match self.style {
             SmoothingStyle::None => {

@@ -18,7 +18,9 @@
 //! The output is always delayed: by `base + window·phase` per tap,
 //! `base + window/2` on average ([`DopplerShifter::mean_delay_samples`]).
 //! At 0 cents the phase never moves and the output is exactly the input
-//! delayed by that mean.
+//! delayed by that mean: the window is a whole, even number of samples
+//! and the base a whole number, so the mean is a whole-sample delay and
+//! the read takes no interpolation.
 
 /// Delay-line pitch shifter for small shifts. See the module docs.
 pub struct DopplerShifter {
@@ -45,8 +47,9 @@ impl DopplerShifter {
     /// line (call from `initialize`).
     pub fn new(sample_rate: f32, max_base_ms: f32, window_ms: f32) -> Self {
         let sr = sample_rate.max(1.0);
-        // Whole samples, so a 0-cent shifter is an exact integer delay.
-        let window = ms_to_samples(window_ms.max(0.1), sr).round().max(2.0);
+        // Whole and even, so window/2 — the 0-cent tap — is a whole
+        // sample and a 0-cent shifter is an exact integer delay.
+        let window = (2.0 * (0.5 * ms_to_samples(window_ms.max(0.1), sr)).round()).max(2.0);
         let max_base = ms_to_samples(max_base_ms.max(0.0), sr).ceil();
         let size = ((max_base + window).ceil() as usize + 4).next_power_of_two();
         Self {
@@ -68,11 +71,12 @@ impl DopplerShifter {
         self.step = (1.0 - ratio) / self.window as f64;
     }
 
-    /// Set the fixed delay under the ramp, clamped to the constructed
+    /// Set the fixed delay under the ramp, rounded to whole samples (so
+    /// the 0-cent delay stays exact) and clamped to the constructed
     /// maximum. Block-rate.
     pub fn set_base_delay(&mut self, sample_rate: f32, base_ms: f32) {
         let base = if base_ms.is_finite() { ms_to_samples(base_ms.max(0.0), sample_rate) } else { 0.0 };
-        self.base = base.min(self.max_base);
+        self.base = base.round().min(self.max_base);
     }
 
     /// Average delay of the output relative to the input, in samples.

@@ -802,3 +802,50 @@ fn t12_hostile_input_stays_finite() {
     assert!(ol.iter().all(|v| v.is_finite()));
 }
 
+
+/// The sample on which the first STFT frame runs, seen as the first
+/// sample after which a cut exists (a loud resonance from sample 0).
+fn first_frame_sample(sup: &mut ResonanceSuppressor) -> usize {
+    let x: Vec<f32> = sine(3_200.0, 0.5, 8_192)
+        .iter()
+        .zip(white(3, 8_192))
+        .map(|(s, w)| s + 0.05 * w)
+        .collect();
+    let cfg = cfg_t1();
+    for (i, &v) in x.iter().enumerate() {
+        let (mut l, mut r) = ([v], [v]);
+        sup.process_stereo(&mut l, &mut r, &cfg);
+        if sup.max_cut_db() > 0.0 {
+            return i;
+        }
+    }
+    panic!("no frame ran in 8192 samples");
+}
+
+/// `set_phase_offset` right after `new()` — before any sample — moves
+/// the first frame by the offset, exactly as it does after a reset. (It
+/// used to wait for a reset: `new()`'s own default config marked the
+/// instance as started.)
+#[test]
+fn a_phase_offset_set_right_after_new_moves_the_first_frame() {
+    let hop = StftGeometry::for_sample_rate(SR).hop;
+    let offset = hop / 4 - 1;
+    let base = first_frame_sample(&mut ResonanceSuppressor::new(SR));
+    assert_eq!(base, hop - 1, "with no offset the first frame closes the first hop");
+
+    let mut fresh = ResonanceSuppressor::new(SR);
+    fresh.set_phase_offset(offset);
+    assert_eq!(first_frame_sample(&mut fresh), base - offset, "offset after new()");
+
+    let mut reset = ResonanceSuppressor::new(SR);
+    reset.set_phase_offset(offset);
+    reset.reset();
+    assert_eq!(first_frame_sample(&mut reset), base - offset, "offset, then reset");
+
+    // Once samples have run, the grid stays put until the next reset.
+    let mut running = ResonanceSuppressor::new(SR);
+    let (mut l, mut r) = ([0.0f32; 3], [0.0f32; 3]);
+    running.process_stereo(&mut l, &mut r, &cfg_t1());
+    running.set_phase_offset(offset);
+    assert_eq!(first_frame_sample(&mut running), base - 3, "an offset mid-stream moved the grid");
+}

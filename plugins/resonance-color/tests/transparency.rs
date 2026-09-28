@@ -9,7 +9,8 @@
 //! - Console at `drive = 0` is transparent the same way, with auto-gain
 //!   on (it computes a gain of exactly 1).
 //! - `flutter = 0` is a true bypass in Tape mode, and switching it on
-//!   crossfades rather than stepping in the ≈ 1.1 ms centre delay.
+//!   glides the ≈ 1.1 ms centre delay in rather than stepping it in (or
+//!   crossfading it in, which would comb).
 //!
 //! "Bit for bit" is compared with `==` on the samples, i.e. up to the
 //! sign of a zero (the blend can turn a −0.0 into +0.0).
@@ -173,7 +174,7 @@ fn flutter_zero_in_tape_mode_is_a_true_bypass() {
     assert!((53 - 26..=53 + 26).contains(&best), "flutter's delay peaks at lag {best}");
 }
 
-/// Switching flutter on inserts its centre delay; the crossfade must keep
+/// Switching flutter on inserts its centre delay; the glide must keep
 /// that from being a step. The largest sample-to-sample jump of a smooth
 /// low sine through the switch stays of the order of the sine's own
 /// slope.
@@ -203,4 +204,50 @@ fn switching_flutter_on_and_off_does_not_click() {
     let own = std::f32::consts::TAU * 220.0 / SR * 0.5;
     let worst = a.windows(2).skip(4_800).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
     assert!(worst < 1.5 * own, "flutter switch stepped by {worst} (sine slope {own})");
+}
+
+/// Switching flutter on or off must not comb. A crossfade between the
+/// undelayed signal and the one behind flutter's centre delay τ nulls
+/// `1 / 2τ` (≈ 454 Hz) outright half way through; gliding the delay
+/// instead keeps a sine there at its level through the whole switch.
+#[test]
+fn switching_flutter_on_and_off_does_not_comb() {
+    use resonance_plugin::ResonancePlugin;
+    let centre = resonance_dsp::Flutter::new(SR).centre_delay_samples() as f64 / SR as f64;
+    let notch_hz = (0.5 / centre) as f32;
+    let mut plugin = resonance_color::ResonanceColor::new();
+    let s = Settings {
+        mode: Mode::Tape,
+        drive: 0.0,
+        flutter: 0.0,
+        mix: 1.0,
+        auto_gain: false,
+        ..Settings::default()
+    };
+    apply_settings(&plugin.params, &s);
+    plugin.initialize(SR, BLOCK as u32);
+    let second = SR as usize;
+    let (l, r) = sine(3 * second, notch_hz, 0.25);
+    let mut out = Vec::new();
+    for (k, flutter) in [0.0f32, 0.05, 0.0].into_iter().enumerate() {
+        plugin.params.flutter.set_value(flutter);
+        let span = k * second..(k + 1) * second;
+        out.extend(render_with(&mut plugin, &l[span.clone()], &r[span]).0);
+    }
+    // Level per 4 ms window (≈ 2 cycles), after the filters settle.
+    let win = 192;
+    let levels: Vec<f32> = out[second / 2..]
+        .chunks_exact(win)
+        .map(|w| {
+            let e = w.iter().map(|v| v * v).sum::<f32>() / win as f32;
+            10.0 * e.max(1e-20).log10()
+        })
+        .collect();
+    let lo = levels.iter().copied().fold(f32::INFINITY, f32::min);
+    let hi = levels.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        hi - lo < 1.0,
+        "a {notch_hz:.0} Hz sine swung {:.1} dB through the flutter switches",
+        hi - lo
+    );
 }

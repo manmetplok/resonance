@@ -53,8 +53,9 @@ pub struct StereoParams {
     /// Widening algorithm, a [`WidenMode`] index.
     pub widen_mode: IntParam,
     /// How much the widening mode does, 0..1. Per mode: Decorrelate =
-    /// side amount, Diffuse = all-pass spread, Micro-shift = level of the
-    /// detuned voices, Haas = delay time (1–30 ms).
+    /// side amount, Diffuse = all-pass spread (up to 0.25 ERB),
+    /// Micro-shift = level of the detuned voices, Haas = delay time
+    /// (1–30 ms).
     pub widen_amount: FloatParam,
     /// Lower edge of the band the widening acts on (Hz); bass below it
     /// stays dry and centred. Haas uses it as its low exclude.

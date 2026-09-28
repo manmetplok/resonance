@@ -3,6 +3,8 @@
 //! where the harmonics say so), the harmonic bars come off the same
 //! probe the tests pin, and the audio thread publishes its levels.
 
+use std::time::{Duration, Instant};
+
 use resonance_color::dsp::voicing::transfer;
 use resonance_color::dsp::Settings;
 use resonance_color::editor::curve::{curve_points, CurveCache, NUM_POINTS};
@@ -66,6 +68,20 @@ fn the_curve_cache_follows_the_settings_it_depends_on() {
     assert_ne!(cache.points(&Settings { drive: 0.9, ..a }), &first[..]);
 }
 
+/// Poll the cache the way `ui()` does, once a millisecond, until it shows
+/// the probe for `s`.
+fn wait_for(cache: &mut ProbeCache, s: &Settings) -> resonance_color::probe::HarmonicSignature {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let sig = cache.signature(s);
+        if cache.is_current(s) {
+            return sig.expect("a current probe has a signature");
+        }
+        assert!(Instant::now() < deadline, "the probe worker never answered");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 #[test]
 fn the_bars_read_the_probe() {
     let s = Settings {
@@ -74,17 +90,64 @@ fn the_bars_read_the_probe() {
         ..Settings::default()
     };
     let mut cache = ProbeCache::default();
-    let shown = cache.signature(&s).expect("first call probes");
+    let shown = wait_for(&mut cache, &s);
     assert_eq!(shown, probe(&s, PROBE_LEVEL_DBFS));
     // Auto-gain and flutter are not part of what the probe measures, so
     // toggling them re-uses the result.
-    assert_eq!(
-        cache.signature(&Settings { auto_gain: false, flutter: 0.3, ..s }),
-        Some(shown)
-    );
+    let same = Settings { auto_gain: false, flutter: 0.3, ..s };
+    assert!(cache.is_current(&same));
+    assert_eq!(cache.signature(&same), Some(shown));
     assert_eq!(bar_fraction(0.0), 1.0);
     assert_eq!(bar_fraction(FLOOR_DBC), 0.0);
     assert_eq!(bar_fraction(-300.0), 0.0);
+}
+
+/// `ui()` never waits for a probe: the call that requests one returns at
+/// once, with the previous result (none yet, the first time), and the
+/// bars catch up on a later frame.
+#[test]
+fn asking_for_a_probe_never_blocks_the_caller() {
+    // Tape HQ at 4x is the slowest probe there is.
+    let s = Settings {
+        mode: Mode::Tape,
+        drive: 0.8,
+        oversample: resonance_dsp::OversampleFactor::X4,
+        tape_quality: resonance_color::params::TapeQuality::Hq,
+        ..Settings::default()
+    };
+    let mut cache = ProbeCache::default();
+    assert_eq!(cache.signature(&s), None, "the first call waited for the probe");
+    let first = wait_for(&mut cache, &s);
+    // A change keeps showing the old bars until the new probe lands.
+    let moved = Settings { drive: 0.2, ..s };
+    assert_eq!(cache.signature(&moved), Some(first), "the retarget waited for the probe");
+    let second = wait_for(&mut cache, &moved);
+    assert_ne!(first, second);
+    assert_eq!(second, probe(&moved, PROBE_LEVEL_DBFS));
+}
+
+/// Closing the editor drops the cache with a probe in flight: the worker
+/// must stop and join promptly, not hang the GUI thread's teardown.
+#[test]
+fn dropping_the_cache_mid_probe_joins_the_worker() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut cache = ProbeCache::default();
+        let hq = Settings {
+            mode: Mode::Tape,
+            drive: 0.8,
+            oversample: resonance_dsp::OversampleFactor::X4,
+            tape_quality: resonance_color::params::TapeQuality::Hq,
+            ..Settings::default()
+        };
+        let _ = cache.signature(&hq);
+        // Queue a second request behind the one running.
+        let _ = cache.signature(&Settings { drive: 0.1, ..hq });
+        drop(cache);
+        let _ = tx.send(());
+    });
+    rx.recv_timeout(Duration::from_secs(20))
+        .expect("dropping the probe cache hung (the worker never joined)");
 }
 
 #[test]
