@@ -140,6 +140,7 @@ fn summary(app: &Resonance, request: &Request) -> Response {
                 name: p.plugin_name.clone(),
             })
             .collect(),
+        automation: super::automation::lane_summaries(app, ChainOwner::Master),
     };
     super::success(request, &result)
 }

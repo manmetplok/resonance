@@ -9,6 +9,8 @@
 use super::clip::{clip_count, track_clip_views};
 use crate::plugin_chain::instrument_slot;
 use crate::state::{BusState, TrackState};
+use crate::update::control::automation::{lane_count, lane_summaries};
+use crate::update::control::plugin_target::ChainOwner;
 use crate::util::db_to_linear;
 use crate::Resonance;
 use resonance_audio::types::{TrackOutput, TrackType};
@@ -25,7 +27,7 @@ pub(in crate::update::control) fn track_summaries(app: &Resonance) -> Vec<TrackS
         .iter()
         .map(|t| track_summary(app, t))
         .collect();
-    out.extend(app.sorted_busses().iter().map(bus_summary));
+    out.extend(app.sorted_busses().iter().map(|b| bus_summary(app, b)));
     out
 }
 
@@ -49,10 +51,11 @@ pub(in crate::update::control) fn track_summary(app: &Resonance, t: &TrackState)
         pan: t.pan,
         output: track_output(t.output),
         clip_count: clip_count(app, t.id),
+        automation_lanes: lane_count(app, ChainOwner::Track(t.id)),
     }
 }
 
-fn bus_summary(b: &BusState) -> TrackSummary {
+fn bus_summary(app: &Resonance, b: &BusState) -> TrackSummary {
     TrackSummary {
         id: resonance_control::ids::TrackId(b.id),
         name: b.name.clone(),
@@ -69,6 +72,7 @@ fn bus_summary(b: &BusState) -> TrackSummary {
         // not a routing the app models.
         output: WireTrackOutput::Master,
         clip_count: 0,
+        automation_lanes: lane_count(app, ChainOwner::Bus(b.id)),
     }
 }
 
@@ -163,6 +167,7 @@ pub(in crate::update::control) fn track_detail(app: &Resonance, t: &TrackState) 
         summary: track_summary(app, t),
         effects: effect_chain(app, t),
         sends: track_sends(app, t),
+        automation: lane_summaries(app, ChainOwner::Track(t.id)),
         // Cache attached (valid or stale): the #576 frozen-input
         // classifier rejects note/lyric/instrument/param edits, so the
         // client needs to see why its mutations bounce.

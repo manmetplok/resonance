@@ -33,6 +33,8 @@ use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod arrangement;
+/// `automation.*` — parameter automation lanes (automation-control-api.md).
+mod automation;
 mod bus;
 mod chain_presets;
 mod clip;
@@ -319,6 +321,14 @@ fn execute_mutating(
     // nothing, but it reports the OPEN project's tempo map, so with
     // nothing open `busy` is honest and a default 120 BPM 4/4 is not.
     if let Some(result) = global::try_handle(app, request) {
+        return result;
+    }
+
+    // Parameter automation (automation-control-api.md). Like
+    // `master.summary`, `automation.lanes` reads only but describes the
+    // OPEN project, so it sits below the gate. Writes compute the new
+    // point list and dispatch ONE `AutomationMessage::SetLane`.
+    if let Some(result) = automation::try_handle(app, request) {
         return result;
     }
 
