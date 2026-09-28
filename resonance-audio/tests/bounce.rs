@@ -10,6 +10,8 @@
 //! file resolves against that file's own directory (`tests/`), not against
 //! the `tests/bounce/` subdirectory.
 
+#[path = "bounce/automation_render.rs"]
+mod automation_render;
 #[path = "bounce/bounce_external_offsets.rs"]
 mod bounce_external_offsets;
 #[path = "bounce/bounce_midi_events.rs"]

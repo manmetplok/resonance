@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use resonance_audio::test_support::{
     attach_tuning_caches, build_tuning_caches, ensure_tuning_caches, pitch_ratio_curve,
-    render_stem, snapshot_tuning_jobs, SharedState, StemSource,
+    render_stem, snapshot_tuning_jobs, AutomationSnapshot, SharedState, StemSource,
 };
 use resonance_audio::analyze_pitch;
 use resonance_audio::types::*;
@@ -101,6 +101,7 @@ impl Engine {
             end,
             &self.shared,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
         )
         .expect("render_stem")

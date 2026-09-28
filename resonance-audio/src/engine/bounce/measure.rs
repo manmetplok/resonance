@@ -76,6 +76,7 @@ use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 /// would invite comparing figures that did not all come from the same
 /// pass, which is exactly the error class this command exists to remove.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn measure_mix(
     measure_id: u64,
     targets: Vec<StemSource>,
@@ -83,6 +84,7 @@ pub fn measure_mix(
     source: MeasureSource,
     shared: &Arc<SharedState>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -93,6 +95,7 @@ pub fn measure_mix(
         source,
         shared,
         tempo_map,
+        automation,
         sample_rate,
         event_tx,
         None,
@@ -110,6 +113,7 @@ fn measure_mix_holding(
     source: MeasureSource,
     shared: &Arc<SharedState>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
     held: Option<OfflineRenderGuard>,
@@ -180,6 +184,7 @@ fn measure_mix_holding(
             end,
             shared,
             tempo_map,
+            automation,
             sample_rate,
         ) {
             Ok(samples) => results.push(measure_rendered_buffer(
@@ -213,6 +218,7 @@ pub(crate) fn measure_mix_spawn(
     source: MeasureSource,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<crate::engine::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) {
@@ -223,6 +229,7 @@ pub(crate) fn measure_mix_spawn(
         source,
         shared,
         tempo_map,
+        automation,
         sample_rate,
         event_tx,
         || {},
@@ -241,6 +248,7 @@ pub(crate) fn measure_mix_spawn_after(
     source: MeasureSource,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<crate::engine::AutomationSnapshot>,
     sample_rate: u32,
     event_tx: Sender<AudioEvent>,
     before: impl FnOnce() + Send + 'static,
@@ -283,6 +291,7 @@ pub(crate) fn measure_mix_spawn_after(
                         source,
                         &shared,
                         &tempo_map,
+                        &automation,
                         sample_rate,
                         &event_tx,
                         held,

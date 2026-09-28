@@ -168,6 +168,10 @@ fn swap(
     // longer exists (the echo repeats it, idempotently).
     r.plugin_mirror.state_cache.remove(&old_id);
     r.presets.pending_plugin_param_overrides.remove(&old_id);
+    // Its automation lanes too: they are keyed by the outgoing instance
+    // id, which the replacement does not inherit (automation-control-api
+    // D1). Undo of the swap brings them back with the old slot.
+    crate::engine_events::plugins::drop_plugin_lanes(r, old_id);
     if r.sidechain.clear_plugin(old_id) && !matches!(locator, PluginLocator::Track(_)) {
         // The engine drops a key route itself on `RemovePlugin`, but not
         // on the bus/master removals — same asymmetry

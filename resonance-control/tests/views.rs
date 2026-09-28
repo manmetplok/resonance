@@ -33,6 +33,7 @@ fn track_summary() -> TrackSummary {
         pan: -0.25,
         output: TrackOutput::Master,
         clip_count: 2,
+        automation_lanes: 0,
     }
 }
 
@@ -155,7 +156,7 @@ fn song_summary_matches_documented_shape() {
                 "instrument": "resonance-wavetable",
                 "muted": false, "soloed": true,
                 "volume": 0.5, "volume_db": -6.0, "pan": -0.25,
-                "output": "master", "clip_count": 2
+                "output": "master", "clip_count": 2, "automation_lanes": 0
             }],
             "revision": 12
         })
@@ -213,6 +214,7 @@ fn track_detail_flattens_the_summary_fields() {
             pre_fader: false,
             enabled: true,
         }],
+        automation: Vec::new(),
         clips: vec![ClipView {
             id: ClipId(7),
             name: Some("Bass groove".to_owned()),

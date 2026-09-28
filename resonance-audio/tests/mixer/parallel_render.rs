@@ -543,15 +543,25 @@ fn parked_workers_wake_for_the_next_block() {
 /// and on 4 threads, each from fresh plugin state.
 #[test]
 fn offline_stems_are_bit_identical_across_thread_counts() {
-    use resonance_audio::test_support::{override_threads_on_this_thread, render_stem, StemSource};
+    use resonance_audio::test_support::{
+        override_threads_on_this_thread, render_stem, AutomationSnapshot, StemSource,
+    };
 
     let render = |threads: usize, source: StemSource| -> Vec<u32> {
         override_threads_on_this_thread(Some(threads));
         let h = fixture(1, 0);
         h.shared().playing.store(false, Ordering::Relaxed);
         let tempo = Arc::new(arc_swap::ArcSwap::from_pointee(TempoMap::default()));
-        let out = render_stem(source, 0, (BLOCKS * BLOCK) as u64 * 3, &h.shared_arc(), &tempo, SR)
-            .expect("stem renders");
+        let out = render_stem(
+            source,
+            0,
+            (BLOCKS * BLOCK) as u64 * 3,
+            &h.shared_arc(),
+            &tempo,
+            &AutomationSnapshot::default(),
+            SR,
+        )
+        .expect("stem renders");
         override_threads_on_this_thread(None);
         out.iter().map(|s| s.to_bits()).collect()
     };

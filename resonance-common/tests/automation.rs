@@ -213,6 +213,77 @@ fn plugin_param_degenerate_range_maps_to_zero() {
     approx(plugin_param_to_lane_value(5.0, 5.0, 5.0), 0.0);
 }
 
+// --- automation-control-api.md §7 unit coverage --------------------------
+//
+// The round trips above already cover the generic shapes (gain, pan,
+// mute, an arbitrary plugin range, a degenerate range). These fill the
+// specific cases the control API's wire layer leans on: the exact −60 dB
+// floor a `"-inf"` write collapses to, a skewed-range plugin parameter
+// shaped like the wavetable's Filter Cutoff (20..20000 Hz, the
+// automation-control-api.md §2.4 example), and a stepped parameter's
+// discrete choices, where the round trip has to land on the same integer
+// index rather than merely "close".
+
+#[test]
+fn gain_floor_is_exactly_normalized_zero_both_ways() {
+    let t = AutomationTarget::MasterGain;
+    // -60 dB (GAIN_MIN_DB) is the wire's "-inf": both must map to the
+    // same normalized value, which the engine renders as exact silence.
+    approx(real_to_lane_value(&t, GAIN_MIN_DB), 0.0);
+    approx(lane_value_to_real(&t, 0.0), GAIN_MIN_DB);
+    // And back: normalized 0 reads back as exactly the floor, not
+    // something a fraction of a dB off it.
+    approx(real_to_lane_value(&t, lane_value_to_real(&t, 0.0)), 0.0);
+}
+
+#[test]
+fn plugin_param_20_to_20000_round_trips() {
+    // The wavetable's Filter Cutoff range from automation-control-api.md
+    // §2.4 / §4.6's worked example (300 Hz -> 4 kHz).
+    const MIN: f64 = 20.0;
+    const MAX: f64 = 20_000.0;
+    for &hz in &[20.0f64, 300.0, 1_000.0, 4_000.0, 20_000.0] {
+        let norm = plugin_param_to_lane_value(hz, MIN, MAX);
+        assert!(
+            (0.0..=1.0).contains(&norm),
+            "{hz} Hz normalized out of 0..=1: {norm}"
+        );
+        let back = lane_value_to_plugin_param(norm, MIN, MAX);
+        // The lane stores the normalized value as f32, so a ~20000-wide
+        // range keeps roughly f32-epsilon-times-range precision, not
+        // f64 exactness.
+        assert!(
+            (back - hz).abs() < 1e-2,
+            "{hz} Hz did not round-trip: got {back}"
+        );
+    }
+    // The endpoints land exactly on 0.0 / 1.0, not merely close to them —
+    // a caller writing the range's own min/max must read it back exact.
+    approx(plugin_param_to_lane_value(MIN, MIN, MAX), 0.0);
+    approx(plugin_param_to_lane_value(MAX, MIN, MAX), 1.0);
+}
+
+#[test]
+fn stepped_plugin_param_indices_round_trip() {
+    // A 3-choice stepped parameter (e.g. a filter type picker), the
+    // shape `automation.set_lane` rounds a written value to (D-shape
+    // handling lives app-side in `resonance-app`; this pins the
+    // underlying linear map it rounds against). Every integer index in
+    // the range must survive normalize -> denormalize -> round.
+    const MIN: f64 = 0.0;
+    const MAX: f64 = 2.0;
+    for index in 0..=2i64 {
+        let real = index as f64;
+        let norm = plugin_param_to_lane_value(real, MIN, MAX);
+        let back = lane_value_to_plugin_param(norm, MIN, MAX);
+        assert_eq!(
+            back.round() as i64,
+            index,
+            "index {index} did not round-trip through normalize/denormalize (got {back})"
+        );
+    }
+}
+
 // --- serde ---------------------------------------------------------------
 
 #[test]

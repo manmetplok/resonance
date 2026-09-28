@@ -9,6 +9,8 @@
 use super::clip::{clip_count, track_clip_views};
 use crate::plugin_chain::instrument_slot;
 use crate::state::{BusState, TrackState};
+use crate::update::control::automation::{lane_count, lane_summaries};
+use crate::update::control::plugin_target::ChainOwner;
 use crate::util::db_to_linear;
 use crate::Resonance;
 use resonance_audio::types::{TrackOutput, TrackType};
@@ -25,7 +27,7 @@ pub(in crate::update::control) fn track_summaries(app: &Resonance) -> Vec<TrackS
         .iter()
         .map(|t| track_summary(app, t))
         .collect();
-    out.extend(app.sorted_busses().iter().map(bus_summary));
+    out.extend(app.sorted_busses().iter().map(|b| bus_summary(app, b)));
     out
 }
 
@@ -49,10 +51,11 @@ pub(in crate::update::control) fn track_summary(app: &Resonance, t: &TrackState)
         pan: t.pan,
         output: track_output(t.output),
         clip_count: clip_count(app, t.id),
+        automation_lanes: lane_count(app, ChainOwner::Track(t.id)),
     }
 }
 
-fn bus_summary(b: &BusState) -> TrackSummary {
+fn bus_summary(app: &Resonance, b: &BusState) -> TrackSummary {
     TrackSummary {
         id: resonance_control::ids::TrackId(b.id),
         name: b.name.clone(),
@@ -69,6 +72,7 @@ fn bus_summary(b: &BusState) -> TrackSummary {
         // not a routing the app models.
         output: WireTrackOutput::Master,
         clip_count: 0,
+        automation_lanes: lane_count(app, ChainOwner::Bus(b.id)),
     }
 }
 
@@ -163,6 +167,7 @@ pub(in crate::update::control) fn track_detail(app: &Resonance, t: &TrackState) 
         summary: track_summary(app, t),
         effects: effect_chain(app, t),
         sends: track_sends(app, t),
+        automation: lane_summaries(app, ChainOwner::Track(t.id)),
         // Cache attached (valid or stale): the #576 frozen-input
         // classifier rejects note/lyric/instrument/param edits, so the
         // client needs to see why its mutations bounce.
@@ -202,9 +207,41 @@ pub(in crate::update::control) fn plugin_entries(
     app: &Resonance,
     t: &TrackState,
 ) -> Vec<track::PluginParamsEntry> {
-    let instrument = instrument_slot(app, t);
+    chain_entries(&t.plugins, instrument_slot(app, t))
+}
+
+/// A bus chain as wire entries, in processing order, each tagged with
+/// its occurrence among same-id siblings.
+///
+/// Deliberately the same [`track::PluginParamsEntry`] shape
+/// `track.plugin_params` returns, so a client reads a bus chain with the
+/// code it already has. `kind` is always `Effect`: a bus has no
+/// instrument slot.
+pub(in crate::update::control) fn bus_plugin_entries(
+    bus: &BusState,
+) -> Vec<track::PluginParamsEntry> {
+    chain_entries(&bus.plugins, None)
+}
+
+/// The master chain as wire entries, in processing order — the same
+/// shape as [`plugin_entries`] / [`bus_plugin_entries`], every entry an
+/// `Effect` (the master has no instrument slot).
+pub(in crate::update::control) fn master_plugin_entries(
+    app: &Resonance,
+) -> Vec<track::PluginParamsEntry> {
+    chain_entries(&app.master.plugins, None)
+}
+
+/// One chain as wire entries: the builder behind [`plugin_entries`],
+/// [`bus_plugin_entries`] and [`master_plugin_entries`], so the three
+/// chains cannot disagree about what an entry says. `instrument` is the
+/// slot index to report as the instrument, if any.
+fn chain_entries(
+    plugins: &[crate::state::PluginSlotState],
+    instrument: Option<usize>,
+) -> Vec<track::PluginParamsEntry> {
     let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    t.plugins
+    plugins
         .iter()
         .enumerate()
         .map(|(i, p)| {

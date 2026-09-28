@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 
-use resonance_audio::test_support::{SharedState, StemBitDepth, StemSource, StemTarget, export_stems};
+use resonance_audio::test_support::{
+    export_stems, AutomationSnapshot, SharedState, StemBitDepth, StemSource, StemTarget,
+};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -113,6 +115,7 @@ impl EngineState {
             &self.shared,
             cancel,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
             event_tx,
         );

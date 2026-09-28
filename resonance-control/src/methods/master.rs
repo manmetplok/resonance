@@ -101,6 +101,11 @@ pub struct MasterSummary {
     /// is inserted on the master at all.
     #[serde(default)]
     pub plugins: Vec<MasterPluginEntry>,
+    /// The master's automation lanes, compact (no points): its volume
+    /// lane and lanes on master-chain plugins. Empty (and elided) when
+    /// nothing on the master is automated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub automation: Vec<super::automation::LaneSummary>,
 }
 
 /// One plugin on the master insert chain.

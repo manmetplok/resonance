@@ -439,7 +439,8 @@ impl crate::Resonance {
     }
 
     /// When `message` is an edit to a track's *frozen inputs* — notes,
-    /// lyrics, plugin params, instrument selection, or the FX-bypass flag
+    /// lyrics, plugin params (and their automation lanes), instrument
+    /// selection, or the FX-bypass flag
     /// (all of which the freeze render captured) — return that track id.
     /// `None` for everything else, including the mixer controls (volume /
     /// pan / mute / solo / routing / sends) that stay live while frozen.
@@ -472,6 +473,17 @@ impl crate::Resonance {
             // Bypassing the FX chain changes the post-FX signal freeze
             // rendered — treat it as an input edit, not a mixer control.
             Message::Track(TrackMessage::ToggleTrackFxBypass(track_id)) => Some(*track_id),
+            // A plugin-param lane drives the plugin the freeze rendered
+            // (and `freeze_content_fingerprint` hashes it), so editing one
+            // on a frozen track is an input edit. Gain / pan / mute lanes
+            // drive the mixer, which stays live while frozen
+            // (automation-control-api.md D2).
+            Message::Automation(m) => match m.edited_target() {
+                Some(resonance_common::AutomationTarget::PluginParam { instance, .. }) => {
+                    self.track_of_plugin(*instance)
+                }
+                _ => None,
+            },
             _ => None,
         }
     }

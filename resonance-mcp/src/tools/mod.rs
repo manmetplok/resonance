@@ -10,6 +10,7 @@
 //! drift from the protocol.
 
 pub mod arrange;
+pub mod automation;
 pub mod bus;
 pub mod clip;
 pub mod compose;

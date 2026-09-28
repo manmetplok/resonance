@@ -54,6 +54,7 @@ pub fn export_stems(
     shared: &Arc<SharedState>,
     cancel: &AtomicBool,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
     engine_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
@@ -125,6 +126,7 @@ pub fn export_stems(
             render_end,
             shared,
             tempo_map,
+            automation,
             engine_rate,
         );
         let outcome = match render {
@@ -168,6 +170,7 @@ pub(crate) fn export_stems_spawn(
     include_fx_tail: bool,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: Arc<crate::engine::AutomationSnapshot>,
     engine_rate: u32,
     event_tx: Sender<AudioEvent>,
 ) -> Arc<AtomicBool> {
@@ -194,6 +197,7 @@ pub(crate) fn export_stems_spawn(
                         &shared,
                         &cancel_render,
                         &tempo_map,
+                        &automation,
                         engine_rate,
                         &event_tx,
                     );
