@@ -251,3 +251,67 @@ fn no_mode_changes_the_latency() {
         assert_eq!(l, plain, "{mode:?}");
     }
 }
+
+/// Phase delay of `out` against `input` at `freq`, in samples, from the
+/// last half of the render.
+fn phase_delay(input: &[f32], out: &[f32], freq: f64) -> f64 {
+    let phase = |x: &[f32]| {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (n, &s) in x.iter().enumerate() {
+            let ph = TAU * freq * n as f64 / SR as f64;
+            re += s as f64 * ph.cos();
+            im -= s as f64 * ph.sin();
+        }
+        im.atan2(re)
+    };
+    let half = input.len() / 2;
+    let mut d = phase(&input[half..]) - phase(&out[half..]);
+    while d < 0.0 {
+        d += TAU;
+    }
+    d / TAU * SR as f64 / freq
+}
+
+/// The group delay the module and chain docs quote: a non-Blend mode
+/// reports no latency, but its 4x IIR pair delays the signal by ~5.5
+/// samples below a few kHz (review finding M3). Console at 0 dB drive is
+/// the identity curve, so what is left is the pair.
+#[test]
+fn the_mode_group_delay_is_the_documented_one() {
+    for freq in [200.0, 1000.0, 3000.0] {
+        let input = sine(freq, 0.25, 96_000);
+        let out = run(&cfg(SatMode::Console, 0.0), &input);
+        let d = phase_delay(&input, &out, freq);
+        assert!((5.3..5.8).contains(&d), "{freq} Hz: {d:.2} samples");
+    }
+}
+
+/// The enable crossfade of a mode combs for its 10 ms (the wet path is
+/// ~5.5 samples late) but must never step: toggled on and off on a tone,
+/// no output sample moves further than the tone itself can.
+#[test]
+fn mode_enable_fades_do_not_step() {
+    let input = sine(1000.0, 0.25, 48_000);
+    let tone_step = input.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    for mode in MODES {
+        let mut s = Saturator::new(SR);
+        let (mut l, mut r) = (input.clone(), input.clone());
+        for (b, start) in (0..l.len()).step_by(BLOCK).enumerate() {
+            let end = (start + BLOCK).min(l.len());
+            let cfg = SaturatorConfig {
+                enabled: (20..60).contains(&b),
+                ..cfg(mode, 0.0)
+            };
+            s.process_stereo(&mut l[start..end], &mut r[start..end], &cfg);
+        }
+        let slope = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        // A mode's own gain (the Inflator's ~1.5x at 0 dB drive) scales
+        // the wet tone's slope, so the bound is the steeper of the two.
+        let wet_step = slope(&l[40 * BLOCK..50 * BLOCK]);
+        let max_step = slope(&l);
+        assert!(
+            max_step <= tone_step.max(wet_step) * 1.05,
+            "{mode:?}: step {max_step} vs the tone's {tone_step} (wet {wet_step})"
+        );
+    }
+}

@@ -23,11 +23,21 @@
 //! [`Oversampler`] cascaded, a 2× instance around a 4× one (the recipe
 //! the `saturate` module documents). With ADAA that keeps the strongest
 //! alias of a 5 kHz full-scale tone at +12 dB drive ≤ −90 dBc, where the
-//! 4× alone reaches only about −73 dBc. The IIR half-bands have no fixed
-//! delay, so the chain's reported latency does not change; they do add a
-//! few samples of frequency-dependent group delay to the wet path, which
-//! is why the enable crossfade (10 ms) is the only place the dry and wet
-//! signals are ever mixed.
+//! 4× alone reaches only about −73 dBc.
+//!
+//! # Delay
+//!
+//! The IIR half-bands have no fixed delay, so [`Clipper::latency`] is 0
+//! and the chain's reported latency does not change. They do delay the
+//! wet path by a frequency-dependent amount: about 6.9 samples at 48 kHz
+//! from DC to a few kHz (4.0 from the outer 2× pair, 2.8 from the inner
+//! 4× one at twice the rate), which the host's delay compensation does
+//! not see. The enable crossfade (10 ms) mixes that wet path with the
+//! raw input, so it combs while it runs (first notch ≈3.5 kHz at its
+//! midpoint). The dry side is deliberately *not* run through a matching
+//! pair: the fade would then start and end on a step between the
+//! delayed and the raw signal, a click where the comb is only a brief
+//! phase smear. See the chain's module docs.
 //!
 //! Off (after its fade-out) the stage is a wire, bit for bit.
 
@@ -166,7 +176,8 @@ impl Clipper {
         self.was_enabled = false;
     }
 
-    /// Zero: the IIR oversampling has no fixed delay.
+    /// Zero: the IIR oversampling has no fixed delay. Its ~6.9-sample
+    /// frequency-dependent group delay is not included (module docs).
     pub fn latency(&self) -> usize {
         0
     }
