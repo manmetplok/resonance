@@ -505,7 +505,12 @@ pub struct ResonanceSuppressor {
     mix: f32,
     /// Per-sample step of `fade` and `mix`.
     ramp_step: f32,
+    /// The first config since construction or reset has been taken
+    /// (snaps `fade` and `mix` instead of ramping them).
     primed: bool,
+    /// A sample has run since construction or reset: from then on the
+    /// hop grid is fixed, and a phase offset waits for the next reset.
+    processed: bool,
     max_cut_db: f32,
 }
 
@@ -571,6 +576,7 @@ impl ResonanceSuppressor {
             mix: 1.0,
             ramp_step: 1.0 / (XFADE_SECONDS * sample_rate).max(1.0),
             primed: false,
+            processed: false,
             max_cut_db: 0.0,
         };
         s.set_config(&SuppressorConfig::default());
@@ -607,11 +613,12 @@ impl ResonanceSuppressor {
     }
 
     /// Move when the FFT runs within the hop, without changing the
-    /// latency (DSP-16 stagger). Takes effect from the next [`Self::reset`]
-    /// (and is applied now if nothing has been processed yet).
+    /// latency (DSP-16 stagger). Takes effect from the next [`Self::reset`],
+    /// and at once if no sample has been processed since construction or
+    /// the last reset.
     pub fn set_phase_offset(&mut self, offset: usize) {
         self.phase_offset = offset % self.geometry.hop;
-        if !self.primed {
+        if !self.processed {
             self.countdown = self.geometry.hop - self.phase_offset;
         }
     }
@@ -628,6 +635,7 @@ impl ResonanceSuppressor {
         self.gain_a.fill(1.0);
         self.gain_b.fill(1.0);
         self.primed = false;
+        self.processed = false;
         self.max_cut_db = 0.0;
     }
 
@@ -673,6 +681,7 @@ impl ResonanceSuppressor {
 
     #[inline]
     fn step(&mut self, l: f32, r: f32) -> (f32, f32) {
+        self.processed = true;
         let idx = self.pos;
         // Before the write, the history slot holds x[s − frame]: the
         // dry path, delayed by exactly the latency.
