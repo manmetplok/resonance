@@ -251,6 +251,12 @@ fn genre_mode_renders_the_master_with_the_assistant_ltas_and_applies_nothing() {
     let high = &result.suggestions[2];
     let gain = high.params.iter().find(|p| p.key == "tone_b3_gain").unwrap();
     assert!((gain.value - 2.0).abs() < 0.05, "lift the 2 dB under the band: {gain:?}");
+    // A shelf is a stereo move: it puts its band's M/S selector back on
+    // Stereo (index 0), whatever an earlier edit left there.
+    for (stage, key) in [(low, "tone_b0_ms"), (high, "tone_b3_ms")] {
+        let ms = stage.params.iter().find(|p| p.key == key);
+        assert_eq!(ms.map(|p| p.value), Some(0.0), "{key} in {:?}", stage.params);
+    }
     let sub = result.deviations.iter().find(|d| (d.hz - 50.0).abs() < 2.0).unwrap();
     assert!((sub.deviation_db - 3.0).abs() < 0.15, "{sub:?}");
     let mid = result.deviations.iter().find(|d| (d.hz - 1_000.0).abs() < 1.0).unwrap();

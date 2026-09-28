@@ -3,6 +3,7 @@ use resonance_mastering::assistant::decide::{
     bins_for_range, build, param_by_key, Target, HIGH_BAND_HZ, LOW_BAND_HZ, STAGE_DIAGNOSTIC,
 };
 use resonance_mastering::params::MasteringParams;
+use resonance_mastering::stages::linear_phase_eq::MsMode;
 use resonance_mastering::PARAM_COUNT;
 use resonance_mastering::assistant::targets::{target_band, target_curve, Genre};
 
@@ -244,5 +245,35 @@ fn shelves_are_listed_only_when_they_move() {
         .collect();
     for key in ["tone_b0_gain", "tone_b3_gain", "img_width", "lim_ceiling", "glue_ratio"] {
         assert!(keys.contains(&key), "{key} missing from {keys:?}");
+    }
+}
+
+/// A shelf is a stereo move: applying it over a band the user had set to
+/// Side (or Mid) puts that band back on Stereo, and the stage lists that
+/// write for the control API too.
+#[test]
+fn applying_a_shelf_resets_its_band_to_stereo() {
+    let s = build(&busy_analyses()[0], &Target::Genre(Genre::Rock));
+    for (stage, ms_key) in [("tonal_low_shelf", "tone_b0_ms"), ("tonal_high_shelf", "tone_b3_ms")] {
+        let st = s.stages().into_iter().find(|st| st.stage == stage).unwrap();
+        let ms = st.params.iter().find(|c| c.key == ms_key);
+        assert_eq!(
+            ms.map(|c| c.value),
+            Some(MsMode::Stereo.to_index() as f32),
+            "{stage} must write {ms_key} = Stereo: {:?}",
+            st.params
+        );
+    }
+
+    let params = MasteringParams::default();
+    for key in ["tone_b0_ms", "tone_b3_ms"] {
+        param_by_key(&params, key)
+            .unwrap()
+            .set_plain(f64::from(MsMode::Side.to_index()));
+    }
+    s.apply_to(&params);
+    for key in ["tone_b0_ms", "tone_b3_ms"] {
+        let v = param_by_key(&params, key).unwrap().get_plain();
+        assert_eq!(v, f64::from(MsMode::Stereo.to_index()), "{key} after apply");
     }
 }

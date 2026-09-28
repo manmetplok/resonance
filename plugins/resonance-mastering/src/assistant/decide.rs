@@ -20,7 +20,7 @@ use super::targets::{
     band_center_hz, target_band, target_band_center_hz, Genre, NUM_TARGET_BANDS,
 };
 use crate::params::MasteringParams;
-use crate::stages::linear_phase_eq::BandType;
+use crate::stages::linear_phase_eq::{BandType, MsMode};
 
 /// Half-width of the band around a reference track's spectrum, dB. A
 /// reference is one recording, not an average, so it gets no genre-style
@@ -214,11 +214,14 @@ impl Suggestions {
     ///
     /// The tonal shelves use band 0 (low shelf) and band 3 (high shelf)
     /// of the tonal EQ: applying one replaces whatever the user had placed
-    /// on that band.
+    /// on that band, its M/S selector included (a shelf is Stereo).
     pub fn stages(&self) -> Vec<StageSuggestion> {
         let bool_value = |b: bool| if b { 1.0 } else { 0.0 };
         let change = |key: &'static str, value: f32| ParamChange { key, value };
-        let shelf = |prefix: [&'static str; 5], band: BandType, gain: f32| {
+        // A shelf is written as a stereo band: left on Mid or Side from
+        // an earlier edit, it would move only half the image while the
+        // rationale speaks of the whole spectrum.
+        let shelf = |prefix: [&'static str; 6], band: BandType, gain: f32| {
             if gain.abs() > SHELF_MIN_DB {
                 let freq = if band == BandType::LowShelf {
                     LOW_SHELF_HZ
@@ -231,6 +234,7 @@ impl Suggestions {
                     change(prefix[2], freq),
                     change(prefix[3], SHELF_Q),
                     change(prefix[4], gain),
+                    change(prefix[5], MsMode::Stereo.to_index() as f32),
                 ]
             } else {
                 Vec::new()
@@ -248,12 +252,26 @@ impl Suggestions {
             match stage {
                 STAGE_INPUT_TRIM => vec![change("input_trim_db", self.input_trim_db)],
                 STAGE_TONAL_LOW_SHELF => shelf(
-                    ["tone_b0_on", "tone_b0_type", "tone_b0_freq", "tone_b0_q", "tone_b0_gain"],
+                    [
+                        "tone_b0_on",
+                        "tone_b0_type",
+                        "tone_b0_freq",
+                        "tone_b0_q",
+                        "tone_b0_gain",
+                        "tone_b0_ms",
+                    ],
                     BandType::LowShelf,
                     self.tonal_low_shelf_gain_db,
                 ),
                 STAGE_TONAL_HIGH_SHELF => shelf(
-                    ["tone_b3_on", "tone_b3_type", "tone_b3_freq", "tone_b3_q", "tone_b3_gain"],
+                    [
+                        "tone_b3_on",
+                        "tone_b3_type",
+                        "tone_b3_freq",
+                        "tone_b3_q",
+                        "tone_b3_gain",
+                        "tone_b3_ms",
+                    ],
                     BandType::HighShelf,
                     self.tonal_high_shelf_gain_db,
                 ),
