@@ -400,8 +400,12 @@ fn meter_detail_is_omitted_when_empty_and_lowercase_when_set() {
     assert_eq!(params.detail, vec![MeasureDetail::Spectrum]);
     assert_eq!(serde_json::to_value(&params).unwrap()["detail"], json!(["spectrum"]));
 
-    let stems: StemsParams = serde_json::from_value(json!({ "detail": ["spectrum"] })).unwrap();
-    assert_eq!(stems.detail, vec![MeasureDetail::Spectrum]);
+    let stems: StemsParams =
+        serde_json::from_value(json!({ "detail": ["spectrum", "stereo", "dynamics"] })).unwrap();
+    assert_eq!(
+        stems.detail,
+        vec![MeasureDetail::Spectrum, MeasureDetail::Stereo, MeasureDetail::Dynamics]
+    );
 
     assert!(serde_json::from_value::<MeasureParams>(json!({ "detail": ["warmth"] })).is_err());
 }

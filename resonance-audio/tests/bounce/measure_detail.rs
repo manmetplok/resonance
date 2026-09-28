@@ -124,6 +124,37 @@ fn sine_stereo(freq: f32, amplitude: f32) -> Vec<f32> {
         .collect()
 }
 
+/// Deterministic white noise, mono.
+fn white(seed: u32) -> Vec<f32> {
+    let mut state = seed | 1;
+    (0..FRAMES)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            ((state >> 8) as f32 / 8_388_608.0 - 1.0) * 0.25
+        })
+        .collect()
+}
+
+/// Interleave two mono channels.
+fn stereo(left: &[f32], right: &[f32]) -> Vec<f32> {
+    left.iter().zip(right).flat_map(|(&l, &r)| [l, r]).collect()
+}
+
+fn stereo_only() -> DetailSet {
+    DetailSet {
+        stereo: true,
+        ..DetailSet::default()
+    }
+}
+
+/// Measure one clip's worth of stereo PCM on the master, with `detail`.
+fn master_of(pcm: Vec<f32>, detail: DetailSet) -> MixMeasurement {
+    let p = Project::new();
+    p.add_track(1);
+    p.add_clip(1, 1, pcm);
+    p.measure(vec![StemSource::Master], detail).remove(0)
+}
+
 fn spectrum_only() -> DetailSet {
     DetailSet {
         spectrum: true,
@@ -196,4 +227,64 @@ fn every_target_gets_its_own_spectrum() {
     assert_eq!(loudest_band(&results[2]), 7, "track 2 is its 100 Hz sine");
     let master = results[0].detail.spectrum.as_ref().unwrap();
     assert!(master.third_octave[17] > -40.0 && master.third_octave[7] > -40.0);
+}
+
+#[test]
+fn rendered_mono_is_fully_correlated() {
+    let x = white(1);
+    let m = master_of(stereo(&x, &x), stereo_only());
+    let s = m.detail.stereo.as_ref().expect("stereo was asked for");
+    assert!(!s.one_sided);
+    for b in &s.bands {
+        assert!(b.correlation.unwrap() > 0.999, "{b:?}");
+    }
+    assert_eq!(s.haas_lag_ms, None);
+    assert_eq!(m.detail.spectrum, None, "only the asked-for block");
+}
+
+#[test]
+fn rendered_hard_pan_is_one_sided() {
+    let x = white(2);
+    let silent = vec![0.0f32; FRAMES];
+    let m = master_of(stereo(&x, &silent), stereo_only());
+    let s = m.detail.stereo.as_ref().unwrap();
+    assert!(s.one_sided, "the right channel renders silent");
+    assert_eq!(s.balance_db, Some(60.0));
+    assert!(s.bands.iter().all(|b| b.correlation.is_none()), "{:?}", s.bands);
+}
+
+#[test]
+fn rendered_ten_ms_haas_is_found() {
+    let x = white(3);
+    let late: Vec<f32> = (0..FRAMES)
+        .map(|i| if i >= 480 { x[i - 480] } else { 0.0 })
+        .collect();
+    let m = master_of(stereo(&x, &late), stereo_only());
+    let lag = m.detail.stereo.as_ref().unwrap().haas_lag_ms.expect("a 10 ms delay");
+    assert!((lag - 10.0).abs() <= 0.1, "lag {lag} ms");
+}
+
+#[test]
+fn rendered_antiphase_is_minus_one() {
+    let x = white(4);
+    let inverted: Vec<f32> = x.iter().map(|s| -s).collect();
+    let m = master_of(stereo(&x, &inverted), stereo_only());
+    let s = m.detail.stereo.as_ref().unwrap();
+    for b in &s.bands {
+        assert!(b.correlation.unwrap() < -0.999, "{b:?}");
+    }
+    assert!(s.correlation_windows.unwrap().worst < -0.999);
+}
+
+#[test]
+fn dynamics_are_the_measurements_own_peak_over_its_loudness() {
+    let detail = DetailSet {
+        dynamics: true,
+        ..DetailSet::default()
+    };
+    let m = master_of(pink_stereo(0.5), detail);
+    let d = m.detail.dynamics.expect("dynamics was asked for");
+    assert_eq!(d.plr_db, Some(m.true_peak_dbtp - m.lufs_integrated));
+    assert_eq!(d.psr_db, Some(m.true_peak_dbtp - m.lufs_short_term_max));
+    assert_eq!((m.detail.spectrum.as_ref(), m.detail.stereo.as_ref()), (None, None));
 }

@@ -366,9 +366,14 @@ fn meter_tools_publish_the_detail_option() {
             .unwrap_or_else(|| panic!("{name} is published"));
         let schema = serde_json::to_string(&tool.input_schema).unwrap();
         assert!(schema.contains("\"detail\""), "{name} schema lacks detail: {schema}");
-        assert!(schema.contains("\"spectrum\""), "{name} schema lacks spectrum: {schema}");
         let description = tool.description.as_deref().unwrap_or_default();
         assert!(description.contains("detail"), "{name} description never names detail");
+        for detail in ["spectrum", "stereo", "dynamics"] {
+            assert!(
+                schema.contains(&format!("\"{detail}\"")),
+                "{name} schema lacks {detail}: {schema}"
+            );
+        }
         assert!(description.contains("spectrum"), "{name} description never names spectrum");
     }
 }

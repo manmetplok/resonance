@@ -1,8 +1,8 @@
 //! Opt-in detailed mix analysis (warmth-width-depth.md §2, §7.1).
 //!
 //! The `meter.measure` / `meter.stems` `detail` option: the measurable
-//! proxies for warmth ([`spectrum`]), computed over a whole rendered
-//! buffer. Pure functions
+//! proxies for warmth ([`spectrum`]) and for width and mono safety
+//! ([`stereo`]), computed over a whole rendered buffer. Pure functions
 //! like [`offline`][crate::offline]: slice in, value out, no state kept,
 //! allocates freely — never call them from the audio thread.
 //!
@@ -13,8 +13,10 @@
 //! [`analyze_stereo`]: crate::spectrum::offline::analyze_stereo
 
 pub mod spectrum;
+pub mod stereo;
 
 pub use spectrum::{spectrum_detail, SpectralPeak, SpectrumDetail, THIRD_OCTAVE_BANDS};
+pub use stereo::{stereo_detail, CorrelationWindows, StereoBand, StereoDetail};
 
 use crate::spectrum::offline::{analyze_stereo, StereoSpectrum, DETAIL_FFT_SIZE};
 

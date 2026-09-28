@@ -12,8 +12,12 @@ use resonance_audio::types::{
 use resonance_control::job::{JobStarted, JobState};
 use resonance_control::methods::meter::{MeasureResult, StemsResult, THIRD_OCTAVE_HZ};
 use resonance_control::{ErrorKind, Request, Response};
-use resonance_metering::detail::{SpectralPeak, SpectrumDetail};
+use resonance_metering::detail::stereo::STEREO_BAND_EDGES_HZ;
+use resonance_metering::detail::{
+    CorrelationWindows, SpectralPeak, SpectrumDetail, StereoBand, StereoDetail,
+};
 use resonance_metering::offline::BandShares;
+use resonance_metering::RangeDynamics;
 use serde_json::json;
 
 use crate::common::roundtrip;
@@ -301,6 +305,139 @@ fn stems_carries_the_detail_on_the_master_and_every_entry() {
     }
     let typed: StemsResult = serde_json::from_value(wire).expect("a StemsResult");
     assert_eq!(typed.tracks.len(), 2);
+}
+
+/// A hard-panned engine stereo block: one-sided, so every correlation is
+/// absent rather than 0 or +1.
+fn hard_panned_stereo() -> StereoDetail {
+    StereoDetail {
+        bands: STEREO_BAND_EDGES_HZ
+            .windows(2)
+            .map(|e| StereoBand {
+                lo_hz: e[0] as f32,
+                hi_hz: e[1] as f32,
+                correlation: None,
+                side_mid_db: Some(0.000_123),
+                mono_loss_db: Some(-3.010_3),
+            })
+            .collect(),
+        correlation_windows: None,
+        balance_db: Some(60.0),
+        one_sided: true,
+        haas_lag_ms: None,
+    }
+}
+
+#[test]
+fn stereo_and_dynamics_are_requested_and_reported() {
+    let (mut app, cmd_rx) = capture_app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(
+        &mut app,
+        request(1, "meter.measure", json!({ "detail": ["stereo", "dynamics"] })),
+    ));
+    let sent = sent_detail(&cmd_rx);
+    assert!(sent.stereo && sent.dynamics && !sent.spectrum, "{sent:?}");
+
+    let mut stereo = hard_panned_stereo();
+    stereo.one_sided = false;
+    stereo.balance_db = Some(0.123_4);
+    stereo.bands[0].correlation = Some(0.987_65);
+    stereo.correlation_windows = Some(CorrelationWindows {
+        windows: 25,
+        pct_below_0_3: 12.345,
+        worst: -0.123_45,
+        worst_at_seconds: 4.004_2,
+    });
+    stereo.haas_lag_ms = Some(10.004);
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![rendered(
+            StemSource::Master,
+            rate,
+            MeasurementDetail {
+                stereo: Some(stereo),
+                dynamics: Some(RangeDynamics {
+                    plr_db: Some(19.0),
+                    psr_db: Some(16.5),
+                }),
+                ..MeasurementDetail::default()
+            },
+        )],
+    });
+    let wire = result_json(&mut app, job);
+    let mut expected = sorted(DEFAULT_KEYS);
+    expected.extend(["stereo".to_owned(), "dynamics".to_owned()]);
+    expected.sort();
+    assert_eq!(keys(&wire), expected);
+
+    let s = &wire["stereo"];
+    assert_eq!(s["bands"].as_array().unwrap().len(), 8);
+    assert_eq!(
+        s["bands"][0],
+        json!({
+            "lo_hz": 20.0,
+            "hi_hz": 60.0,
+            "correlation": 0.988,
+            "side_mid_db": 0.0,
+            "mono_loss_db": -3.0
+        })
+    );
+    assert_eq!(
+        s["correlation_windows"],
+        json!({ "windows": 25, "pct_below_0_3": 12.3, "worst": -0.123, "worst_at_seconds": 4.0 })
+    );
+    assert_eq!(s["balance_db"], json!(0.12));
+    assert_eq!(s["one_sided"], json!(false));
+    assert_eq!(s["haas_lag_ms"], json!(10.0));
+    assert_eq!(wire["dynamics"], json!({ "plr_db": 19.0, "psr_db": 16.5 }));
+
+    let typed: MeasureResult = serde_json::from_value(wire).expect("a MeasureResult");
+    assert!(typed.stereo.is_some() && typed.dynamics.is_some() && typed.spectrum.is_none());
+}
+
+#[test]
+fn a_hard_panned_measurement_says_one_sided_with_null_correlations() {
+    let (mut app, _cmd_rx) = capture_app();
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(
+        &mut app,
+        request(1, "meter.measure", json!({ "detail": ["stereo"] })),
+    ));
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![rendered(
+            StemSource::Master,
+            rate,
+            MeasurementDetail {
+                stereo: Some(hard_panned_stereo()),
+                ..MeasurementDetail::default()
+            },
+        )],
+    });
+    let s = result_json(&mut app, job)["stereo"].clone();
+    assert_eq!(s["one_sided"], json!(true));
+    assert_eq!(s["balance_db"], json!(60.0));
+    assert_eq!(s["correlation_windows"], serde_json::Value::Null);
+    assert_eq!(s["haas_lag_ms"], serde_json::Value::Null);
+    for band in s["bands"].as_array().unwrap() {
+        assert_eq!(band["correlation"], serde_json::Value::Null, "present but null: {band}");
+    }
+}
+
+#[test]
+fn all_three_details_can_be_asked_for_at_once() {
+    let (mut app, cmd_rx) = capture_app();
+    let _ = started_job(roundtrip(
+        &mut app,
+        request(
+            1,
+            "meter.stems",
+            json!({ "detail": ["dynamics", "spectrum", "stereo", "stereo"] }),
+        ),
+    ));
+    let sent = sent_detail(&cmd_rx);
+    assert!(sent.spectrum && sent.stereo && sent.dynamics, "{sent:?}");
 }
 
 #[test]

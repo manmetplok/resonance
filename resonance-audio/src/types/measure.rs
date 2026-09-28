@@ -19,7 +19,8 @@
 //! [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
 //! [`AudioEvent::MixMeasured`]: super::AudioEvent::MixMeasured
 
-use resonance_metering::detail::SpectrumDetail;
+use resonance_metering::detail::{SpectrumDetail, StereoDetail};
+use resonance_metering::RangeDynamics;
 use resonance_metering::offline::BandShares;
 
 use super::{SamplePos, StemSource};
@@ -57,12 +58,17 @@ pub struct DetailSet {
     /// 1/3-octave LTAS, tilt, centroid, low-mid/presence, presence
     /// peakiness, air ratio and resonance peaks.
     pub spectrum: bool,
+    /// Per-band correlation, side/mid and mono loss, windowed
+    /// correlation, balance, one-sidedness and the Haas detector.
+    pub stereo: bool,
+    /// PLR and PSR.
+    pub dynamics: bool,
 }
 
 impl DetailSet {
     /// True when at least one detail is requested.
     pub fn any(self) -> bool {
-        self.spectrum
+        self.spectrum || self.stereo || self.dynamics
     }
 }
 
@@ -72,6 +78,11 @@ impl DetailSet {
 pub struct MeasurementDetail {
     /// See [`SpectrumDetail`].
     pub spectrum: Option<SpectrumDetail>,
+    /// See [`StereoDetail`].
+    pub stereo: Option<StereoDetail>,
+    /// PLR / PSR of the range, from the measurement's own true peak and
+    /// loudness ([`PlrMeter::range`][resonance_metering::PlrMeter::range]).
+    pub dynamics: Option<RangeDynamics>,
 }
 
 /// Everything the mix report needs about one measured slice of the mix.

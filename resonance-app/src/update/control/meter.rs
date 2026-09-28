@@ -89,12 +89,14 @@ use resonance_audio::types::{
     StemSource,
 };
 use resonance_control::methods::meter::{
-    self as proto, Bands, MeasureDetail, MeasureParams, MeasureResult, MeasureSource,
-    MeasureTarget, SpectralPeak, SpectrumDetail, StemsParams, StemsResult, TrackMeasurement,
+    self as proto, Bands, CorrelationWindows, DynamicsDetail, MeasureDetail, MeasureParams,
+    MeasureResult, MeasureSource, MeasureTarget, SpectralPeak, SpectrumDetail, StemsParams,
+    StemsResult, StereoBand, StereoDetail, TrackMeasurement,
 };
-use resonance_metering::detail::SpectrumDetail as EngineSpectrum;
 use resonance_control::methods::render::RangeSpec;
 use resonance_control::{Request, Response, RpcError};
+use resonance_metering::detail::{SpectrumDetail as EngineSpectrum, StereoDetail as EngineStereo};
+use resonance_metering::RangeDynamics;
 
 /// Handle a `meter.*` request, or `None` when `method` belongs to
 /// another namespace. Returns a [`Task`] for signature symmetry with the
@@ -241,6 +243,8 @@ fn detail_set(details: &[MeasureDetail]) -> DetailSet {
     for detail in details {
         match detail {
             MeasureDetail::Spectrum => set.spectrum = true,
+            MeasureDetail::Stereo => set.stereo = true,
+            MeasureDetail::Dynamics => set.dynamics = true,
         }
     }
     set
@@ -497,6 +501,8 @@ pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureRes
             .then(|| (sample_rate > 0).then(|| m.frames as f64 / f64::from(sample_rate)))
             .flatten(),
         spectrum: m.detail.spectrum.as_ref().map(wire_spectrum),
+        stereo: m.detail.stereo.as_ref().map(wire_stereo),
+        dynamics: m.detail.dynamics.map(wire_dynamics),
     }
 }
 
@@ -531,6 +537,38 @@ fn wire_spectrum(d: &EngineSpectrum) -> SpectrumDetail {
                 excess_db: round_to(p.excess_db, 10.0),
             })
             .collect(),
+    }
+}
+
+fn wire_stereo(d: &EngineStereo) -> StereoDetail {
+    StereoDetail {
+        bands: d
+            .bands
+            .iter()
+            .map(|b| StereoBand {
+                lo_hz: f64::from(b.lo_hz),
+                hi_hz: f64::from(b.hi_hz),
+                correlation: round_opt(b.correlation, 1_000.0),
+                side_mid_db: round_opt(b.side_mid_db, 10.0),
+                mono_loss_db: round_opt(b.mono_loss_db, 10.0),
+            })
+            .collect(),
+        correlation_windows: d.correlation_windows.map(|w| CorrelationWindows {
+            windows: w.windows,
+            pct_below_0_3: round_to(w.pct_below_0_3, 10.0),
+            worst: round_to(w.worst, 1_000.0),
+            worst_at_seconds: (w.worst_at_seconds * 100.0).round() / 100.0,
+        }),
+        balance_db: round_opt(d.balance_db, 100.0),
+        one_sided: d.one_sided,
+        haas_lag_ms: round_opt(d.haas_lag_ms, 100.0),
+    }
+}
+
+fn wire_dynamics(d: RangeDynamics) -> DynamicsDetail {
+    DynamicsDetail {
+        plr_db: round_opt(d.plr_db, 100.0),
+        psr_db: round_opt(d.psr_db, 100.0),
     }
 }
 

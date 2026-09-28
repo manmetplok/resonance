@@ -51,8 +51,10 @@ impl ResonanceMcp {
                        measurement, never against an absolute rule. \
                        \
                        DETAIL (opt-in, source \"render\" only; omitted from the result unless \
-                       asked for, so the default reply stays small): detail: [\"spectrum\"] adds \
-                       a spectrum object, the warmth and harshness proxies. third_octave is 31 \
+                       asked for, so the default reply stays small): detail takes any of \
+                       \"spectrum\", \"stereo\", \"dynamics\" and adds one object per name. \
+                       \
+                       spectrum holds the warmth and harshness proxies. third_octave is 31 \
                        ISO 1/3-octave band levels, 20 Hz..20 kHz, in dB where a full-scale sine \
                        reads 0 (pink noise reads flat). tilt_db_per_oct is the slope of the \
                        power density over 100 Hz..10 kHz: pink noise -3.0, white 0, commercial \
@@ -62,8 +64,29 @@ impl ResonanceMcp {
                        presence_peakiness_db is the 1/6-octave crest inside 2-5 kHz (0 = even, \
                        high = a harsh resonance). air_ratio_db is energy 8-16 kHz over the \
                        total. peaks lists up to 5 narrow resonances as {freq_hz, excess_db}, \
-                       excess over the smoothed spectrum around them, strongest first. Compare \
-                       detail numbers between two states only at matched loudness. \
+                       excess over the smoothed spectrum around them, strongest first. \
+                       \
+                       stereo holds width and mono safety. bands is 8 bands (edges 20, 60, 150, \
+                       400, 1k, 2.5k, 5k, 10k, 20k Hz) of {lo_hz, hi_hz, correlation, \
+                       side_mid_db, mono_loss_db}: healthy is correlation >= +0.9 below 150 Hz, \
+                       >= +0.5 to 1 kHz, >= 0 above; side_mid_db (side over mid power) -60 is \
+                       mono, 0 is hard-panned or uncorrelated, and with equal L/R energy \
+                       correlation = (1 - rho)/(1 + rho), rho = 10^(side_mid_db/10), so reason \
+                       about width in side_mid_db and use correlation as the fault detector; \
+                       mono_loss_db is the band's level change folded to mono (0 mono, -3 \
+                       uncorrelated, -60 anti-phase). correlation_windows summarises 400 ms \
+                       windows as {windows, pct_below_0_3, worst, worst_at_seconds} (seconds \
+                       from the start of the range); warn when pct_below_0_3 is over 10. \
+                       balance_db is left over right energy (positive leans left). one_sided \
+                       true means one channel is silent, i.e. hard-panned mono: every 0/0 \
+                       correlation is then null, and the top-level correlation must not be \
+                       read as width. haas_lag_ms is a static L/R delay of 1-35 ms (positive: \
+                       right is late), a mono comb risk; null when there is none. \
+                       \
+                       dynamics holds plr_db (true_peak_db minus lufs_integrated; 8-12 is \
+                       typical for a master) and psr_db (true_peak_db minus lufs_short_max; \
+                       keep it at 8 or more). Compare detail numbers between two states only at \
+                       matched loudness. \
                        \
                        A null field means the number does not exist for this measurement, never \
                        zero: either the range was silent or too short for that meter's window, \
@@ -116,8 +139,9 @@ impl ResonanceMcp {
                        that entry's includes_track_ids. The kit is therefore counted exactly \
                        once, on the parent track. \
                        \
-                       detail (e.g. [\"spectrum\"]) works exactly as on meter_measure and adds \
-                       its objects to the master and to every entry; it costs one spectral \
+                       detail (e.g. [\"spectrum\", \"stereo\"]) works exactly as on \
+                       meter_measure and adds its objects to the master and to every entry; it \
+                       costs one spectral \
                        analysis per entry on top of the render. \
                        \
                        Read balance off lufs_integrated differences (1 LU == 1 dB). A useful \

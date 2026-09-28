@@ -16,7 +16,8 @@
 //!   ([`band_shares`], [`mono_penalty_db`], [`sample_peak_db`],
 //!   [`clipped_samples`])
 //! - [`detail`] — the opt-in `meter.*` detail proxies (spectrum: tilt,
-//!   1/3-octave LTAS, centroid, resonances)
+//!   1/3-octave LTAS, centroid, resonances; stereo: per-band correlation,
+//!   S/M, mono loss, windows, balance, one-sidedness, Haas lag)
 
 pub mod atomic_snapshot;
 pub mod correlation;
@@ -41,7 +42,7 @@ pub use lufs::{LufsMeter, LufsReadout};
 pub use offline::{
     band_shares, clipped_samples, mono_penalty_db, sample_peak_db, sample_peak_linear, BandShares,
 };
-pub use plr::{PlrMeter, PlrReadout};
+pub use plr::{PlrMeter, PlrReadout, RangeDynamics};
 pub use snapshot::MeterSnapshot;
 pub use spectrum::{SpectrumAnalyzer, SpectrumHandle, SpectrumSnapshot, FFT_SIZE, NUM_OCTAVE_BINS};
 pub use true_peak::TruePeakMeter;
