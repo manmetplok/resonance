@@ -1,11 +1,12 @@
 ---
 name: mixing
-description: Balance and tonally shape a song in a running resonance DAW by measuring it, not by guessing. Use when asked to mix, balance, fix levels, sort out the low end, widen or narrow the stereo image, or diagnose why a mix sounds muddy, thin, boxy or lopsided.
+description: Balance, tonally shape and add character to a song in a running resonance DAW by measuring it, not by guessing. Use when asked to mix, balance, fix levels, sort out the low end, make a mix warmer or less harsh, or diagnose why a mix sounds muddy, thin, boxy, cold or lopsided. Width and depth staging is the sibling `spatial` skill.
 when_to_use: >-
   Triggers on requests like "mix this", "balance the tracks", "the vocal is
   buried", "too much low end", "why does this sound muddy", "check the mix",
-  "the drums are too loud".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__master_summary mcp__resonance__track_plugin_params mcp__resonance__automation_lanes mcp__resonance__automation_set_lane
+  "the drums are too loud", "make it warmer", "it sounds harsh", "too
+  digital", "more analog".
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__meter_snapshot mcp__resonance__meter_compare mcp__resonance__meter_probe mcp__resonance__master_summary mcp__resonance__track_plugin_params mcp__resonance__bus_plugin_params mcp__resonance__automation_lanes mcp__resonance__automation_set_lane
 ---
 
 # Mixing in resonance
@@ -61,7 +62,12 @@ fixing out of order means fixing the same thing twice.
 2. **Balance** — differences in `lufs_integrated` between tracks. This is where
    most of the perceived problem in a bad mix actually lives.
 3. **Tone** — `bands` shares, compared between tracks and against the master.
-4. **Dynamics and width** — `crest_db`, `lra`, `mono_penalty_db`.
+4. **Character** — tilt, harshness and warmth, from `detail: ["spectrum"]`:
+   `tilt_db_per_oct`, `presence_peakiness_db`, `peaks`, `lowmid_presence_db`.
+5. **Dynamics** — `crest_db`, `lra`, and `psr_db` from `detail: ["dynamics"]`.
+6. **Width and depth** — `mono_penalty_db`, the `stereo` and `depth` details.
+   This is the `spatial` skill's pass; hand over to it rather than doing it
+   here.
 
 State the diagnosis in plain language with the number that supports it before
 you change anything. "The lead is 9 LU under the drums" is a diagnosis; "the
@@ -77,7 +83,8 @@ In this order, and only as far down as the problem requires:
 | Placement | `mcp__resonance__mixer_set_pan` |
 | Two things fighting for the same range | `mcp__resonance__track_add_effect` with `com.resonance.eq`, then `mcp__resonance__track_set_plugin_param` |
 | A group needing one move | `mcp__resonance__bus_create` + `mcp__resonance__track_set_output` |
-| Shared ambience | `mcp__resonance__track_add_send` into a return bus |
+| Harshness, coldness, "wants warmth" | the character pass below |
+| Shared ambience, width, front-to-back depth | the `spatial` skill |
 | A part that will not sit still | `com.resonance.compressor` on the track |
 | One part ducking under another | `mcp__resonance__track_set_sidechain` |
 | A fader move that has to happen over time (a fade, a level ride) | `mcp__resonance__automation_set_lane`, read back with `mcp__resonance__automation_lanes` |
@@ -95,6 +102,32 @@ Rules that hold regardless of the song:
   with peaks well under 0 dBFS. -14 LUFS is a *mastering* target; hitting it
   here means squashing the mix and is the single most common way to ruin one.
   Loudness is the mastering skill's job.
+
+## 3b. The character pass (after Tone, before Dynamics)
+
+Only once the balance and the gross tone hold. Warmth is a set of small,
+measured moves, and loudness fakes every one of them: louder reads as warmer.
+So every move here is judged with `meter_compare` at matched loudness, never by
+re-measuring and eyeballing.
+
+1. **Snapshot.** `meter_snapshot` on the master (all details) before the first
+   move; keep its `snapshot_id` as the baseline for the whole pass.
+2. **De-harsh first.** A 2-5 kHz peak in `peaks`, or high
+   `presence_peakiness_db`, is harshness. Cut it (-1 to -3 dB, dynamic if it
+   comes and goes) on the bus or track the stems point at, before adding any
+   warmth. Warmth on top of a harsh mix is a louder harsh mix.
+3. **Warmth on busses, not the master.** `com.resonance.color` on the busses
+   (drums, bass, music, vocals), even-dominant voicing, drive set with
+   `meter_probe` to a bus THD target, parallel mix. Several lightly saturated
+   busses sum to cohesion; one hot master stage sums to intermodulation.
+4. **Tilt.** A gentle top shelf or tilt down, and low weight with a lift+dip,
+   only if the low mids are not already muddy.
+5. **Compare.** `meter_compare {a: snapshot_id}` after each move. Keep it only
+   if the numbers moved the warm way and nothing got worse.
+
+The vocabulary, the numbers, the exact keys and presets, and the stop rules are
+in `${CLAUDE_SKILL_DIR}/references/character.md`. Read it before the first
+character move.
 
 ## 4. Verify, then decide whether to continue
 
@@ -119,3 +152,11 @@ path and is visible live in the GUI; `edit_undo` reverses them one at a time.
 - `${CLAUDE_SKILL_DIR}/references/reading-meters.md` — what every meter field
   means, the numbers worth aiming at, and the traps (`null` vs zero, `live` vs
   `render`, solo-sensitivity, band shares being relative).
+- `${CLAUDE_SKILL_DIR}/references/character.md` — the warmth/harshness
+  vocabulary, the warmth procedure with its targets and stop rules, and the
+  plugin keys and presets for each lever.
+- `${CLAUDE_SKILL_DIR}/references/roles.md` — per-role staging (level, pan,
+  width, send, pre-delay, layer, character), and how to infer a track's role
+  from what `song_tracks` and the meters report. Shared with `spatial`.
+- The `spatial` skill (`${CLAUDE_PLUGIN_ROOT}/skills/spatial/SKILL.md`) — width
+  and depth, after this skill's passes are done.
