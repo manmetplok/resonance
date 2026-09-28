@@ -17,6 +17,7 @@ pub mod band;
 pub mod dsp;
 pub mod params;
 pub mod presets;
+pub mod response_curve;
 
 #[cfg(feature = "editor")]
 mod editor;

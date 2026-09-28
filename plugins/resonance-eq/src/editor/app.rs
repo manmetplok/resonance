@@ -43,6 +43,13 @@ pub(crate) struct EqEditorApp {
     pub(crate) selected_band: Option<usize>,
     /// Currently-dragged band, if any.
     pub(crate) drag_state: Option<nodes::DragState>,
+    /// The drawn band curve and the band state it was computed from, so
+    /// the response is re-evaluated only when a band moved, not on every
+    /// 16 ms repaint (ui-work.md §11).
+    pub(crate) curve_cache: Option<(
+        [crate::params::BandSnapshot; crate::params::NUM_BANDS],
+        crate::response_curve::ResponseCurves,
+    )>,
 }
 
 impl EqEditorApp {
@@ -60,6 +67,7 @@ impl EqEditorApp {
             analyzer_mode: AnalyzerMode::Post,
             selected_band: None,
             drag_state: None,
+            curve_cache: None,
         }
     }
 }
