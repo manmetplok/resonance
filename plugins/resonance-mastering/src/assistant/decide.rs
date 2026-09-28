@@ -158,72 +158,169 @@ pub struct Suggestions {
     pub imager_width: f32,
     pub imager_side_hpf: bool,
     pub rationale: Vec<String>,
+    /// Every rationale line with the stage it is about (one of the
+    /// `STAGE_*` ids), in the same order as `rationale`.
+    pub stage_notes: Vec<(&'static str, String)>,
     /// Per-1/3-octave comparison against the target band, 20 Hz first
     /// ([`NUM_TARGET_BANDS`] entries).
     pub deviations: Vec<BandDeviation>,
 }
 
+/// Stage ids of [`StageSuggestion::stage`], in the order [`build`]
+/// decides them.
+pub const STAGE_INPUT_TRIM: &str = "input_trim";
+pub const STAGE_TONAL_LOW_SHELF: &str = "tonal_low_shelf";
+pub const STAGE_TONAL_HIGH_SHELF: &str = "tonal_high_shelf";
+pub const STAGE_GLUE: &str = "glue";
+pub const STAGE_IMAGER: &str = "imager";
+pub const STAGE_LIMITER: &str = "limiter";
+pub const STAGE_TARGET_LUFS: &str = "target_lufs";
+/// A fact about the input, not a move: never carries params.
+pub const STAGE_DIAGNOSTIC: &str = "diagnostic";
+
+/// Frequency and Q the tonal shelves are placed at.
+const LOW_SHELF_HZ: f32 = 120.0;
+const HIGH_SHELF_HZ: f32 = 8_000.0;
+const SHELF_Q: f32 = 0.707;
+/// A shelf smaller than this is not worth a band.
+const SHELF_MIN_DB: f32 = 0.25;
+/// Where the imager's side high-pass is put when it is suggested.
+const SIDE_HPF_HZ: f32 = 120.0;
+
+/// One parameter write: a plugin param key (`"lim_ceiling"`,
+/// `"tone_b0_gain"`, ...) and its plain value — a bool as 0/1, a choice as
+/// its index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParamChange {
+    pub key: &'static str,
+    pub value: f32,
+}
+
+/// What the engine suggests for one stage: why, and exactly which param
+/// writes that is. Empty `params` means the stage needs no change (the
+/// rationale says why).
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageSuggestion {
+    /// One of the `STAGE_*` ids.
+    pub stage: &'static str,
+    pub rationale: Vec<String>,
+    pub params: Vec<ParamChange>,
+}
+
 impl Suggestions {
-    /// Write every suggested value into the plugin's atomic parameters.
-    /// Only the stages the engine has an opinion about are touched —
-    /// the rest of the chain is left alone. Note that the tonal-EQ
-    /// low/high shelves overwrite band 0 and band 3 of the tonal EQ
-    /// respectively: any custom shapes the user had placed on those
-    /// slots are replaced.
-    pub fn apply_to(&self, params: &MasteringParams) {
-        params.target_lufs.set_value(self.target_lufs);
-        params.input_trim_db.set_value(self.input_trim_db);
-
-        params.limiter.on.set_value(self.limiter_enabled);
-        params.limiter.ceiling.set_value(self.limiter_ceiling_db);
-        params.limiter.release.set_value(self.limiter_release_ms);
-
-        params.glue_compressor.on.set_value(self.glue_enabled);
-        params
-            .glue_compressor
-            .threshold
-            .set_value(self.glue_threshold_db);
-        params.glue_compressor.ratio.set_value(self.glue_ratio);
-        params.glue_compressor.attack.set_value(self.glue_attack_ms);
-        params
-            .glue_compressor
-            .release
-            .set_value(self.glue_release_ms);
-        params.glue_compressor.makeup.set_value(self.glue_makeup_db);
-
-        if self.tonal_low_shelf_gain_db.abs() > 0.25 {
-            let b = &params.tonal_eq.bands[0];
-            b.on.set_value(true);
-            b.band_type.set_value(BandType::LowShelf.to_index());
-            b.freq.set_value(120.0);
-            b.q.set_value(0.707);
-            b.gain.set_value(self.tonal_low_shelf_gain_db);
-        }
-        if self.tonal_high_shelf_gain_db.abs() > 0.25 {
-            let b = &params.tonal_eq.bands[3];
-            b.on.set_value(true);
-            b.band_type.set_value(BandType::HighShelf.to_index());
-            b.freq.set_value(8_000.0);
-            b.q.set_value(0.707);
-            b.gain.set_value(self.tonal_high_shelf_gain_db);
-        }
-
-        params.imager.on.set_value(self.imager_enabled);
+    /// The suggestions stage by stage, each with its rationale and the
+    /// exact param writes it consists of — what [`Self::apply_to`] writes,
+    /// and what an agent sets through the control API.
+    ///
+    /// The tonal shelves use band 0 (low shelf) and band 3 (high shelf)
+    /// of the tonal EQ: applying one replaces whatever the user had placed
+    /// on that band.
+    pub fn stages(&self) -> Vec<StageSuggestion> {
+        let bool_value = |b: bool| if b { 1.0 } else { 0.0 };
+        let change = |key: &'static str, value: f32| ParamChange { key, value };
+        let shelf = |prefix: [&'static str; 5], band: BandType, gain: f32| {
+            if gain.abs() > SHELF_MIN_DB {
+                let freq = if band == BandType::LowShelf {
+                    LOW_SHELF_HZ
+                } else {
+                    HIGH_SHELF_HZ
+                };
+                vec![
+                    change(prefix[0], 1.0),
+                    change(prefix[1], band.to_index() as f32),
+                    change(prefix[2], freq),
+                    change(prefix[3], SHELF_Q),
+                    change(prefix[4], gain),
+                ]
+            } else {
+                Vec::new()
+            }
+        };
+        let mut imager = vec![change("img_on", bool_value(self.imager_enabled))];
         if self.imager_enabled {
-            params.imager.width.set_value(self.imager_width);
-            params.imager.side_hpf_on.set_value(self.imager_side_hpf);
+            imager.push(change("img_width", self.imager_width));
+            imager.push(change("img_side_hpf_on", bool_value(self.imager_side_hpf)));
             if self.imager_side_hpf {
-                params.imager.side_hpf_freq.set_value(120.0);
+                imager.push(change("img_side_hpf_freq", SIDE_HPF_HZ));
+            }
+        }
+        let params_of = |stage: &str| -> Vec<ParamChange> {
+            match stage {
+                STAGE_INPUT_TRIM => vec![change("input_trim_db", self.input_trim_db)],
+                STAGE_TONAL_LOW_SHELF => shelf(
+                    ["tone_b0_on", "tone_b0_type", "tone_b0_freq", "tone_b0_q", "tone_b0_gain"],
+                    BandType::LowShelf,
+                    self.tonal_low_shelf_gain_db,
+                ),
+                STAGE_TONAL_HIGH_SHELF => shelf(
+                    ["tone_b3_on", "tone_b3_type", "tone_b3_freq", "tone_b3_q", "tone_b3_gain"],
+                    BandType::HighShelf,
+                    self.tonal_high_shelf_gain_db,
+                ),
+                STAGE_GLUE => vec![
+                    change("glue_on", bool_value(self.glue_enabled)),
+                    change("glue_threshold", self.glue_threshold_db),
+                    change("glue_ratio", self.glue_ratio),
+                    change("glue_attack", self.glue_attack_ms),
+                    change("glue_release", self.glue_release_ms),
+                    change("glue_makeup", self.glue_makeup_db),
+                ],
+                STAGE_IMAGER => imager.clone(),
+                STAGE_LIMITER => vec![
+                    change("lim_on", bool_value(self.limiter_enabled)),
+                    change("lim_ceiling", self.limiter_ceiling_db),
+                    change("lim_release", self.limiter_release_ms),
+                ],
+                STAGE_TARGET_LUFS => vec![change("target_lufs", self.target_lufs)],
+                _ => Vec::new(),
+            }
+        };
+        let mut out: Vec<StageSuggestion> = Vec::new();
+        for (stage, line) in &self.stage_notes {
+            match out.iter_mut().find(|s| s.stage == *stage) {
+                Some(existing) => existing.rationale.push(line.clone()),
+                None => out.push(StageSuggestion {
+                    stage,
+                    rationale: vec![line.clone()],
+                    params: params_of(stage),
+                }),
+            }
+        }
+        out
+    }
+
+    /// Write every suggested value into the plugin's atomic parameters —
+    /// exactly the param writes [`Self::stages`] lists, by key. Only the
+    /// stages the engine has an opinion about are touched; the rest of the
+    /// chain is left alone.
+    pub fn apply_to(&self, params: &MasteringParams) {
+        for stage in self.stages() {
+            for change in stage.params {
+                if let Some(param) = param_by_key(params, change.key) {
+                    param.set_plain(f64::from(change.value));
+                }
             }
         }
     }
+}
+
+/// The plugin param whose string id is `key`.
+pub fn param_by_key<'a>(
+    params: &'a MasteringParams,
+    key: &str,
+) -> Option<&'a dyn resonance_plugin::Param> {
+    (0..crate::PARAM_COUNT)
+        .map(|i| params.param_at(i))
+        .find(|p| p.id() == key)
 }
 
 pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let (band_lo, band_hi) = target.band();
     let target_label = target.label();
     let target_lufs = target.target_lufs();
-    let mut rationale = Vec::new();
+    // Every rationale line, with the stage it is about.
+    let mut stage_notes: Vec<(&'static str, String)> = Vec::new();
+    let mut say = |stage: &'static str, line: String| stage_notes.push((stage, line));
 
     // Resolve band boundaries to bin indices. These depend on the
     // 1/6-octave grid so they're computed, not hard-coded.
@@ -260,14 +357,17 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     // than slamming exactly to target.
     let input_trim_db = (loudness_gap - 3.0).clamp(-24.0, 24.0);
     if input_trim_db.abs() >= 0.5 {
-        rationale.push(format!(
+        say(STAGE_INPUT_TRIM, format!(
             "Input trim: {:+.1} dB (input is {:.1} LU {} target)",
             input_trim_db,
             loudness_gap.abs(),
             direction_word(-loudness_gap),
         ));
     } else {
-        rationale.push("Input level already near target.".to_string());
+        say(
+            STAGE_INPUT_TRIM,
+            "Input level already near target.".to_string(),
+        );
     }
 
     // 3. Measure how far the low and high bands lie OUTSIDE the target
@@ -281,24 +381,30 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let tonal_high_shelf_gain_db = (-high_diff).clamp(-6.0, 6.0);
 
     if tonal_low_shelf_gain_db.abs() >= 0.25 {
-        rationale.push(format!(
+        say(STAGE_TONAL_LOW_SHELF, format!(
             "Low shelf: {:+.1} dB (input is {:.1} dB {} the target band in the low band)",
             tonal_low_shelf_gain_db,
             low_diff.abs(),
             direction_word(low_diff),
         ));
     } else {
-        rationale.push("Low band is inside the target band.".to_string());
+        say(
+            STAGE_TONAL_LOW_SHELF,
+            "Low band is inside the target band.".to_string(),
+        );
     }
     if tonal_high_shelf_gain_db.abs() >= 0.25 {
-        rationale.push(format!(
+        say(STAGE_TONAL_HIGH_SHELF, format!(
             "High shelf: {:+.1} dB (input is {:.1} dB {} the target band in the high band)",
             tonal_high_shelf_gain_db,
             high_diff.abs(),
             direction_word(high_diff),
         ));
     } else {
-        rationale.push("High band is inside the target band.".to_string());
+        say(
+            STAGE_TONAL_HIGH_SHELF,
+            "High band is inside the target band.".to_string(),
+        );
     }
 
     // 4. Glue compressor decision based on crest factor.
@@ -310,7 +416,7 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         if analysis.crest_db > 15.0 {
             // Wide dynamics — gentle glue with slow attack to preserve transients.
             let makeup = estimate_glue_makeup(-18.0, 2.0, estimated_lufs);
-            rationale.push(format!(
+            say(STAGE_GLUE, format!(
                 "Glue compressor: gentle 2:1 at \u{2212}18 dB, {:.1} dB makeup (crest {:.1} dB leaves room for glue)",
                 makeup, analysis.crest_db
             ));
@@ -318,13 +424,13 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         } else if analysis.crest_db > 10.0 {
             // Moderate dynamics — slightly faster and heavier.
             let makeup = estimate_glue_makeup(-14.0, 2.5, estimated_lufs);
-            rationale.push(format!(
+            say(STAGE_GLUE, format!(
                 "Glue compressor: moderate 2.5:1 at \u{2212}14 dB, {:.1} dB makeup (crest {:.1} dB)",
                 makeup, analysis.crest_db
             ));
             (true, -14.0, 2.5, 20.0, 150.0, makeup)
         } else {
-            rationale.push(format!(
+            say(STAGE_GLUE, format!(
                 "Glue compressor: disabled (crest {:.1} dB is already dense)",
                 analysis.crest_db
             ));
@@ -335,26 +441,26 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let (imager_enabled, imager_width, imager_side_hpf) = if analysis.correlation > 0.92 {
         // Very mono / narrow — suggest gentle widening with a side HPF
         // to keep the low-end centered.
-        rationale.push(format!(
+        say(STAGE_IMAGER, format!(
             "Stereo imager: widen to 130% (correlation {:.2} is very narrow)",
             analysis.correlation
         ));
         (true, 1.3, true)
     } else if analysis.correlation > 0.80 {
-        rationale.push(format!(
+        say(STAGE_IMAGER, format!(
             "Stereo imager: widen to 115% (correlation {:.2} is slightly narrow)",
             analysis.correlation
         ));
         (true, 1.15, true)
     } else if analysis.correlation < 0.3 {
         // Very wide / out of phase — pull it in a bit.
-        rationale.push(format!(
+        say(STAGE_IMAGER, format!(
             "Stereo imager: narrow to 85% (correlation {:.2} is very wide, may collapse in mono)",
             analysis.correlation
         ));
         (true, 0.85, false)
     } else {
-        rationale.push(format!(
+        say(STAGE_IMAGER, format!(
             "Stereo width OK (correlation {:.2}).",
             analysis.correlation
         ));
@@ -365,21 +471,22 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let limiter_enabled = true;
     let limiter_ceiling_db = -0.3;
     let limiter_release_ms = 50.0;
-    rationale.push(format!(
+    say(STAGE_LIMITER, format!(
         "Limiter: on at {:.1} dBTP, release 50 ms",
         limiter_ceiling_db
     ));
-    rationale.push(format!(
+    say(STAGE_TARGET_LUFS, format!(
         "Target loudness: {:.1} LUFS ({})",
         target_lufs, target_label
     ));
 
     // 7. Loudness diagnostic — not a suggestion itself, just a fact.
-    rationale.push(format!(
+    say(STAGE_DIAGNOSTIC, format!(
         "Input integrated loudness: {:.1} LUFS ({:+.1} LU from target)",
         analysis.integrated_lufs, loudness_gap
     ));
 
+    let rationale = stage_notes.iter().map(|(_, line)| line.clone()).collect();
     Suggestions {
         target_label,
         target_lufs,
@@ -399,6 +506,7 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         imager_width,
         imager_side_hpf,
         rationale,
+        stage_notes,
         deviations,
     }
 }

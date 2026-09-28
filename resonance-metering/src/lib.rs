@@ -41,7 +41,8 @@ pub use k_weighting::KWeightingFilter;
 pub use lra::LraMeter;
 pub use lufs::{LufsMeter, LufsReadout};
 pub use offline::{
-    band_shares, clipped_samples, mono_penalty_db, sample_peak_db, sample_peak_linear, BandShares,
+    band_shares, clipped_samples, mono_penalty_db, range_correlation, range_crest_db,
+    sample_peak_db, sample_peak_linear, BandShares,
 };
 pub use plr::{PlrMeter, PlrReadout, RangeDynamics};
 pub use snapshot::MeterSnapshot;

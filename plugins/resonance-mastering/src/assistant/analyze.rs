@@ -1,26 +1,26 @@
 //! Offline analysis of a captured stereo buffer.
 //!
-//! Runs every metering stream the live plugin uses, plus a one-shot
-//! Welch LTAS, then packages the readings into an [`AnalysisResult`]
-//! for the decision engine to consume.
+//! Runs the loudness and peak meters the live plugin uses, the range's
+//! own crest factor and L/R correlation, and a one-shot Welch LTAS, then
+//! packages the readings into an [`AnalysisResult`] for the decision
+//! engine to consume.
+//!
+//! Every figure here comes from `resonance-metering`, and the engine's
+//! offline measurement (`master.assist`) reads the same functions off a
+//! rendered range — so the live panel and the control API produce the
+//! same analysis from the same audio.
 
-use resonance_metering::spectrum::octave::OctaveTable;
-use resonance_metering::{CorrelationMeter, CrestMeter, LufsMeter, TruePeakMeter};
-use rustfft::num_complex::Complex;
-use rustfft::FftPlanner;
+use resonance_metering::offline::{range_correlation, range_crest_db};
+use resonance_metering::spectrum::offline::sixth_octave_ltas;
+use resonance_metering::{LufsMeter, TruePeakMeter};
 
 /// Number of 1/6-octave bands in the analysis spectrum. Must match
 /// [`resonance_metering::NUM_OCTAVE_BINS`].
 pub const NUM_SPECTRUM_BINS: usize = resonance_metering::NUM_OCTAVE_BINS;
 
-/// FFT size for the Welch LTAS. 4096 is a good balance of resolution
-/// and number of averages given a ~10 s captured buffer.
-const LTAS_FFT_SIZE: usize = 4096;
-const LTAS_HOP: usize = LTAS_FFT_SIZE / 2;
-
 /// Minimum dB value reported when the analyzed signal is silent.
 #[doc(hidden)]
-pub const FLOOR_DB: f32 = -120.0;
+pub const FLOOR_DB: f32 = resonance_metering::spectrum::offline::LTAS_FLOOR_DB;
 
 #[derive(Debug, Clone)]
 pub struct AnalysisResult {
@@ -45,15 +45,13 @@ pub fn run(sample_rate: f32, left: &[f32], right: &[f32]) -> AnalysisResult {
     tp.push_stereo(&left[..n], &right[..n]);
     let true_peak_dbtp = tp.peak_dbtp();
 
-    let mut crest = CrestMeter::new(sample_rate);
-    crest.push_stereo(&left[..n], &right[..n]);
-    let crest_db = crest.crest_db();
+    // The whole buffer's crest and correlation. The live `CrestMeter` /
+    // `CorrelationMeter` are 100 ms sliding readouts: fed a 10 s capture
+    // they only describe its last 100 ms.
+    let crest_db = range_crest_db(&left[..n], &right[..n]);
+    let correlation = range_correlation(&left[..n], &right[..n]);
 
-    let mut corr = CorrelationMeter::new(sample_rate);
-    corr.push_stereo(&left[..n], &right[..n]);
-    let correlation = corr.correlation();
-
-    let spectrum_db = compute_ltas(sample_rate, &left[..n], &right[..n]);
+    let spectrum_db = sixth_octave_ltas(sample_rate, &left[..n], &right[..n]);
 
     AnalysisResult {
         sample_rate,
@@ -65,57 +63,4 @@ pub fn run(sample_rate: f32, left: &[f32], right: &[f32]) -> AnalysisResult {
         correlation,
         spectrum_db,
     }
-}
-
-/// Welch long-term average spectrum aggregated to 1/6-octave bins.
-/// Averages per-frame power (not amplitude) and converts back to dB at
-/// the end.
-fn compute_ltas(sample_rate: f32, left: &[f32], right: &[f32]) -> Vec<f32> {
-    let n = left.len().min(right.len());
-    if n < LTAS_FFT_SIZE {
-        return vec![FLOOR_DB; NUM_SPECTRUM_BINS];
-    }
-
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(LTAS_FFT_SIZE);
-
-    let window = resonance_dsp::hann_window(LTAS_FFT_SIZE);
-
-    let mut scratch = vec![Complex::new(0.0, 0.0); LTAS_FFT_SIZE];
-    let mut power_sum = vec![0.0_f64; LTAS_FFT_SIZE / 2];
-    let mut frames = 0_usize;
-
-    let mut start = 0_usize;
-    while start + LTAS_FFT_SIZE <= n {
-        for i in 0..LTAS_FFT_SIZE {
-            let mono = 0.5 * (left[start + i] + right[start + i]) * window[i];
-            scratch[i] = Complex::new(mono, 0.0);
-        }
-        fft.process(&mut scratch);
-        let norm = 4.0 / LTAS_FFT_SIZE as f32;
-        for k in 0..LTAS_FFT_SIZE / 2 {
-            let re = scratch[k].re;
-            let im = scratch[k].im;
-            let mag = (re * re + im * im).sqrt() * norm;
-            power_sum[k] += (mag as f64) * (mag as f64);
-        }
-        frames += 1;
-        start += LTAS_HOP;
-    }
-
-    if frames == 0 {
-        return vec![FLOOR_DB; NUM_SPECTRUM_BINS];
-    }
-
-    let mut mag_db = vec![FLOOR_DB; LTAS_FFT_SIZE / 2];
-    for k in 0..LTAS_FFT_SIZE / 2 {
-        let avg_power = power_sum[k] / frames as f64;
-        let avg_mag = avg_power.sqrt() as f32;
-        mag_db[k] = 20.0 * avg_mag.max(1e-10).log10();
-    }
-
-    let table = OctaveTable::new();
-    let mut out = vec![FLOOR_DB; NUM_SPECTRUM_BINS];
-    table.aggregate(&mag_db, sample_rate, &mut out, FLOOR_DB);
-    out
 }

@@ -33,6 +33,7 @@ use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod arrangement;
+mod assist;
 /// `automation.*` — parameter automation lanes (automation-control-api.md).
 mod automation;
 mod bus;
@@ -243,6 +244,12 @@ fn execute_mutating(
     // `is_read_only_method`: with nothing open the honest answer is
     // `busy`, not a measurement of silence.
     if let Some(handled) = meter::try_handle(app, conn, request) {
+        return handled;
+    }
+    // `master.assist` (warmth-width-depth.md §7.4): the mastering
+    // assistant over an offline render of the master, as a job. Like
+    // `meter.*` it changes nothing but describes the OPEN project.
+    if let Some(handled) = assist::try_handle(app, conn, request) {
         return handled;
     }
 

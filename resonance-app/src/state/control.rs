@@ -68,12 +68,33 @@ pub struct ControlEndpointState {
     /// result needs that the engine does not know (the stages' names, the
     /// slots left out).
     pub pending_probes: HashMap<u64, PendingProbe>,
+    /// `master.assist` jobs waiting on the engine's measurements, keyed by
+    /// job id (warmth-width-depth.md §7.4).
+    pub pending_assists: HashMap<u64, PendingAssist>,
     /// Normalized `render.mixdown` jobs waiting on `ExportComplete`, keyed
     /// by the output path the engine echoes (warmth-width-depth.md §7.7):
     /// the platform and targets the result reports next to what the file
     /// achieved.
     pub pending_normalize:
         HashMap<std::path::PathBuf, resonance_control::methods::render::NormalizeReport>,
+}
+
+/// What a `master.assist` job compares against.
+#[derive(Debug, Clone)]
+pub enum AssistTarget {
+    Genre(resonance_control::methods::master::AssistGenre),
+    /// A pooled reference track, with the name its clips get.
+    Reference { asset_id: u64, name: String },
+}
+
+/// The app-side half of a `master.assist` in flight: the target, and the
+/// measurements that have arrived so far (the master render, and in
+/// reference mode the reference).
+#[derive(Debug, Clone)]
+pub struct PendingAssist {
+    pub target: AssistTarget,
+    pub mix: Option<resonance_audio::types::MixMeasurement>,
+    pub reference: Option<resonance_audio::types::MixMeasurement>,
 }
 
 /// The app-side half of a `meter.probe` in flight.

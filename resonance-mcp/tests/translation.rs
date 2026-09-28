@@ -377,3 +377,95 @@ fn meter_tools_publish_the_detail_option() {
         assert!(description.contains("spectrum"), "{name} description never names spectrum");
     }
 }
+
+/// `master_assist` publishes both target modes, the five genres and the
+/// pool-asset reference in its input schema, and says in its description
+/// that nothing is applied.
+#[test]
+fn master_assist_publishes_both_modes() {
+    let tool = ResonanceMcp::combined_router()
+        .list_all()
+        .into_iter()
+        .find(|t| t.name == "master_assist")
+        .expect("master_assist is published");
+    let schema = serde_json::to_string(&tool.input_schema).unwrap();
+    for word in ["\"mode\"", "\"genre\"", "\"reference\"", "\"pool_asset_id\"", "\"range\""] {
+        assert!(schema.contains(word), "master_assist schema lacks {word}: {schema}");
+    }
+    for genre in ["rock", "indie", "acoustic", "jazz", "pop"] {
+        assert!(schema.contains(&format!("\"{genre}\"")), "schema lacks {genre}");
+    }
+    let description = tool.description.as_deref().unwrap_or_default();
+    assert!(description.contains("NOTHING IS APPLIED"), "{description}");
+    assert!(description.contains("master_set_plugin_param"), "{description}");
+}
+
+/// The assistant's suggestion round-trips: typed params go out as the
+/// wire shape, and the job's result comes back as an `AssistResult` whose
+/// param writes an agent can replay through `master.set_plugin_param`.
+#[tokio::test]
+async fn master_assist_round_trips_params_and_result() {
+    use resonance_control::methods::master::{AssistGenre, AssistMode, AssistParams, AssistResult};
+    let seen: Arc<std::sync::Mutex<Option<Value>>> = Arc::default();
+    let captured = Arc::clone(&seen);
+    let result_payload = json!({
+        "target": {"mode": "genre", "genre": "rock", "label": "Rock", "target_lufs": -11.0},
+        "plugin_id": "com.resonance.mastering",
+        "master_slot": 0,
+        "measured": {
+            "lufs_integrated": -20.5, "true_peak_db": -3.0, "crest_db": 14.2,
+            "correlation": 0.81, "measured_seconds": 30.0
+        },
+        "suggestions": [
+            {"stage": "tonal_low_shelf", "rationale": ["Low shelf: -2.0 dB"],
+             "params": [{"key": "tone_b0_on", "value": 1.0}, {"key": "tone_b0_gain", "value": -2.0}]},
+            {"stage": "diagnostic", "rationale": ["Input integrated loudness: -20.5 LUFS"],
+             "params": []}
+        ],
+        "deviations": [
+            {"hz": 50.0, "lo_db": 10.0, "hi_db": 19.0, "measured_db": 21.0, "deviation_db": 2.0}
+        ]
+    });
+    let payload = result_payload.clone();
+    let app = FakeApp::spawn(PROTOCOL_VERSION, move |req| match req.method.as_str() {
+        "master.assist" => {
+            *captured.lock().unwrap() = req.params.clone();
+            ok(req, &json!({"job_id": 11}))
+        }
+        "job.wait" => ok(
+            req,
+            &JobStatus {
+                job_id: JobId(11),
+                state: JobState::Done,
+                progress: Some(1.0),
+                result: Some(payload.clone()),
+                error: None,
+            },
+        ),
+        other => panic!("unexpected method {other}"),
+    });
+    let mcp = server(&app);
+    let params = AssistParams {
+        mode: AssistMode::Genre,
+        genre: Some(AssistGenre::Rock),
+        pool_asset_id: None,
+        range: None,
+    };
+    let result = mcp.invoke_job("master.assist", &params, 1000).await.unwrap();
+    assert!(!is_error(&result), "{}", text(&result));
+    assert_eq!(
+        seen.lock().unwrap().clone(),
+        Some(json!({"mode": "genre", "genre": "rock"}))
+    );
+    let status = structured(&result);
+    let assist: AssistResult =
+        serde_json::from_value(status["result"].clone()).expect("an AssistResult");
+    assert_eq!(assist.master_slot, Some(0));
+    let writes: Vec<(&str, f64)> = assist
+        .suggestions
+        .iter()
+        .flat_map(|s| s.params.iter().map(|p| (p.key.as_str(), p.value)))
+        .collect();
+    assert_eq!(writes, vec![("tone_b0_on", 1.0), ("tone_b0_gain", -2.0)]);
+    assert_eq!(serde_json::to_value(&assist).unwrap(), result_payload);
+}

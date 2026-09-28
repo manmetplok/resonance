@@ -254,6 +254,8 @@ const ALL_DETAIL: DetailSet = DetailSet {
     // Depth is a per-track ranking with extra return renders, not a
     // character proxy to compare; a snapshot or compare never needs it.
     depth: false,
+    // The assistant's own LTAS is `master.assist`'s alone.
+    assist: false,
 };
 
 /// Render one slice with its details and keep the measurement.
@@ -836,6 +838,7 @@ fn describe(targets: &[StemSource], source: EngineSource) -> String {
     match source {
         EngineSource::Live => format!("Measure {what} (live meter)"),
         EngineSource::Render => format!("Measure {what}"),
+        EngineSource::Decoded => format!("Measure {what} (decoded audio)"),
     }
 }
 
@@ -877,6 +880,10 @@ pub(crate) fn mix_measured(
             })
             .ok()
         }),
+        resonance_control::methods::master::ASSIST => {
+            super::assist::measured(app, measure_id, results);
+            return;
+        }
         proto::COMPARE => {
             let Some(plan) = compare else { return };
             match compare_payload(app, plan, results.first()) {
@@ -909,6 +916,7 @@ pub(crate) fn mix_measured(
 /// app can see coming with a synchronous `busy`; this is what is left
 /// once the engine wins a race the app could not.
 pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: String) {
+    super::assist::failed(app, measure_id);
     match app.control.jobs.live_measure(measure_id) {
         Some(_) => app.control.jobs.fail(measure_id, message),
         None => tracing::warn!("audio: mix measurement failed: {message}"),
@@ -937,7 +945,9 @@ pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureRes
         soloed_track_ids: Vec::new(),
         target: wire_target(m.target),
         source: match m.source {
-            EngineSource::Render => MeasureSource::Render,
+            // Decoded audio (a reference) has every whole-buffer figure a
+            // render has, which is all the wire's `source` promises.
+            EngineSource::Render | EngineSource::Decoded => MeasureSource::Render,
             EngineSource::Live => MeasureSource::Live,
         },
         lufs_integrated: finite(m.lufs_integrated),
@@ -1179,7 +1189,7 @@ fn resolve_target(app: &Resonance, target: MeasureTarget) -> Result<StemSource, 
 /// it. A range lying entirely outside the song is a different thing —
 /// there is nothing there to measure, and silently returning the
 /// silence floor would look like a real reading.
-fn resolve_range(
+pub(super) fn resolve_range(
     app: &Resonance,
     range: Option<RangeSpec>,
 ) -> Result<Option<(SamplePos, SamplePos)>, RpcError> {
@@ -1222,6 +1232,13 @@ fn is_whole(range: &RangeSpec) -> bool {
 // ---------------------------------------------------------------------------
 // Guards
 // ---------------------------------------------------------------------------
+
+/// Why an offline render of the master cannot run right now, or `None`:
+/// the guard every render-path `meter.*` call passes, for callers outside
+/// this module (`master.assist`).
+pub(super) fn render_guard(app: &Resonance) -> Option<RpcError> {
+    source_guard(app, EngineSource::Render, StemSource::Master)
+}
 
 /// Why this measurement cannot run right now, or `None`.
 fn source_guard(

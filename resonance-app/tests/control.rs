@@ -61,6 +61,8 @@ mod control_jobs;
 mod control_lane_generator;
 #[path = "control/control_master.rs"]
 mod control_master;
+#[path = "control/control_master_assist.rs"]
+mod control_master_assist;
 #[path = "control/control_master_params.rs"]
 mod control_master_params;
 #[path = "control/control_meter.rs"]

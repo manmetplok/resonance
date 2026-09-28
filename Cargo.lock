@@ -4929,6 +4929,7 @@ dependencies = [
  "resonance-audio",
  "resonance-common",
  "resonance-control",
+ "resonance-mastering",
  "resonance-metering",
  "resonance-music-theory",
  "resonance-plugin",

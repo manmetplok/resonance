@@ -144,6 +144,35 @@ pub(super) fn dispatch_bounce(
             ctx.sample_rate,
             ctx.event_tx.clone(),
         ),
+        AudioCommand::MeasureAudio {
+            measure_id,
+            source,
+            detail,
+        } => {
+            // A reference's PCM lives on this thread's player; hand the
+            // worker the decoded buffer itself.
+            let input = match source {
+                AudioMeasureSource::File(path) => bounce::DecodedInput::File(path),
+                AudioMeasureSource::Reference(id) => match state.reference.entry_pcm(id) {
+                    Some(Some(pcm)) => bounce::DecodedInput::Pcm(pcm),
+                    Some(None) => bounce::DecodedInput::Unavailable(format!(
+                        "reference {} is still decoding; measure it again in a moment",
+                        id.0
+                    )),
+                    None => bounce::DecodedInput::Unavailable(format!(
+                        "no reference {} is loaded",
+                        id.0
+                    )),
+                },
+            };
+            bounce::measure_audio_spawn(
+                measure_id,
+                input,
+                detail,
+                ctx.sample_rate,
+                ctx.event_tx.clone(),
+            )
+        }
         AudioCommand::ProbeChain {
             probe_id,
             stages,

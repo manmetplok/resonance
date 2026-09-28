@@ -142,3 +142,5 @@ live in the GUI's master strip.
 - `${CLAUDE_PLUGIN_ROOT}/skills/mixing/references/reading-meters.md` — full meter
   field semantics, the `null`-vs-zero and `render`-vs-`live` traps, and the
   per-stage loudness targets in one table. Shared with the `mixing` skill.
+  Its `master_assist` section says how to read the Assistant's suggestions and
+  per-band deviations, and how to apply them one stage at a time.

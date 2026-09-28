@@ -29,7 +29,9 @@
 //! ## Two whole-range figures that are computed here, not taken from a meter
 //!
 //! `crest_db` and `correlation` are computed over the whole measured range
-//! by [`measure_rendered_buffer`] rather than read from
+//! by [`measure_rendered_buffer`] (through
+//! `resonance_metering::offline::{range_crest_db, range_correlation}`)
+//! rather than read from
 //! [`CrestMeter`][resonance_metering::CrestMeter] /
 //! [`CorrelationMeter`][resonance_metering::CorrelationMeter]. Those two
 //! meters are 100 ms *sliding-window* readouts built for a live display:
@@ -53,8 +55,8 @@ use resonance_metering::detail::spectrum::spectrum_detail_from;
 use resonance_metering::detail::stereo::stereo_detail_from;
 use resonance_metering::lufs::block_accumulator::BLOCK_HOP_SECS;
 use resonance_metering::offline::{
-    band_shares, clipped_samples, mono_penalty_db, sample_peak_db, sample_peak_linear, BandShares,
-    FLOOR_DBFS,
+    band_shares, clipped_samples, mono_penalty_db, range_correlation, range_crest_db,
+    sample_peak_db, BandShares, FLOOR_DBFS,
 };
 use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, PlrMeter, TruePeakMeter};
 
@@ -622,8 +624,16 @@ pub fn measure_rendered_buffer_detailed(
 /// The spectral details of one rendered buffer — everything read off the
 /// shared analysis, which runs only when one of them is asked for.
 fn spectral_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) -> MeasurementDetail {
+    // The assistant reads its own LTAS (mono, 1/6-octave), not the shared
+    // stereo analysis below.
+    let assist_ltas = detail
+        .assist
+        .then(|| resonance_metering::spectrum::offline::sixth_octave_ltas(rate, left, right));
     if !(detail.spectrum || detail.stereo || detail.depth) {
-        return MeasurementDetail::default();
+        return MeasurementDetail {
+            assist_ltas,
+            ..MeasurementDetail::default()
+        };
     }
     let spec = analyze_detail(rate, left, right);
     MeasurementDetail {
@@ -638,53 +648,113 @@ fn spectral_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) ->
             dry_only: false,
             sends: Vec::new(),
         }),
+        assist_ltas,
     }
 }
 
-/// Peak-to-RMS ratio over the WHOLE buffer, dB — the crest factor of the
-/// measured range, not of a sliding window. `0.0` for silence.
-///
-/// Peak is `max(|L|, |R|)`, RMS is over both channels, matching
-/// [`CrestMeter`][resonance_metering::CrestMeter]'s definition but with
-/// the range as the window. See the module docs for why the meter itself
-/// is not used here.
-fn range_crest_db(left: &[f32], right: &[f32]) -> f32 {
-    let n = left.len().min(right.len());
-    if n == 0 {
-        return 0.0;
-    }
-    let peak = sample_peak_linear(left, right);
-    let mut sum_sq = 0.0f64;
-    for i in 0..n {
-        let s = left[i].abs().max(right[i].abs()) as f64;
-        sum_sq += s * s;
-    }
-    let rms = (sum_sq / n as f64).sqrt();
-    if peak <= 0.0 || rms <= 1e-20 {
-        return 0.0;
-    }
-    20.0 * (peak as f64 / rms).log10() as f32
+/// Where a [`AudioCommand::MeasureAudio`] worker gets its audio.
+pub(crate) enum DecodedInput {
+    /// Read this file the way a clip placed from it is read.
+    File(std::path::PathBuf),
+    /// Already-decoded interleaved stereo at the engine rate (a loaded
+    /// reference).
+    Pcm(Arc<Vec<f32>>),
+    /// Nothing to measure; the message says why.
+    Unavailable(String),
 }
 
-/// Pearson correlation of L against R over the WHOLE buffer, clamped to
-/// `[-1, 1]`. `0.0` for a silent or single-sided buffer — the same
-/// neutral value [`CorrelationMeter`][resonance_metering::CorrelationMeter]
-/// reports when it has nothing to say.
-fn range_correlation(left: &[f32], right: &[f32]) -> f32 {
-    let n = left.len().min(right.len());
-    let (mut ll, mut rr, mut lr) = (0.0f64, 0.0f64, 0.0f64);
-    for i in 0..n {
-        let l = left[i] as f64;
-        let r = right[i] as f64;
-        ll += l * l;
-        rr += r * r;
-        lr += l * r;
+/// Measure already-decoded interleaved stereo — an audio file or a
+/// reference track — exactly as [`measure_rendered_buffer_detailed`]
+/// measures a render, over `0..frames`, with source
+/// [`MeasureSource::Decoded`] and [`StemSource::Master`] as a placeholder
+/// target.
+pub fn measure_decoded(interleaved: &[f32], sample_rate: u32, detail: DetailSet) -> MixMeasurement {
+    let frames = (interleaved.len() / 2) as SamplePos;
+    MixMeasurement {
+        source: MeasureSource::Decoded,
+        ..measure_rendered_buffer_detailed(
+            StemSource::Master,
+            0,
+            frames,
+            interleaved,
+            sample_rate,
+            detail,
+        )
     }
-    let denom_sq = ll * rr;
-    if denom_sq <= 1e-20 {
-        return 0.0;
+}
+
+/// Read `path` the way [`AudioCommand::LoadClipFromWav`] does
+/// ([`ClipSource::open_wav_at_rate`]) and measure it: a pooled asset
+/// measures sample-for-sample like a clip placed from it.
+pub fn measure_audio_file(
+    path: &std::path::Path,
+    sample_rate: u32,
+    detail: DetailSet,
+) -> Result<MixMeasurement, EngineError> {
+    let source = ClipSource::open_wav_at_rate(path, sample_rate)
+        .map_err(|e| EngineError::io(format!("cannot read {}: {e}", path.display())))?;
+    if source.frame_count() == 0 {
+        return Err(EngineError::io(format!("{} holds no audio", path.display())));
     }
-    (lr / denom_sq.sqrt()).clamp(-1.0, 1.0) as f32
+    Ok(measure_decoded(source.as_frames(), sample_rate, detail))
+}
+
+/// Run a [`AudioCommand::MeasureAudio`] on a worker thread and emit its
+/// one terminal event. Renders nothing, so it takes no offline-render
+/// guard.
+pub(crate) fn measure_audio_spawn(
+    measure_id: u64,
+    input: DecodedInput,
+    detail: DetailSet,
+    sample_rate: u32,
+    event_tx: Sender<AudioEvent>,
+) {
+    let spawned = std::thread::Builder::new()
+        .name("measure-audio".into())
+        .spawn({
+            let event_tx = event_tx.clone();
+            move || {
+                let panic_tx = event_tx.clone();
+                crate::supervise::run_supervised(
+                    "measure-audio",
+                    || {
+                        let result = match input {
+                            DecodedInput::File(path) => {
+                                measure_audio_file(&path, sample_rate, detail)
+                                    .map_err(|e| e.to_string())
+                            }
+                            DecodedInput::Pcm(pcm) if pcm.len() >= 2 => {
+                                Ok(measure_decoded(&pcm, sample_rate, detail))
+                            }
+                            DecodedInput::Pcm(_) => Err("the reference holds no audio".into()),
+                            DecodedInput::Unavailable(message) => Err(message),
+                        };
+                        let _ = event_tx.send(match result {
+                            Ok(m) => AudioEvent::MixMeasured {
+                                measure_id,
+                                results: vec![m],
+                            },
+                            Err(message) => AudioEvent::MixMeasureError {
+                                measure_id,
+                                message,
+                            },
+                        });
+                    },
+                    |message| {
+                        let _ = panic_tx.send(AudioEvent::MixMeasureError {
+                            measure_id,
+                            message,
+                        });
+                    },
+                );
+            }
+        });
+    if let Err(e) = spawned {
+        let _ = event_tx.send(AudioEvent::MixMeasureError {
+            measure_id,
+            message: format!("could not start the measurement: {e}"),
+        });
+    }
 }
 
 /// Build the master measurement from the engine's live meter snapshot —

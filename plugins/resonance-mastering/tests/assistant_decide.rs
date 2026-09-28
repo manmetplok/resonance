@@ -1,7 +1,9 @@
 use resonance_mastering::assistant::analyze::AnalysisResult;
 use resonance_mastering::assistant::decide::{
-    bins_for_range, build, Target, HIGH_BAND_HZ, LOW_BAND_HZ,
+    bins_for_range, build, param_by_key, Target, HIGH_BAND_HZ, LOW_BAND_HZ, STAGE_DIAGNOSTIC,
 };
+use resonance_mastering::params::MasteringParams;
+use resonance_mastering::PARAM_COUNT;
 use resonance_mastering::assistant::targets::{target_band, target_curve, Genre};
 
 fn dummy_analysis(crest_db: f32, spectrum: Vec<f32>) -> AnalysisResult {
@@ -158,4 +160,89 @@ fn very_wide_stereo_suggests_narrowing() {
         "expected narrowing, got {}",
         s.imager_width
     );
+}
+
+/// Analyses that make every stage speak: a low band over the band, a top
+/// under it, loose dynamics and a narrow image.
+fn busy_analyses() -> Vec<AnalysisResult> {
+    let (lo, hi) = target_band(Genre::Rock);
+    let mut analyzed = on_target();
+    let (l0, l1) = bins_for_range(LOW_BAND_HZ);
+    for i in l0..l1 {
+        analyzed[i] = hi[i] + 3.0;
+    }
+    let (h0, h1) = bins_for_range(HIGH_BAND_HZ);
+    for i in h0..h1 {
+        analyzed[i] = lo[i] - 2.0;
+    }
+    let mut a = dummy_analysis(18.0, analyzed);
+    a.correlation = 0.95;
+    a.integrated_lufs = -24.0;
+    vec![
+        a,
+        dummy_analysis(7.0, on_target()),
+        dummy_analysis(12.0, on_target()),
+    ]
+}
+
+/// The stage list names real param keys, and applying the suggestions
+/// writes exactly those keys to exactly those values — so an agent that
+/// sets the listed keys over the control API gets what Apply gets.
+#[test]
+fn stages_name_real_keys_and_apply_writes_exactly_them() {
+    for analysis in busy_analyses() {
+        let s = build(&analysis, &Target::Genre(Genre::Rock));
+        let stages = s.stages();
+        assert!(!stages.is_empty());
+        let lines: usize = stages.iter().map(|st| st.rationale.len()).sum();
+        assert_eq!(lines, s.rationale.len(), "every rationale line belongs to a stage");
+
+        let params = MasteringParams::default();
+        let defaults: Vec<f64> =
+            (0..PARAM_COUNT).map(|i| params.param_at(i).get_plain()).collect();
+        s.apply_to(&params);
+        let mut written = std::collections::HashSet::new();
+        for stage in &stages {
+            if stage.stage == STAGE_DIAGNOSTIC {
+                assert!(stage.params.is_empty());
+            }
+            for change in &stage.params {
+                let p = param_by_key(&params, change.key)
+                    .unwrap_or_else(|| panic!("{} is not a mastering param", change.key));
+                assert!(
+                    (p.get_plain() - f64::from(change.value)).abs() < 1e-4,
+                    "{} = {} after apply, suggested {}",
+                    change.key,
+                    p.get_plain(),
+                    change.value
+                );
+                written.insert(change.key);
+            }
+        }
+        for i in 0..PARAM_COUNT {
+            let p = params.param_at(i);
+            if !written.contains(p.id()) {
+                assert_eq!(p.get_plain(), defaults[i], "apply touched unlisted {}", p.id());
+            }
+        }
+    }
+}
+
+#[test]
+fn shelves_are_listed_only_when_they_move() {
+    let s = build(&dummy_analysis(12.0, on_target()), &Target::Genre(Genre::Rock));
+    for stage in s.stages() {
+        if stage.stage.starts_with("tonal_") {
+            assert!(stage.params.is_empty(), "{:?}", stage);
+        }
+    }
+    let s = build(&busy_analyses()[0], &Target::Genre(Genre::Rock));
+    let keys: Vec<&str> = s
+        .stages()
+        .iter()
+        .flat_map(|st| st.params.iter().map(|c| c.key))
+        .collect();
+    for key in ["tone_b0_gain", "tone_b3_gain", "img_width", "lim_ceiling", "glue_ratio"] {
+        assert!(keys.contains(&key), "{key} missing from {keys:?}");
+    }
 }

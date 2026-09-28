@@ -364,4 +364,52 @@ impl ResonanceMcp {
         self.invoke_structured(master::SAVE_PLUGIN_PRESET, &params)
             .await
     }
+
+    #[tool(
+        description = "Run the mastering assistant over the master mix and get its suggestions \
+                       for com.resonance.mastering back — NOTHING IS APPLIED. It renders the \
+                       master offline over range (default the whole song; needs a stopped \
+                       transport, like meter_measure), analyses it exactly as the plugin's \
+                       Assistant panel does, and compares it against a target: \
+                       {mode: \"genre\", genre: rock|indie|acoustic|jazz|pop} — a built-in \
+                       target BAND per 1/3 octave (a Pestana-style -4.5..-5 dB/oct slope with \
+                       genre low-end/top offsets and a tolerance), or {mode: \"reference\", \
+                       pool_asset_id} — a reference track from pool_list (import it with \
+                       pool_import first), whose own spectrum and loudness become the target. \
+                       Runs as a job and returns the final status. \
+                       \
+                       The result: target {mode, genre | pool_asset_id, label, target_lufs}; \
+                       measured {lufs_integrated, true_peak_db, crest_db, correlation, \
+                       measured_seconds} — the master as it is NOW, after the master chain, \
+                       including any mastering plugin already on it; suggestions[], stage by \
+                       stage (input_trim, tonal_low_shelf, tonal_high_shelf, glue, imager, \
+                       limiter, target_lufs, diagnostic), each {stage, rationale[], \
+                       params[{key, value}]} where params are EXACTLY the mastering-plugin writes \
+                       the panel's Apply would make (keys like input_trim_db, tone_b0_gain, \
+                       glue_ratio, img_width, lim_ceiling; bools 0/1, choices by index) and an \
+                       empty params list means that stage needs no change; deviations[], 31 \
+                       bands 20 Hz..20 kHz of {hz, lo_db, hi_db, measured_db, deviation_db} — \
+                       the master's spectral SHAPE (midrange aligned, never level) against the \
+                       band: deviation 0 is inside it, positive is too much there, negative too \
+                       little. Shelves act only on what lies OUTSIDE the band. plugin_id and \
+                       master_slot say where to apply: master_slot null means no \
+                       com.resonance.mastering is on the master yet — master_add_effect it first. \
+                       \
+                       Apply the parts you agree with through master_set_plugin_param (plugin_id \
+                       com.resonance.mastering, param = key, value = value), then re-measure at \
+                       matched loudness (meter_compare) before accepting a move. Read-only.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<resonance_control::job::JobStatus>()
+    )]
+    async fn master_assist(
+        &self,
+        Parameters(params): Parameters<master::AssistParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(master::ASSIST, &params, ASSIST_WAIT_MS)
+            .await
+    }
 }
+
+/// `master.assist` renders the master range offline, like a
+/// `meter.measure`; wait as generously.
+const ASSIST_WAIT_MS: u64 = 300_000;

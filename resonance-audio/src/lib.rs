@@ -115,8 +115,8 @@ pub mod test_support {
         FREEZE_CANCELLED_MSG, MIN_CLAP_FRAMES, SharedState,
     };
     pub use crate::engine::{
-        export_stems, measure_mix, measure_mix_detailed, measure_rendered_buffer,
-        measure_rendered_buffer_detailed, render_stem, stem_filter,
+        export_stems, measure_audio_file, measure_decoded, measure_mix, measure_mix_detailed,
+        measure_rendered_buffer, measure_rendered_buffer_detailed, render_stem, stem_filter,
         stem_project_range, write_stem_wav, StemFilter, MEASURE_BUSY_MSG,
     };
     /// The one "offline render in progress" gate (code review MIX-02 /
