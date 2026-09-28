@@ -57,13 +57,29 @@
 //!
 //! # Flutter
 //!
-//! Switching [`Flutter`] on inserts its ≈ 1.1 ms centre delay (W5), so the
-//! stage never switches: turning flutter on or off (or leaving Tape mode)
-//! crossfades between the undelayed and the flutter-delayed signal over
-//! [`FLUTTER_FADE_MS`]. At 0 it is bypassed outright (ToTape6-style: no
-//! delay, no interpolation). Flutter moves the whole output, like a tape
-//! transport: applying it to the wet path alone would make `mix` a
-//! chorus.
+//! Switching [`Flutter`] on inserts its ≈ 1.1 ms centre delay (W5). The
+//! stage never switches: turning flutter on or off (or entering or
+//! leaving Tape mode) glides the whole delay — centre and modulation —
+//! between 0 and its full value over [`FLUTTER_ENGAGE_MS`]
+//! ([`Flutter::process_engaged`], a smoothstep), like a transport coming
+//! up to speed: a pitch bend of at most ≈ 0.7 % (≈ 12 cents) for that
+//! quarter second. A crossfade between the undelayed and the delayed
+//! signal would instead be a comb filter for as long as it lasted. At 0
+//! it is bypassed outright (ToTape6-style: no delay, no interpolation),
+//! so flutter 0, and every mode but Tape, stays bit-exact.
+//!
+//! Flutter moves the whole output, like a tape transport: applying it to
+//! the wet path alone would make `mix` a chorus, and because dry and wet
+//! are both behind it, `mix` never combs against the delay either.
+//!
+//! **Latency.** While flutter is on the output sits ≈ 1.1 ms
+//! ([`Flutter::centre_delay_samples`], 52.9 samples at 48 kHz) behind the
+//! input. The plugin reports 0 samples: the delay exists only in Tape
+//! mode with flutter above 0, a plugin cannot report a latency change,
+//! and a tape path's own delay is part of the effect rather than
+//! something PDC should undo. Against an undelayed parallel copy of the
+//! same source (a send, a duplicated track) it combs like any short
+//! delay.
 //!
 //! # RT safety
 //!
@@ -85,8 +101,8 @@ use resonance_plugin::{Smoother, SmoothingStyle};
 use crate::params::{speed_ips, ColorParams, Mode, TapeQuality};
 use crate::viz::ColorViz;
 
-/// Crossfade length when flutter's centre delay comes or goes.
-pub const FLUTTER_FADE_MS: f32 = 30.0;
+/// How long flutter's delay takes to glide in or out.
+pub const FLUTTER_ENGAGE_MS: f32 = 250.0;
 
 /// Time constant of the auto-gain power followers. Long enough that the
 /// gain does not ride individual hits; both followers share it, so their
@@ -428,9 +444,9 @@ pub struct ColorDsp {
     voice: Voice,
     voice_key: (f32, f32, Mode, bool),
 
-    /// Flutter crossfade position (0 = bypassed, 1 = fully fluttered)
-    /// and step per sample; the last non-zero amount, held while fading
-    /// out so the delay does not snap away.
+    /// Flutter engage position (0 = bypassed, 1 = full delay) and step
+    /// per sample; the last non-zero amount, held while gliding out so the
+    /// modulation does not snap away.
     flutter_fade: f32,
     flutter_step: f32,
     flutter_held: f32,
@@ -476,7 +492,7 @@ impl ColorDsp {
             },
             voice_key: (f32::NAN, f32::NAN, Mode::Tube, false),
             flutter_fade: 0.0,
-            flutter_step: 1.0 / (FLUTTER_FADE_MS * 0.001 * sr).max(1.0),
+            flutter_step: 1.0 / (FLUTTER_ENGAGE_MS * 0.001 * sr).max(1.0),
             flutter_held: 0.0,
             in_peak: 0.0,
             out_peak: 0.0,
@@ -731,13 +747,16 @@ impl ColorDsp {
             let out_db = self.output_s.next();
             let out_gain = if out_db == 0.0 { 1.0 } else { db_to_linear(out_db) };
 
-            // Flutter crossfade.
+            // Flutter engage glide.
             if flutter_on {
                 self.flutter_fade = (self.flutter_fade + self.flutter_step).min(1.0);
             } else {
                 self.flutter_fade = (self.flutter_fade - self.flutter_step).max(0.0);
             }
             let fade = self.flutter_fade;
+            // Smoothstep: the delay starts and ends its glide at rest, so
+            // the pitch bend has no corners.
+            let engage = fade * fade * (3.0 - 2.0 * fade);
             let fl_amount = self.flutter_s.next();
 
             for c in 0..2 {
@@ -760,8 +779,7 @@ impl ColorDsp {
                     y = fl.process(y);
                 } else {
                     fl.set_amount(fl_amount.max(1.0e-6));
-                    let f = fl.process(y);
-                    y = if fade >= 1.0 { f } else { y + fade * (f - y) };
+                    y = if fade >= 1.0 { fl.process(y) } else { fl.process_engaged(y, engage) };
                 }
                 if c == 0 {
                     in_peak = in_peak.max(x[0].abs());

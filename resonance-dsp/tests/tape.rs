@@ -148,6 +148,37 @@ fn flutter_modulates_deterministically_and_keeps_level() {
     assert!(db(side / spec[1_000]) > -60.0, "no wow/flutter sidebands");
 }
 
+/// `process_engaged` spans exactly the two ends of the switch: engage 0
+/// is the input untouched, engage 1 is `process`, bit for bit; in
+/// between it reads a delay between the two, so a glide is continuous.
+#[test]
+fn flutter_engage_spans_no_delay_to_the_full_delay() {
+    let x = noise(9_600, 0.9, 5);
+    let mut off = Flutter::new(FS);
+    off.set_amount(0.4);
+    let mut full = Flutter::new(FS);
+    full.set_amount(0.4);
+    let mut plain = Flutter::new(FS);
+    plain.set_amount(0.4);
+    for &s in &x {
+        assert_eq!(off.process_engaged(s, 0.0).to_bits(), s.to_bits());
+        assert_eq!(full.process_engaged(s, 1.0).to_bits(), plain.process(s).to_bits());
+    }
+    // A slow glide 0 → 1 over a smooth sine never steps.
+    let y = sine(200.0, 0.5, SR, 48_000);
+    let mut fl = Flutter::new(FS);
+    fl.set_amount(0.4);
+    let n = y.len();
+    let out: Vec<f32> = y
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| fl.process_engaged(s as f32, i as f32 / n as f32))
+        .collect();
+    let own = std::f32::consts::TAU * 200.0 / FS * 0.5;
+    let worst = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 1.1 * own, "the glide stepped by {worst} (sine slope {own})");
+}
+
 #[test]
 fn extreme_inputs_never_produce_nan() {
     let nasty = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30, 1e-40, 0.0, 1.0];

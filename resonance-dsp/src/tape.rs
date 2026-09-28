@@ -205,7 +205,9 @@ const FLUTTER_DEPTH_MS: f64 = 0.06;
 /// its buffer, so switching on has history). Above 0 the signal is
 /// delayed by the centre delay, [`Flutter::centre_delay_samples`], so going
 /// from 0 to non-zero is a latency step; owners should switch while
-/// silent or crossfade. The centre delay (≈ 1.1 ms) is part of the
+/// silent or glide the delay in with [`Flutter::process_engaged`]. (A
+/// crossfade between the bypassed and the delayed signal is a comb filter
+/// for as long as it lasts.) The centre delay (≈ 1.1 ms) is part of the
 /// effect, like a tape path's own delay, and is not host latency.
 ///
 /// The modulation is deterministic (fixed phases), so two instances with
@@ -263,6 +265,18 @@ impl Flutter {
 
     #[inline]
     pub fn process(&mut self, x: f32) -> f32 {
+        self.process_engaged(x, 1.0)
+    }
+
+    /// [`Self::process`] with the whole delay — centre and modulation —
+    /// scaled by `engage` (0..=1). Ramping `engage` glides the read tap
+    /// between no delay and the full centre delay, which is a brief,
+    /// gentle pitch bend rather than the comb a crossfade between the two
+    /// would be. `engage` 1 is exactly [`Self::process`]; `engage` 0 reads
+    /// the newest sample, i.e. returns `x` unchanged. Bypassed (`amount`
+    /// 0) it returns `x` whatever `engage` is.
+    #[inline]
+    pub fn process_engaged(&mut self, x: f32, engage: f32) -> f32 {
         let x = if x.is_finite() { x } else { 0.0 };
         self.buf[self.write] = x;
         self.write = (self.write + 1) & self.mask;
@@ -275,12 +289,18 @@ impl Flutter {
         let m = WOW_DEPTH_MS * (std::f64::consts::TAU * self.wow_phase).sin()
             + FLUTTER_DEPTH_MS * (std::f64::consts::TAU * self.flutter_phase).sin();
         // Delay in samples behind the newest sample (index 0 = newest).
-        let d = self.centre + self.amount * m * ms_to_samples;
+        let d = (self.centre + self.amount * m * ms_to_samples) * engage.clamp(0.0, 1.0) as f64;
         let di = d.floor();
         let frac = (d - di) as f32;
         let i = di as usize;
         // newest sample sits at write − 1.
         let at = |k: usize| self.buf[self.write.wrapping_sub(1 + k) & self.mask];
+        if i == 0 {
+            // Inside the newest sample there is no newer neighbour for
+            // the Hermite: read linearly (only while engaging).
+            let (a, b) = (at(0), at(1));
+            return a + frac * (b - a);
+        }
         // Hermite between delays i and i+1 (older), neighbours i−1, i+2.
         crate::hermite4(at(i - 1), at(i), at(i + 1), at(i + 2), frac)
     }
