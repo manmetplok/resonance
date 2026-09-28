@@ -240,6 +240,7 @@ pub(crate) fn build(
             &mut params,
         )
         .map_err(PwOutputError::StreamConnect)?;
+    prepare_process_thread(&stream);
 
     // Release the loop lock so the RT thread can attach the stream
     // and fire the first `param_changed`.
@@ -275,6 +276,47 @@ pub(crate) fn build(
         negotiated_rate,
         negotiated_channels,
     ))
+}
+
+/// Give the thread `on_process` runs on (the stream's data loop, a
+/// PipeWire realtime thread we do not spawn) its per-thread state before
+/// its first cycle ([`crate::rt_prep`]). Called right after `connect`: the
+/// invoke is queued on that loop and runs there before any cycle, since
+/// the graph cannot schedule the stream until format negotiation, which
+/// has not started yet. Non-blocking. Falls back to seeding free nodes if
+/// the loop cannot be reached.
+fn prepare_process_thread(stream: &StreamRc) {
+    unsafe extern "C" fn on_data_loop(
+        _loop: *mut spa::sys::spa_loop,
+        _async: bool,
+        _seq: u32,
+        _data: *const std::ffi::c_void,
+        _size: usize,
+        _user_data: *mut std::ffi::c_void,
+    ) -> std::ffi::c_int {
+        let _ = std::panic::catch_unwind(crate::rt_prep::claim_arc_swap_node);
+        0
+    }
+    // SAFETY: the stream is connected, so its data loop is set and lives
+    // as long as the stream; `spa_loop_invoke` copies nothing (size 0)
+    // and may be called from any thread.
+    let queued = unsafe {
+        let data_loop = pw::sys::pw_stream_get_data_loop(stream.as_raw_ptr());
+        !data_loop.is_null()
+            && spa::sys::spa_loop_invoke(
+                (*data_loop).loop_,
+                Some(on_data_loop),
+                0,
+                std::ptr::null(),
+                0,
+                false,
+                std::ptr::null_mut(),
+            ) >= 0
+    };
+    if !queued {
+        tracing::warn!("audio: PipeWire data loop unreachable; seeding arc-swap nodes instead");
+        crate::rt_prep::seed_arc_swap_nodes(2);
+    }
 }
 
 /// Listener callback fired whenever the stream's params change; parse

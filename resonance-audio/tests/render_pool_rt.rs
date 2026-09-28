@@ -5,13 +5,14 @@
 //! is process-wide: it counts heap allocations on EVERY thread, the render
 //! workers included, while armed. The one test here drives the whole
 //! audio callback on a four-thread pool through spinning and parked
-//! stretches (so the wake path runs too) and asserts that, once warm, not
-//! a single allocation happens anywhere in the process.
+//! stretches (so the wake path runs too) and asserts that, from the
+//! pool's first block until every worker has run a job, not a single
+//! allocation happens anywhere in the process.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::MixAudioHarness;
 use resonance_audio::types::*;
@@ -89,6 +90,7 @@ fn parallel_callbacks_never_allocate_on_any_thread() {
         pre_fader: false,
         enabled: true,
     }];
+    resonance_audio::test_support::override_threads_on_this_thread(Some(1));
     let mut h = MixAudioHarness::new(
         tracks,
         vec![Bus::new(BUS, "bus".into())],
@@ -109,7 +111,6 @@ fn parallel_callbacks_never_allocate_on_any_thread() {
             enabled: true,
         }]));
     h.shared().playing.store(true, Ordering::Relaxed);
-    h.set_render_threads(4, 0x5eed);
 
     let run = |h: &mut MixAudioHarness, blocks: usize| {
         for block in 0..blocks {
@@ -121,14 +122,32 @@ fn parallel_callbacks_never_allocate_on_any_thread() {
             h.render();
         }
     };
-    // Warm-up: first-use thread-locals, the scheduling hand-off, lazily
-    // initialised statics.
+    // Warm-up, serial: the caller's first-use thread-locals and the lazily
+    // initialised statics. No worker exists yet (the harness was built
+    // serial whatever RESONANCE_RENDER_THREADS says), so each worker's
+    // whole life runs under the counter below.
     run(&mut h, 48);
 
+    // Armed from the pool's first block: the caller's first parallel run
+    // and every worker's first job. When a worker gets its first job is up
+    // to scheduling (under load the caller and the others may claim every
+    // job for many blocks), so render until each has run one: a worker
+    // whose per-thread first-use state is not set up at spawn (the
+    // arc-swap node, `rt_prep`) then fails this every time, not by luck.
+    h.set_render_threads(4, 0x5eed);
     ARMED.store(true, Ordering::SeqCst);
-    run(&mut h, 128);
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut blocks = 0usize;
+    while blocks < 128 || (h.render_pool_min_worker_jobs() == 0 && Instant::now() < deadline) {
+        run(&mut h, 16);
+        blocks += 16;
+    }
     ARMED.store(false, Ordering::SeqCst);
 
+    assert!(
+        h.render_pool_min_worker_jobs() > 0,
+        "a worker never ran a job in {blocks} blocks"
+    );
     let stats = h.take_pass_stats();
     assert_eq!(stats.threads, 4, "the jobs really ran on the pool");
     assert_eq!(

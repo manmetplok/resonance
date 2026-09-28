@@ -23,7 +23,16 @@
 //! - every `${CLAUDE_PLUGIN_ROOT}` / `${CLAUDE_SKILL_DIR}` path the
 //!   skills point each other at, against the files on disk. Progressive
 //!   disclosure only works if the pointer resolves: an agent told to read
-//!   a reference that has been renamed just carries on without it.
+//!   a reference that has been renamed just carries on without it;
+//! - every plugin param key, choice label and factory preset name a skill
+//!   names inside a `<!-- keys: <plugin id> --> … <!-- /keys -->` block,
+//!   against that plugin's real table (warmth-width-depth.md §8.1). This
+//!   crate may not link plugins (it depends on `resonance-control` only),
+//!   so the table check itself runs in each plugin crate's
+//!   `tests/skill_keys.rs` (`resonance_dsp_test_support::skill_keys`).
+//!   What runs here is the other half: the blocks are well formed, and
+//!   every plugin a block names has that test, so no block goes
+//!   unchecked. The scans above them read the text *outside* the blocks.
 
 use resonance_mcp::ResonanceMcp;
 use std::collections::BTreeSet;
@@ -284,7 +293,7 @@ fn skills_bare_tool_names_exist() {
 
     let mut missing = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        let text = strip_key_blocks(&std::fs::read_to_string(&file).expect("read skill markdown"));
         for token in bare_tool_like_tokens(&text, &namespaces) {
             let known_field = WIRE_FIELDS.contains(&token.as_str())
                 || PLUGIN_FILE_KEYS.contains(&token.as_str());
@@ -419,7 +428,7 @@ fn skills_inline_identifiers_exist() {
 
     let mut missing = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        let text = strip_key_blocks(&std::fs::read_to_string(&file).expect("read skill markdown"));
         for token in backticked_snake_tokens(&text) {
             let known = published.contains(&token)
                 || schemas.contains(&format!("\"{token}\""))
@@ -438,4 +447,155 @@ fn skills_inline_identifiers_exist() {
          parameter key:\n{}",
         missing.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Keys blocks (warmth-width-depth.md §8.1)
+// ---------------------------------------------------------------------------
+
+const KEYS_OPEN: &str = "<!-- keys:";
+const KEYS_CLOSE: &str = "<!-- /keys -->";
+
+/// `text` with every keys block, markers included, blanked out (line
+/// count kept). The spans inside are checked against the plugin's own
+/// table by its `tests/skill_keys.rs`, which is stricter than anything
+/// this crate can do from source; here a key such as `clip_on` would read
+/// as a misspelt `clip_*` tool.
+fn strip_key_blocks(text: &str) -> String {
+    // Markers inside fenced code outside a block are examples (the README
+    // shows one), so fences are tracked the way the plugin-side parser
+    // tracks them.
+    let mut inside = false;
+    let mut fenced = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let t = line.trim();
+        if !inside && t.starts_with("```") {
+            fenced = !fenced;
+            out.push_str(line);
+        } else if fenced {
+            out.push_str(line);
+        } else if t.starts_with(KEYS_OPEN) {
+            inside = true;
+        } else if t == KEYS_CLOSE {
+            inside = false;
+        } else if !inside {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The plugin ids of the keys blocks in `text`, in order, or what is
+/// wrong with the markers.
+fn key_block_ids(text: &str) -> Result<Vec<String>, String> {
+    let mut ids = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut fenced = false;
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if open.is_none() && t.starts_with("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        if let Some(rest) = t.strip_prefix(KEYS_OPEN) {
+            if let Some(at) = open {
+                return Err(format!("line {}: block opened inside the one from line {at}", i + 1));
+            }
+            let id = rest.trim().strip_suffix("-->").unwrap_or("").trim();
+            if !id.starts_with("com.resonance.") || id.contains(char::is_whitespace) {
+                return Err(format!(
+                    "line {}: write the marker as `{KEYS_OPEN} com.resonance.<plugin> -->`",
+                    i + 1
+                ));
+            }
+            ids.push(id.to_owned());
+            open = Some(i + 1);
+        } else if t == KEYS_CLOSE {
+            if open.take().is_none() {
+                return Err(format!("line {}: `{KEYS_CLOSE}` with no open block", i + 1));
+            }
+        } else if open.is_some() && t.starts_with("```") {
+            return Err(format!("line {}: fenced code inside a keys block", i + 1));
+        }
+    }
+    match open {
+        Some(at) => Err(format!("line {at}: keys block never closed")),
+        None => Ok(ids),
+    }
+}
+
+/// First-party plugins as `(CLAP id, crate dir)`, read from each
+/// `plugins/*/src/lib.rs`.
+fn first_party_plugins() -> Vec<(String, PathBuf)> {
+    const MARK: &str = "const CLAP_ID: &'static str = \"";
+    let plugins = plugin_dir()
+        .parent()
+        .expect("workspace root")
+        .join("plugins");
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&plugins).expect("read plugins dir") {
+        let dir = entry.expect("read dir entry").path();
+        let Ok(lib) = std::fs::read_to_string(dir.join("src/lib.rs")) else {
+            continue;
+        };
+        if let Some(at) = lib.find(MARK) {
+            let rest = &lib[at + MARK.len()..];
+            let id = &rest[..rest.find('"').expect("CLAP_ID literal closes")];
+            out.push((id.to_owned(), dir));
+        }
+    }
+    out
+}
+
+/// Every keys block is well formed and names a first-party plugin whose
+/// crate runs `skill_keys_test!`. A block nobody checks is worse than no
+/// block: it looks verified.
+#[test]
+fn every_keys_block_names_a_plugin_that_checks_it() {
+    let plugins = first_party_plugins();
+    assert!(
+        plugins.iter().any(|(id, _)| id == "com.resonance.mastering"),
+        "sanity check failed: the CLAP_ID scan found {} plugins",
+        plugins.len()
+    );
+    let mut files = Vec::new();
+    markdown_files(&plugin_dir(), &mut files);
+
+    let mut blocks = 0;
+    let mut problems = Vec::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("read skill markdown");
+        let ids = match key_block_ids(&text) {
+            Ok(ids) => ids,
+            Err(e) => {
+                problems.push(format!("{}: {e}", file.display()));
+                continue;
+            }
+        };
+        blocks += ids.len();
+        for id in ids {
+            let Some((_, dir)) = plugins.iter().find(|(p, _)| *p == id) else {
+                problems.push(format!("{}: `{id}` is not a first-party plugin", file.display()));
+                continue;
+            };
+            let test = dir.join("tests/skill_keys.rs");
+            let checked = std::fs::read_to_string(&test)
+                .is_ok_and(|t| t.contains("skill_keys_test!"));
+            if !checked {
+                problems.push(format!(
+                    "{}: names `{id}`, but {} does not call \
+                     `resonance_dsp_test_support::skill_keys_test!`; add it",
+                    file.display(),
+                    test.display()
+                ));
+            }
+        }
+    }
+    assert!(blocks > 0, "no keys blocks found: the skills name no plugin keys at all?");
+    assert!(problems.is_empty(), "keys blocks:\n{}", problems.join("\n"));
 }

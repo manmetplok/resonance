@@ -46,6 +46,7 @@ pub(crate) mod prefault;
 pub mod quantize;
 mod recording;
 pub(crate) mod render_pool;
+pub(crate) mod rt_prep;
 pub(crate) mod stream_errors;
 pub(crate) mod supervise;
 pub mod types;

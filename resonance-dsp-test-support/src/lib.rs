@@ -20,8 +20,14 @@
 //! granular-delay, which fold per-block digests in alongside the
 //! sample bits). An `f32` is just its bits reinterpreted, so the `_f32`
 //! functions are thin wrappers over the `_words` ones.
+//!
+//! [`skill_keys`] is the one module that is not golden plumbing: the
+//! plugin half of the skill ↔ param-key lockstep, shared here because
+//! this is the one test crate every plugin already depends on.
 
 use std::path::{Path, PathBuf};
+
+pub mod skill_keys;
 
 /// True if any of `vars` is set to exactly `"1"`. `RESONANCE_BLESS` is
 /// the workspace-wide convention (CLAUDE.md); most callers layer a

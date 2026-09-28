@@ -254,6 +254,12 @@ impl MixAudioHarness {
         self.pool = pool;
     }
 
+    /// The fewest jobs any render pool worker has run since the pool was
+    /// built. Allocation-free, so an allocation-counting test may poll it.
+    pub fn render_pool_min_worker_jobs(&self) -> u64 {
+        self.pool.min_worker_jobs()
+    }
+
     /// The render pool's status, as the engine loop reports it.
     pub fn render_pool_status(&self) -> crate::render_pool::PoolStatus {
         self.pool.status()
