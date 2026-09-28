@@ -12,6 +12,7 @@
 //!
 //! [`analyze_stereo`]: crate::spectrum::offline::analyze_stereo
 
+pub mod depth;
 pub mod spectrum;
 pub mod stereo;
 

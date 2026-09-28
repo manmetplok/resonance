@@ -250,6 +250,7 @@ pub fn to_freeze_cache(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        send_filter: None,
         hard_clip: true,
     };
     let mut scratch = ChunkScratch::new();

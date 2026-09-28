@@ -60,7 +60,7 @@ pub(crate) use midi_events::MAX_MIDI_EVENTS_PER_BUFFER;
 pub use midi_stash::{MidiStash, NoteSink, StashEntry};
 pub use monitor::{monitor_catchup_skip, monitor_read_len, MonitorDrain, MONITOR_DRAIN_STREAK};
 pub use recording_push::{push_recording_frames, whole_frame_push_len};
-pub(crate) use render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy};
+pub(crate) use render_core::{render_block, BlockInputs, BlockScratch, RenderStrategy, SendFilter};
 pub use render_core::{mix_track_clips, recorded_monitor_gate, CLIP_DECLICK_FRAMES};
 pub use take_comp::{
     build_comp_table, mix_track_comp, CompRenderTable, CompSpan, TrackComp, COMP_XFADE_FRAMES,

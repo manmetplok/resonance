@@ -63,18 +63,23 @@ pub(crate) fn route_post_fader(
 /// with the send level only. The destination's summing buffer is always
 /// filled before the bus pass runs it, so a track→return send is
 /// sample-correct regardless of bus ordering. `src` is the track's
-/// pre-fader signal.
+/// pre-fader signal. `only_dest` restricts the taps to sends into that
+/// one bus (a return-bus measurement); `None` applies every send.
 pub(crate) fn apply_track_aux_sends(
     track_id: TrackId,
     gains: GainRamp,
     src: (&[f32], &[f32]),
     ctx: &BlockCtx<'_>,
     bus_bufs: &mut BusBufs,
+    only_dest: Option<BusId>,
 ) {
     let frames = ctx.inputs.frames;
     let (gain_l, gain_r) = gains;
     for send in ctx.inputs.aux_sends {
         if !send.enabled || send.source != SendSource::Track(track_id) {
+            continue;
+        }
+        if only_dest.is_some_and(|only| only != send.dest) {
             continue;
         }
         let Some(dst_idx) = ctx

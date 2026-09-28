@@ -23,7 +23,7 @@ use resonance_metering::detail::{SpectrumDetail, StereoDetail};
 use resonance_metering::RangeDynamics;
 use resonance_metering::offline::BandShares;
 
-use super::{SamplePos, StemSource};
+use super::{BusId, SamplePos, StemSource};
 
 /// Where the numbers in a [`MixMeasurement`] come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,13 +63,48 @@ pub struct DetailSet {
     pub stereo: bool,
     /// PLR and PSR.
     pub dynamics: bool,
+    /// HF tilt and, for track targets, the DRR estimate from sends and
+    /// each return's measured gain (renders every return a track sends
+    /// to, once per pass).
+    pub depth: bool,
 }
 
 impl DetailSet {
     /// True when at least one detail is requested.
     pub fn any(self) -> bool {
-        self.spectrum || self.stereo || self.dynamics
+        self.spectrum || self.stereo || self.dynamics || self.depth
     }
+}
+
+/// One of a track's aux sends, as the depth estimate saw it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DepthSend {
+    /// The return bus it feeds.
+    pub bus_id: BusId,
+    /// Its level, dB (the static value; send automation is not read).
+    pub send_level_db: f32,
+    /// Tapped before the source's fader.
+    pub pre_fader: bool,
+    /// The return's measured gain, dB: output energy over the energy its
+    /// sends feed it, over the same range. `None` when the return came
+    /// out silent (no chain output, or muted by its own fader).
+    pub return_gain_db: Option<f32>,
+}
+
+/// The `depth` detail of one measurement (warmth-width-depth.md §7.6).
+#[derive(Debug, Clone, PartialEq)]
+pub struct DepthDetail {
+    /// `E(6–16 kHz) / E(1–4 kHz)`, dB.
+    pub hf_tilt_db: Option<f32>,
+    /// Direct-to-reverberant ESTIMATE, dB
+    /// ([`drr_db_estimate`][resonance_metering::detail::depth::drr_db_estimate]).
+    /// `None` for anything but a track target, for a dry-only track, and
+    /// when every return it feeds came out silent.
+    pub drr_db_estimate: Option<f32>,
+    /// A track target with no enabled sends: no reverberant path at all.
+    pub dry_only: bool,
+    /// The track's enabled sends. Empty for a master or bus target.
+    pub sends: Vec<DepthSend>,
 }
 
 /// The opt-in details of one [`MixMeasurement`]: `Some` exactly for the
@@ -83,6 +118,8 @@ pub struct MeasurementDetail {
     /// PLR / PSR of the range, from the measurement's own true peak and
     /// loudness ([`PlrMeter::range`][resonance_metering::PlrMeter::range]).
     pub dynamics: Option<RangeDynamics>,
+    /// See [`DepthDetail`].
+    pub depth: Option<DepthDetail>,
 }
 
 /// Everything the mix report needs about one measured slice of the mix.

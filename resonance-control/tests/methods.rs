@@ -187,6 +187,8 @@ fn done_job_carries_the_method_result_payload() {
         // Nothing soloed: the field is skipped on the wire entirely, so
         // an existing client sees the shape it always saw.
         soloed_track_ids: Vec::new(),
+        // Not normalized: likewise skipped.
+        normalize: None,
     };
     let status = JobStatus {
         job_id: JobId(3),

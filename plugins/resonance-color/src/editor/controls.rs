@@ -8,12 +8,14 @@
 //! call site that restates something `params.rs` declares.
 //!
 //! Controls a mode does not use stay visible but are greyed out
-//! (`add_enabled_ui`): Bias in Console, Speed and Flutter outside Tape.
+//! (`add_enabled_ui`): Bias in Console; Speed, Flutter and Tape Quality
+//! outside Tape; Solver outside Tape HQ. In Tape HQ the Bias knob is tape
+//! bias (the hysteresis loop's reversible fraction), not asymmetry.
 
 use plugin_gui_core::{egui, widgets};
 use resonance_plugin::{editor_widgets, IntParam, Param};
 
-use crate::params::{ColorParams, Mode};
+use crate::params::{ColorParams, Mode, TapeQuality};
 
 use super::theme;
 
@@ -63,7 +65,7 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, p: &ColorParams) {
         editor_widgets::float_knob(ui, &p.drive, p.drive.name(), "");
         ui.add_space(4.0);
         ui.add_enabled_ui(mode.uses_bias(), |ui| {
-            editor_widgets::float_knob(ui, &p.bias, p.bias.name(), "asymmetry");
+            editor_widgets::float_knob(ui, &p.bias, p.bias.name(), "asymmetry / HQ bias");
         });
         ui.add_space(4.0);
         editor_widgets::float_knob(ui, &p.response, p.response.name(), "−highs / +lows");
@@ -76,6 +78,20 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, p: &ColorParams) {
         ui.add_space(16.0);
         ui.add_enabled_ui(mode == Mode::Tape, |ui| {
             editor_widgets::float_knob(ui, &p.flutter, p.flutter.name(), "wow/flutter");
+        });
+        ui.add_space(12.0);
+        // The tape quality pair, beside the other Tape-only controls:
+        // HQ swaps the curve for the hysteresis stage, and the solver
+        // only means something there.
+        ui.vertical(|ui| {
+            ui.add_enabled_ui(mode == Mode::Tape, |ui| {
+                choice_segmented(ui, &p.tape_quality);
+            });
+            ui.add_space(4.0);
+            let hq = mode == Mode::Tape && p.tape_quality() == TapeQuality::Hq;
+            ui.add_enabled_ui(hq, |ui| {
+                choice_segmented(ui, &p.tape_solver);
+            });
         });
     });
 }

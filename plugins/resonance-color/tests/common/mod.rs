@@ -111,6 +111,8 @@ pub fn apply_settings(params: &ColorParams, s: &Settings) {
         .expect("a declared tape speed");
     params.speed.set_plain(speed as f64);
     params.flutter.set_value(s.flutter);
+    params.tape_quality.set_plain(s.tape_quality as i32 as f64);
+    params.tape_solver.set_plain(s.tape_solver as i32 as f64);
 }
 
 /// Render `(l, r)` through a fresh plugin with `s` applied, in

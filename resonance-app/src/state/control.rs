@@ -68,6 +68,12 @@ pub struct ControlEndpointState {
     /// result needs that the engine does not know (the stages' names, the
     /// slots left out).
     pub pending_probes: HashMap<u64, PendingProbe>,
+    /// Normalized `render.mixdown` jobs waiting on `ExportComplete`, keyed
+    /// by the output path the engine echoes (warmth-width-depth.md §7.7):
+    /// the platform and targets the result reports next to what the file
+    /// achieved.
+    pub pending_normalize:
+        HashMap<std::path::PathBuf, resonance_control::methods::render::NormalizeReport>,
 }
 
 /// The app-side half of a `meter.probe` in flight.

@@ -35,7 +35,7 @@ use super::frozen::fill_from_frozen_source;
 use super::ports::process_multi_port;
 use super::routing::{apply_track_aux_sends, route_post_fader};
 use super::slots::{PassStats, SlotCells, SlotRoute, TrackSlot};
-use super::strategy::{RenderStrategy, TrackDisposition};
+use super::strategy::{RenderStrategy, SendFilter, TrackDisposition};
 use super::sub_track::fan_out_to_sub_tracks;
 
 /// What a track's source stage produced, for the stages that follow it.
@@ -137,6 +137,7 @@ pub(crate) fn render_track_pass(
         &mut *scratch.data,
         &mut *scratch.bus_bufs,
         scratch.stash.as_deref_mut(),
+        strategy,
     );
 }
 
@@ -291,6 +292,7 @@ fn reduce_track_pass(
     data: &mut [f32],
     bus_bufs: &mut BusBufs,
     mut stash: Option<&mut MidiStash>,
+    strategy: &RenderStrategy<'_>,
 ) {
     let tracks = ctx.inputs.tracks;
     let n = slots.len();
@@ -299,21 +301,42 @@ fn reduce_track_pass(
             continue;
         }
         let slot = &mut slots[idx];
+        // Depth measurement (warmth-width-depth.md §7.6): a return's
+        // feeder reaches the mix only through its sends into that return;
+        // a dry render taps no send.
+        let filter = strategy.send_filter(track.id);
+        let send_only = match filter {
+            Some(SendFilter::OnlyInto(bus)) => Some(bus),
+            _ => None,
+        };
         if let Some(route) = slot.route.take() {
             let src = (slot.l.as_slice(), slot.r.as_slice());
-            route_post_fader(
-                route.dest,
-                src,
-                route.gains,
-                (&mut *data, &mut *bus_bufs),
-                ctx,
-            );
-            apply_track_aux_sends(track.id, route.gains, src, ctx, bus_bufs);
+            if send_only.is_none() {
+                route_post_fader(
+                    route.dest,
+                    src,
+                    route.gains,
+                    (&mut *data, &mut *bus_bufs),
+                    ctx,
+                );
+            }
+            if filter != Some(SendFilter::Dry) {
+                apply_track_aux_sends(track.id, route.gains, src, ctx, bus_bufs, send_only);
+            }
         }
         if let Some(stash) = stash.as_deref_mut() {
             stash.restore(&mut slot.carry);
         }
-        if !std::mem::take(&mut slot.fanned_out) {
+        if !std::mem::take(&mut slot.fanned_out) || send_only.is_some() {
+            // A send-only feeder's sub-tracks carry its other outputs,
+            // which are not what the return is fed; drop their routes.
+            if send_only.is_some() {
+                for (sub_idx, sub_track) in tracks.values().enumerate().take(n) {
+                    if matches!(sub_track.sub_track_of, Some((parent, _)) if parent == track.id) {
+                        slots[sub_idx].route = None;
+                    }
+                }
+            }
             continue;
         }
         for (sub_idx, sub_track) in tracks.values().enumerate().take(n) {

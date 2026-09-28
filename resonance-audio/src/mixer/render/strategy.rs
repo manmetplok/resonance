@@ -84,6 +84,10 @@ pub(crate) enum RenderStrategy<'a> {
         key_only: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// The bus twin of `key_only`.
         key_only_bus: &'a (dyn Fn(BusId) -> bool + Sync),
+        /// Depth measurement (warmth-width-depth.md §7.6): how the aux
+        /// sends of the tracks this returns true for are treated — see
+        /// [`SendFilter`]. `None` for every other render.
+        send_filter: Option<(&'a (dyn Fn(TrackId) -> bool + Sync), SendFilter)>,
         respect_mute_solo: bool,
         /// Freeze-cache capture mode. When `true`, every in-filter track
         /// renders its **raw post-instrument / post-FX** signal — unity
@@ -94,6 +98,20 @@ pub(crate) enum RenderStrategy<'a> {
         /// stay sample-identical to the unfrozen track (doc #187).
         freeze_raw: bool,
     },
+}
+
+/// How a depth measurement treats the aux sends of the tracks it names
+/// (warmth-width-depth.md §7.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendFilter {
+    /// The tracks render in full — chain, fader, pan, automation — but
+    /// reach the mix ONLY through their sends into this return bus: their
+    /// main output, their other sends and their sub-tracks' routes are
+    /// dropped. What the return makes of them is then its output.
+    OnlyInto(BusId),
+    /// The tracks render as usual but tap no aux send at all: the dry
+    /// signal alone.
+    Dry,
 }
 
 /// How a top-level track participates in this block, as decided by the
@@ -168,6 +186,19 @@ impl RenderStrategy<'_> {
         match self {
             Self::Live { .. } => false,
             Self::Bounce { key_only, .. } => key_only(id),
+        }
+    }
+
+    /// The [`SendFilter`] applying to track `id`, if any — see
+    /// `RenderStrategy::Bounce::send_filter`.
+    #[inline]
+    pub(crate) fn send_filter(&self, id: TrackId) -> Option<SendFilter> {
+        match self {
+            Self::Bounce {
+                send_filter: Some((names, filter)),
+                ..
+            } if names(id) => Some(*filter),
+            _ => None,
         }
     }
 

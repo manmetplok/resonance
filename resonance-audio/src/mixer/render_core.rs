@@ -33,7 +33,7 @@ use super::render::context::BlockCtx;
 use super::render::track_pass::render_track_pass;
 
 pub(crate) use super::render::context::{BlockInputs, BlockScratch};
-pub(crate) use super::render::strategy::RenderStrategy;
+pub(crate) use super::render::strategy::{RenderStrategy, SendFilter};
 pub use super::render::clips::{mix_track_clips, recorded_monitor_gate, CLIP_DECLICK_FRAMES};
 
 /// Render one contiguous timeline block into the interleaved output:

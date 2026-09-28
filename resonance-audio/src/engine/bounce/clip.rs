@@ -148,6 +148,7 @@ pub fn to_audio_clip(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        send_filter: None,
         automation,
         hard_clip: true,
     };

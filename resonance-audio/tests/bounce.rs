@@ -24,6 +24,8 @@ mod bounce_render_range_tempo;
 mod bounce_tail_and_master_latency;
 #[path = "bounce/bounce_transport_guard.rs"]
 mod bounce_transport_guard;
+#[path = "bounce/delivery_normalize.rs"]
+mod delivery_normalize;
 #[path = "bounce/export_encoders.rs"]
 mod export_encoders;
 #[path = "bounce/export_normalize.rs"]
@@ -36,6 +38,8 @@ mod freeze_cache_read;
 mod freeze_render_core;
 #[path = "bounce/measure_detail.rs"]
 mod measure_detail;
+#[path = "bounce/measure_depth.rs"]
+mod measure_depth;
 #[path = "bounce/midi_export_project.rs"]
 mod midi_export_project;
 #[path = "bounce/offline_render_fidelity.rs"]

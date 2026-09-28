@@ -6,8 +6,8 @@
 
 use resonance_app::Resonance;
 use resonance_audio::types::{
-    AudioCommand, AudioEvent, DetailSet, MeasureSource as EngineSource, MeasurementDetail,
-    MixMeasurement, StemSource, TrackType,
+    AudioCommand, AudioEvent, DepthDetail, DepthSend, DetailSet, MeasureSource as EngineSource,
+    MeasurementDetail, MixMeasurement, StemSource, TrackType,
 };
 use resonance_control::job::{JobStarted, JobState};
 use resonance_control::methods::meter::{MeasureResult, StemsResult, THIRD_OCTAVE_HZ};
@@ -461,4 +461,101 @@ fn stems_without_detail_adds_no_keys() {
         expected.sort();
         assert_eq!(keys(entry), expected, "{entry}");
     }
+}
+
+// ---------------- depth (warmth-width-depth.md §7.6) ----------------
+
+const PAD: u64 = 5;
+
+fn with_depth(drr: Option<f32>, dry_only: bool) -> MeasurementDetail {
+    MeasurementDetail {
+        depth: Some(DepthDetail {
+            hf_tilt_db: Some(-8.765_4),
+            drr_db_estimate: drr,
+            dry_only,
+            sends: if dry_only {
+                Vec::new()
+            } else {
+                vec![DepthSend {
+                    bus_id: 50,
+                    send_level_db: -10.0,
+                    pre_fader: false,
+                    return_gain_db: Some(-6.021),
+                }]
+            },
+        }),
+        ..MeasurementDetail::default()
+    }
+}
+
+#[test]
+fn stems_depth_ranks_the_tracks_front_to_back() {
+    let (mut app, cmd_rx) = capture_app();
+    app.test_add_track(PAD, TrackType::Instrument);
+    let rate = app.sample_rate;
+    let job = started_job(roundtrip(
+        &mut app,
+        request(1, "meter.stems", json!({ "detail": ["depth"] })),
+    ));
+    let sent = sent_detail(&cmd_rx);
+    assert!(sent.depth && !sent.spectrum, "{sent:?}");
+
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![
+            rendered(StemSource::Master, rate, with_depth(None, false)),
+            // Drums dry-only, bass a little wet, the pad soaked.
+            rendered(StemSource::Track(DRUMS), rate, with_depth(None, true)),
+            rendered(StemSource::Track(BASS), rate, with_depth(Some(14.25), false)),
+            rendered(StemSource::Track(PAD), rate, with_depth(Some(-1.5), false)),
+        ],
+    });
+    let wire = result_json(&mut app, job);
+    let entry = |id: u64| {
+        wire["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["track_id"] == json!(id))
+            .unwrap()["depth"]
+            .clone()
+    };
+    assert_eq!(entry(DRUMS)["layer_hint"], json!("front"));
+    assert_eq!(entry(DRUMS)["dry_only"], json!(true));
+    assert_eq!(entry(DRUMS)["drr_db_estimate"], serde_json::Value::Null);
+    assert!(entry(DRUMS).get("sends").is_none(), "no sends, no key");
+    assert_eq!(entry(BASS)["layer_hint"], json!("middle"));
+    assert_eq!(entry(PAD)["layer_hint"], json!("back"));
+    assert_eq!(entry(PAD)["drr_db_estimate"], json!(-1.5));
+    assert_eq!(entry(PAD)["hf_tilt_db"], json!(-8.77));
+    assert_eq!(
+        entry(PAD)["sends"],
+        json!([{
+            "bus_id": 50,
+            "send_level_db": -10.0,
+            "pre_fader": false,
+            "return_gain_db": -6.02
+        }])
+    );
+    assert_eq!(
+        wire["master"]["depth"]["layer_hint"],
+        serde_json::Value::Null,
+        "the master is not ranked"
+    );
+}
+
+#[test]
+fn measure_depth_has_no_layer_hint() {
+    let (mut app, cmd_rx) = capture_app();
+    let rate = app.sample_rate;
+    let params = json!({ "target": { "track_id": BASS }, "detail": ["depth"] });
+    let job = started_job(roundtrip(&mut app, request(1, "meter.measure", params)));
+    assert!(sent_detail(&cmd_rx).depth);
+    app.test_apply_engine_event(AudioEvent::MixMeasured {
+        measure_id: job,
+        results: vec![rendered(StemSource::Track(BASS), rate, with_depth(Some(3.0), false))],
+    });
+    let wire = result_json(&mut app, job);
+    assert_eq!(wire["depth"]["drr_db_estimate"], json!(3.0));
+    assert_eq!(wire["depth"]["layer_hint"], serde_json::Value::Null);
 }
