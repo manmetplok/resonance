@@ -288,6 +288,11 @@ struct Shared {
     task: UnsafeCell<Task>,
     shuffle: UnsafeCell<Shuffle>,
     parked: Box<[AtomicBool]>,
+    /// Workers past their startup (see `worker_main`).
+    ready: AtomicUsize,
+    /// Jobs each worker has run, one cache line each (see
+    /// [`RenderPool::min_worker_jobs`]).
+    jobs_run: Box<[PaddedCounter]>,
     /// The workers' handles, for a plugin's sub-task request to wake
     /// parked ones (it reaches the pool only through [`CURRENT_POOL`]).
     threads: OnceLock<Box<[Thread]>>,
@@ -302,6 +307,9 @@ struct Shared {
     deny_sched: bool,
     spin: Duration,
 }
+
+#[repr(align(64))]
+struct PaddedCounter(AtomicU64);
 
 // SAFETY: `task` and `shuffle` are written only by the caller while the
 // epoch is closed and no worker is registered, and read by workers only
@@ -340,6 +348,10 @@ impl RenderPool {
             parked: (0..config.workers)
                 .map(|_| AtomicBool::new(false))
                 .collect(),
+            ready: AtomicUsize::new(0),
+            jobs_run: (0..config.workers)
+                .map(|_| PaddedCounter(AtomicU64::new(0)))
+                .collect(),
             threads: OnceLock::new(),
             sub: SubTasks::new(),
             sched_want: AtomicU64::new(0),
@@ -366,6 +378,11 @@ impl RenderPool {
             }
         }
         let _ = shared.threads.set(threads.clone().into_boxed_slice());
+        // A returned pool's workers own their per-thread state (the
+        // arc-swap node): nothing a job touches first can allocate.
+        while shared.ready.load(Ordering::SeqCst) < threads.len() {
+            std::thread::yield_now();
+        }
         Self {
             shared,
             threads,
@@ -410,6 +427,19 @@ impl RenderPool {
             shared: Arc::clone(&self.shared),
             workers: self.threads.len(),
         }
+    }
+
+    /// The fewest jobs any worker has run since the pool was built (0 for
+    /// a pool without workers). Lets a test prove every worker has served
+    /// a block. Allocation-free.
+    pub(crate) fn min_worker_jobs(&self) -> u64 {
+        self.shared
+            .jobs_run
+            .iter()
+            .take(self.threads.len())
+            .map(|c| c.0.load(Ordering::Relaxed))
+            .min()
+            .unwrap_or(0)
     }
 
     /// Test hook: shuffle the order shared jobs are claimed in, from
@@ -607,24 +637,15 @@ impl Shuffle {
     }
 }
 
-/// Claim this thread's `arc-swap` debt-list node now, at spawn, not
-/// inside the first job. `arc-swap` hands every thread a node on its first
-/// `load` of ANY `ArcSwap` and keeps it until the thread exits; when no
-/// free node is in the global list it `Box`es a new one. The render jobs
-/// load `ArcSwap`s (a track's frozen source, the shared engine state), so
-/// without this a worker's first job allocated — on a realtime thread,
-/// mid-block. That first job can come arbitrarily late: under load the
-/// caller and the other workers may claim every job for many blocks.
-fn claim_arc_swap_node() {
-    let probe = arc_swap::ArcSwapOption::<()>::const_empty();
-    let _ = probe.load();
-}
-
 fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
     crate::clap_host::thread_check::mark_audio_thread();
     resonance_dsp::flush_denormals();
-    claim_arc_swap_node();
+    // At spawn, not inside the first job: that job can come arbitrarily
+    // late (under load the caller and the other workers may claim every
+    // job for many blocks), and it would allocate mid-block.
+    crate::rt_prep::claim_arc_swap_node();
     let s = &*shared;
+    s.ready.fetch_add(1, Ordering::SeqCst);
     // A plugin running on this worker may split its work into sub-tasks.
     let _current = CurrentPool::enter(s);
     let mut seen = 0u64;
@@ -719,6 +740,7 @@ fn worker_main(shared: Arc<Shared>, index: usize, mut scratch: WorkerScratch) {
             // is the backstop.
             let _ = catch_unwind(AssertUnwindSafe(|| job(job_index, &mut bufs)));
             s.done.fetch_add(1, Ordering::Release);
+            s.jobs_run[index].0.fetch_add(1, Ordering::Relaxed);
         }
         s.active.fetch_sub(1, Ordering::SeqCst);
     }

@@ -994,6 +994,10 @@ impl AudioEngine {
         let build_cpal = |config: &cpal::StreamConfig| {
             let (mut mix, prod) = make_mixer(false);
             let shared_err = Arc::clone(&shared);
+            // cpal spawns the callback thread itself, so it cannot claim
+            // its arc-swap node before its first block: leave free ones
+            // for it to take (`rt_prep`).
+            crate::rt_prep::seed_arc_swap_nodes(2);
             let result = device.build_output_stream(
                 config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| mix(data, channels),
