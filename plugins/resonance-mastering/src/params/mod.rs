@@ -11,6 +11,7 @@
 //! them, in the order they were added, so every older index — and the
 //! host automation lane bound to it — stays where it was.
 
+pub mod clipper;
 pub mod dither;
 pub mod eq_stage;
 pub mod glue_compressor;
@@ -24,6 +25,7 @@ use std::sync::Arc;
 use resonance_plugin::formatters::v2s_f32_db;
 use resonance_plugin::*;
 
+pub use clipper::ClipperParams;
 pub use dither::DitherParams;
 pub use eq_stage::{
     BandParams, EqStageParams, CORRECTIVE_DEFAULTS, MS_PARAMS_PER_STAGE, PARAMS_PER_STAGE,
@@ -60,14 +62,15 @@ const DITH_BASE: usize = LIM_BASE + LIM_PARAM_COUNT;
 pub const LEGACY_PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
 
 // Appended since, in the order they were added:
-//   corrective M/S → tonal M/S → imager band widths
+//   corrective M/S → tonal M/S → imager band widths → clipper
 const CORR_MS_BASE: usize = LEGACY_PARAM_COUNT;
 const TONE_MS_BASE: usize = CORR_MS_BASE + MS_PARAMS_PER_STAGE;
 const IMG_BAND_BASE: usize = TONE_MS_BASE + MS_PARAMS_PER_STAGE;
+const CLIP_BASE: usize = IMG_BAND_BASE + imager::BAND_WIDTH_PARAM_COUNT;
 
 /// Total plugin param count: the 102 above, plus 4 + 4 band M/S
-/// selectors and 4 imager band widths.
-pub const PARAM_COUNT: usize = IMG_BAND_BASE + imager::BAND_WIDTH_PARAM_COUNT;
+/// selectors, 4 imager band widths and 3 clipper params.
+pub const PARAM_COUNT: usize = CLIP_BASE + clipper::PARAM_COUNT;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
@@ -79,6 +82,7 @@ pub struct MasteringParams {
     pub tonal_eq: EqStageParams,
     pub multiband: MultibandParams,
     pub imager: ImagerParams,
+    pub clipper: ClipperParams,
     pub limiter: LimiterParams,
     pub dither: DitherParams,
 }
@@ -104,7 +108,8 @@ impl MasteringParams {
             i if i < CORR_MS_BASE => self.dither.param_at(i - DITH_BASE),
             i if i < TONE_MS_BASE => self.corrective_eq.ms_param_at(i - CORR_MS_BASE),
             i if i < IMG_BAND_BASE => self.tonal_eq.ms_param_at(i - TONE_MS_BASE),
-            i if i < PARAM_COUNT => self.imager.band_width_param_at(i - IMG_BAND_BASE),
+            i if i < CLIP_BASE => self.imager.band_width_param_at(i - IMG_BAND_BASE),
+            i if i < PARAM_COUNT => self.clipper.param_at(i - CLIP_BASE),
             _ => &self.bypass,
         }
     }
@@ -146,6 +151,7 @@ impl Default for MasteringParams {
             tonal_eq: EqStageParams::new("tone", TONAL_DEFAULTS),
             multiband: MultibandParams::default(),
             imager: ImagerParams::default(),
+            clipper: ClipperParams::default(),
             limiter: LimiterParams::default(),
             dither: DitherParams::default(),
         }

@@ -16,6 +16,7 @@ use super::theme;
 use super::TargetSource;
 
 mod assistant;
+mod clipper;
 mod dither;
 mod eq;
 mod glue;
@@ -37,6 +38,7 @@ pub enum StageTab {
     TonalEq,
     Multiband,
     Imager,
+    Clipper,
     Limiter,
     Dither,
 }
@@ -50,6 +52,7 @@ const TABS: &[(StageTab, &str)] = &[
     (StageTab::TonalEq, "Tonal EQ"),
     (StageTab::Multiband, "Multiband"),
     (StageTab::Imager, "Imager"),
+    (StageTab::Clipper, "Clipper"),
     (StageTab::Limiter, "Limiter"),
     (StageTab::Dither, "Dither"),
 ];
@@ -123,6 +126,7 @@ pub(crate) fn draw_stage_panel(
         StageTab::TonalEq => eq::draw(ui, &params.tonal_eq, "Tonal EQ"),
         StageTab::Multiband => multiband::draw(ui, &params.multiband, viz.band_gr_db()),
         StageTab::Imager => imager::draw(ui, &params.imager),
+        StageTab::Clipper => clipper::draw(ui, &params.clipper),
         StageTab::Limiter => limiter::draw(ui, &params.limiter),
         StageTab::Dither => dither::draw(ui, &params.dither),
     }

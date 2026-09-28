@@ -2,6 +2,7 @@
 //! into the mastering signal path. Later phases will add `multiband`,
 //! `imager`, `limiter`, and `dither`.
 
+pub mod clipper;
 pub mod dither;
 pub mod glue_compressor;
 pub mod imager;

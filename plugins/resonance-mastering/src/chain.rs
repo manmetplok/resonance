@@ -13,6 +13,7 @@ use resonance_dsp::{db_to_linear, DelayLine};
 
 use crate::dsp::MeteringCore;
 use crate::params::MasteringParams;
+use crate::stages::clipper::Clipper;
 use crate::stages::dither::Dither;
 use crate::stages::glue_compressor::GlueCompressor;
 use crate::stages::imager::Imager;
@@ -29,6 +30,7 @@ pub struct Chain {
     tonal_eq: LinearPhaseEq,
     multiband: Multiband,
     imager: Imager,
+    clipper: Clipper,
     limiter: Limiter,
     dither: Dither,
     meters: MeteringCore,
@@ -102,6 +104,7 @@ impl Chain {
             tonal_eq,
             multiband,
             imager: Imager::new(sample_rate),
+            clipper: Clipper::new(sample_rate),
             limiter,
             dither: Dither::new(),
             meters: MeteringCore::new(sample_rate, viz),
@@ -123,6 +126,7 @@ impl Chain {
         self.tonal_eq.reset();
         self.multiband.reset();
         self.imager.reset();
+        self.clipper.reset();
         self.limiter.reset();
         self.dither.reset();
         self.meters.reset();
@@ -133,7 +137,8 @@ impl Chain {
     }
 
     /// Total plugin latency in samples: sum of every latency-inducing
-    /// stage. The compressor, saturator, and imager are zero-latency;
+    /// stage. The compressor, saturator, imager and clipper are
+    /// zero-latency (the clipper's oversampling is IIR);
     /// the two linear-phase EQs and the multiband crossover each
     /// contribute one FIR convolver's worth of delay, and the limiter
     /// adds its lookahead.
@@ -292,6 +297,9 @@ impl Chain {
 
         let img_cfg = params.imager.snapshot();
         self.imager.process_stereo(left, right, &img_cfg);
+
+        let clip_cfg = params.clipper.snapshot();
+        self.clipper.process_stereo(left, right, &clip_cfg);
 
         let lim_cfg = params.limiter.snapshot();
         self.limiter.process_stereo(left, right, &lim_cfg);
