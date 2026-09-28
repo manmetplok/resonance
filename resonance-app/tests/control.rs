@@ -63,6 +63,8 @@ mod control_master;
 mod control_master_params;
 #[path = "control/control_meter.rs"]
 mod control_meter;
+#[path = "control/control_meter_detail.rs"]
+mod control_meter_detail;
 #[path = "control/control_mixer_volume_db.rs"]
 mod control_mixer_volume_db;
 #[path = "control/control_mutation_gate.rs"]

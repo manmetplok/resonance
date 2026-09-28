@@ -85,12 +85,14 @@ use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_audio::types::{
-    AudioCommand, MeasureSource as EngineSource, MixMeasurement, SamplePos, StemSource,
+    AudioCommand, DetailSet, MeasureSource as EngineSource, MixMeasurement, SamplePos,
+    StemSource,
 };
 use resonance_control::methods::meter::{
-    self as proto, Bands, MeasureParams, MeasureResult, MeasureSource, MeasureTarget, StemsParams,
-    StemsResult, TrackMeasurement,
+    self as proto, Bands, MeasureDetail, MeasureParams, MeasureResult, MeasureSource,
+    MeasureTarget, SpectralPeak, SpectrumDetail, StemsParams, StemsResult, TrackMeasurement,
 };
+use resonance_metering::detail::SpectrumDetail as EngineSpectrum;
 use resonance_control::methods::render::RangeSpec;
 use resonance_control::{Request, Response, RpcError};
 
@@ -134,6 +136,19 @@ fn measure(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
     if let Some(error) = source_guard(app, source, target) {
         return (super::failure(request, error), Task::none());
     }
+    if source == EngineSource::Live && !params.detail.is_empty() {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(
+                    "`detail` needs the whole rendered buffer, which the live meter does \
+                     not have; use source \"render\"",
+                ),
+            ),
+            Task::none(),
+        );
+    }
+    let detail = detail_set(&params.detail);
 
     // The live tap integrates from the start of the session and has no
     // notion of a range, so accepting one silently would be a lie.
@@ -159,7 +174,7 @@ fn measure(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
     };
 
     (
-        start(app, conn, request, proto::MEASURE, vec![target], range, source),
+        start(app, conn, request, proto::MEASURE, vec![target], range, source, detail),
         Task::none(),
     )
 }
@@ -213,9 +228,22 @@ fn stems(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Tas
             targets,
             range,
             EngineSource::Render,
+            detail_set(&params.detail),
         ),
         Task::none(),
     )
+}
+
+/// The engine's detail flags for a wire `detail` list. Duplicates are
+/// harmless: a detail is either on or off.
+fn detail_set(details: &[MeasureDetail]) -> DetailSet {
+    let mut set = DetailSet::default();
+    for detail in details {
+        match detail {
+            MeasureDetail::Spectrum => set.spectrum = true,
+        }
+    }
+    set
 }
 
 /// The tracks that get an entry of their own, in mixer order: the
@@ -247,7 +275,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
     let master = results
         .iter()
         .find(|m| m.target == StemSource::Master)
-        .map(|m| with_solo(app, measure_result(*m, app.sample_rate)))?;
+        .map(|m| with_solo(app, measure_result(m, app.sample_rate)))?;
 
     let tracks = results
         .iter()
@@ -261,7 +289,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
                 track_id: id.into(),
                 name: entry_name(app, m.target, id),
                 includes_track_ids: includes,
-                measurement: measure_result(*m, app.sample_rate),
+                measurement: measure_result(m, app.sample_rate),
             })
         })
         .collect();
@@ -306,6 +334,7 @@ fn start(
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: EngineSource,
+    detail: DetailSet,
 ) -> Response {
     let started = app.start_control_job(
         method,
@@ -328,6 +357,7 @@ fn start(
             targets,
             range,
             source,
+            detail,
         })
         .is_err()
     {
@@ -375,7 +405,7 @@ pub(crate) fn mix_measured(
         // measurement comes back.
         proto::MEASURE => results
             .first()
-            .map(|m| with_solo(app, measure_result(*m, app.sample_rate)))
+            .map(|m| with_solo(app, measure_result(m, app.sample_rate)))
             .and_then(|r| serde_json::to_value(r).ok()),
         proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
         _ => return,
@@ -420,7 +450,7 @@ pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: S
 ///
 /// `sample_rate` is the engine's, used only to turn the measured frame
 /// count into seconds.
-pub(crate) fn measure_result(m: MixMeasurement, sample_rate: u32) -> MeasureResult {
+pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureResult {
     let live = m.source == EngineSource::Live;
     MeasureResult {
         // Filled in by `with_solo` for master targets, which are the
@@ -466,6 +496,41 @@ pub(crate) fn measure_result(m: MixMeasurement, sample_rate: u32) -> MeasureResu
         measured_seconds: (!live)
             .then(|| (sample_rate > 0).then(|| m.frames as f64 / f64::from(sample_rate)))
             .flatten(),
+        spectrum: m.detail.spectrum.as_ref().map(wire_spectrum),
+    }
+}
+
+/// Round for the wire: detail blocks carry dozens of numbers, and six
+/// significant digits of a Welch estimate are noise that costs tokens.
+/// Rounded in `f64`, which is what the wire serializes, so `-30.1` stays
+/// `-30.1` rather than widening from `f32` to `-30.100000381469727`.
+/// `per_unit` is the number of steps per unit (10 = 0.1 dB): dividing
+/// by an integer is correctly rounded, where multiplying by 0.1 can leave
+/// `…99999` tails.
+fn round_to(value: f32, per_unit: f64) -> f64 {
+    (f64::from(value) * per_unit).round() / per_unit
+}
+
+fn round_opt(value: Option<f32>, per_unit: f64) -> Option<f64> {
+    value.map(|v| round_to(v, per_unit))
+}
+
+fn wire_spectrum(d: &EngineSpectrum) -> SpectrumDetail {
+    SpectrumDetail {
+        third_octave: d.third_octave.iter().map(|&v| round_to(v, 10.0)).collect(),
+        tilt_db_per_oct: round_opt(d.tilt_db_per_oct, 100.0),
+        centroid_hz: round_opt(d.centroid_hz, 1.0),
+        lowmid_presence_db: round_opt(d.lowmid_presence_db, 100.0),
+        presence_peakiness_db: round_opt(d.presence_peakiness_db, 100.0),
+        air_ratio_db: round_opt(d.air_ratio_db, 100.0),
+        peaks: d
+            .peaks
+            .iter()
+            .map(|p| SpectralPeak {
+                freq_hz: round_to(p.freq_hz, 1.0),
+                excess_db: round_to(p.excess_db, 10.0),
+            })
+            .collect(),
     }
 }
 

@@ -50,6 +50,21 @@ impl ResonanceMcp {
                        to 1.0 — compare them against each other or against a reference \
                        measurement, never against an absolute rule. \
                        \
+                       DETAIL (opt-in, source \"render\" only; omitted from the result unless \
+                       asked for, so the default reply stays small): detail: [\"spectrum\"] adds \
+                       a spectrum object, the warmth and harshness proxies. third_octave is 31 \
+                       ISO 1/3-octave band levels, 20 Hz..20 kHz, in dB where a full-scale sine \
+                       reads 0 (pink noise reads flat). tilt_db_per_oct is the slope of the \
+                       power density over 100 Hz..10 kHz: pink noise -3.0, white 0, commercial \
+                       pop about -4.5 to -5; more negative is darker/warmer. centroid_hz is the \
+                       power-weighted mean frequency. lowmid_presence_db is energy 150-500 Hz \
+                       over 2-5 kHz (up = warmer or muddier, down = harsher). \
+                       presence_peakiness_db is the 1/6-octave crest inside 2-5 kHz (0 = even, \
+                       high = a harsh resonance). air_ratio_db is energy 8-16 kHz over the \
+                       total. peaks lists up to 5 narrow resonances as {freq_hz, excess_db}, \
+                       excess over the smoothed spectrum around them, strongest first. Compare \
+                       detail numbers between two states only at matched loudness. \
+                       \
                        A null field means the number does not exist for this measurement, never \
                        zero: either the range was silent or too short for that meter's window, \
                        or source was \"live\", where the streaming tap supplies none of \
@@ -100,6 +115,10 @@ impl ResonanceMcp {
                        their own, so they are measured as part of their parent and listed in \
                        that entry's includes_track_ids. The kit is therefore counted exactly \
                        once, on the parent track. \
+                       \
+                       detail (e.g. [\"spectrum\"]) works exactly as on meter_measure and adds \
+                       its objects to the master and to every entry; it costs one spectral \
+                       analysis per entry on top of the render. \
                        \
                        Read balance off lufs_integrated differences (1 LU == 1 dB). A useful \
                        starting convention, validated in the field, is drums 0 LU as the \

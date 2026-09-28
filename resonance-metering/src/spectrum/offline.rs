@@ -129,3 +129,176 @@ pub fn analyze_mono(sample_rate: f32, mono: &[f32]) -> PowerSpectrum {
     }
     spectrum
 }
+
+/// FFT length of the detailed-analysis pass ([`analyze_stereo`]).
+///
+/// Four times the realtime [`FFT_SIZE`]: at 48 kHz a bin is 1.46 Hz wide,
+/// which is what lets a 1/3-octave band at 20 Hz (4.6 Hz wide) or a
+/// 1/6-octave band at 20 Hz (2.3 Hz) contain real bins instead of reading
+/// one leaky bin. A frame is 0.68 s at 48 kHz, so any range worth
+/// measuring averages many of them.
+pub const DETAIL_FFT_SIZE: usize = 32_768;
+
+/// Averaged single-sided auto- and cross-power spectra of a stereo pair,
+/// scaled to **mean-square units**: summing [`ll`](Self::ll) over every
+/// bin gives the mean square of the left channel (DC excluded), so a band
+/// sum is that band's power in absolute terms.
+///
+/// Produced by [`analyze_stereo`]. Bin `k` is centred at
+/// `k * sample_rate / fft_size` Hz and is treated as covering
+/// `[k - 0.5, k + 0.5) * bin_hz`; [`band`](Self::band) integrates with
+/// fractional bin overlap, so a band narrower than a bin still reads the
+/// density of the bin it sits in rather than zero.
+#[derive(Debug, Clone)]
+pub struct StereoSpectrum {
+    /// Left auto-power per bin.
+    pub ll: Vec<f64>,
+    /// Right auto-power per bin.
+    pub rr: Vec<f64>,
+    /// Real part of the L·conj(R) cross-power per bin. Summed over a band
+    /// it is that band's `E[L·R]`, the numerator of its correlation.
+    pub lr: Vec<f64>,
+    /// Sample rate the analysis ran at, in Hz.
+    pub sample_rate: f32,
+    /// FFT length the bins came from.
+    pub fft_size: usize,
+    /// Number of frames averaged. Zero only for an empty input.
+    pub frames: usize,
+}
+
+/// Which spectrum [`StereoSpectrum::band`] integrates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// Left auto-power.
+    Left,
+    /// Right auto-power.
+    Right,
+    /// Mean of the two auto-powers — the LTAS of the stereo signal,
+    /// which (unlike the mono sum) keeps anti-phase side content.
+    Both,
+    /// Real cross-power L·R.
+    Cross,
+}
+
+impl StereoSpectrum {
+    /// Width of one FFT bin in Hz.
+    pub fn bin_hz(&self) -> f64 {
+        self.sample_rate as f64 / self.fft_size as f64
+    }
+
+    /// Centre frequency of bin `k` in Hz.
+    pub fn center_hz(&self, k: usize) -> f64 {
+        k as f64 * self.bin_hz()
+    }
+
+    /// Bin `k` of `which`.
+    pub fn value(&self, which: Channel, k: usize) -> f64 {
+        match which {
+            Channel::Left => self.ll[k],
+            Channel::Right => self.rr[k],
+            Channel::Both => 0.5 * (self.ll[k] + self.rr[k]),
+            Channel::Cross => self.lr[k],
+        }
+    }
+
+    /// Power of `which` in `[lo_hz, hi_hz)`, integrating each bin by the
+    /// fraction of its width that falls inside the band. DC (bin 0) is
+    /// never counted.
+    pub fn band(&self, which: Channel, lo_hz: f64, hi_hz: f64) -> f64 {
+        let bin = self.bin_hz();
+        if self.ll.is_empty() || !(bin > 0.0) || !(hi_hz > lo_hz) {
+            return 0.0;
+        }
+        let first = (lo_hz / bin - 0.5).floor().max(1.0) as usize;
+        let last = ((hi_hz / bin + 0.5).ceil().max(0.0) as usize).min(self.ll.len());
+        let mut sum = 0.0;
+        for k in first..last {
+            let b_lo = (k as f64 - 0.5) * bin;
+            let b_hi = (k as f64 + 0.5) * bin;
+            let overlap = (b_hi.min(hi_hz) - b_lo.max(lo_hz)).max(0.0) / bin;
+            if overlap > 0.0 {
+                sum += overlap * self.value(which, k);
+            }
+        }
+        sum
+    }
+}
+
+/// Welch-style whole-buffer analysis of a stereo pair: `fft_size`-point
+/// Hann frames at 50 % overlap, averaged, scaled to mean-square units
+/// (see [`StereoSpectrum`]).
+///
+/// A buffer shorter than one frame is analysed as one frame with a Hann
+/// window of its own length, zero-padded, so its level still reads right.
+/// Analyses `min(left.len(), right.len())` samples. Allocates; never call
+/// it from the audio thread.
+pub fn analyze_stereo(
+    sample_rate: f32,
+    left: &[f32],
+    right: &[f32],
+    fft_size: usize,
+) -> StereoSpectrum {
+    let half = fft_size / 2;
+    let mut out = StereoSpectrum {
+        ll: vec![0.0; half],
+        rr: vec![0.0; half],
+        lr: vec![0.0; half],
+        sample_rate,
+        fft_size,
+        frames: 0,
+    };
+    let n = left.len().min(right.len());
+    if n < 2 || fft_size < 2 || !sample_rate.is_finite() || sample_rate <= 0.0 {
+        return out;
+    }
+
+    let win_len = n.min(fft_size);
+    let mut window = vec![0.0_f32; win_len];
+    resonance_dsp::fill_hann_window(&mut window);
+    let win_sq: f64 = window.iter().map(|&w| (w as f64) * (w as f64)).sum();
+    if win_sq <= 0.0 {
+        return out;
+    }
+    // Parseval, single-sided: every non-DC bin carries both halves.
+    let scale = 2.0 / (fft_size as f64 * win_sq);
+
+    let mut planner = FftPlanner::<f32>::new();
+    let fft = planner.plan_fft_forward(fft_size);
+    let zero = Complex::new(0.0_f32, 0.0_f32);
+    let mut xl = vec![zero; fft_size];
+    let mut xr = vec![zero; fft_size];
+    let hop = (win_len / 2).max(1);
+
+    let mut start = 0usize;
+    while start + win_len <= n {
+        for i in 0..fft_size {
+            if i < win_len {
+                let w = window[i];
+                xl[i] = Complex::new(left[start + i] * w, 0.0);
+                xr[i] = Complex::new(right[start + i] * w, 0.0);
+            } else {
+                xl[i] = zero;
+                xr[i] = zero;
+            }
+        }
+        fft.process(&mut xl);
+        fft.process(&mut xr);
+        for k in 1..half {
+            let (lre, lim) = (xl[k].re as f64, xl[k].im as f64);
+            let (rre, rim) = (xr[k].re as f64, xr[k].im as f64);
+            out.ll[k] += lre * lre + lim * lim;
+            out.rr[k] += rre * rre + rim * rim;
+            out.lr[k] += lre * rre + lim * rim;
+        }
+        out.frames += 1;
+        start += hop;
+    }
+
+    let inv = scale / out.frames.max(1) as f64;
+    for k in 0..half {
+        out.ll[k] *= inv;
+        out.rr[k] *= inv;
+        out.lr[k] *= inv;
+    }
+    out
+}

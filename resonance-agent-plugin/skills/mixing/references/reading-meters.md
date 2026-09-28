@@ -40,6 +40,32 @@ a healthy `low` share is — it depends entirely on the arrangement. Use them
 Comparing a band share against a remembered number is how you talk yourself into
 an EQ move the song did not need.
 
+## Detail blocks (opt-in)
+
+Both tools take `detail: ["spectrum"]`. Each named detail adds one object to
+every result (the master and every `meter_stems` entry), named after the detail.
+Without `detail` the reply is exactly the standard fields above. Details need a
+render: asking for one with `source: "live"` is refused. They cost one spectral
+analysis per entry, not an extra render.
+
+Judge any change in a detail number at **matched loudness**. A louder mix reads
+brighter and "better" in every one of these.
+
+### `spectrum`: tone and warmth
+
+Read off the stereo long-term average spectrum (left and right power averaged).
+Unlike `bands`, it keeps anti-phase side content.
+
+| Field | What it means | How to read it |
+|---|---|---|
+| `third_octave` | 31 ISO 1/3-octave band levels, 20 Hz to 20 kHz, dB (a full-scale sine in the band reads 0) | Centres: 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1k, 1.25k, 1.6k, 2k, 2.5k, 3.15k, 4k, 5k, 6.3k, 8k, 10k, 12.5k, 16k, 20k. **Pink noise reads flat**, so a band sticking up is more energy than pink. -120 means no energy. |
+| `tilt_db_per_oct` | Slope of the power density over 100 Hz to 10 kHz | Pink noise -3.0, white 0. Commercial pop averages about **-4.5 to -5**. More negative is darker/warmer. "Warmer" is a move of roughly -0.5 to -1 (e.g. -4.0 to -4.8). It equals the slope of `third_octave` minus 3.01. |
+| `centroid_hz` | Power-weighted mean frequency | Falls about 5-15% when a mix gets warmer at matched loudness. Falling further reads as dull. |
+| `lowmid_presence_db` | Energy 150-500 Hz over 2-5 kHz, dB | Rises 1-2 dB for "warmer". A big rise with a steep tilt is mud, not warmth. |
+| `presence_peakiness_db` | Crest of the 1/6-octave bands inside 2-5 kHz (loudest over mean), dB | 0 is perfectly even. High means one presence resonance, the usual cause of harshness. Fix it before adding warmth. |
+| `air_ratio_db` | Energy 8-16 kHz over the total, dB | Always negative. Drops slightly for "warmer". |
+| `peaks` | Up to 5 narrow resonances, `{freq_hz, excess_db}`, strongest first | `excess_db` is how far a 1/6-octave band stands above the octave either side of it. A peak must clear 1 dB and the measurement's own noise, so a short range reports fewer and only larger peaks. Empty is normal. |
+
 ## `null` never means zero
 
 A `null` field means the number does not exist for that measurement:

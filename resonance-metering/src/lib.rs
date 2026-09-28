@@ -15,10 +15,13 @@
 //! - [`offline`] — pure whole-buffer primitives for mix analysis
 //!   ([`band_shares`], [`mono_penalty_db`], [`sample_peak_db`],
 //!   [`clipped_samples`])
+//! - [`detail`] — the opt-in `meter.*` detail proxies (spectrum: tilt,
+//!   1/3-octave LTAS, centroid, resonances)
 
 pub mod atomic_snapshot;
 pub mod correlation;
 pub mod crest;
+pub mod detail;
 pub mod k_weighting;
 pub mod lra;
 pub mod lufs;

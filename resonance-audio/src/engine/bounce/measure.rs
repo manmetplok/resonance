@@ -17,6 +17,9 @@
 //! * the numbers are `resonance-metering`'s BS.1770-4 meters plus its
 //!   `offline` whole-buffer primitives (band shares, mono penalty, sample
 //!   peak, clip count).
+//! * the opt-in details a [`DetailSet`] asks for (warmth-width-depth.md
+//!   §7.1) are `resonance_metering::detail`, read off ONE shared spectral
+//!   analysis of the same rendered buffer, and only when asked.
 //!
 //! Shape copied from [`export_stems`][super::stem_export::export_stems]:
 //! every target is rendered over ONE shared range on a worker thread, and
@@ -44,6 +47,8 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 
+use resonance_metering::detail::analyze_detail;
+use resonance_metering::detail::spectrum::spectrum_detail_from;
 use resonance_metering::lufs::block_accumulator::BLOCK_HOP_SECS;
 use resonance_metering::offline::{
     band_shares, clipped_samples, mono_penalty_db, sample_peak_db, sample_peak_linear, BandShares,
@@ -76,7 +81,6 @@ use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 /// would invite comparing figures that did not all come from the same
 /// pass, which is exactly the error class this command exists to remove.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn measure_mix(
     measure_id: u64,
     targets: Vec<StemSource>,
@@ -88,11 +92,42 @@ pub fn measure_mix(
     sample_rate: u32,
     event_tx: &Sender<AudioEvent>,
 ) {
+    measure_mix_detailed(
+        measure_id,
+        targets,
+        range,
+        source,
+        DetailSet::default(),
+        shared,
+        tempo_map,
+        automation,
+        sample_rate,
+        event_tx,
+    );
+}
+
+/// [`measure_mix`] with opt-in details (warmth-width-depth.md §7.1):
+/// every rendered target also carries the [`MeasurementDetail`] that
+/// `detail` asks for. The live path ignores `detail`.
+#[allow(clippy::too_many_arguments)]
+pub fn measure_mix_detailed(
+    measure_id: u64,
+    targets: Vec<StemSource>,
+    range: Option<(SamplePos, SamplePos)>,
+    source: MeasureSource,
+    detail: DetailSet,
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
+    sample_rate: u32,
+    event_tx: &Sender<AudioEvent>,
+) {
     measure_mix_holding(
         measure_id,
         targets,
         range,
         source,
+        detail,
         shared,
         tempo_map,
         automation,
@@ -111,6 +146,7 @@ fn measure_mix_holding(
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
+    detail: DetailSet,
     shared: &Arc<SharedState>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: &crate::engine::AutomationSnapshot,
@@ -187,12 +223,13 @@ fn measure_mix_holding(
             automation,
             sample_rate,
         ) {
-            Ok(samples) => results.push(measure_rendered_buffer(
+            Ok(samples) => results.push(measure_rendered_buffer_detailed(
                 target,
                 start,
                 end,
                 &samples,
                 sample_rate,
+                detail,
             )),
             Err(e) => {
                 fail(e.to_string());
@@ -216,6 +253,7 @@ pub(crate) fn measure_mix_spawn(
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
+    detail: DetailSet,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<crate::engine::AutomationSnapshot>,
@@ -227,6 +265,7 @@ pub(crate) fn measure_mix_spawn(
         targets,
         range,
         source,
+        detail,
         shared,
         tempo_map,
         automation,
@@ -246,6 +285,7 @@ pub(crate) fn measure_mix_spawn_after(
     targets: Vec<StemSource>,
     range: Option<(SamplePos, SamplePos)>,
     source: MeasureSource,
+    detail: DetailSet,
     shared: Arc<SharedState>,
     tempo_map: Arc<arc_swap::ArcSwap<TempoMap>>,
     automation: Arc<crate::engine::AutomationSnapshot>,
@@ -289,6 +329,7 @@ pub(crate) fn measure_mix_spawn_after(
                         targets,
                         range,
                         source,
+                        detail,
                         &shared,
                         &tempo_map,
                         &automation,
@@ -326,6 +367,29 @@ pub fn measure_rendered_buffer(
     range_end: SamplePos,
     interleaved: &[f32],
     sample_rate: u32,
+) -> MixMeasurement {
+    measure_rendered_buffer_detailed(
+        target,
+        range_start,
+        range_end,
+        interleaved,
+        sample_rate,
+        DetailSet::default(),
+    )
+}
+
+/// [`measure_rendered_buffer`] plus the opt-in details `detail` asks for.
+///
+/// Every detail is read off one shared spectral analysis
+/// ([`analyze_detail`]), run only when some detail needs it, so a plain
+/// measurement pays nothing for their existence.
+pub fn measure_rendered_buffer_detailed(
+    target: StemSource,
+    range_start: SamplePos,
+    range_end: SamplePos,
+    interleaved: &[f32],
+    sample_rate: u32,
+    detail: DetailSet,
 ) -> MixMeasurement {
     let frames = interleaved.len() / 2;
     let mut left = Vec::with_capacity(frames);
@@ -382,6 +446,18 @@ pub fn measure_rendered_buffer(
         correlation: range_correlation(&left, &right),
         mono_penalty_db: mono_penalty_db(rate, &left, &right),
         bands: band_shares(rate, &left, &right),
+        detail: measure_detail(detail, rate, &left, &right),
+    }
+}
+
+/// The opt-in details of one rendered buffer.
+fn measure_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) -> MeasurementDetail {
+    if !detail.any() {
+        return MeasurementDetail::default();
+    }
+    let spec = analyze_detail(rate, left, right);
+    MeasurementDetail {
+        spectrum: detail.spectrum.then(|| spectrum_detail_from(&spec)),
     }
 }
 
@@ -456,5 +532,6 @@ fn from_live_snapshot(snapshot: MeterSnapshot) -> MixMeasurement {
         correlation: snapshot.correlation,
         mono_penalty_db: 0.0,
         bands: BandShares::SILENT,
+        detail: MeasurementDetail::default(),
     }
 }

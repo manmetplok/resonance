@@ -131,11 +131,13 @@ pub(super) fn dispatch_bounce(
             targets,
             range,
             source,
+            detail,
         } => bounce::measure_mix_spawn(
             measure_id,
             targets,
             range,
             source,
+            detail,
             Arc::clone(ctx.shared),
             Arc::clone(ctx.tempo_map),
             ctx.automation.load_full(),

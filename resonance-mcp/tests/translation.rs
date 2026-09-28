@@ -352,3 +352,23 @@ async fn a_long_job_wait_does_not_stall_concurrent_calls() {
     assert!(!is_error(&waited), "{}", text(&waited));
     assert_eq!(structured(&waited)["state"], "running");
 }
+
+/// The meter tools publish the opt-in `detail` option (warmth-width-depth.md
+/// §7.1) in their input schema, with every detail name, and say what it
+/// adds in their description.
+#[test]
+fn meter_tools_publish_the_detail_option() {
+    for name in ["meter_measure", "meter_stems"] {
+        let tool = ResonanceMcp::combined_router()
+            .list_all()
+            .into_iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} is published"));
+        let schema = serde_json::to_string(&tool.input_schema).unwrap();
+        assert!(schema.contains("\"detail\""), "{name} schema lacks detail: {schema}");
+        assert!(schema.contains("\"spectrum\""), "{name} schema lacks spectrum: {schema}");
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert!(description.contains("detail"), "{name} description never names detail");
+        assert!(description.contains("spectrum"), "{name} description never names spectrum");
+    }
+}
