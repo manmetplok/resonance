@@ -26,9 +26,10 @@ use resonance_control::{Request, Response, RpcError};
 
 use super::chain_presets::{self, Chain};
 use super::effect_addressing::{self, ChainWording};
+use super::plugin_target::{self, ChainOwner};
 use super::reply::{ack, reject};
 use super::sidechain;
-use super::view_model;
+use super::view_model::master_plugin_entries;
 
 /// Handle a `master.*` request, or `None` when `method` belongs to
 /// another namespace.
@@ -221,38 +222,6 @@ fn set_volume(app: &mut Resonance, request: &Request) -> (Response, Task<Message
 // ---------------------------------------------------------------------------
 // The master insert chain (ba doc #273, todo #1227)
 // ---------------------------------------------------------------------------
-
-/// The master chain as wire entries, in processing order, each tagged
-/// with its occurrence among same-id siblings.
-///
-/// Deliberately the same [`track::PluginParamsEntry`] shape
-/// `track.plugin_params` and `bus.plugin_params` return, so a client
-/// reads the master chain with the code it already has. `kind` is always
-/// `Effect`: the master has no instrument slot.
-fn master_plugin_entries(app: &Resonance) -> Vec<track::PluginParamsEntry> {
-    let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    app.master.plugins
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let occurrence = seen
-                .entry(p.clap_plugin_id.as_str())
-                .and_modify(|n| *n += 1)
-                .or_insert(0);
-            track::PluginParamsEntry {
-                bypassed: p.bypassed,
-                plugin_id: p.clap_plugin_id.clone(),
-                name: p.plugin_name.clone(),
-                slot: i as u32,
-                occurrence: *occurrence,
-                kind: track::PluginKind::Effect,
-                status: view_model::slot_status(p),
-                unavailable_reason: p.availability.reason().map(str::to_owned),
-                params: p.params.iter().map(view_model::param_view).collect(),
-            }
-        })
-        .collect()
-}
 
 /// Master's [`ChainWording`]: no id (there is exactly one master) and
 /// no instrument slot — every entry [`master_plugin_entries`] builds is
@@ -524,85 +493,29 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let entries = master_plugin_entries(app);
-    let occurrence = params.occurrence.unwrap_or(0);
-    let entry = match &params.plugin_id {
-        Some(id) => entries
-            .iter()
-            .find(|e| &e.plugin_id == id && e.occurrence == occurrence),
-        // No id names the first plugin on the chain — unambiguous on a
-        // one-effect master, which is the common case.
-        None => entries.first(),
-    };
-    let Some(entry) = entry else {
-        return reject(
-            request,
-            RpcError::not_found(match &params.plugin_id {
-                Some(id) => format!(
-                    "the master chain has no plugin {id:?} at occurrence {occurrence}; it \
-                     carries [{}]",
-                    effect_addressing::chain_description(&entries)
-                ),
-                None => "the master chain carries no plugins; add one with master.add_effect"
-                    .to_owned(),
-            }),
-        );
-    };
-
-    // Same initializing window `track.set_plugin_param` names: the slot
-    // is mirrored at dispatch, the parameter list arrives with the
-    // engine echo.
-    if entry.params.is_empty() {
-        return reject(
-            request,
-            RpcError::busy(format!(
-                "plugin {:?} is on the master but is still initializing — its parameter list \
-                 arrives with the engine echo, usually within a frame. Retry, or read \
-                 master.plugin_params until its params array is non-empty. (A plugin that \
-                 genuinely exposes no parameters reports the same empty list.)",
-                entry.plugin_id
-            )),
-        );
-    }
-
-    let wanted = params.param.trim();
-    let param = super::track::find_param(&entry.params, wanted);
-    let Some(param) = param else {
-        let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} has no parameter {wanted:?} (has: [{}])",
-                entry.plugin_id,
-                known.join(", ")
-            )),
-        );
+    // The addressing every chain shares (plugin_target.rs): no id names
+    // the first plugin on the chain — unambiguous on a one-effect chain,
+    // the common case — and a plugin whose parameter list has not arrived
+    // yet answers `busy` (todo #1234).
+    let (target, param) = match plugin_target::resolve_plugin_param(
+        app,
+        ChainOwner::Master,
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        &params.param,
+    ) {
+        Ok(found) => found,
+        Err(e) => return reject(request, e),
     };
 
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
     // tolerance (todo #1235) and choice-label resolution (todo #1290)
     // behave identically on all three chains.
-    let value = match super::track::resolve_param_value(param, &params.value) {
+    let value = match super::track::resolve_param_value(&param, &params.value) {
         Ok(value) => value,
         Err(e) => return reject(request, e),
     };
-
-    let Some(instance_id) = app
-        .master
-        .plugins
-        .iter()
-        .filter(|p| p.clap_plugin_id == entry.plugin_id)
-        .nth(entry.occurrence as usize)
-        .map(|p| p.instance_id)
-    else {
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from the master chain between lookup and set",
-                entry.plugin_id
-            )),
-        );
-    };
+    let instance_id = target.instance_id;
     let param_id = param.id;
     let task = super::run_via_update(
         app,

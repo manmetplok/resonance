@@ -202,9 +202,41 @@ pub(in crate::update::control) fn plugin_entries(
     app: &Resonance,
     t: &TrackState,
 ) -> Vec<track::PluginParamsEntry> {
-    let instrument = instrument_slot(app, t);
+    chain_entries(&t.plugins, instrument_slot(app, t))
+}
+
+/// A bus chain as wire entries, in processing order, each tagged with
+/// its occurrence among same-id siblings.
+///
+/// Deliberately the same [`track::PluginParamsEntry`] shape
+/// `track.plugin_params` returns, so a client reads a bus chain with the
+/// code it already has. `kind` is always `Effect`: a bus has no
+/// instrument slot.
+pub(in crate::update::control) fn bus_plugin_entries(
+    bus: &BusState,
+) -> Vec<track::PluginParamsEntry> {
+    chain_entries(&bus.plugins, None)
+}
+
+/// The master chain as wire entries, in processing order — the same
+/// shape as [`plugin_entries`] / [`bus_plugin_entries`], every entry an
+/// `Effect` (the master has no instrument slot).
+pub(in crate::update::control) fn master_plugin_entries(
+    app: &Resonance,
+) -> Vec<track::PluginParamsEntry> {
+    chain_entries(&app.master.plugins, None)
+}
+
+/// One chain as wire entries: the builder behind [`plugin_entries`],
+/// [`bus_plugin_entries`] and [`master_plugin_entries`], so the three
+/// chains cannot disagree about what an entry says. `instrument` is the
+/// slot index to report as the instrument, if any.
+fn chain_entries(
+    plugins: &[crate::state::PluginSlotState],
+    instrument: Option<usize>,
+) -> Vec<track::PluginParamsEntry> {
     let mut seen: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
-    t.plugins
+    plugins
         .iter()
         .enumerate()
         .map(|(i, p)| {

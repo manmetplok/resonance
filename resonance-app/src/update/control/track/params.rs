@@ -2,9 +2,10 @@
 //! f32-bound tolerance every plugin-param setter in the control API
 //! shares.
 
-use super::{ack, find_track, frozen_reject, instance_for, not_found_track, reject};
+use super::{ack, find_track, frozen_reject, not_found_track, reject};
 use crate::message::{Message, PluginMessage};
-use crate::update::control::{run_via_update, view_model};
+use crate::update::control::plugin_target::{resolve_plugin_param, ChainOwner};
+use crate::update::control::run_via_update;
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::track;
@@ -63,64 +64,22 @@ pub(super) fn set_plugin_param(
         return reject(request, e);
     }
 
-    // Resolve the plugin: an explicit id, else the track's instrument —
-    // the common case for "make this synth sound different".
-    let entries = view_model::plugin_entries(app, &t);
-    let occurrence = params.occurrence.unwrap_or(0);
-    let entry = match &params.plugin_id {
-        Some(id) => entries
-            .iter()
-            .find(|e| &e.plugin_id == id && e.occurrence == occurrence),
-        None => entries
-            .iter()
-            .find(|e| e.kind == track::PluginKind::Instrument),
-    };
-    let Some(entry) = entry else {
-        let error = match &params.plugin_id {
-            Some(id) => view_model::unknown_plugin_on_track(app, &t, id, occurrence),
-            None => RpcError::invalid_params(format!(
-                "track {} has no instrument; name a plugin_id (it carries: [{}])",
-                t.id,
-                entries
-                    .iter()
-                    .map(|e| e.plugin_id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        };
-        return reject(request, error);
-    };
-
-    // The one window `track.add_effect`'s synchronous commit (todo
-    // #1234) cannot close: the slot exists, but its parameter list only
-    // arrives with the engine's `PluginAdded` echo. Say that, rather
-    // than falling through to "plugin X has no parameter Y (has: [])" —
-    // which is what made a working add look like a failed one.
-    if entry.params.is_empty() {
-        return reject(
-            request,
-            RpcError::busy(format!(
-                "plugin {:?} is on track {} but is still initializing — its parameter list \
-                 arrives with the engine echo, usually within a frame. Retry, or read \
-                 track.plugin_params until its params array is non-empty. (A plugin that \
-                 genuinely exposes no parameters reports the same empty list.)",
-                entry.plugin_id, t.id
-            )),
-        );
-    }
-
-    let wanted = params.param.trim();
-    let param = find_param(&entry.params, wanted);
-    let Some(param) = param else {
-        let known: Vec<&str> = entry.params.iter().map(|p| p.name.as_str()).collect();
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} has no parameter {wanted:?} (has: [{}])",
-                entry.plugin_id,
-                known.join(", ")
-            )),
-        );
+    // Resolve the plugin — an explicit id, else the track's instrument,
+    // the common case for "make this synth sound different" — and the
+    // parameter on it. The addressing (and every miss's wording) is the
+    // one `bus.*`, `master.*` and `automation.*` share; it also answers
+    // `busy` for the window `track.add_effect`'s synchronous commit
+    // (todo #1234) cannot close: the slot exists, but its parameter list
+    // only arrives with the engine's `PluginAdded` echo.
+    let (target, param) = match resolve_plugin_param(
+        app,
+        ChainOwner::Track(t.id),
+        params.plugin_id.as_deref(),
+        params.occurrence,
+        &params.param,
+    ) {
+        Ok(found) => found,
+        Err(e) => return reject(request, e),
     };
 
     // Reject rather than clamp: silently moving a value the caller asked
@@ -140,22 +99,11 @@ pub(super) fn set_plugin_param(
     //
     // `resolve_param_value` also turns a choice label into its step, so
     // a caller can send what the parameter calls itself.
-    let value = match resolve_param_value(param, &params.value) {
+    let value = match resolve_param_value(&param, &params.value) {
         Ok(value) => value,
         Err(e) => return reject(request, e),
     };
-
-    // The instance id is the engine's handle; it is not on the wire, so
-    // recover it from the same chain position the entry came from.
-    let Some(instance_id) = instance_for(&t, &entry.plugin_id, entry.occurrence) else {
-        return reject(
-            request,
-            RpcError::not_found(format!(
-                "plugin {:?} vanished from track {} between lookup and set",
-                entry.plugin_id, t.id
-            )),
-        );
-    };
+    let instance_id = target.instance_id;
 
     let task = run_via_update(
         app,

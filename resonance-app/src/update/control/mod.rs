@@ -58,6 +58,9 @@ mod plugin_presets;
 /// `plugins.rescan` — the installed-plugin catalog's one mutation
 /// (todo #1307). `plugins.catalog` is read-only and lives in `song`.
 mod plugins;
+/// Plugin + parameter addressing shared by every chain owner and the
+/// `automation.*` plugin lanes.
+mod plugin_target;
 mod project;
 mod render;
 /// The shared half of `track/bus/master.replace_effect` (todo #1309).
