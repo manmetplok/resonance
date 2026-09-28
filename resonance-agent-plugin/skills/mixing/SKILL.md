@@ -5,7 +5,7 @@ when_to_use: >-
   Triggers on requests like "mix this", "balance the tracks", "the vocal is
   buried", "too much low end", "why does this sound muddy", "check the mix",
   "the drums are too loud".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__master_summary mcp__resonance__track_plugin_params
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__song_tracks mcp__resonance__song_sections mcp__resonance__meter_stems mcp__resonance__meter_measure mcp__resonance__master_summary mcp__resonance__track_plugin_params mcp__resonance__automation_lanes mcp__resonance__automation_set_lane
 ---
 
 # Mixing in resonance
@@ -80,6 +80,7 @@ In this order, and only as far down as the problem requires:
 | Shared ambience | `mcp__resonance__track_add_send` into a return bus |
 | A part that will not sit still | `com.resonance.compressor` on the track |
 | One part ducking under another | `mcp__resonance__track_set_sidechain` |
+| A fader move that has to happen over time (a fade, a level ride) | `mcp__resonance__automation_set_lane`, read back with `mcp__resonance__automation_lanes` |
 
 Rules that hold regardless of the song:
 

@@ -11,6 +11,7 @@
 //! Methods documented as taking no params use `()`.
 
 pub mod arrangement;
+pub mod automation;
 pub mod bus;
 pub mod clip;
 pub mod control;
@@ -79,6 +80,7 @@ pub fn capabilities() -> Vec<&'static str> {
         vocal::METHODS,
         render::METHODS,
         meter::METHODS,
+        automation::METHODS,
         crate::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

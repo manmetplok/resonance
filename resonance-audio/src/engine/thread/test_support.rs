@@ -1174,6 +1174,7 @@ impl EngineHandlerHarness {
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.tempo_map),
+                ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
             )
@@ -1193,6 +1194,7 @@ impl EngineHandlerHarness {
                 MeasureSource::Render,
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.tempo_map),
+                ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
                 move || {

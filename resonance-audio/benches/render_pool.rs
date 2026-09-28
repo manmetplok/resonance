@@ -35,8 +35,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use resonance_audio::test_support::{
-    override_threads_on_this_thread, physical_cores, render_stem, ClapBundle, MixAudioHarness,
-    PluginSlot, StemSource,
+    override_threads_on_this_thread, physical_cores, render_stem, AutomationSnapshot, ClapBundle,
+    MixAudioHarness, PluginSlot, StemSource,
 };
 use resonance_audio::types::*;
 
@@ -361,6 +361,7 @@ fn main() {
             (blocks * BLOCK) as u64,
             &h.shared_arc(),
             &tempo,
+            &AutomationSnapshot::default(),
             SR,
         )
         .expect("stem renders");

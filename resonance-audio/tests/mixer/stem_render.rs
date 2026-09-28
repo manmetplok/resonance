@@ -16,7 +16,10 @@
 
 use std::sync::Arc;
 
-use resonance_audio::test_support::{SharedState, StemBitDepth, StemSource, render_stem, stem_filter, stem_project_range, write_stem_wav};
+use resonance_audio::test_support::{
+    render_stem, stem_filter, stem_project_range, write_stem_wav, AutomationSnapshot, SharedState,
+    StemBitDepth, StemSource,
+};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -76,6 +79,7 @@ impl EngineState {
             end,
             &self.shared,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
         )
         .map_err(|e| e.to_string())

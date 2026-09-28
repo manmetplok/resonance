@@ -121,6 +121,7 @@ pub(super) fn dispatch_bounce(
                 include_fx_tail,
                 Arc::clone(ctx.shared),
                 Arc::clone(ctx.tempo_map),
+                ctx.automation.load_full(),
                 ctx.sample_rate,
                 ctx.event_tx.clone(),
             ));
@@ -137,6 +138,7 @@ pub(super) fn dispatch_bounce(
             source,
             Arc::clone(ctx.shared),
             Arc::clone(ctx.tempo_map),
+            ctx.automation.load_full(),
             ctx.sample_rate,
             ctx.event_tx.clone(),
         ),

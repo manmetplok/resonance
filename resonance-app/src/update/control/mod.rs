@@ -33,6 +33,8 @@ use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
 mod arrangement;
+/// `automation.*` — parameter automation lanes (automation-control-api.md).
+mod automation;
 mod bus;
 mod chain_presets;
 mod clip;
@@ -58,6 +60,9 @@ mod plugin_presets;
 /// `plugins.rescan` — the installed-plugin catalog's one mutation
 /// (todo #1307). `plugins.catalog` is read-only and lives in `song`.
 mod plugins;
+/// Plugin + parameter addressing shared by every chain owner and the
+/// `automation.*` plugin lanes.
+mod plugin_target;
 mod project;
 mod render;
 /// The shared half of `track/bus/master.replace_effect` (todo #1309).
@@ -316,6 +321,14 @@ fn execute_mutating(
     // nothing, but it reports the OPEN project's tempo map, so with
     // nothing open `busy` is honest and a default 120 BPM 4/4 is not.
     if let Some(result) = global::try_handle(app, request) {
+        return result;
+    }
+
+    // Parameter automation (automation-control-api.md). Like
+    // `master.summary`, `automation.lanes` reads only but describes the
+    // OPEN project, so it sits below the gate. Writes compute the new
+    // point list and dispatch ONE `AutomationMessage::SetLane`.
+    if let Some(result) = automation::try_handle(app, request) {
         return result;
     }
 

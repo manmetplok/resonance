@@ -31,9 +31,16 @@
 //! * [`stem_project_range`] — the shared `[start, end)` over all clips,
 //!   so an export computes the common origin once.
 //!
-//! Automation (epic #14) is honoured automatically: every source goes
-//! through `render_chunk` → `mixer::render_block`, the same path live
-//! playback uses.
+//! Automation (epic #14) is honoured via the `automation` snapshot the
+//! caller passes to [`render_stem`] — it flows through `render_chunk` →
+//! `mixer::render_block`, the same path live playback uses. This is on
+//! the caller, not automatic: `measure.rs` and `stem_export.rs` both
+//! thread `ctx.automation.load_full()` down to `render_stem`, matching
+//! `render.mixdown`, so `meter.measure`, `meter.stems` and stem export
+//! all play automation the way the mixdown does. Passing an empty
+//! [`crate::engine::AutomationSnapshot::default()`] instead — as this
+//! module used to for every stem — silently renders every lane as if it
+//! were absent.
 
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
@@ -529,6 +536,11 @@ pub fn stem_project_range(
 ///
 /// Returns `Err` if the transport is rolling (the offline renderer
 /// shares plugin instances with the live mixer) or the range is empty.
+///
+/// `automation` is the caller's parameter-automation snapshot (see the
+/// module doc): pass `ctx.automation.load_full()`, not a fresh
+/// [`crate::engine::AutomationSnapshot::default()`], or every lane
+/// renders as if it did not exist.
 #[allow(clippy::too_many_arguments)]
 pub fn render_stem(
     source: StemSource,
@@ -536,6 +548,7 @@ pub fn render_stem(
     render_end: SamplePos,
     shared: &Arc<SharedState>,
     tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
     sample_rate: u32,
 ) -> Result<Vec<f32>, StemError> {
     // Same guard as the other offline renderers: rendering while the
@@ -589,16 +602,11 @@ pub fn render_stem(
     let render_stop = render_end + comp_latency;
     let mut skip_frames = comp_latency as usize;
 
-    // Stem export predates parameter automation (epic #40) and threads no
-    // lane snapshot through its command path, so render with an empty one —
-    // matching the pre-merge stem behaviour. Automated lanes still apply on
-    // the live/bounce/export paths.
-    let automation = crate::engine::AutomationSnapshot::default();
     let ctx = ChunkCtx {
         shared,
         tuning: &tuning,
         tempo_map: &bounce_tm,
-        automation: &automation,
+        automation,
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,

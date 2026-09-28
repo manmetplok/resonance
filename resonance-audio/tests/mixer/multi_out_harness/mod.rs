@@ -36,7 +36,8 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::clap_process;
 
 use resonance_audio::test_support::{
-    render_stem, PluginSlot, SharedState, StemSource, __instance_from_raw_for_test,
+    render_stem, AutomationSnapshot, PluginSlot, SharedState, StemSource,
+    __instance_from_raw_for_test,
 };
 use resonance_audio::types::*;
 use resonance_common::{FreezeCacheRef, FreezeCacheStatus};
@@ -333,6 +334,7 @@ impl EngineState {
             FRAMES,
             &self.shared,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
         )
         .map_err(|e| e.to_string())

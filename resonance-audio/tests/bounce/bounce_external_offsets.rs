@@ -15,7 +15,9 @@
 
 use std::sync::Arc;
 
-use resonance_audio::test_support::{SharedState, StemSource, apply_take_shift, render_stem};
+use resonance_audio::test_support::{
+    apply_take_shift, render_stem, AutomationSnapshot, SharedState, StemSource,
+};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -69,6 +71,7 @@ impl EngineState {
             frames,
             &self.shared,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
         )
         .expect("stem render")
