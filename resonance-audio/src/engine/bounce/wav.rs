@@ -442,6 +442,7 @@ pub(crate) fn run_export(
         sample_rate,
         master_vol,
         latency_comp: &latency_comp,
+        send_filter: None,
         automation,
         // Normalization keeps float headroom through its gain trim and
         // true-peak limiter (code review ENG-06); the plain export clips

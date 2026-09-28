@@ -38,6 +38,8 @@ mod freeze_cache_read;
 mod freeze_render_core;
 #[path = "bounce/measure_detail.rs"]
 mod measure_detail;
+#[path = "bounce/measure_depth.rs"]
+mod measure_depth;
 #[path = "bounce/midi_export_project.rs"]
 mod midi_export_project;
 #[path = "bounce/offline_render_fidelity.rs"]

@@ -132,6 +132,11 @@ pub enum MeasureDetail {
     Stereo,
     /// [`DynamicsDetail`]: PLR and PSR.
     Dynamics,
+    /// [`DepthDetail`]: HF tilt, and for tracks a direct-to-reverberant
+    /// ESTIMATE from their sends plus a front/middle/back layer hint.
+    /// Meant for `meter.stems`, where the layer hint ranks the tracks;
+    /// each return a track sends to is rendered once more per pass.
+    Depth,
 }
 
 /// Params for `meter.measure`. Every field is optional: the default is
@@ -298,6 +303,63 @@ pub struct StereoDetail {
     pub haas_lag_ms: Option<f64>,
 }
 
+/// One of a track's sends in [`DepthDetail::sends`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DepthSendInfo {
+    /// The return bus it feeds.
+    pub bus_id: TrackId,
+    /// The send's level, dB.
+    pub send_level_db: f64,
+    /// Tapped before the track's fader.
+    pub pre_fader: bool,
+    /// The return's measured gain in this pass, dB: its output energy
+    /// over the energy its sends feed it, so it includes the return's
+    /// chain and fader. `null` when the return came out silent.
+    pub return_gain_db: Option<f64>,
+}
+
+/// A track's place front-to-back, relative to the other tracks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum LayerHint {
+    /// The driest third.
+    Front,
+    /// The middle third.
+    Middle,
+    /// The wettest third.
+    Back,
+}
+
+/// The `depth` detail (warmth-width-depth.md §7.6, decision D5).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DepthDetail {
+    /// Energy 6-16 kHz over 1-4 kHz, dB. Falls from front to back.
+    pub hf_tilt_db: Option<f64>,
+    /// Direct-to-reverberant ESTIMATE, dB — not a measurement: `-(send
+    /// level + return gain)` per send, summed in power over the track's
+    /// sends, a pre-fader send adding the track's fader. Only the track's
+    /// OWN sends count (a send from a bus it feeds does not). Send levels
+    /// are their current static values. `null` for a master or bus
+    /// target, for a dry-only track, and when every return it feeds is
+    /// silent. Read it for ORDERING: rough targets front >= +10, middle
+    /// +3..+8, back <= 0.
+    pub drr_db_estimate: Option<f64>,
+    /// A track with no enabled sends: no reverberant path. Its
+    /// `drr_db_estimate` is `null`, and it ranks as the driest (front).
+    pub dry_only: bool,
+    /// Front / middle / back from `drr_db_estimate` tertiles across the
+    /// tracks of one `meter.stems` pass (dry-only tracks rank front).
+    /// `null` on `meter.measure`, which has nothing to rank against, and
+    /// on the master and bus entries.
+    pub layer_hint: Option<LayerHint>,
+    /// The track's enabled sends, with each return's measured gain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sends: Vec<DepthSendInfo>,
+}
+
 /// The `dynamics` detail.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -442,6 +504,9 @@ pub struct MeasureResult {
     /// The `dynamics` detail, present only when `detail` asked for it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamics: Option<DynamicsDetail>,
+    /// The `depth` detail, present only when `detail` asked for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<DepthDetail>,
 }
 
 // ---------------------------------------------------------------------------

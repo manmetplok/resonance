@@ -251,6 +251,9 @@ const ALL_DETAIL: DetailSet = DetailSet {
     spectrum: true,
     stereo: true,
     dynamics: true,
+    // Depth is a per-track ranking with extra return renders, not a
+    // character proxy to compare; a snapshot or compare never needs it.
+    depth: false,
 };
 
 /// Render one slice with its details and keep the measurement.
@@ -675,6 +678,7 @@ fn detail_set(details: &[MeasureDetail]) -> DetailSet {
             MeasureDetail::Spectrum => set.spectrum = true,
             MeasureDetail::Stereo => set.stereo = true,
             MeasureDetail::Dynamics => set.dynamics = true,
+            MeasureDetail::Depth => set.depth = true,
         }
     }
     set
@@ -711,7 +715,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
         .find(|m| m.target == StemSource::Master)
         .map(|m| with_solo(app, measure_result(m, app.sample_rate)))?;
 
-    let tracks = results
+    let mut tracks: Vec<TrackMeasurement> = results
         .iter()
         .filter_map(|m| {
             let (id, includes) = match m.target {
@@ -728,6 +732,7 @@ fn stems_result(app: &Resonance, results: &[MixMeasurement]) -> Option<StemsResu
         })
         .collect();
 
+    assign_layer_hints(&mut tracks);
     Some(StemsResult { master, tracks })
 }
 
@@ -973,6 +978,55 @@ pub(crate) fn measure_result(m: &MixMeasurement, sample_rate: u32) -> MeasureRes
         spectrum: m.detail.spectrum.as_ref().map(wire_spectrum),
         stereo: m.detail.stereo.as_ref().map(wire_stereo),
         dynamics: m.detail.dynamics.map(wire_dynamics),
+        depth: m.detail.depth.as_ref().map(wire_depth),
+    }
+}
+
+fn wire_depth(d: &resonance_audio::types::DepthDetail) -> proto::DepthDetail {
+    proto::DepthDetail {
+        hf_tilt_db: round_opt(d.hf_tilt_db, 100.0),
+        drr_db_estimate: round_opt(d.drr_db_estimate, 100.0),
+        dry_only: d.dry_only,
+        // Ranked across a stems pass by `stems_result`.
+        layer_hint: None,
+        sends: d
+            .sends
+            .iter()
+            .map(|s| proto::DepthSendInfo {
+                bus_id: s.bus_id.into(),
+                send_level_db: round_to(s.send_level_db, 100.0),
+                pre_fader: s.pre_fader,
+                return_gain_db: round_opt(s.return_gain_db, 100.0),
+            })
+            .collect(),
+    }
+}
+
+/// Rank the tracks of one stems pass front / middle / back by their DRR
+/// estimate (warmth-width-depth.md §7.6).
+fn assign_layer_hints(tracks: &mut [TrackMeasurement]) {
+    use resonance_metering::detail::depth::{layer_hints, Layer};
+    let ranked: Vec<usize> = tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| {
+            matches!(t.measurement.target, MeasureTarget::Track(_))
+                && t.measurement.depth.is_some()
+        })
+        .map(|(i, _)| i)
+        .collect();
+    let drr: Vec<Option<f64>> = ranked
+        .iter()
+        .map(|&i| tracks[i].measurement.depth.as_ref().and_then(|d| d.drr_db_estimate))
+        .collect();
+    for (&i, layer) in ranked.iter().zip(layer_hints(&drr)) {
+        if let Some(d) = tracks[i].measurement.depth.as_mut() {
+            d.layer_hint = Some(match layer {
+                Layer::Front => proto::LayerHint::Front,
+                Layer::Middle => proto::LayerHint::Middle,
+                Layer::Back => proto::LayerHint::Back,
+            });
+        }
     }
 }
 

@@ -179,6 +179,10 @@ pub(super) struct ChunkCtx<'a> {
     /// the leading `max_latency()` frames from the output so the
     /// rendered audio lands on the timeline with zero net shift.
     pub latency_comp: &'a LatencyComp,
+    /// A depth measurement's send treatment (warmth-width-depth.md §7.6);
+    /// `None` for every other render. See
+    /// `mixer::RenderStrategy::Bounce::send_filter`.
+    pub send_filter: Option<(&'a (dyn Fn(TrackId) -> bool + Sync), mixer::SendFilter)>,
     /// Hard-clip the master output to `[-1, 1]` after master volume
     /// (only read when a chunk runs with `include_master_fx`). The
     /// normalized export turns it off (code review ENG-06): its gain
@@ -374,6 +378,7 @@ pub(super) fn render_chunk(
         fan_out_only,
         key_only,
         key_only_bus,
+        send_filter: ctx.send_filter,
         respect_mute_solo,
         freeze_raw,
     };

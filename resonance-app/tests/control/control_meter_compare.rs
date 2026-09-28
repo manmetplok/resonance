@@ -23,6 +23,7 @@ const ALL: DetailSet = DetailSet {
     spectrum: true,
     stereo: true,
     dynamics: true,
+    depth: false,
 };
 
 fn capture_app() -> (Resonance, crossbeam_channel::Receiver<AudioCommand>) {

@@ -48,6 +48,7 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 
 use resonance_metering::detail::analyze_detail;
+use resonance_metering::detail::depth::{self, SendTerm};
 use resonance_metering::detail::spectrum::spectrum_detail_from;
 use resonance_metering::detail::stereo::stereo_detail_from;
 use resonance_metering::lufs::block_accumulator::BLOCK_HOP_SECS;
@@ -60,7 +61,7 @@ use resonance_metering::{LraMeter, LufsMeter, MeterSnapshot, PlrMeter, TruePeakM
 use crate::types::*;
 
 use super::super::SharedState;
-use super::stem::{render_stem, stem_project_range};
+use super::stem::{render_dry_track_stem, render_return_stem, render_stem, stem_project_range};
 use super::{OfflineRenderGuard, MEASURE_BUSY_MSG};
 
 /// Measure `targets` over one shared range and emit exactly one terminal
@@ -239,10 +240,169 @@ fn measure_mix_holding(
         }
     }
 
+    if detail.depth {
+        if let Err(message) = fill_depth(
+            &mut results,
+            (start, end),
+            shared,
+            tempo_map,
+            automation,
+            sample_rate,
+        ) {
+            fail(message);
+            return;
+        }
+    }
+
     let _ = event_tx.send(AudioEvent::MixMeasured {
         measure_id,
         results,
     });
+}
+
+/// Fill in every track target's DRR estimate (warmth-width-depth.md
+/// §7.6, decision D5): no per-source renders, one render per RETURN.
+///
+/// For each return bus a measured track sends to, [`render_return_stem`]
+/// renders what the return makes of its feeders' sends alone, and its
+/// gain is `E_out / E_in`, with `E_in` the sum over its feeders of their
+/// DRY energy ([`render_dry_track_stem`]) times the send gain squared
+/// (pre-fader sends divide the source's fader back out). Cost: one render
+/// per return plus one per feeder, on top of the pass. That assumes the feeders are uncorrelated,
+/// which is exact for one feeder and close for a mix. A track's DRR then
+/// follows from its own sends and those gains ([`depth::drr_db_estimate`]).
+///
+/// Everything rendered honours automation; the send levels and a
+/// pre-fader source's fader are their current static values.
+fn fill_depth(
+    results: &mut [MixMeasurement],
+    (start, end): (SamplePos, SamplePos),
+    shared: &Arc<SharedState>,
+    tempo_map: &Arc<arc_swap::ArcSwap<TempoMap>>,
+    automation: &crate::engine::AutomationSnapshot,
+    sample_rate: u32,
+) -> Result<(), String> {
+    let sends = shared.aux_sends.load();
+    let tracks = shared.tracks();
+    let enabled_from = |id: TrackId| {
+        sends
+            .iter()
+            .filter(move |s| s.enabled && s.source == SendSource::Track(id))
+            .copied()
+            .collect::<Vec<_>>()
+    };
+    let buffer_energy = |interleaved: &[f32]| {
+        let (l, r): (Vec<f32>, Vec<f32>) =
+            interleaved.chunks_exact(2).map(|f| (f[0], f[1])).unzip();
+        depth::mean_square(&l, &r)
+    };
+
+    // Each feeder's DRY energy, rendered once. Its ordinary stem will not
+    // do: that carries the feeder's own wet path back from the returns.
+    let mut energy: std::collections::HashMap<TrackId, f64> = Default::default();
+
+    let mut returns: Vec<BusId> = results
+        .iter()
+        .filter_map(|m| match m.target {
+            StemSource::Track(id) => Some(id),
+            _ => None,
+        })
+        .flat_map(|id| enabled_from(id).into_iter().map(|s| s.dest))
+        .collect();
+    returns.sort_unstable();
+    returns.dedup();
+
+    let mut gain_db: std::collections::HashMap<BusId, Option<f64>> = Default::default();
+    for bus in returns {
+        let rendered =
+            render_return_stem(bus, start, end, shared, tempo_map, automation, sample_rate)
+                .map_err(|e| e.to_string())?;
+        let Some((output, feeders)) = rendered else {
+            gain_db.insert(bus, None);
+            continue;
+        };
+        let e_out = buffer_energy(&output);
+        let mut e_in = 0.0f64;
+        for feeder in feeders {
+            let e_feeder = match energy.get(&feeder) {
+                Some(&e) => e,
+                None => {
+                    let stem = render_dry_track_stem(
+                        feeder,
+                        start,
+                        end,
+                        shared,
+                        tempo_map,
+                        automation,
+                        sample_rate,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let e = buffer_energy(&stem);
+                    energy.insert(feeder, e);
+                    e
+                }
+            };
+            let fader_sq = tracks
+                .get(&feeder)
+                .map_or(1.0, |t| f64::from(t.volume()).powi(2));
+            for send in enabled_from(feeder).into_iter().filter(|s| s.dest == bus) {
+                let level = 10f64.powf(f64::from(send.level_db) / 20.0);
+                let tapped = if send.pre_fader {
+                    if fader_sq > 0.0 {
+                        e_feeder / fader_sq
+                    } else {
+                        0.0
+                    }
+                } else {
+                    e_feeder
+                };
+                e_in += tapped * level * level;
+            }
+        }
+        let gain = (e_in > 0.0 && e_out > 0.0).then(|| 10.0 * (e_out / e_in).log10());
+        gain_db.insert(bus, gain);
+    }
+
+    for m in results.iter_mut() {
+        let StemSource::Track(id) = m.target else {
+            continue;
+        };
+        let Some(d) = m.detail.depth.as_mut() else {
+            continue;
+        };
+        let own = enabled_from(id);
+        let fader_db = tracks.get(&id).map_or(0.0, |t| {
+            let v = f64::from(t.volume());
+            if v > 0.0 {
+                20.0 * v.log10()
+            } else {
+                -120.0
+            }
+        });
+        d.dry_only = own.is_empty();
+        d.sends = own
+            .iter()
+            .map(|s| DepthSend {
+                bus_id: s.dest,
+                send_level_db: s.level_db,
+                pre_fader: s.pre_fader,
+                return_gain_db: gain_db.get(&s.dest).copied().flatten().map(|g| g as f32),
+            })
+            .collect();
+        let terms: Vec<SendTerm> = d
+            .sends
+            .iter()
+            .filter_map(|s| {
+                s.return_gain_db.map(|g| SendTerm {
+                    send_level_db: f64::from(s.send_level_db),
+                    return_gain_db: f64::from(g),
+                    pre_fader: s.pre_fader,
+                })
+            })
+            .collect();
+        d.drr_db_estimate = depth::drr_db_estimate(fader_db, &terms).map(|v| v as f32);
+    }
+    Ok(())
 }
 
 /// Spawn [`measure_mix`] on a dedicated worker thread so the engine
@@ -462,7 +622,7 @@ pub fn measure_rendered_buffer_detailed(
 /// The spectral details of one rendered buffer — everything read off the
 /// shared analysis, which runs only when one of them is asked for.
 fn spectral_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) -> MeasurementDetail {
-    if !(detail.spectrum || detail.stereo) {
+    if !(detail.spectrum || detail.stereo || detail.depth) {
         return MeasurementDetail::default();
     }
     let spec = analyze_detail(rate, left, right);
@@ -470,6 +630,14 @@ fn spectral_detail(detail: DetailSet, rate: f32, left: &[f32], right: &[f32]) ->
         spectrum: detail.spectrum.then(|| spectrum_detail_from(&spec)),
         stereo: detail.stereo.then(|| stereo_detail_from(&spec, left, right)),
         dynamics: None,
+        // The DRR half needs the other targets and the returns, so
+        // `fill_depth` completes it once the whole pass has rendered.
+        depth: detail.depth.then(|| DepthDetail {
+            hf_tilt_db: depth::hf_tilt_db(&spec),
+            drr_db_estimate: None,
+            dry_only: false,
+            sends: Vec::new(),
+        }),
     }
 }
 
