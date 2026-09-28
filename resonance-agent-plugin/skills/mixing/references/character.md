@@ -77,6 +77,7 @@ Act: an EQ bell on that stem or bus.
 | Enable a band | `band{n}_enabled` `On`, `band{n}_kind` `Bell` |
 | Static cut | `band{n}_freq` at the peak, `band{n}_gain` -1 to -3, `band{n}_q` 2-4 |
 | Cut only when it is hot | `band{n}_kind` `Bell`, `band{n}_gain` 0, `band{n}_dyn_on` `On`, `band{n}_dyn_threshold` a few dB under the region's loud level, `band{n}_dyn_ratio` 2-4, `band{n}_dyn_attack` 5-15 ms, `band{n}_dyn_release` 100-200 ms |
+| Cut one part when another plays (unmasking) | the dynamic bell above, plus `band{n}_dyn_sc` `On` on the EQ of the part being cut |
 | Judge at matched level | `auto_gain` `On` |
 <!-- /keys -->
 
@@ -86,6 +87,10 @@ sibilant phrases, cymbal crashes). Keep dynamics to bells and shelves; the
 tilt and lift+dip kinds in step 4 are static moves. On the master, the
 mastering chain has its own resonance suppressor (the `mastering` skill's
 de-harsh stage); on a stem or a bus, this bell is the tool.
+
+For the keyed band, route the masking part into the EQ with `track_set_sidechain`,
+naming the plugin `com.resonance.eq` explicitly: an unqualified call prefers a
+compressor or gate and never picks the EQ over them.
 
 Verify: `meter_compare {a: snapshot_id}` — `presence_peakiness_db` down, that
 peak's third-octave band down, and `tilt_db_per_oct` barely moved.
