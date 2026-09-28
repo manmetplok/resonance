@@ -5,30 +5,55 @@
 //! full-slice) and the legacy A1 path alike. All scratch is preallocated
 //! at construction.
 //!
-//! The check counts allocator calls with a wrapping global allocator.
-//! This file deliberately contains a SINGLE test: the counter is global,
-//! so concurrent tests in the same binary would pollute it.
+//! The check counts allocator calls with a wrapping global allocator,
+//! armed only on the thread running the model (NAM inference is
+//! single-threaded: `process_*` never hands work to another thread). A
+//! process-wide count used to flake under load: once the test ran past
+//! 60 s, libtest's main thread allocated five times to collect and print
+//! its "has been running for over 60 seconds" notice, landing inside the
+//! measured window. This file still holds a single test, so nothing else
+//! in the binary shares the counter.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct CountingAllocator;
 
 static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn count() {
+    if ARMED.try_with(Cell::get).unwrap_or(false) {
+        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Allocator calls made on THIS thread while running `f`.
+fn allocs_during(f: impl FnOnce()) -> usize {
+    let before = ALLOC_CALLS.load(Ordering::Relaxed);
+    ARMED.with(|a| a.set(true));
+    f();
+    ARMED.with(|a| a.set(false));
+    ALLOC_CALLS.load(Ordering::Relaxed) - before
+}
+
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -115,41 +140,40 @@ fn process_sample_never_allocates_across_all_model_kinds() {
             model.process_sample(0.0);
         }
 
-        let before = ALLOC_CALLS.load(Ordering::Relaxed);
         let mut acc = 0.0f32;
-        for n in 0..4096 {
-            let x = ((n as f32) * 0.013).sin() * 0.4;
-            acc += model.process_sample(x);
-        }
-        let after = ALLOC_CALLS.load(Ordering::Relaxed);
+        let calls = allocs_during(|| {
+            for n in 0..4096 {
+                let x = ((n as f32) * 0.013).sin() * 0.4;
+                acc += model.process_sample(x);
+            }
+        });
         assert!(acc.is_finite(), "{name}: output must stay finite");
         assert_eq!(
-            after - before,
-            0,
-            "{name}: process_sample must not touch the allocator (counted {} calls over 4096 samples)",
-            after - before
+            calls, 0,
+            "{name}: process_sample must not touch the allocator (counted {calls} calls over 4096 samples)"
         );
 
         // The block path the amp actually runs, at a host-sized block
         // and one past the WaveNet's internal chunk; long enough for
-        // every layer history to rewind.
+        // every layer history to rewind many times. A history rewinds
+        // every max(lookback, 256) frames, and the longest lookback in
+        // these fixtures is 1195 (A2.nam), so 8 x 2000 frames rewind each
+        // layer at least 13 times, at shifting alignments.
         let input: Vec<f32> = (0..1000).map(|n| ((n as f32) * 0.013).sin() * 0.4).collect();
         let mut output = vec![0.0f32; input.len()];
-        let before = ALLOC_CALLS.load(Ordering::Relaxed);
-        for _ in 0..40 {
-            for block in [128, 1000] {
-                for (i, o) in input.chunks(block).zip(output.chunks_mut(block)) {
-                    model.process_block(i, o);
+        let calls = allocs_during(|| {
+            for _ in 0..8 {
+                for block in [128, 1000] {
+                    for (i, o) in input.chunks(block).zip(output.chunks_mut(block)) {
+                        model.process_block(i, o);
+                    }
                 }
             }
-        }
-        let after = ALLOC_CALLS.load(Ordering::Relaxed);
+        });
         assert!(output.iter().all(|v| v.is_finite()), "{name}: block output must stay finite");
         assert_eq!(
-            after - before,
-            0,
-            "{name}: process_block must not touch the allocator (counted {} calls)",
-            after - before
+            calls, 0,
+            "{name}: process_block must not touch the allocator (counted {calls} calls)"
         );
     }
 }
