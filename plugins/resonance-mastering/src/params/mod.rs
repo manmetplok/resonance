@@ -65,7 +65,7 @@ pub const LEGACY_PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
 
 // Appended since, in the order they were added:
 //   corrective M/S → tonal M/S → imager band widths → clipper
-//                  → saturator mode/curve → de-harsh (W12)
+//                  → saturator mode/curve → de-harsh (W12) → limiter gain
 const CORR_MS_BASE: usize = LEGACY_PARAM_COUNT;
 const TONE_MS_BASE: usize = CORR_MS_BASE + MS_PARAMS_PER_STAGE;
 const IMG_BAND_BASE: usize = TONE_MS_BASE + MS_PARAMS_PER_STAGE;
@@ -78,9 +78,15 @@ const DH_BASE: usize = SAT_MODE_BASE + saturator::MODE_PARAM_COUNT;
 /// saturator's mode and curve.
 pub const W9_PARAM_COUNT: usize = DH_BASE;
 
-/// Total plugin param count: [`W9_PARAM_COUNT`] plus the 11 de-harsh
-/// params (W12).
-pub const PARAM_COUNT: usize = DH_BASE + deharsh::PARAM_COUNT;
+/// The param count after W12: [`W9_PARAM_COUNT`] plus the 11 de-harsh
+/// params.
+pub const W12_PARAM_COUNT: usize = DH_BASE + deharsh::PARAM_COUNT;
+
+const LIM_GAIN_BASE: usize = W12_PARAM_COUNT;
+
+/// Total plugin param count: [`W12_PARAM_COUNT`] plus the limiter's
+/// input gain (`lim_gain`).
+pub const PARAM_COUNT: usize = LIM_GAIN_BASE + limiter::GAIN_PARAM_COUNT;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
@@ -122,7 +128,8 @@ impl MasteringParams {
             i if i < CLIP_BASE => self.imager.band_width_param_at(i - IMG_BAND_BASE),
             i if i < SAT_MODE_BASE => self.clipper.param_at(i - CLIP_BASE),
             i if i < DH_BASE => self.saturator.mode_param_at(i - SAT_MODE_BASE),
-            i if i < PARAM_COUNT => self.deharsh.param_at(i - DH_BASE),
+            i if i < LIM_GAIN_BASE => self.deharsh.param_at(i - DH_BASE),
+            i if i < PARAM_COUNT => self.limiter.gain_param_at(i - LIM_GAIN_BASE),
             _ => &self.bypass,
         }
     }

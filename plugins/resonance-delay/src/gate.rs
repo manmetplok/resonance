@@ -12,23 +12,18 @@
 //!
 //! **Duck** pulls the wet down while the dry input is loud — the "delay
 //! gets out of the way of the vocal, then blooms in the gaps" effect. It
-//! is a real log-domain ducker built on the shared
-//! [`resonance_dsp::dynamics`] primitives (the same detector → threshold →
-//! ballistics topology the compressors use), keyed off this plugin's own
-//! dry input, so it needs no host-side sidechain routing.
+//! is the shared [`resonance_dsp::dynamics::Ducker`] (the same one the
+//! reverb ducks its wet return with), keyed off this plugin's own dry
+//! input, so it needs no host-side sidechain routing.
 
-use resonance_dsp::dynamics::{soft_knee_gain_reduction_db, Ballistics};
+use resonance_dsp::dynamics::Ducker;
+
+pub use resonance_dsp::dynamics::DUCK_MAX_GR_DB;
 
 /// Attack time of the ducker, in milliseconds. Fixed rather than exposed:
 /// a ducking delay always wants the wet out of the way *now* and only the
 /// recovery is a musical choice, which is what `duck_release` is for.
 pub const DUCK_ATTACK_MS: f32 = 5.0;
-
-/// Gain reduction at `duck_amount = 1.0`, in dB.
-pub const DUCK_MAX_GR_DB: f32 = 24.0;
-
-/// Knee width of the ducker's gain computer, in dB.
-const DUCK_KNEE_DB: f32 = 6.0;
 
 /// Gain applied to the wet signal at gate phase `phase`.
 ///
@@ -113,44 +108,31 @@ pub struct GateDuckParams {
 
 /// Gate phase + ducker envelope, carried across blocks.
 pub struct GateDuck {
-    sample_rate: f32,
     /// Gate position, `0.0..1.0` through the current period.
     phase: f32,
-    /// Smoothed ducking gain reduction, in dB (non-negative).
-    gr_db: f32,
-    ballistics: Ballistics,
-    release_ms: f32,
+    ducker: Ducker,
 }
 
 impl GateDuck {
     pub fn new(sample_rate: f32) -> Self {
         Self {
-            sample_rate: sample_rate.max(1.0),
             phase: 0.0,
-            gr_db: 0.0,
-            ballistics: Ballistics::from_times(sample_rate, DUCK_ATTACK_MS, 200.0),
-            release_ms: 200.0,
+            ducker: Ducker::new(sample_rate, DUCK_ATTACK_MS, 200.0),
         }
     }
 
     pub fn clear(&mut self) {
         self.phase = 0.0;
-        self.gr_db = 0.0;
+        self.ducker.clear();
     }
 
     /// Lock the gate to the transport (when the block carries a phase),
     /// and refresh the ducker's ballistics when the release time changed.
-    /// Recomputing exp coefficients per sample would be wasteful, and per
-    /// block is inaudible for a release control.
     pub fn prepare_block(&mut self, params: &GateDuckParams) {
         if let (true, Some(phase)) = (params.gate_on, params.gate_phase) {
             self.phase = phase - phase.floor();
         }
-        if (params.duck_release_ms - self.release_ms).abs() > f32::EPSILON {
-            self.release_ms = params.duck_release_ms;
-            self.ballistics =
-                Ballistics::from_times(self.sample_rate, DUCK_ATTACK_MS, params.duck_release_ms);
-        }
+        self.ducker.set_times(DUCK_ATTACK_MS, params.duck_release_ms);
     }
 
     /// Advance one sample and return the gain to apply to the wet signal.
@@ -175,37 +157,8 @@ impl GateDuck {
             1.0
         };
 
-        if params.duck_amount <= 0.0 {
-            // Let any residual reduction recover rather than snapping the
-            // wet back to full the moment the amount reaches zero.
-            self.gr_db = self.ballistics.step_envelope(self.gr_db, 0.0);
-            return gate * db_to_linear(-self.gr_db);
-        }
-
-        let detector = dry_l.abs().max(dry_r.abs());
-        let detector_db = linear_to_db(detector);
-        // Slope 1.0 = infinite ratio: everything above the threshold turns
-        // into reduction, capped at the amount-scaled maximum. A ducker
-        // wants a hard hand-off, not a compression curve.
-        let raw_gr = soft_knee_gain_reduction_db(
-            detector_db,
-            params.duck_threshold_db,
-            DUCK_KNEE_DB,
-            DUCK_KNEE_DB * 0.5,
-            1.0,
-        );
-        let target = raw_gr.min(params.duck_amount * DUCK_MAX_GR_DB);
-        self.gr_db = self.ballistics.step_envelope(self.gr_db, target);
-        gate * db_to_linear(-self.gr_db)
+        gate * self
+            .ducker
+            .next_gain(dry_l, dry_r, params.duck_amount, params.duck_threshold_db)
     }
-}
-
-#[inline]
-fn linear_to_db(x: f32) -> f32 {
-    20.0 * x.max(1e-9).log10()
-}
-
-#[inline]
-fn db_to_linear(db: f32) -> f32 {
-    10f32.powf(db / 20.0)
 }

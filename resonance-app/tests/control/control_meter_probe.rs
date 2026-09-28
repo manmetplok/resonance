@@ -133,10 +133,10 @@ fn a_track_probe_leaves_out_the_instrument() {
         *spec,
         ProbeSpec {
             freq_hz: 1_000.0,
-            level_dbfs: -12.0,
+            level_dbfs: -18.0,
             imd: false
         },
-        "defaults"
+        "defaults: -18 dBFS, the colour presets' voicing level"
     );
 }
 

@@ -216,21 +216,38 @@ pub fn bool_checkbox(ui: &mut egui::Ui, param: &BoolParam, label: &str) {
 /// The labels come off the parameter's own table, so the editor, the
 /// host's display and the control API's `choices[]` all read the same
 /// words. `width` is the combo's width in px — a layout fact, not a fact
-/// about the parameter. A param without a choice table shows its number.
+/// about the parameter. A param without a choice table lists every value
+/// of its range, each shown by the param's own formatter.
 pub fn int_choice(ui: &mut egui::Ui, param: &IntParam, width: f32) {
-    let min = param.min_plain() as i32;
     let current = param.value();
-    let labels = param.choices().unwrap_or(&[]);
     let selected = param.display(current as f64);
     egui::ComboBox::from_id_salt(("resonance_int_choice", param.id()))
         .width(width)
         .selected_text(selected)
         .show_ui(ui, |ui| {
-            for (i, label) in labels.iter().enumerate() {
-                let v = min + i as i32;
-                if ui.selectable_label(v == current, *label).clicked() {
+            for (v, label) in int_choice_options(param) {
+                if ui.selectable_label(v == current, label).clicked() {
                     param.set_value(v);
                 }
             }
         });
+}
+
+/// The entries [`int_choice`] lists: `(value, label)` for the param's
+/// choice table, or — for a param declared without one — for every value
+/// `min..=max`, labelled by [`Param::display`]. (Without the fallback a
+/// plain `IntParam` drew an empty dropdown.) Only built while the combo
+/// is open.
+pub fn int_choice_options(param: &IntParam) -> Vec<(i32, String)> {
+    let min = param.min_plain() as i32;
+    match param.choices() {
+        Some(labels) => labels
+            .iter()
+            .enumerate()
+            .map(|(i, label)| (min + i as i32, (*label).to_string()))
+            .collect(),
+        None => (min..=param.max_plain() as i32)
+            .map(|v| (v, param.display(v as f64)))
+            .collect(),
+    }
 }

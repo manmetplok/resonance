@@ -46,7 +46,7 @@ backbeat for **Sidestick (39)**. For up-tempo, add **Ride Bell (53)** accents on
 
 ## Shuffle
 
-Every eighth swung, both hands. Blues, Texas shuffle, `Rosanna` when the ghosts
+Every eighth swung, both hands. Blues, Texas shuffle, *Rosanna* when the ghosts
 get dense.
 
 | Voice | Beats | Vel |

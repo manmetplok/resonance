@@ -14,13 +14,23 @@
 //! A **dynamic** band (`dyn_on`) pulls its own gain down while its
 //! frequency region is loud: a detector filter matched to the band (a
 //! band-pass for a bell, a low-pass under a low shelf or lift, a
-//! high-pass over a high shelf, air or tilt) feeds a peak detector, a
+//! high-pass over a high shelf or air) feeds a peak detector, a
 //! soft-knee gain computer (threshold, ratio) and attack/release
 //! ballistics, and the band is re-voiced at `gain - GR` every
-//! [`DYN_UPDATE_SAMPLES`] samples. A bell at 0 dB with dynamics on is a
+//! [`DYN_UPDATE_SAMPLES`] samples. A Stereo band's detector follows
+//! both channels and takes the louder, `max(|L|, |R|)` after the filter,
+//! so a hard-panned or antiphase source is heard at its real level; a Mid
+//! or Side band's detector hears the component it filters. With `dyn_sc`
+//! on and a key connected (the plugin's sidechain input), the detector
+//! follows the key instead — through the same filter, louder channel —
+//! so a band can duck from another source (the vocal's presence region
+//! out of the guitars); with no key it falls back to the band's own input.
+//! A bell at 0 dB with dynamics on is a
 //! pure de-harsh cut that only acts when the region is hot; with a static
 //! boost it is a boost that backs off when the region gets loud. Only
-//! gain-using kinds take dynamics; on cuts the switch is ignored.
+//! the kinds [`BandKind::supports_dyn`] names take dynamics (bell,
+//! shelves, air); on the cuts, Tilt and LF Lift+Dip the switch is
+//! ignored.
 //!
 //! **Auto-gain** trims the output by the negated [`static_gain_db`] of the
 //! band curve. It is a *static* estimate — a function of the parameters
@@ -51,10 +61,13 @@ const DYN_REVOICE_EPS_DB: f32 = 0.01;
 /// One band's dynamics state.
 #[derive(Clone, Copy)]
 struct DynState {
-    /// Dynamics on, band enabled, and a kind that has a gain.
+    /// Dynamics on, band enabled, and a kind that supports them.
     active: bool,
-    /// Detector filter, matched to the band's kind and frequency.
-    detector: Biquad,
+    /// Detector filter, matched to the band's kind and frequency, one
+    /// per channel (a Mid or Side band uses only the first).
+    detector: [Biquad; 2],
+    /// Detect on the sidechain key when one is connected.
+    sidechain: bool,
     peak_env: f32,
     /// Smoothed gain reduction, dB (>= 0).
     gr_db: f32,
@@ -70,7 +83,8 @@ impl DynState {
     fn new() -> Self {
         Self {
             active: false,
-            detector: Biquad::identity(),
+            detector: [Biquad::identity(); 2],
+            sidechain: false,
             peak_env: 0.0,
             gr_db: 0.0,
             applied_gr_db: 0.0,
@@ -81,17 +95,21 @@ impl DynState {
         }
     }
 
-    /// Detector level update for one sample of the band's input.
+    /// Detector level update for one sample: `a` alone, or the louder of
+    /// `a` and `b` (each through its own filter) when `pair`.
     #[inline]
-    fn detect(&mut self, x: f32, peak_coef: f32) {
-        let y = self.detector.process(x);
-        let y = if y.is_finite() {
-            y
+    fn detect(&mut self, a: f32, b: f32, pair: bool, peak_coef: f32) {
+        let y0 = self.detector[0].process(a);
+        let y1 = if pair { self.detector[1].process(b) } else { 0.0 };
+        // Both checked: `max` would hide a NaN in one filter for good.
+        let a = if y0.is_finite() && y1.is_finite() {
+            y0.abs().max(y1.abs())
         } else {
-            self.detector.reset();
+            for d in &mut self.detector {
+                d.reset();
+            }
             0.0
         };
-        let a = y.abs();
         self.peak_env = if a > self.peak_env {
             a
         } else {
@@ -117,11 +135,12 @@ impl DynState {
 fn configure_detector(d: &mut Biquad, s: &BandSnapshot, sr: f32) {
     match s.kind {
         BandKind::Bell => d.set_band_pass(sr, s.freq, s.q.max(0.3)),
-        BandKind::LowShelf | BandKind::LfLiftDip => d.set_low_pass(sr, s.freq, 0.707),
-        BandKind::HighShelf | BandKind::Air | BandKind::Tilt => {
-            d.set_high_pass(sr, s.freq, 0.707)
+        BandKind::LowShelf => d.set_low_pass(sr, s.freq, 0.707),
+        BandKind::HighShelf | BandKind::Air => d.set_high_pass(sr, s.freq, 0.707),
+        // No dynamics on these (`BandKind::supports_dyn`).
+        BandKind::LowCut | BandKind::HighCut | BandKind::Tilt | BandKind::LfLiftDip => {
+            d.set_identity()
         }
-        BandKind::LowCut | BandKind::HighCut => d.set_identity(),
     }
 }
 
@@ -296,7 +315,9 @@ impl EqDsp {
         }
         self.fade_remaining = [0; NUM_BANDS];
         for d in self.dyn_state.iter_mut() {
-            d.detector.reset();
+            for det in &mut d.detector {
+                det.reset();
+            }
             d.peak_env = 0.0;
             d.gr_db = 0.0;
         }
@@ -370,9 +391,11 @@ impl EqDsp {
             let dy = band.dyn_snapshot();
             let d = &mut self.dyn_state[i];
             if d.last != Some((dy, snapshot)) {
-                let active = dy.on && snapshot.enabled && snapshot.kind.uses_gain();
+                let active = dy.on && snapshot.enabled && snapshot.kind.supports_dyn();
                 if active && !d.active {
-                    d.detector.reset();
+                    for det in &mut d.detector {
+                        det.reset();
+                    }
                     d.peak_env = 0.0;
                     d.gr_db = 0.0;
                 }
@@ -383,11 +406,26 @@ impl EqDsp {
                     d.applied_gr_db = 0.0;
                 }
                 d.active = active;
-                configure_detector(&mut d.detector, &snapshot, self.sample_rate);
+                for det in &mut d.detector {
+                    configure_detector(det, &snapshot, self.sample_rate);
+                }
+                d.sidechain = dy.sidechain;
                 d.threshold_db = dy.threshold_db;
                 d.slope = 1.0 - 1.0 / dy.ratio.max(1.0);
                 d.ballistics = Ballistics::from_times(self.sample_rate, dy.attack_ms, dy.release_ms);
                 d.last = Some((dy, snapshot));
+            }
+            // A changed band was just re-voiced at its static gain. If it is
+            // cutting, put the cut back now: waiting for the next revoice
+            // (up to DYN_UPDATE_SAMPLES away, and not aligned to the block)
+            // lets the first samples of the block out uncut — a spike of the
+            // whole GR on every automated block.
+            if changed && d.active && d.gr_db != 0.0 {
+                let mut s = snapshot;
+                s.gain_db -= d.gr_db;
+                configure_stages(&s, self.sample_rate, &mut self.channels[0][i]);
+                configure_stages(&s, self.sample_rate, &mut self.channels[1][i]);
+                d.applied_gr_db = d.gr_db;
             }
         }
         self.any_dyn = self.dyn_state.iter().any(|d| d.active);
@@ -420,6 +458,19 @@ impl EqDsp {
         right: &mut [f32],
         output_gain: &mut Smoother,
     ) {
+        self.process_stereo_keyed(left, right, None, output_gain);
+    }
+
+    /// [`process_stereo`](Self::process_stereo) with the sidechain key,
+    /// when the host has connected one. Only dynamic bands with `dyn_sc`
+    /// read it; a key shorter than the block reads as silence past its end.
+    pub fn process_stereo_keyed(
+        &mut self,
+        left: &mut [f32],
+        right: &mut [f32],
+        key: Option<(&[f32], &[f32])>,
+        output_gain: &mut Smoother,
+    ) {
         let frames = left.len().min(right.len());
         for i in 0..frames {
             if self.any_dyn {
@@ -434,13 +485,23 @@ impl EqDsp {
             for b in 0..NUM_BANDS {
                 let (in_l, in_r) = (l, r);
                 if self.any_dyn && self.dyn_state[b].active {
-                    // The detector hears what the band filters: the mono
-                    // sum for a Stereo or Mid band, the side for a Side band.
-                    let x = match self.band_ms[b] {
-                        BandMs::Side => (l - r) * 0.5,
-                        _ => (l + r) * 0.5,
-                    };
-                    self.dyn_state[b].detect(x, self.dyn_peak_coef);
+                    let d = &mut self.dyn_state[b];
+                    match key.filter(|_| d.sidechain) {
+                        // The key, louder channel.
+                        Some((kl, kr)) => d.detect(
+                            kl.get(i).copied().unwrap_or(0.0),
+                            kr.get(i).copied().unwrap_or(0.0),
+                            true,
+                            self.dyn_peak_coef,
+                        ),
+                        // What the band filters: both channels (louder one)
+                        // for a Stereo band, the mid or the side otherwise.
+                        None => match self.band_ms[b] {
+                            BandMs::Stereo => d.detect(l, r, true, self.dyn_peak_coef),
+                            BandMs::Mid => d.detect((l + r) * 0.5, 0.0, false, self.dyn_peak_coef),
+                            BandMs::Side => d.detect((l - r) * 0.5, 0.0, false, self.dyn_peak_coef),
+                        },
+                    }
                 }
                 let n = self.active_stages[b];
                 let [ch0, ch1] = &mut self.channels;

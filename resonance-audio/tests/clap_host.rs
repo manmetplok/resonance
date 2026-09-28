@@ -32,6 +32,8 @@ mod clap_param_flush;
 mod clap_param_meta;
 #[path = "clap_host/clap_plugin_drop_order.rs"]
 mod clap_plugin_drop_order;
+#[path = "clap_host/plugin_binaries.rs"]
+mod plugin_binaries;
 #[path = "clap_host/plugin_bypass.rs"]
 mod plugin_bypass;
 #[path = "clap_host/plugin_editor_state.rs"]

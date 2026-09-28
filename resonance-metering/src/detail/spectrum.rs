@@ -58,23 +58,30 @@ pub const PEAK_SIGMAS: f64 = 4.0;
 /// frequency; dividing `bins × frames` by this is a conservative count of
 /// independent averages.
 const WELCH_CORRELATION: f64 = 2.5;
-/// Half-width of the smoothing that defines the reference LTAS for
+/// Half-width of the window that defines the reference LTAS for
 /// [`SpectrumDetail::peaks`], in 1/6-octave bands (6 = one octave each
 /// side).
 pub const PEAK_SMOOTH_HALF_BANDS: usize = 6;
+/// The widest a resonance may be, in 1/6-octave bands (2 = 1/3 octave):
+/// counted as the contiguous bands around the candidate that stay within
+/// half its excess of its level. A broad hump — a high-passed low end, a
+/// gentle bell — is tonal balance, not a resonance, however far it stands
+/// above its surroundings.
+pub const PEAK_MAX_WIDTH_BANDS: usize = 2;
 
 /// `10·log10(2)`: the dB/oct that separates band-power slope from
 /// density slope for any constant-Q band set.
 const DB_PER_OCT_BANDWIDTH: f64 = 3.010_299_956_639_812;
 
-/// One narrow resonance: a 1/6-octave band standing above the smoothed
-/// spectrum around it.
+/// One narrow resonance: a 1/6-octave band standing above the local
+/// trend of the spectrum around it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SpectralPeak {
     /// Frequency of the strongest FFT bin inside the band, Hz.
     pub freq_hz: f32,
-    /// How far the band's level stands above the smoothed LTAS (the mean
-    /// level of the octave either side of it), dB.
+    /// How far the band's level stands above the local trend — a straight
+    /// line (in dB over log frequency) fitted to the octave either side of
+    /// it, leaving out the band's immediate neighbours — dB.
     pub excess_db: f32,
 }
 
@@ -102,9 +109,10 @@ pub struct SpectrumDetail {
     /// `E(8–16 kHz) / E(20 Hz–20 kHz)`, dB. Always ≤ 0.
     pub air_ratio_db: Option<f32>,
     /// Up to [`MAX_PEAKS`] narrow resonances, strongest excess first.
-    /// Empty when nothing stands clear of the smoothed LTAS by both
+    /// Empty when nothing stands clear of the local trend by both
     /// [`PEAK_MIN_EXCESS_DB`] and [`PEAK_SIGMAS`] of its estimate — so a
-    /// short range, whose estimate is noisier, reports only bigger peaks.
+    /// short range, whose estimate is noisier, reports only bigger peaks —
+    /// while staying at most [`PEAK_MAX_WIDTH_BANDS`] wide.
     pub peaks: Vec<SpectralPeak>,
 }
 
@@ -229,14 +237,22 @@ fn presence_peakiness(spec: &StereoSpectrum) -> Option<f32> {
     ratio_db(max, mean)
 }
 
-/// The strongest narrow resonances relative to the smoothed LTAS.
+/// The strongest narrow resonances relative to the local trend.
 ///
 /// Levels are taken per 1/6-octave band (grid anchored at 1 kHz,
 /// 20 Hz–20 kHz, below Nyquist). A band is a candidate when it is a
-/// strict local maximum and stands above the mean level of the
-/// [`PEAK_SMOOTH_HALF_BANDS`] bands on each side (itself excluded) by at
-/// least [`PEAK_MIN_EXCESS_DB`] and by [`PEAK_SIGMAS`] standard
-/// deviations of its own estimate. The frequency reported is the
+/// strict local maximum. Its reference is the least-squares line through
+/// the levels of the [`PEAK_SMOOTH_HALF_BANDS`] bands on each side, left
+/// out: the band itself and its two neighbours (a resonance's own skirts)
+/// and every band without energy. A line follows a tilt without bias,
+/// and — unlike the plain mean it replaced — a window cut short at either
+/// end of the grid. Its excess over that line must reach
+/// [`PEAK_MIN_EXCESS_DB`] and [`PEAK_SIGMAS`] standard deviations of its
+/// own estimate, and the peak must be narrow: at most
+/// [`PEAK_MAX_WIDTH_BANDS`] contiguous bands within half the excess of its
+/// level. A curved but broad shape (the hump a high-pass leaves at the
+/// bottom of a tilted mix) can stand above any straight line; the width
+/// test is what tells it from a resonance. The frequency reported is the
 /// strongest bin inside the band, so a pure tone reads at its own
 /// frequency.
 fn peaks(spec: &StereoSpectrum) -> Vec<SpectralPeak> {
@@ -253,13 +269,15 @@ fn peaks(spec: &StereoSpectrum) -> Vec<SpectralPeak> {
         if here <= LEVEL_FLOOR_DB || here <= levels[i - 1] || here <= levels[i + 1] {
             continue;
         }
-        let lo = i.saturating_sub(PEAK_SMOOTH_HALF_BANDS);
-        let hi = (i + PEAK_SMOOTH_HALF_BANDS).min(levels.len() - 1);
-        let around: Vec<f32> = (lo..=hi).filter(|&j| j != i).map(|j| levels[j]).collect();
-        let smoothed = around.iter().sum::<f32>() / around.len() as f32;
-        let excess = here - smoothed;
+        let Some(trend) = local_trend(&levels, i) else {
+            continue;
+        };
+        let excess = here - trend;
         let noise_floor = PEAK_SIGMAS * level_sigma_db(spec, centres[i]);
         if excess < PEAK_MIN_EXCESS_DB || (excess as f64) < noise_floor {
+            continue;
+        }
+        if peak_width_bands(&levels, i, here - excess / 2.0) > PEAK_MAX_WIDTH_BANDS {
             continue;
         }
         found.push(SpectralPeak {
@@ -270,6 +288,37 @@ fn peaks(spec: &StereoSpectrum) -> Vec<SpectralPeak> {
     found.sort_by(|a, b| b.excess_db.total_cmp(&a.excess_db));
     found.truncate(MAX_PEAKS);
     found
+}
+
+/// The least-squares line through the levels around band `i`, evaluated
+/// at `i`: bands within [`PEAK_SMOOTH_HALF_BANDS`] of it, except `i − 1`
+/// to `i + 1` and floor bands. `None` with fewer than three such bands.
+fn local_trend(levels: &[f32], i: usize) -> Option<f32> {
+    let lo = i.saturating_sub(PEAK_SMOOTH_HALF_BANDS);
+    let hi = (i + PEAK_SMOOTH_HALF_BANDS).min(levels.len() - 1);
+    let points: Vec<(f64, f64)> = (lo..=hi)
+        .filter(|&j| j.abs_diff(i) > 1 && levels[j] > LEVEL_FLOOR_DB)
+        .map(|j| (j as f64 - i as f64, f64::from(levels[j])))
+        .collect();
+    if points.len() < 3 {
+        return None;
+    }
+    let n = points.len() as f64;
+    let mx = points.iter().map(|p| p.0).sum::<f64>() / n;
+    let my = points.iter().map(|p| p.1).sum::<f64>() / n;
+    let sxy: f64 = points.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
+    let sxx: f64 = points.iter().map(|p| (p.0 - mx) * (p.0 - mx)).sum();
+    let slope = if sxx > 0.0 { sxy / sxx } else { 0.0 };
+    // The line at offset 0, i.e. at band `i`.
+    Some((my - slope * mx) as f32)
+}
+
+/// How many contiguous bands around `i` (itself included) stay at or
+/// above `threshold` dB.
+fn peak_width_bands(levels: &[f32], i: usize, threshold: f32) -> usize {
+    let below = levels[..i].iter().rev().take_while(|&&l| l >= threshold).count();
+    let above = levels[i + 1..].iter().take_while(|&&l| l >= threshold).count();
+    1 + below + above
 }
 
 /// Standard deviation of a 1/6-octave band's Welch level estimate, dB.

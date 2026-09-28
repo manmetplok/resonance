@@ -55,7 +55,10 @@ skill moves with it:
 
 Re-measure the track's `lufs_integrated` after the pan and set the fader from
 the measured loss, not from this table. A pair panned apart (doubles, stereo
-backing) keeps its combined loudness roughly; check it as a pair.
+backing) does **not** keep its loudness: each side loses what the table says,
+so two doubles at ±1.0 are about 3 dB quieter as a pair than the same two at
+centre. Give each track its fader back and check the pair's sum against where
+the balance had it.
 
 ## 3. Doubles before processing
 
@@ -87,8 +90,10 @@ first.
 | Reset | `Init — Transparent` |
 <!-- /keys -->
 
-Prefer `Decorrelate`: the mono listener hears exactly the original. Never use
-Haas on bass, kick or the lead vocal.
+<!-- keys: com.resonance.stereo -->
+Prefer `widen_mode` `Decorrelate`: the mono listener hears exactly the
+original. Never use Haas on bass, kick or the lead vocal.
+<!-- /keys -->
 
 Verify: the stem's `side_mid_db` above 150 Hz up by the amount wanted,
 `mono_loss_db` no worse, `haas_lag_ms` still `null` (except by choice with Haas).
@@ -112,7 +117,7 @@ A side-only move leaves the mono sum alone.
 The master's `mono_penalty_db` and per-band `mono_loss_db`. A mix loses ≤ 3 dB.
 If a band is much worse than its neighbours, find the stem with the same band
 problem (`meter_stems` `detail: ["stereo"]`) and fix it there: a mono-maker, a
-less risky widen mode, or less `widen_amount`.
+less risky widen mode, or a smaller widen amount.
 
 ## Stop rules
 

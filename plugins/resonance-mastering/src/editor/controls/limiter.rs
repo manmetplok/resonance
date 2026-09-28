@@ -26,6 +26,7 @@ pub fn draw(ui: &mut egui::Ui, params: &LimiterParams) {
             widgets::bool_checkbox(ui, &params.on, "On");
             ui.add_space(8.0);
 
+            widgets::float_knob(ui, &params.gain, "Gain", "push into the limiter");
             widgets::float_knob(ui, &params.ceiling, "Ceiling", "dBTP");
             widgets::float_knob(ui, &params.release, "Release", "");
         });

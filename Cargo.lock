@@ -4929,7 +4929,7 @@ dependencies = [
  "resonance-audio",
  "resonance-common",
  "resonance-control",
- "resonance-mastering",
+ "resonance-mastering-assist",
  "resonance-metering",
  "resonance-music-theory",
  "resonance-plugin",
@@ -5158,11 +5158,20 @@ dependencies = [
  "plugin-gui-core",
  "resonance-dsp",
  "resonance-dsp-test-support",
+ "resonance-mastering-assist",
  "resonance-metering",
  "resonance-plugin",
  "rustfft",
  "serde_json",
  "symphonia",
+]
+
+[[package]]
+name = "resonance-mastering-assist"
+version = "0.1.0"
+dependencies = [
+ "resonance-dsp",
+ "resonance-metering",
 ]
 
 [[package]]

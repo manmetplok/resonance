@@ -18,7 +18,10 @@ Run the suite with `./scripts/run-tests.py` (add `-p <crate>` to narrow it).
 Plain `cargo test` works too, but it walks its ~370 test binaries one at a
 time; the script builds with cargo and runs them concurrently, which is 24s
 against 157s for the same tests. It also launches each binary from its own
-crate root, which the golden-image tests need.
+crate root, which the golden-image tests need. It also builds the plugin
+cdylibs that the `clap_host` tests load. Under plain `cargo test` those tests
+fail until you build the plugins (`cargo build -p resonance-mastering` etc.),
+or you can set `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES=1` to skip them.
 
 Six things to know before adding tests:
 

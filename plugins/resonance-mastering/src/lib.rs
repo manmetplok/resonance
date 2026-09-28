@@ -1,14 +1,20 @@
 //! Resonance Mastering — automatic mastering plugin for band music.
 //!
 //! A fixed-order mastering chain ([`chain`]): input trim → corrective
-//! linear-phase EQ → glue compressor → saturator → tonal linear-phase EQ
+//! linear-phase EQ → de-harsh → glue compressor → saturator → tonal
+//! linear-phase EQ
 //! → linear-phase multiband compressor → M/S imager → clipper →
 //! true-peak limiter → dither, every stage off by default. The EQ bands
 //! each filter the stereo pair, the mid or the side; the imager has a
 //! global and a per-band width (on the multiband's crossover); the
 //! saturator has the original Tube↔Tape blend plus the character modes
-//! of [`stages::sat_modes`]. The latency is constant: the linear-phase
-//! stages and the limiter lookahead, whatever is switched on.
+//! of [`stages::sat_modes`]. The reported latency is constant: the
+//! linear-phase stages, the de-harsh frame and the limiter lookahead,
+//! whatever is switched on. Two stages add a small frequency-dependent
+//! group delay on top that the host's delay compensation does not see:
+//! the clipper (~6.9 samples at low frequencies) and the non-Blend
+//! saturator modes (~5.5), both from their IIR half-band oversampling
+//! (see [`chain`]).
 //!
 //! Alongside it: a metering tap built on `resonance-metering` (LUFS,
 //! true peak, correlation, spectrum; [`dsp`]) and the one-shot master

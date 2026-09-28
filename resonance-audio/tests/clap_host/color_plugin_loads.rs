@@ -3,13 +3,16 @@
 //! its whole parameter surface, a GUI and no sidechain port, and publishes
 //! the factory bank skills name.
 //!
-//! Skips rather than fails when the workspace hasn't been bundled
-//! (`scripts/bundle.sh`) — the contract every test under `tests/clap_host/`
-//! that needs a built plugin follows.
+//! Needs a built plugin binary; `plugin_binaries` finds it, and a missing
+//! one fails the test unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is
+//! set — the contract every test under `tests/clap_host/` that needs a
+//! built plugin follows.
 
 use resonance_audio::test_support::{ClapBundle, EngineHandlerHarness};
 use resonance_audio::types::AudioEvent;
 use resonance_audio::Track;
+
+use crate::plugin_binaries::plugin_binary;
 
 const COLOR_CLAP_ID: &str = "com.resonance.color";
 const TRACK: u64 = 1;
@@ -17,7 +20,7 @@ const BUS: u64 = 7;
 
 /// The ids `plugins/resonance-color/src/params.rs` declares, by display
 /// name as the bridge reports them.
-const PARAM_NAMES: [&str; 11] = [
+const PARAM_NAMES: [&str; 13] = [
     "Mode",
     "Drive",
     "Bias",
@@ -29,20 +32,17 @@ const PARAM_NAMES: [&str; 11] = [
     "Oversample",
     "Speed",
     "Flutter",
+    "Tape Quality",
+    "Solver",
 ];
 
 fn bundle_path() -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::path::PathBuf::from("target/bundled/resonance-color.clap"),
-        std::path::PathBuf::from("../target/bundled/resonance-color.clap"),
-    ];
-    candidates.into_iter().find(|p| p.exists())
+    plugin_binary("resonance-color")
 }
 
 #[test]
 fn the_color_bundle_loads_on_a_track_and_a_bus() {
     let Some(path) = bundle_path() else {
-        eprintln!("target/bundled/resonance-color.clap absent — run scripts/bundle.sh; skipping");
         return;
     };
     let path = path.to_string_lossy().into_owned();
@@ -100,7 +100,6 @@ fn the_color_bundle_loads_on_a_track_and_a_bus() {
 #[test]
 fn the_color_bundle_publishes_the_spec_preset_names() {
     let Some(path) = bundle_path() else {
-        eprintln!("target/bundled/resonance-color.clap absent — run scripts/bundle.sh; skipping");
         return;
     };
     let bundle = ClapBundle::load(&path).expect("the Color bundle should load");

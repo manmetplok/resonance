@@ -12,9 +12,11 @@
 //! it again, so material below the knee passes at unity and the ceiling
 //! sits at `−drive` dBFS: a transient peaking at 0 dBFS comes out
 //! `drive` dB lower, and everything quieter than the knee is untouched.
-//! The stage never adds loudness by itself; the gain that uses the
-//! headroom it makes belongs upstream (input trim, glue make-up), and the
-//! limiter after it catches what is left.
+//! The stage never adds loudness by itself. The gain that uses the
+//! headroom it makes is the limiter's input gain (`lim_gain`), right
+//! after it: raising the input trim instead would only push more into
+//! the clipper, which takes every dB above its ceiling, and leave the
+//! limiter nothing to do.
 //!
 //! # Aliasing
 //!
@@ -23,11 +25,21 @@
 //! [`Oversampler`] cascaded, a 2× instance around a 4× one (the recipe
 //! the `saturate` module documents). With ADAA that keeps the strongest
 //! alias of a 5 kHz full-scale tone at +12 dB drive ≤ −90 dBc, where the
-//! 4× alone reaches only about −73 dBc. The IIR half-bands have no fixed
-//! delay, so the chain's reported latency does not change; they do add a
-//! few samples of frequency-dependent group delay to the wet path, which
-//! is why the enable crossfade (10 ms) is the only place the dry and wet
-//! signals are ever mixed.
+//! 4× alone reaches only about −73 dBc.
+//!
+//! # Delay
+//!
+//! The IIR half-bands have no fixed delay, so [`Clipper::latency`] is 0
+//! and the chain's reported latency does not change. They do delay the
+//! wet path by a frequency-dependent amount: about 6.9 samples at 48 kHz
+//! from DC to a few kHz (4.0 from the outer 2× pair, 2.8 from the inner
+//! 4× one at twice the rate), which the host's delay compensation does
+//! not see. The enable crossfade (10 ms) mixes that wet path with the
+//! raw input, so it combs while it runs (first notch ≈3.5 kHz at its
+//! midpoint). The dry side is deliberately *not* run through a matching
+//! pair: the fade would then start and end on a step between the
+//! delayed and the raw signal, a click where the comb is only a brief
+//! phase smear. See the chain's module docs.
 //!
 //! Off (after its fade-out) the stage is a wire, bit for bit.
 
@@ -166,7 +178,8 @@ impl Clipper {
         self.was_enabled = false;
     }
 
-    /// Zero: the IIR oversampling has no fixed delay.
+    /// Zero: the IIR oversampling has no fixed delay. Its ~6.9-sample
+    /// frequency-dependent group delay is not included (module docs).
     pub fn latency(&self) -> usize {
         0
     }
@@ -174,7 +187,11 @@ impl Clipper {
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &ClipperConfig) {
         let drive_db = cfg.drive_db.max(0.0);
         let softness = cfg.softness.clamp(0.0, 1.0);
-        if cfg.enabled && !self.was_enabled {
+        // Re-enabled while the fade-out still runs: the wet path is live
+        // and warm, so the fade just turns around (a restart here would
+        // drop it to the filters' cold start under a half-open fade).
+        let fading_out = self.enable_sm.current() > 0.0;
+        if cfg.enabled && !self.was_enabled && !fading_out {
             // (Re)engage from a clean state; the enable crossfade covers
             // the oversamplers settling.
             self.left.reset();

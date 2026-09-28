@@ -4,7 +4,7 @@
 //! The plugin's assistant panel captures 10 s of the live master and
 //! compares it against a genre band or a reference track. This is the
 //! same analysis and the same decision engine
-//! (`resonance_mastering::assistant::decide`), run on an OFFLINE render of
+//! (`resonance_mastering_assist::decide`), run on an OFFLINE render of
 //! the master range instead of a live capture, and answered with the
 //! suggestions — stage by stage, each with its rationale and the exact
 //! mastering-plugin param writes — WITHOUT applying any of them. The agent
@@ -15,13 +15,15 @@
 //! A job, like `meter.measure`: the handler validates, registers a
 //! [`JobToken::Measure`] under [`master::ASSIST`], and asks the engine
 //! for the master render with the assistant's LTAS
-//! ([`DetailSet::assist`]). In reference mode it also asks for the pooled
-//! asset measured as decoded audio ([`AudioCommand::MeasureAudio`], which
-//! reads the file the way a placed clip does). Both answers carry the job
-//! id; [`measured`] parks whichever arrives first in
-//! [`PendingAssist`] and builds the result once both are in. The
-//! reference measurement is told apart by its
-//! [`MeasureSource::Decoded`] source.
+//! ([`DetailSet::assist`]). In reference mode it first asks for the
+//! pooled asset measured as decoded audio ([`AudioCommand::MeasureAudio`],
+//! which reads the file the way a placed clip does), and sends the master
+//! render only once that has succeeded — so the job never has more than
+//! one engine command outstanding, and a failed decode cannot end the job
+//! (releasing the offline-render guard) while a render still runs.
+//! [`measured`] parks the reference in [`PendingAssist`] and builds the
+//! result once the master is in. The reference measurement is told apart
+//! by its [`MeasureSource::Decoded`] source.
 //!
 //! The analysis is exactly the panel's: `analyze::run` reads the same
 //! `resonance-metering` functions (BS.1770 loudness, true peak, the
@@ -45,9 +47,9 @@ use resonance_control::methods::master::{
     AssistParams, AssistResult, AssistSuggestion, AssistTargetInfo, MASTERING_PLUGIN_ID,
 };
 use resonance_control::{Request, Response, RpcError};
-use resonance_mastering::assistant::analyze::AnalysisResult;
-use resonance_mastering::assistant::decide::{self, Target};
-use resonance_mastering::assistant::{Genre, ReferenceTrack};
+use resonance_mastering_assist::analyze::AnalysisResult;
+use resonance_mastering_assist::decide::{self, Target};
+use resonance_mastering_assist::{Genre, ReferenceTrack};
 
 /// Handle `master.assist`, or `None` for any other method.
 pub(super) fn try_handle(
@@ -90,38 +92,32 @@ fn assist(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
         Some(conn),
     );
     let job = u64::from(started.job_id);
+    // Reference mode decodes the reference FIRST and renders the master
+    // only once that succeeds ([`measured`]): with both commands in
+    // flight, a failed decode would end the job — and release the
+    // offline-render guard it holds — while the master render still ran,
+    // so a bounce or freeze could start on top of it.
+    let deferred = reference_file.is_some();
     app.control.pending_assists.insert(
         job,
         PendingAssist {
             target,
             mix: None,
             reference: None,
+            mix_range: deferred.then_some(range),
         },
     );
-    let detail = DetailSet {
-        assist: true,
-        ..DetailSet::default()
-    };
-    let mut sent = app
-        .engine
-        .send(AudioCommand::MeasureMix {
-            measure_id: job,
-            targets: vec![StemSource::Master],
-            range,
-            source: MeasureSource::Render,
-            detail,
-        })
-        .is_ok();
-    if let Some(path) = reference_file {
-        sent &= app
+    let sent = match reference_file {
+        Some(path) => app
             .engine
             .send(AudioCommand::MeasureAudio {
                 measure_id: job,
                 source: AudioMeasureSource::File(path),
-                detail,
+                detail: ASSIST_DETAIL,
             })
-            .is_ok();
-    }
+            .is_ok(),
+        None => send_mix(app, job, range),
+    };
     if !sent {
         app.control.pending_assists.remove(&job);
         app.control
@@ -129,6 +125,27 @@ fn assist(app: &mut Resonance, conn: ConnId, request: &Request) -> Response {
             .fail(job, "the assistant did not start (engine unavailable)");
     }
     super::success(request, &started)
+}
+
+const ASSIST_DETAIL: DetailSet = DetailSet {
+    spectrum: false,
+    stereo: false,
+    dynamics: false,
+    depth: false,
+    assist: true,
+};
+
+/// Ask the engine for the master render with the assistant's LTAS.
+fn send_mix(app: &Resonance, job: u64, range: Option<(u64, u64)>) -> bool {
+    app.engine
+        .send(AudioCommand::MeasureMix {
+            measure_id: job,
+            targets: vec![StemSource::Master],
+            range,
+            source: MeasureSource::Render,
+            detail: ASSIST_DETAIL,
+        })
+        .is_ok()
 }
 
 /// Check the mode's fields and resolve the target (and, for a
@@ -214,6 +231,16 @@ pub(crate) fn measured(app: &mut Resonance, job: u64, results: Vec<MixMeasuremen
     };
     if m.source == MeasureSource::Decoded {
         pending.reference = Some(m);
+        // The reference is in: now render the master (see `assist`).
+        if let Some(range) = pending.mix_range.take() {
+            if !send_mix(app, job, range) {
+                app.control.pending_assists.remove(&job);
+                app.control
+                    .jobs
+                    .fail(job, "the master render did not start (engine unavailable)");
+            }
+            return;
+        }
     } else {
         pending.mix = Some(m);
     }

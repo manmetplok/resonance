@@ -485,7 +485,7 @@ Tonal-Balance-Control model, rather than single curves. Decision D6: the
 bands are **built in, from published averages**. Each genre gets a
 Pestana-style slope (about −4.5 to −5 dB/oct over 100 Hz–4 kHz) with
 genre-specific low-end and top offsets and a ± tolerance per band. They
-replace the heuristic curves in `assistant/targets.rs`. Reference tracks
+replace the heuristic curves in `resonance-mastering-assist/src/targets.rs`. Reference tracks
 (§7.5) stay a separate comparison mode and don't generate targets.
 
 ### 7.5 Reference tracks

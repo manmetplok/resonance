@@ -30,6 +30,7 @@
 
 use crossbeam_channel::{Receiver, Sender};
 
+use crate::clap_host::SyncClapInstance;
 use crate::types::{AudioClip, AudioEvent, ClipId, F0Frame, NoteBlob};
 
 use super::clips::ClipLoadEcho;
@@ -80,6 +81,20 @@ pub(crate) enum EngineInternal {
         clip: Box<AudioClip>,
         completed: Box<AudioEvent>,
     },
+    /// A `probe-chain` worker is done with its cloned instances
+    /// ([`super::probe::spawn_probe`]): destroy them here, since CLAP's
+    /// `deactivate` / `destroy` are main-thread calls.
+    RetireProbeClones(ProbeClones),
+}
+
+/// The cloned instances a finished probe hands back. A newtype only so
+/// [`EngineInternal`] can stay `Debug`.
+pub(crate) struct ProbeClones(pub Vec<SyncClapInstance>);
+
+impl std::fmt::Debug for ProbeClones {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ProbeClones").field(&self.0.len()).finish()
+    }
 }
 
 /// The worker → engine channel on [`SharedState`](super::SharedState).
@@ -141,6 +156,9 @@ pub(crate) fn dispatch_internal(ctx: &HandlerCtx, state: &mut HandlerState, msg:
         EngineInternal::BouncedClip { clip, completed } => {
             super::bounce::apply_bounced_clip(ctx, *clip, *completed)
         }
+        // Dropping runs each clone's `deactivate` / `destroy`, here on
+        // the engine thread.
+        EngineInternal::RetireProbeClones(clones) => drop(clones),
     }
 }
 

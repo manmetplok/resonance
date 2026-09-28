@@ -379,6 +379,15 @@ impl Analysis {
     /// cuts. `box1` doubles as scratch and ends holding the reference.
     fn detect(&mut self, det: &mut Detector, power: &[f32], coefs: HopCoefs) {
         let bins = self.bins;
+        // A NaN or infinity in the frame would poison the smoothed power
+        // for good, and a NaN level reads as over the reference at full
+        // depth: one bad sample latched a full cut. Drop the state and
+        // cut nothing until the frame is clean; the next clean frame
+        // restarts the detector from its own measurement.
+        if !power.iter().all(|p| p.is_finite()) {
+            det.reset();
+            return;
+        }
         if !det.active {
             // First frame after (re)activation: start the integrator at
             // the current measurement instead of ramping up from zero.

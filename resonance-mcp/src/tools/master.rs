@@ -259,9 +259,10 @@ impl ResonanceMcp {
                        happens to be loudest. There is no master_id — there is one master. \
                        \
                        Addressed like master_set_plugin_param: an optional plugin_id (+ \
-                       occurrence); omitted targets the first DYNAMICS plugin (compressor, gate) \
-                       on the chain that HAS a key port, and resonance-reverb only when it is \
-                       the only plugin with one. Name the key source with EITHER source_track_id OR source_bus_id. \
+                       occurrence); omitted targets the first plugin on the chain that HAS a \
+                       key port other than resonance-reverb and resonance-eq (in practice the \
+                       compressor); the reverb or the EQ only when nothing else has one. Name \
+                       the key source with EITHER source_track_id OR source_bus_id. \
                        Sources are tapped post-FX and PRE-fader, so a key source can sit at -inf \
                        and still key. enabled defaults to true; false keeps the routing \
                        configured but stops delivering the key. \
@@ -284,8 +285,11 @@ impl ResonanceMcp {
 
     #[tool(
         description = "Remove a master plugin's external sidechain key route, so its detector \
-                       goes back to reading the mix itself. Addressed exactly as \
-                       master_set_sidechain. Clearing a plugin that had no route is not an error.",
+                       goes back to reading the mix itself. Addressed like \
+                       master_set_sidechain, except that omitting plugin_id clears the first \
+                       plugin on the chain that HAS a route (falling back to \
+                       master_set_sidechain's default). Clearing a plugin that had no route is \
+                       not an error.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<MutationAck>()
     )]

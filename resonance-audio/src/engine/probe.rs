@@ -23,12 +23,22 @@
 //!    state extension is probed at its defaults and reported with
 //!    `state_copied: false`.
 //! 3. Move the clones to a worker thread, run the stimulus through them
-//!    in chain order, analyze, and drop them there.
+//!    in chain order and analyze; then hand them back to the engine
+//!    thread, which destroys them (CLAP `deactivate` / `destroy` are
+//!    main-thread calls, and the engine thread is this host's main
+//!    thread for plugins).
 //!
 //! The live instances are never processed, reset or reloaded, so neither
-//! playback, automation, undo nor any plugin's running state is touched,
-//! and no offline-render guard is taken: a probe can run while the
-//! transport rolls or a bounce renders. Automation is not applied to the
+//! automation, undo nor any plugin's running state is touched, and no
+//! offline-render guard is taken: a probe can run while the transport
+//! rolls or a bounce renders. It is not free for playback, though: the
+//! `save_state()` in step 1 holds the live slot's lock, and the live
+//! render's `try_lock` skips a plugin it cannot take for that block —
+//! the same one-block dropout a project save (`SaveAllPluginStates`)
+//! risks. Avoiding it would mean serialising a plugin's state without
+//! exclusive access to the instance, which the `SyncClapInstance`
+//! contract (the mutex is what keeps host calls off a running
+//! `process()`) does not allow. Automation is not applied to the
 //! clone — it probes the chain at its current parameter values — and a
 //! sidechain key input receives silence.
 
@@ -38,6 +48,7 @@ use resonance_metering::probe::{
     analyze_harmonics, bin_exact_hz, imd_pct, probe_sine, smpte_pair, PROBE_LEN,
 };
 
+use super::internal::{EngineInternal, ProbeClones};
 use super::plugins::{ensure_bundle, resolve_plugin_id};
 use super::thread::{HandlerCtx, HandlerState};
 
@@ -110,22 +121,47 @@ pub(crate) fn handle_probe_chain(
     }
 
     // 3. Render and analyze off the engine thread.
+    spawn_probe(ctx, probe_id, chain, probed, spec);
+}
+
+/// Probe `chain` on a `probe-chain` worker and emit the one terminal
+/// event; the clones then go back to the engine thread to be destroyed.
+///
+/// CLAP makes `deactivate` and `destroy` main-thread calls, and this
+/// host's main thread for plugins is the engine thread (every instance is
+/// created, activated and destroyed there). So the worker never drops a
+/// clone: once the report is out — or the run panicked — it posts them on
+/// the engine inbox ([`EngineInternal::RetireProbeClones`]), whose
+/// handler drops them on the engine thread, as the retire sweep does for
+/// a removed live slot.
+pub(crate) fn spawn_probe(
+    ctx: &HandlerCtx,
+    probe_id: u64,
+    chain: Vec<SyncClapInstance>,
+    probed: Vec<ProbedStage>,
+    spec: ProbeSpec,
+) {
     let event_tx = ctx.event_tx.clone();
+    let shared = std::sync::Arc::clone(ctx.shared);
     let sample_rate = ctx.sample_rate;
     std::thread::Builder::new()
         .name("probe-chain".into())
         .spawn(move || {
+            let mut chain = chain;
             let panic_tx = event_tx.clone();
             crate::supervise::run_supervised(
                 "probe-chain",
                 || {
-                    let report = run_probe(chain, probed, spec, sample_rate);
+                    let report = run_probe(&mut chain, probed, spec, sample_rate);
                     let _ = event_tx.send(AudioEvent::ChainProbed { probe_id, report });
                 },
                 |message| {
                     let _ = panic_tx.send(AudioEvent::ChainProbeError { probe_id, message });
                 },
             );
+            shared
+                .inbox
+                .post(EngineInternal::RetireProbeClones(ProbeClones(chain)));
         })
         .expect("spawn probe-chain thread");
 }
@@ -133,10 +169,11 @@ pub(crate) fn handle_probe_chain(
 /// Drive `chain` (already-built instances, in order) with the probe tone
 /// and, if asked, the SMPTE pair, and analyze the steady-state output.
 ///
-/// Pure over its instances: nothing outside them is read or written.
-/// `pub` via `test_support` so a test can probe instances it built.
+/// Pure over its instances: nothing outside them is read or written, and
+/// they stay the caller's to destroy (on the engine thread — see
+/// [`spawn_probe`]).
 pub fn run_probe(
-    mut chain: Vec<SyncClapInstance>,
+    chain: &mut [SyncClapInstance],
     stages: Vec<ProbedStage>,
     spec: ProbeSpec,
     sample_rate: u32,
@@ -151,7 +188,7 @@ pub fn run_probe(
 
     let freq = bin_exact_hz(rate, spec.freq_hz);
     let tone = probe_sine(rate, freq, spec.level_dbfs, frames);
-    let out = process(&mut chain, &tone);
+    let out = process(chain, &tone);
     let harmonics = analyze_harmonics(rate, freq, &out[warmup..warmup + PROBE_LEN]);
 
     let imd = spec.imd.then(|| {
@@ -160,7 +197,7 @@ pub fn run_probe(
             instance.0.reset();
         }
         let (pair, low, high) = smpte_pair(rate, spec.level_dbfs, frames);
-        let out = process(&mut chain, &pair);
+        let out = process(chain, &pair);
         imd_pct(rate, low, high, &out[warmup..warmup + PROBE_LEN])
     });
 

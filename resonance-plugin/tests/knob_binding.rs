@@ -212,3 +212,28 @@ fn the_readout_comes_from_the_params_own_formatter() {
     p.set_normalized(0.5);
     assert_eq!(p.display(p.value() as f64), "50%");
 }
+
+#[test]
+fn an_int_choice_without_a_choice_table_lists_its_whole_range() {
+    use resonance_plugin::editor_widgets::int_choice_options;
+    use resonance_plugin::{IntParam, IntRange};
+
+    // A plain IntParam — no `with_choices` — used to draw an empty
+    // dropdown: the combo iterated the (missing) label table.
+    let plain = IntParam::new("voices", "Voices", 2, IntRange::Linear { min: 1, max: 4 });
+    let got: Vec<i32> = int_choice_options(&plain).iter().map(|(v, _)| *v).collect();
+    assert_eq!(got, vec![1, 2, 3, 4]);
+    for (v, label) in int_choice_options(&plain) {
+        assert_eq!(label, plain.display(v as f64), "labels come from the param");
+    }
+
+    // With a table, the table's labels, from the range's minimum.
+    let table: &'static [&'static str] = &["Off", "Soft", "Hard"];
+    let choice =
+        IntParam::new("mode", "Mode", 0, IntRange::Linear { min: 0, max: 2 }).with_choices(table);
+    let got = int_choice_options(&choice);
+    assert_eq!(
+        got,
+        vec![(0, "Off".to_string()), (1, "Soft".to_string()), (2, "Hard".to_string())]
+    );
+}

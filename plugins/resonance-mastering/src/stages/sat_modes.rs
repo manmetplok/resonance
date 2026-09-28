@@ -28,12 +28,23 @@
 //!
 //! The curves run through first-order ADAA ([`Adaa1`]) inside a 4× IIR
 //! [`Oversampler`]. At 1× the ADAA's two-tap average would dull the top
-//! octave (−3 dB at fs/4); at 4× it sits far above the audio band. The
-//! half-band filters are latency-free, so the reported latency does not
-//! change, but they do add a few samples of phase shift, so the dry
-//! signal runs through an identical up/down pair before the mix. (The
+//! octave (−3 dB at fs/4); at 4× it sits far above the audio band. (The
 //! linear filters of each voicing run at the base rate, where their low
 //! corners are numerically clean.)
+//!
+//! # Delay
+//!
+//! The half-band filters have no fixed delay, so the reported latency
+//! does not change. They do delay the wet path by a frequency-dependent
+//! amount, about 5.5 samples at 48 kHz below a few kHz, which the host's
+//! delay compensation does not see. For `sat_mix` the dry signal runs
+//! through an identical up/down pair, so the parallel blend does not
+//! comb, and a mode is always its own group delay behind its input.
+//! The stage's enable crossfade (10 ms) is the one place the delayed
+//! signal meets the raw input, so it combs while it runs (first notch
+//! ≈4.4 kHz at its midpoint). Matching its dry side too would make the
+//! fade start and end on a step between the delayed and the raw signal
+//! instead, which clicks. See the chain's module docs.
 //!
 //! Switching modes restarts the mode's filters; like switching the Blend
 //! mode's shaper it is not crossfaded.

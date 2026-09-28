@@ -66,7 +66,7 @@ Unlike `bands`, it keeps anti-phase side content.
 | `lowmid_presence_db` | Energy 150-500 Hz over 2-5 kHz, dB | Rises 1-2 dB for "warmer". A big rise with a steep tilt is mud, not warmth. |
 | `presence_peakiness_db` | Crest of the 1/6-octave bands inside 2-5 kHz (loudest over mean), dB | 0 is perfectly even. High means one presence resonance, the usual cause of harshness. Fix it before adding warmth. |
 | `air_ratio_db` | Energy 8-16 kHz over the total, dB | Always negative. Drops slightly for "warmer". |
-| `peaks` | Up to 5 narrow resonances, `{freq_hz, excess_db}`, strongest first | `excess_db` is how far a 1/6-octave band stands above the octave either side of it. A peak must clear 1 dB and the measurement's own noise, so a short range reports fewer and only larger peaks. Empty is normal. |
+| `peaks` | Up to 5 narrow resonances, `{freq_hz, excess_db}`, strongest first | `excess_db` is how far a 1/6-octave band stands above the local trend: a straight line fitted to the octave either side of it, leaving out its immediate neighbours. A peak must clear 1 dB and the measurement's own noise, so a short range reports fewer and only larger peaks, and it must be at most 1/3 octave wide, so a broad hump (the bump a high-pass leaves in the low end, a wide bell) is never listed; read those in `third_octave`. Empty is normal. |
 
 ### `stereo`: width and mono safety
 
@@ -240,9 +240,13 @@ a sidechain key hears silence. `stages` lists what was probed. A stage with
 | `gain_db` | Output level at the probe frequency minus the input level | A saturator with auto-gain sits near 0. |
 | `latency_samples` | Summed latency of the probed stages | Informational. |
 
-**Probe at the level the chain really sees.** Distortion rises with level, so a
--12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
-tone's peak.
+**Probe at -18 dBFS to set a drive.** Distortion rises with level, so a THD
+figure means nothing without its probe level. The THD targets above, and the
+colour presets voiced to land in them, are all for a -18 dBFS sine, which is
+the tool's default `level_dbfs`; passing `level_dbfs: -18` explicitly is
+harmless. `level_dbfs` (-80..0) sets the tone's peak; a second probe at the level
+the chain really peaks at shows how hard the loudest moments hit, and reads
+higher.
 
 ## Delivery: a normalized mixdown
 
@@ -290,7 +294,9 @@ master range and returns its suggestions. **It applies nothing.** Pass
 
 - `measured` is the master as it is now, after the whole master chain. That
   includes any mastering plugin already on it. Run the assistant before you
-  switch stages on, or read its numbers as "what is left to do".
+  switch stages on. A re-run after that reports what is left to do: its trim
+  plus its limiter gain, and its shelf gains, are amounts to **add** to the
+  current values, not values to write (the `mastering` skill, 3b).
 - `suggestions[]` goes stage by stage (`input_trim`, `tonal_low_shelf`,
   `tonal_high_shelf`, `glue`, `imager`, `limiter`, `target_lufs`,
   `diagnostic`). Each entry has a `rationale` and the exact `params` writes
@@ -312,8 +318,8 @@ master range and returns its suggestions. **It applies nothing.** Pass
 
 Treat each stage as a proposal. Apply one, then check the result with
 `meter_compare` at matched loudness before accepting the next. In
-particular, `input_trim` and `target_lufs` aim at the genre's loudness,
-which is a mastering target and never a mix target.
+particular, `input_trim`, the limiter's gain and `target_lufs` aim at the
+genre's loudness, which is a mastering target and never a mix target.
 
 ## Cost
 
