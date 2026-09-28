@@ -99,6 +99,9 @@ pub fn try_lock_with_backoff<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// caller and lent to [`render_chunk`].
 pub(super) struct ChunkScratch {
     pub sidechain: crate::types::SidechainTaps,
+    /// Per-track render slots (`mixer::render::slots`), grown before each
+    /// chunk to the graph's track count — this is not the audio thread.
+    pub track_slots: crate::mixer::render::slots::TrackSlots,
     pub track_buf_l: Vec<f32>,
     pub track_buf_r: Vec<f32>,
     pub bus_bufs: Vec<(Vec<f32>, Vec<f32>)>,
@@ -115,12 +118,17 @@ pub(super) struct ChunkScratch {
     /// requires it, and because it keeps the offline path structurally
     /// identical to the live one.
     pub fx_dry: crate::bypass::FxDryScratch,
+    /// The worker pool the chunk's track and bus jobs spread over
+    /// (realtime-multithreading.md §4.7): normal priority, owned by this
+    /// render, joined when it ends.
+    pub pool: crate::render_pool::RenderPool,
 }
 
 impl ChunkScratch {
     pub(super) fn new() -> Self {
         Self {
             sidechain: crate::types::SidechainTaps::new(BOUNCE_CHUNK),
+            track_slots: crate::mixer::render::slots::TrackSlots::new(0, BOUNCE_CHUNK),
             track_buf_l: vec![0.0f32; BOUNCE_CHUNK],
             track_buf_r: vec![0.0f32; BOUNCE_CHUNK],
             bus_bufs: (0..MAX_BUSSES)
@@ -132,6 +140,9 @@ impl ChunkScratch {
             note_buf: Vec::with_capacity(256),
             mix_buf: vec![0.0f32; BOUNCE_CHUNK * 2],
             fx_dry: crate::bypass::FxDryScratch::new(BOUNCE_CHUNK),
+            pool: crate::render_pool::RenderPool::new(crate::render_pool::PoolConfig::offline(
+                BOUNCE_CHUNK,
+            )),
         }
     }
 }
@@ -308,15 +319,18 @@ pub(super) fn render_chunk(
     scratch: &mut ChunkScratch,
     pos: u64,
     frames: usize,
-    in_filter: &dyn Fn(TrackId) -> bool,
-    fan_out_only: &dyn Fn(TrackId) -> bool,
-    key_only: &dyn Fn(TrackId) -> bool,
-    key_only_bus: &dyn Fn(BusId) -> bool,
+    in_filter: &(dyn Fn(TrackId) -> bool + Sync),
+    fan_out_only: &(dyn Fn(TrackId) -> bool + Sync),
+    key_only: &(dyn Fn(TrackId) -> bool + Sync),
+    key_only_bus: &(dyn Fn(BusId) -> bool + Sync),
     include_master_fx: bool,
     respect_mute_solo: bool,
     freeze_raw: bool,
 ) {
     scratch.mix_buf[..frames * 2].fill(0.0);
+    // CLAP `thread-check`: this thread renders for the chunk (a bounce
+    // thread makes main-thread calls between chunks, so only a scope).
+    let _audio = crate::clap_host::thread_check::AudioThreadScope::enter();
 
     // The render graph (audio and MIDI clips, busses, master chain,
     // tracks, plugins), loaded once for the chunk (ARCH-02 A2-4…A2-8): no
@@ -355,7 +369,7 @@ pub(super) fn render_chunk(
     // `in_filter` / `respect_mute_solo` gating, uses constant gains
     // instead of per-block ramps, and skips meter / last-gain atomic
     // writes so a bounce can run concurrently with live playback.
-    let mut strategy = mixer::RenderStrategy::Bounce {
+    let strategy = mixer::RenderStrategy::Bounce {
         in_filter,
         fan_out_only,
         key_only,
@@ -363,6 +377,7 @@ pub(super) fn render_chunk(
         respect_mute_solo,
         freeze_raw,
     };
+    scratch.track_slots.ensure(tracks_guard.len());
     mixer::render_block(
         mixer::BlockInputs {
             channels: 2,
@@ -385,15 +400,16 @@ pub(super) fn render_chunk(
         },
         &mut mixer::BlockScratch {
             data: &mut scratch.mix_buf[..frames * 2],
-            track_buf_l: &mut scratch.track_buf_l,
-            track_buf_r: &mut scratch.track_buf_r,
             bus_bufs: &mut scratch.bus_bufs,
+            slots: &mut scratch.track_slots,
+            stash: None,
             port_scratch: &mut scratch.port_scratch,
             note_event_buf: &mut scratch.note_buf,
             sidechain: &mut scratch.sidechain,
             fx_dry: &mut scratch.fx_dry,
+            pool: Some(&scratch.pool),
         },
-        &mut strategy,
+        &strategy,
     );
 
     // Master FX chain: run over the summed mix in place. Skipped when

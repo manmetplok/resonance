@@ -5,7 +5,9 @@
 //! through a recording `NoteSink` — no live CLAP plugin needed.
 
 use resonance_audio::types::PendingNoteEvent;
-use resonance_audio::{MidiStash, NoteSink, MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
+use resonance_audio::{
+    MidiStash, NoteSink, StashEntry, MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS,
+};
 
 #[derive(Debug, PartialEq)]
 enum Call {
@@ -210,4 +212,97 @@ fn slot_pool_exhaustion_drops_events_for_new_instances() {
     sink.calls.clear();
     stash.deliver(999, &mut sink);
     assert_eq!(sink.calls, vec![Call::On(61, 0.8, 0)]);
+}
+
+fn ev(note: u8, on: bool) -> PendingNoteEvent {
+    PendingNoteEvent {
+        is_note_on: on,
+        note,
+        velocity: 0.5,
+        sample_offset: 17,
+    }
+}
+
+/// A render job borrows an instrument's parked events by value
+/// (`take` → the job's carry → `restore`) so it can run on another
+/// thread without sharing the stash (realtime-multithreading.md §4.2).
+/// A carry the job never touched must come back exactly as it left —
+/// events, order and a pending panic all intact.
+#[test]
+fn an_untouched_carry_round_trips_unchanged() {
+    let mut stash = MidiStash::new();
+    stash.request_panic(3);
+    stash.stash(3, &[ev(60, true), ev(62, false)]);
+    let mut carry = StashEntry::new();
+
+    assert!(stash.take(3, &mut carry));
+    assert!(!stash.has_pending(), "taking frees the stash slot");
+    assert_eq!(carry.instance(), Some(3));
+    stash.restore(&mut carry);
+    assert_eq!(carry.instance(), None, "restoring frees the carry");
+
+    let mut sink = Recorder::default();
+    stash.deliver(3, &mut sink);
+    assert_eq!(
+        sink.calls,
+        vec![Call::AllOff, Call::On(60, 0.5, 0), Call::Off(62, 0)]
+    );
+}
+
+/// A job whose lock failed again parks its block's events into the carry
+/// after the ones already there — the same order `stash` alone keeps.
+#[test]
+fn a_carry_stashed_into_restores_old_events_then_new() {
+    let mut stash = MidiStash::new();
+    stash.stash(3, &[ev(60, true)]);
+    let mut carry = StashEntry::new();
+    stash.take(3, &mut carry);
+    carry.stash(3, &[ev(60, false), ev(64, true)]);
+    stash.restore(&mut carry);
+
+    let mut sink = Recorder::default();
+    stash.deliver(3, &mut sink);
+    assert_eq!(
+        sink.calls,
+        vec![Call::On(60, 0.5, 0), Call::Off(60, 0), Call::On(64, 0.5, 0)]
+    );
+}
+
+/// A job whose lock succeeded delivers from the carry, which leaves
+/// nothing to restore.
+#[test]
+fn a_delivered_carry_leaves_nothing_parked() {
+    let mut stash = MidiStash::new();
+    stash.stash(3, &[ev(60, true)]);
+    let mut carry = StashEntry::new();
+    stash.take(3, &mut carry);
+
+    let mut sink = Recorder::default();
+    carry.deliver(4, &mut sink);
+    assert!(
+        sink.calls.is_empty(),
+        "another instrument's carry is not delivered"
+    );
+    carry.deliver(3, &mut sink);
+    assert_eq!(sink.calls, vec![Call::On(60, 0.5, 0)]);
+
+    stash.restore(&mut carry);
+    assert!(!stash.has_pending());
+}
+
+/// With every stash slot claimed by other instruments while the carry
+/// was out, restoring drops the carry — the same fate `stash` gives a
+/// block's events on an exhausted pool — rather than panicking.
+#[test]
+fn restoring_into_an_exhausted_pool_drops_the_carry() {
+    let mut stash = MidiStash::new();
+    stash.stash(1000, &[ev(60, true)]);
+    let mut carry = StashEntry::new();
+    stash.take(1000, &mut carry);
+    for id in 0..MAX_STASHED_INSTRUMENTS as u64 {
+        stash.stash(id, &[ev(1, true)]);
+    }
+    stash.restore(&mut carry);
+    assert_eq!(carry.instance(), None);
+    assert!(!stash.pending_instances().any(|id| id == 1000));
 }

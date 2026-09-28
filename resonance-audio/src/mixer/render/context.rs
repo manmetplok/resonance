@@ -22,9 +22,12 @@ use crate::clap_host::{PluginMap, StereoBufMut};
 use crate::engine::AutomationSnapshot;
 use crate::latency::LatencyComp;
 use crate::mixer::automation_apply::apply_plugin_params;
+use crate::mixer::midi_stash::MidiStash;
 use crate::mixer::take_comp::CompRenderTable;
 use crate::types::*;
 
+use super::slots::TrackSlots;
+use crate::render_pool::RenderPool;
 use super::strategy::RenderStrategy;
 
 /// Gain ramp endpoints for one block, per channel: `((l_from, l_to),
@@ -84,15 +87,37 @@ pub(crate) struct BlockScratch<'a> {
     /// Interleaved output, exactly `frames * channels` samples, cleared
     /// by the caller before the first block.
     pub(crate) data: &'a mut [f32],
-    pub(crate) track_buf_l: &'a mut [f32],
-    pub(crate) track_buf_r: &'a mut [f32],
     pub(crate) bus_bufs: &'a mut BusBufs,
+    /// One slot per track: where each track job leaves its pre-fader
+    /// signal and route for the ordered reduction (see
+    /// [`super::slots`]). Must hold at least `tracks.len()` slots; tracks
+    /// past its end are not rendered.
+    pub(crate) slots: &'a mut TrackSlots,
+    /// The live callback's parked MIDI (lock contention); `None` offline,
+    /// where plugin locks never fail.
+    pub(crate) stash: Option<&'a mut MidiStash>,
     pub(crate) port_scratch: &'a mut [(Vec<f32>, Vec<f32>)],
     pub(crate) note_event_buf: &'a mut Vec<PendingNoteEvent>,
     pub(crate) sidechain: &'a mut SidechainTaps,
     /// Dry-signal staging for the bypass crossfades (`crate::bypass`).
     /// Pre-allocated by the scratch's owner so a bypass transition never
     /// allocates on the audio thread.
+    pub(crate) fx_dry: &'a mut FxDryScratch,
+    /// The render pool the track jobs run on; `None` runs them on the
+    /// calling thread. `port_scratch`, `note_event_buf` and `fx_dry` are
+    /// the calling thread's own share of the job scratch.
+    pub(crate) pool: Option<&'a RenderPool>,
+}
+
+/// What one track job borrows besides its own slots: the scratch of the
+/// thread running it (the multi-output port pool, the MIDI event buffer,
+/// the bypass dry staging) and the sidechain taps.
+pub(crate) struct JobScratch<'a> {
+    pub(crate) port_scratch: &'a mut [(Vec<f32>, Vec<f32>)],
+    pub(crate) note_event_buf: &'a mut Vec<PendingNoteEvent>,
+    /// Shared by every job: keys read the previous block's bank, and a job
+    /// captures only its own sources (`SidechainTaps::capture_shared`).
+    pub(crate) sidechain: &'a SidechainTaps,
     pub(crate) fx_dry: &'a mut FxDryScratch,
 }
 
@@ -274,7 +299,7 @@ pub(crate) fn run_fx_chain(
     sidechain: &SidechainTaps,
     bufs: (&mut [f32], &mut [f32]),
     dry: &mut FxDryScratch,
-    strategy: &mut RenderStrategy<'_>,
+    strategy: &RenderStrategy<'_>,
 ) -> bool {
     let frames = ctx.inputs.frames;
     let sample_rate = ctx.inputs.sample_rate;

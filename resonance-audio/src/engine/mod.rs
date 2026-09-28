@@ -285,6 +285,10 @@ pub struct SharedState {
     /// The callback's one-shot oversize-buffer warning, logged by the
     /// engine loop — never the audio thread (code review ARCH-05 A5-2).
     pub oversize_buffer: crate::cycle_load::OversizeBufferLatch,
+    /// The live render pool's status, for the engine loop to report
+    /// (`AudioEvent::RenderThreads`). Set when an output stream is built;
+    /// engine side only.
+    pub(crate) render_pool: parking_lot::Mutex<Option<crate::render_pool::PoolMonitor>>,
     /// The cpal output / input streams' error callbacks, counted on the
     /// audio thread and logged by the engine loop (code review FU-H6b).
     pub output_stream_errors: crate::stream_errors::StreamErrorLatch,
@@ -549,6 +553,7 @@ impl Default for SharedState {
             monitor_shortfall_cycles: AtomicU64::new(0),
             cycle_report: crate::cycle_load::CycleReportSlot::default(),
             oversize_buffer: crate::cycle_load::OversizeBufferLatch::default(),
+            render_pool: parking_lot::Mutex::new(None),
             output_stream_errors: Default::default(),
             input_stream_errors: Default::default(),
             plugins_dead_after_reset: parking_lot::Mutex::new(Vec::new()),
@@ -696,9 +701,26 @@ impl From<EngineInitError> for EngineError {
     }
 }
 
+/// Startup options for [`AudioEngine::with_options`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EngineOptions {
+    /// Threads the live render pool spreads track jobs over, the audio
+    /// thread included (realtime-multithreading.md §4.3); 1 renders
+    /// serially. `None` = physical cores − 1 workers plus the audio
+    /// thread. The `RESONANCE_RENDER_THREADS` environment variable
+    /// overrides it.
+    pub render_threads: Option<usize>,
+}
+
 impl AudioEngine {
-    /// Create and start the audio engine. Returns the engine handle.
+    /// Create and start the audio engine with default options. Returns
+    /// the engine handle.
     pub fn new() -> Result<Self, EngineInitError> {
+        Self::with_options(EngineOptions::default())
+    }
+
+    /// Create and start the audio engine. Returns the engine handle.
+    pub fn with_options(options: EngineOptions) -> Result<Self, EngineInitError> {
         // Replace ALSA's default stderr error handler before any cpal
         // / device enumeration so the startup PCM probing doesn't
         // spam "Cannot open device /dev/dsp" and friends. Idempotent.
@@ -797,6 +819,11 @@ impl AudioEngine {
 
         let audio_buf_frames = buf_frames;
         let audio_quantum = quantum;
+        // The render pool's size, resolved once: the live callback's pool
+        // and every offline render's use the same thread count.
+        let live_pool_config =
+            crate::render_pool::PoolConfig::live(audio_buf_frames, options.render_threads);
+        crate::render_pool::configure_threads(live_pool_config.workers + 1);
         // Build one fully-captured mixer callback plus the matching
         // monitor-ring producer. Callable more than once (the native
         // PipeWire attempt, then the cpal fallback) — each call
@@ -810,6 +837,15 @@ impl AudioEngine {
             let automation_audio = Arc::clone(&automation_audio);
             let mut track_buf_l = vec![0.0f32; audio_buf_frames];
             let mut track_buf_r = vec![0.0f32; audio_buf_frames];
+            // One render slot per track (the track jobs' output, reduced in
+            // track order), grown by the engine thread on graph publish.
+            let mut track_slots = shared_audio.graph.attach_live_slots(audio_buf_frames);
+            // The render worker pool the track jobs spread over
+            // (realtime-multithreading.md §4.3). Owned by this closure and
+            // joined when the stream drops it; the engine loop reports its
+            // status.
+            let render_pool = crate::render_pool::RenderPool::new(live_pool_config.clone());
+            *shared_audio.render_pool.lock() = Some(render_pool.monitor());
             // Pre-allocate MAX_BUSSES stereo buffers so adding a bus at
             // runtime never allocates on the audio thread. mix_audio only
             // uses the first N slots where N = current bus count.
@@ -929,11 +965,14 @@ impl AudioEngine {
                             monitor_drain: &mut monitor_drain,
                             ab_meters: &mut ab_meters,
                             sidechain: &mut sidechain,
+                            track_slots: &mut track_slots,
+                            pool: &render_pool,
                             fx_dry: &mut fx_dry,
                             continuity: &mut continuity,
                         },
                     );
                     let mix_end = std::time::Instant::now();
+                    load_meter.record_pass(&track_slots.current().take_stats());
                     if let Some(report) = load_meter.record(
                         mix_end,
                         mix_end - mix_start,

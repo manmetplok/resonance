@@ -280,6 +280,20 @@ impl ClapInstance {
         names
     }
 
+    /// The plugin's descriptor id (`com.vendor.plugin`), if it has one.
+    /// Allocates; engine side.
+    pub fn descriptor_id(&self) -> Option<String> {
+        // SAFETY: `plugin` is live for the instance's lifetime, and a
+        // CLAP descriptor and its strings outlive the plugin.
+        unsafe {
+            let desc = (*self.plugin).desc;
+            if desc.is_null() || (*desc).id.is_null() {
+                return None;
+            }
+            Some(std::ffi::CStr::from_ptr((*desc).id).to_string_lossy().into_owned())
+        }
+    }
+
     /// The id of the plugin's own bypass parameter, if it declares one
     /// (`CLAP_PARAM_IS_BYPASS`).
     ///
@@ -606,6 +620,8 @@ impl ClapInstance {
         // SAFETY: `self.plugin` is the live plugin this instance owns;
         // `active` holds, and `&mut self` means no process() runs.
         if let Some(reset) = unsafe { (*self.plugin).reset } {
+            // `[audio-thread]` in CLAP; see `AudioThreadScope`.
+            let _audio = super::thread_check::AudioThreadScope::enter();
             unsafe { reset(self.plugin) };
         }
     }
@@ -629,6 +645,8 @@ impl Drop for ClapInstance {
         let _ = self.close_gui();
         if self.active {
             if let Some(stop) = unsafe { (*self.plugin).stop_processing } {
+                // `[audio-thread]` in CLAP; see `AudioThreadScope`.
+                let _audio = super::thread_check::AudioThreadScope::enter();
                 unsafe { stop(self.plugin) };
             }
             if let Some(deactivate) = unsafe { (*self.plugin).deactivate } {

@@ -398,7 +398,12 @@ impl Resonance {
     /// output stream, probes the machine's audio devices and loads whatever
     /// plugins are installed on it (ba doc #285).
     pub fn new() -> (Self, iced::Task<Message>) {
-        let engine = match AudioEngine::new() {
+        // Engine startup options come from the user's settings, which the
+        // app otherwise loads in `assemble` — after the engine exists.
+        let options = resonance_audio::EngineOptions {
+            render_threads: settings::load().audio.render_threads,
+        };
+        let engine = match AudioEngine::with_options(options) {
             Ok(engine) => engine,
             Err(e) => {
                 // Surface the failure as a native dialog so the user

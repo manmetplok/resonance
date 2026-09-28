@@ -60,7 +60,13 @@ impl NoteSink for SyncClapInstance {
     }
 }
 
-struct Slot {
+/// One instrument's parked events. A [`MidiStash`] holds a fixed pool of
+/// these; a render job borrows one by value through
+/// [`MidiStash::take`] / [`MidiStash::restore`] (a `Vec` swap, so neither
+/// direction allocates), which is what lets the stash stay single-owner
+/// while track jobs run on other threads (realtime-multithreading.md
+/// §4.2).
+pub struct StashEntry {
     instance: Option<PluginInstanceId>,
     events: Vec<PendingNoteEvent>,
     /// Deliver an all-notes-off before any stashed events on the next
@@ -72,26 +78,109 @@ struct Slot {
     drop_carried: bool,
 }
 
+impl StashEntry {
+    /// An empty entry with the full event capacity pre-allocated.
+    pub fn new() -> Self {
+        Self {
+            instance: None,
+            events: Vec::with_capacity(MAX_STASHED_EVENTS),
+            panic: false,
+            drop_carried: false,
+        }
+    }
+
+    /// The instrument this entry holds events for, if any.
+    pub fn instance(&self) -> Option<PluginInstanceId> {
+        self.instance
+    }
+
+    fn clear(&mut self) {
+        self.instance = None;
+        self.events.clear();
+        self.panic = false;
+        self.drop_carried = false;
+    }
+
+    /// Park a contended block's events for `id`. The entry must be free
+    /// or already hold `id`; the overflow rules are the module docs'.
+    pub fn stash(&mut self, id: PluginInstanceId, events: &[PendingNoteEvent]) {
+        if events.is_empty() {
+            return;
+        }
+        self.instance = Some(id);
+        for event in events {
+            if self.events.len() < MAX_STASHED_EVENTS {
+                self.events.push(event.clone());
+                continue;
+            }
+            if event.is_note_on {
+                // Overflow: note-ons are droppable.
+                continue;
+            }
+            // Overflow with a note-off: evict the oldest stashed note-on
+            // to make room; if every stashed event is a note-off, degrade
+            // to a panic — all-notes-off supersedes them all.
+            if let Some(idx) = self.events.iter().position(|e| e.is_note_on) {
+                self.events.remove(idx);
+                self.events.push(event.clone());
+            } else {
+                self.events.clear();
+                self.panic = true;
+                self.drop_carried = true;
+            }
+        }
+    }
+
+    /// Replay everything parked here into `sink` if it belongs to `id`,
+    /// and free the entry. See [`MidiStash::deliver`].
+    pub fn deliver(&mut self, id: PluginInstanceId, sink: &mut impl NoteSink) {
+        if self.instance != Some(id) {
+            return;
+        }
+        if self.panic {
+            if self.drop_carried {
+                sink.all_notes_off();
+            } else {
+                sink.all_notes_off_keep_carried();
+            }
+        }
+        for event in &self.events {
+            if event.is_note_on {
+                sink.note_on(event.note, event.velocity, 0);
+            } else {
+                sink.note_off(event.note, 0);
+            }
+        }
+        self.clear();
+    }
+
+    /// Move this entry's contents into `other` (which must be free),
+    /// leaving this one free. Swaps the event buffers, so both keep their
+    /// pre-allocated capacity and nothing allocates.
+    fn move_into(&mut self, other: &mut StashEntry) {
+        std::mem::swap(&mut self.events, &mut other.events);
+        other.instance = self.instance.take();
+        other.panic = std::mem::take(&mut self.panic);
+        other.drop_carried = std::mem::take(&mut self.drop_carried);
+        self.events.clear();
+    }
+}
+
 pub struct MidiStash {
-    slots: Vec<Slot>,
+    slots: Vec<StashEntry>,
 }
 
 impl MidiStash {
     pub fn new() -> Self {
         Self {
             slots: (0..MAX_STASHED_INSTRUMENTS)
-                .map(|_| Slot {
-                    instance: None,
-                    events: Vec::with_capacity(MAX_STASHED_EVENTS),
-                    panic: false,
-                    drop_carried: false,
-                })
+                .map(|_| StashEntry::new())
                 .collect(),
         }
     }
 
     /// Find the slot already holding `id`, or claim a free one.
-    fn slot_mut(&mut self, id: PluginInstanceId) -> Option<&mut Slot> {
+    fn slot_mut(&mut self, id: PluginInstanceId) -> Option<&mut StashEntry> {
         let idx = self
             .slots
             .iter()
@@ -107,29 +196,59 @@ impl MidiStash {
         if events.is_empty() {
             return;
         }
-        let Some(slot) = self.slot_mut(id) else {
+        if let Some(slot) = self.slot_mut(id) {
+            slot.stash(id, events);
+        }
+    }
+
+    /// Whether anything at all is parked — the render pass's fast path
+    /// for skipping [`Self::take`].
+    pub fn has_pending(&self) -> bool {
+        self.slots.iter().any(|s| s.instance.is_some())
+    }
+
+    /// Move whatever is parked for `id` into `carry` (which must be
+    /// free), freeing the stash slot. The render job that owns `id`'s
+    /// instrument delivers from `carry` on a successful lock, or parks
+    /// more into it on a failed one; [`Self::restore`] puts back whatever
+    /// is left. Returns whether anything was moved. Allocation-free.
+    pub fn take(&mut self, id: PluginInstanceId, carry: &mut StashEntry) -> bool {
+        match self.slots.iter_mut().find(|s| s.instance == Some(id)) {
+            Some(slot) => {
+                slot.move_into(carry);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Return a render job's `carry` to the stash, merging it into any
+    /// slot parked for the same instrument since, and leave `carry` free.
+    /// A free `carry` is a no-op. With the slot pool exhausted the carry
+    /// is dropped, exactly as [`Self::stash`] drops a block's events.
+    pub fn restore(&mut self, carry: &mut StashEntry) {
+        let Some(id) = carry.instance else {
             return;
         };
-        for event in events {
-            if slot.events.len() < MAX_STASHED_EVENTS {
-                slot.events.push(event.clone());
-                continue;
+        match self.slots.iter().position(|s| s.instance == Some(id)) {
+            // Merge (unreachable while a carry is out: nothing else parks
+            // for an instrument its job owns — kept for robustness).
+            Some(idx) => {
+                let slot = &mut self.slots[idx];
+                if carry.panic {
+                    slot.events.clear();
+                    slot.panic = true;
+                    slot.drop_carried |= carry.drop_carried;
+                }
+                let events = std::mem::take(&mut carry.events);
+                slot.stash(id, &events);
+                carry.events = events;
+                carry.clear();
             }
-            if event.is_note_on {
-                // Overflow: note-ons are droppable.
-                continue;
-            }
-            // Overflow with a note-off: evict the oldest stashed note-on
-            // to make room; if every stashed event is a note-off, degrade
-            // to a panic — all-notes-off supersedes them all.
-            if let Some(idx) = slot.events.iter().position(|e| e.is_note_on) {
-                slot.events.remove(idx);
-                slot.events.push(event.clone());
-            } else {
-                slot.events.clear();
-                slot.panic = true;
-                slot.drop_carried = true;
-            }
+            None => match self.slots.iter_mut().find(|s| s.instance.is_none()) {
+                Some(free) => carry.move_into(free),
+                None => carry.clear(),
+            },
         }
     }
 
@@ -145,10 +264,7 @@ impl MidiStash {
     /// stashed pre-panic events.
     pub fn discard(&mut self, id: PluginInstanceId) {
         if let Some(slot) = self.slots.iter_mut().find(|s| s.instance == Some(id)) {
-            slot.instance = None;
-            slot.events.clear();
-            slot.panic = false;
-            slot.drop_carried = false;
+            slot.clear();
         }
     }
 
@@ -181,27 +297,9 @@ impl MidiStash {
     /// they're clamped to 0 (the start of the current block); insertion
     /// order keeps note-offs ahead of retriggered note-ons.
     pub fn deliver(&mut self, id: PluginInstanceId, sink: &mut impl NoteSink) {
-        let Some(slot) = self.slots.iter_mut().find(|s| s.instance == Some(id)) else {
-            return;
-        };
-        if slot.panic {
-            if slot.drop_carried {
-                sink.all_notes_off();
-            } else {
-                sink.all_notes_off_keep_carried();
-            }
+        if let Some(slot) = self.slots.iter_mut().find(|s| s.instance == Some(id)) {
+            slot.deliver(id, sink);
         }
-        for event in &slot.events {
-            if event.is_note_on {
-                sink.note_on(event.note, event.velocity, 0);
-            } else {
-                sink.note_off(event.note, 0);
-            }
-        }
-        slot.instance = None;
-        slot.events.clear();
-        slot.panic = false;
-        slot.drop_carried = false;
     }
 }
 

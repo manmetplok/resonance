@@ -29,6 +29,9 @@
 //! processed kick, and pre-fader so riding the source's fader doesn't
 //! silently change how hard it ducks something else.
 
+use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crate::types::{BusId, PluginInstanceId, SendSource, TrackId};
 
 /// Most distinct key sources one project can have active at once. Bounded
@@ -128,11 +131,14 @@ pub fn active_sources(routes: &[SidechainRoute]) -> ActiveSources {
 struct TapSlot {
     source: Option<SendSource>,
     /// `[bank][channel]`. One bank is written this block while the other
-    /// is read; they swap at the block boundary.
-    banks: [(Vec<f32>, Vec<f32>); 2],
+    /// is read; they swap at the block boundary. A cell, because render
+    /// jobs on different threads capture into different slots' write
+    /// banks through a shared `&SidechainTaps` (see
+    /// [`SidechainTaps::capture_shared`]).
+    banks: [UnsafeCell<(Vec<f32>, Vec<f32>)>; 2],
     /// Whether the read bank actually received audio last block. A source
     /// that produced nothing keys as silence rather than as stale audio.
-    written: [bool; 2],
+    written: [AtomicBool; 2],
 }
 
 /// Per-source capture buffers owned by the mixer (audio thread).
@@ -155,10 +161,10 @@ impl SidechainTaps {
             .map(|_| TapSlot {
                 source: None,
                 banks: [
-                    (vec![0.0; max_frames], vec![0.0; max_frames]),
-                    (vec![0.0; max_frames], vec![0.0; max_frames]),
+                    UnsafeCell::new((vec![0.0; max_frames], vec![0.0; max_frames])),
+                    UnsafeCell::new((vec![0.0; max_frames], vec![0.0; max_frames])),
                 ],
-                written: [false; 2],
+                written: [AtomicBool::new(false), AtomicBool::new(false)],
             })
             .collect();
         Self {
@@ -183,7 +189,7 @@ impl SidechainTaps {
             if let Some(src) = slot.source {
                 if !wanted.contains(src) {
                     slot.source = None;
-                    slot.written = [false; 2];
+                    slot.clear_written();
                 }
             }
         }
@@ -194,13 +200,13 @@ impl SidechainTaps {
             }
             if let Some(free) = self.slots.iter_mut().find(|s| s.source.is_none()) {
                 free.source = Some(src);
-                free.written = [false; 2];
+                free.clear_written();
             }
         }
         // Nothing captured yet this block.
         let bank = self.write_bank;
         for slot in self.slots.iter_mut() {
-            slot.written[bank] = false;
+            *slot.written[bank].get_mut() = false;
         }
     }
 
@@ -212,20 +218,44 @@ impl SidechainTaps {
 
     /// Capture `source`'s audio for the NEXT block's keys.
     pub fn capture(&mut self, source: SendSource, left: &[f32], right: &[f32], frames: usize) {
+        // SAFETY: `&mut self` excludes every other access.
+        unsafe { self.capture_shared(source, left, right, frames) }
+    }
+
+    /// [`Self::capture`] through a shared reference, for render jobs
+    /// running on several threads at once (realtime-multithreading.md
+    /// §4.2). Each capture writes only `source`'s slot's write bank, which
+    /// no key read touches (keys read the other bank).
+    ///
+    /// # Safety
+    ///
+    /// No other thread may capture the same `source` concurrently. The
+    /// render pass guarantees it structurally: a source is one track,
+    /// sub-track or bus, and only the one job that renders that entity
+    /// captures it.
+    pub unsafe fn capture_shared(
+        &self,
+        source: SendSource,
+        left: &[f32],
+        right: &[f32],
+        frames: usize,
+    ) {
         let bank = self.write_bank;
         let max = self.max_frames;
-        let Some(slot) = self.slots.iter_mut().find(|s| s.source == Some(source)) else {
+        let Some(slot) = self.slots.iter().find(|s| s.source == Some(source)) else {
             return;
         };
         let n = frames.min(max).min(left.len()).min(right.len());
-        let (l, r) = &mut slot.banks[bank];
+        // SAFETY: the caller is the only writer of this slot's write bank
+        // (see above), and readers only ever read the other bank.
+        let (l, r) = unsafe { &mut *slot.banks[bank].get() };
         l[..n].copy_from_slice(&left[..n]);
         r[..n].copy_from_slice(&right[..n]);
         // A short block leaves stale audio in the tail; zero it so the
         // key never reads samples from a longer previous block.
         l[n..].fill(0.0);
         r[n..].fill(0.0);
-        slot.written[bank] = true;
+        slot.written[bank].store(true, Ordering::Release);
     }
 
     /// The key signal for `source` this block — the previous block's
@@ -234,10 +264,13 @@ impl SidechainTaps {
     pub fn key(&self, source: SendSource) -> Option<(&[f32], &[f32])> {
         let bank = self.write_bank ^ 1;
         let slot = self.slots.iter().find(|s| s.source == Some(source))?;
-        if !slot.written[bank] {
+        if !slot.written[bank].load(Ordering::Acquire) {
             return None;
         }
-        let (l, r) = &slot.banks[bank];
+        // SAFETY: the read bank is written only between blocks (through
+        // `&mut self`, which the returned borrow excludes); this block's
+        // captures go to the other bank.
+        let (l, r) = unsafe { &*slot.banks[bank].get() };
         Some((l.as_slice(), r.as_slice()))
     }
 
@@ -254,10 +287,23 @@ impl SidechainTaps {
     /// key can't carry audio across a discontinuity.
     pub fn clear(&mut self) {
         for slot in self.slots.iter_mut() {
-            slot.written = [false; 2];
+            slot.clear_written();
         }
     }
 }
+
+impl TapSlot {
+    fn clear_written(&mut self) {
+        for w in &mut self.written {
+            *w.get_mut() = false;
+        }
+    }
+}
+
+// SAFETY: the banks are only written through `&mut self`, or through
+// `capture_shared` under its contract (one writer per slot, into the bank
+// no reader reads); everything else is plain data or atomic.
+unsafe impl Sync for SidechainTaps {}
 
 /// Convenience: a route sourced from a track.
 pub fn from_track(plugin: PluginInstanceId, track: TrackId) -> SidechainRoute {

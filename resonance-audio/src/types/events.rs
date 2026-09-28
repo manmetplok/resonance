@@ -338,6 +338,22 @@ pub enum AudioEvent {
     RecordingOverflow {
         dropped_frames: u64,
     },
+    /// The live render pool's thread count or scheduling changed
+    /// (realtime-multithreading.md §6): sent once the output stream first
+    /// renders through the pool, and again if the pool falls back to
+    /// rendering on the audio thread alone.
+    RenderThreads {
+        /// Worker threads the pool was built with (the audio thread not
+        /// counted).
+        workers: usize,
+        /// Threads jobs actually spread over, the audio thread included;
+        /// 1 = serial.
+        effective_threads: usize,
+        /// Whether the workers run realtime (matching the audio thread).
+        realtime: bool,
+        /// Why the pool fell back to serial, when it did.
+        error: Option<String>,
+    },
     /// One loop pass of a cycle-record run was captured into a distinct
     /// take. Emitted per armed track at each loop seam (and once more for
     /// the trailing pass when recording stops) while

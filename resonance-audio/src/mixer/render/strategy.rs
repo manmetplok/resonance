@@ -9,7 +9,6 @@ use parking_lot::{Mutex, MutexGuard};
 
 use crate::clap_host::SyncClapInstance;
 use crate::mixer::common::{bus_stereo_gains, latch_transport, track_stereo_gains, TransportSnap};
-use crate::mixer::midi_stash::MidiStash;
 use crate::types::*;
 
 /// Automated stereo-gain ramp endpoints `((l_start, l_end), (r_start,
@@ -62,30 +61,29 @@ pub(crate) fn sub_track_silenced(muted: bool, parent_silenced: bool) -> bool {
 /// the live callback and the offline bounce. See the module docs.
 pub(crate) enum RenderStrategy<'a> {
     Live {
-        midi_stash: &'a mut MidiStash,
         transport_snap: Option<TransportSnap>,
         monitor_temp: &'a [f32],
         monitor_frames: usize,
         input_channels: usize,
     },
     Bounce {
-        in_filter: &'a dyn Fn(TrackId) -> bool,
+        in_filter: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// Tracks that are in the filter ONLY to drive their sub-tracks'
         /// port fan-out (ba todo #1242). Their instrument runs — a
         /// sub-track has no other source of audio — but their own main
         /// output (port 0) is discarded before the track's FX chain,
         /// fader, aux sends and routing, so a sub-track stem carries that
         /// tap and nothing else. Always `false` outside stem rendering.
-        fan_out_only: &'a dyn Fn(TrackId) -> bool,
+        fan_out_only: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// Tracks that are in the filter ONLY to be captured as a
         /// sidechain key (ba doc #277). They render through their whole
         /// chain — otherwise there is no audio to capture — and are then
         /// dropped before PDC, fader, aux sends and routing, so they key
         /// the stem without joining it. Always `false` outside stem
         /// rendering, where every track renders anyway.
-        key_only: &'a dyn Fn(TrackId) -> bool,
+        key_only: &'a (dyn Fn(TrackId) -> bool + Sync),
         /// The bus twin of `key_only`.
-        key_only_bus: &'a dyn Fn(BusId) -> bool,
+        key_only_bus: &'a (dyn Fn(BusId) -> bool + Sync),
         respect_mute_solo: bool,
         /// Freeze-cache capture mode. When `true`, every in-filter track
         /// renders its **raw post-instrument / post-FX** signal — unity
@@ -209,44 +207,15 @@ impl RenderStrategy<'_> {
         }
     }
 
-    /// Acquire an instrument plugin's lock. Live additionally replays
-    /// events parked during earlier lock contention before the caller
-    /// queues this block's events.
+    /// Acquire an instrument plugin's lock — as [`Self::lock_fx`]. The
+    /// caller replays MIDI parked during earlier contention (its slot's
+    /// stash carry) before queueing this block's events.
     #[inline]
     pub(crate) fn lock_instrument<'p>(
-        &mut self,
+        &self,
         mutex: &'p Mutex<SyncClapInstance>,
-        id: PluginInstanceId,
     ) -> Option<MutexGuard<'p, SyncClapInstance>> {
-        match self {
-            Self::Live {
-                midi_stash,
-                transport_snap,
-                ..
-            } => {
-                let mut inst = mutex.try_lock()?;
-                latch_transport(&mut inst, *transport_snap);
-                midi_stash.deliver(id, &mut *inst);
-                Some(inst)
-            }
-            Self::Bounce { .. } => Some(crate::engine::try_lock_with_backoff(mutex)),
-        }
-    }
-
-    /// Live: the UI thread holds the plugin lock (param drag / autosave /
-    /// reload) — park this block's events so they replay on the next
-    /// successful lock instead of dropping them. The one-block audio
-    /// dropout is accepted for now (future work: crossfade). Bounce
-    /// locks never fail, so this is unreachable there.
-    #[inline]
-    pub(crate) fn instrument_lock_failed(
-        &mut self,
-        id: PluginInstanceId,
-        events: &[PendingNoteEvent],
-    ) {
-        if let Self::Live { midi_stash, .. } = self {
-            midi_stash.stash(id, events);
-        }
+        self.lock_fx(mutex)
     }
 
     /// Decide whether and how a top-level track renders this block.

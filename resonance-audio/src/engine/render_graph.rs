@@ -92,6 +92,7 @@ use indexmap::IndexMap;
 use parking_lot::Mutex;
 
 use crate::clap_host::{PluginMap, PluginSlot};
+use crate::mixer::render::slots::{LiveSlots, SlotSupply};
 use crate::types::{
     AudioClip, Bus, BusId, ClipId, MasterBus, MidiClip, PluginInstanceId, Track, TrackId,
     TrackMap,
@@ -175,6 +176,9 @@ pub struct RenderGraphSlot {
     graph: ArcSwap<RenderGraph>,
     /// Serialises edits (read, modify, publish). Engine side only.
     edit: Mutex<()>,
+    /// Keeps the live callback's per-track render slots at least as many
+    /// as the published graph has tracks (`mixer::render::slots`).
+    slot_supply: SlotSupply,
 }
 
 impl Default for RenderGraphSlot {
@@ -202,7 +206,17 @@ impl RenderGraphSlot {
         Self {
             graph: ArcSwap::from_pointee(RenderGraph::default()),
             edit: Mutex::new(()),
+            slot_supply: SlotSupply::default(),
         }
+    }
+
+    /// Hand a new live callback its per-track render slot pool, sized for
+    /// the current graph and grown on every later publish. Engine side;
+    /// allocates.
+    pub(crate) fn attach_live_slots(&self, max_frames: usize) -> LiveSlots {
+        let _edit = self.edit.lock();
+        let tracks = self.graph.load().tracks.len();
+        self.slot_supply.attach(max_frames, tracks)
     }
 
     /// The current graph. Wait-free, lock-free and allocation-free after
@@ -425,6 +439,9 @@ impl RenderGraphSlot {
     ) {
         let mut next = current.clone();
         set(&mut next);
+        // Before the store: a callback that sees `next` must find a slot
+        // pool that fits it (see `SlotSupply::ensure`).
+        self.slot_supply.ensure(next.tracks.len());
         retire::publish(&self.graph, Arc::new(next), retired);
     }
 }

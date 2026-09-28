@@ -471,6 +471,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
     let mut last_audition_report = std::time::Instant::now();
     // Sequence of the last DSP-load report printed (see `cycle_load`).
     let mut cycle_report_seen = 0u64;
+    let mut render_pool_reported = None;
     // Coalesce cpal stream underruns into one line per
     // `UNDERRUN_REPORT_INTERVAL` (see `stream_errors`); the counts come
     // from the streams' error callbacks via `SharedState` (FU-H6b).
@@ -685,6 +686,9 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         if let Some(report) = ctx.shared.cycle_report.take_new(&mut cycle_report_seen) {
             tracing::info!("{}", crate::cycle_load::format_cycle_load_line(&report));
         }
+        // The render pool's thread count / realtime status, once it has
+        // rendered, and again on any change (a fallback to serial).
+        report_render_pool(&ctx, &mut render_pool_reported);
         // Same hand-off for the callback's one-shot oversize-buffer
         // warning (ARCH-05 A5-2).
         if let Some((requested, scratch)) = ctx.shared.oversize_buffer.take_unreported() {
@@ -788,4 +792,43 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
              its last owner will destroy it"
         );
     }
+}
+
+/// Emit `AudioEvent::RenderThreads` when the live render pool's status
+/// differs from the last one reported. Silent until the pool has rendered
+/// once (before that, the workers do not know the audio thread's
+/// scheduling class yet).
+fn report_render_pool(
+    ctx: &HandlerCtx<'_>,
+    last: &mut Option<crate::render_pool::PoolStatus>,
+) {
+    use crate::render_pool::PoolHealth;
+    let Some(status) = ctx.shared.render_pool.lock().as_ref().map(|m| m.status()) else {
+        return;
+    };
+    if status.sched.is_none() || *last == Some(status) {
+        return;
+    }
+    *last = Some(status);
+    let error = match status.health {
+        PoolHealth::Ok => None,
+        PoolHealth::RealtimeDenied { errno } => Some(format!(
+            "render workers could not get the audio thread's realtime priority ({}); rendering on the audio thread alone",
+            std::io::Error::from_raw_os_error(errno)
+        )),
+    };
+    match &error {
+        Some(message) => tracing::warn!("audio: {message}"),
+        None => tracing::info!(
+            "audio: rendering on {} threads ({:?})",
+            status.effective_threads,
+            status.sched
+        ),
+    }
+    let _ = ctx.event_tx.send(AudioEvent::RenderThreads {
+        workers: status.workers,
+        effective_threads: status.effective_threads,
+        realtime: status.sched.is_some_and(|s| s.is_realtime()) && error.is_none(),
+        error,
+    });
 }

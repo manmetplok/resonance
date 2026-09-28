@@ -58,6 +58,8 @@ macro_rules! run_callback {
                 monitor_drain: &mut $h.monitor_drain,
                 ab_meters: &mut $h.ab_meters,
                 sidechain: &mut $h.sidechain,
+                track_slots: &mut $h.track_slots,
+                pool: &$h.pool,
                 fx_dry: &mut $h.fx_dry,
                 continuity: &mut $h.continuity,
             },
@@ -102,6 +104,11 @@ pub struct MixAudioHarness {
     monitor_drain: MonitorDrain,
     ab_meters: ABMeters,
     sidechain: SidechainTaps,
+    track_slots: crate::mixer::render::slots::LiveSlots,
+    /// [`configured_threads`](crate::render_pool::configured_threads) —
+    /// serial in a hermetic test unless `RESONANCE_RENDER_THREADS` says
+    /// otherwise — or what a test sets with [`Self::set_render_threads`].
+    pool: crate::render_pool::RenderPool,
     fx_dry: crate::bypass::FxDryScratch,
     continuity: crate::mixer::TransportContinuity,
     live_midi_tx: crossbeam_channel::Sender<LiveMidiEvent>,
@@ -179,6 +186,9 @@ impl MixAudioHarness {
         ab_meters.reserve(frames);
         let (live_midi_tx, live_midi_rx) = crossbeam_channel::unbounded();
         let (live_fwd_tx, live_fwd_rx) = crossbeam_channel::unbounded();
+        // The engine's own supply: grown on every graph publish, adopted
+        // at the top of each playing block.
+        let track_slots = shared.graph.attach_live_slots(frames);
         Self {
             shared,
             tempo_map: arc_swap::ArcSwap::from_pointee(tempo_map),
@@ -205,6 +215,10 @@ impl MixAudioHarness {
             monitor_drain: MonitorDrain::new(native_drain),
             ab_meters,
             sidechain: SidechainTaps::new(frames),
+            track_slots,
+            pool: crate::render_pool::RenderPool::new(crate::render_pool::PoolConfig::offline(
+                frames,
+            )),
             fx_dry: crate::bypass::FxDryScratch::new(frames),
             continuity: crate::mixer::TransportContinuity::default(),
             live_midi_tx,
@@ -212,6 +226,43 @@ impl MixAudioHarness {
             live_fwd_tx,
             live_fwd_rx,
         }
+    }
+
+    /// Render the track jobs on `threads` threads (the callback's own
+    /// included; 1 = serial), at normal priority. With `shuffle_seed`
+    /// non-zero the order jobs are claimed in is shuffled every block, so
+    /// a test cannot pass on a lucky schedule.
+    pub fn set_render_threads(&mut self, threads: usize, shuffle_seed: u64) {
+        self.set_render_pool(threads, shuffle_seed, false);
+    }
+
+    /// [`Self::set_render_threads`] with workers that follow the
+    /// callback's scheduling class, as the engine's do — and, with
+    /// `deny_sched`, fail to, as on a system that forbids realtime.
+    pub fn set_render_pool(&mut self, threads: usize, shuffle_seed: u64, deny_sched: bool) {
+        // Drop (join) the old pool before spawning the new one.
+        self.pool = crate::render_pool::RenderPool::serial();
+        let mut pool = crate::render_pool::RenderPool::new(crate::render_pool::PoolConfig {
+            workers: threads.max(1) - 1,
+            max_frames: self.buf_frames,
+            follow_caller_sched: deny_sched,
+            spin: std::time::Duration::from_micros(crate::render_pool::DEFAULT_SPIN_US),
+            name: "test-render",
+            deny_sched,
+        });
+        pool.set_claim_shuffle(shuffle_seed, 4096);
+        self.pool = pool;
+    }
+
+    /// The render pool's status, as the engine loop reports it.
+    pub fn render_pool_status(&self) -> crate::render_pool::PoolStatus {
+        self.pool.status()
+    }
+
+    /// The track-pass measurements since the last call (realtime-
+    /// multithreading.md §6).
+    pub fn take_pass_stats(&mut self) -> crate::mixer::render::slots::PassStats {
+        self.track_slots.current().take_stats()
     }
 
     /// The callback's view of engine state — transport, loop, count-in,

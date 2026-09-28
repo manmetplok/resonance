@@ -74,8 +74,16 @@ criterion.workspace = true
 name = "render_path"
 harness = false
 
+# Render-pool stress project with real plugins (needs scripts/bundle.sh).
+[[bench]]
+name = "render_pool"
+harness = false
+
 [target.'cfg(target_os = "linux")'.dependencies]
 alsa-sys = "0.3"
+# `pthread_{get,set}schedparam` and `gettid` for the render pool's
+# realtime workers (`render_pool::sched`).
+libc = "0.2"
 pipewire = { version = "0.9", features = ["v0_3_49"] }
 
 # `pthread_main_np` only, for the debug-build editor deadlock-rule

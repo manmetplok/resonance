@@ -31,6 +31,8 @@ mod param_meta;
 mod params;
 mod process;
 mod state;
+pub(crate) mod thread_check;
+mod thread_pool;
 
 pub use bundle::ClapBundle;
 pub use bundle::bundle_binary_path;
@@ -41,10 +43,12 @@ pub use param_meta::{choice_labels, unit_from_text, MAX_CHOICE_STEPS};
 use std::ffi::{c_char, c_void, CStr};
 use std::pin::Pin;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI8, AtomicUsize, Ordering};
 
 use clap_sys::ext::gui::{clap_host_gui, CLAP_EXT_GUI};
 use clap_sys::ext::latency::{clap_host_latency, CLAP_EXT_LATENCY};
+use clap_sys::ext::thread_check::CLAP_EXT_THREAD_CHECK;
+use clap_sys::ext::thread_pool::CLAP_EXT_THREAD_POOL;
 use clap_sys::host::clap_host;
 use clap_sys::version::CLAP_VERSION;
 use indexmap::IndexMap;
@@ -115,6 +119,15 @@ pub(super) struct HostData {
     /// Written before `gui_closed` is set and read after it is taken, so
     /// the release/acquire pair on `gui_closed` publishes it.
     gui_closed_was_destroyed: AtomicBool,
+    /// The instance this host serves, from the moment it is created — the
+    /// `thread-pool` extension hands it back to the plugin's `exec`.
+    pub(super) plugin: std::sync::atomic::AtomicPtr<clap_sys::plugin::clap_plugin>,
+    /// The plugin's `clap_plugin_thread_pool.exec`, queried after `init`.
+    pub(super) thread_pool_exec:
+        std::sync::OnceLock<unsafe extern "C" fn(*const clap_sys::plugin::clap_plugin, u32)>,
+    /// True while the plugin is inside `process()`: the only time CLAP
+    /// lets it use the host's thread pool.
+    pub(super) in_process: AtomicBool,
 }
 
 impl HostData {
@@ -156,6 +169,12 @@ unsafe extern "C" fn host_get_extension(
     }
     if id == CLAP_EXT_GUI.to_bytes() {
         return &data.gui_ext as *const clap_host_gui as *const c_void;
+    }
+    if id == CLAP_EXT_THREAD_CHECK.to_bytes() {
+        return thread_check::host_thread_check_ptr();
+    }
+    if id == CLAP_EXT_THREAD_POOL.to_bytes() {
+        return thread_pool::host_thread_pool_ptr();
     }
     ptr::null()
 }
@@ -259,6 +278,9 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         },
         gui_closed: AtomicBool::new(false),
         gui_closed_was_destroyed: AtomicBool::new(false),
+        plugin: std::sync::atomic::AtomicPtr::new(ptr::null_mut()),
+        thread_pool_exec: std::sync::OnceLock::new(),
+        in_process: AtomicBool::new(false),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {
@@ -336,19 +358,70 @@ pub struct PluginSlot {
     /// `1` = bypassed, `-1` = never sent. Keeps the render path from
     /// re-queuing an unchanged parameter every single block.
     own_bypass_sent: AtomicI8,
+    /// The render pool must process this plugin on the audio thread
+    /// only (realtime-multithreading.md §4.6): a hand-maintained escape
+    /// hatch for a third-party plugin found to misbehave when its
+    /// `process()` moves between threads. See [`serial_only_plugin`].
+    pub serial_only: bool,
+}
+
+/// Plugin ids known to need a fixed audio thread. Empty: none of ours
+/// hold thread-affine state, and no third-party plugin has been caught
+/// needing it yet. `RESONANCE_SERIAL_ONLY_PLUGINS` (comma-separated ids)
+/// adds more without a rebuild.
+const SERIAL_ONLY_PLUGINS: &[&str] = &[];
+
+/// Whether plugin `id` must stay on the audio thread. Allocates (reads
+/// the environment); engine side, once per instance.
+pub fn serial_only_plugin(id: &str) -> bool {
+    SERIAL_ONLY_PLUGINS.contains(&id)
+        || std::env::var("RESONANCE_SERIAL_ONLY_PLUGINS")
+            .is_ok_and(|ids| ids.split(',').any(|listed| listed.trim() == id))
+}
+
+/// Live [`PluginSlot`]s with `serial_only` set, so the render pass can
+/// skip looking for them when there are none (the usual case).
+static SERIAL_ONLY_SLOTS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether any live plugin slot is serial-only. One relaxed load.
+#[inline]
+pub(crate) fn any_serial_only_plugin() -> bool {
+    SERIAL_ONLY_SLOTS.load(Ordering::Relaxed) != 0
 }
 
 impl PluginSlot {
     /// Wrap a freshly created instance. Reads the plugin's bypass
-    /// parameter id once — an engine-thread query, never on the audio
-    /// thread.
+    /// parameter id and descriptor id once — engine-thread queries, never
+    /// on the audio thread.
     pub fn new(instance: ClapInstance) -> Self {
         let bypass_param = instance.bypass_param_id();
+        let serial_only = instance
+            .descriptor_id()
+            .is_some_and(|id| serial_only_plugin(&id));
+        Self::with_serial_only(instance, bypass_param, serial_only)
+    }
+
+    /// [`Self::new`] with the serial-only flag given (tests).
+    #[doc(hidden)]
+    pub fn new_serial_only(instance: ClapInstance) -> Self {
+        let bypass_param = instance.bypass_param_id();
+        Self::with_serial_only(instance, bypass_param, true)
+    }
+
+    fn with_serial_only(
+        instance: ClapInstance,
+        bypass_param: Option<u32>,
+        serial_only: bool,
+    ) -> Self {
+        if serial_only {
+            SERIAL_ONLY_SLOTS.fetch_add(1, Ordering::Relaxed);
+        }
         Self {
             instance: Mutex::new(SyncClapInstance(instance)),
             bypass: BypassFade::new(),
             bypass_param,
             own_bypass_sent: AtomicI8::new(-1),
+            serial_only,
         }
     }
 
@@ -391,6 +464,14 @@ impl PluginSlot {
             return;
         }
         inst.set_param(param_id, f64::from(want));
+    }
+}
+
+impl Drop for PluginSlot {
+    fn drop(&mut self) {
+        if self.serial_only {
+            SERIAL_ONLY_SLOTS.fetch_sub(1, Ordering::Relaxed);
+        }
     }
 }
 

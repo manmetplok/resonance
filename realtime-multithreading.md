@@ -1,6 +1,9 @@
 # Realtime multithreading — parallel graph rendering
 
-Status: **proposal**, 2026-09-27, master `987c7bf1`. Nothing here is built yet.
+Status: **built**, P0–P4, 2026-09-28, branch `rt-multithreading`. §11 records
+what was built where it differs from the proposal below, the measurements,
+and the answers to §9. The live ten-minute stress run (§6) is still to do by
+hand.
 
 ## 1. Problem
 
@@ -301,3 +304,150 @@ with zero over-budget cycles for 10 minutes, where the serial engine xruns.
 `types/sidechain.rs`, `mixer/midi_stash.rs` (per-slot ownership) →
 `engine/render_graph.rs` (where the schedule is built and published) →
 `mixer/callback/mod.rs` and `output_pipewire.rs` (thread and lifecycle).
+
+## 11. As built
+
+Every phase landed as its own commit on `rt-multithreading`, each with the
+full suite green and **no golden re-blessed**:
+
+| Phase | Commit | Notes |
+|---|---|---|
+| P0 | `07155c92` | Job + ordered reduction, still serial. |
+| P1 | `a88d2ccd` | RT pool, thread-check, cost EMA, stats. |
+| — | `d572b9d1` | Stress bench (`benches/render_pool.rs`). |
+| P2 | `cd579d49` | Level-parallel busses. |
+| P3 | `70be65ea` | Offline renders on their own pool. |
+| P4 | `abf8f458` | CLAP `thread-pool`; thread roles honoured. |
+
+The suite also passes with every live-harness and offline render forced
+parallel: `RESONANCE_RENDER_THREADS=4` and `=8`, all goldens unchanged.
+
+### 11.1 Where the build differs from §4
+
+- **Slots are indexed by track-map position** (`mixer/render/slots.rs`), one
+  per track *and* sub-track, so a job's set is disjoint by construction: its
+  own index plus its sub-tracks'. The main track renders straight into its
+  slot; a sub-track's port is copied into its slot after PDC.
+- **The live slot pool grows on the engine thread at graph publish**
+  (`SlotSupply::ensure`, called by `RenderGraphSlot::publish_locked` before
+  the store) and reaches the audio thread over a bounded channel; the
+  replaced pool travels back to be dropped engine-side. Offline renderers
+  grow their own pool.
+- **The job order is built per block on the rendering thread**, not
+  published with the graph: `build_schedule` fills a pre-allocated index
+  buffer and `sort_unstable`s it by the cost EMA. It is allocation-free and
+  O(n log n) for n top-level tracks; publishing it would have meant a
+  republish on every cost change (§9 Q3 is therefore moot).
+- **The MIDI stash is lent, not split** (§4.2). Before the jobs run, the
+  stash moves each instrument's parked events into its slot's `carry`
+  (a `Vec` swap); the job delivers from it or parks more into it; the
+  reduction swaps it back. `RenderStrategy` no longer holds the stash, so it
+  is shared by reference.
+- **Key-only decisions are made in a serial prologue.** Whether a silenced
+  track or bus must render for a sidechain key (`key_consumed`) reads the
+  *consumer's* live state — its last gains and bypass fades — which the
+  consumer's own job advances. The serial loop read a lower-indexed
+  consumer's state after its update and a higher-indexed one's before; the
+  prologue reads all of them before. The two differ only in the block where
+  a muted key source's consumer finishes fading out, and only in whether the
+  source renders once more, key-only, unheard.
+- **Busses pull their sends** (§4.5). A naive level-order push would change
+  the order sends add into a return — bus 1 fed by bus 0 is level 1, bus 2
+  unfed is level 0, and both sending into bus 3 would arrive 2-then-1
+  instead of 1-then-2. Each bus job instead gathers its incoming sends from
+  lower-indexed busses in index order when it starts, and busses sum into
+  master in a final index-order reduction. A send to a *lower*-indexed bus
+  is dropped; it never had an audible effect in the serial loop either.
+- **Sidechain capture takes `&self`** (`SidechainTaps::capture_shared`,
+  `unsafe`): each tap slot's write bank is written only by the one job that
+  renders its source, and keys read the other bank.
+- **Workers adopt the caller's scheduling class lazily** (§4.3). The first
+  parallel run publishes the audio thread's own policy and priority
+  (`pthread_getschedparam`, once); each worker applies it
+  (`pthread_setschedparam`, reset-on-fork) and skips that one block while
+  it does. A failure disables the pool and the engine emits
+  `AudioEvent::RenderThreads` with the reason. Workers do not need to know
+  PipeWire's priority up front, and follow the audio thread across a
+  backend change.
+- **Every spin yields.** At equal `SCHED_FIFO` priority a spinning thread
+  is never preempted by a same-priority thread queued on its CPU, so a
+  caller spinning at the join could starve the worker it waits for.
+  Every 64th spin iteration is a `sched_yield`.
+- **Thread count**: `RESONANCE_RENDER_THREADS`, else the app setting
+  `audio.render_threads` (`EngineOptions::render_threads`), else physical
+  cores (sysfs topology) − 1 workers plus the audio thread. The engine
+  records the resolved count process-wide for the offline pools; a process
+  with no engine (hermetic tests) renders serially unless the env var says
+  otherwise.
+- **Serial-only plugins**: `PluginSlot::serial_only`, from a built-in list
+  (empty) plus `RESONANCE_SERIAL_ONLY_PLUGINS`. Tracks and busses holding
+  one run as caller-only jobs, first.
+
+### 11.2 CLAP threading (§4.6, P4)
+
+- `clap.thread-check`: `is_audio_thread` is a per-thread role flag;
+  `is_main_thread` is its negation. Render workers hold the role for life.
+  The live callback and each offline chunk take it for the render only,
+  so a thread that renders and then makes main-thread calls is never
+  misreported.
+- **The host's own `[audio-thread]` calls take the role too**:
+  `start_processing`, `stop_processing`, `reset`, an active plugin's
+  `params.flush`, and `process`. This was found the hard way: with
+  thread-check served, u-he Hive checked `start_processing` — which the
+  host makes from the engine thread at instantiation — and aborted the
+  process. `tests/clap_host/clap_thread_roles.rs` pins every role.
+- `clap.thread-pool`: the installed-plugin survey (§9 Q4) found u-he Hive
+  and MFM2 both ask for it. `request_exec` becomes a sub-task batch on the
+  pool the calling thread renders for: the requester runs tasks, idle
+  workers and a caller waiting at its join help, and a second concurrent
+  requester (or a thread with no pool) runs its tasks inline — CLAP only
+  requires that all ran. Refused outside `process()`.
+
+### 11.3 Measurements
+
+`cargo bench -p resonance-audio --bench render_pool` (release bundles, a
+`.nam` model and a cab IR; 9700X, q128 @ 48 kHz, budget 2667 µs; the bench
+thread is not realtime, so the max column carries scheduling noise):
+
+| Project | Threads | Mean µs | p99 µs | Over budget |
+|---|---|---|---|---|
+| 8 × amp+IR+reverb, 4 × wavetable | 1 | 982 | 1384 | 0 / 2000 |
+| | 8 | 150 | 191 | 0 |
+| 28 × amp+IR+reverb, 4 × wavetable | 1 | 3434 | 3967 | **2000 / 2000** |
+| | 2 | 1714 | 1941 | 0 |
+| | 4 | 870 | 993 | 0 |
+| | 8 | 494 | 582 | 1 |
+
+After the amp's ~6× speedup the spec's 8-guitar project no longer
+overloads the serial engine, so the "serial xruns, parallel does not" half
+of the P1 exit was shown at 28 guitars. Pool efficiency stays 88–100 %.
+
+Offline master-stem export, 16 guitars + 4 synths, 5.3 s of audio: 1.7×
+realtime serial, 3.4× on 2 threads, 6.6× on 4, 11.1× on 8 (6.7× speedup).
+
+Hive, 3 instances with chords: 260 → 94 µs per block on 4 threads.
+
+### 11.4 §9, answered
+
+1. **RT acquisition**: the `pipewire` crate does not expose thread-utils.
+   Workers use `pthread_setschedparam`, which works wherever
+   `RLIMIT_RTPRIO` allows (98 on this machine). RTKit over D-Bus is **not**
+   implemented; without an rtprio limit the pool falls back to serial and
+   says so. Open if that fallback turns out to matter.
+2. **Default thread count**: physical cores − 1 workers plus the audio
+   thread (7 + 1 here). Nothing measured argues for leaving another core
+   free; the setting is there if the GUI ever stutters under load.
+3. **Schedule location**: neither — built per block on the rendering
+   thread (§11.1).
+4. **CLAP `thread-pool`**: yes — Hive and MFM2 use it (§11.2).
+
+### 11.5 Still open
+
+- The live ten-minute run of the stress project at q128 with
+  `RESONANCE_AUDIO_STATS=1` (§6), which the offline bench cannot replace:
+  it is the only check of RT scheduling jitter and wake latency.
+- The same at the 64-frame tracking quantum (§8, wake-up latency).
+- RTKit, if a machine without an rtprio limit needs the pool.
+- A UI surface for `AudioEvent::RenderThreads` and the per-cycle critical
+  track (the engine logs both today).
+

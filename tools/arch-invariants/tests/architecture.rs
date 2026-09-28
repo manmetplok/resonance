@@ -715,8 +715,9 @@ fn app_test_binaries_are_the_known_groups() {
 
 /// The same rule for `resonance-audio/tests/` (code review ARCH-03): its
 /// 129 one-file targets were grouped into seven by source area, plus the
-/// four that own process-global state and so need a process of their own —
-/// a `#[global_allocator]` (`sidechain_taps`, `retire_queue`; one per
+/// five that own process-global state and so need a process of their own —
+/// a `#[global_allocator]` (`sidechain_taps`, `retire_queue`,
+/// `render_pool_rt`, which counts every thread's allocations; one per
 /// binary), a lowered `RLIMIT_FSIZE` (`recording_write_failure`), and the
 /// one-shot engine-disconnect latch (`engine_send_disconnected`). A new
 /// test is a module in a group; a new standalone needs one of those
@@ -739,6 +740,7 @@ fn audio_test_binaries_are_the_known_groups() {
         // standalone: process-global state
         "engine_send_disconnected",
         "recording_write_failure",
+        "render_pool_rt",
         "retire_queue",
         "sidechain_taps",
     ]

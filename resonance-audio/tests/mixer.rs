@@ -57,6 +57,10 @@ mod mixer_gain_ramp;
 mod monitor_fallback_resample;
 #[path = "mixer/monitor_ring_alignment.rs"]
 mod monitor_ring_alignment;
+#[path = "mixer/parallel_render.rs"]
+mod parallel_render;
+#[path = "mixer/plugin_thread_pool.rs"]
+mod plugin_thread_pool;
 #[path = "mixer/playhead_discontinuity_flush.rs"]
 mod playhead_discontinuity_flush;
 #[path = "mixer/recorded_monitor_gating.rs"]
@@ -79,6 +83,8 @@ mod render_graph_clips;
 mod render_graph_plugins;
 #[path = "mixer/render_graph_publish.rs"]
 mod render_graph_publish;
+#[path = "mixer/render_slot_supply.rs"]
+mod render_slot_supply;
 #[path = "mixer/render_block_parity.rs"]
 mod render_block_parity;
 #[path = "mixer/sidechain_key_delivery.rs"]

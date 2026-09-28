@@ -382,7 +382,17 @@ impl ClapInstance {
         };
 
         if let Some(process_fn) = unsafe { (*self.plugin).process } {
+            // `process()` is `[audio-thread]`: whichever thread renders
+            // this block holds the role for the call.
+            let _audio = super::thread_check::AudioThreadScope::enter();
+            // Open the CLAP `thread-pool` window for exactly this call.
+            self.host_data
+                .in_process
+                .store(true, std::sync::atomic::Ordering::Release);
             unsafe { process_fn(self.plugin, &process_data) };
+            self.host_data
+                .in_process
+                .store(false, std::sync::atomic::Ordering::Release);
 
             // Finite scrub at the plugin-output boundary: whatever the
             // plugin just wrote is about to re-enter the mix graph (track

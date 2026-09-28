@@ -18,8 +18,10 @@
 //! - [`ports`]: the multi-output instrument's per-port CLAP call.
 //! - [`routing`]: the post-fader route to a bus or to master, and the
 //!   aux-send taps from a track and from a bus.
-//! - [`track_pass`]: the per-track phase — source, key capture, PDC,
-//!   meters, routing and sends.
+//! - [`slots`]: the per-track slots a track job renders into and the
+//!   ordered reduction reads, and the live pool's engine-side supply.
+//! - [`track_pass`]: the per-track phase — jobs (source, key capture,
+//!   PDC, meters) and the ordered reduction (routing and sends).
 //! - [`sub_track`]: the multi-output fan-out into sub-tracks.
 //! - [`bus_pass`]: the per-bus phase.
 //!
@@ -32,6 +34,7 @@ pub(crate) mod context;
 pub(crate) mod frozen;
 pub(crate) mod ports;
 pub(crate) mod routing;
+pub(crate) mod slots;
 pub(crate) mod strategy;
 pub(crate) mod sub_track;
 pub(crate) mod track_pass;

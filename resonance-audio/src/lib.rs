@@ -45,12 +45,13 @@ mod platform;
 pub(crate) mod prefault;
 pub mod quantize;
 mod recording;
+pub(crate) mod render_pool;
 pub(crate) mod stream_errors;
 pub(crate) mod supervise;
 pub mod types;
 
 pub use decode::{linear_resample, StreamingLinearResampler};
-pub use engine::{transcode_to_wav, AudioEngine, EngineSendError};
+pub use engine::{transcode_to_wav, AudioEngine, EngineOptions, EngineSendError};
 /// Decode a freeze-cache WAV back into a [`FrozenSource`] for project-load
 /// rehydration (ba todo #577). Lives in the audio crate alongside the
 /// writer ([`engine::to_freeze_cache`]) so the cache format stays owned in
@@ -212,6 +213,9 @@ pub mod test_support {
         encode_control_change, encode_nrpn, parse_control_event_for_test,
         parse_live_event_for_test, LiveControlEvent, LiveMidiEvent,
     };
+    pub use crate::mixer::render::slots::PassStats;
+    pub use crate::render_pool::sched::{physical_cores, Sched};
+    pub use crate::render_pool::{override_threads_on_this_thread, PoolHealth, PoolStatus};
     pub use crate::mixer::{
         auto_gain_ramp, auto_master_volume, auto_muted, commit_playhead, mix_audition_overlay,
         mix_track_clips,
@@ -247,7 +251,7 @@ pub mod test_support {
     /// panic.
     pub use crate::supervise::{panic_message, run_supervised};
     pub use crate::cycle_load::{
-        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot,
+        format_cycle_load_line, CycleLoadMeter, CycleLoadReport, CycleReportSlot, PoolReport,
         LOAD_EMA_ALPHA, QUIET_PEAK_THRESHOLD, QUIET_REPORT_INTERVAL,
         VERBOSE_REPORT_INTERVAL,
     };
@@ -430,7 +434,7 @@ pub use mixer::collect_midi_events_bounce;
 /// overflow / panic / delivery without a live CLAP plugin (the test
 /// supplies its own `NoteSink`).
 #[cfg(feature = "test-internals")]
-pub use mixer::{MidiStash, NoteSink};
+pub use mixer::{MidiStash, NoteSink, StashEntry};
 #[cfg(feature = "test-internals")]
 pub use limits::{MAX_STASHED_EVENTS, MAX_STASHED_INSTRUMENTS};
 
