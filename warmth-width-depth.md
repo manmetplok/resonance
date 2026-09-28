@@ -295,10 +295,17 @@ This was verified in code. Paths are relative to the repo root.
 | Automation | `automation-control-api.md` | Planned. Needed for delay throws and send rides. Its slice A0 fixes `meter.*` ignoring automation, which is a prerequisite for measuring any automated depth move |
 | Skills | `resonance-agent-plugin/skills/{mixing,mastering}` | Mixing: faults → balance → tone → dynamics/width, one class per pass, no warmth/depth/width guidance. Mastering: stage-by-stage via `*_on` keys, "sterile" has no measurement, and it never names `sat_character`/`sat_shaper`/EQ band keys/`img_*` |
 
-Framework constraint: **a plugin cannot report a latency change** (gap F2,
-plugin-audit.md). Oversampling therefore either uses the latency-free IIR
-`Oversampler`, or its factor is fixed at activation. A linear-phase or
-lookahead option must have constant latency.
+Framework constraint: **a plugin cannot change its latency without a
+restart** (gap F2, plugin-audit.md). Since ba todo #1296 (`8c341bf0`) a
+plugin *can* report a new latency through
+`HostHandle::set_latency_samples`, and `resonance-ir` does so for its
+latency mode. But the change forces a deactivate → reactivate restart,
+which is a dropout that flushes whatever audio is in flight (~0.4 s on
+the mastering chain). That is no good for anything a user toggles while
+listening. So the rule stands in practice. Oversampling either uses the
+latency-free IIR `Oversampler`, or its factor is fixed at activation. A
+linear-phase or lookahead option keeps a constant latency. The de-harsh
+stage (W12) charges its one-frame latency whether it is on or off.
 
 ## 6. Proposed DSP additions
 
