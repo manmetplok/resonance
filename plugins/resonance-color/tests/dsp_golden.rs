@@ -28,9 +28,9 @@ use std::path::PathBuf;
 
 use common::*;
 use resonance_color::dsp::Settings;
-use resonance_color::params::{ColorParams, Mode};
+use resonance_color::params::{ColorParams, Mode, TapeQuality};
 use resonance_color::ResonanceColor;
-use resonance_dsp::{OversampleFactor, SimpleRng};
+use resonance_dsp::{HysteresisSolver, OversampleFactor, SimpleRng};
 use resonance_dsp_test_support as golden;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 
@@ -112,6 +112,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::X2,
                 speed_ips: 15.0,
                 flutter: 0.0,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: None,
         },
@@ -133,6 +135,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::Off,
                 speed_ips: 7.5,
                 flutter: 0.6,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: None,
         },
@@ -154,6 +158,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::X4,
                 speed_ips: 15.0,
                 flutter: 0.0,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: None,
         },
@@ -175,6 +181,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::X2,
                 speed_ips: 15.0,
                 flutter: 0.0,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: None,
         },
@@ -196,6 +204,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::Off,
                 speed_ips: 15.0,
                 flutter: 0.0,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: None,
         },
@@ -218,6 +228,8 @@ fn scenarios() -> Vec<Scenario> {
                 oversample: OversampleFactor::X2,
                 speed_ips: 15.0,
                 flutter: 0.0,
+                tape_quality: TapeQuality::Standard,
+                tape_solver: HysteresisSolver::Rk4,
             },
             edit: Some(|p, block| {
                 let t = block as f32 / BLOCKS as f32;

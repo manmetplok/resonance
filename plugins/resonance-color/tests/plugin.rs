@@ -1,9 +1,11 @@
 //! The declared surface: the §6.1 parameter set, its defaults and
 //! choice tables, and the plugin's identity.
 
-use resonance_color::params::{ColorParams, Mode, PARAM_COUNT, SPEED_IPS, SPEED_LABELS};
+use resonance_color::params::{
+    ColorParams, Mode, TapeQuality, PARAM_COUNT, SPEED_IPS, SPEED_LABELS,
+};
 use resonance_color::ResonanceColor;
-use resonance_dsp::OversampleFactor;
+use resonance_dsp::{HysteresisSolver, OversampleFactor};
 use resonance_plugin::{Param, ResonancePlugin};
 
 #[test]
@@ -32,7 +34,9 @@ fn the_param_ids_are_the_spec_names_and_unique() {
             "output",
             "oversample",
             "speed",
-            "flutter"
+            "flutter",
+            "tape_quality",
+            "tape_solver"
         ]
     );
     let mut unique = ids.clone();
@@ -41,15 +45,6 @@ fn the_param_ids_are_the_spec_names_and_unique() {
     assert_eq!(unique.len(), ids.len());
 }
 
-/// `tape_quality` (Standard / HQ) is W6b's. Not declaring it now is what
-/// keeps state forward-compatible: a project saved by this build has no
-/// `tape_quality` key, so W6b's parameter will load it at its default,
-/// Standard — the only quality this build has. See `params.rs`.
-#[test]
-fn tape_quality_is_not_declared_yet() {
-    let plugin = ResonanceColor::new();
-    assert!((0..PARAM_COUNT).all(|i| plugin.param(i).id() != "tape_quality"));
-}
 
 #[test]
 fn defaults() {
@@ -105,4 +100,36 @@ fn the_tape_only_params_are_grouped_for_hosts() {
     let p = ColorParams::default();
     assert_eq!(p.speed.module(), "Tape");
     assert_eq!(p.flutter.module(), "Tape");
+    assert_eq!(p.tape_quality.module(), "Tape");
+    assert_eq!(p.tape_solver.module(), "Tape");
+}
+
+/// W6b's two params: appended after the W6 set (host indices of the
+/// first eleven unchanged), Standard at 0 and the default, so state
+/// saved before they existed loads as Standard (`tests/legacy_state.rs`
+/// pins the render), and RK4 as the default solver.
+#[test]
+fn tape_quality_is_appended_with_standard_at_index_0() {
+    let plugin = ResonanceColor::new();
+    assert_eq!(plugin.param(11).id(), "tape_quality");
+    assert_eq!(plugin.param(12).id(), "tape_solver");
+    let p = ColorParams::default();
+    assert_eq!(p.tape_quality(), TapeQuality::Standard);
+    assert_eq!(TapeQuality::Standard as i32, 0);
+    assert_eq!(p.tape_quality.default_plain(), 0.0);
+    assert_eq!(p.tape_solver(), HysteresisSolver::Rk4);
+    for (i, label) in TapeQuality::LABELS.iter().enumerate() {
+        assert_eq!(p.tape_quality.display(i as f64), *label);
+        assert_eq!(p.tape_quality.parse(label), Some(i as f64));
+    }
+    for (i, label) in HysteresisSolver::LABELS.iter().enumerate() {
+        assert_eq!(p.tape_solver.display(i as f64), *label);
+        assert_eq!(HysteresisSolver::ALL[i] as usize, i);
+        assert_eq!(HysteresisSolver::from_int(i as i32), HysteresisSolver::ALL[i]);
+    }
+    // A blob with no `tape_quality` key (every W6 project) loads into a
+    // fresh instance as Standard.
+    let mut plugin = ResonanceColor::new();
+    assert!(plugin.load_state(br#"{"params":{"mode":1,"drive":0.5}}"#));
+    assert_eq!(plugin.params.tape_quality(), TapeQuality::Standard);
 }

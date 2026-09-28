@@ -125,8 +125,7 @@ pub fn langevin_deriv(x: f64) -> f64 {
 }
 
 /// `(L(x), L'(x))` from one `exp`: with `e = e^{−2|x|}`,
-/// `coth|x| = (1 + e)/(1 − e)` and `1/sinh²x = 4e/(1 − e)²`, where
-/// `1 − e` comes from `expm1` so it keeps its precision near zero.
+/// `coth|x| = (1 + e)/(1 − e)` and `1/sinh²x = 4e/(1 − e)²`.
 #[inline]
 pub fn langevin_pair(x: f64) -> (f64, f64) {
     let ax = x.abs();
@@ -137,8 +136,11 @@ pub fn langevin_pair(x: f64) -> (f64, f64) {
         let dl = 1.0 / 3.0 - x2 * (1.0 / 15.0 - x2 * (2.0 / 189.0));
         return (l, dl);
     }
+    // Above the series switch `1 − e ≥ 0.0198`, so forming it directly
+    // costs at most ~1e-14 relative: no need for a second transcendental
+    // (`expm1`) in the hot path.
     let e = (-2.0 * ax).exp();
-    let one_minus_e = -(-2.0 * ax).exp_m1();
+    let one_minus_e = 1.0 - e;
     let coth = (1.0 + e) / one_minus_e;
     let inv_x = 1.0 / ax;
     let l = (coth - inv_x).copysign(x);
@@ -358,7 +360,9 @@ impl Hysteresis {
 
     /// Advance to field `h` and return the new `M`. A non-finite `h`
     /// reads as 0.
-    #[inline]
+    // Not `#[inline]`: this is the hot loop, and keeping it out of line
+    // compiles it here, at this crate's optimisation level, for every
+    // caller (release LTO inlines it anyway).
     pub fn process(&mut self, h: f64) -> f64 {
         let h = if h.is_finite() { h } else { 0.0 };
         let span = h - self.h_prev;

@@ -5,28 +5,27 @@
 //! param-first, dual-surface rule); `tests/editor_param_binding.rs`
 //! holds the control strip to that.
 //!
-//! # `tape_quality` is deliberately absent
+//! # `tape_quality` and `tape_solver` (slice W6b)
 //!
-//! §6.1 / decision D2 add a `tape_quality` switch (Standard / HQ), with HQ
-//! (a Jiles-Atherton hysteresis stage) landing in slice W6b. This slice
-//! ships only Standard, so the switch is **not declared yet**: a one-value
-//! parameter would be a control that does nothing, and a two-value one
-//! would offer an HQ that does not exist.
+//! §6.1 / decision D2: `tape_quality` switches Tape mode between the
+//! Standard shaper (ADAA curve) and HQ, a Jiles-Atherton hysteresis
+//! stage; `tape_solver` picks HQ's integrator. Both are appended after
+//! every W6 parameter, so the host indices of the first eleven never
+//! moved.
 //!
-//! Leaving it out is also what keeps saved state forward-compatible.
-//! State is matched by string id, so a project saved by this build simply
-//! has no `tape_quality` key; when W6b declares the parameter with
-//! Standard as its default (index 0), such a project loads as Standard and
-//! renders exactly as it did here. W6b must keep Standard at index 0 and
-//! as the default for that to hold.
+//! State is matched by string id, so a project or preset saved before
+//! W6b has no `tape_quality` key and loads at the default. Standard is
+//! index 0 and the default, which is what makes such a project render
+//! exactly as it did (`tests/legacy_state.rs` holds that bit for bit).
+//! Neither choice list may ever be reordered.
 
 use std::sync::Arc;
 
-use resonance_dsp::OversampleFactor;
+use resonance_dsp::{HysteresisSolver, OversampleFactor};
 use resonance_plugin::formatters::{s2v_f32_percentage, v2s_f32_db, v2s_f32_percent};
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 11;
+pub const PARAM_COUNT: usize = 13;
 
 /// The five voicings, in the order §6.1 lists them. The discriminant is
 /// the `mode` parameter's plain value, so the order is part of the saved
@@ -79,6 +78,30 @@ impl Mode {
 pub const SPEED_IPS: [f32; 3] = [7.5, 15.0, 30.0];
 pub const SPEED_LABELS: [&str; 3] = ["7.5 ips", "15 ips", "30 ips"];
 
+/// Tape quality (decision D2). The discriminant is the `tape_quality`
+/// parameter's plain value: Standard must stay 0, the default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u8)]
+pub enum TapeQuality {
+    /// The ADAA soft curve plus the tape filters: cheap, the W6 voicing.
+    #[default]
+    Standard = 0,
+    /// Jiles-Atherton hysteresis plus the same filters, run at 2x
+    /// oversampling or more.
+    Hq = 1,
+}
+
+impl TapeQuality {
+    pub const LABELS: [&'static str; 2] = ["Standard", "HQ"];
+
+    pub fn from_int(v: i32) -> Self {
+        match v {
+            1 => TapeQuality::Hq,
+            _ => TapeQuality::Standard,
+        }
+    }
+}
+
 pub fn speed_ips(index: i32) -> f32 {
     SPEED_IPS[index.clamp(0, SPEED_IPS.len() as i32 - 1) as usize]
 }
@@ -115,6 +138,12 @@ pub struct ColorParams {
     /// Wow and flutter amount, 0..1; Tape mode only. 0 bypasses it
     /// entirely (no delay, no interpolation).
     pub flutter: FloatParam,
+    /// Tape nonlinearity ([`TapeQuality`]), Standard or HQ; Tape mode
+    /// only.
+    pub tape_quality: IntParam,
+    /// HQ's integrator ([`HysteresisSolver`]), RK2 / RK4 / NR; Tape HQ
+    /// only.
+    pub tape_solver: IntParam,
 }
 
 impl ColorParams {
@@ -131,6 +160,8 @@ impl ColorParams {
             8 => &self.oversample,
             9 => &self.speed,
             10 => &self.flutter,
+            11 => &self.tape_quality,
+            12 => &self.tape_solver,
             _ => &self.mode,
         }
     }
@@ -141,6 +172,14 @@ impl ColorParams {
 
     pub fn mode(&self) -> Mode {
         Mode::from_int(self.mode.value())
+    }
+
+    pub fn tape_quality(&self) -> TapeQuality {
+        TapeQuality::from_int(self.tape_quality.value())
+    }
+
+    pub fn tape_solver(&self) -> HysteresisSolver {
+        HysteresisSolver::from_int(self.tape_solver.value())
     }
 
     pub fn oversample_factor(&self) -> OversampleFactor {
@@ -248,6 +287,30 @@ impl Default for ColorParams {
             .with_module("Tape"),
 
             flutter: unit_percent("flutter", "Flutter", 0.0).with_module("Tape"),
+
+            tape_quality: IntParam::new(
+                "tape_quality",
+                "Tape Quality",
+                TapeQuality::Standard as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: TapeQuality::LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(&TapeQuality::LABELS)
+            .with_module("Tape"),
+
+            tape_solver: IntParam::new(
+                "tape_solver",
+                "Solver",
+                HysteresisSolver::Rk4 as i32,
+                IntRange::Linear {
+                    min: 0,
+                    max: HysteresisSolver::LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(&HysteresisSolver::LABELS)
+            .with_module("Tape"),
         }
     }
 }

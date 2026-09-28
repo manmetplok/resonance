@@ -1,13 +1,14 @@
 //! Transfer-curve plot: the mode's static curve (drive law,
-//! normalisation, bias and mix — [`crate::dsp::voicing::transfer`]) over
-//! input −1…+1, with the live input peak marked on it.
+//! normalisation, bias and mix — [`crate::dsp::voicing::transfer_for`];
+//! the loop's centre line in Tape HQ) over input −1…+1, with the live
+//! input peak marked on it.
 
 use plugin_gui_core::egui;
 
-use crate::dsp::voicing::transfer;
+use crate::dsp::voicing::transfer_for;
 use crate::dsp::Settings;
 use crate::editor::theme;
-use crate::params::Mode;
+use crate::params::{Mode, TapeQuality};
 
 /// Points across the input range.
 pub const NUM_POINTS: usize = 129;
@@ -23,6 +24,7 @@ struct Key {
     drive: f32,
     bias: f32,
     mix: f32,
+    tape_quality: TapeQuality,
 }
 
 /// The curve's points, recomputed only when a setting it depends on
@@ -41,6 +43,7 @@ impl CurveCache {
             drive: s.drive,
             bias: s.bias,
             mix: s.mix,
+            tape_quality: s.tape_quality,
         };
         if self.key != Some(key) {
             self.points = curve_points(s);
@@ -55,7 +58,7 @@ pub fn curve_points(s: &Settings) -> Vec<(f32, f32)> {
     (0..NUM_POINTS)
         .map(|i| {
             let x = -SPAN + 2.0 * SPAN * i as f32 / (NUM_POINTS - 1) as f32;
-            (x, transfer(s.mode, s.drive, s.bias, s.mix, x))
+            (x, transfer_for(s, x))
         })
         .collect()
 }

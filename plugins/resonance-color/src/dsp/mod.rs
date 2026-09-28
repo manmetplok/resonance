@@ -1,4 +1,5 @@
-//! The character DSP (warmth-width-depth.md §6.1, Standard tape quality).
+//! The character DSP (warmth-width-depth.md §6.1; Tape's HQ quality is
+//! slice W6b).
 //!
 //! # Signal flow, per channel
 //!
@@ -14,6 +15,15 @@
 //!   factor (Off / 2× / 4×). Transformer mode uses the
 //!   [`LfWeightedDrive`] stage instead, which wraps its own ADAA curve in
 //!   an LF emphasis pair, a sub-sonic high-pass and an HF resonance.
+//! - **Tape HQ** (`tape_quality` = HQ) swaps only the curve for a
+//!   Jiles-Atherton [`Hysteresis`] stage per channel (voicing in
+//!   [`voicing::tape_hq`]), integrated by the `tape_solver` choice (RK4 by
+//!   default). The hysteresis is stateful, so ADAA does not apply: the
+//!   stage runs at [`Settings::stage_factor`], the `oversample` factor
+//!   raised to at least 2×, through the same latency-free IIR pair (the
+//!   dry path follows it, so `mix` stays phase-aligned). The head bump,
+//!   HF loss, flutter, tone and auto-gain are shared with Standard.
+//!   Entering HQ starts the loop demagnetised.
 //! - **Mode post** is Tape's [`HeadBump`] and level-dependent [`HfLoss`],
 //!   at the base rate after the downsampler.
 //! - **Dry** runs through a second oversampler pair of the same design
@@ -66,12 +76,13 @@ pub mod voicing;
 use resonance_dsp::tape::hf_loss_corner_hz;
 use resonance_dsp::{
     db_to_linear, linear_to_db, Adaa1, Biquad, Curve, DcBlocker, EmphasisPair, Flutter,
-    HeadBump, HfLoss, LfWeightedDrive, OversampleFactor, Oversampler,
+    HeadBump, HfLoss, Hysteresis, HysteresisSolver, JaParams, LfWeightedDrive, OversampleFactor,
+    Oversampler,
 };
 use resonance_metering::k_weighting::KWeightingFilter;
 use resonance_plugin::{Smoother, SmoothingStyle};
 
-use crate::params::{speed_ips, ColorParams, Mode};
+use crate::params::{speed_ips, ColorParams, Mode, TapeQuality};
 use crate::viz::ColorViz;
 
 /// Crossfade length when flutter's centre delay comes or goes.
@@ -120,9 +131,28 @@ pub struct Settings {
     pub oversample: OversampleFactor,
     pub speed_ips: f32,
     pub flutter: f32,
+    pub tape_quality: TapeQuality,
+    pub tape_solver: HysteresisSolver,
 }
 
 impl Settings {
+    /// Tape mode at HQ: the hysteresis stage replaces the curve.
+    pub fn is_hq(&self) -> bool {
+        self.mode == Mode::Tape && self.tape_quality == TapeQuality::Hq
+    }
+
+    /// The oversampling the stage actually runs at: the `oversample`
+    /// setting, raised to at least 2x in Tape HQ (hysteresis is stateful,
+    /// so ADAA cannot stand in for oversampling there). Still the IIR
+    /// pair, so still latency-free.
+    pub fn stage_factor(&self) -> OversampleFactor {
+        if self.is_hq() && self.oversample == OversampleFactor::Off {
+            OversampleFactor::X2
+        } else {
+            self.oversample
+        }
+    }
+
     pub fn from_params(p: &ColorParams) -> Self {
         Self {
             mode: p.mode(),
@@ -136,6 +166,8 @@ impl Settings {
             oversample: p.oversample_factor(),
             speed_ips: speed_ips(p.speed.value()),
             flutter: p.flutter.value(),
+            tape_quality: p.tape_quality(),
+            tape_solver: p.tape_solver(),
         }
     }
 }
@@ -153,8 +185,11 @@ struct Voice {
     /// Curve input gain (unused in Console, whose drive is in the curve).
     gain: f32,
     /// `1 / (gain · f'(0))` for the gain-driven modes, `1 / f'(0)` for
-    /// Transformer (whose stage already divides by the gain), 1 in Console.
+    /// Transformer (whose stage already divides by the gain), 1 in Console,
+    /// `1 / (dM_an/dH)` in Tape HQ.
     norm: f32,
+    /// The hysteresis constants (Tape HQ only; the default otherwise).
+    ja: JaParams,
 }
 
 struct Channel {
@@ -169,6 +204,7 @@ struct Channel {
     tone_lo: Biquad,
     tone_hi: Biquad,
     flutter: Flutter,
+    hyst: Hysteresis,
 }
 
 impl Channel {
@@ -185,6 +221,7 @@ impl Channel {
             tone_lo: Biquad::identity(),
             tone_hi: Biquad::identity(),
             flutter: Flutter::new(sample_rate),
+            hyst: Hysteresis::default(),
         }
     }
 
@@ -205,6 +242,7 @@ impl Channel {
         self.adaa.reset();
         self.xfmr.reset();
         self.dc.reset();
+        self.hyst.reset();
     }
 
     /// One base-rate sample: `(dry, wet)` before auto-gain and mix.
@@ -224,6 +262,12 @@ impl Channel {
                     self.xfmr.set_curve(v.curve);
                     self.xfmr.set_drive(v.gain);
                     self.xfmr.process(e) * v.norm
+                }
+                Mode::Tape if flags.hq => {
+                    if self.hyst.params() != v.ja {
+                        self.hyst.set_params(v.ja);
+                    }
+                    self.hyst.process(e as f64) as f32 * v.norm
                 }
                 _ => self.adaa.process(&v.curve, v.gain * e) * v.norm,
             };
@@ -247,6 +291,8 @@ impl Channel {
 struct Flags {
     dc_block: bool,
     tone_on: bool,
+    /// Tape HQ: the hysteresis stage replaces the curve.
+    hq: bool,
 }
 
 /// Stereo-linked, K-weighted RMS match of the wet path to the dry one.
@@ -326,7 +372,7 @@ pub struct ColorDsp {
 
     /// Curve state cache: recomputed only when drive or bias moved.
     voice: Voice,
-    voice_key: (f32, f32, Mode),
+    voice_key: (f32, f32, Mode, bool),
 
     /// Flutter crossfade position (0 = bypassed, 1 = fully fluttered)
     /// and step per sample; the last non-zero amount, held while fading
@@ -372,8 +418,9 @@ impl ColorDsp {
                 curve: Curve::Tanh,
                 gain: 1.0,
                 norm: 1.0,
+                ja: JaParams::default(),
             },
-            voice_key: (f32::NAN, f32::NAN, Mode::Tube),
+            voice_key: (f32::NAN, f32::NAN, Mode::Tube, false),
             flutter_fade: 0.0,
             flutter_step: 1.0 / (FLUTTER_FADE_MS * 0.001 * sr).max(1.0),
             flutter_held: 0.0,
@@ -428,17 +475,17 @@ impl ColorDsp {
     /// Rebuild whatever the settings changed. Cheap when nothing did.
     fn configure(&mut self, s: &Settings) {
         let prev = self.configured;
-        let factor_changed = prev.is_none_or(|p| p.oversample != s.oversample);
+        let factor_changed = prev.is_none_or(|p| p.stage_factor() != s.stage_factor());
         let speed_changed = prev.is_none_or(|p| p.speed_ips != s.speed_ips);
 
         if factor_changed {
-            let stage = self.stage_rate(s.oversample);
+            let stage = self.stage_rate(s.stage_factor());
             for ch in &mut self.ch {
                 // A factor change clears the oversamplers (their state
                 // belongs to the old rate); so must everything that ran
                 // at that rate.
-                ch.os_wet.set_factor(s.oversample);
-                ch.os_dry.set_factor(s.oversample);
+                ch.os_wet.set_factor(s.stage_factor());
+                ch.os_dry.set_factor(s.stage_factor());
                 ch.reset_stage();
                 ch.dc.set_cutoff(DcBlocker::DEFAULT_CUTOFF_HZ, stage);
                 ch.xfmr.set_emphasis(
@@ -476,9 +523,24 @@ impl ColorDsp {
             }
         }
 
+        // Entering Tape HQ starts the hysteresis from the demagnetised
+        // state: whatever it held from an earlier HQ stretch belongs to
+        // signal that is long gone.
+        let hq_entered = s.is_hq() && prev.is_none_or(|p| !p.is_hq());
+        let solver_changed = prev.is_none_or(|p| p.tape_solver != s.tape_solver);
+        if hq_entered || solver_changed {
+            for ch in &mut self.ch {
+                if hq_entered {
+                    ch.hyst.reset();
+                }
+                ch.hyst.set_solver(s.tape_solver);
+            }
+        }
+
         self.flags.dc_block = voicing::needs_dc_block(s.mode);
+        self.flags.hq = s.is_hq();
         self.configured = Some(*s);
-        self.apply_filters(s.oversample);
+        self.apply_filters(s.stage_factor());
     }
 
     /// Push the smoothed response and tone into the filter coefficients
@@ -507,15 +569,27 @@ impl ColorDsp {
     }
 
     #[inline]
-    fn voice_for(&mut self, mode: Mode, drive: f32, bias: f32) -> Voice {
-        let key = (drive, bias, mode);
+    fn voice_for(&mut self, mode: Mode, hq: bool, drive: f32, bias: f32) -> Voice {
+        let key = (drive, bias, mode, hq);
         if key.0.to_bits() == self.voice_key.0.to_bits()
             && key.1.to_bits() == self.voice_key.1.to_bits()
             && key.2 == self.voice_key.2
+            && key.3 == self.voice_key.3
         {
             return self.voice;
         }
         let amount = voicing::drive_amount(mode, drive);
+        if hq {
+            let (ja, norm) = voicing::tape_hq(amount, bias);
+            self.voice = Voice {
+                curve: Curve::Tanh,
+                gain: amount,
+                norm,
+                ja,
+            };
+            self.voice_key = key;
+            return self.voice;
+        }
         let curve = voicing::curve(mode, amount, bias);
         let slope = curve.slope_at_zero() as f32;
         let norm = match mode {
@@ -527,6 +601,7 @@ impl ColorDsp {
             curve,
             gain: amount,
             norm,
+            ja: JaParams::default(),
         };
         self.voice_key = key;
         self.voice
@@ -557,7 +632,7 @@ impl ColorDsp {
         // smoothers will be at the end of this block.
         self.response_s.skip(n as u32);
         self.tone_s.skip(n as u32);
-        self.apply_filters(s.oversample);
+        self.apply_filters(s.stage_factor());
 
         let flutter_on = s.mode == Mode::Tape && s.flutter > 0.0;
         if s.flutter > 0.0 {
@@ -579,7 +654,7 @@ impl ColorDsp {
             let x = [sanitize(left[i]), sanitize(right[i])];
             let drive = self.drive_s.next();
             let bias = self.bias_s.next();
-            let voice = self.voice_for(mode, drive, bias);
+            let voice = self.voice_for(mode, flags.hq, drive, bias);
 
             let (d0, w0) = self.ch[0].tick(x[0], &voice, mode, &flags);
             let (d1, w1) = self.ch[1].tick(x[1], &voice, mode, &flags);
