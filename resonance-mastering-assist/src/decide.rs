@@ -146,6 +146,9 @@ pub struct Suggestions {
     pub limiter_enabled: bool,
     pub limiter_ceiling_db: f32,
     pub limiter_release_ms: f32,
+    /// The limiter's input gain (`lim_gain`): the part of the loudness
+    /// gap the input trim leaves for the limiter to push.
+    pub limiter_gain_db: f32,
     pub glue_enabled: bool,
     pub glue_threshold_db: f32,
     pub glue_ratio: f32,
@@ -186,6 +189,12 @@ const SHELF_Q: f32 = 0.707;
 const SHELF_MIN_DB: f32 = 0.25;
 /// Where the imager's side high-pass is put when it is suggested.
 const SIDE_HPF_HZ: f32 = 120.0;
+/// How much of the loudness gap goes to the limiter's input gain rather
+/// than the input trim: the trim puts the chain this far under the
+/// target, and `lim_gain` pushes the limiter the rest of the way.
+const LIMITER_PUSH_DB: f32 = 3.0;
+/// `lim_gain`'s range.
+const LIMITER_GAIN_MAX_DB: f32 = 18.0;
 
 /// The mastering plugin's M/S selector value for a stereo band (its
 /// `MsMode::Stereo` index; the plugin's lockstep test pins the two
@@ -222,6 +231,7 @@ pub const EMITTED_PARAM_KEYS: &[&str] = &[
     "lim_on",
     "lim_ceiling",
     "lim_release",
+    "lim_gain",
     "target_lufs",
 ];
 
@@ -333,6 +343,7 @@ impl Suggestions {
                     change("lim_on", bool_value(self.limiter_enabled)),
                     change("lim_ceiling", self.limiter_ceiling_db),
                     change("lim_release", self.limiter_release_ms),
+                    change("lim_gain", self.limiter_gain_db),
                 ],
                 STAGE_TARGET_LUFS => vec![change("target_lufs", self.target_lufs)],
                 _ => Vec::new(),
@@ -404,9 +415,11 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     //    that the rest of the chain (compressor, limiter) operates in a
     //    useful range. Clamped to the param's ±24 dB range.
     let loudness_gap = target_lufs - analysis.integrated_lufs;
-    // Leave a few dB of headroom for the limiter to work with rather
-    // than slamming exactly to target.
-    let input_trim_db = (loudness_gap - 3.0).clamp(-24.0, 24.0);
+    // Stop a few dB short of the target: the last of the loudness is
+    // the limiter's input gain (step 6), so it is pushed into the
+    // limiter after the clipper instead of into every stage before it.
+    let input_trim_db = (loudness_gap - LIMITER_PUSH_DB).clamp(-24.0, 24.0);
+    let limiter_gain_db = (loudness_gap - input_trim_db).clamp(0.0, LIMITER_GAIN_MAX_DB);
     if input_trim_db.abs() >= 0.5 {
         say(STAGE_INPUT_TRIM, format!(
             "Input trim: {:+.1} dB (input is {:.1} LU {} target)",
@@ -523,8 +536,8 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
     let limiter_ceiling_db = -0.3;
     let limiter_release_ms = 50.0;
     say(STAGE_LIMITER, format!(
-        "Limiter: on at {:.1} dBTP, release 50 ms",
-        limiter_ceiling_db
+        "Limiter: on at {:.1} dBTP, release 50 ms, {:+.1} dB of gain into it",
+        limiter_ceiling_db, limiter_gain_db
     ));
     say(STAGE_TARGET_LUFS, format!(
         "Target loudness: {:.1} LUFS ({})",
@@ -545,6 +558,7 @@ pub fn build(analysis: &AnalysisResult, target: &Target) -> Suggestions {
         limiter_enabled,
         limiter_ceiling_db,
         limiter_release_ms,
+        limiter_gain_db,
         glue_enabled,
         glue_threshold_db,
         glue_ratio,

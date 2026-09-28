@@ -12,9 +12,11 @@
 //! it again, so material below the knee passes at unity and the ceiling
 //! sits at `−drive` dBFS: a transient peaking at 0 dBFS comes out
 //! `drive` dB lower, and everything quieter than the knee is untouched.
-//! The stage never adds loudness by itself; the gain that uses the
-//! headroom it makes belongs upstream (input trim, glue make-up), and the
-//! limiter after it catches what is left.
+//! The stage never adds loudness by itself. The gain that uses the
+//! headroom it makes is the limiter's input gain (`lim_gain`), right
+//! after it: raising the input trim instead would only push more into
+//! the clipper, which takes every dB above its ceiling, and leave the
+//! limiter nothing to do.
 //!
 //! # Aliasing
 //!

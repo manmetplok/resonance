@@ -5,7 +5,7 @@
 
 use resonance_dsp::deharsh::StftGeometry;
 use resonance_dsp::{Biquad, SimpleRng, SuppressorConfig};
-use resonance_mastering::params::{MasteringParams, PARAM_COUNT, W9_PARAM_COUNT};
+use resonance_mastering::params::{MasteringParams, W12_PARAM_COUNT, W9_PARAM_COUNT};
 use resonance_mastering::ResonanceMastering;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use rustfft::{num_complex::Complex, FftPlanner};
@@ -129,8 +129,8 @@ fn dh_on(p: &MasteringParams, depth: f32) {
 #[test]
 fn deharsh_params_are_appended_after_the_w9_block() {
     let p = MasteringParams::default();
-    assert_eq!(PARAM_COUNT, W9_PARAM_COUNT + 11);
-    let ids: Vec<&str> = (W9_PARAM_COUNT..PARAM_COUNT).map(|i| p.param_at(i).id()).collect();
+    assert_eq!(W12_PARAM_COUNT, W9_PARAM_COUNT + 11);
+    let ids: Vec<&str> = (W9_PARAM_COUNT..W12_PARAM_COUNT).map(|i| p.param_at(i).id()).collect();
     assert_eq!(
         ids,
         [

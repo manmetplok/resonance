@@ -83,7 +83,7 @@ map names the levers, the listing is the territory.
 <!-- keys: com.resonance.mastering -->
 | Stage | Switch | Controls |
 |---|---|---|
-| Input | — | `input_trim_db` (dB into the chain: the loudness lever) |
+| Input | — | `input_trim_db` (dB into the chain: the level every stage sees) |
 | Corrective EQ | `corr_b{n}_on` | per band n = 0-3: `corr_b{n}_type` (0 Bell, 1 low shelf, 2 high shelf, 3 high-pass, 4 low-pass), `corr_b{n}_freq`, `corr_b{n}_q`, `corr_b{n}_gain`, `corr_b{n}_ms` (`Stereo` / `Mid` / `Side`). Defaults: b0 high-pass 30 Hz, b1 250 Hz, b2 500 Hz, b3 3 kHz |
 | De-harsh | `dh_on` | a resonance suppressor: `dh_depth` (max cut, dB), `dh_selectivity` (dB above the smoothed spectrum before it acts), `dh_sharpness` (Q of each cut), `dh_attack`, `dh_release` (ms), `dh_low`, `dh_high` (band, default 1-8 kHz), `dh_mode` (`Stereo` / `Mid` / `Side` / `Mid+Side`), `dh_mix`, `dh_delta` (hear only what is removed; never leave it on) |
 | Glue compressor | `glue_on` | `glue_threshold`, `glue_ratio`, `glue_attack`, `glue_release`, `glue_knee`, `glue_makeup`, `glue_mix` |
@@ -92,7 +92,7 @@ map names the levers, the listing is the territory.
 | Multiband | `mb_on` | `mb_xo1`, `mb_xo2`, `mb_xo3` (crossovers); per band n = 0-3: `mb_b{n}_on`, `mb_b{n}_thresh`, `mb_b{n}_ratio`, `mb_b{n}_attack`, `mb_b{n}_release`, `mb_b{n}_knee`, `mb_b{n}_mix`, `mb_b{n}_gain` |
 | Imager | `img_on` | `img_width` (0-2, 1 = unchanged), `img_side_hpf_on`, `img_side_hpf_freq` (the mono-maker), `img_b{n}_width` (per multiband band, low first; needs the crossovers) |
 | Clipper | `clip_on` | `clip_drive` (dB of peak shaved), `clip_shape` (0 hard … 1 soft) |
-| Limiter | `lim_on` | `lim_ceiling` (dBTP), `lim_release` (ms) |
+| Limiter | `lim_on` | `lim_ceiling` (dBTP), `lim_release` (ms), `lim_gain` (dB pushed into the limiter after the clipper, 0-18; only while it is on) |
 | Dither | `dith_on` | `dith_bits`, `dith_ns` (noise shaping) |
 <!-- /keys -->
 
@@ -180,33 +180,38 @@ compare's stereo deltas: the highs' `side_mid_db` up, the low bands'
 ### Clipper, then limiter
 
 <!-- keys: com.resonance.mastering -->
-The limiter sets the level: `lim_on` `On`, `lim_ceiling` -1 (-2 safer through
-lossy codecs), `lim_release` about 50 ms, and bring the level up with
-`input_trim_db`: about -14 minus the pre-master integrated LUFS.
+The limiter sets the final level: `lim_on` `On`, `lim_ceiling` -1 (-2 safer
+through lossy codecs), `lim_release` about 50 ms. Two levers make the
+loudness: `input_trim_db` sets the level into the chain, and `lim_gain` pushes
+the signal into the limiter, after the clipper. Without the clipper either
+one does; with it, the push has to be `lim_gain`.
 
 The clipper's ceiling is **absolute**: it sits at minus `clip_drive` dBFS, and
-only what peaks above it is shaved. A mix still peaking at -6 dBFS passes it
-untouched, so the trim has to come first. Nothing sits between the clipper and
-the limiter, so the clipper takes every dB of peak above its ceiling and leaves
-the limiter only the stretch from its ceiling down to `lim_ceiling`. The clip
-depth is therefore the pre-clipper true peak plus `clip_drive`, not
-`clip_drive` alone.
+only what peaks above it is shaved. It is level-matched, so it adds no
+loudness: a mix peaking at -6 dBFS passes it untouched, and a mix it shaves
+comes out `clip_drive` dB lower at the peaks. Whatever loudness the target
+still needs after it comes from `lim_gain`, and the limiter takes that share
+of the peak reduction: with the pre-clipper peak at 0 dBFS it takes
+`lim_gain` minus `clip_drive` plus the distance of `lim_ceiling` below 0
+(`clip_drive` 2, `lim_gain` 6, `lim_ceiling` -1: the clipper 2 dB, the
+limiter 5).
 <!-- /keys -->
 
 So, when the limiter pumps or `crest_db` is high with sharp transients:
 
-1. With the clipper and the limiter off and the trim already raised, the
-   master's `true_peak_db` is the pre-clipper peak.
-2. Switch the clipper on with a soft shape and pick the drive so that peak
-   plus drive is 1-3 dB: that is how much the clipper shaves.
-3. Switch the limiter back on and compare. If the loudness target needs more
-   than about 3 dB of peak reduction in total, the clipper would take it all:
-   leave it off and let the limiter do the work, or keep it only if `crest_db`,
-   `psr_db` and a `meter_probe {freq_hz: 5000}` aliasing check still hold.
+1. With the clipper and the limiter off, raise the trim until the master's
+   `true_peak_db` (the pre-clipper peak) sits near 0 dBFS.
+2. Switch the clipper on with a soft shape and a drive of 1-3 dB: that is how
+   much it shaves.
+3. Switch the limiter on and raise its gain until the integrated loudness
+   reaches the target, then compare. Keep the clipper only if `crest_db`,
+   `psr_db` and a `meter_probe {freq_hz: 5000}` aliasing check still hold;
+   otherwise lower its drive, or switch it off and let the limiter do all of
+   it.
 
 <!-- keys: com.resonance.mastering -->
-Those switches are `clip_on` `On`, `clip_shape` toward 1 (soft) and
-`clip_drive` in dB.
+Those switches are `clip_on` `On`, `clip_shape` toward 1 (soft),
+`clip_drive` in dB, and `lim_gain` in dB.
 <!-- /keys -->
 
 The limiter is the only stage that reliably buys loudness. Raising
@@ -235,11 +240,13 @@ against generic targets. The reference must be in the project pool
    pass, with `meter_compare` after each, as above.
 3. If you re-run it after applying anything, its numbers are **what is left
    to do**, relative to the settings already on the chain, not a fresh
-   setting. The trim is the target loudness minus what the chain puts out
-   now (less 3 dB of limiter headroom), and each shelf gain is only the part
-   of the spectrum still outside the band. So **add** the new trim and shelf
-   gains to the current values from `master_plugin_params`; writing them as
-   given undoes the move you made. A re-run's glue suggestion reads the crest
+   setting. Its trim and limiter gain together are the loudness still
+   missing (the trim stops 3 dB short and the limiter gain is those 3 dB),
+   and each shelf gain is only the part of the spectrum still outside the
+   band. So **add** the new trim plus the new limiter gain to the current
+   trim, leave the limiter gain where it is, and add the new shelf gains to
+   the current values from `master_plugin_params`; writing them as given
+   undoes the move you made. A re-run's glue suggestion reads the crest
    after your glue and limiter and so is no longer about the mix: ignore it
    once either is on. Its imager width multiplies the width already set.
    Its limiter ceiling (-0.3 dBTP) is looser than the -1 dBTP target in 4:

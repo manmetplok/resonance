@@ -295,8 +295,8 @@ master range and returns its suggestions. **It applies nothing.** Pass
 - `measured` is the master as it is now, after the whole master chain. That
   includes any mastering plugin already on it. Run the assistant before you
   switch stages on. A re-run after that reports what is left to do: its trim
-  and shelf gains are amounts to **add** to the current values, not values
-  to write (the `mastering` skill, 3b).
+  plus its limiter gain, and its shelf gains, are amounts to **add** to the
+  current values, not values to write (the `mastering` skill, 3b).
 - `suggestions[]` goes stage by stage (`input_trim`, `tonal_low_shelf`,
   `tonal_high_shelf`, `glue`, `imager`, `limiter`, `target_lufs`,
   `diagnostic`). Each entry has a `rationale` and the exact `params` writes
@@ -318,8 +318,8 @@ master range and returns its suggestions. **It applies nothing.** Pass
 
 Treat each stage as a proposal. Apply one, then check the result with
 `meter_compare` at matched loudness before accepting the next. In
-particular, `input_trim` and `target_lufs` aim at the genre's loudness,
-which is a mastering target and never a mix target.
+particular, `input_trim`, the limiter's gain and `target_lufs` aim at the
+genre's loudness, which is a mastering target and never a mix target.
 
 ## Cost
 
