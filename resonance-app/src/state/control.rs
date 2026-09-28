@@ -97,11 +97,20 @@ pub enum AssistTarget {
 /// The app-side half of a `master.assist` in flight: the target, and the
 /// measurements that have arrived so far (the master render, and in
 /// reference mode the reference).
+///
+/// In reference mode the master render is NOT sent up front: the
+/// reference is decoded first and `mix_range` holds the render's range
+/// until it succeeds. That keeps at most one engine command outstanding
+/// per job, so the job ending (and releasing the offline-render guard)
+/// always means no render is still running under it.
 #[derive(Debug, Clone)]
 pub struct PendingAssist {
     pub target: AssistTarget,
     pub mix: Option<resonance_audio::types::MixMeasurement>,
     pub reference: Option<resonance_audio::types::MixMeasurement>,
+    /// The master render still to send once the reference is in:
+    /// `Some(range)` until it is sent, `None` after (or in genre mode).
+    pub mix_range: Option<Option<(u64, u64)>>,
 }
 
 /// The app-side half of a `meter.probe` in flight.
