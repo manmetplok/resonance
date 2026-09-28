@@ -319,5 +319,6 @@ pub fn color_for_kind(kind: BandKind) -> egui::Color32 {
         BandKind::HighShelf => theme::GOOD,
         BandKind::LowCut => theme::WARN,
         BandKind::HighCut => theme::WARN,
+        BandKind::Tilt | BandKind::LfLiftDip | BandKind::Air => theme::GOOD,
     }
 }

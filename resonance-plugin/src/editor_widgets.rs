@@ -41,7 +41,7 @@
 //! and the bridge's `text_to_value` were fully implemented and unit
 //! tested with nothing in the fleet calling them.
 
-use crate::param::{BoolParam, FloatParam, Param};
+use crate::param::{BoolParam, FloatParam, IntParam, Param};
 use plugin_gui_core::egui;
 
 /// The cell `plugin_gui_core::widgets::knob` allocates: 64 px wide,
@@ -208,4 +208,29 @@ pub fn bool_checkbox(ui: &mut egui::Ui, param: &BoolParam, label: &str) {
     if ui.checkbox(&mut v, label).changed() {
         param.set_value(v);
     }
+}
+
+/// Combo box bound to a choice `IntParam` (one declared with
+/// [`IntParam::with_choices`]).
+///
+/// The labels come off the parameter's own table, so the editor, the
+/// host's display and the control API's `choices[]` all read the same
+/// words. `width` is the combo's width in px — a layout fact, not a fact
+/// about the parameter. A param without a choice table shows its number.
+pub fn int_choice(ui: &mut egui::Ui, param: &IntParam, width: f32) {
+    let min = param.min_plain() as i32;
+    let current = param.value();
+    let labels = param.choices().unwrap_or(&[]);
+    let selected = param.display(current as f64);
+    egui::ComboBox::from_id_salt(("resonance_int_choice", param.id()))
+        .width(width)
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            for (i, label) in labels.iter().enumerate() {
+                let v = min + i as i32;
+                if ui.selectable_label(v == current, *label).clicked() {
+                    param.set_value(v);
+                }
+            }
+        });
 }

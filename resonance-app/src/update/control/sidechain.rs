@@ -71,17 +71,29 @@ pub(super) fn resolve_key_source(
     }
 }
 
-/// The first plugin on `chain` that declares a sidechain (key) input.
+/// Plugins whose key port is secondary: they read a key (the reverb
+/// ducks its wet return from one) but are not what an unqualified
+/// "key this track from X" means. Default resolution skips them while a
+/// dynamics plugin with a key port sits anywhere on the chain.
+const SECONDARY_KEY_PLUGINS: &[&str] = &["com.resonance.reverb"];
+
+/// The plugin an omitted `plugin_id` resolves to: the first plugin on
+/// `chain` that declares a sidechain (key) input and is a dynamics
+/// processor (compressor, gate, or any keyed plugin not listed in
+/// [`SECONDARY_KEY_PLUGINS`]); failing that, the first keyed plugin at
+/// all — so a reverb is chosen only when it is the only one with a key.
 ///
-/// This is what an omitted `plugin_id` resolves to. Addressing slot 0
-/// instead — which is what the sidechain methods used to inherit from
-/// `set_plugin_param` — sent every unqualified call at a track's
-/// instrument, the one plugin in the chain guaranteed to have no key
-/// port (ba doc #275 P0).
+/// Addressing slot 0 instead — which is what the sidechain methods used
+/// to inherit from `set_plugin_param` — sent every unqualified call at a
+/// track's instrument, the one plugin in the chain guaranteed to have no
+/// key port (ba doc #275 P0). Preferring dynamics keeps "key the bass
+/// compressor from the kick" pointing at the compressor when a reverb
+/// with its own key port sits ahead of it.
 pub(super) fn first_keyable(chain: &[PluginSlotState]) -> Option<PluginInstanceId> {
-    chain
-        .iter()
-        .find(|p| p.has_sidechain_input)
+    let keyed = || chain.iter().filter(|p| p.has_sidechain_input);
+    keyed()
+        .find(|p| !SECONDARY_KEY_PLUGINS.contains(&p.clap_plugin_id.as_str()))
+        .or_else(|| keyed().next())
         .map(|p| p.instance_id)
 }
 
@@ -120,7 +132,7 @@ pub(super) fn require_key_port(
     let hint = if keyable.is_empty() {
         format!(
             "no plugin on {host} declares one — add a plugin that does \
-             (com.resonance.compressor, com.resonance.gate) and route the key into that"
+             (com.resonance.compressor, com.resonance.gate, com.resonance.reverb) and route the key into that"
         )
     } else {
         format!(

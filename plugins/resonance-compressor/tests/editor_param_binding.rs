@@ -48,6 +48,10 @@ fn float_params(p: &CompressorParams) -> Vec<(&'static str, &FloatParam)> {
 
 const BOOL_PARAM_FIELDS: [&str; 2] = ["sc_hpf_on", "auto_makeup"];
 
+/// Choice `IntParam`s, drawn by the shared `int_choice` combo whose
+/// labels come off the param's own table.
+const CHOICE_PARAM_FIELDS: [&str; 1] = ["release_mode"];
+
 /// Split a single-line call's argument list on commas. Safe here because
 /// the guard also rejects any argument that isn't a plain path or a
 /// string literal, neither of which can contain a comma.
@@ -88,8 +92,17 @@ fn every_param_has_exactly_one_control_in_the_strip() {
     // Completeness in the other direction: no parameter is left without
     // a control, and no control is drawn for something params.rs does
     // not declare.
+    for field in CHOICE_PARAM_FIELDS {
+        let needle = format!("int_choice(ui, &p.{field},");
+        let hits = CONTROL_STRIP_SRC.matches(&needle).count();
+        assert_eq!(
+            hits, 1,
+            "`{field}` must be drawn by exactly one param-bound int_choice call, found {hits}"
+        );
+    }
     let controls = CONTROL_STRIP_SRC.matches("float_knob(ui, &p.").count()
-        + CONTROL_STRIP_SRC.matches("bool_checkbox(ui, &p.").count();
+        + CONTROL_STRIP_SRC.matches("bool_checkbox(ui, &p.").count()
+        + CONTROL_STRIP_SRC.matches("int_choice(ui, &p.").count();
     assert_eq!(
         controls, PARAM_COUNT,
         "the strip draws {controls} controls for {PARAM_COUNT} parameters"

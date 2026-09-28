@@ -14,6 +14,25 @@
 //!
 //! All intermediate quantities downstream of the detector are in dB so
 //! that the soft-knee formula and makeup gain are linear and cheap.
+//!
+//! # Release modes
+//!
+//! `Manual` (the default) is the single attack/release envelope above,
+//! with the user's release time. `Auto` is the program-dependent release
+//! bus compressors are known for (warmth-width-depth.md §3.1, §6.4): two
+//! GR envelopes run side by side on the same target and the deeper one
+//! wins.
+//!
+//! - the **fast** envelope attacks with the user's attack and releases in
+//!   [`AUTO_FAST_RELEASE_MS`];
+//! - the **slow** envelope *charges* only over [`AUTO_SLOW_ATTACK_MS`]
+//!   and releases over [`AUTO_SLOW_RELEASE_MS`].
+//!
+//! A short transient barely charges the slow envelope, so it recovers at
+//! the fast rate and doesn't dig a hole after the hit; sustained
+//! compression charges it fully, so the gain comes back slowly and the
+//! bus doesn't pump. The `release` knob plays no part in Auto, as on the
+//! hardware this imitates.
 
 use resonance_dsp::{db_to_linear, linear_to_db, soft_knee_gain_reduction_db, Ballistics, Biquad};
 use resonance_plugin::{Smoother, SmoothingStyle};
@@ -29,6 +48,13 @@ use crate::viz::{CompressorViz, HISTORY_STEP_SAMPLES};
 /// than asked.
 pub const PEAK_DETECTOR_RELEASE_MS: f32 = 5.0;
 
+/// Auto release: release time of the fast GR envelope, ms.
+pub const AUTO_FAST_RELEASE_MS: f32 = 50.0;
+/// Auto release: how long the slow GR envelope takes to charge, ms.
+pub const AUTO_SLOW_ATTACK_MS: f32 = 300.0;
+/// Auto release: release time of the slow GR envelope, ms.
+pub const AUTO_SLOW_RELEASE_MS: f32 = 1500.0;
+
 pub struct CompressorDsp {
     sample_rate: f32,
 
@@ -42,6 +68,13 @@ pub struct CompressorDsp {
 
     /// Current gain reduction in dB after attack/release smoothing.
     gr_db: f32,
+    /// Auto release: the fast and slow GR envelopes (`gr_db` is the
+    /// larger of the two while Auto is on).
+    gr_fast_db: f32,
+    gr_slow_db: f32,
+    /// Whether the previous block ran in Auto, to seed the envelopes on
+    /// a mode switch.
+    auto_release: bool,
 
     /// Sidechain high-pass biquad, applied to the mono detector signal.
     sc_hpf: Biquad,
@@ -88,6 +121,9 @@ impl CompressorDsp {
             rms_env: 0.0,
             rms_coef: 0.0,
             gr_db: 0.0,
+            gr_fast_db: 0.0,
+            gr_slow_db: 0.0,
+            auto_release: false,
             sc_hpf: Biquad::identity(),
             history_accum: 0,
             in_peak: 0.0,
@@ -118,6 +154,8 @@ impl CompressorDsp {
         self.peak_env = 0.0;
         self.rms_env = 0.0;
         self.gr_db = 0.0;
+        self.gr_fast_db = 0.0;
+        self.gr_slow_db = 0.0;
         self.sc_hpf.reset();
         self.history_accum = 0;
         self.in_peak = 0.0;
@@ -172,10 +210,17 @@ impl CompressorDsp {
         // upstream Inf) would otherwise mute or garble the track until
         // reset. Checking at block rate costs the hot path nothing and
         // bounds recovery to one block.
-        if !(self.gr_db.is_finite() && self.peak_env.is_finite() && self.rms_env.is_finite()) {
+        if !(self.gr_db.is_finite()
+            && self.peak_env.is_finite()
+            && self.rms_env.is_finite()
+            && self.gr_fast_db.is_finite()
+            && self.gr_slow_db.is_finite())
+        {
             self.gr_db = 0.0;
             self.peak_env = 0.0;
             self.rms_env = 0.0;
+            self.gr_fast_db = 0.0;
+            self.gr_slow_db = 0.0;
         }
         if !(self.in_peak.is_finite() && self.out_peak.is_finite()) {
             self.in_peak = 0.0;
@@ -204,6 +249,20 @@ impl CompressorDsp {
         // `exp(-1 / (time_seconds * sr))` is the fraction kept each sample.
         let ballistics = Ballistics::from_times(self.sample_rate, attack_ms, release_ms);
         let detector_release_ms = release_ms.min(PEAK_DETECTOR_RELEASE_MS);
+
+        // Auto release: two envelopes (see the module docs). Entering
+        // Auto hands the current reduction to the fast envelope, so the
+        // switch itself is seamless; leaving it keeps `gr_db`, which is
+        // already the envelope the Manual path continues from.
+        let auto_release = params.release_mode.value() == 1;
+        if auto_release && !self.auto_release {
+            self.gr_fast_db = self.gr_db;
+            self.gr_slow_db = 0.0;
+        }
+        self.auto_release = auto_release;
+        let fast = Ballistics::from_times(self.sample_rate, attack_ms, AUTO_FAST_RELEASE_MS);
+        let slow =
+            Ballistics::from_times(self.sample_rate, AUTO_SLOW_ATTACK_MS, AUTO_SLOW_RELEASE_MS);
         let peak_release_coef = (-1.0 / (detector_release_ms * 0.001 * self.sample_rate)).exp();
 
         // Update SC HPF coefficients once per block. When the HPF is
@@ -298,7 +357,13 @@ impl CompressorDsp {
             // Attack/release ballistics on the GR envelope. When new GR is
             // larger than current (the comp needs to clamp harder) we use
             // the attack coefficient; otherwise the slower release.
-            self.gr_db = ballistics.step_envelope(self.gr_db, target_gr_db);
+            if auto_release {
+                self.gr_fast_db = fast.step_envelope(self.gr_fast_db, target_gr_db);
+                self.gr_slow_db = slow.step_envelope(self.gr_slow_db, target_gr_db);
+                self.gr_db = self.gr_fast_db.max(self.gr_slow_db);
+            } else {
+                self.gr_db = ballistics.step_envelope(self.gr_db, target_gr_db);
+            }
 
             // Apply the gain reduction plus the smoothed makeup.
             let apply_db = self.makeup_smoother.next() - self.gr_db;

@@ -1,5 +1,23 @@
-//! Per-band types: BandKind, BandSlope, and the coefficient-dispatch helper
-//! that turns a `BandSnapshot` into a cascade of up to four biquads.
+//! Per-band types: BandKind, BandSlope, BandMs, and the coefficient-dispatch
+//! helper that turns a `BandSnapshot` into a cascade of up to four biquads.
+//!
+//! The three "one knob" kinds (warmth-width-depth.md §6.4) are built from
+//! the same sections as the rest:
+//!
+//! - **Tilt** — a first-order tilt around the band frequency (the pivot):
+//!   `gain` dB at the top, `-gain` dB at the bottom, 0 dB at the pivot,
+//!   one section, no Q.
+//! - **LF Lift+Dip** — the passive-EQ trick of boosting and cutting the
+//!   same low band at once: a low shelf with its midpoint at the band
+//!   frequency (the lift, `gain` dB) plus a bell at 3.5 × that frequency
+//!   cutting half as much (the dip). At 60–100 Hz that puts the dip at
+//!   210–350 Hz, where the mud is. Q is fixed by the voicing.
+//! - **Air** — a very broad first-order high shelf with its midpoint at
+//!   the band frequency. Its pole sits at `freq × √G`, so at the top of
+//!   the range the corner lands well above the audible band (40 kHz for
+//!   +12 dB at 20 kHz) and only the gentle skirt is heard. The design is
+//!   a prewarped bilinear first-order section, which is stable for any
+//!   corner at any sample rate and needs no special case at Nyquist.
 
 use resonance_dsp::Biquad;
 
@@ -13,15 +31,49 @@ pub enum BandKind {
     HighShelf,
     LowCut,
     HighCut,
+    /// First-order tilt around the band frequency.
+    Tilt,
+    /// Low shelf lift plus a bell dip 3.5× above it, one gain knob.
+    LfLiftDip,
+    /// Very broad first-order high shelf.
+    Air,
 }
 
+/// Host-facing labels of the kind parameter, by index. Indices 0–4 are the
+/// original kinds and must keep their meaning: saved projects store them.
+pub const KIND_LABELS: &[&str] = &[
+    "Bell",
+    "Low Shelf",
+    "High Shelf",
+    "Low Cut",
+    "High Cut",
+    "Tilt",
+    "LF Lift+Dip",
+    "Air",
+];
+
 impl BandKind {
+    /// Every kind, in index order.
+    pub const ALL: [BandKind; 8] = [
+        BandKind::Bell,
+        BandKind::LowShelf,
+        BandKind::HighShelf,
+        BandKind::LowCut,
+        BandKind::HighCut,
+        BandKind::Tilt,
+        BandKind::LfLiftDip,
+        BandKind::Air,
+    ];
+
     pub fn from_index(i: i32) -> Self {
         match i {
             1 => BandKind::LowShelf,
             2 => BandKind::HighShelf,
             3 => BandKind::LowCut,
             4 => BandKind::HighCut,
+            5 => BandKind::Tilt,
+            6 => BandKind::LfLiftDip,
+            7 => BandKind::Air,
             _ => BandKind::Bell,
         }
     }
@@ -33,6 +85,9 @@ impl BandKind {
             BandKind::HighShelf => 2,
             BandKind::LowCut => 3,
             BandKind::HighCut => 4,
+            BandKind::Tilt => 5,
+            BandKind::LfLiftDip => 6,
+            BandKind::Air => 7,
         }
     }
 
@@ -43,6 +98,9 @@ impl BandKind {
             BandKind::HighShelf => "HShelf",
             BandKind::LowCut => "LCut",
             BandKind::HighCut => "HCut",
+            BandKind::Tilt => "Tilt",
+            BandKind::LfLiftDip => "LF Lift",
+            BandKind::Air => "Air",
         }
     }
 
@@ -51,10 +109,53 @@ impl BandKind {
     }
 
     pub fn uses_gain(self) -> bool {
-        matches!(
-            self,
-            BandKind::Bell | BandKind::LowShelf | BandKind::HighShelf
-        )
+        !self.is_cut()
+    }
+
+    /// Whether the band's Q parameter shapes this kind. The one-knob
+    /// kinds fix their own shape.
+    pub fn uses_q(self) -> bool {
+        !matches!(self, BandKind::Tilt | BandKind::LfLiftDip | BandKind::Air)
+    }
+}
+
+/// Which part of the stereo signal a band filters.
+///
+/// `Stereo` filters left and right as before. `Mid` filters only
+/// `(L + R) / 2` and `Side` only `(L - R) / 2`, the other component
+/// passing untouched — so a Side band leaves the mono sum alone and a Mid
+/// band leaves the stereo difference alone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BandMs {
+    Stereo,
+    Mid,
+    Side,
+}
+
+/// Host-facing labels of the per-band M/S parameter, by index.
+pub const MS_LABELS: &[&str] = &["Stereo", "Mid", "Side"];
+
+impl BandMs {
+    pub const ALL: [BandMs; 3] = [BandMs::Stereo, BandMs::Mid, BandMs::Side];
+
+    pub fn from_index(i: i32) -> Self {
+        match i {
+            1 => BandMs::Mid,
+            2 => BandMs::Side,
+            _ => BandMs::Stereo,
+        }
+    }
+
+    pub fn to_index(self) -> i32 {
+        match self {
+            BandMs::Stereo => 0,
+            BandMs::Mid => 1,
+            BandMs::Side => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        MS_LABELS[self.to_index() as usize]
     }
 }
 
@@ -117,6 +218,51 @@ impl BandSlope {
 /// Number of biquad stages per band. 4 is enough for the steepest 48 dB/oct
 /// cut; bell/shelf bands use only stage 0 and leave the rest as identity.
 pub const MAX_STAGES_PER_BAND: usize = 4;
+
+/// Where the LF Lift+Dip dip sits, as a multiple of the lift frequency.
+pub const LF_DIP_RATIO: f32 = 3.5;
+/// How deep the dip cuts, as a fraction of the lift's gain.
+pub const LF_DIP_DEPTH: f32 = 0.5;
+/// Q of the lift's low shelf. A touch above Butterworth gives the slight
+/// bump before the shelf plateau that the passive original has.
+const LF_LIFT_Q: f32 = 0.9;
+/// Q of the dip's bell.
+const LF_DIP_Q: f32 = 1.0;
+
+/// Coefficients of a first-order tilt: `gain_db` at the top, `-gain_db`
+/// at the bottom, unity at `pivot`.
+///
+/// `H(s) = A (s + w/A) / (s + wA)` with `A = 10^(gain/20)` and
+/// `w = 2π·pivot`: DC gain `1/A`, HF gain `A`, and `|H(jw)| = 1`. The
+/// bilinear transform is prewarped at the pivot so the digital curve
+/// crosses 0 dB exactly there.
+pub fn tilt_section(sr: f32, pivot: f32, gain_db: f32) -> Biquad {
+    let a = 10f32.powf(gain_db / 20.0);
+    let pivot = pivot.clamp(10.0, sr * 0.45);
+    let w = 2.0 * std::f32::consts::PI * pivot;
+    let mut b = Biquad::identity();
+    b.set_first_order_analog(sr, a, w, 1.0, w * a, pivot);
+    b
+}
+
+/// Coefficients of the Air band's first-order high shelf: unity at DC,
+/// `gain_db` at the top, half of it (in dB) at `midpoint`.
+///
+/// `H(s) = G (s + w/√G) / (s + w√G)`. The analog pole is at
+/// `midpoint × √G`, which may well be above Nyquist — the bilinear
+/// transform still puts it inside the unit circle. The prewarp point is
+/// the midpoint, or a quarter of the sample rate if that is lower, so the
+/// digital curve tracks the analog one through the audible band and only
+/// compresses the last octave below Nyquist (where it reaches `G`).
+pub fn air_section(sr: f32, midpoint: f32, gain_db: f32) -> Biquad {
+    let g = 10f32.powf(gain_db / 20.0);
+    let rg = g.sqrt();
+    let midpoint = midpoint.max(10.0);
+    let w = 2.0 * std::f32::consts::PI * midpoint;
+    let mut b = Biquad::identity();
+    b.set_first_order_analog(sr, g, g * w / rg, 1.0, w * rg, midpoint.min(sr * 0.25));
+    b
+}
 
 /// Apply a `BandSnapshot` to an array of biquad stages — writes only the
 /// coefficients (leaves the z1/z2 state intact so the filter keeps running
@@ -187,6 +333,35 @@ pub fn configure_stages(
                 assign_identity(s);
             }
             qs.len()
+        }
+        BandKind::Tilt => {
+            let coeffs = tilt_section(sr, snapshot.freq, snapshot.gain_db);
+            assign_coeffs(&mut stages[0], &coeffs);
+            for s in stages.iter_mut().skip(1) {
+                assign_identity(s);
+            }
+            1
+        }
+        BandKind::LfLiftDip => {
+            let mut lift = Biquad::identity();
+            lift.set_low_shelf(sr, snapshot.freq, LF_LIFT_Q, snapshot.gain_db);
+            let mut dip = Biquad::identity();
+            let dip_hz = (snapshot.freq * LF_DIP_RATIO).min(sr * 0.45);
+            dip.set_bell(sr, dip_hz, LF_DIP_Q, -snapshot.gain_db * LF_DIP_DEPTH);
+            assign_coeffs(&mut stages[0], &lift);
+            assign_coeffs(&mut stages[1], &dip);
+            for s in stages.iter_mut().skip(2) {
+                assign_identity(s);
+            }
+            2
+        }
+        BandKind::Air => {
+            let coeffs = air_section(sr, snapshot.freq, snapshot.gain_db);
+            assign_coeffs(&mut stages[0], &coeffs);
+            for s in stages.iter_mut().skip(1) {
+                assign_identity(s);
+            }
+            1
         }
     }
 }

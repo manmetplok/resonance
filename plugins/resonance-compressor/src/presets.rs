@@ -49,4 +49,12 @@ pub const PRESETS: &[PresetEntry] = &[
         name: "Transparent",
         json: include_str!("../presets/transparent.json"),
     },
+    // Bus glue by the book (warmth-width-depth.md §4 step 5): 2:1, a
+    // 20 ms attack that lets transients through, and the program-
+    // dependent Auto release, so a bus held in compression recovers
+    // slowly while single hits recover fast.
+    PresetEntry {
+        name: "Bus — Auto Glue",
+        json: include_str!("../presets/bus_auto_glue.json"),
+    },
 ];

@@ -10,6 +10,7 @@
     "detector_mix": 0.5,
     "sc_hpf_freq": 60.0,
     "sc_hpf_on": 0,
-    "auto_makeup": 0
+    "auto_makeup": 0,
+    "release_mode": 0
   }
 }

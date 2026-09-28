@@ -10,7 +10,7 @@
 
 use plugin_gui_core::egui;
 
-use crate::band::{BandKind, BandSlope};
+use crate::band::{BandKind, BandMs, BandSlope};
 use crate::editor::response::{color_for_kind, db_to_y, freq_to_x, x_to_freq, y_to_db};
 use crate::editor::{theme, EqEditorApp};
 use crate::params::{BandSnapshot, NUM_BANDS};
@@ -109,7 +109,8 @@ pub fn draw_and_interact(
     // Scroll adjusts Q of the hovered band.
     if let Some(i) = hover_node {
         let scroll = ui.ctx().input(|inp| inp.smooth_scroll_delta.y);
-        if scroll.abs() > 0.0 {
+        let uses_q = BandKind::from_index(app.params.bands[i].kind.value()).uses_q();
+        if scroll.abs() > 0.0 && uses_q {
             let b = &app.params.bands[i];
             let q = b.q.value();
             let factor = (scroll * 0.005).exp(); // smooth exponential zoom
@@ -181,13 +182,7 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
 
     let mut kind = BandKind::from_index(band.kind.value());
     ui.label("Type");
-    for opt in [
-        BandKind::Bell,
-        BandKind::LowShelf,
-        BandKind::HighShelf,
-        BandKind::LowCut,
-        BandKind::HighCut,
-    ] {
+    for opt in BandKind::ALL {
         if ui.selectable_label(kind == opt, opt.short_name()).clicked() {
             kind = opt;
             band.kind.set_value(kind.to_index());
@@ -205,6 +200,16 @@ fn context_menu(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize) {
                 band.slope.set_value(slope.to_index());
                 ui.close();
             }
+        }
+    }
+
+    ui.separator();
+    ui.label("Channels");
+    let ms = BandMs::from_index(band.ms.value());
+    for opt in BandMs::ALL {
+        if ui.selectable_label(ms == opt, opt.label()).clicked() {
+            band.ms.set_value(opt.to_index());
+            ui.close();
         }
     }
 

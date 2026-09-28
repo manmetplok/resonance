@@ -259,8 +259,9 @@ impl ResonanceMcp {
                        happens to be loudest. There is no master_id — there is one master. \
                        \
                        Addressed like master_set_plugin_param: an optional plugin_id (+ \
-                       occurrence); omitted targets the first plugin on the chain that HAS a key \
-                       port. Name the key source with EITHER source_track_id OR source_bus_id. \
+                       occurrence); omitted targets the first DYNAMICS plugin (compressor, gate) \
+                       on the chain that HAS a key port, and resonance-reverb only when it is \
+                       the only plugin with one. Name the key source with EITHER source_track_id OR source_bus_id. \
                        Sources are tapped post-FX and PRE-fader, so a key source can sit at -inf \
                        and still key. enabled defaults to true; false keeps the routing \
                        configured but stops delivering the key. \
