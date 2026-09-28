@@ -240,9 +240,13 @@ a sidechain key hears silence. `stages` lists what was probed. A stage with
 | `gain_db` | Output level at the probe frequency minus the input level | A saturator with auto-gain sits near 0. |
 | `latency_samples` | Summed latency of the probed stages | Informational. |
 
-**Probe at the level the chain really sees.** Distortion rises with level, so a
--12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
-tone's peak.
+**Probe at -18 dBFS to set a drive.** Distortion rises with level, so a THD
+figure means nothing without its probe level. The THD targets above, and the
+colour presets voiced to land in them, are all for a -18 dBFS sine: pass
+`level_dbfs: -18` (the tool's default is -12) whenever you set a drive against
+them. `level_dbfs` (-80..0) sets the tone's peak; a second probe at the level
+the chain really peaks at shows how hard the loudest moments hit, and reads
+higher.
 
 ## Delivery: a normalized mixdown
 
@@ -290,7 +294,9 @@ master range and returns its suggestions. **It applies nothing.** Pass
 
 - `measured` is the master as it is now, after the whole master chain. That
   includes any mastering plugin already on it. Run the assistant before you
-  switch stages on, or read its numbers as "what is left to do".
+  switch stages on. A re-run after that reports what is left to do: its trim
+  and shelf gains are amounts to **add** to the current values, not values
+  to write (the `mastering` skill, 3b).
 - `suggestions[]` goes stage by stage (`input_trim`, `tonal_low_shelf`,
   `tonal_high_shelf`, `glue`, `imager`, `limiter`, `target_lufs`,
   `diagnostic`). Each entry has a `rationale` and the exact `params` writes

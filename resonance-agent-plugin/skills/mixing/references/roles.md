@@ -12,7 +12,7 @@ and the same word means different parts in different songs.
 
 | Evidence | Where it comes from | Points to |
 |---|---|---|
-| `kind` is `drums`, or `parent_id` points at a drum kit | `song_tracks` | drums. A kit's sub-tracks are its outputs; tell kick from snare from cymbals by their measured `bands` (kick: `low` dominant; snare: `mid`; cymbals and overheads: `high` and `air`) |
+| `kind` is `drums`, or `parent_id` points at a drum kit | `song_tracks` | drums. A kit's sub-tracks are its outputs; tell kick from snare from cymbals by their measured `bands` (kick: `low` dominant; snare: `mid`; cymbals and overheads: `high` and `air`). `meter_stems` folds sub-tracks into the kit's entry, so measure each one on its own with `meter_measure {target: {track_id: <sub-track>}}` |
 | `kind` is `vocal` | `song_tracks` | a vocal. With several, the lead is the one singing through most sections (`song_vocal`, `song_sections`); the rest are backing |
 | Notes mostly below about MIDI 52 (E3), one at a time | `song_notes` | bass |
 | Long notes held across chords, several at once | `song_notes` | pad (or sustained keys) |
@@ -35,11 +35,32 @@ follow.
 Level is relative to the drums in LU, measured by `meter_stems` (the tripwire
 table in reading-meters.md). Pan is `mixer_set_pan` (-1 left .. +1 right).
 Width is what the role wants on the stereo meter (`side_mid_db` above 150 Hz);
-how to get it is the `spatial` skill's width.md. Send is the track's post-fader
-send into the shared room return, as a starting `level_db`. Pre-delay belongs to
-the return the role uses. Layer is the depth layer (spatial's depth.md).
+how to get it is the `spatial` skill's width.md. Layer is the depth layer
+(spatial's depth.md).
 
-| Role | Layer | Level (LU) | Pan | Width | Room send | Pre-delay | Character |
+**Room send** is the track's post-fader send into the shared room return, as a
+*first guess* `level_db`: it only has to be close enough for the first depth
+pass to measure the return. The send you keep comes from the layer's DRR
+target, because the estimate is plain arithmetic on it:
+
+  DRR = −(send + `return_gain_db`)
+
+Read `return_gain_db` from that pass (`meter_stems` `detail: ["depth"]`, the
+track's `sends` entry for the room), then set the send to
+−(target DRR) − `return_gain_db`. With a return gain of −6 dB, a front part
+aiming at +12 wants a send of −6, and a back part aiming at −2 wants +8. When
+that lands far from the first guess, trust the arithmetic, not the table. The
+targets are in depth.md (front +10 or more, middle +3 to +8, back 0 or less).
+Moving the return's own fader moves `return_gain_db`, and so every sender's
+DRR, by the same amount.
+
+**Pre-delay** is a setting of a *return*, not of a send, and one shared room
+has one pre-delay. The column says what each role wants from the room it is
+on. Set the shared room's pre-delay for the front layer (the lead's 20-40 ms);
+the roles that want 0-10 ms (pads, FX) are what the second, back return in
+depth.md is for.
+
+| Role | Layer | Level (LU) | Pan | Width | Room send (first guess) | Pre-delay wanted | Character |
 |---|---|---|---|---|---|---|---|
 | Kick | front | 0 (drums) | centre | mono | none, or ≤ -24 | — | drum bus |
 | Snare | front | 0 (drums) | centre | narrow | -18 to -12 | 10-20 ms | drum bus |

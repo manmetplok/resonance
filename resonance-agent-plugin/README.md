@@ -110,8 +110,8 @@ enforces it:
 
 That last one covers what versioning cannot. The app is a separate binary from
 the MCP server, so the plugin's version says nothing about the build the user
-actually has open. `control_hello` returns that build's `capabilities`, and both
-skills open by checking the methods they need against it and stopping if one is
+actually has open. `control_hello` returns that build's `capabilities`, and every
+skill opens by checking the methods it needs against it and stopping if one is
 missing. Do not remove that step.
 
 When you bump `PROTOCOL_VERSION`, bump `version` here too — installed copies
@@ -167,8 +167,9 @@ block name:
 RESONANCE_SKILL_KEYS_DUMP=1 cargo test -p resonance-color --test skill_keys -- --nocapture
 ```
 
-Keys named outside a block are only checked loosely (they must exist in *some*
-plugin's source), so put them in a block.
+Outside a block, a key is checked only if it is snake_case inline code, and then
+only for existing in *some* plugin's source — not in the plugin the sentence is
+about. Put every key in a block.
 
 ## Writing more skills
 

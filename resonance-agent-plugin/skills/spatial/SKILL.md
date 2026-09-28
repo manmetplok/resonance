@@ -25,8 +25,10 @@ roles, then decide.
 
 Call `mcp__resonance__control_hello`. This procedure needs `meter.stems`,
 `meter.measure`, `meter.snapshot`, `meter.compare`, `mixer.set_pan`,
-`track.add_send`, `bus.create`, `bus.add_effect`, `bus.set_plugin_param` and
-`bus.set_sidechain` in `capabilities`. If one is missing, the running app is
+`mixer.set_volume_db`, `track.add_effect`, `track.set_plugin_param`,
+`track.add_send`, `track.set_send`, `bus.create`, `bus.add_effect`,
+`bus.load_plugin_preset`, `bus.set_plugin_param` and `bus.set_sidechain` in
+`capabilities`. If one is missing, the running app is
 older than this plugin: say so and stop.
 
 `song_summary` and `song_tracks` for ids, kinds, pans, sends and busses. Note

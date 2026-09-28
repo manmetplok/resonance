@@ -26,6 +26,16 @@ and `capabilities`. This procedure needs `meter.stems`, `meter.measure` and
 plugin: say so and stop, rather than working around it. Nothing else here can
 substitute for a measurement.
 
+The later passes need more, so check these too and skip the pass (saying why)
+when one is missing:
+
+| Pass | Needs |
+|---|---|
+| Tone, compression, sidechain | `track.add_effect`, `track.set_plugin_param`, `track.set_sidechain` |
+| Busses | `bus.create`, `track.set_output` |
+| Character (3b) | `meter.snapshot`, `meter.compare`, `meter.probe`, `bus.add_effect`, `bus.load_plugin_preset`, `bus.set_plugin_param` |
+| Level rides and fades | `automation.set_lane`, `automation.lanes` |
+
 Then `mcp__resonance__song_summary` and `mcp__resonance__song_tracks` for the
 track list and ids. If `edit_status` shows unsaved work you did not make, ask
 before touching anything.
