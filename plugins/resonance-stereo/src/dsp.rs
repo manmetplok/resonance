@@ -7,12 +7,17 @@
 //!      mid, `(L + s, R − s)`. The mono sum is unchanged at any amount
 //!      and any focus (up to float rounding). The default widener.
 //!    - *Diffuse* — [`AllpassDecorrelator`]: per-side ERB all-pass
-//!      cascades offset by `spread = amount / 2` of an ERB step. Mono
-//!      ripple stays small (≈ 1.4 dB at spread 0.2) but is not zero.
+//!      cascades offset by `spread = amount · DIFFUSE_MAX_SPREAD` (0.25)
+//!      of an ERB step. The mono fold's deepest notch grows with the
+//!      spread (−0.3 dB at 0.1, −1.4 dB at 0.2, −2.3 dB at the 0.25 cap;
+//!      `tests/stereo.rs`), so the cap keeps the whole amount range
+//!      mono-safe. Uncapped, spread 0.5 notched −14.6 dB.
 //!    - *Micro-shift* — two [`DopplerShifter`] voices made from the mid,
 //!      +9 cents at 10 ms on the left and −9 cents at 15 ms on the
-//!      right, added at `amount`. Moving combs in mono, milder than
-//!      Haas.
+//!      right, added at `amount`. Moving combs in mono: where the two
+//!      voices line up against the dry signal the fold dips by
+//!      `20·log10(1 − amount)` (−4.4 dB at 0.4, −6 dB at 0.5, −14 dB at
+//!      0.8), sweeping as the voices drift. Keep it moderate.
 //!    - *Haas* — the right channel above `focus_low` (an LR4 split; the
 //!      band below stays in time) delayed by 1–30 ms and lowered 3 dB. The level offset keeps the mono comb's
 //!      notches near −11 dB instead of −∞, and the low exclude keeps the
@@ -99,8 +104,9 @@ impl WidenMode {
     }
 
     /// Whether the mode puts static comb filtering into the mono fold.
-    /// Only Haas does; Decorrelate keeps the mono sum exactly, and
-    /// Diffuse / Micro-shift ripple by a dB or two.
+    /// Only Haas does; Decorrelate keeps the mono sum exactly, Diffuse
+    /// ripples by at most 2.3 dB, and Micro-shift's combs move (their
+    /// depth grows with the amount, see [`Self::amount_hint`]).
     pub fn is_mono_risk(self) -> bool {
         matches!(self, Self::Haas)
     }
@@ -119,12 +125,13 @@ impl WidenMode {
                 amount * 100.0
             ),
             Self::Diffuse => format!(
-                "All-pass spread {:.2} ERB — small mono ripple",
+                "All-pass spread {:.2} ERB — mono ripple under 2.5 dB",
                 diffuse_spread(amount)
             ),
             Self::MicroShift => format!(
-                "±{MICRO_CENTS:.0} cents voices at {:.0}% — mild moving combs in mono",
-                amount * 100.0
+                "±{MICRO_CENTS:.0} cents voices at {:.0}% — moving combs in mono, down to {:.0} dB",
+                amount * 100.0,
+                micro_shift_notch_db(amount)
             ),
             Self::Haas => format!(
                 "Right delayed {:.1} ms, {HAAS_LEVEL_DB:.0} dB — MONO RISK: combs in the fold",
@@ -185,9 +192,21 @@ pub fn haas_delay_ms(amount: f32) -> f32 {
     HAAS_MIN_MS + (HAAS_MAX_MS - HAAS_MIN_MS) * amount.clamp(0.0, 1.0)
 }
 
+/// Largest Diffuse all-pass spread (fraction of an ERB step), reached at
+/// `widen_amount` 1. Chosen by the mono fold's worst notch: −2.3 dB here,
+/// against −14.6 dB at the all-pass cascade's own limit of 0.5.
+pub const DIFFUSE_MAX_SPREAD: f32 = 0.25;
+
 /// Diffuse all-pass spread (fraction of an ERB step) for a `widen_amount`.
 pub fn diffuse_spread(amount: f32) -> f32 {
-    0.5 * amount.clamp(0.0, 1.0)
+    DIFFUSE_MAX_SPREAD * amount.clamp(0.0, 1.0)
+}
+
+/// The deepest dip Micro-shift's moving combs put into the mono fold at
+/// a `widen_amount`, in dB: both voices in antiphase with the dry signal
+/// leave `1 − amount` of it. Floored at −60 dB (a full null).
+pub fn micro_shift_notch_db(amount: f32) -> f32 {
+    20.0 * (1.0 - amount.clamp(0.0, 1.0)).max(1.0e-3).log10()
 }
 
 /// Samples between goniometer points pushed to the viz.

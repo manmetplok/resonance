@@ -7,7 +7,9 @@ mod common;
 
 use common::*;
 use resonance_plugin::{Param, ResonancePlugin};
-use resonance_stereo::dsp::{haas_delay_ms, MonoSlope, WidenMode, HAAS_LEVEL_DB};
+use resonance_stereo::dsp::{
+    haas_delay_ms, micro_shift_notch_db, MonoSlope, WidenMode, HAAS_LEVEL_DB,
+};
 use resonance_stereo::params::{index, StereoParams, PARAM_COUNT};
 use resonance_stereo::ResonanceStereo;
 
@@ -414,31 +416,104 @@ fn haas_delays_the_right_side_above_the_exclude_at_a_level_offset() {
 // The other widening modes stay sane in mono
 // ---------------------------------------------------------------------------
 
+/// The deepest dip of the mono fold's magnitude response, in dB, for a
+/// mono input through `mode` at `amount`: unit impulses 0.25 s apart,
+/// each one's fold `(L + R) / 2` read over the next 4096 samples at
+/// 1/48-octave steps from 30 Hz to 18 kHz. Several impulses, because
+/// Micro-shift's combs move; for the time-invariant Diffuse they agree.
+fn worst_fold_notch_db(mode: WidenMode, amount: f32) -> f64 {
+    const IMPULSES: usize = 8;
+    const SPACING: usize = 12_000;
+    const LEN: usize = 4_096;
+    let first = 9_600;
+    let mut x = vec![0.0f32; first + IMPULSES * SPACING + LEN];
+    for k in 0..IMPULSES {
+        x[first + k * SPACING] = 1.0;
+    }
+    let (l, r) = render(
+        |p| {
+            p.widen_mode.set_value(mode.index());
+            p.widen_amount.set_value(amount);
+        },
+        &x,
+        &x,
+    );
+    let mut worst = f64::INFINITY;
+    for k in 0..IMPULSES {
+        let at = first + k * SPACING;
+        let h: Vec<f64> = (at..at + LEN).map(|i| 0.5 * (l[i] + r[i]) as f64).collect();
+        let mut f = 30.0f64;
+        while f < 18_000.0 {
+            // DFT at `f` by a rotating phasor (no per-sample trig).
+            let w = std::f64::consts::TAU * f / SR as f64;
+            let (c, sn) = (w.cos(), -w.sin());
+            let (mut pr, mut pi) = (1.0f64, 0.0f64);
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for &v in &h {
+                re += v * pr;
+                im += v * pi;
+                (pr, pi) = (pr * c - pi * sn, pr * sn + pi * c);
+            }
+            worst = worst.min(10.0 * (re * re + im * im).log10());
+            f *= 2f64.powf(1.0 / 48.0);
+        }
+    }
+    worst
+}
+
+/// Diffuse's spread is capped (`DIFFUSE_MAX_SPREAD`) where the mono
+/// fold's deepest notch is still shallow: no worse than 2.5 dB anywhere
+/// in the band at any amount. (Uncapped, amount 1 notched −14.6 dB.) It
+/// must still widen at the top of the range.
 #[test]
-fn diffuse_and_micro_shift_keep_the_mono_fold_close() {
+fn diffuse_stays_mono_safe_at_every_amount() {
+    for amount in [0.25f32, 0.5, 0.75, 1.0] {
+        let notch = worst_fold_notch_db(WidenMode::Diffuse, amount);
+        eprintln!("Diffuse amount {amount}: worst fold notch {notch:.2} dB");
+        assert!(notch > -2.5, "Diffuse at {amount}: the mono fold notches {notch:.2} dB");
+    }
     let n = 96_000;
     let x = noise(n, 0.5, 41);
-    for (mode, max_loss_db) in [(WidenMode::Diffuse, 1.5), (WidenMode::MicroShift, 1.5)] {
-        let (ol, or) = render(
-            |p| {
-                p.widen_mode.set_value(mode.index());
-                p.widen_amount.set_value(0.4);
-            },
-            &x,
-            &x,
-        );
-        let fold_in: Vec<f32> = x.clone();
-        let fold_out: Vec<f32> = (0..n).map(|i| 0.5 * (ol[i] + or[i])).collect();
-        let change_db = 10.0 * (energy(&fold_out[4_800..]) / energy(&fold_in[4_800..])).log10();
+    let (ol, or) = render(
+        |p| {
+            p.widen_mode.set_value(WidenMode::Diffuse.index());
+            p.widen_amount.set_value(1.0);
+        },
+        &x,
+        &x,
+    );
+    let r = correlation(&ol[4_800..], &or[4_800..]);
+    assert!(r < 0.97, "Diffuse at full amount did not widen a mono source (r = {r:.3})");
+    assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
+}
+
+/// Micro-shift's combs are as deep as documented (`micro_shift_notch_db`:
+/// the voices in antiphase with the dry leave `1 − amount`), and no
+/// deeper; the hint and the skill quote that figure.
+#[test]
+fn micro_shift_notches_the_mono_fold_as_deep_as_documented() {
+    for amount in [0.2f32, 0.4, 0.6] {
+        let notch = worst_fold_notch_db(WidenMode::MicroShift, amount);
+        let said = micro_shift_notch_db(amount) as f64;
+        eprintln!("Micro-shift amount {amount}: worst fold notch {notch:.2} dB (documented {said:.2})");
         assert!(
-            change_db > -max_loss_db,
-            "{mode:?}: the mono fold lost {:.2} dB",
-            -change_db
+            notch > said - 0.5 && notch < said + 1.0,
+            "Micro-shift at {amount}: the mono fold notches {notch:.2} dB, documented {said:.2}"
         );
-        let r = correlation(&ol[4_800..], &or[4_800..]);
-        assert!(r < 0.97, "{mode:?} did not widen a mono source (r = {r:.3})");
-        assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
     }
+    let n = 96_000;
+    let x = noise(n, 0.5, 41);
+    let (ol, or) = render(
+        |p| {
+            p.widen_mode.set_value(WidenMode::MicroShift.index());
+            p.widen_amount.set_value(0.4);
+        },
+        &x,
+        &x,
+    );
+    let r = correlation(&ol[4_800..], &or[4_800..]);
+    assert!(r < 0.97, "Micro-shift did not widen a mono source (r = {r:.3})");
+    assert!(ol.iter().chain(&or).all(|v| v.is_finite()));
 }
 
 // ---------------------------------------------------------------------------

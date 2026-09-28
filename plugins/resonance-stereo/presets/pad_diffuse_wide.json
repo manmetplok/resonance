@@ -4,7 +4,7 @@
     "mono_below": 150.0,
     "mono_slope": 2,
     "widen_mode": 2,
-    "widen_amount": 0.4,
+    "widen_amount": 0.8,
     "focus_low": 200.0,
     "focus_high": 20000.0,
     "balance": 0.0,
