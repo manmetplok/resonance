@@ -70,7 +70,8 @@ impl ResonanceMcp {
                        presence_peakiness_db is the 1/6-octave crest inside 2-5 kHz (0 = even, \
                        high = a harsh resonance). air_ratio_db is energy 8-16 kHz over the \
                        total. peaks lists up to 5 narrow resonances as {freq_hz, excess_db}, \
-                       excess over the smoothed spectrum around them, strongest first. \
+                       excess over the local trend of the spectrum around them, strongest \
+                       first; at most 1/3 octave wide, so a broad hump is never listed. \
                        \
                        stereo holds width and mono safety. bands is 8 bands (edges 20, 60, 150, \
                        400, 1k, 2.5k, 5k, 10k, 20k Hz) of {lo_hz, hi_hz, correlation, \
