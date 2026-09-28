@@ -128,6 +128,45 @@ fn the_reference_path_round_trips_and_is_reloaded() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Restores arriving faster than a reference decodes (a host replaying
+/// states, undo stepping through them) decode one at a time, on one
+/// thread per instance, and the last one wins (review finding M6: every
+/// restore used to start a decode thread of its own, and a superseded
+/// decode could install itself between its path check and its install).
+#[test]
+fn rapid_restores_decode_one_at_a_time_and_the_last_wins() {
+    let dir = std::env::temp_dir().join(format!("mastering-rapid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<String> = (0..6)
+        .map(|i| {
+            let path = dir.join(format!("ref{i}.wav"));
+            write_wav(&path, 3.0);
+            path.to_string_lossy().into_owned()
+        })
+        .collect();
+
+    let mut plugin = ResonanceMastering::new();
+    for path in &paths {
+        let blob = serde_json::json!({
+            "version": 1,
+            "params": {},
+            STATE_KEY: { "mode": "reference", "genre": "rock", "reference_path": path },
+        });
+        assert!(plugin.load_state(blob.to_string().as_bytes()));
+    }
+    let assistant = &plugin.viz().assistant;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while assistant.reload_in_flight() {
+        assert!(Instant::now() < deadline, "the decodes never finished");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(assistant.peak_decode_threads(), 1, "decodes ran side by side");
+    assert_eq!(assistant.settings().reference_path, paths[5]);
+    let reference = assistant.reference().expect("the last restore's reference is loaded");
+    assert_eq!(reference.display_name, "ref5.wav");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A reference file that is gone surfaces as the panel's error, not as a
 /// failed state load.
 #[test]
