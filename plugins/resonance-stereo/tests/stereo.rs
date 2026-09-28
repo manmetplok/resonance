@@ -552,6 +552,102 @@ fn micro_shift_notches_the_mono_fold_as_deep_as_documented() {
 }
 
 // ---------------------------------------------------------------------------
+// Amount changes glide, they do not step per block
+// ---------------------------------------------------------------------------
+
+/// Render mono `x` in 256-sample blocks with `mode`, `widen_amount` at
+/// `from` and then `to` from block `at` on.
+fn render_amount_step(mode: WidenMode, x: &[f32], from: f32, to: f32, at: usize) -> (Vec<f32>, Vec<f32>) {
+    let mut plugin = ResonanceStereo::new();
+    plugin.params.widen_mode.set_value(mode.index());
+    plugin.params.widen_amount.set_value(from);
+    plugin.initialize(SR, MAX_BLOCK as u32);
+    plugin.reset();
+    let (mut l, mut r) = (x.to_vec(), x.to_vec());
+    for (k, (cl, cr)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+        if k == at {
+            plugin.params.widen_amount.set_value(to);
+        }
+        let frames = cl.len();
+        let mut outs = [resonance_plugin::OutputBuffer { left: cl, right: cr }];
+        plugin.process(&mut outs, frames, &mut resonance_plugin::EventIterator::empty(), None);
+    }
+    (l, r)
+}
+
+/// Decorrelate's side is `a·D(M)`: against a render at amount 1 the side
+/// ratio is the amount itself, sample by sample. A step from 0.2 to 1
+/// must ramp (20 ms, 960 samples), not land in one sample.
+#[test]
+fn a_decorrelate_amount_step_ramps_per_sample() {
+    let n = 48_000;
+    let x = noise(n, 0.5, 13);
+    let at = 40;
+    let (rl, rr) = render_amount_step(WidenMode::Decorrelate, &x, 1.0, 1.0, at);
+    let (sl, sr) = render_amount_step(WidenMode::Decorrelate, &x, 0.2, 1.0, at);
+    let side = |l: &[f32], r: &[f32], i: usize| 0.5 * (l[i] - r[i]);
+    let mut prev: Option<f32> = None;
+    let mut worst = 0.0f32;
+    for i in (at - 4) * 256..(at + 8) * 256 {
+        let reference = side(&rl, &rr, i);
+        if reference.abs() < 1e-3 {
+            continue;
+        }
+        let a = side(&sl, &sr, i) / reference;
+        if let Some(p) = prev {
+            worst = worst.max((a - p).abs());
+        }
+        prev = Some(a);
+    }
+    let ramp_step = 0.8 / 960.0;
+    assert!(
+        worst < 4.0 * ramp_step,
+        "the Decorrelate amount stepped by {worst:.4} between samples (a 20 ms ramp moves {ramp_step:.5})"
+    );
+    // …and it arrives: the tail matches the amount-1 render exactly.
+    let tail = (at + 8) * 256;
+    assert_eq!(sl[tail..], rl[tail..]);
+    assert_eq!(sr[tail..], rr[tail..]);
+}
+
+/// A Diffuse amount step re-lays-out 80 all-passes. Swapped in one go,
+/// that is a click: a 1 kHz sine through an all-pass is still a pure
+/// 1 kHz sine, so anything the switch puts above 4 kHz is the click
+/// itself. Crossfaded, that residue stays tiny — for one step and for a
+/// continuous sweep alike.
+#[test]
+fn a_diffuse_amount_change_crossfades_the_new_layout() {
+    let n = 48_000;
+    let (freq, amp) = (1_000.0f32, 0.5f32);
+    let x = sine(freq, amp, n);
+    let click_db = |r: &[f32]| {
+        let hf = band(r, 4_000.0, 4, false);
+        let peak = hf[9_600..].iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        20.0 * (peak / amp).max(1e-9).log10()
+    };
+    let (_, steady) = render_amount_step(WidenMode::Diffuse, &x, 0.2, 0.2, 40);
+    let (_, stepped) = render_amount_step(WidenMode::Diffuse, &x, 0.2, 1.0, 40);
+    let mut plugin = ResonanceStereo::new();
+    plugin.params.widen_mode.set_value(WidenMode::Diffuse.index());
+    plugin.params.widen_amount.set_value(0.0);
+    plugin.initialize(SR, MAX_BLOCK as u32);
+    plugin.reset();
+    let (mut sl, mut swept) = (x.clone(), x.clone());
+    for (k, (cl, cr)) in sl.chunks_mut(128).zip(swept.chunks_mut(128)).enumerate() {
+        plugin.params.widen_amount.set_value((k as f32 / 150.0).min(1.0));
+        let frames = cl.len();
+        let mut outs = [resonance_plugin::OutputBuffer { left: cl, right: cr }];
+        plugin.process(&mut outs, frames, &mut resonance_plugin::EventIterator::empty(), None);
+    }
+    let (floor, step, sweep) = (click_db(&steady), click_db(&stepped), click_db(&swept));
+    eprintln!("Diffuse HF residue: steady {floor:.1} dB, step {step:.1} dB, sweep {sweep:.1} dB");
+    // One swap left -37 dB.
+    assert!(step < -60.0, "the Diffuse amount step clicked: {step:.1} dB above 4 kHz");
+    // Block-rate swaps left -77 dB here; the steady floor is -97.
+    assert!(sweep < -85.0, "the Diffuse amount sweep zippered: {sweep:.1} dB above 4 kHz");
+}
+
+// ---------------------------------------------------------------------------
 // Latency
 // ---------------------------------------------------------------------------
 

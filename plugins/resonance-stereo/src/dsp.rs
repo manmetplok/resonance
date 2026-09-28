@@ -36,6 +36,15 @@
 //!    `mono_check` folds it to `(M, M)`. Both on is silence, which is the
 //!    honest answer: side cancels in mono.
 //!
+//! # Parameter changes
+//!
+//! Width, balance, rotation, Micro-shift's level and Haas's delay ramp
+//! per sample (20–50 ms). Decorrelate's amount ramps per sample too (its
+//! velvet filter runs at unit amount and the ramp scales the side).
+//! Diffuse's amount and focus are an all-pass layout, 80 coefficient sets
+//! that cannot be ramped per sample at any sane cost, so a new layout is
+//! crossfaded in over [`DIFFUSE_XFADE_MS`] instead (`Diffuser`).
+//!
 //! # Transparent defaults
 //!
 //! Every stage is skipped at its neutral value — width 1, mono-maker
@@ -230,6 +239,105 @@ fn ramp(sr: f32, ms: f32, v: f32) -> Smoother {
     s
 }
 
+/// Crossfade between two Diffuse all-pass layouts.
+pub const DIFFUSE_XFADE_MS: f32 = 30.0;
+
+/// Diffuse's all-pass cascade, re-laid-out without a step.
+///
+/// Re-laying out the cascade (a new spread or focus) swaps 80 sets of
+/// coefficients at once, and ramping them per sample would mean
+/// redesigning 80 biquads every sample. Instead a new layout goes into a
+/// copy of the live cascade (same state, new coefficients) and the output
+/// crossfades from the old cascade to the new one over
+/// [`DIFFUSE_XFADE_MS`]; both run meanwhile. A layout asked for during a
+/// fade waits for it to finish and then starts the next one, so a
+/// continuous sweep follows in crossfaded steps of at most one fade.
+struct Diffuser {
+    live: AllpassDecorrelator,
+    next: AllpassDecorrelator,
+    /// Position of the fade into `next`; `None` when not fading.
+    fade: Option<f32>,
+    step: f32,
+    /// The layout `live` has (or `next` is fading to), and the newest
+    /// one asked for while a fade runs.
+    layout: Option<(f32, f32, f32)>,
+    pending: Option<(f32, f32, f32)>,
+}
+
+impl Diffuser {
+    fn new(sr: f32) -> Self {
+        Self {
+            live: AllpassDecorrelator::default(),
+            next: AllpassDecorrelator::default(),
+            fade: None,
+            step: 1.0 / (DIFFUSE_XFADE_MS * 0.001 * sr).max(1.0),
+            layout: None,
+            pending: None,
+        }
+    }
+
+    fn configure(ap: &mut AllpassDecorrelator, sr: f32, (low, high, spread): (f32, f32, f32)) {
+        ap.configure(sr, DIFFUSE_SECTIONS, low, high, spread);
+    }
+
+    /// Ask for a layout. The first one since construction or
+    /// [`Self::reset`] applies at once; later ones crossfade.
+    fn request(&mut self, sr: f32, layout: (f32, f32, f32)) {
+        if self.layout.is_none() {
+            Self::configure(&mut self.live, sr, layout);
+            self.layout = Some(layout);
+            return;
+        }
+        if self.fade.is_some() {
+            self.pending = Some(layout);
+            return;
+        }
+        if self.layout != Some(layout) {
+            self.start_fade(sr, layout);
+        }
+    }
+
+    fn start_fade(&mut self, sr: f32, layout: (f32, f32, f32)) {
+        self.next = self.live;
+        Self::configure(&mut self.next, sr, layout);
+        self.layout = Some(layout);
+        self.fade = Some(0.0);
+        self.pending = None;
+    }
+
+    /// Forget the layout and the filter state: the next request applies
+    /// at once, to a silent cascade.
+    fn reset(&mut self) {
+        self.live.reset();
+        self.fade = None;
+        self.pending = None;
+        self.layout = None;
+    }
+
+    #[inline]
+    fn process(&mut self, sr: f32, l: f32, r: f32) -> (f32, f32) {
+        let Some(t) = self.fade else {
+            return self.live.process(l, r);
+        };
+        let (al, ar) = self.live.process(l, r);
+        let (bl, br) = self.next.process(l, r);
+        let t = (t + self.step).min(1.0);
+        let out = (al + t * (bl - al), ar + t * (br - ar));
+        if t >= 1.0 {
+            self.live = self.next;
+            self.fade = None;
+            if let Some(p) = self.pending.take() {
+                if self.layout != Some(p) {
+                    self.start_fade(sr, p);
+                }
+            }
+        } else {
+            self.fade = Some(t);
+        }
+        out
+    }
+}
+
 /// Side-channel high-pass for the mono-maker at one of three slopes.
 struct SideHighPass {
     slope: MonoSlope,
@@ -346,7 +454,9 @@ pub struct StereoDsp {
     /// expensive re-layouts only run on a change.
     configured: Option<(f32, f32, f32)>,
     velvet: VelvetDecorrelator,
-    allpass: AllpassDecorrelator,
+    /// Decorrelate's side amount, ramped per sample.
+    decor_amount: Smoother,
+    diffuse: Diffuser,
     micro_focus: Focus,
     micro_l: DopplerShifter,
     micro_r: DopplerShifter,
@@ -391,7 +501,8 @@ impl StereoDsp {
             mode: params.widen_mode(),
             configured: None,
             velvet: VelvetDecorrelator::new(sr, VELVET_SEED),
-            allpass: AllpassDecorrelator::default(),
+            decor_amount: smoother(20.0, amount),
+            diffuse: Diffuser::new(sr),
             micro_focus: Focus::new(),
             micro_l,
             micro_r,
@@ -418,7 +529,8 @@ impl StereoDsp {
 
     pub fn reset(&mut self) {
         self.velvet.reset();
-        self.allpass.reset();
+        self.diffuse.reset();
+        self.configured = None;
         self.micro_focus.reset();
         self.micro_l.reset();
         self.micro_r.reset();
@@ -456,7 +568,10 @@ impl StereoDsp {
             // The incoming mode starts from silence rather than from
             // whatever it held the last time it ran.
             self.velvet.reset();
-            self.allpass.reset();
+            self.diffuse.reset();
+            // The incoming mode starts at its amount, not ramping from
+            // wherever it was left.
+            self.decor_amount.reset(p.widen_amount.value());
             self.micro_focus.reset();
             self.micro_l.reset();
             self.micro_r.reset();
@@ -474,20 +589,19 @@ impl StereoDsp {
             WidenMode::Off => {}
             WidenMode::Decorrelate => {
                 if changed {
-                    self.velvet.set_amount(amount);
                     self.velvet.set_focus(self.sr, low, high.unwrap_or(0.0));
                 }
+                // The velvet filter runs at unit amount and the ramp
+                // scales its side per sample; at a settled 0 it idles.
+                self.decor_amount.set_target(amount);
+                let active = amount > 0.0 || self.decor_amount.current() > 0.0;
+                self.velvet.set_amount(if active { 1.0 } else { 0.0 });
             }
             WidenMode::Diffuse => {
                 if changed {
                     let top = high.unwrap_or(DIFFUSE_OPEN_HIGH_HZ.min(0.45 * self.sr));
-                    self.allpass.configure(
-                        self.sr,
-                        DIFFUSE_SECTIONS,
-                        low,
-                        top.max(low + 1.0),
-                        diffuse_spread(amount),
-                    );
+                    self.diffuse
+                        .request(self.sr, (low, top.max(low + 1.0), diffuse_spread(amount)));
                 }
             }
             WidenMode::MicroShift => {
@@ -518,8 +632,17 @@ impl StereoDsp {
     fn widen(&mut self, l: f32, r: f32) -> (f32, f32) {
         match self.mode {
             WidenMode::Off => (l, r),
-            WidenMode::Decorrelate => self.velvet.process(l, r),
-            WidenMode::Diffuse => self.allpass.process(l, r),
+            WidenMode::Decorrelate => {
+                let a = self.decor_amount.next();
+                let side = self.velvet.side(0.5 * (l + r));
+                if a == 0.0 {
+                    (l, r)
+                } else {
+                    let side = side * a;
+                    (l + side, r - side)
+                }
+            }
+            WidenMode::Diffuse => self.diffuse.process(self.sr, l, r),
             WidenMode::MicroShift => {
                 let a = self.micro_amount.next();
                 let m = self.micro_focus.process(0.5 * (l + r));
