@@ -25,8 +25,9 @@ pub struct StereoViz {
     correlation: AtomicF32,
     /// Rolling correlation history for the strip.
     pub history: AtomicHistoryRing<CORRELATION_LEN>,
-    /// The widening mode the audio thread last ran.
+    /// The widening mode the audio thread last ran, and its amount.
     mode: AtomicI32,
+    amount: AtomicF32,
 }
 
 fn pack(l: f32, r: f32) -> u64 {
@@ -45,6 +46,7 @@ impl StereoViz {
             correlation: AtomicF32::new(0.0),
             history: AtomicHistoryRing::new(0.0),
             mode: AtomicI32::new(WidenMode::Off.index()),
+            amount: AtomicF32::new(0.0),
         })
     }
 
@@ -61,10 +63,12 @@ impl StereoViz {
         self.history.push(r);
     }
 
-    /// Publish the block's correlation and the mode that produced it.
-    pub fn store_block(&self, correlation: f32, mode: WidenMode) {
+    /// Publish the block's correlation and the mode (and amount) that
+    /// produced it.
+    pub fn store_block(&self, correlation: f32, mode: WidenMode, amount: f32) {
         self.correlation.store(correlation, Ordering::Relaxed);
         self.mode.store(mode.index(), Ordering::Relaxed);
+        self.amount.store(amount, Ordering::Relaxed);
     }
 
     /// Clear the traces (plugin reset).
@@ -94,9 +98,9 @@ impl StereoViz {
         WidenMode::from_index(self.mode.load(Ordering::Relaxed))
     }
 
-    /// Whether the last processed block ran a mode that puts static
-    /// combs into the mono fold ([`WidenMode::is_mono_risk`]).
+    /// Whether the last processed block ran a mode and amount that put
+    /// deep combs into the mono fold ([`WidenMode::is_mono_risk`]).
     pub fn mono_risk(&self) -> bool {
-        self.mode().is_mono_risk()
+        self.mode().is_mono_risk(self.amount.load(Ordering::Relaxed))
     }
 }

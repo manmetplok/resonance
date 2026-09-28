@@ -147,11 +147,12 @@ fn draw_header(ui: &mut egui::Ui, app: &mut StereoEditorApp) {
         ui.add_space(14.0);
         ui.separator();
         ui.add_space(8.0);
-        // What the fold does with the current mode, in words. Haas is the
-        // one that puts static combs into mono; say so where the user
-        // looks, not only in the mode's label.
+        // What the fold does with the current mode, in words. Haas (and
+        // Micro-shift past amount 0.5) put deep combs into mono; say so
+        // where the user looks, not only in the mode's label.
         let mode = app.params.widen_mode();
-        let (dot, color, text) = if mode.is_mono_risk() {
+        let amount = app.params.widen_amount.value();
+        let (dot, color, text) = if mode.is_mono_risk(amount) {
             ("\u{25cf}", theme::BAD, "MONO RISK")
         } else if mode.preserves_mono_sum() {
             ("\u{25cf}", theme::GOOD, "MONO SUM KEPT")
@@ -160,7 +161,7 @@ fn draw_header(ui: &mut egui::Ui, app: &mut StereoEditorApp) {
         };
         ui.label(egui::RichText::new(dot).color(color).size(9.0));
         ui.label(egui::RichText::new(text).color(color).strong())
-            .on_hover_text(mode.amount_hint(app.params.widen_amount.value()));
+            .on_hover_text(mode.amount_hint(amount));
     });
 }
 
