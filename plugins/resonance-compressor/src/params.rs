@@ -5,7 +5,7 @@ use std::sync::Arc;
 use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz, v2s_f32_percent};
 use resonance_plugin::*;
 
-pub const PARAM_COUNT: usize = 11;
+pub const PARAM_COUNT: usize = 12;
 
 pub struct CompressorParams {
     /// Threshold in dBFS at which compression begins.
@@ -31,7 +31,14 @@ pub struct CompressorParams {
     pub sc_hpf_on: BoolParam,
     /// Automatically apply makeup gain based on threshold + ratio.
     pub auto_makeup: BoolParam,
+    /// 0 = Manual (the `release` knob, one time constant — the original
+    /// behaviour and the default), 1 = Auto (program-dependent, two time
+    /// constants; see `crate::dsp` — the `release` knob is not used).
+    pub release_mode: IntParam,
 }
+
+/// Labels of [`CompressorParams::release_mode`], by index.
+pub const RELEASE_MODE_LABELS: &[&str] = &["Manual", "Auto"];
 
 impl CompressorParams {
     pub fn param_at(&self, index: usize) -> &dyn Param {
@@ -47,6 +54,7 @@ impl CompressorParams {
             8 => &self.sc_hpf_freq,
             9 => &self.sc_hpf_on,
             10 => &self.auto_makeup,
+            11 => &self.release_mode,
             _ => &self.threshold,
         }
     }
@@ -192,6 +200,17 @@ impl Default for CompressorParams {
 
             sc_hpf_on: BoolParam::new("sc_hpf_on", "SC HPF On", false),
             auto_makeup: BoolParam::new("auto_makeup", "Auto Makeup", false),
+
+            release_mode: IntParam::new(
+                "release_mode",
+                "Release Mode",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: RELEASE_MODE_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(RELEASE_MODE_LABELS),
         }
     }
 }

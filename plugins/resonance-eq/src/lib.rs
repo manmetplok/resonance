@@ -1,8 +1,12 @@
 //! Resonance EQ — an 8-band parametric EQ in the spirit of FabFilter Pro-Q 3.
 //!
 //! Each band supports bell, low/high shelf, and low/high cut modes with
-//! 12/24/48 dB/oct slopes on the cuts. The process loop is a simple
-//! per-channel cascade of RBJ cookbook biquads updated once per block.
+//! 12/24/48 dB/oct slopes on the cuts, plus three one-knob warmth/air
+//! kinds — Tilt, LF Lift+Dip and Air — and a per-band Stereo/Mid/Side
+//! mode (warmth-width-depth.md §6.4). The process loop is a simple
+//! per-channel cascade of biquads updated once per block. An optional
+//! auto-gain trims the output by a static loudness estimate of the curve
+//! (`dsp::static_gain_db`).
 
 use std::sync::Arc;
 
@@ -100,8 +104,18 @@ impl ResonancePlugin for ResonanceEq {
 
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         self.output_gain_smoother.set_sample_rate(sample_rate);
-        self.output_gain_smoother
-            .reset(resonance_dsp::db_to_linear(self.params.output_gain.value()));
+        // Start at the auto-gain trim too, so a project reopened with
+        // auto-gain on doesn't ramp into it on the first block.
+        let auto_db = if self.params.auto_gain.value() {
+            let snaps: [params::BandSnapshot; params::NUM_BANDS] =
+                std::array::from_fn(|i| self.params.bands[i].snapshot());
+            dsp::auto_gain_trim_db(&snaps, sample_rate)
+        } else {
+            0.0
+        };
+        self.output_gain_smoother.reset(resonance_dsp::db_to_linear(
+            self.params.output_gain.value() + auto_db,
+        ));
         self.dsp = Some(EqDsp::new(sample_rate));
         // Replacing the previous `StereoAnalyzers` (a re-initialize, e.g.
         // after a sample-rate change) drops it, which joins the old worker
@@ -152,9 +166,11 @@ impl ResonancePlugin for ResonanceEq {
 
         // Drive the output-gain smoother towards its current target. The
         // dB→linear conversion happens once here at block rate; the smoother
-        // ramps the linear value per sample.
-        self.output_gain_smoother
-            .set_target(resonance_dsp::db_to_linear(self.params.output_gain.value()));
+        // ramps the linear value per sample. The auto-gain trim is exactly
+        // 0.0 while auto-gain is off, so the target is what it always was.
+        self.output_gain_smoother.set_target(resonance_dsp::db_to_linear(
+            self.params.output_gain.value() + dsp.auto_gain_db(),
+        ));
 
         dsp.process_stereo(left, right, &mut self.output_gain_smoother);
 

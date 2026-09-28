@@ -137,3 +137,59 @@ fn assign_raw_sets_coefficients_and_preserves_state() {
     }
     assert_eq!(expect, got);
 }
+
+#[test]
+fn band_pass_peaks_at_0_db_on_its_centre() {
+    let mut b = Biquad::identity();
+    b.set_band_pass(SR, 2_000.0, 2.0);
+    assert!(db(b.magnitude(2_000.0, SR)).abs() < 0.01);
+    assert!(db(b.magnitude(200.0, SR)) < -20.0);
+    assert!(db(b.magnitude(20_000.0, SR)) < -20.0);
+}
+
+#[test]
+fn first_order_low_pass_is_minus_3_db_at_cutoff_and_6_db_per_octave() {
+    let mut b = Biquad::identity();
+    b.set_first_order_low_pass(SR, 1_000.0);
+    assert!(db(b.magnitude(10.0, SR)).abs() < 0.01);
+    assert!((db(b.magnitude(1_000.0, SR)) + 3.01).abs() < 0.05);
+    // Two octaves up the asymptote is ~-12 dB (bilinear makes it a hair
+    // steeper, never shallower).
+    let at_4k = db(b.magnitude(4_000.0, SR));
+    assert!(at_4k < -12.0 && at_4k > -13.5, "got {at_4k} dB");
+}
+
+#[test]
+fn first_order_high_pass_is_minus_3_db_at_cutoff() {
+    let mut b = Biquad::identity();
+    b.set_first_order_high_pass(SR, 500.0);
+    assert!((db(b.magnitude(500.0, SR)) + 3.01).abs() < 0.05);
+    assert!(db(b.magnitude(20_000.0, SR)).abs() < 0.05);
+    assert!(db(b.magnitude(62.5, SR)) < -17.5);
+}
+
+#[test]
+fn first_order_analog_section_with_a_pole_above_nyquist_is_stable() {
+    // A +12 dB high shelf with its geometric centre at 40 kHz: the pole
+    // (80 kHz) is far above the 24 kHz Nyquist. It must still land inside
+    // the unit circle and filter noise to a finite, bounded output.
+    let g = 10f32.powf(12.0 / 20.0);
+    let wc = 2.0 * std::f32::consts::PI * 40_000.0;
+    let (wz, wp) = (wc / g.sqrt(), wc * g.sqrt());
+    for sr in [44_100.0f32, 48_000.0] {
+        let mut b = Biquad::identity();
+        // H(s) = G (s + wz) / (s + wp) has unity DC gain and G at HF.
+        b.set_first_order_analog(sr, g, g * wz, 1.0, wp, sr * 0.25);
+        assert!(b.a1.abs() < 1.0, "pole outside the unit circle at {sr}");
+        let mut peak = 0.0f32;
+        let mut s = 1u32;
+        for _ in 0..48_000 {
+            s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let x = (s >> 8) as f32 / (1 << 24) as f32 * 2.0 - 1.0;
+            let y = b.process(x);
+            assert!(y.is_finite());
+            peak = peak.max(y.abs());
+        }
+        assert!(peak < 8.0, "output ran away: {peak}");
+    }
+}

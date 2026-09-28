@@ -12,12 +12,16 @@
 //! - [`er`] — early reflections (parallel multi-tap stereo delay)
 //! - [`fdn`] — late-tail Feedback Delay Network: delay bank + Householder feedback
 //! - [`modulation`] — chorus/modulation LFO bank for the FDN read positions
+//! - [`return_eq`] — the wet HPF/LPF on the reverb input (before the tank)
+//! - [`duck`] — the wet-return ducker, keyed by the sidechain or the dry input
 
 mod chain;
 mod diffusion;
+mod duck;
 mod er;
 mod fdn;
 mod modulation;
+mod return_eq;
 
 /// Internal channel count for the diffusion + FDN buses. Shared by
 /// every submodule that processes multi-channel signal arrays.
@@ -36,4 +40,5 @@ pub(crate) const DIFFUSION_STEPS: usize = 4;
 pub(crate) const TAP_SLEW_PER_SAMPLE: f32 = 0.25;
 
 pub use chain::ReverbDsp;
+pub use duck::{Ducker, DUCK_MAX_GR_DB};
 pub use er::ER_TAPS;

@@ -1,9 +1,14 @@
-//! Reverb orchestrator: wires the pre-delay, diffusion cascade, early
-//! reflections, FDN feedback loop and final stereo mix together.
+//! Reverb orchestrator: wires the return EQ, pre-delay, diffusion
+//! cascade, early reflections, FDN feedback loop and final stereo mix
+//! together.
 //!
 //! Signal flow (Signalsmith / Geraint Luff style):
-//!   Input -> Pre-delay -> 4-step Diffusion Network -> FDN Feedback Loop -> Stereo Output
-//!                                     `--> Parallel Early Reflections ----^
+//!   Input -> Return EQ -> Pre-delay -> 4-step Diffusion Network -> FDN Feedback Loop -> Stereo Output
+//!                                                 `--> Parallel Early Reflections ----^
+//!
+//! The return EQ (off by default) filters what *feeds* the room; the
+//! ER/tail balance (centred by default) weights the two wet components
+//! against each other just before they are summed.
 //!
 //! The diffusion network blurs the fresh input into dense reflections
 //! using Hadamard mixing. The FDN provides the decaying tail with
@@ -16,6 +21,7 @@ use resonance_dsp::DelayLine;
 use super::diffusion::DiffusionStep;
 use super::er::{EarlyReflections, ER_TAPS};
 use super::fdn::FdnBank;
+use super::return_eq::ReturnEq;
 use super::{CHANNELS, DIFFUSION_STEPS};
 
 /// Maximum pre-delay in seconds. The delay lines (and the tap clamp)
@@ -74,6 +80,13 @@ pub struct ReverbDsp {
     /// Early reflections (parallel multi-tap delay).
     er: EarlyReflections,
 
+    /// Wet HPF/LPF on the input, before everything else.
+    return_eq: ReturnEq,
+    /// ER and tail weights from `er_tail_balance`; both exactly 1.0 at
+    /// the centred default, which multiplies through bit-exactly.
+    er_gain: f32,
+    tail_gain: f32,
+
     // Current parameters (for per-sample smoothing)
     decay_gain: f32,
     mod_depth_samples: f32,
@@ -130,6 +143,9 @@ impl ReverbDsp {
             diffusion_ratios,
             fdn: FdnBank::new(sample_rate, MAX_SIZE_MS),
             er: EarlyReflections::new(sample_rate),
+            return_eq: ReturnEq::new(),
+            er_gain: 1.0,
+            tail_gain: 1.0,
             decay_gain: 0.85,
             mod_depth_samples: 0.0,
             room_size_ms: 150.0,
@@ -147,6 +163,33 @@ impl ReverbDsp {
     /// Set early-reflections time scaling (0..1, normalized).
     pub fn set_er_time(&mut self, norm: f32) {
         self.er.set_time(norm);
+    }
+
+    /// Configure the return EQ (the wet HPF/LPF before the tank). `steep`
+    /// selects 18 dB/oct over 12 dB/oct for both filters.
+    pub fn set_wet_filters(
+        &mut self,
+        hpf_on: bool,
+        hpf_hz: f32,
+        lpf_on: bool,
+        lpf_hz: f32,
+        steep: bool,
+    ) {
+        self.return_eq
+            .configure(self.sample_rate, hpf_on, hpf_hz, lpf_on, lpf_hz, steep);
+    }
+
+    /// Set the ER/tail depth balance, `-1..=1`.
+    ///
+    /// `0` is the plugin's original mix of the two. Toward `-1` the tail
+    /// fades out, leaving the early reflections (a source placed close,
+    /// in the room); toward `+1` the early reflections fade out, leaving
+    /// the diffuse wash (a source far away). One side is always at full
+    /// level, so the crossfade never dips the whole wet signal.
+    pub fn set_er_tail_balance(&mut self, balance: f32) {
+        let b = balance.clamp(-1.0, 1.0);
+        self.er_gain = if b > 0.0 { 1.0 - b } else { 1.0 };
+        self.tail_gain = if b < 0.0 { 1.0 + b } else { 1.0 };
     }
 
     /// Snapshot the current scaled ER tap times (ms) for the editor.
@@ -296,6 +339,10 @@ impl ReverbDsp {
         diffusion_amount: f32,
         width: f32,
     ) -> (f32, f32) {
+        // Return EQ first: it shapes everything the room is fed, ER and
+        // tank alike. A no-op (not even touched) with both filters off.
+        let (left, right) = self.return_eq.process(left, right);
+
         // Pre-delay. A stationary tap reads exactly as before; while a
         // crossfade is in flight both taps are read and mixed.
         let (dl, dr) = if self.predelay_fade_left > 0 {
@@ -385,10 +432,15 @@ impl ReverbDsp {
         sum_l *= scale;
         sum_r *= scale;
 
+        // ER/tail balance. Both gains are exactly 1.0 when centred, and
+        // `x * 1.0 == x` bit for bit, so the default path is unchanged.
+        sum_l *= self.tail_gain;
+        sum_r *= self.tail_gain;
+
         // Sum ER into the wet bus before the width/mix stage so ER also
         // respects width and mix.
-        sum_l += er_l;
-        sum_r += er_r;
+        sum_l += er_l * self.er_gain;
+        sum_r += er_r * self.er_gain;
 
         // Width: 0 = mono, 1 = full stereo
         let mid = (sum_l + sum_r) * 0.5;
@@ -418,6 +470,7 @@ impl ReverbDsp {
         }
         self.fdn.clear();
         self.er.clear();
+        self.return_eq.clear();
         self.wet_sumsq = 0.0;
         self.wet_count = 0;
     }

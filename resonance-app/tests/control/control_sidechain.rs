@@ -351,6 +351,95 @@ fn an_unknown_plugin_on_a_real_bus_is_not_found_and_lists_the_chain() {
 }
 
 // ---------------------------------------------------------------------------
+// Default resolution prefers dynamics over the reverb's key port
+// ---------------------------------------------------------------------------
+
+const REVERB: &str = "com.resonance.reverb";
+const TRACK: u64 = 5;
+const TRACK_REVERB: u64 = 500;
+const TRACK_COMP: u64 = 501;
+
+fn track_plugin(app: &mut Resonance, instance_id: u64, clap_plugin_id: &str) {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: TRACK,
+        instance_id,
+        plugin_name: clap_plugin_id.to_string(),
+        clap_plugin_id: clap_plugin_id.to_string(),
+        clap_file_path: "/plugins/x.clap".to_string(),
+        params: Vec::<ParamInfo>::new(),
+        has_gui: false,
+        has_sidechain_input: true,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+}
+
+/// The reverb reads a key (it ducks its wet return), but "key this track
+/// from the kick" means the compressor. A reverb sitting AHEAD of the
+/// compressor must not capture the unqualified call.
+#[test]
+fn track_set_sidechain_keys_the_compressor_not_a_reverb_ahead_of_it() {
+    let mut app = app();
+    app.test_add_track(TRACK, TrackType::Audio);
+    track_plugin(&mut app, TRACK_REVERB, REVERB);
+    track_plugin(&mut app, TRACK_COMP, COMPRESSOR);
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_sidechain",
+        serde_json::json!({"track_id": TRACK, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("track.set_sidechain succeeds");
+
+    assert_eq!(route_for(&app, TRACK_COMP), Some(SendSource::Track(KICK)));
+    assert_eq!(route_for(&app, TRACK_REVERB), None, "the reverb must not be keyed");
+}
+
+#[test]
+fn bus_set_sidechain_keys_the_compressor_not_a_reverb_ahead_of_it() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_add_track(KICK, TrackType::Instrument);
+    app.test_add_bus(BUS, "Vocal Bus");
+    bus_plugin(&mut app, 210, REVERB, true);
+    bus_plugin(&mut app, BUS_COMP, COMPRESSOR, true);
+
+    let _: MutationAck = call(
+        &mut app,
+        "bus.set_sidechain",
+        serde_json::json!({"bus_id": BUS, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("bus.set_sidechain succeeds");
+
+    assert_eq!(route_for(&app, BUS_COMP), Some(SendSource::Track(KICK)));
+    assert_eq!(route_for(&app, 210), None);
+}
+
+/// With the reverb as the only keyed plugin, the unqualified call keys it
+/// — the ducked-return setup on a reverb bus.
+#[test]
+fn a_reverb_that_is_the_only_keyed_plugin_is_keyed_by_default() {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_add_track(KICK, TrackType::Instrument);
+    app.test_add_bus(BUS, "Reverb Return");
+    bus_plugin(&mut app, BUS_SYNTH, WAVETABLE, false);
+    bus_plugin(&mut app, 210, REVERB, true);
+
+    let _: MutationAck = call(
+        &mut app,
+        "bus.set_sidechain",
+        serde_json::json!({"bus_id": BUS, "source_track_id": KICK}),
+    )
+    .result()
+    .expect("the reverb accepts a key");
+
+    assert_eq!(route_for(&app, 210), Some(SendSource::Track(KICK)));
+}
+
+// ---------------------------------------------------------------------------
 // The new methods are advertised
 // ---------------------------------------------------------------------------
 

@@ -259,7 +259,10 @@ impl ResonanceMcp {
                        \
                        The plugin is addressed like bus_set_plugin_param: bus_id plus an \
                        optional plugin_id (+ occurrence). Omitting plugin_id targets the first \
-                       plugin on the bus that HAS a key port. Name the key source with EITHER \
+                       DYNAMICS plugin (compressor, gate) on the bus that HAS a key port; \
+                       resonance-reverb (which ducks its wet return from a key) is chosen only \
+                       when it is the only plugin with one — name it with plugin_id otherwise. \
+                       Name the key source with EITHER \
                        source_track_id OR source_bus_id; any track, bus or SUB-TRACK works, and \
                        a sub-track (one tap of a multi-output drum kit) is usually the only \
                        address a single kit piece has. Sources are tapped post-FX and PRE-fader, \

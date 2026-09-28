@@ -8,9 +8,10 @@
 //! reader can tolerate one straddled sample at frame boundaries (it's
 //! only ever rendering a viz).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use resonance_metering::{AtomicF32Array, AtomicF32Pair, AtomicHistoryRing};
+use resonance_metering::{AtomicF32, AtomicF32Array, AtomicF32Pair, AtomicHistoryRing};
 
 /// Length of the rolling wet-RMS history shown behind the analytic
 /// decay polygon. At ~1 push/block (e.g. ~350 Hz at 48 k / 128-frame
@@ -75,6 +76,12 @@ pub struct ReverbViz {
 
     /// Rolling history of wet RMS samples (one push per audio block).
     pub tail: TailHistory,
+
+    /// Whether the host has connected a sidechain key this block — the
+    /// ducker keys off it when true, off the dry input otherwise.
+    key_connected: AtomicBool,
+    /// The ducker's current gain reduction on the wet return, dB (>= 0).
+    duck_gr_db: AtomicF32,
 }
 
 impl ReverbViz {
@@ -89,6 +96,8 @@ impl ReverbViz {
             er_tap_gain_l: AtomicF32Array::new(0.0),
             er_tap_gain_r: AtomicF32Array::new(0.0),
             tail: TailHistory::new(),
+            key_connected: AtomicBool::new(false),
+            duck_gr_db: AtomicF32::new(0.0),
         })
     }
 
@@ -145,5 +154,24 @@ impl ReverbViz {
 
     pub fn push_tail_rms(&self, rms: f32) {
         self.tail.push(rms);
+    }
+
+    pub fn store_key_connected(&self, connected: bool) {
+        self.key_connected.store(connected, Ordering::Relaxed);
+    }
+
+    /// True while a sidechain key is connected: the ducker's detector is
+    /// the key, not the dry input.
+    pub fn key_connected(&self) -> bool {
+        self.key_connected.load(Ordering::Relaxed)
+    }
+
+    pub fn store_duck_gr_db(&self, gr_db: f32) {
+        self.duck_gr_db.store(gr_db, Ordering::Relaxed);
+    }
+
+    /// The ducker's gain reduction on the wet return, dB (>= 0).
+    pub fn duck_gr_db(&self) -> f32 {
+        self.duck_gr_db.load(Ordering::Relaxed)
     }
 }
