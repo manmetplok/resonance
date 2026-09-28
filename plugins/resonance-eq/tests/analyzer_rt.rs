@@ -4,34 +4,45 @@
 //! the FFT (which does allocate, per published snapshot) lives on the
 //! background worker threads.
 //!
-//! The check counts allocator calls with a wrapping global allocator.
-//! This file deliberately contains a SINGLE test: the counter is global,
-//! so concurrent tests in the same binary would pollute it. For the same
-//! reason the measured region keeps the total samples pushed per tap
-//! below the worker's hop size (4096), so the workers — whose per-frame
-//! `Arc` publish would also be counted — provably never run an FFT
-//! while the audio thread is being measured.
+//! The check counts allocator calls with a wrapping global allocator,
+//! armed only on the thread calling `process()`: the analyzer workers
+//! allocate legitimately on their own threads, and so does libtest's main
+//! thread (its "running for over 60 seconds" notice). This file holds a
+//! single test so nothing else in the binary shares the counter. The
+//! measured region also keeps the total samples pushed per tap below the
+//! worker's hop size (4096), so no worker-side FFT runs meanwhile.
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct CountingAllocator;
 
 static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    static ARMED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn count() {
+    if ARMED.try_with(Cell::get).unwrap_or(false) {
+        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.alloc(layout) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.dealloc(ptr, layout) }
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+        count();
         unsafe { System.realloc(ptr, layout, new_size) }
     }
 }
@@ -76,9 +87,11 @@ fn process_with_analyzer_never_allocates() {
     }
 
     let before = ALLOC_CALLS.load(Ordering::Relaxed);
+    ARMED.with(|a| a.set(true));
     for block in 4..12 {
         run_block(&mut plugin, &mut left, &mut right, &mut ev, block);
     }
+    ARMED.with(|a| a.set(false));
     let after = ALLOC_CALLS.load(Ordering::Relaxed);
 
     for &x in left.iter().chain(right.iter()) {
