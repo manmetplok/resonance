@@ -29,9 +29,16 @@
 //!    thread for plugins).
 //!
 //! The live instances are never processed, reset or reloaded, so neither
-//! playback, automation, undo nor any plugin's running state is touched,
-//! and no offline-render guard is taken: a probe can run while the
-//! transport rolls or a bounce renders. Automation is not applied to the
+//! automation, undo nor any plugin's running state is touched, and no
+//! offline-render guard is taken: a probe can run while the transport
+//! rolls or a bounce renders. It is not free for playback, though: the
+//! `save_state()` in step 1 holds the live slot's lock, and the live
+//! render's `try_lock` skips a plugin it cannot take for that block —
+//! the same one-block dropout a project save (`SaveAllPluginStates`)
+//! risks. Avoiding it would mean serialising a plugin's state without
+//! exclusive access to the instance, which the `SyncClapInstance`
+//! contract (the mutex is what keeps host calls off a running
+//! `process()`) does not allow. Automation is not applied to the
 //! clone — it probes the chain at its current parameter values — and a
 //! sidechain key input receives silence.
 

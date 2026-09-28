@@ -278,12 +278,15 @@ impl ResonanceMcp {
                        really sees. imd: true adds the SMPTE 60 Hz + 7 kHz 4:1 pair and \
                        imd_pct. \
                        \
-                       SAFE TO RUN ANY TIME: the probe builds a fresh CLONE of each plugin from \
-                       the live plugin's current saved state and drives the clones on a worker \
-                       thread. The live plugins are only read (one state save each), never \
-                       processed, reset or reloaded, so playback, automation, undo and every \
-                       plugin's running state are untouched, and it works while the transport \
-                       rolls. The clone gets no automation (it probes current values) and a \
+                       Runs any time, including while the transport rolls: the probe builds a \
+                       fresh CLONE of each plugin from the live plugin's current saved state \
+                       and drives the clones on a worker thread. The live plugins are only read \
+                       (one state save each), never processed, reset or reloaded, so \
+                       automation, undo and every plugin's running state are untouched. The \
+                       state save holds the live plugin for its duration, so during playback \
+                       that plugin may skip one audio block, exactly as when the project is \
+                       saved; probe a busy chain while stopped if that matters. The clone gets \
+                       no automation (it probes current values) and a \
                        sidechain key hears silence. stages lists what was probed, with \
                        state_copied false for a plugin that has no state extension (probed at \
                        its defaults). \
