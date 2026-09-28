@@ -63,7 +63,7 @@ mastering plugins.
 fixed signal order:
 
 ```
-input trim → corrective EQ → glue comp → saturator → tonal EQ → multiband → imager → clipper → limiter → dither
+input trim → corrective EQ → de-harsh → glue comp → saturator → tonal EQ → multiband → imager → clipper → limiter → dither
 ```
 
 You do not reorder these — you enable the ones the measurement asked for. That
@@ -82,6 +82,7 @@ map names the levers, the listing is the territory.
 |---|---|---|
 | Input | — | `input_trim_db` (dB into the chain: the loudness lever) |
 | Corrective EQ | `corr_b{n}_on` | per band n = 0-3: `corr_b{n}_type` (0 Bell, 1 low shelf, 2 high shelf, 3 high-pass, 4 low-pass), `corr_b{n}_freq`, `corr_b{n}_q`, `corr_b{n}_gain`, `corr_b{n}_ms` (`Stereo` / `Mid` / `Side`). Defaults: b0 high-pass 30 Hz, b1 250 Hz, b2 500 Hz, b3 3 kHz |
+| De-harsh | `dh_on` | a resonance suppressor: `dh_depth` (max cut, dB), `dh_selectivity` (dB above the smoothed spectrum before it acts), `dh_sharpness` (Q of each cut), `dh_attack`, `dh_release` (ms), `dh_low`, `dh_high` (band, default 1-8 kHz), `dh_mode` (`Stereo` / `Mid` / `Side` / `Mid+Side`), `dh_mix`, `dh_delta` (hear only what is removed; never leave it on) |
 | Glue compressor | `glue_on` | `glue_threshold`, `glue_ratio`, `glue_attack`, `glue_release`, `glue_knee`, `glue_makeup`, `glue_mix` |
 | Saturator | `sat_on` | `sat_mode` (`Blend`, `Tube`, `Tape`, `Transformer`, `Console`, `Warm`, `Inflator`), `sat_drive` (dB), `sat_mix`; `Blend` only: `sat_character` (0 Tube … 1 Tape), `sat_shaper` (0 smooth, 1 gritty); `Inflator` only: `sat_curve` |
 | Tonal EQ | `tone_b{n}_on` | as the corrective EQ, with the tone prefix. Defaults: b0 low shelf 100 Hz, b1 700 Hz, b2 2.5 kHz, b3 high shelf 10 kHz |
@@ -92,9 +93,9 @@ map names the levers, the listing is the territory.
 | Dither | `dith_on` | `dith_bits`, `dith_ns` (noise shaping) |
 <!-- /keys -->
 
-A de-harsh stage (a resonance suppressor, band-limited to the presence range)
-is being added to this chain. TODO(de-harsh): name its switch and controls here
-once it lands; until then, de-harsh in the mix (`mixing` skill, character.md).
+The de-harsh stage acts only on narrow peaks relative to the smoothed
+spectrum, so a broadband mix passes it nearly untouched. Its latency is
+constant whether on or off, so switching it never shifts the timeline.
 
 ## 3. Enable stages one at a time, measuring after each
 
@@ -108,7 +109,7 @@ Reach for a stage only when a number asked for it:
 | Measurement | Stage |
 |---|---|
 | A narrow resonance in `peaks`, or rumble below 30 Hz | corrective EQ |
-| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | corrective EQ bell, or the de-harsh stage once it exists |
+| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | de-harsh (`dh_on`, start at the defaults), or a corrective EQ bell for one static peak |
 | The mix does not cohere; parts sit separately | glue compressor, gently |
 | Sterile (the test below) | saturator |
 | `tilt_db_per_oct` off the target slope | tonal EQ |
