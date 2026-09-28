@@ -139,6 +139,15 @@ fn assign_raw_sets_coefficients_and_preserves_state() {
 }
 
 #[test]
+fn band_pass_peaks_at_0_db_on_its_centre() {
+    let mut b = Biquad::identity();
+    b.set_band_pass(SR, 2_000.0, 2.0);
+    assert!(db(b.magnitude(2_000.0, SR)).abs() < 0.01);
+    assert!(db(b.magnitude(200.0, SR)) < -20.0);
+    assert!(db(b.magnitude(20_000.0, SR)) < -20.0);
+}
+
+#[test]
 fn first_order_low_pass_is_minus_3_db_at_cutoff_and_6_db_per_octave() {
     let mut b = Biquad::identity();
     b.set_first_order_low_pass(SR, 1_000.0);

@@ -46,7 +46,7 @@ impl EditorFactory for EqEditorFactory {
     }
 
     fn preferred_size(&self) -> (u32, u32) {
-        (960, 570)
+        (960, 730)
     }
 
     fn create(&self, api_name: &str, is_floating: bool) -> Option<Box<dyn PluginEditor>> {
@@ -63,8 +63,8 @@ impl EditorFactory for EqEditorFactory {
             EditorOptions {
                 title: "Resonance EQ".to_string(),
                 app_id: "com.resonance.eq".to_string(),
-                initial_size: (960, 570),
-                min_size: (720, 450),
+                initial_size: (960, 730),
+                min_size: (720, 610),
                 resizable: true,
             },
         )

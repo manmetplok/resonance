@@ -11,16 +11,119 @@
 //! component runs through the band's (channel-0) stages, and the pair is
 //! recombined. A `Stereo` band runs exactly the arithmetic it always did.
 //!
+//! A **dynamic** band (`dyn_on`) pulls its own gain down while its
+//! frequency region is loud: a detector filter matched to the band (a
+//! band-pass for a bell, a low-pass under a low shelf or lift, a
+//! high-pass over a high shelf, air or tilt) feeds a peak detector, a
+//! soft-knee gain computer (threshold, ratio) and attack/release
+//! ballistics, and the band is re-voiced at `gain - GR` every
+//! [`DYN_UPDATE_SAMPLES`] samples. A bell at 0 dB with dynamics on is a
+//! pure de-harsh cut that only acts when the region is hot; with a static
+//! boost it is a boost that backs off when the region gets loud. Only
+//! gain-using kinds take dynamics; on cuts the switch is ignored.
+//!
 //! **Auto-gain** trims the output by the negated [`static_gain_db`] of the
 //! band curve. It is a *static* estimate — a function of the parameters
 //! only, recomputed when they change — rather than a level follower, so it
 //! is deterministic and cannot pump with the programme.
 
+use resonance_dsp::dynamics::{soft_knee_gain_reduction_db, Ballistics};
 use resonance_dsp::Biquad;
 use resonance_plugin::Smoother;
 
-use crate::band::{configure_stages, BandMs, MAX_STAGES_PER_BAND};
-use crate::params::{BandSnapshot, EqParams, NUM_BANDS};
+use crate::band::{configure_stages, BandKind, BandMs, MAX_STAGES_PER_BAND};
+use crate::params::{BandSnapshot, DynSnapshot, EqParams, NUM_BANDS};
+
+/// How often a dynamic band is re-voiced, in samples. Recomputing the
+/// coefficients per sample would cost a `powf` and a `sin_cos` each; at
+/// 16 samples the gain steps are far below audibility.
+pub const DYN_UPDATE_SAMPLES: u32 = 16;
+/// Largest cut a dynamic band makes, dB.
+pub const DYN_MAX_GR_DB: f32 = 24.0;
+/// Soft-knee width of the dynamic bands' gain computer, dB.
+const DYN_KNEE_DB: f32 = 6.0;
+/// Decay of the detector's peak follower, ms — just enough to bridge the
+/// gaps between a waveform's peaks, as in the compressor.
+const DYN_PEAK_RELEASE_MS: f32 = 5.0;
+/// GR change below which a band is not re-voiced, dB.
+const DYN_REVOICE_EPS_DB: f32 = 0.01;
+
+/// One band's dynamics state.
+#[derive(Clone, Copy)]
+struct DynState {
+    /// Dynamics on, band enabled, and a kind that has a gain.
+    active: bool,
+    /// Detector filter, matched to the band's kind and frequency.
+    detector: Biquad,
+    peak_env: f32,
+    /// Smoothed gain reduction, dB (>= 0).
+    gr_db: f32,
+    /// The GR the band's coefficients currently carry.
+    applied_gr_db: f32,
+    threshold_db: f32,
+    slope: f32,
+    ballistics: Ballistics,
+    last: Option<(DynSnapshot, BandSnapshot)>,
+}
+
+impl DynState {
+    fn new() -> Self {
+        Self {
+            active: false,
+            detector: Biquad::identity(),
+            peak_env: 0.0,
+            gr_db: 0.0,
+            applied_gr_db: 0.0,
+            threshold_db: 0.0,
+            slope: 0.0,
+            ballistics: Ballistics::from_times(48_000.0, 10.0, 150.0),
+            last: None,
+        }
+    }
+
+    /// Detector level update for one sample of the band's input.
+    #[inline]
+    fn detect(&mut self, x: f32, peak_coef: f32) {
+        let y = self.detector.process(x);
+        let y = if y.is_finite() {
+            y
+        } else {
+            self.detector.reset();
+            0.0
+        };
+        let a = y.abs();
+        self.peak_env = if a > self.peak_env {
+            a
+        } else {
+            a + (self.peak_env - a) * peak_coef
+        };
+        let level_db = 20.0 * self.peak_env.max(1e-9).log10();
+        let target = soft_knee_gain_reduction_db(
+            level_db,
+            self.threshold_db,
+            DYN_KNEE_DB,
+            DYN_KNEE_DB * 0.5,
+            self.slope,
+        )
+        .min(DYN_MAX_GR_DB);
+        self.gr_db = self.ballistics.step_envelope(self.gr_db, target);
+        if !self.gr_db.is_finite() {
+            self.gr_db = 0.0;
+        }
+    }
+}
+
+/// Configure a dynamic band's detector filter for the band it follows.
+fn configure_detector(d: &mut Biquad, s: &BandSnapshot, sr: f32) {
+    match s.kind {
+        BandKind::Bell => d.set_band_pass(sr, s.freq, s.q.max(0.3)),
+        BandKind::LowShelf | BandKind::LfLiftDip => d.set_low_pass(sr, s.freq, 0.707),
+        BandKind::HighShelf | BandKind::Air | BandKind::Tilt => {
+            d.set_high_pass(sr, s.freq, 0.707)
+        }
+        BandKind::LowCut | BandKind::HighCut => d.set_identity(),
+    }
+}
 
 pub struct EqDsp {
     sample_rate: f32,
@@ -54,6 +157,15 @@ pub struct EqDsp {
     /// `(cos w, sin w, cos 2w, sin 2w)` per point, so a re-estimate is
     /// arithmetic only.
     grid: Vec<[f32; 4]>,
+    /// Dynamic-band state, one per band.
+    dyn_state: [DynState; NUM_BANDS],
+    /// Whether any band is dynamic — the per-sample loop skips all
+    /// dynamics work when none is.
+    any_dyn: bool,
+    /// Samples until the dynamic bands are next re-voiced.
+    dyn_countdown: u32,
+    /// Peak-follower decay coefficient at this sample rate.
+    dyn_peak_coef: f32,
 }
 
 /// Length of the crossfade a band runs when its kind changes. Long enough
@@ -167,6 +279,10 @@ impl EqDsp {
             auto_gain_valid: false,
             auto_gain_on: false,
             grid: grid(sample_rate),
+            dyn_state: [DynState::new(); NUM_BANDS],
+            any_dyn: false,
+            dyn_countdown: 0,
+            dyn_peak_coef: (-1.0 / (DYN_PEAK_RELEASE_MS * 0.001 * sample_rate.max(1.0))).exp(),
         }
     }
 
@@ -179,6 +295,20 @@ impl EqDsp {
             }
         }
         self.fade_remaining = [0; NUM_BANDS];
+        for d in self.dyn_state.iter_mut() {
+            d.detector.reset();
+            d.peak_env = 0.0;
+            d.gr_db = 0.0;
+        }
+    }
+
+    /// Current gain reduction of band `band`'s dynamics, dB (0 when the
+    /// band is not dynamic).
+    pub fn dyn_gain_reduction_db(&self, band: usize) -> f32 {
+        self.dyn_state
+            .get(band)
+            .filter(|d| d.active)
+            .map_or(0.0, |d| d.gr_db)
     }
 
     /// The current auto-gain trim in dB — 0 while auto-gain is off.
@@ -232,8 +362,35 @@ impl EqDsp {
                 self.active_stages[i] = n;
                 self.band_ms[i] = snapshot.ms;
                 self.last_snapshot[i] = Some(snapshot);
+                // The stages now carry the static gain again.
+                self.dyn_state[i].applied_gr_db = 0.0;
+            }
+
+            // Dynamics: (re)configure when the band or its dynamics moved.
+            let dy = band.dyn_snapshot();
+            let d = &mut self.dyn_state[i];
+            if d.last != Some((dy, snapshot)) {
+                let active = dy.on && snapshot.enabled && snapshot.kind.uses_gain();
+                if active && !d.active {
+                    d.detector.reset();
+                    d.peak_env = 0.0;
+                    d.gr_db = 0.0;
+                }
+                if !active && d.applied_gr_db != 0.0 {
+                    // Back to the static curve.
+                    configure_stages(&snapshot, self.sample_rate, &mut self.channels[0][i]);
+                    configure_stages(&snapshot, self.sample_rate, &mut self.channels[1][i]);
+                    d.applied_gr_db = 0.0;
+                }
+                d.active = active;
+                configure_detector(&mut d.detector, &snapshot, self.sample_rate);
+                d.threshold_db = dy.threshold_db;
+                d.slope = 1.0 - 1.0 / dy.ratio.max(1.0);
+                d.ballistics = Ballistics::from_times(self.sample_rate, dy.attack_ms, dy.release_ms);
+                d.last = Some((dy, snapshot));
             }
         }
+        self.any_dyn = self.dyn_state.iter().any(|d| d.active);
 
         let on = params.auto_gain.value();
         if on != self.auto_gain_on {
@@ -265,10 +422,26 @@ impl EqDsp {
     ) {
         let frames = left.len().min(right.len());
         for i in 0..frames {
+            if self.any_dyn {
+                if self.dyn_countdown == 0 {
+                    self.revoice_dynamic_bands();
+                    self.dyn_countdown = DYN_UPDATE_SAMPLES;
+                }
+                self.dyn_countdown -= 1;
+            }
             let mut l = left[i];
             let mut r = right[i];
             for b in 0..NUM_BANDS {
                 let (in_l, in_r) = (l, r);
+                if self.any_dyn && self.dyn_state[b].active {
+                    // The detector hears what the band filters: the mono
+                    // sum for a Stereo or Mid band, the side for a Side band.
+                    let x = match self.band_ms[b] {
+                        BandMs::Side => (l - r) * 0.5,
+                        _ => (l + r) * 0.5,
+                    };
+                    self.dyn_state[b].detect(x, self.dyn_peak_coef);
+                }
                 let n = self.active_stages[b];
                 let [ch0, ch1] = &mut self.channels;
                 (l, r) = run_band(&mut ch0[b], &mut ch1[b], n, self.band_ms[b], l, r);
@@ -287,6 +460,26 @@ impl EqDsp {
             let gain_lin = output_gain.next();
             left[i] = l * gain_lin;
             right[i] = r * gain_lin;
+        }
+    }
+}
+
+impl EqDsp {
+    /// Re-voice every dynamic band whose GR moved: the same kind, freq and
+    /// Q at `gain - GR`. Coefficients only — the stages keep their state.
+    fn revoice_dynamic_bands(&mut self) {
+        for b in 0..NUM_BANDS {
+            let d = &mut self.dyn_state[b];
+            if !d.active || (d.gr_db - d.applied_gr_db).abs() < DYN_REVOICE_EPS_DB {
+                continue;
+            }
+            let Some(mut s) = self.last_snapshot[b] else {
+                continue;
+            };
+            s.gain_db -= d.gr_db;
+            configure_stages(&s, self.sample_rate, &mut self.channels[0][b]);
+            configure_stages(&s, self.sample_rate, &mut self.channels[1][b]);
+            d.applied_gr_db = d.gr_db;
         }
     }
 }

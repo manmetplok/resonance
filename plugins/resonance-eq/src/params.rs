@@ -17,7 +17,7 @@ pub const AUTO_GAIN_INDEX: usize = OUTPUT_GAIN_INDEX + 1;
 /// Per-band parameters added after the original layout (warmth-width-
 /// depth.md §6.4). They live in their own band-major block *after*
 /// `auto_gain`, so every original parameter keeps its index.
-pub const EXTRA_PER_BAND: usize = 1;
+pub const EXTRA_PER_BAND: usize = 6;
 /// First index of the extra per-band block.
 pub const EXTRA_BASE: usize = AUTO_GAIN_INDEX + 1;
 pub const PARAM_COUNT: usize = EXTRA_BASE + NUM_BANDS * EXTRA_PER_BAND;
@@ -34,6 +34,28 @@ pub struct BandParams {
     pub slope: IntParam,
     /// 0=Stereo, 1=Mid, 2=Side — mirror of `BandMs`. Stereo by default.
     pub ms: IntParam,
+    /// Dynamic band: the band's gain is pulled down by the level of its
+    /// own frequency region (see `crate::dsp`). Off by default; ignored
+    /// on cut kinds.
+    pub dyn_on: BoolParam,
+    /// Detector level above which the dynamic band starts to cut, dBFS.
+    pub dyn_threshold: FloatParam,
+    /// Ratio of the dynamic cut above the threshold.
+    pub dyn_ratio: FloatParam,
+    pub dyn_attack: FloatParam,
+    pub dyn_release: FloatParam,
+}
+
+/// Plain-old-data snapshot of a band's dynamics settings. Kept apart from
+/// [`BandSnapshot`]: the static curve (coefficients, the response view,
+/// auto-gain) does not depend on it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct DynSnapshot {
+    pub on: bool,
+    pub threshold_db: f32,
+    pub ratio: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
 }
 
 pub struct EqParams {
@@ -59,11 +81,27 @@ impl BandParams {
         }
     }
 
+    /// Strongly-typed snapshot of the band's dynamics settings.
+    pub fn dyn_snapshot(&self) -> DynSnapshot {
+        DynSnapshot {
+            on: self.dyn_on.value(),
+            threshold_db: self.dyn_threshold.value(),
+            ratio: self.dyn_ratio.value(),
+            attack_ms: self.dyn_attack.value(),
+            release_ms: self.dyn_release.value(),
+        }
+    }
+
     /// The extra per-band parameter at offset `within` of the band's
     /// block in the extra region (see [`EXTRA_BASE`]).
     fn extra_at(&self, within: usize) -> &dyn Param {
         match within {
             0 => &self.ms,
+            1 => &self.dyn_on,
+            2 => &self.dyn_threshold,
+            3 => &self.dyn_ratio,
+            4 => &self.dyn_attack,
+            5 => &self.dyn_release,
             _ => &self.ms,
         }
     }
@@ -93,8 +131,6 @@ impl EqParams {
         }
         if index >= EXTRA_BASE {
             let off = (index - EXTRA_BASE).min(NUM_BANDS * EXTRA_PER_BAND - 1);
-            // One extra per band for now, so the modulo is trivially 0.
-            #[allow(clippy::modulo_one)]
             let (band, within) = (off / EXTRA_PER_BAND, off % EXTRA_PER_BAND);
             return self.bands[band].extra_at(within);
         }
@@ -129,6 +165,14 @@ const SLOPE_LABELS: &[&str] = &["12 dB/oct", "24 dB/oct", "48 dB/oct"];
 
 fn format_db(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(move |v: f32| format!("{:.*} dB", decimals, v))
+}
+
+fn format_ratio() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
+    Arc::new(|v: f32| format!("{:.1}:1", v))
+}
+
+fn format_ms() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
+    Arc::new(|v: f32| format!("{:.1} ms", v))
 }
 
 fn format_q() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
@@ -209,6 +253,57 @@ macro_rules! make_band {
                 },
             )
             .with_choices(MS_LABELS),
+            dyn_on: BoolParam::new(
+                concat!("band", $ix, "_dyn_on"),
+                concat!("Band ", $ix, " Dynamic"),
+                false,
+            ),
+            dyn_threshold: FloatParam::new(
+                concat!("band", $ix, "_dyn_threshold"),
+                concat!("Band ", $ix, " Dyn Threshold"),
+                -24.0,
+                FloatRange::Linear {
+                    min: -60.0,
+                    max: 0.0,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(format_db(1)),
+            dyn_ratio: FloatParam::new(
+                concat!("band", $ix, "_dyn_ratio"),
+                concat!("Band ", $ix, " Dyn Ratio"),
+                2.0,
+                FloatRange::Skewed {
+                    min: 1.0,
+                    max: 10.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_value_to_string(format_ratio()),
+            dyn_attack: FloatParam::new(
+                concat!("band", $ix, "_dyn_attack"),
+                concat!("Band ", $ix, " Dyn Attack"),
+                10.0,
+                FloatRange::Skewed {
+                    min: 0.5,
+                    max: 100.0,
+                    factor: FloatRange::skew_factor(-1.5),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(format_ms()),
+            dyn_release: FloatParam::new(
+                concat!("band", $ix, "_dyn_release"),
+                concat!("Band ", $ix, " Dyn Release"),
+                150.0,
+                FloatRange::Skewed {
+                    min: 10.0,
+                    max: 1000.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" ms")
+            .with_value_to_string(format_ms()),
         }
     };
 }

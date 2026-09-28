@@ -167,9 +167,10 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
     });
 }
 
-/// Height of the band strip, px: header, kind, slope, M/S, and the
-/// Freq / Gain / Q sliders with their readouts.
-pub(crate) const STRIP_H: f32 = 190.0;
+/// Height of the band strip, px: header, kind, slope, M/S, the
+/// Freq / Gain / Q sliders with their readouts, and the dynamics switch
+/// with its four sliders.
+pub(crate) const STRIP_H: f32 = 350.0;
 /// Sample rate the header's auto-gain readout is estimated at. The trim
 /// is nearly independent of the rate below the top octave.
 const VIS_SR: f32 = 48_000.0;

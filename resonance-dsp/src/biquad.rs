@@ -169,6 +169,16 @@ impl Biquad {
         self.assign_normalized(b0, b1, b2, a0, a1, a2);
     }
 
+    /// Band-pass with a constant 0 dB peak at `freq` (the RBJ
+    /// "constant 0 dB peak gain" form). `q` sets the bandwidth.
+    pub fn set_band_pass(&mut self, sr: f32, freq: f32, q: f32) {
+        let (freq, q) = clamp_params(sr, freq, q);
+        let w0 = 2.0 * PI * freq / sr;
+        let (sin_w0, cos_w0) = w0.sin_cos();
+        let alpha = sin_w0 / (2.0 * q);
+        self.assign_normalized(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w0, 1.0 - alpha);
+    }
+
     /// 6 dB/oct (1st order) low-pass, as a biquad with `b2 = a2 = 0`.
     /// Paired with a 12 dB/oct Butterworth section of Q 1.0 it gives an
     /// 18 dB/oct (3rd-order) Butterworth response.
