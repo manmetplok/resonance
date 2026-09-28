@@ -1,0 +1,9 @@
+[package]
+name = "resonance-mastering-assist"
+version = "0.1.0"
+edition = "2021"
+description = "The mastering assistant's analysis and decision engine: genre target bands, reference comparison, suggestions"
+
+[dependencies]
+resonance-dsp = { path = "../resonance-dsp" }
+resonance-metering = { path = "../resonance-metering" }

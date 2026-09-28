@@ -184,3 +184,87 @@ fn the_clipper_adds_no_latency() {
     };
     assert_eq!(latency(false), latency(true));
 }
+
+/// Phase delay of `out` against `input` at `freq`, in samples, from the
+/// last half of the render.
+fn phase_delay(input: &[f32], out: &[f32], freq: f64) -> f64 {
+    let phase = |x: &[f32]| {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (n, &s) in x.iter().enumerate() {
+            let ph = TAU * freq * n as f64 / SR as f64;
+            re += s as f64 * ph.cos();
+            im -= s as f64 * ph.sin();
+        }
+        im.atan2(re)
+    };
+    let half = input.len() / 2;
+    let mut d = phase(&input[half..]) - phase(&out[half..]);
+    while d < 0.0 {
+        d += TAU;
+    }
+    d / TAU * SR as f64 / freq
+}
+
+/// The group delay the module and chain docs quote: the clipper reports
+/// no latency, but its 8x IIR cascade delays the signal by ~6.9 samples
+/// from DC to a few kHz (review finding M3). Below the knee the stage is
+/// linear, so the phase of a tone measures it.
+#[test]
+fn the_clipper_group_delay_is_the_documented_one() {
+    for freq in [200.0, 1000.0, 3000.0] {
+        let input = sine(freq, 0.25, 96_000);
+        let out = run(&cfg(3.0, 0.0), &input);
+        let d = phase_delay(&input, &out, freq);
+        assert!((6.6..7.2).contains(&d), "{freq} Hz: {d:.2} samples");
+    }
+}
+
+/// The enable crossfade mixes the delayed wet path with the raw input,
+/// which combs for the length of the fade (review finding M3), but it
+/// must not step: a tone is toggled on and off, and no output sample
+/// moves further than the tone itself can. A fade against a matched
+/// (delayed) dry would start and end on a jump between the delayed and
+/// the raw tone, ~7x the tone's own slope at 1 kHz.
+#[test]
+fn enable_fades_do_not_step() {
+    let input = sine(1000.0, 0.25, 48_000);
+    let tone_step = input.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let mut c = Clipper::new(SR);
+    let (mut l, mut r) = (input.clone(), input.clone());
+    for (b, start) in (0..l.len()).step_by(BLOCK).enumerate() {
+        let end = (start + BLOCK).min(l.len());
+        let on = (20..60).contains(&b);
+        let cfg = ClipperConfig { enabled: on, ..cfg(3.0, 0.0) };
+        c.process_stereo(&mut l[start..end], &mut r[start..end], &cfg);
+    }
+    let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(max_step <= tone_step * 1.01, "step {max_step} vs the tone's {tone_step}");
+    // The fades did happen, and the delay is real: mid-stream the output
+    // is the delayed tone, not the input.
+    let on = 40 * BLOCK..50 * BLOCK;
+    let moved = on.map(|i| (l[i] - input[i]).abs()).fold(0.0f32, f32::max);
+    assert!(moved > 0.2, "the clipper never engaged ({moved})");
+}
+
+/// Switching the clipper back on while its fade-out is still running
+/// must pick the fade up where it is, not restart the oversamplers under
+/// a half-open crossfade (review finding M7): that dropped the wet path
+/// to the filters' cold start with the fade at ~60 %, a step of ~0.3.
+#[test]
+fn re_enabling_mid_fade_out_does_not_step() {
+    let input = sine(300.0, 1.4, 24_000);
+    let block = 64;
+    let mut c = Clipper::new(SR);
+    let (mut l, mut r) = (input.clone(), input.clone());
+    for (b, start) in (0..l.len()).step_by(block).enumerate() {
+        let end = (start + block).min(l.len());
+        // On, off for three blocks (192 samples of a 480-sample fade),
+        // on again.
+        let on = !(100..103).contains(&b);
+        let cfg = ClipperConfig { enabled: on, ..cfg(6.0, 0.0) };
+        c.process_stereo(&mut l[start..end], &mut r[start..end], &cfg);
+    }
+    assert!(peak(&l[50 * block..100 * block]) < 0.52, "was not clipping while on");
+    let max_step = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(max_step < 0.1, "a step of {max_step} in the output");
+}

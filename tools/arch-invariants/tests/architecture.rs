@@ -184,12 +184,15 @@ fn report(rule: &str, violations: &[String]) {
 /// `resonance-plugin`'s `editor-widgets` feature (ARCH-08). The one
 /// exception is a *dev* dependency gated on a target, which is what the
 /// gate's Cocoa round-trip test needs for the NSApplication pump; see
-/// `plugins_never_name_a_platform_runtime`.
+/// `plugins_never_name_a_platform_runtime`. `resonance-mastering-assist`
+/// is the mastering plugin's ("`resonance-mastering-assist` ──►
+/// resonance-mastering plugin").
 const PLUGIN_DEPS: &[&str] = &[
     "resonance-plugin",
     "resonance-common",
     "resonance-dsp",
     "resonance-metering",
+    "resonance-mastering-assist",
     "resonance-music-theory",
     "plugin-gui-core",
     "resonance-dsp-test-support",
@@ -205,6 +208,9 @@ fn allowed_internal_deps(name: &str) -> Option<&'static [&'static str]> {
         // "framework-agnostic — no Iced, no CLAP, no plugin trait"
         "resonance-dsp" | "resonance-common" => &[],
         "resonance-metering" => &["resonance-dsp"],
+        // "a library crate: depends on `resonance-metering` and
+        // `resonance-dsp` only"
+        "resonance-mastering-assist" => &["resonance-metering", "resonance-dsp"],
         "resonance-dsp-test-support" => &[],
         // "pure music theory ... does not depend on audio, app, or plugin code"
         "resonance-music-theory" => &[],
@@ -241,19 +247,38 @@ fn allowed_internal_deps(name: &str) -> Option<&'static [&'static str]> {
 /// ... the lower layers know nothing about the upper layers", followed by
 /// the hard rules quoted in `allowed_internal_deps`. `resonance-app` "is
 /// allowed to depend on everything; it is the integration layer", so it is
-/// the one crate with no row.
+/// the one crate with no row, except that it "depends on no plugin crate"
+/// (checked here too, any dependency kind).
 ///
 /// Exercised 2026-09-26: added `resonance-app = { path = "../resonance-app" }`
 /// to `resonance-audio/Cargo.toml` → failed with
 /// `resonance-audio -> resonance-app (normal)`; reverted.
+/// Exercised 2026-09-28: put `resonance-mastering = { path =
+/// "../plugins/resonance-mastering", default-features = false }` back in
+/// `resonance-app/Cargo.toml` → failed with `resonance-app ->
+/// resonance-mastering (normal)`; reverted.
 #[test]
 fn crate_dag_matches_architecture_md() {
     let root = workspace_root();
     let pkgs = packages();
     let internal: BTreeSet<&str> = pkgs.iter().map(|p| p.name.as_str()).collect();
+    let plugins: BTreeSet<&str> = pkgs
+        .iter()
+        .filter(|p| p.is_plugin(&root))
+        .map(|p| p.name.as_str())
+        .collect();
     let mut violations = Vec::new();
     for p in &pkgs {
         if p.name == "resonance-app" {
+            for d in &p.deps {
+                if plugins.contains(d.name.as_str()) {
+                    violations.push(format!(
+                        "resonance-app -> {} ({}): the app depends on no plugin crate; \
+                         move what it needs into a library crate both can use",
+                        d.name, d.kind
+                    ));
+                }
+            }
             continue;
         }
         let allowed = if p.is_plugin(&root) {
@@ -336,6 +361,7 @@ fn framework_crates_stay_where_the_diagram_puts_them() {
     let no_clap: &[&str] = &[
         "resonance-dsp",
         "resonance-metering",
+        "resonance-mastering-assist",
         "resonance-common",
         "resonance-music-theory",
         "resonance-svs",

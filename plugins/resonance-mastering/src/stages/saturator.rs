@@ -295,7 +295,11 @@ impl Saturator {
         let mix = cfg.mix.clamp(0.0, 1.0);
         let curve = cfg.curve.clamp(-0.5, 0.5);
 
-        if cfg.enabled && !self.was_enabled {
+        // Re-enabled while the fade-out still runs: the wet path is live,
+        // so the fade just turns around. Restarting its state under a
+        // half-open fade would step the output.
+        let fading_out = self.enable_sm.current() > 0.0;
+        if cfg.enabled && !self.was_enabled && !fading_out {
             // (Re)engage. The parameter smoothers snap to the current
             // values — ramping in from whatever they held when the
             // stage was last audible would be meaningless — and the

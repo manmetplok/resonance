@@ -4,7 +4,7 @@
 //! back to Stereo must end up bit-identical to one that never left it.
 
 use resonance_mastering::stages::linear_phase_eq::{
-    BandConfig, BandType, LinearPhaseEq, MsMode, NUM_BANDS,
+    BandConfig, BandType, FirGeometry, LinearPhaseEq, MsMode, NUM_BANDS,
 };
 
 const SR: f32 = 48_000.0;
@@ -217,4 +217,58 @@ fn a_disabled_side_band_is_inert() {
     assert!(!eq.cross_active());
     assert!(a.iter().zip(&c).all(|(x, y)| x.to_bits() == y.to_bits()));
     assert!(b.iter().zip(&d).all(|(x, y)| x.to_bits() == y.to_bits()));
+}
+
+/// Engaging a side band mid-stream, at a block that is not on the hop
+/// grid, must keep the mono guarantee through the engage and through
+/// every later edit of the side band: the cross pair's crossfades land
+/// on the same samples as the direct pair's, so `A + B` stays the mid
+/// filter at every sample (review finding M1: the engage used to reset
+/// the cross pair onto a grid of its own, so the two halves of each
+/// band change landed up to a hop apart).
+#[test]
+fn mid_stream_side_engage_keeps_the_mono_sum() {
+    // The standalone stage (unstaggered) and a chain-like staggered one.
+    let hop = FirGeometry::for_sample_rate(SR).hop;
+    for stagger in [None, Some([hop / 10, hop / 2 + hop / 10])] {
+        let mut eq = LinearPhaseEq::new(SR);
+        if let Some(offsets) = stagger {
+            eq.set_phase_offsets(offsets);
+        }
+        let lat = eq.latency();
+        let len = lat + 200_000;
+        let x: Vec<f32> = (0..len as u64).map(|n| 0.4 * noise(n)).collect();
+        let hpf = |hz: f32| {
+            [
+                band(BandType::HighPass, hz, 0.0, MsMode::Side),
+                BandConfig::off(),
+                BandConfig::off(),
+                BandConfig::off(),
+            ]
+        };
+        // Engage at block 3 (1536 samples: off the 4096 hop grid), then
+        // move the side cut every 40 blocks.
+        let (ol, or) = run(&mut eq, &x, &x, |b| match b {
+            0..=2 => [BandConfig::off(); NUM_BANDS],
+            3..=99 => hpf(200.0),
+            100..=139 => hpf(450.0),
+            140..=179 => hpf(120.0),
+            _ => hpf(800.0),
+        });
+        assert!(eq.cross_active());
+        assert_eq!(eq.cross_iteration_countdowns(), eq.iteration_countdowns());
+        let mut worst = 0.0f32;
+        let mut at = 0;
+        for i in lat..len {
+            let err = (0.5 * (ol[i] + or[i]) - x[i - lat]).abs();
+            if err > worst {
+                worst = err;
+                at = i;
+            }
+        }
+        assert!(
+            worst < 2e-5,
+            "stagger {stagger:?}: mono sum moved by {worst:.3e} at sample {at}"
+        );
+    }
 }

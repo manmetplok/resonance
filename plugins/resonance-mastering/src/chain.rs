@@ -13,6 +13,31 @@
 //! crossover and the limiter lookahead have latency, and it does not
 //! depend on which stages are on or what they are set to (de-harsh
 //! off is its own exact one-frame delay).
+//!
+//! # Group delay the latency does not include
+//!
+//! The clipper and the saturator's non-Blend modes run their curves
+//! inside IIR half-band oversamplers. Those have no fixed delay (their
+//! reported latency is 0) but a small frequency-dependent group delay:
+//! about 6.9 samples through the clipper's 8× cascade and 5.5 through
+//! a sat mode's 4× pair, at 48 kHz and below a few kHz (pinned in
+//! `tests/stages_clipper.rs` and `tests/sat_modes.rs`). It is not an
+//! integer and not flat, so it cannot be reported to the host, and the
+//! host's delay compensation does not see it: with both stages on the
+//! chain runs ~12 samples (0.25 ms) behind its reported latency.
+//!
+//! Wherever that delayed signal is crossfaded against an undelayed one
+//! the fade combs while it lasts. That happens in three places, each a
+//! 10 ms linear fade: the whole-plugin bypass below (chain against the
+//! latency-matched dry), and the two stages' own enable crossfades
+//! (wet against their raw input). At the fade's midpoint the first
+//! notch sits near `fs / (2·delay)`, ≈3.5 kHz for the clipper; it is
+//! deeper than −20 dB for about 1 ms of the 10. At rest nothing is
+//! mixed: each path is passed alone. Running the dry side of a fade
+//! through a matching up/down pair would remove the comb but not the
+//! delay, so the stage would step between the delayed and the raw
+//! signal where the fade starts and ends: a click of up to twice the
+//! signal's amplitude at a few kHz, which is worse.
 
 use resonance_dsp::{db_to_linear, DelayLine};
 
@@ -92,13 +117,10 @@ impl Chain {
             [phase(3), phase(8)],
             [phase(4), phase(9)],
         ]);
-        // The EQs' mid/side cross pairs run only while a band is mid or
-        // side; they take the half-slots in between, so even then no
-        // callback runs two FFT iterations. (The ten above are left
-        // exactly where they were: moving one changes its rounding.)
-        let half_phase = |slot: usize| (2 * slot + 1) * hop / (2 * CONVOLVER_COUNT);
-        corrective_eq.set_cross_phase_offsets([half_phase(0), half_phase(5)]);
-        tonal_eq.set_cross_phase_offsets([half_phase(1), half_phase(6)]);
+        // The EQs' mid/side cross pairs follow their direct pairs' grid
+        // (a band change must crossfade both on the same samples), so
+        // while a band is mid/side its cross FFT shares the direct one's
+        // callback.
         let limiter = Limiter::new(sample_rate);
         let deharsh = DeharshStage::new(sample_rate);
         let max_latency = corrective_eq.latency()
@@ -148,8 +170,9 @@ impl Chain {
     }
 
     /// Total plugin latency in samples: sum of every latency-inducing
-    /// stage. The compressor, saturator, imager and clipper are
-    /// zero-latency (the clipper's oversampling is IIR);
+    /// stage. The compressor, saturator, imager and clipper report zero
+    /// (the clipper's and the sat modes' oversampling is IIR, with a
+    /// small group delay this does not include: see the module docs);
     /// the two linear-phase EQs and the multiband crossover each
     /// contribute one FIR convolver's worth of delay, the de-harsh stage
     /// one STFT frame (on or off), and the limiter adds its lookahead.
@@ -184,7 +207,9 @@ impl Chain {
     /// frozen, they would hold the ~0.4 s of audio in flight when bypass
     /// engaged and replay it on un-bypass (DSP-05). Both directions
     /// crossfade over [`BYPASS_XFADE_SECONDS`]; at rest each path is
-    /// passed bit-exactly.
+    /// passed bit-exactly. With the clipper or a non-Blend sat mode on,
+    /// the chain lags the dry path by their group delay, and the fade
+    /// combs briefly (module docs).
     pub fn process(
         &mut self,
         left: &mut [f32],

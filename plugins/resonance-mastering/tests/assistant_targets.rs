@@ -24,6 +24,23 @@ fn band_centres_are_the_iso_third_octave_series() {
     assert!((target_band_center_hz(30) - 20_159.0).abs() < 1.0);
 }
 
+/// The analysis grid's centres are the geometric centres of the bins the
+/// LTAS measures (review finding M8: they were the lower edges, half a
+/// bin low, so every target value was read 1/12 octave off).
+#[test]
+fn analysis_grid_centres_are_the_ltas_bin_centres() {
+    use resonance_metering::spectrum::octave::OctaveTable;
+    let table = OctaveTable::new();
+    for i in 0..NUM_SPECTRUM_BINS {
+        assert_eq!(band_center_hz(i), table.center(i), "bin {i}");
+        let (lo, hi) = (table.edges[i], table.edges[i + 1]);
+        assert!(lo < band_center_hz(i) && band_center_hz(i) < hi, "bin {i}");
+    }
+    assert!((band_center_hz(0) - 21.19).abs() < 0.01, "{}", band_center_hz(0));
+    let last = band_center_hz(NUM_SPECTRUM_BINS - 1);
+    assert!((last - 18_881.2).abs() < 1.0, "{last}");
+}
+
 #[test]
 fn every_band_is_finite_ordered_and_centred_on_1k() {
     for &g in Genre::ALL {

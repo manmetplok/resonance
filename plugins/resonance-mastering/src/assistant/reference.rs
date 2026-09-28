@@ -5,14 +5,14 @@
 //! every packet through symphonia's default codec registry, converts
 //! each audio frame to stereo `f32`, and runs the same offline analysis
 //! the assistant uses on the captured live buffer. The resulting
-//! [`ReferenceTrack`] can then be supplied to the decision engine as
-//! an ad-hoc target: the reference's LTAS becomes the target spectral
-//! shape and the reference's integrated LUFS becomes the target
-//! loudness.
+//! [`ReferenceTrack`] (the engine's type, `resonance_mastering_assist`)
+//! can then be supplied to the decision engine as an ad-hoc target: the
+//! reference's LTAS becomes the target spectral shape and the reference's
+//! integrated LUFS becomes the target loudness.
 //!
-//! Runs synchronously on the UI thread — loading a few minutes of MP3
-//! takes well under a second, and a background thread adds complexity
-//! we don't need for the first pass.
+//! The panel's Load runs it on the UI thread (a few minutes of MP3 takes
+//! well under a second); a restored project decodes on the assistant's
+//! background thread (see `state`).
 
 use std::fs::File;
 use std::path::Path;
@@ -24,20 +24,13 @@ use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
-use super::analyze::{self, AnalysisResult};
+pub use resonance_mastering_assist::reference::ReferenceTrack;
 
 /// Maximum number of samples we'll decode from a reference file.
 /// Ten minutes at 96 kHz stereo (~115 MB of f32 samples total) is
 /// plenty of headroom for any mastering reference; longer inputs are
 /// truncated so we don't allocate gigabytes on a bad file pick.
 const MAX_SAMPLES_PER_CHANNEL: usize = 96_000 * 60 * 10;
-
-#[derive(Debug, Clone)]
-pub struct ReferenceTrack {
-    pub display_name: String,
-    pub sample_rate: f32,
-    pub analysis: AnalysisResult,
-}
 
 /// Decode a file at `path` and run the full offline analysis. Returns
 /// an error string (suitable for UI display) on any failure.
@@ -126,12 +119,12 @@ pub fn load_from_path(path: &str) -> Result<ReferenceTrack, String> {
         return Err("decoded 0 samples".to_string());
     }
 
-    let analysis = analyze::run(sample_rate, &left, &right);
-    Ok(ReferenceTrack {
+    Ok(ReferenceTrack::from_samples(
         display_name,
         sample_rate,
-        analysis,
-    })
+        &left,
+        &right,
+    ))
 }
 
 /// Copy one decoded packet's interleaved samples into the running

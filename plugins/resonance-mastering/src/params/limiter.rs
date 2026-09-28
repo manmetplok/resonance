@@ -2,17 +2,23 @@
 
 use std::sync::Arc;
 
-use resonance_plugin::formatters::v2s_f32_ms;
+use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_ms};
 use resonance_plugin::*;
 
-use crate::stages::limiter::LimiterConfig;
+use crate::stages::limiter::{LimiterConfig, MAX_INPUT_GAIN_DB};
 
+/// The limiter's params in the pre-W9 block (on, ceiling, release).
 pub const PARAM_COUNT: usize = 3;
+
+/// `lim_gain`, appended after the de-harsh params.
+pub const GAIN_PARAM_COUNT: usize = 1;
 
 pub struct LimiterParams {
     pub on: BoolParam,
     pub ceiling: FloatParam,
     pub release: FloatParam,
+    /// Input drive into the limiter, dB (see [`LimiterConfig::input_gain_db`]).
+    pub gain: FloatParam,
 }
 
 impl LimiterParams {
@@ -25,11 +31,17 @@ impl LimiterParams {
         }
     }
 
+    /// The appended `lim_gain` param.
+    pub fn gain_param_at(&self, _index: usize) -> &dyn Param {
+        &self.gain
+    }
+
     pub fn snapshot(&self) -> LimiterConfig {
         LimiterConfig {
             enabled: self.on.value(),
             ceiling_db: self.ceiling.value(),
             release_ms: self.release.value(),
+            input_gain_db: self.gain.value(),
         }
     }
 }
@@ -67,6 +79,17 @@ impl Default for LimiterParams {
             )
             .with_unit(" ms")
             .with_value_to_string(v2s_f32_ms(0)),
+            gain: FloatParam::new(
+                "lim_gain",
+                "Limiter Gain",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: MAX_INPUT_GAIN_DB,
+                },
+            )
+            .with_unit(" dB")
+            .with_value_to_string(v2s_f32_db(1)),
         }
     }
 }

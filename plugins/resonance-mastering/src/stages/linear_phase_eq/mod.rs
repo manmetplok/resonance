@@ -34,7 +34,9 @@
 //!   again, bit-for-bit the path that never engaged.
 //!
 //! The cross pair has the same geometry, so the latency is the same
-//! whether it runs or not.
+//! whether it runs or not. It also runs on the direct pair's hop grid
+//! (each cross convolver iterates on its direct twin's sample), so the
+//! two halves of a band change crossfade over the same samples.
 
 pub mod band;
 pub mod convolver;
@@ -122,7 +124,7 @@ impl LinearPhaseEq {
 
     pub fn reset(&mut self) {
         self.fir.reset();
-        self.cross.reset();
+        self.align_cross_grid();
         if let Cross::Warming { remaining } = &mut self.cross_state {
             *remaining = 2 * self.hop;
         }
@@ -141,14 +143,32 @@ impl LinearPhaseEq {
     }
 
     /// Stagger the channels' FFT iterations (see
-    /// [`StereoFir::set_phase_offsets`]).
+    /// [`StereoFir::set_phase_offsets`]). The cross pair follows.
     pub fn set_phase_offsets(&mut self, offsets: [usize; 2]) {
         self.fir.set_phase_offsets(offsets);
+        self.align_cross_grid();
     }
 
-    /// Stagger the mid/side cross pair's FFT iterations.
-    pub fn set_cross_phase_offsets(&mut self, offsets: [usize; 2]) {
-        self.cross.set_phase_offsets(offsets);
+    /// Put the cross pair on the direct pair's hop grid, clearing its
+    /// streaming state: each cross convolver iterates on the same sample
+    /// as its direct twin, so a band change crossfades `A` and `B` over
+    /// the same samples and `A + B` is the designed filter at every one
+    /// of them. On a grid of its own the two halves landed up to a hop
+    /// apart, and a side band's change leaked into the mono sum for that
+    /// long (review M1). The price: while a band is mid/side, each cross
+    /// convolver spends its FFT in the same callback as its twin.
+    fn align_cross_grid(&mut self) {
+        let hop = self.hop;
+        let [l, r] = self.fir.iteration_countdowns();
+        // A convolver with phase offset `p` iterates after `hop − p`.
+        self.cross.set_phase_offsets([(hop - l) % hop, (hop - r) % hop]);
+    }
+
+    /// Samples until each cross channel's next FFT iteration
+    /// (diagnostics: equal to [`Self::iteration_countdowns`] whenever
+    /// the cross pair runs).
+    pub fn cross_iteration_countdowns(&self) -> [usize; 2] {
+        self.cross.iteration_countdowns()
     }
 
     /// Samples until each channel's next FFT iteration.
@@ -170,9 +190,9 @@ impl LinearPhaseEq {
         bands: &[BandConfig; NUM_BANDS],
     ) {
         if self.cross_state == Cross::Off && bands.iter().any(BandConfig::is_ms) {
-            // Start the cross pair from silence; the design waits until
-            // its history is real input.
-            self.cross.reset();
+            // Start the cross pair from silence, on the direct pair's
+            // grid; the design waits until its history is real input.
+            self.align_cross_grid();
             self.cross_state = Cross::Warming {
                 remaining: 2 * self.hop,
             };

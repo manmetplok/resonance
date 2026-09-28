@@ -7,7 +7,9 @@ Patterns this codebase has gotten right. Imitate these when adding new code; res
 The workspace is a deliberate DAG. Every crate has a single responsibility, and the lower layers know nothing about the upper layers.
 
 ```
-resonance-dsp ──┬─► resonance-metering ──► resonance-mastering plugin
+resonance-dsp ──┬─► resonance-metering ──┬─► resonance-mastering plugin
+                │                       └─► resonance-mastering-assist ──┬─► resonance-mastering plugin
+                │                                                        └─► resonance-app
                 ├─► resonance-audio ─────► resonance-app
                 └─► (every FX plugin)
 resonance-music-theory ──┬─► resonance-app                   (pure theory, no audio/app deps)
@@ -25,14 +27,15 @@ Hard rules — these are load-bearing for build times, testability, and cognitiv
 - `resonance-music-theory` **does not depend on audio, app, or plugin code**. It is pure music theory: pitch, scale, chord, progression, voicing, generators. It can be built and tested headless. Keep it that way.
 - `resonance-audio` **does not depend on `resonance-app`**, and its one dependency the other direction on `resonance-music-theory` is narrow and sanctioned (doc #160, todo #358): the vocal-tuning render/bounce path (`engine/vocal_render.rs`) uses `resonance_music_theory::scale::{Mode, Scale}` for scale-snap, and `types::TuningScale` is the small, wire-stable enum the vocal-tuning data model and UI use, mapped to `Mode` in one place (`TuningScale::to_mode`). Don't widen this into a general audio/theory coupling — a new use needs its own doc/todo justification, not a ride on this one. The audio engine still doesn't know about Iced messages.
 - `resonance-dsp`, `resonance-metering`, `resonance-common` are framework-agnostic — no Iced, no CLAP, no plugin trait. They're reusable building blocks.
+- `resonance-mastering-assist` is the mastering assistant's analysis and decision engine (genre target bands, reference comparison, suggestions as param writes by key), a library crate: depends on `resonance-metering` and `resonance-dsp` only. The mastering plugin's panel and the app's `master.assist` both run it; the plugin owns the param lookup its keys resolve through, and its `tests/assistant_lockstep.rs` pins every key the engine emits to a real param.
 - Plugins reach `resonance-common` **only for utilities** (`scan_directory`, `registry`, `drum_map`, WAV decode, `factory_presets` via the SDK). DAW model types (takes, automation, MIDI maps, device definitions, freeze, track groups) are not plugin API. Pure-DSP helpers such as `flush_denormals` live in `resonance-dsp`, so most plugins do not depend on `resonance-common` at all; only amp, drums and ir do (ARCH-07).
 - `resonance-svs` (singing-voice synthesis) depends only on `resonance-music-theory`. It renders DiffSinger `.ds` segments to audio headless, and ships its own CLI binary so the pipeline can be exercised without booting the app.
 - `plugin-gui-core` is the platform-neutral half of the editor stack: the `EditorApp`/`EditorOptions`/`EditorError` contract, the fleet theme, and the pure egui widget set. No windowing code; builds on every OS.
 - `wayland-plugin-gui` is the Linux editor runtime — it hosts an egui UI in its own Wayland window/thread, building on `plugin-gui-core` for the shared contract (and re-exporting it, so plugins have one import surface). No plugin depends on it directly: `resonance-plugin`'s `editor-widgets` feature pulls in the runtime for the current target and re-exports it as `editor_host::RuntimeEditor`, so a plugin's `editor` feature names only `plugin-gui-core` and `resonance-plugin/editor-widgets` (ARCH-08; `tools/arch-invariants` fails the build otherwise). It knows nothing about any specific plugin or the app. Its windowing body is Linux-only; other targets get a stub `Editor` so the workspace builds everywhere.
 - `cocoa-plugin-gui` is the macOS editor runtime — same public `Editor` surface, inverted mechanics: the window lives on the AppKit main thread (which AppKit requires) and the `Send` handle dispatches onto it; rendering is NSOpenGLView + the same egui_glow painter. Windowing body macOS-only, stub elsewhere. Plugins reach whichever runtime matches the platform through `resonance_plugin::editor_host` (migration tracked in `macos-editor-plan.md` item 3c).
-- `resonance-app` is allowed to depend on everything; it is the integration layer. Its one plugin-crate dependency is `resonance-mastering`, headless (`default-features = false`, no editor), for the Assistant's analysis and decision engine behind `master.assist` — the live plugin still runs as a CLAP bundle like every other.
+- `resonance-app` is allowed to depend on everything; it is the integration layer. The exception: it depends on no plugin crate. Plugins reach the app as CLAP bundles only; code both need goes into a library crate both depend on (as `resonance-mastering-assist` did for `master.assist`).
 
-These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a plugin naming a `resonance_common` item outside the utility allow-list (or gaining the dependency unlisted), a GUI toolkit or windowing stack outside its crate, an inline `#[cfg(test)]` beyond the documented exception, or a new top-level file in `resonance-app/tests/` (ARCH-10). Adding a crate means deciding its layer here and adding its row there.
+These rules are tests, not only prose: `tools/arch-invariants/tests/architecture.rs` reads `cargo metadata` and fails the suite on an internal dependency that is not an edge of the diagram, a plugin manifest or source that names a platform runtime, a plugin naming a `resonance_common` item outside the utility allow-list (or gaining the dependency unlisted), a GUI toolkit or windowing stack outside its crate, `resonance-app` depending on a plugin crate, an inline `#[cfg(test)]` beyond the documented exception, or a new top-level file in `resonance-app/tests/` (ARCH-10). Adding a crate means deciding its layer here and adding its row there.
 
 When extending: add new building blocks to the lowest layer they fit, not the most convenient one. A new filter goes in `resonance-dsp`, not in the plugin that needs it first.
 
@@ -77,10 +80,11 @@ src/
 │   ├── glue_compressor.rs
 │   ├── multiband.rs
 │   └── ...
-├── assistant/        Independent feature in its own subdir
-│   ├── analyze.rs
-│   ├── decide.rs
-│   └── reference.rs
+├── assistant/        Independent feature in its own subdir (its engine,
+│   ├── capture.rs    analysis and decisions, is the library crate
+│   ├── decide.rs     resonance-mastering-assist; this is the plugin's half)
+│   ├── reference.rs
+│   └── state.rs
 └── editor/
     ├── controls/     One file per stage's control panel
     └── <metric>.rs   Per-meter views (lufs_meter, tp_meter, ...)

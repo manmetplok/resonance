@@ -31,6 +31,15 @@
 use resonance_dsp::db_to_linear;
 use resonance_metering::true_peak::coefficients::{PHASES, TAPS};
 use resonance_metering::true_peak::polyphase::PolyphasePeakDetector;
+use resonance_plugin::{Smoother, SmoothingStyle};
+
+use super::retarget;
+
+/// Ramp length of the input gain, ms.
+const GAIN_RAMP_MS: f32 = 10.0;
+
+/// Largest input gain, dB (`lim_gain`'s range is 0 to this).
+pub const MAX_INPUT_GAIN_DB: f32 = 18.0;
 
 /// Fixed lookahead time in milliseconds. 5 ms at 48 kHz = 240 samples,
 /// plenty of runway for a band-music master without excessive added
@@ -53,6 +62,14 @@ pub struct LimiterConfig {
     /// back to unity — short values chase transients, long values
     /// preserve perceived loudness and dynamics.
     pub release_ms: f32,
+    /// Input drive, dB (0..18): the gain the signal is pushed into the
+    /// limiter with, applied ahead of its detector and delay line while
+    /// the limiter is on. This is where the master's last loudness comes
+    /// from once the clipper is on: the clipper's ceiling sits at
+    /// `-clip_drive` dBFS, so without a push after it the limiter would
+    /// have at most `|ceiling| - clip_drive` dB left to do. 0 dB is
+    /// bit-transparent.
+    pub input_gain_db: f32,
 }
 
 impl Default for LimiterConfig {
@@ -61,6 +78,7 @@ impl Default for LimiterConfig {
             enabled: false,
             ceiling_db: -0.3,
             release_ms: 50.0,
+            input_gain_db: 0.0,
         }
     }
 }
@@ -80,6 +98,14 @@ pub struct Limiter {
     /// Held GR for the UI meter, linear.
     meter_gr_lin: f32,
     meter_decay: f32,
+
+    /// Linear input gain, ramped on changes; snapped while the limiter
+    /// is off (there is nothing to ramp against).
+    gain_sm: Smoother,
+    gain_tgt: f32,
+    /// False until a block has run since construction/reset: the first
+    /// one starts at the gain instead of ramping to it.
+    gain_primed: bool,
 }
 
 impl Limiter {
@@ -97,6 +123,14 @@ impl Limiter {
             peak_r: PolyphasePeakDetector::new(),
             meter_gr_lin: 1.0,
             meter_decay: (-1.0_f32 / (0.25 * sample_rate)).exp(),
+            gain_sm: {
+                let mut s = Smoother::new(SmoothingStyle::Linear(GAIN_RAMP_MS));
+                s.set_sample_rate(sample_rate);
+                s.reset(1.0);
+                s
+            },
+            gain_tgt: 1.0,
+            gain_primed: false,
         }
     }
 
@@ -108,6 +142,7 @@ impl Limiter {
         self.peak_l.reset();
         self.peak_r.reset();
         self.meter_gr_lin = 1.0;
+        self.gain_primed = false;
     }
 
     /// Reported latency. Matches the lookahead length because the
@@ -128,10 +163,20 @@ impl Limiter {
         if frames == 0 {
             return;
         }
+        let gain = db_to_linear(cfg.input_gain_db.clamp(0.0, MAX_INPUT_GAIN_DB));
+        if !self.gain_primed {
+            self.gain_primed = true;
+            self.gain_sm.reset(gain);
+            self.gain_tgt = gain;
+        }
 
         // Bypass path: still run the delay line so plugin latency
         // stays constant when the user toggles the limiter on/off.
         if !cfg.enabled {
+            // The gain is the limiter's: off, it is not applied, and it
+            // engages at its value with the limiter.
+            self.gain_sm.reset(gain);
+            self.gain_tgt = gain;
             for i in 0..frames {
                 let out_l = self.delay_l[self.write_pos];
                 let out_r = self.delay_r[self.write_pos];
@@ -159,8 +204,14 @@ impl Limiter {
         let release_step = 1.0_f32 / release_samples;
 
         let mut min_env_block: f32 = 1.0;
+        retarget(&mut self.gain_sm, &mut self.gain_tgt, gain);
 
         for i in 0..frames {
+            // Input gain, ahead of the detector and the delay line. At
+            // 0 dB it is exactly 1.0, so the product is the input.
+            let g = self.gain_sm.next();
+            let (in_l, in_r) = (left[i] * g, right[i] * g);
+
             // Step 1: read output.
             let out_gain = self.envelope[self.write_pos];
             let out_l = self.delay_l[self.write_pos] * out_gain;
@@ -173,8 +224,8 @@ impl Limiter {
             // TP_GROUP_DELAY iterations ago, not `left[i]`.
             self.peak_l.reset_peak();
             self.peak_r.reset_peak();
-            self.peak_l.push_sample(left[i]);
-            self.peak_r.push_sample(right[i]);
+            self.peak_l.push_sample(in_l);
+            self.peak_r.push_sample(in_r);
             let peak = self.peak_l.peak().max(self.peak_r.peak());
 
             // Step 3: required gain for the measured sample.
@@ -195,8 +246,8 @@ impl Limiter {
             };
             let release_bound = (self.envelope[prev_pos] + release_step).min(1.0);
 
-            self.delay_l[self.write_pos] = left[i];
-            self.delay_r[self.write_pos] = right[i];
+            self.delay_l[self.write_pos] = in_l;
+            self.delay_r[self.write_pos] = in_r;
             self.envelope[self.write_pos] = release_bound;
 
             // Apply the required gain at the ring position the detector
