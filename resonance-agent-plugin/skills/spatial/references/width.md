@@ -76,7 +76,7 @@ first.
 |---|---|---|---|
 | `Decorrelate` | generates pure side from the mid | none: the mono sum is unchanged | `Widen Mono Source` |
 | `Diffuse` | all-pass cascade per side | ripple of at most 2.3 dB at any `widen_amount`, slight transient smear | `Pad — Diffuse Wide` |
-| `Micro-shift` | small detune plus short delays per side | moving combs as deep as 20·log10(1 − amount) dB (−4.4 dB at 0.4, −6 dB at 0.5); keep the amount moderate | `Vocal — Micro-shift Double` |
+| `Micro-shift` | small detune plus short delays per side | moving combs as deep as 20·log10(1 − amount) dB (−4.4 dB at 0.4, −6 dB at 0.5); safe up to `widen_amount` 0.5, past it a mono risk like Haas: check the fold | `Vocal — Micro-shift Double` |
 | `Haas (mono risk)` | one side delayed | deep combs in mono; only with a low exclude and a level offset | `Haas — Safe` |
 
 | Key | Use |

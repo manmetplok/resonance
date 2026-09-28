@@ -337,7 +337,9 @@ fn solo_side_and_mono_check_audition_what_they_say() {
 #[test]
 fn the_haas_mode_is_flagged_as_a_mono_risk_and_only_it() {
     for mode in WidenMode::ALL {
-        assert_eq!(mode.is_mono_risk(), mode == WidenMode::Haas, "{mode:?}");
+        // At amount 0.5 only Haas is flagged (Micro-shift is at its
+        // threshold, not past it); see the Micro-shift test for above.
+        assert_eq!(mode.is_mono_risk(0.5), mode == WidenMode::Haas, "{mode:?}");
     }
     // The flag is in the choice label every surface shows: the host's
     // automation lane, the control API's param listing, the editor.
@@ -519,6 +521,43 @@ fn haas_notches_the_mono_fold_as_deep_as_documented() {
             excluded < said && excluded > -26.0,
             "Haas at {amount} with the exclude: the fold notches {excluded:.2} dB"
         );
+    }
+}
+
+/// Micro-shift turns into a mono risk exactly where its worst notch
+/// passes −6 dB: amount 0.5. Below or at it the pill says ripple, above
+/// it MONO RISK — the same flag Haas carries — in the editor's viz feed
+/// and the hover hint alike. The sound does not change with the flag.
+#[test]
+fn micro_shift_is_a_mono_risk_above_amount_one_half() {
+    use resonance_stereo::dsp::MICRO_SHIFT_RISK_AMOUNT;
+    assert_eq!(MICRO_SHIFT_RISK_AMOUNT, 0.5);
+    assert!((micro_shift_notch_db(MICRO_SHIFT_RISK_AMOUNT) + 6.02).abs() < 0.01);
+    let m = WidenMode::MicroShift;
+    for (amount, risk) in [(0.0f32, false), (0.3, false), (0.5, false), (0.501, true), (0.8, true), (1.0, true)] {
+        assert_eq!(m.is_mono_risk(amount), risk, "Micro-shift at {amount}");
+        assert_eq!(m.amount_hint(amount).contains("MONO RISK"), risk, "hint at {amount}");
+        assert_eq!(risk, micro_shift_notch_db(amount) < -6.03, "threshold vs notch at {amount}");
+    }
+    // Diffuse and Decorrelate never are, at any amount.
+    for amount in [0.0f32, 0.5, 1.0] {
+        assert!(!WidenMode::Diffuse.is_mono_risk(amount));
+        assert!(!WidenMode::Decorrelate.is_mono_risk(amount));
+        assert!(WidenMode::Haas.is_mono_risk(amount));
+    }
+    // The running plugin publishes the amount-aware flag.
+    let x = noise(2_048, 0.3, 3);
+    for (amount, risk) in [(0.5f32, false), (0.7, true)] {
+        let (_, _, plugin) = render_with(
+            |p| {
+                p.widen_mode.set_value(m.index());
+                p.widen_amount.set_value(amount);
+            },
+            &x,
+            &x,
+            &[256],
+        );
+        assert_eq!(plugin.viz().mono_risk(), risk, "viz at Micro-shift {amount}");
     }
 }
 

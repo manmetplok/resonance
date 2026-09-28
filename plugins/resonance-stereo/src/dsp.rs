@@ -17,7 +17,8 @@
 //!      right, added at `amount`. Moving combs in mono: where the two
 //!      voices line up against the dry signal the fold dips by
 //!      `20·log10(1 − amount)` (−4.4 dB at 0.4, −6 dB at 0.5, −14 dB at
-//!      0.8), sweeping as the voices drift. Keep it moderate.
+//!      0.8), sweeping as the voices drift. Above amount 0.5 (a notch
+//!      deeper than −6 dB) it is flagged as a mono risk like Haas.
 //!    - *Haas* — the right channel above `focus_low` (an LR4 split; the
 //!      band below stays in time) delayed by 1–30 ms and lowered 3 dB.
 //!      The level offset keeps the mono comb's notches at
@@ -115,12 +116,17 @@ impl WidenMode {
         self as i32
     }
 
-    /// Whether the mode puts static comb filtering into the mono fold.
-    /// Only Haas does; Decorrelate keeps the mono sum exactly, Diffuse
-    /// ripples by at most 2.3 dB, and Micro-shift's combs move (their
-    /// depth grows with the amount, see [`Self::amount_hint`]).
-    pub fn is_mono_risk(self) -> bool {
-        matches!(self, Self::Haas)
+    /// Whether the mode at `amount` puts deep combs into the mono fold.
+    /// Haas always does (static combs). Micro-shift does above
+    /// [`MICRO_SHIFT_RISK_AMOUNT`], where its moving combs' worst notch
+    /// ([`micro_shift_notch_db`]) is deeper than −6 dB. Decorrelate keeps
+    /// the mono sum exactly and Diffuse ripples by at most 2.3 dB.
+    pub fn is_mono_risk(self, amount: f32) -> bool {
+        match self {
+            Self::Haas => true,
+            Self::MicroShift => amount > MICRO_SHIFT_RISK_AMOUNT,
+            _ => false,
+        }
     }
 
     /// Whether the mono sum is left exactly as it was (up to rounding).
@@ -141,8 +147,9 @@ impl WidenMode {
                 diffuse_spread(amount)
             ),
             Self::MicroShift => format!(
-                "±{MICRO_CENTS:.0} cents voices at {:.0}% — moving combs in mono, down to {:.0} dB",
+                "±{MICRO_CENTS:.0} cents voices at {:.0}% — {}moving combs in mono, down to {:.0} dB",
                 amount * 100.0,
+                if self.is_mono_risk(amount) { "MONO RISK: " } else { "" },
                 micro_shift_notch_db(amount)
             ),
             Self::Haas => format!(
@@ -213,6 +220,10 @@ pub const DIFFUSE_MAX_SPREAD: f32 = 0.25;
 pub fn diffuse_spread(amount: f32) -> f32 {
     DIFFUSE_MAX_SPREAD * amount.clamp(0.0, 1.0)
 }
+
+/// Micro-shift is a mono risk above this `widen_amount`: past it the
+/// fold's worst notch, `20·log10(1 − amount)`, is deeper than −6 dB.
+pub const MICRO_SHIFT_RISK_AMOUNT: f32 = 0.5;
 
 /// The deepest dip Micro-shift's moving combs put into the mono fold at
 /// a `widen_amount`, in dB: both voices in antiphase with the dry signal
@@ -725,6 +736,6 @@ impl StereoDsp {
             self.corr_count %= CORRELATION_STEP;
             viz.push_correlation(self.correlation.correlation());
         }
-        viz.store_block(self.correlation.correlation(), self.mode);
+        viz.store_block(self.correlation.correlation(), self.mode, p.widen_amount.value());
     }
 }
