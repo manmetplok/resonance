@@ -59,6 +59,7 @@ fn bands(block: usize) -> [BandConfig; NUM_BANDS] {
             freq_hz: 200.0 * (i + 1) as f32 + 50.0 * ((block as f32) * 0.1).sin(),
             q: 0.9,
             gain_db: 4.0 * ((block as f32) * 0.07 + i as f32).sin(),
+            ..BandConfig::off()
         };
     }
     b

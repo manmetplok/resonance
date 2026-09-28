@@ -83,6 +83,13 @@ impl Chain {
             [phase(3), phase(8)],
             [phase(4), phase(9)],
         ]);
+        // The EQs' mid/side cross pairs run only while a band is mid or
+        // side; they take the half-slots in between, so even then no
+        // callback runs two FFT iterations. (The ten above are left
+        // exactly where they were: moving one changes its rounding.)
+        let half_phase = |slot: usize| (2 * slot + 1) * hop / (2 * CONVOLVER_COUNT);
+        corrective_eq.set_cross_phase_offsets([half_phase(0), half_phase(5)]);
+        tonal_eq.set_cross_phase_offsets([half_phase(1), half_phase(6)]);
         let limiter = Limiter::new(sample_rate);
         let max_latency = corrective_eq.latency()
             + tonal_eq.latency()

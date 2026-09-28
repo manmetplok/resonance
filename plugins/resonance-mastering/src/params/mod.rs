@@ -5,8 +5,11 @@
 //! root [`MasteringParams`] just wires them together and exposes a
 //! single flat enumeration to the CLAP bridge.
 //!
-//! Params are laid out in **signal order** so a linear scan through
-//! them reads top-to-bottom through the processing chain.
+//! The first 102 params are laid out in **signal order** so a linear
+//! scan through them reads top-to-bottom through the processing chain.
+//! Params added since (warmth-width-depth.md W9) are **appended** after
+//! them, in the order they were added, so every older index — and the
+//! host automation lane bound to it — stays where it was.
 
 pub mod dither;
 pub mod eq_stage;
@@ -23,7 +26,8 @@ use resonance_plugin::*;
 
 pub use dither::DitherParams;
 pub use eq_stage::{
-    BandParams, EqStageParams, CORRECTIVE_DEFAULTS, PARAMS_PER_STAGE, TONAL_DEFAULTS,
+    BandParams, EqStageParams, CORRECTIVE_DEFAULTS, MS_PARAMS_PER_STAGE, PARAMS_PER_STAGE,
+    TONAL_DEFAULTS,
 };
 pub use glue_compressor::GlueCompressorParams;
 pub use imager::ImagerParams;
@@ -52,9 +56,17 @@ const IMG_BASE: usize = MB_BASE + MB_PARAM_COUNT;
 const LIM_BASE: usize = IMG_BASE + IMG_PARAM_COUNT;
 const DITH_BASE: usize = LIM_BASE + LIM_PARAM_COUNT;
 
-/// Total plugin param count:
-/// 3 + 20 + 8 + 5 + 20 + 36 + 4 + 3 + 3 = 102.
-pub const PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
+/// The pre-W9 param list: 3 + 20 + 8 + 5 + 20 + 36 + 4 + 3 + 3 = 102.
+pub const LEGACY_PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
+
+// Appended since, in the order they were added:
+//   corrective M/S → tonal M/S
+const CORR_MS_BASE: usize = LEGACY_PARAM_COUNT;
+const TONE_MS_BASE: usize = CORR_MS_BASE + MS_PARAMS_PER_STAGE;
+
+/// Total plugin param count: the 102 above, plus 4 + 4 band M/S
+/// selectors.
+pub const PARAM_COUNT: usize = TONE_MS_BASE + MS_PARAMS_PER_STAGE;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
@@ -88,7 +100,9 @@ impl MasteringParams {
             i if i < IMG_BASE => self.multiband.param_at(i - MB_BASE),
             i if i < LIM_BASE => self.imager.param_at(i - IMG_BASE),
             i if i < DITH_BASE => self.limiter.param_at(i - LIM_BASE),
-            i if i < PARAM_COUNT => self.dither.param_at(i - DITH_BASE),
+            i if i < CORR_MS_BASE => self.dither.param_at(i - DITH_BASE),
+            i if i < TONE_MS_BASE => self.corrective_eq.ms_param_at(i - CORR_MS_BASE),
+            i if i < PARAM_COUNT => self.tonal_eq.ms_param_at(i - TONE_MS_BASE),
             _ => &self.bypass,
         }
     }
