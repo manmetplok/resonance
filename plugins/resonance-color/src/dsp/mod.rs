@@ -94,8 +94,21 @@ pub const FLUTTER_FADE_MS: f32 = 30.0;
 pub const AUTO_GAIN_TIME_S: f32 = 0.8;
 /// Auto-gain never moves the wet signal further than this, either way.
 pub const AUTO_GAIN_LIMIT_DB: f32 = 24.0;
-/// Floor added to both follower powers (−100 dBFS²): in silence the
-/// ratio drifts to 1 instead of dividing two denormals.
+/// Below this dry level (K-weighted, per channel, over
+/// [`AUTO_GAIN_GATE_TIME_S`]) the followers stop integrating and the gain
+/// holds: silence carries no information about the drive's level change.
+pub const AUTO_GAIN_GATE_DBFS: f32 = -60.0;
+/// Time constant of the gate's level detector.
+pub const AUTO_GAIN_GATE_TIME_S: f32 = 0.01;
+/// Fastest the gain may rise. Falling is not limited (a louder wet path
+/// is pulled down at once). Without it, the first hit after the
+/// followers have no history — a fresh instance — sets the gain from
+/// that hit's attack alone, which a hard drive squashes most, and the
+/// gain overshoots its steady-state value by several dB for the first
+/// tens of ms.
+pub const AUTO_GAIN_RISE_DB_PER_S: f32 = 40.0;
+/// Floor added to both follower powers (−100 dBFS²), so a follower that
+/// has never seen signal does not divide by zero.
 const AUTO_GAIN_EPS: f64 = 1.0e-10;
 
 /// Parameter de-zipper times.
@@ -296,6 +309,22 @@ struct Flags {
 }
 
 /// Stereo-linked, K-weighted RMS match of the wet path to the dry one.
+///
+/// Two slow power followers (dry, wet) whose ratio is the gain, with
+/// three guards against the gain that ratio gives when it has too little
+/// to go on:
+///
+/// - **Gate.** While the dry level is below [`AUTO_GAIN_GATE_DBFS`] the
+///   followers hold instead of decaying, so the gain after a silence is
+///   the one before it: a loop that stops and restarts comes back at its
+///   matched level instead of re-learning it from its first hit.
+/// - **Reset keeps the match.** [`AutoGain::reset`] clears the
+///   K-weighting filters but keeps the followers and the gain: a
+///   transport reset clears signal history, and the match is a property
+///   of the material and the settings, not of that history.
+/// - **Rise limit.** The gain rises at most [`AUTO_GAIN_RISE_DB_PER_S`]
+///   (it falls freely). A fresh instance starts at unity and climbs to
+///   the match, rather than jumping to what the first attack alone says.
 struct AutoGain {
     k_dry: [KWeightingFilter; 2],
     k_wet: [KWeightingFilter; 2],
@@ -303,26 +332,41 @@ struct AutoGain {
     p_wet: f64,
     coef: f64,
     limit: f64,
+    /// The gate's fast dry-power detector and its threshold (summed over
+    /// both channels).
+    p_gate: f64,
+    gate_coef: f64,
+    gate_floor: f64,
+    /// The gain last returned, and the most it may grow per sample.
+    gain: f64,
+    rise: f64,
 }
 
 impl AutoGain {
     fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0) as f64;
         Self {
             k_dry: [KWeightingFilter::new(sample_rate); 2],
             k_wet: [KWeightingFilter::new(sample_rate); 2],
             p_dry: 0.0,
             p_wet: 0.0,
-            coef: (-1.0 / (AUTO_GAIN_TIME_S as f64 * sample_rate.max(1.0) as f64)).exp(),
+            coef: (-1.0 / (AUTO_GAIN_TIME_S as f64 * sr)).exp(),
             limit: db_to_linear(AUTO_GAIN_LIMIT_DB) as f64,
+            p_gate: 0.0,
+            gate_coef: (-1.0 / (AUTO_GAIN_GATE_TIME_S as f64 * sr)).exp(),
+            gate_floor: 2.0 * 10f64.powf(AUTO_GAIN_GATE_DBFS as f64 / 10.0),
+            gain: 1.0,
+            rise: 10f64.powf(AUTO_GAIN_RISE_DB_PER_S as f64 / (20.0 * sr)),
         }
     }
 
+    /// Clear the filters' signal history; keep the learned match (see the
+    /// type docs).
     fn reset(&mut self) {
         for k in self.k_dry.iter_mut().chain(self.k_wet.iter_mut()) {
             k.reset();
         }
-        self.p_dry = 0.0;
-        self.p_wet = 0.0;
+        self.p_gate = 0.0;
     }
 
     /// Feed one frame; returns the gain that matches wet to dry.
@@ -336,15 +380,25 @@ impl AutoGain {
             pd += d * d;
             pw += w * w;
         }
-        let a = 1.0 - self.coef;
-        self.p_dry += (pd - self.p_dry) * a;
-        self.p_wet += (pw - self.p_wet) * a;
+        self.p_gate += (pd - self.p_gate) * (1.0 - self.gate_coef);
+        if self.p_gate >= self.gate_floor {
+            let a = 1.0 - self.coef;
+            self.p_dry += (pd - self.p_dry) * a;
+            self.p_wet += (pw - self.p_wet) * a;
+        }
         let g = ((self.p_dry + AUTO_GAIN_EPS) / (self.p_wet + AUTO_GAIN_EPS)).sqrt();
         if g.is_finite() {
-            g.clamp(1.0 / self.limit, self.limit) as f32
+            let g = g.clamp(1.0 / self.limit, self.limit);
+            self.gain = if g > self.gain { g.min(self.gain * self.rise) } else { g };
         } else {
-            1.0
+            // A non-finite follower (sanitised input cannot get there, but
+            // never let it lodge): start the match over.
+            self.p_dry = 0.0;
+            self.p_wet = 0.0;
+            self.p_gate = 0.0;
+            self.gain = 1.0;
         }
+        self.gain as f32
     }
 }
 
@@ -454,8 +508,9 @@ impl ColorDsp {
         self.configure(s);
     }
 
-    /// Clear every piece of signal state (filters, followers, flutter
-    /// history) and snap the smoothers to `s`.
+    /// Clear every piece of signal state (filters, flutter history) and
+    /// snap the smoothers to `s`. Auto-gain keeps its learned match (see
+    /// [`AutoGain`]).
     pub fn reset(&mut self, s: &Settings) {
         for ch in &mut self.ch {
             ch.reset();
