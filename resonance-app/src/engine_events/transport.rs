@@ -66,7 +66,7 @@ pub(super) fn bounce_complete(r: &mut Resonance, path: String) {
     // #1157). The engine echoes the requested path verbatim, so the
     // token matches exactly the job that asked for this file. No-op when
     // no control job carries the token (an ordinary GUI bounce).
-    let result = crate::update::control::mixdown_result(r, &path, r.sample_rate);
+    let result = crate::update::control::mixdown_result(r, &path, r.sample_rate, None);
     r.control.jobs.complete_token(
         &crate::control_jobs::JobToken::Export {
             path: std::path::PathBuf::from(&path),
@@ -142,17 +142,47 @@ pub(super) fn export_progress(
     r.io.bounce_fraction = fraction.clamp(0.0, 1.0);
 }
 
-pub(super) fn export_complete(r: &mut Resonance, path: String, bytes: u64) {
+pub(super) fn export_complete(
+    r: &mut Resonance,
+    path: String,
+    achieved_lufs: Option<f32>,
+    achieved_dbtp: f32,
+    bytes: u64,
+) {
     r.io.bouncing = false;
+    // A normalized control `render.mixdown` rides the export path
+    // (warmth-width-depth.md §7.7); resolve its job with what the file
+    // achieved. No pending entry means a GUI export: nothing to resolve.
+    let key = std::path::PathBuf::from(&path);
+    if let Some(mut report) = r.control.pending_normalize.remove(&key) {
+        report.achieved_lufs = achieved_lufs
+            .filter(|v| v.is_finite())
+            .map(|v| (f64::from(v) * 100.0).round() / 100.0);
+        report.achieved_dbtp = (f64::from(achieved_dbtp) * 100.0).round() / 100.0;
+        let result =
+            crate::update::control::mixdown_result(r, &path, r.sample_rate, Some(report));
+        r.control
+            .jobs
+            .complete_token(&crate::control_jobs::JobToken::Export { path: key }, result);
+    }
     tracing::info!("Export complete: {path} ({bytes} bytes)");
 }
 
 pub(super) fn export_error(
     r: &mut Resonance,
-    _kind: resonance_audio::types::ExportErrorKind,
+    kind: resonance_audio::types::ExportErrorKind,
     message: String,
 ) {
     r.io.bouncing = false;
+    // Only one render runs at a time, so a normalized control mixdown in
+    // flight is the one that failed (same reasoning as `bounce_error`).
+    if !r.control.pending_normalize.is_empty() {
+        r.control.pending_normalize.clear();
+        r.control.jobs.fail_export_jobs(
+            message.clone(),
+            Some(crate::update::control::export_kind_to_rpc(kind)),
+        );
+    }
     r.banners.error_message = Some(format!("Export failed: {message}"));
 }
 

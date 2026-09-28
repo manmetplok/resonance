@@ -222,6 +222,26 @@ a sidechain key hears silence. `stages` lists what was probed. A stage with
 -12 dBFS probe of a bus that peaks at -3 understates it. `level_dbfs` sets the
 tone's peak.
 
+## Delivery: a normalized mixdown
+
+`render_mixdown` can write a loudness-normalized file: pass `platform` (or
+`normalize: {target_lufs, ceiling_dbtp}`). The mix is measured, gained to the
+target, and true-peak limited at the ceiling. The project itself is untouched.
+
+| `platform` | Target | Ceiling |
+|---|---|---|
+| `spotify`, `youtube`, `tidal` | -14 LUFS | -1 dBTP |
+| `apple` | -16 LUFS | -1 dBTP |
+| `amazon` | -14 LUFS | -2 dBTP |
+| `deezer` | -15 LUFS | -1 dBTP |
+| `club` | -8 LUFS | -0.3 dBTP |
+
+The result's `normalize` block reports `achieved_lufs` and `achieved_dbtp`,
+re-measured from the written file. If `achieved_lufs` sits clearly below the
+target, reaching it would have taken more limiting than the ceiling allows. Do
+not push harder here: the master needs its own glue and limiting first, and its
+PSR (see `dynamics`) should stay at 8 or more.
+
 ## Cost
 
 A measurement renders the slice offline — roughly what a bounce of the same

@@ -24,6 +24,8 @@ mod bounce_render_range_tempo;
 mod bounce_tail_and_master_latency;
 #[path = "bounce/bounce_transport_guard.rs"]
 mod bounce_transport_guard;
+#[path = "bounce/delivery_normalize.rs"]
+mod delivery_normalize;
 #[path = "bounce/export_encoders.rs"]
 mod export_encoders;
 #[path = "bounce/export_normalize.rs"]

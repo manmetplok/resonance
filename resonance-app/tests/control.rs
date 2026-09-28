@@ -109,6 +109,8 @@ mod control_position_beats;
 mod control_project;
 #[path = "control/control_render.rs"]
 mod control_render;
+#[path = "control/control_render_normalize.rs"]
+mod control_render_normalize;
 #[path = "control/control_render_wav_geometry.rs"]
 mod control_render_wav_geometry;
 #[path = "control/control_reply_contract.rs"]
