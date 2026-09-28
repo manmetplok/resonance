@@ -9,8 +9,8 @@ use resonance_common::{
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam, PlaybackSource};
 
 use super::{
-    ABSource, BusId, ClipId, ExportSettings, FadeCurve, FrozenSource, MeasureSource, MidiNote,
-    PluginInstanceId, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
+    ABSource, BusId, ClipId, DetailSet, ExportSettings, FadeCurve, FrozenSource, MeasureSource,
+    MidiNote, PluginInstanceId, ReferenceId, SamplePos, SendId, SendSource, SignaturePoint, StemBitDepth,
     StemSource, StemTarget, TempoPoint, TrackId, TrackOutput, WarpAlgorithm, WarpMarker,
 };
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
@@ -702,6 +702,9 @@ pub enum AudioCommand {
         range: Option<(SamplePos, SamplePos)>,
         /// Render offline, or read the live master meter.
         source: MeasureSource,
+        /// Opt-in details to compute on every target (render path only).
+        /// The default set computes none, and costs nothing extra.
+        detail: DetailSet,
     },
     /// Cancel an in-flight stem export between targets. The worker polls
     /// a shared atomic and stops before the next target; stems already

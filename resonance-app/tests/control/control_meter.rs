@@ -18,7 +18,8 @@ use resonance_app::message::{FreezeMessage, Message, ProjectIoMessage};
 use resonance_app::state::{FreezeStatus, TrackState, ViewMode};
 use resonance_app::{Resonance};
 use resonance_audio::types::{
-    AudioEvent, MeasureSource as EngineSource, MixMeasurement, StemSource, TrackType,
+    AudioEvent, MeasureSource as EngineSource, MeasurementDetail, MixMeasurement, StemSource,
+    TrackType,
 };
 use resonance_control::job::{JobStarted, JobState, JobStatus};
 use resonance_control::methods::control::HelloResult;
@@ -111,6 +112,7 @@ fn rendered(target: StemSource, sample_rate: u32) -> MixMeasurement {
             high: 0.2,
             air: 0.05,
         },
+        detail: MeasurementDetail::default(),
     }
 }
 
@@ -147,6 +149,7 @@ fn live_snapshot() -> MixMeasurement {
         correlation: 0.0,
         mono_penalty_db: 0.0,
         bands: BandShares::SILENT,
+        detail: MeasurementDetail::default(),
     }
 }
 

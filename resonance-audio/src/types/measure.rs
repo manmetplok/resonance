@@ -19,6 +19,8 @@
 //! [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
 //! [`AudioEvent::MixMeasured`]: super::AudioEvent::MixMeasured
 
+use resonance_metering::detail::{SpectrumDetail, StereoDetail};
+use resonance_metering::RangeDynamics;
 use resonance_metering::offline::BandShares;
 
 use super::{SamplePos, StemSource};
@@ -43,6 +45,44 @@ pub enum MeasureSource {
     ///
     /// [`AudioEvent::MixMeasureError`]: super::AudioEvent::MixMeasureError
     Live,
+}
+
+/// Which opt-in details a measurement computes on top of the default
+/// figures (warmth-width-depth.md §7.1). All off by default, so a plain
+/// measurement costs exactly what it did before details existed.
+///
+/// Details exist only on the [`MeasureSource::Render`] path: every one of
+/// them needs the whole rendered buffer. The live path ignores the set.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DetailSet {
+    /// 1/3-octave LTAS, tilt, centroid, low-mid/presence, presence
+    /// peakiness, air ratio and resonance peaks.
+    pub spectrum: bool,
+    /// Per-band correlation, side/mid and mono loss, windowed
+    /// correlation, balance, one-sidedness and the Haas detector.
+    pub stereo: bool,
+    /// PLR and PSR.
+    pub dynamics: bool,
+}
+
+impl DetailSet {
+    /// True when at least one detail is requested.
+    pub fn any(self) -> bool {
+        self.spectrum || self.stereo || self.dynamics
+    }
+}
+
+/// The opt-in details of one [`MixMeasurement`]: `Some` exactly for the
+/// details its [`DetailSet`] asked for (and only on the render path).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeasurementDetail {
+    /// See [`SpectrumDetail`].
+    pub spectrum: Option<SpectrumDetail>,
+    /// See [`StereoDetail`].
+    pub stereo: Option<StereoDetail>,
+    /// PLR / PSR of the range, from the measurement's own true peak and
+    /// loudness ([`PlrMeter::range`][resonance_metering::PlrMeter::range]).
+    pub dynamics: Option<RangeDynamics>,
 }
 
 /// Everything the mix report needs about one measured slice of the mix.
@@ -81,7 +121,7 @@ pub enum MeasureSource {
 /// loudness and true-peak fields and ends with `..MeterSnapshot::
 /// default()`, and neither `CrestMeter` nor `CorrelationMeter` is
 /// instantiated anywhere on the live path.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MixMeasurement {
     /// Which slice of the mix this measures.
     pub target: StemSource,
@@ -138,4 +178,7 @@ pub struct MixMeasurement {
     /// Fraction of the range's energy in each of the four AES tonal
     /// bands. Sums to 1.0 except for silence, where all four are 0.
     pub bands: BandShares,
+    /// The opt-in details the command's [`DetailSet`] asked for. All
+    /// `None` on the live path and for a plain measurement.
+    pub detail: MeasurementDetail,
 }

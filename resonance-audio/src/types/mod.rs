@@ -142,7 +142,7 @@ pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,
 };
 pub use reference::{ABSource, ReferenceAnalysisStage, ReferenceId, ReferenceMarker};
-pub use measure::{MeasureSource, MixMeasurement};
+pub use measure::{DetailSet, MeasureSource, MeasurementDetail, MixMeasurement};
 pub use stem::{StemBitDepth, StemSource, StemTarget};
 pub use export::{
     BitDepth, ExportFormat, ExportMetadata, ExportSettings, FlacLevel, Mp3Rate, NormalizeMode,
