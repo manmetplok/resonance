@@ -145,7 +145,7 @@ sterile; do not stack a master stage on top of it. Otherwise, the saturator:
 <!-- /keys -->
 
 Set the drive with `meter_probe {level_dbfs: -18}` on the master, the level
-every THD band here is defined at (the tool's default is -12, so pass it):
+every THD band here is defined at (also the tool's default):
 `thd_pct` 0.1-1 %, `h2_h3_db` above 0 and `decay_db_per_order` 6 or more. The
 full warmth procedure, with its stop rules, is the mixing skill's
 `${CLAUDE_PLUGIN_ROOT}/skills/mixing/references/character.md`.

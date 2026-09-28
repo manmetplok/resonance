@@ -273,9 +273,11 @@ impl ResonanceMcp {
                        bypassed and missing plugins are left out and listed in skipped). \
                        freq_hz defaults to 1000 and is snapped to the analysis grid (the result \
                        echoes the exact value); probe at 5000 to expose aliasing, since \
-                       harmonics past Nyquist fold back. level_dbfs (default -12, -80..0) is \
-                       the tone's peak: distortion depends on level, so probe at what the chain \
-                       really sees. imd: true adds the SMPTE 60 Hz + 7 kHz 4:1 pair and \
+                       harmonics past Nyquist fold back. level_dbfs (default -18, -80..0) is \
+                       the tone's peak; -18 is the level the colour presets' THD targets are \
+                       voiced at. Distortion depends on level, so probe again at what the \
+                       chain really peaks at to see the loudest moments. imd: true adds the \
+                       SMPTE 60 Hz + 7 kHz 4:1 pair and \
                        imd_pct. \
                        \
                        Runs any time, including while the transport rolls: the probe builds a \
