@@ -10,7 +10,7 @@ track's number against a target.
 |---|---|---|---|
 | Level | louder | quieter | the fader (the `mixing` skill's balance) |
 | Direct-to-reverberant ratio (DRR) | dry | wet | the send level into the shared room |
-| Pre-delay (pop/rock convention) | long, 20-40 ms: the voice lands before its room | short, 0-10 ms | the room's `predelay`, or a second return |
+| Pre-delay (pop/rock convention) | long, 20-40 ms: the voice lands before its room | short, 0-10 ms | the room's pre-delay, or a second return |
 | Early reflections vs tail | ER carry position | tail carries the room's size | the room's ER/tail balance |
 | High-frequency content | bright | darker | a high shelf or the colour plugin's output tilt on back parts; the room's wet low-pass |
 | Transients | sharp | softer | less compression on front parts; softer attack on back parts |
@@ -38,8 +38,8 @@ A return bus with the reverb at full wet, fed by post-fader sends:
 |---|---|---|
 | `mix` | 1.0 (100 % wet) | a return carries only the wet signal; the dry is the track itself |
 | `predelay` | from tempo, 20-40 ms (table below) | lets the front layer land before its room |
-| `wet_hpf_on`, `wet_hpf_freq` | `On`, about 600 Hz | return EQ before the tank: no low-end wash |
-| `wet_lpf_on`, `wet_lpf_freq` | `On`, about 10 kHz (6-8 kHz for a darker room) | no sizzle; darker reads further away |
+| `wet_hpf_freq` | about 600 Hz, with `wet_hpf_on` `On` | return EQ before the tank: no low-end wash |
+| `wet_lpf_freq` | about 10 kHz (6-8 kHz for a darker room), with `wet_lpf_on` `On` | no sizzle; darker reads further away |
 | `wet_filter_slope` | `12 dB/oct` or `18 dB/oct` | 12-18 dB/oct is the norm |
 | `er_tail_balance` | 0; toward -1 more early reflections (closer), toward +1 more tail (further) | the room's depth crossfade |
 | `decay`, `size`, `damping` | leave the preset's unless the user asks for a bigger or smaller space | |
@@ -47,7 +47,9 @@ A return bus with the reverb at full wet, fed by post-fader sends:
 
 3. `track_add_send` from each track that needs space, `pre_fader` false (the
    default): moving the track's fader then takes its reverb with it.
-   Starting `level_db` per role: roles.md. Kick and bass usually get none.
+   Start from roles.md's first-guess `level_db` per role (kick and bass
+   usually get none), then set each send from its layer's DRR target once the
+   first depth pass has measured the return (§4).
 
 ## 2. Pre-delay from tempo
 
@@ -65,7 +67,8 @@ lands in the layer's range: 20-40 ms for the front.
 | 170 | 22.1 ms | 11.0 ms |
 
 The general form is 60000 / BPM / k with k = 8 (a 1/32 note), 16 or 32. A
-1/32 note is too long for most front vocals above about 90 BPM.
+1/32 note only fits the front's 20-40 ms at about 188 BPM or faster; below
+that it is too long (80 ms at 94 BPM).
 
 ## 3. Duck the room from the lead
 
@@ -95,17 +98,22 @@ why this one uses `match: "none"`.
 
 ## 4. Per-layer sends and a second return
 
-Adjust each track's send (`track_set_send`) until the DRR ordering holds. The
-estimate is arithmetic on the send: raising a send by 3 dB lowers that track's
-`drr_db_estimate` by about 3 dB.
+Set each track's send (`track_set_send`) from its layer's DRR target. The
+estimate is arithmetic on the send, DRR = −(send + `return_gain_db`) for a
+single post-fader send, so read the return's `return_gain_db` from the track's
+`sends` in the depth pass and set the send to −(target) − `return_gain_db`
+(roles.md works an example). Raising a send by 3 dB lowers that track's
+`drr_db_estimate` by 3 dB. Then check the ordering holds.
 
 If one room cannot place both the front and the back, add a second return
 rather than pushing sends to extremes:
 
+<!-- keys: com.resonance.reverb -->
 | Return | Fed by | Settings |
 |---|---|---|
 | Room (shared) | everything that needs space | as above |
 | Back / wash | pads, FX, textures | longer `decay`, `er_tail_balance` +0.3 to +0.6, `wet_lpf_freq` 6-8 kHz, `predelay` 0-10 ms |
+<!-- /keys -->
 
 The back parts then send to both, or only to the wash. Keep the front on the
 shared room only.

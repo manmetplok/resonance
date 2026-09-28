@@ -39,7 +39,8 @@ belong to the `spatial` skill.
 | Peak-to-short-term | `psr_db` (absolute) | — | under 8 dB |
 | Harmonic signature | `thd_pct`, `h2_h3_db`, `decay_db_per_order`, `aliasing_floor_dbc` from `meter_probe` | H2 over H3 (`h2_h3_db` > 0), decay ≥ 6 dB per order, aliasing ≤ -90 dBc | THD over the placement's band (below) |
 
-THD targets for a character stage, by placement:
+THD targets for a character stage, by placement, read from a `meter_probe`
+at `level_dbfs: -18` (the level the presets are voiced at; see step 3):
 
 | Placement | `thd_pct` | Roughly |
 |---|---|---|
@@ -75,14 +76,16 @@ Act: an EQ bell on that stem or bus.
 |---|---|
 | Enable a band | `band{n}_enabled` `On`, `band{n}_kind` `Bell` |
 | Static cut | `band{n}_freq` at the peak, `band{n}_gain` -1 to -3, `band{n}_q` 2-4 |
-| Cut only when it is hot | `band{n}_gain` 0, `band{n}_dyn_on` `On`, `band{n}_dyn_threshold` a few dB under the region's loud level, `band{n}_dyn_ratio` 2-4, `band{n}_dyn_attack` 5-15 ms, `band{n}_dyn_release` 100-200 ms |
+| Cut only when it is hot | `band{n}_kind` `Bell`, `band{n}_gain` 0, `band{n}_dyn_on` `On`, `band{n}_dyn_threshold` a few dB under the region's loud level, `band{n}_dyn_ratio` 2-4, `band{n}_dyn_attack` 5-15 ms, `band{n}_dyn_release` 100-200 ms |
 | Judge at matched level | `auto_gain` `On` |
 <!-- /keys -->
 
 A bell at 0 dB with dynamics on is a pure de-harsh cut: it does nothing until
 its region is loud. Prefer it for a resonance that comes and goes (a vocal's
-sibilant phrases, cymbal crashes). A mastering-stage resonance suppressor is
-planned; until it lands, this is the de-harsh tool.
+sibilant phrases, cymbal crashes). Keep dynamics to bells and shelves; the
+tilt and lift+dip kinds in step 4 are static moves. On the master, the
+mastering chain has its own resonance suppressor (the `mastering` skill's
+de-harsh stage); on a stem or a bus, this bell is the tool.
 
 Verify: `meter_compare {a: snapshot_id}` — `presence_peakiness_db` down, that
 peak's third-octave band down, and `tilt_db_per_oct` barely moved.
@@ -101,9 +104,9 @@ Act: `bus_add_effect` with `com.resonance.color`, then start from a preset with
 | Bus | Start from | Voicing it uses |
 |---|---|---|
 | Mix or music bus | `Bus — Warm Glue` | bus THD band |
-| Drum bus | `Drums — Tape 15` | `Tape` at `15 ips`, bus THD band |
-| Bass track or bus | `Bass — Iron` | `Transformer`, track THD band |
-| Lead vocal track | `Vocal — Tube Air` | `Tube`, track THD band |
+| Drum bus | `Drums — Tape 15` | `mode` `Tape` at `speed` `15 ips`, bus THD band |
+| Bass track or bus | `Bass — Iron` | `mode` `Transformer`, track THD band |
+| Lead vocal track | `Vocal — Tube Air` | `mode` `Tube`, track THD band |
 | Master (step 6 only) | `Master — Subtle Tape` | master THD band |
 
 The controls, when a preset needs moving:
@@ -112,31 +115,41 @@ The controls, when a preset needs moving:
 |---|---|---|
 | `mode` | voicing: `Tube` (biased, H2-dominant), `Tape` (soft curve + head bump + level-dependent HF loss), `Transformer` (drives the lows harder, sub-sonic HPF), `Console` (odd, very clean, for glue at low drive), `Warm` (one-polarity: even harmonics only) | `Tube`, `Tape` or `Warm` for warmth; not `Console` |
 | `drive` | how hard the curve is hit, 0-1 | set by probe, below |
-| `bias` | asymmetry, 0-1: more means more H2 | 0.5-0.7 for even-dominant; ignored in `Console` |
+| `bias` | asymmetry, 0-1: more means more H2 | 0.5-0.7 for even-dominant; ignored in `mode` `Console` |
 | `response` | tilt of the *drive*, dB: positive saturates the lows more | +2 to +6 for low-end weight without fizz |
 | `tone` | output tilt, ±6 dB, positive brighter | -0.5 to -1.5 for a darker result |
 | `mix` | dry/wet | 0.2-0.5 on a bus |
 | `auto_gain` | matches the output's loudness to the input | leave `On`: it is what makes the move judgeable |
 | `oversample` | `Off` / `2x` / `4x`, latency-free | `2x`; `4x` if the aliasing probe fails |
-| `speed` | `Tape` only: `7.5 ips` / `15 ips` / `30 ips`; moves the head bump up with speed | `15 ips` |
-| `flutter` | `Tape` only; 0 bypasses it | 0 unless asked for wobble |
+| `speed` | `7.5 ips` / `15 ips` / `30 ips`, only in `mode` `Tape`; moves the head bump up with speed | `speed` `15 ips` |
+| `flutter` | only in `mode` `Tape`; 0 bypasses it | 0 unless asked for wobble |
 | `tape_quality` | `Standard` or `HQ` (hysteresis; costs CPU) | `Standard` |
 <!-- /keys -->
 
 Color is **not** inert when inserted: its defaults already drive the signal.
 Load a preset or set every control before measuring.
 
-Set drive to a THD target with `meter_probe`, not by knob position:
+Set drive to a THD target with `meter_probe`, not by knob position. The THD
+bands, and the presets that land in them, are defined for a **-18 dBFS sine**,
+so probe at that level; pass it explicitly, because the tool's own default is
+-12:
 
-1. Find the level the bus really sees: its `true_peak_db` from the
-   `meter_stems` pass with `include_busses: true`.
-2. `meter_probe {target: {bus_id}, level_dbfs: <that peak>}`.
-3. `thd_pct` under the bus band (0.5-3 %)? raise `drive` by about 0.05 and probe
-   again; over it, lower. Three or four probes is normal.
-4. Check the signature: `h2_h3_db` above 0 (even-dominant), `decay_db_per_order`
-   6 or more. Odd-dominant means the wrong `mode` or too little `bias`.
-5. `meter_probe {freq_hz: 5000}` once: `aliasing_floor_dbc` must be -90 or lower.
-   If not, raise `oversample` or lower `drive`.
+1. `meter_probe {target: {bus_id}, level_dbfs: -18}`.
+2. `thd_pct` under the bus band (0.5-3 %)? raise the drive by about 0.05 and
+   probe again; over it, lower. Three or four probes is normal.
+3. Check the signature: `h2_h3_db` above 0 (even-dominant), `decay_db_per_order`
+   6 or more. Odd-dominant means the wrong mode or too little bias.
+4. `meter_probe {level_dbfs: -18, freq_hz: 5000}` once: `aliasing_floor_dbc`
+   must be -90 or lower. If not, raise the oversampling or lower the drive.
+5. Optionally, one probe at the level the bus really peaks at (its
+   `true_peak_db` from the `meter_stems` pass with `include_busses: true`,
+   within `level_dbfs`'s -80..0) shows how hard the loudest moments hit. It
+   reads higher than the -18 figure; report it, but set the drive by the -18
+   one.
+
+<!-- keys: com.resonance.color -->
+The knobs those steps turn are `drive`, `mode`, `bias` and `oversample`.
+<!-- /keys -->
 
 Verify: `meter_compare {a: snapshot_id}` on the master. Keep the move only if
 `tilt_db_per_oct` went more negative or `lowmid_presence_db` rose, and none of
@@ -182,8 +195,12 @@ Verify: `meter_compare` — `crest_db` down 0.5-2 dB, `psr_db` still 8 or more.
 ### 6. Master character — only if still sterile
 
 "Sterile" has a number: after steps 2-5, the master's `tilt_db_per_oct` is
-still flatter than about -4.5 **and** a `meter_probe` of the master chain shows
-`thd_pct` under 0.1 %. Then it is the `mastering` skill's saturator stage, at
+still flatter than about -4.5 **and** nothing in the path adds harmonics: a
+`meter_probe {level_dbfs: -18}` of the master chain **and** of every mix bus
+(`{target: {bus_id}}`, each bus from `song_tracks`) shows `thd_pct` under
+0.1 %. A bus that already carries colour means the mix is not sterile, whatever
+the master probe says: the busses are where step 3 put the warmth. Only then is
+it the `mastering` skill's saturator stage, at
 the master THD band (0.1-1 %), before the clipper and limiter, never after the
 limiter. Parallel at 10-30 % if in doubt.
 
