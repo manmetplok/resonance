@@ -15,25 +15,19 @@
 //! what's proven is the actual `ctx.plugins` map and the actual
 //! `AudioEvent::Error` — not a description of the rule.
 //!
-//! Skips rather than fails when the workspace hasn't been bundled
-//! (`scripts/bundle.sh`) — same contract as the rest of the
-//! plugin-hosting tests under `tests/clap_host/`.
+//! Needs a built plugin binary; `plugin_binaries` finds it, and a missing
+//! one fails the test unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is
+//! set — the contract every test under `tests/clap_host/` that needs a
+//! built plugin follows.
 
 use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::{AudioEvent, EngineErrorKind};
 use resonance_audio::{Track, TrackId};
 
+use crate::plugin_binaries::plugin_binary;
+
 const TRACK: TrackId = 1;
 const EQ_CLAP_ID: &str = "com.resonance.eq";
-
-/// Locate a built bundle by file name, if the workspace has been bundled.
-fn bundle_path(file: &str) -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::path::PathBuf::from("target/bundled").join(file),
-        std::path::PathBuf::from("../target/bundled").join(file),
-    ];
-    candidates.into_iter().find(|p| p.exists())
-}
 
 fn error_kind(events: &[AudioEvent]) -> Option<EngineErrorKind> {
     events.iter().find_map(|e| match e {
@@ -44,8 +38,7 @@ fn error_kind(events: &[AudioEvent]) -> Option<EngineErrorKind> {
 
 #[test]
 fn a_duplicate_id_is_refused_and_does_not_replace_the_live_instance() {
-    let Some(path) = bundle_path("resonance-eq.clap") else {
-        eprintln!("target/bundled/resonance-eq.clap absent — run scripts/bundle.sh; skipping");
+    let Some(path) = plugin_binary("resonance-eq") else {
         return;
     };
     let path = path.to_string_lossy().into_owned();
@@ -104,8 +97,7 @@ fn a_duplicate_id_is_refused_and_does_not_replace_the_live_instance() {
 /// not slip through container-specific code that forgot the check.
 #[test]
 fn a_duplicate_id_is_refused_across_track_bus_and_master() {
-    let Some(path) = bundle_path("resonance-eq.clap") else {
-        eprintln!("target/bundled/resonance-eq.clap absent — run scripts/bundle.sh; skipping");
+    let Some(path) = plugin_binary("resonance-eq") else {
         return;
     };
     let path = path.to_string_lossy().into_owned();

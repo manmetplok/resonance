@@ -3,16 +3,17 @@
 //! clones on a worker, and leaves the live instances untouched.
 //!
 //! The empty-chain case runs everywhere. The mastering-saturator case
-//! needs the real plugin binary — `target/bundled/resonance-mastering.clap`
-//! (scripts/bundle.sh) or the debug cdylib `libresonance_mastering.so`
-//! (`cargo build -p resonance-mastering`) — and skips without one, the
-//! same pattern as `clap_all_notes_off.rs`.
+//! needs the real plugin binary (`plugin_binaries`: the debug cdylib
+//! `./scripts/run-tests.py` builds, or the bundle) and fails without one
+//! unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is set.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use resonance_audio::test_support::EngineHandlerHarness;
 use resonance_audio::types::*;
+
+use crate::plugin_binaries::plugin_binary;
 
 const PROBE_ID: u64 = 7_311;
 
@@ -89,15 +90,7 @@ fn a_stage_whose_live_instance_is_gone_fails_the_probe() {
 }
 
 fn mastering_binary() -> Option<PathBuf> {
-    [
-        "target/bundled/resonance-mastering.clap",
-        "../target/bundled/resonance-mastering.clap",
-        "target/debug/libresonance_mastering.so",
-        "../target/debug/libresonance_mastering.so",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
+    plugin_binary("resonance-mastering")
 }
 
 /// Set `key` to `to` wherever it appears in a JSON state.
@@ -125,10 +118,6 @@ fn set_key(value: &mut serde_json::Value, key: &str, to: &serde_json::Value) -> 
 #[test]
 fn the_mastering_saturator_in_tape_mode_shows_h2_and_the_live_instance_is_untouched() {
     let Some(path) = mastering_binary() else {
-        eprintln!(
-            "[skip] no resonance-mastering binary (scripts/bundle.sh, or cargo build -p \
-             resonance-mastering)"
-        );
         return;
     };
     let path = path.canonicalize().unwrap().to_string_lossy().into_owned();
@@ -173,4 +162,169 @@ fn the_mastering_saturator_in_tape_mode_shows_h2_and_the_live_instance_is_untouc
     let after = plugins.get(&100).unwrap().lock().0.save_state().unwrap();
     assert_eq!(before, after, "the live plugin's state is untouched");
     assert_eq!(harness.plugin_instance_count(), 1, "the clone is not in the live map");
+}
+
+// ---------------------------------------------------------------------------
+// Clone teardown thread
+// ---------------------------------------------------------------------------
+
+mod teardown {
+    use std::ffi::{c_char, c_void, CStr};
+    use std::ptr;
+    use std::sync::{Arc, Mutex};
+    use std::thread::ThreadId;
+    use std::time::{Duration, Instant};
+
+    use clap_sys::ext::audio_ports::{
+        clap_audio_port_info, clap_plugin_audio_ports, CLAP_EXT_AUDIO_PORTS,
+    };
+    use clap_sys::host::clap_host;
+    use clap_sys::id::clap_id;
+    use clap_sys::plugin::clap_plugin;
+    use clap_sys::process::clap_process;
+
+    use resonance_audio::test_support::{
+        EngineHandlerHarness, SyncClapInstance, __instance_from_raw_for_test,
+    };
+    use resonance_audio::types::*;
+
+    /// Which thread ran each lifecycle call.
+    type Log = Arc<Mutex<Vec<(&'static str, ThreadId)>>>;
+
+    unsafe fn log<'a>(p: *const clap_plugin) -> &'a Log {
+        &*((*p).plugin_data as *const Log)
+    }
+    unsafe fn record(p: *const clap_plugin, call: &'static str) {
+        log(p).lock().unwrap().push((call, std::thread::current().id()));
+    }
+    unsafe extern "C" fn c_init(_: *const clap_plugin) -> bool {
+        true
+    }
+    unsafe extern "C" fn c_destroy(p: *const clap_plugin) {
+        record(p, "destroy");
+    }
+    unsafe extern "C" fn c_activate(_: *const clap_plugin, _: f64, _: u32, _: u32) -> bool {
+        true
+    }
+    unsafe extern "C" fn c_deactivate(p: *const clap_plugin) {
+        record(p, "deactivate");
+    }
+    unsafe extern "C" fn c_start(_: *const clap_plugin) -> bool {
+        true
+    }
+    unsafe extern "C" fn c_stop(_: *const clap_plugin) {}
+    unsafe extern "C" fn c_reset(_: *const clap_plugin) {}
+    unsafe extern "C" fn c_main_thread(_: *const clap_plugin) {}
+    unsafe extern "C" fn c_process(p: *const clap_plugin, _: *const clap_process) -> i32 {
+        record(p, "process");
+        1
+    }
+    unsafe extern "C" fn c_ports_count(_: *const clap_plugin, _: bool) -> u32 {
+        1
+    }
+    unsafe extern "C" fn c_ports_get(
+        _: *const clap_plugin,
+        index: u32,
+        _: bool,
+        info: *mut clap_audio_port_info,
+    ) -> bool {
+        if index != 0 || info.is_null() {
+            return false;
+        }
+        let out = &mut *info;
+        out.id = 0 as clap_id;
+        out.name = [0; 256];
+        out.flags = 0;
+        out.channel_count = 2;
+        out.port_type = ptr::null();
+        out.in_place_pair = 0;
+        true
+    }
+    static PORTS: clap_plugin_audio_ports = clap_plugin_audio_ports {
+        count: Some(c_ports_count),
+        get: Some(c_ports_get),
+    };
+    unsafe extern "C" fn c_get_extension(
+        _: *const clap_plugin,
+        id: *const c_char,
+    ) -> *const c_void {
+        if !id.is_null() && CStr::from_ptr(id) == CLAP_EXT_AUDIO_PORTS {
+            return &PORTS as *const clap_plugin_audio_ports as *const c_void;
+        }
+        ptr::null()
+    }
+
+    fn logging_effect(calls: &Log) -> SyncClapInstance {
+        let calls = Arc::clone(calls);
+        let inst = __instance_from_raw_for_test(
+            move |_host: *const clap_host| {
+                let data = Box::into_raw(Box::new(calls));
+                Box::into_raw(Box::new(clap_plugin {
+                    desc: ptr::null(),
+                    plugin_data: data as *mut c_void,
+                    init: Some(c_init),
+                    destroy: Some(c_destroy),
+                    activate: Some(c_activate),
+                    deactivate: Some(c_deactivate),
+                    start_processing: Some(c_start),
+                    stop_processing: Some(c_stop),
+                    reset: Some(c_reset),
+                    process: Some(c_process),
+                    get_extension: Some(c_get_extension),
+                    on_main_thread: Some(c_main_thread),
+                })) as *const clap_plugin
+            },
+            48_000,
+        )
+        .expect("logging effect builds");
+        SyncClapInstance(inst)
+    }
+
+    /// The clones are processed on the `probe-chain` worker, but CLAP's
+    /// `deactivate` / `destroy` are main-thread calls — the engine
+    /// thread here. The worker must hand them back rather than drop them.
+    #[test]
+    fn probe_clones_are_destroyed_on_the_engine_thread() {
+        let calls: Log = Arc::default();
+        let mut harness = EngineHandlerHarness::new();
+        let engine_thread = std::thread::current().id();
+        harness.probe_instances(
+            9_001,
+            vec![logging_effect(&calls), logging_effect(&calls)],
+            ProbeSpec {
+                freq_hz: 1_000.0,
+                level_dbfs: -12.0,
+                imd: false,
+            },
+        );
+        // Wait for the report, then for the clones to come back.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut reported = false;
+        loop {
+            reported |= harness
+                .drain_events()
+                .iter()
+                .any(|e| matches!(e, AudioEvent::ChainProbed { probe_id: 9_001, .. }));
+            harness.apply_worker_results();
+            let destroyed = calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(call, _)| *call == "destroy")
+                .count();
+            if reported && destroyed == 2 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "the probe never finished: {calls:?}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let calls = calls.lock().unwrap();
+        assert!(
+            calls.iter().any(|(call, t)| *call == "process" && *t != engine_thread),
+            "the clones are processed off the engine thread"
+        );
+        for (call, thread) in calls.iter().filter(|(c, _)| *c != "process") {
+            assert_eq!(*thread, engine_thread, "{call} ran off the engine thread");
+        }
+    }
 }

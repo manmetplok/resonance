@@ -207,3 +207,40 @@ fn side_content_counts_toward_the_ltas() {
     let d = spectrum_detail(SR, &l, &r);
     assert!((d.third_octave[17] - -12.0).abs() < 0.2);
 }
+
+/// A typical mix's low end: −4.5 dB/oct noise, high-passed at 40 Hz with
+/// 24 dB/oct (two Butterworth biquads). Its band levels rise out of the
+/// filter and fall with the tilt, a broad concave hump around 60 Hz that
+/// a mean-of-the-window reference read as a +1.4 dB "resonance".
+fn high_passed_mix() -> Vec<f32> {
+    let dry = coloured_noise(LEN, 1.5, -20.0, 0x5EED_0045);
+    let mut hp1 = Biquad::default();
+    hp1.set_high_pass(SR, 40.0, 0.541_196);
+    let mut hp2 = Biquad::default();
+    hp2.set_high_pass(SR, 40.0, 1.306_563);
+    filtered(&filtered(&dry, hp1), hp2)
+}
+
+#[test]
+fn a_broad_high_passed_low_end_is_not_a_resonance() {
+    let d = measure_mono(&high_passed_mix());
+    assert!(d.peaks.is_empty(), "a broad hump is no resonance: {:?}", d.peaks);
+}
+
+#[test]
+fn a_narrow_resonance_on_the_high_passed_low_end_is_still_found() {
+    // 1059 Hz sits on a band edge, so its energy splits over two bands.
+    for freq in [150.0f32, 1_000.0, 1_059.5, 4_000.0] {
+        let mut bell = Biquad::default();
+        bell.set_bell(SR, freq, 8.0, 6.0);
+        let d = measure_mono(&filtered(&high_passed_mix(), bell));
+        assert_eq!(d.peaks.len(), 1, "{freq} Hz: exactly the resonance: {:?}", d.peaks);
+        let top = d.peaks[0];
+        assert!(
+            (top.freq_hz / freq - 1.0).abs() < 0.05,
+            "{freq} Hz: found at {} Hz",
+            top.freq_hz
+        );
+        assert!(top.excess_db > 2.0, "{freq} Hz: excess {}", top.excess_db);
+    }
+}

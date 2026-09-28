@@ -578,8 +578,10 @@ fn compare_payload(
 /// instrument is not an insert and is left out silently; a missing,
 /// bypassed or chain-bypassed slot is left out and listed in `skipped`,
 /// exactly as the audio would skip it. The engine then clones what is
-/// left (see `resonance_audio::engine::probe`); nothing live is touched,
-/// so the probe needs no render guard and runs while the transport rolls.
+/// left (see `resonance_audio::engine::probe`); nothing live is processed,
+/// so the probe needs no render guard and runs while the transport rolls
+/// — though each live plugin's state save holds its slot lock, so a
+/// rolling plugin may skip one block, as on a project save.
 fn probe(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, Task<Message>) {
     let params: ProbeParams = match super::optional_params(request) {
         Ok(p) => p,

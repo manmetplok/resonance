@@ -3,9 +3,9 @@
 //! whisper of a short room, a middle one with a real send to it, and a
 //! back one with a big send to a long room order front > middle > back.
 //!
-//! Needs the resonance-reverb binary — `target/bundled/resonance-reverb.clap`
-//! (scripts/bundle.sh) or the debug cdylib `libresonance_reverb.so`
-//! (`cargo build -p resonance-reverb`) — and skips without one. The
+//! Needs the resonance-reverb binary (`plugin_binaries`: the debug cdylib
+//! `./scripts/run-tests.py` builds, or the bundle) and fails without one
+//! unless `RESONANCE_ALLOW_MISSING_PLUGIN_BINARIES` is set. The
 //! plugin-free twin with exact numbers is `tests/bounce/measure_depth.rs`.
 
 use std::path::PathBuf;
@@ -17,19 +17,13 @@ use resonance_audio::test_support::{
 };
 use resonance_audio::types::*;
 
+use crate::plugin_binaries::plugin_binary;
+
 const SR: u32 = 48_000;
 const FRAMES: usize = SR as usize * 4;
 
 fn reverb_binary() -> Option<PathBuf> {
-    [
-        "target/bundled/resonance-reverb.clap",
-        "../target/bundled/resonance-reverb.clap",
-        "target/debug/libresonance_reverb.so",
-        "../target/debug/libresonance_reverb.so",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
+    plugin_binary("resonance-reverb")
 }
 
 /// Set `key` to `to` wherever it appears in a JSON state.
@@ -97,10 +91,6 @@ fn noise_clip(id: ClipId, track: TrackId, seed: u32) -> AudioClip {
 #[test]
 fn real_reverbs_order_three_layers_front_to_back() {
     let Some(path) = reverb_binary() else {
-        eprintln!(
-            "[skip] no resonance-reverb binary (scripts/bundle.sh, or cargo build -p \
-             resonance-reverb)"
-        );
         return;
     };
     let bundle = ClapBundle::load(&path).expect("load the reverb");

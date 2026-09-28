@@ -70,7 +70,8 @@ impl ResonanceMcp {
                        presence_peakiness_db is the 1/6-octave crest inside 2-5 kHz (0 = even, \
                        high = a harsh resonance). air_ratio_db is energy 8-16 kHz over the \
                        total. peaks lists up to 5 narrow resonances as {freq_hz, excess_db}, \
-                       excess over the smoothed spectrum around them, strongest first. \
+                       excess over the local trend of the spectrum around them, strongest \
+                       first; at most 1/3 octave wide, so a broad hump is never listed. \
                        \
                        stereo holds width and mono safety. bands is 8 bands (edges 20, 60, 150, \
                        400, 1k, 2.5k, 5k, 10k, 20k Hz) of {lo_hz, hi_hz, correlation, \
@@ -272,17 +273,22 @@ impl ResonanceMcp {
                        bypassed and missing plugins are left out and listed in skipped). \
                        freq_hz defaults to 1000 and is snapped to the analysis grid (the result \
                        echoes the exact value); probe at 5000 to expose aliasing, since \
-                       harmonics past Nyquist fold back. level_dbfs (default -12, -80..0) is \
-                       the tone's peak: distortion depends on level, so probe at what the chain \
-                       really sees. imd: true adds the SMPTE 60 Hz + 7 kHz 4:1 pair and \
+                       harmonics past Nyquist fold back. level_dbfs (default -18, -80..0) is \
+                       the tone's peak; -18 is the level the colour presets' THD targets are \
+                       voiced at. Distortion depends on level, so probe again at what the \
+                       chain really peaks at to see the loudest moments. imd: true adds the \
+                       SMPTE 60 Hz + 7 kHz 4:1 pair and \
                        imd_pct. \
                        \
-                       SAFE TO RUN ANY TIME: the probe builds a fresh CLONE of each plugin from \
-                       the live plugin's current saved state and drives the clones on a worker \
-                       thread. The live plugins are only read (one state save each), never \
-                       processed, reset or reloaded, so playback, automation, undo and every \
-                       plugin's running state are untouched, and it works while the transport \
-                       rolls. The clone gets no automation (it probes current values) and a \
+                       Runs any time, including while the transport rolls: the probe builds a \
+                       fresh CLONE of each plugin from the live plugin's current saved state \
+                       and drives the clones on a worker thread. The live plugins are only read \
+                       (one state save each), never processed, reset or reloaded, so \
+                       automation, undo and every plugin's running state are untouched. The \
+                       state save holds the live plugin for its duration, so during playback \
+                       that plugin may skip one audio block, exactly as when the project is \
+                       saved; probe a busy chain while stopped if that matters. The clone gets \
+                       no automation (it probes current values) and a \
                        sidechain key hears silence. stages lists what was probed, with \
                        state_copied false for a plugin that has no state extension (probed at \
                        its defaults). \

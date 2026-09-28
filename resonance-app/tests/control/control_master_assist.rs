@@ -267,14 +267,14 @@ fn reference_mode_measures_the_pooled_file_and_targets_it() {
         request(json!({ "mode": "reference", "pool_asset_id": ASSET })),
     ));
     let commands = sent(&cmd_rx);
-    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert_eq!(commands.len(), 1, "the reference is decoded first: {commands:?}");
     let AudioCommand::MeasureAudio {
         measure_id,
         source: AudioMeasureSource::File(path),
         detail,
-    } = &commands[1]
+    } = &commands[0]
     else {
-        panic!("expected MeasureAudio of a file, got {:?}", commands[1]);
+        panic!("expected MeasureAudio of a file, got {:?}", commands[0]);
     };
     assert_eq!(*measure_id, job);
     assert!(detail.assist);
@@ -288,12 +288,28 @@ fn reference_mode_measures_the_pooled_file_and_targets_it() {
     let reference_ltas = target_curve(Genre::Rock).to_vec();
     let reference = measurement(MeasureSource::Decoded, -9.0, reference_ltas);
     let mix = measurement(MeasureSource::Render, -21.0, assistant_spectrum());
-    // Either may arrive first; the job completes on the second.
+    // The reference arrives first; only then is the master rendered.
     app.test_apply_engine_event(AudioEvent::MixMeasured {
         measure_id: job,
         results: vec![reference.clone()],
     });
     assert_ne!(status(&mut app, job).state, JobState::Done, "still waiting on the mix");
+    let commands = sent(&cmd_rx);
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    let AudioCommand::MeasureMix {
+        measure_id,
+        targets,
+        source,
+        detail,
+        ..
+    } = &commands[0]
+    else {
+        panic!("expected the master render, got {:?}", commands[0]);
+    };
+    assert_eq!(*measure_id, job);
+    assert_eq!(targets, &vec![StemSource::Master]);
+    assert_eq!(*source, MeasureSource::Render);
+    assert!(detail.assist);
     app.test_apply_engine_event(AudioEvent::MixMeasured {
         measure_id: job,
         results: vec![mix.clone()],
@@ -346,6 +362,35 @@ fn an_engine_failure_fails_the_job() {
     let status = status(&mut app, job);
     assert_eq!(status.state, JobState::Error);
     assert!(status.error.unwrap().message.contains("cannot read"));
+}
+
+/// A failed reference decode ends the job, and with it the offline-render
+/// guard the job holds — so no master render may still be running under
+/// it, or a bounce could start on top of that render. The master render
+/// is only ever sent after the reference succeeded, and while the
+/// reference decodes the guard is held.
+#[test]
+fn a_failed_reference_leaves_no_render_running_behind_the_released_guard() {
+    let (mut app, cmd_rx) = capture_app();
+    let job = started_job(roundtrip(
+        &mut app,
+        request(json!({ "mode": "reference", "pool_asset_id": ASSET })),
+    ));
+    let (kind, _) = refused(&mut app, json!({ "mode": "genre", "genre": "rock" }));
+    assert_eq!(kind, ErrorKind::Busy, "the guard is held while the reference decodes");
+    app.test_apply_engine_event(AudioEvent::MixMeasureError {
+        measure_id: job,
+        message: "cannot read the file".into(),
+    });
+    assert_eq!(status(&mut app, job).state, JobState::Error);
+    let renders: Vec<_> = sent(&cmd_rx)
+        .into_iter()
+        .filter(|c| matches!(c, AudioCommand::MeasureMix { .. }))
+        .collect();
+    assert!(
+        renders.is_empty(),
+        "the guard is released, so no master render may be in flight: {renders:?}"
+    );
 }
 
 fn refused(app: &mut Resonance, params: serde_json::Value) -> (ErrorKind, String) {

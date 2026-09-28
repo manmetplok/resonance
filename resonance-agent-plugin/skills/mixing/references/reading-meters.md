@@ -66,7 +66,7 @@ Unlike `bands`, it keeps anti-phase side content.
 | `lowmid_presence_db` | Energy 150-500 Hz over 2-5 kHz, dB | Rises 1-2 dB for "warmer". A big rise with a steep tilt is mud, not warmth. |
 | `presence_peakiness_db` | Crest of the 1/6-octave bands inside 2-5 kHz (loudest over mean), dB | 0 is perfectly even. High means one presence resonance, the usual cause of harshness. Fix it before adding warmth. |
 | `air_ratio_db` | Energy 8-16 kHz over the total, dB | Always negative. Drops slightly for "warmer". |
-| `peaks` | Up to 5 narrow resonances, `{freq_hz, excess_db}`, strongest first | `excess_db` is how far a 1/6-octave band stands above the octave either side of it. A peak must clear 1 dB and the measurement's own noise, so a short range reports fewer and only larger peaks. Empty is normal. |
+| `peaks` | Up to 5 narrow resonances, `{freq_hz, excess_db}`, strongest first | `excess_db` is how far a 1/6-octave band stands above the local trend: a straight line fitted to the octave either side of it, leaving out its immediate neighbours. A peak must clear 1 dB and the measurement's own noise, so a short range reports fewer and only larger peaks, and it must be at most 1/3 octave wide, so a broad hump (the bump a high-pass leaves in the low end, a wide bell) is never listed; read those in `third_octave`. Empty is normal. |
 
 ### `stereo`: width and mono safety
 
@@ -242,9 +242,9 @@ a sidechain key hears silence. `stages` lists what was probed. A stage with
 
 **Probe at -18 dBFS to set a drive.** Distortion rises with level, so a THD
 figure means nothing without its probe level. The THD targets above, and the
-colour presets voiced to land in them, are all for a -18 dBFS sine: pass
-`level_dbfs: -18` (the tool's default is -12) whenever you set a drive against
-them. `level_dbfs` (-80..0) sets the tone's peak; a second probe at the level
+colour presets voiced to land in them, are all for a -18 dBFS sine, which is
+the tool's default `level_dbfs`; passing `level_dbfs: -18` explicitly is
+harmless. `level_dbfs` (-80..0) sets the tone's peak; a second probe at the level
 the chain really peaks at shows how hard the loudest moments hit, and reads
 higher.
 

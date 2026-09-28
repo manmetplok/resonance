@@ -204,8 +204,10 @@ pub const THIRD_OCTAVE_HZ: [f32; 31] = [
 pub struct SpectralPeak {
     /// Frequency of the resonance, Hz.
     pub freq_hz: f64,
-    /// How far its 1/6-octave band stands above the smoothed spectrum
-    /// around it (the mean level of the octave either side), dB.
+    /// How far its 1/6-octave band stands above the local trend of the
+    /// spectrum (a straight line fitted to the octave either side,
+    /// leaving out the band's immediate neighbours), dB. A resonance is at
+    /// most 1/3 octave wide; a broad hump is not listed.
     pub excess_db: f64,
 }
 
@@ -244,8 +246,8 @@ pub struct SpectrumDetail {
     /// negative).
     pub air_ratio_db: Option<f64>,
     /// Up to 5 narrow resonances, strongest first: 1/6-octave bands at
-    /// least 1 dB above the smoothed spectrum around them. Empty when
-    /// nothing stands out.
+    /// least 1 dB above the local trend of the spectrum around them, and
+    /// at most 1/3 octave wide. Empty when nothing stands out.
     pub peaks: Vec<SpectralPeak>,
 }
 
@@ -865,8 +867,10 @@ fn default_probe_freq_hz() -> f64 {
     1_000.0
 }
 
+/// -18 dBFS: the level the colour presets are voiced to their THD targets
+/// at, so a default probe reads against the same convention.
 fn default_probe_level_dbfs() -> f64 {
-    -12.0
+    -18.0
 }
 
 /// Params for `meter.probe`: which insert chain, and the stimulus.
@@ -882,8 +886,10 @@ pub struct ProbeParams {
     /// 5000 to expose aliasing: harmonics past Nyquist fold back.
     #[serde(default = "default_probe_freq_hz")]
     pub freq_hz: f64,
-    /// Peak level of the tone, dBFS (default -12), -80..0. Distortion
-    /// depends on it, so probe at the level the chain really sees.
+    /// Peak level of the tone, dBFS (default -18, the level the colour
+    /// presets' THD targets are voiced at), -80..0. Distortion depends on
+    /// it, so a second probe at the level the chain really peaks at shows
+    /// how hard the loudest moments hit.
     #[serde(default = "default_probe_level_dbfs")]
     pub level_dbfs: f64,
     /// Also run the SMPTE pair (60 Hz + 7 kHz, 4:1, summed peak at

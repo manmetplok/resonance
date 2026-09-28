@@ -792,6 +792,11 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
              its last owner will destroy it"
         );
     }
+    // Probe clones a finished `probe-chain` worker handed back but the
+    // loop did not get to: destroy them here too, not wherever the last
+    // `SharedState` owner lets go (a probe still running at shutdown
+    // posts after this and is not covered).
+    drop(ctx.shared.inbox.drain());
 }
 
 /// Emit `AudioEvent::RenderThreads` when the live render pool's status
