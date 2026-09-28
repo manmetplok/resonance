@@ -14,6 +14,36 @@ fn param_enumeration_covers_declared_count() {
     }
 }
 
+/// The shared loader only writes ids it finds, so a preset that omits a
+/// parameter silently inherits whatever the previous patch left there —
+/// loading "Kick — Punch" over a patch with a Side band would keep the
+/// band on the side. Every factory preset must name every parameter.
+#[test]
+fn every_factory_preset_is_a_full_snapshot() {
+    let plugin = ResonanceEq::new();
+    for entry in PRESETS {
+        let value: serde_json::Value = serde_json::from_str(entry.json).unwrap();
+        let map = value["params"].as_object().unwrap();
+        for i in 0..plugin.param_count() {
+            let id = plugin.param(i).id();
+            assert!(map.contains_key(id), "preset {:?} omits `{id}`", entry.name);
+        }
+    }
+}
+
+/// The original 49 parameters keep their host indices: new ones are
+/// appended after them, never interleaved.
+#[test]
+fn the_original_parameters_keep_their_indices() {
+    let plugin = ResonanceEq::new();
+    for b in 0..8 {
+        for (j, name) in ["enabled", "freq", "gain", "q", "kind", "slope"].iter().enumerate() {
+            assert_eq!(plugin.param(b * 6 + j).id(), format!("band{b}_{name}"));
+        }
+    }
+    assert_eq!(plugin.param(48).id(), "output_gain");
+}
+
 #[test]
 fn every_factory_preset_parses_and_loads() {
     assert!(!PRESETS.is_empty());

@@ -4,26 +4,45 @@ use std::sync::Arc;
 
 use resonance_plugin::*;
 
-use crate::band::{BandKind, BandSlope};
+use crate::band::{BandKind, BandMs, BandSlope, KIND_LABELS, MS_LABELS};
 
 pub const NUM_BANDS: usize = 8;
+/// The original per-band block (enabled, freq, gain, q, kind, slope),
+/// laid out band-major from index 0.
 pub const PARAMS_PER_BAND: usize = 6;
-pub const PARAM_COUNT: usize = NUM_BANDS * PARAMS_PER_BAND + 1;
+/// Index of `output_gain`, right after the original band blocks.
+pub const OUTPUT_GAIN_INDEX: usize = NUM_BANDS * PARAMS_PER_BAND;
+/// Index of `auto_gain`.
+pub const AUTO_GAIN_INDEX: usize = OUTPUT_GAIN_INDEX + 1;
+/// Per-band parameters added after the original layout (warmth-width-
+/// depth.md §6.4). They live in their own band-major block *after*
+/// `auto_gain`, so every original parameter keeps its index.
+pub const EXTRA_PER_BAND: usize = 1;
+/// First index of the extra per-band block.
+pub const EXTRA_BASE: usize = AUTO_GAIN_INDEX + 1;
+pub const PARAM_COUNT: usize = EXTRA_BASE + NUM_BANDS * EXTRA_PER_BAND;
 
 pub struct BandParams {
     pub enabled: BoolParam,
     pub freq: FloatParam,
     pub gain: FloatParam,
     pub q: FloatParam,
-    /// 0=Bell, 1=LowShelf, 2=HighShelf, 3=LowCut, 4=HighCut — mirror of `BandKind`.
+    /// 0=Bell, 1=LowShelf, 2=HighShelf, 3=LowCut, 4=HighCut, 5=Tilt,
+    /// 6=LF Lift+Dip, 7=Air — mirror of `BandKind`.
     pub kind: IntParam,
     /// 0=12 dB/oct, 1=24 dB/oct, 2=48 dB/oct — only meaningful for LowCut/HighCut.
     pub slope: IntParam,
+    /// 0=Stereo, 1=Mid, 2=Side — mirror of `BandMs`. Stereo by default.
+    pub ms: IntParam,
 }
 
 pub struct EqParams {
     pub bands: [BandParams; NUM_BANDS],
     pub output_gain: FloatParam,
+    /// Loudness-compensated output: trims the output by the static gain
+    /// estimate of the band curve (see `crate::dsp::static_gain_db`), so
+    /// an EQ move can be judged at matched level. Off by default.
+    pub auto_gain: BoolParam,
 }
 
 impl BandParams {
@@ -36,6 +55,16 @@ impl BandParams {
             q: self.q.value(),
             kind: BandKind::from_index(self.kind.value()),
             slope: BandSlope::from_index(self.slope.value()),
+            ms: BandMs::from_index(self.ms.value()),
+        }
+    }
+
+    /// The extra per-band parameter at offset `within` of the band's
+    /// block in the extra region (see [`EXTRA_BASE`]).
+    fn extra_at(&self, within: usize) -> &dyn Param {
+        match within {
+            0 => &self.ms,
+            _ => &self.ms,
         }
     }
 }
@@ -51,12 +80,23 @@ pub struct BandSnapshot {
     pub q: f32,
     pub kind: BandKind,
     pub slope: BandSlope,
+    pub ms: BandMs,
 }
 
 impl EqParams {
     pub fn param_at(&self, index: usize) -> &dyn Param {
-        if index == PARAM_COUNT - 1 {
+        if index == OUTPUT_GAIN_INDEX {
             return &self.output_gain;
+        }
+        if index == AUTO_GAIN_INDEX {
+            return &self.auto_gain;
+        }
+        if index >= EXTRA_BASE {
+            let off = (index - EXTRA_BASE).min(NUM_BANDS * EXTRA_PER_BAND - 1);
+            // One extra per band for now, so the modulo is trivially 0.
+            #[allow(clippy::modulo_one)]
+            let (band, within) = (off / EXTRA_PER_BAND, off % EXTRA_PER_BAND);
+            return self.bands[band].extra_at(within);
         }
         let band = index / PARAMS_PER_BAND;
         let within = index % PARAMS_PER_BAND;
@@ -83,6 +123,9 @@ fn format_hz() -> Arc<dyn Fn(f32) -> String + Send + Sync> {
         }
     })
 }
+
+/// Host-facing labels of the slope parameter, by index.
+const SLOPE_LABELS: &[&str] = &["12 dB/oct", "24 dB/oct", "48 dB/oct"];
 
 fn format_db(decimals: usize) -> Arc<dyn Fn(f32) -> String + Send + Sync> {
     Arc::new(move |v: f32| format!("{:.*} dB", decimals, v))
@@ -143,14 +186,29 @@ macro_rules! make_band {
                 concat!("band", $ix, "_kind"),
                 concat!("Band ", $ix, " Kind"),
                 $kind_default,
-                IntRange::Linear { min: 0, max: 4 },
-            ),
+                IntRange::Linear {
+                    min: 0,
+                    max: KIND_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(KIND_LABELS),
             slope: IntParam::new(
                 concat!("band", $ix, "_slope"),
                 concat!("Band ", $ix, " Slope"),
                 1,
                 IntRange::Linear { min: 0, max: 2 },
-            ),
+            )
+            .with_choices(SLOPE_LABELS),
+            ms: IntParam::new(
+                concat!("band", $ix, "_ms"),
+                concat!("Band ", $ix, " M/S"),
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: MS_LABELS.len() as i32 - 1,
+                },
+            )
+            .with_choices(MS_LABELS),
         }
     };
 }
@@ -182,6 +240,7 @@ impl Default for EqParams {
             )
             .with_unit(" dB")
             .with_value_to_string(format_db(1)),
+            auto_gain: BoolParam::new("auto_gain", "Auto Gain", false),
         }
     }
 }

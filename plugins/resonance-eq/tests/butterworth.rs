@@ -4,7 +4,7 @@
 //! sagged to -6 dB (24 dB/oct) and -12 dB (48 dB/oct) at cutoff.
 
 use resonance_dsp::Biquad;
-use resonance_eq::band::{configure_stages, BandKind, BandSlope, MAX_STAGES_PER_BAND};
+use resonance_eq::band::{configure_stages, BandKind, BandMs, BandSlope, MAX_STAGES_PER_BAND};
 use resonance_eq::params::BandSnapshot;
 
 const SR: f32 = 48_000.0;
@@ -18,6 +18,7 @@ fn cut_snapshot(kind: BandKind, slope: BandSlope) -> BandSnapshot {
         q: 0.707,
         kind,
         slope,
+        ms: BandMs::Stereo,
     }
 }
 

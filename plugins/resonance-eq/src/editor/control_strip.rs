@@ -19,7 +19,7 @@
 use plugin_gui_core::egui;
 use plugin_gui_core::widgets::{slider, HSlider, SliderStyle};
 
-use crate::band::{BandKind, BandSlope};
+use crate::band::{BandKind, BandMs, BandSlope};
 use crate::params::NUM_BANDS;
 
 use super::app::EqEditorApp;
@@ -92,13 +92,7 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                     .width(92.0)
                     .selected_text(kind.short_name())
                     .show_ui(ui, |ui| {
-                        for opt in [
-                            BandKind::Bell,
-                            BandKind::LowShelf,
-                            BandKind::HighShelf,
-                            BandKind::LowCut,
-                            BandKind::HighCut,
-                        ] {
+                        for opt in BandKind::ALL {
                             if ui.selectable_label(kind == opt, opt.short_name()).clicked() {
                                 kind = opt;
                                 band.kind.set_value(kind.to_index());
@@ -125,6 +119,20 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                     // row is rendered, so all bands line up.
                     ui.add_space(22.0);
                 }
+
+                // Stereo / Mid / Side: which component the band filters.
+                let mut ms = BandMs::from_index(band.ms.value());
+                egui::ComboBox::from_id_salt(("eq_band_ms", band_index))
+                    .width(92.0)
+                    .selected_text(ms.label())
+                    .show_ui(ui, |ui| {
+                        for opt in BandMs::ALL {
+                            if ui.selectable_label(ms == opt, opt.label()).clicked() {
+                                ms = opt;
+                                band.ms.set_value(ms.to_index());
+                            }
+                        }
+                    });
 
                 ui.add_space(4.0);
 
@@ -157,13 +165,19 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
                     ui.label(egui::RichText::new(" ").color(theme::TEXT_DIM));
                 }
 
-                // Q.
-                let mut q = band.q.value();
-                if let Some(travel) = band_slider(ui, log_travel(Q, q), false) {
-                    q = log_value(Q, travel);
-                    band.q.set_value(q);
+                // Q — the one-knob kinds (Tilt, LF Lift+Dip, Air) fix
+                // their own shape, so they show no Q.
+                if kind.uses_q() {
+                    let mut q = band.q.value();
+                    if let Some(travel) = band_slider(ui, log_travel(Q, q), false) {
+                        q = log_value(Q, travel);
+                        band.q.set_value(q);
+                    }
+                    ui.label(egui::RichText::new(format!("Q {:.2}", q)).color(theme::TEXT_DIM));
+                } else {
+                    ui.add_space(22.0);
+                    ui.label(egui::RichText::new(" ").color(theme::TEXT_DIM));
                 }
-                ui.label(egui::RichText::new(format!("Q {:.2}", q)).color(theme::TEXT_DIM));
             });
         });
 }

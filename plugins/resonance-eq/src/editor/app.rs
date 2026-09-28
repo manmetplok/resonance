@@ -76,7 +76,7 @@ impl EditorApp for EqEditorApp {
             .show_inside(ui, |ui| draw_header(ui, self));
 
         egui::Panel::bottom("eq_strip")
-            .exact_size(160.0)
+            .exact_size(STRIP_H)
             .show_inside(ui, |ui| control_strip::draw_band_strip(ui, self));
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -145,8 +145,34 @@ fn draw_header(ui: &mut egui::Ui, app: &mut EqEditorApp) {
             app.params.output_gain.set_value(gain);
         }
         ui.label(egui::RichText::new(format!("{:+.1} dB", gain)).color(theme::TEXT_DIM));
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        // Auto-gain: the output trimmed by the curve's static loudness
+        // estimate, so a move can be judged at matched level. The trim is
+        // a function of the bands alone, so the editor computes the same
+        // number the DSP applies.
+        let mut auto = app.params.auto_gain.value();
+        if ui.checkbox(&mut auto, "Auto gain").changed() {
+            app.params.auto_gain.set_value(auto);
+        }
+        if auto {
+            let snaps: [crate::params::BandSnapshot; crate::params::NUM_BANDS] =
+                std::array::from_fn(|i| app.params.bands[i].snapshot());
+            let trim = crate::dsp::auto_gain_trim_db(&snaps, VIS_SR);
+            ui.label(egui::RichText::new(format!("{trim:+.1} dB")).color(theme::TEXT_DIM));
+        }
     });
 }
+
+/// Height of the band strip, px: header, kind, slope, M/S, and the
+/// Freq / Gain / Q sliders with their readouts.
+pub(crate) const STRIP_H: f32 = 190.0;
+/// Sample rate the header's auto-gain readout is estimated at. The trim
+/// is nearly independent of the rate below the top octave.
+const VIS_SR: f32 = 48_000.0;
 
 /// Width of the header's Output slider, px — `egui::Slider`'s own
 /// default `slider_width`, which is what it was laid out at.
