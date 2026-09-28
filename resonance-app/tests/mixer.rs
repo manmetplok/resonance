@@ -75,6 +75,8 @@ mod mixer_strip_external_instrument;
 mod mixer_sub_track_grouping;
 #[path = "mixer/plugin_bypass_persistence.rs"]
 mod plugin_bypass_persistence;
+#[path = "mixer/plugin_removal_prunes_lanes.rs"]
+mod plugin_removal_prunes_lanes;
 #[path = "mixer/recording_overflow_banner.rs"]
 mod recording_overflow_banner;
 #[path = "mixer/sidechain_persistence.rs"]
