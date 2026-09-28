@@ -46,9 +46,15 @@ pub(crate) fn draw_control_strip(ui: &mut egui::Ui, app: &mut CompressorEditorAp
         ui.add_space(8.0);
         // Toggles.
         ui.vertical(|ui| {
-            ui.add_space(16.0);
+            ui.add_space(4.0);
             editor_widgets::bool_checkbox(ui, &p.auto_makeup, p.auto_makeup.name());
             editor_widgets::bool_checkbox(ui, &p.sc_hpf_on, p.sc_hpf_on.name());
+            // Manual / Auto release. In Auto the Release knob is unused.
+            ui.label(p.release_mode.name());
+            editor_widgets::int_choice(ui, &p.release_mode, RELEASE_COMBO_W);
         });
     });
 }
+
+/// Width of the release-mode combo, px — a layout fact of this strip.
+const RELEASE_COMBO_W: f32 = 84.0;

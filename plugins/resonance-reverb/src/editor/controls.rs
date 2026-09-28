@@ -12,7 +12,6 @@
 //! ER/tail depth balance.
 
 use resonance_plugin::editor_widgets;
-use resonance_plugin::{IntParam, Param};
 use plugin_gui_core::egui;
 
 use crate::params::ReverbParams;
@@ -82,7 +81,7 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
                 editor_widgets::bool_checkbox(ui, &params.wet_hpf_on, "Wet HPF");
                 editor_widgets::bool_checkbox(ui, &params.wet_lpf_on, "Wet LPF");
                 ui.add_space(2.0);
-                choice_combo(ui, &params.wet_filter_slope);
+                editor_widgets::int_choice(ui, &params.wet_filter_slope, 86.0);
             });
             ui.add_space(4.0);
             editor_widgets::float_knob(ui, &params.wet_hpf_freq, "HPF", "before tank");
@@ -123,23 +122,4 @@ pub fn draw(ui: &mut egui::Ui, params: &ReverbParams, viz: &ReverbViz) {
             editor_widgets::float_knob(ui, &params.er_tail_balance, "ER / Tail", "depth");
         });
     });
-}
-
-/// Combo box over a choice `IntParam`, labelled from the param's own
-/// table so the editor and the host read the same words.
-fn choice_combo(ui: &mut egui::Ui, param: &IntParam) {
-    let labels = param.choices().unwrap_or(&[]);
-    let min = param.min_plain() as i32;
-    let idx = (param.value() - min).max(0) as usize;
-    let current = labels.get(idx).copied().unwrap_or("?");
-    egui::ComboBox::from_id_salt(param.id())
-        .width(86.0)
-        .selected_text(current)
-        .show_ui(ui, |ui| {
-            for (i, label) in labels.iter().enumerate() {
-                if ui.selectable_label(i == idx, *label).clicked() {
-                    param.set_value(min + i as i32);
-                }
-            }
-        });
 }
