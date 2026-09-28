@@ -78,10 +78,15 @@ impl ResonancePlugin for ResonanceMastering {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
+        let viz = MasteringViz::new();
         Self {
             params: Arc::new(MasteringParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
-            viz: MasteringViz::new(),
+            // The assistant's target choice rides along with the preset
+            // identity (warmth-width-depth.md §7.4).
+            presets: resonance_plugin::presets::PresetSession::with_extra(
+                assistant::AssistantStateSaver::new(viz.clone()),
+            ),
+            viz,
             chain: None,
         }
     }

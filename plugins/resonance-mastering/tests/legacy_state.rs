@@ -253,3 +253,45 @@ fn the_factory_bank_is_still_empty() {
         "resonance-mastering now ships factory presets: add them to legacy_state.rs"
     );
 }
+
+/// The assistant's target choice (warmth-width-depth.md W10) is saved
+/// with the state under `assistant`. Every blob above predates it: each
+/// must load as a fresh assistant (Rock, genre mode, no reference), and
+/// adding the entry to it must not move a single rendered bit — the
+/// assistant processes no audio.
+#[test]
+fn assistant_settings_load_as_defaults_and_never_touch_the_render() {
+    use resonance_mastering::assistant::{AssistantSettings, Genre, TargetMode};
+    for (name, state) in states() {
+        let mut plugin = ResonanceMastering::new();
+        assert!(plugin.load_state(state.as_bytes()));
+        assert_eq!(
+            plugin.viz().assistant.settings(),
+            AssistantSettings::default(),
+            "`{name}` has no assistant entry and must load the defaults"
+        );
+
+        let mut with: serde_json::Value = serde_json::from_str(state).unwrap();
+        with["assistant"] = serde_json::json!({
+            "mode": "reference",
+            "genre": "jazz",
+            "reference_path": "/nonexistent/reference.wav",
+        });
+        let blob = serde_json::to_vec(&with).unwrap();
+        let mut plugin = ResonanceMastering::new();
+        assert!(plugin.load_state(&blob));
+        let settings = plugin.viz().assistant.settings();
+        assert_eq!(settings.mode, TargetMode::Reference);
+        assert_eq!(settings.genre, Genre::Jazz);
+
+        let plain = render_state(state.as_bytes());
+        let assisted = render_state(&blob);
+        assert_eq!(plain.len(), assisted.len());
+        let differ = plain
+            .iter()
+            .zip(&assisted)
+            .filter(|(a, b)| a.to_bits() != b.to_bits())
+            .count();
+        assert_eq!(differ, 0, "`{name}`: the assistant entry moved {differ} samples");
+    }
+}

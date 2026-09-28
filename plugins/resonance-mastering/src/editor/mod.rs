@@ -11,7 +11,6 @@ use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, Ru
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 use plugin_gui_core::{egui, EditorApp};
 
-use crate::assistant::Genre;
 use crate::params::MasteringParams;
 use crate::viz::MasteringViz;
 
@@ -85,12 +84,6 @@ impl EditorFactory for MasteringEditorFactory {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TargetSource {
-    Genre,
-    Reference,
-}
-
 pub(crate) struct MasteringEditorApp {
     params: Arc<MasteringParams>,
     viz: Arc<MasteringViz>,
@@ -104,9 +97,6 @@ pub(crate) struct MasteringEditorApp {
     /// Transient bar state (open combo, in-progress rename), editor-only.
     preset_editor: resonance_plugin::presets::PresetEditor,
     current_stage: StageTab,
-    selected_genre: Genre,
-    target_source: TargetSource,
-    reference_path: String,
 }
 
 impl MasteringEditorApp {
@@ -125,9 +115,6 @@ impl MasteringEditorApp {
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             current_stage: StageTab::default(),
-            selected_genre: Genre::default(),
-            target_source: TargetSource::Genre,
-            reference_path: String::new(),
         }
     }
 }
@@ -168,9 +155,6 @@ impl EditorApp for MasteringEditorApp {
                     self.current_stage,
                     &self.params,
                     &self.viz,
-                    &mut self.selected_genre,
-                    &mut self.target_source,
-                    &mut self.reference_path,
                 )
             });
 

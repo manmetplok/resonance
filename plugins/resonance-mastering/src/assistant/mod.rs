@@ -20,5 +20,7 @@ pub mod targets;
 pub use analyze::AnalysisResult;
 pub use decide::{Suggestions, Target};
 pub use reference::ReferenceTrack;
-pub use state::{Assistant, CAPTURE_SECONDS};
+pub use state::{
+    Assistant, AssistantSettings, AssistantStateSaver, TargetMode, CAPTURE_SECONDS, STATE_KEY,
+};
 pub use targets::Genre;
