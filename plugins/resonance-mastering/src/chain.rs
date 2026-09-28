@@ -3,16 +3,21 @@
 //! Owns every DSP stage and the metering tap, orchestrating them in
 //! processing order:
 //!
-//!   input → corrective EQ → glue compressor → saturator
-//!         → tonal EQ → multiband → metering tap
+//!   input trim → corrective EQ → glue compressor → saturator
+//!         → tonal EQ → multiband → imager → clipper → limiter
+//!         → dither → metering tap
 //!
-//! Later phases will add stereo imaging, the true-peak limiter, and
-//! dither between the multiband and the meter.
+//! The imager's per-band width is applied on the multiband's crossover
+//! bands, just before they are summed (see `stages::multiband`). Only
+//! the two linear-phase EQs, the multiband crossover and the limiter
+//! lookahead have latency, and it does not depend on which stages are
+//! on or what they are set to.
 
 use resonance_dsp::{db_to_linear, DelayLine};
 
 use crate::dsp::MeteringCore;
 use crate::params::MasteringParams;
+use crate::stages::clipper::Clipper;
 use crate::stages::dither::Dither;
 use crate::stages::glue_compressor::GlueCompressor;
 use crate::stages::imager::Imager;
@@ -29,6 +34,7 @@ pub struct Chain {
     tonal_eq: LinearPhaseEq,
     multiband: Multiband,
     imager: Imager,
+    clipper: Clipper,
     limiter: Limiter,
     dither: Dither,
     meters: MeteringCore,
@@ -83,6 +89,13 @@ impl Chain {
             [phase(3), phase(8)],
             [phase(4), phase(9)],
         ]);
+        // The EQs' mid/side cross pairs run only while a band is mid or
+        // side; they take the half-slots in between, so even then no
+        // callback runs two FFT iterations. (The ten above are left
+        // exactly where they were: moving one changes its rounding.)
+        let half_phase = |slot: usize| (2 * slot + 1) * hop / (2 * CONVOLVER_COUNT);
+        corrective_eq.set_cross_phase_offsets([half_phase(0), half_phase(5)]);
+        tonal_eq.set_cross_phase_offsets([half_phase(1), half_phase(6)]);
         let limiter = Limiter::new(sample_rate);
         let max_latency = corrective_eq.latency()
             + tonal_eq.latency()
@@ -95,6 +108,7 @@ impl Chain {
             tonal_eq,
             multiband,
             imager: Imager::new(sample_rate),
+            clipper: Clipper::new(sample_rate),
             limiter,
             dither: Dither::new(),
             meters: MeteringCore::new(sample_rate, viz),
@@ -116,6 +130,7 @@ impl Chain {
         self.tonal_eq.reset();
         self.multiband.reset();
         self.imager.reset();
+        self.clipper.reset();
         self.limiter.reset();
         self.dither.reset();
         self.meters.reset();
@@ -126,7 +141,8 @@ impl Chain {
     }
 
     /// Total plugin latency in samples: sum of every latency-inducing
-    /// stage. The compressor, saturator, and imager are zero-latency;
+    /// stage. The compressor, saturator, imager and clipper are
+    /// zero-latency (the clipper's oversampling is IIR);
     /// the two linear-phase EQs and the multiband crossover each
     /// contribute one FIR convolver's worth of delay, and the limiter
     /// adds its lookahead.
@@ -276,11 +292,18 @@ impl Chain {
         let tonal_bands = params.tonal_eq.snapshot();
         self.tonal_eq.process_stereo(left, right, &tonal_bands);
 
+        // The imager's per-band width rides on the multiband's crossover
+        // (see `stages::multiband`); unity while the imager is off.
         let mb_cfg = params.multiband.snapshot();
-        self.multiband.process_stereo(left, right, &mb_cfg);
+        let band_width = params.imager.band_width_targets();
+        self.multiband
+            .process_stereo_with_width(left, right, &mb_cfg, &band_width);
 
         let img_cfg = params.imager.snapshot();
         self.imager.process_stereo(left, right, &img_cfg);
+
+        let clip_cfg = params.clipper.snapshot();
+        self.clipper.process_stereo(left, right, &clip_cfg);
 
         let lim_cfg = params.limiter.snapshot();
         self.limiter.process_stereo(left, right, &lim_cfg);

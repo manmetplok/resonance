@@ -2,18 +2,27 @@
 //!
 //! Each stage owns [`NUM_BANDS`] [`BandParams`] groups, each exposing
 //! the five params that describe one biquad section (on, type, freq,
-//! Q, gain). [`EqStageParams::snapshot`] converts the atomics into a
+//! Q, gain), plus the band's M/S selector (`{prefix}_b{n}_ms`). The
+//! selector came later (warmth-width-depth.md W9), so it sits outside
+//! the stage's original 20-param block: [`EqStageParams::param_at`]
+//! still covers exactly those, and the plugin appends the selectors
+//! after every older param (see `params/mod.rs`).
+//! [`EqStageParams::snapshot`] converts the atomics into a
 //! plain `[BandConfig; NUM_BANDS]` array ready for the DSP engine.
 
 use resonance_plugin::formatters::{v2s_f32_db, v2s_f32_hz, v2s_f32_rounded};
 use resonance_plugin::*;
 
-use crate::stages::linear_phase_eq::{BandConfig, BandType, NUM_BANDS};
+use crate::stages::linear_phase_eq::{BandConfig, BandType, MsMode, NUM_BANDS};
 
-/// Number of params exposed per band (on, type, freq, q, gain).
+/// Number of params exposed per band in the stage's original block (on,
+/// type, freq, q, gain).
 pub const PARAMS_PER_BAND: usize = 5;
-/// Number of params per EQ stage.
+/// Number of params per EQ stage in its original block.
 pub const PARAMS_PER_STAGE: usize = NUM_BANDS * PARAMS_PER_BAND;
+/// The per-band M/S selectors, one per band, appended after every
+/// pre-W9 param.
+pub const MS_PARAMS_PER_STAGE: usize = NUM_BANDS;
 
 pub struct BandParams {
     pub on: BoolParam,
@@ -21,6 +30,8 @@ pub struct BandParams {
     pub freq: FloatParam,
     pub q: FloatParam,
     pub gain: FloatParam,
+    /// Stereo / Mid / Side.
+    pub ms: IntParam,
 }
 
 impl BandParams {
@@ -88,6 +99,13 @@ impl BandParams {
             )
             .with_unit(" dB")
             .with_value_to_string(v2s_f32_db(1)),
+            ms: IntParam::new(
+                leak_id(format!("{prefix}_b{band_index}_ms")),
+                leak_name(format!("{} B{} M/S", prefix.to_uppercase(), band_index + 1)),
+                MsMode::Stereo.to_index(),
+                IntRange::Linear { min: 0, max: 2 },
+            )
+            .with_choices(MsMode::LABELS),
         }
     }
 
@@ -109,6 +127,7 @@ impl BandParams {
             freq_hz: self.freq.value(),
             q: self.q.value(),
             gain_db: self.gain.value(),
+            ms: MsMode::from_index(self.ms.value()),
         }
     }
 }
@@ -137,6 +156,12 @@ impl EqStageParams {
         let band = index / PARAMS_PER_BAND;
         let sub = index % PARAMS_PER_BAND;
         self.bands[band].param_at(sub)
+    }
+
+    /// Band `band`'s M/S selector (index `0..MS_PARAMS_PER_STAGE`).
+    pub fn ms_param_at(&self, band: usize) -> &dyn Param {
+        debug_assert!(band < MS_PARAMS_PER_STAGE);
+        &self.bands[band].ms
     }
 
     pub fn snapshot(&self) -> [BandConfig; NUM_BANDS] {

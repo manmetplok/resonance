@@ -33,7 +33,7 @@ use rustfft::{Fft, FftPlanner};
 
 use super::band::BandConfig;
 use super::convolver::{FirGeometry, OverlapSaveConvolver};
-use super::design::FirDesigner;
+use super::design::{FirDesigner, FirPart};
 use super::NUM_BANDS;
 
 /// Designs a filter all the way to the convolver's frequency-domain
@@ -47,9 +47,14 @@ pub struct SpectrumDesigner {
 
 impl SpectrumDesigner {
     pub fn new(geometry: FirGeometry) -> Self {
+        Self::with_part(geometry, FirPart::Direct)
+    }
+
+    /// A designer for one of the two M/S filters (see [`FirPart`]).
+    pub fn with_part(geometry: FirGeometry, part: FirPart) -> Self {
         let fft = FftPlanner::<f32>::new().plan_fft_forward(geometry.fft_size);
         Self {
-            designer: FirDesigner::with_geometry(geometry),
+            designer: FirDesigner::with_part(geometry, part),
             fft_scratch: vec![Complex::new(0.0, 0.0); fft.get_inplace_scratch_len()],
             fft,
             spectrum: vec![Complex::new(0.0, 0.0); geometry.fft_size],
@@ -201,7 +206,12 @@ impl DesignWorker {
         })
     }
 
-    fn register(self: &Arc<Self>, geometry: FirGeometry, sample_rate: f32) -> DesignClient {
+    fn register(
+        self: &Arc<Self>,
+        geometry: FirGeometry,
+        sample_rate: f32,
+        part: FirPart,
+    ) -> DesignClient {
         let shared = Arc::new(ClientShared {
             sample_rate,
             request: Slot::new(Request {
@@ -215,7 +225,7 @@ impl DesignWorker {
                 })
             }),
             next_result: AtomicUsize::new(0),
-            designer: Mutex::new(SpectrumDesigner::new(geometry)),
+            designer: Mutex::new(SpectrumDesigner::with_part(geometry, part)),
         });
         self.inner
             .clients
@@ -320,13 +330,23 @@ impl StereoFir {
     /// A pair for `sample_rate`'s geometry, designed through `worker`
     /// (`None`: always inline), initially a pure delay.
     pub fn new(sample_rate: f32, worker: Option<&Arc<DesignWorker>>) -> Self {
+        Self::with_part(sample_rate, worker, FirPart::Direct)
+    }
+
+    /// A pair designing one of the two M/S filters (see [`FirPart`]).
+    /// Initially a pure delay, like [`Self::new`].
+    pub fn with_part(
+        sample_rate: f32,
+        worker: Option<&Arc<DesignWorker>>,
+        part: FirPart,
+    ) -> Self {
         let geometry = FirGeometry::for_sample_rate(sample_rate);
         Self {
             sample_rate,
             left: OverlapSaveConvolver::with_geometry(geometry),
             right: OverlapSaveConvolver::with_geometry(geometry),
-            inline: SpectrumDesigner::new(geometry),
-            client: worker.map(|w| w.register(geometry, sample_rate)),
+            inline: SpectrumDesigner::with_part(geometry, part),
+            client: worker.map(|w| w.register(geometry, sample_rate, part)),
             generation: 0,
             pending: None,
             worker_designs: 0,

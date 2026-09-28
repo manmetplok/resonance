@@ -55,9 +55,18 @@ pub const MEASURE: &str = "meter.measure";
 /// `meter.stems` — measure every track plus the master in one pass
 /// ([`StemsParams`] -> job -> [`StemsResult`]).
 pub const STEMS: &str = "meter.stems";
+/// `meter.snapshot` — measure one slice and keep the numbers for a later
+/// `meter.compare` ([`SnapshotParams`] -> job -> [`SnapshotResult`]).
+pub const SNAPSHOT: &str = "meter.snapshot";
+/// `meter.compare` — loudness-matched deltas between two measurements
+/// ([`CompareParams`] -> job -> [`CompareResult`]).
+pub const COMPARE: &str = "meter.compare";
+/// `meter.probe` — harmonic signature of an insert chain
+/// ([`ProbeParams`] -> job -> [`ProbeResult`]).
+pub const PROBE: &str = "meter.probe";
 
 /// All `meter.*` method names.
-pub const METHODS: &[&str] = &[MEASURE, STEMS];
+pub const METHODS: &[&str] = &[MEASURE, STEMS, SNAPSHOT, COMPARE, PROBE];
 
 /// Which slice of the mix to measure.
 ///
@@ -505,4 +514,386 @@ pub struct StemsResult {
     /// other stem and produced a plausible, completely wrong balance
     /// table.
     pub tracks: Vec<TrackMeasurement>,
+}
+
+// ---------------------------------------------------------------------------
+// meter.snapshot / meter.compare (warmth-width-depth.md §7.2)
+// ---------------------------------------------------------------------------
+
+/// Params for `meter.snapshot`: what to measure and keep.
+///
+/// Snapshots live in the running app's memory for the session: they are
+/// never saved with the project, do not survive a restart, and the
+/// oldest-used ones are evicted past [`SNAPSHOT_CAPACITY`]. They do
+/// survive opening another project, so a snapshot of one song can be
+/// compared against another.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SnapshotParams {
+    /// Defaults to `"master"`.
+    #[serde(default)]
+    pub target: MeasureTarget,
+    /// Defaults to the whole song. The resolved sample range is stored
+    /// with the snapshot, and a later `"current"` side of a compare
+    /// renders exactly that range again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeSpec>,
+    /// Detail blocks to keep. Defaults to ALL of them (`spectrum`,
+    /// `stereo`, `dynamics`), since a snapshot exists to be compared and
+    /// a detail it lacks has no delta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<Vec<MeasureDetail>>,
+}
+
+/// How many snapshots the app keeps; past it the least recently used
+/// one is evicted.
+pub const SNAPSHOT_CAPACITY: usize = 32;
+
+/// Job payload once a `meter.snapshot` job completes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SnapshotResult {
+    /// Pass this as `a` or `b` of `meter.compare`.
+    pub snapshot_id: u64,
+    /// The stored measurement, as `meter.measure` would report it.
+    pub measurement: MeasureResult,
+}
+
+/// Marker for the `"current"` side of a compare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum Current {
+    /// Render the project as it is now.
+    Current,
+}
+
+/// One side of a `meter.compare`: `"current"` (render the project now)
+/// or a `snapshot_id` from `meter.snapshot`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum CompareSide {
+    /// A stored snapshot.
+    Snapshot(u64),
+    /// The project as it is now.
+    Current(Current),
+}
+
+impl CompareSide {
+    /// The `"current"` side.
+    pub const CURRENT: Self = CompareSide::Current(Current::Current);
+}
+
+impl Default for CompareSide {
+    fn default() -> Self {
+        Self::CURRENT
+    }
+}
+
+/// How `meter.compare` levels B against A.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum MatchMode {
+    /// Gain-match B to A's integrated loudness first (the default): every
+    /// delta then describes a change in *character*, not in level.
+    #[default]
+    Lufs,
+    /// Compare as measured.
+    None,
+}
+
+/// Params for `meter.compare`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompareParams {
+    /// Only needed when both sides are `"current"`; a snapshot side
+    /// carries its own target, and a `"current"` side renders that same
+    /// target. Given together with a snapshot, it must match it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<MeasureTarget>,
+    /// Same rule as `target`: a snapshot side fixes the range, and a
+    /// `"current"` side re-renders exactly that sample range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeSpec>,
+    /// The reference: usually a `snapshot_id` taken before a change.
+    pub a: CompareSide,
+    /// The candidate. Defaults to `"current"`.
+    #[serde(default)]
+    pub b: CompareSide,
+    /// Defaults to `"lufs"`.
+    #[serde(rename = "match", default)]
+    pub match_mode: MatchMode,
+}
+
+/// One side of a [`CompareResult`], echoed with its loudness.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompareSideInfo {
+    /// What was compared.
+    pub side: CompareSide,
+    /// Its integrated loudness as measured (before any match gain).
+    pub lufs_integrated: Option<f64>,
+}
+
+/// Deltas of the four [`Bands`] shares.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct BandsDelta {
+    /// Change in the 20-250 Hz share.
+    pub low: f64,
+    /// Change in the 250 Hz-2 kHz share.
+    pub mid: f64,
+    /// Change in the 2-8 kHz share.
+    pub high: f64,
+    /// Change in the 8-20 kHz share.
+    pub air: f64,
+}
+
+/// Deltas of the [`SpectrumDetail`] figures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SpectrumDelta {
+    /// Per 1/3-octave band, dB (centres in [`THIRD_OCTAVE_HZ`]); `null`
+    /// where either side has no energy in the band.
+    pub third_octave: Vec<Option<f64>>,
+    /// Change in spectral tilt, dB/oct. Negative is warmer.
+    pub tilt_db_per_oct: Option<f64>,
+    /// Change in centroid, Hz.
+    pub centroid_hz: Option<f64>,
+    /// Change in centroid, percent of A's.
+    pub centroid_pct: Option<f64>,
+    /// Change in the low-mid / presence ratio, dB.
+    pub lowmid_presence_db: Option<f64>,
+    /// Change in presence peakiness, dB. Negative is less harsh.
+    pub presence_peakiness_db: Option<f64>,
+    /// Change in the air ratio, dB.
+    pub air_ratio_db: Option<f64>,
+}
+
+/// Deltas of one [`StereoBand`].
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StereoBandDelta {
+    /// Lower band edge, Hz.
+    pub lo_hz: f64,
+    /// Upper band edge, Hz.
+    pub hi_hz: f64,
+    /// Change in the band's correlation.
+    pub correlation: Option<f64>,
+    /// Change in the band's side/mid ratio, dB. Positive is wider.
+    pub side_mid_db: Option<f64>,
+    /// Change in the band's mono loss, dB. Negative is less mono-safe.
+    pub mono_loss_db: Option<f64>,
+}
+
+/// Deltas of the [`StereoDetail`] figures.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct StereoDelta {
+    /// Per band, same edges as [`StereoDetail::bands`].
+    pub bands: Vec<StereoBandDelta>,
+    /// Change in balance, dB.
+    pub balance_db: Option<f64>,
+    /// Change in the percentage of 400 ms windows below +0.3.
+    pub pct_below_0_3: Option<f64>,
+    /// Change in the worst window's correlation.
+    pub worst_window_correlation: Option<f64>,
+}
+
+/// Deltas of the [`DynamicsDetail`] figures.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DynamicsDelta {
+    /// Change in PLR, dB.
+    pub plr_db: Option<f64>,
+    /// Change in PSR, dB.
+    pub psr_db: Option<f64>,
+}
+
+/// `B − A` for every proxy, B taken at the match gain.
+///
+/// A delta is `null` when either side lacks the number (silence, a
+/// window the range cannot fill, a detail the snapshot did not keep).
+/// Level figures (the LUFS fields, `true_peak_db`, `sample_peak_db`,
+/// `third_octave`) move with the match gain; shape figures (crest, LRA,
+/// correlation, `bands`, tilt and the other ratios, PLR/PSR, the whole
+/// stereo block) do not, since a pure gain cannot change them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompareDeltas {
+    /// ~0 by construction when matched.
+    pub lufs_integrated: Option<f64>,
+    /// Loudest 3 s window, LU.
+    pub lufs_short_max: Option<f64>,
+    /// Loudest 400 ms window, LU.
+    pub lufs_momentary_max: Option<f64>,
+    /// Loudness range, LU.
+    pub lra: Option<f64>,
+    /// True peak, dB.
+    pub true_peak_db: Option<f64>,
+    /// Sample peak, dB.
+    pub sample_peak_db: Option<f64>,
+    /// Crest factor, dB. Negative is denser.
+    pub crest_db: Option<f64>,
+    /// Change in clipped samples AS MEASURED — a clip count cannot be
+    /// re-derived at another gain, so this one is never matched.
+    pub clipped_samples: Option<i64>,
+    /// Whole-range correlation.
+    pub correlation: Option<f64>,
+    /// Mono penalty, dB.
+    pub mono_penalty_db: Option<f64>,
+    /// Energy-share deltas of the four tonal bands.
+    pub bands: Option<BandsDelta>,
+    /// Present when both sides carry the `spectrum` detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spectrum: Option<SpectrumDelta>,
+    /// Present when both sides carry the `stereo` detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stereo: Option<StereoDelta>,
+    /// Present when both sides carry the `dynamics` detail.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamics: Option<DynamicsDelta>,
+}
+
+/// Job payload once a `meter.compare` job completes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CompareResult {
+    /// The slice both sides measure.
+    pub target: MeasureTarget,
+    /// Length of the compared range, seconds.
+    pub measured_seconds: Option<f64>,
+    /// The reference side.
+    pub a: CompareSideInfo,
+    /// The candidate side.
+    pub b: CompareSideInfo,
+    /// The match mode asked for.
+    #[serde(rename = "match")]
+    pub match_mode: MatchMode,
+    /// Whether the match gain was applied. `false` with `match: "none"`,
+    /// or when either side has no integrated loudness (silence), in which
+    /// case the deltas are as measured.
+    pub matched: bool,
+    /// Gain applied to B, dB: `a.lufs_integrated − b.lufs_integrated`
+    /// when matched, else 0. A +3 dB louder B reads about -3 here.
+    pub match_gain_db: f64,
+    /// `B − A` for every proxy.
+    pub deltas: CompareDeltas,
+}
+
+// ---------------------------------------------------------------------------
+// meter.probe (warmth-width-depth.md §7.3)
+// ---------------------------------------------------------------------------
+
+fn default_probe_freq_hz() -> f64 {
+    1_000.0
+}
+
+fn default_probe_level_dbfs() -> f64 {
+    -12.0
+}
+
+/// Params for `meter.probe`: which insert chain, and the stimulus.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeParams {
+    /// Whose insert chain: `"master"` (default), `{track_id}` or
+    /// `{bus_id}`. A track's instrument is not part of it.
+    #[serde(default)]
+    pub target: MeasureTarget,
+    /// Probe tone, Hz (default 1000), snapped to the analysis grid
+    /// (0.73 Hz at 48 kHz; the result echoes the exact value). Use e.g.
+    /// 5000 to expose aliasing: harmonics past Nyquist fold back.
+    #[serde(default = "default_probe_freq_hz")]
+    pub freq_hz: f64,
+    /// Peak level of the tone, dBFS (default -12), -80..0. Distortion
+    /// depends on it, so probe at the level the chain really sees.
+    #[serde(default = "default_probe_level_dbfs")]
+    pub level_dbfs: f64,
+    /// Also run the SMPTE pair (60 Hz + 7 kHz, 4:1, summed peak at
+    /// `level_dbfs`) and report `imd_pct` (default false).
+    #[serde(default)]
+    pub imd: bool,
+}
+
+impl Default for ProbeParams {
+    fn default() -> Self {
+        Self {
+            target: MeasureTarget::Master,
+            freq_hz: default_probe_freq_hz(),
+            level_dbfs: default_probe_level_dbfs(),
+            imd: false,
+        }
+    }
+}
+
+/// One stage the probe ran through.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeStageInfo {
+    /// The plugin's CLAP id, as `*.plugin_params` reports it.
+    pub plugin_id: String,
+    /// Its index among same-id plugins on the chain.
+    pub occurrence: u32,
+    /// Its display name.
+    pub name: String,
+    /// Whether the live plugin's current state was copied into the probe's
+    /// clone. `false` means the plugin has no state extension and was
+    /// probed at its defaults.
+    pub state_copied: bool,
+}
+
+/// A slot the probe left out, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeSkipped {
+    /// The plugin's CLAP id.
+    pub plugin_id: String,
+    /// Its index among same-id plugins on the chain.
+    pub occurrence: u32,
+    /// `"bypassed"`, `"chain bypassed"` or `"missing"`.
+    pub reason: String,
+}
+
+/// Job payload once a `meter.probe` job completes: the chain's harmonic
+/// signature at the probed frequency and level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ProbeResult {
+    /// The chain probed.
+    pub target: MeasureTarget,
+    /// The exact probe frequency, Hz.
+    pub freq_hz: f64,
+    /// The tone's input peak level, dBFS.
+    pub level_dbfs: f64,
+    /// The stages the tone went through, in order. Empty means the chain
+    /// was a straight wire.
+    pub stages: Vec<ProbeStageInfo>,
+    /// Slots on the chain that were not probed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<ProbeSkipped>,
+    /// Chain gain at the probe frequency: output fundamental minus input
+    /// level, dB.
+    pub gain_db: f64,
+    /// Total harmonic distortion over H2..H9 (in-band ones), %. Targets:
+    /// master 0.1-1, bus 0.5-3, single track 3-10.
+    pub thd_pct: f64,
+    /// H2..H9 in dBc (`h[0]` is H2), floored at -160; `null` for a
+    /// harmonic above Nyquist (it aliases instead).
+    pub h: Vec<Option<f64>>,
+    /// H2 minus H3, dB. Positive is even-dominant (the "warm" signature).
+    pub h2_h3_db: Option<f64>,
+    /// How fast the series falls, dB per order (positive = falling);
+    /// fitted over harmonics above -140 dBc. Aim for 6 or more.
+    pub decay_db_per_order: Option<f64>,
+    /// Strongest non-harmonic, non-DC bin, dBc: aliasing plus any noise
+    /// or inharmonic product. Aim for -90 or lower.
+    pub aliasing_floor_dbc: f64,
+    /// SMPTE intermodulation, %, when `imd` was asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imd_pct: Option<f64>,
+    /// Summed latency of the probed stages, samples.
+    pub latency_samples: u32,
 }

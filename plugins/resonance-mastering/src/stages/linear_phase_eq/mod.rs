@@ -14,15 +14,36 @@
 //! thread timing (FU-M2a, see [`worker`]). Redesigns are rate-limited
 //! to one per hop: while one waits for its boundary, further changes
 //! wait and the newest settings are designed next.
+//!
+//! # Mid/side bands
+//!
+//! Each band filters the stereo pair, the mid or the side
+//! ([`MsMode`]). The stereo result is `L' = A·L + B·R`, `R' = A·R + B·L`
+//! (see [`design`]): the usual pair of convolvers carries `A`, and a
+//! second, *cross* pair carries `B` on the opposite channel. `B` is zero
+//! while every band is on `Stereo`, so the cross pair only runs while a
+//! band needs it:
+//!
+//! - **Engage.** The first mid/side band starts the cross pair from
+//!   silence with a zero filter and feeds it for two hops before the new
+//!   design is requested, so its overlap-save history is real input by
+//!   the time `B` crossfades in. The band change waits those ~170 ms.
+//! - **Release.** When the last mid/side band goes back to `Stereo`,
+//!   `B` crossfades to zero and the pair keeps running until that has
+//!   drained, then stops. From then on the output is the plain pair's
+//!   again, bit-for-bit the path that never engaged.
+//!
+//! The cross pair has the same geometry, so the latency is the same
+//! whether it runs or not.
 
 pub mod band;
 pub mod convolver;
 pub mod design;
 pub mod worker;
 
-pub use band::{BandConfig, BandType};
+pub use band::{BandConfig, BandType, MsMode};
 pub use convolver::{FirGeometry, OverlapSaveConvolver, FIR_LENGTH, GROUP_DELAY, HOP_SIZE};
-pub use design::FirDesigner;
+pub use design::{FirDesigner, FirPart};
 pub use worker::{DesignWorker, SpectrumDesigner, StereoFir};
 
 use std::sync::Arc;
@@ -32,14 +53,41 @@ use std::sync::Arc;
 /// touching the convolver or designer — they're band-count-agnostic.
 pub const NUM_BANDS: usize = 4;
 
+/// Frames per pass of the cross pair's scratch (see
+/// [`LinearPhaseEq::process_stereo`]); longer blocks run in chunks.
+const CROSS_CHUNK: usize = 256;
+
+/// Where the mid/side cross pair is in its life cycle (module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cross {
+    /// Not running; the output is the plain pair's.
+    Off,
+    /// Running with a zero filter until its history is real input.
+    Warming { remaining: usize },
+    /// Running, its output added.
+    On,
+    /// Its filter is back at zero; running until the tail has drained.
+    Draining { remaining: usize },
+}
+
 /// Stereo linear-phase parametric EQ.
 ///
-/// A [`StereoFir`] (two convolvers plus the off-thread designer) and a
-/// cached snapshot of the band parameters the current filter was
-/// designed for. Any difference between the supplied `bands` and the
-/// cache requests a redesign on the next `process_stereo` call.
+/// A [`StereoFir`] (two convolvers plus the off-thread designer), the
+/// mid/side cross pair, and a cached snapshot of the band parameters the
+/// current filter was designed for. Any difference between the supplied
+/// `bands` and the cache requests a redesign on the next
+/// `process_stereo` call.
 pub struct LinearPhaseEq {
     fir: StereoFir,
+    /// `B = (Hm − Hs)/2`, fed the opposite channel (module docs).
+    cross: StereoFir,
+    cross_state: Cross,
+    /// One hop of the geometry, the unit of the warm-up and drain.
+    hop: usize,
+    /// Cross-pair scratch: the right input on its way to the left
+    /// output, and vice versa.
+    cross_l: Box<[f32; CROSS_CHUNK]>,
+    cross_r: Box<[f32; CROSS_CHUNK]>,
     /// Band parameters of the current (or pending) FIR. Compared on
     /// every `process_stereo` to decide whether to redesign.
     cached_bands: [BandConfig; NUM_BANDS],
@@ -56,18 +104,33 @@ impl LinearPhaseEq {
     pub fn with_worker(sample_rate: f32, worker: Option<&Arc<DesignWorker>>) -> Self {
         // FIR length scales with the rate so the low bands keep their
         // resolution (DSP-06).
+        let fir = StereoFir::new(sample_rate, worker);
+        let mut cross = StereoFir::with_part(sample_rate, worker, FirPart::Cross);
+        // The cross filter of an all-stereo set is exactly zero.
+        cross.design_now(&[BandConfig::off(); NUM_BANDS]);
+        let hop = fir.geometry().hop;
         Self {
-            fir: StereoFir::new(sample_rate, worker),
+            fir,
+            cross,
+            cross_state: Cross::Off,
+            hop,
+            cross_l: Box::new([0.0; CROSS_CHUNK]),
+            cross_r: Box::new([0.0; CROSS_CHUNK]),
             cached_bands: [BandConfig::off(); NUM_BANDS],
         }
     }
 
     pub fn reset(&mut self) {
         self.fir.reset();
+        self.cross.reset();
+        if let Cross::Warming { remaining } = &mut self.cross_state {
+            *remaining = 2 * self.hop;
+        }
     }
 
     /// Reported per-channel latency. Same for both channels; constant
-    /// in ms across sample rates.
+    /// in ms across sample rates, and the same whether or not a band is
+    /// mid/side.
     pub fn latency(&self) -> usize {
         self.fir.latency()
     }
@@ -83,9 +146,19 @@ impl LinearPhaseEq {
         self.fir.set_phase_offsets(offsets);
     }
 
+    /// Stagger the mid/side cross pair's FFT iterations.
+    pub fn set_cross_phase_offsets(&mut self, offsets: [usize; 2]) {
+        self.cross.set_phase_offsets(offsets);
+    }
+
     /// Samples until each channel's next FFT iteration.
     pub fn iteration_countdowns(&self) -> [usize; 2] {
         self.fir.iteration_countdowns()
+    }
+
+    /// True while the mid/side cross pair is running (diagnostics).
+    pub fn cross_active(&self) -> bool {
+        self.cross_state != Cross::Off
     }
 
     /// Process one stereo block in place, requesting a redesign first if
@@ -96,12 +169,79 @@ impl LinearPhaseEq {
         right: &mut [f32],
         bands: &[BandConfig; NUM_BANDS],
     ) {
+        if self.cross_state == Cross::Off && bands.iter().any(BandConfig::is_ms) {
+            // Start the cross pair from silence; the design waits until
+            // its history is real input.
+            self.cross.reset();
+            self.cross_state = Cross::Warming {
+                remaining: 2 * self.hop,
+            };
+        }
+
         // At most one redesign per hop: while one is pending the newest
         // settings wait (they differ from `cached_bands`, so they are
-        // picked up on the first block after it lands).
-        if *bands != self.cached_bands && self.fir.request(bands) {
+        // picked up on the first block after it lands). The two pairs
+        // move together, so neither may be pending.
+        let warming = matches!(self.cross_state, Cross::Warming { .. });
+        if *bands != self.cached_bands
+            && !warming
+            && !self.fir.is_pending()
+            && !self.cross.is_pending()
+        {
+            self.fir.request(bands);
+            if self.cross_state != Cross::Off {
+                self.cross.request(bands);
+            }
             self.cached_bands = *bands;
         }
-        self.fir.process(left, right);
+
+        let designed_ms = self.cached_bands.iter().any(BandConfig::is_ms);
+        self.cross_state = match self.cross_state {
+            Cross::On if !designed_ms && !self.cross.is_pending() => Cross::Draining {
+                // One hop for the later channel's crossfade to land, one
+                // for its transition output, one of margin.
+                remaining: 3 * self.hop,
+            },
+            Cross::Draining { .. } if designed_ms => Cross::On,
+            s => s,
+        };
+
+        if self.cross_state == Cross::Off {
+            self.fir.process(left, right);
+            return;
+        }
+
+        let add = matches!(self.cross_state, Cross::On | Cross::Draining { .. });
+        let n = left.len().min(right.len());
+        let mut start = 0;
+        while start < n {
+            let end = (start + CROSS_CHUNK).min(n);
+            let m = end - start;
+            let (l, r) = (&mut left[start..end], &mut right[start..end]);
+            self.cross_l[..m].copy_from_slice(r);
+            self.cross_r[..m].copy_from_slice(l);
+            self.cross
+                .process(&mut self.cross_l[..m], &mut self.cross_r[..m]);
+            self.fir.process(l, r);
+            if add {
+                for i in 0..m {
+                    l[i] += self.cross_l[i];
+                    r[i] += self.cross_r[i];
+                }
+            }
+            start = end;
+        }
+
+        self.cross_state = match self.cross_state {
+            Cross::Warming { remaining } if remaining > n => Cross::Warming {
+                remaining: remaining - n,
+            },
+            Cross::Warming { .. } => Cross::On,
+            Cross::Draining { remaining } if remaining > n => Cross::Draining {
+                remaining: remaining - n,
+            },
+            Cross::Draining { .. } => Cross::Off,
+            s => s,
+        };
     }
 }

@@ -102,6 +102,7 @@ pub use import_pool::{
 mod import_queue;
 pub use import_queue::{ImportQueue, MAX_CONCURRENT_IMPORTS};
 mod master;
+pub(crate) mod probe;
 pub(crate) mod midi;
 mod midi_map;
 pub(crate) mod plugins;

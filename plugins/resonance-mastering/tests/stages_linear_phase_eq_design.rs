@@ -29,6 +29,7 @@ fn bell_boost_is_symmetric() {
         freq_hz: 1000.0,
         q: 1.0,
         gain_db: 6.0,
+        ..BandConfig::off()
     }];
     let h = d.design(&bands, 48_000.0);
     let centre = FIR_LENGTH / 2;

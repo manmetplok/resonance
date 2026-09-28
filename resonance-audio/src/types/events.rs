@@ -9,8 +9,8 @@ use resonance_metering::MeterSnapshot;
 use crate::midi_hardware::MidiDeviceInfo;
 
 use super::{
-    ABSource, AssetId, BusId, ClipId, EngineError, EngineErrorKind, F0Frame, FadeCurve,
-    InputDeviceInfo, MidiNote, MixMeasurement, NoteBlob, ParamInfo, PluginInstanceId,
+    ABSource, AssetId, BusId, ChainProbeReport, ClipId, EngineError, EngineErrorKind, F0Frame,
+    FadeCurve, InputDeviceInfo, MidiNote, MixMeasurement, NoteBlob, ParamInfo, PluginInstanceId,
     PluginScanFailure, ReferenceAnalysisStage, ReferenceId, SamplePos, ScannedPlugin, SendId,
     SendSource, TrackId, WarpAlgorithm, WarpMarker,
 };
@@ -649,6 +649,26 @@ pub enum AudioEvent {
     /// from the same pass.
     ///
     /// [`AudioCommand::MeasureMix`]: super::AudioCommand::MeasureMix
+    /// An [`AudioCommand::ProbeChain`] finished (warmth-width-depth.md
+    /// §7.3). Terminal: a probe emits this or [`AudioEvent::ChainProbeError`].
+    ///
+    /// [`AudioCommand::ProbeChain`]: super::AudioCommand::ProbeChain
+    ChainProbed {
+        /// The command's `probe_id`, echoed unchanged.
+        probe_id: u64,
+        report: ChainProbeReport,
+    },
+    /// An [`AudioCommand::ProbeChain`] failed: a stage's live instance is
+    /// gone, its bundle would not load, or its clone would not build. The
+    /// string is user-facing.
+    ///
+    /// [`AudioCommand::ProbeChain`]: super::AudioCommand::ProbeChain
+    ChainProbeError {
+        /// The command's `probe_id`, echoed unchanged.
+        probe_id: u64,
+        /// User-facing reason.
+        message: String,
+    },
     MixMeasureError {
         /// The `measure_id` of the command that failed, echoed unchanged
         /// (ba todo #1243). Present on every failure branch, including

@@ -160,4 +160,124 @@ impl ResonanceMcp {
         self.invoke_job(meter::STEMS, &params, MEASURE_WAIT_MS)
             .await
     }
+
+    #[tool(
+        description = "Measure one slice of the mix (like meter_measure, render only) and KEEP \
+                       the numbers, so a later meter_compare can tell you what a change did. \
+                       Returns {snapshot_id, measurement}. Take one BEFORE a move (EQ, \
+                       saturation, width, a send), make the move, then meter_compare {a: \
+                       snapshot_id} against the current state. \
+                       \
+                       target and range as in meter_measure; the resolved sample range is \
+                       stored, and the \"current\" side of a compare re-renders exactly that \
+                       range. detail defaults to ALL of spectrum, stereo and dynamics, since a \
+                       detail the snapshot lacks has no delta; pass a narrower list to save \
+                       space. Snapshots live in the running app's memory for this session \
+                       only: not saved with the project, gone after a restart, and the least \
+                       recently used is evicted past 32. They survive opening another project, \
+                       so one song can be compared against another. Nothing is changed and it \
+                       is not an undo step.",
+        annotations(read_only_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_snapshot(
+        &self,
+        Parameters(params): Parameters<meter::SnapshotParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::SNAPSHOT, &params, MEASURE_WAIT_MS)
+            .await
+    }
+
+    #[tool(
+        description = "Loudness-matched A/B: the deltas (B minus A) of every measured proxy \
+                       between two measurements. This is THE tool for judging a warmth, width \
+                       or tone move, because louder always reads as warmer and better: with \
+                       match \"lufs\" (the default) B is gain-matched to A's integrated \
+                       loudness first, so a delta is a change in character, not in level. \
+                       \
+                       a and b are each \"current\" (render the project now) or a snapshot_id \
+                       from meter_snapshot; b defaults to \"current\". Both sides always \
+                       describe the same audio slice: a snapshot fixes the target and sample \
+                       range, and \"current\" re-renders exactly that range, so omit target \
+                       and range unless both sides are \"current\". Two snapshots compare \
+                       instantly with no render. match \"none\" compares as measured. \
+                       \
+                       Result: {target, measured_seconds, a, b (each {side, \
+                       lufs_integrated}), match, matched, match_gain_db, deltas}. \
+                       match_gain_db is the gain applied to B (a B that is 3 dB louder reads \
+                       about -3); matched is false with match \"none\" or when either side is \
+                       silent. Matching is exact arithmetic on the stored numbers: level \
+                       figures (lufs_integrated, lufs_short_max, lufs_momentary_max, \
+                       true_peak_db, sample_peak_db, the third_octave bands) move by the gain; \
+                       shape figures (lra, crest_db, correlation, mono_penalty_db, bands, \
+                       tilt_db_per_oct, centroid_hz, lowmid_presence_db, \
+                       presence_peakiness_db, air_ratio_db, plr_db, psr_db and the whole \
+                       stereo block) cannot change with a pure gain. clipped_samples is the \
+                       one delta reported AS MEASURED. deltas.spectrum carries third_octave \
+                       (per band), tilt_db_per_oct, centroid_hz, centroid_pct, \
+                       lowmid_presence_db, presence_peakiness_db, air_ratio_db; deltas.stereo \
+                       carries bands of {lo_hz, hi_hz, correlation, side_mid_db, \
+                       mono_loss_db}, balance_db, pct_below_0_3 and worst_window_correlation; \
+                       deltas.dynamics carries plr_db and psr_db. A delta is null when either \
+                       side lacks the number. Identical states compare to all zeros. \
+                       \
+                       Reading it for warmth: tilt_db_per_oct more negative, lowmid_presence_db \
+                       up 1-2, presence_peakiness_db down, centroid_pct down 5-15, and crest_db \
+                       down no more than 2 with psr_db staying at 8 or more in absolute terms.",
+        annotations(read_only_hint = true, idempotent_hint = false, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_compare(
+        &self,
+        Parameters(params): Parameters<meter::CompareParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::COMPARE, &params, MEASURE_WAIT_MS)
+            .await
+    }
+
+    #[tool(
+        description = "Measure the harmonic signature of an insert chain: run a sine through it \
+                       offline and read THD, the harmonics and the aliasing floor. Use it to set \
+                       a saturator's drive to a THD target instead of guessing from the knob, \
+                       and to check that a character stage is even-dominant (\"warm\"). \
+                       \
+                       target: \"master\" (default), {track_id: N} or {bus_id: N}; the chain is \
+                       that owner's inserts in order (a track's instrument is not part of it; \
+                       bypassed and missing plugins are left out and listed in skipped). \
+                       freq_hz defaults to 1000 and is snapped to the analysis grid (the result \
+                       echoes the exact value); probe at 5000 to expose aliasing, since \
+                       harmonics past Nyquist fold back. level_dbfs (default -12, -80..0) is \
+                       the tone's peak: distortion depends on level, so probe at what the chain \
+                       really sees. imd: true adds the SMPTE 60 Hz + 7 kHz 4:1 pair and \
+                       imd_pct. \
+                       \
+                       SAFE TO RUN ANY TIME: the probe builds a fresh CLONE of each plugin from \
+                       the live plugin's current saved state and drives the clones on a worker \
+                       thread. The live plugins are only read (one state save each), never \
+                       processed, reset or reloaded, so playback, automation, undo and every \
+                       plugin's running state are untouched, and it works while the transport \
+                       rolls. The clone gets no automation (it probes current values) and a \
+                       sidechain key hears silence. stages lists what was probed, with \
+                       state_copied false for a plugin that has no state extension (probed at \
+                       its defaults). \
+                       \
+                       Result: {target, freq_hz, level_dbfs, stages, skipped, gain_db, thd_pct, \
+                       h, h2_h3_db, decay_db_per_order, aliasing_floor_dbc, imd_pct, \
+                       latency_samples}. h is H2..H9 in dBc (h[0] is H2), floored at -160, \
+                       null for a harmonic above Nyquist. Targets: thd_pct 0.1-1 on the \
+                       master, 0.5-3 on a bus, 3-10 on a single track; h2_h3_db above 0 is \
+                       even-dominant (warm), below 0 odd-dominant (harder, edgier); \
+                       decay_db_per_order of 6 or more; aliasing_floor_dbc of -90 or lower. \
+                       gain_db is the chain's level change at the probe frequency. Runs as a \
+                       job.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<JobStatus>()
+    )]
+    async fn meter_probe(
+        &self,
+        Parameters(params): Parameters<meter::ProbeParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_job(meter::PROBE, &params, MEASURE_WAIT_MS)
+            .await
+    }
 }

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use crate::stages::linear_phase_eq::{
-    BandConfig, BandType, DesignWorker, FirGeometry, StereoFir, NUM_BANDS,
+    BandConfig, BandType, DesignWorker, FirGeometry, MsMode, StereoFir, NUM_BANDS,
 };
 
 /// Number of cascaded 12 dB/oct biquad sections. Two sections give a
@@ -106,5 +106,6 @@ fn cascade(cutoff_hz: f32) -> [BandConfig; NUM_BANDS] {
         freq_hz: cutoff_hz,
         q: 0.707,
         gain_db: 0.0,
+        ms: MsMode::Stereo,
     })
 }

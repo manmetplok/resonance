@@ -1,11 +1,11 @@
 //! Parametric EQ control panel — used for both the corrective and
 //! tonal EQ stages. Lays out the four bands as horizontal rows of
-//! knobs, each with enable / type / freq / Q / gain.
+//! knobs, each with enable / type / M/S / freq / Q / gain.
 
 use plugin_gui_core::egui;
 
 use crate::params::EqStageParams;
-use crate::stages::linear_phase_eq::NUM_BANDS;
+use crate::stages::linear_phase_eq::{MsMode, NUM_BANDS};
 
 use super::theme;
 use super::widgets;
@@ -40,12 +40,22 @@ pub fn draw(ui: &mut egui::Ui, params: &EqStageParams, title: &str) {
                             .color(theme::TEXT),
                     );
                     widgets::bool_checkbox(ui, &band.on, "On");
-                    widgets::int_combo(
-                        ui,
-                        &band.band_type,
-                        &format!("{}_type_{i}", title),
-                        TYPE_LABELS,
-                    );
+                    // Type and M/S side by side, so the band row keeps
+                    // its height.
+                    ui.horizontal(|ui| {
+                        widgets::int_combo(
+                            ui,
+                            &band.band_type,
+                            &format!("{}_type_{i}", title),
+                            TYPE_LABELS,
+                        );
+                        widgets::int_combo(
+                            ui,
+                            &band.ms,
+                            &format!("{}_ms_{i}", title),
+                            MsMode::LABELS,
+                        );
+                    });
                 });
                 ui.add_space(8.0);
 
