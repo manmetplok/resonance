@@ -63,14 +63,17 @@ pub const LEGACY_PARAM_COUNT: usize = DITH_BASE + DITH_PARAM_COUNT;
 
 // Appended since, in the order they were added:
 //   corrective M/S → tonal M/S → imager band widths → clipper
+//                  → saturator mode/curve
 const CORR_MS_BASE: usize = LEGACY_PARAM_COUNT;
 const TONE_MS_BASE: usize = CORR_MS_BASE + MS_PARAMS_PER_STAGE;
 const IMG_BAND_BASE: usize = TONE_MS_BASE + MS_PARAMS_PER_STAGE;
 const CLIP_BASE: usize = IMG_BAND_BASE + imager::BAND_WIDTH_PARAM_COUNT;
+const SAT_MODE_BASE: usize = CLIP_BASE + clipper::PARAM_COUNT;
 
 /// Total plugin param count: the 102 above, plus 4 + 4 band M/S
-/// selectors, 4 imager band widths and 3 clipper params.
-pub const PARAM_COUNT: usize = CLIP_BASE + clipper::PARAM_COUNT;
+/// selectors, 4 imager band widths, 3 clipper params and the
+/// saturator's mode and curve.
+pub const PARAM_COUNT: usize = SAT_MODE_BASE + saturator::MODE_PARAM_COUNT;
 
 pub struct MasteringParams {
     pub bypass: BoolParam,
@@ -109,7 +112,8 @@ impl MasteringParams {
             i if i < TONE_MS_BASE => self.corrective_eq.ms_param_at(i - CORR_MS_BASE),
             i if i < IMG_BAND_BASE => self.tonal_eq.ms_param_at(i - TONE_MS_BASE),
             i if i < CLIP_BASE => self.imager.band_width_param_at(i - IMG_BAND_BASE),
-            i if i < PARAM_COUNT => self.clipper.param_at(i - CLIP_BASE),
+            i if i < SAT_MODE_BASE => self.clipper.param_at(i - CLIP_BASE),
+            i if i < PARAM_COUNT => self.saturator.mode_param_at(i - SAT_MODE_BASE),
             _ => &self.bypass,
         }
     }

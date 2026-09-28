@@ -9,6 +9,7 @@ pub mod imager;
 pub mod limiter;
 pub mod linear_phase_eq;
 pub mod multiband;
+pub mod sat_modes;
 pub mod saturator;
 
 use resonance_plugin::Smoother;

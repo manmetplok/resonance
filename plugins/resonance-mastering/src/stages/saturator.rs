@@ -1,6 +1,15 @@
 //! Tape / tube saturator.
 //!
-//! Intended for mastering-grade harmonic coloration. Two shaper modes:
+//! Intended for mastering-grade harmonic coloration. `sat_mode` picks
+//! the voicing: the default, [`SatMode::Blend`], is the original
+//! Tube↔Tape blend described below, and is unchanged by the other modes
+//! existing — a project saved before them renders bit-identically. The
+//! other modes (Tube, Tape, Transformer, Console, Warm, Inflator) are in
+//! [`super::sat_modes`].
+//!
+//! # The Blend mode
+//!
+//! Two shaper modes:
 //! `Smooth` runs `tanh` for clean even/odd harmonics; `Gritty` runs a
 //! cubic soft-clipper with a sharper knee and richer odd-harmonic
 //! content for a more obviously analog sound.
@@ -46,10 +55,12 @@
 //! character > 0, so the wet path stays continuous as the knob sweeps —
 //! before the low shelf can amplify the offset.
 
-use resonance_dsp::{db_to_linear, Biquad, DcBlocker};
+use resonance_dsp::{db_to_linear, Biquad, Curve, DcBlocker};
 use resonance_plugin::{Smoother, SmoothingStyle};
 
 use super::retarget;
+pub use super::sat_modes::SatMode;
+use super::sat_modes::{peak_gain, ModeChannel};
 
 /// Ramp length for drive/character/mix and the enable crossfade, in
 /// milliseconds. Long enough to spread a full-scale parameter step
@@ -89,8 +100,12 @@ pub struct SaturatorConfig {
     pub character: f32,
     /// Dry/wet mix.
     pub mix: f32,
-    /// Which waveshaper to run.
+    /// Which waveshaper to run (Blend mode).
     pub shaper: Shaper,
+    /// Which voicing to run; [`SatMode::Blend`] is the original stage.
+    pub mode: SatMode,
+    /// The Inflator's Curve control, −0.5..0.5 (the JSFX's ±50 %).
+    pub curve: f32,
 }
 
 impl Default for SaturatorConfig {
@@ -101,6 +116,8 @@ impl Default for SaturatorConfig {
             character: 0.3,
             mix: 1.0,
             shaper: Shaper::Smooth,
+            mode: SatMode::Blend,
+            curve: 0.0,
         }
     }
 }
@@ -146,6 +163,21 @@ pub struct Saturator {
     /// audio history to click against); a later enable crossfades in.
     primed: bool,
     was_enabled: bool,
+
+    /// The non-Blend modes' per-channel paths (see `sat_modes`).
+    mode_l: ModeChannel,
+    mode_r: ModeChannel,
+    /// The Inflator Curve control, smoothed like the other params.
+    curve_sm: Smoother,
+    curve_tgt: f32,
+    /// The mode the stage state belongs to; a change restarts it.
+    active_mode: SatMode,
+    /// Drive (dB) and curve the cached mode values were computed for
+    /// (NaN forces the first compute).
+    mode_key: (f32, f32),
+    mode_drive_lin: f32,
+    mode_gain: f32,
+    mode_curve: Curve,
 }
 
 impl Saturator {
@@ -174,6 +206,15 @@ impl Saturator {
             adaa_x1_r: 0.0,
             primed: false,
             was_enabled: false,
+            mode_l: ModeChannel::new(sample_rate),
+            mode_r: ModeChannel::new(sample_rate),
+            curve_sm: Smoother::new(SmoothingStyle::Linear(RAMP_MS)),
+            curve_tgt: f32::NAN,
+            active_mode: SatMode::Blend,
+            mode_key: (f32::NAN, f32::NAN),
+            mode_drive_lin: 1.0,
+            mode_gain: 1.0,
+            mode_curve: Curve::Tanh,
         };
         s.set_sample_rate(sample_rate);
         s
@@ -201,6 +242,9 @@ impl Saturator {
         self.character_sm.set_sample_rate(sample_rate);
         self.mix_sm.set_sample_rate(sample_rate);
         self.enable_sm.set_sample_rate(sample_rate);
+        self.curve_sm.set_sample_rate(sample_rate);
+        self.mode_l = ModeChannel::new(sample_rate);
+        self.mode_r = ModeChannel::new(sample_rate);
     }
 
     pub fn reset(&mut self) {
@@ -223,11 +267,33 @@ impl Saturator {
         self.adaa_x1_r = 0.0;
         self.primed = false;
         self.was_enabled = false;
+        self.mode_l.reset();
+        self.mode_r.reset();
+        self.curve_sm.reset(0.0);
+        self.curve_tgt = f32::NAN;
+        self.mode_key = (f32::NAN, f32::NAN);
+    }
+
+    /// Restart the filter and ADAA state of both paths: on (re)engage,
+    /// and when the mode changes (the state belongs to the old mode).
+    fn restart_state(&mut self) {
+        self.hf_shelf_l.reset();
+        self.hf_shelf_r.reset();
+        self.lf_shelf_l.reset();
+        self.lf_shelf_r.reset();
+        self.dc_l.reset();
+        self.dc_r.reset();
+        self.adaa_x1_l = 0.0;
+        self.adaa_x1_r = 0.0;
+        self.mode_l.reset();
+        self.mode_r.reset();
+        self.mode_key = (f32::NAN, f32::NAN);
     }
 
     pub fn process_stereo(&mut self, left: &mut [f32], right: &mut [f32], cfg: &SaturatorConfig) {
         let character = cfg.character.clamp(0.0, 1.0);
         let mix = cfg.mix.clamp(0.0, 1.0);
+        let curve = cfg.curve.clamp(-0.5, 0.5);
 
         if cfg.enabled && !self.was_enabled {
             // (Re)engage. The parameter smoothers snap to the current
@@ -259,6 +325,10 @@ impl Saturator {
             self.character_tgt = character;
             self.mix_sm.reset(mix);
             self.mix_tgt = mix;
+            self.mode_l.reset();
+            self.mode_r.reset();
+            self.curve_sm.reset(curve);
+            self.curve_tgt = curve;
             if !self.primed {
                 // Very first block: engage instantly, there is no
                 // running audio to click against.
@@ -269,6 +339,11 @@ impl Saturator {
             retarget(&mut self.drive_sm, &mut self.drive_tgt, cfg.drive_db);
             retarget(&mut self.character_sm, &mut self.character_tgt, character);
             retarget(&mut self.mix_sm, &mut self.mix_tgt, mix);
+            retarget(&mut self.curve_sm, &mut self.curve_tgt, curve);
+        }
+        if cfg.mode != self.active_mode {
+            self.restart_state();
+            self.active_mode = cfg.mode;
         }
         let enable_target = if cfg.enabled { 1.0 } else { 0.0 };
         retarget(&mut self.enable_sm, &mut self.enable_tgt, enable_target);
@@ -278,6 +353,11 @@ impl Saturator {
         // Fully faded out: the stage is a wire, bit-identical to a
         // hard bypass once the disable crossfade has finished.
         if !cfg.enabled && self.enable_sm.current() == 0.0 {
+            return;
+        }
+
+        if cfg.mode != SatMode::Blend {
+            self.process_mode(left, right, cfg.mode);
             return;
         }
 
@@ -327,6 +407,35 @@ impl Saturator {
 
             left[i] = dry_l + (l3 - dry_l) * mix;
             right[i] = dry_r + (r3 - dry_r) * mix;
+        }
+    }
+}
+
+impl Saturator {
+    /// The non-Blend modes (see `sat_modes`): each channel's dry/wet
+    /// blend at 4×, then the enable crossfade against the raw input.
+    fn process_mode(&mut self, left: &mut [f32], right: &mut [f32], mode: SatMode) {
+        let frames = left.len().min(right.len());
+        for i in 0..frames {
+            let drive_db = self.drive_sm.next();
+            let curve = self.curve_sm.next();
+            if (drive_db, curve) != self.mode_key || self.mode_key.0.is_nan() {
+                self.mode_key = (drive_db, curve);
+                self.mode_drive_lin = db_to_linear(drive_db);
+                self.mode_gain = peak_gain(mode, self.mode_drive_lin, curve);
+                self.mode_curve = mode.curve(self.mode_drive_lin, curve).unwrap_or(Curve::Tanh);
+            }
+            // Kept moving so it has converged if the mode goes back to
+            // Blend.
+            let _ = self.character_sm.next();
+            let mix = self.mix_sm.next();
+            let e = self.enable_sm.next();
+            let (dl, dr) = (left[i], right[i]);
+            let (drive, gain, c) = (self.mode_drive_lin, self.mode_gain, self.mode_curve);
+            let wl = self.mode_l.process(mode, &c, dl, drive, gain, mix);
+            let wr = self.mode_r.process(mode, &c, dr, drive, gain, mix);
+            left[i] = dl + (wl - dl) * e;
+            right[i] = dr + (wr - dr) * e;
         }
     }
 }
