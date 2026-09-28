@@ -28,6 +28,30 @@ fn zero_cents_is_an_exact_delay_of_the_mean() {
     }
 }
 
+/// The exact-delay promise also holds where the asked-for times are not
+/// whole samples: at 44.1 kHz a 5 ms base is 220.5 samples and a 10 ms
+/// window 441 (odd, so its half is fractional too). The base rounds to a
+/// whole sample and the window to an even one, so the 0-cent tap is
+/// still a whole-sample delay and reads no interpolation.
+#[test]
+fn zero_cents_is_exact_for_fractional_base_and_odd_window() {
+    let fs = 44_100.0;
+    let mut d = DopplerShifter::new(fs, 30.0, 10.0);
+    d.set_base_delay(fs, 5.0);
+    d.set_cents(0.0);
+    let window = d.window_samples();
+    assert_eq!(window % 2.0, 0.0, "window {window} is not even");
+    let mean = d.mean_delay_samples();
+    assert_eq!(mean.fract(), 0.0, "mean delay {mean} is not whole");
+    let lag = mean as usize;
+    let x = noise(8_000, 0.8, 4);
+    let y: Vec<f32> = x.iter().map(|&v| d.process(v)).collect();
+    for i in 0..x.len() {
+        let want = if i >= lag { x[i - lag] } else { 0.0 };
+        assert_eq!(y[i], want, "sample {i}");
+    }
+}
+
 /// Frequency of the strongest bin of `x`, in Hz.
 fn peak_hz(x: &[f32]) -> f64 {
     let spec = amplitude_spectrum(x);
