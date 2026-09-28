@@ -66,6 +66,7 @@ mod plugins;
 /// `automation.*` plugin lanes.
 mod plugin_target;
 mod project;
+mod reference_track;
 mod render;
 /// The shared half of `track/bus/master.replace_effect` (todo #1309).
 mod replace;
@@ -250,6 +251,11 @@ fn execute_mutating(
     // assistant over an offline render of the master, as a job. Like
     // `meter.*` it changes nothing but describes the OPEN project.
     if let Some(handled) = assist::try_handle(app, conn, request) {
+        return handled;
+    }
+    // Reference tracks (warmth-width-depth.md §7.5): load a pooled asset
+    // onto the A/B reference list — undoable project content.
+    if let Some(handled) = reference_track::try_handle(app, request) {
         return handled;
     }
 

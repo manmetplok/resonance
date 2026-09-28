@@ -28,6 +28,7 @@ pub mod plugin_preset;
 pub mod plugins;
 pub mod pool;
 pub mod project;
+pub mod reference;
 pub mod render;
 pub mod section;
 pub mod song;
@@ -76,6 +77,7 @@ pub fn capabilities() -> Vec<&'static str> {
         notes::METHODS,
         pool::METHODS,
         clip::METHODS,
+        reference::METHODS,
         arrangement::METHODS,
         vocal::METHODS,
         render::METHODS,

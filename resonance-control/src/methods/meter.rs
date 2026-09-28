@@ -74,7 +74,8 @@ pub const METHODS: &[&str] = &[MEASURE, STEMS, SNAPSHOT, COMPARE, PROBE];
 /// `{"track_id": N}` / `{"bus_id": N}` — the same id space
 /// `song.summary` reports every track and bus under. A track target
 /// includes that track's sub-tracks, so a multi-output instrument is
-/// measured whole.
+/// measured whole. `{"reference": N}` measures a loaded reference track
+/// instead (`reference.load`; `meter.measure` only).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub enum MeasureTarget {
@@ -92,6 +93,12 @@ pub enum MeasureTarget {
     /// bus's own FX chain, before master FX and the master fader.
     #[serde(rename = "bus_id")]
     Bus(TrackId),
+    /// A reference track loaded with `reference.load`, measured whole
+    /// from its decoded audio, exactly as a clip of the same file would
+    /// measure. `meter.measure` only; `range` and `source: "live"` do not
+    /// apply to it.
+    #[serde(rename = "reference")]
+    Reference(crate::ids::ReferenceId),
 }
 
 /// Where the numbers come from.
@@ -144,11 +151,13 @@ pub enum MeasureDetail {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MeasureParams {
-    /// Defaults to `"master"`.
+    /// Defaults to `"master"`. `{"reference": N}` measures a loaded
+    /// reference track.
     #[serde(default)]
     pub target: MeasureTarget,
     /// Defaults to the whole song. A range reaching past the end of the
-    /// song is clamped to it rather than refused.
+    /// song is clamped to it rather than refused. Refused for a
+    /// reference, which is always measured whole.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<RangeSpec>,
     /// Defaults to `"render"`.

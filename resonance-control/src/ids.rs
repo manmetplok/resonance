@@ -83,3 +83,9 @@ id_type!(
     /// `clip.place`.
     AssetId
 );
+id_type!(
+    /// A loaded reference track: one entry of the project's A/B reference
+    /// list. Returned by `reference.load` and taken by `meter.measure`'s
+    /// `{"reference": N}` target.
+    ReferenceId
+);

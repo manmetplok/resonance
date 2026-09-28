@@ -1,7 +1,7 @@
 {
   "name": "resonance-agent-plugin",
   "description": "Skills for driving a running resonance DAW over the resonance MCP server: mixing and mastering procedures built on the meter_* measurement tools.",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "author": {
     "name": "Jorrit"
   }

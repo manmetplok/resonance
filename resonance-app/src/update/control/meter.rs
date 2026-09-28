@@ -85,8 +85,8 @@ use crate::message::Message;
 use crate::Resonance;
 use iced::Task;
 use resonance_audio::types::{
-    AudioCommand, ChainProbeReport, DetailSet, MeasureSource as EngineSource, MixMeasurement,
-    ProbeSpec, ProbeStage, SamplePos, StemSource,
+    AudioCommand, AudioMeasureSource, ChainProbeReport, DetailSet,
+    MeasureSource as EngineSource, MixMeasurement, ProbeSpec, ProbeStage, SamplePos, StemSource,
 };
 use resonance_control::methods::meter::{
     self as proto, Bands, CompareParams, CompareResult, CompareSide, CompareSideInfo,
@@ -130,6 +130,9 @@ fn measure(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         Ok(p) => p,
         Err(e) => return (super::failure(request, e), Task::none()),
     };
+    if let MeasureTarget::Reference(id) = params.target {
+        return (measure_reference(app, conn, request, id, &params), Task::none());
+    }
 
     let target = match resolve_target(app, params.target) {
         Ok(target) => target,
@@ -184,6 +187,104 @@ fn measure(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
         start(app, conn, request, proto::MEASURE, vec![target], range, source, detail),
         Task::none(),
     )
+}
+
+/// `meter.measure {target: {reference: N}}` (warmth-width-depth.md §7.5):
+/// measure a loaded reference track from its decoded audio.
+///
+/// No render, so none of the render guards apply and it may run while the
+/// transport rolls; the engine measures the A/B player's decoded PCM with
+/// the same code a rendered slice goes through, and the result is read
+/// back under the reference's own target in [`mix_measured`].
+fn measure_reference(
+    app: &mut Resonance,
+    conn: ConnId,
+    request: &Request,
+    id: resonance_control::ids::ReferenceId,
+    params: &MeasureParams,
+) -> Response {
+    if params.source == MeasureSource::Live {
+        return super::failure(
+            request,
+            RpcError::invalid_params(
+                "a reference has no live meter; omit `source` to measure its decoded audio",
+            ),
+        );
+    }
+    if params.range.is_some_and(|r| !is_whole(&r)) {
+        return super::failure(
+            request,
+            RpcError::invalid_params(
+                "a reference is always measured whole: `range` counts song time, which a \
+                 reference track does not share; omit it",
+            ),
+        );
+    }
+    let engine_id = match u32::try_from(id.0) {
+        Ok(raw) => resonance_audio::types::ReferenceId(raw),
+        Err(_) => return super::failure(request, no_reference(id)),
+    };
+    let Some(entry) = app.reference.entries.iter().find(|e| e.id == engine_id) else {
+        return super::failure(request, no_reference(id));
+    };
+    use crate::reference::ReferenceStatus;
+    match &entry.status {
+        ReferenceStatus::Loaded => {}
+        ReferenceStatus::Analyzing(_) => {
+            return super::failure(
+                request,
+                RpcError::busy(format!(
+                    "reference {id} is still decoding; measure it again in a moment"
+                )),
+            )
+        }
+        ReferenceStatus::Missing => {
+            return super::failure(
+                request,
+                RpcError::not_found(format!("reference {id}'s file is missing")),
+            )
+        }
+        ReferenceStatus::Error(reason) => {
+            return super::failure(
+                request,
+                RpcError::invalid_params(format!("reference {id} failed to load: {reason}")),
+            )
+        }
+    }
+    let name = entry.name.clone();
+    let started = app.start_control_job(
+        proto::MEASURE,
+        &format!("Measure reference {name}"),
+        JobToken::Measure {
+            method: proto::MEASURE,
+            offline: false,
+            compare: None,
+        },
+        Some(conn),
+    );
+    let job = u64::from(started.job_id);
+    app.control.reference_measures.insert(job, id);
+    if app
+        .engine
+        .send(AudioCommand::MeasureAudio {
+            measure_id: job,
+            source: AudioMeasureSource::Reference(engine_id),
+            detail: detail_set(&params.detail),
+        })
+        .is_err()
+    {
+        app.control.reference_measures.remove(&job);
+        app.control
+            .jobs
+            .fail(job, "measurement did not start (engine unavailable)");
+    }
+    super::success(request, &started)
+}
+
+fn no_reference(id: resonance_control::ids::ReferenceId) -> RpcError {
+    RpcError::not_found(format!(
+        "no reference {id} is loaded; load one with reference.load"
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -866,10 +967,21 @@ pub(crate) fn mix_measured(
     let payload = match method {
         // `meter.measure` asks for exactly one target, so exactly one
         // measurement comes back.
-        proto::MEASURE => results
-            .first()
-            .map(|m| with_solo(app, measure_result(m, app.sample_rate)))
-            .and_then(|r| serde_json::to_value(r).ok()),
+        proto::MEASURE => {
+            let reference = app.control.reference_measures.remove(&measure_id);
+            results
+                .first()
+                .map(|m| match reference {
+                    // Decoded reference audio: its own target, and solo is
+                    // meaningless for it.
+                    Some(id) => MeasureResult {
+                        target: MeasureTarget::Reference(id),
+                        ..measure_result(m, app.sample_rate)
+                    },
+                    None => with_solo(app, measure_result(m, app.sample_rate)),
+                })
+                .and_then(|r| serde_json::to_value(r).ok())
+        }
         proto::STEMS => stems_result(app, &results).and_then(|r| serde_json::to_value(r).ok()),
         proto::SNAPSHOT => results.first().and_then(|m| {
             let measurement = with_solo(app, measure_result(m, app.sample_rate));
@@ -917,6 +1029,7 @@ pub(crate) fn mix_measured(
 /// once the engine wins a race the app could not.
 pub(crate) fn mix_measure_error(app: &mut Resonance, measure_id: u64, message: String) {
     super::assist::failed(app, measure_id);
+    app.control.reference_measures.remove(&measure_id);
     match app.control.jobs.live_measure(measure_id) {
         Some(_) => app.control.jobs.fail(measure_id, message),
         None => tracing::warn!("audio: mix measurement failed: {message}"),
@@ -1177,6 +1290,10 @@ fn resolve_target(app: &Resonance, target: MeasureTarget) -> Result<StemSource, 
                 Err(super::reply::no_bus(raw))
             }
         }
+        MeasureTarget::Reference(_) => Err(RpcError::invalid_params(
+            "a reference track is not part of the mix: measure it with meter.measure; \
+             snapshots, compares and probes take the master, a track or a bus",
+        )),
     }
 }
 

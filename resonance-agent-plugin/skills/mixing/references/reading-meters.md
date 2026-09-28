@@ -264,6 +264,23 @@ target, reaching it would have taken more limiting than the ceiling allows. Do
 not push harder here: the master needs its own glue and limiting first, and its
 PSR (see `dynamics`) should stay at 8 or more.
 
+## Reference tracks: `reference_load`
+
+A reference is a commercial master the user supplies to compare against.
+Import the file with `pool_import`, then call `reference_load` with its
+`pool_asset_id`. The reference joins the GUI's A/B reference panel and is
+saved with the project; the load is undoable. It decodes in the background,
+so a measurement asked for right away answers `busy`: retry.
+
+`meter_measure` with `target: {reference: reference_id}` measures the
+reference whole, from the same pooled file a clip of it would play. It
+reports every field and detail block a mix slice gets. `range` and
+`source: "live"` do not apply, and `meter_snapshot`, `meter_compare` and
+`meter_probe` refuse a reference target. Compare the two measurements
+directly: `tilt_db_per_oct`, the per-band `side_mid_db` and correlation,
+and `plr_db` / `psr_db`. Judge tone only at matched loudness: a commercial
+master is usually 6-10 LU louder than a mix, and louder reads brighter.
+
 ## The mastering assistant: `master_assist`
 
 `master_assist` runs the `com.resonance.mastering` Assistant offline over the

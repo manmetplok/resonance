@@ -23,7 +23,11 @@ impl ResonanceMcp {
                        \
                        target: \"master\" (default), {track_id: N} or {bus_id: N}, ids from \
                        song_summary. A track target includes its sub-tracks, so a multi-output \
-                       instrument is measured as one whole thing. range defaults to the whole \
+                       instrument is measured as one whole thing. {reference: N} measures a \
+                       REFERENCE TRACK loaded with reference_load instead — whole (no range, \
+                       no live), from the same pooled file a clip of it would play, with every \
+                       field and detail block a mix slice gets — so compare a reference's \
+                       tilt, per-band width and PLR with the master's directly. range defaults to the whole \
                        song and is clamped to it. source defaults to \"render\" (an offline \
                        render, deterministic, needs a stopped transport and no bounce in \
                        flight); \"live\" instead reads the master meter as it plays, master \

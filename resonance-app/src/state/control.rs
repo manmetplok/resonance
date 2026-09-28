@@ -71,6 +71,13 @@ pub struct ControlEndpointState {
     /// `master.assist` jobs waiting on the engine's measurements, keyed by
     /// job id (warmth-width-depth.md §7.4).
     pub pending_assists: HashMap<u64, PendingAssist>,
+    /// `meter.measure` jobs measuring a reference track, keyed by job id:
+    /// the reference the result is reported under (§7.5).
+    pub reference_measures: HashMap<u64, resonance_control::ids::ReferenceId>,
+    /// References loaded by `reference.load` that are still decoding: the
+    /// asset name their `ReferenceLoaded` echo is listed under instead of
+    /// the pooled file's `asset_N` stem.
+    pub reference_names: HashMap<resonance_audio::types::ReferenceId, String>,
     /// Normalized `render.mixdown` jobs waiting on `ExportComplete`, keyed
     /// by the output path the engine echoes (warmth-width-depth.md §7.7):
     /// the platform and targets the result reports next to what the file

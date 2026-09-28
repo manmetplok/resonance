@@ -418,7 +418,10 @@ async fn master_assist_round_trips_params_and_result() {
         },
         "suggestions": [
             {"stage": "tonal_low_shelf", "rationale": ["Low shelf: -2.0 dB"],
-             "params": [{"key": "tone_b0_on", "value": 1.0}, {"key": "tone_b0_gain", "value": -2.0}]},
+             "params": [
+                 {"key": "tone_b0_on", "value": 1.0},
+                 {"key": "tone_b0_gain", "value": -2.0}
+             ]},
             {"stage": "diagnostic", "rationale": ["Input integrated loudness: -20.5 LUFS"],
              "params": []}
         ],

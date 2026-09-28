@@ -244,6 +244,7 @@ const WIRE_FIELDS: &[&str] = &[
     "clip_id",
     "clip_ids",
     "pool_asset_id",
+    "reference_id",
     "section_id",
     "track_id",
 ];

@@ -79,6 +79,8 @@ fn mutating_methods() -> Vec<&'static str> {
         // project". The rest of `pool.*` / `clip.*` mutates outright.
         methods::pool::METHODS,
         methods::clip::METHODS,
+        // `reference.load` adds to the open project's reference list.
+        methods::reference::METHODS,
         // `automation.lanes` reads only, but like `master.summary` it
         // describes the OPEN project's lanes — "no lanes" and "no
         // project" are different claims. `set_lane` mutates outright.
