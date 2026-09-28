@@ -14,7 +14,15 @@
 //!   (`output_pipewire`);
 //! - a thread we cannot run code on before its first callback (cpal's
 //!   audio worker): [`seed_arc_swap_nodes`] leaves free nodes in the list
-//!   so that thread's first load takes one without allocating.
+//!   so that thread's first load takes one instead of `Box`ing a new
+//!   one. That removes the Rust allocation, not every allocation: the
+//!   first load still initialises arc-swap's per-thread `THREAD_HEAD`,
+//!   and registering that thread-local's destructor goes through glibc's
+//!   `__cxa_thread_atexit_impl`, which `calloc`s its list entry. It is a
+//!   one-off, small and bounded, but it is on that thread's first
+//!   callback, and a Rust `#[global_allocator]` never sees it. Only
+//!   running code on the thread before its first callback would move
+//!   it.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};

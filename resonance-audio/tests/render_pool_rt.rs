@@ -1,13 +1,18 @@
-//! The render pool's dispatch and join never allocate — on any thread
-//! (realtime-multithreading.md §7).
+//! The render pool's dispatch and join never make a Rust heap
+//! allocation, on any thread (realtime-multithreading.md §7).
 //!
 //! A standalone binary because it installs a `#[global_allocator]`, which
-//! is process-wide: it counts heap allocations on EVERY thread, the render
-//! workers included, while armed. The one test here drives the whole
-//! audio callback on a four-thread pool through spinning and parked
+//! is process-wide: it counts Rust heap allocations on EVERY thread, the
+//! render workers included, while armed. The one test here drives the
+//! whole audio callback on a four-thread pool through spinning and parked
 //! stretches (so the wake path runs too) and asserts that, from the
-//! pool's first block until every worker has run a job, not a single
+//! pool's first block until every worker has run a job, no Rust
 //! allocation happens anywhere in the process.
+//!
+//! What the counter cannot see: allocations made below Rust's allocator,
+//! by libc or another C library on its own behalf — glibc `calloc`ing a
+//! thread-local destructor entry (`rt_prep.rs`), for one. This guards
+//! the Rust side of the path, not the process's whole heap.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
