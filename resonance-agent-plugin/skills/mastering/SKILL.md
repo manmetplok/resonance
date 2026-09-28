@@ -6,7 +6,7 @@ when_to_use: >-
   LUFS", "prepare for Spotify", "add a limiter", "it's too quiet compared to
   other tracks", "make it sound like this reference", "final polish", "it
   sounds sterile".
-allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__meter_measure mcp__resonance__meter_snapshot mcp__resonance__meter_compare mcp__resonance__meter_probe mcp__resonance__master_summary mcp__resonance__master_plugin_params
+allowed-tools: mcp__resonance__control_hello mcp__resonance__song_summary mcp__resonance__meter_measure mcp__resonance__meter_snapshot mcp__resonance__meter_compare mcp__resonance__meter_probe mcp__resonance__master_summary mcp__resonance__master_plugin_params mcp__resonance__master_assist
 ---
 
 # Mastering in resonance
@@ -196,21 +196,26 @@ When the user supplies a commercial reference, compare against it instead of
 against generic targets. The reference must be in the project pool
 (`pool_import`, then `pool_list` for its id).
 
-> TODO(master.assist): the `master.assist` control method and its MCP tool are
-> being built. Resolve this branch against the landed tool name and result
-> shape before shipping; until then, skip 3b if `control_hello` does not list
-> `master.assist`.
+1. Run `mcp__resonance__master_assist` with `{mode: "reference", pool_asset_id}`,
+   or with `{mode: "genre", genre}` (rock, indie, acoustic, jazz, pop) for the
+   built-in genre target bands. It **suggests, it does not apply**. Run it
+   before switching stages on, because `measured` is taken after the whole
+   master chain.
+2. Read `deviations[]` first. It gives 31 bands, 0 inside the target band.
+   Then treat each `suggestions[]` entry as a measurement asking for a stage
+   (the table in 3). Each entry lists its exact `{key, value}` writes. Apply
+   the ones you agree with through `master_set_plugin_param`, one stage per
+   pass, with `meter_compare` after each, as above. `input_trim` is an
+   absolute value computed from the current output, so it does not stack
+   across re-runs.
+3. To compare figures the assistant does not cover (tilt, width per band,
+   PLR), call `mcp__resonance__reference_load {pool_asset_id}`. Then run
+   `meter_measure {target: {reference: <id>}, detail: [...]}` and set its
+   numbers beside the master's.
+4. Report which suggestions you took, which you did not, and why.
 
-With `master.assist` in `capabilities`:
-
-1. Call it in reference mode with the reference's pool asset id (or
-   `{mode: "genre", genre: <what the user named>}` for the built-in genre
-   target bands). It **suggests, it does not apply**: each suggestion comes with
-   its rationale.
-2. Treat each suggestion as a measurement asking for a stage (the table in 3).
-   Apply the ones you agree with through `master_set_plugin_param`, one stage
-   per pass, with `meter_compare` after each, as above.
-3. Report which suggestions you took, which you did not, and why.
+`mixing/references/reading-meters.md` ("The mastering assistant") documents
+every field.
 
 A genre is a parameter the user gives, never a branch baked into this
 procedure.

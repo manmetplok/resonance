@@ -1,7 +1,11 @@
 # Warmth, width and depth — mix character for agents and humans
 
-Status: **plan, not started; decisions recorded in §10** (2026-09-28,
-master @ f95f2afe). Research-backed
+Status: **W0–W12 built and merged 2026-09-28**, decisions in §10.
+Deviations found while building: the PurestWarm one-polarity curve is not
+even-only, so `Warm` is a strictly even curve instead. The delay "Haas — Safe"
+preset was dropped, because Haas lives in `resonance-stereo`. De-harsh
+defaults are Q 24 / selectivity 5 (`docs/design/deharsh-resonance-suppressor.md`).
+Research-backed
 spec. §1–§4 are the research digest (vocabulary, measurable proxies, the
 field, the procedure), §5 is what exists, §6–§8 are the proposal, §9 is
 the build order. Land it as vertical slices in the usual
