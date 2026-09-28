@@ -1,7 +1,7 @@
 use resonance_common::automation::CurveKind;
 use resonance_common::automation_shape::{
-    generate_shape, replace_range, BarSpan, GeneratedPoint, ShapeError, ShapeKind, ShapeRequest,
-    StepQuantizer, MAX_SHAPE_POINTS_PER_CALL,
+    generate_shape, lands_on_to, replace_range, BarSpan, GeneratedPoint, ShapeError, ShapeKind,
+    ShapeRequest, StepQuantizer, MAX_SHAPE_POINTS_PER_CALL,
 };
 
 const TICKS_PER_BAR_4_4: u64 = 1920; // 4 beats * 480 ticks/beat, matches app's TICKS_PER_QUARTER_NOTE
@@ -9,18 +9,12 @@ const TICKS_PER_BAR_7_8: u64 = 7 * 240; // 7 eighth-notes * 240 ticks/eighth
 
 fn bars_4_4(count: u64) -> Vec<BarSpan> {
     (0..count)
-        .map(|i| BarSpan {
-            start_tick: i * TICKS_PER_BAR_4_4,
-            end_tick: (i + 1) * TICKS_PER_BAR_4_4,
-        })
+        .map(|i| BarSpan::whole(i * TICKS_PER_BAR_4_4, (i + 1) * TICKS_PER_BAR_4_4))
         .collect()
 }
 
 fn one_bar_7_8() -> Vec<BarSpan> {
-    vec![BarSpan {
-        start_tick: 0,
-        end_tick: TICKS_PER_BAR_7_8,
-    }]
+    vec![BarSpan::whole(0, TICKS_PER_BAR_7_8)]
 }
 
 fn base_request(shape: ShapeKind, bars: Vec<BarSpan>) -> ShapeRequest {
@@ -115,18 +109,16 @@ fn triangle_default_cycles_is_one() {
 // --- end point holds `to` (D3) --------------------------------------------
 
 #[test]
-fn every_shape_ends_at_to_and_at_the_final_tick() {
+fn every_sweep_ends_at_to_and_at_the_final_tick() {
     let bars = bars_4_4(2);
     let end_tick = bars.last().unwrap().end_tick;
     for shape in [
         ShapeKind::Ramp,
         ShapeKind::Exp,
-        ShapeKind::Sine,
-        ShapeKind::Triangle,
-        ShapeKind::Square,
         ShapeKind::Steps,
         ShapeKind::RandomWalk,
     ] {
+        assert!(lands_on_to(shape));
         let out = generate_shape(&base_request(shape, bars.clone())).unwrap();
         let last = out.points.last().unwrap();
         assert_eq!(last.tick, end_tick, "shape {shape:?} last tick");
@@ -137,6 +129,47 @@ fn every_shape_ends_at_to_and_at_the_final_tick() {
         );
         assert_sorted_ascending(&out.points);
     }
+}
+
+#[test]
+fn every_oscillator_ends_at_the_final_tick_on_its_own_phase() {
+    let bars = bars_4_4(2);
+    let end_tick = bars.last().unwrap().end_tick;
+    for shape in [ShapeKind::Sine, ShapeKind::Triangle, ShapeKind::Square] {
+        assert!(!lands_on_to(shape));
+        for cycles in [1, 3] {
+            let mut req = base_request(shape, bars.clone());
+            req.cycles = Some(cycles);
+            let out = generate_shape(&req).unwrap();
+            let last = out.points.last().unwrap();
+            assert_eq!(last.tick, end_tick, "shape {shape:?} last tick");
+            // Whole cycles end where they started: at `from`.
+            assert!(
+                (last.value - 300.0).abs() < 1e-9,
+                "shape {shape:?} x{cycles} should end on `from`, got {}",
+                last.value
+            );
+            assert_sorted_ascending(&out.points);
+        }
+    }
+}
+
+#[test]
+fn a_one_cycle_triangle_keeps_its_down_leg() {
+    let out = generate_shape(&base_request(ShapeKind::Triangle, bars_4_4(2))).unwrap();
+    let values: Vec<f64> = out.points.iter().map(|p| p.value).collect();
+    assert_eq!(values, vec![300.0, 4000.0, 300.0]);
+    assert_eq!(out.points[1].tick, TICKS_PER_BAR_4_4);
+}
+
+#[test]
+fn a_sine_has_no_spike_in_its_last_step() {
+    let out = generate_shape(&base_request(ShapeKind::Sine, bars_4_4(1))).unwrap();
+    let n = out.points.len();
+    let (before, last) = (out.points[n - 2].value, out.points[n - 1].value);
+    // One 1/16-bar step before the end of a one-cycle sine: near `from`,
+    // and the end point stays near it too.
+    assert!((before - last).abs() < 0.05 * 3700.0, "{before} -> {last}");
 }
 
 #[test]
@@ -450,13 +483,7 @@ fn empty_bars_is_rejected() {
 
 #[test]
 fn invalid_bar_span_is_rejected() {
-    let req = base_request(
-        ShapeKind::Ramp,
-        vec![BarSpan {
-            start_tick: 100,
-            end_tick: 100,
-        }],
-    );
+    let req = base_request(ShapeKind::Ramp, vec![BarSpan::whole(100, 100)]);
     assert!(matches!(
         generate_shape(&req).unwrap_err(),
         ShapeError::InvalidBarSpan { .. }
@@ -545,14 +572,8 @@ fn replace_range_with_generated_shape_output_end_to_end() {
 /// A 7/8 bar followed by a 4/4 bar, back to back.
 fn seven_eight_then_four_four() -> Vec<BarSpan> {
     vec![
-        BarSpan {
-            start_tick: 0,
-            end_tick: TICKS_PER_BAR_7_8,
-        },
-        BarSpan {
-            start_tick: TICKS_PER_BAR_7_8,
-            end_tick: TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4,
-        },
+        BarSpan::whole(0, TICKS_PER_BAR_7_8),
+        BarSpan::whole(TICKS_PER_BAR_7_8, TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4),
     ]
 }
 
@@ -602,11 +623,95 @@ fn sine_phase_follows_ticks_across_mixed_meters() {
     let bars = seven_eight_then_four_four();
     let span = (TICKS_PER_BAR_7_8 + TICKS_PER_BAR_4_4) as f64;
     let out = generate_shape(&base_request(ShapeKind::Sine, bars)).unwrap();
-    // Every point but the forced end point sits on the one-cycle sine of
+    // Every point, the end point included, sits on the one-cycle sine of
     // its own time fraction.
-    for p in &out.points[..out.points.len() - 1] {
+    for p in &out.points {
         let t = p.tick as f64 / span;
         let expected = 300.0 + 3700.0 * (1.0 - (2.0 * std::f64::consts::PI * t).cos()) / 2.0;
         assert!((p.value - expected).abs() < 1e-9, "{p:?} vs {expected}");
     }
+}
+
+// --- partial bars get a proportional share -----------------------------------
+
+/// Beat 3 of one 4/4 bar through beat 2 of the next: half a bar, then a
+/// quarter of a bar.
+fn half_then_quarter_bar() -> Vec<BarSpan> {
+    let beat = TICKS_PER_BAR_4_4 / 4;
+    vec![
+        BarSpan {
+            start_tick: 2 * beat,
+            end_tick: TICKS_PER_BAR_4_4,
+            bar_ticks: TICKS_PER_BAR_4_4,
+        },
+        BarSpan {
+            start_tick: TICKS_PER_BAR_4_4,
+            end_tick: TICKS_PER_BAR_4_4 + beat,
+            bar_ticks: TICKS_PER_BAR_4_4,
+        },
+    ]
+}
+
+#[test]
+fn partial_bars_get_points_in_proportion_to_what_they_cover() {
+    let out = generate_shape(&base_request(ShapeKind::Exp, half_then_quarter_bar())).unwrap();
+    // 16/bar: half a bar -> 8, a quarter -> 4, plus the end point.
+    assert_eq!(out.points.len(), 8 + 4 + 1);
+    // The density is uniform: every step is 1/16 of a bar.
+    for w in out.points.windows(2) {
+        assert_eq!(w[1].tick - w[0].tick, TICKS_PER_BAR_4_4 / 16, "{w:?}");
+    }
+    assert_eq!(out.points.last().unwrap().value, 4000.0);
+}
+
+#[test]
+fn a_partial_bar_rounds_its_share_up_and_never_drops_below_one() {
+    // 3 per bar over a quarter bar: ceil(0.75) = 1. Steps default to 1 per
+    // bar: a quarter bar still gets its one step.
+    let quarter = vec![BarSpan {
+        start_tick: 0,
+        end_tick: TICKS_PER_BAR_4_4 / 4,
+        bar_ticks: TICKS_PER_BAR_4_4,
+    }];
+    let mut req = base_request(ShapeKind::Sine, quarter.clone());
+    req.resolution = Some(3);
+    assert_eq!(generate_shape(&req).unwrap().points.len(), 1 + 1);
+    let steps = generate_shape(&base_request(ShapeKind::Steps, quarter)).unwrap();
+    assert_eq!(steps.points.len(), 1 + 1);
+    // A third of a bar at 16/bar: ceil(5.33) = 6.
+    let third = vec![BarSpan {
+        start_tick: 0,
+        end_tick: 640,
+        bar_ticks: TICKS_PER_BAR_4_4,
+    }];
+    let out = generate_shape(&base_request(ShapeKind::Exp, third)).unwrap();
+    assert_eq!(out.points.len(), 6 + 1);
+}
+
+#[test]
+fn the_suggested_resolution_accounts_for_partial_bars() {
+    // 100 whole bars plus half a bar at 1000/bar is far over the limit.
+    let mut bars = bars_4_4(100);
+    let end = bars.last().unwrap().end_tick;
+    bars.push(BarSpan {
+        start_tick: end,
+        end_tick: end + TICKS_PER_BAR_4_4 / 2,
+        bar_ticks: TICKS_PER_BAR_4_4,
+    });
+    let mut req = base_request(ShapeKind::Sine, bars);
+    req.resolution = Some(1000);
+    let ShapeError::TooManyPoints {
+        max_value, count, ..
+    } = generate_shape(&req).unwrap_err()
+    else {
+        panic!("expected TooManyPoints");
+    };
+    assert_eq!(count, 100 * 1000 + 500 + 1);
+    // 20/bar: 2000 + 10 + 1 = 2011 fits; 21/bar: 2100 + 11 + 1 does not.
+    assert_eq!(max_value, 20);
+    let mut retry = req.clone();
+    retry.resolution = Some(max_value);
+    assert_eq!(generate_shape(&retry).unwrap().points.len(), 2011);
+    retry.resolution = Some(max_value + 1);
+    assert!(generate_shape(&retry).is_err());
 }

@@ -127,15 +127,17 @@ fn cutoff_example() -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn every_shape_has_its_point_count_and_ends_at_end_holding_to() {
-    // Over bars 1-2 (end {bar: 3}): 2 bars.
-    for (shape_name, expected) in [
-        ("ramp", 2),
-        ("sine", 16 * 2 + 1),
-        ("triangle", 3),
-        ("square", 3),
-        ("steps", 2 + 1),
-        ("random_walk", 4 * 2 + 1),
+fn every_shape_has_its_point_count_and_a_point_at_end() {
+    // Over bars 1-2 (end {bar: 3}): 2 bars. The sweeps land on `to` (0 dB)
+    // at end; the oscillators end on their own phase, which after whole
+    // cycles is `from` (-30 dB).
+    for (shape_name, expected, end_value) in [
+        ("ramp", 2, 0.0),
+        ("sine", 16 * 2 + 1, -30.0),
+        ("triangle", 3, -30.0),
+        ("square", 3, -30.0),
+        ("steps", 2 + 1, 0.0),
+        ("random_walk", 4 * 2 + 1, 0.0),
     ] {
         let mut app = app();
         let lane = lane_of(shape_ok(
@@ -155,8 +157,8 @@ fn every_shape_has_its_point_count_and_ends_at_end_holding_to() {
         );
         assert_eq!(
             last.value,
-            AutomationValue::Number(0.0),
-            "{shape_name} end holds to"
+            AutomationValue::Number(end_value),
+            "{shape_name} end value"
         );
         for w in lane.points.windows(2) {
             assert!(w[0].position.sample < w[1].position.sample, "{shape_name}");
@@ -336,10 +338,24 @@ fn a_mute_shape_is_stepped_bools() {
         assert!(matches!(p.value, AutomationValue::Bool(_)), "{p:?}");
         assert!(p.normalized == 0.0 || p.normalized == 1.0, "{p:?}");
     }
+    // A whole-cycle sine swings to `to` mid-way and ends back on `from`.
+    assert!(lane
+        .points
+        .iter()
+        .any(|p| p.value == AutomationValue::Bool(true)));
     assert_eq!(
         lane.points.last().unwrap().value,
-        AutomationValue::Bool(true)
+        AutomationValue::Bool(false)
     );
+    // A ramp, a sweep, lands on `to`.
+    let ramp = lane_of(shape_ok(
+        &mut app,
+        json!({"track_id": TRACK, "control": "mute", "start": {"bar": 5},
+               "end": {"bar": 6}, "shape": "ramp", "from": false, "to": true}),
+    ));
+    let last = ramp.points.last().unwrap();
+    assert_eq!(last.value, AutomationValue::Bool(true));
+    assert_eq!(last.curve, AutomationCurve::Stepped);
 }
 
 #[test]
@@ -357,7 +373,35 @@ fn a_stepped_parameter_takes_labels_and_is_rounded_to_its_steps() {
         let v = number(&p.value);
         assert_eq!(v, v.round(), "{p:?} is on a step");
     }
-    assert_eq!(lane.points.last().unwrap().text, "High-pass");
+    assert!(lane.points.iter().any(|p| p.text == "High-pass"));
+    assert_eq!(lane.points.last().unwrap().text, "Low-pass");
+}
+
+#[test]
+fn a_range_starting_and_ending_mid_bar_keeps_the_density_uniform() {
+    let mut app = app();
+    // Bar 1 beat 3 to bar 3 beat 2: half a bar, a whole bar, a quarter.
+    let lane = lane_of(shape_ok(
+        &mut app,
+        json!({"track_id": TRACK, "param": "Filter Cutoff",
+               "start": {"bar": 1, "beat": 3}, "end": {"bar": 3, "beat": 2},
+               "shape": "exp", "from": 300, "to": 4000}),
+    ));
+    assert_eq!(lane.points.len(), 8 + 16 + 4 + 1);
+    // Every step is a sixteenth of a bar.
+    for w in lane.points.windows(2) {
+        assert_eq!(
+            w[1].position.sample - w[0].position.sample,
+            BAR / 16,
+            "{:?} then {:?}",
+            w[0].position,
+            w[1].position
+        );
+    }
+    assert_eq!(lane.points[0].position.sample, BAR / 2);
+    let last = lane.points.last().unwrap();
+    assert_eq!(last.position.sample, 2 * BAR + BAR / 4);
+    assert_eq!(last.value, AutomationValue::Number(4000.0));
 }
 
 // ---------------------------------------------------------------------------

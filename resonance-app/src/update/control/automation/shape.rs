@@ -146,14 +146,18 @@ impl BarGrid {
         let mut bar = first_bar;
         let mut end_tick = map.sample_to_abs_tick(end, sr).max(start_tick + 1);
         loop {
-            let next_tick = bar_tick + map.bar_len_ticks_at(bar);
+            let bar_ticks = map.bar_len_ticks_at(bar);
+            let next_tick = bar_tick + bar_ticks;
             end_tick = snap(end_tick, next_tick);
             let lo = start_tick.max(bar_tick);
             let hi = end_tick.min(next_tick);
             if hi > lo {
+                // A clipped first / last bar keeps its whole length, so
+                // the generator gives it a proportional share of points.
                 spans.push(BarSpan {
                     start_tick: lo,
                     end_tick: hi,
+                    bar_ticks,
                 });
                 bars.push((bar, bar_tick));
             }

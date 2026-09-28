@@ -104,8 +104,10 @@ impl ResonanceMcp {
                        \
                        start / end: {bar, beat} | {sample}; bars and beats are 1-based and \
                        meter-aware. The curve starts at start holding from and INCLUDES a point \
-                       AT end holding to, so the value arrives: {bar: 25} as end sweeps over \
-                       bars 17-24 and lands on the downbeat of bar 25. Only points in [start, \
+                       AT end. For ramp, exp, steps and random_walk that point holds to, so \
+                       the value arrives: {bar: 25} as end sweeps over bars 17-24 and lands on \
+                       the downbeat of bar 25. sine, triangle and square instead end on their \
+                       own phase — after whole cycles that is from, not to. Only points in [start, \
                        end] (both ends included) are replaced; points outside are kept (unlike \
                        automation_set_lane, which replaces ALL points). \
                        \
@@ -119,7 +121,8 @@ impl ResonanceMcp {
                        deterministic from seed, default 0; the seed used is echoed). \
                        resolution = points per bar (defaults: exp / sine 16, steps 1, \
                        random_walk 4), spaced evenly within each bar, so a 7/8 bar gets as \
-                       many points as a 4/4 bar, while the curve's value follows time. At most \
+                       many points as a 4/4 bar, while the curve's value follows time; a range \
+                       starting or ending mid-bar gets that bar's proportional share. At most \
                        2048 points per call; past it the error names the largest resolution \
                        that fits. Mute and stepped plugin parameters are always stepped and \
                        rounded to their steps. \

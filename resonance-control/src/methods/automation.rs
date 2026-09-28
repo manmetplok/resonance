@@ -432,14 +432,17 @@ pub struct ShapeParams {
     pub target: AutomationTargetSpec,
     /// Where the curve starts, holding `from`.
     pub start: PositionSpec,
-    /// The generated curve INCLUDES a point at `end` holding `to`; points
-    /// already in `[start, end]` are replaced, points outside are kept.
-    /// Must lie after `start`.
+    /// The generated curve INCLUDES a point at `end` — holding `to` for
+    /// `ramp` / `exp` / `steps` / `random_walk`, the oscillator's own value
+    /// there (after whole cycles: `from`) for `sine` / `triangle` /
+    /// `square`. Points already in `[start, end]` are replaced, points
+    /// outside are kept. Must lie after `start`.
     pub end: PositionSpec,
     pub shape: ShapeKind,
     /// The value at `start`, in real units (or `0..=1` when `normalized`).
     pub from: AutomationValue,
-    /// The value at `end`, in real units (or `0..=1` when `normalized`).
+    /// The value a sweep arrives at at `end`, or the far extreme an
+    /// oscillator swings to; real units (or `0..=1` when `normalized`).
     pub to: AutomationValue,
     /// Whole periods over the range (`sine`, `triangle`, `square`; at
     /// least 1, default 1).
