@@ -25,8 +25,10 @@ roles, then decide.
 
 Call `mcp__resonance__control_hello`. This procedure needs `meter.stems`,
 `meter.measure`, `meter.snapshot`, `meter.compare`, `mixer.set_pan`,
-`track.add_send`, `bus.create`, `bus.add_effect`, `bus.set_plugin_param` and
-`bus.set_sidechain` in `capabilities`. If one is missing, the running app is
+`mixer.set_volume_db`, `track.add_effect`, `track.set_plugin_param`,
+`track.add_send`, `track.set_send`, `bus.create`, `bus.add_effect`,
+`bus.load_plugin_preset`, `bus.set_plugin_param` and `bus.set_sidechain` in
+`capabilities`. If one is missing, the running app is
 older than this plugin: say so and stop.
 
 `song_summary` and `song_tracks` for ids, kinds, pans, sends and busses. Note
@@ -108,7 +110,7 @@ Verify each move: `meter_compare {a: snapshot_id}` — `side_mid_db` up above
    10 kHz.
 5. **Duck the return** from the lead, keyed with `bus_set_sidechain`.
 6. **Darken the back.** Back-layer parts get less top (a high shelf or the
-   colour plugin's `tone`), front parts keep theirs.
+   colour plugin's output tilt), front parts keep theirs.
 7. **Verify the ordering.** `meter_stems` `detail: ["depth"]`: front's
    `drr_db_estimate` above middle's above back's, and `hf_tilt_db` falling
    front to back.

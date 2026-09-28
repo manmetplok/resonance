@@ -19,8 +19,11 @@ fix a balance problem — it magnifies one. If the mix is not finished, use the
 
 Call `mcp__resonance__control_hello`. This procedure needs `meter.measure`,
 `meter.snapshot`, `meter.compare`, `meter.probe`, `master.summary`,
-`master.add_effect`, `master.plugin_params` and `master.set_plugin_param`. If
-any is missing, the running app is older than this plugin — say so and stop.
+`master.add_effect`, `master.plugin_params`, `master.set_plugin_param` and
+`render.mixdown`. The reference branch (3b) also needs `master.assist`,
+`reference.load`, `pool.import` and `pool.list`. If any is missing, the running
+app is older than this plugin — say so and stop (for 3b, skip the branch and
+say why).
 
 ## 1. Establish the starting point
 
@@ -84,7 +87,7 @@ map names the levers, the listing is the territory.
 | Corrective EQ | `corr_b{n}_on` | per band n = 0-3: `corr_b{n}_type` (0 Bell, 1 low shelf, 2 high shelf, 3 high-pass, 4 low-pass), `corr_b{n}_freq`, `corr_b{n}_q`, `corr_b{n}_gain`, `corr_b{n}_ms` (`Stereo` / `Mid` / `Side`). Defaults: b0 high-pass 30 Hz, b1 250 Hz, b2 500 Hz, b3 3 kHz |
 | De-harsh | `dh_on` | a resonance suppressor: `dh_depth` (max cut, dB), `dh_selectivity` (dB above the smoothed spectrum before it acts), `dh_sharpness` (Q of each cut), `dh_attack`, `dh_release` (ms), `dh_low`, `dh_high` (band, default 1-8 kHz), `dh_mode` (`Stereo` / `Mid` / `Side` / `Mid+Side`), `dh_mix`, `dh_delta` (hear only what is removed; never leave it on) |
 | Glue compressor | `glue_on` | `glue_threshold`, `glue_ratio`, `glue_attack`, `glue_release`, `glue_knee`, `glue_makeup`, `glue_mix` |
-| Saturator | `sat_on` | `sat_mode` (`Blend`, `Tube`, `Tape`, `Transformer`, `Console`, `Warm`, `Inflator`), `sat_drive` (dB), `sat_mix`; `Blend` only: `sat_character` (0 Tube … 1 Tape), `sat_shaper` (0 smooth, 1 gritty); `Inflator` only: `sat_curve` |
+| Saturator | `sat_on` | `sat_mode` (`Blend`, `Tube`, `Tape`, `Transformer`, `Console`, `Warm`, `Inflator`), `sat_drive` (dB), `sat_mix`; `sat_character` (0 Tube … 1 Tape) and `sat_shaper` (0 smooth, 1 gritty) only in `sat_mode` `Blend`; `sat_curve` only in `sat_mode` `Inflator` |
 | Tonal EQ | `tone_b{n}_on` | as the corrective EQ, with the tone prefix. Defaults: b0 low shelf 100 Hz, b1 700 Hz, b2 2.5 kHz, b3 high shelf 10 kHz |
 | Multiband | `mb_on` | `mb_xo1`, `mb_xo2`, `mb_xo3` (crossovers); per band n = 0-3: `mb_b{n}_on`, `mb_b{n}_thresh`, `mb_b{n}_ratio`, `mb_b{n}_attack`, `mb_b{n}_release`, `mb_b{n}_knee`, `mb_b{n}_mix`, `mb_b{n}_gain` |
 | Imager | `img_on` | `img_width` (0-2, 1 = unchanged), `img_side_hpf_on`, `img_side_hpf_freq` (the mono-maker), `img_b{n}_width` (per multiband band, low first; needs the crossovers) |
@@ -109,7 +112,7 @@ Reach for a stage only when a number asked for it:
 | Measurement | Stage |
 |---|---|
 | A narrow resonance in `peaks`, or rumble below 30 Hz | corrective EQ |
-| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | de-harsh (`dh_on`, start at the defaults), or a corrective EQ bell for one static peak |
+| A presence peak (2-5 kHz `peaks`, high `presence_peakiness_db`) | de-harsh (its switch, starting at the defaults), or a corrective EQ bell for one static peak |
 | The mix does not cohere; parts sit separately | glue compressor, gently |
 | Sterile (the test below) | saturator |
 | `tilt_db_per_oct` off the target slope | tonal EQ |
@@ -124,8 +127,9 @@ The mix is sterile when **both** hold:
 
 - `tilt_db_per_oct` is flatter than about -4.5 (from the baseline's spectrum
   detail), **and**
-- `meter_probe` on the master, and on the mix busses if the mix has any, shows
-  `thd_pct` under 0.1 %: nothing in the path adds harmonics.
+- `meter_probe {level_dbfs: -18}` on the master, and on every mix bus if the
+  mix has any, shows `thd_pct` under 0.1 %: nothing in the path adds
+  harmonics.
 
 If the mix busses already carry colour and the probe shows it, the mix is not
 sterile; do not stack a master stage on top of it. Otherwise, the saturator:
@@ -137,12 +141,13 @@ sterile; do not stack a master stage on top of it. Otherwise, the saturator:
 | `sat_mode` | `Tape` or `Transformer` (even-leaning, low-weighted); `Tube` or `Warm` for more H2 |
 | `sat_mix` | 0.1-0.3 for parallel |
 | `sat_drive` | raised until the probe hits the master THD band |
-| `Inflator` | density (loudness without more limiting), odd-only: not a warmth tool |
+| `sat_mode` `Inflator` | density (loudness without more limiting), odd-only: not a warmth tool |
 <!-- /keys -->
 
-Set the drive with `meter_probe {level_dbfs: <the master's true peak before the
-chain>}`: `thd_pct` 0.1-1 %, `h2_h3_db` above 0 and `decay_db_per_order` 6 or
-more. The full warmth procedure, with its stop rules, is the mixing skill's
+Set the drive with `meter_probe {level_dbfs: -18}` on the master, the level
+every THD band here is defined at (the tool's default is -12, so pass it):
+`thd_pct` 0.1-1 %, `h2_h3_db` above 0 and `decay_db_per_order` 6 or more. The
+full warmth procedure, with its stop rules, is the mixing skill's
 `${CLAUDE_PLUGIN_ROOT}/skills/mixing/references/character.md`.
 
 ### Tone: tilt toward the target slope
@@ -175,12 +180,33 @@ compare's stereo deltas: the highs' `side_mid_db` up, the low bands'
 ### Clipper, then limiter
 
 <!-- keys: com.resonance.mastering -->
-The clipper shaves transients so the limiter does less: `clip_on` `On`,
-`clip_drive` 1-3 dB, `clip_shape` toward soft. It lowers the peaks by
-`clip_drive` and adds no loudness itself, so raise `input_trim_db` by about the
-same amount to use the headroom it made. Then `lim_on` `On`, `lim_ceiling` -1
-(-2 safer through lossy codecs), `lim_release` about 50 ms, and bring the level
-up with `input_trim_db`: about -14 minus the pre-master integrated LUFS.
+The limiter sets the level: `lim_on` `On`, `lim_ceiling` -1 (-2 safer through
+lossy codecs), `lim_release` about 50 ms, and bring the level up with
+`input_trim_db`: about -14 minus the pre-master integrated LUFS.
+
+The clipper's ceiling is **absolute**: it sits at minus `clip_drive` dBFS, and
+only what peaks above it is shaved. A mix still peaking at -6 dBFS passes it
+untouched, so the trim has to come first. Nothing sits between the clipper and
+the limiter, so the clipper takes every dB of peak above its ceiling and leaves
+the limiter only the stretch from its ceiling down to `lim_ceiling`. The clip
+depth is therefore the pre-clipper true peak plus `clip_drive`, not
+`clip_drive` alone.
+<!-- /keys -->
+
+So, when the limiter pumps or `crest_db` is high with sharp transients:
+
+1. With the clipper and the limiter off and the trim already raised, the
+   master's `true_peak_db` is the pre-clipper peak.
+2. Switch the clipper on with a soft shape and pick the drive so that peak
+   plus drive is 1-3 dB: that is how much the clipper shaves.
+3. Switch the limiter back on and compare. If the loudness target needs more
+   than about 3 dB of peak reduction in total, the clipper would take it all:
+   leave it off and let the limiter do the work, or keep it only if `crest_db`,
+   `psr_db` and a `meter_probe {freq_hz: 5000}` aliasing check still hold.
+
+<!-- keys: com.resonance.mastering -->
+Those switches are `clip_on` `On`, `clip_shape` toward 1 (soft) and
+`clip_drive` in dB.
 <!-- /keys -->
 
 The limiter is the only stage that reliably buys loudness. Raising
@@ -198,21 +224,31 @@ against generic targets. The reference must be in the project pool
 
 1. Run `mcp__resonance__master_assist` with `{mode: "reference", pool_asset_id}`,
    or with `{mode: "genre", genre}` (rock, indie, acoustic, jazz, pop) for the
-   built-in genre target bands. It **suggests, it does not apply**. Run it
-   before switching stages on, because `measured` is taken after the whole
-   master chain.
+   built-in genre target bands. It **suggests, it does not apply**.
+   **Run it once, before switching any stage on.** It measures the master
+   after the whole master chain, so its first run is the only one that sees
+   the mix itself.
 2. Read `deviations[]` first. It gives 31 bands, 0 inside the target band.
    Then treat each `suggestions[]` entry as a measurement asking for a stage
    (the table in 3). Each entry lists its exact `{key, value}` writes. Apply
    the ones you agree with through `master_set_plugin_param`, one stage per
-   pass, with `meter_compare` after each, as above. `input_trim` is an
-   absolute value computed from the current output, so it does not stack
-   across re-runs.
-3. To compare figures the assistant does not cover (tilt, width per band,
+   pass, with `meter_compare` after each, as above.
+3. If you re-run it after applying anything, its numbers are **what is left
+   to do**, relative to the settings already on the chain, not a fresh
+   setting. The trim is the target loudness minus what the chain puts out
+   now (less 3 dB of limiter headroom), and each shelf gain is only the part
+   of the spectrum still outside the band. So **add** the new trim and shelf
+   gains to the current values from `master_plugin_params`; writing them as
+   given undoes the move you made. A re-run's glue suggestion reads the crest
+   after your glue and limiter and so is no longer about the mix: ignore it
+   once either is on. Its imager width multiplies the width already set.
+   Its limiter ceiling (-0.3 dBTP) is looser than the -1 dBTP target in 4:
+   keep -1.
+4. To compare figures the assistant does not cover (tilt, width per band,
    PLR), call `mcp__resonance__reference_load {pool_asset_id}`. Then run
    `meter_measure {target: {reference: <id>}, detail: [...]}` and set its
    numbers beside the master's.
-4. Report which suggestions you took, which you did not, and why.
+5. Report which suggestions you took, which you did not, and why.
 
 `mixing/references/reading-meters.md` ("The mastering assistant") documents
 every field.
