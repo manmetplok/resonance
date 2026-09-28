@@ -415,6 +415,7 @@ fn master_export_keeps_fx_tail_and_matches_stem_length() {
         &e.shared,
         &AtomicBool::new(false),
         &e.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
         &tx,
     );

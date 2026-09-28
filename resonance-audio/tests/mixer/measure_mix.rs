@@ -27,7 +27,10 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 
-use resonance_audio::test_support::{MEASURE_BUSY_MSG, MeasureSource, MixMeasurement, SharedState, StemSource, measure_mix, measure_rendered_buffer, stem_filter};
+use resonance_audio::test_support::{
+    measure_mix, measure_rendered_buffer, stem_filter, AutomationSnapshot, MeasureSource,
+    MixMeasurement, SharedState, StemSource, MEASURE_BUSY_MSG,
+};
 use resonance_audio::types::*;
 
 const SR: u32 = 48_000;
@@ -110,6 +113,7 @@ impl EngineState {
             source,
             &self.shared,
             &self.tempo_map,
+            &AutomationSnapshot::default(),
             SR,
             &self.tx,
         );

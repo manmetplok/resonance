@@ -42,7 +42,7 @@ use clap_sys::process::clap_process;
 
 use multi_out_harness::{at_master, peak, EngineState, PARENT, SR, TAP_A, TAP_B};
 use resonance_audio::test_support::{
-    __instance_from_raw_for_test, render_stem, PluginSlot, StemSource,
+    __instance_from_raw_for_test, render_stem, AutomationSnapshot, PluginSlot, StemSource,
 };
 use resonance_audio::types::*;
 
@@ -280,6 +280,7 @@ fn render_second_chunk(state: &EngineState, source: StemSource) -> f32 {
         TWO_CHUNKS,
         &state.shared,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
     )
     .expect("render succeeds");
@@ -481,6 +482,7 @@ fn the_key_is_one_block_old() {
         TWO_CHUNKS,
         &state.shared,
         &state.tempo_map,
+        &AutomationSnapshot::default(),
         SR,
     )
     .expect("render succeeds");
