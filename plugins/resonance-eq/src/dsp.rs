@@ -14,13 +14,15 @@
 //! A **dynamic** band (`dyn_on`) pulls its own gain down while its
 //! frequency region is loud: a detector filter matched to the band (a
 //! band-pass for a bell, a low-pass under a low shelf or lift, a
-//! high-pass over a high shelf, air or tilt) feeds a peak detector, a
+//! high-pass over a high shelf or air) feeds a peak detector, a
 //! soft-knee gain computer (threshold, ratio) and attack/release
 //! ballistics, and the band is re-voiced at `gain - GR` every
 //! [`DYN_UPDATE_SAMPLES`] samples. A bell at 0 dB with dynamics on is a
 //! pure de-harsh cut that only acts when the region is hot; with a static
 //! boost it is a boost that backs off when the region gets loud. Only
-//! gain-using kinds take dynamics; on cuts the switch is ignored.
+//! the kinds [`BandKind::supports_dyn`] names take dynamics (bell,
+//! shelves, air); on the cuts, Tilt and LF Lift+Dip the switch is
+//! ignored.
 //!
 //! **Auto-gain** trims the output by the negated [`static_gain_db`] of the
 //! band curve. It is a *static* estimate — a function of the parameters
@@ -51,7 +53,7 @@ const DYN_REVOICE_EPS_DB: f32 = 0.01;
 /// One band's dynamics state.
 #[derive(Clone, Copy)]
 struct DynState {
-    /// Dynamics on, band enabled, and a kind that has a gain.
+    /// Dynamics on, band enabled, and a kind that supports them.
     active: bool,
     /// Detector filter, matched to the band's kind and frequency.
     detector: Biquad,
@@ -117,11 +119,12 @@ impl DynState {
 fn configure_detector(d: &mut Biquad, s: &BandSnapshot, sr: f32) {
     match s.kind {
         BandKind::Bell => d.set_band_pass(sr, s.freq, s.q.max(0.3)),
-        BandKind::LowShelf | BandKind::LfLiftDip => d.set_low_pass(sr, s.freq, 0.707),
-        BandKind::HighShelf | BandKind::Air | BandKind::Tilt => {
-            d.set_high_pass(sr, s.freq, 0.707)
+        BandKind::LowShelf => d.set_low_pass(sr, s.freq, 0.707),
+        BandKind::HighShelf | BandKind::Air => d.set_high_pass(sr, s.freq, 0.707),
+        // No dynamics on these (`BandKind::supports_dyn`).
+        BandKind::LowCut | BandKind::HighCut | BandKind::Tilt | BandKind::LfLiftDip => {
+            d.set_identity()
         }
-        BandKind::LowCut | BandKind::HighCut => d.set_identity(),
     }
 }
 
@@ -370,7 +373,7 @@ impl EqDsp {
             let dy = band.dyn_snapshot();
             let d = &mut self.dyn_state[i];
             if d.last != Some((dy, snapshot)) {
-                let active = dy.on && snapshot.enabled && snapshot.kind.uses_gain();
+                let active = dy.on && snapshot.enabled && snapshot.kind.supports_dyn();
                 if active && !d.active {
                     d.detector.reset();
                     d.peak_env = 0.0;

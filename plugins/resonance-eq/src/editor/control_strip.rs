@@ -182,9 +182,10 @@ fn draw_band_column(ui: &mut egui::Ui, app: &mut EqEditorApp, band_index: usize)
 
                 // Dynamics: a switch, then threshold / ratio / attack /
                 // release. Always laid out so the columns line up; greyed
-                // while off, and unavailable on the cut kinds.
+                // while off, and unavailable on the kinds that take no
+                // dynamics (the cuts, Tilt, LF Lift+Dip).
                 ui.add_space(4.0);
-                ui.add_enabled_ui(kind.uses_gain(), |ui| {
+                ui.add_enabled_ui(kind.supports_dyn(), |ui| {
                     let mut on = band.dyn_on.value();
                     if ui.checkbox(&mut on, "Dynamic").changed() {
                         band.dyn_on.set_value(on);

@@ -135,6 +135,39 @@ fn dynamics_are_ignored_on_cut_kinds_and_off_by_default() {
     assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
 }
 
+/// Tilt and LF Lift+Dip have no single gain a dynamic cut could pull
+/// down: lowering a tilt's gain *raises* its bottom end, and lowering a
+/// lift's raises its dip — a "cut" that boosts the other side up to
+/// +24 dB. Dynamics act only on the bell, the shelves and Air; on these
+/// two the switch (and every dyn param) is ignored, bit for bit.
+#[test]
+fn dynamics_are_ignored_on_tilt_and_lf_lift_dip() {
+    for kind in [BandKind::Tilt, BandKind::LfLiftDip] {
+        assert!(!kind.supports_dyn(), "{kind:?} must not take dynamics");
+        let setup = |p: &EqParams, dyn_on: bool| {
+            let b = &p.bands[3];
+            b.enabled.set_value(true);
+            b.kind.set_value(kind.to_index());
+            b.freq.set_value(if kind == BandKind::Tilt { 1_000.0 } else { 80.0 });
+            b.gain.set_value(4.0);
+            b.dyn_on.set_value(dyn_on);
+            b.dyn_threshold.set_value(-60.0);
+            b.dyn_ratio.set_value(10.0);
+            b.dyn_attack.set_value(1.0);
+        };
+        let input = |n: u64| sine(60.0, 0.5)(n) + sine(4_000.0, 0.4)(n);
+        let a = render(|p| setup(p, false), input, 20);
+        let b = render(|p| setup(p, true), input, 20);
+        assert!(
+            a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()),
+            "{kind:?} with dynamics on rendered differently"
+        );
+    }
+    for kind in [BandKind::Bell, BandKind::LowShelf, BandKind::HighShelf, BandKind::Air] {
+        assert!(kind.supports_dyn(), "{kind:?} must take dynamics");
+    }
+}
+
 /// A named, fully pinned setup.
 type Scenario = (&'static str, fn(&EqParams));
 

@@ -117,6 +117,22 @@ impl BandKind {
     pub fn uses_q(self) -> bool {
         !matches!(self, BandKind::Tilt | BandKind::LfLiftDip | BandKind::Air)
     }
+
+    /// Whether a dynamic band (`dyn_on`) acts on this kind: the bell, the
+    /// shelves and Air, whose gain is a single cut or boost a dynamic
+    /// reduction can pull down.
+    ///
+    /// Not the cuts, which have no gain, and not Tilt or LF Lift+Dip:
+    /// their gain knob drives two opposite moves at once, so lowering it
+    /// raises the other side — a tilt's bottom end, a lift's dip — and a
+    /// "cut" would boost by up to the full reduction. On these kinds the
+    /// DSP ignores every dyn param and the editor greys the controls.
+    pub fn supports_dyn(self) -> bool {
+        matches!(
+            self,
+            BandKind::Bell | BandKind::LowShelf | BandKind::HighShelf | BandKind::Air
+        )
+    }
 }
 
 /// Which part of the stereo signal a band filters.

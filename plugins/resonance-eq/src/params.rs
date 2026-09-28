@@ -29,6 +29,11 @@ pub struct BandParams {
     pub q: FloatParam,
     /// 0=Bell, 1=LowShelf, 2=HighShelf, 3=LowCut, 4=HighCut, 5=Tilt,
     /// 6=LF Lift+Dip, 7=Air — mirror of `BandKind`.
+    ///
+    /// Note: W8 grew the range from 0–4 to 0–7, so a *normalized* value
+    /// (an automation lane, a host's 0..1 view) now lands on a different
+    /// kind than before; plain values — saved state — are unchanged.
+    /// Deliberately not migrated: there are no real users with kind lanes.
     pub kind: IntParam,
     /// 0=12 dB/oct, 1=24 dB/oct, 2=48 dB/oct — only meaningful for LowCut/HighCut.
     pub slope: IntParam,
@@ -36,7 +41,8 @@ pub struct BandParams {
     pub ms: IntParam,
     /// Dynamic band: the band's gain is pulled down by the level of its
     /// own frequency region (see `crate::dsp`). Off by default; ignored
-    /// on cut kinds.
+    /// on the kinds `BandKind::supports_dyn` excludes (the cuts, Tilt,
+    /// LF Lift+Dip).
     pub dyn_on: BoolParam,
     /// Detector level above which the dynamic band starts to cut, dBFS.
     pub dyn_threshold: FloatParam,
