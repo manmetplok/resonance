@@ -131,8 +131,17 @@ fn the_selector_only_loads_what_the_user_picked() {
     // `wavenet.nam` is index 0 — the file a spurious load lands on — and
     // `wavenet_a1_standard.nam` is index 1.
     let root = std::env::temp_dir().join(format!("resonance-amp-selector-{}", std::process::id()));
-    let models = root.join("resonance/amp-models/tone3000");
     let _ = std::fs::remove_dir_all(&root);
+    std::env::set_var("XDG_DATA_HOME", &root);
+    // macOS ignores `XDG_DATA_HOME`: `dirs::data_dir()` there is
+    // `$HOME/Library/Application Support`, so redirect `HOME` too and ask
+    // `dirs` where that lands rather than hard-coding the Linux layout.
+    #[cfg(target_os = "macos")]
+    std::env::set_var("HOME", &root);
+    let models = dirs::data_dir()
+        .expect("data dir resolves under the scratch root")
+        .join("resonance/amp-models/tone3000");
+    assert!(models.starts_with(&root), "{} is not under {}", models.display(), root.display());
     std::fs::create_dir_all(&models).expect("create scratch downloads dir");
     let mut seeded: Vec<String> = ["wavenet.nam", "wavenet_a1_standard.nam"]
         .into_iter()
@@ -143,7 +152,6 @@ fn the_selector_only_loads_what_the_user_picked() {
         })
         .collect();
     seeded.sort();
-    std::env::set_var("XDG_DATA_HOME", &root);
 
     // -- A freshly added amp -------------------------------------------
     // No persisted model, so nothing should be playing and nothing should

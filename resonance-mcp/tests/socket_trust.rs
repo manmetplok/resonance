@@ -20,7 +20,10 @@ use std::time::Duration;
 
 fn scratch(tag: &str) -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
-    let root = std::env::temp_dir().join(format!(
+    // `/tmp`, not `temp_dir()`: macOS's per-user `$TMPDIR` under
+    // `/var/folders/…` pushes `…/resonance-1000/control.sock` past the
+    // 104-byte `sun_path` limit and `bind` fails before the test starts.
+    let root = Path::new("/tmp").join(format!(
         "resonance-mcp-trust-{tag}-{}-{}",
         std::process::id(),
         N.fetch_add(1, Ordering::Relaxed)

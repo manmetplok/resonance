@@ -5,6 +5,10 @@
 //! none. Unless the show that follows releases it, egui keeps the button
 //! down — a slider drag that never ends (FU-M1c).
 
+// `InputState` translates SCTK events, so it (and its re-export) only
+// exists in the Linux build of the crate.
+#![cfg(target_os = "linux")]
+
 use egui::{Event, PointerButton};
 use wayland_plugin_gui::InputState;
 
