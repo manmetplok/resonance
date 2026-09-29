@@ -34,7 +34,6 @@ use crossbeam_channel::Sender;
 use resonance_common::ExternalInstrument;
 
 use crate::midi_hardware::{enumerate_midi_outputs, MidiOutputRegistry};
-use crate::platform;
 use crate::types::{AudioEvent, TrackId, TrackMap};
 
 use super::thread::{HandlerCtx, HandlerState};
@@ -224,10 +223,10 @@ pub(crate) fn handle_set_patch(
     );
 }
 
-/// Dispatch glue for `AudioCommand::CheckExternalInstrumentDevices`: read the
-/// track's configured MIDI output + audio-return device names, enumerate the
-/// currently-available hardware, and report any endpoint that has gone offline
-/// via [`check_external_instrument_devices_in_place`].
+/// Dispatch glue for `AudioCommand::CheckExternalInstrumentDevices`: queue
+/// the input enumeration the check needs on the worker (it can block on the
+/// macOS microphone-permission prompt, `engine::input_devices`). The check
+/// itself runs in [`apply_input_devices_for_check`] when the names arrive.
 pub(crate) fn handle_check_devices(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -236,30 +235,43 @@ pub(crate) fn handle_check_devices(
     if !state.external_instruments.contains_key(&track_id) {
         return;
     }
-    let (midi_out_device, return_input_device) = {
-        let tracks = ctx.tracks();
-        match tracks.get(&track_id) {
-            Some(t) => (
-                t.midi_output_device.load_full().map(|n| (*n).clone()),
-                t.input_device_name.load_full().map(|n| (*n).clone()),
-            ),
-            None => (None, None),
-        }
-    };
+    state.input_devices.request_check(ctx, track_id);
+}
+
+/// The enumeration worker's answer to [`handle_check_devices`]: read each
+/// track's configured MIDI output + audio-return device names now, list the
+/// MIDI outputs, and report any endpoint that has gone offline via
+/// [`check_external_instrument_devices_in_place`]. A track that stopped being
+/// an external instrument meanwhile is skipped by that check.
+pub(crate) fn apply_input_devices_for_check(
+    ctx: &HandlerCtx,
+    state: &HandlerState,
+    track_ids: HashSet<TrackId>,
+    available_inputs: HashSet<String>,
+) {
     let available_midi_outputs: HashSet<String> =
         enumerate_midi_outputs().into_iter().map(|d| d.name).collect();
-    let (inputs, _default) = platform::enumerate_input_devices();
-    let available_inputs: HashSet<String> = inputs.into_iter().map(|d| d.name).collect();
-
-    check_external_instrument_devices_in_place(
-        &state.external_instruments,
-        ctx.event_tx,
-        track_id,
-        midi_out_device.as_deref(),
-        return_input_device.as_deref(),
-        &available_midi_outputs,
-        &available_inputs,
-    );
+    for track_id in track_ids {
+        let (midi_out_device, return_input_device) = {
+            let tracks = ctx.tracks();
+            match tracks.get(&track_id) {
+                Some(t) => (
+                    t.midi_output_device.load_full().map(|n| (*n).clone()),
+                    t.input_device_name.load_full().map(|n| (*n).clone()),
+                ),
+                None => (None, None),
+            }
+        };
+        check_external_instrument_devices_in_place(
+            &state.external_instruments,
+            ctx.event_tx,
+            track_id,
+            midi_out_device.as_deref(),
+            return_input_device.as_deref(),
+            &available_midi_outputs,
+            &available_inputs,
+        );
+    }
 }
 
 /// Re-send Bank Select + Program Change for a single external-instrument track

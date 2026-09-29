@@ -727,6 +727,21 @@ impl EngineHandlerHarness {
         });
     }
 
+    /// Replace what `ListInputDevices` and the external-instrument device
+    /// check enumerate with — e.g. an enumerator that blocks, standing in
+    /// for CoreAudio waiting on the macOS microphone-permission prompt.
+    pub fn set_input_enumerator(
+        &mut self,
+        enumerate: impl Fn() -> (Vec<crate::types::InputDeviceInfo>, Option<String>)
+            + Send
+            + Sync
+            + 'static,
+    ) {
+        self.state
+            .input_devices
+            .set_enumerator(std::sync::Arc::new(enumerate));
+    }
+
     /// Apply every worker result waiting on the engine inbox (a finished
     /// clip load, a pitch analysis, a bounced clip, retune caches), in
     /// order, through the real engine-thread handlers — what the engine
