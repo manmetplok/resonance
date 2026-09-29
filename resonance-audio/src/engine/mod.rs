@@ -95,6 +95,9 @@ pub use clips::{
 };
 pub(crate) mod id_grant;
 mod import_pool;
+/// Input-device enumeration on a worker: it can block on the macOS
+/// microphone-permission prompt.
+pub(crate) mod input_devices;
 pub use import_pool::{
     import_one_to_pool, run_pool_import, run_pool_import_with, PoolImportOutcome,
     POOL_IMPORT_CANCELLED,

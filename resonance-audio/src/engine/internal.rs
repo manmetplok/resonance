@@ -28,10 +28,12 @@
 //!
 //! [`SharedState::inbox`]: super::SharedState::inbox
 
+use std::collections::HashSet;
+
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::clap_host::SyncClapInstance;
-use crate::types::{AudioClip, AudioEvent, ClipId, F0Frame, NoteBlob};
+use crate::types::{AudioClip, AudioEvent, ClipId, F0Frame, NoteBlob, TrackId};
 
 use super::clips::ClipLoadEcho;
 use super::thread::{HandlerCtx, HandlerState};
@@ -85,6 +87,13 @@ pub(crate) enum EngineInternal {
     /// ([`super::probe::spawn_probe`]): destroy them here, since CLAP's
     /// `deactivate` / `destroy` are main-thread calls.
     RetireProbeClones(ProbeClones),
+    /// The input-enumeration worker's device names for the queued
+    /// external-instrument checks
+    /// ([`super::external_instrument::apply_input_devices_for_check`]).
+    InputDevicesForCheck {
+        track_ids: HashSet<TrackId>,
+        available_inputs: HashSet<String>,
+    },
 }
 
 /// The cloned instances a finished probe hands back. A newtype only so
@@ -159,6 +168,15 @@ pub(crate) fn dispatch_internal(ctx: &HandlerCtx, state: &mut HandlerState, msg:
         // Dropping runs each clone's `deactivate` / `destroy`, here on
         // the engine thread.
         EngineInternal::RetireProbeClones(clones) => drop(clones),
+        EngineInternal::InputDevicesForCheck {
+            track_ids,
+            available_inputs,
+        } => super::external_instrument::apply_input_devices_for_check(
+            ctx,
+            state,
+            track_ids,
+            available_inputs,
+        ),
     }
 }
 

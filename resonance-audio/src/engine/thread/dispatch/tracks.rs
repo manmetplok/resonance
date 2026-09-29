@@ -59,7 +59,7 @@ pub(super) fn dispatch_tracks(
             track_id,
             port_index,
         } => tracks::handle_set_track_input_port(ctx, state, track_id, port_index),
-        AudioCommand::ListInputDevices => tracks::handle_list_input_devices(ctx),
+        AudioCommand::ListInputDevices => tracks::handle_list_input_devices(ctx, state),
         AudioCommand::ClearAll => tracks::handle_clear_all(ctx, state),
         AudioCommand::SetTrackFrozenSource { track_id, source } => {
             tracks::handle_set_track_frozen_source(ctx, state, track_id, source)

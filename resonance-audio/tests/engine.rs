@@ -40,6 +40,8 @@ mod device_params_handler;
 mod engine_error_kind;
 #[path = "engine/external_instrument_handlers.rs"]
 mod external_instrument_handlers;
+#[path = "engine/input_device_worker.rs"]
+mod input_device_worker;
 #[path = "engine/external_instrument_ping.rs"]
 mod external_instrument_ping;
 #[path = "engine/external_recorded_playback.rs"]

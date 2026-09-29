@@ -493,12 +493,11 @@ fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
     }
 }
 
-pub(crate) fn handle_list_input_devices(ctx: &HandlerCtx) {
-    let (devices, default_name) = platform::enumerate_input_devices();
-    let _ = ctx.event_tx.send(AudioEvent::InputDevicesListed {
-        devices,
-        default_name,
-    });
+/// Queue an `InputDevicesListed` on the enumeration worker — never
+/// inline: enumeration can block on the macOS microphone-permission
+/// prompt (`engine::input_devices`).
+pub(crate) fn handle_list_input_devices(ctx: &HandlerCtx, state: &HandlerState) {
+    state.input_devices.request_list(ctx);
 }
 
 pub(crate) fn handle_clear_all(ctx: &HandlerCtx, state: &mut HandlerState) {

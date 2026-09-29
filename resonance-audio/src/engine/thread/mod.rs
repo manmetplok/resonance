@@ -221,6 +221,9 @@ pub(crate) struct HandlerState {
     /// Reference-track (A/B) state: loaded references, active selection,
     /// monitored source, and the loudness-match / trim / loop knobs.
     pub reference: super::reference::ReferencePlayer,
+    /// The input-enumeration worker behind `ListInputDevices` and the
+    /// external-instrument device check (`engine::input_devices`).
+    pub input_devices: super::input_devices::InputDeviceWorker,
     /// In-flight cycle-record run, or `None` when not loop-recording.
     pub loop_record_session: Option<LoopRecordSession>,
     /// Authoritative take groups keyed by id (epic #15, doc #165).
@@ -354,6 +357,7 @@ impl HandlerState {
             midi_clock_last_emitted_bpm: 0.0,
             pending_bounce: None,
             reference: super::reference::ReferencePlayer::new(),
+            input_devices: super::input_devices::InputDeviceWorker::new(),
             loop_record_session: None,
             take_groups: HashMap::new(),
             take_clip_park: Default::default(),
