@@ -13,17 +13,22 @@
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 
+use objc2::encode::{Encoding, RefEncode};
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{define_class, msg_send, sel, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, Message};
-use objc2_app_kit::{NSEvent, NSOpenGLPixelFormat, NSOpenGLView, NSTrackingArea, NSTrackingAreaOptions};
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{msg_send, sel, AnyThread, ClassType, MainThreadMarker, MainThreadOnly, Message};
+use objc2_app_kit::{
+    NSEvent, NSOpenGLPixelFormat, NSOpenGLView, NSTrackingArea, NSTrackingAreaOptions,
+};
 use objc2_foundation::{NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer};
 
 use plugin_gui_core::repaint::{plan_repaint, repaint_due, RepaintPlan};
 use plugin_gui_core::{CloseNotifier, EditorApp, EditorError, SharedSize};
 
+use super::runtime_class::{self, RuntimeClass, RuntimeDefined};
 use crate::input::{self, InputState};
 
 /// The GL-side state built once in [`EditorView::init_gl`].
@@ -76,141 +81,218 @@ pub(super) struct ViewIvars {
     tracking_area: RefCell<Option<Retained<NSTrackingArea>>>,
 }
 
-define_class!(
-    // SAFETY: NSOpenGLView has no subclassing requirements beyond NSView's
-    // main-thread confinement, which `MainThreadOnly` enforces;
-    // `EditorView` does not implement `Drop`.
-    #[unsafe(super(NSOpenGLView))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "RESCocoaPluginEditorView"]
-    #[ivars = ViewIvars]
-    pub(super) struct EditorView;
+/// The editor's `NSOpenGLView` subclass. Its Objective-C class is
+/// registered at runtime under a per-image name (see [`runtime_class`]),
+/// so every plugin binary in the host process gets its own.
+#[repr(C)]
+pub(super) struct EditorView {
+    superclass: NSOpenGLView,
+}
 
-    impl EditorView {
-        /// Top-left-origin coordinates, matching egui — AppKit then hands
-        /// us view-local points that need no flipping.
-        #[unsafe(method(isFlipped))]
-        fn is_flipped(&self) -> bool {
-            true
-        }
+// SAFETY: `EditorView` is a `#[repr(C)]` wrapper around its superclass,
+// and an Objective-C object pointer like it.
+unsafe impl RefEncode for EditorView {
+    const ENCODING_REF: Encoding = NSOpenGLView::ENCODING_REF;
+}
 
-        /// Key events come straight to the view; without this the window
-        /// has no first responder and every keypress beeps.
-        #[unsafe(method(acceptsFirstResponder))]
-        fn accepts_first_responder(&self) -> bool {
-            true
-        }
+// SAFETY: a reference-counted Objective-C object.
+unsafe impl Message for EditorView {}
 
-        #[unsafe(method(drawRect:))]
-        fn draw_rect(&self, _dirty: NSRect) {
-            self.paint();
-        }
+// SAFETY: `class()` is a subclass of `Super` (registered by
+// `runtime_class::register`), whose instances are main-thread-only like
+// every NSView's; the struct is a `#[repr(C)]` wrapper around `Super`.
+unsafe impl ClassType for EditorView {
+    type Super = NSOpenGLView;
+    type ThreadKind = dyn MainThreadOnly;
+    /// The base name; the registered one carries a per-image suffix.
+    const NAME: &'static str = "RESCocoaPluginEditorView";
 
-        /// Re-render at the new scale when the window moves to a display
-        /// with a different `backingScaleFactor` (the Cocoa analog of the
-        /// Wayland runtime's `scale_factor_changed`). The factor itself is
-        /// re-read every frame in `paint`, so marking a repaint suffices.
-        #[unsafe(method(viewDidChangeBackingProperties))]
-        fn view_did_change_backing_properties(&self) {
-            self.mark_repaint();
-        }
+    fn class() -> &'static AnyClass {
+        Self::runtime_class().class
+    }
 
-        // ---- repaint timer ----
+    fn as_super(&self) -> &Self::Super {
+        &self.superclass
+    }
 
-        #[unsafe(method(onRepaintTimer:))]
-        fn on_repaint_timer(&self, _timer: &NSTimer) {
-            self.tick();
-        }
+    const __INNER: () = ();
+    type __SubclassingType = Self;
+}
 
-        // ---- pointer ----
+impl std::ops::Deref for EditorView {
+    type Target = NSOpenGLView;
 
-        #[unsafe(method(mouseMoved:))]
-        fn mouse_moved(&self, event: &NSEvent) {
-            self.pointer_moved(event);
-        }
+    fn deref(&self) -> &NSOpenGLView {
+        &self.superclass
+    }
+}
 
-        #[unsafe(method(mouseDragged:))]
-        fn mouse_dragged(&self, event: &NSEvent) {
-            self.pointer_moved(event);
-        }
+// SAFETY: registered by `runtime_class::register::<Self>`; `#[repr(C)]`
+// wrapper around `Super`.
+unsafe impl RuntimeDefined for EditorView {
+    type Ivars = ViewIvars;
 
-        #[unsafe(method(rightMouseDragged:))]
-        fn right_mouse_dragged(&self, event: &NSEvent) {
-            self.pointer_moved(event);
-        }
+    fn runtime_class() -> &'static RuntimeClass {
+        static CLASS: OnceLock<RuntimeClass> = OnceLock::new();
+        CLASS.get_or_init(|| runtime_class::register::<Self>(Self::NAME, register_view_methods))
+    }
+}
 
-        #[unsafe(method(otherMouseDragged:))]
-        fn other_mouse_dragged(&self, event: &NSEvent) {
-            self.pointer_moved(event);
-        }
+/// The overrides AppKit calls on the view. Each is a thin
+/// `extern "C-unwind"` trampoline into the `EditorView` method of the
+/// same name.
+fn register_view_methods(builder: &mut ClassBuilder) {
+    /// Top-left-origin coordinates, matching egui — AppKit then hands
+    /// us view-local points that need no flipping.
+    extern "C-unwind" fn is_flipped(_: &EditorView, _: Sel) -> Bool {
+        Bool::YES
+    }
+    /// Key events come straight to the view; without this the window
+    /// has no first responder and every keypress beeps.
+    extern "C-unwind" fn accepts_first_responder(_: &EditorView, _: Sel) -> Bool {
+        Bool::YES
+    }
+    extern "C-unwind" fn draw_rect(this: &EditorView, _: Sel, _dirty: NSRect) {
+        this.paint();
+    }
+    /// Re-render at the new scale when the window moves to a display
+    /// with a different `backingScaleFactor` (the Cocoa analog of the
+    /// Wayland runtime's `scale_factor_changed`). The factor itself is
+    /// re-read every frame in `paint`, so marking a repaint suffices.
+    extern "C-unwind" fn view_did_change_backing_properties(this: &EditorView, _: Sel) {
+        this.mark_repaint();
+    }
+    extern "C-unwind" fn on_repaint_timer(this: &EditorView, _: Sel, _timer: &NSTimer) {
+        this.tick();
+    }
 
-        #[unsafe(method(mouseExited:))]
-        fn mouse_exited(&self, event: &NSEvent) {
-            self.with_input(event, |input, out| input.pointer_left(out));
-        }
+    // ---- pointer ----
 
-        #[unsafe(method(mouseDown:))]
-        fn mouse_down(&self, event: &NSEvent) {
-            self.pointer_button(event, egui::PointerButton::Primary, true);
-        }
-
-        #[unsafe(method(mouseUp:))]
-        fn mouse_up(&self, event: &NSEvent) {
-            self.pointer_button(event, egui::PointerButton::Primary, false);
-        }
-
-        #[unsafe(method(rightMouseDown:))]
-        fn right_mouse_down(&self, event: &NSEvent) {
-            self.pointer_button(event, egui::PointerButton::Secondary, true);
-        }
-
-        #[unsafe(method(rightMouseUp:))]
-        fn right_mouse_up(&self, event: &NSEvent) {
-            self.pointer_button(event, egui::PointerButton::Secondary, false);
-        }
-
-        #[unsafe(method(otherMouseDown:))]
-        fn other_mouse_down(&self, event: &NSEvent) {
-            if let Some(btn) = input::map_other_button(event.buttonNumber() as i64) {
-                self.pointer_button(event, btn, true);
-            }
-        }
-
-        #[unsafe(method(otherMouseUp:))]
-        fn other_mouse_up(&self, event: &NSEvent) {
-            if let Some(btn) = input::map_other_button(event.buttonNumber() as i64) {
-                self.pointer_button(event, btn, false);
-            }
-        }
-
-        #[unsafe(method(scrollWheel:))]
-        fn scroll_wheel(&self, event: &NSEvent) {
-            let dx = event.scrollingDeltaX();
-            let dy = event.scrollingDeltaY();
-            let precise = event.hasPreciseScrollingDeltas();
-            self.with_input(event, |input, out| input.scroll(dx, dy, precise, out));
-        }
-
-        // ---- keyboard ----
-
-        #[unsafe(method(keyDown:))]
-        fn key_down(&self, event: &NSEvent) {
-            self.key_event(event, true);
-        }
-
-        #[unsafe(method(keyUp:))]
-        fn key_up(&self, event: &NSEvent) {
-            self.key_event(event, false);
-        }
-
-        #[unsafe(method(flagsChanged:))]
-        fn flags_changed(&self, event: &NSEvent) {
-            self.with_input(event, |_input, _out| {});
+    extern "C-unwind" fn pointer_moved(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.pointer_moved(event);
+    }
+    extern "C-unwind" fn mouse_exited(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.with_input(event, |input, out| input.pointer_left(out));
+    }
+    extern "C-unwind" fn mouse_down(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.pointer_button(event, egui::PointerButton::Primary, true);
+    }
+    extern "C-unwind" fn mouse_up(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.pointer_button(event, egui::PointerButton::Primary, false);
+    }
+    extern "C-unwind" fn right_mouse_down(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.pointer_button(event, egui::PointerButton::Secondary, true);
+    }
+    extern "C-unwind" fn right_mouse_up(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.pointer_button(event, egui::PointerButton::Secondary, false);
+    }
+    extern "C-unwind" fn other_mouse_down(this: &EditorView, _: Sel, event: &NSEvent) {
+        if let Some(btn) = input::map_other_button(event.buttonNumber() as i64) {
+            this.pointer_button(event, btn, true);
         }
     }
-);
+    extern "C-unwind" fn other_mouse_up(this: &EditorView, _: Sel, event: &NSEvent) {
+        if let Some(btn) = input::map_other_button(event.buttonNumber() as i64) {
+            this.pointer_button(event, btn, false);
+        }
+    }
+    extern "C-unwind" fn scroll_wheel(this: &EditorView, _: Sel, event: &NSEvent) {
+        let dx = event.scrollingDeltaX();
+        let dy = event.scrollingDeltaY();
+        let precise = event.hasPreciseScrollingDeltas();
+        this.with_input(event, |input, out| input.scroll(dx, dy, precise, out));
+    }
+
+    // ---- keyboard ----
+
+    extern "C-unwind" fn key_down(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.key_event(event, true);
+    }
+    extern "C-unwind" fn key_up(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.key_event(event, false);
+    }
+    extern "C-unwind" fn flags_changed(this: &EditorView, _: Sel, event: &NSEvent) {
+        this.with_input(event, |_input, _out| {});
+    }
+
+    // SAFETY: each function's signature matches its selector's.
+    unsafe {
+        builder.add_method(
+            sel!(isFlipped),
+            is_flipped as extern "C-unwind" fn(_, _) -> _,
+        );
+        builder.add_method(
+            sel!(acceptsFirstResponder),
+            accepts_first_responder as extern "C-unwind" fn(_, _) -> _,
+        );
+        builder.add_method(sel!(drawRect:), draw_rect as extern "C-unwind" fn(_, _, _));
+        builder.add_method(
+            sel!(viewDidChangeBackingProperties),
+            view_did_change_backing_properties as extern "C-unwind" fn(_, _),
+        );
+        builder.add_method(
+            sel!(onRepaintTimer:),
+            on_repaint_timer as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(mouseMoved:),
+            pointer_moved as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(mouseDragged:),
+            pointer_moved as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(rightMouseDragged:),
+            pointer_moved as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(otherMouseDragged:),
+            pointer_moved as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(mouseExited:),
+            mouse_exited as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(mouseDown:),
+            mouse_down as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(sel!(mouseUp:), mouse_up as extern "C-unwind" fn(_, _, _));
+        builder.add_method(
+            sel!(rightMouseDown:),
+            right_mouse_down as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(rightMouseUp:),
+            right_mouse_up as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(otherMouseDown:),
+            other_mouse_down as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(otherMouseUp:),
+            other_mouse_up as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(
+            sel!(scrollWheel:),
+            scroll_wheel as extern "C-unwind" fn(_, _, _),
+        );
+        builder.add_method(sel!(keyDown:), key_down as extern "C-unwind" fn(_, _, _));
+        builder.add_method(sel!(keyUp:), key_up as extern "C-unwind" fn(_, _, _));
+        builder.add_method(
+            sel!(flagsChanged:),
+            flags_changed as extern "C-unwind" fn(_, _, _),
+        );
+    }
+}
 
 impl EditorView {
+    fn ivars(&self) -> &ViewIvars {
+        runtime_class::ivars(self)
+    }
+
     /// Allocate and initialize the view. The GL pipeline is built later by
     /// [`EditorView::init_gl`] (it needs the pixel format's context, which
     /// `initWithFrame:pixelFormat:` creates).
@@ -224,29 +306,32 @@ impl EditorView {
         closed: CloseNotifier,
         editor_id: u64,
     ) -> Result<Retained<Self>, EditorError> {
-        let this = Self::alloc(mtm).set_ivars(ViewIvars {
-            editor_id,
-            app: RefCell::new(app),
-            egui_ctx: egui::Context::default(),
-            paint: RefCell::new(None),
-            input: RefCell::new(InputState::new()),
-            pending_events: RefCell::new(Vec::new()),
-            shared_size,
-            alive,
-            closed,
-            start_time: Instant::now(),
-            in_paint: Cell::new(false),
-            needs_repaint: Cell::new(true),
-            repaint_at: Cell::new(None),
-            close_requested: Cell::new(false),
-            on_close_fired: Cell::new(false),
-            repaint_timer: RefCell::new(None),
-            tracking_area: RefCell::new(None),
-        });
-        // SAFETY: standard NSOpenGLView designated initializer on a
-        // freshly allocated instance with its ivars set.
+        let this = runtime_class::alloc_with_ivars::<Self>(
+            mtm,
+            ViewIvars {
+                editor_id,
+                app: RefCell::new(app),
+                egui_ctx: egui::Context::default(),
+                paint: RefCell::new(None),
+                input: RefCell::new(InputState::new()),
+                pending_events: RefCell::new(Vec::new()),
+                shared_size,
+                alive,
+                closed,
+                start_time: Instant::now(),
+                in_paint: Cell::new(false),
+                needs_repaint: Cell::new(true),
+                repaint_at: Cell::new(None),
+                close_requested: Cell::new(false),
+                on_close_fired: Cell::new(false),
+                repaint_timer: RefCell::new(None),
+                tracking_area: RefCell::new(None),
+            },
+        );
+        // SAFETY: NSOpenGLView's designated initializer (not overridden
+        // here) on a freshly allocated instance with its state set.
         let this: Option<Retained<Self>> =
-            unsafe { msg_send![super(this), initWithFrame: frame, pixelFormat: pixel_format] };
+            unsafe { msg_send![this, initWithFrame: frame, pixelFormat: pixel_format] };
         let this =
             this.ok_or_else(|| EditorError::Cocoa("NSOpenGLView init failed".to_string()))?;
 
