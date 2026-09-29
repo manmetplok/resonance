@@ -9,6 +9,7 @@
 
 mod debug;
 mod delegate;
+mod runtime_class;
 mod view;
 
 use std::cell::RefCell;
