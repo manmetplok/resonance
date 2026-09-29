@@ -103,6 +103,7 @@ pub use join::{await_startup, Startup};
 
 /// The SCTK → egui input translator, exposed for headless tests of its
 /// button bookkeeping (a button held across a hide, FU-M1c).
+#[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use input::InputState;
 
