@@ -278,8 +278,14 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         //    is safe to write either). The loaded values stay untouched
         //    and the still-set flag re-syncs the plugin from them next
         //    block.
-        // 2. `params_gen` is read before the store and again after it
-        //    (ba todo #1374). Odd means a load is publishing right now:
+        // 2. `params_gen` is read once before the loop reads any slot, and
+        //    again after each store (ba todo #1374). It has to come
+        //    before the slot reads, not merely before the store: read
+        //    after them, a whole window could close between the dirty
+        //    check and the generation read, and a loaded value taken
+        //    inside that window would then pass as quiescent and be
+        //    exchanged away — the flag that followed copying the stale
+        //    value into the plugin. Odd means a load is publishing right now:
         //    its values are already in the atomics with no flag yet
         //    announcing them, which is precisely the case guard 1 cannot
         //    see, so the push-back stands down. A generation that
@@ -330,7 +336,18 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // to live somewhere this loop cannot write at all: a staging
         // buffer the dirty flag hands over, which is a change to the
         // layout of `ClapShared` and to every reader of `param_values`.
-        for i in 0..self.plugin.param_count() {
+        //
+        // `gen_before` is a SeqCst (so acquire) load, which keeps every
+        // Relaxed slot read below from being hoisted above it. Odd: a
+        // load is publishing, and whatever the slots hold may be its
+        // values with no flag announcing them yet — skip the push-back.
+        let gen_before = self.shared.param_publish_gen();
+        let push_back_count = if gen_before & 1 == 1 {
+            0
+        } else {
+            self.plugin.param_count()
+        };
+        for i in 0..push_back_count {
             if i < self.shared.param_values.len() {
                 let plugin_v = self.plugin.param(i).get_plain();
                 let shared_v = self.shared.get_value(i);
@@ -343,14 +360,6 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     // `state::load` and keeps the exchange below from
                     // being reordered ahead of it.
                     if self.shared.params_dirty.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let gen_before = self.shared.param_publish_gen();
-                    if gen_before & 1 == 1 {
-                        // A load is publishing right now. Whatever is in
-                        // this slot may be one of its values with no flag
-                        // announcing it yet; hands off, and off every
-                        // later slot too.
                         break;
                     }
                     let stored = self.shared.compare_exchange_value(i, shared_v, plugin_v);
