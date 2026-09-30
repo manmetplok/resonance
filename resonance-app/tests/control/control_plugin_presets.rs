@@ -551,7 +551,7 @@ fn a_recall_hands_the_plugin_the_whole_sound_and_its_identity() {
         .iter()
         .enumerate()
         .find_map(|(i, c)| match c {
-            AudioCommand::LoadPluginPresetState { instance_id, data } if *instance_id == INSTANCE => {
+            AudioCommand::LoadPluginPresetState { instance_id, data, .. } if *instance_id == INSTANCE => {
                 Some((i, data.clone()))
             }
             _ => None,

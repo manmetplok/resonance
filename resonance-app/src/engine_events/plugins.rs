@@ -751,6 +751,30 @@ pub(super) fn preset_loaded(
     );
 }
 
+/// The full state a preset load saved before loading: it fills the undo
+/// entries and audition origins waiting on `token`, and completes a revert
+/// that happened before it arrived.
+pub(super) fn state_captured(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    token: u64,
+    data: Vec<u8>,
+) {
+    let blob: std::sync::Arc<[u8]> = data.into();
+    for late in r.presets.pending_captures.remove(&token).unwrap_or_default() {
+        if let Ok(mut slot) = late.lock() {
+            *slot = Some(blob.clone());
+        }
+    }
+    if r.presets.revert_on_capture.remove(&token) == Some(instance_id) {
+        let _ = r.engine.send(AudioCommand::LoadPluginState {
+            instance_id,
+            data: blob.to_vec(),
+        });
+        r.plugin_mirror.state_cache.insert(instance_id, blob);
+    }
+}
+
 /// A plugin's preset-discovery factory listed its presets (slice P8): they
 /// join the library as read-only factory presets (after any compiled-in
 /// bank), loadable through `clap.preset-load`. A preset the provider flags

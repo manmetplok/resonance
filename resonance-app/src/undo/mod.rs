@@ -110,7 +110,8 @@ impl crate::Resonance {
                 // below.
                 UndoAction::Record | UndoAction::RecordCoalesced(_) if absorbed => {}
                 UndoAction::Record => {
-                    let snap = self.snapshot_for_undo();
+                    let mut snap = self.snapshot_for_undo();
+                    self.attach_preset_capture(message, &mut snap);
                     self.session.undo.record(snap, describe(message));
                 }
                 UndoAction::RecordCoalesced(_) if self.session.undo.in_compound() => {
@@ -127,7 +128,8 @@ impl crate::Resonance {
                     // building one here would deep-copy the whole project
                     // once per slider event only to drop it.
                     if !self.session.undo.try_extend_coalesced(&key) {
-                        let snap = self.snapshot_for_undo();
+                        let mut snap = self.snapshot_for_undo();
+                        self.attach_preset_capture(message, &mut snap);
                         self.session.undo.record_coalesced(snap, key, describe(message));
                     }
                 }
@@ -139,6 +141,33 @@ impl crate::Resonance {
         }
 
         commit_after
+    }
+
+    /// A preset load that replaces a plugin's state gets a late slot in its
+    /// undo entry, which the load fills with the full state the engine
+    /// saves just before loading (`capture`): undoing the load then puts
+    /// back what it replaced — a model, an IR, user tables — even if the
+    /// cached blob was stale. `update::plugin::apply_preset_load` takes it.
+    fn attach_preset_capture(
+        &mut self,
+        message: &crate::message::Message,
+        snap: &mut snapshot::UndoSnapshot,
+    ) {
+        use crate::message::{Message, PluginMessage};
+        let instance_id = match message {
+            Message::Plugin(PluginMessage::LoadPluginPreset {
+                instance_id,
+                preset_state: Some(_),
+                ..
+            })
+            | Message::Plugin(PluginMessage::LoadPluginPresetFromLocation { instance_id, .. }) => {
+                *instance_id
+            }
+            _ => return,
+        };
+        let late = snapshot::LateBlob::default();
+        snap.late_plugin_states.push((instance_id, late.clone()));
+        self.presets.next_capture = Some((instance_id, late));
     }
 
     /// Close a Begin…Commit gesture after its gesture-end message has

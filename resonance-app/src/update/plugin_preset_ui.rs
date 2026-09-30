@@ -403,8 +403,22 @@ fn audition(r: &mut Resonance, index: usize) {
             })
             .unwrap_or_default();
         let identity = r.presets.plugin_preset_identity.get(&instance_id).cloned();
+        // The whole sound comes back on a revert: the engine saves the
+        // plugin's full state under its lock just before this first
+        // audition loads (a model, an IR, user tables may exist nowhere
+        // else).
+        r.presets.capture_seq += 1;
+        let token = r.presets.capture_seq;
+        let state = crate::undo::snapshot::LateBlob::default();
+        r.presets.pending_captures.entry(token).or_default().push(state.clone());
+        r.presets.forced_capture = Some(token);
         if let Some(b) = r.presets.host_browser.as_mut() {
-            b.origin = Some(AuditionOrigin { values, identity });
+            b.origin = Some(AuditionOrigin {
+                values,
+                identity,
+                state,
+                token,
+            });
         }
     }
     match pp::host_load_message(r, instance_id, &row.plugin_id, &row.id, row.source) {
@@ -435,7 +449,12 @@ fn close_browser(r: &mut Resonance, keep: bool) -> Task<Message> {
             // plays the pick), so the recorded load's "before" is the sound
             // the browser opened on — one undo entry, back to it.
             restore_mirror(r, instance_id, &origin);
-            recorded_load(r, instance_id, &row.plugin_id, &row.id, row.source)
+            // The kept load's undo entry returns to the origin's full
+            // state, not to what a capture now would see (the audition).
+            r.presets.capture_from = Some((origin.state.clone(), origin.token));
+            let task = recorded_load(r, instance_id, &row.plugin_id, &row.id, row.source);
+            r.presets.capture_from = None;
+            task
         }
         _ => {
             revert(r, instance_id, &origin);
@@ -464,19 +483,21 @@ fn restore_mirror(r: &mut Resonance, instance_id: PluginInstanceId, origin: &Aud
     }
 }
 
-/// Undo an audition: the origin preset's state first (the rest of its
-/// sound — a model, an IR), when it was one, then every origin value.
+/// Undo an audition: the plugin's full state as it was before the first
+/// audition (the engine's capture), then every origin value. A capture
+/// still in flight completes the revert when it lands.
 fn revert(r: &mut Resonance, instance_id: PluginInstanceId, origin: &AuditionOrigin) {
-    let clap_id = r.with_plugin_mut(instance_id, |slot| slot.clap_plugin_id.clone());
-    if let (Some(clap_id), Some(identity)) = (clap_id, &origin.identity) {
-        if let Ok(Message::Plugin(PluginMessage::LoadPluginPreset {
-            preset_state: Some(data),
-            ..
-        })) = pp::host_load_message(r, instance_id, &clap_id, &identity.id, identity.source)
-        {
-            let _ = r
-                .engine
-                .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+    let state = origin.state.lock().ok().and_then(|b| b.clone());
+    match state {
+        Some(blob) => {
+            let _ = r.engine.send(AudioCommand::LoadPluginState {
+                instance_id,
+                data: blob.to_vec(),
+            });
+            r.plugin_mirror.state_cache.insert(instance_id, blob);
+        }
+        None => {
+            r.presets.revert_on_capture.insert(origin.token, instance_id);
         }
     }
     for (param_id, value) in &origin.values {

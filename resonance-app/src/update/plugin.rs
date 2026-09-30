@@ -250,10 +250,12 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
                 reported,
             },
         );
+        let capture = take_capture(r, instance_id);
         let _ = r.engine.send(AudioCommand::LoadPluginPresetFromLocation {
             instance_id,
             location,
             load_key,
+            capture,
         });
         return;
     }
@@ -307,8 +309,43 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
     // params in the engine's queue, so a plugin that lays the
     // preset over its state sees the new values.
     if let Some(data) = preset_state {
-        let _ = r
-            .engine
-            .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+        let capture = take_capture(r, instance_id);
+        let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
+            instance_id,
+            data,
+            capture,
+        });
     }
+}
+
+/// The capture token a preset load onto `instance_id` asks the engine
+/// for, if any: an audition's origin (forced), else the late slot of the
+/// undo entry this load just recorded. A kept audition's slot takes the
+/// origin's state instead, and asks for nothing.
+fn take_capture(r: &mut Resonance, instance_id: resonance_audio::types::PluginInstanceId) -> Option<u64> {
+    if let Some(token) = r.presets.forced_capture.take() {
+        return Some(token);
+    }
+    let late = r
+        .presets
+        .next_capture
+        .take()
+        .filter(|(id, _)| *id == instance_id)
+        .map(|(_, late)| late)?;
+    if let Some((origin, token)) = r.presets.capture_from.take() {
+        let known = origin.lock().ok().and_then(|b| b.clone());
+        match known {
+            Some(blob) => {
+                if let Ok(mut slot) = late.lock() {
+                    *slot = Some(blob);
+                }
+            }
+            None => r.presets.pending_captures.entry(token).or_default().push(late),
+        }
+        return None;
+    }
+    r.presets.capture_seq += 1;
+    let token = r.presets.capture_seq;
+    r.presets.pending_captures.entry(token).or_default().push(late);
+    Some(token)
 }

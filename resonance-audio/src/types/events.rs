@@ -554,6 +554,14 @@ pub enum AudioEvent {
         location: crate::types::PluginPresetLocation,
         load_key: Option<String>,
     },
+    /// The full state a preset load saved before loading
+    /// (`LoadPluginPresetState` / `LoadPluginPresetFromLocation` with
+    /// `capture: Some(token)`).
+    PluginStateCaptured {
+        instance_id: PluginInstanceId,
+        token: u64,
+        data: Vec<u8>,
+    },
     /// What a plugin's `clap.preset-discovery-factory` lists for it
     /// (plugin-preset-library.md §8 tier T1, slice P8), from the discovery
     /// worker after a scan (or its cache).

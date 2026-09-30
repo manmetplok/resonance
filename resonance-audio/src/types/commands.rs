@@ -598,17 +598,25 @@ pub enum AudioCommand {
     /// full state load. The app has already set the params through
     /// `SetPluginParam` so its mirror agrees; this carries the rest of
     /// the sound (a model, an IR, user wavetables) and the identity.
+    ///
+    /// With `capture`, the plugin's full state is saved first, under the
+    /// same lock, and returned as `AudioEvent::PluginStateCaptured` with
+    /// that token: what an undo of the load (or an audition's revert)
+    /// puts back — the model, IR or user tables the preset replaced.
     LoadPluginPresetState {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
+        capture: Option<u64>,
     },
     /// Ask the plugin to load a preset it owns (`clap.preset-load`
     /// `from_location`). The plugin reports it with `loaded()`, which
     /// arrives as `AudioEvent::PluginPresetLoaded`.
+    /// `capture` as for `LoadPluginPresetState`.
     LoadPluginPresetFromLocation {
         instance_id: PluginInstanceId,
         location: PluginPresetLocation,
         load_key: Option<String>,
+        capture: Option<u64>,
     },
     /// The CLAP ids of the params the host automates on this instance: a
     /// Resonance plugin leaves them out of its preset-modified comparison

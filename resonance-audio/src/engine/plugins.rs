@@ -239,6 +239,14 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             // that is where a plugin reports a self-closed editor
             // (`clap_host_gui.closed()`, PLG-01) or a latency change.
             inst.0.run_requested_callback();
+            // A load asked for a second look at the params, or the plugin
+            // asked for a values rescan (`clap_host_params.rescan`).
+            if inst.0.take_params_refresh() {
+                let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
+                    instance_id,
+                    params: inst.0.query_params(),
+                });
+            }
             // What the plugin said about its preset, from that callback or
             // a `from_location` / state load since the last poll.
             for report in inst.0.take_preset_reports() {
@@ -874,30 +882,81 @@ pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: Plu
     }
 }
 
+/// Save the full state for `capture` (an undo entry, an audition's
+/// origin) before a preset load replaces it.
+fn capture_state(
+    ctx: &HandlerCtx,
+    inst: &crate::clap_host::ClapInstance,
+    instance_id: PluginInstanceId,
+    capture: Option<u64>,
+) {
+    let Some(token) = capture else {
+        return;
+    };
+    if let Some(data) = inst.save_state() {
+        let _ = ctx.event_tx.send(AudioEvent::PluginStateCaptured {
+            instance_id,
+            token,
+            data,
+        });
+    }
+}
+
+/// The mirror follows what the plugin actually took (an opaque preset's
+/// values are known only to the plugin): now, and once more after the
+/// next block, for a plugin that applies a load there.
+fn refresh_params(
+    ctx: &HandlerCtx,
+    inst: &mut crate::clap_host::ClapInstance,
+    instance_id: PluginInstanceId,
+) {
+    let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
+        instance_id,
+        params: inst.query_params(),
+    });
+    inst.request_params_refresh();
+}
+
 pub(crate) fn handle_load_plugin_preset_state(
     ctx: &HandlerCtx,
     instance_id: PluginInstanceId,
     data: Vec<u8>,
+    capture: Option<u64>,
 ) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
-            if !inst.0.load_preset_state(&data) {
-                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
-                    "Plugin instance {instance_id} rejected the preset it was given; \
-                     it keeps its previous settings."
-                ))));
+            capture_state(ctx, &inst.0, instance_id, capture);
+            // A plugin with state-context lays the preset over its state
+            // with no reactivation; any other takes it as a full state,
+            // through the same reload (and failure messages) a project
+            // state load uses.
+            let loaded = if inst.0.has_preset_state() {
+                let ok = inst.0.load_preset_state(&data);
+                if !ok {
+                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
+                        "Plugin instance {instance_id} rejected the preset it was given; \
+                         it keeps its previous settings."
+                    ))));
+                }
+                ok
             } else {
-                // The mirror follows what the plugin actually took (an
-                // opaque preset's values are known only to the plugin).
-                let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
-                    instance_id,
-                    params: inst.0.query_params(),
-                });
+                match reload_plugin_state(&mut inst.0, instance_id, &data) {
+                    Some(event) => {
+                        let _ = ctx.event_tx.send(event);
+                        false
+                    }
+                    None => true,
+                }
+            };
+            if loaded {
+                refresh_params(ctx, &mut inst.0, instance_id);
             }
         } else {
-            let _ = ctx
-                .cmd_tx_retry
-                .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
         }
     }
 }
@@ -923,24 +982,29 @@ pub(crate) fn handle_load_plugin_preset_from_location(
     instance_id: PluginInstanceId,
     location: crate::types::PluginPresetLocation,
     load_key: Option<String>,
+    capture: Option<u64>,
 ) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
         if let Some(mut inst) = mutex.try_lock() {
-            if !inst.0.load_preset_from_location(&location, load_key.as_deref()) {
-                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
-                    "Plugin instance {instance_id} could not load the preset it was asked for."
-                ))));
+            capture_state(ctx, &inst.0, instance_id, capture);
+            if inst.0.load_preset_from_location(&location, load_key.as_deref()) {
+                refresh_params(ctx, &mut inst.0, instance_id);
             } else {
-                let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
-                    instance_id,
-                    params: inst.0.query_params(),
-                });
+                // One error, not two: the plugin's own `on_error` message
+                // (queued by the call) is folded into it.
+                let plugin_says = inst.0.take_preset_error();
+                let detail = plugin_says.map(|m| format!(": {m}")).unwrap_or_default();
+                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
+                    "Plugin instance {instance_id} could not load the preset it was asked \
+                     for{detail}"
+                ))));
             }
         } else {
             let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetFromLocation {
                 instance_id,
                 location,
                 load_key,
+                capture,
             });
         }
     }

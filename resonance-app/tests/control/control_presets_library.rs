@@ -744,7 +744,7 @@ fn a_third_party_plugins_state_saves_and_loads_as_an_opaque_preset() {
     );
     assert!(loaded.error.is_none(), "{:?}", loaded.error);
     let sent = rx.try_iter().find_map(|c| match c {
-        AudioCommand::LoadPluginPresetState { instance_id: VENDOR_INSTANCE, data } => Some(data),
+        AudioCommand::LoadPluginPresetState { instance_id: VENDOR_INSTANCE, data, .. } => Some(data),
         _ => None,
     });
     assert_eq!(sent.as_deref(), Some(OPAQUE), "the bytes go back untouched, extra or not");

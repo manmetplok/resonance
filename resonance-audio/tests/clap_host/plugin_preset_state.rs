@@ -185,3 +185,103 @@ fn the_plugin_reports_its_preset_and_whether_it_was_edited() {
     drop(instance);
     drop(bundle);
 }
+
+// ---------------------------------------------------------------------------
+// The engine's handlers (review: engine-handler tests)
+// ---------------------------------------------------------------------------
+
+mod handlers {
+    use resonance_audio::test_support::EngineHandlerHarness;
+    use resonance_audio::types::{AudioCommand, AudioEvent, PluginPresetLocation};
+    use resonance_audio::{Track, TrackId};
+
+    use crate::plugin_binaries::plugin_binary;
+
+    const TRACK: TrackId = 1;
+    const GATE: u64 = 7;
+
+    fn gate() -> Option<EngineHandlerHarness> {
+        let path = plugin_binary("resonance-gate")?.to_string_lossy().into_owned();
+        let mut h = EngineHandlerHarness::new();
+        h.push_track(Track::new(TRACK, "T1".to_string()));
+        h.add_plugin(TRACK, path, "com.resonance.gate".to_string(), GATE);
+        let _ = h.drain_events();
+        Some(h)
+    }
+
+    fn threshold(events: &[AudioEvent]) -> Option<f64> {
+        events.iter().rev().find_map(|e| match e {
+            AudioEvent::PluginParamsRefreshed { instance_id: GATE, params } => params
+                .iter()
+                .find(|p| p.name.eq_ignore_ascii_case("threshold"))
+                .map(|p| p.current_value),
+            _ => None,
+        })
+    }
+
+    fn errors(events: &[AudioEvent]) -> usize {
+        events.iter().filter(|e| matches!(e, AudioEvent::Error(_))).count()
+    }
+
+    /// `LoadPluginPresetState` with a capture: the full state before the
+    /// load comes back under the token, then the mirror refresh with the
+    /// loaded values — now, and again at the next host-request poll.
+    #[test]
+    fn a_preset_state_load_captures_first_and_refreshes_the_mirror() {
+        let Some(mut h) = gate() else { return };
+        let preset = serde_json::json!({"version": 1, "params": {"threshold": -21.0}});
+        h.dispatch(AudioCommand::LoadPluginPresetState {
+            instance_id: GATE,
+            data: serde_json::to_vec(&preset).unwrap(),
+            capture: Some(42),
+        });
+        let events = h.drain_events();
+        let captured = events.iter().find_map(|e| match e {
+            AudioEvent::PluginStateCaptured { instance_id: GATE, token: 42, data } => Some(data),
+            _ => None,
+        });
+        let before: serde_json::Value =
+            serde_json::from_slice(captured.expect("a capture")).unwrap();
+        assert_ne!(before["params"]["threshold"].as_f64(), Some(-21.0), "captured before");
+        assert_eq!(threshold(&events), Some(-21.0));
+        h.poll_plugin_host_requests();
+        assert_eq!(threshold(&h.drain_events()), Some(-21.0), "and after the next block");
+    }
+
+    /// `LoadPluginPresetFromLocation`: a factory id loads and refreshes;
+    /// an unknown one is exactly one error.
+    #[test]
+    fn a_location_load_refreshes_and_a_failure_is_one_error() {
+        let Some(mut h) = gate() else { return };
+        h.dispatch(AudioCommand::LoadPluginPresetFromLocation {
+            instance_id: GATE,
+            location: PluginPresetLocation::Plugin,
+            load_key: Some("drums-snare-gate".into()),
+            capture: None,
+        });
+        let events = h.drain_events();
+        assert!(threshold(&events).is_some(), "{events:?}");
+        assert_eq!(errors(&events), 0);
+        h.poll_plugin_host_requests();
+        let polled = h.drain_events();
+        assert!(
+            polled.iter().any(|e| matches!(
+                e,
+                AudioEvent::PluginPresetIdentity { instance_id: GATE, identity: Some(i) }
+                    if i.id == "drums-snare-gate"
+            )),
+            "the plugin reports its identity from on_main_thread: {polled:?}"
+        );
+
+        h.dispatch(AudioCommand::LoadPluginPresetFromLocation {
+            instance_id: GATE,
+            location: PluginPresetLocation::Plugin,
+            load_key: Some("no-such-preset".into()),
+            capture: None,
+        });
+        let mut events = h.drain_events();
+        h.poll_plugin_host_requests();
+        events.extend(h.drain_events());
+        assert_eq!(errors(&events), 1, "one error, not two: {events:?}");
+    }
+}

@@ -337,7 +337,7 @@ fn discovered_presets_are_listed_and_load_through_the_plugin() {
     assert_eq!(undo_len(&app), before + 1);
     assert_eq!(current_id(&app).as_deref(), Some("plugin:bank/2"));
     let asked = rx.try_iter().find_map(|c| match c {
-        AudioCommand::LoadPluginPresetFromLocation { instance_id: INSTANCE, location, load_key } => {
+        AudioCommand::LoadPluginPresetFromLocation { instance_id: INSTANCE, location, load_key, .. } => {
             Some((location, load_key))
         }
         _ => None,
@@ -364,6 +364,123 @@ fn selecting_a_row_does_not_arm_a_drag() {
     ui(&mut app, PresetUiMessage::MediaPress(0));
     ui(&mut app, PresetUiMessage::DropOnTrack(TRACK));
     assert_eq!(app.test_registry().tracks[0].plugins.len(), 1, "no movement, no drop");
+}
+
+// ---------------------------------------------------------------------------
+// The whole sound comes back (review M1)
+// ---------------------------------------------------------------------------
+
+/// The state a plugin had with model X picked by hand; the audition's
+/// preset carries model Y.
+const MODEL_X: &[u8] = br#"{"version":2,"params":{"gain":1.0},"model_id":"x"}"#;
+
+fn capture_token(cmds: &[AudioCommand]) -> Option<u64> {
+    cmds.iter().find_map(|c| match c {
+        AudioCommand::LoadPluginPresetState {
+            instance_id: INSTANCE,
+            capture,
+            ..
+        } => *capture,
+        _ => None,
+    })
+}
+
+fn full_state_loads(cmds: &[AudioCommand]) -> Vec<Vec<u8>> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            AudioCommand::LoadPluginState {
+                instance_id: INSTANCE,
+                data,
+            } => Some(data.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn captured(app: &mut Resonance, token: u64, data: &[u8]) {
+    app.test_apply_engine_event(AudioEvent::PluginStateCaptured {
+        instance_id: INSTANCE,
+        token,
+        data: data.to_vec(),
+    });
+}
+
+/// Model X by hand, audition a preset (model Y), Esc: the plugin gets its
+/// full pre-audition state back (X plays), and that is what is cached and
+/// saved.
+#[test]
+fn esc_after_an_audition_restores_the_whole_state_the_plugin_had() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    while rx.try_recv().is_ok() {}
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    let cmds: Vec<_> = rx.try_iter().collect();
+    let token = capture_token(&cmds).expect("the first audition captures the full state");
+    captured(&mut app, token, MODEL_X);
+
+    app.test_dismiss_overlay();
+    let cmds: Vec<_> = rx.try_iter().collect();
+    assert_eq!(full_state_loads(&cmds), vec![MODEL_X.to_vec()], "X plays again");
+    assert_eq!(
+        app.test_cached_plugin_state(INSTANCE).as_deref(),
+        Some(MODEL_X),
+        "and is what is saved"
+    );
+}
+
+/// Esc before the engine's capture arrived: the revert completes when it
+/// does.
+#[test]
+fn a_revert_before_the_capture_lands_completes_when_it_does() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    while rx.try_recv().is_ok() {}
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).unwrap();
+    app.test_dismiss_overlay();
+    assert!(full_state_loads(&rx.try_iter().collect::<Vec<_>>()).is_empty());
+    captured(&mut app, token, MODEL_X);
+    assert_eq!(
+        full_state_loads(&rx.try_iter().collect::<Vec<_>>()),
+        vec![MODEL_X.to_vec()]
+    );
+}
+
+/// Undo of a bar step and of a kept audition puts back the full state
+/// the load replaced (the engine's capture), not only the params.
+#[test]
+fn undoing_a_preset_load_restores_the_full_state_it_replaced() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    app.test_seed_plugin_state(INSTANCE, b"stale".to_vec());
+    while rx.try_recv().is_ok() {}
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).expect("a recorded load captures");
+    captured(&mut app, token, MODEL_X);
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        full_state_loads(&rx.try_iter().collect::<Vec<_>>()),
+        vec![MODEL_X.to_vec()]
+    );
+
+    // Kept audition: the entry returns to the origin, captured at the
+    // first audition — not to the audition the engine plays when kept.
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).unwrap();
+    captured(&mut app, token, MODEL_X);
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: true });
+    assert_eq!(capture_token(&rx.try_iter().collect::<Vec<_>>()), None, "no second capture");
+    let _ = app.update(Message::Undo);
+    assert_eq!(
+        full_state_loads(&rx.try_iter().collect::<Vec<_>>()),
+        vec![MODEL_X.to_vec()]
+    );
 }
 
 // ---------------------------------------------------------------------------

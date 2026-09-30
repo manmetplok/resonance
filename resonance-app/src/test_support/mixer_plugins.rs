@@ -312,6 +312,16 @@ impl Resonance {
         self.plugin_mirror.state_cache.insert(instance_id, data.into());
     }
 
+    /// Test-only: the cached full state of `instance_id` (what undo and a
+    /// missing plugin's save fall back on).
+    #[doc(hidden)]
+    pub fn test_cached_plugin_state(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<Vec<u8>> {
+        self.plugin_mirror.state_cache.get(&instance_id).map(|b| b.to_vec())
+    }
+
     /// Test-only: the chain as `(instance_id, clap_plugin_id, missing)`
     /// triples, in slot order (ba todo #1309).
     ///

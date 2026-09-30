@@ -66,17 +66,22 @@ pub struct HostPresetList {
 }
 
 /// The sound a plugin had before its first audition: what a revert puts
-/// back and what the commit's undo entry returns to (§6.7).
-#[derive(Debug, Clone, PartialEq)]
+/// back and what the commit's undo entry returns to (§6.7). `state` is the
+/// plugin's full state, saved by the engine under the plugin's lock just
+/// before the first audition loaded (`capture` token `token`); it fills in
+/// asynchronously.
+#[derive(Debug, Clone)]
 pub struct AuditionOrigin {
     pub values: Vec<(u32, f64)>,
     pub identity: Option<SlotPresetIdentity>,
+    pub state: crate::undo::snapshot::LateBlob,
+    pub token: u64,
 }
 
 /// The preset browser opened from a plugin panel's bar, over one plugin
 /// instance. Clicking a row auditions it (unrecorded); keeping records one
 /// undo entry from the origin; Esc reverts.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct HostPresetBrowser {
     pub instance_id: PluginInstanceId,
     pub plugin_name: String,
@@ -155,6 +160,22 @@ pub struct PresetState {
     /// changes from the host.
     pub fx_favorite_picks: std::rc::Rc<[PresetAddPick]>,
     pub instrument_favorite_picks: std::rc::Rc<[PresetAddPick]>,
+    /// The late undo slot the last recorded preset load's snapshot holds,
+    /// for that load to fill (`undo::attach_preset_capture`).
+    pub(crate) next_capture:
+        Option<(PluginInstanceId, crate::undo::snapshot::LateBlob)>,
+    /// A load that must capture into this token (an audition's origin).
+    pub(crate) forced_capture: Option<u64>,
+    /// A kept audition: its undo slot takes the origin's state rather than
+    /// a capture (the engine plays the audition by now).
+    pub(crate) capture_from: Option<(crate::undo::snapshot::LateBlob, u64)>,
+    /// Captures in flight: the slots each token fills.
+    pub(crate) pending_captures:
+        std::collections::HashMap<u64, Vec<crate::undo::snapshot::LateBlob>>,
+    /// A revert that happened before its origin's capture arrived: load
+    /// the capture into this instance when it does.
+    pub(crate) revert_on_capture: std::collections::HashMap<u64, PluginInstanceId>,
+    pub(crate) capture_seq: u64,
     pub pending_plugin_presets: std::collections::HashMap<
         PluginInstanceId,
         (String, String, resonance_control::methods::plugin_preset::PluginPresetSource),

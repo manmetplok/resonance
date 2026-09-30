@@ -871,6 +871,14 @@ impl EngineHandlerHarness {
         self.with_ctx(|ctx, state| super::dispatch::dispatch(ctx, state, cmd));
     }
 
+    /// The engine loop's plugin host-request poll (`on_main_thread`, preset
+    /// reports, param refreshes, restart requests), once.
+    pub fn poll_plugin_host_requests(&mut self) {
+        self.with_ctx(|ctx, state| {
+            crate::engine::plugins::poll_plugin_host_requests(ctx, &state.external_instruments)
+        });
+    }
+
     /// One engine-loop pass: apply the worker results waiting on the
     /// inbox ([`Self::apply_worker_results`]), then the parked-clip-edit
     /// replay (`clips::poll_deferred_clip_commands`).

@@ -72,14 +72,23 @@ pub(super) fn dispatch_plugins(
         AudioCommand::SavePluginPresetState { instance_id } => {
             plugins::handle_save_plugin_preset_state(ctx, instance_id)
         }
-        AudioCommand::LoadPluginPresetState { instance_id, data } => {
-            plugins::handle_load_plugin_preset_state(ctx, instance_id, data)
-        }
+        AudioCommand::LoadPluginPresetState {
+            instance_id,
+            data,
+            capture,
+        } => plugins::handle_load_plugin_preset_state(ctx, instance_id, data, capture),
         AudioCommand::LoadPluginPresetFromLocation {
             instance_id,
             location,
             load_key,
-        } => plugins::handle_load_plugin_preset_from_location(ctx, instance_id, location, load_key),
+            capture,
+        } => plugins::handle_load_plugin_preset_from_location(
+            ctx,
+            instance_id,
+            location,
+            load_key,
+            capture,
+        ),
         AudioCommand::SetPluginPresetIgnoredParams {
             instance_id,
             clap_ids,

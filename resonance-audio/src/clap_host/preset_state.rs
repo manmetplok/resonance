@@ -256,6 +256,36 @@ impl ClapInstance {
         std::mem::take(&mut *self.host_data.preset_reports.lock())
     }
 
+    /// Take the plugin's queued `on_error` messages (joined), leaving its
+    /// other reports queued: a failed `from_location` reports once.
+    pub fn take_preset_error(&mut self) -> Option<String> {
+        let mut reports = self.host_data.preset_reports.lock();
+        let mut messages = Vec::new();
+        reports.retain(|r| match r {
+            PresetHostReport::Error { message } => {
+                messages.push(message.clone());
+                false
+            }
+            _ => true,
+        });
+        (!messages.is_empty()).then(|| messages.join("; "))
+    }
+
+    /// Ask for the params to be re-read at the next host-request poll.
+    pub fn request_params_refresh(&mut self) {
+        self.host_data
+            .params_refresh
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Whether the params should be re-read (a values rescan, or a load's
+    /// second look), clearing the flag.
+    pub fn take_params_refresh(&mut self) -> bool {
+        self.host_data
+            .params_refresh
+            .swap(false, std::sync::atomic::Ordering::AcqRel)
+    }
+
     /// Tell a Resonance plugin which params the host automates, so its
     /// modified comparison leaves them out (D8). False for a plugin
     /// without `com.resonance.preset-session`. `[main-thread]`.
