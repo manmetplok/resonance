@@ -1480,3 +1480,60 @@ what landed and where the code differs from §§4–15.
   from §6.6:** the drop target is the arrange track header, not a mixer
   strip — the media browser lives in the Arrange view, where no strip is
   on screen.
+
+### Review round (after P8)
+
+What the three reviews changed, where it differs from the slices above:
+
+- **Rows and drag (P6/P8).** Preset rows are styled containers in a mouse
+  area (a button captured the press, so double-click never fired). A drag
+  is armed by the real press on a row, becomes one after 4 px of movement,
+  and drops on the release over a track header; a click disarms on its own
+  release. The root and every track header carry an always-present mouse
+  area that only listens while a drag is armed (so arming never changes
+  the tree's shape). An effect is refused on an instrument track with no
+  instrument, and nothing drops onto a multi-output sub-track.
+- **The whole sound on revert and undo (§6.7).** `LoadPluginPresetState` /
+  `LoadPluginPresetFromLocation` take a `capture` token: the engine saves
+  the full state under the plugin's lock first (`PluginStateCaptured`).
+  The first audition captures into its origin (Esc reloads it as a full
+  state, or when it lands if still in flight); a recorded load's undo
+  entry carries a late slot the capture fills (`UndoSnapshot::
+  late_plugin_states`), and a kept audition's entry takes the origin's.
+  ◀ / ▶ runs coalesce into one entry and send one debounced state load.
+- **Modified cost (§7).** The main-thread compare is throttled to
+  `MODIFIED_COMPARE_INTERVAL`; host-automated params never request one
+  (per-slot flags on the audio thread); the extra-state hash is cached
+  behind `ExtraStateSaver::revision` (user wavetables); a moved param
+  settles it first; the amp compares by `model_id` only.
+- **P7 by provenance.** First-party means the instance serves
+  `com.resonance.preset-session`; `PluginPresetStateSaved.first_party`
+  decides, never the content. A blob records its `form` (preset/full).
+- **Discovery (P8).** The cache moved to the cache dir
+  (`<cache>/preset-discovery/`, `RESONANCE_CACHE_DIR` in tests), per
+  bundle: each provider's declarations and PLUGIN presets by binary stamp,
+  each file's presets by (size, mtime ns); a start reads only new or
+  changed files, a rescan re-indexes. One worker, joined before the next
+  and on shutdown. Declarations are sealed after `init`; presets inherit
+  location flags, a file stem for a missing name, and a missing plugin id
+  means the bundle's only plugin. `loaded()` echoes of discovered presets
+  keep the library's id and name; a provider favourite is seeded once.
+- **Drums / IR.** A drums load that changes the kit or its mics reloads it
+  (once a sample rate is known); a document without `kit_path` keeps the
+  kit, as one without `ir_path` keeps the IR. `ir_path: ""` fades the IR
+  out (`SwapFader::begin_clear`) and a new path moves the excluded
+  `file_select` into the new folder. **Consequence, kept:** a legacy
+  params-only IR preset no longer names an IR, so it recalls the params
+  and keeps whatever IR is loaded — same as the amp's model.
+- **Search.** Scoped tokens match a value exactly (folded) or by slug
+  prefix (`genre:rock` does not find `post-rock`); facet selections and
+  counts fold case. Library rows re-read marks and preset directories at
+  most once per poll interval; the first open's trash sweep runs on a
+  thread.
+- **Host lists.** `presets.*` edits and saves call `library_changed`
+  (lists, add-picker favourites, loaded names); a visible browser or
+  Presets tab re-queries once a second, and a list whose rows did not
+  change keeps its `lazy` generation. The browser closes with its plugin,
+  keeps what was auditioned even once filtered out, takes ↑/↓/↵/Esc before
+  its focused search field, and a preset on the instrument already loaded
+  is a recorded recall.

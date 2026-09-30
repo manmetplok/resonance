@@ -15,7 +15,6 @@ use super::{
 };
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
-/// Commands sent from the GUI to the audio engine.
 /// Where a preset lives, as `clap.preset-load` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PluginPresetLocation {
@@ -25,6 +24,7 @@ pub enum PluginPresetLocation {
     File(std::path::PathBuf),
 }
 
+/// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     Play,

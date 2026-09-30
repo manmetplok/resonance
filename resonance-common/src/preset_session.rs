@@ -76,7 +76,20 @@ impl IdentityReport {
         .to_string()
     }
 
-    /// Parse a report; `None` for "nothing loaded".
+    /// Parse a report as the host takes it: `Some(None)` for "nothing
+    /// loaded" (`{}`), `Some(Some(_))` for an identity, `None` for a report
+    /// that does not parse — which the host drops rather than reading as
+    /// "nothing loaded".
+    pub fn parse_report(text: &str) -> Option<Option<Self>> {
+        let v: serde_json::Value = serde_json::from_str(text).ok()?;
+        let obj = v.as_object()?;
+        if obj.is_empty() {
+            return Some(None);
+        }
+        Self::parse(text).map(Some)
+    }
+
+    /// Parse a report; `None` for "nothing loaded" or malformed.
     pub fn parse(text: &str) -> Option<Self> {
         let v: serde_json::Value = serde_json::from_str(text).ok()?;
         Some(Self {

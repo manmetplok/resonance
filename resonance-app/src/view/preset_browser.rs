@@ -42,7 +42,10 @@ fn ui(m: PresetUiMessage) -> Message {
 
 /// The plugin panel's preset bar: ◀ name • ▶ ☆ Presets…, for any plugin
 /// (third-party and GUI-less ones included).
-pub(crate) fn preset_bar<'a>(r: &'a Resonance, plugin: &'a PluginSlotState) -> Element<'a, Message> {
+pub(crate) fn preset_bar<'a>(
+    r: &'a Resonance,
+    plugin: &'a PluginSlotState,
+) -> Element<'a, Message> {
     let instance_id = plugin.instance_id;
     let identity = r.presets.plugin_preset_identity.get(&instance_id);
     let name = identity.map_or("\u{2014} preset \u{2014}", |i| i.name.as_str());
@@ -103,14 +106,14 @@ pub(crate) fn preset_bar<'a>(r: &'a Resonance, plugin: &'a PluginSlotState) -> E
 // List (shared by the overlay and the media tab)
 // ---------------------------------------------------------------------------
 
-fn preset_row<'a>(
-    row_data: &'a HostPresetRow,
+fn preset_row(
+    row_data: &HostPresetRow,
     selected: bool,
     show_plugin: bool,
     on_click: Message,
     on_double: Message,
     on_star: Message,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let mut label = column![text(row_data.name.clone()).size(12).color(theme::TEXT)].spacing(1);
     let mut sub = Vec::new();
     if show_plugin {
@@ -166,12 +169,17 @@ fn row_style(selected: bool) -> container::Style {
 
 fn search_row<'a>(
     list: &'a HostPresetList,
+    id: Option<iced::widget::Id>,
     on_input: fn(String) -> Message,
     on_favorites: fn(bool) -> Message,
 ) -> Element<'a, Message> {
     let only = list.favorites_only;
+    let mut input = text_input("Search presets\u{2026}", &list.query);
+    if let Some(id) = id {
+        input = input.id(id);
+    }
     row![
-        text_input("Search presets\u{2026}", &list.query)
+        input
             .on_input(on_input)
             .size(12)
             .padding([4, 6])
@@ -281,6 +289,7 @@ pub(crate) fn view_preset_browser_overlay(r: &Resonance) -> Element<'_, Message>
             header,
             search_row(
                 list,
+                Some(crate::update::plugin_preset_ui::search_input_id()),
                 |s| ui(PresetUiMessage::BrowserSearch(s)),
                 |on| ui(PresetUiMessage::BrowserFavoritesOnly(on)),
             ),
@@ -333,20 +342,27 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
     .padding([4, 8])
     .width(Length::Fill);
 
-    let mut rows = column![].spacing(2);
-    if list.rows.is_empty() {
-        rows = rows.push(text("No presets match").size(12).color(theme::TEXT_3));
-    }
-    for (i, row_data) in list.rows.iter().enumerate() {
-        rows = rows.push(preset_row(
-            row_data,
-            list.selected == Some(i),
-            list.plugin.is_none(),
-            ui(PresetUiMessage::MediaPress(i)),
-            ui(PresetUiMessage::MediaLoad(i)),
-            ui(PresetUiMessage::MediaToggleRowFavorite(i)),
-        ));
-    }
+    // The rows are a `lazy` region keyed on the list's generation (bumped
+    // by every re-query) and the selection, so a frame that changed
+    // neither reuses them (ui-work.md §11, like the Files tab's listing).
+    let key = (list.generation, list.selected, list.plugin.is_none());
+    let rows = iced::widget::lazy(key, move |_| -> Element<'static, Message> {
+        let mut rows = column![].spacing(2);
+        if list.rows.is_empty() {
+            rows = rows.push(text("No presets match").size(12).color(theme::TEXT_3));
+        }
+        for (i, row_data) in list.rows.iter().enumerate() {
+            rows = rows.push(preset_row(
+                row_data,
+                list.selected == Some(i),
+                list.plugin.is_none(),
+                ui(PresetUiMessage::MediaPress(i)),
+                ui(PresetUiMessage::MediaLoad(i)),
+                ui(PresetUiMessage::MediaToggleRowFavorite(i)),
+            ));
+        }
+        rows.into()
+    });
     let target = r
         .ui
         .mixer
@@ -358,6 +374,7 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
     column![
         search_row(
             list,
+            None,
             |s| ui(PresetUiMessage::MediaSearch(s)),
             |on| ui(PresetUiMessage::MediaFavoritesOnly(on)),
         ),

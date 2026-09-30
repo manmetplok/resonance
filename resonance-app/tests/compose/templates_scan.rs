@@ -127,16 +127,18 @@ fn make_project_with_content() -> ProjectFile {
     project
 }
 
+/// The templates directory is a user dir like the others: in a test
+/// process it lives under the hermetic root, never the developer's
+/// `~/.config/resonance/templates` (it used to call `dirs::config_dir()`
+/// directly, so this test created the real folder).
 #[test]
-fn templates_dir_returns_path() {
-    let dir = templates_dir();
-    assert!(dir.is_some() || dir.is_none());
-}
-
-#[test]
-fn ensure_templates_dir_creates_or_returns() {
-    let dir = ensure_templates_dir();
-    assert!(dir.is_some() || dir.is_none());
+fn the_templates_dir_is_hermetic_in_a_test_process() {
+    let _app = resonance_app::Resonance::new_for_test();
+    let root = resonance_app::user_dirs::hermetic_root().expect("a test app is hermetic");
+    let dir = templates_dir().expect("a templates dir");
+    assert!(dir.starts_with(root), "{} is under {}", dir.display(), root.display());
+    let made = ensure_templates_dir().expect("created");
+    assert!(made.starts_with(root));
 }
 
 #[test]

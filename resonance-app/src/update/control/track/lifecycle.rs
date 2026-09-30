@@ -140,6 +140,12 @@ pub(super) fn add_effect(app: &mut Resonance, request: &Request) -> (Response, T
     add_plugin(app, request, PluginRole::Effect)
 }
 
+fn bank_record_use(app: &Resonance, clap_id: &str, preset_id: &str) -> Result<(), String> {
+    crate::plugin_preset_library::library(app)
+        .record_use(clap_id, preset_id)
+        .map(|_| ())
+}
+
 enum PluginRole {
     Instrument,
     Effect,
@@ -266,13 +272,30 @@ fn add_plugin(
                     .map(|p| p.instance_id);
                 match (kind, now) {
                     (Some(ReplaceKind::AlreadyLoaded), Some(id)) => {
-                        crate::update::control::plugin_presets::park_add_preset(
+                        // Nothing to add: the preset is a plain recall on
+                        // the instrument that is there — one recorded
+                        // edit, one revision, like `load_plugin_preset`.
+                        let message = crate::update::control::plugin_presets::host_load_message(
                             app,
                             id,
                             &params.plugin_id,
-                            found,
+                            &found.id,
+                            crate::update::control::plugin_presets::wire_source(found.source),
                         );
-                        crate::update::control::plugin_presets::apply_pending_preset(app, id);
+                        match message {
+                            Ok(message) => {
+                                let _ = bank_record_use(app, &params.plugin_id, &found.id);
+                                let recall = run_via_update(app, message);
+                                let result = track::AddPluginResult {
+                                    plugin_id: params.plugin_id,
+                                    occurrence: 0,
+                                    slot,
+                                    revision: app.revision(),
+                                };
+                                return (success(request, &result), Task::batch([task, recall]));
+                            }
+                            Err(e) => return reject(request, e),
+                        }
                     }
                     (Some(_), Some(id)) => {
                         crate::update::control::plugin_presets::park_add_preset(

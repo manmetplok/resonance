@@ -90,6 +90,25 @@ impl FactoryEntry {
     }
 }
 
+/// Why a rename was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RenameError {
+    /// The request itself: a factory preset, an unusable name, a clash.
+    Invalid(String),
+    /// The preset is not there (any more).
+    NotFound(String),
+    /// Reading or writing the file failed.
+    Io(String),
+}
+
+impl std::fmt::Display for RenameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invalid(m) | Self::NotFound(m) | Self::Io(m) => f.write_str(m),
+        }
+    }
+}
+
 /// What [`PresetLibrary::save`] writes.
 #[derive(Debug, Clone, Default)]
 pub struct SaveRequest {
@@ -171,6 +190,12 @@ pub struct PresetLibrary {
     plugins: Mutex<HashMap<String, PluginIndex>>,
     /// Background housekeeping started by a first open (the trash sweep).
     housekeeping: Mutex<Vec<std::thread::JoinHandle<usize>>>,
+}
+
+impl std::fmt::Debug for PresetLibrary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresetLibrary").field("root", &self.root()).finish_non_exhaustive()
+    }
 }
 
 impl Default for PresetLibrary {
@@ -634,17 +659,31 @@ impl PresetLibrary {
         preset: &PresetRef,
         new_name: &str,
     ) -> Result<PresetRecord, String> {
+        self.rename_typed(plugin_id, preset, new_name)
+            .map_err(|e| e.to_string())
+    }
+
+    /// [`rename`](Self::rename) with the reason typed: what the caller
+    /// asked for is refused ([`RenameError::Invalid`]: a factory preset, an
+    /// empty or unusable name, a name another user preset has), the preset
+    /// is gone ([`RenameError::NotFound`]), or the disk failed.
+    pub fn rename_typed(
+        &self,
+        plugin_id: &str,
+        preset: &PresetRef,
+        new_name: &str,
+    ) -> Result<PresetRecord, RenameError> {
         if preset.source != PresetSource::User {
-            return Err("Factory presets cannot be renamed".to_string());
+            return Err(RenameError::Invalid("Factory presets cannot be renamed".to_string()));
         }
-        let new_name = validate_name(new_name)?;
+        let new_name = validate_name(new_name).map_err(RenameError::Invalid)?;
         let mut plugins = self.plugins.lock();
         let index = plugins.entry(plugin_id.to_string()).or_default();
         self.ensure_fresh(plugin_id, index, Duration::ZERO);
         let users = index.user.as_ref().map(|u| u.records.as_slice()).unwrap_or(&[]);
         let record = find_record(users, preset)
             .cloned()
-            .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
+            .ok_or_else(|| RenameError::NotFound(format!("No preset named '{}'", preset.name)))?;
         if record.meta.name == new_name {
             return Ok(record);
         }
@@ -652,20 +691,23 @@ impl PresetLibrary {
             .iter()
             .any(|r| r.preset.id != record.preset.id && same_name(&r.meta.name, &new_name))
         {
-            return Err(format!("A preset named '{new_name}' already exists"));
+            return Err(RenameError::Invalid(format!(
+                "A preset named '{new_name}' already exists"
+            )));
         }
         let from = record
             .path
             .clone()
-            .ok_or_else(|| "User preset has no file".to_string())?;
+            .ok_or_else(|| RenameError::Io("User preset has no file".to_string()))?;
         let text = std::fs::read_to_string(&from)
-            .map_err(|e| format!("Read preset '{}': {e}", preset.name))?;
-        let mut file = PresetFile::parse(&text)?;
+            .map_err(|e| RenameError::Io(format!("Read preset '{}': {e}", preset.name)))?;
+        let mut file = PresetFile::parse(&text).map_err(RenameError::Io)?;
         file.meta.name = new_name.clone();
         file.meta.modified = Some(format::rfc3339(self.now()));
         let to = from.with_file_name(files::preset_file_name(&new_name, &file.id));
-        files::move_before_rewrite(&from, &to)?;
-        files::atomic_write(&to, file.to_text()?.as_bytes())?;
+        files::move_before_rewrite(&from, &to).map_err(RenameError::Io)?;
+        let text = file.to_text().map_err(RenameError::Io)?;
+        files::atomic_write(&to, text.as_bytes()).map_err(RenameError::Io)?;
         let record = user_record(&file, to);
         upsert_user(index, record.clone());
         Ok(record)

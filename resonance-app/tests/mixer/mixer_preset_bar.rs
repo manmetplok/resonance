@@ -127,10 +127,11 @@ fn undo_len(app: &Resonance) -> usize {
     app.test_undo_history().undo_len()
 }
 
-/// ◀ / ▶ walk the bank in order and wrap; each step is one recorded load
-/// that names the preset.
+/// ◀ / ▶ walk the bank in order and wrap, naming each preset; a run of
+/// steps on one plugin is one undo entry (review minor), back to where it
+/// started.
 #[test]
-fn next_and_previous_walk_the_bank_and_record_one_entry_each() {
+fn next_and_previous_walk_the_bank_as_one_undo_entry() {
     let mut app = app();
     let before = undo_len(&app);
     ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
@@ -141,7 +142,33 @@ fn next_and_previous_walk_the_bank_and_record_one_entry_each() {
     ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
     ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
     assert_eq!(current_id(&app).as_deref(), Some("flat"), "wraps to the last");
-    assert_eq!(undo_len(&app), before + 4);
+    assert_eq!(undo_len(&app), before + 1, "one entry for the run");
+    let _ = app.update(Message::Undo);
+    assert_eq!(gain(&mut app), Some(1.0), "back to before the first step");
+}
+
+/// A run of steps sends the plugin one state load, for where it stopped,
+/// once the run is quiet (an amp step would reload a model each time).
+#[test]
+fn a_step_run_sends_one_state_load() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    while rx.try_recv().is_ok() {}
+    for _ in 0..3 {
+        ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    }
+    let loads = |cmds: &[AudioCommand]| {
+        cmds.iter()
+            .filter(|c| {
+                matches!(c, AudioCommand::LoadPluginPresetState { instance_id: INSTANCE, .. })
+            })
+            .count()
+    };
+    assert_eq!(loads(&rx.try_iter().collect::<Vec<_>>()), 0, "parked during the run");
+    app.test_flush_step_state();
+    let cmds: Vec<_> = rx.try_iter().collect();
+    assert_eq!(loads(&cmds), 1);
+    assert!(capture_token(&cmds).is_some(), "the run's undo entry waits on its capture");
 }
 
 /// The audition bracket (§6.7): auditions record nothing, keeping records
@@ -459,7 +486,9 @@ fn undoing_a_preset_load_restores_the_full_state_it_replaced() {
     app.test_seed_plugin_state(INSTANCE, b"stale".to_vec());
     while rx.try_recv().is_ok() {}
     ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
-    let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).expect("a recorded load captures");
+    app.test_flush_step_state();
+    let token =
+        capture_token(&rx.try_iter().collect::<Vec<_>>()).expect("a recorded load captures");
     captured(&mut app, token, MODEL_X);
     let _ = app.update(Message::Undo);
     assert_eq!(
@@ -515,6 +544,93 @@ fn a_loaded_echo_confirms_a_discovered_identity_and_unstars_stick() {
         .cloned()
         .unwrap();
     assert!(!air.favorite, "the provider's favourite is seeded once, not every start");
+}
+
+// ---------------------------------------------------------------------------
+// The browser's lifetime and what Keep keeps (review M12, minors)
+// ---------------------------------------------------------------------------
+
+/// The browser does not outlive its plugin: removing it closes the browser
+/// without a revert, so Esc sends nothing to a dead instance and no
+/// identity is re-inserted for it.
+#[test]
+fn removing_the_plugin_closes_its_browser_without_a_revert() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    app.test_apply_engine_event(AudioEvent::PluginRemoved {
+        track_id: TRACK,
+        instance_id: INSTANCE,
+    });
+    assert!(app.test_presets().host_browser.is_none());
+    assert_eq!(app.root_overlay(), None);
+    while rx.try_recv().is_ok() {}
+    app.test_dismiss_overlay();
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: false });
+    let sent: Vec<_> = rx.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, AudioCommand::SetPluginParam { instance_id: INSTANCE, .. })),
+        "nothing goes to the dead instance: {sent:?}"
+    );
+    assert!(!app.test_presets().plugin_preset_identity.contains_key(&INSTANCE));
+}
+
+/// Keep keeps what was auditioned even when a search has filtered its row
+/// out since (it used to turn into a revert).
+#[test]
+fn keep_keeps_the_audition_after_its_row_is_filtered_out() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    ui(&mut app, PresetUiMessage::BrowserSearch("warm".into()));
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: true });
+    assert_eq!(current_id(&app).as_deref(), Some("bright"));
+    assert_eq!(gain(&mut app), Some(7.0));
+}
+
+fn press_key(app: &mut Resonance, key: resonance_app::commands::NamedKey, captured: bool) {
+    use resonance_app::commands::{KeyChord, Mods};
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(key, Mods::NONE),
+        repeat: false,
+        captured,
+    }));
+}
+
+/// The browser's keys go through the real key dispatch: ↓ auditions the
+/// next row even while the search field has focus (captured), ↵ keeps.
+#[test]
+fn arrows_audition_and_enter_keeps_in_the_browser() {
+    use resonance_app::commands::NamedKey;
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    press_key(&mut app, NamedKey::ArrowDown, true);
+    assert_eq!(gain(&mut app), Some(3.0), "the first row (Warm) auditions");
+    press_key(&mut app, NamedKey::ArrowDown, true);
+    assert_eq!(gain(&mut app), Some(7.0), "then Bright");
+    press_key(&mut app, NamedKey::Enter, true);
+    assert!(app.test_presets().host_browser.is_none(), "kept and closed");
+    assert_eq!(current_id(&app).as_deref(), Some("bright"));
+}
+
+/// The Presets tab's rows are cached behind the list's generation: an
+/// unrelated update leaves it alone, a re-query that changes nothing does
+/// too, and a search that changes the rows bumps it (review M10).
+#[test]
+fn the_tab_list_generation_moves_only_with_its_rows() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::MediaSearch(String::new()));
+    let g0 = app.test_presets().media_presets.generation;
+    let _ = app.update(Message::Tick);
+    ui(&mut app, PresetUiMessage::MediaSearch(String::new()));
+    assert_eq!(app.test_presets().media_presets.generation, g0, "same rows, same widgets");
+    ui(&mut app, PresetUiMessage::MediaSearch("bri".into()));
+    assert_ne!(app.test_presets().media_presets.generation, g0);
 }
 
 // ---------------------------------------------------------------------------

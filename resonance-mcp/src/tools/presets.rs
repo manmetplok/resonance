@@ -69,13 +69,15 @@ impl ResonanceMcp {
                        a plugin is even on a track — pick a plugin AND a preset in one read. \
                        Filters AND: query (tokens match name, author, description, category \
                        and tags; is:fav, is:recent, is:user, is:factory, tag:, genre:, cat:, \
-                       for:, char:, by: scope a token, e.g. \"for:vocal char:warm\"), \
+                       for:, char:, by: scope a token to a value or its prefix, e.g. \
+                       \"for:vocal char:warm\"), \
                        favorites_only, source, category, instrument, genres, character, tags; \
                        sort (bank / name / category / recent / modified); limit (default 100) \
                        and offset. Each hit carries plugin_id and the preset entry (id, \
                        metadata, favorite, tags). Add the plugin with track_add_effect / \
-                       track_add_instrument (preset: {id}) or load it onto an existing one with \
-                       track_load_plugin_preset (preset_id). Read-only.",
+                       track_add_instrument / bus_add_effect / master_add_effect, passing the \
+                       hit's id as the preset string (preset: \"<id>\"), or load it onto an \
+                       existing one with track_load_plugin_preset (preset_id). Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<presets::SearchResult>()
     )]

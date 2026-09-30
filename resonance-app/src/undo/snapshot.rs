@@ -89,6 +89,9 @@ pub enum CoalesceKey {
     BusPan(u64),
     MasterVolume,
     PluginParam { instance_id: u64, param_id: u32 },
+    /// Consecutive ◀ / ▶ preset steps on one plugin: one entry for the
+    /// run, back to where it started.
+    PluginPresetStep(u64),
     /// The reference-track manual trim fader.
     ReferenceTrim,
     /// An aux-send level slider drag, keyed by the send's id.

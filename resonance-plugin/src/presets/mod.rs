@@ -63,7 +63,8 @@ pub use bank::{PresetBank, SaveOptions};
 pub use editor::{NamingKind, PresetEditor, PresetEvent};
 pub use format::{PresetFile, PresetMeta, PresetPluginInfo, PresetState};
 pub use library::{
-    Clock, FactoryEntry, PresetLibrary, PresetRecord, SaveRequest, TRASH_DIR, TRASH_RETENTION,
+    Clock, FactoryEntry, PresetLibrary, PresetRecord, RenameError, SaveRequest, TRASH_DIR,
+    TRASH_RETENTION,
 };
 pub use marks::{mark_key, MarksSource, NoMarks};
 pub use rows::{PresetRow, PresetRows};

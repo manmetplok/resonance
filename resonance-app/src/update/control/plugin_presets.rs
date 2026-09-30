@@ -603,12 +603,6 @@ pub(crate) fn apply_meta_input(meta: &mut PresetMeta, input: &PresetMetaInput) {
     }
 }
 
-/// Write the plugin's preset state as a user preset, with what the save
-/// request asked for (id, metadata, star, target).
-///
-/// Called when the engine's `PluginPresetStateSaved` echo lands: the
-/// plugin is the only thing that knows its current sound (edits made in
-/// its own window never reach the app's mirror).
 /// Where a captured preset state came from and what it is.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SavedStateKind {
@@ -618,6 +612,12 @@ pub(crate) struct SavedStateKind {
     pub preset_form: bool,
 }
 
+/// Write the plugin's preset state as a user preset, with what the save
+/// request asked for (id, metadata, star, target).
+///
+/// Called when the engine's `PluginPresetStateSaved` echo lands: the
+/// plugin is the only thing that knows its current sound (edits made in
+/// its own window never reach the app's mirror).
 pub(crate) fn write_saved_state(
     app: &Resonance,
     pending: &crate::PendingPluginPresetSave,

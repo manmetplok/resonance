@@ -253,3 +253,32 @@ fn a_click_then_a_click_on_a_header_adds_nothing() {
     at(&mut app, header, vec![release()]);
     assert_eq!(plugins_on_track(&app), 1);
 }
+
+/// An effect dragged onto an instrument track with no instrument yet is
+/// refused (it would take the instrument slot and hide the picker).
+#[test]
+fn an_effect_is_not_dropped_into_an_empty_instrument_slot() {
+    let mut app = app();
+    app.test_add_track(6, TrackType::Instrument);
+    let name = app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| t.id == 6)
+        .unwrap()
+        .name
+        .clone();
+    let row = centre_of(&app, "Bright");
+    let header = centre_of(&app, &name);
+    at(&mut app, row, vec![press()]);
+    at(&mut app, row, vec![moved(row)]);
+    at(&mut app, header, vec![moved(header), release()]);
+    let count = app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| t.id == 6)
+        .map_or(0, |t| t.plugins.len());
+    assert_eq!(count, 0, "refused");
+    assert!(app.test_presets().dragging.is_none());
+}

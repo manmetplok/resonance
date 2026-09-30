@@ -827,7 +827,158 @@ fn a_third_party_json_state_is_kept_opaque() {
     });
     assert_eq!(sent.as_deref(), Some(&nih_style[..]), "whole and untouched");
     assert!(
-        !cmds.iter().any(|c| matches!(c, AudioCommand::SetPluginParam { instance_id: VENDOR_INSTANCE, .. })),
+        !cmds.iter().any(|c| {
+            matches!(c, AudioCommand::SetPluginParam { instance_id: VENDOR_INSTANCE, .. })
+        }),
         "no param-by-param recall of an opaque state"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Adds with a preset are one undo step and one revision (review M9)
+// ---------------------------------------------------------------------------
+
+const FX_ID: &str = "com.resonance.test-fx";
+
+fn scanned_fx() -> ScannedPlugin {
+    ScannedPlugin {
+        clap_file_path: "/nonexistent/test-fx.clap".to_owned(),
+        clap_plugin_id: FX_ID.to_owned(),
+        name: "Test FX".to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument: false,
+        factory_presets: vec![factory(
+            "fx-warm",
+            "FX — Warm",
+            300.0,
+            serde_json::json!({"category": "EQ"}),
+        )],
+    }
+}
+
+fn recorded_app() -> Resonance {
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(std::path::PathBuf::from("/tmp/preset-add-undo.rprj"));
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![scanned(), scanned_fx()],
+    });
+    app
+}
+
+/// `track.add_instrument {preset}` naming the instrument already there is
+/// a recall: one undo entry and one revision, not a silent sound change.
+#[test]
+fn a_preset_on_the_instrument_already_loaded_is_one_recorded_recall() {
+    let mut app = recorded_app();
+    app.test_add_track(EMPTY_TRACK, TrackType::Instrument);
+    let add = |app: &mut Resonance, preset: Option<&str>| {
+        call(
+            app,
+            track_proto::ADD_INSTRUMENT,
+            &track_proto::AddPluginParams {
+                track_id: ProtoTrackId(EMPTY_TRACK),
+                plugin_id: PLUGIN_ID.to_owned(),
+                preset: preset.map(str::to_owned),
+            },
+        )
+    };
+    let id = app.test_next_plugin_id();
+    assert!(add(&mut app, None).error.is_none());
+    echo_added(&mut app, id);
+    let (undo, revision) = (app.test_undo_history().undo_len(), app.revision());
+
+    let response = add(&mut app, Some("pad-glass"));
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert_eq!(app.test_plugin_param(id, clap_id("cutoff")), Some(9000.0));
+    assert_eq!(app.test_undo_history().undo_len(), undo + 1);
+    assert_eq!(app.revision(), revision + 1);
+    let _ = app.update(resonance_app::message::Message::Undo);
+    assert_eq!(app.test_plugin_param(id, clap_id("cutoff")), Some(1.0), "and undoable");
+}
+
+/// `bus.add_effect` / `master.add_effect` with a preset: the add and the
+/// load are one step.
+#[test]
+fn bus_and_master_adds_with_a_preset_are_one_step() {
+    use resonance_control::methods::{bus as bus_proto, master as master_proto};
+    let mut app = recorded_app();
+    app.test_add_bus(9, "Drums");
+    for (method, params) in [
+        (
+            bus_proto::ADD_EFFECT,
+            serde_json::to_value(bus_proto::AddEffectParams {
+                bus_id: ProtoTrackId(9),
+                plugin_id: FX_ID.to_owned(),
+                preset: Some("fx-warm".to_owned()),
+            })
+            .unwrap(),
+        ),
+        (
+            master_proto::ADD_EFFECT,
+            serde_json::to_value(master_proto::AddEffectParams {
+                plugin_id: FX_ID.to_owned(),
+                preset: Some("FX — Warm".to_owned()),
+            })
+            .unwrap(),
+        ),
+    ] {
+        let (undo, revision) = (app.test_undo_history().undo_len(), app.revision());
+        let response = call(&mut app, method, &params);
+        assert!(response.error.is_none(), "{method}: {:?}", response.error);
+        assert_eq!(app.test_undo_history().undo_len(), undo + 1, "{method}");
+        assert_eq!(app.revision(), revision + 1, "{method}");
+    }
+}
+
+/// The host's lists follow a library edit made over the control API
+/// (review M11): a starred preset appears in the add pickers' "with
+/// preset…", and `presets.delete` takes it out again.
+#[test]
+fn presets_delete_removes_the_entry_from_the_add_pickers() {
+    let mut app = app();
+    let id = save(&mut app, "Keeper", None, true);
+    let picks = |app: &Resonance| -> Vec<String> {
+        app.test_presets()
+            .instrument_favorite_picks
+            .iter()
+            .map(|p| p.preset_id.clone())
+            .collect()
+    };
+    assert!(picks(&app).contains(&id), "a starred save shows up: {:?}", picks(&app));
+    let response = call(
+        &mut app,
+        presets::DELETE,
+        &presets::DeleteParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: id.clone(),
+            confirm: true,
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert!(!picks(&app).contains(&id), "and goes with the delete");
+}
+
+/// A rename's validation failure is `invalid_params`, typed.
+#[test]
+fn a_rename_onto_a_taken_or_empty_name_is_invalid_params() {
+    let mut app = app();
+    let a = save(&mut app, "Alpha", None, false);
+    let _b = save(&mut app, "Beta", None, false);
+    for name in ["Beta", "   "] {
+        let response = call(
+            &mut app,
+            presets::RENAME,
+            &presets::RenameParams {
+                plugin_id: PLUGIN_ID.to_owned(),
+                preset_id: a.clone(),
+                name: name.to_owned(),
+            },
+        );
+        assert_eq!(
+            response.error.map(|e| e.kind()),
+            Some(ErrorKind::InvalidParams),
+            "{name:?}"
+        );
+    }
 }

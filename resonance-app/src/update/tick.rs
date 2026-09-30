@@ -74,6 +74,7 @@ fn needs_fast_tick(r: &Resonance) -> bool {
         || export_render_in_flight(r)
         || (r.ui.mixer.reference_panel_open && !r.reference.entries.is_empty())
         || r.plugin_catalog.plugin_scan_in_progress
+        || !r.presets.pending_step_state.is_empty()
         || r.media.relink.scanning()
         || !r.control.pending_tracks.is_empty()
         || !r.control.pending_labels.is_empty()
@@ -130,6 +131,8 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
         tasks.push(task);
     }
     refresh_midi_devices_if_stale(r);
+    crate::update::plugin_preset_ui::poll_visible_lists(r);
+    crate::update::plugin::flush_step_state(r, false);
     check_engine_disconnected(r);
     check_output_stream_lost(r);
     // Change-gated periodic autosave (todo #465, code review UPD-07).

@@ -146,7 +146,9 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
         // factory preset by id inside the plugin. (A user preset's file is
         // what the plugin's own browser reads; hosts that index files see
         // it through the file.)
-        let identity = |r: &Option<IdentityReport>| r.as_ref().map(|r| (r.source.clone(), r.id.clone()));
+        let identity = |r: &Option<IdentityReport>| {
+            r.as_ref().map(|r| (r.source.clone(), r.id.clone()))
+        };
         if identity(&current) != identity(&previous) {
             if let Some(r) = current.filter(|r| r.source == "factory" && !r.id.is_empty()) {
                 if let Some(ext) = self.host.shared().get_extension::<HostPresetLoad>() {

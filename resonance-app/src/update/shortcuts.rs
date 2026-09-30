@@ -92,6 +92,13 @@ pub(crate) fn handle_key(
             return task;
         }
     }
+    // The preset browser takes Esc (revert), ↑/↓ (audition) and ↵ (keep)
+    // first, its search field focused or not.
+    if r.presets.host_browser.is_some() {
+        if let Some(task) = crate::update::plugin_preset_ui::key(r, chord) {
+            return task;
+        }
+    }
     // A focused text field or a key-owning canvas already acted on it.
     if captured {
         return Task::none();

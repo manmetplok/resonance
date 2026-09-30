@@ -154,6 +154,11 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         }
         m @ PluginMessage::LoadPluginPreset { .. } => apply_preset_load(r, m),
         m @ PluginMessage::LoadPluginPresetFromLocation { .. } => apply_preset_load(r, m),
+        PluginMessage::PresetStep { load, .. } => {
+            r.presets.debounce_state_load = true;
+            apply_preset_load(r, *load);
+            r.presets.debounce_state_load = false;
+        }
         PluginMessage::SetPluginSidechain {
             instance_id,
             source,
@@ -310,11 +315,50 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
     // preset over its state sees the new values.
     if let Some(data) = preset_state {
         let capture = take_capture(r, instance_id);
-        let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
-            instance_id,
-            data,
-            capture,
-        });
+        if r.presets.debounce_state_load {
+            // A run of steps loads only where it stops; the run's first
+            // capture is the one its undo entry waits on.
+            let entry = r
+                .presets
+                .pending_step_state
+                .entry(instance_id)
+                .or_insert_with(|| (Vec::new(), None, std::time::Instant::now()));
+            entry.0 = data;
+            entry.1 = entry.1.or(capture);
+            entry.2 = std::time::Instant::now();
+        } else {
+            r.presets.pending_step_state.remove(&instance_id);
+            let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
+        }
+    }
+}
+
+/// How long a run of preset steps waits, after its last step, before the
+/// plugin's state load goes out.
+pub(crate) const STEP_STATE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Send the state load of every step run that has been quiet for
+/// [`STEP_STATE_DEBOUNCE`] (`force` sends them all). Tick.
+pub(crate) fn flush_step_state(r: &mut Resonance, force: bool) {
+    let due: Vec<_> = r
+        .presets
+        .pending_step_state
+        .iter()
+        .filter(|(_, (_, _, at))| force || at.elapsed() >= STEP_STATE_DEBOUNCE)
+        .map(|(id, _)| *id)
+        .collect();
+    for instance_id in due {
+        if let Some((data, capture, _)) = r.presets.pending_step_state.remove(&instance_id) {
+            let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
+        }
     }
 }
 
@@ -322,7 +366,10 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
 /// for, if any: an audition's origin (forced), else the late slot of the
 /// undo entry this load just recorded. A kept audition's slot takes the
 /// origin's state instead, and asks for nothing.
-fn take_capture(r: &mut Resonance, instance_id: resonance_audio::types::PluginInstanceId) -> Option<u64> {
+fn take_capture(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+) -> Option<u64> {
     if let Some(token) = r.presets.forced_capture.take() {
         return Some(token);
     }

@@ -25,13 +25,7 @@ use crate::Resonance;
 /// A private preset root for a test app (`Host::None`), under the process's
 /// hermetic data dir.
 pub(crate) fn hermetic_preset_root() -> Option<PathBuf> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    Some(
-        crate::user_dirs::data_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(format!("plugin-presets-{n}")),
-    )
+    Some(crate::user_dirs::hermetic_subdir("plugin-presets"))
 }
 
 /// The preset root the app reads and writes.
@@ -59,13 +53,32 @@ pub(crate) fn marks(app: &Resonance) -> Arc<SharedMarks> {
 }
 
 /// The library for the app's preset root, with the marks store installed
-/// and every scanned plugin's factory bank registered.
+/// and every scanned plugin's factory bank registered: built once and
+/// cached (the bar reads it every frame; the process-wide root map lock
+/// and the marks install are not per-frame work). A plugin scan registers
+/// what is new ([`register_scanned`]).
 pub(crate) fn library(app: &Resonance) -> Arc<PresetLibrary> {
-    let lib = match preset_root(app) {
-        Some(root) => PresetLibrary::shared_for_root(&root),
-        None => PresetLibrary::shared(),
-    };
-    lib.set_marks(marks(app));
+    app.presets
+        .library_cache
+        .get_or_init(|| {
+            let lib = match preset_root(app) {
+                Some(root) => PresetLibrary::shared_for_root(&root),
+                None => PresetLibrary::shared(),
+            };
+            lib.set_marks(marks(app));
+            register_into(app, &lib);
+            lib
+        })
+        .clone()
+}
+
+/// Register the factory bank of every scanned plugin the library does not
+/// have yet. Called on a plugin scan.
+pub(crate) fn register_scanned(app: &Resonance) {
+    register_into(app, &library(app));
+}
+
+fn register_into(app: &Resonance, lib: &PresetLibrary) {
     for plugin in &app.plugin_catalog.available_plugins {
         if plugin.factory_presets.is_empty() || lib.factory_len(&plugin.clap_plugin_id) > 0 {
             continue;
@@ -77,7 +90,6 @@ pub(crate) fn library(app: &Resonance) -> Arc<PresetLibrary> {
             }),
         );
     }
-    lib
 }
 
 /// One plugin's bank over [`library`].

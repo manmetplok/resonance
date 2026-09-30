@@ -21,6 +21,8 @@ return), so a mix that is not balanced first cannot be staged.
 Nothing here assumes a track name, a track count or a genre. Read the song, infer
 roles, then decide.
 
+- **Find a sound before you dial one:** prefer `mcp__resonance__presets_search` (across every plugin, or one) with `query` scopes like `"for:vocal char:warm"` over guessing preset names, then pass the hit's `id` as `preset` to the add tool or as `preset_id` to `*_load_plugin_preset`.
+
 ## 0. Preflight
 
 Call `mcp__resonance__control_hello`. This procedure needs `meter.stems`,

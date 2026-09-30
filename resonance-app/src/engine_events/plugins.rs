@@ -343,8 +343,7 @@ pub(crate) fn track_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
-    r.presets.pending_plugin_presets.remove(&instance_id);
-    r.presets.plugin_preset_identity.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     // The engine's `RemovePlugin` arm already dropped this instance's key
     // route, so only the mirror needs pruning here — but prune it we must,
@@ -439,6 +438,7 @@ pub(crate) fn mirror_track_plugin_move(
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.plugin_catalog.available_plugins = plugins;
     r.ui.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
+    crate::plugin_preset_library::register_scanned(r);
     crate::update::plugin_preset_ui::rebuild_caches(r);
     // A scan answers exactly one `PluginsScanned`, whether it was the
     // startup scan or a live rescan, so this is where a rescan ends
@@ -707,6 +707,7 @@ pub(super) fn preset_state_saved(
             preset_form,
         },
     );
+    crate::update::plugin_preset_ui::library_changed(r);
     if let Err(e) = saved {
         r.banners.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
     }
@@ -1046,8 +1047,7 @@ pub(crate) fn bus_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
-    r.presets.pending_plugin_presets.remove(&instance_id);
-    r.presets.plugin_preset_identity.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);
@@ -1165,8 +1165,7 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
-    r.presets.pending_plugin_presets.remove(&instance_id);
-    r.presets.plugin_preset_identity.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);

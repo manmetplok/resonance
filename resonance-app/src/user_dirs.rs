@@ -50,3 +50,14 @@ pub fn data_dir() -> Option<PathBuf> {
         None => dirs::data_dir(),
     }
 }
+
+/// A fresh private directory `<data dir>/<prefix>-<n>` for a test app's
+/// library roots (the data dir is the test process's hermetic root there).
+/// One counter for every caller, so no two test apps share a root.
+pub(crate) fn hermetic_subdir(prefix: &str) -> std::path::PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("{prefix}-{n}"))
+}

@@ -359,6 +359,7 @@ fn plugin_edit_target(
         // signal exactly as the individual writes it replaces would.
         LoadPluginPreset { instance_id, .. } => r.track_of_plugin(*instance_id),
         LoadPluginPresetFromLocation { instance_id, .. } => r.track_of_plugin(*instance_id),
+        PresetStep { instance_id, .. } => r.track_of_plugin(*instance_id),
         // Re-keying a detector changes the rendered signal on the
         // plugin's own track, so a frozen track must go stale for it.
         SetPluginSidechain { instance_id, .. } => r.track_of_plugin(*instance_id),

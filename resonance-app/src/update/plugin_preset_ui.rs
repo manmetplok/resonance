@@ -54,6 +54,48 @@ impl Resonance {
     }
 }
 
+/// The preset browser's search field.
+pub(crate) fn search_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("preset-browser-search")
+}
+
+/// Keys while the preset browser is open (checked before the text field's
+/// capture, like the palette): Esc reverts and closes, ↑ / ↓ audition,
+/// ↵ keeps.
+pub(crate) fn key(r: &mut Resonance, chord: crate::commands::KeyChord) -> Option<Task<Message>> {
+    use crate::commands::{KeyChord, Mods, NamedKey};
+    let named = |n| KeyChord::named(n, Mods::NONE);
+    let m = if chord == named(NamedKey::Escape) {
+        PresetUiMessage::CloseBrowser { keep: false }
+    } else if chord == named(NamedKey::ArrowUp) {
+        PresetUiMessage::BrowserMove(-1)
+    } else if chord == named(NamedKey::ArrowDown) {
+        PresetUiMessage::BrowserMove(1)
+    } else if chord == named(NamedKey::Enter) {
+        PresetUiMessage::CloseBrowser { keep: true }
+    } else {
+        return None;
+    };
+    Some(handle(r, m))
+}
+
+/// A plugin instance is gone: drop everything the preset surfaces held
+/// for it — its identity, a parked preset, and a browser open over it
+/// (closed without a revert: there is nothing left to send it to).
+pub(crate) fn forget_instance(r: &mut Resonance, instance_id: PluginInstanceId) {
+    r.presets.plugin_preset_identity.remove(&instance_id);
+    r.presets.pending_plugin_presets.remove(&instance_id);
+    r.presets.revert_on_capture.retain(|_, id| *id != instance_id);
+    if r
+        .presets
+        .host_browser
+        .as_ref()
+        .is_some_and(|b| b.instance_id == instance_id)
+    {
+        r.presets.host_browser = None;
+    }
+}
+
 pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
     match m {
         PresetUiMessage::Step { instance_id, delta } => return step(r, instance_id, delta),
@@ -90,7 +132,10 @@ pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
                 plugin_name,
                 list,
                 origin: None,
+                auditioned: None,
             });
+            // Type to search straight away.
+            return iced::widget::operation::focus(search_input_id());
         }
         PresetUiMessage::CloseBrowser { keep } => return close_browser(r, keep),
         PresetUiMessage::BrowserSearch(text) => with_browser_list(r, |list| list.query = text),
@@ -98,6 +143,19 @@ pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
             with_browser_list(r, |list| list.favorites_only = on)
         }
         PresetUiMessage::BrowserAudition(index) => audition(r, index),
+        PresetUiMessage::BrowserMove(delta) => {
+            let next = r.presets.host_browser.as_ref().and_then(|b| {
+                let n = b.list.rows.len() as i64;
+                (n > 0).then(|| match b.list.selected {
+                    Some(i) => (i as i64 + delta as i64).clamp(0, n - 1) as usize,
+                    None if delta < 0 => (n - 1) as usize,
+                    None => 0,
+                })
+            });
+            if let Some(index) = next {
+                audition(r, index);
+            }
+        }
         PresetUiMessage::BrowserToggleRowFavorite(index) => {
             let row = r
                 .presets
@@ -147,7 +205,8 @@ pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
                     None => drag.origin = Some(at),
                     Some(o) => {
                         let (dx, dy) = (at.x - o.x, at.y - o.y);
-                        if (dx * dx + dy * dy).sqrt() > crate::state::presets::PresetDrag::THRESHOLD {
+                        let far = crate::state::presets::PresetDrag::THRESHOLD;
+                        if (dx * dx + dy * dy).sqrt() > far {
                             drag.moved = true;
                         }
                     }
@@ -178,7 +237,11 @@ pub(crate) fn refresh(r: &Resonance, list: &mut HostPresetList) {
         .selected
         .and_then(|i| list.rows.get(i))
         .map(|row| (row.plugin_id.clone(), row.id.clone()));
-    list.rows = rows(r, list);
+    let fresh = rows(r, list);
+    if fresh != list.rows {
+        list.rows = fresh;
+        list.generation = list.generation.wrapping_add(1);
+    }
     list.selected = selected.and_then(|(plugin, id)| {
         list.rows
             .iter()
@@ -231,6 +294,70 @@ fn with_browser_list(r: &mut Resonance, f: impl FnOnce(&mut HostPresetList)) {
     refresh(r, &mut browser.list);
     r.presets.host_browser = Some(browser);
 }
+
+/// The library changed under the host (a `presets.*` edit, another
+/// process): every list, the add pickers' favourites and the loaded
+/// identities' names follow. Cheap to call; a list whose rows did not
+/// change keeps its generation (and its cached widgets).
+pub(crate) fn library_changed(r: &mut Resonance) {
+    marks_changed(r);
+    // A renamed preset's loaded identity shows its new name; a deleted
+    // user preset is no longer loaded as such.
+    let lib = crate::plugin_preset_library::library(r);
+    let ids: Vec<PluginInstanceId> = r.presets.plugin_preset_identity.keys().copied().collect();
+    for instance_id in ids {
+        let Some(clap_id) = r.plugin_slot(instance_id).map(|s| s.clap_plugin_id.clone()) else {
+            continue;
+        };
+        let Some(identity) = r.presets.plugin_preset_identity.get(&instance_id).cloned() else {
+            continue;
+        };
+        if identity.reported {
+            continue;
+        }
+        let preset = resonance_plugin::presets::PresetRef {
+            source: match identity.source {
+                PluginPresetSource::Factory => resonance_plugin::presets::PresetSource::Factory,
+                PluginPresetSource::User => resonance_plugin::presets::PresetSource::User,
+            },
+            id: identity.id.clone(),
+            name: identity.name.clone(),
+        };
+        match lib.peek_record(&clap_id, &preset) {
+            Some(record) => {
+                if let Some(i) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
+                    i.name = record.meta.name.clone();
+                }
+            }
+            None if identity.source == PluginPresetSource::User => {
+                r.presets.plugin_preset_identity.remove(&instance_id);
+            }
+            None => {}
+        }
+    }
+}
+
+/// While the preset browser or the Presets tab shows: re-query now and
+/// then, so another process's edits (or a plugin's own browser) show.
+pub(crate) fn poll_visible_lists(r: &mut Resonance) {
+    let tab_visible = r.media.browser.visible
+        && r.media.browser.tab == crate::state::BrowserTab::Presets
+        && matches!(r.ui.view_mode, crate::state::ViewMode::Arrange);
+    if r.presets.host_browser.is_none() && !tab_visible {
+        return;
+    }
+    let due = r
+        .presets
+        .lists_polled
+        .is_none_or(|t| t.elapsed() >= LIST_POLL_INTERVAL);
+    if due {
+        r.presets.lists_polled = Some(std::time::Instant::now());
+        library_changed(r);
+    }
+}
+
+/// How often a visible preset list re-queries the library.
+const LIST_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// A star moved: every open list and the add pickers' favourites follow.
 fn marks_changed(r: &mut Resonance) {
@@ -378,7 +505,21 @@ fn step(r: &mut Resonance, instance_id: PluginInstanceId, delta: i32) -> Task<Me
         None => 0,
     };
     let target = order[next].clone();
-    recorded_load(r, instance_id, &clap_id, &target.id, pp::wire_source(target.source))
+    let source = pp::wire_source(target.source);
+    match pp::host_load_message(r, instance_id, &clap_id, &target.id, source) {
+        Ok(Message::Plugin(load)) => {
+            record_use(r, &clap_id, &target.id);
+            r.update(Message::Plugin(PluginMessage::PresetStep {
+                instance_id,
+                load: Box::new(load),
+            }))
+        }
+        Ok(_) => Task::none(),
+        Err(e) => {
+            r.banners.error_message = Some(format!("Could not load the preset: {}", e.message));
+            Task::none()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -431,6 +572,7 @@ fn audition(r: &mut Resonance, index: usize) {
     }
     if let Some(b) = r.presets.host_browser.as_mut() {
         b.list.selected = Some(index);
+        b.auditioned = Some(row);
     }
 }
 
@@ -442,7 +584,9 @@ fn close_browser(r: &mut Resonance, keep: bool) -> Task<Message> {
         return Task::none();
     };
     let instance_id = browser.instance_id;
-    let picked = browser.list.selected.and_then(|i| browser.list.rows.get(i).cloned());
+    // What was auditioned, whatever the list shows now (a search may have
+    // filtered it out since).
+    let picked = browser.auditioned;
     match (keep, picked) {
         (true, Some(row)) => {
             // Put the origin back into the mirror only (the engine already
@@ -558,13 +702,29 @@ fn drop_on_track(r: &mut Resonance, track_id: resonance_audio::types::TrackId) -
         return Task::none();
     };
     // An instrument goes onto an instrument track that has none; an effect
-    // anywhere (appended). Anything else is said, not guessed.
-    let is_instrument_track = matches!(track.track_type, resonance_audio::types::TrackType::Instrument);
-    if plugin.is_instrument && !(is_instrument_track && track.plugins.is_empty()) {
-        r.banners.error_message = Some(format!(
+    // onto a track that already has its sound source (on an empty
+    // instrument track it would take the instrument slot); nothing onto a
+    // multi-output sub-track, whose chain belongs to its parent. Anything
+    // else is said, not guessed.
+    let is_instrument_track =
+        matches!(track.track_type, resonance_audio::types::TrackType::Instrument);
+    let refusal = if track.sub_track.is_some() {
+        Some(format!("{} is a sub-track: drop it on its parent", track.name))
+    } else if plugin.is_instrument && !(is_instrument_track && track.plugins.is_empty()) {
+        Some(format!(
             "{} is an instrument: drop it on an instrument track with no instrument yet",
             plugin.name
-        ));
+        ))
+    } else if !plugin.is_instrument && is_instrument_track && track.plugins.is_empty() {
+        Some(format!(
+            "{} is an effect: add an instrument to {} first",
+            plugin.name, track.name
+        ))
+    } else {
+        None
+    };
+    if let Some(message) = refusal {
+        r.banners.error_message = Some(message);
         return Task::none();
     }
     add_with_preset(
@@ -582,10 +742,6 @@ fn drop_on_track(r: &mut Resonance, track_id: resonance_audio::types::TrackId) -
 fn add_with_preset(r: &mut Resonance, owner: PresetAddOwner, pick: PresetAddPick) -> Task<Message> {
     let instance_id = r.allocate_plugin_id();
     let clap_id = pick.plugin.clap_plugin_id.clone();
-    record_use(r, &clap_id, &pick.preset_id);
-    r.presets
-        .pending_plugin_presets
-        .insert(instance_id, (clap_id, pick.preset_id, pick.source));
     let plugin = pick.plugin;
     let message = match owner {
         PresetAddOwner::Track(track_id) => {
@@ -604,5 +760,14 @@ fn add_with_preset(r: &mut Resonance, owner: PresetAddOwner, pick: PresetAddPick
             Message::Master(MasterMessage::AddPluginToMasterWithId { instance_id, plugin })
         }
     };
-    r.update(message)
+    let task = r.update(message);
+    // Only an add that happened (a frozen track's gate refuses it) parks
+    // the preset for the echo and counts as a use.
+    if r.plugin_slot(instance_id).is_some() {
+        record_use(r, &clap_id, &pick.preset_id);
+        r.presets
+            .pending_plugin_presets
+            .insert(instance_id, (clap_id, pick.preset_id, pick.source));
+    }
+    task
 }

@@ -137,6 +137,8 @@ pub enum PresetUiMessage {
         keep: bool,
     },
     BrowserSearch(String),
+    /// ↑ / ↓ in the browser: audition the previous / next row.
+    BrowserMove(i32),
     BrowserFavoritesOnly(bool),
     /// Audition the row: load it unrecorded, remembering the origin.
     BrowserAudition(usize),
@@ -289,6 +291,14 @@ pub enum PluginMessage {
         preset_name: String,
         preset_id: String,
     },
+    /// A ◀ / ▶ preset step: the `LoadPluginPreset` (or location load) in
+    /// `load`, coalesced with the steps before it on the same plugin into
+    /// one undo entry, and with the rest of the sound's state load
+    /// debounced (an amp step reloads a model).
+    PresetStep {
+        instance_id: PluginInstanceId,
+        load: Box<PluginMessage>,
+    },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
@@ -355,6 +365,9 @@ impl PluginMessage {
             // together (ba todo #1333).
             Self::LoadPluginPreset { .. } => UndoAction::Record,
             Self::LoadPluginPresetFromLocation { .. } => UndoAction::Record,
+            Self::PresetStep { instance_id, .. } => {
+                UndoAction::RecordCoalesced(CoalesceKey::PluginPresetStep(*instance_id))
+            }
             Self::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,

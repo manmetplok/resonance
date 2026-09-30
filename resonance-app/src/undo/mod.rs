@@ -154,6 +154,12 @@ impl crate::Resonance {
         snap: &mut snapshot::UndoSnapshot,
     ) {
         use crate::message::{Message, PluginMessage};
+        let message = match message {
+            Message::Plugin(PluginMessage::PresetStep { load, .. }) => {
+                &Message::Plugin((**load).clone())
+            }
+            other => other,
+        };
         let instance_id = match message {
             Message::Plugin(PluginMessage::LoadPluginPreset {
                 instance_id,

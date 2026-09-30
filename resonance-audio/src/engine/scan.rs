@@ -160,7 +160,8 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force:
                     )
                 };
                 for (plugin_id, presets) in found {
-                    let _ = event_tx.send(AudioEvent::PluginPresetsDiscovered { plugin_id, presets });
+                    let event = AudioEvent::PluginPresetsDiscovered { plugin_id, presets };
+                    let _ = event_tx.send(event);
                 }
             }
         });

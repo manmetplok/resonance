@@ -452,7 +452,8 @@ fn browser_overlay(
                                 response = list(ui, browser);
                             });
                             ui.separator();
-                            ui.allocate_ui_with_layout(egui::vec2(DETAIL_WIDTH, body_h), down, |ui| {
+                            let detail = egui::vec2(DETAIL_WIDTH, body_h);
+                            ui.allocate_ui_with_layout(detail, down, |ui| {
                                 egui::ScrollArea::vertical()
                                     .id_salt((id_salt, "detail"))
                                     .show(ui, |ui| {

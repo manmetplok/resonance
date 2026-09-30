@@ -244,7 +244,13 @@ unsafe extern "C" fn host_preset_report(host: *const c_void, json: *const c_char
         let Some(text) = c_str(json) else {
             return;
         };
-        let identity = resonance_common::preset_session::IdentityReport::parse(&text);
+        // A malformed report is dropped: it must not read as "nothing
+        // loaded" and clear the identity the host holds.
+        let Some(identity) = resonance_common::preset_session::IdentityReport::parse_report(&text)
+        else {
+            tracing::debug!("preset session: dropped a malformed identity report");
+            return;
+        };
         data.preset_reports.lock().push(PresetHostReport::Identity(identity));
     }
 }

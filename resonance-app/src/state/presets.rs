@@ -63,6 +63,8 @@ pub struct HostPresetList {
     pub plugin: Option<String>,
     pub rows: Vec<HostPresetRow>,
     pub selected: Option<usize>,
+    /// Bumped by every re-query: the key of the rows' `lazy` region.
+    pub generation: u64,
 }
 
 /// The sound a plugin had before its first audition: what a revert puts
@@ -87,6 +89,9 @@ pub struct HostPresetBrowser {
     pub plugin_name: String,
     pub list: HostPresetList,
     pub origin: Option<AuditionOrigin>,
+    /// The preset last auditioned: what Keep keeps, even once a search
+    /// has filtered its row out of the list.
+    pub auditioned: Option<HostPresetRow>,
 }
 
 /// A plugin the media browser's Presets tab can narrow to.
@@ -138,16 +143,21 @@ pub struct PresetState {
     /// Each plugin slot's loaded preset, keyed by instance: reported by
     /// the plugin, else set by the host's own loads (slice P5).
     pub plugin_preset_identity: std::collections::HashMap<PluginInstanceId, SlotPresetIdentity>,
-    /// A preset to load onto a plugin that is being added, once its
-    /// `PluginAdded` echo brings the param list: `(clap id, preset id,
-    /// source)` by instance (a `preset` on `*.add_effect`, "with preset…"
-    /// in the add pickers — slice P6).
     /// What each plugin's preset-discovery factory listed (slice P8), by
     /// CLAP id; registered with the library as read-only factory presets.
-    pub discovered: std::collections::HashMap<String, Vec<resonance_audio::types::DiscoveredPreset>>,
+    pub discovered:
+        std::collections::HashMap<String, Vec<resonance_audio::types::DiscoveredPreset>>,
     /// A press on a Presets-tab row, which becomes a drag onto a track
     /// header once the pointer moves (slice P8).
     pub dragging: Option<PresetDrag>,
+    /// Set while a ◀ / ▶ step applies its load: the state load is parked
+    /// in `pending_step_state` instead of sent.
+    pub(crate) debounce_state_load: bool,
+    /// A step run's parked state load: data, capture token, last step.
+    pub(crate) pending_step_state:
+        std::collections::HashMap<PluginInstanceId, (Vec<u8>, Option<u64>, std::time::Instant)>,
+    /// When a visible preset list last re-queried the library.
+    pub(crate) lists_polled: Option<std::time::Instant>,
     /// The preset browser over one plugin, when open (a root overlay).
     pub host_browser: Option<HostPresetBrowser>,
     /// The media browser's Presets tab.
@@ -176,6 +186,10 @@ pub struct PresetState {
     /// the capture into this instance when it does.
     pub(crate) revert_on_capture: std::collections::HashMap<u64, PluginInstanceId>,
     pub(crate) capture_seq: u64,
+    /// A preset to load onto a plugin that is being added, once its
+    /// `PluginAdded` echo brings the param list: `(clap id, preset id,
+    /// source)` by instance (a `preset` on `*.add_effect`, "with preset…"
+    /// in the add pickers — slice P6).
     pub pending_plugin_presets: std::collections::HashMap<
         PluginInstanceId,
         (String, String, resonance_control::methods::plugin_preset::PluginPresetSource),
@@ -186,6 +200,10 @@ pub struct PresetState {
     /// The shared marks store (favourites, personal tags, recents) the
     /// plugin preset library reads, opened on first use
     /// (`crate::plugin_preset_library::marks`).
+    /// The preset library, built on first use for `plugin_preset_root`
+    /// (`crate::plugin_preset_library::library`); reset when the root moves.
+    pub library_cache:
+        std::sync::OnceLock<std::sync::Arc<resonance_plugin::presets::PresetLibrary>>,
     pub library_marks:
         std::sync::OnceLock<std::sync::Arc<resonance_common::library_marks::SharedMarks>>,
     /// Plugin state blobs to apply as PluginAdded events arrive for a

@@ -208,7 +208,11 @@ impl Fixture {
         }
     }
 
-    fn discover(&self, ids: &[&str], force: bool) -> Vec<(String, Vec<resonance_audio::types::DiscoveredPreset>)> {
+    fn discover(
+        &self,
+        ids: &[&str],
+        force: bool,
+    ) -> Vec<(String, Vec<resonance_audio::types::DiscoveredPreset>)> {
         let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
         unsafe {
             discovery::discover(
@@ -249,7 +253,10 @@ fn a_provider_is_indexed_with_the_fallback_rules() {
     assert_eq!(presets[0].creators, vec!["Jane".to_string()]);
     assert_eq!(presets[0].features, vec!["bass".to_string()]);
     assert!(presets[1].is_favorite());
-    assert!(matches!(&presets[2].location, DiscoveredLocation::File(p) if p.ends_with("Warm Keys.vpr")));
+    assert!(matches!(
+        &presets[2].location,
+        DiscoveredLocation::File(p) if p.ends_with("Warm Keys.vpr")
+    ));
     assert_eq!(presets[2].flags, CLAP_PRESET_DISCOVERY_IS_USER_CONTENT, "the location's flags");
     assert!(!LATE_DECLARE_ACCEPTED.load(Ordering::SeqCst), "sealed after init");
 }

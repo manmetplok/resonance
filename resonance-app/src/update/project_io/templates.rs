@@ -29,7 +29,7 @@ const APP_DIR: &str = "resonance";
 /// Template storage directory, lazily created.
 /// Mirrors the location pattern in `recent.rs`.
 pub fn templates_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join(APP_DIR).join(TEMPLATES_DIR_NAME))
+    crate::user_dirs::config_dir().map(|d| d.join(APP_DIR).join(TEMPLATES_DIR_NAME))
 }
 
 /// Ensure the user templates directory exists, creating it if necessary.

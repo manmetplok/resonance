@@ -94,6 +94,7 @@ fn set_marks(app: &mut Resonance, request: &Request) -> Response {
             return failure(request, RpcError::internal(e));
         }
     }
+    crate::update::plugin_preset_ui::library_changed(app);
     reply_entry(app, request, &params.plugin_id, &preset.id)
 }
 
@@ -140,6 +141,7 @@ fn update_meta(app: &mut Resonance, request: &Request) -> Response {
     if let Err(e) = result {
         return failure(request, RpcError::internal(e));
     }
+    crate::update::plugin_preset_ui::library_changed(app);
     reply_entry(app, request, &params.plugin_id, &preset.id)
 }
 
@@ -205,10 +207,17 @@ fn rename(app: &mut Resonance, request: &Request) -> Response {
             RpcError::invalid_params("factory presets cannot be renamed; save a copy instead"),
         );
     }
-    match bank_for(app, &params.plugin_id).rename(&preset, &params.name) {
-        Ok(p) => reply_entry(app, request, &params.plugin_id, &p.id),
-        Err(e) if e.contains("already exists") => failure(request, RpcError::invalid_params(e)),
-        Err(e) => failure(request, RpcError::internal(e)),
+    use resonance_plugin::presets::RenameError;
+    let bank = bank_for(app, &params.plugin_id);
+    match bank.library().rename_typed(&params.plugin_id, &preset, &params.name) {
+        Ok(record) => {
+            let response = reply_entry(app, request, &params.plugin_id, &record.preset.id);
+            crate::update::plugin_preset_ui::library_changed(app);
+            response
+        }
+        Err(RenameError::Invalid(e)) => failure(request, RpcError::invalid_params(e)),
+        Err(RenameError::NotFound(e)) => failure(request, RpcError::not_found(e)),
+        Err(RenameError::Io(e)) => failure(request, RpcError::internal(e)),
     }
 }
 
@@ -239,12 +248,15 @@ fn delete(app: &mut Resonance, request: &Request) -> Response {
         );
     }
     match bank_for(app, &params.plugin_id).trash(&preset) {
-        Ok(path) => success(
-            request,
-            &presets::DeleteResult {
-                trashed_path: path.to_string_lossy().into_owned(),
-            },
-        ),
+        Ok(path) => {
+            crate::update::plugin_preset_ui::library_changed(app);
+            success(
+                request,
+                &presets::DeleteResult {
+                    trashed_path: path.to_string_lossy().into_owned(),
+                },
+            )
+        }
         Err(e) => failure(request, RpcError::internal(e)),
     }
 }

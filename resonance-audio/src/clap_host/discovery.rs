@@ -350,7 +350,10 @@ impl Provider {
     ///
     /// # Safety
     /// `factory` is live and used on this thread only.
-    unsafe fn open(factory: *const clap_preset_discovery_factory, id: *const c_char) -> Option<Self> {
+    unsafe fn open(
+        factory: *const clap_preset_discovery_factory,
+        id: *const c_char,
+    ) -> Option<Self> {
         // SAFETY: forwarded; preset-discovery.h: create, then init before use.
         unsafe {
             let create = (*factory).create?;
@@ -641,7 +644,9 @@ fn index_all(
 /// # Safety
 /// `factory` is a live `clap_preset_discovery_factory` (from a loaded
 /// bundle's `get_factory`, or a test's), used on this thread only.
-pub unsafe fn index_factory(factory: *const clap_preset_discovery_factory) -> Vec<DiscoveredPreset> {
+pub unsafe fn index_factory(
+    factory: *const clap_preset_discovery_factory,
+) -> Vec<DiscoveredPreset> {
     if factory.is_null() {
         return Vec::new();
     }
