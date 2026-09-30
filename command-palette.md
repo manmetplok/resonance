@@ -14,6 +14,7 @@ to match; those notes are marked *(as built)*.
   selection / quantize, the orphan entry points, the rest of the §5.3–5.6
   keymap, and the canvas-scoped entries (the four canvases now read their
   keys from the keymap).
+- **P4 landed.** `:` `@` `#` `+` argument modes and ⌘J.
 
 ## 0. Why
 
@@ -453,6 +454,12 @@ command mode is phase 2.
 
 ⌘J opens the palette in `:` mode. The footer shows the prefixes when the
 query is empty.
+
+*(As built:)* `#` selects the track but does not scroll the arrangement to
+it; there is no scroll-to-track primitive yet. `+` offers an instrument for
+an empty instrument track and effects otherwise, the same split the mixer
+chain picker uses. `@` jumps to a section placement by seeking to its
+start.
 
 ## 8. Shortcut hints everywhere (phase 5, and the deferred items)
 

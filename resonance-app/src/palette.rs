@@ -27,7 +27,16 @@ pub fn list_id() -> iced::widget::Id {
 /// query's leading prefix character, so opening in a mode just seeds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteMode {
+    /// The command registry (no prefix).
     Commands,
+    /// `:` — go to a bar (`17`) or a beat (`17.3`).
+    GoToBar,
+    /// `@` — jump to a marker or a section placement.
+    Jump,
+    /// `#` — select a track.
+    Tracks,
+    /// `+` — add a plugin to the selected track.
+    Plugins,
 }
 
 impl PaletteMode {
@@ -35,8 +44,43 @@ impl PaletteMode {
     pub fn prefix(self) -> &'static str {
         match self {
             PaletteMode::Commands => "",
+            PaletteMode::GoToBar => ":",
+            PaletteMode::Jump => "@",
+            PaletteMode::Tracks => "#",
+            PaletteMode::Plugins => "+",
         }
     }
+
+    /// The mode a query's leading character selects, and the rest of it.
+    pub fn of(query: &str) -> (PaletteMode, &str) {
+        for mode in [
+            PaletteMode::GoToBar,
+            PaletteMode::Jump,
+            PaletteMode::Tracks,
+            PaletteMode::Plugins,
+        ] {
+            if let Some(rest) = query.strip_prefix(mode.prefix()) {
+                return (mode, rest);
+            }
+        }
+        (PaletteMode::Commands, query)
+    }
+}
+
+/// Parse the `:` mode's argument: `17` is bar 17, `17.3` its third beat
+/// (both 1-based).
+pub fn parse_bar(text: &str) -> Option<(u32, u32)> {
+    let text = text.trim();
+    let (bar, beat) = match text.split_once('.') {
+        Some((bar, beat)) => (bar, Some(beat)),
+        None => (text, None),
+    };
+    let bar: u32 = bar.trim().parse().ok().filter(|&b| b >= 1)?;
+    let beat: u32 = match beat {
+        Some(b) => b.trim().parse().ok().filter(|&b| b >= 1)?,
+        None => 1,
+    };
+    Some((bar, beat))
 }
 
 /// Palette interaction, routed as `UiMessage::Palette`.
@@ -60,6 +104,16 @@ pub enum PaletteMsg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteItem {
     Command(CommandId),
+    /// `:` — seek to a 1-based bar and beat.
+    GoTo { bar: u32, beat: u32 },
+    /// `@` — an arrangement marker.
+    Marker(u64),
+    /// `@` — a section placement, by its start sample.
+    Section { start: u64 },
+    /// `#` — a track.
+    Track(resonance_audio::types::TrackId),
+    /// `+` — a plugin, by index into the scanned catalog.
+    Plugin(usize),
 }
 
 /// One result row, fully resolved for drawing.
@@ -179,8 +233,16 @@ pub fn score(query: &str, id: CommandId) -> Option<(i32, Vec<(usize, usize)>)> {
     }
 }
 
-/// Build the palette's sections for `query` (§7.2).
+/// Build the palette's sections for `query` (§7.2, §7.4).
 pub fn build(r: &Resonance, query: &str) -> Vec<PaletteSection> {
+    let (mode, rest) = PaletteMode::of(query);
+    match mode {
+        PaletteMode::Commands => {}
+        PaletteMode::GoToBar => return build_goto(rest),
+        PaletteMode::Jump => return build_jump(r, rest),
+        PaletteMode::Tracks => return build_tracks(r, rest),
+        PaletteMode::Plugins => return build_plugins(r, rest),
+    }
     if query.trim().is_empty() {
         return build_empty(r);
     }
@@ -243,4 +305,182 @@ fn build_empty(r: &Resonance) -> Vec<PaletteSection> {
         });
     }
     sections
+}
+
+fn item_row(item: PaletteItem, name: String, ranges: Vec<(usize, usize)>, crumb: String, glyph: char) -> PaletteRow {
+    PaletteRow {
+        item,
+        name,
+        ranges,
+        breadcrumb: crumb,
+        glyph: Some(glyph),
+        chord: None,
+        unavailable: None,
+    }
+}
+
+fn one_section(title: &str, rows: Vec<PaletteRow>) -> Vec<PaletteSection> {
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    vec![PaletteSection {
+        title: title.to_string(),
+        rows,
+    }]
+}
+
+/// `:` — one row, parsed live.
+fn build_goto(rest: &str) -> Vec<PaletteSection> {
+    use crate::theme::fa;
+    let row = match parse_bar(rest) {
+        Some((bar, 1)) if !rest.contains('.') => item_row(
+            PaletteItem::GoTo { bar, beat: 1 },
+            format!("Go to bar {bar}"),
+            Vec::new(),
+            "Transport › Playhead".to_string(),
+            fa::FORWARD_STEP,
+        ),
+        Some((bar, beat)) => item_row(
+            PaletteItem::GoTo { bar, beat },
+            format!("Go to bar {bar}, beat {beat}"),
+            Vec::new(),
+            "Transport › Playhead".to_string(),
+            fa::FORWARD_STEP,
+        ),
+        None => PaletteRow {
+            unavailable: Some("Type a bar, e.g. 17 or 17.3"),
+            ..item_row(
+                PaletteItem::GoTo { bar: 1, beat: 1 },
+                "Go to bar…".to_string(),
+                Vec::new(),
+                "Transport › Playhead".to_string(),
+                fa::FORWARD_STEP,
+            )
+        },
+    };
+    one_section("Go to", vec![row])
+}
+
+/// Rows whose `name` fuzzy-matches `needle`, best first, stable on ties.
+fn filtered(needle: &str, mut rows: Vec<PaletteRow>) -> Vec<PaletteRow> {
+    let mut scored: Vec<(i32, usize, PaletteRow)> = rows
+        .drain(..)
+        .enumerate()
+        .filter_map(|(i, mut row)| {
+            let m = fuzzy_match(needle, &row.name)?;
+            row.ranges = m.ranges;
+            Some((m.score, i, row))
+        })
+        .collect();
+    if !needle.trim().is_empty() {
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    }
+    scored.into_iter().map(|(_, _, row)| row).collect()
+}
+
+/// `@` — markers and section placements, in timeline order.
+fn build_jump(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
+    use crate::theme::fa;
+    let bar_of = |sample: u64| r.tempo_map.sample_to_bar(sample, r.sample_rate).0 + 1;
+    let mut entries: Vec<(u64, PaletteRow)> = r
+        .markers
+        .markers
+        .iter()
+        .map(|m| {
+            (
+                m.start_sample,
+                item_row(
+                    PaletteItem::Marker(m.id),
+                    m.name.clone(),
+                    Vec::new(),
+                    format!("Marker › Bar {}", bar_of(m.start_sample)),
+                    fa::FLAG,
+                ),
+            )
+        })
+        .collect();
+    for p in &r.compose.placements {
+        let Some(def) = r.compose.find_definition(p.definition_id) else {
+            continue;
+        };
+        let start = r.tempo_map.bar_to_sample(p.start_bar);
+        entries.push((
+            start,
+            item_row(
+                PaletteItem::Section { start },
+                def.name.clone(),
+                Vec::new(),
+                format!("Section › Bar {}", p.start_bar + 1),
+                fa::MUSIC,
+            ),
+        ));
+    }
+    entries.sort_by_key(|(s, _)| *s);
+    one_section(
+        "Markers & sections",
+        filtered(rest, entries.into_iter().map(|(_, r)| r).collect()),
+    )
+}
+
+/// `#` — every track, in track order.
+fn build_tracks(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
+    use crate::theme::fa;
+    let rows = r
+        .sorted_tracks()
+        .iter()
+        .map(|t| {
+            item_row(
+                PaletteItem::Track(t.id),
+                t.name.clone(),
+                Vec::new(),
+                format!("Track › {:?}", t.track_type),
+                fa::SLIDERS,
+            )
+        })
+        .collect();
+    one_section("Tracks", filtered(rest, rows))
+}
+
+/// `+` — the plugins the selected track can take next: an instrument for
+/// an empty instrument track, effects otherwise.
+fn build_plugins(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
+    use crate::theme::fa;
+    let Some(track) = r
+        .ui
+        .interaction
+        .selected_track
+        .and_then(|id| r.registry.tracks.iter().find(|t| t.id == id))
+    else {
+        let row = PaletteRow {
+            unavailable: Some("Select a track first"),
+            ..item_row(
+                PaletteItem::Plugin(usize::MAX),
+                "Add plugin…".to_string(),
+                Vec::new(),
+                "Mixer › Chain".to_string(),
+                fa::SLIDERS,
+            )
+        };
+        return one_section("Add plugin", vec![row]);
+    };
+    let wants_instrument = matches!(track.track_type, resonance_audio::types::TrackType::Instrument)
+        && track.plugins.is_empty()
+        && track.sub_track.is_none();
+    let rows = r
+        .plugin_catalog
+        .available_plugins
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.is_instrument == wants_instrument)
+        .map(|(i, p)| {
+            item_row(
+                PaletteItem::Plugin(i),
+                p.name.clone(),
+                Vec::new(),
+                format!("Add to {} › {}", track.name, p.vendor),
+                fa::SLIDERS,
+            )
+        })
+        .collect();
+    one_section("Add plugin", filtered(rest, rows))
 }

@@ -32,8 +32,8 @@ pub(crate) fn open(r: &mut Resonance, mode: PaletteMode) -> Task<Message> {
     // ↵ runs it again. Opening in another mode seeds that mode's prefix.
     let query = match mode {
         PaletteMode::Commands => r.ui.palette_memory.clone(),
+        other => other.prefix().to_string(),
     };
-    let query = if query.starts_with(mode.prefix()) { query } else { mode.prefix().to_string() };
     let mut state = PaletteState {
         query,
         ..PaletteState::default()
@@ -150,9 +150,27 @@ fn run(r: &mut Resonance, index: usize) -> Task<Message> {
     }
     let item = row.item;
     let _ = close(r);
-    match item {
-        PaletteItem::Command(command) => crate::update::shortcuts::execute(r, command),
-    }
+    use crate::message::{MarkerMessage, PluginMessage, TransportMessage};
+    use crate::update::transport_nav::SeekTarget;
+    let message = match item {
+        PaletteItem::Command(command) => return crate::update::shortcuts::execute(r, command),
+        PaletteItem::GoTo { bar, beat } => {
+            Message::Transport(TransportMessage::SeekTo(SeekTarget::Bar { bar, beat }))
+        }
+        PaletteItem::Marker(id) => Message::Marker(MarkerMessage::JumpTo(id)),
+        PaletteItem::Section { start } => Message::Transport(TransportMessage::SeekToSample(start)),
+        PaletteItem::Track(id) => Message::Ui(UiMessage::SelectTrack(Some(id))),
+        PaletteItem::Plugin(index) => {
+            let (Some(track), Some(plugin)) = (
+                r.ui.interaction.selected_track,
+                r.plugin_catalog.available_plugins.get(index).cloned(),
+            ) else {
+                return Task::none();
+            };
+            Message::Plugin(PluginMessage::AddPluginToTrack(track, plugin))
+        }
+    };
+    r.update(message)
 }
 
 /// Keys the palette takes while it is open, before the registry sees them

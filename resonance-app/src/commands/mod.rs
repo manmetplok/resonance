@@ -179,6 +179,7 @@ command_ids! {
     NextMarker,
     PrevSectionStart,
     NextSectionStart,
+    GoToBar,
     AddMarkerAtPlayhead,
     LoopSelection,
     TransportSkipBack,
@@ -271,7 +272,8 @@ impl CommandId {
             | PlayheadToLoopStart | PlayheadToLoopEnd | SetLoopStartAtPlayhead
             | SetLoopEndAtPlayhead | LoopSectionAtPlayhead | NudgeBackBar | NudgeForwardBar
             | NudgeBackBeat | NudgeForwardBeat | PrevMarker | NextMarker | PrevSectionStart
-            | NextSectionStart | AddMarkerAtPlayhead | ToggleFollowPlayhead | LoopSelection => {
+            | NextSectionStart | AddMarkerAtPlayhead | ToggleFollowPlayhead | LoopSelection
+            | GoToBar => {
                 CommandCategory::Transport
             }
 
@@ -335,6 +337,7 @@ impl CommandId {
             TransportSkipForward => "Fast-forward 5 s",
             ToggleFollowPlayhead => "Toggle Follow Playhead",
             LoopSelection => "Loop Selection",
+            GoToBar => "Go to Bar…",
 
             Undo => "Undo",
             Redo => "Redo",
@@ -482,6 +485,7 @@ impl CommandId {
             TransportSkipBack | TransportSkipForward => &["seconds", "skip", "scrub"],
             ToggleFollowPlayhead => &["scroll", "track playhead"],
             LoopSelection => &["cycle", "clip", "region"],
+            GoToBar => &["jump", "locate", "position", "measure"],
             SplitClipAtPlayhead => &["cut", "razor", "slice"],
             DuplicateSelection => &["copy", "repeat", "clone"],
             QuantizeSelectedNotes => &["grid", "snap", "timing"],
@@ -549,7 +553,7 @@ impl CommandId {
         use CommandId::*;
         match self {
             // ⌘/Ctrl-only chords a text field never consumes.
-            CommandPalette | SaveProject | SaveProjectAs | OpenProject | NewProject | BounceToWav
+            GoToBar | CommandPalette | SaveProject | SaveProjectAs | OpenProject | NewProject | BounceToWav
             | ExportChordSheet | OpenSettings | GroupSelectedTracks | FreezeSelectedTracks
             | FreezeAllTracks | ViewArrange | ViewMixer | ViewCompose | ZoomIn | ZoomOut
             | ToggleGlobalTracks | AddAudioTrack | AddInstrumentTrack | OpenAddTrackMenu

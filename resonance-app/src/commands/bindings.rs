@@ -163,6 +163,7 @@ impl BindingMap {
             (NextSectionStart, KeyChord::char('.', shift)),
             (PrevSectionStart, KeyChord::char(',', shift)),
             (AddMarkerAtPlayhead, KeyChord::char('m', shift)),
+            (GoToBar, KeyChord::char('j', cmd)),
             // View & Navigation.
             (ViewArrange, KeyChord::char('1', cmd)),
             (ViewMixer, KeyChord::char('2', cmd)),

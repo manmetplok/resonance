@@ -37,12 +37,14 @@ fn query(app: &mut Resonance, q: &str) {
 fn first(app: &Resonance) -> CommandId {
     match app.test_palette().expect("palette open").rows().next().expect("a row").item {
         PaletteItem::Command(c) => c,
+        other => panic!("not a command row: {other:?}"),
     }
 }
 
 fn selected(app: &Resonance) -> CommandId {
     match app.test_palette().unwrap().selected_row().unwrap().item {
         PaletteItem::Command(c) => c,
+        other => panic!("not a command row: {other:?}"),
     }
 }
 
@@ -205,6 +207,83 @@ fn the_empty_query_shows_recents_then_suggestions() {
         ],
         "newest first, de-duplicated"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Argument modes (§7.4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_go_to_bar_argument_parses_bars_and_beats() {
+    use resonance_app::palette::parse_bar;
+    assert_eq!(parse_bar("17"), Some((17, 1)));
+    assert_eq!(parse_bar(" 17.3 "), Some((17, 3)));
+    assert_eq!(parse_bar("0"), None, "bars are 1-based");
+    assert_eq!(parse_bar("17.0"), None, "beats are 1-based");
+    assert_eq!(parse_bar("x"), None);
+    assert_eq!(parse_bar(""), None);
+}
+
+#[test]
+fn cmd_j_opens_go_to_bar_and_enter_seeks() {
+    let mut app = app();
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::char('j', Mods::cmd()),
+        repeat: false,
+        captured: false,
+    }));
+    assert_eq!(app.test_palette().unwrap().query, ":");
+    let row = app.test_palette().unwrap().selected_row().unwrap();
+    assert!(row.unavailable.is_some(), "no bar typed yet");
+
+    query(&mut app, ":5.2");
+    let row = app.test_palette().unwrap().selected_row().unwrap();
+    assert_eq!(row.item, PaletteItem::GoTo { bar: 5, beat: 2 });
+    assert_eq!(row.name, "Go to bar 5, beat 2");
+    palette(&mut app, PaletteMsg::Submit);
+    let expected = app
+        .test_tempo_map()
+        .beat_sample_in_bar(4, 1, 44_100)
+        .expect("in the bar table");
+    assert_eq!(app.test_playhead(), expected);
+}
+
+#[test]
+fn at_mode_lists_markers_and_sections_in_timeline_order() {
+    use resonance_app::state::ArrangementMarker;
+    let mut app = app();
+    let late = app.test_tempo_map().bar_to_sample(8);
+    let early = app.test_tempo_map().bar_to_sample(1);
+    app.test_add_marker(ArrangementMarker::new_point(1, "Bridge".into(), [0; 3], late));
+    app.test_add_marker(ArrangementMarker::new_point(2, "Intro".into(), [0; 3], early));
+    open(&mut app);
+    query(&mut app, "@");
+    let names: Vec<String> = app.test_palette().unwrap().rows().map(|r| r.name.clone()).collect();
+    assert_eq!(names, ["Intro", "Bridge"]);
+    query(&mut app, "@brid");
+    let rows: Vec<PaletteItem> = app.test_palette().unwrap().rows().map(|r| r.item).collect();
+    assert_eq!(rows.len(), 1);
+    palette(&mut app, PaletteMsg::Submit);
+    assert_eq!(app.test_playhead(), late);
+}
+
+#[test]
+fn hash_mode_selects_a_track_and_plus_mode_needs_one() {
+    use resonance_audio::types::TrackType;
+    let mut app = app();
+    app.test_add_track(1, TrackType::Audio);
+    app.test_add_track(2, TrackType::Audio);
+    open(&mut app);
+    query(&mut app, "+");
+    assert!(app.test_palette().unwrap().selected_row().unwrap().unavailable.is_some());
+    query(&mut app, "#");
+    assert_eq!(app.test_palette().unwrap().row_count(), 2);
+    palette(&mut app, PaletteMsg::Move(1));
+    let PaletteItem::Track(id) = app.test_palette().unwrap().selected_row().unwrap().item else {
+        panic!("a track row");
+    };
+    palette(&mut app, PaletteMsg::Submit);
+    assert_eq!(app.test_selected_track(), Some(id));
 }
 
 // ---------------------------------------------------------------------------

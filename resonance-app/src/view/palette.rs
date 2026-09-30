@@ -285,6 +285,11 @@ fn footer(state: &PaletteState) -> Element<'_, Message> {
     let enter = theme::kbd::ENTER.to_string();
     let right: Element<'_, Message> = match state.flash {
         Some(reason) => text(reason).size(11).color(theme::BAD).into(),
+        None if state.query.is_empty() => text(": bar   @ jump   # track   + plugin")
+            .size(11)
+            .font(theme::MONO_FONT)
+            .color(theme::TEXT_3)
+            .into(),
         None => {
             let n = state.row_count();
             text(if n == 1 {
