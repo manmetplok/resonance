@@ -49,10 +49,12 @@ use egui::{self, Color32, Pos2, Rect, Response, Sense, Stroke, Vec2};
 use std::f32::consts::PI;
 
 pub mod chip;
+pub mod library;
 pub mod segmented;
 pub mod slider;
 
 pub use chip::{chip_button, chip_styled, Chip, ChipColors, ChipPalette, ChipStyle};
+pub use library::{star_toggle, star_toggle_sized, tag_pill, TagPillResponse};
 pub use segmented::{segmented, segmented_styled, SegmentedStyle};
 pub use slider::{
     slider, slider_bipolar, slider_bipolar_warm, slider_unipolar, HSlider, SliderPalette,

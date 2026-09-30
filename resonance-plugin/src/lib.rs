@@ -6,6 +6,7 @@ pub mod features;
 pub mod formatters;
 pub mod gui;
 pub mod host;
+pub mod library_view;
 pub mod loader;
 mod logging;
 pub mod param;
@@ -22,6 +23,10 @@ pub mod editor_widgets;
 #[cfg(feature = "editor-widgets")]
 pub mod editor_host;
 
+/// egui skin over `library_view` (list, search, facets, confirm, tags).
+#[cfg(feature = "editor-widgets")]
+pub mod library_ui;
+
 /// Shared preset bar (picker + Save/Rename/Delete) for plugin editors.
 #[cfg(feature = "editor-widgets")]
 pub mod preset_ui;
@@ -31,6 +36,9 @@ pub use clap_bridge::ClapBridge;
 pub use formatters::*;
 pub use host::HostHandle;
 pub use loader::{rescan_directory, Mailbox};
+/// The shared marks store and file-manager launcher, re-exported so a
+/// plugin reaches them without its own `resonance-common` dependency.
+pub use resonance_common::{library_marks, reveal};
 /// The `RUST_LOG`-unset filter, shared by the app binary and every bundle.
 pub use logging::DEFAULT_LOG_FILTER;
 pub use param::{BoolParam, FloatParam, IntParam, Param};
