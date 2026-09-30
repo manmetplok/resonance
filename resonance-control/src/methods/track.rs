@@ -232,6 +232,12 @@ pub struct AddPluginParams {
     /// Stable plugin id from `plugins.catalog`, e.g.
     /// `"com.resonance.wavetable"`.
     pub plugin_id: String,
+    /// Load this preset onto the new plugin as soon as it exists: a
+    /// preset id or name, as `*.plugin_presets` / `presets.search` report
+    /// it. Checked before anything is added; the add and the load are one
+    /// undo step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// Result of `track.add_effect` / `track.add_instrument`: a handle on

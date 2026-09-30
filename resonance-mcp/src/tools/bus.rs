@@ -90,7 +90,11 @@ impl ResonanceMcp {
                        plugin_id is a CLAP id of the form \"com.resonance.<name>\"; \
                        plugins_catalog lists them. Instruments are refused — a bus is handed \
                        audio, not notes. Each call APPENDS another instance. Unlike aux sends, \
-                       bus effects ARE saved with the project. Undoable.",
+                       bus effects ARE saved with the project. Undoable. \
+                       \
+                       preset (optional) loads one of the plugin's presets onto it as it is \
+                       added — an id or name from bus_plugin_presets or presets_search; \
+                       an unknown one is refused before anything is added.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<track::AddPluginResult>()
     )]

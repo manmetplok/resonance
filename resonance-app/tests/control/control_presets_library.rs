@@ -587,3 +587,71 @@ fn automated_params_are_sent_to_the_plugin_as_ignored() {
         .collect();
     assert_eq!(sent, vec![Vec::<u32>::new()], "the last lane gone: nothing ignored");
 }
+
+// ---------------------------------------------------------------------------
+// A preset on add (slice P6)
+// ---------------------------------------------------------------------------
+
+const EMPTY_TRACK: u64 = 82;
+
+fn echo_added(app: &mut Resonance, instance_id: u64) {
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: EMPTY_TRACK,
+        instance_id,
+        plugin_name: "Test Synth".to_owned(),
+        clap_plugin_id: PLUGIN_ID.to_owned(),
+        clap_file_path: "/nonexistent/test-synth.clap".to_owned(),
+        params: params(),
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
+    });
+}
+
+/// `track.add_instrument {preset}` loads the preset once the plugin's
+/// params arrive with the engine's echo, and names it; an unknown preset
+/// is refused before anything is added.
+#[test]
+fn an_instrument_added_with_a_preset_comes_up_with_that_sound() {
+    let mut app = app();
+    app.test_add_track(EMPTY_TRACK, TrackType::Instrument);
+    let add = |app: &mut Resonance, preset: &str| {
+        call(
+            app,
+            track_proto::ADD_INSTRUMENT,
+            &track_proto::AddPluginParams {
+                track_id: ProtoTrackId(EMPTY_TRACK),
+                plugin_id: PLUGIN_ID.to_owned(),
+                preset: Some(preset.to_owned()),
+            },
+        )
+    };
+
+    let refused = add(&mut app, "No Such Preset");
+    assert_eq!(refused.error.map(|e| e.kind()), Some(ErrorKind::NotFound));
+    let next = app.test_next_plugin_id();
+
+    let response = add(&mut app, "bass-reese");
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert_eq!(app.test_next_plugin_id(), next + 1, "nothing was added by the refusal");
+    echo_added(&mut app, next);
+    assert_eq!(app.test_plugin_param(next, clap_id("cutoff")), Some(400.0));
+
+    let view: PluginPresetsView = serde_json::from_value(
+        call(
+            &mut app,
+            track_proto::PLUGIN_PRESETS,
+            &track_proto::PluginPresetsParams {
+                track_id: ProtoTrackId(EMPTY_TRACK),
+                plugin_id: Some(PLUGIN_ID.to_owned()),
+                occurrence: None,
+                filter: PresetFilter::default(),
+            },
+        )
+        .result
+        .expect("plugin_presets"),
+    )
+    .unwrap();
+    assert_eq!(view.current.map(|c| c.id), Some("bass-reese".to_owned()));
+}

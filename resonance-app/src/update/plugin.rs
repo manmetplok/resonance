@@ -151,58 +151,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 }
             }
         }
-        PluginMessage::LoadPluginPreset {
-            instance_id,
-            values,
-            preset_name,
-            preset_state,
-            preset_id,
-            preset_source,
-        } => {
-            // The identity, optimistically: a reporting plugin confirms it
-            // (and keeps `reported`); for any other it is all there is.
-            let reported = r
-                .presets
-                .plugin_preset_identity
-                .get(&instance_id)
-                .is_some_and(|i| i.reported);
-            r.presets.plugin_preset_identity.insert(
-                instance_id,
-                crate::state::presets::SlotPresetIdentity {
-                    source: preset_source,
-                    id: preset_id,
-                    name: preset_name,
-                    modified: false,
-                    reported,
-                },
-            );
-            // Same two steps as SetPluginParam, once per parameter: tell
-            // the engine, then move the app's mirror so every reader
-            // (generic panel, `track.plugin_params`, its MCP tool) agrees
-            // with the sound.
-            for (param_id, value) in &values {
-                let _ = r.engine.send(AudioCommand::SetPluginParam {
-                    instance_id,
-                    param_id: *param_id,
-                    value: *value,
-                });
-            }
-            r.with_plugin_mut(instance_id, |p| {
-                for (param_id, value) in &values {
-                    if let Some(param) = p.params.iter_mut().find(|pp| pp.id == *param_id) {
-                        param.current_value = *value;
-                    }
-                }
-            });
-            // Then the rest of the sound and the identity. After the
-            // params in the engine's queue, so a plugin that lays the
-            // preset over its state sees the new values.
-            if let Some(data) = preset_state {
-                let _ = r
-                    .engine
-                    .send(AudioCommand::LoadPluginPresetState { instance_id, data });
-            }
-        }
+        m @ PluginMessage::LoadPluginPreset { .. } => apply_preset_load(r, m),
         PluginMessage::SetPluginSidechain {
             instance_id,
             source,
@@ -266,4 +215,66 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Apply a [`PluginMessage::LoadPluginPreset`]: the identity, every
+/// param (engine and mirror), then the rest of the sound. The message
+/// handler records it as one undo entry; an audition and a preset loaded
+/// onto a plugin that was just added call this directly, unrecorded
+/// (plugin-preset-library.md §6.7). Any other message is ignored.
+pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
+    let PluginMessage::LoadPluginPreset {
+        instance_id,
+        values,
+        preset_name,
+        preset_state,
+        preset_id,
+        preset_source,
+    } = m
+    else {
+        return;
+    };
+    // The identity, optimistically: a reporting plugin confirms it
+    // (and keeps `reported`); for any other it is all there is.
+    let reported = r
+        .presets
+        .plugin_preset_identity
+        .get(&instance_id)
+        .is_some_and(|i| i.reported);
+    r.presets.plugin_preset_identity.insert(
+        instance_id,
+        crate::state::presets::SlotPresetIdentity {
+            source: preset_source,
+            id: preset_id,
+            name: preset_name,
+            modified: false,
+            reported,
+        },
+    );
+    // Same two steps as SetPluginParam, once per parameter: tell
+    // the engine, then move the app's mirror so every reader
+    // (generic panel, `track.plugin_params`, its MCP tool) agrees
+    // with the sound.
+    for (param_id, value) in &values {
+        let _ = r.engine.send(AudioCommand::SetPluginParam {
+            instance_id,
+            param_id: *param_id,
+            value: *value,
+        });
+    }
+    r.with_plugin_mut(instance_id, |p| {
+        for (param_id, value) in &values {
+            if let Some(param) = p.params.iter_mut().find(|pp| pp.id == *param_id) {
+                param.current_value = *value;
+            }
+        }
+    });
+    // Then the rest of the sound and the identity. After the
+    // params in the engine's queue, so a plugin that lays the
+    // preset over its state sees the new values.
+    if let Some(data) = preset_state {
+        let _ = r
+            .engine
+            .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+    }
 }

@@ -318,12 +318,32 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
             )),
         );
     }
+    // A preset to load onto it, checked before anything is added.
+    let preset = match params.preset.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => match crate::update::control::plugin_presets::resolve_add_preset(
+            app,
+            &params.plugin_id,
+            p,
+        ) {
+            Ok(found) => Some(found),
+            Err(e) => return reject(request, e),
+        },
+        None => None,
+    };
     // Same synchronous commit as `track.add_effect` / `bus.add_effect`:
     // the id is allocated app-side and the slot mirrored at dispatch, so
     // `master.plugin_params` and `master.set_plugin_param` can address
     // the plugin in the same cycle as this reply instead of racing the
     // engine's `MasterPluginAdded` echo.
     let instance_id = app.allocate_plugin_id();
+    if let Some(found) = &preset {
+        crate::update::control::plugin_presets::park_add_preset(
+            app,
+            instance_id,
+            &params.plugin_id,
+            found,
+        );
+    }
     let task = super::run_via_update(
         app,
         Message::Master(MasterMessage::AddPluginToMasterWithId {

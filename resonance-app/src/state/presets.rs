@@ -43,6 +43,14 @@ pub struct PresetState {
     /// Each plugin slot's loaded preset, keyed by instance: reported by
     /// the plugin, else set by the host's own loads (slice P5).
     pub plugin_preset_identity: std::collections::HashMap<PluginInstanceId, SlotPresetIdentity>,
+    /// A preset to load onto a plugin that is being added, once its
+    /// `PluginAdded` echo brings the param list: `(clap id, preset id,
+    /// source)` by instance (a `preset` on `*.add_effect`, "with preset…"
+    /// in the add pickers — slice P6).
+    pub pending_plugin_presets: std::collections::HashMap<
+        PluginInstanceId,
+        (String, String, resonance_control::methods::plugin_preset::PluginPresetSource),
+    >,
     /// Root the plugin-preset directories are read from and written to,
     /// when it is not the user's real data directory. A test seam.
     pub plugin_preset_root: Option<std::path::PathBuf>,

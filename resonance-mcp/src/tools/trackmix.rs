@@ -72,7 +72,11 @@ impl ResonanceMcp {
                        \
                        Returns {plugin_id, occurrence, slot} — pass plugin_id and occurrence \
                        straight to track_set_plugin_param instead of re-reading the chain to \
-                       work out which instance is the new one.",
+                       work out which instance is the new one. \
+                       \
+                       preset (optional) loads one of the plugin's presets onto it as it is \
+                       added — an id or name from track_plugin_presets or presets_search; \
+                       an unknown one is refused before anything is added.",
         annotations(destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<track::AddPluginResult>()
     )]
@@ -104,7 +108,11 @@ impl ResonanceMcp {
                        set_plugin_param issued in the very next call can report that the plugin \
                        is still initializing — that is a retry, not a failed add. Effect \
                        parameters are then set the same way as instrument ones, by naming \
-                       plugin_id.",
+                       plugin_id. \
+                       \
+                       preset (optional) loads one of the plugin's presets onto it as it is \
+                       added — an id or name from track_plugin_presets or presets_search; \
+                       an unknown one is refused before anything is added.",
         annotations(destructive_hint = false, open_world_hint = false),
         output_schema = schema_for_output::<track::AddPluginResult>()
     )]

@@ -151,6 +151,12 @@ pub struct AddEffectParams {
     /// Instrument plugins are refused — the master chain processes an
     /// already-summed mix and has no notes to play.
     pub plugin_id: String,
+    /// Load this preset onto the new plugin as soon as it exists: a
+    /// preset id or name, as `*.plugin_presets` / `presets.search` report
+    /// it. Checked before anything is added; the add and the load are one
+    /// undo step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// Params for `master.remove_effect`: address the plugin **either** by

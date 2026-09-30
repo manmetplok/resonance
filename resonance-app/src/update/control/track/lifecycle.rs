@@ -216,6 +216,18 @@ fn add_plugin(
             )),
         );
     }
+    // A preset to load onto it, checked before anything is added.
+    let preset = match params.preset.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => match crate::update::control::plugin_presets::resolve_add_preset(
+            app,
+            &params.plugin_id,
+            p,
+        ) {
+            Ok(found) => Some(found),
+            Err(e) => return reject(request, e),
+        },
+        None => None,
+    };
     // `add_instrument` SETS the track's instrument (CTL-04). A track has
     // one sound source: appending a second instrument doubled the CPU,
     // let the new one overwrite the old one's output, and left every
@@ -245,6 +257,34 @@ fn add_plugin(
                     }),
                 ),
             };
+            if let Some(found) = &preset {
+                // The instrument now in the slot: the same one (load now,
+                // its params are known) or its replacement (load on the
+                // echo, like a fresh add).
+                let now = find_track(app, params.track_id.0)
+                    .and_then(|t| t.plugins.get(slot as usize))
+                    .map(|p| p.instance_id);
+                match (kind, now) {
+                    (Some(ReplaceKind::AlreadyLoaded), Some(id)) => {
+                        crate::update::control::plugin_presets::park_add_preset(
+                            app,
+                            id,
+                            &params.plugin_id,
+                            found,
+                        );
+                        crate::update::control::plugin_presets::apply_pending_preset(app, id);
+                    }
+                    (Some(_), Some(id)) => {
+                        crate::update::control::plugin_presets::park_add_preset(
+                            app,
+                            id,
+                            &params.plugin_id,
+                            found,
+                        );
+                    }
+                    _ => {}
+                }
+            }
             let result = track::AddPluginResult {
                 plugin_id: params.plugin_id,
                 occurrence: 0,
@@ -282,6 +322,14 @@ fn add_plugin(
     // is untouched: it still waits, via `AddPluginToTrack` rather than
     // this `...WithId` variant.
     let instance_id = app.allocate_plugin_id();
+    if let Some(found) = &preset {
+        crate::update::control::plugin_presets::park_add_preset(
+            app,
+            instance_id,
+            &params.plugin_id,
+            found,
+        );
+    }
     let task = run_via_update(
         app,
         Message::Plugin(PluginMessage::AddPluginToTrackWithId {

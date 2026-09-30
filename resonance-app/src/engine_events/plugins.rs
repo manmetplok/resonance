@@ -104,6 +104,7 @@ pub(super) fn track_added(
     }
 
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
 
     // Seed the undo plugin-state cache with the plugin's initial CLAP
     // state. Snapshots taken before the user interacts with the plugin
@@ -342,6 +343,8 @@ pub(crate) fn track_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_presets.remove(&instance_id);
+    r.presets.plugin_preset_identity.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     // The engine's `RemovePlugin` arm already dropped this instance's key
     // route, so only the mirror needs pruning here — but prune it we must,
@@ -844,6 +847,7 @@ pub(super) fn bus_added(
         );
     }
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
@@ -922,6 +926,8 @@ pub(crate) fn bus_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_presets.remove(&instance_id);
+    r.presets.plugin_preset_identity.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);
@@ -976,6 +982,7 @@ pub(super) fn master_added(
         );
     }
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
@@ -1038,6 +1045,8 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    r.presets.pending_plugin_presets.remove(&instance_id);
+    r.presets.plugin_preset_identity.remove(&instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);

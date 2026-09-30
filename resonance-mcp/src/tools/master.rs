@@ -77,7 +77,11 @@ impl ResonanceMcp {
                        or -2 dBTP to stay safe through lossy codecs, which push peaks up. \
                        Streaming platforms normalise, so mastering louder than about -14 LUFS \
                        integrated buys nothing — it is turned back down on playback and you \
-                       keep only the squashed dynamics.",
+                       keep only the squashed dynamics. \
+                       \
+                       preset (optional) loads one of the plugin's presets onto it as it is \
+                       added — an id or name from master_plugin_presets or presets_search; \
+                       an unknown one is refused before anything is added.",
         annotations(destructive_hint = false, open_world_hint = false)
     )]
     async fn master_add_effect(

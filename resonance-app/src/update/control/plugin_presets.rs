@@ -243,6 +243,61 @@ pub(crate) fn find(
     }
 }
 
+/// The preset a `preset` argument on `*.add_effect` / `add_instrument`
+/// names: an id first, then a name (user before factory).
+pub(crate) fn resolve_add_preset(
+    app: &Resonance,
+    clap_id: &str,
+    preset: &str,
+) -> Result<PresetRef, RpcError> {
+    find(app, clap_id, preset, Some(preset), None)
+        .or_else(|_| find(app, clap_id, preset, None, None))
+        .map(|(_, found)| found)
+}
+
+/// Park `found` for the plugin being added as `instance_id`; the
+/// `PluginAdded` echo loads it ([`apply_pending_preset`]).
+pub(crate) fn park_add_preset(
+    app: &mut Resonance,
+    instance_id: PluginInstanceId,
+    clap_id: &str,
+    found: &PresetRef,
+) {
+    if let Err(e) = bank_for(app, clap_id).library().record_use(clap_id, &found.id) {
+        tracing::debug!("presets: recents not recorded: {e}");
+    }
+    app.presets.pending_plugin_presets.insert(
+        instance_id,
+        (clap_id.to_string(), found.id.clone(), wire_source(found.source)),
+    );
+}
+
+/// Load the preset parked for a just-added plugin, now that its params
+/// are known. Unrecorded: the add it belongs to is the undo step.
+pub(crate) fn apply_pending_preset(app: &mut Resonance, instance_id: PluginInstanceId) {
+    let Some((clap_id, preset_id, source)) = app.presets.pending_plugin_presets.remove(&instance_id)
+    else {
+        return;
+    };
+    let Some(params) = app.with_plugin_mut(instance_id, |slot| {
+        slot.params
+            .iter()
+            .map(super::view_model::param_view)
+            .collect::<Vec<_>>()
+    }) else {
+        return;
+    };
+    let message = find(app, &clap_id, "", Some(&preset_id), Some(source))
+        .and_then(|(bank, found)| load_message_for(&bank, &found, instance_id, &params));
+    match message {
+        Ok(Message::Plugin(m)) => crate::update::plugin::apply_preset_load(app, m),
+        Ok(_) => {}
+        Err(e) => {
+            app.banners.error_message = Some(format!("Could not load preset: {}", e.message));
+        }
+    }
+}
+
 /// What a `*.load_plugin_preset` asks for.
 pub(crate) struct LoadArgs<'a> {
     pub preset: &'a str,
