@@ -27,6 +27,24 @@ pub trait ExtraStateSaver: Send + Sync {
     fn load(&self, state: &serde_json::Value);
 }
 
+/// Parameter text conversion that works while the plugin object is inside
+/// the audio processor.
+///
+/// The CLAP bridge answers `value_to_text` / `text_to_value` from the
+/// plugin's own [`crate::Param`]s while the plugin is idle, but an active
+/// plugin lives in the audio processor, where the main thread cannot reach
+/// it. A plugin whose parameters are shared (behind an `Arc`, as the amp's
+/// are) returns one of these from [`ResonancePlugin::param_text_source`],
+/// and the bridge falls back to it while active — so a host reads the real
+/// text of a live instance, and a label resolves on it
+/// (nam-model-library.md §9). Indices are host-order parameter indices.
+pub trait ParamTextSource: Send + Sync {
+    /// The display text of `value` for parameter `index`.
+    fn display(&self, index: usize, value: f64) -> Option<String>;
+    /// The value `text` names for parameter `index`.
+    fn parse(&self, index: usize, text: &str) -> Option<f64>;
+}
+
 /// A note event for sample-accurate MIDI processing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteEvent {
@@ -490,6 +508,14 @@ pub trait ResonancePlugin: Send + 'static {
     /// chains a saver the plugin already had), and the preset the user
     /// picked survives closing the editor and reopening the project.
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
+        None
+    }
+
+    /// Optional parameter text conversion for while the plugin is active
+    /// (see [`ParamTextSource`]). Harvested once at plugin creation, like
+    /// [`Self::extra_state_saver`]. Default: `None`, and an active plugin's
+    /// text reads as its number.
+    fn param_text_source(&self) -> Option<Arc<dyn ParamTextSource>> {
         None
     }
 

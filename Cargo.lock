@@ -4911,6 +4911,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tiny_http",
+ "tracing",
  "ureq",
  "webbrowser",
 ]
@@ -5004,6 +5005,7 @@ dependencies = [
  "dirs",
  "serde",
  "serde_json",
+ "sha2",
  "symphonia",
  "thiserror 2.0.21",
  "time",

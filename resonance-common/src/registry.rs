@@ -1,8 +1,9 @@
 //! Shared installed-content registry for Resonance plugins.
 //!
-//! Tracks which downloadable assets (drum kits, amp models, etc.) have been
-//! installed, persisted as `$XDG_DATA_HOME/resonance/installed.json`. Both
-//! the drum and amp plugins can read/write this file via the helpers here.
+//! Tracks which downloadable assets (drum kits today) have been installed,
+//! persisted as `$XDG_DATA_HOME/resonance/installed.json`. NAM amp models
+//! are not tracked here: the amp never wrote this file, and
+//! `nam_library`'s `library.json` indexes them (nam-model-library.md D8).
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +35,6 @@ pub enum RegistryError {
 #[serde(rename_all = "kebab-case")]
 pub enum ContentType {
     Drumkit,
-    AmpModel,
 }
 
 /// One installed asset.
@@ -52,8 +52,20 @@ pub struct InstalledItem {
 /// The on-disk JSON shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InstalledRegistry {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "known_items")]
     pub items: Vec<InstalledItem>,
+}
+
+/// The items this build understands. An item of a type it does not know
+/// (the retired `amp-model`, or a newer build's kind) is skipped rather
+/// than failing the whole file — which would quarantine it and lose every
+/// drum-kit record with it.
+fn known_items<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<InstalledItem>, D::Error> {
+    let raw = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect())
 }
 
 impl InstalledRegistry {

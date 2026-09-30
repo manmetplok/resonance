@@ -1,10 +1,19 @@
 # NAM model library: managing installed amp models
 
-Status: **design, not built** (2026-09-30). Build it as the vertical slices in
-§12. Each slice lands its storage change, plugin behaviour, editor UI and tests
-together, and the control-API slices follow the one-tool-per-method rule
-(`project_control_api_vertical_slices`). Touches `resonance-common` (new
-library module), `plugins/resonance-amp` (state, selector, editor) and, in the
+Status: **built, branch `feat/nam-library`, unmerged** (2026-09-30): the
+shared foundation (F: `library_marks`, `reveal`, `library_view`, the list
+widget) and slices L0–L7b of §12. The open decisions D1–D10 (§13) were not
+answered; every one is built as its **recommended** option (D3 copy-on-import
+included) and can still be revisited. Where the code had to differ from the
+design, the section says so in place (§5.1 empty slots, §5.2 `file_changed`,
+§8 worker ownership and refresh, §9.2 as built). Each slice landed its
+storage change, plugin behaviour, editor UI and tests together, and the
+control-API slices follow the one-tool-per-method rule
+(`project_control_api_vertical_slices`). Touches `resonance-common`
+(`nam_library`, `library_marks`, `reveal`), `resonance-plugin`
+(`library_view`, `library_ui`, the bridge's `param_text_source`),
+`plugin-gui-core` (`star_toggle`, `tag_pill`), `plugins/resonance-amp`
+(state, selector, editor), `resonance-audio` (`param_from_text`) and, in the
 MCP slices, `resonance-control` / `resonance-app` / `resonance-mcp`.
 
 ## 0. Why
@@ -164,6 +173,7 @@ follow the model across renames:
 
 ```json
 { "version": 1,
+  "generation": 412,
   "items": {
     "amp-model:9f2c…": { "favorite": true, "tags": ["djent", "rhythm"], "last_used": "2026-09-30T14:02:11Z", "use_count": 12 }
   } }
@@ -171,10 +181,25 @@ follow the model across renames:
 
 The key is `<kind>:<id>`, so presets can live in the same file
 (`plugin-preset:<clap_id>:<preset id>`). §10 covers how this is shared.
-Recents are derived from `last_used`, written when a model finishes loading
-in an instance that has an editor open or when the user picks it. It is not
-written by project-open restores, so opening an old project does not reorder
-recents.
+`generation` is bumped on every write; both libraries' freshness checks
+read it (plugin-preset-library.md §10.2 item 2). The store lives at
+`$XDG_DATA_HOME/resonance/library/marks.json`, overridable with
+`RESONANCE_LIBRARY_DIR`. An item whose fields are all at their defaults is
+deleted rather than stored, and the schema reserves `rating: u8?` for later.
+
+The same module carries the **seeded facet vocabulary**
+(`library_marks::vocab`, plugin-preset-library.md §4.4): `instrument`,
+`genres` and `character`. The Library panel offers `instrument`
+(`electric-guitar`, `bass`, …) and `character` values beside its own
+NAM-only `gear_type` / `tone_type` facets, and `+ tag` completion suggests
+the seeded values as well as every tag already used across kinds.
+Recents are derived from `last_used`, written when the user picks a model:
+a Library row, ◀/▶, an import, a Tone3000 download or a relink from the
+missing banner (every editor action that points `file_select` at a slot).
+It is not written by project-open restores, so opening an old project does
+not reorder recents, nor by a host or automation moving `file_select` (the
+plugin cannot tell those from a restore). The marks prune pass (§7.2) runs
+after every rescan.
 
 ## 5. Selection, state and the missing model
 
@@ -183,17 +208,25 @@ recents.
 `file_list` stops being a directory listing. It becomes the library's **slot
 table**: `slots[n] = Some(path) | None`, shared by every amp instance.
 
-- A newly installed model takes the lowest free slot. Deleting a model frees
-  its slot, but the slot is **not reused while any other slot is free** above
-  the high-water mark. In practice slots behave as append-only until 1000
-  models, and only then are freed ones reused. So a preset or an automation
-  lane recalls the same model after other models are added or removed.
+- A newly installed model takes the slot after the high-water mark. Deleting
+  a model frees its slot, but the slot is **not reused while any other slot is
+  free** above the high-water mark. In practice slots behave as append-only
+  until 1000 models, and only then are freed ones reused. So a preset or an
+  automation lane recalls the same model after other models are added or
+  removed. A model whose bytes come back (a re-download or re-import of the
+  same content) gets its old slot back while that slot is still free.
+- Every distinct file gets a slot, including one whose header does not
+  parse, because the old directory listing counted it too; a load of it
+  fails with the parse reason. A byte-identical duplicate gets none: its
+  canonical copy (downloads first, then imports, then path order) holds it.
 - Migration: the first build of the index assigns slots to the existing
   `tone3000/` files in today's sorted order. So `file_select` values that
   point into the downloads directory keep their meaning.
-- `file_select` pointing at an empty slot means "no model", and the loader
-  does not clamp to the last entry (`loader.rs:98` today). It publishes
-  `Missing`.
+- `file_select` pointing at an empty slot loads nothing, and the loader
+  does not clamp to the last entry (`loader.rs:98` before). It also
+  **unloads nothing**: whatever was playing keeps playing (unloading would
+  mean dropping a model on the audio thread), and the status reads
+  "empty slot N". A missing *reference* is the §5.2 step 3 state.
 - ◀/▶ step through the **Library panel's current view** (search + filters +
   sort, favourites first). They do not step through slot order, so "next" is
   what the user sees next. They write the slot number.
@@ -224,9 +257,32 @@ on load (`project_no_real_users_yet`: no migration machinery).
    with `model_id` → load that path, **rewrite `model_path`**, and show a
    one-line notice "Relinked: <name> (file had moved)". This is silent
    auto-relink.
-3. Otherwise → `Resolved::Missing { name, path, source }`. No model is
-   loaded, `model_path` / `model_id` are **kept verbatim**, so a save does not
-   lose the reference, and the editor shows the missing banner (§6.4).
+3. Otherwise → `Resolved::Missing { name, path, source, file_changed }`. No
+   model is loaded, the whole reference is **kept verbatim** (an unparsable
+   `model_source` included), so a save does not lose it, and the editor shows
+   the missing banner (§6.4). `file_changed` marks a path that exists but
+   holds other bytes; the banner then also offers "Use the file at this
+   path".
+
+The reference is written only once its outcome is known — after a load
+succeeds, or verbatim when the model is missing — so what `save_state`
+persists is always what plays. A state load never writes it directly: it
+parks the reference (`pending_ref`, which `save_state` reports until it is
+resolved), and `initialize` (inactive) or the loader thread (active)
+resolves it with the one `apply_reference`. On the active path the saved
+content id wins over the `file_select` the same state carried, the slot is
+re-derived from the id, and a reference that resolves to nothing, to a
+missing model or to an unloadable file swaps a pass-through in (through the
+swap fader, so the old model is retired off the audio thread): a state that
+says "no model" never keeps the previous model playing under it.
+
+**Activation is read-only.** `initialize` re-reads the cached index (one
+`stat` of `library.json`) and resolves against it; it never scans, hashes
+beyond the referenced file, prunes marks or writes. The index's cached id is
+used for a file whose size and mtime (ns) are unchanged; an external file is
+hashed once per process and cached. Scans happen lazily and off the main
+thread: when an editor opens (a background job), and on the loader thread
+when a requested slot is not in the index (throttled to once per 2 s).
 
 ### 5.3 What "missing" sounds like
 
@@ -360,8 +416,9 @@ no model. It uses a `WARN`-bordered `Frame`:
    window. When instances in this process are using the model, the line says
    so: `Used by 2 open amps — they keep playing until reloaded`.
 2. **What is removed**: the `.nam`, its sidecar, and its slot, which is freed
-   under the no-reuse rule of §5.1. **Marks are kept** for 30 days, keyed by
-   content id. So a delete followed by a re-download or re-import keeps the
+   under the no-reuse rule of §5.1. **Marks are kept** for 90 days, keyed by
+   content id (the shared store's one orphan policy, plugin-preset-library.md
+   §4.5). So a delete followed by a re-download or re-import keeps the
    star and tags. A prune pass at index build drops marks older than that
    whose id is in no library entry.
 3. **Instances already playing it** keep the model in memory. Deleting does
@@ -376,6 +433,11 @@ no model. It uses a `WARN`-bordered `Frame`:
 6. The **file on disk is authoritative**: a file deleted in the file manager
    is dropped at the next refresh (§8), exactly as if it had been deleted in
    the panel.
+7. `Library::delete` removes only a `.nam` file the index knows, whose
+   canonical (symlink- and `..`-resolved) path is inside the canonical root,
+   and refuses anything else before touching it — never `library.json`, a
+   sidecar, a user's file or anything outside the root. A confirmed delete
+   deletes the key that was armed; selecting another row disarms it.
 
 ## 8. Concurrency: many instances, one library
 
@@ -388,26 +450,39 @@ There are two scopes:
   `file_list` becomes a view of it, and the "used in N open amps" count is a
   registry of live instance → id that each instance updates on load and drop.
   This also replaces the per-instance Tone3000 worker (G8) with one shared
-  worker that is created lazily on first editor open.
+  worker that is created lazily on first editor open. Each editor factory
+  that opened it holds it, so it is joined when the last such plugin goes
+  (a static that outlived the plugins would leave a thread running into an
+  unloaded `.clap`). A download carries a callback from the requesting
+  editor, which points that instance's `file_select` at the new slot.
 - **Across processes** (a second host, or a second Resonance), there is no
-  lock and no watcher dependency (the workspace has no `notify` crate, and a
-  plugin should not add inotify threads). The design instead:
+  watcher dependency (the workspace has no `notify` crate, and a plugin
+  should not add inotify threads). The design instead:
   - Writes are atomic whole-file replaces (`resonance_common::atomic_file::atomic_write`)
     of `library.json` and `marks.json`, each carrying a `generation` counter.
-  - Marks writes are **read-modify-write of the single item**. The writer
-    reloads `marks.json`, applies its one change, and writes. So two
-    processes starring different models both win, and the same item is
-    last-writer-wins.
-  - **Refresh** is poll-based and cheap. While a Library panel is open, or at
-    most once per 2 s from the header, a background thread stats the root and
-    its two subdirectories (mtime), `library.json` and `marks.json`. Only a
-    change triggers a rescan, which hashes only files whose (size, mtime) are
-    new. With no editor open, a refresh runs only at `initialize` and when a
-    load is requested.
-  - Slot allocation is taken under a short advisory lock
-    (`library.json.lock`, created with `create_new`, removed after the write,
-    and treated as stale after 10 s). This is the one place where two
-    processes racing would produce two models in one slot.
+  - Marks writes are **read-modify-write of the single item under a lock**.
+    The writer takes an exclusive `std::fs::File::lock` on
+    `library/marks.lock`, reloads `marks.json`, applies its one change, bumps
+    `generation` and atomic-replaces the file. So two processes starring
+    different models both win, even inside the same few milliseconds, and
+    the same item is last-writer-wins. The OS releases the lock when a
+    process dies. It is never taken on the audio thread.
+  - **Refresh** is poll-based and cheap. Every 500 ms while the Library
+    panel is open, and at most once per 2 s from the header, the editor
+    frame stats the root and its two subdirectories (mtime + entry count),
+    `library.json` and `marks.json` (`library_marks::FreshnessPoll`, one
+    helper shared with the preset library). A marks change re-reads
+    `marks.json`; a library change starts a rescan on a helper thread
+    (joined when the editor closes, so nothing outlives the plugin image),
+    which hashes only files whose (size, mtime) are new. With no editor
+    open, a refresh runs only at `initialize` and when a load is requested
+    for a slot this process sees empty, or whose file has gone.
+  - Slot allocation (the rescan that writes `library.json`) is taken under
+    the same primitive: an exclusive `File::lock` on `library.lock` in the
+    library root. It replaces the earlier `create_new` lockfile with a 10 s
+    staleness rule, which could break a live lock under a slow disk. This is
+    the one place where two processes racing would produce two models in one
+    slot.
 - **The audio thread** never touches any of this. `process()` still only
   compares `file_select` with its baseline and stores into `load_request`. The
   loader thread resolves slot → path through the shared library, taking a read
@@ -439,12 +514,47 @@ of `param_text` at `instance.rs:475`), before it rejects the label. Then
 works, and every stepped parameter in the fleet that has a `string_to_value`
 gains the same thing. It is one generic slice with no amp-specific method.
 
+As built: `ClapInstance::param_from_text` is the host call. For Resonance
+Amp's Model Select the app does not ask the plugin at all: it resolves the
+name (or id prefix) with `nam_library::Library::find` against the same
+library, and an exact name two models share is refused as ambiguous
+(prefer the slot or id). For any other plugin the question goes out as
+`AudioCommand::ResolvePluginParamText { token }` and nothing waits: the
+control reply is **deferred** (the handler keeps the connection's reply
+channel) until the engine's `AudioEvent::PluginParamTextResolved { token }`
+arrives, then the request is re-run with the number, so it still costs one
+undo entry and one revision. The engine answers under the instance lock
+(re-enqueued, never blocking, while the audio thread holds it), and only
+with a value whose display round-trips to the label (`label_round_trips`:
+equal, a 3+ character prefix, or a number agreeing to the input's
+precision) — a lenient plugin that parses `"loud"` as 0 is not believed. A
+rejected label, or no answer within 3 s (checked on the tick), keeps the old
+"names no choices" error and says what happened. Model Select's `text` in
+`plugin_params` is refreshed on an app-originated set only; a pick in the
+amp's own editor is not echoed, so an agent re-reads `amp_models.list`.
+
+Both conversions also had to work on an **active** plugin: the CLAP
+bridge answered `value_to_text` / `text_to_value` only while the plugin
+object was on the main thread, and printed a bare number (and parsed
+nothing) once it moved into the audio processor. `ResonancePlugin` gains
+an optional `param_text_source()` (a `ParamTextSource` harvested at
+construction, like `extra_state_saver`), which the bridge falls back to
+while active; the amp returns one over its shared `AmpParams`. So §9.1's
+`text` is the model name on a live instance too.
+
 ### 9.3 Library methods (slices L7a/L7b)
 
 | Method | Params | Returns | Notes |
 |---|---|---|---|
-| `amp_models.list` | `query?`, `favorites_only?`, `gear_type?`, `tone_type?` | `[{slot, id, name, author, gear, gear_type, tone_type, architecture, sample_rate, size_bytes, source, favorite, tags, last_used}]` + `library_generation` | Read-only. The app reads the library via `resonance_common::nam_library`, the same code and files as the plugin, so it needs no running amp instance. The agent then sets `file_select` to `slot` (or to the name, per 9.2). |
-| `amp_models.set_marks` | `id`, `favorite?`, `tags?` | the updated entry | Mutates per-user state, not the project: no undo entry, and it does not bump the project `revision`. The description must say so. |
+| `amp_models.list` | `query?`, `favorites_only?`, `gear_type?`, `tone_type?` | `[{slot, id, name, author, gear, gear_type, tone_type, architecture, sample_rate, size_bytes, source, favorite, tags, last_used, status, error?}]` + `library_generation` + `total` | Read-only, and answered above the mutation gate: no project needed, no undo entry, no `revision` bump. The app reads (and rescans) the library via `resonance_common::nam_library` and the shared marks store, the same code and files as the plugin, so it needs no running amp instance. `query` is the Library panel's own search (the shared `BrowserModel` over the same rows). Favourites first, then slot order. The agent then sets `Model Select` to `slot` (or to the name, per 9.2). |
+| `amp_models.set_marks` | `id` (or a unique 8+ character prefix), `favorite?`, `tags?` (replaces the personal tags, normalised; `[]` clears) | the updated entry | Mutates per-user state, not the project: no undo entry, and it does not bump the project `revision`. The description says so. At least one of `favorite` / `tags`; an unknown id is `not_found`. Written through the shared store's lock, so it cannot lose a concurrent star from the amp's panel. |
+
+`amp_models.list` also takes `limit` (and reports `matched`), and `status`
+is an enum (`ok` / `unreadable` / `duplicate`). The app's handlers take
+their roots from the app — the user's data dir in the real app, a private
+temporary directory in every `new_for_test*` app — keep the library open
+across calls, and rescan only when a file moved (an unchanged library is
+answered with no hashing, locking or writing).
 
 **Not on MCP** in this spec: delete, import and download. Delete removes user
 files that are outside the project and cannot be undone, and the agent loses
@@ -469,16 +579,20 @@ across the two:
 
 | Shared | Owner | Used here as |
 |---|---|---|
-| **Marks store** (`$XDG_DATA_HOME/resonance/library/marks.json`, `<kind>:<id>` keys, favourite / tags / last_used / use_count, per-item read-modify-write, generation counter) | `resonance-common` (a `library_marks` module; plugin-safe, in `PLUGIN_COMMON_ITEMS`) | §4.3. Kind `amp-model`, id = content sha256. |
-| **Tag vocabulary** (completion reads all tags across kinds) | same module | the `+ tag` completion |
-| **Browser list widget**: a searchable, filterable list with favourites first, a ★ toggle, tag chips and a detail pane, over a trait of `{title, subtitle, columns, key, marks}`, with pure view-state logic (filter, sort, stepping) that is testable without egui | `resonance-plugin` behind `editor-widgets`, beside `preset_ui` | §6.2's Installed tab and the ◀/▶ stepping over the view |
-| **Delete-confirm row** (two-click in place) | same | §7.1, and the preset bar's unconfirmed `Delete` should adopt it |
+| **Marks store** (`$XDG_DATA_HOME/resonance/library/marks.json`, `<kind>:<id>` keys, favourite / tags / last_used / use_count, reserved `rating`, per-item read-modify-write under `File::lock`, generation counter, orphan pruning, freshness helper) | `resonance-common` (a `library_marks` module; plugin-safe, in `PLUGIN_COMMON_ITEMS`) | §4.3. Kind `amp-model`, id = content sha256. |
+| **Tag vocabulary** (completion reads all tags across kinds) and the **seeded facet vocabulary** (`instrument`, `genres`, `character`) | same module (`library_marks::vocab`) | the `+ tag` completion, and `instrument` / `character` facets beside `gear_type` / `tone_type` |
+| **Browser view-state**: search, facets, favourites-first sort, ◀/▶ over the current view, the audition bracket and confirm-in-place delete state, over a `LibraryRows` trait of `{title, subtitle, columns, key, marks}`, testable without egui | `resonance-plugin::library_view`, **not** feature-gated, because the iced app drives the same model (plugin-preset-library.md §10.2 item 3) | §6.2's Installed tab and the ◀/▶ stepping over the view |
+| **Browser list widget**: the egui skin over that model, with a ★ toggle, tag chips and a detail pane frame; `star_toggle` / `tag_pill` in `plugin_gui_core::widgets` | `resonance-plugin` behind `editor-widgets` | §6.2's rows |
+| **Delete-confirm row** (two-click in place) | state in `library_view`, skin beside the list widget | §7.1, and the preset bar's unconfirmed `Delete` should adopt it |
 | **Reveal launcher** | `resonance-common` | §6.2 Reveal |
 
 What stays amp-specific: the NAM header reader, the slot table, content
-hashing, the Tone3000 source, and relink. If the preset spec picks a different
-path or key scheme for marks, this spec follows it. The only requirement from
-this side is that ids are opaque strings, so a sha256 fits.
+hashing, the Tone3000 source, and relink. The preset spec adopted this
+spec's path and key scheme for marks as-is; ids are opaque strings, so a
+sha256 fits. Its §10.2 asked for five changes, all applied here: the lock
+(§8), `generation` in the schema (§4.3), the ungated `library_view`
+view-state (this table), the seeded vocabulary in `library_marks` (§4.3),
+and the shared `library_marks.rs` test binary (§11).
 
 ## 11. Tests
 
@@ -489,7 +603,8 @@ slice. No inline `#[cfg(test)]`.
 | Where | What |
 |---|---|
 | `resonance-common/tests/nam_library.rs` (new; the crate already has `tests/atomic_file.rs`) | `read_header` on the three fixture families (a1, a2, lstm), which reads metadata without allocating weights. Index build, then rescan: only changed files are re-hashed. Slot allocation: append, free, no reuse below the high-water mark, reuse only past 999. Migration assigns today's sorted order. Duplicate detection by id. A corrupt `library.json` is quarantined and rebuilt (`quarantine_corrupt`). Each test uses its own temp root through the explicit-root API, not env vars. |
-| `resonance-common/tests/library_marks.rs` (new, or a module in the preset spec's test binary if it lands first) | Per-item read-modify-write: two writers with different items both survive, and the same item is last-writer-wins. Kinds do not collide. Prune after deletion with a clock injected. |
+| `resonance-common/tests/library_marks.rs` (new; shared with the preset spec and owned by whichever slice lands first) | Per-item read-modify-write under the lock: two writers with different items both survive, including two processes (the test binary re-spawns itself as a child to hold the lock), and the same item is last-writer-wins. `generation` bumps on every write. Kinds do not collide. Prune after deletion with a clock injected. Vocabulary and tag completion across kinds. |
+| `resonance-plugin/tests/library_view.rs` (new; shared with the preset spec) | `BrowserModel` over a fake `LibraryRows`: search, facets, favourites-first sort, ◀/▶ over the view (clamped), the audition bracket, confirm-in-place. |
 | `plugins/resonance-amp/tests/model_library.rs` (new) | `resolve_model`: path ok; moved and found by id (rewrites path); missing with the reference kept verbatim; hash mismatch. Import copies and dedupes. Delete removes the file, sidecar and slot, keeps marks, and lets live instances keep playing. Sidecar written by `finalize_download`, with `sanitize_filename` unchanged. View-state logic: search, filters, favourites-first sort, ◀/▶ over the view. `file_select` `value_to_string` / `string_to_value` round-trip. |
 | `plugins/resonance-amp/tests/model_selector.rs` (extend) | The baseline invariant still holds with slots. An empty slot never loads. Adding a model to the library while an instance is active does not move its model. |
 | `plugins/resonance-amp/tests/state.rs` (extend) | v2 keys round-trip. A v1 state (only `model_path`) loads. A missing model re-saves byte-identical extra state. |
@@ -515,7 +630,7 @@ Each slice is shippable on its own and leaves the plugin better than before.
 | **L1: provenance at download** | `finalize_download` writes the sidecar. The Tone3000 tab shows `Installed` / `Load` for models already present. | L0 |
 | **L2: slots + state v2 + missing** | `file_list` → shared slot table (process `OnceLock`). `AmpExtraState` v2, `resolve_model` with auto-relink. The missing banner with Locate / Choose. `file_select` `value_to_string`/`string_to_value` (MCP now *reads* the model name). One shared Tone3000 worker. | L0 |
 | **L3: Library panel (browse)** | `Installed` tab: rows, search, filters, sort, detail, Load, Reveal (with the launcher moved to common). The header `Library…` button. ◀/▶ over the view. Import replaces `Load Model…`. | L2 |
-| **L4: marks** | `library_marks` in common (or adopted from the preset spec). ★ in rows and header, tags, recents, favourites-first. | L3; coordinate with plugin-preset-library.md |
+| **L4: marks** | `library_marks` in common, built to plugin-preset-library.md §10.2's shape (the shared foundation slice F builds it first, together with `library_view`, the list widget and the reveal launcher). ★ in rows and header, tags, recents, favourites-first. | L3; F |
 | **L5: delete + re-download** | Confirm-in-place delete, in-use count, the "(deleted)" suffix. Re-download from the detail pane and the missing banner. Poll-based cross-process refresh. | L3 (L1 for re-download) |
 | **L6: labels via `text_to_value`** | `param_from_text` host call and the `ParamValue::Label` fallback. The fleet gets it; MCP can now *pick* the amp model by name. | L2 |
 | **L7a: `amp_models.list`** | Wire type + app handler + MCP tool + test. | L0 (L4 for the marks fields) |
@@ -537,5 +652,5 @@ preset and automation index (G3).
 | D6 | Library writes on MCP | list only · + marks · + delete/import/download | **list + set_marks.** Delete stays GUI-only (irreversible user files outside the project). Download needs the plugin's OAuth session. Revisit if an agent workflow needs it. |
 | D7 | Where the Library lives in the editor | overlay (like Tone3000) · a side drawer beside the viz · a separate editor page | **Overlay with two tabs.** It reuses the existing mechanism, fits 760×520, and folds the two model entry points into one. A persistent drawer would squeeze the scope at minimum size. |
 | D8 | `installed.json` `AmpModel` variant | start writing it · leave it · remove it | **Remove the unused variant** in L0. `library.json` supersedes it for amps, and two registries that disagree are worse than one. Drums keeps the registry. |
-| D9 | Marks store location/format | shared `library/marks.json` (§10) · per-plugin files · inside app `settings.json` | **Shared file in `resonance-common`,** because plugins cannot reach app settings and the preset library needs the same thing. Final path and schema are agreed with plugin-preset-library.md. |
+| D9 | Marks store location/format | shared `library/marks.json` (§10) · per-plugin files · inside app `settings.json` | **Shared file in `resonance-common`,** because plugins cannot reach app settings and the preset library needs the same thing. Path and schema are agreed with plugin-preset-library.md (§4.3 here, §4.5 there). |
 | D10 | Do recents come from project restores? | yes · only user picks | **Only user picks** (and loads with an editor open), so opening an old project does not reshuffle Recent. |

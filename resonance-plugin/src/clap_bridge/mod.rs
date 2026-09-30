@@ -238,6 +238,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         // plugins that don't opt in.
         let editor_factory = plugin.editor_factory();
         let extra_state_saver = plugin.extra_state_saver();
+        let param_text_source = plugin.param_text_source();
 
         Ok(ClapMainThread {
             host,
@@ -248,6 +249,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             editor: None,
             editor_serial: 0,
             extra_state_saver,
+            param_text_source,
         })
     }
 }

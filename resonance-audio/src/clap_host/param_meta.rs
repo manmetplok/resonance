@@ -151,3 +151,48 @@ pub fn choice_labels(
     }
     Some(labels)
 }
+
+/// Whether a plugin's answer to `text_to_value(input)` is a real match:
+/// the text the plugin displays for that value (`display`) says what the
+/// caller typed (nam-model-library.md §9.2).
+///
+/// Lenient plugins parse anything: JUCE's `getValueForText` turns `"loud"`
+/// into 0. So the answer only counts when it round-trips:
+///
+/// - the display equals the input, ignoring case, accents and outer space;
+/// - or the display starts with the input (3+ characters: a name prefix,
+///   `"friedman"` for `"Friedman BE-100 · standard"`);
+/// - or both begin with a number and they agree to the input's precision
+///   (`"-6 dB"` against `"-6.02 dB"`).
+pub fn label_round_trips(input: &str, display: &str) -> bool {
+    let fold = |s: &str| resonance_common::library_marks::vocab::fold(s.trim());
+    let (i, d) = (fold(input), fold(display));
+    if i.is_empty() {
+        return false;
+    }
+    if i == d || (i.chars().count() >= 3 && d.starts_with(&i)) {
+        return true;
+    }
+    match (leading_number(&i), leading_number(&d)) {
+        (Some((a, decimals)), Some((b, _))) => {
+            let tol = 0.5 * 10f64.powi(-(decimals as i32));
+            (a - b).abs() <= tol + f64::EPSILON * b.abs().max(1.0)
+        }
+        _ => false,
+    }
+}
+
+/// The number a text starts with, and how many decimals it was written
+/// with (`"-6.02 dB"` → `(-6.02, 2)`).
+fn leading_number(s: &str) -> Option<(f64, usize)> {
+    let s = s.trim_start();
+    let end = s
+        .char_indices()
+        .take_while(|(i, c)| c.is_ascii_digit() || *c == '.' || (*i == 0 && (*c == '-' || *c == '+')))
+        .map(|(i, c)| i + c.len_utf8())
+        .last()?;
+    let num = &s[..end];
+    let v: f64 = num.parse().ok()?;
+    let decimals = num.split_once('.').map(|(_, f)| f.len()).unwrap_or(0);
+    Some((v, decimals))
+}

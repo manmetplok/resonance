@@ -110,32 +110,10 @@ pub(crate) struct Candidate<'a> {
 // Text
 // ---------------------------------------------------------------------------
 
-/// Lowercase with common Latin diacritics folded (`"Café"` → `"cafe"`).
+/// Lowercase with Latin diacritics folded (`"Café"` → `"cafe"`): the one
+/// fold every library kind shares, `library_marks::vocab::fold`.
 pub fn fold(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars().flat_map(char::to_lowercase) {
-        match c {
-            'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => out.push('a'),
-            'ç' | 'ć' | 'č' => out.push('c'),
-            'ď' | 'đ' => out.push('d'),
-            'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => out.push('e'),
-            'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' => out.push('i'),
-            'ł' => out.push('l'),
-            'ñ' | 'ń' | 'ň' => out.push('n'),
-            'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' => out.push('o'),
-            'ř' => out.push('r'),
-            'ś' | 'š' | 'ş' => out.push('s'),
-            'ť' => out.push('t'),
-            'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' => out.push('u'),
-            'ý' | 'ÿ' => out.push('y'),
-            'ź' | 'ż' | 'ž' => out.push('z'),
-            'ß' => out.push_str("ss"),
-            'æ' => out.push_str("ae"),
-            'œ' => out.push_str("oe"),
-            _ => out.push(c),
-        }
-    }
-    out
+    resonance_common::library_marks::vocab::fold(s)
 }
 
 /// Folded alphanumeric words of `s`.

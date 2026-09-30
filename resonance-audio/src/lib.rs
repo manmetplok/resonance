@@ -67,7 +67,7 @@ pub use resonance_common::AudioFormat;
 /// place one exists is the plugin's own `value_to_text` output; the app
 /// re-derives it when the engine echoes fresh text for a value it just
 /// wrote (`AudioEvent::PluginParamText`).
-pub use clap_host::unit_from_text;
+pub use clap_host::{label_round_trips, unit_from_text};
 /// The per-clip gain bounds `SetClipGain` clamps to; the app clamps its
 /// own gain edits to the same range so its mirror never disagrees with
 /// what the engine stores.

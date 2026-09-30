@@ -33,6 +33,7 @@ resonance-metering = { path = "../../resonance-metering" }
 parking_lot.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tracing.workspace = true
 # Not editor-gated: `initialize()` seeds the model browser from the
 # downloads directory, and a headless build has to find it too.
 dirs.workspace = true

@@ -22,6 +22,14 @@ pub trait NamInference: Send {
     }
 
     fn reset(&mut self);
+
+    /// Whether this model passes its input through unchanged. The
+    /// processor treats an identity model exactly like no model (stereo
+    /// dry path, no mono sum, no DC blocking) while still running the
+    /// swap crossfade into and out of it.
+    fn is_identity(&self) -> bool {
+        false
+    }
 }
 
 /// Validate that buffer dimensions are consistent for matrix-vector operations.

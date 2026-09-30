@@ -6,8 +6,10 @@ pub mod features;
 pub mod formatters;
 pub mod gui;
 pub mod host;
+pub mod library_view;
 pub mod loader;
 mod logging;
+pub mod nam_rows;
 pub mod param;
 pub mod plugin;
 pub mod presets;
@@ -21,6 +23,10 @@ pub mod editor_widgets;
 /// The `wayland-plugin-gui` -> `PluginEditor` adapter every plugin editor needs.
 #[cfg(feature = "editor-widgets")]
 pub mod editor_host;
+
+/// egui skin over `library_view` (list, search, facets, confirm, tags).
+#[cfg(feature = "editor-widgets")]
+pub mod library_ui;
 
 /// Shared preset bar (picker + Save/Rename/Delete) for plugin editors.
 #[cfg(feature = "editor-widgets")]
@@ -41,9 +47,12 @@ pub use presets::{
 pub use state::{ParamRename, STATE_VERSION};
 pub use plugin::{
     ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
-    OutputPortSpec, PluginEvent, ResonancePlugin, TempoInfo,
+    OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
+/// The shared marks store and file-manager launcher, re-exported so a
+/// plugin reaches them without its own `resonance-common` dependency.
+pub use resonance_common::{library_marks, reveal};
 pub use smoother::{Smoother, SmoothingStyle};
 
 // Re-export clack-plugin crate so the export_clap! macro can reference it

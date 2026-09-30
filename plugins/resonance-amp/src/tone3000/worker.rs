@@ -12,7 +12,6 @@
 //! loader thread picks the new .nam up and primes it.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -45,8 +44,20 @@ pub enum Command {
     LoadMore,
     /// Load the model list for a tone; results go to `State::models`.
     ListModels(i64),
-    /// Download a model to disk and queue it for loading.
-    Download(Model),
+    /// Download a model to disk, index it, and hand the new library entry
+    /// to `done` (the requesting instance loads it).
+    Download { model: Model, done: DownloadDone },
+    /// Re-download a Tone3000 model by id (nam-model-library.md §6.2): the
+    /// pre-signed `model_url` rotates, so the tone is re-listed first to
+    /// find the model and a fresh URL. `title_hint` fills the sidecar's
+    /// tone title when the tone is not in the current search results (the
+    /// missing banner knows the model's saved name).
+    Redownload {
+        tone_id: i64,
+        model_id: i64,
+        title_hint: Option<String>,
+        done: DownloadDone,
+    },
     /// Gracefully stop the worker thread.
     Shutdown,
 }
@@ -168,14 +179,28 @@ pub fn apply_search_page(state: &mut State, page: SearchPage, append: bool) {
     };
 }
 
-/// Shared handles the worker needs to reach into to hand off a freshly
-/// downloaded model. These come from the plugin's own state so the
-/// download → load path reuses the existing loader thread wholesale.
-pub struct PluginHooks {
-    pub file_list: Arc<Mutex<Vec<String>>>,
-    pub model_path: Arc<Mutex<String>>,
-    pub load_request: Arc<AtomicI32>,
-    pub file_select_setter: Arc<dyn Fn(i32) + Send + Sync>,
+/// What to do with a finished download: called on the worker thread with
+/// the new library entry. The requesting editor passes one that points
+/// its own instance's `file_select` at the entry's slot, so one shared
+/// worker serves every amp.
+pub type DownloadDone = Arc<dyn Fn(&resonance_common::nam_library::Entry) + Send + Sync>;
+
+/// The one Tone3000 worker of this process, created on first use (the
+/// first editor open) and shared by every amp instance while any holds it
+/// (nam-model-library.md G8: N amps used to mean N workers, each with its
+/// own token copy). Held by the editor factories, so it lives as long as
+/// the plugins that opened an editor and is joined when the last goes.
+pub fn shared(library: Arc<crate::library::SharedLibrary>) -> Arc<WorkerHandle> {
+    static SHARED: std::sync::OnceLock<Mutex<std::sync::Weak<WorkerHandle>>> =
+        std::sync::OnceLock::new();
+    let slot = SHARED.get_or_init(|| Mutex::new(std::sync::Weak::new()));
+    let mut weak = slot.lock();
+    if let Some(w) = weak.upgrade() {
+        return w;
+    }
+    let worker = Arc::new(spawn(library));
+    *weak = Arc::downgrade(&worker);
+    worker
 }
 
 pub struct WorkerHandle {
@@ -199,19 +224,33 @@ impl Drop for WorkerHandle {
     }
 }
 
-pub fn spawn(hooks: PluginHooks) -> WorkerHandle {
+pub fn spawn(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
+    spawn_with(library, true)
+}
+
+/// A worker that does not restore the saved Tone3000 session: nothing is
+/// read from the user's config until they press Connect. For headless
+/// editor tests.
+#[doc(hidden)]
+pub fn spawn_offline(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
+    spawn_with(library, false)
+}
+
+fn spawn_with(library: Arc<crate::library::SharedLibrary>, restore: bool) -> WorkerHandle {
     let (tx, rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(State::default()));
     let state_for_thread = state.clone();
 
     let join = std::thread::Builder::new()
         .name("amp-tone3000".into())
-        .spawn(move || worker_loop(rx, state_for_thread, hooks))
+        .spawn(move || worker_loop(rx, state_for_thread, library))
         .expect("spawn amp-tone3000 worker");
 
     // Kick off a token-restore attempt immediately so a returning user
     // sees "Connected" without having to click anything.
-    let _ = tx.send(Command::TryRestore);
+    if restore {
+        let _ = tx.send(Command::TryRestore);
+    }
 
     WorkerHandle {
         tx,
@@ -220,7 +259,11 @@ pub fn spawn(hooks: PluginHooks) -> WorkerHandle {
     }
 }
 
-fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHooks) {
+fn worker_loop(
+    rx: Receiver<Command>,
+    state: Arc<Mutex<State>>,
+    library: Arc<crate::library::SharedLibrary>,
+) {
     let client = Tone3000Client::new();
     let mut tokens: Option<StoredTokens> = None;
     let mut active = ActiveSearch::default();
@@ -312,7 +355,55 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
                     Err(e) => set_error(&state, &format!("list models: {e}")),
                 }
             }
-            Command::Download(model) => {
+            Command::Redownload {
+                tone_id,
+                model_id,
+                title_hint,
+                done,
+            } => {
+                let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
+                    continue;
+                };
+                state.lock().status = Status::LoadingModels;
+                let models = match client.list_models(&tok, tone_id, ArchitectureFilter::All) {
+                    Ok(m) => m,
+                    Err(ClientError::Unauthorized) => {
+                        handle_unauthorized(&mut tokens, &state);
+                        continue;
+                    }
+                    Err(e) => {
+                        set_error(&state, &format!("re-download: list models: {e}"));
+                        continue;
+                    }
+                };
+                let Some(model) = find_redownload(&models, model_id).cloned() else {
+                    set_error(
+                        &state,
+                        &format!("re-download: model {model_id} is no longer on tone {tone_id}"),
+                    );
+                    continue;
+                };
+                let Some(url) = model.model_url.clone() else {
+                    set_error(&state, "model has no download URL");
+                    continue;
+                };
+                state.lock().status = Status::Downloading(model.display_label());
+                match client.download_model(&tok, &url) {
+                    Ok(bytes) => match finalize_download(&model, &bytes, &library, &state) {
+                        Ok(mut entry) => {
+                            if let Some(hint) = title_hint.as_deref() {
+                                entry = fill_title(&library, entry, &model, hint);
+                            }
+                            state.lock().status = Status::Connected;
+                            done(&entry);
+                        }
+                        Err(e) => set_error(&state, &e),
+                    },
+                    Err(ClientError::Unauthorized) => handle_unauthorized(&mut tokens, &state),
+                    Err(e) => set_error(&state, &format!("download: {e}")),
+                }
+            }
+            Command::Download { model, done } => {
                 let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
                     continue;
                 };
@@ -324,10 +415,12 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
 
                 match client.download_model(&tok, &url) {
                     Ok(bytes) => {
-                        if let Err(e) = finalize_download(&model, &bytes, &hooks, &state) {
-                            set_error(&state, &e);
-                        } else {
-                            state.lock().status = Status::Connected;
+                        match finalize_download(&model, &bytes, &library, &state) {
+                            Ok(entry) => {
+                                state.lock().status = Status::Connected;
+                                done(&entry);
+                            }
+                            Err(e) => set_error(&state, &e),
                         }
                     }
                     Err(ClientError::Unauthorized) => handle_unauthorized(&mut tokens, &state),
@@ -416,38 +509,111 @@ fn set_error(state: &Arc<Mutex<State>>, msg: &str) {
     s.status = Status::Error(msg.to_string());
 }
 
-/// Write the downloaded bytes to the models dir and trigger the amp
-/// loader to swap the new file in.
+/// Write the downloaded bytes and their provenance sidecar into the
+/// library's downloads directory, rescan, and return the new entry.
 fn finalize_download(
     model: &Model,
     bytes: &[u8],
-    hooks: &PluginHooks,
+    library: &crate::library::SharedLibrary,
     state: &Arc<Mutex<State>>,
-) -> Result<(), String> {
-    let dir = super::models_dir().ok_or_else(|| "no data dir".to_string())?;
+) -> Result<resonance_common::nam_library::Entry, String> {
+    let dir = library
+        .root()
+        .map(|r| r.join(resonance_common::nam_library::TONE3000_DIR))
+        .ok_or_else(|| "no data dir".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
     let filename = sanitize_filename(&model.display_label(), model.id);
     let dest = dir.join(filename);
-    auth::write_all_to(&dest, bytes)?;
+    // Written beside the target and renamed into place, so a scan (or a
+    // crash) never sees a half-written model under the real name.
+    resonance_common::nam_library::write_model_file(&dest, bytes).map_err(|e| e.to_string())?;
 
-    // Rescan the directory so file_list reflects the new file, then
-    // point file_select + load_request at it so the existing loader
-    // thread picks it up and primes it like any manual load would.
-    let files = resonance_common::scan_directory(&dir, "nam");
-    let dest_str = dest.to_string_lossy().into_owned();
-    let idx = files.iter().position(|f| f == &dest_str).unwrap_or(0) as i32;
-
-    *hooks.file_list.lock() = files;
-    *hooks.model_path.lock() = dest_str.clone();
-    (hooks.file_select_setter)(idx);
-    hooks.load_request.store(idx, Ordering::Release);
-
+    // Provenance: everything Tone3000 knows that the file does not
+    // (nam-model-library.md §4.1). The tone is the one whose model list
+    // the download came from.
+    let tone = state
+        .lock()
+        .tones
+        .iter()
+        .find(|t| t.id == model.tone_id)
+        .cloned();
+    let sidecar = sidecar_for(model, tone.as_ref(), resonance_common::library_marks::now_unix());
+    if let Err(e) = resonance_common::nam_library::write_sidecar(&dest, &sidecar) {
+        tracing::warn!("could not write {}: {e}", dest.display());
+    }
+    library
+        .rescan()
+        .map_err(|e| format!("model library rescan failed: {e}"))?;
+    let entry = library
+        .read()
+        .by_path(&dest)
+        .cloned()
+        .ok_or_else(|| format!("{} did not index", dest.display()))?;
     state.lock().last_downloaded = Some(dest);
-    Ok(())
+    Ok(entry)
 }
 
-fn sanitize_filename(label: &str, id: i64) -> String {
+/// The model a re-download wants, in a freshly listed tone.
+pub fn find_redownload(models: &[Model], model_id: i64) -> Option<&Model> {
+    models.iter().find(|m| m.id == model_id)
+}
+
+/// Give a re-downloaded file's sidecar the saved tone title when the tone
+/// was not in the search results: `hint` is the model's saved display
+/// name, `"<title> · <size>"`.
+fn fill_title(
+    library: &crate::library::SharedLibrary,
+    entry: resonance_common::nam_library::Entry,
+    model: &Model,
+    hint: &str,
+) -> resonance_common::nam_library::Entry {
+    let Some(mut sc) = resonance_common::nam_library::read_sidecar(&entry.path) else {
+        return entry;
+    };
+    if sc.tone_title.is_some() {
+        return entry;
+    }
+    let title = match model.size.as_deref() {
+        Some(size) => hint
+            .strip_suffix(&format!(" · {size}"))
+            .unwrap_or(hint)
+            .to_string(),
+        None => hint.to_string(),
+    };
+    sc.tone_title = Some(title);
+    if resonance_common::nam_library::write_sidecar(&entry.path, &sc).is_err()
+        || library.rescan().is_err()
+    {
+        return entry;
+    }
+    let refreshed = library.read().by_path(&entry.path).cloned();
+    refreshed.unwrap_or(entry)
+}
+
+/// The provenance sidecar for a downloaded `model` of `tone` at `now`
+/// (Unix seconds). Pure, so the mapping is testable without a network.
+pub fn sidecar_for(
+    model: &Model,
+    tone: Option<&Tone>,
+    now: i64,
+) -> resonance_common::nam_library::Sidecar {
+    resonance_common::nam_library::Sidecar {
+        source: resonance_common::nam_library::SOURCE_TONE3000.to_string(),
+        tone_id: Some(model.tone_id),
+        model_id: Some(model.id),
+        tone_title: tone.and_then(|t| t.title.clone()),
+        author: tone.map(|t| t.display_author().to_string()),
+        gear: tone.and_then(|t| t.gear.clone()),
+        model_name: model.name.clone(),
+        size: model.size.clone(),
+        downloaded_at: resonance_common::library_marks::format_timestamp(now),
+    }
+}
+
+/// The file name a download is saved under. Unchanged by the library
+/// work: existing downloads keep their names (nam-model-library.md §4.1).
+pub fn sanitize_filename(label: &str, id: i64) -> String {
     // Conservative: keep ASCII alphanumerics, `-`, `_`, `.`; replace the
     // rest with `_`. Always append the model id so downloads with the
     // same label don't collide.

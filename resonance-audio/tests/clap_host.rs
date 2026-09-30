@@ -30,6 +30,8 @@ mod clap_thread_roles;
 mod clap_param_flush;
 #[path = "clap_host/clap_param_meta.rs"]
 mod clap_param_meta;
+#[path = "clap_host/param_from_text.rs"]
+mod param_from_text;
 #[path = "clap_host/clap_plugin_drop_order.rs"]
 mod clap_plugin_drop_order;
 #[path = "clap_host/plugin_binaries.rs"]

@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod amp_models;
 mod arrangement;
 mod assist;
 /// `automation.*` — parameter automation lanes (automation-control-api.md).
@@ -91,6 +92,9 @@ pub(crate) use job::export_kind_to_rpc;
 pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
+pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};
+pub(crate) use amp_models::roots_for as amp_library_roots;
+pub(crate) use track::{expire_pending_labels, label_resolved};
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
 pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
@@ -108,6 +112,10 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
             // still find them. A reader blocked in `job.wait` on a
             // dropped terminal job resolves to `not_found`.
             app.control.jobs.on_disconnect(conn);
+            // A label the plugin is still resolving for this client: the
+            // reply has nowhere to go, so the edit it would make is not
+            // made either.
+            app.control.pending_labels.retain(|_, p| p.conn != conn);
             Task::none()
         }
         ControlMessage::Request(request) => {
@@ -116,8 +124,17 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
                 request,
                 reply,
             } = request;
+            // A handler that has to wait for the engine (a label only the
+            // plugin can read) takes the reply channel and answers later.
+            app.control.current_reply = Some(reply.clone());
+            app.control.current_conn = Some(conn);
+            app.control.deferred = false;
             let (response, task) = execute(app, conn, &request);
-            reply.send(response);
+            app.control.current_reply = None;
+            app.control.current_conn = None;
+            if !std::mem::take(&mut app.control.deferred) {
+                reply.send(response);
+            }
             task
         }
     }
@@ -170,6 +187,13 @@ pub fn execute(
     // fallback for `job.wait` — the socket transport serves the
     // blocking form on its reader threads).
     if let Some(response) = job::try_handle(app, request) {
+        return (response, Task::none());
+    }
+
+    // The per-user NAM model library (nam-model-library.md §9.3): about
+    // the machine, not the project — no project needed, no undo entry,
+    // no revision bump.
+    if let Some(response) = amp_models::try_handle(app, request) {
         return (response, Task::none());
     }
 
@@ -431,6 +455,9 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
         // find out what it had to build with before opening a project
         // (todo #1236).
         || methods::plugins::METHODS.contains(&method)
+        // `amp_models.*` is the user's model library, which no project
+        // owns (nam-model-library.md §9.3).
+        || methods::amp_models::METHODS.contains(&method)
         || resonance_control::job::METHODS.contains(&method)
 }
 

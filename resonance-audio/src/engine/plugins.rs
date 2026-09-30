@@ -525,6 +525,46 @@ pub(crate) fn handle_move_plugin(
     }
 }
 
+/// Answer an `AudioCommand::ResolvePluginParamText` query with an
+/// `AudioEvent::PluginParamTextResolved`: which value does the plugin say
+/// `text` names, and does its own display of that value say `text` back?
+/// Held under the instance lock, like `param_text`, because both calls are
+/// main-thread calls that must not race `process()`; when the audio thread
+/// holds the lock the query is re-enqueued rather than blocking it,
+/// exactly as a parameter set is.
+pub(crate) fn handle_resolve_param_text(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    param_id: u32,
+    text: String,
+    token: u64,
+) {
+    let answer = |value: Option<f64>| {
+        let _ = ctx
+            .event_tx
+            .send(AudioEvent::PluginParamTextResolved { token, value });
+    };
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(inst) = mutex.try_lock() {
+            let value = inst.0.param_from_text(param_id, &text).filter(|&v| {
+                inst.0
+                    .param_text(param_id, v)
+                    .is_some_and(|shown| crate::label_round_trips(&text, &shown))
+            });
+            answer(value);
+        } else {
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::ResolvePluginParamText {
+                instance_id,
+                param_id,
+                text,
+                token,
+            });
+        }
+    } else {
+        answer(None);
+    }
+}
+
 pub(crate) fn handle_set_plugin_param(
     ctx: &HandlerCtx,
     instance_id: PluginInstanceId,

@@ -160,10 +160,23 @@ PRESET_ROOT = os.path.join(
     tempfile.gettempdir(), f"resonance-test-plugin-presets-{os.getpid()}"
 )
 
+# The same for the NAM model library and the shared library marks store
+# (favourites/tags): a test that goes through a plugin binary it cannot hand
+# a library to (the clap_host tests, the app's plugin instances) must never
+# index or mark the user's real ~/.local/share/resonance/amp-models.
+AMP_MODEL_ROOT = os.path.join(
+    tempfile.gettempdir(), f"resonance-test-amp-models-{os.getpid()}"
+)
+LIBRARY_ROOT = os.path.join(
+    tempfile.gettempdir(), f"resonance-test-library-{os.getpid()}"
+)
+
 
 def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
     env = dict(os.environ)
     env.setdefault("RESONANCE_PLUGIN_PRESET_DIR", PRESET_ROOT)
+    env.setdefault("RESONANCE_AMP_MODEL_DIR", AMP_MODEL_ROOT)
+    env.setdefault("RESONANCE_LIBRARY_DIR", LIBRARY_ROOT)
     proc = subprocess.run(
         [exe, *extra],
         cwd=cwd,

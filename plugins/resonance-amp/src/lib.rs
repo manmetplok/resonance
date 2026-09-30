@@ -1,6 +1,5 @@
 /// Resonance Amp - A guitar amp simulator CLAP plugin using NAM models.
 use parking_lot::Mutex;
-use std::path::Path;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
@@ -10,7 +9,10 @@ use resonance_plugin::*;
 // directly — the same entry point `process()` uses, minus the CLAP
 // buffer plumbing.
 pub mod dsp;
+pub mod library_rows;
+pub mod library;
 mod loader;
+pub mod model_ref;
 pub mod models;
 pub mod nam;
 pub mod params;
@@ -24,6 +26,7 @@ pub mod editor;
 
 use dsp::AmpProcessor;
 use loader::{LoaderDeps, LoaderHandle};
+use model_ref::{ModelRef, ModelState, ModelStatus};
 use nam::NamInference;
 use params::AmpParams;
 use tuner::Tuner;
@@ -33,17 +36,13 @@ pub struct ResonanceAmp {
     /// Parameters — shared with the editor thread via `Arc` so the UI can
     /// read and write from a separate thread. The `FloatParam` / `IntParam`
     /// fields use atomic storage internally, so `&AmpParams` is safe to use
-    /// concurrently from audio + UI.
+    /// concurrently from audio + UI. Also carries the model reference, the
+    /// model status and the shared library.
     params: Arc<AmpParams>,
     /// Which preset is loaded and whether it has been edited since,
     /// chained in front of this plugin's own `AmpExtraState` so both ride
     /// along in `save_state` (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
-    /// Tone3000 API browser worker, lazily created on first editor open.
-    /// Held as `Option` because it depends on `Arc<AmpParams>` and is only
-    /// useful with the editor feature enabled.
-    #[cfg(feature = "editor")]
-    tone3000: Option<Arc<tone3000::worker::WorkerHandle>>,
     /// Lock-free meters + scope + transfer curve + tuner state shared
     /// with the editor.
     viz: Arc<AmpViz>,
@@ -56,10 +55,10 @@ pub struct ResonanceAmp {
     processor: AmpProcessor,
 
     model_mailbox: Mailbox<Box<dyn NamInference>>,
-    model_name: Arc<Mutex<String>>,
     /// Last file_select param value we acted on (to detect changes).
     last_file_index: i32,
-    /// Atomic load request for the persistent loader thread (-1 = no request).
+    /// Atomic load request for the persistent loader thread (-1 = no
+    /// request). The value is a library slot.
     load_request: Arc<AtomicI32>,
     /// Handle to the persistent loader thread.
     loader: Option<LoaderHandle>,
@@ -72,33 +71,76 @@ pub struct ResonanceAmp {
 }
 
 impl ResonanceAmp {
-    /// Synchronously load a model, prime it, sample its transfer curve,
-    /// and place it in the mailbox. Used only from `initialize` so the
-    /// first model is available before `process` runs.
-    fn load_model_sync(&self, path: String) {
-        match nam::parse::load_model_from_file(&path) {
-            Ok(loaded) => {
-                let mut model = loaded.model;
-                loader::note_model_sample_rate(&self.viz, loaded.sample_rate);
-                model.reset();
-                loader::prime_model(&mut *model, 2048);
-                let curve = loader::sample_transfer_curve(&mut *model);
-                self.viz.store_transfer_curve(curve);
-                model.reset();
-                loader::prime_model(&mut *model, 2048);
+    /// Build an instance over a given shared library. `new()` uses the
+    /// process-wide one at the default root; tests pass their own.
+    pub fn with_library(library: Arc<library::SharedLibrary>) -> Self {
+        let params = Arc::new(AmpParams::with_library(library));
+        let load_request = Arc::new(AtomicI32::new(-1));
+        // The preset identity wraps the model-reference saver rather than
+        // replacing it: chaining is why `with_extra` exists.
+        let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(
+            Arc::new(AmpExtraState {
+                model_ref: params.model_ref.clone(),
+                pending_ref: params.pending_ref.clone(),
+            }),
+        );
 
-                let name = Path::new(&path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                *self.model_name.lock() = name;
-                self.model_mailbox.post(model);
-            }
-            Err(e) => {
-                eprintln!("Failed to load NAM model: {e}");
-                *self.model_name.lock() = format!("Error: {e}");
+        Self {
+            params,
+            presets,
+            viz: AmpViz::new(),
+            tuner: None,
+            processor: AmpProcessor::new(),
+            model_mailbox: Mailbox::new(),
+            last_file_index: -1,
+            load_request,
+            loader: None,
+            input_scratch: Vec::new(),
+            input_scratch_r: Vec::new(),
+        }
+    }
+
+    /// What the instance is playing, or why not.
+    pub fn model_status(&self) -> ModelStatus {
+        self.params.status.lock().clone()
+    }
+
+    /// Resolve the saved model reference against the library and load
+    /// what it names (nam-model-library.md §5.2), synchronously, so the
+    /// first `process` call has a model. A reference that does not resolve
+    /// is kept verbatim and shown as missing.
+    ///
+    /// Read-only on disk: resolution runs against the cached index
+    /// (refreshed with one `stat` of `library.json`); nothing is scanned,
+    /// hashed beyond the referenced file itself, pruned or written.
+    fn restore_model(&mut self) {
+        self.params.library.refresh();
+        let reference = self
+            .params
+            .pending_ref
+            .lock()
+            .take()
+            .unwrap_or_else(|| self.params.model_ref.lock().clone());
+        match loader::apply_reference(&self.params, &self.viz, reference, false) {
+            Some(model) => self.processor.install_initial_model(model),
+            None => {
+                // Nothing to play: a model left from an earlier activation
+                // must not keep playing under a reference that says
+                // otherwise.
+                let loaded = self.params.status.lock().state == ModelState::Loaded;
+                if !loaded && self.processor.has_model() {
+                    self.processor
+                        .install_initial_model(Box::new(loader::Passthrough));
+                }
             }
         }
+    }
+}
+
+impl Drop for ResonanceAmp {
+    fn drop(&mut self) {
+        // Leave the "used in N open amps" count.
+        self.params.library.set_usage(self.params.instance_id, None);
     }
 }
 
@@ -120,46 +162,7 @@ impl ResonancePlugin for ResonanceAmp {
     const INPUT_CHANNELS: Option<u32> = Some(2);
 
     fn new() -> Self {
-        let params = Arc::new(AmpParams::default());
-        let load_request = Arc::new(AtomicI32::new(-1));
-        // The preset identity wraps the model-path saver rather than
-        // replacing it: chaining is why `with_extra` exists.
-        let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(Arc::new(
-            AmpExtraState {
-                model_path: params.model_path.clone(),
-            },
-        ));
-
-        #[cfg(feature = "editor")]
-        let tone3000 = {
-            let params_for_setter = params.clone();
-            let hooks = tone3000::worker::PluginHooks {
-                file_list: params.file_list.clone(),
-                model_path: params.model_path.clone(),
-                load_request: load_request.clone(),
-                file_select_setter: Arc::new(move |v| {
-                    params_for_setter.file_select.set_value(v);
-                }),
-            };
-            Some(Arc::new(tone3000::worker::spawn(hooks)))
-        };
-
-        Self {
-            params,
-            presets,
-            #[cfg(feature = "editor")]
-            tone3000,
-            viz: AmpViz::new(),
-            tuner: None,
-            processor: AmpProcessor::new(),
-            model_mailbox: Mailbox::new(),
-            model_name: Arc::new(Mutex::new(String::new())),
-            last_file_index: -1,
-            load_request,
-            loader: None,
-            input_scratch: Vec::new(),
-            input_scratch_r: Vec::new(),
-        }
+        Self::with_library(library::shared())
     }
 
     fn param_count(&self) -> usize {
@@ -182,39 +185,23 @@ impl ResonancePlugin for ResonanceAmp {
         self.input_scratch_r = vec![0.0; max_buffer_size as usize];
         self.viz.store_engine_sample_rate(sample_rate);
 
-        let path = self.params.model_path.lock().clone();
-        if !path.is_empty() {
-            let idx = rescan_directory(&path, "nam", &self.params.file_list);
-            self.last_file_index = idx as i32;
-            self.params.file_select.set_value(idx as i32);
-
-            // Block on loading the model during init so the first
-            // `process` call has an active model to run.
-            self.load_model_sync(path);
-            if let Some(model) = self.model_mailbox.take() {
-                self.processor.install_initial_model(model);
-            }
-        } else {
-            // No persisted model. Seed the browser from the downloads
-            // directory anyway, so a freshly added amp offers the
-            // profiles the user has already pulled down instead of an
-            // empty ◀/▶ and "(no model loaded)" with no way out but the
-            // file dialog.
-            if let Some(dir) = models::models_dir() {
-                *self.params.file_list.lock() = resonance_common::scan_directory(&dir, "nam");
-            }
-        }
+        // Resolve the saved reference against the cached index and block
+        // on loading it, so the first `process` call has an active model to
+        // run. A reference that resolves into the library also re-derives
+        // `file_select` from it: in a project the reference wins over a
+        // stale slot value. Read-only: activation never scans or writes the
+        // library (scans happen off this thread, on demand).
+        self.restore_model();
 
         // Baseline the change detector against what the selector ACTUALLY
         // holds, on every activation and whether or not a model was
         // restored above.
         //
         // `process()` reads any `file_select != last_file_index` as "the
-        // user picked a new model" and loads `file_list[file_select]`.
-        // Leaving the baseline at its `new()` value of -1 (which is what
-        // the empty-path branch used to do) therefore makes the FIRST
-        // `process()` call fire a load request for index 0 — the first
-        // file in the directory — regardless of what is loaded.
+        // user picked a new model" and loads that slot. Leaving the
+        // baseline at its `new()` value of -1 would make the FIRST
+        // `process()` call fire a load request for slot 0 regardless of
+        // what is loaded.
         //
         // That first call is not where you would look for it either. The
         // mixer skips the arrangement render while the transport is
@@ -231,7 +218,6 @@ impl ResonancePlugin for ResonanceAmp {
         self.loader = Some(loader::start(LoaderDeps {
             params: self.params.clone(),
             mailbox: self.model_mailbox.clone(),
-            model_name: self.model_name.clone(),
             load_request: self.load_request.clone(),
             viz: self.viz.clone(),
         }));
@@ -277,8 +263,10 @@ impl ResonancePlugin for ResonanceAmp {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            self.load_request
-                .store(current_index, std::sync::atomic::Ordering::Release);
+            self.load_request.store(
+                current_index | loader::FROM_PARAM,
+                std::sync::atomic::Ordering::Release,
+            );
         }
 
         self.processor.set_gain_targets(
@@ -317,15 +305,19 @@ impl ResonancePlugin for ResonanceAmp {
         Some(self.presets.clone())
     }
 
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // The params are shared, so a host reads a live amp's model name
+        // (`file_select` → slot → name) and picks one by name while the
+        // plugin is in the audio processor (nam-model-library.md §9).
+        Some(Arc::new(AmpParamText(self.params.clone())))
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
-        let tone3000 = self.tone3000.clone()?;
         Some(Arc::new(editor::AmpEditorFactory::new(
             self.params.clone(),
-            self.model_name.clone(),
             self.load_request.clone(),
             self.viz.clone(),
-            tone3000,
             self.presets.clone(),
         )))
     }
@@ -333,26 +325,52 @@ impl ResonancePlugin for ResonanceAmp {
 
 use resonance_dsp::linear_to_db;
 
-/// Persists the NAM model path alongside the plugin's params. Holds only
-/// the shared `Arc<Mutex<String>>` so the CLAP bridge can serialize it
-/// while the plugin is in the audio processor.
+/// Parameter text over the shared `AmpParams`, for the CLAP bridge while
+/// the plugin is active.
+struct AmpParamText(Arc<AmpParams>);
+
+impl resonance_plugin::ParamTextSource for AmpParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= params::PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
+    }
+}
+
+/// Persists the model reference (state v2: `model_path` + optional
+/// `model_id` / `model_name` / `model_source`) alongside the plugin's
+/// params. Holds only the shared `Arc<Mutex<ModelRef>>` so the CLAP bridge
+/// can serialize it while the plugin is in the audio processor.
 struct AmpExtraState {
-    model_path: Arc<Mutex<String>>,
+    model_ref: Arc<Mutex<ModelRef>>,
+    pending_ref: Arc<Mutex<Option<ModelRef>>>,
 }
 
 impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
-        map.insert(
-            "model_path".to_string(),
-            serde_json::Value::String(self.model_path.lock().clone()),
-        );
+        // A reference not resolved yet is what is about to play.
+        match self.pending_ref.lock().clone() {
+            Some(pending) => pending.save_into(&mut map),
+            None => self.model_ref.lock().save_into(&mut map),
+        }
         map
     }
 
     fn load(&self, state: &serde_json::Value) {
-        if let Some(path) = state.get("model_path").and_then(|v| v.as_str()) {
-            *self.model_path.lock() = path.to_string();
+        // A v1 document carries only `model_path`; the other keys are
+        // optional. A document with no `model_path` at all leaves the
+        // reference alone, as before v2.
+        // Never written straight into what plays: `initialize` (inactive)
+        // or the loader thread (active) resolves it and records the
+        // outcome, so `save_state` never names a model that is not playing.
+        if let Some(reference) = ModelRef::load_from(state) {
+            *self.pending_ref.lock() = Some(reference);
         }
     }
 }

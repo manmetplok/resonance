@@ -538,6 +538,13 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    /// The answer to `AudioCommand::ResolvePluginParamText` with this
+    /// `token`: the value the plugin says the text names, when it
+    /// round-trips.
+    PluginParamTextResolved {
+        token: u64,
+        value: Option<f64>,
+    },
     /// A plugin instance's editor window changed state (ba todo #1347).
     /// This is the ONLY source of truth for "is this plugin's editor
     /// open" — the app must mirror it rather than assuming a sent

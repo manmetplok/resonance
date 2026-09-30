@@ -1,14 +1,11 @@
-//! Top header bar: title, Load Model button, Prev/Next browser, and
+//! Top header bar: title, the model entry points, the preset bar, ◀/▶ and
 //! the current model name. Extracted from `editor/mod.rs` so the main
 //! module stays focused on layout.
 
-use std::path::Path;
-use std::sync::atomic::Ordering;
-
 use plugin_gui_core::egui;
 
-use super::theme;
-use super::AmpEditorApp;
+use super::{actions, theme, AmpEditorApp};
+use crate::library_rows::{step_in_view, view_counter};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -24,29 +21,19 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        if ui.button("Load Model…").clicked() {
-            load_model_clicked(app);
-        }
-
-        ui.add_space(8.0);
-
-        // Accent-coloured rich-text button so the Tone3000 entry point
-        // is visually distinct from the plain "Load Model…" button
-        // next to it. The label is the darkest surface token rather than
-        // pure black: this is the fleet's only solid-accent fill, and the
-        // canonical accent is a much darker violet than the blue it
-        // replaced (ba todo #1338) — 5.7:1 against it, still past AA, but
-        // the black-on-cyan headroom is gone, so the label has to be the
-        // dark end of the palette and cannot drift lighter.
-        let tone3000_btn = egui::Button::new(
-            egui::RichText::new("Browse Tone3000…")
+        // One entry point for every model source (nam-model-library.md
+        // §6.1). The fleet's only solid-accent fill; the label is the darkest
+        // surface token because the canonical accent is a dark violet
+        // (5.7:1 against it, past AA; ba todo #1338).
+        let library_btn = egui::Button::new(
+            egui::RichText::new("Library…")
                 .color(theme::BG_0)
                 .strong()
                 .size(13.0),
         )
         .fill(theme::ACCENT);
-        if ui.add(tone3000_btn).clicked() {
-            app.tone3000_panel.open = true;
+        if ui.add(library_btn).clicked() {
+            app.open_library();
         }
 
         ui.add_space(8.0);
@@ -73,68 +60,74 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        let list_len = app.params.file_list.lock().len();
-        let enabled = list_len > 1;
-        ui.add_enabled_ui(enabled, |ui| {
+        // ◀/▶ walk the Library panel's current view (search, filters,
+        // sort, favourites first), not slot order: "next" is what the user
+        // sees next (§5.1). They write the slot number.
+        app.refresh_rows();
+        let mut status = app.params.status.lock().clone();
+        // A model deleted from the library keeps playing here until it is
+        // reloaded (§7.3); say so.
+        status.deleted = status.state == crate::model_ref::ModelState::Loaded
+            && !status.external
+            && status
+                .id
+                .as_deref()
+                .is_some_and(|id| app.params.library.read().entry(id).is_none());
+        let loaded_id = if status.state == crate::model_ref::ModelState::Loaded {
+            status.id.clone()
+        } else {
+            None
+        };
+        ui.add_enabled_ui(app.browser.view_len() > 0, |ui| {
             if ui.button("◀").clicked() {
-                seek_relative(app, -1);
+                step(app, loaded_id.as_deref(), -1);
             }
             if ui.button("▶").clicked() {
-                seek_relative(app, 1);
+                step(app, loaded_id.as_deref(), 1);
             }
         });
 
         ui.add_space(12.0);
 
-        // Current model name + position counter.
-        let current_index = app.params.file_select.value() as usize;
-        let (name_text, position_text) = {
-            let list = app.params.file_list.lock();
-            let len = list.len();
-            let clamped = current_index.min(len.saturating_sub(1));
-            let stem = list
-                .get(clamped)
-                .and_then(|p| {
-                    Path::new(p)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                })
-                .unwrap_or_default();
-            drop(list);
+        // ☆/★ for the loaded model (WARM when set).
+        if let Some(id) = loaded_id.as_deref() {
+            let fav = app.params.library.marks_of(id).favorite;
+            if plugin_gui_core::widgets::star_toggle(ui, fav).clicked() {
+                app.toggle_favorite(id);
+            }
+            ui.add_space(4.0);
+        }
 
-            let raw_name = app.model_name.lock().clone();
-            // The stem is a stand-in for a load that has been requested
-            // but has not finished naming itself yet, so it is only
-            // honest while a model path is actually set. Since the
-            // browser is seeded from the downloads directory on a fresh
-            // amp, `file_list[0]` exists long before anything is loaded,
-            // and using it here would name a profile that is not playing.
-            let has_model = !app.params.model_path.lock().is_empty();
-            let name = if raw_name.is_empty() {
-                if has_model && !stem.is_empty() {
-                    stem.clone()
-                } else {
-                    "(no model loaded)".to_string()
-                }
-            } else {
-                raw_name
-            };
-
-            let position = if len == 0 {
-                String::new()
-            } else {
-                format!("{} / {}", clamped + 1, len)
-            };
-            (name, position)
+        let color = if status.is_missing() || status.deleted {
+            theme::WARN
+        } else {
+            theme::TEXT
         };
-
-        ui.label(egui::RichText::new(name_text).size(13.0).color(theme::TEXT));
+        // The name opens the Library too.
+        let name = ui
+            .add(
+                egui::Label::new(egui::RichText::new(status.header_text()).size(13.0).color(color))
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_text("Open the model library");
+        if name.clicked() {
+            app.open_library();
+        }
         ui.add_space(8.0);
         ui.label(
-            egui::RichText::new(position_text)
+            egui::RichText::new(view_counter(&app.browser, loaded_id.as_deref()))
                 .size(11.0)
                 .color(theme::TEXT_DIM),
         );
+        let redownloaded = actions::live_notice(app);
+        if let Some(notice) = redownloaded
+            .as_ref()
+            .or(status.notice.as_ref())
+            .or(app.notice.as_ref())
+        {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(notice).size(11.0).color(theme::TEXT_DIM));
+        }
 
         // Sample-rate mismatch warning: a NAM profile runs sample-for-sample
         // at the engine rate, so a rate mismatch shifts its frequency
@@ -160,7 +153,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     });
 }
 
-fn format_khz(hz: f32) -> String {
+pub(crate) fn format_khz(hz: f32) -> String {
     let khz = hz / 1000.0;
     if (khz - khz.round()).abs() < 0.05 {
         format!("{:.0} kHz", khz)
@@ -169,47 +162,23 @@ fn format_khz(hz: f32) -> String {
     }
 }
 
-fn load_model_clicked(app: &AmpEditorApp) {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h).
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("NAM model", &["nam"])
-        .pick_file()
-    else {
-        return;
+/// ◀/▶ from the header (or a test): step through the Library view from
+/// the playing model.
+pub(crate) fn step_from_header(app: &mut AmpEditorApp, delta: i32) {
+    app.refresh_rows();
+    let loaded = {
+        let st = app.params.status.lock();
+        (st.state == crate::model_ref::ModelState::Loaded)
+            .then(|| st.id.clone())
+            .flatten()
     };
-    let path_str = path.to_string_lossy().into_owned();
-
-    let Some(dir) = path.parent() else {
-        return;
-    };
-    let files = resonance_common::scan_directory(dir, "nam");
-    let idx = files.iter().position(|f| f == &path_str).unwrap_or(0);
-
-    *app.params.file_list.lock() = files;
-    *app.params.model_path.lock() = path_str;
-    app.params.file_select.set_value(idx as i32);
-    app.load_request.store(idx as i32, Ordering::Release);
+    step(app, loaded.as_deref(), delta);
 }
 
-fn seek_relative(app: &AmpEditorApp, delta: i32) {
-    let len = app.params.file_list.lock().len();
-    if len == 0 {
-        return;
+fn step(app: &mut AmpEditorApp, loaded_id: Option<&str>, delta: i32) {
+    if let Some(slot) = step_in_view(&app.browser, &app.rows, loaded_id, delta) {
+        // Browsing, not a pick: no Recent bump (it would re-sort a
+        // "Recently used" view under the stepping).
+        actions::load_slot(app, slot, actions::LoadKind::Browse);
     }
-    let len_i = len as i32;
-    let current = app.params.file_select.value();
-    // With nothing loaded the selector is parked at 0 without that
-    // meaning "file 0 is playing", so the first press loads where it
-    // already points rather than stepping past it — otherwise the entry
-    // the browser is sitting on is the one entry you cannot reach.
-    let next = if app.params.model_path.lock().is_empty() {
-        current.clamp(0, len_i - 1)
-    } else {
-        (current + delta).rem_euclid(len_i)
-    };
-    app.params.file_select.set_value(next);
-    app.load_request.store(next, Ordering::Release);
 }

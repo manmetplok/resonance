@@ -598,8 +598,15 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     // Shared with `track.set_plugin_param` so the f32-declared-bounds
     // tolerance (todo #1235) and choice-label resolution (todo #1290)
     // behave identically on all three chains.
-    let value = match super::track::resolve_param_value(&param, &params.value) {
-        Ok(value) => value,
+    let value = match super::track::resolve_param_value_on(
+        app,
+        request,
+        &target,
+        &param,
+        &params.value,
+    ) {
+        Ok(super::track::ParamValueOutcome::Value(value)) => value,
+        Ok(super::track::ParamValueOutcome::Deferred) => return super::track::deferred_reply(request),
         Err(e) => return reject(request, e),
     };
     let instance_id = target.instance_id;

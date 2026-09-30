@@ -108,51 +108,50 @@ fn batched_queries_against_one_loaded_registry() {
     let mut reg = InstalledRegistry::default();
     reg.items.push(item("KitA", ContentType::Drumkit));
     reg.items.push(item("KitB", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
 
     // Method-based is_installed answers N queries with zero re-reads.
     assert!(reg.is_installed("KitA", &ContentType::Drumkit));
     assert!(reg.is_installed("KitB", &ContentType::Drumkit));
-    assert!(reg.is_installed("Amp1", &ContentType::AmpModel));
-    // Name/type must both match.
-    assert!(!reg.is_installed("KitA", &ContentType::AmpModel));
-    assert!(!reg.is_installed("Amp1", &ContentType::Drumkit));
     assert!(!reg.is_installed("Missing", &ContentType::Drumkit));
 }
 
-#[test]
-fn installed_set_filters_by_type() {
-    let mut reg = InstalledRegistry::default();
-    reg.items.push(item("KitA", ContentType::Drumkit));
-    reg.items.push(item("KitB", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
+/// A registry written before `amp-model` was retired (or by a newer build
+/// with a kind this one does not know): the unknown item is skipped, and the
+/// drum-kit records around it survive rather than the whole file being
+/// quarantined.
+const MIXED: &str = r#"{"items":[
+    {"name":"KitA","type":"drumkit","path":"/tmp/KitA","installed_at":"2026-06-09"},
+    {"name":"Amp1","type":"amp-model","path":"/tmp/Amp1","installed_at":"2026-06-09"},
+    {"name":"KitB","type":"drumkit","path":"/tmp/KitB","installed_at":"2026-06-09"}
+]}"#;
 
+#[test]
+fn installed_set_keeps_known_items_past_an_unknown_type() {
+    let reg: InstalledRegistry = serde_json::from_str(MIXED).expect("an unknown type is not fatal");
     let kits = reg.installed_set(&ContentType::Drumkit);
     assert_eq!(kits.len(), 2);
     assert!(kits.contains("KitA"));
     assert!(kits.contains("KitB"));
     assert!(!kits.contains("Amp1"));
 
-    let amps = reg.installed_set(&ContentType::AmpModel);
-    assert_eq!(amps.len(), 1);
-    assert!(amps.contains("Amp1"));
-
     let empty = InstalledRegistry::default();
     assert!(empty.installed_set(&ContentType::Drumkit).is_empty());
 }
 
 #[test]
-fn items_of_iterates_matching_items_only() {
-    let mut reg = InstalledRegistry::default();
-    reg.items.push(item("KitA", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
-    reg.items.push(item("KitB", ContentType::Drumkit));
-
+fn a_registry_file_with_a_retired_type_loads_without_quarantine() {
+    let dir = std::env::temp_dir().join(format!("resonance-registry-mixed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("installed.json");
+    std::fs::write(&path, MIXED).unwrap();
+    let reg = load_registry_from(&path);
     let names: Vec<&str> = reg
         .items_of(&ContentType::Drumkit)
         .map(|i| i.name.as_str())
         .collect();
     assert_eq!(names, vec!["KitA", "KitB"]);
+    assert!(!dir.join("installed.json.corrupt").exists());
 }
 
 #[test]

@@ -84,6 +84,34 @@ pub struct ControlEndpointState {
     /// achieved.
     pub pending_normalize:
         HashMap<std::path::PathBuf, resonance_control::methods::render::NormalizeReport>,
+    /// The user's NAM model library and marks, opened once for the
+    /// `amp_models.*` handlers (nam-model-library.md §9.3). Its roots are
+    /// the machine's in the real app and private temp dirs in a test app.
+    pub amp_library: crate::update::control::AmpLibraryCache,
+    /// `*.set_plugin_param` requests whose label the plugin is resolving
+    /// (CLAP `text_to_value`, off the update loop), keyed by the token of
+    /// their `ResolvePluginParamText`: replied to when the engine answers,
+    /// or when their deadline passes.
+    pub pending_labels: HashMap<u64, PendingLabel>,
+    pub next_label_token: u64,
+    /// The reply channel of the request being executed, for a handler that
+    /// defers its reply ([`Self::deferred`]).
+    pub current_reply: Option<crate::control_socket::ReplySender>,
+    /// The connection of the request being executed.
+    pub current_conn: Option<crate::control_socket::ConnId>,
+    /// Set by a handler that took `current_reply` to answer later.
+    pub deferred: bool,
+}
+
+/// A `*.set_plugin_param` waiting on the plugin to say what its label
+/// means: the request to re-run with the answer, and where to reply.
+pub struct PendingLabel {
+    pub conn: crate::control_socket::ConnId,
+    pub request: resonance_control::Request,
+    pub reply: crate::control_socket::ReplySender,
+    pub deadline: std::time::Instant,
+    /// The error to send if the plugin does not recognise the label.
+    pub refusal: String,
 }
 
 /// What a `master.assist` job compares against.

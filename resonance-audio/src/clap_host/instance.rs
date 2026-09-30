@@ -498,6 +498,25 @@ impl ClapInstance {
         Some(String::from_utf8_lossy(&buf[..end]).into_owned())
     }
 
+    /// Ask the plugin which value `text` names for `param_id` (CLAP
+    /// `text_to_value`) — the mirror of [`Self::param_text`]. This is how a
+    /// label that is not one of a parameter's enumerated `choices` still
+    /// resolves: a model name on the amp's 1000-slot selector, `"-6 dB"`
+    /// on a gain (nam-model-library.md §9.2). `None` when the plugin has
+    /// no params extension, no `text_to_value`, or does not accept the
+    /// text. Main/engine thread only, like the rest of the params
+    /// extension.
+    pub fn param_from_text(&self, param_id: u32, text: &str) -> Option<f64> {
+        let params = self.params_ext?;
+        let text_to_value = unsafe { (*params).text_to_value }?;
+        // An interior NUL cannot cross the C boundary; nothing a caller
+        // means contains one.
+        let c_text = std::ffi::CString::new(text).ok()?;
+        let mut value = 0.0f64;
+        let ok = unsafe { text_to_value(self.plugin, param_id, c_text.as_ptr(), &mut value) };
+        (ok && value.is_finite()).then_some(value)
+    }
+
     /// Queue a parameter change to be sent during the next process() call.
     /// Deduplicates by param_id (last value wins) and caps at 128 entries
     /// to prevent unbounded growth when the GUI automates many parameters

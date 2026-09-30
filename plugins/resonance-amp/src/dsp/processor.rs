@@ -101,6 +101,11 @@ impl AmpProcessor {
         self.models.begin_swap(model);
     }
 
+    /// Whether a model is installed (main thread, between activations).
+    pub fn has_model(&self) -> bool {
+        self.models.active().is_some()
+    }
+
     /// Install the very first model synchronously, with no crossfade and
     /// no fade-in. Used during plugin initialization before `process()`
     /// has had a chance to run.
@@ -125,10 +130,13 @@ impl AmpProcessor {
     ) -> BlockPeaks {
         let mut peaks = BlockPeaks::default();
 
-        if self.models.active().is_none() && !self.models.is_fading_out() {
-            // No model loaded: only `input_gain * output_gain` is
-            // applied. The fader is idle here — a fade-in is always
-            // paired with a newly installed model.
+        let dry_active = self.models.active().is_none_or(|m| m.is_identity());
+        if dry_active && self.models.is_settled() {
+            // No model loaded (or an identity one standing in for a
+            // missing model): only `input_gain * output_gain` is
+            // applied, stereo and unfiltered. A fade into or out of an
+            // identity model runs the ticking loop below, which takes
+            // the same dry path under the fade gain.
             for i in 0..frames {
                 let dry_l = left[i];
                 let dry_r = right[i];
@@ -179,7 +187,7 @@ impl AmpProcessor {
             let (fade_gain, model) = self.models.next();
 
             let (out_l, out_r) = match model {
-                Some(model) => {
+                Some(model) if !model.is_identity() => {
                     // The NAM model is mono-by-design: a single
                     // tube/amp captured at one mic position. Sum
                     // L+R into mono before driving it so a stereo
@@ -191,7 +199,8 @@ impl AmpProcessor {
                     let raw = model.process_sample(input) * output_gain * fade_gain;
                     (self.dc_l.process(raw), self.dc_r.process(raw))
                 }
-                None => {
+                _ => {
+                    // No model, or an identity one: the stereo dry path.
                     let gain = input_gain * output_gain * fade_gain;
                     (dry_l * gain, dry_r * gain)
                 }

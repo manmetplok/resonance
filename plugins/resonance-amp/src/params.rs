@@ -1,26 +1,44 @@
-/// Plugin parameters: input/output gain, persisted model path, and file selector.
+/// Plugin parameters: input/output gain, the model reference, and the
+/// model selector.
 use parking_lot::Mutex;
 use resonance_plugin::*;
 use std::sync::Arc;
 
-/// Maximum number of files the selector param supports.
-pub const MAX_FILE_INDEX: i32 = 999;
+use crate::library::SharedLibrary;
+use crate::model_ref::{ModelRef, ModelState, ModelStatus};
+
+/// Highest `file_select` value: the library's last slot.
+pub const MAX_FILE_INDEX: i32 = resonance_common::nam_library::MAX_SLOT as i32;
 
 pub struct AmpParams {
-    /// Persisted model file path, reloaded on plugin init.
-    pub model_path: Arc<Mutex<String>>,
+    /// The model reference that plays (plugin state v2): written only once
+    /// a load succeeds, or verbatim when the model it names is missing.
+    pub model_ref: Arc<Mutex<ModelRef>>,
 
-    /// File selector index exposed as a DAW parameter.
-    /// The host can automate this to switch between .nam files
-    /// found in the same directory as the loaded model.
+    /// A reference a state load delivered that has not been resolved yet:
+    /// `initialize` resolves it when inactive, the loader thread when
+    /// active. `save_state` persists it until then (it is what is about
+    /// to play), and it wins over the slot the same state's `file_select`
+    /// asked for.
+    pub pending_ref: Arc<Mutex<Option<ModelRef>>>,
+
+    /// What the instance is playing, or why it is not.
+    pub status: Arc<Mutex<ModelStatus>>,
+
+    /// The model library shared by every amp in the process.
+    pub library: Arc<SharedLibrary>,
+
+    /// This instance's key in the library's usage registry.
+    pub instance_id: u64,
+
+    /// The model selector: a **stable slot** in the library's slot table
+    /// (nam-model-library.md §5.1), not a position in a directory listing,
+    /// so adding or deleting models never changes what a preset or an
+    /// automation lane recalls.
     ///
-    /// Visible, like resonance-ir's identical `file_select` — see the
-    /// declaration below for why it stopped being `.hidden()`.
+    /// Visible, like resonance-ir's `file_select` — see the declaration
+    /// below for why it stopped being `.hidden()`.
     pub file_select: IntParam,
-
-    /// Shared file list the header browser and the loader thread index
-    /// with `file_select`.
-    pub file_list: Arc<Mutex<Vec<String>>>,
 
     pub input_gain: FloatParam,
 
@@ -47,46 +65,17 @@ impl AmpParams {
             _ => &self.file_select,
         }
     }
-}
 
-impl Default for AmpParams {
-    fn default() -> Self {
+    /// Parameters over a given shared library (tests pass their own).
+    pub fn with_library(library: Arc<SharedLibrary>) -> Self {
+        let status = Arc::new(Mutex::new(ModelStatus::default()));
         Self {
-            model_path: Arc::new(Mutex::new(String::new())),
-            file_list: Arc::new(Mutex::new(Vec::new())),
-            // Not `.hidden()` (ba todo #1283, audit finding A6). The
-            // identical parameter in resonance-ir is visible, and there
-            // is nothing about switching the loaded model that a host —
-            // or the app's own `track.plugin_params` — should be kept
-            // from: it is the single most consequential choice this
-            // plugin offers.
-            //
-            // Hiding it never protected anything either. `hidden` is a
-            // display hint, not a storage switch: the CLAP bridge always
-            // wrote every param to plugin state, and since ba todo #1290
-            // the engine reports hidden params to the app *flagged*
-            // rather than dropping them — dropping them was what cost
-            // them on save, because `ProjectPlugin.params` is derived
-            // from the app mirror. So unhiding changes exactly what the
-            // finding asks for (the host's param list, the generic
-            // parameter panel and the automation-lane picker all stop
-            // skipping it) and nothing about persistence.
-            //
-            // Stepped and 1000 values wide, which is deliberately past
-            // the engine's `MAX_CHOICE_STEPS` (64): `ParamInfo.choices`
-            // does not walk it, so a visible selector costs no per-query
-            // label enumeration. The value is an index into `file_list`,
-            // whose contents depend on the directory the model was
-            // loaded from, so there is no fixed label set to publish.
-            file_select: IntParam::new(
-                "file_select",
-                "Model Select",
-                0,
-                IntRange::Linear {
-                    min: 0,
-                    max: MAX_FILE_INDEX,
-                },
-            ),
+            model_ref: Arc::new(Mutex::new(ModelRef::default())),
+            pending_ref: Arc::new(Mutex::new(None)),
+            file_select: file_select_param(library.clone(), status.clone()),
+            status,
+            library,
+            instance_id: crate::library::next_instance_id(),
             // Smoothers live on the plugin struct, not here, because
             // sharing `Arc<AmpParams>` with the editor thread forbids
             // `&mut` access through the Arc.
@@ -117,5 +106,81 @@ impl Default for AmpParams {
             .with_value_to_string(formatters::v2s_f32_gain_to_db(2))
             .with_string_to_value(formatters::s2v_f32_gain_to_db()),
         }
+    }
+}
+
+/// The text a `file_select` value shows: the slot's model name,
+/// `"(empty)"`, `"Missing: <name>"` for the value an instance's missing
+/// model was saved at, or `"External: <name>"` for the value parked while
+/// a model from outside the library plays. Non-blocking: a busy library
+/// reads as `"slot N"`. Hosts call this on the main thread, never the
+/// audio thread.
+pub fn slot_text(library: &SharedLibrary, status: &Mutex<ModelStatus>, value: i32) -> String {
+    if let Some(st) = status.try_lock() {
+        if let ModelState::Missing { name, at_slot, .. } = &st.state {
+            if *at_slot == value {
+                return format!("Missing: {name}");
+            }
+        }
+        if st.external && st.state == ModelState::Loaded && st.external_slot == Some(value) {
+            return format!("External: {}", st.name);
+        }
+    }
+    match library.try_read() {
+        Some(lib) => match lib.by_slot(value.max(0) as u32) {
+            Some(e) => e.name.clone(),
+            None => "(empty)".to_string(),
+        },
+        None => format!("slot {value}"),
+    }
+}
+
+/// The slot a typed or host-sent text names: a number (`"12"`, `"slot 12"`),
+/// else a model name or id prefix resolved by the library
+/// (`Library::find`).
+pub fn slot_from_text(library: &SharedLibrary, text: &str) -> Option<i32> {
+    let t = text.trim();
+    let digits = t.strip_prefix("slot ").unwrap_or(t);
+    if let Ok(n) = digits.parse::<i32>() {
+        return (0..=MAX_FILE_INDEX).contains(&n).then_some(n);
+    }
+    let lib = library.try_read()?;
+    lib.find(t).and_then(|e| e.slot).map(|s| s as i32)
+}
+
+fn file_select_param(library: Arc<SharedLibrary>, status: Arc<Mutex<ModelStatus>>) -> IntParam {
+    let lib_for_text = library.clone();
+    // Not `.hidden()` (ba todo #1283, audit finding A6). The identical
+    // parameter in resonance-ir is visible, and there is nothing about
+    // switching the loaded model that a host — or the app's own
+    // `track.plugin_params` — should be kept from: it is the single most
+    // consequential choice this plugin offers.
+    //
+    // Hiding it never protected anything either. `hidden` is a display
+    // hint, not a storage switch: the CLAP bridge always wrote every param
+    // to plugin state, and since ba todo #1290 the engine reports hidden
+    // params to the app *flagged* rather than dropping them.
+    //
+    // Stepped and 1000 values wide, which is deliberately past the
+    // engine's `MAX_CHOICE_STEPS` (64): `ParamInfo.choices` does not walk
+    // it, so a visible selector costs no per-query label enumeration. The
+    // value is a library slot; its text is the slot's model name, which is
+    // how the control API reads which model is loaded (§9.1).
+    IntParam::new(
+        "file_select",
+        "Model Select",
+        0,
+        IntRange::Linear {
+            min: 0,
+            max: MAX_FILE_INDEX,
+        },
+    )
+    .with_value_to_string(Arc::new(move |v| slot_text(&lib_for_text, &status, v)))
+    .with_string_to_value(Arc::new(move |text| slot_from_text(&library, text)))
+}
+
+impl Default for AmpParams {
+    fn default() -> Self {
+        Self::with_library(crate::library::shared())
     }
 }

@@ -38,7 +38,7 @@ pub use bundle::ClapBundle;
 pub use bundle::bundle_binary_path;
 pub use bundle::ClapBundleError;
 pub use instance::{ClapInstance, StereoBufMut};
-pub use param_meta::{choice_labels, unit_from_text, MAX_CHOICE_STEPS};
+pub use param_meta::{choice_labels, label_round_trips, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
 use std::pin::Pin;

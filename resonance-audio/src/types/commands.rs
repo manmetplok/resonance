@@ -329,6 +329,21 @@ pub enum AudioCommand {
         param_id: u32,
         value: f64,
     },
+    /// Ask a plugin which value `text` names for one of its parameters
+    /// (CLAP `text_to_value`, `ClapInstance::param_from_text`). Answered —
+    /// never blocking anyone — with `AudioEvent::PluginParamTextResolved`
+    /// carrying the same `token`: `Some(value)` only when the plugin's own
+    /// display of that value round-trips to `text`
+    /// ([`crate::label_round_trips`]), `None` otherwise or when the
+    /// instance is gone. A query, not an edit. Runs on the engine thread
+    /// (the params extension is main-thread only), nam-model-library.md
+    /// §9.2.
+    ResolvePluginParamText {
+        instance_id: PluginInstanceId,
+        param_id: u32,
+        text: String,
+        token: u64,
+    },
     /// Set loop (cycle) range. When enabled, playback wraps from loop_out back to
     /// loop_in, and any recording is trimmed to [loop_in, loop_out]. If
     /// loop_out <= loop_in, no clip is produced.

@@ -287,17 +287,171 @@ fn an_unknown_label_is_refused_with_the_ones_that_work() {
     }
 }
 
+/// Send `track.set_plugin_param` with a label and hand back the reply
+/// channel (nothing on it yet when the label went to the plugin) and the
+/// token of the `ResolvePluginParamText` question the engine received.
+fn set_label_deferred(
+    app: &mut Resonance,
+    rx: &crossbeam_channel::Receiver<AudioCommand>,
+    param: &str,
+    label: &str,
+) -> (crossbeam_channel::Receiver<Response>, u64) {
+    let (reply, replies) = resonance_app::control_socket::ReplySender::test_pair();
+    let request = resonance_control::Request::new(
+        7,
+        "track.set_plugin_param",
+        &serde_json::json!({ "track_id": TRACK, "plugin_id": PLUGIN, "param": param, "value": label }),
+    )
+    .unwrap();
+    let _ = app.update(resonance_app::message::Message::Control(
+        resonance_app::control_socket::ControlMessage::Request(
+            resonance_app::control_socket::ControlRequest {
+                conn: 1,
+                request,
+                reply,
+            },
+        ),
+    ));
+    let token = std::iter::from_fn(|| rx.try_recv().ok())
+        .find_map(|c| match c {
+            AudioCommand::ResolvePluginParamText {
+                instance_id,
+                param_id,
+                text,
+                token,
+            } => {
+                assert_eq!(instance_id, DELAY);
+                assert_eq!(param_id, MIX);
+                assert_eq!(text, label);
+                Some(token)
+            }
+            _ => None,
+        })
+        .expect("the label went to the plugin");
+    (replies, token)
+}
+
+#[test]
+fn a_label_on_a_choiceless_parameter_is_resolved_by_the_plugin_without_blocking() {
+    // nam-model-library.md §9.2: with no `choices` to match, the app asks
+    // the plugin (CLAP `text_to_value`) — through the engine, answering the
+    // request only when the engine answers, so the update loop never waits.
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let revision = app.revision();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    assert!(replies.try_recv().is_err(), "no reply until the plugin has answered");
+    assert_eq!(app.revision(), revision);
+
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved {
+        token,
+        value: Some(0.5),
+    });
+    let ack: MutationAck = replies
+        .try_recv()
+        .expect("the reply goes out with the answer")
+        .result()
+        .expect("the plugin knows what \"half\" means");
+    assert_eq!(ack.revision, revision + 1, "one call, one revision");
+    assert_eq!(dispatched(&rx, MIX), 0.5, "the plugin's answer is what the engine is told to set");
+}
+
 #[test]
 fn a_label_on_a_parameter_with_no_choices_says_so() {
     let mut app = app();
-    let response = set(&mut app, "Mix", serde_json::json!("loud"));
-    let error = response.error.expect("Mix names no choices");
+    let rx = app.test_capture_engine();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "loud");
+    // The engine's answer for a text the plugin does not display back (a
+    // lenient plugin's "loud" → 0 does not round-trip).
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: None });
+    let error = replies.try_recv().unwrap().error.expect("Mix names no choices");
     assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("names no choices"), "{}", error.message);
+    assert!(error.message.contains("nor does the plugin recognise"), "{}", error.message);
+}
+
+#[test]
+fn a_label_the_plugin_never_answers_times_out() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let (replies, _token) = set_label_deferred(&mut app, &rx, "Mix", "loud");
+    app.test_expire_pending_labels(std::time::Instant::now());
+    assert!(replies.try_recv().is_err(), "not before its deadline");
+    app.test_expire_pending_labels(std::time::Instant::now() + std::time::Duration::from_secs(10));
+    let error = replies.try_recv().unwrap().error.expect("an unanswered label is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("did not answer in time"), "{}", error.message);
+}
+
+#[test]
+fn a_pending_label_holds_the_fast_tick() {
+    // The answer arrives as an engine event, drained on the tick: at the
+    // 200 ms idle rate the reply would wait that long for nothing.
+    use resonance_app::update::tick;
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let slow = std::time::Duration::from_millis(tick::TICK_INTERVAL_IDLE_MS);
+    assert_eq!(tick::tick_interval(&app), slow);
+    let (_replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    assert_ne!(tick::tick_interval(&app), slow, "a label in flight needs the fast tick");
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    assert_eq!(tick::tick_interval(&app), slow);
+}
+
+#[test]
+fn a_deferred_label_set_is_one_undo_entry() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let before = app.test_undo_history().undo_len();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    replies.try_recv().unwrap().result::<MutationAck>().expect("applied");
+    assert_eq!(app.test_undo_history().undo_len(), before + 1, "one call, one undo entry");
+}
+
+#[test]
+fn a_label_whose_plugin_went_away_meanwhile_is_not_found() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    app.test_apply_engine_event(AudioEvent::PluginRemoved { track_id: TRACK, instance_id: DELAY });
+    let revision = app.revision();
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    let error = replies.try_recv().unwrap().error.expect("the plugin is gone");
+    assert_eq!(error.kind(), ErrorKind::NotFound, "{}", error.message);
+    assert_eq!(app.revision(), revision, "nothing was changed");
+}
+
+#[test]
+fn a_label_whose_client_disconnected_meanwhile_changes_nothing() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let revision = app.revision();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    drop(replies);
+    let _ = app.update(resonance_app::message::Message::Control(
+        resonance_app::control_socket::ControlMessage::Disconnected { conn: 1 },
+    ));
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    assert_eq!(app.revision(), revision, "no client to tell, so no edit made");
     assert!(
-        error.message.contains("names no choices"),
-        "got {:?}",
-        error.message
+        !std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|c| matches!(c, AudioCommand::SetPluginParam { param_id: MIX, .. })),
+        "the engine was not told to set Mix"
     );
+}
+
+#[test]
+fn only_a_round_tripping_answer_counts() {
+    use resonance_audio::label_round_trips;
+    assert!(label_round_trips("half", "Half"));
+    assert!(label_round_trips("-6 dB", "-6.02 dB"), "numbers agree to the input's precision");
+    assert!(label_round_trips("0.5", "0.50"));
+    assert!(label_round_trips("friedman", "Friedman BE-100 · standard"), "a name prefix");
+    assert!(!label_round_trips("loud", "0.0 %"), "JUCE parses \"loud\" as 0; that is not a match");
+    assert!(!label_round_trips("-12 dB", "-6.02 dB"));
+    assert!(!label_round_trips("fr", "Friedman"), "too short to be a prefix");
+    assert!(!label_round_trips("", "0"));
 }
 
 #[test]

@@ -800,6 +800,11 @@ pub struct SetPluginParamParams {
     /// the same request; the label is the one that survives the plugin
     /// reordering its enum.
     ///
+    /// On a parameter with no `choices`, a text is asked of the plugin
+    /// itself (CLAP `text_to_value`): what the parameter displays as its
+    /// `text` is accepted back — `"-6 dB"` on a gain, or an amp model's
+    /// name (`"Friedman BE-100"`) on Resonance Amp's `Model Select`.
+    ///
     /// A number must lie within the parameter's `min..=max`, which an
     /// out-of-range request reports back.
     ///
