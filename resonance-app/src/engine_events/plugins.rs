@@ -751,6 +751,53 @@ pub(super) fn preset_loaded(
     );
 }
 
+/// A plugin's preset-discovery factory listed its presets (slice P8): they
+/// join the library as read-only factory presets (after any compiled-in
+/// bank), loadable through `clap.preset-load`. A preset the provider flags
+/// as a favourite is starred once, when the user has never marked it.
+pub(super) fn presets_discovered(
+    r: &mut Resonance,
+    plugin_id: String,
+    presets: Vec<resonance_audio::types::DiscoveredPreset>,
+) {
+    use resonance_plugin::presets::FactoryEntry;
+    let lib = crate::plugin_preset_library::library(r);
+    let mut entries: Vec<FactoryEntry> = r
+        .plugin_catalog
+        .available_plugins
+        .iter()
+        .find(|p| p.clap_plugin_id == plugin_id)
+        .map(|p| {
+            p.factory_presets
+                .iter()
+                .map(|e| FactoryEntry::from_parts(&e.id, &e.name, &e.json, e.meta.as_deref()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for p in &presets {
+        let meta = serde_json::json!({
+            "author": (!p.creators.is_empty()).then(|| p.creators.join(", ")),
+            "description": p.description,
+            "tags": p.features,
+        });
+        entries.push(FactoryEntry::from_parts(
+            &p.stable_id(),
+            &p.name,
+            r#"{"version":1,"params":{}}"#,
+            Some(&meta.to_string()),
+        ));
+    }
+    lib.register_factory_entries(&plugin_id, entries);
+    for p in presets.iter().filter(|p| p.is_favorite()) {
+        let id = p.stable_id();
+        if lib.preset_marks(&plugin_id, &id) == resonance_common::library_marks::Marks::default() {
+            let _ = lib.set_favorite(&plugin_id, &id, true);
+        }
+    }
+    r.presets.discovered.insert(plugin_id, presets);
+    crate::update::plugin_preset_ui::rebuild_caches(r);
+}
+
 /// The plugin's params after a preset state load: the mirror takes every
 /// value and its text (a third-party preset's values are only known to the
 /// plugin, slice P7). Ids the mirror does not have are ignored.

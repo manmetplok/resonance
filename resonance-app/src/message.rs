@@ -148,6 +148,12 @@ pub enum PresetUiMessage {
     /// Load the row onto the selected plugin slot (same plugin only).
     MediaLoad(usize),
     MediaToggleRowFavorite(usize),
+    /// The pointer entered (`Some`) or left (`None`) a track header while
+    /// a preset is dragged from the media browser.
+    DragOver(Option<TrackId>),
+    /// The mouse button was released anywhere while a preset drag was
+    /// armed: drop it on the header under the pointer, or cancel.
+    DragEnd,
     /// "with preset…" in an add picker: add the plugin, then load the
     /// preset onto it once it exists.
     AddWithPreset {
@@ -269,6 +275,17 @@ pub enum PluginMessage {
         preset_id: String,
         preset_source: resonance_control::methods::plugin_preset::PluginPresetSource,
     },
+    /// Recall a preset the plugin owns (one its preset-discovery factory
+    /// listed): the plugin loads it through `clap.preset-load`, and the
+    /// engine refreshes the mirror afterwards. One undo entry, like
+    /// `LoadPluginPreset` (slice P8).
+    LoadPluginPresetFromLocation {
+        instance_id: PluginInstanceId,
+        location: resonance_audio::types::PluginPresetLocation,
+        load_key: Option<String>,
+        preset_name: String,
+        preset_id: String,
+    },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),
     /// Close the plugin's editor window.
@@ -334,6 +351,7 @@ impl PluginMessage {
             // into a neighbouring knob edit would make the two undo
             // together (ba todo #1333).
             Self::LoadPluginPreset { .. } => UndoAction::Record,
+            Self::LoadPluginPresetFromLocation { .. } => UndoAction::Record,
             Self::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,

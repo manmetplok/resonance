@@ -25,6 +25,7 @@
 //!   its own titlebar stops reading as open.
 
 mod bundle;
+pub mod discovery;
 mod gui;
 mod instance;
 mod param_meta;

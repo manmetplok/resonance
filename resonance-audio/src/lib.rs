@@ -93,6 +93,8 @@ pub mod test_support {
     pub use crate::clap_host::{
         ClapBundle, ClapInstance, PluginMap, PluginSlot, PresetHostReport, SyncClapInstance,
     };
+    /// Preset discovery (slice P8), for driving the indexer with a fake factory.
+    pub use crate::clap_host::discovery;
     /// The live, additive plugin rescan (ba todo #1307) — exposed so
     /// `tests/clap_host/plugin_rescan.rs` can assert it never loads a bundle it
     /// already holds, which is what keeps running instances safe. The

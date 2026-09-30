@@ -127,10 +127,19 @@ pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
             r.presets.media_presets = list;
         }
         PresetUiMessage::MediaSelect(index) => {
-            if index < r.presets.media_presets.rows.len() {
+            if let Some(row) = r.presets.media_presets.rows.get(index).cloned() {
                 r.presets.media_presets.selected = Some(index);
+                // A press on a row also arms a drag onto a track header.
+                r.presets.dragging = Some(row);
+                r.presets.drag_over = None;
             }
         }
+        PresetUiMessage::DragOver(track) => {
+            if r.presets.dragging.is_some() {
+                r.presets.drag_over = track;
+            }
+        }
+        PresetUiMessage::DragEnd => return drag_end(r),
         PresetUiMessage::MediaLoad(index) => return media_load(r, index),
         PresetUiMessage::MediaToggleRowFavorite(index) => {
             if let Some(row) = r.presets.media_presets.rows.get(index).cloned() {
@@ -491,6 +500,47 @@ fn media_load(r: &mut Resonance, index: usize) -> Task<Message> {
         return Task::none();
     }
     recorded_load(r, instance_id, &row.plugin_id, &row.id, row.source)
+}
+
+fn drag_end(r: &mut Resonance) -> Task<Message> {
+    let (Some(row), Some(track_id)) = (r.presets.dragging.take(), r.presets.drag_over.take())
+    else {
+        r.presets.dragging = None;
+        r.presets.drag_over = None;
+        return Task::none();
+    };
+    let Some(plugin) = r
+        .plugin_catalog
+        .available_plugins
+        .iter()
+        .find(|p| p.clap_plugin_id == row.plugin_id)
+        .cloned()
+    else {
+        return Task::none();
+    };
+    let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) else {
+        return Task::none();
+    };
+    // An instrument goes onto an instrument track that has none; an effect
+    // anywhere (appended). Anything else is said, not guessed.
+    let is_instrument_track = matches!(track.track_type, resonance_audio::types::TrackType::Instrument);
+    if plugin.is_instrument && !(is_instrument_track && track.plugins.is_empty()) {
+        r.banners.error_message = Some(format!(
+            "{} is an instrument: drop it on an instrument track with no instrument yet",
+            plugin.name
+        ));
+        return Task::none();
+    }
+    add_with_preset(
+        r,
+        PresetAddOwner::Track(track_id),
+        PresetAddPick {
+            plugin,
+            preset_id: row.id,
+            preset_name: row.name,
+            source: row.source,
+        },
+    )
 }
 
 fn add_with_preset(r: &mut Resonance, owner: PresetAddOwner, pick: PresetAddPick) -> Task<Message> {

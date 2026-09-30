@@ -262,6 +262,18 @@ impl crate::Resonance {
 
         let mut subs = vec![tick, keys, close_requests, file_drops];
 
+        // A preset dragged from the media browser (slice P8) ends on the
+        // next button release wherever it happens; only listened for while
+        // one is armed.
+        if self.presets.dragging.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left)) => {
+                    Some(Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd)))
+                }
+                _ => None,
+            }));
+        }
+
         // Control-endpoint bridge (doc #265, todo #1147): stream every
         // socket-thread event (connects, disconnects, parsed requests)
         // into `update()` as `Message::Control`. Only attached when the

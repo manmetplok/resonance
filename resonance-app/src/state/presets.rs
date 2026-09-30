@@ -121,6 +121,13 @@ pub struct PresetState {
     /// `PluginAdded` echo brings the param list: `(clap id, preset id,
     /// source)` by instance (a `preset` on `*.add_effect`, "with preset…"
     /// in the add pickers — slice P6).
+    /// What each plugin's preset-discovery factory listed (slice P8), by
+    /// CLAP id; registered with the library as read-only factory presets.
+    pub discovered: std::collections::HashMap<String, Vec<resonance_audio::types::DiscoveredPreset>>,
+    /// The preset being dragged from the media browser's Presets tab onto
+    /// a track (slice P8), and the track header under the pointer.
+    pub dragging: Option<HostPresetRow>,
+    pub drag_over: Option<resonance_audio::types::TrackId>,
     /// The preset browser over one plugin, when open (a root overlay).
     pub host_browser: Option<HostPresetBrowser>,
     /// The media browser's Presets tab.

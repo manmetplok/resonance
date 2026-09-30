@@ -288,7 +288,7 @@ pub(crate) fn apply_pending_preset(app: &mut Resonance, instance_id: PluginInsta
         return;
     };
     let message = find(app, &clap_id, "", Some(&preset_id), Some(source))
-        .and_then(|(bank, found)| load_message_for(&bank, &found, instance_id, &params));
+        .and_then(|(bank, found)| load_message_for(app, &bank, &found, instance_id, &params));
     match message {
         Ok(Message::Plugin(m)) => crate::update::plugin::apply_preset_load(app, m),
         Ok(_) => {}
@@ -316,7 +316,7 @@ pub(crate) fn host_load_message(
         })
         .ok_or_else(|| RpcError::not_found(format!("no plugin instance {instance_id}")))?;
     let (bank, found) = find(app, clap_id, "", Some(preset_id), Some(source))?;
-    load_message_for(&bank, &found, instance_id, &params)
+    load_message_for(app, &bank, &found, instance_id, &params)
 }
 
 /// A plugin's presets in bank order (factory as declared, then the user's
@@ -344,7 +344,7 @@ pub(crate) fn load_request(
     args: &LoadArgs<'_>,
 ) -> Result<Message, RpcError> {
     let (bank, found) = find(app, clap_id, args.preset, args.preset_id, args.source)?;
-    let mut message = load_message_for(&bank, &found, instance_id, params)?;
+    let mut message = load_message_for(app, &bank, &found, instance_id, params)?;
     if !args.extra {
         // An opaque (third-party) preset has no params to recall on their
         // own: `extra: false` cannot split it, so it loads whole.
@@ -371,6 +371,38 @@ pub(crate) fn load_request(
 /// is what maps the preset's string ids onto CLAP ids and lets an unknown
 /// id be reported rather than silently dropped.
 pub(crate) fn load_message_for(
+    app: &Resonance,
+    bank: &PresetBank,
+    found: &PresetRef,
+    instance_id: PluginInstanceId,
+    params: &[PluginParamView],
+) -> Result<Message, RpcError> {
+    // A preset the plugin's own preset-discovery factory listed is the
+    // plugin's to load (`clap.preset-load`, §8 tier T1, slice P8).
+    if let Some(discovered) = app
+        .presets
+        .discovered
+        .get(bank.plugin_id())
+        .and_then(|list| list.iter().find(|p| p.stable_id() == found.id))
+    {
+        use resonance_audio::types::{DiscoveredLocation, PluginPresetLocation};
+        return Ok(Message::Plugin(PluginMessage::LoadPluginPresetFromLocation {
+            instance_id,
+            location: match &discovered.location {
+                DiscoveredLocation::Plugin => PluginPresetLocation::Plugin,
+                DiscoveredLocation::File(p) => PluginPresetLocation::File(p.clone()),
+            },
+            load_key: discovered.load_key.clone(),
+            preset_name: found.name.clone(),
+            preset_id: found.id.clone(),
+        }));
+    }
+    load_document_message(bank, found, instance_id, params)
+}
+
+/// The recall of a preset the library holds the sound of: its params one
+/// by one, then the rest of its state (or a third-party blob whole).
+fn load_document_message(
     bank: &PresetBank,
     found: &PresetRef,
     instance_id: PluginInstanceId,

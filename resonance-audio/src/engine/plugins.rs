@@ -930,6 +930,11 @@ pub(crate) fn handle_load_plugin_preset_from_location(
                 let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
                     "Plugin instance {instance_id} could not load the preset it was asked for."
                 ))));
+            } else {
+                let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
+                    instance_id,
+                    params: inst.0.query_params(),
+                });
             }
         } else {
             let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetFromLocation {

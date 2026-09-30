@@ -63,6 +63,7 @@ pub(crate) fn scan_plugins(
     let dirs = scan_dirs();
     let (scanned, failures) = load_bundles(&dirs, bundles);
     report(&dirs, scanned, failures, event_tx);
+    spawn_discovery(bundles, event_tx);
 }
 
 /// The live rescan: pick up newly installed plugins WITHOUT disturbing
@@ -94,6 +95,51 @@ pub fn rescan_plugins_in(
 ) {
     let (scanned, failures) = load_bundles(dirs, bundles);
     report(dirs, scanned, failures, event_tx);
+    spawn_discovery(bundles, event_tx);
+}
+
+/// Index the presets of every bundle with a `clap.preset-discovery-
+/// factory` on a worker thread (slice P8): never on the engine thread,
+/// which a slow provider walking a large preset folder would stall. Each
+/// plugin's list arrives as `AudioEvent::PluginPresetsDiscovered`; the
+/// results are cached in `<library>/discovered/` by binary size + mtime.
+fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>) {
+    let jobs: Vec<_> = bundles
+        .iter()
+        .filter_map(|b| {
+            let factory = b.preset_discovery_factory()?;
+            let ids: Vec<String> = b.descriptors().iter().map(|d| d.id.clone()).collect();
+            Some((factory, PathBuf::from(b.path()), ids))
+        })
+        .collect();
+    if jobs.is_empty() {
+        return;
+    }
+    let event_tx = event_tx.clone();
+    let cache_dir = resonance_common::library_marks::default_library_dir();
+    let spawned = std::thread::Builder::new()
+        .name("preset-discovery".into())
+        .spawn(move || {
+            for (factory, binary, ids) in jobs {
+                // SAFETY: the factory outlives the process's use of it (the
+                // library is never unloaded) and this thread is its only
+                // caller.
+                let found = unsafe {
+                    crate::clap_host::discovery::discover(
+                        factory.0,
+                        &binary,
+                        &ids,
+                        cache_dir.as_deref(),
+                    )
+                };
+                for (plugin_id, presets) in found {
+                    let _ = event_tx.send(AudioEvent::PluginPresetsDiscovered { plugin_id, presets });
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("preset discovery: worker not started: {e}");
+    }
 }
 
 /// The directories a scan looks in, in priority order.

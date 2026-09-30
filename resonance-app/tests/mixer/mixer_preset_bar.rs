@@ -284,6 +284,107 @@ fn the_preset_commands_need_a_selected_plugin() {
 }
 
 // ---------------------------------------------------------------------------
+// Discovered presets and drag-to-add (slice P8)
+// ---------------------------------------------------------------------------
+
+fn discovered(name: &str, key: &str, flags: u32) -> resonance_audio::types::DiscoveredPreset {
+    resonance_audio::types::DiscoveredPreset {
+        name: name.to_owned(),
+        location: resonance_audio::types::DiscoveredLocation::Plugin,
+        load_key: Some(key.to_owned()),
+        plugin_ids: vec![PLUGIN_ID.to_owned()],
+        creators: vec!["Jane".to_owned()],
+        description: Some("From the plugin".to_owned()),
+        features: vec!["bass".to_owned()],
+        flags,
+    }
+}
+
+/// A preset-discovery listing joins the library after the compiled-in
+/// bank, a provider favourite is starred once, and loading one asks the
+/// plugin (`clap.preset-load`) as one undo entry.
+#[test]
+fn discovered_presets_are_listed_and_load_through_the_plugin() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    app.test_apply_engine_event(AudioEvent::PluginPresetsDiscovered {
+        plugin_id: PLUGIN_ID.to_owned(),
+        presets: vec![
+            discovered("Sub Drop", "bank/1", 0),
+            discovered("Air Lift", "bank/2", 1 << 3),
+        ],
+    });
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let rows: Vec<(String, bool)> = app.test_presets().host_browser.as_ref().unwrap().list.rows
+        .iter()
+        .map(|r| (r.name.clone(), r.favorite))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("Warm".to_owned(), false),
+            ("Bright".to_owned(), false),
+            ("Flat".to_owned(), false),
+            ("Sub Drop".to_owned(), false),
+            ("Air Lift".to_owned(), true),
+        ]
+    );
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: false });
+    while rx.try_recv().is_ok() {}
+
+    let before = undo_len(&app);
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
+    assert_eq!(undo_len(&app), before + 1);
+    assert_eq!(current_id(&app).as_deref(), Some("plugin:bank/2"));
+    let asked = rx.try_iter().find_map(|c| match c {
+        AudioCommand::LoadPluginPresetFromLocation { instance_id: INSTANCE, location, load_key } => {
+            Some((location, load_key))
+        }
+        _ => None,
+    });
+    assert_eq!(
+        asked,
+        Some((
+            resonance_audio::types::PluginPresetLocation::Plugin,
+            Some("bank/2".to_owned())
+        ))
+    );
+}
+
+/// Pressing a Presets-tab row arms a drag; releasing over a track header
+/// adds the plugin there with that preset; releasing anywhere else only
+/// cancels.
+#[test]
+fn a_preset_dragged_onto_a_track_adds_the_plugin_with_it() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::MediaSearch("bright".into()));
+    ui(&mut app, PresetUiMessage::MediaSelect(0));
+    assert!(app.test_presets().dragging.is_some());
+    ui(&mut app, PresetUiMessage::DragEnd);
+    assert!(app.test_presets().dragging.is_none(), "a plain click cancels");
+    assert_eq!(app.test_registry().tracks[0].plugins.len(), 1);
+
+    let next = app.test_next_plugin_id();
+    ui(&mut app, PresetUiMessage::MediaSelect(0));
+    ui(&mut app, PresetUiMessage::DragOver(Some(TRACK)));
+    ui(&mut app, PresetUiMessage::DragEnd);
+    assert_eq!(app.test_registry().tracks[0].plugins.len(), 2, "added to the chain");
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: TRACK,
+        instance_id: next,
+        plugin_name: "Test EQ".to_owned(),
+        clap_plugin_id: PLUGIN_ID.to_owned(),
+        clap_file_path: "/nonexistent/test-eq.clap".to_owned(),
+        params: params(),
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
+    });
+    assert_eq!(app.test_plugin_param(next, clap_id("gain")), Some(7.0));
+}
+
+// ---------------------------------------------------------------------------
 // Goldens
 // ---------------------------------------------------------------------------
 

@@ -106,6 +106,16 @@ pub struct ClapBundle {
     path: CString,
 }
 
+/// A bundle's preset-discovery factory, handed to the discovery worker.
+#[derive(Debug, Clone, Copy)]
+pub struct DiscoveryFactory(
+    pub *const clap_sys::factory::preset_discovery::clap_preset_discovery_factory,
+);
+
+// SAFETY: the factory lives as long as its never-unloaded library, and the
+// worker is the only thread that calls into it (or into what it creates).
+unsafe impl Send for DiscoveryFactory {}
+
 impl ClapBundle {
     /// Load a .clap shared library file.
     pub fn load(path: &Path) -> Result<Self, ClapBundleError> {
@@ -214,6 +224,26 @@ impl ClapBundle {
 
     pub fn descriptors(&self) -> &[PluginDescInfo] {
         &self.descriptors
+    }
+
+    /// The bundle's `clap.preset-discovery-factory`, if it has one
+    /// (slice P8). `get_factory` is thread-safe, and the library is never
+    /// unloaded, so the pointer stays valid for the process and may be
+    /// used from the discovery worker.
+    pub fn preset_discovery_factory(&self) -> Option<DiscoveryFactory> {
+        use clap_sys::factory::preset_discovery::{
+            CLAP_PRESET_DISCOVERY_FACTORY_ID, CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT,
+        };
+        // SAFETY: `entry` is live (never deinit'ed) and `get_factory` is
+        // thread-safe per entry.h.
+        unsafe {
+            let get_factory = (*self.entry).get_factory?;
+            let mut ptr = get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID.as_ptr());
+            if ptr.is_null() {
+                ptr = get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT.as_ptr());
+            }
+            (!ptr.is_null()).then(|| DiscoveryFactory(ptr.cast()))
+        }
     }
 
     /// Factory presets baked into this plugin, as `(name, state json)`.

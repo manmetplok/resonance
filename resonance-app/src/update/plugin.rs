@@ -153,6 +153,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         m @ PluginMessage::LoadPluginPreset { .. } => apply_preset_load(r, m),
+        m @ PluginMessage::LoadPluginPresetFromLocation { .. } => apply_preset_load(r, m),
         PluginMessage::SetPluginSidechain {
             instance_id,
             source,
@@ -224,6 +225,38 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
 /// onto a plugin that was just added call this directly, unrecorded
 /// (plugin-preset-library.md §6.7). Any other message is ignored.
 pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
+    if let PluginMessage::LoadPluginPresetFromLocation {
+        instance_id,
+        location,
+        load_key,
+        preset_name,
+        preset_id,
+    } = m
+    {
+        // The plugin loads it; its `loaded()` (or its own report) confirms
+        // the identity and the engine's refresh moves the mirror.
+        let reported = r
+            .presets
+            .plugin_preset_identity
+            .get(&instance_id)
+            .is_some_and(|i| i.reported);
+        r.presets.plugin_preset_identity.insert(
+            instance_id,
+            crate::state::presets::SlotPresetIdentity {
+                source: resonance_control::methods::plugin_preset::PluginPresetSource::Factory,
+                id: preset_id,
+                name: preset_name,
+                modified: false,
+                reported,
+            },
+        );
+        let _ = r.engine.send(AudioCommand::LoadPluginPresetFromLocation {
+            instance_id,
+            location,
+            load_key,
+        });
+        return;
+    }
     let PluginMessage::LoadPluginPreset {
         instance_id,
         values,

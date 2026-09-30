@@ -1444,3 +1444,39 @@ what landed and where the code differs from §§4–15.
   param via `query_params`) and the app's mirror takes those values.
 - Identity is what the host loaded (`modified_known: false`; host edits
   set `modified`). Marks, search, metadata and the host UI work unchanged.
+
+### P8 — discovered presets (tiers T1/T2) and drag-to-add
+
+- `clap_host::discovery`: a host indexer for `clap.preset-discovery-
+  factory` (`/2`, and `/draft-2`): every provider is created, `init`ed
+  (collecting declared file types and locations), asked for the metadata
+  of each `PLUGIN` location and of each file of each `FILE` location (a
+  directory is walked, depth-capped, for the declared extensions), and
+  destroyed. Presets carry name, location, load key, `clap` plugin ids,
+  creators, description, features and flags.
+- Threading: `engine::scan` spawns a `preset-discovery` worker after the
+  startup scan and every rescan for the bundles that expose the factory
+  (the pointer is valid for the process: bundles are never unloaded); the
+  engine and audio threads never call a provider. Each plugin's list
+  arrives as `AudioEvent::PluginPresetsDiscovered`.
+- Cache: `<library>/discovered/<clap-id>.json` (the library dir is
+  `library_marks::default_library_dir()`, so `RESONANCE_LIBRARY_DIR`
+  redirects it), valid while the binary's path, size and mtime match.
+- App: the list joins the library as **read-only factory presets** after
+  the compiled-in bank, id `plugin:<key>` / `file:<path>[#key]`; creators
+  → author, description, features → tags. A provider `IS_FAVORITE` stars
+  the preset once, when the user never marked it. A recall of one is the
+  new recorded `PluginMessage::LoadPluginPresetFromLocation` →
+  `AudioCommand::LoadPluginPresetFromLocation`, after which the engine
+  emits `PluginParamsRefreshed`; the plugin's `loaded()` (T2, from P5)
+  confirms the identity. **Not built:** soundpacks, timestamps and extra
+  info are received and dropped; `IS_USER_CONTENT` presets are listed as
+  factory (read-only) like the rest.
+- Drag-to-add: pressing a Presets-tab row arms a drag; while armed, the
+  arrange track headers report the pointer (`DragOver`) and a window-level
+  button-release listener ends it (`DragEnd`): over a header, the plugin
+  is added there with the preset (the "with preset…" path, one undo step);
+  an instrument only onto an instrument track with none yet. **Deviation
+  from §6.6:** the drop target is the arrange track header, not a mixer
+  strip — the media browser lives in the Arrange view, where no strip is
+  on screen.

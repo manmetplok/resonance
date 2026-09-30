@@ -27,6 +27,7 @@ arc-swap.workspace = true
 memmap2 = "0.9"
 bytemuck.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 flacenc = { version = "0.5.1", default-features = false, features = ["par"] }

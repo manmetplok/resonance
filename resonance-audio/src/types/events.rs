@@ -554,6 +554,13 @@ pub enum AudioEvent {
         location: crate::types::PluginPresetLocation,
         load_key: Option<String>,
     },
+    /// What a plugin's `clap.preset-discovery-factory` lists for it
+    /// (plugin-preset-library.md §8 tier T1, slice P8), from the discovery
+    /// worker after a scan (or its cache).
+    PluginPresetsDiscovered {
+        plugin_id: String,
+        presets: Vec<crate::clap_host::discovery::DiscoveredPreset>,
+    },
     /// A preset state load finished (`AudioCommand::LoadPluginPresetState`):
     /// every param as the plugin now reports it, so the app's mirror
     /// follows a load it could not predict — a third-party plugin's opaque
