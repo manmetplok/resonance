@@ -4,12 +4,13 @@
 //! Covers the view-layer additions on top of the `MarkerMessage` reducers
 //! (todo #367): the overview popover open/close toggle, the overview
 //! click-to-jump path (`MarkerMessage::JumpTo`), and the focus-gated
-//! next/prev-marker keyboard shortcut (`UiMessage::MarkerNavResolved`).
+//! next/prev-marker keyboard shortcut (`UiMessage::ShortcutProbed`).
 //! The reducers move the transport playhead in lockstep with the `SeekTo`
 //! command they send the engine, so the mirrored playhead is the
 //! observable proxy for a correct jump (same convention the reducer tests
 //! use).
 
+use resonance_app::commands::CommandId;
 use resonance_app::message::{MarkerMessage, Message, TransportMessage, UiMessage};
 use resonance_app::state::ArrangementMarker;
 use resonance_app::Resonance;
@@ -77,15 +78,15 @@ fn marker_nav_shortcut_jumps_when_not_editing() {
 
     // Next-marker (`.`) with no focused text field jumps to the following
     // marker (Chorus/Verse boundary after 60k is Verse @96k).
-    let _ = app.update(Message::Ui(UiMessage::MarkerNavResolved {
-        forward: true,
+    let _ = app.update(Message::Ui(UiMessage::ShortcutProbed {
+        command: CommandId::NextMarker,
         editing: false,
     }));
     assert_eq!(app.test_playhead(), 96_000);
 
     // Prev-marker (`,`) jumps back to Intro @48k.
-    let _ = app.update(Message::Ui(UiMessage::MarkerNavResolved {
-        forward: false,
+    let _ = app.update(Message::Ui(UiMessage::ShortcutProbed {
+        command: CommandId::PrevMarker,
         editing: false,
     }));
     assert_eq!(app.test_playhead(), 48_000);
@@ -98,8 +99,8 @@ fn marker_nav_shortcut_suppressed_while_editing() {
     let _ = app.update(Message::Transport(TransportMessage::SeekToSample(60_000)));
 
     // A period typed into a focused text field must not move the playhead.
-    let _ = app.update(Message::Ui(UiMessage::MarkerNavResolved {
-        forward: true,
+    let _ = app.update(Message::Ui(UiMessage::ShortcutProbed {
+        command: CommandId::NextMarker,
         editing: true,
     }));
     assert_eq!(app.test_playhead(), 60_000, "editing suppresses nav");

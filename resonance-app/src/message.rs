@@ -309,18 +309,6 @@ pub enum UiMessage {
     /// or `Esc` returns to it; never auto-opens on record-arm and never
     /// disturbs transport state.
     TogglePerformanceMode,
-    /// The raw `F` key press. Unlike [`TogglePerformanceMode`] this does not
-    /// toggle directly: it first probes the live widget tree for keyboard
-    /// focus (see [`crate::focus`]) and only toggles when no text field is
-    /// being edited, so typing `F` into a track name / BPM / lyrics field
-    /// never flips Performance mode. Resolves to [`PerformanceToggleResolved`].
-    RequestPerformanceToggle,
-    /// Result of the focus probe started by [`RequestPerformanceToggle`].
-    /// `editing` is `true` when a text field held focus at the moment `F` was
-    /// pressed; the toggle is suppressed in that case.
-    PerformanceToggleResolved {
-        editing: bool,
-    },
     /// Leave Performance mode (the `Esc` keyboard shortcut), restoring the
     /// view that was active when Performance mode was entered. A no-op when
     /// not in Performance mode.
@@ -397,29 +385,11 @@ pub enum UiMessage {
     /// Close the markers overview popover — backdrop click, or after an
     /// overview entry jumps the playhead (todo #370).
     CloseMarkersOverview,
-    /// Raw next/prev-marker key press (`.` / `,`). Like
-    /// [`RequestPerformanceToggle`], this does not navigate directly: it
-    /// first probes the live widget tree for keyboard focus (see
-    /// [`crate::focus`]) so typing `.`/`,` into a track name / lyrics /
-    /// section field never jumps the playhead. Resolves to
-    /// [`MarkerNavResolved`]. `forward` picks next (`true`) vs prev.
-    RequestMarkerNav {
-        forward: bool,
-    },
-    /// Result of the focus probe started by [`RequestMarkerNav`]. When no
-    /// text field held focus (`editing == false`) the corresponding
-    /// [`crate::message::MarkerMessage::JumpToNext`] /
-    /// [`crate::message::MarkerMessage::JumpToPrev`] is dispatched.
-    MarkerNavResolved {
-        forward: bool,
-        editing: bool,
-    },
-    /// A global keyboard shortcut that is also an ordinary typing key
-    /// (Enter, `B`, Cmd-Z / Cmd-Y). Like [`RequestPerformanceToggle`] it
-    /// does not act directly: the keyboard subscription sees presses a
-    /// focused text field already consumed, so this probes widget focus
-    /// (see [`crate::focus`]) and resolves to [`ShortcutResolved`]
-    /// (UPD-11).
+    /// A key press outside the command registry that is also an ordinary
+    /// typing key (the held `B` reference audition). It does not act
+    /// directly: this probes widget focus (see [`crate::focus`]) and
+    /// resolves to [`ShortcutResolved`] (UPD-11). Registry shortcuts take
+    /// the same gate through [`ShortcutProbed`].
     RequestShortcut(Box<Message>),
     /// Result of the focus probe started by [`RequestShortcut`]: the
     /// wrapped message is dispatched only when no text field held focus
@@ -496,8 +466,6 @@ impl UiMessage {
             // settings: pure UI or user-settings state, never a project edit.
             Self::SwitchView(..)
             | Self::TogglePerformanceMode
-            | Self::RequestPerformanceToggle
-            | Self::PerformanceToggleResolved { .. }
             | Self::ExitPerformanceMode
             | Self::OpenSettings
             | Self::CloseSettings
@@ -526,8 +494,6 @@ impl UiMessage {
             | Self::SetPerformanceCapo(..)
             | Self::ToggleMarkersOverview
             | Self::CloseMarkersOverview
-            | Self::RequestMarkerNav { .. }
-            | Self::MarkerNavResolved { .. }
             | Self::RequestShortcut(..)
             | Self::ShortcutResolved { .. }
             | Self::DismissImportProgress

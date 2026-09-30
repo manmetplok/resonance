@@ -4,7 +4,9 @@
 //! `legacy_key_press_message` below is a verbatim copy of the hand-written
 //! `update::key_press_message` match that the registry replaced. It is kept
 //! frozen here as the oracle, so the parity check still pins the old
-//! behaviour after the live function is gone.
+//! behaviour now the live function is gone. (Its faithfulness was checked
+//! against the live function over the whole key space in the commit that
+//! introduced it, before the function was removed.)
 //!
 //! For every chord the legacy table handled, the new path — the chord looked
 //! up in `BindingMap::resonance_default()`, then the command's typing gate
@@ -248,35 +250,6 @@ fn legacy_chords_the_registry_drops_are_only_modifier_sloppy_variants() {
             assert!(
                 bound.is_some_and(|(_, new)| new.1 == legacy.1),
                 "{key:?}+{mods:?} has no bound canonical form"
-            );
-        }
-    }
-}
-
-/// While the legacy function is still live, prove the frozen copy above is
-/// faithful to it over the whole key space.
-#[test]
-fn the_frozen_oracle_matches_the_live_legacy_function() {
-    for key in all_keys() {
-        for mods in all_modifiers() {
-            let live = resonance_app::update::key_press_message(key.clone(), mods).map(|m| match m {
-                Message::Ui(UiMessage::RequestPerformanceToggle) => {
-                    Legacy::Gated(Message::Ui(UiMessage::TogglePerformanceMode))
-                }
-                Message::Ui(UiMessage::RequestMarkerNav { forward }) => {
-                    Legacy::Gated(Message::Marker(if forward {
-                        MarkerMessage::JumpToNext
-                    } else {
-                        MarkerMessage::JumpToPrev
-                    }))
-                }
-                other => Legacy::of(other),
-            });
-            let frozen = legacy_key_press_message(key.clone(), mods);
-            assert_eq!(
-                live.map(|l| l.key()),
-                frozen.map(|l| l.key()),
-                "{key:?}+{mods:?}"
             );
         }
     }

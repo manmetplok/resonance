@@ -52,17 +52,12 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
         | Message::Ui(UiMessage::TogglePerformanceMode)
-        | Message::Ui(UiMessage::RequestPerformanceToggle)
-        | Message::Ui(UiMessage::PerformanceToggleResolved { .. })
         | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
         | Message::Ui(UiMessage::OpenAddTrackMenu)
-        // Markers overview + marker navigation are only meaningful with a
-        // project open — block them while the startup modal owns the screen
-        // (the nav variants would otherwise drive gated `Marker` messages).
+        // The markers overview is only meaningful with a project open —
+        // block it while the startup modal owns the screen.
         | Message::Ui(UiMessage::ToggleMarkersOverview)
-        | Message::Ui(UiMessage::RequestMarkerNav { .. })
-        | Message::Ui(UiMessage::MarkerNavResolved { .. })
         // The track context menu acts on a project's tracks — block it
         // while the startup modal owns the screen (there are no tracks to
         // act on yet), like the other auxiliary overlays.

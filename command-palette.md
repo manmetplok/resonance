@@ -1,8 +1,12 @@
 # Command palette, keyboard shortcuts and transport control commands
 
-Status: **spec** (2026-09-30). Nothing built yet. Build it as vertical slices
-(§9). Each slice lands its registry entries, reducer, bindings and tests
-together.
+Status: **building** on `feat/command-palette` (2026-09-30), one phase per
+slice (§9). The open decisions in §11 were never answered, so the build
+takes the **recommended** option for each (D1–D7). Where the code and this
+spec disagreed, the build followed the code and this document was corrected
+to match; those notes are marked *(as built)*.
+
+- **P0 landed.** The registry is the live dispatch.
 
 ## 0. Why
 
@@ -119,6 +123,13 @@ the tests (`ALL.len() == 37`) turns into a check derived from the enum.
   root overlay (a new generic dismiss for each overlay, the same effect as
   a backdrop click), then exit Performance mode. Canvas-local Esc (cancel a
   drag, collapse the expanded editor) captures first, as it does now.
+  *(As built:)* Esc does not close the startup screen or the bounce,
+  mixdown and freeze progress modals; stopping a render takes the explicit
+  Cancel button. The non-modal "Group selected" bar is a root overlay that
+  gates nothing (`Overlay::blocks_keys`).
+- *(As built:)* `view()` now draws the root overlay over the Performance
+  shell too. Before, Performance mode returned early and hid every overlay,
+  so the gate and the renderer would have disagreed there.
 
 ### 3.3 Several chords per command
 
@@ -146,24 +157,42 @@ A command must produce **one undo entry**, as a click does. Two cases:
 
 ### 4.1 Global handler
 
-`key_press_message` is replaced by:
+`key_press_message` is replaced by *(as built)*:
 
 ```
-KeyPressed{key, modifiers, repeat, ..}
+event::listen_with → KeyPressed{key, modifiers, repeat, ..} + capture status
   → KeyChord::from_iced(&key, modifiers)
-  → bindings.command_for(Scope::Global, chord)
-  → skip if repeat && !cmd.repeat()
-  → Message::Ui(UiMessage::RunShortcut(cmd))
+  → Message::Ui(UiMessage::ShortcutKey{chord, repeat, captured})
+reducer (update/shortcuts.rs):
+  → drop if captured (a focused field or a key-owning canvas used it)
+  → Esc + modal root overlay → that overlay's dismiss message
+  → modal root overlay + no ⌘/Ctrl → drop
+  → r.ui.keymap.command_for(Scope::Global, chord)
+  → drop if repeat && !cmd.repeat()
+  → run_shortcut: availability, then the typing gate, then to_message(r)
 ```
 
-The `RunShortcut` reducer does the rest. It checks the palette and overlay
-gate first (§3.2), then the typing gate, then `to_message(r)`, then
-dispatches. The active `BindingMap` lives on `Resonance`; phase 5 loads it
-from settings. The subscription closure can't capture state, which is why
-the map lookup runs in the reducer.
+The subscription closure can't capture state, so it forwards every key
+and the map lookup runs in the reducer. It uses `iced::event::listen_with`
+rather than `keyboard::listen`, because the palette needs Esc, which a
+focused `text_input` captures (it unfocuses itself on Esc). The reducer
+drops captured keys otherwise, which is what `keyboard::listen` did.
 
-`key_press_message` stays as a thin test seam that returns the
-`CommandId`, so the existing focus-gate tests keep a stable entry point.
+The typing gate is `UiMessage::ShortcutProbed{command, editing}`: the
+focus probe resolves to it, and the command's message is built only then.
+A bare chord is typing-gated whatever `gate()` says, so a preset or a
+rebinding can't put an ungated letter on a command. `RequestShortcut`
+stays only for the held-`B` audition, which is not a command.
+`RunShortcut(cmd)` runs a command as a shortcut without a chord.
+The active `BindingMap` is `r.ui.keymap`; phase 5 loads it from settings.
+
+The test seam is `update::shortcuts::key_press_command(&BindingMap, &Key,
+Modifiers) -> Option<CommandId>` (renamed from `key_press_message`,
+because it returns a command, not a message).
+
+`to_message(r)` returns `None` only when a command has no target to name.
+`availability(r)` is the authority on whether a command can run; the
+shortcut path drops an unavailable command without dispatching.
 
 ### 4.2 New named keys
 
