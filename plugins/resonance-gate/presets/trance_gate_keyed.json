@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -35.0,
-    "ratio": 20.0,
-    "attack": 5.0,
-    "hold": 0.0,
-    "release": 5.0,
-    "range": 80.0,
-    "hysteresis": 3.0,
-    "key_hpf": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "keyed-trance-gate",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Keyed — Trance Gate",
+    "author": "Resonance",
+    "description": "Hard 20:1 keyed gate with no hold and a near-instant 5 ms close at full 80 dB range, for rhythmic stutter-chopping.",
+    "category": "Creative",
+    "instrument": ["synth", "synth-bass"],
+    "genres": ["trance", "electronic"],
+    "character": ["aggressive", "punchy"],
+    "tags": ["trance-gate", "sidechain", "stutter"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -35.0,
+        "ratio": 20.0,
+        "attack": 5.0,
+        "hold": 0.0,
+        "release": 5.0,
+        "range": 80.0,
+        "hysteresis": 3.0,
+        "key_hpf": 0.0
+      }
+    }
   }
 }

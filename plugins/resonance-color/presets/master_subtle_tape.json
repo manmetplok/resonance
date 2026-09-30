@@ -1,17 +1,36 @@
 {
-  "params": {
-    "mode": 1,
-    "drive": 0.25,
-    "bias": 0.3,
-    "response": 0.0,
-    "tone": 0.0,
-    "mix": 0.8,
-    "auto_gain": 1,
-    "output": 0.0,
-    "oversample": 2,
-    "speed": 2,
-    "flutter": 0.0,
-    "tape_quality": 0,
-    "tape_solver": 1
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "master-subtle-tape",
+  "plugin": { "id": "com.resonance.color" },
+  "meta": {
+    "name": "Master — Subtle Tape",
+    "author": "Resonance",
+    "description": "Low-drive Tape voicing at 30 ips with 4x oversampling, for a barely-there vintage tape wash on the master.",
+    "category": "Master",
+    "instrument": ["master"],
+    "genres": [],
+    "character": ["subtle", "warm", "clean"],
+    "tags": ["tape"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "mode": 1,
+        "drive": 0.25,
+        "bias": 0.3,
+        "response": 0.0,
+        "tone": 0.0,
+        "mix": 0.8,
+        "auto_gain": 1,
+        "output": 0.0,
+        "oversample": 2,
+        "speed": 2,
+        "flutter": 0.0,
+        "tape_quality": 0,
+        "tape_solver": 1
+      }
+    }
   }
 }

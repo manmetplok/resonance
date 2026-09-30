@@ -89,7 +89,7 @@ impl ResonancePlugin for ResonanceMastering {
             params: Arc::new(MasteringParams::default()),
             // The assistant's target choice rides along with the preset
             // identity (warmth-width-depth.md §7.4).
-            presets: resonance_plugin::presets::PresetSession::with_extra(
+            presets: resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(
                 assistant::AssistantStateSaver::new(viz.clone()),
             ),
             viz,

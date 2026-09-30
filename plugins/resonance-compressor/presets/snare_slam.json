@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -18.0,
-    "ratio": 6.0,
-    "attack": 3.0,
-    "release": 80.0,
-    "knee": 2.0,
-    "makeup": 3.0,
-    "mix": 1.0,
-    "detector_mix": 0.0,
-    "sc_hpf_freq": 120.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "snare-slam",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Snare — Slam",
+    "author": "Resonance",
+    "description": "6:1 with a 3 ms attack that crushes the transient hard; sidechain HPF at 120 Hz keeps low thump from tripping it.",
+    "category": "Track",
+    "instrument": ["snare"],
+    "genres": [],
+    "character": ["aggressive", "punchy"],
+    "tags": ["high-pass"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -18.0,
+        "ratio": 6.0,
+        "attack": 3.0,
+        "release": 80.0,
+        "knee": 2.0,
+        "makeup": 3.0,
+        "mix": 1.0,
+        "detector_mix": 0.0,
+        "sc_hpf_freq": 120.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

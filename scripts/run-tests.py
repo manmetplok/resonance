@@ -53,6 +53,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -150,12 +151,25 @@ def build_plugin_cdylibs(crates: list[str]) -> None:
     print(f"built {len(plugins)} plugin cdylibs in {time.monotonic() - started:.0f}s")
 
 
+# Plugin presets resolve a loaded identity against the user preset
+# directory, and the first look at a directory converts legacy files in
+# it. Point every test at a private, empty root so a run never reads or
+# rewrites the real ~/.local/share/resonance/plugin-presets. Tests that
+# need presets set their own root; an explicit override is respected.
+PRESET_ROOT = os.path.join(
+    tempfile.gettempdir(), f"resonance-test-plugin-presets-{os.getpid()}"
+)
+
+
 def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
+    env = dict(os.environ)
+    env.setdefault("RESONANCE_PLUGIN_PRESET_DIR", PRESET_ROOT)
     proc = subprocess.run(
         [exe, *extra],
         cwd=cwd,
         capture_output=True,
         text=True,
+        env=env,
     )
     return exe, proc.returncode, proc.stdout + proc.stderr
 

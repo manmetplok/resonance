@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -20.0,
-    "ratio": 3.5,
-    "attack": 20.0,
-    "release": 200.0,
-    "knee": 8.0,
-    "makeup": 2.5,
-    "mix": 1.0,
-    "detector_mix": 0.4,
-    "sc_hpf_freq": 40.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "bass-glue",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Bass — Glue",
+    "author": "Resonance",
+    "description": "3.5:1 with a soft knee and a 20 ms attack to smooth bass sustain without choking the pluck; 40 Hz sidechain HPF.",
+    "category": "Track",
+    "instrument": ["bass"],
+    "genres": [],
+    "character": ["warm", "clean"],
+    "tags": ["glue"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -20.0,
+        "ratio": 3.5,
+        "attack": 20.0,
+        "release": 200.0,
+        "knee": 8.0,
+        "makeup": 2.5,
+        "mix": 1.0,
+        "detector_mix": 0.4,
+        "sc_hpf_freq": 40.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

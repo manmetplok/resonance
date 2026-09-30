@@ -1,26 +1,45 @@
 {
-  "params": {
-    "predelay": 60.0,
-    "er_level": 0.20,
-    "er_time": 0.65,
-    "size": 0.80,
-    "decay": 5.0,
-    "damping": 6000.0,
-    "diffusion": 0.80,
-    "mod_rate": 1.5,
-    "mod_depth": 0.50,
-    "width": 1.0,
-    "mix": 0.50,
-    "freeze": 0,
-    "wet_hpf_on": 0,
-    "wet_hpf_freq": 600.0,
-    "wet_lpf_on": 0,
-    "wet_lpf_freq": 10000.0,
-    "wet_filter_slope": 0,
-    "duck_amount": 0.0,
-    "duck_threshold": -30.0,
-    "duck_attack": 15.0,
-    "duck_release": 200.0,
-    "er_tail_balance": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "ambient-bloom",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Ambient Bloom",
+    "author": "Resonance",
+    "description": "Long 60 ms predelay, high 0.5 mod depth and a 5 s tail blended at 50%, a slow-blooming ambient wash, not a discreet space.",
+    "category": "Creative",
+    "instrument": ["synth", "strings"],
+    "genres": ["ambient"],
+    "character": ["evolving", "lush", "wide"],
+    "tags": ["long-decay"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 60.0,
+        "er_level": 0.20,
+        "er_time": 0.65,
+        "size": 0.80,
+        "decay": 5.0,
+        "damping": 6000.0,
+        "diffusion": 0.80,
+        "mod_rate": 1.5,
+        "mod_depth": 0.50,
+        "width": 1.0,
+        "mix": 0.50,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0
+      }
+    }
   }
 }

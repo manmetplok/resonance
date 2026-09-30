@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -32.0,
-    "ratio": 12.0,
-    "attack": 5.0,
-    "hold": 140.0,
-    "release": 90.0,
-    "range": 45.0,
-    "hysteresis": 8.0,
-    "key_hpf": 120.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "drums-tom-gate",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Drums — Tom Gate",
+    "author": "Resonance",
+    "description": "12:1 gate with a long 140 ms hold so tom decay survives, closing over 90 ms with a moderate 45 dB range.",
+    "category": "Track",
+    "instrument": ["drums"],
+    "genres": [],
+    "character": ["punchy", "clean"],
+    "tags": ["gate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -32.0,
+        "ratio": 12.0,
+        "attack": 5.0,
+        "hold": 140.0,
+        "release": 90.0,
+        "range": 45.0,
+        "hysteresis": 8.0,
+        "key_hpf": 120.0
+      }
+    }
   }
 }

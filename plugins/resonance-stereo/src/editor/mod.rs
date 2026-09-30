@@ -95,10 +95,7 @@ impl StereoEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceStereo as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceStereo as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceStereo>(),
             presets,
             preset_editor: PresetEditor::default(),
             scratch: Vec::with_capacity(crate::viz::GONIO_POINTS),

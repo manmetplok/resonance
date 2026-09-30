@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -18.0,
-    "ratio": 3.0,
-    "attack": 12.0,
-    "release": 120.0,
-    "knee": 6.0,
-    "makeup": 2.0,
-    "mix": 1.0,
-    "detector_mix": 0.2,
-    "sc_hpf_freq": 80.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "guitar-control",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Guitar — Control",
+    "author": "Resonance",
+    "description": "3:1, 12 ms attack, mostly-peak detection to tame pick dynamics on electric guitar without squashing sustain.",
+    "category": "Track",
+    "instrument": ["guitar", "electric-guitar"],
+    "genres": [],
+    "character": ["clean", "punchy"],
+    "tags": ["high-pass"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -18.0,
+        "ratio": 3.0,
+        "attack": 12.0,
+        "release": 120.0,
+        "knee": 6.0,
+        "makeup": 2.0,
+        "mix": 1.0,
+        "detector_mix": 0.2,
+        "sc_hpf_freq": 80.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

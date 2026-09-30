@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -22.0,
-    "ratio": 3.0,
-    "attack": 8.0,
-    "release": 150.0,
-    "knee": 6.0,
-    "makeup": 3.0,
-    "mix": 1.0,
-    "detector_mix": 0.3,
-    "sc_hpf_freq": 90.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "vocal-lead",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Vocal — Lead",
+    "author": "Resonance",
+    "description": "3:1 with an 8 ms attack riding a lead vocal ~3 dB; sidechain HPF at 90 Hz keeps breath and pops from triggering it.",
+    "category": "Track",
+    "instrument": ["lead-vocal", "vocal"],
+    "genres": [],
+    "character": ["clean", "punchy"],
+    "tags": ["high-pass"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -22.0,
+        "ratio": 3.0,
+        "attack": 8.0,
+        "release": 150.0,
+        "knee": 6.0,
+        "makeup": 3.0,
+        "mix": 1.0,
+        "detector_mix": 0.3,
+        "sc_hpf_freq": 90.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

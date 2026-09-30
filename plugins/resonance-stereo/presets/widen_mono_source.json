@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.0,
-    "mono_below": 100.0,
-    "mono_slope": 1,
-    "widen_mode": 1,
-    "widen_amount": 0.6,
-    "focus_low": 200.0,
-    "focus_high": 20000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "widen-mono-source",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Widen Mono Source",
+    "author": "Resonance",
+    "description": "Decorrelate widening at 60% above 200 Hz with bass mono'd below 100 Hz, for turning a mono source into a stereo image.",
+    "category": "Track",
+    "instrument": [],
+    "genres": [],
+    "character": ["wide", "lush"],
+    "tags": ["decorrelate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.0,
+        "mono_below": 100.0,
+        "mono_slope": 1,
+        "widen_mode": 1,
+        "widen_amount": 0.6,
+        "focus_low": 200.0,
+        "focus_high": 20000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

@@ -50,38 +50,47 @@ pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 /// only make sense with something connected to the key port.
 pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {
+        id: "init-default",
         name: "Init — Default",
         json: include_str!("../presets/init_default.json"),
     },
     PresetEntry {
+        id: "vocal-noise-gate",
         name: "Vocal — Noise Gate",
         json: include_str!("../presets/vocal_noise_gate.json"),
     },
     PresetEntry {
+        id: "drums-snare-gate",
         name: "Drums — Snare Gate",
         json: include_str!("../presets/snare_gate.json"),
     },
     PresetEntry {
+        id: "drums-tom-gate",
         name: "Drums — Tom Gate",
         json: include_str!("../presets/tom_gate.json"),
     },
     PresetEntry {
+        id: "guitar-noise-floor",
         name: "Guitar — Noise Floor",
         json: include_str!("../presets/guitar_noise_floor.json"),
     },
     PresetEntry {
+        id: "gentle-expander",
         name: "Gentle Expander",
         json: include_str!("../presets/gentle_expander.json"),
     },
     PresetEntry {
+        id: "dialogue-room-tone",
         name: "Dialogue — Room Tone",
         json: include_str!("../presets/dialogue_room_tone.json"),
     },
     PresetEntry {
+        id: "keyed-open-on-kick",
         name: "Keyed — Open on Kick",
         json: include_str!("../presets/keyed_open_on_kick.json"),
     },
     PresetEntry {
+        id: "keyed-trance-gate",
         name: "Keyed — Trance Gate",
         json: include_str!("../presets/trance_gate_keyed.json"),
     },

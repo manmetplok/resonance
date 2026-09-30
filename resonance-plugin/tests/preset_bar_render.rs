@@ -17,10 +17,12 @@ use plugin_gui_core::egui;
 
 const FACTORY: &[FactoryPreset] = &[
     FactoryPreset {
+        id: "init",
         name: "Init",
         json: r#"{"params":{"mix":0.5}}"#,
     },
     FactoryPreset {
+        id: "wide",
         name: "Wide",
         json: r#"{"params":{"mix":0.9}}"#,
     },
@@ -57,8 +59,8 @@ fn the_bar_lays_out_in_every_state_it_can_be_in() {
 
     // 2. A factory preset loaded and edited since (the "•" branch), with
     //    a user preset in the list so both headings render.
-    session.save_as(&bank, "Mine", &params).unwrap();
-    session.set_current(Some(PresetRef::factory("Init")));
+    let mine = session.save_as(&bank, "Mine", &params).unwrap();
+    session.set_current(Some(PresetRef::factory("init", "Init")));
     session.mark_modified();
     egui::__run_test_ui(|ui| {
         preset_bar(
@@ -73,7 +75,7 @@ fn the_bar_lays_out_in_every_state_it_can_be_in() {
     });
 
     // 3. Mid-rename: the name field replaces the buttons.
-    editor.begin_rename(&PresetRef::user("Mine"));
+    editor.begin_rename(&mine);
     egui::__run_test_ui(|ui| {
         preset_bar(
             ui,

@@ -67,7 +67,7 @@ impl ResonancePlugin for ResonanceReverb {
     fn new() -> Self {
         Self {
             params: Arc::new(ReverbParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             smoothers: ReverbSmoothers::new(),
             viz: ReverbViz::new(),
             reverb: None,

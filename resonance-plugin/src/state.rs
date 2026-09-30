@@ -90,6 +90,9 @@ pub fn version_of(state: &serde_json::Value) -> u32 {
 /// undo a future migration) but are still loaded key-by-key by the
 /// loaders below.
 pub fn migrate(state: &mut serde_json::Value, renames: &[ParamRename]) -> u32 {
+    // A whole preset file (format 1) is accepted wherever a state document
+    // is: it carries one under `state.doc` (plugin-preset-library.md §4.3).
+    crate::presets::format::unwrap_envelope(state);
     let from_version = version_of(state);
     if from_version >= STATE_VERSION || renames.is_empty() {
         // Nothing to do: either current/newer, or the plugin has never

@@ -38,10 +38,7 @@ impl CompressorEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceCompressor as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceCompressor as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceCompressor>(),
             presets,
             preset_editor: PresetEditor::default(),
         }

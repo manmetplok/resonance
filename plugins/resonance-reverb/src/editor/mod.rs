@@ -103,10 +103,7 @@ impl ReverbEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceReverb as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceReverb as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceReverb>(),
             presets,
             preset_editor: PresetEditor::default(),
         }

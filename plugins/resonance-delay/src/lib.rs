@@ -56,7 +56,7 @@ impl ResonancePlugin for ResonanceDelay {
     fn new() -> Self {
         Self {
             params: Arc::new(DelayParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             smoothers: DelaySmoothers::new(),
             viz: DelayViz::new(),
             dsp: None,

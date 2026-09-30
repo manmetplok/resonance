@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -32.0,
-    "ratio": 12.0,
-    "attack": 2.0,
-    "release": 60.0,
-    "knee": 1.0,
-    "makeup": 6.0,
-    "mix": 0.35,
-    "detector_mix": 0.0,
-    "sc_hpf_freq": 100.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "parallel-smash",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Parallel Smash",
+    "author": "Resonance",
+    "description": "Extreme 12:1 NY-style smash from -32 dB threshold, 2 ms attack, heavy pumping, blended 35% parallel for drum-bus weight.",
+    "category": "Creative",
+    "instrument": ["drum-bus", "drums"],
+    "genres": ["rock"],
+    "character": ["aggressive", "gritty", "punchy"],
+    "tags": ["parallel", "pumping"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -32.0,
+        "ratio": 12.0,
+        "attack": 2.0,
+        "release": 60.0,
+        "knee": 1.0,
+        "makeup": 6.0,
+        "mix": 0.35,
+        "detector_mix": 0.0,
+        "sc_hpf_freq": 100.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

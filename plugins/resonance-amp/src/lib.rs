@@ -124,7 +124,7 @@ impl ResonancePlugin for ResonanceAmp {
         let load_request = Arc::new(AtomicI32::new(-1));
         // The preset identity wraps the model-path saver rather than
         // replacing it: chaining is why `with_extra` exists.
-        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+        let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(Arc::new(
             AmpExtraState {
                 model_path: params.model_path.clone(),
             },

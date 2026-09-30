@@ -1,17 +1,36 @@
 {
-  "params": {
-    "mode": 0,
-    "drive": 0.52,
-    "bias": 0.5,
-    "response": -3.0,
-    "tone": 2.0,
-    "mix": 0.85,
-    "auto_gain": 1,
-    "output": 0.0,
-    "oversample": 1,
-    "speed": 1,
-    "flutter": 0.0,
-    "tape_quality": 0,
-    "tape_solver": 1
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "vocal-tube-air",
+  "plugin": { "id": "com.resonance.color" },
+  "meta": {
+    "name": "Vocal — Tube Air",
+    "author": "Resonance",
+    "description": "Tube voicing with a negative response tilt driving the highs and a +2 dB bright output tilt, for airy vocal warmth.",
+    "category": "Track",
+    "instrument": ["vocal", "lead-vocal"],
+    "genres": [],
+    "character": ["warm", "bright", "airy"],
+    "tags": ["tube"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "mode": 0,
+        "drive": 0.52,
+        "bias": 0.5,
+        "response": -3.0,
+        "tone": 2.0,
+        "mix": 0.85,
+        "auto_gain": 1,
+        "output": 0.0,
+        "oversample": 1,
+        "speed": 1,
+        "flutter": 0.0,
+        "tape_quality": 0,
+        "tape_solver": 1
+      }
+    }
   }
 }

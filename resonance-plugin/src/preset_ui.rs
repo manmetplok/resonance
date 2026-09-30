@@ -27,8 +27,13 @@ use plugin_gui_core::egui;
 
 use crate::param::Param;
 use crate::presets::{
-    NamingKind, PresetBank, PresetEditor, PresetEvent, PresetRef, PresetSession, PresetSource,
+    NamingKind, PresetBank, PresetEditor, PresetEvent, PresetRecord, PresetRef, PresetSession,
+    PresetSource,
 };
+
+/// How often the bar re-checks the user preset directory; see
+/// [`crate::presets::BAR_REFRESH`].
+pub use crate::presets::BAR_REFRESH;
 
 /// Draw the preset bar. Returns what the user did, if anything.
 pub fn preset_bar(
@@ -48,17 +53,21 @@ pub fn preset_bar(
             return;
         }
 
+        // A project saved before preset ids carries a name-only identity;
+        // give it its id now that a bank is at hand (free once resolved).
+        session.resolve(bank);
         let current = session.current();
+        let records = bank.records_cached(BAR_REFRESH);
 
         // Step through the list without opening the combo — the fastest
         // way to audition a bank. Wavetable had these as a private fork
         // around its own combo; ba todo #1280 folds them in here so the
         // whole fleet gets them. Disabled at the ends, since stepping
         // clamps rather than wraps.
-        let all = bank.list();
+        let all = &records;
         let at = current
             .as_ref()
-            .and_then(|c| all.iter().position(|p| p == c));
+            .and_then(|c| all.iter().position(|r| r.preset.matches(c)));
         let can_prev = !all.is_empty() && at.map(|i| i > 0).unwrap_or(true);
         let can_next = !all.is_empty() && at.map(|i| i + 1 < all.len()).unwrap_or(true);
         if ui
@@ -69,7 +78,7 @@ pub fn preset_bar(
             event = editor.step(bank, session, -1, params);
         }
 
-        let picked = picker(ui, id_salt, editor, bank, session, params, placeholder);
+        let picked = picker(ui, id_salt, editor, bank, session, params, placeholder, all);
         if !matches!(picked, PresetEvent::None) {
             event = picked;
         }
@@ -125,6 +134,7 @@ pub fn preset_bar(
 
 /// The combo itself: factory bank first, then the user's own presets
 /// under their own heading, so the two sets are never confused.
+#[allow(clippy::too_many_arguments)]
 fn picker(
     ui: &mut egui::Ui,
     id_salt: &str,
@@ -133,29 +143,30 @@ fn picker(
     session: &PresetSession,
     params: &[&dyn Param],
     placeholder: &str,
+    records: &[PresetRecord],
 ) -> PresetEvent {
     let mut event = PresetEvent::None;
     let current = session.current();
+    let factory = || records.iter().filter(|r| r.preset.source == PresetSource::Factory);
+    let user = || records.iter().filter(|r| r.preset.source == PresetSource::User);
 
     egui::ComboBox::from_id_salt(id_salt)
         .selected_text(session.label(placeholder))
         .show_ui(ui, |ui| {
-            if !bank.factory().is_empty() {
+            if factory().next().is_some() {
                 ui.label(egui::RichText::new("Factory").weak().small());
             }
-            for entry in bank.factory() {
-                let preset = PresetRef::factory(entry.name);
-                if selectable(ui, &current, &preset) {
-                    event = editor.pick(bank, session, &preset, params);
+            for record in factory() {
+                if selectable(ui, &current, &record.preset) {
+                    event = editor.pick(bank, session, &record.preset, params);
                 }
             }
-            let user = bank.list_user();
-            if !user.is_empty() {
+            if user().next().is_some() {
                 ui.separator();
                 ui.label(egui::RichText::new("User").weak().small());
-                for preset in user {
-                    if selectable(ui, &current, &preset) {
-                        event = editor.pick(bank, session, &preset, params);
+                for record in user() {
+                    if selectable(ui, &current, &record.preset) {
+                        event = editor.pick(bank, session, &record.preset, params);
                     }
                 }
             }
@@ -165,7 +176,7 @@ fn picker(
 }
 
 fn selectable(ui: &mut egui::Ui, current: &Option<PresetRef>, preset: &PresetRef) -> bool {
-    let selected = current.as_ref() == Some(preset);
+    let selected = current.as_ref().is_some_and(|c| c.matches(preset));
     ui.selectable_label(selected, preset.name.as_str()).clicked()
 }
 

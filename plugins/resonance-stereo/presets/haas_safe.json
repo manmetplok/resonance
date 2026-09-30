@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.0,
-    "mono_below": 120.0,
-    "mono_slope": 1,
-    "widen_mode": 4,
-    "widen_amount": 0.35,
-    "focus_low": 250.0,
-    "focus_high": 20000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "haas-safe",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Haas — Safe",
+    "author": "Resonance",
+    "description": "Moderate Haas widening above 250 Hz with bass folded mono below 120 Hz, keeping the pre-delay trick mono-safe.",
+    "category": "Track",
+    "instrument": [],
+    "genres": [],
+    "character": ["wide", "subtle", "clean"],
+    "tags": ["haas", "mono-bass"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.0,
+        "mono_below": 120.0,
+        "mono_slope": 1,
+        "widen_mode": 4,
+        "widen_amount": 0.35,
+        "focus_low": 250.0,
+        "focus_high": 20000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

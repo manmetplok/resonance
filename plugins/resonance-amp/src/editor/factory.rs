@@ -80,10 +80,7 @@ impl EditorFactory for AmpEditorFactory {
             viz: self.viz.clone(),
             tone3000: self.tone3000.clone(),
             tone3000_panel: Tone3000PanelState::default(),
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceAmp>(),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
         };
