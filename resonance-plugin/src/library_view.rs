@@ -339,13 +339,30 @@ fn facet_values_of<'a>(rows: &'a dyn LibraryRows, row: usize, facet: &str) -> Ve
     }
 }
 
+/// Whether a facet value answers a scoped search token: the same value
+/// (case and accents folded), or one whose slug starts with the token's —
+/// `cat:ba` finds Bass, `genre:rock` does not find post-rock.
+fn facet_value_matches(value: &str, wanted: &str) -> bool {
+    let folded = fold(value);
+    if folded == wanted {
+        return true;
+    }
+    match (
+        crate::library_marks::normalize_tag(value),
+        crate::library_marks::normalize_tag(wanted),
+    ) {
+        (Some(v), Some(w)) => v.starts_with(&w),
+        _ => false,
+    }
+}
+
 fn token_matches(rows: &dyn LibraryRows, row: usize, token: &SearchToken) -> bool {
     match token {
         SearchToken::Favorite => rows.marks(row).is_some_and(|m| m.favorite),
         SearchToken::Recent => rows.marks(row).is_some_and(|m| m.last_used.is_some()),
         SearchToken::Facet { facet, value } => facet_values_of(rows, row, facet)
             .iter()
-            .any(|v| fold(v).contains(value.as_str())),
+            .any(|v| facet_value_matches(v, value)),
         SearchToken::Text(t) => {
             fold(rows.title(row)).contains(t.as_str())
                 || rows
@@ -454,15 +471,16 @@ impl BrowserModel {
     }
 
     pub fn is_facet_selected(&self, facet: &str, value: &str) -> bool {
-        self.facets.get(facet).is_some_and(|s| s.contains(value))
+        self.facets.get(facet).is_some_and(|s| s.contains(&fold(value)))
     }
 
     /// Toggle one facet value. Within a facet the selected values are ORed;
     /// across facets they are ANDed.
     pub fn toggle_facet(&mut self, facet: &str, value: &str) {
+        let value = fold(value);
         let set = self.facets.entry(facet.to_string()).or_default();
-        if !set.remove(value) {
-            set.insert(value.to_string());
+        if !set.remove(&value) {
+            set.insert(value);
         }
         if set.is_empty() {
             self.facets.remove(facet);
@@ -475,8 +493,7 @@ impl BrowserModel {
     pub fn set_facet(&mut self, facet: &str, value: Option<&str>) {
         match value {
             Some(v) => {
-                self.facets
-                    .insert(facet.to_string(), BTreeSet::from([v.to_string()]));
+                self.facets.insert(facet.to_string(), BTreeSet::from([fold(v)]));
             }
             None => {
                 self.facets.remove(facet);
@@ -576,8 +593,10 @@ impl BrowserModel {
             if Some(facet.as_str()) == skip_facet {
                 continue;
             }
+            // Selections are stored folded, so `Bass` and `bass` (a
+            // category outside the seeded vocabulary, say) are one value.
             let values = facet_values_of(rows, row, facet);
-            if !values.iter().any(|v| wanted.contains(*v)) {
+            if !values.iter().any(|v| wanted.contains(&fold(v))) {
                 return false;
             }
         }
@@ -652,23 +671,26 @@ impl BrowserModel {
     /// by count and name.
     pub fn facet_counts(&self, rows: &dyn LibraryRows, facet: &str) -> Vec<FacetCount> {
         let candidates = self.compute(rows, Some(facet));
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        // Grouped by the folded value (one entry for `Bass` and `bass`),
+        // shown as first seen.
+        let mut counts: BTreeMap<String, (String, usize)> = BTreeMap::new();
         for r in candidates {
-            let mut seen: Vec<&str> = Vec::new();
+            let mut seen: Vec<String> = Vec::new();
             for v in facet_values_of(rows, r, facet) {
-                if !seen.contains(&v) {
-                    seen.push(v);
-                    *counts.entry(v.to_string()).or_default() += 1;
+                let key = fold(v);
+                if !seen.contains(&key) {
+                    counts.entry(key.clone()).or_insert_with(|| (v.to_string(), 0)).1 += 1;
+                    seen.push(key);
                 }
             }
         }
         for v in self.facet_selection(facet) {
-            counts.entry(v.to_string()).or_default();
+            counts.entry(v.to_string()).or_insert_with(|| (v.to_string(), 0));
         }
         let seeded = vocab::Facet::from_name(facet);
         let rank = |v: &str| seeded.and_then(|f| f.seeded_rank(v));
         let mut out: Vec<FacetCount> = counts
-            .into_iter()
+            .into_values()
             .map(|(value, count)| FacetCount {
                 selected: self.is_facet_selected(facet, &value),
                 value,

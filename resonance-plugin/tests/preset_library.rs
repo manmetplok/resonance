@@ -386,6 +386,9 @@ fn the_shared_marks_store_backs_the_library() {
         .set_favorite("plugin-preset:com.resonance.test:lead-acid", true)
         .unwrap();
     let before = library.marks().generation();
+    // Picked up by the first query after the poll interval (queries are
+    // throttled: one per keystroke must not stat the file each time).
+    std::thread::sleep(resonance_plugin::library_marks::BROWSER_POLL_INTERVAL);
     assert_eq!(hit_names(&library, &q("is:fav")).len(), 2, "refreshed before the query");
     assert!(library.marks().generation() > before);
 
@@ -632,7 +635,8 @@ fn trash_older_than_thirty_days_is_purged_when_the_library_opens() {
             .with_root(root.0.clone())
             .with_clock(clock),
     );
-    PresetBank::new(PLUGIN, &[]).with_library(reopened).list();
+    PresetBank::new(PLUGIN, &[]).with_library(reopened.clone()).list();
+    reopened.wait_housekeeping();
     assert!(!old_trash.exists(), "past retention: purged");
     assert!(young_trash.exists(), "within retention: kept");
 }

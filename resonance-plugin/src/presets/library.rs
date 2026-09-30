@@ -169,6 +169,8 @@ pub struct PresetLibrary {
     marks_checked: Mutex<Option<Instant>>,
     clock: Clock,
     plugins: Mutex<HashMap<String, PluginIndex>>,
+    /// Background housekeeping started by a first open (the trash sweep).
+    housekeeping: Mutex<Vec<std::thread::JoinHandle<usize>>>,
 }
 
 impl Default for PresetLibrary {
@@ -188,6 +190,7 @@ impl PresetLibrary {
             marks_checked: Mutex::new(None),
             clock: Arc::new(SystemTime::now),
             plugins: Mutex::new(HashMap::new()),
+            housekeeping: Mutex::new(Vec::new()),
         }
     }
 
@@ -440,12 +443,16 @@ impl PresetLibrary {
         } else {
             plugin_ids.to_vec()
         };
+        // Throttled: a query per keystroke or star must not stat the marks
+        // file and re-list every preset directory each time. Our own
+        // writes update the index directly; another process's show within
+        // the poll interval.
+        self.refresh_marks(crate::library_marks::BROWSER_POLL_INTERVAL);
         let marks = self.marks();
-        marks.refresh();
         let sets: Vec<(String, Arc<Vec<PresetRecord>>)> = plugin_ids
             .into_iter()
             .map(|id| {
-                let records = self.records(&id, Duration::ZERO);
+                let records = self.records(&id, crate::library_marks::BROWSER_POLL_INTERVAL);
                 (id, records)
             })
             .collect();
@@ -905,27 +912,23 @@ impl PresetLibrary {
         let Some(trash) = self.trash_dir(plugin_id) else {
             return 0;
         };
-        let Ok(entries) = std::fs::read_dir(&trash) else {
-            return 0;
-        };
-        let now = self
-            .now()
+        purge_trash_dir(&trash, self.now_secs())
+    }
+
+    fn now_secs(&self) -> u64 {
+        self.now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
-        let mut purged = 0;
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let Some(stamp) = name.split('-').next().and_then(|s| s.parse::<u64>().ok()) else {
-                continue;
-            };
-            if now.saturating_sub(stamp) > TRASH_RETENTION.as_secs()
-                && std::fs::remove_file(entry.path()).is_ok()
-            {
-                purged += 1;
-            }
+            .unwrap_or(0)
+    }
+
+    /// Wait for the background housekeeping (the trash sweep a first open
+    /// starts) to finish. Tests; a UI never needs to.
+    pub fn wait_housekeeping(&self) {
+        let handles: Vec<_> = self.housekeeping.lock().drain(..).collect();
+        for h in handles {
+            let _ = h.join();
         }
-        purged
     }
 
     // -----------------------------------------------------------------
@@ -975,7 +978,16 @@ impl PresetLibrary {
             if !report.is_empty() {
                 tracing::info!("presets for {plugin_id}: {report:?}");
             }
-            self.purge_trash(plugin_id);
+            // The trash sweep is housekeeping nobody waits for: off the
+            // calling (UI / update) thread.
+            if let Some(trash) = self.trash_dir(plugin_id) {
+                let now = self.now_secs();
+                let handle = std::thread::Builder::new()
+                    .name("preset-trash-purge".into())
+                    .spawn(move || purge_trash_dir(&trash, now))
+                    .ok();
+                self.housekeeping.lock().extend(handle);
+            }
         } else if let Some(at) = user.checked_at {
             if at.elapsed() < max_age {
                 return;
@@ -997,6 +1009,27 @@ impl PresetLibrary {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Delete trashed presets older than [`TRASH_RETENTION`] at `now` (Unix
+/// seconds). Returns how many went.
+fn purge_trash_dir(trash: &Path, now: u64) -> usize {
+    let Ok(entries) = std::fs::read_dir(trash) else {
+        return 0;
+    };
+    let mut purged = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(stamp) = name.split('-').next().and_then(|s| s.parse::<u64>().ok()) else {
+            continue;
+        };
+        if now.saturating_sub(stamp) > TRASH_RETENTION.as_secs()
+            && std::fs::remove_file(entry.path()).is_ok()
+        {
+            purged += 1;
+        }
+    }
+    purged
+}
 
 fn build_factory(plugin_id: &str, entries: impl IntoIterator<Item = FactoryEntry>) -> FactorySet {
     let mut set = FactorySet::default();

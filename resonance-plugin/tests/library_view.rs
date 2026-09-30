@@ -549,3 +549,38 @@ fn audition_then_commit_keeps_the_last_provisional_load() {
     assert_eq!(bracket.revert(&mut target), AuditionEvent::Reverted);
     assert_eq!(target.value, 1.0);
 }
+
+/// Scoped tokens match the value or a slug prefix, never a mid-word
+/// substring; facet values group and filter case-folded.
+#[test]
+fn scoped_tokens_are_exact_or_prefix_and_facets_fold_case() {
+    let mut rows = rows();
+    let mut model = BrowserModel::new();
+    model.set_query("genre:metal");
+    model.refresh(&rows, 1);
+    assert_eq!(
+        titles(&model, &rows),
+        vec!["5150 Block Letter", "Darkglass MT900"],
+        "metal, not post-metal's suffix (the 5150 has metal itself)"
+    );
+    model.set_query("genre:etal");
+    model.refresh(&rows, 1);
+    assert!(titles(&model, &rows).is_empty(), "no mid-word match");
+    model.set_query("by:tone");
+    model.refresh(&rows, 1);
+    assert_eq!(titles(&model, &rows), vec!["5150 Block Letter", "Old Marshall"], "prefix");
+
+    rows.items[4].gear_type = "AMP";
+    model.set_query("");
+    model.refresh(&rows, 2);
+    let amp: Vec<_> = model
+        .facet_counts(&rows, "gear_type")
+        .into_iter()
+        .filter(|c| c.value.eq_ignore_ascii_case("amp"))
+        .collect();
+    assert_eq!(amp.len(), 1, "one entry for amp and AMP: {amp:?}");
+    assert_eq!(amp[0].count, 3);
+    model.toggle_facet("gear_type", "Amp");
+    model.refresh(&rows, 3);
+    assert_eq!(titles(&model, &rows).len(), 3, "the selection matches every case");
+}

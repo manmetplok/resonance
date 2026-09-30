@@ -323,21 +323,25 @@ impl SharedMarks {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// The refresh hook: re-read the file if another writer changed it
-    /// (one `stat` when not). Returns whether anything changed. The read
-    /// happens outside every in-memory lock.
+    /// The refresh hook: re-read the file if another writer changed it.
+    /// When nothing changed this costs one `stat` and nothing else — the
+    /// document is copied only once the stamp says the file moved. Returns
+    /// whether anything changed. Callers drawing every frame throttle it
+    /// (`PresetLibrary::refresh_marks`).
     pub fn refresh(&self) -> bool {
         if self.dir.as_os_str().is_empty() {
             return false;
         }
         let _w = self.writer.lock().unwrap_or_else(|p| p.into_inner());
         let current = self.snapshot();
+        if stat(&current.path()) == current.stamp {
+            return false;
+        }
         let mut next = MarksStore {
             dir: current.dir.clone(),
-            doc: MarksDoc::default(),
+            doc: current.doc.clone(),
             stamp: current.stamp,
         };
-        next.doc = current.doc.clone();
         match next.reload_if_changed() {
             Ok(true) => {
                 self.install(next);

@@ -423,6 +423,13 @@ fn every_factory_preset_matches_its_own_filters_after_the_swap() {
             };
             assert!(found(q), "{at}: category");
             assert!(found(text(format!("cat:{}", category.to_lowercase()))), "{at}: cat:");
+            // Scoped tokens match the value or a slug prefix, not any
+            // substring, and fold case.
+            assert!(found(text(format!("cat:{}", category.to_uppercase()))), "{at}: CAT:");
+            let inner: String = category.to_lowercase().chars().skip(1).collect();
+            if inner.len() >= 2 {
+                assert!(!found(text(format!("cat:{inner}"))), "{at}: cat:{inner} is no prefix");
+            }
             for g in &meta.genres {
                 let q = Query {
                     genres: vec![g.clone()],
@@ -430,6 +437,13 @@ fn every_factory_preset_matches_its_own_filters_after_the_swap() {
                 };
                 assert!(found(q), "{at}: genre {g}");
                 assert!(found(text(format!("genre:{g}"))), "{at}: genre:{g}");
+                // `genre:rock` must not find `post-rock`.
+                if let Some((_, tail)) = g.rsplit_once('-') {
+                    let other = meta.genres.iter().any(|o| o.starts_with(tail));
+                    if !other {
+                        assert!(!found(text(format!("genre:{tail}"))), "{at}: genre:{tail}");
+                    }
+                }
             }
             for c in &meta.character {
                 let q = Query {
