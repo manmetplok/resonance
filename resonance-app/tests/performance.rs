@@ -13,8 +13,12 @@
 #[path = "common/mod.rs"]
 mod common;
 
+#[path = "performance/command_palette.rs"]
+mod command_palette;
 #[path = "performance/commands_registry.rs"]
 mod commands_registry;
+#[path = "performance/keymap_settings.rs"]
+mod keymap_settings;
 #[path = "performance/keycap_styles.rs"]
 mod keycap_styles;
 #[path = "performance/performance_beat_cue.rs"]
@@ -65,5 +69,11 @@ mod reference_persistence;
 mod reference_undo;
 #[path = "performance/remote_indicator_snapshot.rs"]
 mod remote_indicator_snapshot;
+#[path = "performance/shortcut_dispatch.rs"]
+mod shortcut_dispatch;
+#[path = "performance/shortcut_review_fixes.rs"]
+mod shortcut_review_fixes;
+#[path = "performance/shortcut_parity.rs"]
+mod shortcut_parity;
 #[path = "performance/shortcut_focus_gate.rs"]
 mod shortcut_focus_gate;

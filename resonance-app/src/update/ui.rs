@@ -23,24 +23,8 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::TogglePerformanceMode => {
             toggle_performance_mode(r);
         }
-        UiMessage::RequestPerformanceToggle => {
-            // The unmodified `F` shortcut arrives via the global keyboard
-            // subscription, which fires even while a text field is focused.
-            // Probe the live widget tree for keyboard focus and only toggle
-            // once we know no text input is being edited (see `crate::focus`).
-            return crate::focus::any_text_input_focused()
-                .map(|editing| Message::Ui(UiMessage::PerformanceToggleResolved { editing }));
-        }
-        UiMessage::PerformanceToggleResolved { editing } => {
-            // Suppress the toggle when `F` was typed into a focused text
-            // field; otherwise apply the manual toggle.
-            if !editing {
-                toggle_performance_mode(r);
-            }
-        }
         UiMessage::ExitPerformanceMode => {
-            // `Esc` only leaves Performance mode; it is a no-op elsewhere so
-            // it never steals Escape from other views.
+            // Leaves Performance mode only; a no-op elsewhere.
             if r.ui.view_mode == ViewMode::Performance {
                 r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
             }
@@ -50,6 +34,8 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::CloseSettings => {
             r.ui.mixer.settings_open = false;
+            r.ui.keymap_editor.capturing = None;
+            r.ui.keymap_editor.conflict = None;
         }
         UiMessage::OpenAddTrackMenu => {
             r.ui.mixer.add_track_menu_open = true;
@@ -79,6 +65,23 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 return Task::none();
             }
             return project_io::save_project_as_dialog();
+        }
+        UiMessage::NewEmptyProject => {
+            if r.session.dirty {
+                r.banners.error_message =
+                    Some("Save the project first: it has unsaved changes".into());
+                return Task::none();
+            }
+            if r.io.loading || r.io.saving || r.io.save_state.is_some() {
+                return Task::none();
+            }
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
+            crate::update::project_io::instantiate_builtin(
+                r,
+                crate::update::project_io::BuiltinTemplateId::Empty,
+            );
         }
         UiMessage::SelectTrack(id) => {
             // A track and a bus can't both be selected — the inspector
@@ -228,19 +231,10 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::CloseMarkersOverview => {
             r.ui.mixer.markers_overview_open = false;
         }
-        UiMessage::RequestMarkerNav { forward } => {
-            // The bare `.`/`,` shortcut arrives via the global keyboard
-            // subscription, which fires even while a text field is focused.
-            // Probe for keyboard focus and only navigate once we know no
-            // text input is being edited (see `crate::focus`), mirroring the
-            // `F` performance-toggle gate.
-            return crate::focus::any_text_input_focused()
-                .map(move |editing| Message::Ui(UiMessage::MarkerNavResolved { forward, editing }));
-        }
         UiMessage::RequestShortcut(message) => {
-            // Same gate as `F` and `.`/`,`, for the shortcuts that are also
-            // typing keys (Enter, `B`, Cmd-Z/Y): probe focus first, act
-            // only when no text field is being edited (UPD-11).
+            // The typing gate for the held-`B` audition, which is not a
+            // registry command: probe focus first, act only when no text
+            // field is being edited (UPD-11).
             return crate::focus::any_text_input_focused().map(move |editing| {
                 Message::Ui(UiMessage::ShortcutResolved {
                     message: message.clone(),
@@ -256,17 +250,27 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 return r.update(*message);
             }
         }
-        UiMessage::MarkerNavResolved { forward, editing } => {
-            // Suppress navigation when the key was typed into a focused text
-            // field; otherwise jump to the adjacent marker.
-            if !editing {
-                let nav = if forward {
-                    crate::message::MarkerMessage::JumpToNext
-                } else {
-                    crate::message::MarkerMessage::JumpToPrev
-                };
-                return r.update(Message::Marker(nav));
-            }
+        UiMessage::ShortcutKey {
+            chord,
+            repeat,
+            captured,
+        } => {
+            return crate::update::shortcuts::handle_key(r, chord, repeat, captured);
+        }
+        UiMessage::ShortcutProbed { command, editing } => {
+            return crate::update::shortcuts::probed(r, command, editing);
+        }
+        UiMessage::OpenPalette(mode) => {
+            return crate::update::palette::open(r, mode);
+        }
+        UiMessage::ClosePalette => {
+            return crate::update::palette::close(r);
+        }
+        UiMessage::Palette(msg) => {
+            return crate::update::palette::handle(r, msg);
+        }
+        UiMessage::Keymap(msg) => {
+            return crate::update::keymap::handle(r, msg);
         }
     }
     Task::none()

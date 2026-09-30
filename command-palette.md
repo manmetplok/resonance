@@ -1,8 +1,49 @@
 # Command palette, keyboard shortcuts and transport control commands
 
-Status: **spec** (2026-09-30). Nothing built yet. Build it as vertical slices
-(§9). Each slice lands its registry entries, reducer, bindings and tests
-together.
+Status: **built** on `feat/command-palette` (2026-09-30), P0–P5, one
+phase per slice (§9). The open decisions in §11 were never answered, so the build
+takes the **recommended** option for each (D1–D7). Where the code and this
+spec disagreed, the build followed the code and this document was corrected
+to match; those notes are marked *(as built)*.
+
+- **P0 landed.** The registry is the live dispatch.
+- **P1 landed.** Transport and playhead control, with Space bound.
+- **P2 landed.** The palette (⌘K / ⇧⌘P), recents, `keys_blocked` on every
+  canvas, platform keycaps, goldens `command_palette_*`.
+- **P3 landed.** `…Selected` track toggles, split / duplicate / loop
+  selection / quantize, the orphan entry points, the rest of the §5.3–5.6
+  keymap, and the canvas-scoped entries (the four canvases now read their
+  keys from the keymap).
+- **P4 landed.** `:` `@` `#` `+` argument modes and ⌘J.
+- **P5 landed.** Tooltips (transport buttons, view tabs, Import, Settings),
+  the track-menu hints and the Performance footer read the registry; the
+  keymap lives in `settings.json`; Settings has a General / Keyboard nav
+  rail with preset, filter, Rebind (press the chord), conflict banner,
+  Reset and Reset all; the DAW presets ship (D5).
+- **Review fixes landed.** *(As built:)*
+  - Every canvas ignores keys while any modal overlay (palette included) is
+    open or a rebind is capturing (`Resonance::canvas_keys_blocked`). The
+    track context menu and its preset prompt are `Overlay::TrackMenu`:
+    gated and closed by Esc, though still drawn in the arrange area.
+  - Canvas deletes accept ⇧ and ⌘ with Delete/Backspace again, so ⌘⌫ over
+    a canvas selection never reaches Delete Selected Track. With nothing
+    selected on a key-owning canvas ⌘⌫ does still fall through to it (it
+    asks first). In the vocal roll, `s` / `+` / Delete with no note
+    selected are captured and do nothing. ⌥ variants are not restored.
+  - New Project with a project open makes a fresh untitled one (the
+    `project.new` path). With unsaved changes it is unavailable ("Save
+    first"); there is no GUI discard-confirm yet.
+  - Presets: Logic Pro (C cycle, ⌘U loop selection, ⌘T split, Return to
+    start) and Pro Tools (numpad-style 0/3/4/7). Ableton and FL Studio were
+    dropped: their old tables were wrong or no-ops. The panel lists what a
+    preset leaves unbound. Rebinding replaces the primary chord and keeps
+    the alternates.
+  - Seek commands are unavailable while recording or counting in. Recents
+    skip the palette-opening commands, record only after the gates pass,
+    and are written after 2 s of quiet (and at close).
+  - `:+5` / `:-2` move by bars; a bar past the song end or a beat the
+    meter lacks is an unavailable row. Palette lists cap at 200 rows; the
+    Keyboard page's list is `lazy`.
 
 ## 0. Why
 
@@ -119,6 +160,13 @@ the tests (`ALL.len() == 37`) turns into a check derived from the enum.
   root overlay (a new generic dismiss for each overlay, the same effect as
   a backdrop click), then exit Performance mode. Canvas-local Esc (cancel a
   drag, collapse the expanded editor) captures first, as it does now.
+  *(As built:)* Esc does not close the startup screen or the bounce,
+  mixdown and freeze progress modals; stopping a render takes the explicit
+  Cancel button. The non-modal "Group selected" bar is a root overlay that
+  gates nothing (`Overlay::blocks_keys`).
+- *(As built:)* `view()` now draws the root overlay over the Performance
+  shell too. Before, Performance mode returned early and hid every overlay,
+  so the gate and the renderer would have disagreed there.
 
 ### 3.3 Several chords per command
 
@@ -146,24 +194,42 @@ A command must produce **one undo entry**, as a click does. Two cases:
 
 ### 4.1 Global handler
 
-`key_press_message` is replaced by:
+`key_press_message` is replaced by *(as built)*:
 
 ```
-KeyPressed{key, modifiers, repeat, ..}
+event::listen_with → KeyPressed{key, modifiers, repeat, ..} + capture status
   → KeyChord::from_iced(&key, modifiers)
-  → bindings.command_for(Scope::Global, chord)
-  → skip if repeat && !cmd.repeat()
-  → Message::Ui(UiMessage::RunShortcut(cmd))
+  → Message::Ui(UiMessage::ShortcutKey{chord, repeat, captured})
+reducer (update/shortcuts.rs):
+  → drop if captured (a focused field or a key-owning canvas used it)
+  → Esc + modal root overlay → that overlay's dismiss message
+  → modal root overlay + no ⌘/Ctrl → drop
+  → r.ui.keymap.command_for(Scope::Global, chord)
+  → drop if repeat && !cmd.repeat()
+  → run_shortcut: availability, then the typing gate, then to_message(r)
 ```
 
-The `RunShortcut` reducer does the rest. It checks the palette and overlay
-gate first (§3.2), then the typing gate, then `to_message(r)`, then
-dispatches. The active `BindingMap` lives on `Resonance`; phase 5 loads it
-from settings. The subscription closure can't capture state, which is why
-the map lookup runs in the reducer.
+The subscription closure can't capture state, so it forwards every key
+and the map lookup runs in the reducer. It uses `iced::event::listen_with`
+rather than `keyboard::listen`, because the palette needs Esc, which a
+focused `text_input` captures (it unfocuses itself on Esc). The reducer
+drops captured keys otherwise, which is what `keyboard::listen` did.
 
-`key_press_message` stays as a thin test seam that returns the
-`CommandId`, so the existing focus-gate tests keep a stable entry point.
+The typing gate is `UiMessage::ShortcutProbed{command, editing}`: the
+focus probe resolves to it, and the command's message is built only then.
+A bare chord is typing-gated whatever `gate()` says, so a preset or a
+rebinding can't put an ungated letter on a command. `RequestShortcut`
+stays only for the held-`B` audition, which is not a command.
+`RunShortcut(cmd)` runs a command as a shortcut without a chord.
+The active `BindingMap` is `r.ui.keymap`; phase 5 loads it from settings.
+
+The test seam is `update::shortcuts::key_press_command(&BindingMap, &Key,
+Modifiers) -> Option<CommandId>` (renamed from `key_press_message`,
+because it returns a command, not a message).
+
+`to_message(r)` returns `None` only when a command has no target to name.
+`availability(r)` is the authority on whether a command can run; the
+shortcut path drops an unavailable command without dispatching.
 
 ### 4.2 New named keys
 
@@ -204,7 +270,7 @@ message. **NEW** = needs a new message or reducer (§6). All chords without
 | Command | Chord | | Notes |
 |---|---|---|---|
 | Play / Stop | `Space` | NEW | `TogglePlay`. If stopped, play. If playing, stop and **return to where playback started** (D1). |
-| Play / Pause (stop in place) | `⇧Space` | NEW | Stop without moving the playhead (existing `Pause`). |
+| Play / Pause (stop in place) | `⇧Space` | NEW | Stop without moving the playhead (existing `Pause`). *(As built:)* resolved in `to_message`: `Pause` while playing, `Play` when stopped, so no new message. |
 | Play from Loop Start | `⌥Space` | NEW | Seek to `loop_in`, then play. |
 | Stop and Return to Zero | — (palette) | L msg | The existing `Stop`. The ■ button keeps this behaviour. |
 | Record | `R` | N | Not available when no track is armed ("Arm a track to record"). |
@@ -225,11 +291,11 @@ message. **NEW** = needs a new message or reducer (§6). All chords without
 | **Set Loop End at Playhead** | `O` | NEW | The mirror of Set Loop Start. If `out <= in`, `in` becomes `out − 1 bar`, clamped at 0. |
 | **Loop Selection** | `⌘L` | NEW | Sets and enables the loop from the current selection, trying these in order: selected clips (their union), the selected section placement, the selected marker region. Not available with no selection. |
 | Loop Section at Playhead | `⇧L` | NEW | The section placement under the playhead. |
-| Nudge Playhead Back / Forward 1 Bar | `←` / `→` | NEW | Bar-aligned through the tempo map, so it is meter-aware. The first press snaps to the nearest bar line. Repeats while held. |
-| Nudge Playhead Back / Forward 1 Beat | `⌥←` / `⌥→` | NEW | Uses the beat unit of the signature in force at the playhead. Repeats while held. |
+| Nudge Playhead Back / Forward 1 Bar | `←` / `→` | NEW | Bar-aligned through the tempo map, so it is meter-aware. An off-grid playhead first snaps to the bar line **in the direction of travel** *(as built: "nearest" would move → backwards)*. Repeats while held. |
+| Nudge Playhead Back / Forward 1 Beat | `⌥←` / `⌥→` | NEW | Uses the beat unit of the signature in force at the playhead (a 7/8 beat is an eighth). Same off-grid rule. Repeats while held. |
 | Previous / Next Marker | `,` / `.` | L | |
 | Previous / Next Section Start | `⇧,` / `⇧.` | NEW | Jumps across section placement starts. |
-| Add Marker at Playhead | `⇧M` | N | Gives the existing orphan `MarkerMessage::AddAtPlayhead` its first user-facing entry point. |
+| Add Marker at Playhead | `⇧M` | N | Gives the existing orphan `MarkerMessage::AddAtPlayhead` its first user-facing entry point. *(As built: lands in P1 with the other §5.2 keys.)* |
 | Go to Bar… | `⌘J` | NEW | Opens the palette in `:` mode (§7.4). |
 | Rewind / Fast-forward 5 s | — (palette) | L msg | The existing `SkipBack` / `SkipForward`, renamed to match what they actually do. |
 | Toggle Follow Playhead | — (palette) | L msg | |
@@ -246,13 +312,13 @@ seeks; it creates no entry.
 |---|---|---|---|
 | Undo / Redo | `⌘Z` / `⇧⌘Z` (+ `⌘Y`) | L | |
 | Delete Selection | `⌫` / `Del` | L (canvas) | The timeline, MIDI editor and vocal roll entries become registry-scoped entries. |
-| Split Clip at Playhead | `⌘E` | N | `SplitClipAt` currently has no GUI emitter. For takes, it uses `SplitCompAtPlayhead`. |
-| Duplicate Selection | `⌘D` | NEW | Clip/placement duplicate placed right after the original. Check first whether the control API already has a primitive to reuse. |
+| Split Clip at Playhead | `⌘E` | N | `SplitClipAt` currently has no GUI emitter. For takes, it uses `SplitCompAtPlayhead`. *(As built: `SplitClipAt` needs a caller-allocated clip id, so commands that create an entity build their message through `CommandId::build(&mut Resonance)`, which allocates it the way the control API does; Add Drum Track does the same for its track id.)* |
+| Duplicate Selection | `⌘D` | NEW | Clip/placement duplicate placed right after the original. *(As built: section placements only, via the existing `PlaceSection`, unavailable when the bars after it are taken. The only clip primitive, `PoolMessage::PlacePooledAsset`, places the whole asset and would drop trims, fades and gain, so clip duplication waits for a real clip-copy message.)* |
 | Select All Notes | `⌘A` | L (MIDI editor) | |
 | Quantize Selected Notes | `Q` | N | Uses the current quantize panel settings. |
 | Open Selected MIDI Clip | `↵` | L | |
 | Close MIDI Editor | `⌘Esc` | N | |
-| Toggle Slur | `S` / `+` | L (vocal roll) | Canvas-scoped. It shadows the global `S` (solo) only while the vocal roll owns the keys. |
+| Toggle Slur | `S` / `+` | L (vocal roll) | Canvas-scoped. It shadows the global `S` (solo) only while the vocal roll owns the keys. *(As built: `+` is `NamedKey::Plus`, because `+` separates tokens in the chord text form; `⇧S` and `⇧=` are alternates so Shift doesn't break it.)* |
 
 ### 5.4 Tracks and mixer
 
@@ -289,7 +355,7 @@ seeks; it creates no entry.
 | Export Stems / MIDI… | `⇧⌘E` | N | Gives the currently unreachable `ExportMessage::Open` an entry point. |
 | Import MIDI… | `⌘I` | N | |
 | Import Audio to Pool… | `⇧⌘I` | N | |
-| Save as Template… | — (palette) | L msg | Its first entry point (orphan). |
+| Save as Template… | — (palette) | L msg | Its first entry point (orphan). *(As built: "Save as Template", no dialog; it names the template after the project and keeps both capture toggles on.)* |
 | Export Chord Sheet… | — (palette) | L msg | |
 | Settings… | `⌘,` | N | |
 | Rescan Plugins, Relink Missing Media, Show Missing Plugins | — (palette) | L msg | |
@@ -308,10 +374,10 @@ adjust the names, as long as the undo classification below holds.
 
 | Message | Undo | Notes |
 |---|---|---|
-| `TransportMessage::TogglePlay` | Skip | Adds `TransportState.play_start: u64`, recorded by Play, Record and TogglePlay. On stop, it seeks back to `play_start`. In Compose view the existing Play branch still auto-loops the selected section. |
+| `TransportMessage::TogglePlay` | Skip | Adds `TransportState.play_start: u64`, recorded by Play, Record and TogglePlay. On stop it sends the engine `Stop` (which also ends a recording pass), then `SeekTo(play_start)`. In Compose view the existing Play branch still auto-loops the selected section; `play_start` is recorded after that seek. |
 | `TransportMessage::PlayFromLoopStart` | Skip | |
-| `TransportMessage::SeekTo(SeekTarget)` | Skip | `SeekTarget::{ProjectStart, ProjectEnd, LoopStart, LoopEnd, NudgeBars(i32), NudgeBeats(i32), PrevSection, NextSection, Bar(u32)}`. This is one reducer, so all the seek maths lives in one place and can be tested. It resolves through `TempoMap` and then calls the existing `SeekToSample` path. |
-| `TransportMessage::SetLoopPoint{edge: LoopEdge, at: LoopAt}` | Record | `LoopAt::{Playhead, Selection, SectionAtPlayhead}`. Snapping and the swap/clamp rules from §5.2 live here. |
+| `TransportMessage::SeekTo(SeekTarget)` | Skip | `SeekTarget::{ProjectStart, ProjectEnd, LoopStart, LoopEnd, NudgeBars(i32), NudgeBeats(i32), PrevSection, NextSection, Bar{bar, beat}}` (1-based, so `:17.3` maps straight onto it). One reducer (`update/transport_nav.rs`), so all the seek maths lives in one place and can be tested. It resolves through `TempoMap` and sends the engine `SeekTo`, as `SeekToSample` does. |
+| `TransportMessage::SetLoopPoint{edge: LoopEdge}` | Record | *(As built)* the playhead case only. Snapping and the swap/clamp rules from §5.2 live here. Loop Selection and Loop Section at Playhead set both edges at once, so they resolve their range in `to_message` and emit the existing `SetLoopRange{…, enabled: Some(true)}` (the §3.4 single-target rule) instead of a `LoopAt` variant. |
 | `TrackMessage::{ToggleMuteSelected, ToggleSoloSelected, ToggleArmSelected}` | Record | Mixed state resolves to "all on" when any selected track is off, which matches the group macro behaviour. |
 | `UiMessage::{OpenPalette(PaletteMode), ClosePalette, Palette(PaletteMsg), RunShortcut(CommandId), DismissOverlay}` | Skip | |
 
@@ -356,7 +422,12 @@ On Linux the keycaps read `Ctrl` `L`, per §4.2.
   add bus, bypass master FX, bounce; Compose suggests new section, loop
   section; Performance suggests play/stop and exit.
 - **Query.** `fuzzy_match` on the name, then on the keywords at a lower
-  weight. Rank by score, then a recent-use boost, then available before
+  weight (half the score). *(As built:)* `fuzzy_match` now tries every
+  occurrence of the first query character as the alignment start, and a
+  match that begins at a word boundary takes no leading-gap penalty, so
+  "loop st" finds "Playhead to Loop Start" as well as "Set Loop Start…";
+  ties then fall to registry order, which puts the playhead commands
+  before Play from Loop Start. Rank by score, then a recent-use boost, then available before
   unavailable, then registry order. Results group by category in
   `CommandCategory::ALL` order, and categories are ordered by their best
   hit. Ranking must be deterministic, because tests pin it.
@@ -389,6 +460,13 @@ On Linux the keycaps read `Ctrl` `L`, per §4.2.
   set. A test pins this (§10).
 - **Keeping state.** Closing the palette keeps the last query, pre-selected
   so typing replaces it. That makes "run it again" cheap.
+- *(As built:)* results are rebuilt in the reducer on each palette message
+  and stored on `r.ui.palette`, so `view()` never ranks anything. Recents
+  are persisted as `CommandId::key()` strings (the variant name, derived by
+  the same macro as `ALL`), which lands the §8 stable id in P2. The palette
+  is `Overlay::Palette`, so the overlay gate and Esc order apply to it
+  unchanged; while it is open the reducer takes Esc (even captured), ↑/↓
+  and an uncaptured ↵ before the registry.
 
 ### 7.4 Argument modes (phase 4)
 
@@ -406,6 +484,12 @@ command mode is phase 2.
 ⌘J opens the palette in `:` mode. The footer shows the prefixes when the
 query is empty.
 
+*(As built:)* `#` selects the track but does not scroll the arrangement to
+it; there is no scroll-to-track primitive yet. `+` offers an instrument for
+an empty instrument track and effects otherwise, the same split the mixer
+chain picker uses. `@` jumps to a section placement by seeking to its
+start.
+
 ## 8. Shortcut hints everywhere (phase 5, and the deferred items)
 
 - **Tooltips.** Transport buttons, view tabs and header buttons get a
@@ -421,6 +505,15 @@ query is empty.
   The Settings view first needs a nav rail (it is a single column today).
   The DAW presets in `commands.rs` stay in the code, unexposed, until then
   (D5).
+- *(As built:)* the command id is the variant name (`CommandId::key()`,
+  e.g. `"TransportTogglePlay"`, landed in P2 for recents), not a dotted
+  path. Overrides are `{command, chord: Option<tokens>}` replayed in order
+  onto the preset (`None` unbinds); a rebind whose chord belongs to
+  another command asks first and names the owner, and confirming takes the
+  chord from it. A bare chord is typing-gated regardless of the command, so
+  a preset or override can't put an ungated letter on a command. The
+  Performance footer's exit hint now reads `Esc` (the registry's keycap)
+  instead of `⎋`, and the track menu reads `Ctrl+F` on Linux.
 
 ## 9. Build plan (vertical slices)
 
@@ -480,6 +573,12 @@ asserts an engine `AudioCommand`.
 - Goldens: the empty state (recents plus suggested), results with
   highlighting and one unavailable row, the no-match state, and Linux
   keycap formatting.
+
+*(As built:)* Add Control Track surfaced as **Add Drum Track** (the control
+kind the GUI add menu lacks); the chord-track actions are Add Chord at
+Playhead, Delete Chord at Playhead, Pin / Unpin Chord at Playhead. Select
+Notes in View is listed but dimmed in the palette, because the view
+rectangle only exists inside the piano roll.
 
 **P3 / P4.** Each new `…Selected` message yields one undo entry for three
 selected tracks. Each orphan command reaches its modal or reducer. The

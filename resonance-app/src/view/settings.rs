@@ -216,12 +216,67 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
         Space::new().height(8),
         recv_toggle,
         recv_picker,
-        Space::new().height(20),
+    ]
+    .spacing(6)
+    .width(420);
+
+    // The nav rail (command-palette.md §8): General is the page above,
+    // Keyboard the rebinding panel.
+    use crate::update::keymap::{KeymapMsg, SettingsTab};
+    let tab = r.ui.keymap_editor.tab;
+    let rail_item = |label: &'static str, icon: char, this: SettingsTab| {
+        let active = tab == this;
+        let item = button(
+            row![
+                theme::icon(icon)
+                    .size(12)
+                    .color(if active { theme::ACCENT_SOFT } else { theme::TEXT_3 }),
+                text(label)
+                    .size(13)
+                    .color(if active { theme::TEXT_1 } else { theme::TEXT_2 }),
+            ]
+            .spacing(10)
+            .align_y(alignment::Vertical::Center),
+        )
+        .on_press(Message::Ui(UiMessage::Keymap(KeymapMsg::SetTab(this))))
+        .padding([9, 11])
+        .width(Length::Fill);
+        if active {
+            item.style(|_theme, _status| iced::widget::button::Style {
+                background: Some(iced::Background::Color(theme::ACCENT_DIM)),
+                text_color: theme::TEXT_1,
+                border: iced::Border {
+                    color: theme::ACCENT_LINE,
+                    width: 1.0,
+                    radius: theme::RADIUS_MD.into(),
+                },
+                ..Default::default()
+            })
+        } else {
+            item.style(|_theme, status| theme::ghost_button_style(status))
+        }
+    };
+    let rail = column![
+        rail_item("General", fa::SLIDERS, SettingsTab::General),
+        rail_item("Keyboard", fa::BARS, SettingsTab::Keyboard),
+    ]
+    .spacing(4)
+    .width(150);
+    // One card size for both pages, so switching tabs doesn't jump.
+    let page_width = crate::view::settings_keyboard::PAGE_WIDTH;
+    let page: Element<'_, Message> = match tab {
+        SettingsTab::General => dialog_content.into(),
+        SettingsTab::Keyboard => crate::view::settings_keyboard::view_keyboard_page(r),
+    };
+    let dialog_content = column![
+        row![rail, page].spacing(20),
+        Space::new().height(14),
         row![Space::new().width(Length::Fill), close_btn,],
     ]
     .spacing(6)
     .padding(24)
-    .width(420);
+    // Rail + gap + page + padding.
+    .width(150.0 + 20.0 + page_width + 48.0);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {
         background: Some(iced::Background::Color(theme::BG_2)),

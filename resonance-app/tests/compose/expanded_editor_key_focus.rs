@@ -34,6 +34,8 @@ fn run(
     at: (f32, f32),
 ) -> Option<Message> {
     let canvas = ExpandedEditorCanvas {
+        keys_blocked: false,
+        keymap: resonance_app::commands::BindingMap::default_ref(),
         track_id: 1,
         midi_clips: &[],
         section_start: 0,

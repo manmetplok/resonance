@@ -197,6 +197,7 @@ pub(super) fn recording_finished(
         asset_ref: None,
     });
     r.transport.recording = false;
+    r.transport.record_pending = false;
 
     // Auto-switch to Recorded playback after a take lands on an
     // external-instrument track (doc #257, todo #1100): the user just

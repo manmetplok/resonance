@@ -9,6 +9,7 @@ pub(super) fn stopped(r: &mut Resonance) {
     if !r.io.loading {
         r.transport.playing = false;
         r.transport.recording = false;
+        r.transport.record_pending = false;
         r.transport.playhead = 0;
     }
 }
@@ -18,6 +19,7 @@ pub(super) fn stopped(r: &mut Resonance) {
 pub(super) fn refused(r: &mut Resonance) {
     r.transport.playing = false;
     r.transport.recording = false;
+    r.transport.record_pending = false;
 }
 
 pub(super) fn error(r: &mut Resonance, e: EngineError) {
@@ -41,6 +43,7 @@ pub(super) fn input_devices_listed(
 
 pub(super) fn recording_started(r: &mut Resonance, start_sample: SamplePos) {
     r.transport.recording = true;
+    r.transport.record_pending = false;
     r.transport.recording_start_sample = start_sample;
     // Each recording session is its own undo entry (STATE-02).
     r.session.undo.break_coalesce();

@@ -226,9 +226,12 @@ All buttons must have distinct hover, pressed, and default states. Use the `RADI
 
 ### Keyboard
 
-- Transport controls should have single-key shortcuts (Space = play/stop, R = record).
-- Tab-based navigation for main views.
-- Escape to cancel/deselect.
+- Every shortcut lives in the command registry (`resonance-app/src/commands/`); never match a key literal in view or update code. Canvas-local keys are registry entries with a canvas `Scope`. See `command-palette.md`.
+- Transport controls have single-key shortcuts (Space = play/stop, R = record). Any chord without ⌘/Ctrl is typing-gated.
+- Every command is reachable from the command palette (⌘K / Ctrl+K); an unavailable command is shown dimmed with its reason, never hidden.
+- Show a chord through the registry: `KeyChord::keycaps` / `format_for_platform`, so Linux reads `Ctrl` where macOS reads ⌘.
+- Tab-based navigation for main views (⌘1 / ⌘2 / ⌘3).
+- Escape closes the palette, then the topmost overlay, then leaves Performance mode.
 
 ## Container Hierarchy
 

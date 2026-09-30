@@ -42,6 +42,13 @@ pub enum TrackMessage {
     ToggleMute(TrackId),
     ToggleSolo(TrackId),
     ToggleRecordArm(TrackId),
+    /// Mute / solo / arm every selected track in one reducer call, so the
+    /// command is one undo entry (command-palette.md §3.4). A mixed
+    /// selection turns the flag on for all of them; only an all-on
+    /// selection turns it off — the group macro's rule.
+    ToggleMuteSelected,
+    ToggleSoloSelected,
+    ToggleArmSelected,
     ToggleMonitor(TrackId),
     ToggleTrackMono(TrackId),
     ToggleTrackFxBypass(TrackId),
@@ -175,6 +182,9 @@ impl TrackMessage {
             | Self::ToggleMute(..)
             | Self::ToggleSolo(..)
             | Self::ToggleRecordArm(..)
+            | Self::ToggleMuteSelected
+            | Self::ToggleSoloSelected
+            | Self::ToggleArmSelected
             | Self::ToggleMonitor(..)
             | Self::ToggleTrackMono(..)
             | Self::ToggleTrackFxBypass(..)
@@ -438,6 +448,22 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
                 volume: db_to_gain(vol_db),
             });
             r.master.volume = vol_db;
+        }
+        TrackMessage::ToggleMuteSelected => {
+            return toggle_selected(r, |_, _| true, |t| t.muted, TrackMessage::ToggleMute);
+        }
+        TrackMessage::ToggleSoloSelected => {
+            return toggle_selected(r, |_, _| true, |t| t.soloed, TrackMessage::ToggleSolo);
+        }
+        TrackMessage::ToggleArmSelected => {
+            // A frozen track has no live input to arm; the header locks
+            // its arm button for the same reason.
+            return toggle_selected(
+                r,
+                |r, t| !r.freeze.status(t.id).is_frozen(),
+                |t| t.record_armed,
+                TrackMessage::ToggleRecordArm,
+            );
         }
         TrackMessage::ToggleMute(id) => {
             let new_muted = r.with_track_mut(id, |t| {
@@ -919,4 +945,32 @@ fn internal_bounce_dispatch(r: &mut Resonance, track_id: resonance_audio::types:
         target_clip_id,
         name: clip_name,
     });
+}
+
+/// Bring one flag on every selected track to a common value, through the
+/// per-track toggle so the engine sees exactly what a click sends. Called
+/// inside the one `…Selected` reducer, so the batch is one undo entry.
+fn toggle_selected(
+    r: &mut Resonance,
+    eligible: impl Fn(&Resonance, &crate::state::TrackState) -> bool,
+    flag: impl Fn(&crate::state::TrackState) -> bool,
+    toggle: impl Fn(TrackId) -> TrackMessage,
+) -> Task<Message> {
+    let selected: Vec<(TrackId, bool)> = r
+        .ui
+        .interaction
+        .selected_tracks
+        .iter()
+        .filter_map(|&id| r.registry.tracks.iter().find(|t| t.id == id))
+        .filter(|t| eligible(r, t))
+        .map(|t| (t.id, flag(t)))
+        .collect();
+    let target = selected.iter().any(|&(_, on)| !on);
+    let mut tasks = Vec::new();
+    for (id, on) in selected {
+        if on != target {
+            tasks.push(handle(r, toggle(id)));
+        }
+    }
+    Task::batch(tasks)
 }

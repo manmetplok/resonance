@@ -16,6 +16,7 @@ use resonance_music_theory::TableRegistry;
 pub mod chord_box;
 pub mod chord_sheet_pdf;
 pub mod commands;
+pub mod palette;
 pub mod chord_track;
 pub mod compose;
 pub mod control_jobs;
@@ -597,6 +598,14 @@ impl Resonance {
                 last_arrangement_shift: None,
                 interaction: ClipInteractionState::default(),
                 mixer: MixerUiState::default(),
+                keymap: crate::update::keymap::resolve(&settings.keymap),
+                typing_probe: Default::default(),
+                palette: None,
+                palette_memory: String::new(),
+                recent_dirty_since: None,
+                keymap_editor: crate::update::keymap::KeymapEditorState::for_settings(
+                    &settings.keymap,
+                ),
             },
             banners: state::Banners::default(),
             master: state::MasterState {

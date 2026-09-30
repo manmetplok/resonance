@@ -121,5 +121,7 @@ mod expanded_editor_key_focus;
 mod vocal_roll_key_focus;
 #[path = "compose/vocal_tempo_mismatch_warning.rs"]
 mod vocal_tempo_mismatch_warning;
+#[path = "compose/vocal_roll_keys.rs"]
+mod vocal_roll_keys;
 #[path = "compose/vocal_roll_fingerprint.rs"]
 mod vocal_roll_fingerprint;

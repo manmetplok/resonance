@@ -23,13 +23,16 @@ pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
+pub(crate) mod palette;
 pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
 pub mod performance;
 pub mod piano_roll;
 pub(crate) mod selection_bar;
+pub(crate) mod shortcut_hint;
 pub(crate) mod settings;
+pub(crate) mod settings_keyboard;
 pub(crate) mod startup;
 pub mod timeline;
 pub(crate) mod timeline_panel;
@@ -51,9 +54,18 @@ use iced::{alignment, Element, Length};
 
 impl crate::Resonance {
     pub fn view(&self) -> Element<'_, Message> {
+        let base = self.view_base();
+        match self.view_root_overlay() {
+            Some(overlay) => stack![base, overlay].into(),
+            None => base,
+        }
+    }
+
+    /// The window content under any root overlay.
+    fn view_base(&self) -> Element<'_, Message> {
         // Performance mode is a full-bleed, distraction-free surface: it
-        // owns its own status bar / footer (built in follow-up todos) and
-        // intentionally hides the normal transport chrome below.
+        // owns its own status bar / footer and intentionally hides the
+        // normal transport chrome below.
         if matches!(self.ui.view_mode, ViewMode::Performance) {
             return self.view_performance_shell();
         }
@@ -95,119 +107,77 @@ impl crate::Resonance {
             column![transport, main_area].spacing(0).into()
         };
 
-        let base: Element<'_, Message> = container(content)
+        container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::base_bg)
-            .into();
+            .into()
+    }
 
-        if let Some(prompt) = &self.io.recovery_prompt {
-            // The autosave-recovery prompt (FU-M12a) answers an open, so
-            // it sits over the startup screen when nothing is open yet.
-            let prompt = recovery_prompt::view_recovery_prompt_overlay(prompt);
-            if self.io.has_active_project {
-                stack![base, prompt].into()
-            } else {
-                stack![base, startup::view_startup_overlay(self), prompt].into()
+    /// The one window-root overlay, chosen by [`Resonance::root_overlay`] —
+    /// the same priority order the keyboard gate reads, so what the user
+    /// sees is what the shortcuts are gated on (command-palette.md §3.2).
+    fn view_root_overlay(&self) -> Option<Element<'_, Message>> {
+        let overlay: Element<'_, Message> = match self.root_overlay()? {
+            Overlay::Recovery => {
+                // The autosave-recovery prompt (FU-M12a) answers an open, so
+                // it sits over the startup screen when nothing is open yet.
+                let prompt = self
+                    .io
+                    .recovery_prompt
+                    .as_ref()
+                    .map(recovery_prompt::view_recovery_prompt_overlay)?;
+                if self.io.has_active_project {
+                    prompt
+                } else {
+                    stack![startup::view_startup_overlay(self), prompt].into()
+                }
             }
-        } else if !self.io.has_active_project {
-            stack![base, startup::view_startup_overlay(self)].into()
-        } else if self.modals.bounce_in_progress.is_some() {
+            Overlay::Startup => startup::view_startup_overlay(self),
             // The bounce progress modal sits above any other overlay
             // because it gates user input until the engine finishes the
             // current bounce — letting the quit-confirm or delete-track
             // dialog appear over it would invite the user into a state
             // change the engine isn't ready for.
-            stack![
-                base,
-                bounce_progress::view_bounce_progress_overlay(self)
-            ]
-            .into()
-        } else if self.io.bouncing {
+            Overlay::BounceProgress => bounce_progress::view_bounce_progress_overlay(self),
             // The WAV mixdown gates the same traffic as a bounce in place
             // (`gates_message`), so it gets the same blocking modal at the
             // same priority (code review FU-F1c).
-            stack![
-                base,
-                bounce_progress::view_mixdown_progress_overlay(self)
-            ]
-            .into()
-        } else if self.freeze.any_in_flight() {
+            Overlay::MixdownProgress => bounce_progress::view_mixdown_progress_overlay(self),
             // The freeze progress modal (design doc #181, todo #582) is the
             // same blocking overlay — a freeze IS a bounce-in-place run.
-            // It sits at the same priority: every message except Cancel is
-            // gated while the render is in flight (`freeze_blocks_message`),
-            // so no other overlay may appear above it.
-            stack![
-                base,
-                bounce_progress::view_freeze_progress_overlay(self)
-            ]
-            .into()
-        } else if self.modals.confirm_quit.is_some() {
-            stack![base, confirm_quit::view_confirm_quit_overlay(self)].into()
-        } else if let Some(track_id) = self.modals.confirm_delete_track {
-            stack![
-                base,
+            Overlay::FreezeProgress => bounce_progress::view_freeze_progress_overlay(self),
+            Overlay::Palette => palette::view_palette_overlay(self),
+            Overlay::ConfirmQuit => confirm_quit::view_confirm_quit_overlay(self),
+            Overlay::ConfirmDeleteTrack => {
+                let track_id = self.modals.confirm_delete_track?;
                 confirm_delete_track::view_confirm_delete_track_overlay(self, track_id)
-            ]
-            .into()
-        } else if self.modals.bounce_dialog.is_some() {
-            stack![base, bounce_dialog::view_bounce_dialog_overlay(self)].into()
-        } else if self.modals.export_dialog.is_some() {
-            stack![base, export_dialog::view_export_dialog_overlay(self)].into()
-        } else if self.modals.import_dialog.is_some() {
-            stack![base, import_dialog::view_import_dialog_overlay(self)].into()
-        } else if self.media.import_progress_modal_open {
-            // Audio-import transcode-progress modal (doc #175, todo #606):
-            // shown while the engine copies / transcodes the selected audio
-            // files into the project folder. Dismissed once all files settle.
-            stack![
-                base,
-                import_progress_dialog::view_import_progress_overlay(self)
-            ]
-            .into()
-        } else if self.missing_plugins.modal_open && self.has_missing_plugins() {
-            // Missing-plugin load warning (ba doc #275 P5, todo #1309):
-            // raised when a project's chains reference plugins this
-            // machine hasn't got. Sits ABOVE the relink modal in this
-            // chain only because one modal shows at a time; the two are
-            // independent and a project can trip both.
-            stack![
-                base,
-                missing_plugins_dialog::view_missing_plugins_overlay(self)
-            ]
-            .into()
-        } else if self.media.relink.modal_open && !self.media.relink.modal_targets.is_empty() {
-            // Missing-files relink modal (doc #175, todo #607): surfaced on
-            // load when the project references audio that's gone, and
-            // re-openable from the Pool tab's inline `relink` chip.
-            stack![base, relink_dialog::view_relink_dialog_overlay(self)].into()
-        } else if self.ui.mixer.settings_open {
-            stack![base, settings::view_settings_overlay(self)].into()
-        } else if self.ui.mixer.add_track_menu_open {
-            stack![base, menus::view_add_track_menu(self)].into()
-        } else if self.ui.mixer.markers_overview_open {
-            stack![base, markers_overview::view_markers_overview_overlay(self)].into()
-        } else if self.compose.drumroll.manager_open
-            && matches!(self.ui.view_mode, ViewMode::Compose)
-        {
-            stack![base, compose::drum_groups_manager::view(self)].into()
-        } else if self.ui.interaction.marker_menu.is_some()
-            || self.ui.interaction.marker_rename.is_some()
-        {
-            // Arrangement-marker context menu / inline rename float above the
-            // arrange timeline (todo #369). Only reachable from the ruler, so
-            // guarding on the state alone is enough.
-            stack![base, menus::view_marker_overlay(self)].into()
-        } else if matches!(self.ui.view_mode, ViewMode::Arrange)
-            && self.ui.interaction.selected_tracks.len() >= 2
-        {
+            }
+            Overlay::BounceDialog => bounce_dialog::view_bounce_dialog_overlay(self),
+            Overlay::ExportDialog => export_dialog::view_export_dialog_overlay(self),
+            Overlay::ImportDialog => import_dialog::view_import_dialog_overlay(self),
+            // Audio-import transcode-progress modal (doc #175, todo #606).
+            Overlay::ImportProgress => import_progress_dialog::view_import_progress_overlay(self),
+            // Missing-plugin load warning (ba doc #275 P5, todo #1309). Sits
+            // ABOVE the relink modal only because one modal shows at a time;
+            // the two are independent and a project can trip both.
+            Overlay::MissingPlugins => missing_plugins_dialog::view_missing_plugins_overlay(self),
+            // Missing-files relink modal (doc #175, todo #607).
+            Overlay::Relink => relink_dialog::view_relink_dialog_overlay(self),
+            Overlay::Settings => settings::view_settings_overlay(self),
+            Overlay::AddTrackMenu => menus::view_add_track_menu(self),
+            Overlay::MarkersOverview => markers_overview::view_markers_overview_overlay(self),
+            Overlay::DrumGroupsManager => compose::drum_groups_manager::view(self),
+            // Arrangement-marker context menu / inline rename float above
+            // the arrange timeline (todo #369).
+            Overlay::MarkerMenu => menus::view_marker_overlay(self),
+            // Drawn by `view_main_area` in arrange-area space.
+            Overlay::TrackMenu => return None,
             // Floating "Group selected" bar — non-modal, so it layers over
             // the arrange view without blocking it (todo #684).
-            stack![base, selection_bar::view_selection_bar(self)].into()
-        } else {
-            base
-        }
+            Overlay::SelectionBar => selection_bar::view_selection_bar(self),
+        };
+        Some(overlay)
     }
 
     fn view_main_area(&self) -> Element<'_, Message> {

@@ -16,7 +16,10 @@ use crate::Resonance;
 
 /// Render the floating selection bar with the given track count.
 /// This variant returns a `'static` element for snapshot testing.
-pub(crate) fn selection_bar_with_count(count: usize) -> Element<'static, Message> {
+pub(crate) fn selection_bar_with_count(
+    count: usize,
+    group_chord: Option<String>,
+) -> Element<'static, Message> {
     let label = text(format!("{count} tracks selected"))
         .size(13)
         .font(theme::UI_FONT_MEDIUM)
@@ -24,8 +27,12 @@ pub(crate) fn selection_bar_with_count(count: usize) -> Element<'static, Message
 
     let dot = text("\u{00b7}").size(13).color(theme::TEXT_3);
 
+    let group_label = match group_chord {
+        Some(chord) => format!("Group  {chord}"),
+        None => "Group".to_string(),
+    };
     let group_btn = button(
-        text("Group  \u{2318}G")
+        text(group_label)
             .size(13)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::BG_0),
@@ -70,5 +77,6 @@ pub(crate) fn selection_bar_with_count(count: usize) -> Element<'static, Message
 
 pub(crate) fn view_selection_bar(r: &Resonance) -> Element<'_, Message> {
     let count = r.ui.interaction.selected_tracks.len();
-    selection_bar_with_count(count)
+    let chord = crate::view::shortcut_hint::chord_text(r, crate::commands::CommandId::GroupSelectedTracks);
+    selection_bar_with_count(count, chord)
 }

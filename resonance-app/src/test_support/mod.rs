@@ -26,6 +26,7 @@ mod pool_media;
 pub use mixer_plugins::TestChain;
 
 mod project;
+mod shortcuts;
 mod timeline;
 mod tracks;
 mod transport;

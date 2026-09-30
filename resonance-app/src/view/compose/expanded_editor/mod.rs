@@ -55,6 +55,8 @@ pub fn view<'a>(
     let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let canvas = Canvas::new(ExpandedEditorCanvas {
+        keys_blocked: app.canvas_keys_blocked(),
+        keymap: &app.ui.keymap,
         track_id,
         midi_clips: &app.midi_clips,
         section_start,
@@ -78,6 +80,15 @@ pub fn view<'a>(
 }
 
 pub struct ExpandedEditorCanvas<'a> {
+    /// The active keymap: canvas-local keys resolve through it
+    /// (command-palette.md §4.3).
+    pub keymap: &'a crate::commands::BindingMap,
+    /// Set while any modal overlay (the palette included) is open or the
+    /// Keyboard panel is capturing a chord: the canvas ignores key presses,
+    /// so Backspace typed into a dialog can't delete the selection this
+    /// canvas owned the keys for (command-palette.md §7.3). See
+    /// `Resonance::canvas_keys_blocked`.
+    pub keys_blocked: bool,
     pub track_id: TrackId,
     pub midi_clips: &'a [MidiClipState],
     pub section_start: u64,
@@ -208,6 +219,11 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if self.keys_blocked
+            && matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+        {
+            return None;
+        }
         self.update_inner(state, event, bounds, cursor)
     }
 }
@@ -409,24 +425,21 @@ impl<'a> ExpandedEditorCanvas<'a> {
             // Only while the editor was the last surface pressed, not
             // while the cursor merely hovers it or a text field has the
             // keys (code review FU-C3).
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key: iced::keyboard::Key::Character(ref ch),
-                ..
-            }) if state.key_focus.owns_keys() => {
-                let s = ch.as_str();
-                if s == "+" || s == "=" {
-                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedZoomY(2.0))).and_capture());
-                }
-                if s == "-" {
-                    return Some(canvas::Action::publish(Message::Compose(ComposeMessage::ExpandedZoomY(-2.0))).and_capture());
-                }
-            }
-
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
-                ..
-            }) if state.key_focus.owns_keys() => {
-                return Some(canvas::Action::publish(Message::Compose(ComposeMessage::CollapseTrack)).and_capture());
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. })
+                if state.key_focus.owns_keys() =>
+            {
+                use crate::commands::{CommandId, KeyChord};
+                let chord = KeyChord::from_event(event)?;
+                let message = if self.keymap.matches(CommandId::ExpandedZoomIn, chord) {
+                    ComposeMessage::ExpandedZoomY(2.0)
+                } else if self.keymap.matches(CommandId::ExpandedZoomOut, chord) {
+                    ComposeMessage::ExpandedZoomY(-2.0)
+                } else if self.keymap.matches(CommandId::ComposeCollapseTrack, chord) {
+                    ComposeMessage::CollapseTrack
+                } else {
+                    return None;
+                };
+                return Some(canvas::Action::publish(Message::Compose(message)).and_capture());
             }
 
             _ => {}

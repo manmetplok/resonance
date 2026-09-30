@@ -22,11 +22,14 @@ fn exit(app: &mut Resonance) {
     let _ = app.update(Message::Ui(UiMessage::ExitPerformanceMode));
 }
 
-/// The resolution half of the `F` shortcut: `RequestPerformanceToggle` first
+/// The resolution half of the `F` shortcut: the registry dispatcher first
 /// probes widget focus, then dispatches this with the result. `editing = true`
 /// models "a text field was focused when `F` was pressed".
 fn resolve_toggle(app: &mut Resonance, editing: bool) {
-    let _ = app.update(Message::Ui(UiMessage::PerformanceToggleResolved { editing }));
+    let _ = app.update(Message::Ui(UiMessage::ShortcutProbed {
+        command: resonance_app::commands::CommandId::TogglePerformanceMode,
+        editing,
+    }));
 }
 
 fn switch(app: &mut Resonance, mode: ViewMode) {

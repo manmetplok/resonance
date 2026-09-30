@@ -309,18 +309,6 @@ pub enum UiMessage {
     /// or `Esc` returns to it; never auto-opens on record-arm and never
     /// disturbs transport state.
     TogglePerformanceMode,
-    /// The raw `F` key press. Unlike [`TogglePerformanceMode`] this does not
-    /// toggle directly: it first probes the live widget tree for keyboard
-    /// focus (see [`crate::focus`]) and only toggles when no text field is
-    /// being edited, so typing `F` into a track name / BPM / lyrics field
-    /// never flips Performance mode. Resolves to [`PerformanceToggleResolved`].
-    RequestPerformanceToggle,
-    /// Result of the focus probe started by [`RequestPerformanceToggle`].
-    /// `editing` is `true` when a text field held focus at the moment `F` was
-    /// pressed; the toggle is suppressed in that case.
-    PerformanceToggleResolved {
-        editing: bool,
-    },
     /// Leave Performance mode (the `Esc` keyboard shortcut), restoring the
     /// view that was active when Performance mode was entered. A no-op when
     /// not in Performance mode.
@@ -334,6 +322,11 @@ pub enum UiMessage {
     DismissError,
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
+    /// Replace the open project with a fresh, untitled empty one (the New
+    /// Project command) — the control API's `project.new` path. Refused
+    /// while the project has unsaved changes, a load or save is running,
+    /// or an offline render owns the engine.
+    NewEmptyProject,
     /// Select (highlight) a track in the arrange view, or deselect all.
     /// Whether the click replaces or extends the multi-selection is read
     /// from the live modifier state ([`ModifiersChanged`]).
@@ -397,29 +390,11 @@ pub enum UiMessage {
     /// Close the markers overview popover — backdrop click, or after an
     /// overview entry jumps the playhead (todo #370).
     CloseMarkersOverview,
-    /// Raw next/prev-marker key press (`.` / `,`). Like
-    /// [`RequestPerformanceToggle`], this does not navigate directly: it
-    /// first probes the live widget tree for keyboard focus (see
-    /// [`crate::focus`]) so typing `.`/`,` into a track name / lyrics /
-    /// section field never jumps the playhead. Resolves to
-    /// [`MarkerNavResolved`]. `forward` picks next (`true`) vs prev.
-    RequestMarkerNav {
-        forward: bool,
-    },
-    /// Result of the focus probe started by [`RequestMarkerNav`]. When no
-    /// text field held focus (`editing == false`) the corresponding
-    /// [`crate::message::MarkerMessage::JumpToNext`] /
-    /// [`crate::message::MarkerMessage::JumpToPrev`] is dispatched.
-    MarkerNavResolved {
-        forward: bool,
-        editing: bool,
-    },
-    /// A global keyboard shortcut that is also an ordinary typing key
-    /// (Enter, `B`, Cmd-Z / Cmd-Y). Like [`RequestPerformanceToggle`] it
-    /// does not act directly: the keyboard subscription sees presses a
-    /// focused text field already consumed, so this probes widget focus
-    /// (see [`crate::focus`]) and resolves to [`ShortcutResolved`]
-    /// (UPD-11).
+    /// A key press outside the command registry that is also an ordinary
+    /// typing key (the held `B` reference audition). It does not act
+    /// directly: this probes widget focus (see [`crate::focus`]) and
+    /// resolves to [`ShortcutResolved`] (UPD-11). Registry shortcuts take
+    /// the same gate through [`ShortcutProbed`].
     RequestShortcut(Box<Message>),
     /// Result of the focus probe started by [`RequestShortcut`]: the
     /// wrapped message is dispatched only when no text field held focus
@@ -458,6 +433,32 @@ pub enum UiMessage {
     /// Close the track context menu (backdrop click, or after an entry
     /// dispatched its action).
     CloseTrackMenu,
+    /// A global key press, forwarded by the keyboard subscription
+    /// (command-palette.md §4.1). `captured` is set when a widget (a
+    /// focused text field, a key-owning canvas) already consumed it. The
+    /// reducer applies the overlay gate, looks the chord up in the active
+    /// keymap, drops key repeat the command doesn't want, and runs it.
+    ShortcutKey {
+        chord: crate::commands::KeyChord,
+        repeat: bool,
+        captured: bool,
+    },
+    /// The typing gate's answer for a `NotWhileTyping` shortcut: the
+    /// command runs only when no text field held focus (`editing ==
+    /// false`).
+    ShortcutProbed {
+        command: crate::commands::CommandId,
+        editing: bool,
+    },
+    /// Open the command palette in a mode (⌘K / ⇧⌘P); closes it when it
+    /// is already open.
+    OpenPalette(crate::palette::PaletteMode),
+    /// Close the command palette, keeping its query for next time.
+    ClosePalette,
+    /// Command-palette interaction.
+    Palette(crate::palette::PaletteMsg),
+    /// Preferences › Keyboard: the settings tab, preset and rebinding.
+    Keymap(crate::update::keymap::KeymapMsg),
 }
 
 impl UiMessage {
@@ -472,8 +473,6 @@ impl UiMessage {
             // settings: pure UI or user-settings state, never a project edit.
             Self::SwitchView(..)
             | Self::TogglePerformanceMode
-            | Self::RequestPerformanceToggle
-            | Self::PerformanceToggleResolved { .. }
             | Self::ExitPerformanceMode
             | Self::OpenSettings
             | Self::CloseSettings
@@ -482,6 +481,7 @@ impl UiMessage {
             | Self::ToggleReferencePanel
             | Self::DismissError
             | Self::StartNewProject
+            | Self::NewEmptyProject
             | Self::SelectTrack(..)
             | Self::SelectBus(..)
             | Self::ModifiersChanged(..)
@@ -502,15 +502,25 @@ impl UiMessage {
             | Self::SetPerformanceCapo(..)
             | Self::ToggleMarkersOverview
             | Self::CloseMarkersOverview
-            | Self::RequestMarkerNav { .. }
-            | Self::MarkerNavResolved { .. }
             | Self::RequestShortcut(..)
             | Self::ShortcutResolved { .. }
             | Self::DismissImportProgress
             | Self::DismissMissingPlugins
             | Self::ShowMissingPlugins
             | Self::OpenTrackMenu { .. }
-            | Self::CloseTrackMenu => UndoAction::Skip,
+            | Self::CloseTrackMenu
+            // Keyboard envelopes: the message they resolve to re-enters
+            // `update()` and is classified on its own, so one shortcut is
+            // one undo entry (or none).
+            | Self::ShortcutKey { .. }
+            | Self::ShortcutProbed { .. }
+            // The palette itself is pure UI; the command a row runs
+            // re-enters `update()` and is classified on its own.
+            | Self::OpenPalette(..)
+            | Self::ClosePalette
+            | Self::Palette(..)
+            // Keymap edits are user settings, not project state.
+            | Self::Keymap(..) => UndoAction::Skip,
         }
     }
 }

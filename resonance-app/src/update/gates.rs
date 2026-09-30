@@ -52,17 +52,12 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // steal focus from the startup modal.
         Message::Ui(UiMessage::SwitchView(_))
         | Message::Ui(UiMessage::TogglePerformanceMode)
-        | Message::Ui(UiMessage::RequestPerformanceToggle)
-        | Message::Ui(UiMessage::PerformanceToggleResolved { .. })
         | Message::Ui(UiMessage::ExitPerformanceMode)
         | Message::Ui(UiMessage::OpenSettings)
         | Message::Ui(UiMessage::OpenAddTrackMenu)
-        // Markers overview + marker navigation are only meaningful with a
-        // project open — block them while the startup modal owns the screen
-        // (the nav variants would otherwise drive gated `Marker` messages).
+        // The markers overview is only meaningful with a project open —
+        // block it while the startup modal owns the screen.
         | Message::Ui(UiMessage::ToggleMarkersOverview)
-        | Message::Ui(UiMessage::RequestMarkerNav { .. })
-        | Message::Ui(UiMessage::MarkerNavResolved { .. })
         // The track context menu acts on a project's tracks — block it
         // while the startup modal owns the screen (there are no tracks to
         // act on yet), like the other auxiliary overlays.
@@ -70,13 +65,23 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // Focus-gated shortcut envelope: allow — the wrapped message
         // re-enters `update()` on resolution and meets this gate then.
         Message::Ui(UiMessage::RequestShortcut(_))
-        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
+        | Message::Ui(UiMessage::ShortcutResolved { .. })
+        | Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        // The palette refuses to open over the startup screen itself
+        // (`Overlay::allows_palette`); a row's command meets this gate
+        // when it re-enters `update()`.
+        | Message::Ui(UiMessage::OpenPalette(_))
+        | Message::Ui(UiMessage::ClosePalette)
+        | Message::Ui(UiMessage::Palette(_))
+        | Message::Ui(UiMessage::Keymap(_)) => false,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
         | Message::Ui(UiMessage::CloseTrackMenu)
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
+        | Message::Ui(UiMessage::NewEmptyProject)
         | Message::Ui(UiMessage::SelectTrack(_))
         | Message::Ui(UiMessage::SelectBus(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
@@ -159,6 +164,14 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // synthesized mutating messages re-enter `update()` and are
         // blocked by this gate individually.
         Message::Control(_) => false,
+        // Keyboard envelopes: the message a shortcut resolves to re-enters
+        // `update()` and meets this gate on its own, so ⌘S still saves
+        // mid-render exactly as it did before shortcuts went through the
+        // registry.
+        Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        | Message::Ui(UiMessage::RequestShortcut(_))
+        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)
@@ -220,6 +233,14 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         // answered; synthesized mutating messages re-enter `update()`
         // and are blocked by this gate individually.
         Message::Control(_) => false,
+        // Keyboard envelopes: the message a shortcut resolves to re-enters
+        // `update()` and meets this gate on its own, so ⌘S still saves
+        // mid-render exactly as it did before shortcuts went through the
+        // registry.
+        Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        | Message::Ui(UiMessage::RequestShortcut(_))
+        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)
