@@ -645,7 +645,19 @@ impl ResonanceMcp {
                        \
                        current is the loaded preset when the app knows it, which it does not \
                        after a knob was turned in the plugin's own window — absent means \
-                       unknown, not none.",
+                       unknown, not none. \
+                       \
+                       Each entry also carries its stable id (use it as preset_id), category, \
+                       instrument (what it is for), genres, character, tags (its own plus this \
+                       user's), favorite, author, description, modified_at and last_used. \
+                       Filters AND: query (the preset browsers' search: tokens match name, \
+                       author, description, category and tags; is:fav, is:recent, is:user, \
+                       is:factory, tag:, genre:, cat:, for:, char:, by: scope a token), \
+                       favorites_only, source, category, instrument, genres, character, tags; \
+                       sort (bank / name / category / recent / modified), limit (default 100) \
+                       and offset page it; total and facets (value counts per facet) describe \
+                       every match. Prefer instrument / character / genres filters over \
+                       guessing names.",
         annotations(read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<plugin_preset::PluginPresetsView>()
     )]
@@ -666,7 +678,12 @@ impl ResonanceMcp {
                        a factory name meant. The recall is ONE undo entry, is visible in the \
                        plugin's own window immediately, and moves every parameter the preset \
                        names — anything it does not name keeps its current value, so a preset \
-                       written for an older build still loads.",
+                       written for an older build still loads. \
+                       \
+                       preset_id (the stable id from the list) wins over the name and survives \
+                       renames. The whole sound comes along — a NAM model (by content id), an \
+                       IR, user wavetables — unless extra: false (params only). A load counts \
+                       as a pick in the user's recents.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<MutationAck>()
     )]
@@ -690,9 +707,15 @@ impl ResonanceMcp {
                        This answers as soon as the capture is armed, not when the file lands: \
                        the plugin hands its state back a beat later. Read track_plugin_presets \
                        to see the preset appear — the same one-cycle gap track_add_effect has \
-                       for its parameter list.",
+                       for its parameter list. \
+                       \
+                       meta (category, instrument, genres, character, tags, author, \
+                       description) makes it findable next session — do pass it for a sound \
+                       you designed; favorite stars it; overwrite_id updates that user preset \
+                       in place (keeping its id; the name may change). Returns the preset's \
+                       id, minted up front, so you can refer to it before the file lands.",
         annotations(destructive_hint = false, open_world_hint = false),
-        output_schema = schema_for_output::<MutationAck>()
+        output_schema = schema_for_output::<plugin_preset::SavePluginPresetResult>()
     )]
     async fn track_save_plugin_preset(
         &self,

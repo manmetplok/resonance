@@ -329,7 +329,7 @@ pub fn strip_blocks(text: &str) -> String {
 /// assistant's stage id and `render_mixdown`'s `normalize` field.
 /// `resonance-mcp`'s lockstep test holds the matching list
 /// (`KEY_SHAPED_WIRE_WORDS`) and checks each is a real schema property.
-pub const WIRE_WORDS: &[&str] = &["b", "range", "target_lufs", "scale"];
+pub const WIRE_WORDS: &[&str] = &["b", "range", "target_lufs", "scale", "character"];
 
 /// The inline-code spans of `text` (already stripped of its blocks) that
 /// are exactly one of `surface`'s keys or preset names, as `(line, span)`.

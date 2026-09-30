@@ -1258,3 +1258,35 @@ what landed and where the code differs from §§4–15.
   private preset root at construction. Undo of a host recall restores the
   params; the extra state is not part of the snapshot (as before P2 for
   any plugin-side change).
+
+### P3 — favourites and filters over MCP
+
+- `*.plugin_presets` (track, bus, master) take a flattened `PresetFilter`
+  (`query`, `favorites_only`, `source`, `category`, `instrument`,
+  `genres`, `character`, `tags`, `sort` = bank/name/category/recent/
+  modified, `limit` default 100, `offset`) and answer through the one
+  engine (`PresetLibrary::query`). `PluginPresetEntry` gains `id`,
+  `category`, `instrument`, `genres`, `character`, `tags` (content ∪
+  personal), `personal_tags`, `favorite`, `author`, `description`,
+  `plugin_version`, `modified_at`, `derived_from`, `last_used`; the view
+  gains `total` and `facets`. `current`/`modified` stay unknown until P5.
+- `*.load_plugin_preset` gains `preset_id` (wins over the name) and
+  `extra` (default true; false = params only). A control-API load records
+  the pick in the recents (`last_used`, `use_count`).
+- `*.save_plugin_preset` gains `meta` (`PresetMetaInput`), `favorite` and
+  `overwrite_id`; the reply is `SavePluginPresetResult {revision, id}`
+  (a superset of the old ack) with the id minted up front
+  (`SaveRequest::id`), which is the id the file gets when the capture
+  lands.
+- New namespace `presets.*`, answered above the mutation gate (library
+  state: no project needed, no undo entry, no revision bump):
+  `presets.set_marks` (favourite and personal tags, factory presets
+  included), `presets.update_meta` (a user preset's own metadata; refused
+  on factory presets with a pointer to `set_marks`), `presets.vocabulary`
+  (seeded values then values in use, tags in use). MCP tools
+  `presets_set_marks`, `presets_update_meta`, `presets_vocabulary`; the
+  nine per-surface tools describe the new fields. The mixing skill gained
+  one line (search by `instrument`/`character`/`genres`, load by id, save
+  with `meta`, star keepers).
+- The editor bar gained the ☆/★ toggle on the loaded preset (marks
+  re-read at most every `BAR_REFRESH`).

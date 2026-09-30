@@ -101,6 +101,8 @@ mod control_plugin_param_bounds;
 mod control_plugin_param_meta;
 #[path = "control/control_amp_models.rs"]
 mod control_amp_models;
+#[path = "control/control_presets_library.rs"]
+mod control_presets_library;
 #[path = "control/control_plugin_presets.rs"]
 mod control_plugin_presets;
 #[path = "control/control_plugin_params_persist.rs"]

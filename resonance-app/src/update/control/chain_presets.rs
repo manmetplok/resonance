@@ -17,7 +17,6 @@ use crate::message::Message;
 use crate::state::PluginSlotState;
 use crate::Resonance;
 use iced::Task;
-use resonance_control::methods::plugin_preset::PluginPresetSource;
 use resonance_control::{Request, Response, RpcError};
 
 use super::reply::{ack, no_bus, reject};
@@ -131,13 +130,14 @@ pub(super) fn view(
     chain: Chain,
     plugin_id: &Option<String>,
     occurrence: Option<u32>,
+    filter: &resonance_control::methods::plugin_preset::PresetFilter,
 ) -> (Response, Task<Message>) {
     let (clap_id, _, _) = match resolve(app, chain, plugin_id, occurrence) {
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };
     (
-        super::success(request, &plugin_presets::view(app, &clap_id)),
+        super::success(request, &plugin_presets::view(app, &clap_id, filter)),
         Task::none(),
     )
 }
@@ -150,18 +150,16 @@ pub(super) fn load(
     chain: Chain,
     plugin_id: &Option<String>,
     occurrence: Option<u32>,
-    preset: &str,
-    source: Option<PluginPresetSource>,
+    args: plugin_presets::LoadArgs<'_>,
 ) -> (Response, Task<Message>) {
     let (clap_id, mirrored, instance_id) = match resolve(app, chain, plugin_id, occurrence) {
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };
-    let message =
-        match plugin_presets::load_message(app, &clap_id, instance_id, &mirrored, preset, source) {
-            Ok(message) => message,
-            Err(e) => return reject(request, e),
-        };
+    let message = match plugin_presets::load_request(app, &clap_id, instance_id, &mirrored, &args) {
+        Ok(message) => message,
+        Err(e) => return reject(request, e),
+    };
     let task = super::run_via_update(app, message);
     (ack(app, request), task)
 }
@@ -179,25 +177,14 @@ pub(super) fn save(
     chain: Chain,
     plugin_id: &Option<String>,
     occurrence: Option<u32>,
-    name: &str,
-    overwrite: bool,
+    args: plugin_presets::SaveArgs,
 ) -> (Response, Task<Message>) {
     let (clap_id, _, instance_id) = match resolve(app, chain, plugin_id, occurrence) {
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };
-    if let Err(e) = plugin_presets::check_save(app, &clap_id, name, overwrite) {
-        return reject(request, e);
+    match plugin_presets::arm_save(app, clap_id, instance_id, args) {
+        Ok(id) => (plugin_presets::saved_reply(app, request, id), Task::none()),
+        Err(e) => reject(request, e),
     }
-
-    app.presets.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
-        instance_id,
-        clap_id,
-        name: name.trim().to_string(),
-    });
-    let _ = app
-        .engine
-        .send(resonance_audio::types::AudioCommand::SavePluginPresetState { instance_id });
-
-    (ack(app, request), Task::none())
 }

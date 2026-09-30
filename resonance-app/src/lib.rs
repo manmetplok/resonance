@@ -72,6 +72,13 @@ pub(crate) struct PendingPluginPresetSave {
     pub(crate) clap_id: String,
     /// Display name to write.
     pub(crate) name: String,
+    /// The id the preset gets (minted when the save was armed, or the
+    /// existing preset's).
+    pub(crate) id: String,
+    pub(crate) meta: Option<resonance_control::methods::plugin_preset::PresetMetaInput>,
+    pub(crate) favorite: Option<bool>,
+    /// `overwrite_id`: update this user preset in place.
+    pub(crate) target: Option<String>,
 }
 
 pub struct Resonance {

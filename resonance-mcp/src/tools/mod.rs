@@ -10,6 +10,7 @@
 //! drift from the protocol.
 
 pub mod amp_models;
+pub mod presets;
 pub mod arrange;
 pub mod automation;
 pub mod bus;

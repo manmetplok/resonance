@@ -138,6 +138,7 @@ fn presets(app: &mut Resonance) -> PluginPresetsView {
             track_id: ProtoTrackId(TRACK),
             plugin_id: Some(PLUGIN_ID.to_owned()),
             occurrence: None,
+            filter: Default::default(),
         },
     );
     serde_json::from_value(response.result.expect("plugin_presets should succeed"))
@@ -185,6 +186,8 @@ fn loading_a_preset_moves_the_parameters_and_the_mirror() {
             occurrence: None,
             preset: "Bright".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -210,6 +213,8 @@ fn a_recall_is_a_single_undo_entry() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
 
@@ -236,6 +241,8 @@ fn an_unknown_preset_is_refused_with_the_names_that_exist() {
             occurrence: None,
             preset: "Nope".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     let error = response.error.expect("an unknown preset must be refused");
@@ -261,6 +268,9 @@ fn saving_adds_a_user_preset_the_list_then_reports() {
             occurrence: None,
             name: "My Sound".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -306,6 +316,9 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             name: "Captured".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
@@ -325,6 +338,8 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             preset: "Bright".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 12000.0);
@@ -338,6 +353,8 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             preset: "Captured".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -362,6 +379,9 @@ fn overwriting_a_user_preset_needs_the_flag() {
                 occurrence: None,
                 name: "Mine".to_owned(),
                 overwrite,
+                meta: None,
+                favorite: None,
+                overwrite_id: None,
             },
         )
     };
@@ -407,6 +427,9 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             name: "Dark".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -429,6 +452,8 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 777.0);
@@ -443,6 +468,8 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: Some(PluginPresetSource::Factory),
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 400.0);
@@ -509,6 +536,8 @@ fn a_recall_hands_the_plugin_the_whole_sound_and_its_identity() {
             occurrence: None,
             preset: "tube lead".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -553,6 +582,9 @@ fn a_save_asks_the_plugin_for_its_preset_form() {
             occurrence: None,
             name: "Captured".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);

@@ -1,0 +1,373 @@
+//! The plugin preset library over the control API
+//! (plugin-preset-library.md §12; slice P3): filters and facets on
+//! `*.plugin_presets`, ids and metadata on every entry, load by id, save
+//! with metadata and a star, and the `presets.*` library methods
+//! (`set_marks`, `update_meta`, `vocabulary`).
+//!
+//! Every app here has a private preset root and marks store (a test app
+//! gets both at construction), so nothing reads the user's library.
+
+use resonance_app::state::{PluginSlotState, ViewMode};
+use resonance_app::Resonance;
+use resonance_audio::types::{AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_common::factory_presets::FactoryPresetEntry;
+use resonance_control::ids::TrackId as ProtoTrackId;
+use resonance_control::methods::plugin_preset::{
+    PluginPresetSource, PluginPresetsView, PresetFilter, PresetMetaInput, SavePluginPresetResult,
+};
+use resonance_control::methods::{presets, track as track_proto};
+use resonance_control::{ErrorKind, Request, Response};
+
+use crate::common::roundtrip;
+
+const TRACK: u64 = 81;
+const INSTANCE: u64 = 901;
+const PLUGIN_ID: &str = "com.resonance.test-synth";
+
+fn clap_id(s: &str) -> u32 {
+    resonance_plugin::stable_hash(s)
+}
+
+fn params() -> Vec<ParamInfo> {
+    ["cutoff", "drive"]
+        .into_iter()
+        .map(|id| ParamInfo {
+            id: clap_id(id),
+            name: id.to_owned(),
+            min_value: 0.0,
+            max_value: 20_000.0,
+            default_value: 1.0,
+            current_value: 1.0,
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn factory(id: &str, name: &str, cutoff: f64, meta: serde_json::Value) -> FactoryPresetEntry {
+    FactoryPresetEntry {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        json: format!(r#"{{"version":1,"params":{{"cutoff":{cutoff},"drive":0.1}}}}"#),
+        meta: Some(meta.to_string()),
+    }
+}
+
+fn scanned() -> ScannedPlugin {
+    ScannedPlugin {
+        clap_file_path: "/nonexistent/test-synth.clap".to_owned(),
+        clap_plugin_id: PLUGIN_ID.to_owned(),
+        name: "Test Synth".to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument: true,
+        factory_presets: vec![
+            factory(
+                "bass-reese",
+                "Bass — Reese",
+                400.0,
+                serde_json::json!({"category": "Bass", "genres": ["drum-and-bass"],
+                    "character": ["dark", "wide"], "instrument": ["synth-bass"]}),
+            ),
+            factory(
+                "pad-glass",
+                "Pad — Glass",
+                9000.0,
+                serde_json::json!({"category": "Pad", "genres": ["ambient"],
+                    "character": ["bright", "airy"], "tags": ["shimmer"]}),
+            ),
+        ],
+    }
+}
+
+/// A fresh app with the synth on a track.
+fn app() -> Resonance {
+    let (app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    with_plugin(app)
+}
+
+/// `app` (plain or capturing) with the synth scanned and on a track.
+fn with_plugin(mut app: Resonance) -> Resonance {
+    app.test_set_active_project(true);
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![scanned()],
+    });
+    app.test_add_track(TRACK, TrackType::Instrument);
+    app.test_push_track_plugin(
+        TRACK,
+        PluginSlotState::new(
+            INSTANCE,
+            "Test Synth".to_owned(),
+            PLUGIN_ID.to_owned(),
+            "/nonexistent/test-synth.clap".to_owned(),
+            params(),
+            false,
+        ),
+    );
+    app
+}
+
+fn call<T: serde::Serialize>(app: &mut Resonance, method: &str, params: &T) -> Response {
+    roundtrip(app, Request::new(1, method, params).expect("params serialize"))
+}
+
+fn list(app: &mut Resonance, filter: PresetFilter) -> PluginPresetsView {
+    let response = call(
+        app,
+        track_proto::PLUGIN_PRESETS,
+        &track_proto::PluginPresetsParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            filter,
+        },
+    );
+    serde_json::from_value(response.result.expect("plugin_presets should succeed")).unwrap()
+}
+
+fn names(view: &PluginPresetsView) -> Vec<&str> {
+    view.presets.iter().map(|p| p.name.as_str()).collect()
+}
+
+fn save(app: &mut Resonance, name: &str, meta: Option<PresetMetaInput>, favorite: bool) -> String {
+    let response = call(
+        app,
+        track_proto::SAVE_PLUGIN_PRESET,
+        &track_proto::SavePluginPresetParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            name: name.to_owned(),
+            overwrite: false,
+            meta,
+            favorite: favorite.then_some(true),
+            overwrite_id: None,
+        },
+    );
+    let result: SavePluginPresetResult =
+        serde_json::from_value(response.result.expect("save should succeed")).unwrap();
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
+        instance_id: INSTANCE,
+        data: br#"{"version":1,"params":{"cutoff":777.0,"drive":0.5}}"#.to_vec(),
+        preset_form: true,
+    });
+    result.id
+}
+
+#[test]
+fn entries_carry_ids_and_metadata_and_filters_and_facets_apply() {
+    let mut app = app();
+    let all = list(&mut app, PresetFilter::default());
+    assert_eq!(all.total, 2);
+    let reese = &all.presets[0];
+    assert_eq!(reese.id, "bass-reese");
+    assert_eq!(reese.category.as_deref(), Some("Bass"));
+    assert_eq!(reese.genres, vec!["drum-and-bass"]);
+    assert_eq!(reese.instrument, vec!["synth-bass"]);
+
+    let dark = list(
+        &mut app,
+        PresetFilter {
+            character: vec!["dark".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(names(&dark), vec!["Bass — Reese"]);
+    // The character facet counts ignore the character selection itself.
+    let bright = dark.facets.character.iter().find(|c| c.value == "bright");
+    assert_eq!(bright.map(|c| c.count), Some(1));
+
+    let q = list(
+        &mut app,
+        PresetFilter {
+            query: Some("tag:shimmer".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(names(&q), vec!["Pad — Glass"]);
+
+    let paged = list(
+        &mut app,
+        PresetFilter {
+            limit: Some(1),
+            offset: Some(1),
+            ..Default::default()
+        },
+    );
+    assert_eq!(paged.total, 2);
+    assert_eq!(names(&paged), vec!["Pad — Glass"]);
+}
+
+#[test]
+fn a_load_by_id_wins_over_the_name_and_extra_false_recalls_params_only() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = with_plugin(app);
+    while rx.try_recv().is_ok() {}
+    let response = call(
+        &mut app,
+        track_proto::LOAD_PLUGIN_PRESET,
+        &track_proto::LoadPluginPresetParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            preset: "this name is ignored".to_owned(),
+            source: None,
+            preset_id: Some("pad-glass".to_owned()),
+            extra: Some(false),
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+    assert_eq!(app.test_plugin_param(INSTANCE, clap_id("cutoff")), Some(9000.0));
+    let commands: Vec<_> = rx.try_iter().collect();
+    let preset_state = commands.iter().any(|c| {
+        matches!(c, resonance_audio::types::AudioCommand::LoadPluginPresetState { .. })
+    });
+    assert!(!preset_state, "extra: false recalls the params only");
+    // A control-API load is a user pick: it lands in the recents.
+    let recent = list(
+        &mut app,
+        PresetFilter {
+            query: Some("is:recent".into()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(names(&recent), vec!["Pad — Glass"]);
+    assert!(recent.presets[0].last_used.is_some());
+}
+
+#[test]
+fn a_save_returns_its_id_and_carries_meta_and_a_star() {
+    let mut app = app();
+    let id = save(
+        &mut app,
+        "Night Lead",
+        Some(PresetMetaInput {
+            category: Some("lead".into()),
+            genres: Some(vec!["Synthwave".into()]),
+            tags: Some(vec!["ferrous".into()]),
+            ..Default::default()
+        }),
+        true,
+    );
+    let view = list(
+        &mut app,
+        PresetFilter {
+            source: Some(PluginPresetSource::User),
+            ..Default::default()
+        },
+    );
+    let entry = &view.presets[0];
+    assert_eq!(entry.id, id, "the id minted up front is the preset's");
+    assert_eq!(entry.category.as_deref(), Some("Lead"));
+    assert_eq!(entry.genres, vec!["synthwave"]);
+    assert_eq!(entry.tags, vec!["ferrous"]);
+    assert!(entry.favorite);
+}
+
+#[test]
+fn set_marks_stars_a_factory_preset_without_touching_the_project() {
+    let mut app = app();
+    let revision = app.revision();
+    let response = call(
+        &mut app,
+        presets::SET_MARKS,
+        &presets::SetMarksParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: "bass-reese".to_owned(),
+            favorite: Some(true),
+            tags: Some(vec!["Mine".into()]),
+        },
+    );
+    let result: presets::EntryResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert!(result.entry.favorite);
+    assert_eq!(result.entry.personal_tags, vec!["mine"]);
+    assert_eq!(app.revision(), revision, "library state, not a project edit");
+
+    let favs = list(
+        &mut app,
+        PresetFilter {
+            favorites_only: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(names(&favs), vec!["Bass — Reese"]);
+
+    let none = call(
+        &mut app,
+        presets::SET_MARKS,
+        &presets::SetMarksParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: "bass-reese".to_owned(),
+            ..Default::default()
+        },
+    );
+    assert_eq!(none.error.unwrap().kind(), ErrorKind::InvalidParams);
+    let unknown = call(
+        &mut app,
+        presets::SET_MARKS,
+        &presets::SetMarksParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: "no-such".to_owned(),
+            favorite: Some(true),
+            ..Default::default()
+        },
+    );
+    assert_eq!(unknown.error.unwrap().kind(), ErrorKind::NotFound);
+}
+
+#[test]
+fn update_meta_edits_a_user_preset_and_refuses_a_factory_one() {
+    let mut app = app();
+    let id = save(&mut app, "Mine", None, false);
+    let response = call(
+        &mut app,
+        presets::UPDATE_META,
+        &presets::UpdateMetaParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: id.clone(),
+            set: Some(PresetMetaInput {
+                description: Some("Late-night lead.".into()),
+                character: Some(vec!["warm".into()]),
+                ..Default::default()
+            }),
+            add_tags: vec!["demo".into()],
+            remove_tags: vec![],
+        },
+    );
+    let result: presets::EntryResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(result.entry.description.as_deref(), Some("Late-night lead."));
+    assert_eq!(result.entry.character, vec!["warm"]);
+    assert_eq!(result.entry.tags, vec!["demo"]);
+    assert_eq!(result.entry.name, "Mine", "the name is not changed here");
+
+    let refused = call(
+        &mut app,
+        presets::UPDATE_META,
+        &presets::UpdateMetaParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: "bass-reese".to_owned(),
+            add_tags: vec!["x".into()],
+            ..Default::default()
+        },
+    );
+    let err = refused.error.expect("a factory preset is read-only");
+    assert!(err.message.contains("set_marks"), "{}", err.message);
+}
+
+#[test]
+fn the_vocabulary_lists_seeded_values_then_values_in_use() {
+    let mut app = app();
+    save(
+        &mut app,
+        "Odd",
+        Some(PresetMetaInput {
+            genres: Some(vec!["shoegaze".into()]),
+            ..Default::default()
+        }),
+        false,
+    );
+    let response = call(&mut app, presets::VOCABULARY, &presets::VocabularyParams {});
+    let vocab: presets::Vocabulary = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(vocab.genres.first().map(String::as_str), Some("ambient"));
+    assert!(vocab.genres.iter().any(|g| g == "shoegaze"), "{:?}", vocab.genres);
+    assert!(vocab.categories_effect.iter().any(|c| c == "Bus"));
+    assert!(vocab.tags.iter().any(|t| t == "shimmer"));
+}

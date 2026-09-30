@@ -78,6 +78,24 @@ pub fn preset_bar(
             event = editor.step(bank, session, -1, params);
         }
 
+        // ☆/★ on the loaded preset (factory ones too: a mark never touches
+        // the preset). WARM when set. Marks are per-user library state,
+        // shared with every other browser.
+        if let Some(c) = current.as_ref().filter(|c| c.is_resolved()) {
+            bank.library().refresh_marks(BAR_REFRESH);
+            let fav = bank.library().preset_marks(bank.plugin_id(), &c.id).favorite;
+            let resp = plugin_gui_core::widgets::star_toggle(ui, fav).on_hover_text(if fav {
+                "Unstar this preset"
+            } else {
+                "Star this preset"
+            });
+            if resp.clicked() {
+                if let Err(e) = bank.library().set_favorite(bank.plugin_id(), &c.id, !fav) {
+                    tracing::warn!("preset favourite: {e}");
+                }
+            }
+        }
+
         let picked = picker(ui, id_salt, editor, bank, session, params, placeholder, all);
         if !matches!(picked, PresetEvent::None) {
             event = picked;

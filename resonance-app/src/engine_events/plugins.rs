@@ -693,9 +693,7 @@ pub(super) fn preset_state_saved(
         return;
     }
     let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
-    if let Err(e) =
-        crate::update::control::write_plugin_preset(r, &pending.clap_id, &pending.name, &data)
-    {
+    if let Err(e) = crate::update::control::write_plugin_preset(r, &pending, &data) {
         r.banners.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
     }
 }

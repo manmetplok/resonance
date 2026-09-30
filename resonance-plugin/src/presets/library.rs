@@ -107,6 +107,14 @@ pub struct SaveRequest {
     pub derived_from: Option<String>,
     /// Plugin name and version to record (`id` is filled in).
     pub plugin: PresetPluginInfo,
+    /// The id a *new* preset gets (a UUID minted up front by a caller that
+    /// must report it before the file lands); a fresh one when `None` or
+    /// not UUID-shaped.
+    pub id: Option<String>,
+    /// Update this user preset (by id) in place instead of the one `name`
+    /// addresses. It keeps its id and takes `name`; refused if it does not
+    /// exist or another user preset already has `name`.
+    pub target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,6 +159,8 @@ pub struct PresetLibrary {
     /// nothing reads it unless a query or a mark asks.
     marks: RwLock<Option<Arc<dyn MarksSource>>>,
     default_marks: bool,
+    /// When [`Self::refresh_marks`] last asked the store to re-read.
+    marks_checked: Mutex<Option<Instant>>,
     clock: Clock,
     plugins: Mutex<HashMap<String, PluginIndex>>,
 }
@@ -169,6 +179,7 @@ impl PresetLibrary {
             root: None,
             marks: RwLock::new(None),
             default_marks: false,
+            marks_checked: Mutex::new(None),
             clock: Arc::new(SystemTime::now),
             plugins: Mutex::new(HashMap::new()),
         }
@@ -432,6 +443,19 @@ impl PresetLibrary {
     // Marks (favourite, personal tags, recents)
     // -----------------------------------------------------------------
 
+    /// Pick up another process's marks write, checking at most once per
+    /// `max_age` (a widget drawn every frame passes its poll interval).
+    pub fn refresh_marks(&self, max_age: Duration) {
+        {
+            let mut at = self.marks_checked.lock();
+            if at.is_some_and(|t| t.elapsed() < max_age) {
+                return;
+            }
+            *at = Some(Instant::now());
+        }
+        self.marks().refresh();
+    }
+
     /// The marks of one preset.
     pub fn preset_marks(&self, plugin_id: &str, preset_id: &str) -> Marks {
         self.marks().marks(&mark_key(plugin_id, preset_id))
@@ -500,11 +524,25 @@ impl PresetLibrary {
         let mut plugins = self.plugins.lock();
         let index = plugins.entry(plugin_id.to_string()).or_default();
         self.ensure_fresh(plugin_id, index, Duration::ZERO);
-        let existing = index
-            .user
-            .as_ref()
-            .and_then(|u| u.records.iter().find(|r| same_name(&r.meta.name, &name)))
-            .cloned();
+        let users: &[PresetRecord] =
+            index.user.as_ref().map(|u| u.records.as_slice()).unwrap_or(&[]);
+        let existing = match &request.target {
+            Some(target) => {
+                let found = users
+                    .iter()
+                    .find(|r| r.preset.id == *target)
+                    .cloned()
+                    .ok_or_else(|| format!("No user preset with id {target:?}"))?;
+                if users
+                    .iter()
+                    .any(|r| r.preset.id != found.preset.id && same_name(&r.meta.name, &name))
+                {
+                    return Err(format!("A preset named '{name}' already exists"));
+                }
+                Some(found)
+            }
+            None => users.iter().find(|r| same_name(&r.meta.name, &name)).cloned(),
+        };
 
         let mut plugin = request.plugin;
         plugin.id = plugin_id.to_string();
@@ -533,7 +571,12 @@ impl PresetLibrary {
                 meta.created = Some(now.clone());
                 meta.modified = Some(now.clone());
                 meta.derived_from = request.derived_from.clone();
-                (format::new_uuid(), meta, None)
+                let id = request
+                    .id
+                    .clone()
+                    .filter(|id| format::is_uuid(id) && !users.iter().any(|r| r.preset.id == *id))
+                    .unwrap_or_else(format::new_uuid);
+                (id, meta, None)
             }
         };
         let file = PresetFile::new(id, plugin, meta.normalized(), doc);
@@ -589,6 +632,51 @@ impl PresetLibrary {
         files::move_before_rewrite(&from, &to)?;
         files::atomic_write(&to, file.to_text()?.as_bytes())?;
         let record = user_record(&file, to);
+        upsert_user(index, record.clone());
+        Ok(record)
+    }
+
+    /// Edit a **user** preset's content metadata in place (name, id and
+    /// lineage excepted; rename with [`Self::rename`]). Factory presets are
+    /// refused: their tags are personal marks (`set_personal_tags`).
+    pub fn update_meta(
+        &self,
+        plugin_id: &str,
+        preset: &PresetRef,
+        edit: impl FnOnce(&mut PresetMeta),
+    ) -> Result<PresetRecord, String> {
+        if preset.source != PresetSource::User {
+            return Err(
+                "Factory presets are read-only; star or tag them with presets.set_marks".into(),
+            );
+        }
+        let mut plugins = self.plugins.lock();
+        let index = plugins.entry(plugin_id.to_string()).or_default();
+        self.ensure_fresh(plugin_id, index, Duration::ZERO);
+        let users = index.user.as_ref().map(|u| u.records.as_slice()).unwrap_or(&[]);
+        let record = find_record(users, preset)
+            .cloned()
+            .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
+        let path = record
+            .path
+            .clone()
+            .ok_or_else(|| "User preset has no file".to_string())?;
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Read preset '{}': {e}", preset.name))?;
+        let mut file = PresetFile::parse(&text)?;
+        let (name, created, derived) = (
+            file.meta.name.clone(),
+            file.meta.created.clone(),
+            file.meta.derived_from.clone(),
+        );
+        edit(&mut file.meta);
+        file.meta.name = name;
+        file.meta.created = created;
+        file.meta.derived_from = derived;
+        file.meta.modified = Some(format::rfc3339(self.now()));
+        file.meta = std::mem::take(&mut file.meta).normalized();
+        files::atomic_write(&path, file.to_text()?.as_bytes())?;
+        let record = user_record(&file, path);
         upsert_user(index, record.clone());
         Ok(record)
     }

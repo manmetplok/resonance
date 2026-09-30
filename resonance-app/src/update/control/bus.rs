@@ -643,6 +643,7 @@ fn plugin_presets(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
+        &params.filter,
     )
 }
 
@@ -657,8 +658,12 @@ fn load_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
-        &params.preset,
-        params.source,
+        super::plugin_presets::LoadArgs {
+            preset: &params.preset,
+            preset_id: params.preset_id.as_deref(),
+            source: params.source,
+            extra: params.extra.unwrap_or(true),
+        },
     )
 }
 
@@ -673,8 +678,13 @@ fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
-        &params.name,
-        params.overwrite,
+        super::plugin_presets::SaveArgs {
+            name: params.name,
+            overwrite: params.overwrite,
+            meta: params.meta,
+            favorite: params.favorite,
+            overwrite_id: params.overwrite_id,
+        },
     )
 }
 

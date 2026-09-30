@@ -22,6 +22,10 @@ pub struct SaveOptions {
     /// (`ExtraStateSaver::save_for_preset`): a model reference, an IR, user
     /// wavetables.
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// The id for a new preset, minted up front (see `SaveRequest::id`).
+    pub id: Option<String>,
+    /// Update this user preset (by id) in place (see `SaveRequest::target`).
+    pub target: Option<String>,
 }
 
 /// The browsable preset set for one plugin: its factory bank plus the
@@ -254,11 +258,22 @@ impl PresetBank {
         name: &str,
         document: &serde_json::Value,
     ) -> Result<PresetRef, String> {
+        self.write_user_preset_with(name, document, SaveOptions::default())
+    }
+
+    /// [`write_user_preset`](Self::write_user_preset) with metadata, a
+    /// pre-minted id or an in-place target.
+    pub fn write_user_preset_with(
+        &self,
+        name: &str,
+        document: &serde_json::Value,
+        options: SaveOptions,
+    ) -> Result<PresetRef, String> {
         let mut doc = document.clone();
         if let Some(obj) = doc.as_object_mut() {
             obj.remove("name");
         }
-        self.write(name, doc, SaveOptions::default())
+        self.write(name, doc, options)
     }
 
     fn write(
@@ -276,6 +291,8 @@ impl PresetBank {
                     meta: options.meta,
                     derived_from: options.derived_from,
                     plugin: self.plugin.clone(),
+                    id: options.id,
+                    target: options.target,
                 },
             )
             .map(|r| r.preset)
