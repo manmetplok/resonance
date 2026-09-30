@@ -415,10 +415,10 @@ impl PresetLibrary {
         };
         let file = PresetFile::new(id, plugin, meta.normalized(), doc);
         let path = dir.join(fs::preset_file_name(&name, &file.id));
-        fs::atomic_write(&path, file.to_text()?.as_bytes())?;
-        if let Some(old) = old_path.filter(|old| *old != path) {
-            let _ = std::fs::remove_file(old);
+        if let Some(old) = &old_path {
+            fs::move_before_rewrite(old, &path)?;
         }
+        fs::atomic_write(&path, file.to_text()?.as_bytes())?;
         let record = user_record(&file, path);
         upsert_user(index, record.clone());
         Ok(record)
@@ -463,10 +463,8 @@ impl PresetLibrary {
         file.meta.name = new_name.clone();
         file.meta.modified = Some(format::rfc3339(self.now()));
         let to = from.with_file_name(fs::preset_file_name(&new_name, &file.id));
+        fs::move_before_rewrite(&from, &to)?;
         fs::atomic_write(&to, file.to_text()?.as_bytes())?;
-        if to != from {
-            let _ = std::fs::remove_file(&from);
-        }
         let record = user_record(&file, to);
         upsert_user(index, record.clone());
         Ok(record)
@@ -575,6 +573,12 @@ impl PresetLibrary {
             });
             index.merged = None;
         }
+        let factory_ids: Vec<String> = index
+            .factory
+            .records
+            .iter()
+            .map(|r| r.preset.id.clone())
+            .collect();
         let user = index.user.as_mut().expect("just ensured");
         if !user.opened {
             user.opened = true;
@@ -593,7 +597,7 @@ impl PresetLibrary {
         if user.fingerprint.as_ref() == Some(&fp) {
             return;
         }
-        user.records = scan_dir(&dir, plugin_id, self.now());
+        user.records = scan_dir(&dir, plugin_id, self.now(), &factory_ids);
         // Re-read the fingerprint: scanning may have rewritten files
         // (ids minted, strays converted), and those writes are ours.
         user.fingerprint = Some(fingerprint(&dir));
@@ -642,7 +646,10 @@ fn build_factory(plugin_id: &str, entries: impl IntoIterator<Item = FactoryEntry
     set
 }
 
-fn find_record<'a>(records: &'a [PresetRecord], preset: &PresetRef) -> Option<&'a PresetRecord> {
+pub(crate) fn find_record<'a>(
+    records: &'a [PresetRecord],
+    preset: &PresetRef,
+) -> Option<&'a PresetRecord> {
     let of_source = || records.iter().filter(|r| r.preset.source == preset.source);
     if !preset.id.is_empty() {
         return of_source().find(|r| r.preset.id == preset.id);
@@ -721,15 +728,30 @@ fn fingerprint(dir: &Path) -> Fingerprint {
     }
 }
 
-/// Read every preset file in `dir`. Unparsable files are quarantined, a
-/// stray legacy file is converted, and a format-1 file without an id gets
-/// one written into it (§4.2). Two files with one id (a rename caught
-/// half-way, §11.4) keep the newer.
-fn scan_dir(dir: &Path, plugin_id: &str, now: SystemTime) -> Vec<PresetRecord> {
+/// Read every preset file in `dir`.
+///
+/// - Unparsable files are quarantined; a file of a *newer* format version
+///   is skipped and left alone (a newer build can read it).
+/// - A stray legacy file is converted.
+/// - A file with no name is listed under its file stem.
+/// - Ids are made unique and unmistakable (§4.2). A file gets a fresh
+///   UUID, written into it, when it has no id, when its id is not
+///   UUID-shaped (a factory file copied in by hand carries the factory
+///   slug, and a user preset must never share a marks key with a factory
+///   one), when the id is a registered factory id, or when a newer file
+///   already has the id but a different name or sound (a hand copy).
+///   Two files with one id, the same name and the same sound (a rename
+///   caught half-way, §11.4) list once, the newer.
+fn scan_dir(
+    dir: &Path,
+    plugin_id: &str,
+    now: SystemTime,
+    factory_ids: &[String],
+) -> Vec<PresetRecord> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let mut found: Vec<(PresetRecord, Option<SystemTime>)> = Vec::new();
+    let mut found: Vec<(PresetFile, PathBuf, Option<SystemTime>)> = Vec::new();
     for entry in entries.flatten() {
         let mut path = entry.path();
         if !fs::is_preset_path(&path) {
@@ -745,21 +767,12 @@ fn scan_dir(dir: &Path, plugin_id: &str, now: SystemTime) -> Vec<PresetRecord> {
                 continue;
             }
         };
-        let file = if format::is_envelope(&value) {
+        let mut file = if format::is_envelope(&value) {
+            if format::is_newer_format(&value) {
+                tracing::info!("{}: written by a newer build, skipped", path.display());
+                continue;
+            }
             match PresetFile::from_value(value) {
-                Ok(mut file) if file.id.trim().is_empty() => {
-                    file.id = format::new_uuid();
-                    if file.meta.name.is_empty() {
-                        file.meta.name = stem_of(&path);
-                    }
-                    match file.to_text().and_then(|t| fs::atomic_write(&path, t.as_bytes())) {
-                        Ok(()) => file,
-                        Err(e) => {
-                            tracing::warn!("{}: could not write an id: {e}", path.display());
-                            continue;
-                        }
-                    }
-                }
                 Ok(file) => file,
                 Err(_) => {
                     fs::quarantine(&path);
@@ -778,19 +791,42 @@ fn scan_dir(dir: &Path, plugin_id: &str, now: SystemTime) -> Vec<PresetRecord> {
                 }
             }
         };
-        if file.meta.name.is_empty() {
-            continue;
+        if file.meta.name.trim().is_empty() {
+            file.meta.name = stem_of(&path);
         }
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        found.push((user_record(&file, path), mtime));
+        found.push((file, path, mtime));
     }
-    // Dedup by id, newest file wins.
-    found.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // Newest first, so on an id clash the older file is the one re-minted.
+    found.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.cmp(&b.1)));
     let mut records: Vec<PresetRecord> = Vec::with_capacity(found.len());
-    for (record, _) in found {
-        if !records.iter().any(|r| r.preset.id == record.preset.id) {
-            records.push(record);
+    let mut kept: Vec<PresetFile> = Vec::with_capacity(found.len());
+    for (mut file, mut path, _) in found {
+        let id = file.id.trim();
+        let mut remint = !format::is_uuid(id) || factory_ids.iter().any(|f| f == id);
+        if !remint {
+            if let Some(twin) = kept.iter().find(|k| k.id == file.id) {
+                if twin.meta.name == file.meta.name && twin.state == file.state {
+                    continue;
+                }
+                remint = true;
+            }
         }
+        if remint {
+            file.id = format::new_uuid();
+            let to = dir.join(fs::preset_file_name(&file.meta.name, &file.id));
+            let written = fs::move_before_rewrite(&path, &to)
+                .and_then(|()| file.to_text())
+                .and_then(|text| fs::atomic_write(&to, text.as_bytes()));
+            if let Err(e) = written {
+                tracing::warn!("{}: could not write a new id: {e}", path.display());
+                continue;
+            }
+            path = to;
+        }
+        records.push(user_record(&file, path));
+        kept.push(file);
     }
     sort_users(&mut records);
     records

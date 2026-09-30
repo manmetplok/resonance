@@ -167,7 +167,7 @@ impl PresetEditor {
             return PresetEvent::None;
         }
         let target = match session.current() {
-            Some(current) => match all.iter().position(|p| *p == current) {
+            Some(current) => match all.iter().position(|p| p.matches(&current)) {
                 Some(index) => {
                     let next = index as i32 + delta;
                     if next < 0 || next >= all.len() as i32 {

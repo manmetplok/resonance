@@ -321,6 +321,12 @@ fn every_factory_preset_is_a_complete_format_1_file() {
                 categories.contains(&category),
                 "{at}: category {category:?} is not one of {categories:?}"
             );
+            // One convention for every bank's reset preset.
+            assert_eq!(
+                name.starts_with("Init"),
+                category == "Init",
+                "{at}: an Init preset has the Init category, and only it does"
+            );
             assert!(meta.description.is_some(), "{at}: no description");
             assert!(!meta.character.is_empty(), "{at}: no character");
             for c in &meta.character {

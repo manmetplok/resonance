@@ -113,7 +113,7 @@ impl ResonancePlugin for ResonanceIr {
         let load_request = Arc::new(AtomicI32::new(-1));
         // The preset identity wraps the IR-path saver rather than
         // replacing it: chaining is why `with_extra` exists.
-        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+        let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(Arc::new(
             IrExtraState {
                 ir_path: params.ir_path.clone(),
                 file_list: params.file_list.clone(),

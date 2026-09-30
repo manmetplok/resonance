@@ -17,8 +17,10 @@ pub const INSTRUMENT_CATEGORIES: &[&str] = &[
     "Init",
 ];
 
-/// `category` values for effect plugins.
-pub const EFFECT_CATEGORIES: &[&str] = &["Utility", "Track", "Bus", "Master", "Creative"];
+/// `category` values for effect plugins. `Init` is shared with the
+/// instrument list: every bank's reset preset uses it.
+pub const EFFECT_CATEGORIES: &[&str] =
+    &["Init", "Utility", "Track", "Bus", "Master", "Creative"];
 
 /// "What is it for": the source an effect suits, or what an instrument is.
 pub const INSTRUMENT: &[&str] = &[
@@ -32,7 +34,7 @@ pub const INSTRUMENT: &[&str] = &[
 pub const GENRES: &[&str] = &[
     "ambient", "americana", "cinematic", "drum-and-bass", "electronic", "folk", "hip-hop",
     "house", "indie", "industrial", "jazz", "metal", "pop", "post-metal", "rock",
-    "singer-songwriter", "techno",
+    "singer-songwriter", "techno", "trance", "synthwave", "dubstep", "dub", "lo-fi",
 ];
 
 /// Timbre words.

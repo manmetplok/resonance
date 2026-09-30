@@ -6,7 +6,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use super::bank::{PresetBank, SaveOptions};
-use super::{PresetRef, PresetSource, PRESET_STATE_KEY};
+use super::{PresetRef, PresetSource, BAR_REFRESH, PRESET_STATE_KEY};
 use crate::param::Param;
 use crate::plugin::ExtraStateSaver;
 
@@ -27,10 +27,10 @@ use crate::plugin::ExtraStateSaver;
 ///
 /// The identity is persisted as `"preset": {id, name, source, modified}`.
 /// A project written before preset ids existed carries `{name, source}`
-/// only; that loads as an *unresolved* reference, which
-/// [`resolve`](Self::resolve) turns into an id by name the first time a
-/// bank is at hand (the editor's bar does it every frame, for free once
-/// resolved).
+/// only. A session built with [`for_plugin`](Self::for_plugin) (every
+/// plugin's) resolves that to an id by name **at state load** (§13), so
+/// the next save writes the new shape; a session without a bank keeps it
+/// unresolved until [`resolve`](Self::resolve) is called.
 ///
 /// Thread-safety: the bridge may call `save`/`load` while the plugin is
 /// in the audio processor, so state lives behind a mutex and an atomic,
@@ -39,7 +39,12 @@ pub struct PresetSession {
     current: Mutex<Option<PresetRef>>,
     modified: AtomicBool,
     inner: Option<Arc<dyn ExtraStateSaver>>,
+    bank: Option<BankFactory>,
 }
+
+/// Builds the bank a session resolves name-only identities against.
+/// Deferred so constructing a plugin never touches the disk.
+pub type BankFactory = Box<dyn Fn() -> PresetBank + Send + Sync>;
 
 impl Default for PresetSession {
     fn default() -> Self {
@@ -47,6 +52,7 @@ impl Default for PresetSession {
             current: Mutex::new(None),
             modified: AtomicBool::new(false),
             inner: None,
+            bank: None,
         }
     }
 }
@@ -60,10 +66,33 @@ impl PresetSession {
     /// A session that also persists another saver's keys, for plugins
     /// that already had an [`ExtraStateSaver`].
     pub fn with_extra(inner: Arc<dyn ExtraStateSaver>) -> Arc<Self> {
+        Self::resolving(None, Some(inner))
+    }
+
+    /// The session for plugin `P`: resolves a name-only identity against
+    /// `PresetBank::for_plugin::<P>()` when state loads.
+    pub fn for_plugin<P: crate::ResonancePlugin>() -> Arc<Self> {
+        Self::resolving(Some(Box::new(PresetBank::for_plugin::<P>)), None)
+    }
+
+    /// [`for_plugin`](Self::for_plugin) chaining another saver's keys.
+    pub fn for_plugin_with_extra<P: crate::ResonancePlugin>(
+        inner: Arc<dyn ExtraStateSaver>,
+    ) -> Arc<Self> {
+        Self::resolving(Some(Box::new(PresetBank::for_plugin::<P>)), Some(inner))
+    }
+
+    /// A session resolving against whatever bank `bank` builds (tests point
+    /// it at a private root).
+    pub fn resolving(
+        bank: Option<BankFactory>,
+        inner: Option<Arc<dyn ExtraStateSaver>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             current: Mutex::new(None),
             modified: AtomicBool::new(false),
-            inner: Some(inner),
+            inner,
+            bank,
         })
     }
 
@@ -103,16 +132,34 @@ impl PresetSession {
     /// its id, and refresh a resolved one's display name after a rename
     /// elsewhere. Leaves the modified flag alone. No-op when nothing is
     /// loaded or the preset no longer exists.
+    ///
+    /// Reads the library's cached index ([`BAR_REFRESH`]), never the disk
+    /// directly, because the bar calls it every frame.
     pub fn resolve(&self, bank: &PresetBank) {
         let Some(current) = self.current() else {
             return;
         };
-        if let Some(found) = bank.resolve(&current) {
-            if found.id != current.id || found.name != current.name {
-                let mut slot = self.current.lock();
-                if slot.as_ref() == Some(&current) {
-                    *slot = Some(found);
-                }
+        let found = bank.resolve_cached(&current, BAR_REFRESH);
+        self.adopt(&current, found);
+    }
+
+    /// Resolve against the directory as it is now (state load).
+    fn resolve_now(&self, bank: &PresetBank) {
+        let Some(current) = self.current().filter(|c| !c.is_resolved()) else {
+            return;
+        };
+        let found = bank.resolve(&current);
+        self.adopt(&current, found);
+    }
+
+    fn adopt(&self, current: &PresetRef, found: Option<PresetRef>) {
+        let Some(found) = found else {
+            return;
+        };
+        if found.id != current.id || found.name != current.name {
+            let mut slot = self.current.lock();
+            if slot.as_ref() == Some(current) {
+                *slot = Some(found);
             }
         }
     }
@@ -147,12 +194,14 @@ impl PresetSession {
         name: &str,
         params: &[&dyn Param],
     ) -> Result<PresetRef, String> {
+        let target = PresetRef::unresolved(PresetSource::User, name);
+        let overwrites = bank.record(&target).is_some();
         let options = match self.current().and_then(|c| bank.record(&c)) {
-            Some(loaded) => SaveOptions {
+            Some(loaded) if !overwrites => SaveOptions {
                 meta: Some(loaded.meta.clone()),
                 derived_from: Some(loaded.preset.id.clone()),
             },
-            None => SaveOptions::default(),
+            _ => SaveOptions::default(),
         };
         let saved = bank.save_with(name, params, options)?;
         self.set_current(Some(saved.clone()));
@@ -169,7 +218,10 @@ impl PresetSession {
     ) -> Result<PresetRef, String> {
         let renamed = bank.rename(preset, new_name)?;
         let mut current = self.current.lock();
-        if current.as_ref() == Some(&renamed) || current.as_ref() == Some(preset) {
+        if current
+            .as_ref()
+            .is_some_and(|c| c.matches(&renamed) || c.matches(preset))
+        {
             *current = Some(renamed.clone());
         }
         Ok(renamed)
@@ -182,8 +234,9 @@ impl PresetSession {
         let resolved = bank.resolve(preset);
         bank.delete(preset)?;
         let mut current = self.current.lock();
-        let hit = current.as_ref() == Some(preset)
-            || (resolved.is_some() && current.as_ref() == resolved.as_ref());
+        let hit = current.as_ref().is_some_and(|c| {
+            c.matches(preset) || resolved.as_ref().is_some_and(|r| c.matches(r))
+        });
         if hit {
             *current = None;
             self.modified.store(false, Ordering::Relaxed);
@@ -242,5 +295,8 @@ impl ExtraStateSaver for PresetSession {
             name: name.to_string(),
         });
         self.modified.store(modified, Ordering::Relaxed);
+        if let Some(make_bank) = &self.bank {
+            self.resolve_now(&make_bank());
+        }
     }
 }

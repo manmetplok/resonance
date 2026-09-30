@@ -152,6 +152,13 @@ impl PresetBank {
         self.record(preset).map(|r| r.preset)
     }
 
+    /// [`resolve`](Self::resolve) against the index as last read, checking
+    /// the directory at most once per `max_age` (for per-frame callers).
+    pub fn resolve_cached(&self, preset: &PresetRef, max_age: Duration) -> Option<PresetRef> {
+        let records = self.records_cached(max_age);
+        super::library::find_record(&records, preset).map(|r| r.preset.clone())
+    }
+
     /// Search this plugin's presets (`q.plugins` is overridden).
     pub fn query(&self, q: &Query) -> QueryResult {
         let q = Query {

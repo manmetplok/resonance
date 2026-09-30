@@ -80,7 +80,7 @@ impl ResonancePlugin for ResonanceWavetable {
             params: Arc::new(WavetableParams::new()),
             // The preset identity wraps the user-table saver: chaining is
             // why `with_extra` exists.
-            presets: resonance_plugin::presets::PresetSession::with_extra(user_tables.clone()),
+            presets: resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(user_tables.clone()),
             engine: SynthEngine::new(),
             viz: Arc::new(WavetableVizState::new()),
             user_tables,

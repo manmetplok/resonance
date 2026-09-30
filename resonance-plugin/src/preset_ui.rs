@@ -23,8 +23,6 @@
 //! Feature-gated behind `editor-widgets` with the rest of the egui
 //! helpers, so DSP-only consumers don't pull in the GUI stack.
 
-use std::time::Duration;
-
 use plugin_gui_core::egui;
 
 use crate::param::Param;
@@ -33,11 +31,9 @@ use crate::presets::{
     PresetSource,
 };
 
-/// How often the bar re-checks the user preset directory for changes
-/// made by another instance or process (plugin-preset-library.md §4.6).
-/// Between checks it reads the library's in-memory index: no disk access
-/// per frame.
-pub const BAR_REFRESH: Duration = Duration::from_secs(2);
+/// How often the bar re-checks the user preset directory; see
+/// [`crate::presets::BAR_REFRESH`].
+pub use crate::presets::BAR_REFRESH;
 
 /// Draw the preset bar. Returns what the user did, if anything.
 pub fn preset_bar(
@@ -71,7 +67,7 @@ pub fn preset_bar(
         let all = &records;
         let at = current
             .as_ref()
-            .and_then(|c| all.iter().position(|r| r.preset == *c));
+            .and_then(|c| all.iter().position(|r| r.preset.matches(c)));
         let can_prev = !all.is_empty() && at.map(|i| i > 0).unwrap_or(true);
         let can_next = !all.is_empty() && at.map(|i| i + 1 < all.len()).unwrap_or(true);
         if ui
@@ -180,7 +176,7 @@ fn picker(
 }
 
 fn selectable(ui: &mut egui::Ui, current: &Option<PresetRef>, preset: &PresetRef) -> bool {
-    let selected = current.as_ref() == Some(preset);
+    let selected = current.as_ref().is_some_and(|c| c.matches(preset));
     ui.selectable_label(selected, preset.name.as_str()).clicked()
 }
 

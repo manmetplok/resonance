@@ -100,7 +100,7 @@ impl ResonancePlugin for ResonanceGate {
     fn new() -> Self {
         Self {
             params: Arc::new(GateParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             dsp: None,
             viz: GateViz::new(),
         }

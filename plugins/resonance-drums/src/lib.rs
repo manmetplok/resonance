@@ -253,7 +253,7 @@ impl ResonancePlugin for ResonanceDrums {
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
         // The preset identity wraps the kit saver rather than replacing
         // it: chaining is why `with_extra` exists.
-        let presets = resonance_plugin::presets::PresetSession::with_extra(Arc::new(
+        let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(Arc::new(
             DrumsExtraState {
                 kit_path: bridge.kit_path.clone(),
                 overhead_setup_key: bridge.overhead_setup_key.clone(),

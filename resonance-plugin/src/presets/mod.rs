@@ -76,6 +76,12 @@ pub const USER_PRESET_DIR_ENV: &str = "RESONANCE_PLUGIN_PRESET_DIR";
 /// Top-level state key carrying the loaded-preset identity.
 pub const PRESET_STATE_KEY: &str = "preset";
 
+/// How often a widget drawn every frame (the preset bar) re-checks the
+/// user preset directory for changes made by another instance or process
+/// (plugin-preset-library.md §4.6). Between checks it reads the library's
+/// in-memory index: no disk access per frame.
+pub const BAR_REFRESH: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Parse a preset (a preset file or a bare `{"params": {id: value}}`
 /// state document) and apply matching parameter values via
 /// `Param::set_plain`. Returns `true` when a `"params"` object was found.
@@ -145,8 +151,11 @@ impl PresetSource {
 /// display hint (and what error messages quote).
 ///
 /// A reference with an empty `id` is **unresolved**: it came from a
-/// project saved before preset ids existed. It compares by name instead,
-/// and [`PresetBank::resolve`] gives it its id.
+/// project saved before preset ids existed. Two unresolved refs are equal
+/// when their names are; an unresolved ref never equals a resolved one
+/// (so `==` stays an equivalence relation). Use [`PresetRef::matches`] to
+/// compare a possibly-unresolved ref against a listed one, and
+/// [`PresetBank::resolve`] to give it its id.
 #[derive(Debug, Clone, Eq)]
 pub struct PresetRef {
     pub id: String,
@@ -157,11 +166,8 @@ pub struct PresetRef {
 impl PartialEq for PresetRef {
     fn eq(&self, other: &Self) -> bool {
         self.source == other.source
-            && if self.id.is_empty() || other.id.is_empty() {
-                self.name == other.name
-            } else {
-                self.id == other.id
-            }
+            && self.id == other.id
+            && (!self.id.is_empty() || self.name == other.name)
     }
 }
 
@@ -193,6 +199,19 @@ impl PresetRef {
 
     pub fn is_resolved(&self) -> bool {
         !self.id.is_empty()
+    }
+
+    /// Whether `self` and `other` name the same preset, allowing either to
+    /// be unresolved: by id when both have one, otherwise by source and
+    /// case-insensitive name (the same rule the index resolves by).
+    pub fn matches(&self, other: &PresetRef) -> bool {
+        if self.source != other.source {
+            return false;
+        }
+        if self.is_resolved() && other.is_resolved() {
+            return self.id == other.id;
+        }
+        self.name.trim().to_lowercase() == other.name.trim().to_lowercase()
     }
 
     fn to_json(&self, modified: bool) -> serde_json::Value {

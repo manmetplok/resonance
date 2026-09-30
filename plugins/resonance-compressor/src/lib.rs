@@ -76,7 +76,7 @@ impl ResonancePlugin for ResonanceCompressor {
     fn new() -> Self {
         Self {
             params: Arc::new(CompressorParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: CompressorViz::new(),
             dsp: None,
         }

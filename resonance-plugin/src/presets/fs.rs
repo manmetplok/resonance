@@ -101,3 +101,18 @@ pub(crate) fn is_preset_path(path: &Path) -> bool {
             .map(|n| n.to_string_lossy().starts_with('.'))
             .unwrap_or(true)
 }
+
+/// Move the file at `from` to `to` before `to` is rewritten, so a preset
+/// whose file name changes (rename, a re-save under a new spelling) is
+/// never briefly two files, and a *case-only* change is safe on a
+/// case-insensitive filesystem (APFS, exFAT, casefold ext4). There
+/// `from` and `to` are one file, and "write `to`, then delete `from`"
+/// would delete the preset just written. `rename` handles both: it is a
+/// no-op or an in-place re-case for the same file, and a move otherwise.
+pub(crate) fn move_before_rewrite(from: &Path, to: &Path) -> Result<(), String> {
+    if from == to || !from.exists() {
+        return Ok(());
+    }
+    std::fs::rename(from, to)
+        .map_err(|e| format!("move {} to {}: {e}", from.display(), to.display()))
+}

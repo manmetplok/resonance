@@ -200,6 +200,9 @@ impl PresetFile {
         if !is_envelope(&value) {
             return Err("not a resonance.preset file".to_string());
         }
+        if is_newer_format(&value) {
+            return Err("written by a newer build".to_string());
+        }
         let mut file: PresetFile =
             serde_json::from_value(value).map_err(|e| format!("malformed preset file: {e}"))?;
         file.meta = file.meta.normalized();
@@ -229,6 +232,60 @@ impl PresetFile {
 /// Whether `value` is a preset file rather than a bare state document.
 pub fn is_envelope(value: &serde_json::Value) -> bool {
     value.get("format").and_then(|f| f.as_str()) == Some(FORMAT)
+}
+
+/// Whether `value` is a preset file of a format version newer than this
+/// build writes. Such a file is left alone rather than quarantined.
+pub fn is_newer_format(value: &serde_json::Value) -> bool {
+    value
+        .get("format_version")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|v| v > FORMAT_VERSION as u64)
+}
+
+/// Whether `id` has the hyphenated lowercase 8-4-4-4-12 hex shape of a
+/// UUID.
+pub fn is_uuid(id: &str) -> bool {
+    id.len() == 36
+        && id.char_indices().all(|(i, c)| match i {
+            8 | 13 | 18 | 23 => c == '-',
+            _ => c.is_ascii_digit() || ('a'..='f').contains(&c),
+        })
+}
+
+/// A UUID-shaped id derived deterministically from `parts` (version 8,
+/// "custom"), so two processes converting the same legacy file mint the
+/// same id and the same file name instead of two copies. FNV-1a over the
+/// parts, twice with different offsets for 128 bits: stable across
+/// builds and platforms, which std's hasher is not.
+pub fn derived_uuid(parts: &[&[u8]]) -> String {
+    let fnv = |offset: u64| {
+        let mut h = offset;
+        for part in parts {
+            for b in part.iter().chain(&[0xff]) {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x0000_0100_0000_01b3);
+            }
+        }
+        h
+    };
+    let mut bits =
+        ((fnv(0xcbf2_9ce4_8422_2325) as u128) << 64) | fnv(0x6c62_272e_07bb_0142) as u128;
+    bits = (bits & !(0xf << 76)) | (0x8 << 76);
+    bits = (bits & !(0x3 << 62)) | (0x2 << 62);
+    uuid_text(bits)
+}
+
+fn uuid_text(bits: u128) -> String {
+    let hex = format!("{bits:032x}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 /// Replace a preset file with the state document it carries, in place.
@@ -286,15 +343,7 @@ pub fn new_uuid() -> String {
     // Version 4, RFC 4122 variant.
     bits = (bits & !(0xf << 76)) | (0x4 << 76);
     bits = (bits & !(0x3 << 62)) | (0x2 << 62);
-    let hex = format!("{bits:032x}");
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    uuid_text(bits)
 }
 
 /// `t` as RFC 3339 UTC with second precision (`2026-09-30T14:02:11Z`).

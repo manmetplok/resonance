@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use resonance_plugin::presets::migrate::{convert_legacy_dir, LEGACY_SUFFIX};
+use resonance_plugin::presets::migrate::{convert_legacy_dir, LEGACY_RETENTION, LEGACY_SUFFIX};
 use resonance_plugin::presets::{
     mark_key, FactoryEntry, FactoryPreset, MarksSource, PresetBank, PresetFile, PresetLibrary,
     PresetMarks, PresetMeta, PresetRef, PresetSource, Query, SaveOptions, Sort, TRASH_RETENTION,
@@ -420,7 +420,12 @@ fn a_file_without_an_id_gets_one() {
     let listed = bank.list_user();
     assert_eq!(listed.len(), 1);
     assert!(listed[0].is_resolved());
-    let file = PresetFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // The file moves to the `<name>-<id8>.json` convention with its id in it.
+    assert!(!path.exists());
+    let now_at = bank.record(&listed[0]).unwrap().path.unwrap();
+    let stem = now_at.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(stem.starts_with("Hand_Made-"), "{stem}");
+    let file = PresetFile::parse(&std::fs::read_to_string(&now_at).unwrap()).unwrap();
     assert_eq!(file.id, listed[0].id, "the id is persisted in the file");
 
     let again = PresetBank::new(PLUGIN, &[]).with_library(root.library());
@@ -440,13 +445,109 @@ fn an_unparsable_file_is_quarantined_not_listed() {
 #[test]
 fn duplicate_ids_list_once() {
     let root = TempRoot::new("dup");
-    let body = r#"{"format":"resonance.preset","format_version":1,"id":"same-id",
+    let body = r#"{"format":"resonance.preset","format_version":1,
+        "id":"3f0c9a4e-7a51-4d7e-9b1e-5b2a8f1c0d42",
         "meta":{"name":"Twice"},
         "state":{"encoding":"resonance-json","doc":{"params":{}}}}"#;
     root.drop_file("a.json", body);
     root.drop_file("b.json", body);
     let bank = PresetBank::new(PLUGIN, &[]).with_library(root.library());
     assert_eq!(bank.list_user().len(), 1);
+}
+
+fn user_file(id: &str, name: &str, mix: f64) -> String {
+    serde_json::json!({
+        "format": "resonance.preset", "format_version": 1, "id": id,
+        "meta": {"name": name},
+        "state": {"encoding": "resonance-json", "doc": {"params": {"mix": mix}}},
+    })
+    .to_string()
+}
+
+fn id_in(path: &Path) -> String {
+    PresetFile::parse(&std::fs::read_to_string(path).unwrap())
+        .unwrap()
+        .id
+}
+
+/// Review fix 4: a hand-copied preset (same id, then edited) is a second
+/// preset, not a duplicate to hide. The older file gets a fresh id.
+#[test]
+fn a_hand_copied_preset_with_a_different_sound_gets_its_own_id() {
+    let root = TempRoot::new("hand-copy");
+    let id = "3f0c9a4e-7a51-4d7e-9b1e-5b2a8f1c0d42";
+    let original = root.drop_file("orig.json", &user_file(id, "Take", 0.1));
+    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&original)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    root.drop_file("copy.json", &user_file(id, "Take copy", 0.9));
+
+    let bank = PresetBank::new(PLUGIN, &[]).with_library(root.library());
+    let listed = bank.list_user();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_ne!(listed[0].id, listed[1].id);
+    let copy = listed.iter().find(|p| p.name == "Take copy").unwrap();
+    assert_eq!(copy.id, id, "the newer file keeps the id");
+    let take = listed.iter().find(|p| p.name == "Take").unwrap();
+    let take_path = bank.record(take).unwrap().path.unwrap();
+    assert_eq!(id_in(&take_path), take.id, "the new id is written into the file");
+}
+
+/// Review fix 5: a user preset never shares a marks key with a factory
+/// preset. A factory file copied into the user directory carries the
+/// factory slug; so does anything with a non-UUID id. Both are re-minted.
+#[test]
+fn a_user_preset_never_carries_a_factory_or_non_uuid_id() {
+    const BANK: &[FactoryPreset] = &[FactoryPreset {
+        id: "tight-room",
+        name: "Tight Room",
+        json: r#"{"params":{"mix":0.9}}"#,
+    }];
+    let root = TempRoot::new("slug-copy");
+    root.drop_file("tight.json", &user_file("tight-room", "Tight Room", 0.9));
+    root.drop_file("mine.json", &user_file("my-own-id", "Mine", 0.2));
+    let bank = PresetBank::new(PLUGIN, BANK).with_library(root.library());
+    let users = bank.list_user();
+    assert_eq!(users.len(), 2);
+    for u in &users {
+        assert!(resonance_plugin::presets::format::is_uuid(&u.id), "{u:?}");
+        let path = bank.record(u).unwrap().path.unwrap();
+        assert_eq!(id_in(&path), u.id);
+    }
+    assert_eq!(bank.list().len(), 3, "the factory preset is still listed once");
+}
+
+/// Review fix 8: a file with an id but no name is listed under its stem,
+/// not hidden.
+#[test]
+fn a_file_with_an_id_but_no_name_is_listed_by_its_stem() {
+    let root = TempRoot::new("no-name");
+    root.drop_file(
+        "Nameless.json",
+        &user_file("3f0c9a4e-7a51-4d7e-9b1e-5b2a8f1c0d42", "", 0.3),
+    );
+    let bank = PresetBank::new(PLUGIN, &[]).with_library(root.library());
+    let names: Vec<String> = bank.list_user().into_iter().map(|p| p.name).collect();
+    assert_eq!(names, vec!["Nameless"]);
+}
+
+/// Review fix 14: a file written by a newer build is skipped and left
+/// alone — never quarantined as corrupt.
+#[test]
+fn a_newer_format_version_is_skipped_not_quarantined() {
+    let root = TempRoot::new("newer");
+    root.drop_file(
+        "future.json",
+        r#"{"format":"resonance.preset","format_version":2,"id":"x",
+            "entirely":"different"}"#,
+    );
+    let bank = PresetBank::new(PLUGIN, &[]).with_library(root.library());
+    assert!(bank.list_user().is_empty());
+    assert_eq!(files_in(&root.dir()), vec!["future.json"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -533,24 +634,69 @@ fn legacy_files_convert_to_format_1() {
     assert!(bank.apply(&dropped.preset, &[&m as &dyn Param]));
     assert!((m.get_plain() - 0.4).abs() < 1e-6);
 
-    // Opening the library is the next start: the backups go.
-    assert!(!files_in(&root.dir()).iter().any(|f| f.ends_with(LEGACY_SUFFIX)));
+    // Opening the library again soon after keeps them: they are purged
+    // by age, not by the next start (review fix 6).
+    let backups = files_in(&root.dir())
+        .iter()
+        .filter(|f| f.ends_with(LEGACY_SUFFIX))
+        .count();
+    assert_eq!(backups, 3);
 }
 
+/// Review fix 6: `.legacy` backups are purged by age (30 days from the
+/// conversion), not by whichever library opens the directory next.
 #[test]
-fn the_converter_is_idempotent_and_clears_old_backups() {
+fn the_converter_is_idempotent_and_purges_old_backups_by_age() {
     let root = TempRoot::new("idempotent");
     root.drop_file("Take.json", r#"{"params":{"mix":0.8},"name":"Take"}"#);
-    let first = convert_legacy_dir(&root.dir(), PLUGIN, SystemTime::now());
+    let now = SystemTime::now();
+    let first = convert_legacy_dir(&root.dir(), PLUGIN, now);
     assert_eq!(first.converted.len(), 1);
     let converted = files_in(&root.dir());
+    assert_eq!(converted.len(), 2, "{converted:?}");
 
-    let second = convert_legacy_dir(&root.dir(), PLUGIN, SystemTime::now());
+    let second = convert_legacy_dir(&root.dir(), PLUGIN, now + Duration::from_secs(60));
     assert!(second.converted.is_empty(), "format-1 files are skipped");
-    assert_eq!(second.backups_removed, 1, "last start's .legacy goes");
+    assert_eq!(second.backups_removed, 0, "a fresh backup is kept");
+    assert_eq!(files_in(&root.dir()), converted);
+
+    let later = now + LEGACY_RETENTION + Duration::from_secs(86_400);
+    let third = convert_legacy_dir(&root.dir(), PLUGIN, later);
+    assert_eq!(third.backups_removed, 1, "past retention the backup goes");
     let after: Vec<String> = files_in(&root.dir());
     assert_eq!(after.len(), 1);
     assert!(converted.contains(&after[0]));
+}
+
+/// Review fix 7: the legacy id is derived from the plugin, file name and
+/// bytes, so two converters racing on one file write one preset, not two.
+#[test]
+fn racing_converters_produce_one_preset() {
+    let root = TempRoot::new("race");
+    let body = r#"{"params":{"mix":0.8},"name":"Take"}"#;
+    root.drop_file("Take.json", body);
+    convert_legacy_dir(&root.dir(), PLUGIN, SystemTime::now());
+    // The second process read the original before the first moved it.
+    root.drop_file("Take.json", body);
+    convert_legacy_dir(&root.dir(), PLUGIN, SystemTime::now());
+
+    let json: Vec<String> = files_in(&root.dir())
+        .into_iter()
+        .filter(|f| f.ends_with(".json"))
+        .collect();
+    assert_eq!(json.len(), 1, "{json:?}");
+
+    // The same file in another directory converts to the same id.
+    let other = TempRoot::new("race-other");
+    other.drop_file("Take.json", body);
+    convert_legacy_dir(&other.dir(), PLUGIN, SystemTime::now());
+    let a = id_in(&root.dir().join(&json[0]));
+    let other_json: Vec<String> = files_in(&other.dir())
+        .into_iter()
+        .filter(|f| f.ends_with(".json"))
+        .collect();
+    assert_eq!(id_in(&other.dir().join(&other_json[0])), a);
+    assert!(resonance_plugin::presets::format::is_uuid(&a));
 }
 
 /// The library runs the converter on its own the first time it indexes a

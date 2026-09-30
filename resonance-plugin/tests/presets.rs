@@ -235,6 +235,39 @@ fn names_are_unique_case_insensitively() {
     assert_eq!(recased.id, first.id);
 }
 
+/// Review fix 1: a case-only rename or re-save changes only the case of
+/// the file name. On a case-insensitive filesystem the old and the new
+/// path are one file, and "write new, delete old" deleted the preset.
+/// The library now moves the file first and rewrites it in place; on any
+/// filesystem the preset must survive, as exactly one file.
+#[test]
+fn a_case_only_rename_or_resave_keeps_the_preset() {
+    let root = TempRoot::new("case-only");
+    let bank = root.bank();
+    let params = TestParams::new();
+    params.mix.set_plain(0.42);
+    let saved = bank.save("Take", &params.refs()).unwrap();
+
+    let renamed = bank.rename(&saved, "TAKE").unwrap();
+    let path = bank.record(&renamed).unwrap().path.unwrap();
+    assert!(path.is_file(), "the renamed preset's file must exist: {path:?}");
+    assert_eq!(json_files(&bank.user_dir().unwrap()), vec![path.clone()]);
+
+    let resaved = bank.save("take", &params.refs()).unwrap();
+    assert_eq!(resaved.id, saved.id);
+    let path = bank.record(&resaved).unwrap().path.unwrap();
+    assert!(path.is_file(), "the re-saved preset's file must exist: {path:?}");
+    assert_eq!(json_files(&bank.user_dir().unwrap()), vec![path]);
+
+    // …and it still loads, from a fresh index too.
+    let fresh = PresetBank::new("com.resonance.test", FACTORY).with_library(Arc::new(
+        resonance_plugin::presets::PresetLibrary::new().with_root(root.0.clone()),
+    ));
+    let target = TestParams::new();
+    assert!(fresh.apply(&resaved, &target.refs()));
+    assert!((target.mix.get_plain() - 0.42).abs() < 1e-6);
+}
+
 #[test]
 fn a_nameless_preset_is_refused_before_anything_is_written() {
     let root = TempRoot::new("noname");
@@ -557,6 +590,42 @@ fn save_as_inherits_meta_and_records_lineage() {
     );
 }
 
+/// Review fix 2: "Save as…" onto the name of an existing user preset
+/// overwrites that preset's *sound* but keeps *its* metadata and lineage;
+/// the loaded preset's meta only seeds a new preset.
+#[test]
+fn save_as_over_an_existing_preset_keeps_its_meta() {
+    let root = TempRoot::new("save-over-meta");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+
+    let mine = bank
+        .save_with(
+            "My Bass",
+            &params.refs(),
+            resonance_plugin::presets::SaveOptions {
+                meta: Some(resonance_plugin::presets::PresetMeta {
+                    category: Some("Track".into()),
+                    genres: vec!["metal".into()],
+                    tags: vec!["mine".into()],
+                    ..Default::default()
+                }),
+                derived_from: None,
+            },
+        )
+        .unwrap();
+
+    session.load_preset(&bank, &wide(), &params.refs());
+    let over = session.save_as(&bank, "My Bass", &params.refs()).unwrap();
+    assert_eq!(over.id, mine.id);
+    let meta = bank.record(&over).unwrap().meta;
+    assert_eq!(meta.tags, vec!["mine"]);
+    assert_eq!(meta.genres, vec!["metal"]);
+    assert_eq!(meta.category.as_deref(), Some("Track"));
+    assert_eq!(meta.derived_from, None, "no lineage invented on overwrite");
+}
+
 #[test]
 fn a_preset_that_no_longer_exists_leaves_the_sound_and_the_name_alone() {
     let root = TempRoot::new("missing");
@@ -586,13 +655,91 @@ fn a_name_only_identity_resolves_to_an_id() {
     }));
     let before = session.current().unwrap();
     assert!(!before.is_resolved());
-    assert_eq!(before, saved, "an unresolved ref compares by name");
+    assert!(before.matches(&saved), "an unresolved ref matches by name");
+    assert_ne!(before, saved, "but is not equal to the resolved one");
 
     session.resolve(&bank);
     let after = session.current().unwrap();
     assert_eq!(after.id, saved.id);
     assert!(session.is_modified(), "resolving is not loading");
     assert_eq!(session.save()["preset"]["id"], saved.id.as_str());
+}
+
+/// Review fix 12: a session built for a plugin resolves a name-only
+/// identity when state loads (§13), so the next save writes the id.
+#[test]
+fn a_name_only_identity_resolves_at_state_load() {
+    let root = TempRoot::new("resolve-at-load");
+    let bank = root.bank();
+    let params = TestParams::new();
+    let saved = bank.save("Old Project Sound", &params.refs()).unwrap();
+
+    let dir = root.0.clone();
+    let session = PresetSession::resolving(
+        Some(Box::new(move || {
+            PresetBank::new("com.resonance.test", FACTORY).with_root(dir.clone())
+        })),
+        None,
+    );
+    session.load(&serde_json::json!({
+        "params": {},
+        "preset": {"name": "old project sound", "source": "user", "modified": false},
+    }));
+    let current = session.current().unwrap();
+    assert_eq!(current.id, saved.id, "resolved by name, case-insensitively");
+    assert_eq!(session.save()["preset"]["id"], saved.id.as_str());
+
+    // A name that is gone stays unresolved rather than vanishing.
+    session.load(&serde_json::json!({
+        "params": {},
+        "preset": {"name": "Deleted Long Ago", "source": "user"},
+    }));
+    assert_eq!(session.current().map(|c| c.is_resolved()), Some(false));
+}
+
+/// Review fix 3: the bar calls `resolve` every frame, so it reads the
+/// cached index and never the directory within `BAR_REFRESH`.
+#[test]
+fn resolving_in_the_bar_reads_the_cached_index() {
+    let root = TempRoot::new("resolve-cached");
+    let bank = root.bank();
+    bank.list(); // the library has indexed the (empty) directory
+
+    // Another process saves the preset the project names.
+    let params = TestParams::new();
+    let other = PresetBank::new("com.resonance.test", FACTORY).with_library(Arc::new(
+        resonance_plugin::presets::PresetLibrary::new().with_root(root.0.clone()),
+    ));
+    let saved = other.save("Elsewhere", &params.refs()).unwrap();
+
+    let session = PresetSession::new();
+    session.set_current(Some(user("Elsewhere")));
+    session.resolve(&bank);
+    assert!(
+        !session.current().unwrap().is_resolved(),
+        "within BAR_REFRESH the per-frame resolve must not touch the disk"
+    );
+    bank.list(); // an explicit read picks the new file up
+    session.resolve(&bank);
+    assert_eq!(session.current().unwrap().id, saved.id);
+}
+
+/// Review fix 13: `==` is an equivalence relation; `matches` is the
+/// lenient comparison for name-only refs.
+#[test]
+fn preset_ref_equality_is_strict_and_matches_is_lenient() {
+    let resolved = PresetRef::user("3f0c9a4e-7a51-4d7e-9b1e-5b2a8f1c0d42", "Take");
+    let renamed = PresetRef::user("3f0c9a4e-7a51-4d7e-9b1e-5b2a8f1c0d42", "Take 2");
+    let by_name = user("Take");
+    let by_other_case = user("TAKE");
+
+    assert_eq!(resolved, renamed, "same (source, id)");
+    assert_ne!(resolved, by_name, "a resolved ref never equals a name-only one");
+    assert_ne!(by_name, by_other_case, "name-only refs are equal only by exact name");
+    assert!(by_name.matches(&resolved) && resolved.matches(&by_name));
+    assert!(by_other_case.matches(&resolved), "matches ignores case");
+    assert!(!by_name.matches(&renamed));
+    assert!(!init().matches(&user("Init")), "source always counts");
 }
 
 // ---------------------------------------------------------------------------
