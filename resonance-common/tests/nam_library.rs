@@ -432,10 +432,14 @@ fn reload_if_changed_sees_another_writer() {
 
 const CHILD_ROOT: &str = "RESONANCE_NAMLIB_CHILD_ROOT";
 const CHILD_SEED: &str = "RESONANCE_NAMLIB_CHILD_SEED";
-const MODELS_PER_CHILD: u32 = 12;
+const MODELS_PER_CHILD: u32 = 100;
 
+/// Not a test on its own: the parent re-runs this binary with `--ignored
+/// --exact namlib_child_scanner`. Parked on a go file so both children
+/// start together; after every rescan it appends each `(id, slot)` it sees
+/// to its own log, so the parent can check no id ever changed slot.
 #[test]
-#[ignore = "worker half of two_processes_never_share_a_slot"]
+#[ignore = "worker half of two_processes_never_share_or_move_a_slot"]
 fn namlib_child_scanner() {
     let (Some(root), Some(seed)) = (
         std::env::var_os(CHILD_ROOT),
@@ -444,16 +448,30 @@ fn namlib_child_scanner() {
         return;
     };
     let root = PathBuf::from(root);
+    let log_path = root.join(format!("slots-{seed}.log"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !root.join("go").exists() {
+        assert!(std::time::Instant::now() < deadline, "no go");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
     let mut lib = Library::open(&root);
+    let mut log = String::new();
     for i in 0..MODELS_PER_CHILD {
         write_model(&root.join(TONE3000_DIR).join(format!("{seed}-{i}.nam")), seed * 1000 + i);
         lib.rescan().unwrap();
+        for e in lib.entries() {
+            if let Some(slot) = e.slot {
+                log.push_str(&format!("{} {slot}\n", e.id));
+            }
+        }
     }
+    std::fs::write(log_path, log).unwrap();
 }
 
 #[test]
-fn two_processes_never_share_a_slot() {
+fn two_processes_never_share_or_move_a_slot() {
     let root = temp_root("processes");
+    std::fs::create_dir_all(root.join(TONE3000_DIR)).unwrap();
     let exe = std::env::current_exe().unwrap();
     let children: Vec<_> = [1u32, 2]
         .into_iter()
@@ -466,14 +484,173 @@ fn two_processes_never_share_a_slot() {
                 .unwrap()
         })
         .collect();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    std::fs::write(root.join("go"), b"").unwrap();
     for mut c in children {
         assert!(c.wait().unwrap().success());
     }
-    let lib = Library::open_and_scan(&root).unwrap();
+
+    // Every (id, slot) either child ever saw: one slot per id, for good.
+    let mut seen: std::collections::HashMap<String, u32> = Default::default();
+    for seed in [1, 2] {
+        let log = std::fs::read_to_string(root.join(format!("slots-{seed}.log"))).unwrap();
+        for line in log.lines() {
+            let (id, slot) = line.split_once(' ').unwrap();
+            let slot: u32 = slot.parse().unwrap();
+            let first = *seen.entry(id.to_string()).or_insert(slot);
+            assert_eq!(first, slot, "model {id} moved from slot {first} to {slot}");
+        }
+    }
+
+    // What the index says, read without rescanning.
+    let lib = Library::open(&root);
     let mut slots: Vec<u32> = lib.entries().iter().filter_map(|e| e.slot).collect();
     assert_eq!(slots.len(), (2 * MODELS_PER_CHILD) as usize, "every model got a slot");
     slots.sort();
     slots.dedup();
     assert_eq!(slots.len(), (2 * MODELS_PER_CHILD) as usize, "no slot holds two models");
-    assert_eq!(*slots.last().unwrap(), 2 * MODELS_PER_CHILD - 1, "slots stay dense");
+    for e in lib.entries() {
+        assert_eq!(seen.get(&e.id), e.slot.as_ref(), "the final index agrees with the children");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_refuses_anything_but_a_known_model_inside_the_root() {
+    let root = temp_root("delete-guard");
+    let dl = root.join(TONE3000_DIR);
+    write_model(&dl.join("a.nam"), 1);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+
+    // Outside, through `..`.
+    let victim = root.parent().unwrap().join(format!("victim-{}.nam", std::process::id()));
+    write_model(&victim, 9);
+    let sneaky = root.join("..").join(victim.file_name().unwrap());
+    assert!(lib.delete(&sneaky).is_err());
+    assert!(victim.exists(), "a path escaping the root is refused");
+    let _ = std::fs::remove_file(&victim);
+
+    // Inside, but not a model entry.
+    let index = root.join("library.json");
+    assert!(lib.delete(&index).is_err());
+    assert!(index.exists(), "the index is not deletable");
+    let notes = dl.join("notes.txt");
+    std::fs::write(&notes, b"mine").unwrap();
+    assert!(lib.delete(&notes).is_err());
+    assert!(notes.exists());
+    let unknown = dl.join("unindexed.nam");
+    write_model(&unknown, 5);
+    assert!(lib.delete(&unknown).is_err(), "a file the index does not know is refused");
+    assert!(unknown.exists());
+
+    // A symlink inside the root pointing outside it.
+    #[cfg(unix)]
+    {
+        let outside = temp_root("delete-guard-target").join("target.nam");
+        write_model(&outside, 7);
+        let link = dl.join("link.nam");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        lib.rescan().unwrap();
+        assert!(lib.delete(&link).is_err());
+        assert!(outside.exists(), "a symlink out of the root is refused");
+    }
+
+    // And the real thing still works.
+    lib.delete(&dl.join("a.nam")).unwrap();
+    assert!(!dl.join("a.nam").exists());
+}
+
+#[test]
+fn a_non_finite_header_value_does_not_poison_the_index() {
+    let root = temp_root("nonfinite");
+    let dl = root.join(TONE3000_DIR);
+    std::fs::create_dir_all(&dl).unwrap();
+    std::fs::write(
+        dl.join("inf.nam"),
+        r#"{"architecture":"WaveNet","weights":[],"sample_rate":"inf",
+            "metadata":{"loudness":"NaN","gain":"-inf","name":"Inf"}}"#,
+    )
+    .unwrap();
+    write_model(&dl.join("ok.nam"), 1);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let e = lib.by_path(&dl.join("inf.nam")).unwrap();
+    assert_eq!(e.sample_rate, nam_library::DEFAULT_SAMPLE_RATE);
+    assert_eq!(e.loudness_db, None);
+    let gen = lib.generation();
+    // The index reads back whole, and a rescan finds nothing to rewrite.
+    let reopened = Library::open(&root);
+    assert_eq!(reopened.len(), 2);
+    assert!(!root.join("library.json.corrupt").exists());
+    assert!(!lib.rescan().unwrap().changed);
+    assert_eq!(lib.generation(), gen);
+}
+
+#[test]
+fn a_bad_file_record_costs_only_that_record_not_the_slots() {
+    let root = temp_root("bad-record");
+    let dl = root.join(TONE3000_DIR);
+    write_model(&dl.join("a.nam"), 1);
+    write_model(&dl.join("b.nam"), 2);
+    write_model(&dl.join("c.nam"), 3);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    lib.delete(&dl.join("b.nam")).unwrap();
+    let before: Vec<(String, Option<u32>)> =
+        lib.entries().iter().map(|e| (e.id.clone(), e.slot)).collect();
+
+    // Break one record in the index by hand.
+    let path = root.join("library.json");
+    let mut doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["files"][0]["size"] = serde_json::json!("not a number");
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let after: Vec<(String, Option<u32>)> =
+        lib.entries().iter().map(|e| (e.id.clone(), e.slot)).collect();
+    assert_eq!(after, before, "the slot table survives; the record is re-hashed");
+    assert_eq!(slot_of_path(&lib, &dl.join("c.nam")), Some(2), "slot 1 stays freed");
+    assert!(!root.join("library.json.corrupt").exists());
+    assert!(!lib.rescan().unwrap().changed);
+}
+
+#[test]
+fn an_unchanged_library_rescans_without_touching_anything() {
+    let root = temp_root("untouched");
+    write_model(&root.join(TONE3000_DIR).join("a.nam"), 1);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    std::fs::remove_file(root.join(nam_library::LOCK_FILE)).unwrap();
+    let before = std::fs::metadata(root.join("library.json")).unwrap().modified().unwrap();
+    let report = lib.rescan().unwrap();
+    assert!(!report.changed);
+    assert!(!root.join(nam_library::LOCK_FILE).exists(), "no lock file for a no-op");
+    assert_eq!(
+        std::fs::metadata(root.join("library.json")).unwrap().modified().unwrap(),
+        before
+    );
+}
+
+#[test]
+fn an_ambiguous_exact_name_resolves_to_nothing() {
+    let root = temp_root("ambiguous");
+    let dl = root.join(TONE3000_DIR);
+    // Same metadata name, different bytes.
+    for (file, seed) in [("a.nam", 1), ("b.nam", 2)] {
+        std::fs::write(
+            dl.join(file),
+            format!(r#"{{"architecture":"WaveNet","weights":[{seed}.0],"metadata":{{"name":"Twin"}}}}"#),
+        )
+        .unwrap_or_else(|_| {
+            std::fs::create_dir_all(&dl).unwrap();
+            std::fs::write(
+                dl.join(file),
+                format!(r#"{{"architecture":"WaveNet","weights":[{seed}.0],"metadata":{{"name":"Twin"}}}}"#),
+            )
+            .unwrap()
+        });
+    }
+    let lib = Library::open_and_scan(&root).unwrap();
+    assert_eq!(lib.len(), 2);
+    assert!(lib.find("Twin").is_none(), "two exact matches: the caller must use slot or id");
 }

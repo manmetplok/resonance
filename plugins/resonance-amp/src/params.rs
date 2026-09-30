@@ -11,9 +11,16 @@ use crate::model_ref::{ModelRef, ModelState, ModelStatus};
 pub const MAX_FILE_INDEX: i32 = resonance_common::nam_library::MAX_SLOT as i32;
 
 pub struct AmpParams {
-    /// The saved model reference (plugin state v2), reloaded on init.
-    /// Written by the loader thread on every completed load.
+    /// The model reference that plays (plugin state v2): written only once
+    /// a load succeeds, or verbatim when the model it names is missing.
     pub model_ref: Arc<Mutex<ModelRef>>,
+
+    /// A reference a state load delivered that has not been resolved yet:
+    /// `initialize` resolves it when inactive, the loader thread when
+    /// active. `save_state` persists it until then (it is what is about
+    /// to play), and it wins over the slot the same state's `file_select`
+    /// asked for.
+    pub pending_ref: Arc<Mutex<Option<ModelRef>>>,
 
     /// What the instance is playing, or why it is not.
     pub status: Arc<Mutex<ModelStatus>>,
@@ -64,6 +71,7 @@ impl AmpParams {
         let status = Arc::new(Mutex::new(ModelStatus::default()));
         Self {
             model_ref: Arc::new(Mutex::new(ModelRef::default())),
+            pending_ref: Arc::new(Mutex::new(None)),
             file_select: file_select_param(library.clone(), status.clone()),
             status,
             library,
@@ -102,15 +110,20 @@ impl AmpParams {
 }
 
 /// The text a `file_select` value shows: the slot's model name,
-/// `"(empty)"`, or `"Missing: <name>"` for the value an instance's missing
-/// model was saved at. Non-blocking: a busy library reads as `"slot N"`.
-/// Hosts call this on the main thread, never the audio thread.
+/// `"(empty)"`, `"Missing: <name>"` for the value an instance's missing
+/// model was saved at, or `"External: <name>"` for the value parked while
+/// a model from outside the library plays. Non-blocking: a busy library
+/// reads as `"slot N"`. Hosts call this on the main thread, never the
+/// audio thread.
 pub fn slot_text(library: &SharedLibrary, status: &Mutex<ModelStatus>, value: i32) -> String {
     if let Some(st) = status.try_lock() {
         if let ModelState::Missing { name, at_slot, .. } = &st.state {
             if *at_slot == value {
                 return format!("Missing: {name}");
             }
+        }
+        if st.external && st.state == ModelState::Loaded && st.external_slot == Some(value) {
+            return format!("External: {}", st.name);
         }
     }
     match library.try_read() {

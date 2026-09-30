@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use resonance_amp::library::{shared_for, SharedLibrary};
 use resonance_amp::library_rows::{step_in_view, view_counter, ModelRows};
-use resonance_plugin::library_view::{BrowserModel, Sort, SortKey};
+use resonance_plugin::library_view::{BrowserModel, LibraryRows, Sort, SortKey};
 use resonance_amp::model_ref::{resolve_model, ModelRef, ModelState, Resolved};
 use resonance_amp::ResonanceAmp;
 use resonance_common::nam_library::{self, Library, Source};
@@ -434,9 +434,9 @@ fn the_installed_view_searches_filters_and_sorts() {
         view_titles(&model, &rows),
         vec!["5150 Block Letter", "Darkglass MT900", "Friedman BE-100", "Fuzz Face"]
     );
-    assert_eq!(rows.rows[0].columns[0], "J. Smith");
-    assert_eq!(rows.rows[0].columns[4], "A1");
-    assert_eq!(rows.rows[0].columns[5], "48k");
+    assert_eq!(rows.column(0, 0).as_deref(), Some("J. Smith"));
+    assert_eq!(rows.column(0, 4).as_deref(), Some("A1"));
+    assert_eq!(rows.column(0, 5).as_deref(), Some("48k"));
 }
 
 #[test]
@@ -472,7 +472,7 @@ fn favourites_sort_first_and_marks_follow_the_content_id() {
     lib.toggle_favorite(&id(3)).unwrap();
     lib.add_tag(&id(1), "Djent Rhythm").unwrap();
     let gen = lib.marks_generation();
-    let rows = ModelRows::build(&lib.read(), Some(&lib.marks()), (1, gen));
+    let rows = ModelRows::build(&lib.read(), Some(&lib.marks().snapshot()), (1, gen));
     let mut model = BrowserModel::new();
     model.refresh(&rows, 1);
     assert_eq!(view_titles(&model, &rows)[0], "Fuzz Face", "the favourite first");
@@ -583,43 +583,342 @@ fn delete_keeps_marks_and_live_instances_and_the_next_activation_is_missing() {
 // The editor, headless
 // ---------------------------------------------------------------------------
 
-/// Every Library state lays out: closed, open on a populated Installed
-/// tab, a row selected with its detail pane and tags, a pending delete,
-/// an empty search result, and the missing-model banner. CPU-only frames,
-/// no window (the Wayland `editor_open` pair covers the window).
+fn has(drawn: &[String], text: &str) -> bool {
+    drawn.iter().any(|t| t.contains(text))
+}
+
+/// The Library overlay, read back from what it draws: the populated
+/// Installed tab with its rows and columns, a selected row's detail pane
+/// with its tags and usage, a delete armed on one row that does not
+/// follow the selection to another, an empty search, and the minimum
+/// editor size.
 #[test]
-fn the_editor_lays_out_in_every_library_state() {
+fn the_library_overlay_shows_what_the_library_holds() {
     let lib = browse_root("render");
     let first = lib.read().by_slot(0).unwrap().id.clone();
     lib.toggle_favorite(&first).unwrap();
     lib.add_tag(&first, "rhythm").unwrap();
     let mut amp = ResonanceAmp::with_library(lib.clone());
     assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    // Something else "plays" the first model, for the usage count.
+    lib.set_usage(u64::MAX, Some(&first));
+
     let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
-    ed.frame();
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Library…"), "{drawn:?}");
+    assert!(has(&drawn, "– / 4 in view"), "{drawn:?}");
+
+    ed.open_library();
+    ed.frame(); // an egui area's first frame only measures it
+    let drawn = ed.frame();
+    assert!(ed.is_library_open());
+    for name in ["Friedman BE-100", "Darkglass MT900", "5150 Block Letter", "Fuzz Face"] {
+        assert!(has(&drawn, name), "{name} is listed: {drawn:?}");
+    }
+    assert!(has(&drawn, "4 models"));
+    assert!(has(&drawn, "tonekid"), "the author column");
+
+    ed.select_in_view(0);
+    let drawn = ed.frame();
+    assert!(has(&drawn, "rhythm"), "the selected row's tags");
+    assert!(has(&drawn, "used in 1 open amp"), "usage count: {drawn:?}");
+    assert!(has(&drawn, "Delete…"));
+
+    // Arm a delete on the first row, then select the second: no confirm
+    // is offered there, and the armed delete is gone.
+    ed.begin_delete_selected();
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Delete \"Friedman BE-100"), "{drawn:?}");
+    lib.set_usage(u64::MAX, None);
+    assert!(has(&drawn, "Used by 1 open amp"));
+    ed.select_in_view(1);
+    let drawn = ed.frame();
+    assert!(!drawn.iter().any(|t| t.starts_with("Delete \"")), "{drawn:?}");
+    assert_eq!(ed.pending_delete(), None);
+
+    ed.set_query("no such model at all");
+    let drawn = ed.frame();
+    assert!(!has(&drawn, "5150 Block Letter"), "filtered out of the list: {drawn:?}");
+
+    // At the editor's minimum size everything still lays out, the filter
+    // row wrapping instead of running off the panel.
+    ed.set_query("");
+    ed.set_size(760.0, 520.0);
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Sort: Slot"), "{drawn:?}");
+    assert!(has(&drawn, "Arch"));
+}
+
+#[test]
+fn the_empty_library_and_the_tone3000_tab_render() {
+    let root = temp_root("render-empty");
+    let lib = shared_for(Some(root.clone()), Some(root.join("marks")));
+    let mut amp = ResonanceAmp::with_library(lib);
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
     ed.open_library();
     ed.frame();
-    assert!(ed.is_library_open());
-    ed.select_first();
+    let drawn = ed.frame();
+    assert!(has(&drawn, "No models installed yet."), "{drawn:?}");
+    assert!(has(&drawn, "Browse Tone3000"));
+    ed.open_tone3000_tab();
     ed.frame();
-    ed.begin_delete_selected();
-    ed.frame();
-    ed.set_query("no such model at all");
-    ed.frame();
-    drop(ed);
+    let drawn = ed.frame();
+    assert!(has(&drawn, "TONE3000"), "{drawn:?}");
+    assert!(has(&drawn, "disconnected"), "offline worker: no saved session was read");
+}
+
+#[test]
+fn a_deleted_model_shows_deleted_and_a_missing_one_its_banner() {
+    let (root, lib) = seeded_root("render-deleted");
+    let b = root.join("tone3000/b.nam");
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    let blob = json!({ "params": {}, "model_path": b.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
+    lib.mutate(|l| l.delete(&b)).unwrap();
+    let drawn = ed.frame();
+    assert!(has(&drawn, "b (deleted)"), "{drawn:?}");
 
     let mut missing = ResonanceAmp::with_library(lib);
     let blob = json!({
         "params": {},
-        "model_path": "/gone/x.nam",
+        "model_path": b.to_string_lossy(),
+        "model_id": "ab".repeat(32),
         "model_name": "Friedman BE-100 · standard",
-        "model_source": { "tone3000": { "tone_id": 1, "model_id": 2 } },
     });
     assert!(missing.load_state(&serde_json::to_vec(&blob).unwrap()));
     assert!(missing.initialize(SAMPLE_RATE, BLOCK as u32));
     let mut ed = resonance_amp::editor::HeadlessEditor::new(&missing);
-    ed.frame();
-    ed.frame();
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Missing model: \"Friedman BE-100 · standard\""), "{drawn:?}");
+    assert!(has(&drawn, "Locate file…"));
+    ed.locate_mismatch(root.join("tone3000/a.nam"));
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Use this file anyway?"), "{drawn:?}");
+    assert!(has(&drawn, "Use it"));
+}
+
+#[test]
+fn stepping_browses_without_recording_a_use() {
+    // Under "Recently used", recording each ◀/▶ step as a use re-sorted the
+    // view under the stepping and bounced between two models.
+    let root = temp_root("step-recent");
+    for (i, f) in ["a1/wavenet.nam", "a1/wavenet_a1_standard.nam", "lstm/lstm.nam", "a2/wavenet_a2_max.nam"]
+        .into_iter()
+        .enumerate()
+    {
+        std::fs::copy(fixture(f), root.join(format!("tone3000/{i}.nam"))).unwrap();
+    }
+    let lib = shared_for(Some(root.clone()), Some(root.join("marks")));
+    lib.rescan().unwrap();
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
+    ed.set_sort(SortKey::RecentlyUsed);
+    let gen = lib.marks_generation();
+    let mut visited = Vec::new();
+    for _ in 0..4 {
+        ed.step(1);
+        ed.frame();
+        let slot = amp.param(FILE_SELECT).get_plain() as u32;
+        visited.push(slot);
+        // What `process()` and the loader would do; that model plays.
+        let want = lib.read().by_slot(slot).unwrap().id.clone();
+        assert!(pump_until(&mut amp, |a| a.model_status().id.as_deref() == Some(want.as_str())));
+    }
+    assert_eq!(lib.marks_generation(), gen, "browsing wrote no marks");
+    visited.dedup();
+    assert_eq!(visited.len(), 4, "four steps visit four models: {visited:?}");
+}
+
+#[test]
+fn a_detail_pane_redownload_neither_loads_nor_compares_with_what_plays() {
+    let (root, lib) = seeded_root("redownload-only");
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    let a = root.join("tone3000/a.nam");
+    let blob = json!({ "params": {}, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let ed = resonance_amp::editor::HeadlessEditor::new(&amp);
+    let b = lib.read().by_slot(1).unwrap().clone();
+    let before = amp.param(FILE_SELECT).get_plain();
+
+    // Unchanged bytes: "unchanged", and this amp does not switch to b.
+    (ed.detail_redownload_done(&b))(&b);
+    assert_eq!(amp.param(FILE_SELECT).get_plain(), before);
+    assert!(ed.redownload_notice().unwrap().contains("unchanged"));
+    // Different bytes than THE ENTRY (not than what plays): says so.
+    let mut changed = b.clone();
+    changed.id = "cd".repeat(32);
+    (ed.detail_redownload_done(&b))(&changed);
+    assert!(ed.redownload_notice().unwrap().contains("differs"));
+    assert_eq!(amp.param(FILE_SELECT).get_plain(), before);
+}
+
+#[test]
+fn an_external_models_slot_text_says_external() {
+    let (_root, lib) = seeded_root("external-text");
+    let outside = temp_root("external-file").join("mine.nam");
+    std::fs::copy(fixture("lstm/lstm.nam"), &outside).unwrap();
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": { "file_select": 1.0 }, "model_path": outside.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    assert!(amp.model_status().external);
+    assert_eq!(amp.param(FILE_SELECT).display(1.0), "External: mine");
+    assert_eq!(amp.param(FILE_SELECT).display(0.0), "Test Model", "other slots read as before");
+}
+
+#[test]
+fn empty_slot_requests_rescan_at_most_every_two_seconds() {
+    let (_root, lib) = seeded_root("miss-throttle");
+    assert!(lib.rescan_for_miss());
+    assert!(!lib.rescan_for_miss(), "a second miss right after does not hash the library again");
+}
+
+// ---------------------------------------------------------------------------
+// B2: a state loaded into an ACTIVE amp
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_state_loaded_while_active_follows_its_model_id_not_its_slot() {
+    let (root, lib) = seeded_root("active-id");
+    let b = root.join("tone3000/b.nam");
+    let b_id = hash(&b).unwrap();
+    let mut amp = ResonanceAmp::with_library(lib);
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    amp.param(FILE_SELECT).set_plain(1.0);
+    assert!(pump_until(&mut amp, |a| a.model_status().id.as_deref() == Some(b_id.as_str())));
+
+    // A state that points file_select at slot 0 (a) but names b by id.
+    let blob = json!({
+        "params": { "file_select": 0.0 },
+        "model_path": b.to_string_lossy(),
+        "model_id": b_id,
+    });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    std::thread::sleep(Duration::from_millis(300));
+    run_blocks(&mut amp, 64);
+    std::thread::sleep(Duration::from_millis(300));
+    run_blocks(&mut amp, 64);
+    assert_eq!(amp.model_status().id.as_deref(), Some(b_id.as_str()), "b still plays");
+    assert_eq!(model_keys(&state_of(&amp))["model_id"], json!(b_id), "and b is what is saved");
+    assert_eq!(amp.param(FILE_SELECT).get_plain(), 1.0, "file_select re-derived from the id");
+}
+
+#[test]
+fn a_state_whose_slot_is_empty_still_saves_what_plays() {
+    let (root, lib) = seeded_root("active-empty-slot");
+    let a = root.join("tone3000/a.nam");
+    let b = root.join("tone3000/b.nam");
+    let a_id = hash(&a).unwrap();
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": {}, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    assert_eq!(amp.model_status().id.as_deref(), Some(a_id.as_str()));
+
+    let blob = json!({
+        "params": { "file_select": 500.0 },
+        "model_path": b.to_string_lossy(),
+        "model_id": hash(&b).unwrap(),
+    });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(pump_until(&mut amp, |a| a.model_status().name == "b"));
+    // Whatever plays is what is saved — never a path to one model while
+    // another one plays.
+    let saved = model_keys(&state_of(&amp));
+    assert_eq!(saved["model_path"], json!(b.to_string_lossy()));
+    assert_eq!(amp.model_status().id, hash(&b));
+}
+
+#[test]
+fn a_missing_state_loaded_while_active_stops_the_old_model() {
+    let (root, lib) = seeded_root("active-missing");
+    let a = root.join("tone3000/a.nam");
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": {}, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let gone = json!({ "params": {}, "model_path": "/gone/x.nam", "model_name": "X" });
+    assert!(amp.load_state(&serde_json::to_vec(&gone).unwrap()));
+    assert!(pump_until(&mut amp, |a| a.model_status().is_missing()));
+    assert_eq!(model_keys(&state_of(&amp))["model_path"], json!("/gone/x.nam"));
+    assert_eq!(amp.model_status().id, None, "nothing of a's plays under x's reference");
+}
+
+// ---------------------------------------------------------------------------
+// B1: activation writes nothing
+// ---------------------------------------------------------------------------
+
+const CHILD_HOME: &str = "RESONANCE_AMP_B1_HOME";
+
+/// Worker half of `activating_an_amp_writes_nothing_under_the_data_dir`,
+/// run in a child process whose `XDG_DATA_HOME` / `HOME` point at an empty
+/// temporary directory (set by the parent on the child only).
+#[test]
+#[ignore = "worker half of activating_an_amp_writes_nothing_under_the_data_dir"]
+fn b1_child_activates_an_amp() {
+    let Some(_home) = std::env::var_os(CHILD_HOME) else {
+        return;
+    };
+    let mut amp = <ResonanceAmp as ResonancePlugin>::new();
+    let blob = json!({
+        "params": { "file_select": 3.0 },
+        "model_path": fixture("a1/wavenet.nam").to_string_lossy(),
+        "model_id": "ab".repeat(32),
+    });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    run_blocks(&mut amp, 16);
+    let _ = amp.save_state();
+    amp.reset();
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    run_blocks(&mut amp, 16);
+}
+
+#[test]
+fn activating_an_amp_writes_nothing_under_the_data_dir() {
+    let home = std::env::temp_dir().join(format!("resonance-amp-b1-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    // An installed download, so the library root exists: an activation that
+    // scanned would index it (library.json, library.lock) and prune marks.
+    let model = home.join("resonance/amp-models/tone3000/installed.nam");
+    std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+    std::fs::copy(fixture("a1/wavenet.nam"), &model).unwrap();
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--ignored", "--exact", "b1_child_activates_an_amp", "--test-threads=1"])
+        .env(CHILD_HOME, &home)
+        .env("XDG_DATA_HOME", &home)
+        .env("XDG_CONFIG_HOME", &home)
+        .env("HOME", &home)
+        .env_remove(nam_library::AMP_MODEL_DIR_ENV)
+        .env_remove(resonance_common::library_marks::LIBRARY_DIR_ENV)
+        .status()
+        .unwrap();
+    assert!(status.success(), "the child activation failed");
+    let left: Vec<_> = walk(&home);
+    assert_eq!(left, vec![model], "activation created files under the data dir");
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+                if out.is_empty() {
+                    out.push(p);
+                }
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
 }
 
 #[test]

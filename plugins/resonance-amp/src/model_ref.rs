@@ -180,13 +180,9 @@ pub fn resolve_model(
 }
 
 fn file_unchanged(entry: &Entry, path: &Path) -> bool {
+    // Nanoseconds, the resolution the index itself compares at.
     std::fs::metadata(path).is_ok_and(|m| {
-        m.len() == entry.size_bytes
-            && m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .is_some_and(|d| d.as_secs() as i64 == entry.mtime)
+        m.len() == entry.size_bytes && nam_library::file_mtime_ns(&m) == entry.mtime_ns
     })
 }
 
@@ -226,6 +222,9 @@ pub struct ModelStatus {
     pub state: ModelState,
     /// The playing model is not in the library.
     pub external: bool,
+    /// The `file_select` value parked while an external model plays, so
+    /// the parameter's text can say "External: …" for it.
+    pub external_slot: Option<i32>,
     /// The playing model's file was deleted from the library.
     pub deleted: bool,
     /// A one-line notice ("Relinked: … (file had moved)").

@@ -27,9 +27,15 @@ fn a_folder_opens_as_itself_and_a_file_is_selected_where_possible() {
     #[cfg(target_os = "linux")]
     {
         assert_eq!(cmds[0].program, "dbus-send", "FileManager1.ShowItems first");
+        assert!(
+            cmds[0].args.iter().any(|a| a == "--reply-timeout=2000"),
+            "a silent session bus cannot hang the caller"
+        );
         let last = cmds.last().unwrap();
-        assert_eq!(last.program, "xdg-open");
-        assert_eq!(last.args, vec![dir.as_os_str().to_owned()], "fallback opens the folder");
+        assert_eq!(last.program, "sh", "xdg-open is detached through a short-lived shell");
+        assert!(last.args[1].to_string_lossy().contains("xdg-open \"$1\""));
+        assert!(last.args[1].to_string_lossy().ends_with('&'));
+        assert_eq!(last.args.last().unwrap(), dir.as_os_str(), "fallback opens the folder");
     }
     #[cfg(target_os = "macos")]
     assert_eq!(cmds[0].args[0], "-R");

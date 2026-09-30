@@ -52,25 +52,8 @@ pub const MAX_TAG_LEN: usize = 32;
 /// anything else collapsed to one `-`, at most [`MAX_TAG_LEN`] bytes.
 /// `None` when nothing usable is left.
 pub fn normalize_facet(value: &str) -> Option<String> {
-    let folded = super::query::fold(value);
-    let mut out = String::with_capacity(folded.len());
-    for c in folded.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c);
-        } else if !out.is_empty() && !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    if out.len() > MAX_TAG_LEN {
-        out.truncate(MAX_TAG_LEN);
-        while out.ends_with('-') {
-            out.pop();
-        }
-    }
-    (!out.is_empty()).then_some(out)
+    // The one slug rule every library kind shares.
+    resonance_common::library_marks::normalize_tag(value)
 }
 
 /// The vocabulary spelling of a category (`"bass"` → `"Bass"`), or the

@@ -52,6 +52,17 @@ use resonance_plugin::{FloatParam, FloatRange, Param, ResonancePlugin};
 /// [`the_guard_reads_every_editor_source`] pins this against the
 /// directory itself — the list going stale is how a source guard turns
 /// vacuous.
+/// Point every amp this binary builds at a per-process temporary library,
+/// so no test reads (or writes) the user's real model library. Idempotent;
+/// no environment variable, so no `setenv` race with the harness threads.
+fn hermetic() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let base = std::env::temp_dir().join(format!("resonance-amp-hermetic-{}", std::process::id()));
+        resonance_amp::library::override_default_roots(base.join("models"), base.join("marks"));
+    });
+}
+
 const EDITOR_SOURCES: &[(&str, &str)] = &[
     ("actions.rs", include_str!("../src/editor/actions.rs")),
     ("app.rs", include_str!("../src/editor/app.rs")),
@@ -59,6 +70,7 @@ const EDITOR_SOURCES: &[(&str, &str)] = &[
     ("curve_view.rs", include_str!("../src/editor/curve_view.rs")),
     ("factory.rs", include_str!("../src/editor/factory.rs")),
     ("header.rs", include_str!("../src/editor/header.rs")),
+    ("jobs.rs", include_str!("../src/editor/jobs.rs")),
     (
         "library_panel.rs",
         include_str!("../src/editor/library_panel.rs"),
@@ -408,6 +420,7 @@ fn no_caption_restates_the_range_the_unit_or_the_readout() {
 fn every_declared_param_is_registered_with_the_host() {
     let declared: BTreeSet<String> = declared_param_ids();
 
+    hermetic();
     let plugin = ResonanceAmp::new();
     let registered: BTreeSet<String> = (0..plugin.param_count())
         .map(|i| plugin.param(i).id().to_string())
@@ -464,6 +477,7 @@ fn every_float_param_is_drawn_as_a_knob() {
 /// decides whether they cover anything.
 #[test]
 fn the_sweep_covers_every_declared_float_param() {
+    hermetic();
     let params = AmpParams::default();
     let swept: BTreeSet<&str> = float_params(&params).into_iter().map(|(n, _)| n).collect();
     let declared: BTreeSet<String> = declared_params()
@@ -484,6 +498,7 @@ fn the_sweep_covers_every_declared_float_param() {
 
 #[test]
 fn knob_travel_is_exactly_the_declared_range() {
+    hermetic();
     let params = AmpParams::default();
     for (field, param) in float_params(&params) {
         let range = param.range();
@@ -522,6 +537,7 @@ fn knob_travel_is_exactly_the_declared_range() {
 
 #[test]
 fn the_knob_and_the_parameter_agree_in_both_directions() {
+    hermetic();
     let params = AmpParams::default();
     for (field, param) in float_params(&params) {
         let range = param.range();
@@ -550,6 +566,7 @@ fn the_knob_and_the_parameter_agree_in_both_directions() {
 
 #[test]
 fn a_reset_lands_on_the_declared_default_verbatim() {
+    hermetic();
     let params = AmpParams::default();
     for (field, param) in float_params(&params) {
         param.set_value(param.range().max());
@@ -565,6 +582,7 @@ fn a_reset_lands_on_the_declared_default_verbatim() {
 
 #[test]
 fn no_readout_doubles_up_the_declared_unit() {
+    hermetic();
     let params = AmpParams::default();
     for (field, param) in float_params(&params) {
         let unit = param.unit();
@@ -594,6 +612,7 @@ fn no_readout_doubles_up_the_declared_unit() {
 /// the knob was simply wrong, and the declaration is untouched.
 #[test]
 fn output_gain_resets_to_the_declared_minus_six_db() {
+    hermetic();
     let p = AmpParams::default();
     assert_eq!(
         p.output_gain.default_value(),
@@ -616,6 +635,7 @@ fn output_gain_resets_to_the_declared_minus_six_db() {
 /// above broke for one control, checked here across the whole surface.
 #[test]
 fn a_fresh_instance_starts_on_every_declared_default() {
+    hermetic();
     let plugin = ResonanceAmp::new();
     for param in plugin.params() {
         assert_eq!(
@@ -635,6 +655,7 @@ fn a_fresh_instance_starts_on_every_declared_default() {
 /// to `params.rs` and #1349's own job.
 #[test]
 fn the_declared_skew_reaches_the_arc_and_unity_is_off_centre() {
+    hermetic();
     let p = AmpParams::default();
     for (field, param, unity_travel) in [
         ("input_gain", &p.input_gain, 0.619_f32),
@@ -675,6 +696,7 @@ fn the_declared_skew_reaches_the_arc_and_unity_is_off_centre() {
 /// parameter panel and the automation-lane picker.
 #[test]
 fn no_parameter_is_hidden_from_the_host() {
+    hermetic();
     let plugin = ResonanceAmp::new();
     for param in plugin.params() {
         assert!(
@@ -697,6 +719,7 @@ fn no_parameter_is_hidden_from_the_host() {
 /// sees and nothing about what is stored.
 #[test]
 fn the_selected_model_index_round_trips_through_plugin_state() {
+    hermetic();
     let plugin = ResonanceAmp::new();
     let params = plugin.params();
     let file_select = params
@@ -723,6 +746,7 @@ fn the_selected_model_index_round_trips_through_plugin_state() {
 /// enumeration behind every `track.plugin_params`.
 #[test]
 fn the_model_selector_is_too_wide_for_the_choice_label_walk() {
+    hermetic();
     let p = AmpParams::default();
     let steps = p.file_select.range().max() - p.file_select.range().min() + 1;
     assert_eq!(steps, 1000);

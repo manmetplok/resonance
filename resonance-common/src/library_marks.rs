@@ -34,6 +34,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -112,8 +114,7 @@ pub fn default_library_dir() -> Option<PathBuf> {
 /// spells it the same way).
 pub fn normalize_tag(raw: &str) -> Option<String> {
     let mut out = String::with_capacity(raw.len());
-    for ch in vocab::fold_accents(raw).chars() {
-        let c = ch.to_ascii_lowercase();
+    for c in vocab::fold(raw).chars() {
         if c.is_ascii_alphanumeric() {
             out.push(c);
         } else if !out.is_empty() && !out.ends_with('-') {
@@ -215,25 +216,45 @@ impl Marks {
     }
 }
 
-/// A [`MarksStore`] shared between threads (an editor, a host-side
-/// browser, an index's freshness poll) behind one lock. Everything takes
-/// `&self`, so it can sit in an `Arc` and back a read-only trait object (a
-/// preset index's marks source) while writers use the same instance.
+/// A marks store shared between threads — an editor, a host-side browser,
+/// an index's freshness poll — with every method on `&self`, so it can sit
+/// in an `Arc` and back a read-only trait object (a preset index's marks
+/// source) while writers use the same instance.
+///
+/// **Readers never wait on I/O.** Reads are served from an immutable
+/// snapshot (`Arc<MarksStore>`) that is swapped in after a write or reload
+/// completes; the generation is an atomic. Writes do their file lock, read,
+/// write and fsync with no in-memory lock held, serialised among this
+/// process's writers by a separate mutex that no reader takes. A paint path
+/// can call [`marks`](Self::marks), [`snapshot`](Self::snapshot) and
+/// [`generation`](Self::generation) every frame.
 #[derive(Debug)]
 pub struct SharedMarks {
-    store: std::sync::Mutex<MarksStore>,
+    dir: PathBuf,
+    snapshot: std::sync::RwLock<Arc<MarksStore>>,
+    generation: AtomicU64,
+    /// Serialises this process's writers (and reloads) with each other.
+    writer: std::sync::Mutex<()>,
 }
 
 impl SharedMarks {
     pub fn new(store: MarksStore) -> Self {
         Self {
-            store: std::sync::Mutex::new(store),
+            dir: store.dir.clone(),
+            generation: AtomicU64::new(store.generation()),
+            snapshot: std::sync::RwLock::new(Arc::new(store)),
+            writer: std::sync::Mutex::new(()),
         }
     }
 
-    /// Open the store in `dir`.
+    /// Open the store in `dir` (reads only; nothing is created).
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self, MarksError> {
         MarksStore::open(dir).map(Self::new)
+    }
+
+    /// A store that lives nowhere and whose writes fail.
+    pub fn detached() -> Self {
+        Self::new(MarksStore::detached())
     }
 
     /// Open the store at [`default_library_dir`], or a detached one when
@@ -245,31 +266,127 @@ impl SharedMarks {
         }))
     }
 
-    /// The store itself, for anything not wrapped here. Never hold it on
-    /// an audio thread. A poisoned lock is recovered: the store's state is
-    /// always a whole file's worth.
-    pub fn lock(&self) -> std::sync::MutexGuard<'_, MarksStore> {
-        self.store.lock().unwrap_or_else(|p| p.into_inner())
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Path of `marks.json`.
+    pub fn path(&self) -> PathBuf {
+        self.dir.join(MARKS_FILE)
+    }
+
+    /// The current in-memory copy, for reads of more than one item (tag
+    /// completion, iteration). Never blocks on I/O.
+    pub fn snapshot(&self) -> Arc<MarksStore> {
+        self.snapshot
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    fn install(&self, store: MarksStore) {
+        self.generation.store(store.generation(), Ordering::Release);
+        *self.snapshot.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(store);
     }
 
     /// The marks of `key`, or the defaults.
     pub fn marks(&self, key: &str) -> Marks {
-        self.lock().marks(key)
+        self.snapshot().marks(key)
     }
 
+    pub fn is_favorite(&self, key: &str) -> bool {
+        self.snapshot().is_favorite(key)
+    }
+
+    /// The write counter as last read (lock-free).
     pub fn generation(&self) -> u64 {
-        self.lock().generation()
+        self.generation.load(Ordering::Acquire)
     }
 
     /// The refresh hook: re-read the file if another writer changed it
-    /// (one `stat` when not). Returns whether anything changed.
+    /// (one `stat` when not). Returns whether anything changed. The read
+    /// happens outside every in-memory lock.
     pub fn refresh(&self) -> bool {
-        self.lock().reload_if_changed().unwrap_or(false)
+        if self.dir.as_os_str().is_empty() {
+            return false;
+        }
+        let _w = self.writer.lock().unwrap_or_else(|p| p.into_inner());
+        let current = self.snapshot();
+        let mut next = MarksStore {
+            dir: current.dir.clone(),
+            doc: MarksDoc::default(),
+            stamp: current.stamp,
+        };
+        next.doc = current.doc.clone();
+        match next.reload_if_changed() {
+            Ok(true) => {
+                self.install(next);
+                true
+            }
+            _ => false,
+        }
     }
 
-    /// [`MarksStore::update`] through the shared lock.
-    pub fn update(&self, key: &str, f: impl FnOnce(&mut Marks)) -> Result<Marks, MarksError> {
-        self.lock().update(key, f)
+    fn write(
+        &self,
+        op: impl FnOnce(&mut MarksStore) -> Result<Marks, MarksError>,
+    ) -> Result<Marks, MarksError> {
+        let _w = self.writer.lock().unwrap_or_else(|p| p.into_inner());
+        let current = self.snapshot();
+        let mut next = MarksStore {
+            dir: current.dir.clone(),
+            doc: current.doc.clone(),
+            stamp: current.stamp,
+        };
+        let out = op(&mut next)?;
+        self.install(next);
+        Ok(out)
+    }
+
+    /// [`MarksStore::update`], without blocking readers.
+    pub fn update(&self, key: &str, f: impl Fn(&mut Marks)) -> Result<Marks, MarksError> {
+        self.write(|s| s.update(key, f))
+    }
+
+    pub fn set_favorite(&self, key: &str, favorite: bool) -> Result<Marks, MarksError> {
+        self.update(key, |m| m.favorite = favorite)
+    }
+
+    /// Flip the favourite flag relative to the latest copy on disk.
+    pub fn toggle_favorite(&self, key: &str) -> Result<Marks, MarksError> {
+        self.write(|s| s.toggle_favorite(key))
+    }
+
+    pub fn set_tags<S: AsRef<str>>(&self, key: &str, tags: &[S]) -> Result<Marks, MarksError> {
+        let tags = normalize_tags(tags);
+        self.update(key, |m| m.tags = tags.clone())
+    }
+
+    pub fn add_tag(&self, key: &str, tag: &str) -> Result<Marks, MarksError> {
+        self.write(|s| s.add_tag(key, tag))
+    }
+
+    pub fn remove_tag(&self, key: &str, tag: &str) -> Result<Marks, MarksError> {
+        self.write(|s| s.remove_tag(key, tag))
+    }
+
+    pub fn record_use(&self, key: &str, now: i64) -> Result<Marks, MarksError> {
+        self.write(|s| s.record_use(key, now))
+    }
+
+    /// [`MarksStore::prune_orphans`], without blocking readers.
+    pub fn prune_orphans(
+        &self,
+        kind: &str,
+        is_live: impl Fn(&str) -> bool,
+        now: i64,
+    ) -> Result<usize, MarksError> {
+        let mut removed = 0;
+        self.write(|s| {
+            removed = s.prune_orphans(kind, is_live, now)?;
+            Ok(Marks::default())
+        })?;
+        Ok(removed)
     }
 }
 
@@ -347,31 +464,69 @@ fn stat(path: &Path) -> Option<FileStamp> {
     })
 }
 
-/// Read and parse the document. `Ok(None)` for a missing file; a file that
-/// does not parse is quarantined (`marks.json.corrupt`) and reads as empty,
-/// so one bad write can never wedge every later one.
-fn read_doc(path: &Path) -> Result<Option<MarksDoc>, MarksError> {
+/// How a read of `marks.json` went.
+enum ReadDoc {
+    Missing,
+    Ok(MarksDoc),
+    /// It exists but does not parse.
+    Corrupt(String),
+}
+
+fn read_doc(path: &Path) -> Result<ReadDoc, MarksError> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ReadDoc::Missing),
         Err(e) => return Err(io_err("read", path)(e)),
     };
-    match serde_json::from_slice::<MarksDoc>(&bytes) {
-        Ok(doc) => Ok(Some(doc)),
-        Err(e) => {
-            tracing::error!("library marks {} unreadable ({e}); starting empty", path.display());
-            quarantine_corrupt(path);
-            Ok(None)
+    Ok(match serde_json::from_slice::<MarksDoc>(&bytes) {
+        Ok(doc) => ReadDoc::Ok(doc),
+        Err(e) => ReadDoc::Corrupt(e.to_string()),
+    })
+}
+
+/// Whether a `lock()` failure means "this filesystem has no locks" (NFS
+/// without lockd, some FUSE mounts) rather than a real error.
+pub fn lock_error_is_unsupported(e: &std::io::Error) -> bool {
+    if e.kind() == std::io::ErrorKind::Unsupported {
+        return true;
+    }
+    // ENOLCK: 37 on Linux, 77 on macOS/BSD.
+    #[cfg(target_os = "linux")]
+    let enolck = 37;
+    #[cfg(not(target_os = "linux"))]
+    let enolck = 77;
+    e.raw_os_error() == Some(enolck)
+}
+
+/// Take an exclusive advisory lock on `file`. On a filesystem without
+/// locks, warn once per process and carry on unlocked (best effort) rather
+/// than make the library unusable there.
+pub(crate) fn lock_or_best_effort(file: &File, path: &Path) -> std::io::Result<bool> {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    match file.lock() {
+        Ok(()) => Ok(true),
+        Err(e) if lock_error_is_unsupported(&e) => {
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                tracing::warn!(
+                    "{}: file locks are not supported here ({e}); library writes proceed unlocked",
+                    path.display()
+                );
+            }
+            Ok(false)
         }
+        Err(e) => Err(e),
     }
 }
 
 /// An exclusive advisory lock on `marks.lock`, released on drop.
 struct DirLock {
     file: File,
+    locked: bool,
 }
 
 impl DirLock {
+    /// Creates the directory and the lock file: call it only when a write
+    /// is about to happen.
     fn acquire(dir: &Path) -> Result<Self, MarksError> {
         std::fs::create_dir_all(dir).map_err(io_err("mkdir", dir))?;
         let path = dir.join(MARKS_LOCK_FILE);
@@ -381,25 +536,28 @@ impl DirLock {
             .write(true)
             .open(&path)
             .map_err(io_err("open", &path))?;
-        file.lock().map_err(io_err("lock", &path))?;
-        Ok(Self { file })
+        let locked = lock_or_best_effort(&file, &path).map_err(io_err("lock", &path))?;
+        Ok(Self { file, locked })
     }
 }
 
 impl Drop for DirLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        if self.locked {
+            let _ = self.file.unlock();
+        }
     }
 }
 
 /// The marks store: an in-memory copy of `marks.json` plus the locked
-/// read-modify-write that changes it.
+/// read-modify-write that changes it. Single-owner (`&mut self` writes);
+/// share one across threads with [`SharedMarks`].
 ///
 /// Reads are served from memory. Call [`reload_if_changed`](Self::reload_if_changed)
 /// (cheap: one `stat`) to pick up other processes' writes; every mutation
 /// re-reads under the lock anyway, so a stale copy never loses anyone
 /// else's change.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MarksStore {
     dir: PathBuf,
     doc: MarksDoc,
@@ -409,12 +567,20 @@ pub struct MarksStore {
 impl MarksStore {
     /// Open the store in `dir` (the directory holding `marks.json`). A
     /// missing file is an empty store; nothing is created until the first
-    /// write.
+    /// write. A file that does not parse reads as empty here and is
+    /// quarantined by the next write, under the lock.
     pub fn open(dir: impl Into<PathBuf>) -> Result<Self, MarksError> {
         let dir = dir.into();
         let path = dir.join(MARKS_FILE);
         let stamp = stat(&path);
-        let doc = read_doc(&path)?.unwrap_or_default();
+        let doc = match read_doc(&path)? {
+            ReadDoc::Ok(doc) => doc,
+            ReadDoc::Missing => MarksDoc::default(),
+            ReadDoc::Corrupt(e) => {
+                tracing::error!("library marks {} unreadable ({e}); reading as empty", path.display());
+                MarksDoc::default()
+            }
+        };
         Ok(Self { dir, doc, stamp })
     }
 
@@ -449,7 +615,10 @@ impl MarksStore {
     }
 
     /// Re-read the file if another writer changed it since the last read.
-    /// Returns whether the in-memory copy changed.
+    /// Returns whether the in-memory copy changed. The stamp is taken
+    /// before the read, so a write landing mid-read is seen next time; a
+    /// file that does not parse is left alone (a writer may be mid-way) and
+    /// the old copy kept.
     pub fn reload_if_changed(&mut self) -> Result<bool, MarksError> {
         if self.dir.as_os_str().is_empty() {
             return Ok(false);
@@ -459,10 +628,14 @@ impl MarksStore {
         if now == self.stamp {
             return Ok(false);
         }
-        let doc = read_doc(&path)?.unwrap_or_default();
+        let doc = match read_doc(&path)? {
+            ReadDoc::Ok(doc) => doc,
+            ReadDoc::Missing => MarksDoc::default(),
+            ReadDoc::Corrupt(_) => return Ok(false),
+        };
         let changed = doc.generation != self.doc.generation || doc.items != self.doc.items;
         self.doc = doc;
-        self.stamp = stat(&path);
+        self.stamp = now;
         Ok(changed)
     }
 
@@ -551,21 +724,33 @@ impl MarksStore {
     /// Apply `f` to the marks of `key` under the lock: take the lock,
     /// re-read the file, change only this item, bump `generation`, write
     /// atomically, and refresh the in-memory copy. Tags are normalised
-    /// after `f` runs, and an item left at its defaults is removed.
-    /// Returns the item's new marks.
-    pub fn update(&mut self, key: &str, f: impl FnOnce(&mut Marks)) -> Result<Marks, MarksError> {
+    /// after `f` runs, and an item left at its defaults is removed. An
+    /// update that changes nothing writes nothing. `f` may run twice (a
+    /// dry run on the in-memory copy, then under the lock). Returns the
+    /// item's new marks.
+    pub fn update(&mut self, key: &str, f: impl Fn(&mut Marks)) -> Result<Marks, MarksError> {
         if split_key(key).is_none() {
             return Err(MarksError::BadKey(key.to_string()));
         }
         let mut result = Marks::default();
         self.transact(|items| {
-            let mut m = items.remove(key).unwrap_or_default();
+            let old = items.get(key).cloned();
+            let mut m = old.clone().unwrap_or_default();
             f(&mut m);
             m.tags = normalize_tags(&m.tags);
-            if !m.is_default() {
-                items.insert(key.to_string(), m.clone());
-            }
+            let new = (!m.is_default()).then(|| m.clone());
             result = m;
+            if new == old {
+                return false;
+            }
+            match new {
+                Some(m) => {
+                    items.insert(key.to_string(), m);
+                }
+                None => {
+                    items.remove(key);
+                }
+            }
             true
         })?;
         Ok(result)
@@ -575,24 +760,41 @@ impl MarksStore {
         self.update(key, |m| m.favorite = favorite)
     }
 
-    /// Flip the favourite flag; returns the new marks.
+    /// Flip the favourite flag of the latest copy on disk; returns the new
+    /// marks.
     pub fn toggle_favorite(&mut self, key: &str) -> Result<Marks, MarksError> {
-        self.update(key, |m| m.favorite = !m.favorite)
+        // Not `update`: its dry run would flip the in-memory copy and the
+        // locked pass the on-disk one, which may differ.
+        if split_key(key).is_none() {
+            return Err(MarksError::BadKey(key.to_string()));
+        }
+        let mut result = Marks::default();
+        self.transact_always(|items| {
+            let mut m = items.get(key).cloned().unwrap_or_default();
+            m.favorite = !m.favorite;
+            if m.is_default() {
+                items.remove(key);
+            } else {
+                items.insert(key.to_string(), m.clone());
+            }
+            result = m;
+        })?;
+        Ok(result)
     }
 
     /// Replace the item's personal tags (normalised, deduplicated).
     pub fn set_tags<S: AsRef<str>>(&mut self, key: &str, tags: &[S]) -> Result<Marks, MarksError> {
         let tags = normalize_tags(tags);
-        self.update(key, |m| m.tags = tags)
+        self.update(key, |m| m.tags = tags.clone())
     }
 
     /// Add one tag (a no-op if it is already there or normalises to nothing).
     pub fn add_tag(&mut self, key: &str, tag: &str) -> Result<Marks, MarksError> {
         let tag = normalize_tag(tag);
         self.update(key, |m| {
-            if let Some(tag) = tag {
-                if !m.has_tag(&tag) {
-                    m.tags.push(tag);
+            if let Some(tag) = &tag {
+                if !m.has_tag(tag) {
+                    m.tags.push(tag.clone());
                 }
             }
         })
@@ -605,19 +807,27 @@ impl MarksStore {
 
     /// Record a user pick at `now` (Unix seconds): sets `last_used` and
     /// bumps `use_count`. Call it for a browser/bar pick or a control-API
-    /// load, never for a project-open restore.
+    /// load, never for a project-open restore or for browsing.
     pub fn record_use(&mut self, key: &str, now: i64) -> Result<Marks, MarksError> {
-        self.update(key, |m| {
+        if split_key(key).is_none() {
+            return Err(MarksError::BadKey(key.to_string()));
+        }
+        let mut result = Marks::default();
+        self.transact_always(|items| {
+            let m = items.entry(key.to_string()).or_default();
             m.last_used = Some(now);
             m.use_count = m.use_count.saturating_add(1);
-        })
+            result = m.clone();
+        })?;
+        Ok(result)
     }
 
     /// Orphan pass for one kind: an item whose id `is_live` rejects is
     /// stamped `orphaned_at = now` the first time it is seen missing and
     /// removed once that is [`ORPHAN_RETENTION_SECS`] old; an item that is
-    /// live again loses its stamp. Writes (under the lock) only when
-    /// something changed. Returns how many items were removed.
+    /// live again loses its stamp. Touches nothing on disk — not even the
+    /// lock file — when nothing changes. Returns how many items were
+    /// removed.
     pub fn prune_orphans(
         &mut self,
         kind: &str,
@@ -627,6 +837,7 @@ impl MarksStore {
         let mut removed = 0usize;
         self.transact(|items| {
             let mut changed = false;
+            removed = 0;
             items.retain(|key, m| {
                 let Some((k, id)) = split_key(key) else {
                     return true;
@@ -659,22 +870,65 @@ impl MarksStore {
         Ok(removed)
     }
 
-    /// The locked read-modify-write every mutation goes through. `apply`
-    /// edits the freshly read items and returns whether it changed
-    /// anything; nothing is written when it did not.
+    /// The read-modify-write every conditional mutation goes through.
+    /// `apply` edits items and returns whether it changed anything. It is
+    /// first run on a copy of the in-memory state: when that changes
+    /// nothing, nothing on disk is touched (no directory, no lock file, no
+    /// write). Otherwise the lock is taken, the file re-read, `apply` run
+    /// again on the fresh items, and the result written if it still
+    /// changes something.
     fn transact(
         &mut self,
-        apply: impl FnOnce(&mut BTreeMap<String, Marks>) -> bool,
+        mut apply: impl FnMut(&mut BTreeMap<String, Marks>) -> bool,
     ) -> Result<(), MarksError> {
         if self.dir.as_os_str().is_empty() {
             return Err(MarksError::NoDataDir);
         }
+        let mut dry = self.doc.items.clone();
+        if !apply(&mut dry) && stat(&self.path()) == self.stamp {
+            return Ok(());
+        }
+        self.locked_write(|items| apply(items))
+    }
+
+    /// A mutation that always writes (its effect cannot be a no-op).
+    fn transact_always(
+        &mut self,
+        apply: impl FnOnce(&mut BTreeMap<String, Marks>),
+    ) -> Result<(), MarksError> {
+        if self.dir.as_os_str().is_empty() {
+            return Err(MarksError::NoDataDir);
+        }
+        let mut apply = Some(apply);
+        self.locked_write(|items| {
+            if let Some(f) = apply.take() {
+                f(items);
+            }
+            true
+        })
+    }
+
+    fn locked_write(
+        &mut self,
+        apply: impl FnOnce(&mut BTreeMap<String, Marks>) -> bool,
+    ) -> Result<(), MarksError> {
         let _lock = DirLock::acquire(&self.dir)?;
         let path = self.path();
-        let mut doc = read_doc(&path)?.unwrap_or_default();
+        let mut doc = match read_doc(&path)? {
+            ReadDoc::Ok(doc) => doc,
+            ReadDoc::Missing => MarksDoc::default(),
+            ReadDoc::Corrupt(e) => {
+                // Under the lock, so no writer is mid-install: this really
+                // is a bad file. Keep it for the user, start empty.
+                tracing::error!("library marks {} unreadable ({e}); starting empty", path.display());
+                quarantine_corrupt(&path);
+                MarksDoc::default()
+            }
+        };
         if apply(&mut doc.items) {
             doc.generation = doc.generation.wrapping_add(1);
-            doc.version = MARKS_VERSION;
+            // A newer build's file keeps its version.
+            doc.version = doc.version.max(MARKS_VERSION);
             let bytes = serde_json::to_vec_pretty(&doc)?;
             atomic_write(&path, &bytes)?;
         }

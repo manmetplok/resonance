@@ -276,11 +276,15 @@ fn one_slug_rule_for_marks_and_preset_metadata() {
     use resonance_plugin::presets::vocab::normalize_facet;
     for raw in [
         "R&B", "Drum & Bass", "  Djent Rhythm ", "Café_Crème", "lo-fi", "--x--", "!!!", "a/b",
-        "Shoegaze", "ÅÄÖ", "0123456789012345678901234567890123456789",
+        "Shoegaze", "ÅÄÖ", "0123456789012345678901234567890123456789", "Dvořák", "Ďábel",
+        "Şahin",
     ] {
         assert_eq!(normalize_tag(raw), normalize_facet(raw), "{raw:?}");
     }
     assert_eq!(normalize_tag("R&B").as_deref(), Some("r-b"));
+    assert_eq!(normalize_tag("Dvořák").as_deref(), Some("dvorak"));
+    assert_eq!(normalize_tag("Ďábel").as_deref(), Some("dabel"));
+    assert_eq!(normalize_tag("Şahin").as_deref(), Some("sahin"));
 }
 
 #[test]
@@ -386,6 +390,58 @@ fn delete_is_confirmed_in_place() {
     assert_eq!(model.confirm_delete().as_deref(), Some("amp-model:a"));
     assert_eq!(model.pending_delete(), None);
     assert_eq!(model.selected(), None, "the deleted row is no longer selected");
+}
+
+#[test]
+fn a_pending_delete_never_survives_a_change_of_selection_or_its_row() {
+    let mut rows = rows();
+    let mut model = BrowserModel::new();
+    model.refresh(&rows, 1);
+    model.select("amp-model:a");
+    model.begin_delete("amp-model:a");
+    model.select("amp-model:a");
+    assert_eq!(model.pending_delete(), Some("amp-model:a"), "re-selecting the same row keeps it");
+    model.select("amp-model:b");
+    assert_eq!(model.pending_delete(), None, "another row disarms it");
+
+    model.begin_delete("amp-model:b");
+    let _ = model.move_selection(&rows, 1);
+    assert_eq!(model.pending_delete(), None, "moving with the keys disarms it too");
+
+    model.select("amp-model:c");
+    model.begin_delete("amp-model:c");
+    rows.items.retain(|i| i.key != "amp-model:c");
+    model.refresh(&rows, 2);
+    assert_eq!(model.pending_delete(), None, "its row went away");
+    assert_eq!(model.confirm_delete(), None);
+}
+
+#[test]
+fn a_pair_of_counters_is_compared_as_a_pair() {
+    let rows = rows();
+    let mut model = BrowserModel::new();
+    assert!(model.refresh(&rows, (1, 2)));
+    assert!(!model.refresh(&rows, (1, 2)));
+    // (2, 1) would fold to the same number as (1, 2) under many hashes;
+    // as a pair it is simply different.
+    assert!(model.refresh(&rows, (2, 1)));
+    assert!(model.refresh(&rows, 7u64));
+}
+
+#[test]
+fn one_fold_for_search_slugs_and_preset_queries() {
+    use resonance_plugin::library_marks::vocab::fold;
+    use resonance_plugin::presets::query;
+    for (raw, want) in [
+        ("Dvořák", "dvorak"),
+        ("Ďábel", "dabel"),
+        ("Şahin", "sahin"),
+        ("Łódź", "lodz"),
+        ("Café Crème", "cafe creme"),
+    ] {
+        assert_eq!(fold(raw), want, "{raw:?}");
+        assert_eq!(query::fold(raw), want, "presets fold the same way: {raw:?}");
+    }
 }
 
 #[test]

@@ -600,11 +600,13 @@ fn set_plugin_param(app: &mut Resonance, request: &Request) -> (Response, Task<M
     // behave identically on all three chains.
     let value = match super::track::resolve_param_value_on(
         app,
-        target.instance_id,
+        request,
+        &target,
         &param,
         &params.value,
     ) {
-        Ok(value) => value,
+        Ok(super::track::ParamValueOutcome::Value(value)) => value,
+        Ok(super::track::ParamValueOutcome::Deferred) => return super::track::deferred_reply(request),
         Err(e) => return reject(request, e),
     };
     let instance_id = target.instance_id;

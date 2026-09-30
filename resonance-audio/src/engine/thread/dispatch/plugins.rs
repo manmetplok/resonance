@@ -51,8 +51,8 @@ pub(super) fn dispatch_plugins(
             instance_id,
             param_id,
             text,
-            reply,
-        } => plugins::handle_resolve_param_text(ctx, instance_id, param_id, text, reply),
+            token,
+        } => plugins::handle_resolve_param_text(ctx, instance_id, param_id, text, token),
         AudioCommand::SetPluginBypass {
             instance_id,
             bypassed,

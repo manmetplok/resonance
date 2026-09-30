@@ -106,6 +106,17 @@ pub fn hash_file(path: &Path) -> std::io::Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
+/// Write a downloaded model's bytes to `path` atomically (a temporary
+/// sibling, fsync, rename), creating the directory: a scan or a crash
+/// never sees a half-written `.nam` under its real name.
+pub fn write_model_file(path: &Path, bytes: &[u8]) -> Result<(), LibraryError> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(io_err("mkdir", dir))?;
+    }
+    atomic_write(path, bytes)?;
+    Ok(())
+}
+
 /// sha256 of a byte slice, lowercase hex.
 pub fn hash_bytes(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
@@ -172,6 +183,9 @@ pub struct Entry {
     pub size_bytes: u64,
     /// File mtime, Unix seconds.
     pub mtime: i64,
+    /// File mtime, nanoseconds (what the index compares; see
+    /// [`file_mtime_ns`]).
+    pub mtime_ns: u64,
     /// Sidecar `downloaded_at`, else when the index first saw the file.
     pub added_at: i64,
     pub source: Source,
@@ -236,7 +250,11 @@ impl HeaderRecord {
         Self {
             architecture: h.architecture.clone(),
             version: h.version.clone(),
-            sample_rate: h.sample_rate,
+            sample_rate: if h.sample_rate.is_finite() {
+                h.sample_rate
+            } else {
+                DEFAULT_SAMPLE_RATE
+            },
             name: h.name.clone(),
             modeled_by: h.modeled_by.clone(),
             gear_type: h.gear_type.clone(),
@@ -370,6 +388,13 @@ fn stat_stamp(path: &Path) -> Option<Stamp> {
     })
 }
 
+/// A file's mtime in nanoseconds since the epoch: the resolution the index
+/// compares at, exposed so callers checking "is this the indexed file?"
+/// compare the same way.
+pub fn file_mtime_ns(meta: &std::fs::Metadata) -> u64 {
+    mtime_ns(meta)
+}
+
 fn mtime_ns(meta: &std::fs::Metadata) -> u64 {
     meta.modified()
         .ok()
@@ -454,7 +479,7 @@ impl Library {
         let root = root.into();
         let path = root.join(LIBRARY_FILE);
         let stamp = stat_stamp(&path);
-        let doc = read_index(&path);
+        let doc = read_index(&path, false);
         let mut lib = Self {
             root: Some(root),
             doc,
@@ -561,8 +586,14 @@ impl Library {
         }
         let lower = t.to_lowercase();
         let slotted = || self.entries.iter().filter(|e| e.slot.is_some());
-        if let Some(e) = slotted().find(|e| e.name.to_lowercase() == lower) {
-            return Some(e);
+        // Two models can share a display name (two captures of one amp):
+        // an exact name that is not unique resolves to nothing, so the
+        // caller errors rather than silently taking the first.
+        let mut exact = slotted().filter(|e| e.name.to_lowercase() == lower);
+        match (exact.next(), exact.next()) {
+            (Some(e), None) => return Some(e),
+            (Some(_), Some(_)) => return None,
+            _ => {}
         }
         if t.len() >= 6 && t.chars().all(|c| c.is_ascii_hexdigit()) {
             let mut hits = slotted().filter(|e| e.id.starts_with(&lower));
@@ -592,7 +623,7 @@ impl Library {
         if now == self.stamp {
             return false;
         }
-        let doc = read_index(&path);
+        let doc = read_index(&path, false);
         let changed = doc.generation != self.doc.generation;
         self.doc = doc;
         self.stamp = now;
@@ -615,6 +646,12 @@ impl Library {
             self.rebuild_entries();
             return Ok(ScanReport::default());
         }
+        // Nothing on disk moved since the index was written: nothing to do,
+        // and nothing is touched (no lock file, no write).
+        self.reload_if_changed();
+        if self.scan_is_current(&root) {
+            return Ok(ScanReport::default());
+        }
         let lock_path = root.join(LOCK_FILE);
         let lock = File::options()
             .create(true)
@@ -622,15 +659,18 @@ impl Library {
             .write(true)
             .open(&lock_path)
             .map_err(io_err("open", &lock_path))?;
-        lock.lock().map_err(io_err("lock", &lock_path))?;
+        let locked = crate::library_marks::lock_or_best_effort(&lock, &lock_path)
+            .map_err(io_err("lock", &lock_path))?;
         let result = self.rescan_locked(&root);
-        let _ = lock.unlock();
+        if locked {
+            let _ = lock.unlock();
+        }
         result
     }
 
     fn rescan_locked(&mut self, root: &Path) -> Result<ScanReport, LibraryError> {
         let index_path = root.join(LIBRARY_FILE);
-        let mut doc = read_index(&index_path);
+        let mut doc = read_index(&index_path, true);
         let mut report = ScanReport::default();
         let now = crate::library_marks::now_unix();
 
@@ -757,8 +797,16 @@ impl Library {
         std::fs::create_dir_all(&dir).map_err(io_err("mkdir", &dir))?;
         let dest = unique_dest(&dir, src);
         let tmp = dest.with_extension("nam.part");
-        std::fs::copy(src, &tmp).map_err(io_err("copy", src))?;
-        std::fs::rename(&tmp, &dest).map_err(io_err("rename", &dest))?;
+        if let Err(e) = std::fs::copy(src, &tmp) {
+            // A partial copy (full disk, unreadable source) is removed, never
+            // left to linger beside the models.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(io_err("copy", src)(e));
+        }
+        if let Err(e) = std::fs::rename(&tmp, &dest) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(io_err("rename", &dest)(e));
+        }
         self.rescan()?;
         let entry = self
             .by_path(&dest)
@@ -772,29 +820,76 @@ impl Library {
     }
 
     /// Delete the model file at `path` and its sidecar, then rescan (which
-    /// frees the slot if no other file has the same bytes). Only files
-    /// inside the root. Marks are not touched: they are kept for the
-    /// orphan window. Returns the removed entry.
+    /// frees the slot if no other file has the same bytes). Marks are not
+    /// touched: they are kept for the orphan window. Returns the removed
+    /// entry.
+    ///
+    /// Refused — before anything is removed — unless `path` is a `.nam`
+    /// file the index knows, whose canonical (symlink- and `..`-resolved)
+    /// location is inside the canonical root. Nothing else under the root
+    /// (`library.json`, a sidecar, a user's file) can be deleted through
+    /// this, and neither can anything outside it.
     pub fn delete(&mut self, path: &Path) -> Result<Entry, LibraryError> {
         let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
-        if !path.starts_with(&root) {
-            return Err(LibraryError::OutsideLibrary {
+        let outside = || LibraryError::OutsideLibrary {
+            path: path.to_path_buf(),
+        };
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(outside());
+        }
+        if !path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("nam"))
+            || is_sidecar(path)
+        {
+            return Err(LibraryError::NotAModel {
                 path: path.to_path_buf(),
+                reason: "only .nam model files can be deleted".into(),
             });
         }
-        let entry = self.by_path(path).cloned();
-        match std::fs::remove_file(path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_err("delete", path)(e)),
-        }
-        let _ = std::fs::remove_file(sidecar_path(path));
-        self.rescan()?;
-        entry.ok_or_else(|| LibraryError::Io {
-            op: "delete",
+        let entry = self.by_path(path).cloned().ok_or_else(|| LibraryError::NotAModel {
             path: path.to_path_buf(),
-            source: std::io::Error::from(std::io::ErrorKind::NotFound),
-        })
+            reason: "not an entry of the model library".into(),
+        })?;
+        let canon_root = std::fs::canonicalize(&root).map_err(io_err("resolve", &root))?;
+        let canon = std::fs::canonicalize(path).map_err(io_err("resolve", path))?;
+        if !canon.starts_with(&canon_root) || canon == canon_root {
+            return Err(outside());
+        }
+        std::fs::remove_file(&canon).map_err(io_err("delete", path))?;
+        let _ = std::fs::remove_file(sidecar_path(&canon));
+        self.rescan()?;
+        Ok(entry)
+    }
+
+    /// Whether a scan would find exactly what the index records: the same
+    /// `.nam` files with the same size, mtime and sidecar, and every
+    /// distinct id slotted (while slots remain). Stats and reads sidecars;
+    /// hashes nothing, locks nothing, writes nothing.
+    fn scan_is_current(&self, root: &Path) -> bool {
+        let paths = scan_files(root);
+        if paths.len() != self.doc.files.len() {
+            return false;
+        }
+        let by_path: HashMap<&Path, &FileRecord> =
+            self.doc.files.iter().map(|r| (r.path.as_path(), r)).collect();
+        for p in &paths {
+            let Some(r) = by_path.get(p.as_path()) else {
+                return false;
+            };
+            let Ok(meta) = std::fs::metadata(p) else {
+                return false;
+            };
+            if r.size != meta.len() || r.mtime_ns != mtime_ns(&meta) || r.sidecar != read_sidecar(p) {
+                return false;
+            }
+        }
+        let slotted: HashSet<&str> = self.doc.slots.values().map(String::as_str).collect();
+        let full = self.doc.slots.len() >= SLOT_COUNT as usize;
+        full || self.doc.files.iter().all(|r| slotted.contains(r.id.as_str()))
     }
 
     fn rebuild_entries(&mut self) {
@@ -873,17 +968,49 @@ fn unique_dest(dir: &Path, src: &Path) -> PathBuf {
     dest
 }
 
-fn read_index(path: &Path) -> IndexDoc {
+/// Read `library.json`. Tolerant by record: a file record that does not
+/// deserialise is dropped (it is re-hashed by the next scan) and never
+/// costs the slot table. Only a document that is not JSON at all reads as
+/// empty, and it is quarantined only when `quarantine` is set — which the
+/// rescan does under the lock, never a reader, so a reader can never
+/// rename away a file a writer has just installed.
+fn read_index(path: &Path, quarantine: bool) -> IndexDoc {
     let Ok(bytes) = std::fs::read(path) else {
         return IndexDoc::default();
     };
-    match serde_json::from_slice::<IndexDoc>(&bytes) {
-        Ok(doc) => doc,
+    let value: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
         Err(e) => {
-            tracing::error!("model library index {} unreadable ({e}); rebuilding", path.display());
-            quarantine_corrupt(path);
-            IndexDoc::default()
+            if quarantine {
+                tracing::error!("model library index {} unreadable ({e}); rebuilding", path.display());
+                quarantine_corrupt(path);
+            }
+            return IndexDoc::default();
         }
+    };
+    fn lenient<T: serde::de::DeserializeOwned>(v: &serde_json::Value, k: &str) -> Option<T> {
+        serde_json::from_value(v.get(k)?.clone()).ok()
+    }
+    let files = match value.get("files") {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|r| match serde_json::from_value::<FileRecord>(r.clone()) {
+                Ok(rec) => Some(rec),
+                Err(e) => {
+                    tracing::warn!("model library index: dropping a bad file record ({e})");
+                    None
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    IndexDoc {
+        version: lenient(&value, "version").unwrap_or(INDEX_VERSION),
+        generation: lenient(&value, "generation").unwrap_or(0),
+        next_slot: lenient(&value, "next_slot").unwrap_or(0),
+        slots: lenient(&value, "slots").unwrap_or_default(),
+        retired: lenient(&value, "retired").unwrap_or_default(),
+        files,
     }
 }
 
@@ -949,6 +1076,7 @@ fn make_entry(root: &Path, r: &FileRecord, slot: Option<u32>, duplicate_of: Opti
             .unwrap_or(DEFAULT_SAMPLE_RATE),
         size_bytes: r.size,
         mtime: (r.mtime_ns / 1_000_000_000) as i64,
+        mtime_ns: r.mtime_ns,
         added_at,
         source,
         esr: header.as_ref().and_then(|h| h.validation_esr),

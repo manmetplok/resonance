@@ -330,18 +330,19 @@ pub enum AudioCommand {
         value: f64,
     },
     /// Ask a plugin which value `text` names for one of its parameters
-    /// (CLAP `text_to_value`, `ClapInstance::param_from_text`) and send the
-    /// answer on `reply`: `Some(value)`, or `None` when the instance is
-    /// unknown or the plugin does not accept the text. A query, not an
-    /// edit — nothing changes. Answered on the engine thread (the params
-    /// extension is main-thread only); `EngineHandle`'s
-    /// `param_from_text` wraps the round trip with a timeout
-    /// (nam-model-library.md §9.2).
+    /// (CLAP `text_to_value`, `ClapInstance::param_from_text`). Answered —
+    /// never blocking anyone — with `AudioEvent::PluginParamTextResolved`
+    /// carrying the same `token`: `Some(value)` only when the plugin's own
+    /// display of that value round-trips to `text`
+    /// ([`crate::label_round_trips`]), `None` otherwise or when the
+    /// instance is gone. A query, not an edit. Runs on the engine thread
+    /// (the params extension is main-thread only), nam-model-library.md
+    /// §9.2.
     ResolvePluginParamText {
         instance_id: PluginInstanceId,
         param_id: u32,
         text: String,
-        reply: crossbeam_channel::Sender<Option<f64>>,
+        token: u64,
     },
     /// Set loop (cycle) range. When enabled, playback wraps from loop_out back to
     /// loop_in, and any recording is trimmed to [loop_in, loop_out]. If

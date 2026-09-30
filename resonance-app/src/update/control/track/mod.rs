@@ -61,7 +61,10 @@ mod sidechain;
 
 /// Shared with `bus.*` / `master.*`, which address plugin parameters the
 /// same way: same f32-bound tolerance, same choice-label resolution.
-pub(crate) use params::{find_param, resolve_param_value, resolve_param_value_on};
+pub(crate) use params::{
+    deferred_reply, expire_pending_labels, find_param, label_resolved, resolve_param_value,
+    resolve_param_value_on, ParamValueOutcome,
+};
 
 /// Handle a `track.*` / `mixer.*` request, or `None` when `method`
 /// belongs to another namespace.

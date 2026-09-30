@@ -104,6 +104,11 @@ impl AmpProcessor {
     /// Install the very first model synchronously, with no crossfade and
     /// no fade-in. Used during plugin initialization before `process()`
     /// has had a chance to run.
+    /// Whether a model is installed (main thread, between activations).
+    pub fn has_model(&self) -> bool {
+        self.models.active().is_some()
+    }
+
     pub fn install_initial_model(&mut self, model: Box<dyn NamInference>) {
         self.models.install(model);
     }

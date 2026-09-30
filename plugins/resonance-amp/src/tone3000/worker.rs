@@ -225,6 +225,18 @@ impl Drop for WorkerHandle {
 }
 
 pub fn spawn(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
+    spawn_with(library, true)
+}
+
+/// A worker that does not restore the saved Tone3000 session: nothing is
+/// read from the user's config until they press Connect. For headless
+/// editor tests.
+#[doc(hidden)]
+pub fn spawn_offline(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
+    spawn_with(library, false)
+}
+
+fn spawn_with(library: Arc<crate::library::SharedLibrary>, restore: bool) -> WorkerHandle {
     let (tx, rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(State::default()));
     let state_for_thread = state.clone();
@@ -236,7 +248,9 @@ pub fn spawn(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
 
     // Kick off a token-restore attempt immediately so a returning user
     // sees "Connected" without having to click anything.
-    let _ = tx.send(Command::TryRestore);
+    if restore {
+        let _ = tx.send(Command::TryRestore);
+    }
 
     WorkerHandle {
         tx,
@@ -511,7 +525,9 @@ fn finalize_download(
 
     let filename = sanitize_filename(&model.display_label(), model.id);
     let dest = dir.join(filename);
-    auth::write_all_to(&dest, bytes)?;
+    // Written beside the target and renamed into place, so a scan (or a
+    // crash) never sees a half-written model under the real name.
+    resonance_common::nam_library::write_model_file(&dest, bytes).map_err(|e| e.to_string())?;
 
     // Provenance: everything Tone3000 knows that the file does not
     // (nam-model-library.md §4.1). The tone is the one whose model list

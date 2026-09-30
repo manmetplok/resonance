@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! ┌ LIBRARY  [ Installed | Tone3000 ]                 41 models · 612 MB   [Close] ┐
-//! │ [search name, author, gear, tag…]  (★ only) (Recent)  Gear ▾  Type ▾  Arch ▾  Sort ▾ │
+//! │ [search name, author, gear, tag…]  (★ only) (Recent)  Gear  Type  Arch  Sort    │
 //! │ ★ Friedman BE-100 · standard   J. Smith  Friedman BE-100  amp  crunch  A2  48k  4.1 MB │
 //! │ …                                                                               │
 //! │ Friedman BE-100 · standard                                                      │
@@ -14,15 +14,17 @@
 //! └─────────────────────────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! The behaviour lives in the shared `BrowserModel` and `library_rows`; this
-//! file only turns clicks into their calls.
+//! The behaviour lives in the shared `BrowserModel` and `nam_rows`; this
+//! file only turns clicks into their calls. Anything that hashes, copies
+//! or waits on the library's writer lock is a job (`jobs.rs`).
 
 use plugin_gui_core::egui;
 use plugin_gui_core::widgets::{chip_button, segmented};
-use resonance_common::nam_library::{Entry, EntryStatus, ImportOutcome, Source};
+use resonance_common::nam_library::{Entry, EntryStatus, Source};
 use resonance_plugin::library_ui::{self, ColumnSpec, ConfirmOutcome, ListOptions};
 use resonance_plugin::library_view::Sort;
 
+use super::jobs::JobDone;
 use super::{actions, theme, tone3000_panel, AmpEditorApp};
 use crate::library_rows::{format_size, sort_options, FACETS};
 
@@ -39,7 +41,7 @@ pub(crate) enum Tab {
 pub(crate) struct LibraryPanelState {
     pub(crate) open: bool,
     pub(crate) tab: Tab,
-    /// The last Tone3000 download this panel has reacted to.
+    /// The last download of THIS editor the panel has reacted to.
     pub(crate) seen_download: Option<std::path::PathBuf>,
 }
 
@@ -81,21 +83,25 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                     draw_contents(ui, app);
                 });
         });
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // Esc closes the overlay — but not while a text field (search, a tag)
+    // is being typed in: there it only leaves the field.
+    if !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.library_panel.open = false;
     }
 }
 
 fn draw_contents(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
-    // After a download from the Tone3000 tab, switch to Installed with the
-    // new row selected.
-    let downloaded = app.tone3000.state.lock().last_downloaded.clone();
+    // After a download this editor asked for, switch to Installed with the
+    // new row selected. (The Tone3000 worker is shared by every amp's
+    // editor, so its own `last_downloaded` is not this editor's.)
+    let downloaded = app.my_download.lock().clone();
     if downloaded.is_some() && downloaded != app.library_panel.seen_download {
         app.library_panel.seen_download = downloaded.clone();
         app.refresh_rows();
         if let Some(path) = downloaded {
             if let Some(row) = app.rows.rows.iter().find(|r| r.entry.path == path) {
-                app.browser.select(row.key.clone());
+                let key = row.key.clone();
+                app.browser.select(key);
                 app.library_panel.tab = Tab::Installed;
             }
         }
@@ -145,7 +151,7 @@ fn draw_contents(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
             };
             if let Some(tone3000_panel::ModelRowAction::Load { slot, .. }) = picked {
                 match slot {
-                    Some(slot) => actions::load_slot(app, slot),
+                    Some(slot) => actions::load_slot(app, slot, actions::LoadKind::Pick),
                     None => app.browser.set_error("That model has no slot to load it through"),
                 }
             }
@@ -160,9 +166,10 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         return;
     }
 
-    // Search, switches, facets, sort.
-    ui.horizontal(|ui| {
-        library_ui::search_field(ui, &mut app.browser, "search name, author, gear, tag…", 240.0);
+    // Search, switches, facets, sort. Wrapped: at the editor's 760 px
+    // minimum the row does not fit on one line.
+    ui.horizontal_wrapped(|ui| {
+        library_ui::search_field(ui, &mut app.browser, "search name, author, gear, tag…", 200.0);
         if chip_button(ui, "★ only", app.browser.favorites_only()) {
             let on = !app.browser.favorites_only();
             app.browser.set_favorites_only(on);
@@ -223,8 +230,8 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                     row_height: 22.0,
                     columns: &COLUMNS,
                     loaded: loaded_key.as_deref(),
-                    show_star: true,
                     is_error: Some(&is_error),
+                    ..ListOptions::default()
                 },
             )
         })
@@ -235,9 +242,6 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     }
     if let Some(row) = resp.double_clicked {
         load_row(app, row);
-    }
-    if resp.clicked.is_some() {
-        app.tag_draft.clear();
     }
 
     ui.separator();
@@ -269,6 +273,7 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
         return;
     };
     let entry = app.rows.rows[row].entry.clone();
+    let key = app.rows.rows[row].key.clone();
     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new(&entry.name).strong().size(13.0).color(theme::TEXT));
@@ -290,7 +295,11 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
             let suggestions = if app.tag_draft.trim().is_empty() {
                 Vec::new()
             } else {
-                app.params.library.marks().complete_tag(&app.tag_draft, &tags, 6)
+                app.params
+                    .library
+                    .marks()
+                    .snapshot()
+                    .complete_tag(&app.tag_draft, &tags, 6)
             };
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("tags:").size(11.0).color(theme::TEXT_DIM));
@@ -313,7 +322,7 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
             let used = app.usage_count(&entry.id);
             if used > 0 {
                 ui.label(
-                    egui::RichText::new(format!("used in {used} open amp{}", if used == 1 { "" } else { "s" }))
+                    egui::RichText::new(format!("used in {used} open amp{}", plural(used)))
                         .size(11.0)
                         .color(theme::TEXT_DIM),
                 );
@@ -331,62 +340,81 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
                 if let Source::Tone3000 { tone_id, model_id } = entry.source {
                     if actions::tone3000_connected(app) {
                         if ui.button("Re-download").clicked() {
-                            actions::redownload(app, tone_id, model_id, Some(entry.name.clone()));
+                            // Refreshes the library's file; does not switch
+                            // this amp to it.
+                            actions::redownload_only(app, &entry, tone_id, model_id);
                             app.browser.set_info(format!("re-downloading \"{}\"…", entry.name));
                         }
                     } else if ui.button("Connect… to re-download").clicked() {
                         app.tone3000.send(crate::tone3000::worker::Command::Authenticate);
                     }
                 }
-                let key = app.rows.rows[row].key.clone();
                 if app.browser.pending_delete() != Some(key.as_str())
-                    && ui.button("Delete…").clicked()
+                    && ui
+                        .add_enabled(!app.jobs.busy(), egui::Button::new("Delete…"))
+                        .clicked()
                 {
-                    app.browser.begin_delete(key);
+                    app.browser.begin_delete(key.clone());
                 }
             });
-            draw_delete_confirm(ui, app, &entry);
+            draw_delete_confirm(ui, app, &key, &entry);
         });
     });
 }
 
+fn plural(n: usize) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
+    }
+}
+
 /// The confirm-in-place line of §7.1: "Delete "<name>" (4.1 MB)? [Delete]
 /// [Cancel]", saying who is still using it and what happens to projects.
-fn draw_delete_confirm(ui: &mut egui::Ui, app: &mut AmpEditorApp, entry: &Entry) {
+/// Shown only for the row that was armed, and the key it hands back —
+/// not the displayed entry — is what gets deleted.
+fn draw_delete_confirm(ui: &mut egui::Ui, app: &mut AmpEditorApp, key: &str, entry: &Entry) {
     let used = app.usage_count(&entry.id);
     let mut detail = String::from("Projects that use it will show it as missing.");
     if used > 0 {
         detail = format!(
             "Used by {used} open amp{} — they keep playing until reloaded. {detail}",
-            if used == 1 { "" } else { "s" }
+            plural(used)
         );
     }
     let prompt = format!("Delete \"{}\" ({})?", entry.name, format_size(entry.size_bytes));
-    if let ConfirmOutcome::Confirmed(_) =
-        library_ui::confirm_delete_row(ui, &mut app.browser, &prompt, Some(&detail))
+    if let ConfirmOutcome::Confirmed(confirmed) =
+        library_ui::confirm_delete_row(ui, &mut app.browser, key, &prompt, Some(&detail))
     {
-        match delete_entry(app, entry) {
-            Ok(()) => app.browser.set_info(format!("deleted \"{}\"", entry.name)),
-            Err(e) => app.browser.set_error(e),
-        }
+        start_delete(app, &confirmed);
     }
 }
 
-/// Delete the file and its sidecar (a real delete, D4). Its slot is freed
-/// under the no-reuse rule; its marks are kept for the orphan window, so a
-/// re-download or re-import keeps the star and tags.
-pub(crate) fn delete_entry(app: &mut AmpEditorApp, entry: &Entry) -> Result<(), String> {
-    app.params
-        .library
-        .mutate(|lib| lib.delete(&entry.path))
-        .map(|_| ())
-        .map_err(|e| e.to_string())?;
-    app.refresh_rows();
-    Ok(())
+/// Delete the entry whose row key is `key` (a real delete, D4), as a job.
+/// Its slot is freed under the no-reuse rule; its marks are kept for the
+/// orphan window, so a re-download or re-import keeps the star and tags.
+pub(crate) fn start_delete(app: &mut AmpEditorApp, key: &str) {
+    let Some(row) = app.rows.rows.iter().find(|r| r.key == key) else {
+        app.browser.set_error("that model is no longer in the library");
+        return;
+    };
+    let (path, name) = (row.entry.path.clone(), row.entry.name.clone());
+    let library = app.params.library.clone();
+    let started = app.jobs.start("deleting…", move || JobDone::Deleted {
+        name,
+        result: library
+            .mutate(|lib| lib.delete(&path))
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+    });
+    if !started {
+        app.browser.set_error("the library is busy; try again in a moment");
+    }
 }
 
 /// "by J. Smith · Tone3000 tone #1934 · WaveNet A2 · 48 kHz · ESR 0.0041 · added 2026-09-12"
-pub(crate) fn detail_line(entry: &resonance_common::nam_library::Entry) -> String {
+pub(crate) fn detail_line(entry: &Entry) -> String {
     let mut parts = Vec::new();
     if let Some(a) = &entry.author {
         parts.push(format!("by {a}"));
@@ -413,65 +441,27 @@ pub(crate) fn detail_line(entry: &resonance_common::nam_library::Entry) -> Strin
 
 fn draw_footer(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.horizontal(|ui| {
-        if ui.button("Import .nam…").clicked() {
+        let busy = app.jobs.busy();
+        if ui.add_enabled(!busy, egui::Button::new("Import .nam…")).clicked() {
             import_clicked(app);
         }
-        if ui.button("Rescan").clicked() {
-            match app.params.library.rescan() {
-                Ok(r) => app.browser.set_info(format!(
-                    "rescanned: {} added, {} removed",
-                    r.added.len(),
-                    r.removed.len()
-                )),
-                Err(e) => app.browser.set_error(e.to_string()),
-            }
+        if ui.add_enabled(!busy, egui::Button::new("Rescan")).clicked() {
+            app.start_rescan();
         }
-        if let Some(n) = app.browser.notice() {
+        if let Some(label) = app.jobs.label() {
+            ui.label(egui::RichText::new(label).size(11.0).color(theme::TEXT_DIM));
+        } else if let Some(n) = app.browser.notice() {
             let color = if n.is_error() { theme::DANGER } else { theme::TEXT_DIM };
             ui.label(egui::RichText::new(n.text()).size(11.0).color(color));
         }
     });
 }
 
-/// Import one or more files; a single file is also loaded, and a file that
-/// is already in the library selects its row.
+/// Import one or more files (a job); a single file is also loaded, and a
+/// file that is already in the library selects its row.
 pub(crate) fn import_clicked(app: &mut AmpEditorApp) {
     let files = actions::pick_nam_files(true);
-    if files.is_empty() {
-        return;
-    }
-    let single = files.len() == 1;
-    let mut added = 0usize;
-    let mut errors = Vec::new();
-    let mut last_key = None;
-    for file in &files {
-        let outcome = app.params.library.mutate(|lib| lib.import(file));
-        match outcome {
-            Ok(o) => {
-                if matches!(o, ImportOutcome::Added(_)) {
-                    added += 1;
-                } else if single {
-                    app.browser.set_info("already in library");
-                }
-                last_key = Some(o.entry().mark_key());
-                if single {
-                    if let Err(e) = actions::load_entry(app, o.entry()) {
-                        errors.push(e);
-                    }
-                }
-            }
-            Err(e) => errors.push(e.to_string()),
-        }
-    }
-    app.refresh_rows();
-    if let Some(key) = last_key {
-        app.browser.select(key);
-    }
-    if !errors.is_empty() {
-        app.browser.set_error(errors.join("; "));
-    } else if !single {
-        app.browser.set_info(format!("imported {added} of {}", files.len()));
-    }
+    actions::start_import(app, files);
 }
 
 fn draw_empty_state(ui: &mut egui::Ui, app: &mut AmpEditorApp) {

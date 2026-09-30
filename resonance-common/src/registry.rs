@@ -52,8 +52,20 @@ pub struct InstalledItem {
 /// The on-disk JSON shape.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct InstalledRegistry {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "known_items")]
     pub items: Vec<InstalledItem>,
+}
+
+/// The items this build understands. An item of a type it does not know
+/// (the retired `amp-model`, or a newer build's kind) is skipped rather
+/// than failing the whole file — which would quarantine it and lose every
+/// drum-kit record with it.
+fn known_items<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<InstalledItem>, D::Error> {
+    let raw = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|v| serde_json::from_value(v).ok())
+        .collect())
 }
 
 impl InstalledRegistry {

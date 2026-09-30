@@ -474,6 +474,11 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             value,
             text,
         } => plugins::param_text(r, instance_id, param_id, value, text),
+        // The plugin's answer to a `*.set_plugin_param` label (§9.2): the
+        // deferred request finishes now, and its reply goes out.
+        E::PluginParamTextResolved { token, value } => {
+            return crate::update::control::label_resolved(r, token, value)
+        }
         E::PluginScanFailed { failures } => plugins::scan_failed(r, failures),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)

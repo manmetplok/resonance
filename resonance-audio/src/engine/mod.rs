@@ -1192,30 +1192,6 @@ impl AudioEngine {
         }
     }
 
-    /// Ask a plugin which value `text` names for one of its parameters
-    /// (CLAP `text_to_value`), waiting at most `timeout` for the engine
-    /// thread's answer. `Ok(None)`: the plugin does not accept the text (or
-    /// the instance is gone); `Err(())`: no answer in time (the engine is
-    /// busy or stopped). Blocks the caller for the round trip, so use a
-    /// short timeout, and never call it from an audio thread.
-    pub fn param_from_text(
-        &self,
-        instance_id: PluginInstanceId,
-        param_id: u32,
-        text: &str,
-        timeout: std::time::Duration,
-    ) -> Result<Option<f64>, ()> {
-        let (reply, answer) = crossbeam_channel::bounded(1);
-        self.send(AudioCommand::ResolvePluginParamText {
-            instance_id,
-            param_id,
-            text: text.to_string(),
-            reply,
-        })
-        .map_err(|_| ())?;
-        answer.recv_timeout(timeout).map_err(|_| ())
-    }
-
     /// Whether a `send` has ever observed the engine thread's command
     /// channel disconnected. Reads the same one-shot latch
     /// [`report_engine_disconnect_once`] sets, so it goes true the first

@@ -1,6 +1,7 @@
 //! egui skin over [`crate::library_view::BrowserModel`]: the virtualised
-//! library list with ☆/★ toggles, the search field, facet menus, the
-//! confirm-in-place delete row and the tag editor row.
+//! library list with ☆/★ toggles and keyboard navigation, the search
+//! field, facet menus, the confirm-in-place delete row and the tag editor
+//! row.
 //!
 //! Every function here is a thin translation of clicks into model calls;
 //! the behaviour is in `library_view` and tested there without a window.
@@ -42,13 +43,19 @@ impl ColumnSpec {
 pub struct ListOptions<'a> {
     /// Height of every row, px (fixed, so the list can virtualise).
     pub row_height: f32,
-    /// Widths of [`LibraryRows::columns`], in order; extra columns are not
+    /// Widths of [`LibraryRows::column`]s, in order; extra columns are not
     /// drawn.
     pub columns: &'a [ColumnSpec],
     /// The key of the item currently loaded: drawn with an accent border.
     pub loaded: Option<&'a str>,
     /// Draw the ☆/★ toggle at the left of each row.
     pub show_star: bool,
+    /// Draw [`LibraryRows::subtitle`] as a second, dimmer line (give the
+    /// rows room: 34 px or more).
+    pub show_subtitle: bool,
+    /// ↑/↓ move the selection, Enter activates it, Esc reports
+    /// [`ListResponse::escaped`] — while no text field is being edited.
+    pub keyboard: bool,
     /// Rows to draw in the danger colour (e.g. unreadable files).
     pub is_error: Option<&'a dyn Fn(usize) -> bool>,
 }
@@ -60,6 +67,8 @@ impl Default for ListOptions<'_> {
             columns: &[],
             loaded: None,
             show_star: true,
+            show_subtitle: false,
+            keyboard: true,
             is_error: None,
         }
     }
@@ -70,10 +79,16 @@ impl Default for ListOptions<'_> {
 pub struct ListResponse {
     /// A row was clicked (it is now the model's selection).
     pub clicked: Option<usize>,
-    /// A row was double-clicked (load it).
+    /// A row was double-clicked, or Enter pressed on the selection (load
+    /// it).
     pub double_clicked: Option<usize>,
     /// A row's star was clicked (toggle its favourite). Does not select.
     pub star_clicked: Option<usize>,
+    /// ↑/↓ moved the selection to this row (audition it, if the browser
+    /// auditions).
+    pub moved: Option<usize>,
+    /// Esc was pressed with the list focused and no text field active.
+    pub escaped: bool,
 }
 
 /// The search field, bound to the model's query. Returns the text edit's
@@ -102,27 +117,58 @@ pub fn library_list(
     opts: &ListOptions<'_>,
 ) -> ListResponse {
     let mut out = ListResponse::default();
-    let view: Vec<usize> = model.view().to_vec();
     let row_h = opts.row_height;
     let salt = egui::Id::new(id_salt);
-    egui::ScrollArea::vertical()
+
+    // Keyboard, before layout, so the scroll can follow the move.
+    let mut scroll_to: Option<usize> = None;
+    if opts.keyboard && !ui.ctx().text_edit_focused() {
+        let (up, down, enter, esc) = ui.input(|i| {
+            (
+                i.key_pressed(egui::Key::ArrowUp),
+                i.key_pressed(egui::Key::ArrowDown),
+                i.key_pressed(egui::Key::Enter),
+                i.key_pressed(egui::Key::Escape),
+            )
+        });
+        let delta = i32::from(down) - i32::from(up);
+        if delta != 0 {
+            if let Some(row) = model.move_selection(rows, delta) {
+                out.moved = Some(row);
+                scroll_to = model.view().iter().position(|&r| r == row);
+            }
+        }
+        if enter {
+            out.double_clicked = model.selected_row();
+        }
+        out.escaped = esc;
+    }
+
+    let view: Vec<usize> = model.view().to_vec();
+    let mut area = egui::ScrollArea::vertical()
         .id_salt(salt)
-        .auto_shrink([false, false])
-        .show_rows(ui, row_h, view.len(), |ui, range| {
-            for &row in &view[range] {
-                let r = draw_row(ui, salt, model, rows, row, opts);
-                if r.star_clicked.is_some() {
-                    out.star_clicked = r.star_clicked;
-                } else {
-                    if r.clicked.is_some() {
-                        out.clicked = r.clicked;
-                    }
-                    if r.double_clicked.is_some() {
-                        out.double_clicked = r.double_clicked;
-                    }
+        .auto_shrink([false, false]);
+    if let Some(pos) = scroll_to {
+        let visible = ui.available_height().max(row_h);
+        let spacing = ui.spacing().item_spacing.y;
+        let top = pos as f32 * (row_h + spacing);
+        area = area.vertical_scroll_offset((top - visible * 0.5).max(0.0));
+    }
+    area.show_rows(ui, row_h, view.len(), |ui, range| {
+        for &row in &view[range] {
+            let r = draw_row(ui, salt, model, rows, row, opts);
+            if r.star_clicked.is_some() {
+                out.star_clicked = r.star_clicked;
+            } else {
+                if r.clicked.is_some() {
+                    out.clicked = r.clicked;
+                }
+                if r.double_clicked.is_some() {
+                    out.double_clicked = r.double_clicked;
                 }
             }
-        });
+        }
+    });
     if let Some(row) = out.clicked.or(out.double_clicked) {
         model.select(rows.key(row).to_string());
     }
@@ -144,9 +190,15 @@ fn draw_row(
     let selected = model.selected() == Some(key);
     let loaded = opts.loaded == Some(key);
     let mut out = ListResponse::default();
+    let two_lines = opts.show_subtitle && opts.row_height >= 30.0;
+    let line_y = if two_lines {
+        rect.min.y + opts.row_height * 0.36
+    } else {
+        rect.center().y
+    };
 
     let star_rect = egui::Rect::from_min_size(
-        rect.min + egui::vec2(4.0, (opts.row_height - 16.0) * 0.5),
+        egui::pos2(rect.min.x + 4.0, line_y - 8.0),
         egui::vec2(16.0, 16.0),
     );
     if resp.clicked() {
@@ -194,37 +246,29 @@ fn draw_row(
         let title_color = if error { theme::BAD } else { theme::TEXT_1 };
         let font = egui::FontId::proportional(12.0);
         let small = egui::FontId::proportional(11.0);
-        let y = rect.center().y;
 
         // Columns from the right edge inwards.
-        let cols = rows.columns(row);
         let mut right = rect.max.x - 6.0;
-        let mut col_rects = Vec::new();
-        for spec in opts.columns.iter().take(cols.len()).rev() {
+        let mut col_rects = Vec::with_capacity(opts.columns.len());
+        let count = (0..opts.columns.len())
+            .take_while(|&c| rows.column(row, c).is_some())
+            .count();
+        for (c, spec) in opts.columns.iter().enumerate().take(count).rev() {
             let left = right - spec.width;
-            col_rects.push((egui::Rect::from_x_y_ranges(left..=right, rect.y_range()), *spec));
+            col_rects.push((c, egui::Rect::from_x_y_ranges(left..=right, rect.y_range()), *spec));
             right = left - 8.0;
         }
-        col_rects.reverse();
-        for ((col_rect, spec), text) in col_rects.iter().zip(cols.iter()) {
-            let p = painter.with_clip_rect(*col_rect);
-            if spec.align_right {
-                p.text(
-                    egui::pos2(col_rect.max.x, y),
-                    egui::Align2::RIGHT_CENTER,
-                    text,
-                    small.clone(),
-                    theme::TEXT_2,
-                );
+        for (c, col_rect, spec) in col_rects {
+            let Some(text) = rows.column(row, c) else {
+                continue;
+            };
+            let p = painter.with_clip_rect(col_rect);
+            let (x, align) = if spec.align_right {
+                (col_rect.max.x, egui::Align2::RIGHT_CENTER)
             } else {
-                p.text(
-                    egui::pos2(col_rect.min.x, y),
-                    egui::Align2::LEFT_CENTER,
-                    text,
-                    small.clone(),
-                    theme::TEXT_2,
-                );
-            }
+                (col_rect.min.x, egui::Align2::LEFT_CENTER)
+            };
+            p.text(egui::pos2(x, line_y), align, text, small.clone(), theme::TEXT_2);
         }
         let title_left = if opts.show_star {
             star_rect.max.x + 6.0
@@ -233,19 +277,32 @@ fn draw_row(
         };
         let title_rect = egui::Rect::from_x_y_ranges(title_left..=right, rect.y_range());
         painter.with_clip_rect(title_rect).text(
-            egui::pos2(title_left, y),
+            egui::pos2(title_left, line_y),
             egui::Align2::LEFT_CENTER,
             rows.title(row),
             font,
             title_color,
         );
+        if two_lines {
+            let sub_rect = egui::Rect::from_x_y_ranges(title_left..=rect.max.x - 6.0, rect.y_range());
+            let subtitle = rows.subtitle(row);
+            if !subtitle.is_empty() {
+                painter.with_clip_rect(sub_rect).text(
+                    egui::pos2(title_left, rect.min.y + opts.row_height * 0.74),
+                    egui::Align2::LEFT_CENTER,
+                    subtitle,
+                    small,
+                    if error { theme::BAD } else { theme::TEXT_3 },
+                );
+            }
+        }
     }
     out
 }
 
-/// A facet filter as a menu button: `label ▾` listing every value with its
-/// count; clicking a value toggles it. Returns whether the selection
-/// changed.
+/// A facet filter as a menu button: `label` (with the selection) listing
+/// every value with its count; clicking a value toggles it and the menu
+/// stays open for the next one. Returns whether the selection changed.
 pub fn facet_menu(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash,
@@ -255,14 +312,16 @@ pub fn facet_menu(
     facet: &str,
 ) -> bool {
     let selected = model.facet_selection(facet);
+    // The combo draws its own ▾.
     let text = match selected.len() {
-        0 => format!("{label} ▾"),
-        1 => format!("{label}: {} ▾", selected[0]),
-        n => format!("{label}: {n} ▾"),
+        0 => label.to_string(),
+        1 => format!("{label}: {}", selected[0]),
+        n => format!("{label}: {n}"),
     };
     let mut changed = false;
     egui::ComboBox::from_id_salt(egui::Id::new(id_salt))
         .selected_text(text)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
             let counts = model.facet_counts(rows, facet);
             if counts.is_empty() {
@@ -287,21 +346,24 @@ pub fn facet_menu(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmOutcome {
     None,
-    /// The second click: delete this key.
+    /// The second click: delete this key (the one that was armed — delete
+    /// this, not whatever is displayed).
     Confirmed(String),
     Cancelled,
 }
 
-/// The confirm-in-place line for the model's pending delete:
-/// `prompt [Delete] [Cancel]`, with an optional dimmer `detail` line under
-/// it ("Used by 2 open amps …"). Draws nothing when no delete is pending.
+/// The confirm-in-place line for `key`: `prompt [Delete] [Cancel]`, with
+/// an optional dimmer `detail` line under it ("Used by 2 open amps …").
+/// Draws nothing unless the model's pending delete is exactly `key`, so a
+/// delete armed on one row can never be confirmed on another.
 pub fn confirm_delete_row(
     ui: &mut egui::Ui,
     model: &mut BrowserModel,
+    key: &str,
     prompt: &str,
     detail: Option<&str>,
 ) -> ConfirmOutcome {
-    if model.pending_delete().is_none() {
+    if model.pending_delete() != Some(key) {
         return ConfirmOutcome::None;
     }
     let mut outcome = ConfirmOutcome::None;
@@ -337,8 +399,10 @@ pub struct TagRowResponse {
 }
 
 /// Removable tag pills plus an inline `+ tag` field with completions.
-/// `draft` is the caller-owned text buffer; `suggestions` are offered
-/// under it while it has focus (typically `MarksStore::complete_tag`).
+/// `draft` is the caller-owned text buffer; `suggestions` (typically
+/// `MarksStore::complete_tag`) are offered while the draft is non-empty —
+/// not only while the field has focus, because clicking a suggestion takes
+/// the focus away on that very frame.
 pub fn tag_row(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash,
@@ -364,7 +428,7 @@ pub fn tag_row(
         if submitted && !draft.trim().is_empty() {
             out.added = Some(std::mem::take(draft));
         }
-        if resp.has_focus() && !suggestions.is_empty() {
+        if !draft.trim().is_empty() {
             for s in suggestions.iter().take(6) {
                 if tag_pill(ui, s, true, false).clicked {
                     out.added = Some(s.clone());

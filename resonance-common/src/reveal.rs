@@ -67,6 +67,9 @@ pub fn reveal_commands(path: &Path) -> Vec<RevealCommand> {
                     args: vec![
                         "--session".into(),
                         "--print-reply".into(),
+                        // Never hang the caller on a session bus that does
+                        // not answer.
+                        "--reply-timeout=2000".into(),
                         "--dest=org.freedesktop.FileManager1".into(),
                         "--type=method_call".into(),
                         "/org/freedesktop/FileManager1".into(),
@@ -77,9 +80,18 @@ pub fn reveal_commands(path: &Path) -> Vec<RevealCommand> {
                 });
             }
         }
+        // `xdg-open` in generic mode can stay alive as long as the file
+        // manager it started. Detach it through a shell that exits at once,
+        // so the caller only waits on the short-lived `sh` and no thread or
+        // child of ours outlives a plugin library that is unloaded.
         out.push(RevealCommand {
-            program: "xdg-open",
-            args: vec![folder.as_os_str().to_owned()],
+            program: "sh",
+            args: vec![
+                "-c".into(),
+                "xdg-open \"$1\" >/dev/null 2>&1 &".into(),
+                "_".into(),
+                folder.as_os_str().to_owned(),
+            ],
         });
     }
     let _ = &folder;
@@ -104,38 +116,25 @@ pub fn file_uri(path: &Path) -> Option<String> {
     Some(out)
 }
 
-/// Reveal `path` in the file manager. Tries each of [`reveal_commands`] in
-/// turn and stops at the first that starts and exits successfully; the
-/// last one (the plain folder open) is spawned without waiting. Blocking
-/// for at most the D-Bus round trip, so call it from a UI thread, never an
-/// audio thread.
+/// Reveal `path` in the file manager. Tries each of [`reveal_commands`]
+/// in turn and stops at the first that exits successfully. Every
+/// invocation is waited for and is short-lived (the D-Bus call has a 2 s
+/// reply timeout; the final folder open is detached through `sh`), so no
+/// reaper thread is left behind — it would otherwise outlive a plugin
+/// `.so` that is unloaded. Call it from a UI thread, never an audio thread.
 pub fn reveal(path: &Path) -> std::io::Result<()> {
-    let commands = reveal_commands(path);
-    let last = commands.len().saturating_sub(1);
     let mut last_err = None;
-    for (i, cmd) in commands.into_iter().enumerate() {
-        let mut c = Command::new(cmd.program);
-        c.args(&cmd.args)
+    for cmd in reveal_commands(path) {
+        let status = Command::new(cmd.program)
+            .args(&cmd.args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        if i < last {
-            match c.status() {
-                Ok(s) if s.success() => return Ok(()),
-                Ok(s) => last_err = Some(std::io::Error::other(format!("{} exited {s}", cmd.program))),
-                Err(e) => last_err = Some(e),
-            }
-        } else {
-            match c.spawn() {
-                Ok(mut child) => {
-                    // Reap it off-thread so no zombie is left behind.
-                    std::thread::spawn(move || {
-                        let _ = child.wait();
-                    });
-                    return Ok(());
-                }
-                Err(e) => last_err = Some(e),
-            }
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => return Ok(()),
+            Ok(s) => last_err = Some(std::io::Error::other(format!("{} exited {s}", cmd.program))),
+            Err(e) => last_err = Some(e),
         }
     }
     Err(last_err.unwrap_or_else(|| std::io::Error::other("no file manager launcher")))

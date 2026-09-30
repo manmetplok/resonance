@@ -682,7 +682,12 @@ impl Resonance {
                 session_id,
                 undo: UndoHistory::new(),
             },
-            control: crate::state::ControlEndpointState::default(),
+            control: crate::state::ControlEndpointState {
+                amp_library: crate::update::control::AmpLibraryCache::new(
+                    crate::update::control::amp_library_roots(matches!(host, Host::None)),
+                ),
+                ..Default::default()
+            },
             modals: state::ModalState::default(),
             settings,
             presets: state::PresetState {

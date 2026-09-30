@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use plugin_gui_core::egui;
 use resonance_common::nam_library::{self, ImportOutcome};
 
+use super::jobs::JobDone;
 use super::{actions, theme, AmpEditorApp};
 use crate::model_ref::{ModelState, ModelStatus};
 
@@ -103,7 +104,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                     if let Some(nam_library::Source::Tone3000 { tone_id, model_id }) = source {
                         if actions::tone3000_connected(app) {
                             if ui.button("Re-download from Tone3000").clicked() {
-                                actions::redownload(app, *tone_id, *model_id, Some(name.clone()));
+                                actions::redownload_and_load(app, *tone_id, *model_id, Some(name.clone()));
                                 app.missing.error = None;
                             }
                         } else if ui.button("Connect… to re-download").clicked() {
@@ -114,14 +115,17 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                     if *file_changed && ui.button("Use the file at this path").clicked() {
                         relink(app, &PathBuf::from(path));
                     }
-                    if ui.button("Locate file…").clicked() {
+                    if ui
+                        .add_enabled(!app.jobs.busy(), egui::Button::new("Locate file…"))
+                        .clicked()
+                    {
                         if let Some(located) = actions::pick_nam_files(false).into_iter().next() {
-                            let located_id = nam_library::hash_file(&located).ok();
-                            let saved = app.params.model_ref.lock().id.clone();
-                            match locate_decision(saved.as_deref(), located_id.as_deref()) {
-                                LocateDecision::Relink => relink(app, &located),
-                                LocateDecision::AskFirst => app.missing.mismatch = Some(located),
-                            }
+                            // Hashed on the job thread; the frame decides
+                            // when it reports back (`app.rs`).
+                            app.jobs.start("checking the file…", move || {
+                                let id = nam_library::hash_file(&located).ok();
+                                JobDone::Located(located, id)
+                            });
                         }
                     }
                     if ui.button("Choose another model").clicked() {
@@ -136,31 +140,35 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
 }
 
 /// Bring `file` into the library (a copy unless it is already inside the
-/// root) and load it.
-fn relink(app: &mut AmpEditorApp, file: &std::path::Path) {
-    let inside = app
-        .params
-        .library
-        .root()
-        .is_some_and(|r| file.starts_with(r));
-    let result = if inside {
-        app.params
-            .library
-            .rescan()
-            .map_err(|e| e.to_string())
-            .and_then(|_| {
-                let entry = app.params.library.read().by_path(file).cloned();
-                match entry {
-                    Some(e) => actions::load_entry(app, &e).map(|_| ()),
-                    None => Err(format!("{} is not a readable model", file.display())),
-                }
-            })
-    } else {
-        actions::import_and_load(app, file).map(|o| {
-            if let ImportOutcome::AlreadyPresent(_) = o {
-                app.notice = Some("already in library".into());
-            }
+/// root) and load it, as a job.
+pub(crate) fn relink(app: &mut AmpEditorApp, file: &std::path::Path) {
+    let library = app.params.library.clone();
+    let file = file.to_path_buf();
+    let inside = library.root().is_some_and(|r| file.starts_with(r));
+    let started = app.jobs.start("relinking…", move || {
+        JobDone::Relinked(if inside {
+            library
+                .rescan()
+                .map_err(|e| e.to_string())
+                .and_then(|_| {
+                    library
+                        .read()
+                        .by_path(&file)
+                        .cloned()
+                        .map(|e| (e, false))
+                        .ok_or_else(|| format!("{} is not a readable model", file.display()))
+                })
+        } else {
+            library
+                .mutate(|lib| lib.import(&file))
+                .map(|o| {
+                    let already = matches!(o, ImportOutcome::AlreadyPresent(_));
+                    (o.entry().clone(), already)
+                })
+                .map_err(|e| e.to_string())
         })
-    };
-    app.missing.error = result.err();
+    });
+    if !started {
+        app.missing.error = Some("the library is busy; try again in a moment".into());
+    }
 }

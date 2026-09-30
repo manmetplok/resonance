@@ -92,6 +92,9 @@ pub(crate) use job::export_kind_to_rpc;
 pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
+pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};
+pub(crate) use amp_models::roots_for as amp_library_roots;
+pub(crate) use track::{expire_pending_labels, label_resolved};
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
 pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
@@ -117,8 +120,17 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
                 request,
                 reply,
             } = request;
+            // A handler that has to wait for the engine (a label only the
+            // plugin can read) takes the reply channel and answers later.
+            app.control.current_reply = Some(reply.clone());
+            app.control.current_conn = Some(conn);
+            app.control.deferred = false;
             let (response, task) = execute(app, conn, &request);
-            reply.send(response);
+            app.control.current_reply = None;
+            app.control.current_conn = None;
+            if !std::mem::take(&mut app.control.deferred) {
+                reply.send(response);
+            }
             task
         }
     }

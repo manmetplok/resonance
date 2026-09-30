@@ -20,8 +20,9 @@ impl ResonanceMcp {
                        project needs to be open. Each model reports slot, id, name, author, \
                        gear, gear_type, tone_type (capture type: clean, crunch, hi_gain, …), \
                        architecture, sample_rate, size_bytes, source (tone3000 / imported / \
-                       external), favorite, tags, last_used and status (\"unreadable\" models \
-                       carry the parse error). Favourites come first, then slot order. \
+                       external), favorite, tags, last_used and status (ok / unreadable, with \
+                       the parse error / duplicate). Favourites come first, then slot order; \
+                       limit caps the list and matched counts every match. \
                        \
                        Filters AND: query (the amp Library panel's search — tokens matched \
                        against name, author, gear, file name and tags; is:fav, is:recent, \
@@ -29,9 +30,12 @@ impl ResonanceMcp {
                        token), favorites_only, gear_type, tone_type. \
                        \
                        To load one, set the amp's \"Model Select\" parameter with \
-                       track_set_plugin_param (or bus_/master_): value = the entry's slot, or \
-                       its name, which the plugin resolves. The slot is stable — adding or \
-                       deleting models never moves it. A model captured at another \
+                       track_set_plugin_param (or bus_/master_). Prefer value = the entry's \
+                       slot (stable: adding or deleting models never moves it); a name works \
+                       only while no other installed model shares it. Model Select's text in \
+                       track_plugin_params is refreshed when YOU set it; after a change made \
+                       in the amp's own editor, trust amp_models_list and the slot number \
+                       rather than that text. A model captured at another \
                        sample_rate than the session runs with a shifted tone. Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<amp_models::AmpModelList>()

@@ -149,12 +149,16 @@ fn text(v: Option<serde_json::Value>) -> Option<String> {
     }
 }
 
+/// A finite number field. `"inf"`, `"NaN"` and friends read as absent: a
+/// non-finite value would serialise as `null` in the index and could never
+/// be read back.
 fn number(v: Option<serde_json::Value>) -> Option<f64> {
-    match v? {
+    let n = match v? {
         serde_json::Value::Number(n) => n.as_f64(),
         serde_json::Value::String(s) => s.trim().parse().ok(),
         _ => None,
-    }
+    }?;
+    n.is_finite().then_some(n)
 }
 
 /// Parse a header from any reader (buffer it: the scan is byte-wise).

@@ -45,6 +45,23 @@ pub struct ListParams {
     /// Only this capture type (`clean`, `crunch`, `hi_gain`, `fuzz`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tone_type: Option<String>,
+    /// At most this many models (the first ones in the list's order);
+    /// `matched` still counts them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// The health of one installed model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AmpModelStatus {
+    /// Loadable.
+    Ok,
+    /// The file does not parse; `error` says why.
+    Unreadable,
+    /// The same bytes as another entry, which holds the slot.
+    Duplicate,
 }
 
 /// Where a model came from.
@@ -73,7 +90,8 @@ pub struct AmpModelEntry {
     /// Content id: sha256 of the file. What `amp_models.set_marks` takes.
     pub id: String,
     /// Display name; also accepted by `track.set_plugin_param` on Model
-    /// Select.
+    /// Select when no other installed model has the same name (prefer the
+    /// slot or id, which are unambiguous).
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
@@ -99,9 +117,7 @@ pub struct AmpModelEntry {
     /// RFC 3339; when the user last picked it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_used: Option<String>,
-    /// `"ok"`, `"unreadable"` (the file does not parse; `error` says why)
-    /// or `"duplicate"` (same bytes as another entry, which holds the slot).
-    pub status: String,
+    pub status: AmpModelStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -126,8 +142,11 @@ pub struct SetMarksParams {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct AmpModelList {
-    /// Matching models: favourites first, then slot order.
+    /// Matching models: favourites first, then slot order (at most
+    /// `limit`).
     pub models: Vec<AmpModelEntry>,
+    /// How many models matched the filters, before `limit`.
+    pub matched: usize,
     /// Bumped whenever the library's index changes (any process).
     pub library_generation: u64,
     /// How many models are installed in all, before the filters.

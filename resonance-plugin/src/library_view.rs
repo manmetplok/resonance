@@ -37,9 +37,10 @@
 //!
 //! Matching is substring matching, a superset of the token-prefix rule.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use resonance_common::library_marks::vocab::{self, fold_accents};
+use resonance_common::library_marks::vocab;
 pub use resonance_common::library_marks::Marks;
 
 /// The facet name for tags. [`LibraryRows::facet_values`] with this name
@@ -53,6 +54,23 @@ pub const AUTHOR_FACET: &str = "author";
 /// The facet `is:<value>` searches (other than `is:fav` / `is:recent`):
 /// where an item comes from (`user`, `factory`, `tone3000`, `imported`).
 pub const SOURCE_FACET: &str = "source";
+
+/// What [`BrowserModel::refresh`] compares to decide the rows changed: one
+/// counter, or two compared as a pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Revision(pub u64, pub u64);
+
+impl From<u64> for Revision {
+    fn from(v: u64) -> Self {
+        Revision(v, 0)
+    }
+}
+
+impl From<(u64, u64)> for Revision {
+    fn from((a, b): (u64, u64)) -> Self {
+        Revision(a, b)
+    }
+}
 
 /// A sortable value one row offers for one field.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,9 +99,11 @@ pub trait LibraryRows {
         String::new()
     }
 
-    /// Display columns after the title, in the order the skin lays them out.
-    fn columns(&self, _row: usize) -> Vec<String> {
-        Vec::new()
+    /// Display column `col` after the title (0-based, in the order the
+    /// skin lays them out), or `None` past the last. Borrowed where the
+    /// rows already hold the text, so a frame allocates nothing per row.
+    fn column(&self, _row: usize, _col: usize) -> Option<Cow<'_, str>> {
+        None
     }
 
     /// The row's personal marks, if any are stored.
@@ -195,7 +215,7 @@ pub struct BrowserModel {
     // Cache.
     view: Vec<usize>,
     key_index: HashMap<String, usize>,
-    rows_revision: Option<u64>,
+    rows_revision: Option<Revision>,
     dirty: bool,
 }
 
@@ -221,7 +241,7 @@ impl Default for BrowserModel {
 
 /// Lowercased, accent-folded text for matching.
 fn fold(text: &str) -> String {
-    fold_accents(text).to_lowercase()
+    vocab::fold(text)
 }
 
 /// One parsed search token (see the module docs for the syntax). Public so
@@ -481,9 +501,13 @@ impl BrowserModel {
     // -- The view ----------------------------------------------------------
 
     /// Recompute the view if the query changed or `rows_revision` differs
-    /// from the last call. Bump the revision whenever the rows or any row's
-    /// marks change. Returns whether the view was recomputed.
-    pub fn refresh(&mut self, rows: &dyn LibraryRows, rows_revision: u64) -> bool {
+    /// from the last call. Pass anything that changes whenever the rows or
+    /// any row's marks change: a `u64` counter, or a `(content, marks)`
+    /// pair of counters (compared as a pair, so two counters can never
+    /// collide into one). Returns whether the view was recomputed. A
+    /// selection or pending delete whose row is gone is dropped.
+    pub fn refresh(&mut self, rows: &dyn LibraryRows, rows_revision: impl Into<Revision>) -> bool {
+        let rows_revision = rows_revision.into();
         let rows_changed = self.rows_revision != Some(rows_revision);
         if !self.dirty && !rows_changed {
             return false;
@@ -496,6 +520,13 @@ impl BrowserModel {
         self.rows_revision = Some(rows_revision);
         self.dirty = false;
         self.view = self.compute(rows, None);
+        if rows_changed {
+            if let Some(k) = &self.pending_delete {
+                if !self.key_index.contains_key(k) {
+                    self.pending_delete = None;
+                }
+            }
+        }
         true
     }
 
@@ -667,12 +698,20 @@ impl BrowserModel {
         self.selected.as_deref().and_then(|k| self.row_of(k))
     }
 
+    /// Select `key`. Selecting another row disarms a pending delete, so a
+    /// second click can never delete a row other than the one that was
+    /// armed.
     pub fn select(&mut self, key: impl Into<String>) {
-        self.selected = Some(key.into());
+        let key = key.into();
+        if self.pending_delete.as_deref().is_some_and(|p| p != key) {
+            self.pending_delete = None;
+        }
+        self.selected = Some(key);
     }
 
     pub fn clear_selection(&mut self) {
         self.selected = None;
+        self.pending_delete = None;
     }
 
     /// The row `delta` places from `current` in the view, clamped rather
@@ -703,7 +742,7 @@ impl BrowserModel {
     /// the newly selected row.
     pub fn move_selection(&mut self, rows: &dyn LibraryRows, delta: i32) -> Option<usize> {
         let row = self.step_from(self.selected.as_deref(), delta)?;
-        self.selected = Some(rows.key(row).to_string());
+        self.select(rows.key(row).to_string());
         Some(row)
     }
 

@@ -4,8 +4,10 @@
 //! the chrome panels (header, tuner, control strip) and dispatches the centre
 //! to the scope/curve/meters views, or to the missing-model banner.
 
+use std::path::PathBuf;
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 
@@ -17,10 +19,11 @@ use crate::viz::AmpViz;
 
 use resonance_plugin::library_view::BrowserModel;
 
+use super::jobs::{JobDone, Jobs};
 use super::library_panel::{self, LibraryPanelState};
 use super::missing_banner::{self, MissingBannerState};
 use super::tone3000_panel::Tone3000PanelState;
-use super::{controls, curve_view, header, meters, scope_view, theme, tuner_view};
+use super::{actions, controls, curve_view, header, meters, scope_view, theme, tuner_view};
 use crate::library_rows::ModelRows;
 use resonance_common::library_marks::{FreshnessPoll, BAR_POLL_INTERVAL, BROWSER_POLL_INTERVAL};
 
@@ -47,18 +50,23 @@ pub(crate) struct AmpEditorApp {
     pub(crate) browser: BrowserModel,
     /// The library as browser rows, rebuilt when the library changes.
     pub(crate) rows: ModelRows,
-    /// The `+ tag` field's text in the detail pane.
+    /// The `+ tag` field's text in the detail pane, and the row it was
+    /// typed for (cleared when the selection moves).
     pub(crate) tag_draft: String,
+    pub(crate) tag_draft_for: Option<String>,
     /// Change detection for other processes' marks writes.
     pub(crate) marks_poll: FreshnessPoll,
     /// Change detection for the library folders and index (files added or
     /// deleted in a file manager, another process's rescan).
     pub(crate) library_poll: FreshnessPoll,
-    /// The background rescan, if one is running. Joined before the editor
-    /// goes away, so no thread outlives the plugin image.
-    pub(crate) rescan_thread: Option<std::thread::JoinHandle<()>>,
-    /// Set by a finished re-download whose bytes differ from the saved id.
-    pub(crate) redownload_notice: Arc<Mutex<Option<String>>>,
+    /// Rescans, imports, deletes and relinks, off the editor thread.
+    pub(crate) jobs: Jobs,
+    /// A re-download notice and when it was set (expires, and clears on the
+    /// next pick).
+    pub(crate) redownload_notice: Arc<Mutex<Option<(String, Instant)>>>,
+    /// The last Tone3000 download THIS editor asked for (the shared worker
+    /// serves every editor, so its own `last_downloaded` is not ours).
+    pub(crate) my_download: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl AmpEditorApp {
@@ -69,7 +77,7 @@ impl AmpEditorApp {
         tone3000: Arc<WorkerHandle>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
-        Self {
+        let mut app = Self {
             params,
             load_request,
             viz,
@@ -84,16 +92,31 @@ impl AmpEditorApp {
             browser: BrowserModel::new(),
             rows: ModelRows::default(),
             tag_draft: String::new(),
+            tag_draft_for: None,
             marks_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
             library_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
-            rescan_thread: None,
+            jobs: Jobs::default(),
             redownload_notice: Arc::new(Mutex::new(None)),
-        }
+            my_download: Arc::new(Mutex::new(None)),
+        };
+        // Opening an editor is when the library is brought up to date
+        // (activation never scans): on the job thread, so the first frame
+        // is not held up by hashing new downloads.
+        app.start_rescan();
+        app
     }
 
     /// Open the Library overlay.
     pub(crate) fn open_library(&mut self) {
         library_panel::open(self);
+    }
+
+    /// Start a background rescan unless a job is running.
+    pub(crate) fn start_rescan(&mut self) -> bool {
+        let library = self.params.library.clone();
+        self.jobs.start("scanning…", move || {
+            JobDone::Rescanned(library.rescan().map_err(|e| e.to_string()))
+        })
     }
 
     /// Rebuild the rows if the library or the marks changed, and refresh
@@ -102,13 +125,74 @@ impl AmpEditorApp {
         let revision = self.params.library.revision();
         let marks_gen = self.params.library.marks_generation();
         if self.rows.built_from != (revision, marks_gen) || self.rows.rows.is_empty() {
+            let marks = self.params.library.marks().snapshot();
             let lib = self.params.library.read();
-            let marks = self.params.library.marks();
             self.rows = ModelRows::build(&lib, Some(&marks), (revision, marks_gen));
         }
-        // The view's cache key folds both counters together.
-        self.browser
-            .refresh(&self.rows, revision.wrapping_mul(1_000_003) ^ marks_gen);
+        self.browser.refresh(&self.rows, (revision, marks_gen));
+        // A draft tag belongs to the row it was typed for.
+        if self.browser.selected() != self.tag_draft_for.as_deref() {
+            self.tag_draft.clear();
+            self.tag_draft_for = self.browser.selected().map(str::to_string);
+        }
+    }
+
+    /// Apply a finished background job.
+    pub(crate) fn poll_jobs(&mut self) {
+        let Some(done) = self.jobs.poll() else {
+            return;
+        };
+        self.apply_job(done);
+    }
+
+    pub(crate) fn apply_job(&mut self, done: JobDone) {
+        match done {
+            JobDone::Rescanned(Ok(_)) => {}
+            JobDone::Rescanned(Err(e)) => self.browser.set_error(format!("rescan failed: {e}")),
+            JobDone::Imported {
+                results,
+                load_single,
+            } => {
+                let (last, message) = actions::import_summary(&results);
+                self.refresh_rows();
+                if let Some(e) = &last {
+                    self.browser.select(e.mark_key());
+                    if load_single {
+                        if let Err(err) = actions::load_entry(self, e) {
+                            self.browser.set_error(err);
+                            return;
+                        }
+                    }
+                }
+                match message {
+                    Ok(m) => self.browser.set_info(m),
+                    Err(m) => self.browser.set_error(m),
+                }
+            }
+            JobDone::Deleted { name, result } => {
+                self.refresh_rows();
+                match result {
+                    Ok(()) => self.browser.set_info(format!("deleted \"{name}\"")),
+                    Err(e) => self.browser.set_error(e),
+                }
+            }
+            JobDone::Relinked(result) => match result {
+                Ok((entry, already)) => {
+                    if already {
+                        self.notice = Some("already in library".into());
+                    }
+                    self.missing.error = actions::load_entry(self, &entry).err();
+                }
+                Err(e) => self.missing.error = Some(e),
+            },
+            JobDone::Located(path, id) => {
+                let saved = self.params.model_ref.lock().id.clone();
+                match missing_banner::locate_decision(saved.as_deref(), id.as_deref()) {
+                    missing_banner::LocateDecision::Relink => missing_banner::relink(self, &path),
+                    missing_banner::LocateDecision::AskFirst => self.missing.mismatch = Some(path),
+                }
+            }
+        }
     }
 
     /// Poll for other processes' changes: every 500 ms while the Library is
@@ -118,11 +202,8 @@ impl AmpEditorApp {
             let marks = self.params.library.marks().path();
             self.marks_poll = FreshnessPoll::new(vec![marks], BAR_POLL_INTERVAL);
         }
-        self.marks_poll.set_interval(if self.library_panel.open {
-            BROWSER_POLL_INTERVAL
-        } else {
-            BAR_POLL_INTERVAL
-        });
+        let interval = self.poll_interval();
+        self.marks_poll.set_interval(interval);
         let now = std::time::Instant::now();
         if self.marks_poll.check(now) {
             self.params.library.refresh_marks();
@@ -133,31 +214,16 @@ impl AmpEditorApp {
             self.library_poll = FreshnessPoll::new(paths, BAR_POLL_INTERVAL);
             self.library_poll.mark_seen(now);
         }
-        self.library_poll.set_interval(self.marks_poll_interval());
-        if self.rescan_thread.as_ref().is_some_and(|t| t.is_finished()) {
-            if let Some(t) = self.rescan_thread.take() {
-                let _ = t.join();
-            }
-        }
-        if self.rescan_thread.is_none() && self.library_poll.check(now) {
+        self.library_poll.set_interval(interval);
+        if !self.jobs.busy() && self.library_poll.check(now) {
             // Off the UI thread: a new file has to be hashed. The rescan
-            // only re-hashes files whose size or mtime changed.
-            let library = self.params.library.clone();
-            self.rescan_thread = std::thread::Builder::new()
-                .name("amp-library-rescan".into())
-                .spawn(move || {
-                    if let Err(e) = library.rescan() {
-                        tracing::warn!("model library rescan failed: {e}");
-                    }
-                })
-                .ok();
+            // only re-hashes files whose size or mtime changed, and writes
+            // nothing when nothing did, so the poll settles.
+            self.start_rescan();
         }
-        // The rescan's own index write shows up as one more change on the
-        // next poll; that rescan finds nothing to hash and writes nothing,
-        // so the poll settles.
     }
 
-    fn marks_poll_interval(&self) -> std::time::Duration {
+    fn poll_interval(&self) -> std::time::Duration {
         if self.library_panel.open {
             BROWSER_POLL_INTERVAL
         } else {
@@ -178,19 +244,12 @@ impl AmpEditorApp {
     }
 }
 
-impl Drop for AmpEditorApp {
-    fn drop(&mut self) {
-        if let Some(t) = self.rescan_thread.take() {
-            let _ = t.join();
-        }
-    }
-}
-
 impl EditorApp for AmpEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
+        self.poll_jobs();
         self.poll_freshness();
 
         egui::Panel::top("amp_header")

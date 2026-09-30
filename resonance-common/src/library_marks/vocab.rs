@@ -146,52 +146,49 @@ pub fn slug(raw: &str) -> Option<String> {
     super::normalize_tag(raw)
 }
 
-/// Replace the common Latin accented letters with their ASCII base, so
-/// search and slugs are accent-insensitive (`"Café"` matches `"cafe"`).
-/// Characters with no mapping pass through unchanged.
-pub fn fold_accents(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.is_ascii() {
-        return std::borrow::Cow::Borrowed(text);
-    }
+/// Lowercase with the Latin diacritics folded to their ASCII base
+/// (`"Café"` → `"cafe"`, `"Dvořák"` → `"dvorak"`, `"Şahin"` → `"sahin"`).
+/// Characters with no mapping pass through lowercased. The ONE fold every
+/// library kind searches and slugs with (the preset library's query and
+/// facet normaliser call it too), so a text matches the same way in every
+/// browser.
+pub fn fold(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match fold_char(ch) {
+    for c in text.chars().flat_map(char::to_lowercase) {
+        match fold_char(c) {
             Some(s) => out.push_str(s),
-            None => out.push(ch),
+            None => out.push(c),
         }
     }
-    std::borrow::Cow::Owned(out)
+    out
 }
 
-fn fold_char(ch: char) -> Option<&'static str> {
-    Some(match ch {
-        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' => "a",
-        'À' | 'Á' | 'Â' | 'Ã' | 'Ä' | 'Å' | 'Ā' => "A",
+/// The ASCII base of one lowercase letter, if it has a diacritic.
+fn fold_char(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => "a",
         'æ' => "ae",
-        'Æ' => "AE",
-        'ç' | 'ć' | 'č' => "c",
-        'Ç' | 'Ć' | 'Č' => "C",
-        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ę' | 'ě' => "e",
-        'È' | 'É' | 'Ê' | 'Ë' | 'Ē' | 'Ę' | 'Ě' => "E",
-        'ì' | 'í' | 'î' | 'ï' | 'ī' => "i",
-        'Ì' | 'Í' | 'Î' | 'Ï' | 'Ī' => "I",
-        'ñ' | 'ń' | 'ň' => "n",
-        'Ñ' | 'Ń' | 'Ň' => "N",
-        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' => "o",
-        'Ò' | 'Ó' | 'Ô' | 'Õ' | 'Ö' | 'Ø' | 'Ō' => "O",
+        'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' | 'ĕ' => "e",
+        'ğ' | 'ĝ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì' | 'í' | 'î' | 'ï' | 'ī' | 'į' | 'ı' | 'ĭ' => "i",
+        'ĵ' => "j",
+        'ķ' => "k",
+        'ł' | 'ľ' | 'ĺ' | 'ļ' => "l",
+        'ñ' | 'ń' | 'ň' | 'ņ' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ő' | 'ŏ' => "o",
         'œ' => "oe",
-        'Œ' => "OE",
+        'ř' | 'ŕ' | 'ŗ' => "r",
+        'ś' | 'š' | 'ş' | 'ŝ' | 'ș' => "s",
         'ß' => "ss",
-        'š' | 'ś' => "s",
-        'Š' | 'Ś' => "S",
-        'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' => "u",
-        'Ù' | 'Ú' | 'Û' | 'Ü' | 'Ū' | 'Ů' => "U",
-        'ý' | 'ÿ' => "y",
-        'Ý' | 'Ÿ' => "Y",
-        'ž' | 'ź' | 'ż' => "z",
-        'Ž' | 'Ź' | 'Ż' => "Z",
-        'ł' => "l",
-        'Ł' => "L",
+        'ť' | 'ţ' | 'ț' | 'ŧ' => "t",
+        'þ' => "th",
+        'ù' | 'ú' | 'û' | 'ü' | 'ū' | 'ů' | 'ű' | 'ų' | 'ŭ' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
         _ => return None,
     })
 }

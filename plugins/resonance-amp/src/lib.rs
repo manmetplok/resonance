@@ -26,7 +26,7 @@ pub mod editor;
 
 use dsp::AmpProcessor;
 use loader::{LoaderDeps, LoaderHandle};
-use model_ref::{resolve_model, ModelRef, ModelState, ModelStatus, Resolved};
+use model_ref::{ModelRef, ModelState, ModelStatus};
 use nam::NamInference;
 use params::AmpParams;
 use tuner::Tuner;
@@ -81,6 +81,7 @@ impl ResonanceAmp {
         let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(
             Arc::new(AmpExtraState {
                 model_ref: params.model_ref.clone(),
+                pending_ref: params.pending_ref.clone(),
             }),
         );
 
@@ -104,117 +105,33 @@ impl ResonanceAmp {
         self.params.status.lock().clone()
     }
 
-    /// Synchronously load the model at `path`, prime it, sample its
-    /// transfer curve, and install it. Used only from `initialize` so the
-    /// first model is available before `process` runs.
-    fn load_model_sync(&mut self, path: &str) -> Result<(), String> {
-        let model = loader::prepare_model(path, &self.viz)?;
-        self.processor.install_initial_model(model);
-        Ok(())
-    }
-
     /// Resolve the saved model reference against the library and load
-    /// what it names (nam-model-library.md §5.2). A reference that does
-    /// not resolve is kept verbatim and shown as missing.
+    /// what it names (nam-model-library.md §5.2), synchronously, so the
+    /// first `process` call has a model. A reference that does not resolve
+    /// is kept verbatim and shown as missing.
+    ///
+    /// Read-only on disk: resolution runs against the cached index
+    /// (refreshed with one `stat` of `library.json`); nothing is scanned,
+    /// hashed beyond the referenced file itself, pruned or written.
     fn restore_model(&mut self) {
-        let reference = self.params.model_ref.lock().clone();
-        let resolved = {
-            let lib = self.params.library.read();
-            resolve_model(&reference, &lib, |p| {
-                resonance_common::nam_library::hash_file(p).ok()
-            })
-        };
-        let at_slot = self.params.file_select.value();
-        self.restore_resolved(resolved, &reference, at_slot);
-        let st = self.params.status.lock();
-        let playing = (st.state == ModelState::Loaded).then(|| st.id.clone()).flatten();
-        drop(st);
-        self.params
-            .library
-            .set_usage(self.params.instance_id, playing.as_deref());
-    }
-
-    fn restore_resolved(&mut self, resolved: Resolved, reference: &ModelRef, at_slot: i32) {
-        match resolved {
-            Resolved::Nothing => {
-                *self.params.status.lock() = ModelStatus::default();
-            }
-            Resolved::Load { path, entry } => {
-                let path_str = path.to_string_lossy().into_owned();
-                match self.load_model_sync(&path_str) {
-                    Ok(()) => {
-                        let mut st = self.params.status.lock();
-                        *st = ModelStatus {
-                            name: entry
-                                .as_ref()
-                                .map(|e| e.name.clone())
-                                .unwrap_or_else(|| reference.display_name()),
-                            id: entry.as_ref().map(|e| e.id.clone()).or(reference.id.clone()),
-                            state: ModelState::Loaded,
-                            external: entry.as_ref().is_none_or(|e| e.path != path),
-                            ..ModelStatus::default()
-                        };
-                        drop(st);
-                        if let Some(e) = &entry {
-                            // Fill in what a v1 reference lacked; the path
-                            // that loaded stays the path.
-                            let mut r = ModelRef::from_entry(e);
-                            r.path = path_str;
-                            *self.params.model_ref.lock() = r;
-                            if let Some(slot) = e.slot {
-                                self.params.file_select.set_value(slot as i32);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("failed to load NAM model {path_str}: {e}");
-                        *self.params.status.lock() = ModelStatus {
-                            state: ModelState::Error(e),
-                            ..ModelStatus::default()
-                        };
-                    }
+        self.params.library.refresh();
+        let reference = self
+            .params
+            .pending_ref
+            .lock()
+            .take()
+            .unwrap_or_else(|| self.params.model_ref.lock().clone());
+        match loader::apply_reference(&self.params, &self.viz, reference, false) {
+            Some(model) => self.processor.install_initial_model(model),
+            None => {
+                // Nothing to play: a model left from an earlier activation
+                // must not keep playing under a reference that says
+                // otherwise.
+                let loaded = self.params.status.lock().state == ModelState::Loaded;
+                if !loaded && self.processor.has_model() {
+                    self.processor
+                        .install_initial_model(Box::new(loader::Passthrough));
                 }
-            }
-            Resolved::Relinked { entry } => {
-                let path_str = entry.path.to_string_lossy().into_owned();
-                match self.load_model_sync(&path_str) {
-                    Ok(()) => {
-                        *self.params.model_ref.lock() = ModelRef::from_entry(&entry);
-                        *self.params.status.lock() = ModelStatus {
-                            name: entry.name.clone(),
-                            id: Some(entry.id.clone()),
-                            state: ModelState::Loaded,
-                            notice: Some(format!("Relinked: {} (file had moved)", entry.name)),
-                            ..ModelStatus::default()
-                        };
-                        if let Some(slot) = entry.slot {
-                            self.params.file_select.set_value(slot as i32);
-                        }
-                    }
-                    Err(e) => {
-                        *self.params.status.lock() = ModelStatus {
-                            state: ModelState::Error(e),
-                            ..ModelStatus::default()
-                        };
-                    }
-                }
-            }
-            Resolved::Missing {
-                name,
-                path,
-                source,
-                file_changed,
-            } => {
-                *self.params.status.lock() = ModelStatus {
-                    state: ModelState::Missing {
-                        name,
-                        path,
-                        source,
-                        file_changed,
-                        at_slot,
-                    },
-                    ..ModelStatus::default()
-                };
             }
         }
     }
@@ -268,13 +185,12 @@ impl ResonancePlugin for ResonanceAmp {
         self.input_scratch_r = vec![0.0; max_buffer_size as usize];
         self.viz.store_engine_sample_rate(sample_rate);
 
-        // Bring the shared index up to date (a full scan once per process,
-        // a `stat` of library.json after that), then resolve the saved
-        // reference and block on loading it, so the first `process` call
-        // has an active model to run. A reference that resolves into the
-        // library also re-derives `file_select` from it: in a project the
-        // reference wins over a stale slot value.
-        self.params.library.ensure_scanned();
+        // Resolve the saved reference against the cached index and block
+        // on loading it, so the first `process` call has an active model to
+        // run. A reference that resolves into the library also re-derives
+        // `file_select` from it: in a project the reference wins over a
+        // stale slot value. Read-only: activation never scans or writes the
+        // library (scans happen off this thread, on demand).
         self.restore_model();
 
         // Baseline the change detector against what the selector ACTUALLY
@@ -383,7 +299,6 @@ impl ResonancePlugin for ResonanceAmp {
         }
     }
 
-
     fn extra_state_saver(&self) -> Option<Arc<dyn resonance_plugin::plugin::ExtraStateSaver>> {
         Some(self.presets.clone())
     }
@@ -431,12 +346,17 @@ impl resonance_plugin::ParamTextSource for AmpParamText {
 /// can serialize it while the plugin is in the audio processor.
 struct AmpExtraState {
     model_ref: Arc<Mutex<ModelRef>>,
+    pending_ref: Arc<Mutex<Option<ModelRef>>>,
 }
 
 impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
-        self.model_ref.lock().save_into(&mut map);
+        // A reference not resolved yet is what is about to play.
+        match self.pending_ref.lock().clone() {
+            Some(pending) => pending.save_into(&mut map),
+            None => self.model_ref.lock().save_into(&mut map),
+        }
         map
     }
 
@@ -444,8 +364,11 @@ impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
         // A v1 document carries only `model_path`; the other keys are
         // optional. A document with no `model_path` at all leaves the
         // reference alone, as before v2.
+        // Never written straight into what plays: `initialize` (inactive)
+        // or the loader thread (active) resolves it and records the
+        // outcome, so `save_state` never names a model that is not playing.
         if let Some(reference) = ModelRef::load_from(state) {
-            *self.model_ref.lock() = reference;
+            *self.pending_ref.lock() = Some(reference);
         }
     }
 }

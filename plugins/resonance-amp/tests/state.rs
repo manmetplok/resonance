@@ -28,6 +28,23 @@ use serde_json::{json, Value};
 
 type Plugin = ResonanceAmp;
 
+/// Point every amp this binary builds at a per-process temporary library,
+/// so no test reads (or writes) the user's real model library. Idempotent;
+/// no environment variable, so no `setenv` race with the harness threads.
+fn hermetic() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let base = std::env::temp_dir().join(format!("resonance-amp-hermetic-{}", std::process::id()));
+        resonance_amp::library::override_default_roots(base.join("models"), base.join("marks"));
+    });
+}
+
+/// `Plugin::new()` against the hermetic library.
+fn new_plugin() -> Plugin {
+    hermetic();
+    <Plugin as ResonancePlugin>::new()
+}
+
 const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK: usize = 256;
 
@@ -123,7 +140,7 @@ fn run_blocks(plugin: &mut Plugin, blocks: usize) {
 /// **active**: initialized against a real sample rate and several blocks into
 /// a session.
 fn running() -> Plugin {
-    let mut plugin = Plugin::new();
+    let mut plugin = new_plugin();
     plugin.initialize(SAMPLE_RATE, BLOCK as u32);
     run_blocks(&mut plugin, 4);
     plugin
@@ -153,7 +170,7 @@ fn hostile_state(plugin: &Plugin) -> Vec<u8> {
 
 #[test]
 fn every_declared_param_survives_a_save_load_round_trip() {
-    let src = Plugin::new();
+    let src = new_plugin();
     let expected = detune_all(&src);
 
     let state = state_of(&src);
@@ -163,18 +180,18 @@ fn every_declared_param_survives_a_save_load_round_trip() {
         "every declared parameter must be written, including hidden ones"
     );
 
-    let mut dst = Plugin::new();
+    let mut dst = new_plugin();
     assert!(dst.load_state(&serde_json::to_vec(&state).unwrap()));
     assert_eq!(snapshot(&dst), expected);
 }
 
 #[test]
 fn re_saving_a_loaded_state_reproduces_it_exactly() {
-    let src = Plugin::new();
+    let src = new_plugin();
     detune_all(&src);
     let first = state_of(&src);
 
-    let mut dst = Plugin::new();
+    let mut dst = new_plugin();
     assert!(dst.load_state(&serde_json::to_vec(&first).unwrap()));
     assert_eq!(
         state_of(&dst),
@@ -200,11 +217,11 @@ fn re_saving_a_loaded_state_reproduces_it_exactly() {
 /// while playing the old one.
 #[test]
 fn a_state_blob_restores_the_same_values_into_a_running_and_a_fresh_instance() {
-    let src = Plugin::new();
+    let src = new_plugin();
     detune_all(&src);
     let bytes = src.save_state();
 
-    let mut fresh = Plugin::new();
+    let mut fresh = new_plugin();
     assert!(fresh.load_state(&bytes));
 
     let mut active = running();
@@ -222,9 +239,9 @@ fn a_state_blob_restores_the_same_values_into_a_running_and_a_fresh_instance() {
 /// back to the declared bounds.
 #[test]
 fn out_of_range_state_is_clamped_the_same_way_running_or_fresh() {
-    let bytes = hostile_state(&Plugin::new());
+    let bytes = hostile_state(&new_plugin());
 
-    let mut fresh = Plugin::new();
+    let mut fresh = new_plugin();
     assert!(fresh.load_state(&bytes));
 
     let mut active = running();
@@ -252,7 +269,7 @@ fn out_of_range_state_is_clamped_the_same_way_running_or_fresh() {
 
 #[test]
 fn state_written_before_the_version_field_still_restores_every_param() {
-    let src = Plugin::new();
+    let src = new_plugin();
     let expected = detune_all(&src);
     let mut state = state_of(&src);
     assert!(
@@ -262,7 +279,7 @@ fn state_written_before_the_version_field_still_restores_every_param() {
     );
     state.as_object_mut().unwrap().remove("version");
 
-    let mut dst = Plugin::new();
+    let mut dst = new_plugin();
     assert!(dst.load_state(&serde_json::to_vec(&state).unwrap()));
     assert_eq!(snapshot(&dst), expected);
 }
@@ -272,7 +289,7 @@ fn state_written_before_the_version_field_still_restores_every_param() {
 /// being refused whole because of the version or the extra keys.
 #[test]
 fn state_from_an_unknown_future_version_still_restores_every_shared_param() {
-    let src = Plugin::new();
+    let src = new_plugin();
     let expected = detune_all(&src);
     let mut state = state_of(&src);
     {
@@ -285,7 +302,7 @@ fn state_from_an_unknown_future_version_still_restores_every_shared_param() {
         .unwrap()
         .insert("a_future_param".to_string(), json!(1.0));
 
-    let mut dst = Plugin::new();
+    let mut dst = new_plugin();
     assert!(dst.load_state(&serde_json::to_vec(&state).unwrap()));
     assert_eq!(snapshot(&dst), expected);
 }
@@ -303,7 +320,7 @@ fn the_loaded_preset_identity_survives_a_round_trip() {
 
     let bytes = serde_json::to_vec(&json!({ "params": {}, "preset": identity })).unwrap();
 
-    let mut plugin = Plugin::new();
+    let mut plugin = new_plugin();
     assert!(plugin.load_state(&bytes));
 
     assert_eq!(state_of(&plugin).get("preset"), Some(&identity));
@@ -313,7 +330,7 @@ fn the_loaded_preset_identity_survives_a_round_trip() {
 /// must leave the picker empty rather than inventing an identity.
 #[test]
 fn state_without_a_preset_key_leaves_no_identity_behind() {
-    let mut plugin = Plugin::new();
+    let mut plugin = new_plugin();
     assert!(plugin.load_state(
         &serde_json::to_vec(&json!({
             "params": {},
@@ -344,7 +361,7 @@ fn the_model_path_survives_a_round_trip_alongside_the_preset_identity() {
     }))
     .unwrap();
 
-    let mut plugin = Plugin::new();
+    let mut plugin = new_plugin();
     assert!(plugin.load_state(&bytes));
 
     let state = state_of(&plugin);
@@ -362,7 +379,7 @@ fn loading_state_with_an_empty_model_path_clears_the_loaded_one() {
     let stale = serde_json::to_vec(&json!({ "params": {}, "model_path": "/stale/model.nam" }));
     let empty = serde_json::to_vec(&json!({ "params": {}, "model_path": "" }));
 
-    let mut plugin = Plugin::new();
+    let mut plugin = new_plugin();
     assert!(plugin.load_state(&stale.unwrap()));
     assert!(plugin.load_state(&empty.unwrap()));
     assert_eq!(state_of(&plugin).get("model_path"), Some(&json!("")));
@@ -403,6 +420,7 @@ impl HostHandlers for TestHost {
 
 /// This plugin behind the real CLAP C ABI, in-process.
 fn hosted() -> PluginInstance<TestHost> {
+    hermetic();
     let entry = PluginEntry::load_from_clack::<SinglePluginEntry<ClapBridge<Plugin>>>(
         c"resonance-amp-state.clap",
     )
@@ -481,7 +499,7 @@ fn non_param_state() -> Vec<(String, Value)> {
 /// A complete saved document — every parameter off its default plus the
 /// non-param state — and what each parameter must come back as, in host order.
 fn full_document() -> (Vec<u8>, Vec<(String, f64)>) {
-    let src = Plugin::new();
+    let src = new_plugin();
     let expected = detune_all(&src);
     let mut state = state_of(&src);
     let obj = state.as_object_mut().unwrap();
@@ -591,6 +609,40 @@ fn a_document_loaded_while_active_lands_every_declared_param() {
             "`{id}` was lost when the plugin was deactivated"
         );
     }
+}
+
+/// While active, the plugin object lives in the audio processor, where the
+/// bridge cannot reach its params; `ResonancePlugin::param_text_source` is
+/// what keeps a live instance's text honest — a gain reads in dB and parses
+/// its own text back, instead of printing a bare number and parsing
+/// nothing (nam-model-library.md §9.2).
+#[test]
+fn an_active_instance_still_converts_parameter_text_both_ways() {
+    let mut instance = hosted();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginParams>()
+        .expect("the bridge must expose the params extension");
+    let gain = ClapId::new(stable_hash("output_gain"));
+    let mut buf = [0u8; 128];
+    let text = ext
+        .value_to_text(&mut instance.plugin_handle(), gain, 0.5, &mut buf)
+        .expect("value_to_text while active")
+        .to_vec();
+    let text = String::from_utf8(text).unwrap();
+    assert!(text.ends_with("dB"), "the plugin's own formatting, not a bare number: {text:?}");
+    let c = std::ffi::CString::new(text.clone()).unwrap();
+    let back = ext
+        .text_to_value(&mut instance.plugin_handle(), gain, &c)
+        .expect("text_to_value while active");
+    assert!((back - 0.5).abs() < 1e-3, "{text:?} parsed back to {back}");
+    let select = ClapId::new(stable_hash("file_select"));
+    let c = std::ffi::CString::new("slot 12").unwrap();
+    assert_eq!(ext.text_to_value(&mut instance.plugin_handle(), select, &c), Some(12.0));
+    instance.deactivate(processor);
 }
 
 /// The non-param state is the part the active path handles separately from the

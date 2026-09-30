@@ -119,7 +119,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                 .size(11.0)
                 .color(theme::TEXT_DIM),
         );
-        let redownloaded = app.redownload_notice.lock().clone();
+        let redownloaded = actions::live_notice(app);
         if let Some(notice) = redownloaded
             .as_ref()
             .or(status.notice.as_ref())
@@ -162,8 +162,23 @@ pub(crate) fn format_khz(hz: f32) -> String {
     }
 }
 
+/// ◀/▶ from the header (or a test): step through the Library view from
+/// the playing model.
+pub(crate) fn step_from_header(app: &mut AmpEditorApp, delta: i32) {
+    app.refresh_rows();
+    let loaded = {
+        let st = app.params.status.lock();
+        (st.state == crate::model_ref::ModelState::Loaded)
+            .then(|| st.id.clone())
+            .flatten()
+    };
+    step(app, loaded.as_deref(), delta);
+}
+
 fn step(app: &mut AmpEditorApp, loaded_id: Option<&str>, delta: i32) {
     if let Some(slot) = step_in_view(&app.browser, &app.rows, loaded_id, delta) {
-        actions::load_slot(app, slot);
+        // Browsing, not a pick: no Recent bump (it would re-sort a
+        // "Recently used" view under the stepping).
+        actions::load_slot(app, slot, actions::LoadKind::Browse);
     }
 }

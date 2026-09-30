@@ -71,9 +71,6 @@ impl EditorFactory for AmpEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
-        // The Library panel and the Tone3000 tab's "Installed" labels read
-        // the index.
-        self.params.library.ensure_scanned();
         let tone3000 = self
             .tone3000
             .lock()

@@ -20,7 +20,7 @@ use std::thread::JoinHandle;
 
 use resonance_plugin::Mailbox;
 
-use crate::model_ref::{ModelRef, ModelState};
+use crate::model_ref::{resolve_model, ModelRef, ModelState, ModelStatus, Resolved};
 use crate::nam::{self, NamInference};
 use crate::params::AmpParams;
 use crate::viz::{AmpViz, CURVE_POINTS};
@@ -126,61 +126,214 @@ pub fn prepare_model(path: &str, viz: &AmpViz) -> Result<Box<dyn NamInference>, 
 
 fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
+        // A state loaded while active (a project's amp restored into a
+        // running instance, an undo, a host preset) comes first, and the
+        // slot request its `file_select` raised is superseded by it: the
+        // reference's content id is the authority, not the slot number.
+        let pending = deps.params.pending_ref.lock().take();
+        if let Some(reference) = pending {
+            deps.load_request.store(-1, Ordering::Release);
+            if let Some(model) = apply_reference(&deps.params, &deps.viz, reference, true) {
+                deps.mailbox.post(model);
+            }
+            continue;
+        }
+
         let slot = deps.load_request.swap(-1, Ordering::AcqRel);
         if slot < 0 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
         }
-
-        // Slot → file, under the shared library's read lock. An empty slot
-        // means "no model" (§5.1): nothing is loaded, and — unlike the old
-        // directory index — nothing is clamped onto the last entry, and
-        // what is playing keeps playing.
-        let mut entry = deps.params.library.read().by_slot(slot as u32).cloned();
-        if entry.as_ref().is_none_or(|e| !e.path.is_file()) {
-            // With no editor open nothing polls the library, so a request
-            // for a slot this process has not seen filled (another process
-            // downloaded into it), or whose file went away, refreshes it
-            // first.
-            if let Err(e) = deps.params.library.rescan() {
-                tracing::warn!("model library rescan failed: {e}");
-            }
-            entry = deps.params.library.read().by_slot(slot as u32).cloned();
-        }
-        let Some(entry) = entry else {
-            deps.params.status.lock().state = ModelState::EmptySlot(slot as u32);
-            continue;
-        };
-        let path = entry.path.to_string_lossy().into_owned();
-
-        match prepare_model(&path, &deps.viz) {
-            Ok(model) => {
-                deps.mailbox.post(model);
-                // Recorded after the load, so the reference `save_state`
-                // persists is always the model that is actually playing. A
-                // blocking lock, not `try_lock`: this is the loader thread,
-                // and a lost write here would silently revert the model on
-                // the next activation.
-                *deps.params.model_ref.lock() = ModelRef::from_entry(&entry);
-                deps.params
-                    .library
-                    .set_usage(deps.params.instance_id, Some(&entry.id));
-                let mut st = deps.params.status.lock();
-                st.name = entry.name.clone();
-                st.id = Some(entry.id.clone());
-                st.state = ModelState::Loaded;
-                st.external = false;
-                st.deleted = false;
-                st.notice = None;
-            }
-            Err(e) => {
-                tracing::warn!("failed to load NAM model {path}: {e}");
-                deps.params.status.lock().state = ModelState::Error(e);
-            }
+        if let Some(model) = load_slot(&deps.params, &deps.viz, slot as u32) {
+            deps.mailbox.post(model);
         }
     }
 }
 
+/// Load library slot `slot`, recording what plays. `None` when nothing is
+/// to be installed: an empty slot (loads nothing, unloads nothing), a
+/// failed load (what was playing keeps playing), or the model already
+/// playing.
+fn load_slot(params: &AmpParams, viz: &AmpViz, slot: u32) -> Option<Box<dyn NamInference>> {
+    let mut entry = params.library.read().by_slot(slot).cloned();
+    if entry.as_ref().is_none_or(|e| !e.path.is_file()) {
+        // With no editor open nothing polls the library, so a request for
+        // a slot this process has not seen filled (another process
+        // downloaded into it), or whose file went away, refreshes it first
+        // — throttled, so automation over empty slots does not rescan per
+        // step.
+        if params.library.rescan_for_miss() {
+            entry = params.library.read().by_slot(slot).cloned();
+        }
+    }
+    let Some(entry) = entry else {
+        params.status.lock().state = ModelState::EmptySlot(slot);
+        return None;
+    };
+    {
+        let st = params.status.lock();
+        if st.state == ModelState::Loaded && st.id.as_deref() == Some(entry.id.as_str()) && !st.external {
+            // Same bytes already playing (e.g. the slot a state restore
+            // just re-derived): nothing to swap.
+            return None;
+        }
+    }
+    let path = entry.path.to_string_lossy().into_owned();
+    match prepare_model(&path, viz) {
+        Ok(model) => {
+            // Recorded after the load, so the reference `save_state`
+            // persists is always the model that is actually playing.
+            *params.model_ref.lock() = ModelRef::from_entry(&entry);
+            params.library.set_usage(params.instance_id, Some(&entry.id));
+            *params.status.lock() = ModelStatus {
+                name: entry.name.clone(),
+                id: Some(entry.id.clone()),
+                state: ModelState::Loaded,
+                ..ModelStatus::default()
+            };
+            Some(model)
+        }
+        Err(e) => {
+            tracing::warn!("failed to load NAM model {path}: {e}");
+            params.status.lock().state = ModelState::Error(e);
+            None
+        }
+    }
+}
+
+/// An identity "model": what an active instance swaps to when a restored
+/// reference names nothing, or a model that is missing, so what plays is
+/// what the saved state says (a clean signal) without dropping the old
+/// model on the audio thread — the swap fader retires it to its janitor.
+pub(crate) struct Passthrough;
+
+impl NamInference for Passthrough {
+    fn process_sample(&mut self, input: f32) -> f32 {
+        input
+    }
+
+    fn reset(&mut self) {}
+}
+
+/// Resolve a saved `reference` against the library (nam-model-library.md
+/// §5.2), prepare what it names, and record the outcome in `params`: the
+/// reference `save_state` persists, the status, the usage count and a
+/// re-derived `file_select`. Returns the model to install.
+///
+/// `active` is whether a model may already be playing: then a reference
+/// that resolves to nothing, or to a missing or unloadable model, installs
+/// a [`Passthrough`], so what plays matches what is saved; and a reference
+/// to the model already playing installs nothing.
+///
+/// The reference is written only once its outcome is known: after a
+/// successful load (filled in from the library entry), or verbatim when
+/// the model is missing, so a re-save loses nothing.
+pub(crate) fn apply_reference(
+    params: &AmpParams,
+    viz: &AmpViz,
+    reference: ModelRef,
+    active: bool,
+) -> Option<Box<dyn NamInference>> {
+    let at_slot = params.file_select.value();
+    let resolved = {
+        let lib = params.library.read();
+        resolve_model(&reference, &lib, |p| params.library.content_id(p))
+    };
+    let silence = || -> Option<Box<dyn NamInference>> { active.then(|| Box::new(Passthrough) as _) };
+    let (path, entry, notice) = match resolved {
+        Resolved::Nothing => {
+            *params.model_ref.lock() = reference;
+            *params.status.lock() = ModelStatus::default();
+            params.library.set_usage(params.instance_id, None);
+            return silence();
+        }
+        Resolved::Missing {
+            name,
+            path,
+            source,
+            file_changed,
+        } => {
+            *params.model_ref.lock() = reference;
+            *params.status.lock() = ModelStatus {
+                state: ModelState::Missing {
+                    name,
+                    path,
+                    source,
+                    file_changed,
+                    at_slot,
+                },
+                ..ModelStatus::default()
+            };
+            params.library.set_usage(params.instance_id, None);
+            return silence();
+        }
+        Resolved::Load { path, entry } => (path, entry, None),
+        Resolved::Relinked { entry } => {
+            let notice = format!("Relinked: {} (file had moved)", entry.name);
+            (entry.path.clone(), Some(entry), Some(notice))
+        }
+    };
+
+    let path_str = path.to_string_lossy().into_owned();
+    let id = entry
+        .as_ref()
+        .map(|e| e.id.clone())
+        .or_else(|| params.library.content_id(&path));
+    // A file with the same bytes as a library entry is that model, wherever
+    // it sits; only one the library has nothing like is external.
+    let external = entry.is_none();
+    let slot = entry.as_ref().and_then(|e| e.slot);
+
+    let already = active && {
+        let st = params.status.lock();
+        st.state == ModelState::Loaded && st.id.is_some() && st.id == id
+    };
+    let model = if already {
+        None
+    } else {
+        match prepare_model(&path_str, viz) {
+            Ok(m) => Some(m),
+            Err(e) => {
+                tracing::warn!("failed to load NAM model {path_str}: {e}");
+                *params.model_ref.lock() = reference;
+                *params.status.lock() = ModelStatus {
+                    state: ModelState::Error(e),
+                    ..ModelStatus::default()
+                };
+                params.library.set_usage(params.instance_id, None);
+                return silence();
+            }
+        }
+    };
+
+    // What plays now; record it.
+    let mut saved = match &entry {
+        Some(e) => ModelRef::from_entry(e),
+        None => reference.clone(),
+    };
+    saved.path = path_str;
+    if saved.id.is_none() {
+        saved.id = id.clone();
+    }
+    *params.model_ref.lock() = saved;
+    if let Some(slot) = slot {
+        params.file_select.set_value(slot as i32);
+    }
+    *params.status.lock() = ModelStatus {
+        name: entry
+            .as_ref()
+            .map(|e| e.name.clone())
+            .unwrap_or_else(|| reference.display_name()),
+        id: id.clone(),
+        state: ModelState::Loaded,
+        external,
+        external_slot: external.then(|| params.file_select.value()),
+        notice,
+        ..ModelStatus::default()
+    };
+    params.library.set_usage(params.instance_id, id.as_deref());
+    model
+}
 
 /// Best-effort text for a `catch_unwind` payload. `panic!` payloads are
 /// almost always `&str` (a string-literal message) or `String` (a

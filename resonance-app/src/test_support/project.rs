@@ -79,6 +79,31 @@ impl Resonance {
         self.settings.autosave = settings;
     }
 
+    #[doc(hidden)]
+    /// Test-only: point this app's `amp_models.*` handlers at `models` /
+    /// `marks` (every test app already gets private temporary ones; this is
+    /// for a test that seeds its own). No environment variable involved.
+    pub fn test_set_amp_library_roots(&mut self, models: std::path::PathBuf, marks: std::path::PathBuf) {
+        self.control.amp_library = crate::update::control::AmpLibraryCache::new(
+            crate::update::control::AmpLibraryRoots {
+                models: Some(models),
+                marks: Some(marks),
+            },
+        );
+    }
+
+    /// Test-only: the `amp_models.*` roots this app uses.
+    #[doc(hidden)]
+    pub fn test_amp_library_roots(&self) -> crate::update::control::AmpLibraryRoots {
+        self.control.amp_library.roots.clone()
+    }
+
+    /// Test-only: run the tick's deferred-label expiry as of `now`.
+    #[doc(hidden)]
+    pub fn test_expire_pending_labels(&mut self, now: std::time::Instant) {
+        crate::update::control::expire_pending_labels(self, now);
+    }
+
     /// Test-only: swap in a command-capturing engine and hand back the
     /// receiver its [`send`](resonance_audio::AudioEngine::send) calls
     /// queue onto. Lets `tests/aux_send_handlers.rs` assert the exact

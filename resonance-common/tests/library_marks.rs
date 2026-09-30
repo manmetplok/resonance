@@ -192,9 +192,119 @@ fn a_corrupt_file_is_quarantined_and_the_store_starts_empty() {
     std::fs::write(dir.join("marks.json"), b"{ not json").unwrap();
     let mut store = MarksStore::open(&dir).unwrap();
     assert_eq!(store.iter().count(), 0);
-    assert!(dir.join("marks.json.corrupt").exists());
+    assert!(
+        !dir.join("marks.json.corrupt").exists(),
+        "a reader never quarantines: a writer may be mid-install"
+    );
     store.set_favorite("amp-model:x", true).unwrap();
+    assert!(dir.join("marks.json.corrupt").exists(), "the next write, under the lock, does");
     assert!(MarksStore::open(&dir).unwrap().is_favorite("amp-model:x"));
+}
+
+#[test]
+fn a_mutation_that_changes_nothing_writes_nothing() {
+    let dir = temp_dir("noop");
+    let mut store = MarksStore::open(&dir).unwrap();
+    // On a fresh dir: no directory entry, no lock file, no marks file.
+    store.set_favorite("amp-model:x", false).unwrap();
+    store.remove_tag("amp-model:x", "nope").unwrap();
+    assert_eq!(
+        store.prune_orphans(kind::AMP_MODEL, |_| true, T0).unwrap(),
+        0
+    );
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing was created");
+
+    store.set_favorite("amp-model:x", true).unwrap();
+    let gen = store.generation();
+    let before = std::fs::metadata(store.path()).unwrap().modified().unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    store.set_favorite("amp-model:x", true).unwrap();
+    store.add_tag("amp-model:x", "").unwrap();
+    assert_eq!(store.generation(), gen, "a no-op is not a write");
+    assert_eq!(std::fs::metadata(store.path()).unwrap().modified().unwrap(), before);
+}
+
+#[test]
+fn prune_on_a_missing_library_dir_creates_nothing() {
+    let dir = temp_dir("prune-missing").join("not-yet");
+    let mut store = MarksStore::open(&dir).unwrap();
+    assert_eq!(store.prune_orphans(kind::AMP_MODEL, |_| false, T0).unwrap(), 0);
+    assert!(!dir.exists());
+}
+
+#[test]
+fn a_newer_files_version_is_kept_on_write() {
+    let dir = temp_dir("version");
+    std::fs::write(dir.join("marks.json"), r#"{"version":7,"generation":1,"items":{}}"#).unwrap();
+    let mut store = MarksStore::open(&dir).unwrap();
+    store.set_favorite("amp-model:x", true).unwrap();
+    let doc: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(store.path()).unwrap()).unwrap();
+    assert_eq!(doc["version"], 7, "an older build must not downgrade a newer file");
+}
+
+#[test]
+fn a_filesystem_without_locks_is_recognised() {
+    use resonance_common::library_marks::lock_error_is_unsupported;
+    assert!(lock_error_is_unsupported(&std::io::Error::from(
+        std::io::ErrorKind::Unsupported
+    )));
+    #[cfg(target_os = "linux")]
+    assert!(lock_error_is_unsupported(&std::io::Error::from_raw_os_error(37)));
+    assert!(!lock_error_is_unsupported(&std::io::Error::from(
+        std::io::ErrorKind::PermissionDenied
+    )));
+}
+
+#[test]
+fn two_stores_in_two_threads_lose_no_write() {
+    // The lock is what makes this pass: without it about half of the 400
+    // writes are lost to interleaved read-modify-writes.
+    let dir = temp_dir("threads");
+    let writers: Vec<_> = ["a", "b"]
+        .into_iter()
+        .map(|tag| {
+            let dir = dir.clone();
+            std::thread::spawn(move || {
+                let mut store = MarksStore::open(&dir).unwrap();
+                for i in 0..200 {
+                    store.set_favorite(&format!("amp-model:{tag}-{i}"), true).unwrap();
+                }
+            })
+        })
+        .collect();
+    for w in writers {
+        w.join().unwrap();
+    }
+    let store = MarksStore::open(&dir).unwrap();
+    assert_eq!(store.iter_kind(kind::AMP_MODEL).count(), 400);
+    assert_eq!(store.generation(), 400);
+}
+
+#[test]
+fn shared_marks_readers_see_writes_and_never_wait_on_them() {
+    use resonance_common::library_marks::SharedMarks;
+    let dir = temp_dir("shared-threads");
+    let shared = std::sync::Arc::new(SharedMarks::open(&dir).unwrap());
+    let writer = {
+        let shared = shared.clone();
+        std::thread::spawn(move || {
+            for i in 0..100 {
+                shared.set_favorite(&format!("amp-model:{i}"), true).unwrap();
+            }
+        })
+    };
+    let mut last = 0;
+    while !writer.is_finished() {
+        let g = shared.generation();
+        assert!(g >= last, "the generation never goes backwards");
+        last = g;
+        let _ = shared.snapshot().iter().count();
+    }
+    writer.join().unwrap();
+    assert_eq!(shared.generation(), 100);
+    assert_eq!(shared.snapshot().iter().count(), 100);
+    assert!(shared.is_favorite("amp-model:42"));
 }
 
 #[test]
@@ -370,7 +480,16 @@ fn the_freshness_poll_is_rate_limited_and_sees_changes() {
 /// Environment variables that turn `marks_child_writer` into a worker.
 const CHILD_DIR: &str = "RESONANCE_MARKS_CHILD_DIR";
 const CHILD_TAG: &str = "RESONANCE_MARKS_CHILD_TAG";
-const WRITES_PER_CHILD: usize = 40;
+const WRITES_PER_CHILD: usize = 150;
+
+/// Wait for the parent's go file, so both children start writing at once.
+fn wait_for_go(dir: &std::path::Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !dir.join("go").exists() {
+        assert!(Instant::now() < deadline, "the parent never said go");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
 
 /// Not a test on its own: the parent below re-runs this binary with
 /// `--ignored --exact marks_child_writer`, and the env vars make it write
@@ -382,7 +501,10 @@ fn marks_child_writer() {
     else {
         return;
     };
-    let mut store = MarksStore::open(PathBuf::from(dir)).unwrap();
+    let dir = PathBuf::from(dir);
+    let marks = dir.join("marks");
+    let mut store = MarksStore::open(&marks).unwrap();
+    wait_for_go(&dir);
     for i in 0..WRITES_PER_CHILD {
         store
             .set_favorite(&format!("amp-model:{tag}-{i}"), true)
@@ -405,10 +527,13 @@ fn two_processes_writing_different_items_lose_nothing() {
                 .expect("spawn child test process")
         })
         .collect();
+    // Both children are up and parked on the barrier before either writes.
+    std::thread::sleep(Duration::from_millis(300));
+    std::fs::write(dir.join("go"), b"").unwrap();
     for mut child in children {
         assert!(child.wait().unwrap().success(), "child writer failed");
     }
-    let store = MarksStore::open(&dir).unwrap();
+    let store = MarksStore::open(dir.join("marks")).unwrap();
     let count = store.iter_kind(kind::AMP_MODEL).count();
     assert_eq!(
         count,

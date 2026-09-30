@@ -119,6 +119,8 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
         let task = crate::engine_events::handle_engine_event(r, event);
         tasks.push(task);
     }
+    // A `*.set_plugin_param` label whose plugin never answered.
+    crate::update::control::expire_pending_labels(r, std::time::Instant::now());
     update_vu_meters(r);
     poll_ab_meters(r);
     sync_tempo_at_playhead(r);

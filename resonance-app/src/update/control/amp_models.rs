@@ -6,125 +6,107 @@
 //! records no undo entry and never bumps `revision`. The app reads the same
 //! files the amp plugin does (`resonance_common::nam_library` and the
 //! shared `library_marks` store), so no amp instance has to be running.
-//! The search is the plugin's own: the shared `library_view::BrowserModel`
-//! over the same rows.
+//! The rows and the search are the plugin's own
+//! (`resonance_plugin::nam_rows` over the shared `BrowserModel`), so a
+//! query means the same here as in the amp's Library panel.
+//!
+//! The roots come from the app ([`AmpLibraryRoots`]): the user's data dir
+//! in the real app, a private temporary one in every `new_for_test*` app.
+//! The library is opened once and kept; a request re-reads the index only
+//! when it changed on disk (one `stat`), and rescans only when a file
+//! moved — an unchanged library is answered without hashing, locking or
+//! writing anything.
 
-use resonance_common::library_marks::{Marks, MarksStore};
+use std::path::PathBuf;
+
+use resonance_common::library_marks::SharedMarks;
 use resonance_common::nam_library::{self, Entry, EntryStatus, Library, Source};
-use resonance_control::methods::amp_models::{self, AmpModelEntry, AmpModelList, AmpModelSource};
+use resonance_control::methods::amp_models::{
+    self, AmpModelEntry, AmpModelList, AmpModelSource, AmpModelStatus,
+};
 use resonance_control::{Request, Response, RpcError};
-use resonance_plugin::library_view::{BrowserModel, LibraryRows};
+use resonance_plugin::library_view::BrowserModel;
+use resonance_plugin::nam_rows::ModelRows;
 
 use super::reply::{failure, success};
 use crate::Resonance;
 
+/// Where the app's `amp_models.*` handlers find the model library and the
+/// marks store.
+#[derive(Debug, Clone, Default)]
+pub struct AmpLibraryRoots {
+    pub models: Option<PathBuf>,
+    pub marks: Option<PathBuf>,
+}
+
+/// The opened library and marks, cached across requests.
+#[derive(Default)]
+pub struct AmpLibraryCache {
+    pub roots: AmpLibraryRoots,
+    library: Option<Library>,
+    marks: Option<SharedMarks>,
+}
+
+impl AmpLibraryCache {
+    pub fn new(roots: AmpLibraryRoots) -> Self {
+        Self {
+            roots,
+            library: None,
+            marks: None,
+        }
+    }
+
+    /// The library, brought up to date: opened on first use, re-read when
+    /// `library.json` changed, rescanned (hashing only new files) when a
+    /// model file moved. Touches nothing on disk when nothing changed.
+    pub fn library(&mut self) -> &Library {
+        let roots = &self.roots;
+        let lib = self.library.get_or_insert_with(|| match &roots.models {
+            Some(r) => Library::open(r),
+            None => Library::empty(),
+        });
+        if lib.root().is_some() {
+            lib.reload_if_changed();
+            if let Err(e) = lib.rescan() {
+                tracing::warn!("amp_models: library rescan failed: {e}");
+            }
+        }
+        lib
+    }
+
+    /// The marks store (picking up other processes' writes).
+    pub fn marks(&mut self) -> &SharedMarks {
+        let roots = &self.roots;
+        let marks = self.marks.get_or_insert_with(|| match &roots.marks {
+            Some(d) => SharedMarks::open(d).unwrap_or_else(|e| {
+                tracing::warn!("amp_models: marks unavailable: {e}");
+                SharedMarks::detached()
+            }),
+            None => SharedMarks::detached(),
+        });
+        marks.refresh();
+        marks
+    }
+}
+
 /// Handle an `amp_models.*` request, or `None` for another namespace.
-pub(super) fn try_handle(_app: &mut Resonance, request: &Request) -> Option<Response> {
+pub(super) fn try_handle(app: &mut Resonance, request: &Request) -> Option<Response> {
     match request.method.as_str() {
-        amp_models::LIST => Some(list(request)),
-        amp_models::SET_MARKS => Some(set_marks(request)),
+        amp_models::LIST => Some(list(app, request)),
+        amp_models::SET_MARKS => Some(set_marks(app, request)),
         _ => None,
     }
 }
 
-/// The library at its root (`RESONANCE_AMP_MODEL_DIR` or the data dir),
-/// rescanned so files added since the last scan — by the amp, a file
-/// manager or another process — are listed. Only new or changed files are
-/// hashed.
-fn open_library() -> Library {
-    let Some(root) = nam_library::default_root() else {
-        return Library::empty();
-    };
-    let mut lib = Library::open(root);
-    if let Err(e) = lib.rescan() {
-        tracing::warn!("amp_models: library rescan failed: {e}");
-    }
-    lib
-}
-
-/// The shared marks store (`RESONANCE_LIBRARY_DIR` or the data dir).
-fn open_marks() -> MarksStore {
-    MarksStore::open_default().unwrap_or_else(|e| {
-        tracing::warn!("amp_models: marks unavailable: {e}");
-        MarksStore::detached()
-    })
-}
-
-/// The library as browser rows (the amp's `library_rows` shape: the same
-/// keys, search text and facets, so a query means the same thing here as
-/// in the plugin's Library panel).
-struct Rows<'a> {
-    entries: &'a [Entry],
-    keys: Vec<String>,
-    marks: Vec<Option<Marks>>,
-}
-
-impl<'a> Rows<'a> {
-    fn new(lib: &'a Library, store: &MarksStore) -> Self {
-        let entries = lib.entries();
-        let keys = entries
-            .iter()
-            .map(|e| match &e.status {
-                EntryStatus::DuplicateOf(_) => {
-                    format!("{}#{}", nam_library::mark_key(&e.id), e.path.display())
-                }
-                _ => nam_library::mark_key(&e.id),
-            })
-            .collect();
-        let marks = entries
-            .iter()
-            .map(|e| store.get(&nam_library::mark_key(&e.id)).cloned())
-            .collect();
-        Self {
-            entries,
-            keys,
-            marks,
-        }
-    }
-}
-
-impl LibraryRows for Rows<'_> {
-    fn row_count(&self) -> usize {
-        self.entries.len()
-    }
-    fn key(&self, row: usize) -> &str {
-        &self.keys[row]
-    }
-    fn title(&self, row: usize) -> &str {
-        &self.entries[row].name
-    }
-    fn marks(&self, row: usize) -> Option<&Marks> {
-        self.marks[row].as_ref()
-    }
-    fn search_text(&self, row: usize) -> Vec<&str> {
-        let e = &self.entries[row];
-        let mut out = vec![e.file_name.as_str()];
-        for s in [&e.author, &e.gear, &e.gear_type, &e.tone_type].into_iter().flatten() {
-            out.push(s.as_str());
-        }
-        out
-    }
-    fn facet_names(&self) -> Vec<&str> {
-        vec!["gear_type", "tone_type", "author"]
-    }
-    fn facet_values(&self, row: usize, facet: &str) -> Vec<&str> {
-        let e = &self.entries[row];
-        match facet {
-            "gear_type" => e.gear_type.as_deref().into_iter().collect(),
-            "tone_type" => e.tone_type.as_deref().into_iter().collect(),
-            "author" => e.author.as_deref().into_iter().collect(),
-            "source" => vec![e.source.label()],
-            _ => Vec::new(),
-        }
-    }
-}
-
 /// The wire form of one entry with its marks.
-pub(super) fn wire_entry(e: &Entry, marks: Option<&Marks>) -> AmpModelEntry {
+pub(super) fn wire_entry(
+    e: &Entry,
+    marks: Option<&resonance_common::library_marks::Marks>,
+) -> AmpModelEntry {
     let (status, error) = match &e.status {
-        EntryStatus::Ok => ("ok", None),
-        EntryStatus::Unreadable(reason) => ("unreadable", Some(reason.clone())),
-        EntryStatus::DuplicateOf(_) => ("duplicate", None),
+        EntryStatus::Ok => (AmpModelStatus::Ok, None),
+        EntryStatus::Unreadable(reason) => (AmpModelStatus::Unreadable, Some(reason.clone())),
+        EntryStatus::DuplicateOf(_) => (AmpModelStatus::Duplicate, None),
     };
     AmpModelEntry {
         slot: e.slot,
@@ -144,21 +126,22 @@ pub(super) fn wire_entry(e: &Entry, marks: Option<&Marks>) -> AmpModelEntry {
         },
         favorite: marks.is_some_and(|m| m.favorite),
         tags: marks.map(|m| m.tags.clone()).unwrap_or_default(),
-        last_used: marks.and_then(Marks::last_used_rfc3339),
-        status: status.to_string(),
+        last_used: marks.and_then(|m| m.last_used_rfc3339()),
+        status,
         error,
     }
 }
 
 /// `amp_models.list`.
-fn list(request: &Request) -> Response {
+fn list(app: &mut Resonance, request: &Request) -> Response {
     let params: amp_models::ListParams = match super::optional_params(request) {
         Ok(p) => p,
         Err(e) => return failure(request, e),
     };
-    let lib = open_library();
-    let store = open_marks();
-    let rows = Rows::new(&lib, &store);
+    let cache = &mut app.control.amp_library;
+    let snapshot = cache.marks().snapshot();
+    let lib = cache.library();
+    let rows = ModelRows::build(lib, Some(&snapshot), (lib.generation(), snapshot.generation()));
 
     let mut view = BrowserModel::new();
     view.set_query(params.query.unwrap_or_default());
@@ -171,13 +154,17 @@ fn list(request: &Request) -> Response {
     }
     view.refresh(&rows, 1);
 
+    let matched = view.view_len();
+    let limit = params.limit.unwrap_or(usize::MAX);
     let models = view
         .view()
         .iter()
-        .map(|&r| wire_entry(&rows.entries[r], rows.marks[r].as_ref()))
+        .take(limit)
+        .map(|&r| wire_entry(&rows.rows[r].entry, rows.marks_of(r)))
         .collect();
     let result = AmpModelList {
         models,
+        matched,
         library_generation: lib.generation(),
         total: lib.len(),
     };
@@ -214,7 +201,7 @@ fn find_entry<'a>(lib: &'a Library, id: &str) -> Result<&'a Entry, RpcError> {
 /// `amp_models.set_marks` — star and/or re-tag one model in the shared
 /// marks store (the same store, key and lock the amp's Library panel
 /// uses). Per-user state: no undo entry, no `revision` bump.
-fn set_marks(request: &Request) -> Response {
+fn set_marks(app: &mut Resonance, request: &Request) -> Response {
     let params: amp_models::SetMarksParams = match request.params() {
         Ok(p) => p,
         Err(e) => return failure(request, e),
@@ -225,22 +212,21 @@ fn set_marks(request: &Request) -> Response {
             RpcError::invalid_params("nothing to set: pass favorite and/or tags"),
         );
     }
-    let lib = open_library();
-    let entry = match find_entry(&lib, &params.id) {
+    let cache = &mut app.control.amp_library;
+    let entry = match find_entry(cache.library(), &params.id) {
         Ok(e) => e.clone(),
         Err(e) => return failure(request, e),
     };
-    let mut store = open_marks();
     let tags = params
         .tags
         .as_ref()
         .map(|t| resonance_common::library_marks::normalize_tags(t));
-    let updated = store.update(&entry.mark_key(), |m| {
+    let updated = cache.marks().update(&entry.mark_key(), |m| {
         if let Some(f) = params.favorite {
             m.favorite = f;
         }
-        if let Some(t) = tags {
-            m.tags = t;
+        if let Some(t) = &tags {
+            m.tags = t.clone();
         }
     });
     match updated {
@@ -249,5 +235,39 @@ fn set_marks(request: &Request) -> Response {
             request,
             RpcError::internal(format!("could not save the marks: {e}")),
         ),
+    }
+}
+
+/// Resolve a model name (or id prefix) to its `Model Select` slot, for a
+/// label sent to Resonance Amp's selector: answered app-side from the
+/// library, with no round trip through the plugin. `Err` names why.
+pub(crate) fn slot_for_label(app: &mut Resonance, text: &str) -> Result<u32, String> {
+    let lib = app.control.amp_library.library();
+    match lib.find(text).and_then(|e| e.slot) {
+        Some(slot) => Ok(slot),
+        None => Err(format!(
+            "no single installed amp model is named {text:?} (an exact name shared by two \
+             models is ambiguous) — send its slot or id from amp_models_list"
+        )),
+    }
+}
+
+/// The app's roots: the user's data dir for the real app, a private
+/// directory under the test process's hermetic root otherwise.
+pub(crate) fn roots_for(hermetic: bool) -> AmpLibraryRoots {
+    if !hermetic {
+        return AmpLibraryRoots {
+            models: nam_library::default_root(),
+            marks: resonance_common::library_marks::default_library_dir(),
+        };
+    }
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let base = crate::user_dirs::data_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("amp-library-{n}"));
+    AmpLibraryRoots {
+        models: Some(base.join("models")),
+        marks: Some(base.join("marks")),
     }
 }

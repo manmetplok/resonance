@@ -264,11 +264,25 @@ on load (`project_no_real_users_yet`: no migration machinery).
    holds other bytes; the banner then also offers "Use the file at this
    path".
 
-The reference is written by the loader **after** a load succeeds, so what
-`save_state` persists is always what plays. `initialize` brings the shared
-index up to date first: a full scan once per process, then only a `stat`
-of `library.json`. The index's cached id is used for a file whose size and
-mtime are unchanged; only an unknown file is hashed.
+The reference is written only once its outcome is known — after a load
+succeeds, or verbatim when the model is missing — so what `save_state`
+persists is always what plays. A state load never writes it directly: it
+parks the reference (`pending_ref`, which `save_state` reports until it is
+resolved), and `initialize` (inactive) or the loader thread (active)
+resolves it with the one `apply_reference`. On the active path the saved
+content id wins over the `file_select` the same state carried, the slot is
+re-derived from the id, and a reference that resolves to nothing, to a
+missing model or to an unloadable file swaps a pass-through in (through the
+swap fader, so the old model is retired off the audio thread): a state that
+says "no model" never keeps the previous model playing under it.
+
+**Activation is read-only.** `initialize` re-reads the cached index (one
+`stat` of `library.json`) and resolves against it; it never scans, hashes
+beyond the referenced file, prunes marks or writes. The index's cached id is
+used for a file whose size and mtime (ns) are unchanged; an external file is
+hashed once per process and cached. Scans happen lazily and off the main
+thread: when an editor opens (a background job), and on the loader thread
+when a requested slot is not in the index (throttled to once per 2 s).
 
 ### 5.3 What "missing" sounds like
 
@@ -419,6 +433,11 @@ no model. It uses a `WARN`-bordered `Frame`:
 6. The **file on disk is authoritative**: a file deleted in the file manager
    is dropped at the next refresh (§8), exactly as if it had been deleted in
    the panel.
+7. `Library::delete` removes only a `.nam` file the index knows, whose
+   canonical (symlink- and `..`-resolved) path is inside the canonical root,
+   and refuses anything else before touching it — never `library.json`, a
+   sidecar, a user's file or anything outside the root. A confirmed delete
+   deletes the key that was armed; selecting another row disarms it.
 
 ## 8. Concurrency: many instances, one library
 
@@ -495,14 +514,24 @@ of `param_text` at `instance.rs:475`), before it rejects the label. Then
 works, and every stepped parameter in the fleet that has a `string_to_value`
 gains the same thing. It is one generic slice with no amp-specific method.
 
-As built: `ClapInstance::param_from_text` is the host call; the app reaches
-it through `AudioCommand::ResolvePluginParamText`, answered on the engine
-thread under the instance lock (re-enqueued, never blocking, while the
-audio thread holds it), with `AudioEngine::param_from_text` waiting at
-most 250 ms for the reply. The control reply stays synchronous, so the
-one-revision-per-call contract holds. A text the plugin rejects (or no
-answer in time) keeps the old "names no choices" error and says what the
-plugin answered.
+As built: `ClapInstance::param_from_text` is the host call. For Resonance
+Amp's Model Select the app does not ask the plugin at all: it resolves the
+name (or id prefix) with `nam_library::Library::find` against the same
+library, and an exact name two models share is refused as ambiguous
+(prefer the slot or id). For any other plugin the question goes out as
+`AudioCommand::ResolvePluginParamText { token }` and nothing waits: the
+control reply is **deferred** (the handler keeps the connection's reply
+channel) until the engine's `AudioEvent::PluginParamTextResolved { token }`
+arrives, then the request is re-run with the number, so it still costs one
+undo entry and one revision. The engine answers under the instance lock
+(re-enqueued, never blocking, while the audio thread holds it), and only
+with a value whose display round-trips to the label (`label_round_trips`:
+equal, a 3+ character prefix, or a number agreeing to the input's
+precision) — a lenient plugin that parses `"loud"` as 0 is not believed. A
+rejected label, or no answer within 3 s (checked on the tick), keeps the old
+"names no choices" error and says what happened. Model Select's `text` in
+`plugin_params` is refreshed on an app-originated set only; a pick in the
+amp's own editor is not echoed, so an agent re-reads `amp_models.list`.
 
 Both conversions also had to work on an **active** plugin: the CLAP
 bridge answered `value_to_text` / `text_to_value` only while the plugin
@@ -519,6 +548,13 @@ while active; the amp returns one over its shared `AmpParams`. So §9.1's
 |---|---|---|---|
 | `amp_models.list` | `query?`, `favorites_only?`, `gear_type?`, `tone_type?` | `[{slot, id, name, author, gear, gear_type, tone_type, architecture, sample_rate, size_bytes, source, favorite, tags, last_used, status, error?}]` + `library_generation` + `total` | Read-only, and answered above the mutation gate: no project needed, no undo entry, no `revision` bump. The app reads (and rescans) the library via `resonance_common::nam_library` and the shared marks store, the same code and files as the plugin, so it needs no running amp instance. `query` is the Library panel's own search (the shared `BrowserModel` over the same rows). Favourites first, then slot order. The agent then sets `Model Select` to `slot` (or to the name, per 9.2). |
 | `amp_models.set_marks` | `id` (or a unique 8+ character prefix), `favorite?`, `tags?` (replaces the personal tags, normalised; `[]` clears) | the updated entry | Mutates per-user state, not the project: no undo entry, and it does not bump the project `revision`. The description says so. At least one of `favorite` / `tags`; an unknown id is `not_found`. Written through the shared store's lock, so it cannot lose a concurrent star from the amp's panel. |
+
+`amp_models.list` also takes `limit` (and reports `matched`), and `status`
+is an enum (`ok` / `unreadable` / `duplicate`). The app's handlers take
+their roots from the app — the user's data dir in the real app, a private
+temporary directory in every `new_for_test*` app — keep the library open
+across calls, and rescan only when a file moved (an unchanged library is
+answered with no hashing, locking or writing).
 
 **Not on MCP** in this spec: delete, import and download. Delete removes user
 files that are outside the project and cannot be undone, and the agent loses

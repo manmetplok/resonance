@@ -15,13 +15,14 @@
 //! is monitored / record-armed. The bogus load therefore surfaces one
 //! user action later, as "arming the track swapped my amp model".
 //!
-//! Its own binary, and ONE test in it: the scratch downloads directory is
-//! selected with `XDG_DATA_HOME`, and an env var is process-wide, so the
-//! phases run in sequence rather than as parallel `#[test]`s.
+//! One test, its phases in sequence: the second phase depends on the index
+//! the first one built (activation never scans; the loader's miss rescan
+//! of phase one is what slots the downloads).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use resonance_amp::library::shared_for;
 use resonance_amp::ResonanceAmp;
 use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
 use serde_json::Value;
@@ -126,25 +127,16 @@ fn pump_until_loaded(plugin: &mut ResonanceAmp, want: &str) -> String {
 
 #[test]
 fn the_selector_only_loads_what_the_user_picked() {
-    // Copy the two A1 fixtures into a scratch downloads directory and
-    // point `XDG_DATA_HOME` at its root, so `models::models_dir()`
-    // resolves there instead of at the developer's real Tone3000
-    // downloads. `scan_directory` sorts, and `.` sorts below `_`, so
-    // `wavenet.nam` is index 0 — the file a spurious load lands on — and
-    // `wavenet_a1_standard.nam` is index 1.
+    // Copy the two A1 fixtures into a scratch library's downloads and
+    // hand the instances that library explicitly (no environment
+    // variable: `setenv` races the harness's threads). `scan_directory`
+    // sorts, and `.` sorts below `_`, so `wavenet.nam` is slot 0 — the file
+    // a spurious load lands on — and `wavenet_a1_standard.nam` is slot 1.
     let root = std::env::temp_dir().join(format!("resonance-amp-selector-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
-    std::env::set_var("XDG_DATA_HOME", &root);
-    // macOS ignores `XDG_DATA_HOME`: `dirs::data_dir()` there is
-    // `$HOME/Library/Application Support`, so redirect `HOME` too and ask
-    // `dirs` where that lands rather than hard-coding the Linux layout.
-    #[cfg(target_os = "macos")]
-    std::env::set_var("HOME", &root);
-    let models = dirs::data_dir()
-        .expect("data dir resolves under the scratch root")
-        .join("resonance/amp-models/tone3000");
-    assert!(models.starts_with(&root), "{} is not under {}", models.display(), root.display());
+    let models = root.join("tone3000");
     std::fs::create_dir_all(&models).expect("create scratch downloads dir");
+    let library = shared_for(Some(root.clone()), Some(root.join("marks")));
     let mut seeded: Vec<String> = ["wavenet.nam", "wavenet_a1_standard.nam"]
         .into_iter()
         .map(|name| {
@@ -158,7 +150,7 @@ fn the_selector_only_loads_what_the_user_picked() {
     // -- A freshly added amp -------------------------------------------
     // No persisted model, so nothing should be playing and nothing should
     // start playing on its own.
-    let mut amp = ResonanceAmp::new();
+    let mut amp = ResonanceAmp::with_library(library.clone());
     assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
     assert_eq!(
         model_path_of(&amp),
@@ -214,7 +206,7 @@ fn the_selector_only_loads_what_the_user_picked() {
         "version": 1,
     });
 
-    let mut amp = ResonanceAmp::new();
+    let mut amp = ResonanceAmp::with_library(library.clone());
     assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
     assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
     assert_eq!(

@@ -98,7 +98,7 @@ In this order, and only as far down as the problem requires:
 | A part that will not sit still | `com.resonance.compressor` on the track |
 | One part ducking under another | `mcp__resonance__track_set_sidechain` |
 | A fader move that has to happen over time (a fade, a level ride) | `mcp__resonance__automation_set_lane`, read back with `mcp__resonance__automation_lanes` |
-| The wrong guitar or bass amp tone on Resonance Amp | `mcp__resonance__amp_models_list` for the installed NAM models, then `mcp__resonance__track_set_plugin_param` on its Model Select with the model's name or slot; star the keeper with `mcp__resonance__amp_models_set_marks` |
+| The wrong guitar or bass amp tone on Resonance Amp | `mcp__resonance__amp_models_list` for the installed NAM models, then `mcp__resonance__track_set_plugin_param` on its Model Select with the model's slot (a name works only when unique); star the keeper with `mcp__resonance__amp_models_set_marks`. Model Select's `text` is only fresh after a set you made — a change in the amp's own editor is not echoed, so re-read `amp_models_list` and the slot number |
 
 Rules that hold regardless of the song:
 
