@@ -27,6 +27,7 @@ symphonia = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 dirs.workspace = true
-time.workspace = true
+# RFC 3339 timestamps in the library marks store (`library_marks`).
+time = { workspace = true, features = ["formatting", "parsing"] }
 tracing.workspace = true
 thiserror.workspace = true
