@@ -172,6 +172,9 @@ pub fn apply_search_page(state: &mut State, page: SearchPage, append: bool) {
 /// downloaded model. These come from the plugin's own state so the
 /// download → load path reuses the existing loader thread wholesale.
 pub struct PluginHooks {
+    /// The shared model library: rescanned after a download so the new
+    /// file gets its slot and its sidecar metadata.
+    pub library: Arc<crate::library::SharedLibrary>,
     pub file_list: Arc<Mutex<Vec<String>>>,
     pub model_path: Arc<Mutex<String>>,
     pub load_request: Arc<AtomicI32>,
@@ -431,6 +434,23 @@ fn finalize_download(
     let dest = dir.join(filename);
     auth::write_all_to(&dest, bytes)?;
 
+    // Provenance: everything Tone3000 knows that the file does not
+    // (nam-model-library.md §4.1). The tone is the one whose model list
+    // the download came from.
+    let tone = state
+        .lock()
+        .tones
+        .iter()
+        .find(|t| t.id == model.tone_id)
+        .cloned();
+    let sidecar = sidecar_for(model, tone.as_ref(), resonance_common::library_marks::now_unix());
+    if let Err(e) = resonance_common::nam_library::write_sidecar(&dest, &sidecar) {
+        tracing::warn!("could not write {}: {e}", dest.display());
+    }
+    if let Err(e) = hooks.library.rescan() {
+        tracing::warn!("model library rescan failed: {e}");
+    }
+
     // Rescan the directory so file_list reflects the new file, then
     // point file_select + load_request at it so the existing loader
     // thread picks it up and primes it like any manual load would.
@@ -447,7 +467,29 @@ fn finalize_download(
     Ok(())
 }
 
-fn sanitize_filename(label: &str, id: i64) -> String {
+/// The provenance sidecar for a downloaded `model` of `tone` at `now`
+/// (Unix seconds). Pure, so the mapping is testable without a network.
+pub fn sidecar_for(
+    model: &Model,
+    tone: Option<&Tone>,
+    now: i64,
+) -> resonance_common::nam_library::Sidecar {
+    resonance_common::nam_library::Sidecar {
+        source: resonance_common::nam_library::SOURCE_TONE3000.to_string(),
+        tone_id: Some(model.tone_id),
+        model_id: Some(model.id),
+        tone_title: tone.and_then(|t| t.title.clone()),
+        author: tone.map(|t| t.display_author().to_string()),
+        gear: tone.and_then(|t| t.gear.clone()),
+        model_name: model.name.clone(),
+        size: model.size.clone(),
+        downloaded_at: resonance_common::library_marks::format_timestamp(now),
+    }
+}
+
+/// The file name a download is saved under. Unchanged by the library
+/// work: existing downloads keep their names (nam-model-library.md §4.1).
+pub fn sanitize_filename(label: &str, id: i64) -> String {
     // Conservative: keep ASCII alphanumerics, `-`, `_`, `.`; replace the
     // rest with `_`. Always append the model id so downloads with the
     // same label don't collide.

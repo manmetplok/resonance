@@ -10,6 +10,7 @@ use resonance_plugin::*;
 // directly — the same entry point `process()` uses, minus the CLAP
 // buffer plumbing.
 pub mod dsp;
+pub mod library;
 mod loader;
 pub mod models;
 pub mod nam;
@@ -39,6 +40,8 @@ pub struct ResonanceAmp {
     /// chained in front of this plugin's own `AmpExtraState` so both ride
     /// along in `save_state` (ba todo #1358).
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// The model library shared by every amp in this process.
+    library: Arc<library::SharedLibrary>,
     /// Tone3000 API browser worker, lazily created on first editor open.
     /// Held as `Option` because it depends on `Arc<AmpParams>` and is only
     /// useful with the editor feature enabled.
@@ -121,6 +124,7 @@ impl ResonancePlugin for ResonanceAmp {
 
     fn new() -> Self {
         let params = Arc::new(AmpParams::default());
+        let library = library::shared();
         let load_request = Arc::new(AtomicI32::new(-1));
         // The preset identity wraps the model-path saver rather than
         // replacing it: chaining is why `with_extra` exists.
@@ -134,6 +138,7 @@ impl ResonancePlugin for ResonanceAmp {
         let tone3000 = {
             let params_for_setter = params.clone();
             let hooks = tone3000::worker::PluginHooks {
+                library: library.clone(),
                 file_list: params.file_list.clone(),
                 model_path: params.model_path.clone(),
                 load_request: load_request.clone(),
@@ -147,6 +152,7 @@ impl ResonancePlugin for ResonanceAmp {
         Self {
             params,
             presets,
+            library,
             #[cfg(feature = "editor")]
             tone3000,
             viz: AmpViz::new(),
@@ -327,6 +333,7 @@ impl ResonancePlugin for ResonanceAmp {
             self.viz.clone(),
             tone3000,
             self.presets.clone(),
+            self.library.clone(),
         )))
     }
 }

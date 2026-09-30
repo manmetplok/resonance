@@ -25,9 +25,36 @@ use std::sync::Arc;
 
 use plugin_gui_core::egui;
 
+use resonance_common::nam_library::Library;
+
 use super::theme;
 use crate::tone3000::client::ArchitectureFilter;
+use crate::tone3000::types::Model;
 use crate::tone3000::worker::{Command, Status, WorkerHandle};
+
+/// What a Tone3000 model row offers, given the local library.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelRowAction {
+    /// Not installed: download it.
+    Download,
+    /// Already installed (matched by Tone3000 model id): load the local
+    /// file instead of downloading it again.
+    Load {
+        path: std::path::PathBuf,
+        slot: Option<u32>,
+    },
+}
+
+/// The row decision for `model` (nam-model-library.md §6.2 "Tone3000 tab").
+pub fn model_row_action(model: &Model, library: &Library) -> ModelRowAction {
+    match library.tone3000_model(model.id) {
+        Some(e) => ModelRowAction::Load {
+            path: e.path.clone(),
+            slot: e.slot,
+        },
+        None => ModelRowAction::Download,
+    }
+}
 
 /// Sort modes surfaced in the UI dropdown. The string values match the
 /// exact query-string tokens tone3000.com's search API accepts.
@@ -108,7 +135,15 @@ impl Tone3000PanelState {
     }
 }
 
-pub fn draw(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
+/// Draw the overlay. Returns the path of an installed model the user asked
+/// to load from a model row, if any.
+pub fn draw(
+    ui: &mut egui::Ui,
+    panel: &mut Tone3000PanelState,
+    worker: &Arc<WorkerHandle>,
+    library: &Library,
+) -> Option<ModelRowAction> {
+    let mut picked = None;
     // Dim the underlying editor behind the overlay.
     let screen = ui.ctx().content_rect();
     ui.painter()
@@ -129,12 +164,18 @@ pub fn draw(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<Work
             frame.show(ui, |ui| {
                 ui.set_width(rect.width());
                 ui.set_height(rect.height());
-                draw_contents(ui, panel, worker);
+                picked = draw_contents(ui, panel, worker, library);
             });
         });
+    picked
 }
 
-fn draw_contents(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
+fn draw_contents(
+    ui: &mut egui::Ui,
+    panel: &mut Tone3000PanelState,
+    worker: &Arc<WorkerHandle>,
+    library: &Library,
+) -> Option<ModelRowAction> {
     draw_header(ui, panel, worker);
     ui.add_space(6.0);
     ui.separator();
@@ -167,12 +208,13 @@ fn draw_contents(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc
         }
     };
 
-    draw_results(ui, worker, &snapshot);
+    let picked = draw_results(ui, worker, &snapshot, library);
 
     if let Some(err) = snapshot.error {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(err).color(theme::DANGER).size(11.0));
     }
+    picked
 }
 
 fn draw_header(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<WorkerHandle>) {
@@ -297,7 +339,13 @@ struct Snapshot {
     has_more: bool,
 }
 
-fn draw_results(ui: &mut egui::Ui, worker: &Arc<WorkerHandle>, snap: &Snapshot) {
+fn draw_results(
+    ui: &mut egui::Ui,
+    worker: &Arc<WorkerHandle>,
+    snap: &Snapshot,
+    library: &Library,
+) -> Option<ModelRowAction> {
+    let mut picked = None;
     let Snapshot {
         status,
         tones,
@@ -377,7 +425,9 @@ fn draw_results(ui: &mut egui::Ui, worker: &Arc<WorkerHandle>, snap: &Snapshot) 
                             return;
                         }
                         for model in models {
-                            draw_model_row(ui, worker, model);
+                            if let Some(p) = draw_model_row(ui, worker, model, library) {
+                                picked = Some(p);
+                            }
                         }
                         if models.is_empty() {
                             ui.label(
@@ -390,6 +440,7 @@ fn draw_results(ui: &mut egui::Ui, worker: &Arc<WorkerHandle>, snap: &Snapshot) 
             },
         );
     });
+    picked
 }
 
 /// Heading over the tone list. Shows how many of the server's total are
@@ -465,7 +516,10 @@ fn draw_model_row(
     ui: &mut egui::Ui,
     worker: &Arc<WorkerHandle>,
     model: &crate::tone3000::types::Model,
-) {
+    library: &Library,
+) -> Option<ModelRowAction> {
+    let action = model_row_action(model, library);
+    let mut picked = None;
     let frame = egui::Frame::new()
         .fill(theme::PANEL)
         .stroke(egui::Stroke::new(1.0, theme::BORDER))
@@ -480,14 +534,27 @@ fn draw_model_row(
                     .color(theme::TEXT)
                     .size(12.0),
             );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let enabled = model.model_url.is_some();
-                ui.add_enabled_ui(enabled, |ui| {
-                    if ui.button("Download").clicked() {
-                        worker.send(Command::Download(model.clone()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match &action {
+                ModelRowAction::Download => {
+                    let enabled = model.model_url.is_some();
+                    ui.add_enabled_ui(enabled, |ui| {
+                        if ui.button("Download").clicked() {
+                            worker.send(Command::Download(model.clone()));
+                        }
+                    });
+                }
+                ModelRowAction::Load { .. } => {
+                    if ui.button("Load").clicked() {
+                        picked = Some(action.clone());
                     }
-                });
+                    ui.label(
+                        egui::RichText::new("Installed")
+                            .color(theme::ACCENT)
+                            .size(11.0),
+                    );
+                }
             });
         });
     });
+    picked
 }

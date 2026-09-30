@@ -32,6 +32,8 @@ pub(crate) struct AmpEditorApp {
     pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Transient bar state (open combo, in-progress rename), editor-only.
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
+    /// The model library shared by every amp in this process.
+    pub(crate) library: Arc<crate::library::SharedLibrary>,
 }
 
 impl EditorApp for AmpEditorApp {
@@ -59,7 +61,13 @@ impl EditorApp for AmpEditorApp {
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
 
         if self.tone3000_panel.open {
-            tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000);
+            let picked = {
+                let library = self.library.read();
+                tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000, &library)
+            };
+            if let Some(tone3000_panel::ModelRowAction::Load { path, .. }) = picked {
+                header::load_path(self, &path);
+            }
         }
     }
 }

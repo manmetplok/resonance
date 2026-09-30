@@ -34,6 +34,7 @@ pub struct AmpEditorFactory {
     viz: Arc<AmpViz>,
     tone3000: Arc<WorkerHandle>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    library: Arc<crate::library::SharedLibrary>,
 }
 
 impl AmpEditorFactory {
@@ -44,6 +45,7 @@ impl AmpEditorFactory {
         viz: Arc<AmpViz>,
         tone3000: Arc<WorkerHandle>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
+        library: Arc<crate::library::SharedLibrary>,
     ) -> Self {
         Self {
             params,
@@ -52,6 +54,7 @@ impl AmpEditorFactory {
             viz,
             tone3000,
             presets,
+            library,
         }
     }
 }
@@ -73,6 +76,8 @@ impl EditorFactory for AmpEditorFactory {
         if !self.supports(api_name, is_floating) {
             return None;
         }
+        // The Tone3000 tab's "Installed" labels read the index.
+        self.library.ensure_scanned();
         let app = AmpEditorApp {
             params: self.params.clone(),
             model_name: self.model_name.clone(),
@@ -86,6 +91,7 @@ impl EditorFactory for AmpEditorFactory {
             ),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
+            library: self.library.clone(),
         };
         let runtime = RuntimeEditor::new(
             app,

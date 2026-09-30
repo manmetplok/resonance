@@ -6,14 +6,14 @@
 //! `/api/v1/tones/search` and `/api/v1/models` bodies, so the decode
 //! path is covered too.
 
-use resonance_amp::editor::tone3000_panel::tones_heading;
+use resonance_amp::editor::tone3000_panel::{model_row_action, tones_heading, ModelRowAction};
 use resonance_amp::tone3000::auth::build_authorize_url;
 use resonance_amp::tone3000::client::{
     merge_model_pages, merge_search_pages, models_query_params, search_query_params,
     ArchitectureFilter,
 };
 use resonance_amp::tone3000::types::{Model, PaginatedResponse, Tone};
-use resonance_amp::tone3000::worker::{apply_search_page, State};
+use resonance_amp::tone3000::worker::{apply_search_page, sanitize_filename, sidecar_for, State};
 
 /// Recorded-shape search response. Field set matches what the API
 /// returns; extra keys are present on purpose so the "ignore unknown
@@ -365,4 +365,78 @@ fn heading_shows_the_real_total_not_just_what_is_loaded() {
     assert_eq!(tones_heading(25, Some(1284)), "Tones (25 of 1284)");
     assert_eq!(tones_heading(12, Some(12)), "Tones (12)");
     assert_eq!(tones_heading(3, None), "Tones (3)");
+}
+
+// ------------------------------------------------------- library (L1)
+
+fn one_model(id: i64, tone_id: i64) -> Model {
+    serde_json::from_str(&format!(
+        r#"{{"id":{id},"tone_id":{tone_id},"name":"BE100","size":"standard","model_url":"https://example.invalid/x.nam"}}"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn download_file_names_are_unchanged_by_the_library() {
+    // Existing downloads keep their names, so the migration's slot order
+    // and every stored path stay valid.
+    assert_eq!(
+        sanitize_filename("Friedman BE100 (standard)", 48121),
+        "Friedman_BE100_standard_48121.nam"
+    );
+    assert_eq!(sanitize_filename("Ünïcode!", 7), "ncode_7.nam");
+    assert_eq!(sanitize_filename("", 9), "model_9.nam");
+}
+
+#[test]
+fn a_download_sidecar_carries_the_tone_metadata_the_file_lacks() {
+    let tone: Tone = serde_json::from_str(
+        r#"{"id":1934,"title":"Friedman BE-100","gear":"amp","user":{"username":"jsmith"}}"#,
+    )
+    .unwrap();
+    let model = one_model(48121, 1934);
+    let sc = sidecar_for(&model, Some(&tone), 1_790_000_000);
+    assert_eq!(sc.source, "tone3000");
+    assert_eq!((sc.tone_id, sc.model_id), (Some(1934), Some(48121)));
+    assert_eq!(sc.tone_title.as_deref(), Some("Friedman BE-100"));
+    assert_eq!(sc.author.as_deref(), Some("jsmith"));
+    assert_eq!(sc.size.as_deref(), Some("standard"));
+    assert_eq!(sc.model_name.as_deref(), Some("BE100"));
+    assert!(sc.downloaded_at.unwrap().starts_with("2026-"));
+
+    // The tone may have scrolled out of the list: the ids still make it.
+    let bare = sidecar_for(&model, None, 0);
+    assert_eq!(bare.model_id, Some(48121));
+    assert_eq!(bare.tone_title, None);
+}
+
+#[test]
+fn an_installed_model_row_offers_load_instead_of_download() {
+    let root =
+        std::env::temp_dir().join(format!("resonance-amp-t3k-rows-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let dl = root.join("tone3000");
+    std::fs::create_dir_all(&dl).unwrap();
+    let path = dl.join("BE100_standard_48121.nam");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/a1/wavenet.nam"),
+        &path,
+    )
+    .unwrap();
+    resonance_common::nam_library::write_sidecar(
+        &path,
+        &sidecar_for(&one_model(48121, 1934), None, 0),
+    )
+    .unwrap();
+    let lib = resonance_common::nam_library::Library::open_and_scan(&root).unwrap();
+
+    assert_eq!(
+        model_row_action(&one_model(48121, 1934), &lib),
+        ModelRowAction::Load {
+            path: path.clone(),
+            slot: Some(0)
+        }
+    );
+    assert_eq!(model_row_action(&one_model(1, 1934), &lib), ModelRowAction::Download);
+    let _ = std::fs::remove_dir_all(&root);
 }

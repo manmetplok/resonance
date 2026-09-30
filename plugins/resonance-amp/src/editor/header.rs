@@ -180,6 +180,11 @@ fn load_model_clicked(app: &AmpEditorApp) {
     else {
         return;
     };
+    load_path(app, &path);
+}
+
+/// Load the model at `path` and make its directory the ◀/▶ set.
+pub(super) fn load_path(app: &AmpEditorApp, path: &Path) {
     let path_str = path.to_string_lossy().into_owned();
 
     let Some(dir) = path.parent() else {
