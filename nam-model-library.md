@@ -164,6 +164,7 @@ follow the model across renames:
 
 ```json
 { "version": 1,
+  "generation": 412,
   "items": {
     "amp-model:9f2c…": { "favorite": true, "tags": ["djent", "rhythm"], "last_used": "2026-09-30T14:02:11Z", "use_count": 12 }
   } }
@@ -171,6 +172,18 @@ follow the model across renames:
 
 The key is `<kind>:<id>`, so presets can live in the same file
 (`plugin-preset:<clap_id>:<preset id>`). §10 covers how this is shared.
+`generation` is bumped on every write; both libraries' freshness checks
+read it (plugin-preset-library.md §10.2 item 2). The store lives at
+`$XDG_DATA_HOME/resonance/library/marks.json`, overridable with
+`RESONANCE_LIBRARY_DIR`. An item whose fields are all at their defaults is
+deleted rather than stored, and the schema reserves `rating: u8?` for later.
+
+The same module carries the **seeded facet vocabulary**
+(`library_marks::vocab`, plugin-preset-library.md §4.4): `instrument`,
+`genres` and `character`. The Library panel offers `instrument`
+(`electric-guitar`, `bass`, …) and `character` values beside its own
+NAM-only `gear_type` / `tone_type` facets, and `+ tag` completion suggests
+the seeded values as well as every tag already used across kinds.
 Recents are derived from `last_used`, written when a model finishes loading
 in an instance that has an editor open or when the user picks it. It is not
 written by project-open restores, so opening an old project does not reorder
@@ -360,8 +373,9 @@ no model. It uses a `WARN`-bordered `Frame`:
    window. When instances in this process are using the model, the line says
    so: `Used by 2 open amps — they keep playing until reloaded`.
 2. **What is removed**: the `.nam`, its sidecar, and its slot, which is freed
-   under the no-reuse rule of §5.1. **Marks are kept** for 30 days, keyed by
-   content id. So a delete followed by a re-download or re-import keeps the
+   under the no-reuse rule of §5.1. **Marks are kept** for 90 days, keyed by
+   content id (the shared store's one orphan policy, plugin-preset-library.md
+   §4.5). So a delete followed by a re-download or re-import keeps the
    star and tags. A prune pass at index build drops marks older than that
    whose id is in no library entry.
 3. **Instances already playing it** keep the model in memory. Deleting does
@@ -390,24 +404,29 @@ There are two scopes:
   This also replaces the per-instance Tone3000 worker (G8) with one shared
   worker that is created lazily on first editor open.
 - **Across processes** (a second host, or a second Resonance), there is no
-  lock and no watcher dependency (the workspace has no `notify` crate, and a
-  plugin should not add inotify threads). The design instead:
+  watcher dependency (the workspace has no `notify` crate, and a plugin
+  should not add inotify threads). The design instead:
   - Writes are atomic whole-file replaces (`resonance_common::atomic_file::atomic_write`)
     of `library.json` and `marks.json`, each carrying a `generation` counter.
-  - Marks writes are **read-modify-write of the single item**. The writer
-    reloads `marks.json`, applies its one change, and writes. So two
-    processes starring different models both win, and the same item is
-    last-writer-wins.
+  - Marks writes are **read-modify-write of the single item under a lock**.
+    The writer takes an exclusive `std::fs::File::lock` on
+    `library/marks.lock`, reloads `marks.json`, applies its one change, bumps
+    `generation` and atomic-replaces the file. So two processes starring
+    different models both win, even inside the same few milliseconds, and
+    the same item is last-writer-wins. The OS releases the lock when a
+    process dies. It is never taken on the audio thread.
   - **Refresh** is poll-based and cheap. While a Library panel is open, or at
     most once per 2 s from the header, a background thread stats the root and
     its two subdirectories (mtime), `library.json` and `marks.json`. Only a
     change triggers a rescan, which hashes only files whose (size, mtime) are
     new. With no editor open, a refresh runs only at `initialize` and when a
     load is requested.
-  - Slot allocation is taken under a short advisory lock
-    (`library.json.lock`, created with `create_new`, removed after the write,
-    and treated as stale after 10 s). This is the one place where two
-    processes racing would produce two models in one slot.
+  - Slot allocation (the rescan that writes `library.json`) is taken under
+    the same primitive: an exclusive `File::lock` on `library.lock` in the
+    library root. It replaces the earlier `create_new` lockfile with a 10 s
+    staleness rule, which could break a live lock under a slow disk. This is
+    the one place where two processes racing would produce two models in one
+    slot.
 - **The audio thread** never touches any of this. `process()` still only
   compares `file_select` with its baseline and stores into `load_request`. The
   loader thread resolves slot → path through the shared library, taking a read
@@ -469,16 +488,20 @@ across the two:
 
 | Shared | Owner | Used here as |
 |---|---|---|
-| **Marks store** (`$XDG_DATA_HOME/resonance/library/marks.json`, `<kind>:<id>` keys, favourite / tags / last_used / use_count, per-item read-modify-write, generation counter) | `resonance-common` (a `library_marks` module; plugin-safe, in `PLUGIN_COMMON_ITEMS`) | §4.3. Kind `amp-model`, id = content sha256. |
-| **Tag vocabulary** (completion reads all tags across kinds) | same module | the `+ tag` completion |
-| **Browser list widget**: a searchable, filterable list with favourites first, a ★ toggle, tag chips and a detail pane, over a trait of `{title, subtitle, columns, key, marks}`, with pure view-state logic (filter, sort, stepping) that is testable without egui | `resonance-plugin` behind `editor-widgets`, beside `preset_ui` | §6.2's Installed tab and the ◀/▶ stepping over the view |
-| **Delete-confirm row** (two-click in place) | same | §7.1, and the preset bar's unconfirmed `Delete` should adopt it |
+| **Marks store** (`$XDG_DATA_HOME/resonance/library/marks.json`, `<kind>:<id>` keys, favourite / tags / last_used / use_count, reserved `rating`, per-item read-modify-write under `File::lock`, generation counter, orphan pruning, freshness helper) | `resonance-common` (a `library_marks` module; plugin-safe, in `PLUGIN_COMMON_ITEMS`) | §4.3. Kind `amp-model`, id = content sha256. |
+| **Tag vocabulary** (completion reads all tags across kinds) and the **seeded facet vocabulary** (`instrument`, `genres`, `character`) | same module (`library_marks::vocab`) | the `+ tag` completion, and `instrument` / `character` facets beside `gear_type` / `tone_type` |
+| **Browser view-state**: search, facets, favourites-first sort, ◀/▶ over the current view, the audition bracket and confirm-in-place delete state, over a `LibraryRows` trait of `{title, subtitle, columns, key, marks}`, testable without egui | `resonance-plugin::library_view`, **not** feature-gated, because the iced app drives the same model (plugin-preset-library.md §10.2 item 3) | §6.2's Installed tab and the ◀/▶ stepping over the view |
+| **Browser list widget**: the egui skin over that model, with a ★ toggle, tag chips and a detail pane frame; `star_toggle` / `tag_pill` in `plugin_gui_core::widgets` | `resonance-plugin` behind `editor-widgets` | §6.2's rows |
+| **Delete-confirm row** (two-click in place) | state in `library_view`, skin beside the list widget | §7.1, and the preset bar's unconfirmed `Delete` should adopt it |
 | **Reveal launcher** | `resonance-common` | §6.2 Reveal |
 
 What stays amp-specific: the NAM header reader, the slot table, content
-hashing, the Tone3000 source, and relink. If the preset spec picks a different
-path or key scheme for marks, this spec follows it. The only requirement from
-this side is that ids are opaque strings, so a sha256 fits.
+hashing, the Tone3000 source, and relink. The preset spec adopted this
+spec's path and key scheme for marks as-is; ids are opaque strings, so a
+sha256 fits. Its §10.2 asked for five changes, all applied here: the lock
+(§8), `generation` in the schema (§4.3), the ungated `library_view`
+view-state (this table), the seeded vocabulary in `library_marks` (§4.3),
+and the shared `library_marks.rs` test binary (§11).
 
 ## 11. Tests
 
@@ -489,7 +512,8 @@ slice. No inline `#[cfg(test)]`.
 | Where | What |
 |---|---|
 | `resonance-common/tests/nam_library.rs` (new; the crate already has `tests/atomic_file.rs`) | `read_header` on the three fixture families (a1, a2, lstm), which reads metadata without allocating weights. Index build, then rescan: only changed files are re-hashed. Slot allocation: append, free, no reuse below the high-water mark, reuse only past 999. Migration assigns today's sorted order. Duplicate detection by id. A corrupt `library.json` is quarantined and rebuilt (`quarantine_corrupt`). Each test uses its own temp root through the explicit-root API, not env vars. |
-| `resonance-common/tests/library_marks.rs` (new, or a module in the preset spec's test binary if it lands first) | Per-item read-modify-write: two writers with different items both survive, and the same item is last-writer-wins. Kinds do not collide. Prune after deletion with a clock injected. |
+| `resonance-common/tests/library_marks.rs` (new; shared with the preset spec and owned by whichever slice lands first) | Per-item read-modify-write under the lock: two writers with different items both survive, including two processes (the test binary re-spawns itself as a child to hold the lock), and the same item is last-writer-wins. `generation` bumps on every write. Kinds do not collide. Prune after deletion with a clock injected. Vocabulary and tag completion across kinds. |
+| `resonance-plugin/tests/library_view.rs` (new; shared with the preset spec) | `BrowserModel` over a fake `LibraryRows`: search, facets, favourites-first sort, ◀/▶ over the view (clamped), the audition bracket, confirm-in-place. |
 | `plugins/resonance-amp/tests/model_library.rs` (new) | `resolve_model`: path ok; moved and found by id (rewrites path); missing with the reference kept verbatim; hash mismatch. Import copies and dedupes. Delete removes the file, sidecar and slot, keeps marks, and lets live instances keep playing. Sidecar written by `finalize_download`, with `sanitize_filename` unchanged. View-state logic: search, filters, favourites-first sort, ◀/▶ over the view. `file_select` `value_to_string` / `string_to_value` round-trip. |
 | `plugins/resonance-amp/tests/model_selector.rs` (extend) | The baseline invariant still holds with slots. An empty slot never loads. Adding a model to the library while an instance is active does not move its model. |
 | `plugins/resonance-amp/tests/state.rs` (extend) | v2 keys round-trip. A v1 state (only `model_path`) loads. A missing model re-saves byte-identical extra state. |
@@ -515,7 +539,7 @@ Each slice is shippable on its own and leaves the plugin better than before.
 | **L1: provenance at download** | `finalize_download` writes the sidecar. The Tone3000 tab shows `Installed` / `Load` for models already present. | L0 |
 | **L2: slots + state v2 + missing** | `file_list` → shared slot table (process `OnceLock`). `AmpExtraState` v2, `resolve_model` with auto-relink. The missing banner with Locate / Choose. `file_select` `value_to_string`/`string_to_value` (MCP now *reads* the model name). One shared Tone3000 worker. | L0 |
 | **L3: Library panel (browse)** | `Installed` tab: rows, search, filters, sort, detail, Load, Reveal (with the launcher moved to common). The header `Library…` button. ◀/▶ over the view. Import replaces `Load Model…`. | L2 |
-| **L4: marks** | `library_marks` in common (or adopted from the preset spec). ★ in rows and header, tags, recents, favourites-first. | L3; coordinate with plugin-preset-library.md |
+| **L4: marks** | `library_marks` in common, built to plugin-preset-library.md §10.2's shape (the shared foundation slice F builds it first, together with `library_view`, the list widget and the reveal launcher). ★ in rows and header, tags, recents, favourites-first. | L3; F |
 | **L5: delete + re-download** | Confirm-in-place delete, in-use count, the "(deleted)" suffix. Re-download from the detail pane and the missing banner. Poll-based cross-process refresh. | L3 (L1 for re-download) |
 | **L6: labels via `text_to_value`** | `param_from_text` host call and the `ParamValue::Label` fallback. The fleet gets it; MCP can now *pick* the amp model by name. | L2 |
 | **L7a: `amp_models.list`** | Wire type + app handler + MCP tool + test. | L0 (L4 for the marks fields) |
@@ -537,5 +561,5 @@ preset and automation index (G3).
 | D6 | Library writes on MCP | list only · + marks · + delete/import/download | **list + set_marks.** Delete stays GUI-only (irreversible user files outside the project). Download needs the plugin's OAuth session. Revisit if an agent workflow needs it. |
 | D7 | Where the Library lives in the editor | overlay (like Tone3000) · a side drawer beside the viz · a separate editor page | **Overlay with two tabs.** It reuses the existing mechanism, fits 760×520, and folds the two model entry points into one. A persistent drawer would squeeze the scope at minimum size. |
 | D8 | `installed.json` `AmpModel` variant | start writing it · leave it · remove it | **Remove the unused variant** in L0. `library.json` supersedes it for amps, and two registries that disagree are worse than one. Drums keeps the registry. |
-| D9 | Marks store location/format | shared `library/marks.json` (§10) · per-plugin files · inside app `settings.json` | **Shared file in `resonance-common`,** because plugins cannot reach app settings and the preset library needs the same thing. Final path and schema are agreed with plugin-preset-library.md. |
+| D9 | Marks store location/format | shared `library/marks.json` (§10) · per-plugin files · inside app `settings.json` | **Shared file in `resonance-common`,** because plugins cannot reach app settings and the preset library needs the same thing. Path and schema are agreed with plugin-preset-library.md (§4.3 here, §4.5 there). |
 | D10 | Do recents come from project restores? | yes · only user picks | **Only user picks** (and loads with an editor open), so opening an old project does not reshuffle Recent. |
