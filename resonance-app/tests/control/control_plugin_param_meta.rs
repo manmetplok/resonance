@@ -300,6 +300,62 @@ fn a_label_on_a_parameter_with_no_choices_says_so() {
     );
 }
 
+/// Stand in for the engine thread: answer `ResolvePluginParamText` the way
+/// a plugin's `text_to_value` would ("half" → 0.5 on Mix, nothing else),
+/// and forward every other command to the returned receiver.
+fn plugin_that_reads_text(
+    rx: crossbeam_channel::Receiver<AudioCommand>,
+) -> crossbeam_channel::Receiver<AudioCommand> {
+    let (fwd_tx, fwd_rx) = crossbeam_channel::unbounded();
+    std::thread::spawn(move || {
+        for cmd in rx.iter() {
+            match cmd {
+                AudioCommand::ResolvePluginParamText {
+                    instance_id,
+                    param_id,
+                    text,
+                    reply,
+                } => {
+                    let answer = (instance_id == DELAY && param_id == MIX && text == "half")
+                        .then_some(0.5);
+                    let _ = reply.send(answer);
+                }
+                other => {
+                    let _ = fwd_tx.send(other);
+                }
+            }
+        }
+    });
+    fwd_rx
+}
+
+#[test]
+fn a_label_on_a_choiceless_parameter_is_resolved_by_the_plugin() {
+    // nam-model-library.md §9.2: with no `choices` to match, the app asks
+    // the plugin (CLAP `text_to_value`) before refusing — how an agent
+    // picks an amp model by name on the 1000-slot selector.
+    let mut app = app();
+    let rx = plugin_that_reads_text(app.test_capture_engine());
+    let _: MutationAck = set(&mut app, "Mix", serde_json::json!("half"))
+        .result()
+        .expect("the plugin knows what \"half\" means");
+    let value = rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .ok()
+        .and_then(|c| match c {
+            AudioCommand::SetPluginParam { param_id, value, .. } if param_id == MIX => Some(value),
+            _ => None,
+        });
+    assert_eq!(value, Some(0.5), "the plugin's answer is what the engine is told to set");
+
+    let error = set(&mut app, "Mix", serde_json::json!("loud"))
+        .error
+        .expect("a text the plugin does not know is still refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("names no choices"), "{}", error.message);
+    assert!(error.message.contains("nor does the plugin recognise"), "{}", error.message);
+}
+
 #[test]
 fn a_number_outside_the_range_still_reports_the_range() {
     let mut app = app();

@@ -525,6 +525,34 @@ pub(crate) fn handle_move_plugin(
     }
 }
 
+/// Answer an `AudioCommand::ResolvePluginParamText` query: which value
+/// does the plugin say `text` names? Held under the instance lock, like
+/// `param_text`, because `text_to_value` is a main-thread call that must
+/// not race `process()`; when the audio thread holds the lock the query is
+/// re-enqueued rather than blocking it, exactly as a parameter set is.
+pub(crate) fn handle_resolve_param_text(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    param_id: u32,
+    text: String,
+    reply: crossbeam_channel::Sender<Option<f64>>,
+) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(inst) = mutex.try_lock() {
+            let _ = reply.send(inst.0.param_from_text(param_id, &text));
+        } else {
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::ResolvePluginParamText {
+                instance_id,
+                param_id,
+                text,
+                reply,
+            });
+        }
+    } else {
+        let _ = reply.send(None);
+    }
+}
+
 pub(crate) fn handle_set_plugin_param(
     ctx: &HandlerCtx,
     instance_id: PluginInstanceId,

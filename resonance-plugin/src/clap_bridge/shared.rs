@@ -253,6 +253,9 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// activate/deactivate so the host can save/load project state while
     /// the plugin is in the audio processor.
     pub(crate) extra_state_saver: Option<std::sync::Arc<dyn crate::plugin::ExtraStateSaver>>,
+    /// Parameter text conversion harvested at construction, for
+    /// `value_to_text` / `text_to_value` while the plugin is active.
+    pub(crate) param_text_source: Option<std::sync::Arc<dyn crate::plugin::ParamTextSource>>,
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {

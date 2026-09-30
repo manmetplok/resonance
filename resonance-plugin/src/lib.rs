@@ -47,7 +47,7 @@ pub use presets::{
 };
 pub use state::{ParamRename, STATE_VERSION};
 pub use plugin::{
-    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
+    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer, ParamTextSource,
     OutputPortSpec, PluginEvent, ResonancePlugin, TempoInfo,
 };
 pub use range::{FloatRange, IntRange};

@@ -66,6 +66,15 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                     return write!(writer, "{}", text);
                 }
             }
+            // Active: the plugin object is in the audio processor, so ask
+            // the text source it handed over at construction, if any.
+            if let Some(text) = self
+                .param_text_source
+                .as_ref()
+                .and_then(|s| s.display(slot, value))
+            {
+                return write!(writer, "{}", text);
+            }
             write!(writer, "{:.2}", value)
         } else {
             write!(writer, "{:.2}", value)
@@ -74,12 +83,13 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
 
     fn text_to_value(&mut self, param_id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
+        let text = text.to_str().ok()?;
         if let Some(plugin) = &self.plugin {
             if slot < plugin.param_count() {
-                return plugin.param(slot).parse(text.to_str().ok()?);
+                return plugin.param(slot).parse(text);
             }
         }
-        None
+        self.param_text_source.as_ref()?.parse(slot, text)
     }
 
     fn flush(

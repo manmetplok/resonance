@@ -486,6 +486,24 @@ of `param_text` at `instance.rs:475`), before it rejects the label. Then
 works, and every stepped parameter in the fleet that has a `string_to_value`
 gains the same thing. It is one generic slice with no amp-specific method.
 
+As built: `ClapInstance::param_from_text` is the host call; the app reaches
+it through `AudioCommand::ResolvePluginParamText`, answered on the engine
+thread under the instance lock (re-enqueued, never blocking, while the
+audio thread holds it), with `AudioEngine::param_from_text` waiting at
+most 250 ms for the reply. The control reply stays synchronous, so the
+one-revision-per-call contract holds. A text the plugin rejects (or no
+answer in time) keeps the old "names no choices" error and says what the
+plugin answered.
+
+Both conversions also had to work on an **active** plugin: the CLAP
+bridge answered `value_to_text` / `text_to_value` only while the plugin
+object was on the main thread, and printed a bare number (and parsed
+nothing) once it moved into the audio processor. `ResonancePlugin` gains
+an optional `param_text_source()` (a `ParamTextSource` harvested at
+construction, like `extra_state_saver`), which the bridge falls back to
+while active; the amp returns one over its shared `AmpParams`. So §9.1's
+`text` is the model name on a live instance too.
+
 ### 9.3 Library methods (slices L7a/L7b)
 
 | Method | Params | Returns | Notes |

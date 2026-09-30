@@ -388,6 +388,13 @@ impl ResonancePlugin for ResonanceAmp {
         Some(self.presets.clone())
     }
 
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // The params are shared, so a host reads a live amp's model name
+        // (`file_select` → slot → name) and picks one by name while the
+        // plugin is in the audio processor (nam-model-library.md §9).
+        Some(Arc::new(AmpParamText(self.params.clone())))
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::AmpEditorFactory::new(
@@ -400,6 +407,23 @@ impl ResonancePlugin for ResonanceAmp {
 }
 
 use resonance_dsp::linear_to_db;
+
+/// Parameter text over the shared `AmpParams`, for the CLAP bridge while
+/// the plugin is active.
+struct AmpParamText(Arc<AmpParams>);
+
+impl resonance_plugin::ParamTextSource for AmpParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= params::PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
+    }
+}
 
 /// Persists the model reference (state v2: `model_path` + optional
 /// `model_id` / `model_name` / `model_source`) alongside the plugin's

@@ -99,7 +99,7 @@ pub(super) fn set_plugin_param(
     //
     // `resolve_param_value` also turns a choice label into its step, so
     // a caller can send what the parameter calls itself.
-    let value = match resolve_param_value(&param, &params.value) {
+    let value = match resolve_param_value_on(app, target.instance_id, &param, &params.value) {
         Ok(value) => value,
         Err(e) => return reject(request, e),
     };
@@ -152,6 +152,51 @@ pub(crate) fn resolve_param_value(
             param.name, param.min, param.max
         ))
     })
+}
+
+/// How long a setter waits for the plugin to answer a label
+/// (`AudioEngine::param_from_text`): an engine-thread round trip, normally
+/// well under a millisecond.
+const PARAM_TEXT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// [`resolve_param_value`], and when that fails on a label for a parameter
+/// with no enumerated `choices`, ask the plugin itself what the label
+/// means (CLAP `text_to_value`, nam-model-library.md §9.2). This is how
+/// `"Friedman BE-100"` picks a model on the amp's 1000-slot selector, and
+/// `"-6 dB"` a gain, on any plugin that implements `text_to_value`.
+///
+/// The answer goes through the same finite and range checks a number
+/// does. Shared by the track, bus and master setters.
+pub(crate) fn resolve_param_value_on(
+    app: &Resonance,
+    instance_id: resonance_audio::PluginInstanceId,
+    param: &track::PluginParamView,
+    requested: &track::ParamValue,
+) -> Result<f64, RpcError> {
+    let first = resolve_param_value(param, requested);
+    let track::ParamValue::Label(text) = requested else {
+        return first;
+    };
+    let text = text.trim();
+    if first.is_ok() || !param.choices.is_empty() || text.parse::<f64>().is_ok() {
+        return first;
+    }
+    // Keep the choice-resolution error as the base: it already tells the
+    // caller to send a number in range; say what the plugin answered too.
+    let base = first.err().map(|e| e.message).unwrap_or_default();
+    match app
+        .engine
+        .param_from_text(instance_id, param.id, text, PARAM_TEXT_TIMEOUT)
+    {
+        Ok(Some(value)) => resolve_param_value(param, &track::ParamValue::Number(value)),
+        Ok(None) => Err(RpcError::invalid_params(format!(
+            "{base}; nor does the plugin recognise {text:?} as one of its displayed values \
+             (read them back as `text` from plugin_params)"
+        ))),
+        Err(()) => Err(RpcError::invalid_params(format!(
+            "{base} (the plugin was asked what {text:?} means but did not answer in time)"
+        ))),
+    }
 }
 
 /// `value` clamped into `min..=max`, or `None` when it lies genuinely
