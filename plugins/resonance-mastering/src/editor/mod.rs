@@ -108,10 +108,7 @@ impl MasteringEditorApp {
         Self {
             params,
             viz,
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceMastering as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceMastering as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceMastering>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             current_stage: StageTab::default(),

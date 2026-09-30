@@ -12,7 +12,6 @@ use resonance_plugin::Param;
 
 use crate::analyzer::AnalyzerState;
 use crate::params::EqParams;
-use crate::presets::PRESETS;
 
 use super::{control_strip, nodes, response, theme};
 
@@ -61,7 +60,7 @@ impl EqEditorApp {
         Self {
             params,
             analyzer,
-            bank: PresetBank::new(<crate::ResonanceEq as resonance_plugin::ResonancePlugin>::CLAP_ID, PRESETS),
+            bank: PresetBank::for_plugin::<crate::ResonanceEq>(),
             presets,
             preset_editor: PresetEditor::default(),
             analyzer_mode: AnalyzerMode::Post,

@@ -29,10 +29,7 @@ impl ColorEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceColor as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceColor as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceColor>(),
             presets,
             preset_editor: PresetEditor::default(),
             curve_cache: curve::CurveCache::default(),

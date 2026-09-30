@@ -69,10 +69,7 @@ impl DrumsEditorApp {
             installed_kits,
             installed_kits_refresh: 0,
             out_meter: [0.0; 2],
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceDrums as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceDrums as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
         }

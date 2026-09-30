@@ -38,10 +38,7 @@ impl DelayEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceDelay as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceDelay as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceDelay>(),
             presets,
             preset_editor: PresetEditor::default(),
         }

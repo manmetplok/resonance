@@ -1,19 +1,23 @@
-//! The preset system: the user-preset directory (save / rename /
-//! delete), the merged factory+user listing, and the loaded-preset
-//! identity that has to survive closing the window (ba todo #1332,
-//! audit findings X1 and X2).
+//! The preset system as a plugin sees it: the user-preset directory
+//! (save / rename / delete through `PresetBank`), the merged
+//! factory+user listing, stable ids, and the loaded-preset identity that
+//! has to survive closing the window (ba todo #1332, audit findings X1
+//! and X2; plugin-preset-library.md P0).
+//!
+//! The index, query, trash and legacy converter are covered in
+//! `tests/preset_library.rs`.
 //!
 //! Every test points its bank at a private temporary root through
 //! `PresetBank::with_root`, so nothing here reads or writes the real
 //! `~/.local/share/resonance/plugin-presets`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use resonance_plugin::presets::{
-    FactoryPreset, NamingKind, PresetBank, PresetEditor, PresetEvent, PresetRef, PresetSession,
-    PresetSource,
+    FactoryPreset, NamingKind, PresetBank, PresetEditor, PresetEvent, PresetFile, PresetRef,
+    PresetSession, PresetSource,
 };
 use resonance_plugin::{
     BoolParam, EventIterator, ExtraStateSaver, FloatParam, FloatRange, IntParam, IntRange,
@@ -44,16 +48,52 @@ impl TestParams {
     }
 }
 
+/// One bare state document (the pre-format-1 factory shape, still
+/// accepted) and one format-1 file with metadata.
 const FACTORY: &[FactoryPreset] = &[
     FactoryPreset {
+        id: "init",
         name: "Init",
         json: r#"{"params":{"mix":0.5,"taps":3.0,"freeze":0.0}}"#,
     },
     FactoryPreset {
+        id: "wide",
         name: "Wide",
-        json: r#"{"params":{"mix":0.9,"taps":7.0,"freeze":1.0}}"#,
+        json: r#"{"format":"resonance.preset","format_version":1,"id":"wide",
+            "plugin":{"id":"com.resonance.test"},
+            "meta":{"name":"Wide","category":"Creative","character":["wide"],"tags":["spread"]},
+            "state":{"encoding":"resonance-json",
+                     "doc":{"params":{"mix":0.9,"taps":7.0,"freeze":1.0}}}}"#,
     },
 ];
+
+fn init() -> PresetRef {
+    PresetRef::factory("init", "Init")
+}
+
+fn wide() -> PresetRef {
+    PresetRef::factory("wide", "Wide")
+}
+
+/// A name-only reference, resolved against the bank by name — what a
+/// project saved before preset ids carries.
+fn user(name: &str) -> PresetRef {
+    PresetRef::unresolved(PresetSource::User, name)
+}
+
+fn names(list: &[PresetRef]) -> Vec<String> {
+    list.iter().map(|p| p.name.clone()).collect()
+}
+
+/// Every `.json` file directly in `dir`.
+fn json_files(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|r| r.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.retain(|p| p.extension().map(|e| e == "json").unwrap_or(false));
+    files.sort();
+    files
+}
 
 /// A temporary preset root unique to the calling test.
 struct TempRoot(PathBuf);
@@ -71,7 +111,9 @@ impl TempRoot {
     }
 
     fn bank(&self) -> PresetBank {
-        PresetBank::new("com.resonance.test", FACTORY).with_root(self.0.clone())
+        PresetBank::new("com.resonance.test", FACTORY)
+            .with_root(self.0.clone())
+            .with_plugin_info("Test Plugin", "9.8.7")
     }
 }
 
@@ -86,20 +128,34 @@ impl Drop for TempRoot {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn saving_writes_a_file_into_the_plugins_own_directory() {
+fn saving_writes_a_format_1_file_into_the_plugins_own_directory() {
     let root = TempRoot::new("dir");
     let bank = root.bank();
     let params = TestParams::new();
 
     let saved = bank.save("My Sound", &params.refs()).expect("save failed");
-    assert_eq!(saved, PresetRef::user("My Sound"));
+    assert_eq!(saved.name, "My Sound");
+    assert_eq!(saved.source, PresetSource::User);
+    assert_eq!(saved.id.len(), 36, "a hyphenated UUID: {}", saved.id);
+    assert_eq!(&saved.id[14..15], "4", "UUID version 4: {}", saved.id);
 
     let dir = bank.user_dir().expect("a bank with a root always has a dir");
     assert!(dir.ends_with("com.resonance.test"), "{dir:?}");
-    assert!(
-        dir.join("My_Sound.json").is_file(),
-        "expected the sanitised file name inside {dir:?}"
-    );
+    let files = json_files(&dir);
+    assert_eq!(files.len(), 1);
+    let stem_expected = format!("My_Sound-{}.json", &saved.id[..8]);
+    assert_eq!(files[0].file_name().unwrap().to_string_lossy(), stem_expected);
+
+    let file = PresetFile::parse(&std::fs::read_to_string(&files[0]).unwrap()).unwrap();
+    assert_eq!(file.format, "resonance.preset");
+    assert_eq!(file.format_version, 1);
+    assert_eq!(file.id, saved.id);
+    assert_eq!(file.plugin.id, "com.resonance.test");
+    assert_eq!(file.plugin.name.as_deref(), Some("Test Plugin"));
+    assert_eq!(file.plugin.version.as_deref(), Some("9.8.7"));
+    assert_eq!(file.meta.name, "My Sound");
+    assert!(file.meta.created.is_some() && file.meta.modified.is_some());
+    assert_eq!(file.state.encoding, "resonance-json");
 }
 
 #[test]
@@ -112,56 +168,71 @@ fn a_saved_preset_is_a_full_snapshot_of_every_param() {
     // previous patch had in the other two (finding P7).
     let params = TestParams::new();
     params.mix.set_plain(0.2);
-    bank.save("Partial?", &params.refs()).expect("save failed");
+    let saved = bank.save("Partial?", &params.refs()).expect("save failed");
 
-    let text = std::fs::read_to_string(bank.user_dir().unwrap().join("Partial_.json")).unwrap();
-    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let value: serde_json::Value =
+        serde_json::from_str(&bank.json_for(&saved).expect("the state document")).unwrap();
     let map = value.get("params").and_then(|v| v.as_object()).unwrap();
-
-    assert_eq!(
-        map.len(),
-        params.refs().len(),
-        "a saved preset must snapshot every declared param, found {map:?}"
-    );
+    assert_eq!(map.len(), params.refs().len(), "{map:?}");
     for p in params.refs() {
         assert!(map.contains_key(p.id()), "missing param '{}'", p.id());
     }
-    // …and the file is versioned like project state is.
+    // …and the document is versioned like project state is.
     assert_eq!(
         value.get("version").and_then(|v| v.as_u64()),
         Some(resonance_plugin::STATE_VERSION as u64)
     );
 
-    // Recall proves the snapshot is complete rather than merely present:
-    // a target sitting at the far end of every range comes all the way
-    // back, including the params the user never touched.
     let target = TestParams::new();
     target.mix.set_plain(1.0);
     target.taps.set_plain(8.0);
     target.freeze.set_plain(1.0);
-    assert!(bank.apply(&PresetRef::user("Partial?"), &target.refs()));
+    assert!(bank.apply(&user("Partial?"), &target.refs()));
     assert!((target.mix.get_plain() - 0.2).abs() < 1e-6);
     assert_eq!(target.taps.get_plain(), 3.0);
     assert_eq!(target.freeze.get_plain(), 0.0);
 }
 
 #[test]
-fn saving_the_same_name_twice_overwrites_rather_than_duplicating() {
+fn saving_the_same_name_twice_overwrites_and_keeps_the_id() {
     let root = TempRoot::new("overwrite");
     let bank = root.bank();
     let params = TestParams::new();
 
     params.mix.set_plain(0.1);
-    bank.save("Take", &params.refs()).unwrap();
+    let first = bank.save("Take", &params.refs()).unwrap();
     params.mix.set_plain(0.7);
-    bank.save("Take", &params.refs()).unwrap();
+    let second = bank.save("Take", &params.refs()).unwrap();
 
-    let user = bank.list_user();
-    assert_eq!(user, vec![PresetRef::user("Take")]);
+    assert_eq!(first.id, second.id, "a re-save is the same preset");
+    assert_eq!(bank.list_user(), vec![first.clone()]);
+    assert_eq!(json_files(&bank.user_dir().unwrap()).len(), 1);
 
     let fresh = TestParams::new();
-    assert!(bank.apply(&PresetRef::user("Take"), &fresh.refs()));
+    assert!(bank.apply(&first, &fresh.refs()));
     assert!((fresh.mix.get_plain() - 0.7).abs() < 1e-6);
+}
+
+/// D11: user preset names are unique per plugin, case-insensitively, so a
+/// name-addressed load can never be ambiguous. Saving "TAKE" over "Take"
+/// is the same preset, renamed to the new spelling.
+#[test]
+fn names_are_unique_case_insensitively() {
+    let root = TempRoot::new("case");
+    let bank = root.bank();
+    let params = TestParams::new();
+
+    let first = bank.save("Take", &params.refs()).unwrap();
+    let again = bank.save("TAKE", &params.refs()).unwrap();
+    assert_eq!(first.id, again.id);
+    assert_eq!(names(&bank.list_user()), vec!["TAKE"]);
+
+    bank.save("Other", &params.refs()).unwrap();
+    let err = bank.rename(&again, "other").expect_err("case-insensitive clash");
+    assert!(err.contains("already exists"), "{err}");
+    // A case-only rename of itself is fine.
+    let recased = bank.rename(&again, "take").unwrap();
+    assert_eq!(recased.id, first.id);
 }
 
 #[test]
@@ -183,8 +254,47 @@ fn the_display_name_survives_characters_a_file_name_cannot_hold() {
 
     let saved = bank.save("Vocal — Doubler", &params.refs()).unwrap();
     assert_eq!(saved.name, "Vocal — Doubler");
-    assert_eq!(bank.list_user(), vec![PresetRef::user("Vocal — Doubler")]);
+    assert_eq!(names(&bank.list_user()), vec!["Vocal — Doubler"]);
     assert!(bank.json_for(&saved).is_some());
+}
+
+/// The host saves the plugin's own state blob, which carries the plugin's
+/// `"preset"` session key. A preset must not claim to be a modified
+/// version of itself, so the key is stripped.
+#[test]
+fn a_host_saved_blob_loses_its_session_identity() {
+    let root = TempRoot::new("host-blob");
+    let bank = root.bank();
+    let blob = serde_json::json!({
+        "version": 1,
+        "params": {"mix": 0.3, "taps": 2.0, "freeze": 0.0},
+        "ir_path": "/tmp/cab.wav",
+        "preset": {"name": "Old", "source": "user", "modified": true},
+    });
+    let saved = bank.write_user_preset("From Host", &blob).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&bank.json_for(&saved).unwrap()).unwrap();
+    assert!(doc.get("preset").is_none(), "{doc}");
+    assert_eq!(doc["ir_path"], "/tmp/cab.wav", "extra state is kept");
+}
+
+/// Every write is temp + fsync + rename: nothing but the preset itself is
+/// left behind, and there is never a moment with a half-written file.
+#[test]
+fn saving_leaves_no_temp_files_behind() {
+    let root = TempRoot::new("atomic");
+    let bank = root.bank();
+    let params = TestParams::new();
+    for i in 0..5 {
+        params.mix.set_plain(i as f64 / 10.0);
+        bank.save("Churn", &params.refs()).unwrap();
+    }
+    let all: Vec<String> = std::fs::read_dir(bank.user_dir().unwrap())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert!(all[0].ends_with(".json"), "{all:?}");
 }
 
 // ---------------------------------------------------------------------------
@@ -197,20 +307,39 @@ fn factory_and_user_presets_are_listed_together_and_stay_distinguishable() {
     let bank = root.bank();
     let params = TestParams::new();
     bank.save("Zed", &params.refs()).unwrap();
-    bank.save("Alpha", &params.refs()).unwrap();
+    bank.save("alpha", &params.refs()).unwrap();
 
     let all = bank.list();
     assert_eq!(
-        all,
-        vec![
-            PresetRef::factory("Init"),
-            PresetRef::factory("Wide"),
-            PresetRef::user("Alpha"),
-            PresetRef::user("Zed"),
-        ],
+        names(&all),
+        vec!["Init", "Wide", "alpha", "Zed"],
         "factory bank in declared order first, then user presets by name"
     );
-    assert!(all[0].source == PresetSource::Factory && all[3].source == PresetSource::User);
+    assert_eq!(all[0], init());
+    assert_eq!(all[1], wide());
+    assert!(all[2].source == PresetSource::User && all[3].source == PresetSource::User);
+    assert!(all[2].is_resolved());
+}
+
+/// Factory metadata is read from the preset file; a bare state document
+/// (the old factory shape) still loads, with a name-only meta block.
+#[test]
+fn factory_records_carry_their_files_metadata() {
+    let root = TempRoot::new("factory-meta");
+    let bank = root.bank();
+    let records = bank.records();
+    let w = records.iter().find(|r| r.preset == wide()).unwrap();
+    assert_eq!(w.meta.category.as_deref(), Some("Creative"));
+    assert_eq!(w.meta.character, vec!["wide"]);
+    assert_eq!(w.path, None);
+    let i = records.iter().find(|r| r.preset == init()).unwrap();
+    assert_eq!(i.meta.name, "Init");
+
+    let params = TestParams::new();
+    assert!(bank.apply(&wide(), &params.refs()));
+    assert_eq!(params.taps.get_plain(), 7.0);
+    assert!(bank.apply(&init(), &params.refs()));
+    assert_eq!(params.taps.get_plain(), 3.0);
 }
 
 #[test]
@@ -219,20 +348,37 @@ fn a_user_preset_may_shadow_a_factory_name_without_replacing_it() {
     let bank = root.bank();
     let params = TestParams::new();
     params.mix.set_plain(0.33);
-    bank.save("Init", &params.refs()).unwrap();
+    let mine = bank.save("Init", &params.refs()).unwrap();
 
     let all = bank.list();
     assert_eq!(all.len(), 3, "{all:?}");
+    assert_ne!(mine, init(), "ids never collide across the two sets");
 
-    // The pair (name, source) is the identity, so both "Init"s resolve
-    // to their own blob.
     let factory = TestParams::new();
-    assert!(bank.apply(&PresetRef::factory("Init"), &factory.refs()));
+    assert!(bank.apply(&init(), &factory.refs()));
     assert!((factory.mix.get_plain() - 0.5).abs() < 1e-6);
 
-    let user = TestParams::new();
-    assert!(bank.apply(&PresetRef::user("Init"), &user.refs()));
-    assert!((user.mix.get_plain() - 0.33).abs() < 1e-6);
+    let user_side = TestParams::new();
+    assert!(bank.apply(&mine, &user_side.refs()));
+    assert!((user_side.mix.get_plain() - 0.33).abs() < 1e-6);
+}
+
+/// A preset saved by another instance or process is picked up by an
+/// explicit list, without a restart.
+#[test]
+fn a_preset_written_by_another_bank_is_listed() {
+    let root = TempRoot::new("other-writer");
+    let params = TestParams::new();
+    let a = root.bank();
+    assert!(a.list_user().is_empty());
+
+    // A second library over the same root, as another process has.
+    let other = PresetBank::new("com.resonance.test", FACTORY).with_library(Arc::new(
+        resonance_plugin::presets::PresetLibrary::new().with_root(root.0.clone()),
+    ));
+    other.save("From Elsewhere", &params.refs()).unwrap();
+
+    assert_eq!(names(&a.list_user()), vec!["From Elsewhere"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +386,7 @@ fn a_user_preset_may_shadow_a_factory_name_without_replacing_it() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn renaming_moves_the_preset_and_follows_the_loaded_identity() {
+fn renaming_keeps_the_id_moves_the_file_and_follows_the_loaded_identity() {
     let root = TempRoot::new("rename");
     let bank = root.bank();
     let session = PresetSession::new();
@@ -250,9 +396,15 @@ fn renaming_moves_the_preset_and_follows_the_loaded_identity() {
     let saved = session.save_as(&bank, "Before", &params.refs()).unwrap();
     let renamed = session.rename(&bank, &saved, "After").unwrap();
 
-    assert_eq!(renamed, PresetRef::user("After"));
-    assert_eq!(bank.list_user(), vec![PresetRef::user("After")]);
-    assert_eq!(session.current(), Some(PresetRef::user("After")));
+    assert_eq!(renamed.id, saved.id, "rename never changes the id");
+    assert_eq!(renamed.name, "After");
+    assert_eq!(bank.list_user(), vec![renamed.clone()]);
+    assert_eq!(session.current().map(|c| c.name), Some("After".to_string()));
+
+    let files = json_files(&bank.user_dir().unwrap());
+    assert_eq!(files.len(), 1, "the old file is gone");
+    let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("After-"), "{name}");
 
     let fresh = TestParams::new();
     assert!(bank.apply(&renamed, &fresh.refs()));
@@ -264,19 +416,19 @@ fn renaming_onto_an_existing_name_is_refused_and_keeps_both() {
     let root = TempRoot::new("collide");
     let bank = root.bank();
     let params = TestParams::new();
-    bank.save("One", &params.refs()).unwrap();
+    let one = bank.save("One", &params.refs()).unwrap();
     bank.save("Two", &params.refs()).unwrap();
 
     let err = bank
-        .rename(&PresetRef::user("One"), "Two")
+        .rename(&one, "Two")
         .expect_err("a colliding rename must be refused");
     assert!(err.contains("already exists"), "{err}");
     assert_eq!(bank.list_user().len(), 2);
 }
 
 /// Sanitising is lossy: "Big Room" and "Big+Room" both reduce to the file
-/// stem `Big_Room`. They are still two different presets, and saving the
-/// second must not silently destroy the first.
+/// stem `Big_Room`. They are still two different presets, and the id in
+/// the file name keeps their files apart.
 #[test]
 fn two_names_that_sanitise_alike_are_two_presets() {
     let root = TempRoot::new("sanitise-collide");
@@ -284,76 +436,53 @@ fn two_names_that_sanitise_alike_are_two_presets() {
     let params = TestParams::new();
 
     params.mix.set_plain(0.25);
-    bank.save("Big Room", &params.refs()).unwrap();
+    let room = bank.save("Big Room", &params.refs()).unwrap();
     params.mix.set_plain(0.75);
-    bank.save("Big+Room", &params.refs()).unwrap();
+    let plus = bank.save("Big+Room", &params.refs()).unwrap();
 
-    let names: Vec<String> = bank.list_user().into_iter().map(|p| p.name).collect();
-    assert_eq!(names, vec!["Big Room".to_string(), "Big+Room".to_string()]);
-
-    // ...and each still recalls its own sound, so they are genuinely two
-    // files and not one entry listed twice.
-    params.mix.set_plain(0.0);
-    assert!(bank.apply(&PresetRef::user("Big Room"), &params.refs()));
-    assert_eq!(params.mix.get_plain(), 0.25);
-    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
-    assert_eq!(params.mix.get_plain(), 0.75);
-}
-
-/// Re-saving under a name that already exists still overwrites that one
-/// preset — the collision handling above must not turn every save into a
-/// new file.
-#[test]
-fn re_saving_a_colliding_name_overwrites_only_its_own_file() {
-    let root = TempRoot::new("sanitise-overwrite");
-    let bank = root.bank();
-    let params = TestParams::new();
-
-    params.mix.set_plain(0.25);
-    bank.save("Big Room", &params.refs()).unwrap();
-    params.mix.set_plain(0.75);
-    bank.save("Big+Room", &params.refs()).unwrap();
+    assert_eq!(names(&bank.list_user()), vec!["Big Room", "Big+Room"]);
+    assert_eq!(json_files(&bank.user_dir().unwrap()).len(), 2);
 
     params.mix.set_plain(0.5);
     bank.save("Big Room", &params.refs()).unwrap();
-
     assert_eq!(bank.list_user().len(), 2, "no third preset should appear");
+
     params.mix.set_plain(0.0);
-    assert!(bank.apply(&PresetRef::user("Big Room"), &params.refs()));
+    assert!(bank.apply(&room, &params.refs()));
     assert_eq!(params.mix.get_plain(), 0.5, "the re-save should have landed");
-    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
+    assert!(bank.apply(&plus, &params.refs()));
     assert_eq!(params.mix.get_plain(), 0.75, "the neighbour is untouched");
-}
 
-/// Deleting one of two colliding presets must remove the one named, not
-/// whichever file the name happens to sanitise to.
-#[test]
-fn deleting_one_colliding_preset_leaves_the_other() {
-    let root = TempRoot::new("sanitise-delete");
-    let bank = root.bank();
-    let params = TestParams::new();
-
-    params.mix.set_plain(0.25);
-    bank.save("Big Room", &params.refs()).unwrap();
-    params.mix.set_plain(0.75);
-    bank.save("Big+Room", &params.refs()).unwrap();
-
-    bank.delete(&PresetRef::user("Big Room")).unwrap();
-
-    let names: Vec<String> = bank.list_user().into_iter().map(|p| p.name).collect();
-    assert_eq!(names, vec!["Big+Room".to_string()]);
-    params.mix.set_plain(0.0);
-    assert!(bank.apply(&PresetRef::user("Big+Room"), &params.refs()));
-    assert_eq!(params.mix.get_plain(), 0.75);
+    bank.delete(&room).unwrap();
+    assert_eq!(names(&bank.list_user()), vec!["Big+Room"]);
 }
 
 #[test]
 fn factory_presets_cannot_be_renamed_or_deleted() {
     let root = TempRoot::new("readonly");
     let bank = root.bank();
-    assert!(bank.rename(&PresetRef::factory("Init"), "Mine").is_err());
-    assert!(bank.delete(&PresetRef::factory("Init")).is_err());
+    assert!(bank.rename(&init(), "Mine").is_err());
+    assert!(bank.delete(&init()).is_err());
     assert_eq!(bank.list().len(), 2, "the factory bank is untouched");
+}
+
+/// D10: a delete moves the file to `.trash/`, so an accidental delete —
+/// from either surface, one of them an agent — is recoverable.
+#[test]
+fn deleting_moves_the_file_to_the_trash() {
+    let root = TempRoot::new("trash");
+    let bank = root.bank();
+    let params = TestParams::new();
+    let saved = bank.save("Doomed", &params.refs()).unwrap();
+
+    let trashed = bank.trash(&saved).unwrap();
+    assert!(trashed.is_file(), "{trashed:?}");
+    assert!(trashed.starts_with(root.0.join(".trash").join("com.resonance.test")));
+    assert!(bank.list_user().is_empty());
+    assert!(json_files(&bank.user_dir().unwrap()).is_empty());
+    // The trashed file is still a whole preset.
+    let file = PresetFile::parse(&std::fs::read_to_string(&trashed).unwrap()).unwrap();
+    assert_eq!(file.id, saved.id);
 }
 
 #[test]
@@ -389,8 +518,8 @@ fn loading_names_the_preset_and_clears_the_modified_flag() {
 
     assert_eq!(session.label("— preset —"), "— preset —");
 
-    assert!(session.load_preset(&bank, &PresetRef::factory("Wide"), &params.refs()));
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    assert_eq!(session.current(), Some(wide()));
     assert!(!session.is_modified());
     assert_eq!(session.label("— preset —"), "Wide");
     assert_eq!(params.taps.get_plain(), 7.0);
@@ -398,11 +527,34 @@ fn loading_names_the_preset_and_clears_the_modified_flag() {
     session.mark_modified();
     assert_eq!(session.label("— preset —"), "Wide *");
 
-    // Saving the edited sound names it after the new user preset and the
-    // asterisk goes away.
-    session.save_as(&bank, "Wide+", &params.refs()).unwrap();
-    assert_eq!(session.current(), Some(PresetRef::user("Wide+")));
+    let saved = session.save_as(&bank, "Wide+", &params.refs()).unwrap();
+    assert_eq!(session.current(), Some(saved));
     assert!(!session.is_modified());
+}
+
+/// "Save as…" from a loaded preset seeds the new one's descriptive
+/// metadata and records where it came from (§6.4).
+#[test]
+fn save_as_inherits_meta_and_records_lineage() {
+    let root = TempRoot::new("lineage");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+
+    session.load_preset(&bank, &wide(), &params.refs());
+    let copy = session.save_as(&bank, "Wider", &params.refs()).unwrap();
+    let record = bank.record(&copy).unwrap();
+    assert_eq!(record.meta.derived_from.as_deref(), Some("wide"));
+    assert_eq!(record.meta.category.as_deref(), Some("Creative"));
+    assert_eq!(record.meta.tags, vec!["spread"]);
+
+    // Re-saving it in place keeps its own lineage.
+    let again = session.save_as(&bank, "Wider", &params.refs()).unwrap();
+    assert_eq!(again.id, copy.id);
+    assert_eq!(
+        bank.record(&again).unwrap().meta.derived_from.as_deref(),
+        Some("wide")
+    );
 }
 
 #[test]
@@ -411,14 +563,36 @@ fn a_preset_that_no_longer_exists_leaves_the_sound_and_the_name_alone() {
     let bank = root.bank();
     let session = PresetSession::new();
     let params = TestParams::new();
-    session
-        .load_preset(&bank, &PresetRef::factory("Wide"), &params.refs())
-        .then_some(())
-        .expect("factory load failed");
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
 
-    assert!(!session.load_preset(&bank, &PresetRef::user("Gone"), &params.refs()));
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert!(!session.load_preset(&bank, &user("Gone"), &params.refs()));
+    assert_eq!(session.current(), Some(wide()));
     assert_eq!(params.taps.get_plain(), 7.0);
+}
+
+/// A project saved before preset ids carries `{name, source}` only. The
+/// bar resolves it to an id by name the first time it has a bank.
+#[test]
+fn a_name_only_identity_resolves_to_an_id() {
+    let root = TempRoot::new("resolve");
+    let bank = root.bank();
+    let params = TestParams::new();
+    let saved = bank.save("Legacy Sound", &params.refs()).unwrap();
+
+    let session = PresetSession::new();
+    session.load(&serde_json::json!({
+        "params": {},
+        "preset": {"name": "Legacy Sound", "source": "user", "modified": true},
+    }));
+    let before = session.current().unwrap();
+    assert!(!before.is_resolved());
+    assert_eq!(before, saved, "an unresolved ref compares by name");
+
+    session.resolve(&bank);
+    let after = session.current().unwrap();
+    assert_eq!(after.id, saved.id);
+    assert!(session.is_modified(), "resolving is not loading");
+    assert_eq!(session.save()["preset"]["id"], saved.id.as_str());
 }
 
 // ---------------------------------------------------------------------------
@@ -445,11 +619,14 @@ fn the_bar_saves_the_typed_name_and_reports_it() {
     editor.name_buffer().unwrap().push_str("Bar Sound");
 
     let event = editor.submit(&bank, &session, &params.refs());
-    assert_eq!(event, PresetEvent::Saved(PresetRef::user("Bar Sound")));
+    let PresetEvent::Saved(saved) = event else {
+        panic!("expected Saved, got {event:?}");
+    };
+    assert_eq!(saved.name, "Bar Sound");
     assert_eq!(editor.naming(), None, "the field closes on success");
     assert_eq!(editor.error(), None);
-    assert_eq!(bank.list_user(), vec![PresetRef::user("Bar Sound")]);
-    assert_eq!(session.current(), Some(PresetRef::user("Bar Sound")));
+    assert_eq!(bank.list_user(), vec![saved.clone()]);
+    assert_eq!(session.current(), Some(saved));
 }
 
 #[test]
@@ -460,7 +637,7 @@ fn saving_over_a_factory_preset_proposes_a_copy_not_an_overwrite() {
     let mut editor = PresetEditor::default();
     let params = TestParams::new();
 
-    editor.pick(&bank, &session, &PresetRef::factory("Wide"), &params.refs());
+    editor.pick(&bank, &session, &wide(), &params.refs());
     editor.begin_save(&session);
     assert_eq!(editor.name_buffer().map(|s| s.as_str()), Some("Wide (edit)"));
 
@@ -489,7 +666,6 @@ fn a_rejected_name_keeps_the_field_open_with_what_was_typed() {
     assert!(editor.error().is_some());
     assert!(bank.list_user().is_empty());
 
-    // Cancelling clears both.
     editor.cancel();
     assert_eq!(editor.naming(), None);
     assert_eq!(editor.error(), None);
@@ -508,18 +684,19 @@ fn the_bar_renames_and_deletes_through_the_session() {
     assert_eq!(editor.naming(), Some(NamingKind::Rename));
     editor.name_buffer().unwrap().clear();
     editor.name_buffer().unwrap().push_str("Second");
+    let renamed = PresetRef::user(saved.id.clone(), "Second");
     assert_eq!(
         editor.submit(&bank, &session, &params.refs()),
-        PresetEvent::Renamed(PresetRef::user("Second"))
+        PresetEvent::Renamed(renamed.clone())
     );
 
-    let event = editor.delete(&bank, &session, &PresetRef::user("Second"));
-    assert_eq!(event, PresetEvent::Deleted(PresetRef::user("Second")));
+    let event = editor.delete(&bank, &session, &renamed);
+    assert_eq!(event, PresetEvent::Deleted(renamed));
     assert!(bank.list_user().is_empty());
 
-    // Deleting something that is already gone reports the failure in the
-    // bar instead of panicking.
-    let event = editor.delete(&bank, &session, &PresetRef::factory("Init"));
+    // Deleting something that cannot be deleted reports the failure in
+    // the bar instead of panicking.
+    let event = editor.delete(&bank, &session, &init());
     assert_eq!(event, PresetEvent::None);
     assert!(editor.error().is_some());
 }
@@ -532,14 +709,14 @@ fn picking_a_preset_loads_it_and_reports_that_every_param_may_have_moved() {
     let mut editor = PresetEditor::default();
     let params = TestParams::new();
 
-    let event = editor.pick(&bank, &session, &PresetRef::factory("Wide"), &params.refs());
-    assert_eq!(event, PresetEvent::Loaded(PresetRef::factory("Wide")));
+    let event = editor.pick(&bank, &session, &wide(), &params.refs());
+    assert_eq!(event, PresetEvent::Loaded(wide()));
     assert_eq!(params.taps.get_plain(), 7.0);
 
-    let event = editor.pick(&bank, &session, &PresetRef::user("Nope"), &params.refs());
+    let event = editor.pick(&bank, &session, &user("Nope"), &params.refs());
     assert_eq!(event, PresetEvent::None);
     assert!(editor.error().is_some());
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert_eq!(session.current(), Some(wide()));
 }
 
 /// Stepping walks the merged list, so a user preset is reachable from the
@@ -551,26 +728,19 @@ fn stepping_walks_factory_then_user_presets() {
     let session = PresetSession::new();
     let mut editor = PresetEditor::default();
     let params = TestParams::new();
-    bank.save("Mine", &params.refs()).unwrap();
-
-    // Nothing loaded: forwards enters at the top of the list.
-    editor.step(&bank, &session, 1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+    let mine = bank.save("Mine", &params.refs()).unwrap();
 
     editor.step(&bank, &session, 1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
-
-    // ...and on into the user half of the same list.
+    assert_eq!(session.current(), Some(init()));
     editor.step(&bank, &session, 1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::user("Mine")));
-
+    assert_eq!(session.current(), Some(wide()));
+    editor.step(&bank, &session, 1, &params.refs());
+    assert_eq!(session.current(), Some(mine));
     editor.step(&bank, &session, -1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert_eq!(session.current(), Some(wide()));
 }
 
-/// Stepping clamps rather than wrapping: running off the end and silently
-/// reappearing at the other one is disorienting when you are listening
-/// rather than looking.
+/// Stepping clamps rather than wrapping.
 #[test]
 fn stepping_stops_at_both_ends() {
     let root = TempRoot::new("bar-step-ends");
@@ -579,22 +749,20 @@ fn stepping_stops_at_both_ends() {
     let mut editor = PresetEditor::default();
     let params = TestParams::new();
 
-    // Backwards from nothing enters at the bottom.
     editor.step(&bank, &session, -1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert_eq!(session.current(), Some(wide()));
 
     let event = editor.step(&bank, &session, 1, &params.refs());
     assert_eq!(event, PresetEvent::None, "no wrap past the last preset");
-    assert_eq!(session.current(), Some(PresetRef::factory("Wide")));
+    assert_eq!(session.current(), Some(wide()));
 
     editor.step(&bank, &session, -1, &params.refs());
-    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+    assert_eq!(session.current(), Some(init()));
     let event = editor.step(&bank, &session, -1, &params.refs());
     assert_eq!(event, PresetEvent::None, "no wrap before the first preset");
-    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+    assert_eq!(session.current(), Some(init()));
 }
 
-/// Stepping actually loads the sound, not just the label.
 #[test]
 fn stepping_recalls_the_preset_it_lands_on() {
     let root = TempRoot::new("bar-step-sound");
@@ -603,15 +771,14 @@ fn stepping_recalls_the_preset_it_lands_on() {
     let mut editor = PresetEditor::default();
     let params = TestParams::new();
 
-    editor.pick(&bank, &session, &PresetRef::factory("Init"), &params.refs());
+    editor.pick(&bank, &session, &init(), &params.refs());
     assert_eq!(params.taps.get_plain(), 3.0);
     editor.step(&bank, &session, 1, &params.refs());
     assert_eq!(params.taps.get_plain(), 7.0, "Wide's value should be live");
 }
 
 // ---------------------------------------------------------------------------
-// Identity through save_state / load_state — the half that regressed
-// every time the window closed
+// Identity through save_state / load_state
 // ---------------------------------------------------------------------------
 
 struct PresetPlugin {
@@ -628,6 +795,7 @@ impl ResonancePlugin for PresetPlugin {
     const FEATURES: &'static [&'static std::ffi::CStr] =
         &[resonance_plugin::features::AUDIO_EFFECT];
     const INPUT_CHANNELS: Option<u32> = Some(2);
+    const FACTORY_PRESETS: &'static [FactoryPreset] = FACTORY;
 
     fn new() -> Self {
         Self {
@@ -672,18 +840,17 @@ fn the_loaded_preset_survives_save_state_and_load_state() {
     plugin.presets.mark_modified();
     let blob = plugin.save_state();
 
-    // The identity is in the blob, next to the params.
     let value: serde_json::Value = serde_json::from_slice(&blob).unwrap();
     assert_eq!(value["preset"]["name"], "Session Sound");
     assert_eq!(value["preset"]["source"], "user");
+    assert_eq!(value["preset"]["id"], saved_ref.id.as_str());
     assert_eq!(value["preset"]["modified"], true);
 
-    // Reopening the project: a brand-new instance restores both the
-    // sound and the name the picker shows.
     let mut reopened = PresetPlugin::new();
     assert_eq!(reopened.presets.current(), None);
     assert!(reopened.load_state(&blob));
-    assert_eq!(reopened.presets.current(), Some(saved_ref));
+    assert_eq!(reopened.presets.current(), Some(saved_ref.clone()));
+    assert_eq!(reopened.presets.current().unwrap().id, saved_ref.id);
     assert!(reopened.presets.is_modified());
     assert_eq!(reopened.presets.label("— preset —"), "Session Sound *");
     assert!((reopened.params.mix.get_plain() - 0.77).abs() < 1e-6);
@@ -697,6 +864,16 @@ fn state_written_before_preset_identity_existed_still_loads() {
     assert_eq!(plugin.presets.current(), None);
     assert!(!plugin.presets.is_modified());
     assert!((plugin.params.mix.get_plain() - 0.25).abs() < 1e-6);
+}
+
+/// A preset file is accepted wherever a state document is: `load_state`
+/// of a whole format-1 file loads the document it carries.
+#[test]
+fn load_state_accepts_a_whole_preset_file() {
+    let mut plugin = PresetPlugin::new();
+    assert!(plugin.load_state(FACTORY[1].json.as_bytes()));
+    assert_eq!(plugin.params.taps.get_plain(), 7.0);
+    assert!(resonance_plugin::presets::load(FACTORY[1].json, 3, |i| plugin.param(i)));
 }
 
 #[test]
@@ -714,47 +891,52 @@ fn a_session_chains_a_plugins_own_extra_state_saver() {
     }
 
     let session = PresetSession::with_extra(Arc::new(FileSaver));
-    session.set_current(Some(PresetRef::factory("Init")));
+    session.set_current(Some(init()));
 
     let saved = session.save();
     assert_eq!(saved["ir_path"], "/tmp/cab.wav");
     assert_eq!(saved["preset"]["name"], "Init");
+    assert_eq!(saved["preset"]["id"], "init");
 
-    // The chained saver still sees the whole state object on the way back.
     session.load(&serde_json::json!({
         "ir_path": "/tmp/cab.wav",
-        "preset": {"name": "Init", "source": "factory", "modified": false},
+        "preset": {"id": "init", "name": "Init", "source": "factory", "modified": false},
     }));
-    assert_eq!(session.current(), Some(PresetRef::factory("Init")));
+    assert_eq!(session.current(), Some(init()));
 }
 
 // ---------------------------------------------------------------------------
 // The factory bank as the host reads it (ba todo #1333)
 // ---------------------------------------------------------------------------
 
-/// The host has no CLAP way to enumerate presets baked into a binary, so
-/// `export_clap!` exports them as JSON. Encode and decode are a pair and
-/// have to stay one.
+/// Encode and decode are a pair and have to stay one. The symbol carries
+/// the state document (so today's host loads it unchanged) plus the id
+/// and metadata.
 #[test]
 fn a_factory_bank_survives_the_trip_to_the_host() {
     let encoded = resonance_plugin::presets::encode_factory_bank(FACTORY)
         .expect("a well-formed bank encodes");
-    let decoded = resonance_plugin::presets::decode_factory_bank(
-        encoded.to_str().expect("valid utf-8"),
-    );
+    let text = encoded.to_str().expect("valid utf-8");
+    let decoded = resonance_plugin::presets::decode_factory_bank(text);
 
     let names: Vec<&str> = decoded.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, vec!["Init", "Wide"]);
 
-    // The bodies must arrive loadable, not as JSON quoted inside JSON.
+    // The bodies arrive as bare state documents, not preset files.
     let params = TestParams::new();
-    let wide = &decoded[1].1;
-    assert!(resonance_plugin::presets::apply(wide, &params.refs(), &[]));
+    let body: serde_json::Value = serde_json::from_str(&decoded[1].1).unwrap();
+    assert!(body.get("params").is_some(), "{body}");
+    assert!(resonance_plugin::presets::apply(&decoded[1].1, &params.refs(), &[]));
     assert_eq!(params.taps.get_plain(), 7.0);
+
+    // …and the id and metadata ride alongside.
+    let entries = resonance_plugin::presets::decode_factory_entries(text);
+    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["init", "wide"]);
+    let wide_file = PresetFile::parse(&entries[1].json).unwrap();
+    assert_eq!(wide_file.meta.category.as_deref(), Some("Creative"));
 }
 
-/// A plugin that ships no factory presets encodes to an empty bank rather
-/// than to something the host has to special-case.
 #[test]
 fn an_empty_factory_bank_decodes_to_nothing() {
     let encoded =
@@ -764,13 +946,16 @@ fn an_empty_factory_bank_decodes_to_nothing() {
     );
 }
 
-/// Junk from a newer or broken build is skipped entry by entry, not
-/// treated as "this plugin has no presets".
+/// Junk from a newer or broken build is skipped entry by entry.
 #[test]
 fn a_malformed_entry_does_not_take_the_bank_with_it() {
-    let decoded = resonance_plugin::presets::decode_factory_bank(
-        r#"[{"name":"Good","json":{"params":{}}},{"unexpected":true},{"name":"Also good","json":{}}]"#,
-    );
+    let text = r#"[{"name":"Good","json":{"params":{}}},{"unexpected":true},{"name":"Also good","json":{}}]"#;
+    let decoded = resonance_plugin::presets::decode_factory_bank(text);
     let names: Vec<&str> = decoded.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, vec!["Good", "Also good"]);
+
+    // An entry from a build before ids gets one slugged from its name.
+    let entries = resonance_plugin::presets::decode_factory_entries(text);
+    let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, vec!["good", "also-good"]);
 }

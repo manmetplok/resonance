@@ -43,7 +43,7 @@ use resonance_control::methods::plugin_preset::{
 };
 use resonance_control::methods::track::PluginParamView;
 use resonance_control::RpcError;
-use resonance_plugin::presets::{PresetBank, PresetRef};
+use resonance_plugin::presets::PresetBank;
 
 /// The bank for one plugin: its baked-in factory presets, plus this
 /// user's own directory for it.
@@ -125,7 +125,7 @@ fn json_for(
         bank.list_user()
             .into_iter()
             .find(|p| p.name.eq_ignore_ascii_case(wanted))
-            .and_then(|p| bank.json_for(&PresetRef::user(p.name)))
+            .and_then(|p| bank.json_for(&p))
     };
     let fact = || {
         factory
