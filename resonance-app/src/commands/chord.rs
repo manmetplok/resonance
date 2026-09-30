@@ -56,6 +56,10 @@ pub enum NamedKey {
     Plus,
     Minus,
     Comma,
+    Home,
+    End,
+    PageUp,
+    PageDown,
 }
 
 impl NamedKey {
@@ -75,6 +79,10 @@ impl NamedKey {
             NamedKey::Plus => "Plus",
             NamedKey::Minus => "Minus",
             NamedKey::Comma => "Comma",
+            NamedKey::Home => "Home",
+            NamedKey::End => "End",
+            NamedKey::PageUp => "PageUp",
+            NamedKey::PageDown => "PageDown",
         }
     }
 
@@ -94,6 +102,10 @@ impl NamedKey {
             NamedKey::Plus => "+",
             NamedKey::Minus => "−",
             NamedKey::Comma => ",",
+            NamedKey::Home => "Home",
+            NamedKey::End => "End",
+            NamedKey::PageUp => "PgUp",
+            NamedKey::PageDown => "PgDn",
         }
     }
 
@@ -112,6 +124,10 @@ impl NamedKey {
             "plus" => NamedKey::Plus,
             "minus" => NamedKey::Minus,
             "comma" => NamedKey::Comma,
+            "home" | "↖" => NamedKey::Home,
+            "end" | "↘" => NamedKey::End,
+            "pageup" | "pgup" | "⇞" => NamedKey::PageUp,
+            "pagedown" | "pgdn" | "⇟" => NamedKey::PageDown,
             _ => return None,
         };
         Some(k)
@@ -292,6 +308,10 @@ impl KeyChord {
                 N::ArrowDown => NamedKey::ArrowDown,
                 N::ArrowLeft => NamedKey::ArrowLeft,
                 N::ArrowRight => NamedKey::ArrowRight,
+                N::Home => NamedKey::Home,
+                N::End => NamedKey::End,
+                N::PageUp => NamedKey::PageUp,
+                N::PageDown => NamedKey::PageDown,
                 _ => return None,
             }),
             _ => return None,

@@ -66,7 +66,7 @@ impl KeymapPreset {
             ],
             KeymapPreset::ProTools => vec![
                 (TransportRecord, KeyChord::char('3', none)),
-                (TransportPlay, KeyChord::named(NamedKey::Space, none)),
+                (TransportTogglePlay, KeyChord::named(NamedKey::Space, none)),
                 (TransportToggleMetronome, KeyChord::char('7', none)),
                 (TransportToggleLoop, KeyChord::char('4', none)),
             ],
@@ -99,6 +99,15 @@ impl BindingMap {
         let cmd_shift = Mods::cmd_shift();
         let none = Mods::NONE;
         let key = |c: char| KeyChord::char(c, none);
+        let shift = Mods {
+            shift: true,
+            ..Mods::NONE
+        };
+        let alt = Mods {
+            alt: true,
+            ..Mods::NONE
+        };
+        let named = KeyChord::named;
 
         let entries = vec![
             // Project.
@@ -110,9 +119,32 @@ impl BindingMap {
             (Redo, KeyChord::char('z', cmd_shift)),
             (Redo, KeyChord::char('y', cmd)),
             (OpenSelectedMidiClip, KeyChord::named(NamedKey::Enter, none)),
-            // Transport: marker navigation.
+            // Transport (§5.1).
+            (TransportTogglePlay, named(NamedKey::Space, none)),
+            (TransportPlayPause, named(NamedKey::Space, shift)),
+            (TransportPlayFromLoopStart, named(NamedKey::Space, alt)),
+            (TransportRecord, key('r')),
+            (TransportToggleLoop, key('l')),
+            (TransportToggleMetronome, key('k')),
+            // Playhead and loop control (§5.2).
+            (PlayheadToStart, named(NamedKey::Home, none)),
+            (PlayheadToStart, named(NamedKey::ArrowLeft, cmd)),
+            (PlayheadToEnd, named(NamedKey::End, none)),
+            (PlayheadToEnd, named(NamedKey::ArrowRight, cmd)),
+            (PlayheadToLoopStart, key('[')),
+            (PlayheadToLoopEnd, key(']')),
+            (SetLoopStartAtPlayhead, key('i')),
+            (SetLoopEndAtPlayhead, key('o')),
+            (LoopSectionAtPlayhead, KeyChord::char('l', shift)),
+            (NudgeBackBar, named(NamedKey::ArrowLeft, none)),
+            (NudgeForwardBar, named(NamedKey::ArrowRight, none)),
+            (NudgeBackBeat, named(NamedKey::ArrowLeft, alt)),
+            (NudgeForwardBeat, named(NamedKey::ArrowRight, alt)),
             (NextMarker, key('.')),
             (PrevMarker, key(',')),
+            (NextSectionStart, KeyChord::char('.', shift)),
+            (PrevSectionStart, KeyChord::char(',', shift)),
+            (AddMarkerAtPlayhead, KeyChord::char('m', shift)),
             // View & Navigation.
             (TogglePerformanceMode, key('f')),
             (ExitPerformanceMode, KeyChord::named(NamedKey::Escape, none)),

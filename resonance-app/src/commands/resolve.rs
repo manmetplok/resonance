@@ -28,6 +28,17 @@ impl CommandId {
             TransportRecord if !r.registry.tracks.iter().any(|t| t.record_armed) => {
                 Available::No("Arm a track to record")
             }
+            TransportPlayFromLoopStart | PlayheadToLoopStart | PlayheadToLoopEnd
+                if r.transport.loop_in == r.transport.loop_out =>
+            {
+                Available::No("Set a loop range first")
+            }
+            LoopSectionAtPlayhead if section_at_playhead(r).is_none() => {
+                Available::No("No section at the playhead")
+            }
+            PrevSectionStart | NextSectionStart if r.compose.placements.is_empty() => {
+                Available::No("The song has no sections")
+            }
             OpenSelectedMidiClip if r.ui.interaction.selected_midi_clip.is_none() => {
                 Available::No("Select a MIDI clip first")
             }
@@ -56,12 +67,18 @@ impl CommandId {
     /// needs a target that `r` doesn't have. A fresh `Message` is built per
     /// call, so commands never need `Message: Clone`.
     pub fn to_message(self, r: &Resonance) -> Option<Message> {
-        let _ = r;
+        use crate::update::transport_nav::{LoopEdge, SeekTarget};
         use CommandId::*;
+        let seek = |target| Message::Transport(TransportMessage::SeekTo(target));
         let message = match self {
+            TransportTogglePlay => Message::Transport(TransportMessage::TogglePlay),
+            TransportPlayPause if r.transport.playing => {
+                Message::Transport(TransportMessage::Pause)
+            }
+            TransportPlayPause => Message::Transport(TransportMessage::Play),
+            TransportPlayFromLoopStart => Message::Transport(TransportMessage::PlayFromLoopStart),
             TransportPlay => Message::Transport(TransportMessage::Play),
             TransportStop => Message::Transport(TransportMessage::Stop),
-            TransportPause => Message::Transport(TransportMessage::Pause),
             TransportRecord => Message::Transport(TransportMessage::Record),
             TransportSkipBack => Message::Transport(TransportMessage::SkipBack),
             TransportSkipForward => Message::Transport(TransportMessage::SkipForward),
@@ -70,8 +87,34 @@ impl CommandId {
             TransportCycleTimeSignature => {
                 Message::Transport(TransportMessage::CycleTimeSignature)
             }
+            PlayheadToStart => seek(SeekTarget::ProjectStart),
+            PlayheadToEnd => seek(SeekTarget::ProjectEnd),
+            PlayheadToLoopStart => seek(SeekTarget::LoopStart),
+            PlayheadToLoopEnd => seek(SeekTarget::LoopEnd),
+            SetLoopStartAtPlayhead => {
+                Message::Transport(TransportMessage::SetLoopPoint { edge: LoopEdge::Start })
+            }
+            SetLoopEndAtPlayhead => {
+                Message::Transport(TransportMessage::SetLoopPoint { edge: LoopEdge::End })
+            }
+            LoopSectionAtPlayhead => {
+                let (loop_in, loop_out) = section_at_playhead(r)?;
+                Message::Transport(TransportMessage::SetLoopRange {
+                    loop_in,
+                    loop_out,
+                    enabled: Some(true),
+                })
+            }
+            NudgeBackBar => seek(SeekTarget::NudgeBars(-1)),
+            NudgeForwardBar => seek(SeekTarget::NudgeBars(1)),
+            NudgeBackBeat => seek(SeekTarget::NudgeBeats(-1)),
+            NudgeForwardBeat => seek(SeekTarget::NudgeBeats(1)),
             NextMarker => Message::Marker(MarkerMessage::JumpToNext),
             PrevMarker => Message::Marker(MarkerMessage::JumpToPrev),
+            PrevSectionStart => seek(SeekTarget::PrevSection),
+            NextSectionStart => seek(SeekTarget::NextSection),
+            AddMarkerAtPlayhead => Message::Marker(MarkerMessage::AddAtPlayhead),
+            ToggleFollowPlayhead => Message::Ui(UiMessage::ToggleFollowPlayhead),
 
             Undo => Message::Undo,
             Redo => Message::Redo,
@@ -119,4 +162,15 @@ impl CommandId {
         };
         Some(message)
     }
+}
+
+/// The `[start, end)` samples of the section placement under the playhead.
+pub(crate) fn section_at_playhead(r: &Resonance) -> Option<(u64, u64)> {
+    let pos = r.transport.playhead;
+    r.compose.placements.iter().find_map(|p| {
+        let def = r.compose.find_definition(p.definition_id)?;
+        let start = r.tempo_map.bar_to_sample(p.start_bar);
+        let end = r.tempo_map.bar_to_sample(p.start_bar + def.length_bars);
+        (start <= pos && pos < end).then_some((start, end))
+    })
 }

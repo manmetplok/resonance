@@ -192,65 +192,76 @@ fn intended(command: CommandId, legacy: (bool, String), new: (bool, String)) -> 
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Every chord the default table binds reproduces the legacy result.
+/// The modifiers the legacy match actually looked at for `key`: the ⌘
+/// branch tested Shift only on S, Z and F; the bare branch tested nothing.
+fn legacy_relevant(key: &Key, mods: Modifiers) -> Modifiers {
+    if mods.command() {
+        let shift_matters =
+            matches!(key, Key::Character(c) if ["s", "z", "f"].contains(&c.as_str()));
+        if shift_matters {
+            mods & (Modifiers::COMMAND | Modifiers::SHIFT)
+        } else {
+            Modifiers::COMMAND
+        }
+    } else {
+        Modifiers::empty()
+    }
+}
+
+/// Every chord the legacy table handled on purpose (its exact modifiers)
+/// yields the same message behind the same gate.
 #[test]
-fn every_bound_chord_matches_the_legacy_table() {
+fn every_legacy_chord_matches_the_registry() {
     let (app, _task) = Resonance::new_for_test();
-    let mut checked = std::collections::HashSet::new();
+    let mut checked = 0;
     for key in all_keys() {
         for mods in all_modifiers() {
-            let Some((command, new)) = registry(&app, &key, mods) else {
+            let Some(legacy) = legacy_key_press_message(key.clone(), mods) else {
                 continue;
             };
-            let legacy = legacy_key_press_message(key.clone(), mods)
-                .unwrap_or_else(|| panic!("{key:?}+{mods:?} → {command:?}, legacy: nothing"))
-                .key();
+            if legacy_relevant(&key, mods) != mods {
+                continue;
+            }
+            let legacy = legacy.key();
+            let (command, new) = registry(&app, &key, mods)
+                .unwrap_or_else(|| panic!("{key:?}+{mods:?}: legacy {legacy:?}, registry nothing"));
             if new != legacy {
                 assert!(
                     intended(command, legacy.clone(), new.clone()),
                     "{key:?}+{mods:?}: registry {new:?}, legacy {legacy:?}"
                 );
             }
-            checked.insert(KeyChord::from_iced(&key, mods).unwrap());
+            checked += 1;
         }
     }
-    // ⌘S ⇧⌘S ⌘O ⌘Z ⇧⌘Z ⌘Y ⌘G ⌘F ⇧⌘F ↵ F Esc . , — Super is not an
-    // accelerator on Linux, so it folds onto the same chords.
-    assert_eq!(checked.len(), 14, "every default binding was exercised");
-    assert_eq!(checked.len(), BindingMap::resonance_default().len());
+    // ⌘S ⇧⌘S ⌘O ⌘Z ⇧⌘Z ⌘Y ⌘G ⌘F ⇧⌘F ↵ F Esc . ,
+    assert_eq!(checked, 14, "every legacy chord was exercised");
 }
 
-/// Every legacy chord the registry no longer handles differs from a bound
-/// chord only by a modifier the legacy match ignored.
+/// A legacy chord with a modifier the old match ignored (Alt+⌘S, Shift+F)
+/// either no longer fires, still means the same thing, or was reassigned
+/// on purpose by the §5 keymap.
 #[test]
-fn legacy_chords_the_registry_drops_are_only_modifier_sloppy_variants() {
+fn modifier_sloppy_legacy_chords_are_dropped_or_reassigned_on_purpose() {
+    // §5.2: ⇧, / ⇧. jump between section starts.
+    let reassigned = [CommandId::PrevSectionStart, CommandId::NextSectionStart];
     let (app, _task) = Resonance::new_for_test();
     for key in all_keys() {
         for mods in all_modifiers() {
-            if legacy_key_press_message(key.clone(), mods).is_none()
-                || registry(&app, &key, mods).is_some()
-            {
+            let Some(legacy) = legacy_key_press_message(key.clone(), mods) else {
+                continue;
+            };
+            if legacy_relevant(&key, mods) == mods {
                 continue;
             }
-            // Strip the modifiers the legacy match never looked at.
-            let canonical = if mods.command() {
-                // The ⌘ branch only tested Shift (on S, Z and F).
-                let shift_matters = matches!(&key, Key::Character(c) if ["s", "z", "f"].contains(&c.as_str()));
-                if shift_matters {
-                    mods & (Modifiers::COMMAND | Modifiers::SHIFT)
-                } else {
-                    Modifiers::COMMAND
-                }
-            } else {
-                Modifiers::empty()
-            };
-            assert_ne!(canonical, mods, "{key:?}+{mods:?} is a canonical chord");
-            let bound = registry(&app, &key, canonical);
-            let legacy = legacy_key_press_message(key.clone(), mods).unwrap().key();
-            assert!(
-                bound.is_some_and(|(_, new)| new.1 == legacy.1),
-                "{key:?}+{mods:?} has no bound canonical form"
-            );
+            match registry(&app, &key, mods) {
+                None => {}
+                Some((_, new)) if new.1 == legacy.key().1 => {}
+                Some((command, _)) => assert!(
+                    reassigned.contains(&command),
+                    "{key:?}+{mods:?} now runs {command:?}"
+                ),
+            }
         }
     }
 }

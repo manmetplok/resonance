@@ -7,6 +7,7 @@ spec disagreed, the build followed the code and this document was corrected
 to match; those notes are marked *(as built)*.
 
 - **P0 landed.** The registry is the live dispatch.
+- **P1 landed.** Transport and playhead control, with Space bound.
 
 ## 0. Why
 
@@ -233,7 +234,7 @@ message. **NEW** = needs a new message or reducer (§6). All chords without
 | Command | Chord | | Notes |
 |---|---|---|---|
 | Play / Stop | `Space` | NEW | `TogglePlay`. If stopped, play. If playing, stop and **return to where playback started** (D1). |
-| Play / Pause (stop in place) | `⇧Space` | NEW | Stop without moving the playhead (existing `Pause`). |
+| Play / Pause (stop in place) | `⇧Space` | NEW | Stop without moving the playhead (existing `Pause`). *(As built:)* resolved in `to_message`: `Pause` while playing, `Play` when stopped, so no new message. |
 | Play from Loop Start | `⌥Space` | NEW | Seek to `loop_in`, then play. |
 | Stop and Return to Zero | — (palette) | L msg | The existing `Stop`. The ■ button keeps this behaviour. |
 | Record | `R` | N | Not available when no track is armed ("Arm a track to record"). |
@@ -254,11 +255,11 @@ message. **NEW** = needs a new message or reducer (§6). All chords without
 | **Set Loop End at Playhead** | `O` | NEW | The mirror of Set Loop Start. If `out <= in`, `in` becomes `out − 1 bar`, clamped at 0. |
 | **Loop Selection** | `⌘L` | NEW | Sets and enables the loop from the current selection, trying these in order: selected clips (their union), the selected section placement, the selected marker region. Not available with no selection. |
 | Loop Section at Playhead | `⇧L` | NEW | The section placement under the playhead. |
-| Nudge Playhead Back / Forward 1 Bar | `←` / `→` | NEW | Bar-aligned through the tempo map, so it is meter-aware. The first press snaps to the nearest bar line. Repeats while held. |
-| Nudge Playhead Back / Forward 1 Beat | `⌥←` / `⌥→` | NEW | Uses the beat unit of the signature in force at the playhead. Repeats while held. |
+| Nudge Playhead Back / Forward 1 Bar | `←` / `→` | NEW | Bar-aligned through the tempo map, so it is meter-aware. An off-grid playhead first snaps to the bar line **in the direction of travel** *(as built: "nearest" would move → backwards)*. Repeats while held. |
+| Nudge Playhead Back / Forward 1 Beat | `⌥←` / `⌥→` | NEW | Uses the beat unit of the signature in force at the playhead (a 7/8 beat is an eighth). Same off-grid rule. Repeats while held. |
 | Previous / Next Marker | `,` / `.` | L | |
 | Previous / Next Section Start | `⇧,` / `⇧.` | NEW | Jumps across section placement starts. |
-| Add Marker at Playhead | `⇧M` | N | Gives the existing orphan `MarkerMessage::AddAtPlayhead` its first user-facing entry point. |
+| Add Marker at Playhead | `⇧M` | N | Gives the existing orphan `MarkerMessage::AddAtPlayhead` its first user-facing entry point. *(As built: lands in P1 with the other §5.2 keys.)* |
 | Go to Bar… | `⌘J` | NEW | Opens the palette in `:` mode (§7.4). |
 | Rewind / Fast-forward 5 s | — (palette) | L msg | The existing `SkipBack` / `SkipForward`, renamed to match what they actually do. |
 | Toggle Follow Playhead | — (palette) | L msg | |
@@ -337,10 +338,10 @@ adjust the names, as long as the undo classification below holds.
 
 | Message | Undo | Notes |
 |---|---|---|
-| `TransportMessage::TogglePlay` | Skip | Adds `TransportState.play_start: u64`, recorded by Play, Record and TogglePlay. On stop, it seeks back to `play_start`. In Compose view the existing Play branch still auto-loops the selected section. |
+| `TransportMessage::TogglePlay` | Skip | Adds `TransportState.play_start: u64`, recorded by Play, Record and TogglePlay. On stop it sends the engine `Stop` (which also ends a recording pass), then `SeekTo(play_start)`. In Compose view the existing Play branch still auto-loops the selected section; `play_start` is recorded after that seek. |
 | `TransportMessage::PlayFromLoopStart` | Skip | |
-| `TransportMessage::SeekTo(SeekTarget)` | Skip | `SeekTarget::{ProjectStart, ProjectEnd, LoopStart, LoopEnd, NudgeBars(i32), NudgeBeats(i32), PrevSection, NextSection, Bar(u32)}`. This is one reducer, so all the seek maths lives in one place and can be tested. It resolves through `TempoMap` and then calls the existing `SeekToSample` path. |
-| `TransportMessage::SetLoopPoint{edge: LoopEdge, at: LoopAt}` | Record | `LoopAt::{Playhead, Selection, SectionAtPlayhead}`. Snapping and the swap/clamp rules from §5.2 live here. |
+| `TransportMessage::SeekTo(SeekTarget)` | Skip | `SeekTarget::{ProjectStart, ProjectEnd, LoopStart, LoopEnd, NudgeBars(i32), NudgeBeats(i32), PrevSection, NextSection, Bar{bar, beat}}` (1-based, so `:17.3` maps straight onto it). One reducer (`update/transport_nav.rs`), so all the seek maths lives in one place and can be tested. It resolves through `TempoMap` and sends the engine `SeekTo`, as `SeekToSample` does. |
+| `TransportMessage::SetLoopPoint{edge: LoopEdge}` | Record | *(As built)* the playhead case only. Snapping and the swap/clamp rules from §5.2 live here. Loop Selection and Loop Section at Playhead set both edges at once, so they resolve their range in `to_message` and emit the existing `SetLoopRange{…, enabled: Some(true)}` (the §3.4 single-target rule) instead of a `LoopAt` variant. |
 | `TrackMessage::{ToggleMuteSelected, ToggleSoloSelected, ToggleArmSelected}` | Record | Mixed state resolves to "all on" when any selected track is off, which matches the group macro behaviour. |
 | `UiMessage::{OpenPalette(PaletteMode), ClosePalette, Palette(PaletteMsg), RunShortcut(CommandId), DismissOverlay}` | Skip | |
 

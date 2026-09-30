@@ -40,6 +40,7 @@ pub mod tempo_reanchor;
 pub mod tick;
 pub mod track;
 pub mod transport;
+pub mod transport_nav;
 pub mod ui;
 pub mod viewport;
 pub mod vocal_tuning;

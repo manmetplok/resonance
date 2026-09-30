@@ -15,6 +15,9 @@ pub struct TransportState {
     pub recording: bool,
     pub recording_start_sample: u64,
     pub playhead: u64,
+    /// Where the current playback started (set by Play, Record and the
+    /// Play / Stop toggle); the toggle's stop returns here.
+    pub play_start: u64,
     pub bpm: f32,
     pub bpm_input: String,
     pub time_sig_num: u8,
@@ -37,6 +40,7 @@ impl Default for TransportState {
             recording: false,
             recording_start_sample: 0,
             playhead: 0,
+            play_start: 0,
             bpm: 120.0,
             bpm_input: "120".to_string(),
             time_sig_num: 4,

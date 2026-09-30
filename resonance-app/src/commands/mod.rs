@@ -139,17 +139,35 @@ macro_rules! command_ids {
 
 command_ids! {
     // --- Transport ---
+    TransportTogglePlay,
+    TransportPlayPause,
+    TransportPlayFromLoopStart,
     TransportPlay,
     TransportStop,
-    TransportPause,
     TransportRecord,
-    TransportSkipBack,
-    TransportSkipForward,
     TransportToggleLoop,
     TransportToggleMetronome,
     TransportCycleTimeSignature,
-    NextMarker,
+    // Playhead and loop control.
+    PlayheadToStart,
+    PlayheadToEnd,
+    PlayheadToLoopStart,
+    PlayheadToLoopEnd,
+    SetLoopStartAtPlayhead,
+    SetLoopEndAtPlayhead,
+    LoopSectionAtPlayhead,
+    NudgeBackBar,
+    NudgeForwardBar,
+    NudgeBackBeat,
+    NudgeForwardBeat,
     PrevMarker,
+    NextMarker,
+    PrevSectionStart,
+    NextSectionStart,
+    AddMarkerAtPlayhead,
+    TransportSkipBack,
+    TransportSkipForward,
+    ToggleFollowPlayhead,
 
     // --- Editing ---
     Undo,
@@ -198,10 +216,16 @@ impl CommandId {
     pub fn category(self) -> CommandCategory {
         use CommandId::*;
         match self {
-            TransportPlay | TransportStop | TransportPause | TransportRecord
-            | TransportSkipBack | TransportSkipForward | TransportToggleLoop
-            | TransportToggleMetronome | TransportCycleTimeSignature | NextMarker
-            | PrevMarker => CommandCategory::Transport,
+            TransportTogglePlay | TransportPlayPause | TransportPlayFromLoopStart
+            | TransportPlay | TransportStop | TransportRecord | TransportSkipBack
+            | TransportSkipForward | TransportToggleLoop | TransportToggleMetronome
+            | TransportCycleTimeSignature | PlayheadToStart | PlayheadToEnd
+            | PlayheadToLoopStart | PlayheadToLoopEnd | SetLoopStartAtPlayhead
+            | SetLoopEndAtPlayhead | LoopSectionAtPlayhead | NudgeBackBar | NudgeForwardBar
+            | NudgeBackBeat | NudgeForwardBeat | PrevMarker | NextMarker | PrevSectionStart
+            | NextSectionStart | AddMarkerAtPlayhead | ToggleFollowPlayhead => {
+                CommandCategory::Transport
+            }
 
             Undo | Redo | OpenSelectedMidiClip | CloseMidiEditor => CommandCategory::Editing,
 
@@ -225,17 +249,34 @@ impl CommandId {
     pub fn display_name(self) -> &'static str {
         use CommandId::*;
         match self {
+            TransportTogglePlay => "Play / Stop",
+            TransportPlayPause => "Play / Pause",
+            TransportPlayFromLoopStart => "Play from Loop Start",
             TransportPlay => "Play",
-            TransportStop => "Stop",
-            TransportPause => "Pause",
+            TransportStop => "Stop and Return to Zero",
             TransportRecord => "Record",
-            TransportSkipBack => "Skip to Start",
-            TransportSkipForward => "Skip to End",
             TransportToggleLoop => "Toggle Loop",
             TransportToggleMetronome => "Toggle Metronome",
             TransportCycleTimeSignature => "Cycle Time Signature",
-            NextMarker => "Next Marker",
+            PlayheadToStart => "Playhead to Project Start",
+            PlayheadToEnd => "Playhead to Project End",
+            PlayheadToLoopStart => "Playhead to Loop Start",
+            PlayheadToLoopEnd => "Playhead to Loop End",
+            SetLoopStartAtPlayhead => "Set Loop Start at Playhead",
+            SetLoopEndAtPlayhead => "Set Loop End at Playhead",
+            LoopSectionAtPlayhead => "Loop Section at Playhead",
+            NudgeBackBar => "Nudge Playhead Back 1 Bar",
+            NudgeForwardBar => "Nudge Playhead Forward 1 Bar",
+            NudgeBackBeat => "Nudge Playhead Back 1 Beat",
+            NudgeForwardBeat => "Nudge Playhead Forward 1 Beat",
             PrevMarker => "Previous Marker",
+            NextMarker => "Next Marker",
+            PrevSectionStart => "Previous Section Start",
+            NextSectionStart => "Next Section Start",
+            AddMarkerAtPlayhead => "Add Marker at Playhead",
+            TransportSkipBack => "Rewind 5 s",
+            TransportSkipForward => "Fast-forward 5 s",
+            ToggleFollowPlayhead => "Toggle Follow Playhead",
 
             Undo => "Undo",
             Redo => "Redo",
@@ -286,12 +327,12 @@ impl CommandId {
     pub fn glyph(self) -> Option<char> {
         use CommandId::*;
         match self {
-            TransportPlay => Some('▶'),
+            TransportTogglePlay | TransportPlay | TransportPlayFromLoopStart => Some('▶'),
             TransportStop => Some('■'),
-            TransportPause => Some('⏸'),
+            TransportPlayPause => Some('⏸'),
             TransportRecord => Some('●'),
-            TransportSkipBack => Some('⏮'),
-            TransportSkipForward => Some('⏭'),
+            TransportSkipBack | PlayheadToStart => Some('⏮'),
+            TransportSkipForward | PlayheadToEnd => Some('⏭'),
             _ => None,
         }
     }
@@ -301,9 +342,23 @@ impl CommandId {
     pub fn keywords(self) -> &'static [&'static str] {
         use CommandId::*;
         match self {
+            TransportTogglePlay => &["start", "transport", "spacebar"],
+            TransportPlayPause => &["stop in place", "hold", "transport"],
+            TransportPlayFromLoopStart => &["cycle", "transport"],
             TransportPlay => &["start", "transport"],
-            TransportStop => &["transport", "halt", "zero"],
-            TransportPause => &["transport", "hold"],
+            TransportStop => &["transport", "halt", "zero", "rewind"],
+            PlayheadToStart => &["home", "beginning", "rewind", "zero"],
+            PlayheadToEnd => &["end", "last"],
+            PlayheadToLoopStart | PlayheadToLoopEnd => &["cycle", "locate", "jump"],
+            SetLoopStartAtPlayhead | SetLoopEndAtPlayhead => &["cycle", "in point", "out point"],
+            LoopSectionAtPlayhead => &["cycle", "part", "verse", "chorus"],
+            NudgeBackBar | NudgeForwardBar | NudgeBackBeat | NudgeForwardBeat => {
+                &["move", "step", "playhead"]
+            }
+            PrevSectionStart | NextSectionStart => &["part", "jump", "verse", "chorus"],
+            AddMarkerAtPlayhead => &["locator", "flag", "cue"],
+            TransportSkipBack | TransportSkipForward => &["seconds", "skip", "scrub"],
+            ToggleFollowPlayhead => &["scroll", "track playhead"],
             TransportRecord => &["arm", "capture", "take"],
             TransportToggleLoop => &["cycle", "repeat"],
             TransportToggleMetronome => &["click", "count"],
@@ -358,7 +413,11 @@ impl CommandId {
     /// Whether key repeat re-fires this command. True only for nudges and
     /// zoom — never for a toggle.
     pub fn repeat(self) -> bool {
-        matches!(self, CommandId::ZoomIn | CommandId::ZoomOut)
+        use CommandId::*;
+        matches!(
+            self,
+            ZoomIn | ZoomOut | NudgeBackBar | NudgeForwardBar | NudgeBackBeat | NudgeForwardBeat
+        )
     }
 
     /// Where the command's binding is live.
