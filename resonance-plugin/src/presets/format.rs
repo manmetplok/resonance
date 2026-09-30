@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::vocab;
+use resonance_common::library_marks::{normalize_tag, vocab};
 
 /// `format` marker of a preset file.
 pub const FORMAT: &str = "resonance.preset";
@@ -84,7 +84,7 @@ impl PresetMeta {
         self.name = self.name.trim().to_string();
         self.author = blank_to_none(self.author);
         self.description = blank_to_none(self.description);
-        self.category = self.category.as_deref().and_then(vocab::canonical_category);
+        self.category = self.category.as_deref().and_then(canonical_category);
         for list in [
             &mut self.instrument,
             &mut self.genres,
@@ -93,7 +93,7 @@ impl PresetMeta {
         ] {
             let mut seen = Vec::with_capacity(list.len());
             for value in list.drain(..) {
-                if let Some(v) = vocab::normalize_facet(&value) {
+                if let Some(v) = normalize_tag(&value) {
                     if !seen.contains(&v) {
                         seen.push(v);
                     }
@@ -119,6 +119,22 @@ impl PresetMeta {
         self.character = other.character.clone();
         self.tags = other.tags.clone();
     }
+}
+
+/// The vocabulary spelling of a category (`"bass"` → `"Bass"`), or the
+/// trimmed input when it is not a seeded category. `None` for blank.
+/// Categories keep their case (they are display labels, one per preset);
+/// every other facet value is slugged by [`normalize_tag`].
+pub fn canonical_category(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let seeded = vocab::CATEGORIES_INSTRUMENT
+        .iter()
+        .chain(vocab::CATEGORIES_EFFECT)
+        .find(|c| c.eq_ignore_ascii_case(trimmed));
+    Some(seeded.map(|c| c.to_string()).unwrap_or_else(|| trimmed.to_string()))
 }
 
 /// Which plugin a preset belongs to.

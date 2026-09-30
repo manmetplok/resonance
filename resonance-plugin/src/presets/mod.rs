@@ -50,13 +50,13 @@ use crate::state::ParamRename;
 mod bank;
 mod editor;
 pub mod format;
-mod fs;
+mod files;
 mod library;
 pub mod marks;
 pub mod migrate;
 pub mod query;
+pub mod rows;
 mod session;
-pub mod vocab;
 
 pub use bank::{PresetBank, SaveOptions};
 pub use editor::{NamingKind, PresetEditor, PresetEvent};
@@ -64,7 +64,8 @@ pub use format::{PresetFile, PresetMeta, PresetPluginInfo, PresetState};
 pub use library::{
     Clock, FactoryEntry, PresetLibrary, PresetRecord, SaveRequest, TRASH_DIR, TRASH_RETENTION,
 };
-pub use marks::{mark_key, MarksSource, NoMarks, PresetMarks};
+pub use marks::{mark_key, MarksSource, NoMarks};
+pub use rows::{PresetRow, PresetRows};
 pub use query::{Facets, Hit, Query, QueryResult, Sort};
 pub use session::PresetSession;
 
@@ -314,7 +315,7 @@ pub fn decode_factory_entries(text: &str) -> Vec<FactoryEntry> {
                 .get("id")
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
-                .or_else(|| vocab::normalize_facet(&name))?;
+                .or_else(|| resonance_common::library_marks::normalize_tag(&name))?;
             let meta: PresetMeta = entry
                 .get("meta")
                 .and_then(|m| serde_json::from_value(m.clone()).ok())

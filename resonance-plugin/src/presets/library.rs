@@ -31,8 +31,10 @@ use parking_lot::{Mutex, RwLock};
 
 use super::format::{self, PresetFile, PresetMeta, PresetPluginInfo};
 use super::marks::{mark_key, MarksSource, NoMarks};
-use super::query::{self, Candidate, Query, QueryResult};
-use super::{fs, migrate, user_preset_root, FactoryPreset, PresetRef, PresetSource};
+use super::query::{self, Query, QueryResult};
+use super::rows::PresetRows;
+use resonance_common::library_marks::{Marks, SharedMarks};
+use super::{files, migrate, user_preset_root, FactoryPreset, PresetRef, PresetSource};
 use super::PRESET_STATE_KEY;
 
 /// How long a deleted user preset stays recoverable in `.trash/` (D10).
@@ -125,7 +127,11 @@ struct PluginIndex {
 /// The preset index for one preset root. See the module docs.
 pub struct PresetLibrary {
     root: Option<PathBuf>,
-    marks: RwLock<Arc<dyn MarksSource>>,
+    /// `None` until installed or first needed: the process-wide default
+    /// library opens the user's marks store lazily ([`Self::marks`]), so
+    /// nothing reads it unless a query or a mark asks.
+    marks: RwLock<Option<Arc<dyn MarksSource>>>,
+    default_marks: bool,
     clock: Clock,
     plugins: Mutex<HashMap<String, PluginIndex>>,
 }
@@ -142,7 +148,8 @@ impl PresetLibrary {
     pub fn new() -> Self {
         Self {
             root: None,
-            marks: RwLock::new(Arc::new(NoMarks)),
+            marks: RwLock::new(None),
+            default_marks: false,
             clock: Arc::new(SystemTime::now),
             plugins: Mutex::new(HashMap::new()),
         }
@@ -164,7 +171,14 @@ impl PresetLibrary {
     /// The process-wide library over the default root.
     pub fn shared() -> Arc<Self> {
         static SHARED: OnceLock<Arc<PresetLibrary>> = OnceLock::new();
-        SHARED.get_or_init(|| Arc::new(Self::new())).clone()
+        SHARED
+            .get_or_init(|| {
+                Arc::new(Self {
+                    default_marks: true,
+                    ..Self::new()
+                })
+            })
+            .clone()
     }
 
     /// The process-wide library over `root`, created on first use.
@@ -178,14 +192,29 @@ impl PresetLibrary {
             .clone()
     }
 
-    /// Install the marks store (**integration seam**, see
-    /// [`super::marks`]).
+    /// Install the marks store this library reads and writes marks
+    /// through (the app installs its own `SharedMarks`).
     pub fn set_marks(&self, marks: Arc<dyn MarksSource>) {
-        *self.marks.write() = marks;
+        *self.marks.write() = Some(marks);
     }
 
+    /// The marks store. The process-wide default library opens the user's
+    /// store ([`SharedMarks::open_default_or_detached`], honouring
+    /// `RESONANCE_LIBRARY_DIR`) the first time it is asked; a library over
+    /// an explicit root reads [`NoMarks`] until one is installed.
     pub fn marks(&self) -> Arc<dyn MarksSource> {
-        self.marks.read().clone()
+        if let Some(m) = self.marks.read().clone() {
+            return m;
+        }
+        let mut slot = self.marks.write();
+        slot.get_or_insert_with(|| {
+            if self.default_marks {
+                Arc::new(SharedMarks::open_default_or_detached())
+            } else {
+                Arc::new(NoMarks)
+            }
+        })
+        .clone()
     }
 
     /// The root directory, or `None` when the platform has no data
@@ -339,17 +368,19 @@ impl PresetLibrary {
         }
     }
 
-    /// Search. `q.plugins` empty searches every plugin this library has
-    /// indexed or had a factory bank registered for.
-    pub fn query(&self, q: &Query) -> QueryResult {
-        let plugin_ids: Vec<String> = if q.plugins.is_empty() {
+    /// The rows of `plugin_ids` (every plugin this library knows when
+    /// empty), with marks fresh from the store: what a browser and
+    /// `presets.search` read.
+    pub fn rows(&self, plugin_ids: &[String]) -> PresetRows {
+        let plugin_ids: Vec<String> = if plugin_ids.is_empty() {
             let mut ids: Vec<String> = self.plugins.lock().keys().cloned().collect();
             ids.sort();
             ids
         } else {
-            q.plugins.clone()
+            plugin_ids.to_vec()
         };
         let marks = self.marks();
+        marks.refresh();
         let sets: Vec<(String, Arc<Vec<PresetRecord>>)> = plugin_ids
             .into_iter()
             .map(|id| {
@@ -357,18 +388,63 @@ impl PresetLibrary {
                 (id, records)
             })
             .collect();
-        let mut candidates = Vec::new();
-        for (order, (plugin_id, records)) in sets.iter().enumerate() {
-            for record in records.iter() {
-                candidates.push(Candidate {
-                    plugin_id,
-                    plugin_order: order,
-                    record,
-                    marks: marks.marks(&mark_key(plugin_id, &record.preset.id)),
-                });
-            }
-        }
-        query::run(&candidates, q)
+        PresetRows::build(
+            sets.iter().map(|(id, r)| (id.as_str(), r.as_slice())),
+            marks.as_ref(),
+        )
+    }
+
+    /// Search. `q.plugins` empty searches every plugin this library has
+    /// indexed or had a factory bank registered for.
+    pub fn query(&self, q: &Query) -> QueryResult {
+        query::run(&self.rows(&q.plugins), q)
+    }
+
+    // -----------------------------------------------------------------
+    // Marks (favourite, personal tags, recents)
+    // -----------------------------------------------------------------
+
+    /// The marks of one preset.
+    pub fn preset_marks(&self, plugin_id: &str, preset_id: &str) -> Marks {
+        self.marks().marks(&mark_key(plugin_id, preset_id))
+    }
+
+    /// Star or unstar a preset (factory presets too: marks never touch the
+    /// preset). Per-user state, not content.
+    pub fn set_favorite(
+        &self,
+        plugin_id: &str,
+        preset_id: &str,
+        favorite: bool,
+    ) -> Result<Marks, String> {
+        self.marks()
+            .update(&mark_key(plugin_id, preset_id), &|m| m.favorite = favorite)
+    }
+
+    /// Replace a preset's personal tags (normalised; empty clears).
+    pub fn set_personal_tags(
+        &self,
+        plugin_id: &str,
+        preset_id: &str,
+        tags: &[String],
+    ) -> Result<Marks, String> {
+        let tags = resonance_common::library_marks::normalize_tags(tags);
+        self.marks()
+            .update(&mark_key(plugin_id, preset_id), &|m| m.tags = tags.clone())
+    }
+
+    /// Record a user pick (a browser/bar pick or a control-API load, never
+    /// a project restore): `last_used` = now, `use_count` + 1.
+    pub fn record_use(&self, plugin_id: &str, preset_id: &str) -> Result<Marks, String> {
+        let now = self
+            .now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.marks().update(&mark_key(plugin_id, preset_id), &|m| {
+            m.last_used = Some(now);
+            m.use_count = m.use_count.saturating_add(1);
+        })
     }
 
     // -----------------------------------------------------------------
@@ -433,11 +509,11 @@ impl PresetLibrary {
             }
         };
         let file = PresetFile::new(id, plugin, meta.normalized(), doc);
-        let path = dir.join(fs::preset_file_name(&name, &file.id));
+        let path = dir.join(files::preset_file_name(&name, &file.id));
         if let Some(old) = &old_path {
-            fs::move_before_rewrite(old, &path)?;
+            files::move_before_rewrite(old, &path)?;
         }
-        fs::atomic_write(&path, file.to_text()?.as_bytes())?;
+        files::atomic_write(&path, file.to_text()?.as_bytes())?;
         let record = user_record(&file, path);
         upsert_user(index, record.clone());
         Ok(record)
@@ -481,9 +557,9 @@ impl PresetLibrary {
         let mut file = PresetFile::parse(&text)?;
         file.meta.name = new_name.clone();
         file.meta.modified = Some(format::rfc3339(self.now()));
-        let to = from.with_file_name(fs::preset_file_name(&new_name, &file.id));
-        fs::move_before_rewrite(&from, &to)?;
-        fs::atomic_write(&to, file.to_text()?.as_bytes())?;
+        let to = from.with_file_name(files::preset_file_name(&new_name, &file.id));
+        files::move_before_rewrite(&from, &to)?;
+        files::atomic_write(&to, file.to_text()?.as_bytes())?;
         let record = user_record(&file, to);
         upsert_user(index, record.clone());
         Ok(record)
@@ -687,7 +763,7 @@ pub(crate) fn validate_name(name: &str) -> Result<String, String> {
     if trimmed.is_empty() {
         return Err("A preset needs a name".to_string());
     }
-    if fs::sanitize_filename(trimmed).trim_matches('_').is_empty() {
+    if files::sanitize_filename(trimmed).trim_matches('_').is_empty() {
         return Err("That name has no usable characters".to_string());
     }
     Ok(trimmed.to_string())
@@ -773,7 +849,7 @@ fn scan_dir(
     let mut found: Vec<(PresetFile, PathBuf, Option<SystemTime>)> = Vec::new();
     for entry in entries.flatten() {
         let mut path = entry.path();
-        if !fs::is_preset_path(&path) {
+        if !files::is_preset_path(&path) {
             continue;
         }
         let Ok(text) = std::fs::read_to_string(&path) else {
@@ -782,7 +858,7 @@ fn scan_dir(
         let value: serde_json::Value = match serde_json::from_str(&text) {
             Ok(v) => v,
             Err(_) => {
-                fs::quarantine(&path);
+                files::quarantine(&path);
                 continue;
             }
         };
@@ -794,7 +870,7 @@ fn scan_dir(
             match PresetFile::from_value(value) {
                 Ok(file) => file,
                 Err(_) => {
-                    fs::quarantine(&path);
+                    files::quarantine(&path);
                     continue;
                 }
             }
@@ -834,10 +910,10 @@ fn scan_dir(
         }
         if remint {
             file.id = format::new_uuid();
-            let to = dir.join(fs::preset_file_name(&file.meta.name, &file.id));
-            let written = fs::move_before_rewrite(&path, &to)
+            let to = dir.join(files::preset_file_name(&file.meta.name, &file.id));
+            let written = files::move_before_rewrite(&path, &to)
                 .and_then(|()| file.to_text())
-                .and_then(|text| fs::atomic_write(&to, text.as_bytes()));
+                .and_then(|text| files::atomic_write(&to, text.as_bytes()));
             if let Err(e) = written {
                 tracing::warn!("{}: could not write a new id: {e}", path.display());
                 continue;

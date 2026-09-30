@@ -13,8 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use resonance_plugin::presets::migrate::{convert_legacy_dir, LEGACY_RETENTION, LEGACY_SUFFIX};
 use resonance_plugin::presets::{
     mark_key, FactoryEntry, FactoryPreset, MarksSource, PresetBank, PresetFile, PresetLibrary,
-    PresetMarks, PresetMeta, PresetRef, PresetSource, Query, SaveOptions, Sort, TRASH_RETENTION,
+    PresetMeta, PresetRef, PresetSource, Query, SaveOptions, Sort, TRASH_RETENTION,
 };
+use resonance_plugin::library_marks::{Marks, SharedMarks};
 use resonance_plugin::{FloatParam, FloatRange, Param};
 
 const PLUGIN: &str = "com.resonance.test";
@@ -188,15 +189,17 @@ fn an_empty_query_lists_everything_in_bank_order() {
 }
 
 #[test]
-fn text_tokens_are_prefixes_anded_and_name_hits_rank_first() {
+fn text_tokens_are_substrings_anded_in_bank_order() {
     let root = TempRoot::new("text");
     let (library, _) = seeded(&root);
-    // "Reese" is in two names and one description; name hits come first,
-    // bank order within each group.
+    // One engine (library_view::BrowserModel): substring matching over
+    // name, author, description, category and tags, in bank order.
+    // "Reese" is in two names and one description.
     assert_eq!(
         hit_names(&library, &q("rees")),
-        vec!["Bass — Reese", "Ferrous Reese", "Lead — Acid"]
+        vec!["Bass — Reese", "Lead — Acid", "Ferrous Reese"]
     );
+    assert_eq!(hit_names(&library, &q("eese")).len(), 3, "substring, not prefix");
     // Tokens AND: both must match somewhere.
     assert_eq!(hit_names(&library, &q("reese ferr")), vec!["Ferrous Reese"]);
     // Tags and category are searched too.
@@ -307,16 +310,17 @@ fn sources_filter_and_sorts_order() {
 fn favourites_and_personal_tags_come_from_the_marks_source() {
     struct Fake;
     impl MarksSource for Fake {
-        fn marks(&self, key: &str) -> PresetMarks {
+        fn marks(&self, key: &str) -> Marks {
             if key == mark_key(PLUGIN, "lead-acid") {
-                PresetMarks {
+                Marks {
                     favorite: true,
                     tags: vec!["mine".into()],
-                    last_used: Some("2026-09-30T10:00:00Z".into()),
+                    last_used: Some(1_790_000_000),
                     use_count: 3,
+                    ..Marks::default()
                 }
             } else {
-                PresetMarks::default()
+                Marks::default()
             }
         }
     }
@@ -334,6 +338,12 @@ fn favourites_and_personal_tags_come_from_the_marks_source() {
     assert_eq!(hit_names(&library, &q("tag:mine")), vec!["Lead — Acid"]);
     let hit = library.query(&q("tag:mine")).hits.remove(0);
     assert_eq!(hit.tags, vec!["303", "mine"]);
+    assert_eq!(hit.personal_tags, vec!["mine"]);
+    assert_eq!(
+        hit.last_used.as_deref(),
+        Some("2026-09-21T14:13:20Z"),
+        "last_used crosses to presets as RFC 3339"
+    );
 
     let first = Query {
         favorites_first: true,
@@ -345,6 +355,47 @@ fn favourites_and_personal_tags_come_from_the_marks_source() {
         ..Query::plugin(PLUGIN)
     };
     assert_eq!(hit_names(&library, &recent)[0], "Lead — Acid");
+}
+
+/// Convergence (9): the shared `SharedMarks` store is a marks source.
+/// Stars and personal tags written through the library land in
+/// `marks.json` under `plugin-preset:<clap>:<id>`, a factory preset
+/// included, and a write from another process is picked up by the next
+/// query (the refresh hook).
+#[test]
+fn the_shared_marks_store_backs_the_library() {
+    let root = TempRoot::new("shared-marks");
+    let marks_dir = root.0.join("library");
+    let (library, _) = seeded(&root);
+    library.set_marks(Arc::new(SharedMarks::open(&marks_dir).unwrap()));
+
+    library.set_favorite(PLUGIN, "bass-reese", true).unwrap();
+    library
+        .set_personal_tags(PLUGIN, "bass-reese", &["Mine Too".to_string()])
+        .unwrap();
+    let hit = library.query(&q("is:fav")).hits.remove(0);
+    assert_eq!(hit.record.preset.id, "bass-reese");
+    assert_eq!(hit.personal_tags, vec!["mine-too"]);
+    let text = std::fs::read_to_string(marks_dir.join("marks.json")).unwrap();
+    assert!(text.contains("plugin-preset:com.resonance.test:bass-reese"), "{text}");
+
+    // Another process stars a second preset.
+    let other = SharedMarks::open(&marks_dir).unwrap();
+    other
+        .set_favorite("plugin-preset:com.resonance.test:lead-acid", true)
+        .unwrap();
+    let before = library.marks().generation();
+    assert_eq!(hit_names(&library, &q("is:fav")).len(), 2, "refreshed before the query");
+    assert!(library.marks().generation() > before);
+
+    library.record_use(PLUGIN, "lead-acid").unwrap();
+    let recent = Query {
+        sort: Sort::RecentlyUsed,
+        ..Query::plugin(PLUGIN)
+    };
+    let first = library.query(&recent).hits.remove(0);
+    assert_eq!(first.record.preset.id, "lead-acid");
+    assert!(first.last_used.is_some());
 }
 
 #[test]

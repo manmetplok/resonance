@@ -1176,16 +1176,32 @@ round 2 reconciles it)
   `library_view::BrowserModel` replaces. `PresetLibrary::query` is the
   model's row source.
 
-**Deferred to round 2** (found in review, not fixed here)
+**Round-1 review items, resolved in round 2 (convergence)**
 
-- `MarksSource::generation()` is documented as feeding the freshness
-  fingerprint, but nothing calls it and there is no refresh hook; and
-  `PresetMarks::last_used` is an RFC 3339 string where `library_marks`
-  has its own type. Reconcile both when the trait is implemented for the
-  real store.
-- `presets::query` and `library_view::BrowserModel` both implement search,
-  with different token syntax. Choose one engine; the other becomes a
-  thin adapter.
-- `presets::vocab::normalize_facet` and `library_marks::normalize_tag`
-  slug differently (`r&b` → `r-b` here, `rb` there), so `vocab` cannot
-  simply become a re-export: pick one rule and migrate stored values.
+- *(9) Marks.* `MarksSource` is implemented for the shared
+  `library_marks::SharedMarks`, with `refresh()` (called before every
+  query) as the hook for another process's write, `generation()`
+  documented as what a cached view keys on, and write/tag-completion
+  methods. It returns the shared `Marks`; `last_used` crosses to presets
+  and the wire as RFC 3339 through `Marks::last_used_rfc3339` (`Hit::last_used`).
+  `PresetMarks` is gone. The process-wide default library opens the user's
+  store lazily on its first query or mark (honouring
+  `RESONANCE_LIBRARY_DIR`); a library over an explicit root reads
+  `NoMarks` until one is installed (the app installs its own).
+- *(10) One search engine.* `library_view::BrowserModel` is it.
+  `presets::query::run` is a thin typed wrapper that configures a model
+  (query text, facet selections, favourites-only/first, sort) over
+  `presets::rows::PresetRows` — the one `LibraryRows` adapter the editor
+  browser, the host browser and `presets.search` all read — and returns
+  the view plus facet counts. The syntax is `parse_search`'s. What changed
+  for presets: matching is substring (a superset of the old token-prefix
+  rule), and name hits are no longer ranked first (bank order within the
+  sort); facet counts list the seeded vocabulary first.
+- *(11) One slug rule and one atomic write.* `presets::vocab` is deleted:
+  metadata normalises with `library_marks::normalize_tag` and the seeded
+  lists are `library_marks::vocab`. `presets/fs.rs` became
+  `presets/files.rs`, which keeps only the preset library's own file
+  naming and calls `resonance_common::atomic_file` for the write and the
+  quarantine (`atomic_file` joined `PLUGIN_COMMON_ITEMS`). A fleet test
+  proves every round-1 factory file is still found by each of its own
+  metadata values, as facet filters and as typed tokens.
