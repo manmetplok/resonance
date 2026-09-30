@@ -31,6 +31,13 @@ use crate::viz::{AmpViz, CURVE_POINTS};
 /// to settle to their true steady-state response.
 const PRIME_SAMPLES: usize = 2048;
 
+/// Set on a load request raised by `process()` seeing `file_select`
+/// change (a param change), as opposed to an explicit pick from the editor.
+/// A param change to the slot the current status already accounts for —
+/// the slot a missing or external reference was restored at — is not a
+/// pick: the loader leaves what the restored state says playing (B2).
+pub(crate) const FROM_PARAM: i32 = 1 << 30;
+
 /// Handle returned by `start`. Dropping it or calling `stop` cleanly
 /// joins the thread.
 pub struct LoaderHandle {
@@ -139,14 +146,32 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
             continue;
         }
 
-        let slot = deps.load_request.swap(-1, Ordering::AcqRel);
-        if slot < 0 {
+        let request = deps.load_request.swap(-1, Ordering::AcqRel);
+        if request < 0 {
             std::thread::sleep(std::time::Duration::from_millis(50));
+            continue;
+        }
+        let slot = request & !FROM_PARAM;
+        if request & FROM_PARAM != 0 && status_accounts_for(&deps.params, slot) {
             continue;
         }
         if let Some(model) = load_slot(&deps.params, &deps.viz, slot as u32) {
             deps.mailbox.post(model);
         }
+    }
+}
+
+/// Whether the status already describes `file_select == slot`: a restored
+/// reference that is missing, or playing from outside the library, at that
+/// slot. A param change landing there (the first `process()` after a
+/// `load_state` sees the restored `file_select` as a change) must not load
+/// whatever the library holds in the slot.
+fn status_accounts_for(params: &AmpParams, slot: i32) -> bool {
+    let st = params.status.lock();
+    match &st.state {
+        ModelState::Missing { at_slot, .. } => *at_slot == slot,
+        ModelState::Loaded => st.external && st.external_slot == Some(slot),
+        _ => false,
     }
 }
 
@@ -213,6 +238,10 @@ impl NamInference for Passthrough {
     }
 
     fn reset(&mut self) {}
+
+    fn is_identity(&self) -> bool {
+        true
+    }
 }
 
 /// Resolve a saved `reference` against the library (nam-model-library.md

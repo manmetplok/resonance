@@ -576,7 +576,7 @@ impl Library {
     }
 
     /// Resolve free text to a slotted entry, for `string_to_value` and
-    /// label addressing: an exact name (case-insensitive), then an id
+    /// label addressing: an exact name (folded: case and diacritics), then an id
     /// prefix of at least 6 hex digits, then a unique name prefix, then a
     /// unique name substring. `None` when nothing or several match.
     pub fn find(&self, text: &str) -> Option<&Entry> {
@@ -584,19 +584,23 @@ impl Library {
         if t.is_empty() {
             return None;
         }
-        let lower = t.to_lowercase();
+        // Names match through the one library fold (case and Latin
+        // diacritics), as every browser searches them.
+        use crate::library_marks::vocab::fold;
+        let lower = fold(t);
         let slotted = || self.entries.iter().filter(|e| e.slot.is_some());
         // Two models can share a display name (two captures of one amp):
         // an exact name that is not unique resolves to nothing, so the
         // caller errors rather than silently taking the first.
-        let mut exact = slotted().filter(|e| e.name.to_lowercase() == lower);
+        let mut exact = slotted().filter(|e| fold(&e.name) == lower);
         match (exact.next(), exact.next()) {
             (Some(e), None) => return Some(e),
             (Some(_), Some(_)) => return None,
             _ => {}
         }
         if t.len() >= 6 && t.chars().all(|c| c.is_ascii_hexdigit()) {
-            let mut hits = slotted().filter(|e| e.id.starts_with(&lower));
+            let hex = t.to_ascii_lowercase();
+            let mut hits = slotted().filter(|e| e.id.starts_with(&hex));
             if let (Some(e), None) = (hits.next(), hits.next()) {
                 return Some(e);
             }
@@ -608,8 +612,8 @@ impl Library {
                 _ => None,
             }
         };
-        unique(&|e: &Entry| e.name.to_lowercase().starts_with(&lower))
-            .or_else(|| unique(&|e: &Entry| e.name.to_lowercase().contains(&lower)))
+        unique(&|e: &Entry| fold(&e.name).starts_with(&lower))
+            .or_else(|| unique(&|e: &Entry| fold(&e.name).contains(&lower)))
     }
 
     /// Re-read `library.json` if another writer changed it. Returns

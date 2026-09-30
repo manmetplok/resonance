@@ -284,9 +284,15 @@ impl SharedMarks {
             .clone()
     }
 
+    /// Swap the snapshot in, then publish its generation (Release,
+    /// paired with [`generation`](Self::generation)'s Acquire): a reader
+    /// that sees generation N and then takes the snapshot gets one at least
+    /// as new as N, so a cache keyed on the generation never pins an older
+    /// snapshot under the newer number.
     fn install(&self, store: MarksStore) {
-        self.generation.store(store.generation(), Ordering::Release);
+        let generation = store.generation();
         *self.snapshot.write().unwrap_or_else(|p| p.into_inner()) = Arc::new(store);
+        self.generation.store(generation, Ordering::Release);
     }
 
     /// The marks of `key`, or the defaults.

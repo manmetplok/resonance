@@ -112,6 +112,10 @@ pub fn handle(app: &mut Resonance, message: ControlMessage) -> Task<Message> {
             // still find them. A reader blocked in `job.wait` on a
             // dropped terminal job resolves to `not_found`.
             app.control.jobs.on_disconnect(conn);
+            // A label the plugin is still resolving for this client: the
+            // reply has nowhere to go, so the edit it would make is not
+            // made either.
+            app.control.pending_labels.retain(|_, p| p.conn != conn);
             Task::none()
         }
         ControlMessage::Request(request) => {

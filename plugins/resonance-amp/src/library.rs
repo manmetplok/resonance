@@ -238,8 +238,14 @@ impl SharedLibrary {
     /// Pick up another process's `library.json` write, if any: one `stat`
     /// when nothing moved; the parse happens on a copy with no lock held.
     /// Read-only: never scans, never writes.
+    ///
+    /// Never waits on a writer: activation calls this, and a writer may be
+    /// a full rescan hashing new files. With one in flight the current
+    /// snapshot is served (the rescan publishes a fresher one when done).
     pub fn refresh(&self) -> bool {
-        let _w = self.writer.lock();
+        let Some(_w) = self.writer.try_lock() else {
+            return false;
+        };
         let mut copy = self.lib.read().clone();
         if !copy.reload_if_changed() {
             return false;

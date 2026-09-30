@@ -384,6 +384,64 @@ fn a_label_the_plugin_never_answers_times_out() {
 }
 
 #[test]
+fn a_pending_label_holds_the_fast_tick() {
+    // The answer arrives as an engine event, drained on the tick: at the
+    // 200 ms idle rate the reply would wait that long for nothing.
+    use resonance_app::update::tick;
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let slow = std::time::Duration::from_millis(tick::TICK_INTERVAL_IDLE_MS);
+    assert_eq!(tick::tick_interval(&app), slow);
+    let (_replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    assert_ne!(tick::tick_interval(&app), slow, "a label in flight needs the fast tick");
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    assert_eq!(tick::tick_interval(&app), slow);
+}
+
+#[test]
+fn a_deferred_label_set_is_one_undo_entry() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let before = app.test_undo_history().undo_len();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    replies.try_recv().unwrap().result::<MutationAck>().expect("applied");
+    assert_eq!(app.test_undo_history().undo_len(), before + 1, "one call, one undo entry");
+}
+
+#[test]
+fn a_label_whose_plugin_went_away_meanwhile_is_not_found() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    app.test_apply_engine_event(AudioEvent::PluginRemoved { track_id: TRACK, instance_id: DELAY });
+    let revision = app.revision();
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    let error = replies.try_recv().unwrap().error.expect("the plugin is gone");
+    assert_eq!(error.kind(), ErrorKind::NotFound, "{}", error.message);
+    assert_eq!(app.revision(), revision, "nothing was changed");
+}
+
+#[test]
+fn a_label_whose_client_disconnected_meanwhile_changes_nothing() {
+    let mut app = app();
+    let rx = app.test_capture_engine();
+    let revision = app.revision();
+    let (replies, token) = set_label_deferred(&mut app, &rx, "Mix", "half");
+    drop(replies);
+    let _ = app.update(resonance_app::message::Message::Control(
+        resonance_app::control_socket::ControlMessage::Disconnected { conn: 1 },
+    ));
+    app.test_apply_engine_event(AudioEvent::PluginParamTextResolved { token, value: Some(0.5) });
+    assert_eq!(app.revision(), revision, "no client to tell, so no edit made");
+    assert!(
+        !std::iter::from_fn(|| rx.try_recv().ok())
+            .any(|c| matches!(c, AudioCommand::SetPluginParam { param_id: MIX, .. })),
+        "the engine was not told to set Mix"
+    );
+}
+
+#[test]
 fn only_a_round_tripping_answer_counts() {
     use resonance_audio::label_round_trips;
     assert!(label_round_trips("half", "Half"));

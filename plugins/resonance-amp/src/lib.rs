@@ -263,8 +263,10 @@ impl ResonancePlugin for ResonanceAmp {
         let current_index = self.params.file_select.value();
         if current_index != self.last_file_index {
             self.last_file_index = current_index;
-            self.load_request
-                .store(current_index, std::sync::atomic::Ordering::Release);
+            self.load_request.store(
+                current_index | loader::FROM_PARAM,
+                std::sync::atomic::Ordering::Release,
+            );
         }
 
         self.processor.set_gain_targets(

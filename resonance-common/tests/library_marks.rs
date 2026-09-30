@@ -542,3 +542,38 @@ fn two_processes_writing_different_items_lose_nothing() {
     );
     assert_eq!(store.generation(), (2 * WRITES_PER_CHILD) as u64);
 }
+
+#[test]
+fn a_reader_never_sees_a_generation_newer_than_the_snapshot() {
+    // A cache keyed on `generation()` reads the number, then the snapshot.
+    // If the number were published before the snapshot swap, the reader
+    // could pair generation N with the N-1 snapshot and never re-read.
+    use resonance_common::library_marks::SharedMarks;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    let dir = temp_dir("install-order");
+    let shared = Arc::new(SharedMarks::open(&dir).unwrap());
+    let stop = Arc::new(AtomicBool::new(false));
+    let readers: Vec<_> = (0..3)
+        .map(|_| {
+            let shared = shared.clone();
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut torn = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    let seen = shared.generation();
+                    if shared.snapshot().generation() < seen {
+                        torn += 1;
+                    }
+                }
+                torn
+            })
+        })
+        .collect();
+    for i in 0..400 {
+        shared.set_favorite(&format!("amp-model:{i}"), true).unwrap();
+    }
+    stop.store(true, Ordering::Relaxed);
+    let torn: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
+    assert_eq!(torn, 0, "a reader paired a new generation with an older snapshot");
+}

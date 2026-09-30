@@ -83,7 +83,15 @@ fn model_keys(state: &Value) -> serde_json::Map<String, Value> {
 }
 
 fn pump_until(plugin: &mut ResonanceAmp, done: impl Fn(&ResonanceAmp) -> bool) -> bool {
-    let deadline = Instant::now() + LOAD_TIMEOUT;
+    pump_until_for(plugin, LOAD_TIMEOUT, done)
+}
+
+fn pump_until_for(
+    plugin: &mut ResonanceAmp,
+    timeout: Duration,
+    done: impl Fn(&ResonanceAmp) -> bool,
+) -> bool {
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         run_blocks(plugin, 4);
         if done(plugin) {
@@ -847,6 +855,139 @@ fn a_missing_state_loaded_while_active_stops_the_old_model() {
     assert!(pump_until(&mut amp, |a| a.model_status().is_missing()));
     assert_eq!(model_keys(&state_of(&amp))["model_path"], json!("/gone/x.nam"));
     assert_eq!(amp.model_status().id, None, "nothing of a's plays under x's reference");
+}
+
+#[test]
+fn a_param_change_to_a_missing_references_slot_loads_nothing() {
+    // The amp plays a (slot 0). A state naming a gone model at slot 1
+    // arrives while `process()` is not running; the loader resolves it
+    // to Missing on its own. The first `process()` then sees
+    // `file_select` 1 against its baseline 0 — that is the restored
+    // state, not a pick, and must not load b from slot 1.
+    let (root, lib) = seeded_root("active-missing-slot");
+    let a = root.join("tone3000/a.nam");
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": { "file_select": 0.0 }, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    run_blocks(&mut amp, 2);
+    let gone = json!({ "params": { "file_select": 1.0 }, "model_path": "/gone/x.nam" });
+    assert!(amp.load_state(&serde_json::to_vec(&gone).unwrap()));
+    let deadline = Instant::now() + LOAD_TIMEOUT;
+    while !amp.model_status().is_missing() {
+        assert!(Instant::now() < deadline, "the loader never resolved the state");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    // Give a spurious slot-1 load every chance to land (loading b takes
+    // a second or two in a debug build).
+    let loaded_b = pump_until_for(&mut amp, Duration::from_secs(6), |a| {
+        !a.model_status().is_missing()
+    });
+    assert!(!loaded_b, "b was loaded from the slot: {:?}", amp.model_status());
+    let status = amp.model_status();
+    assert!(status.is_missing(), "b was loaded from the slot: {status:?}");
+    assert_eq!(status.id, None);
+    assert_eq!(model_keys(&state_of(&amp))["model_path"], json!("/gone/x.nam"));
+}
+
+/// One block of a sine on L and its inverse on R; returns (L, R) out.
+fn run_out_of_phase(plugin: &mut ResonanceAmp) -> (Vec<f32>, Vec<f32>) {
+    let mut left: Vec<f32> = (0..BLOCK)
+        .map(|i| 0.5 * (i as f32 * 2.0 * std::f32::consts::PI * 440.0 / SAMPLE_RATE).sin())
+        .collect();
+    let mut right: Vec<f32> = left.iter().map(|x| -x).collect();
+    let mut outs = [OutputBuffer {
+        left: &mut left,
+        right: &mut right,
+    }];
+    let mut ev = EventIterator::empty();
+    plugin.process(&mut outs, BLOCK, &mut ev, None);
+    (left, right)
+}
+
+fn assert_stereo_dry(left: &[f32], right: &[f32]) {
+    let peak = left.iter().fold(0.0_f32, |m, x| m.max(x.abs()));
+    assert!(peak > 0.2, "the out-of-phase signal was cancelled: peak {peak}");
+    for (l, r) in left.iter().zip(right) {
+        assert!((l + r).abs() < 1e-6, "L and R no longer opposite: {l} vs {r}");
+    }
+}
+
+#[test]
+fn a_missing_model_on_a_reactivated_amp_passes_stereo_unfiltered() {
+    // Re-activation with a missing reference swaps the old model for an
+    // identity stand-in; that must sound exactly like no model — stereo,
+    // no mono sum, no DC blocking — not like a model that is a wire.
+    let (root, lib) = seeded_root("reactivated-missing");
+    let a = root.join("tone3000/a.nam");
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": {}, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    run_blocks(&mut amp, 4);
+    let gone = json!({ "params": {}, "model_path": "/gone/x.nam" });
+    assert!(amp.load_state(&serde_json::to_vec(&gone).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    assert!(amp.model_status().is_missing());
+    for _ in 0..8 {
+        run_out_of_phase(&mut amp);
+    }
+    let (l, r) = run_out_of_phase(&mut amp);
+    assert_stereo_dry(&l, &r);
+}
+
+#[test]
+fn a_missing_model_loaded_while_active_passes_stereo_unfiltered() {
+    // The same through the loader: the old model fades out into the
+    // identity stand-in, and what is left is the stereo dry path.
+    let (root, lib) = seeded_root("active-missing-stereo");
+    let a = root.join("tone3000/a.nam");
+    let mut amp = ResonanceAmp::with_library(lib);
+    let blob = json!({ "params": {}, "model_path": a.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let gone = json!({ "params": {}, "model_path": "/gone/x.nam" });
+    assert!(amp.load_state(&serde_json::to_vec(&gone).unwrap()));
+    assert!(pump_until(&mut amp, |a| a.model_status().is_missing()));
+    // Let the mailbox hand over the stand-in and the swap fade finish.
+    for _ in 0..20 {
+        run_out_of_phase(&mut amp);
+    }
+    let (l, r) = run_out_of_phase(&mut amp);
+    assert_stereo_dry(&l, &r);
+}
+
+#[test]
+fn a_refresh_never_waits_behind_a_writer() {
+    // Activation refreshes the library; a rescan in flight holds the
+    // writer for as long as hashing takes. The refresh serves the current
+    // snapshot instead of waiting.
+    let (_root, lib) = seeded_root("refresh-try-lock");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let writer = {
+        let lib = lib.clone();
+        std::thread::spawn(move || {
+            lib.mutate(|_| {
+                held_tx.send(()).unwrap();
+                let _ = release_rx.recv();
+            })
+        })
+    };
+    held_rx.recv().unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let refresher = {
+        let lib = lib.clone();
+        std::thread::spawn(move || {
+            lib.refresh();
+            let _ = done_tx.send(());
+        })
+    };
+    let returned = done_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+    release_tx.send(()).unwrap();
+    writer.join().unwrap();
+    refresher.join().unwrap();
+    assert!(returned, "refresh waited for the writer");
 }
 
 // ---------------------------------------------------------------------------

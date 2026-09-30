@@ -415,6 +415,26 @@ fn find_resolves_names_and_id_prefixes() {
 }
 
 #[test]
+fn find_matches_names_through_the_library_fold() {
+    // The one fold every library browser searches with: a name typed
+    // without its diacritics still resolves (as it does in the search box).
+    let root = temp_root("find-fold");
+    let path = root.join(TONE3000_DIR).join("d.nam");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        r#"{"version":"0.5.4","architecture":"WaveNet","config":{},"weights":[7.0],"sample_rate":48000,
+            "metadata":{"name":"Dvořák Crunch","modeled_by":"tester","gear_type":"amp"}}"#,
+    )
+    .unwrap();
+    let lib = Library::open_and_scan(&root).unwrap();
+    assert_eq!(lib.by_slot(0).unwrap().name, "Dvořák Crunch");
+    assert!(lib.find("dvorak crunch").is_some(), "exact name, folded");
+    assert!(lib.find("DVORAK").is_some(), "prefix, folded");
+    assert!(lib.find("řák cr").is_some(), "substring, folded");
+}
+
+#[test]
 fn reload_if_changed_sees_another_writer() {
     let root = temp_root("reload");
     write_model(&root.join(TONE3000_DIR).join("a.nam"), 1);
