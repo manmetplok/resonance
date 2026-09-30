@@ -1,14 +1,10 @@
-//! Top header bar: title, Load Model button, Prev/Next browser, and
+//! Top header bar: title, the model entry points, the preset bar, ◀/▶ and
 //! the current model name. Extracted from `editor/mod.rs` so the main
 //! module stays focused on layout.
 
-use std::path::Path;
-use std::sync::atomic::Ordering;
-
 use plugin_gui_core::egui;
 
-use super::theme;
-use super::AmpEditorApp;
+use super::{actions, theme, AmpEditorApp};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -73,68 +69,37 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        let list_len = app.params.file_list.lock().len();
-        let enabled = list_len > 1;
-        ui.add_enabled_ui(enabled, |ui| {
+        let slots = slotted(app);
+        ui.add_enabled_ui(slots.len() > 1, |ui| {
             if ui.button("◀").clicked() {
-                seek_relative(app, -1);
+                seek_relative(app, &slots, -1);
             }
             if ui.button("▶").clicked() {
-                seek_relative(app, 1);
+                seek_relative(app, &slots, 1);
             }
         });
 
         ui.add_space(12.0);
 
-        // Current model name + position counter.
-        let current_index = app.params.file_select.value() as usize;
-        let (name_text, position_text) = {
-            let list = app.params.file_list.lock();
-            let len = list.len();
-            let clamped = current_index.min(len.saturating_sub(1));
-            let stem = list
-                .get(clamped)
-                .and_then(|p| {
-                    Path::new(p)
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                })
-                .unwrap_or_default();
-            drop(list);
-
-            let raw_name = app.model_name.lock().clone();
-            // The stem is a stand-in for a load that has been requested
-            // but has not finished naming itself yet, so it is only
-            // honest while a model path is actually set. Since the
-            // browser is seeded from the downloads directory on a fresh
-            // amp, `file_list[0]` exists long before anything is loaded,
-            // and using it here would name a profile that is not playing.
-            let has_model = !app.params.model_path.lock().is_empty();
-            let name = if raw_name.is_empty() {
-                if has_model && !stem.is_empty() {
-                    stem.clone()
-                } else {
-                    "(no model loaded)".to_string()
-                }
-            } else {
-                raw_name
-            };
-
-            let position = if len == 0 {
-                String::new()
-            } else {
-                format!("{} / {}", clamped + 1, len)
-            };
-            (name, position)
+        let status = app.params.status.lock().clone();
+        let color = if status.is_missing() || status.deleted {
+            theme::WARN
+        } else {
+            theme::TEXT
         };
-
-        ui.label(egui::RichText::new(name_text).size(13.0).color(theme::TEXT));
+        ui.label(egui::RichText::new(status.header_text()).size(13.0).color(color));
         ui.add_space(8.0);
-        ui.label(
-            egui::RichText::new(position_text)
-                .size(11.0)
-                .color(theme::TEXT_DIM),
-        );
+        let current = app.params.file_select.value() as u32;
+        let position = match slots.iter().position(|&s| s == current) {
+            Some(i) if !status.is_missing() => format!("{} / {}", i + 1, slots.len()),
+            _ if slots.is_empty() => String::new(),
+            _ => format!("– / {}", slots.len()),
+        };
+        ui.label(egui::RichText::new(position).size(11.0).color(theme::TEXT_DIM));
+        if let Some(notice) = status.notice.as_ref().or(app.notice.as_ref()) {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(notice).size(11.0).color(theme::TEXT_DIM));
+        }
 
         // Sample-rate mismatch warning: a NAM profile runs sample-for-sample
         // at the engine rate, so a rate mismatch shifts its frequency
@@ -160,7 +125,7 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     });
 }
 
-fn format_khz(hz: f32) -> String {
+pub(crate) fn format_khz(hz: f32) -> String {
     let khz = hz / 1000.0;
     if (khz - khz.round()).abs() < 0.05 {
         format!("{:.0} kHz", khz)
@@ -169,52 +134,48 @@ fn format_khz(hz: f32) -> String {
     }
 }
 
-fn load_model_clicked(app: &AmpEditorApp) {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h).
-    let Some(path) = rfd::FileDialog::new()
-        .add_filter("NAM model", &["nam"])
-        .pick_file()
-    else {
-        return;
-    };
-    load_path(app, &path);
+/// The occupied slots, in slot order.
+fn slotted(app: &AmpEditorApp) -> Vec<u32> {
+    app.params
+        .library
+        .read()
+        .entries()
+        .iter()
+        .filter_map(|e| e.slot)
+        .collect()
 }
 
-/// Load the model at `path` and make its directory the ◀/▶ set.
-pub(super) fn load_path(app: &AmpEditorApp, path: &Path) {
-    let path_str = path.to_string_lossy().into_owned();
-
-    let Some(dir) = path.parent() else {
+fn load_model_clicked(app: &mut AmpEditorApp) {
+    // A picked file is imported (copied into the library, deduplicated by
+    // content) and loaded through its slot.
+    let Some(path) = actions::pick_nam_files(false).into_iter().next() else {
         return;
     };
-    let files = resonance_common::scan_directory(dir, "nam");
-    let idx = files.iter().position(|f| f == &path_str).unwrap_or(0);
-
-    *app.params.file_list.lock() = files;
-    *app.params.model_path.lock() = path_str;
-    app.params.file_select.set_value(idx as i32);
-    app.load_request.store(idx as i32, Ordering::Release);
+    app.notice = match actions::import_and_load(app, &path) {
+        Ok(resonance_common::nam_library::ImportOutcome::AlreadyPresent(_)) => {
+            Some("already in library".into())
+        }
+        Ok(_) => None,
+        Err(e) => Some(e),
+    };
 }
 
-fn seek_relative(app: &AmpEditorApp, delta: i32) {
-    let len = app.params.file_list.lock().len();
-    if len == 0 {
+fn seek_relative(app: &AmpEditorApp, slots: &[u32], delta: i32) {
+    if slots.is_empty() {
         return;
     }
-    let len_i = len as i32;
-    let current = app.params.file_select.value();
-    // With nothing loaded the selector is parked at 0 without that
-    // meaning "file 0 is playing", so the first press loads where it
-    // already points rather than stepping past it — otherwise the entry
-    // the browser is sitting on is the one entry you cannot reach.
-    let next = if app.params.model_path.lock().is_empty() {
-        current.clamp(0, len_i - 1)
-    } else {
-        (current + delta).rem_euclid(len_i)
+    let current = app.params.file_select.value() as u32;
+    let playing = !app.params.model_ref.lock().is_empty();
+    // With nothing loaded the selector is parked without that meaning
+    // "that slot is playing", so the first press loads where it points
+    // (or the first model) rather than stepping past it.
+    let target = match slots.iter().position(|&s| s == current) {
+        Some(i) if playing => {
+            let n = slots.len() as i32;
+            slots[(i as i32 + delta).rem_euclid(n) as usize]
+        }
+        Some(i) => slots[i],
+        None => slots[0],
     };
-    app.params.file_select.set_value(next);
-    app.load_request.store(next, Ordering::Release);
+    actions::load_slot(app, target);
 }

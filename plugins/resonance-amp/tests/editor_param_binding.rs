@@ -53,12 +53,17 @@ use resonance_plugin::{FloatParam, FloatRange, Param, ResonancePlugin};
 /// directory itself — the list going stale is how a source guard turns
 /// vacuous.
 const EDITOR_SOURCES: &[(&str, &str)] = &[
+    ("actions.rs", include_str!("../src/editor/actions.rs")),
     ("app.rs", include_str!("../src/editor/app.rs")),
     ("controls.rs", include_str!("../src/editor/controls.rs")),
     ("curve_view.rs", include_str!("../src/editor/curve_view.rs")),
     ("factory.rs", include_str!("../src/editor/factory.rs")),
     ("header.rs", include_str!("../src/editor/header.rs")),
     ("meters.rs", include_str!("../src/editor/meters.rs")),
+    (
+        "missing_banner.rs",
+        include_str!("../src/editor/missing_banner.rs"),
+    ),
     ("mod.rs", include_str!("../src/editor/mod.rs")),
     ("scope_view.rs", include_str!("../src/editor/scope_view.rs")),
     ("theme.rs", include_str!("../src/editor/theme.rs")),

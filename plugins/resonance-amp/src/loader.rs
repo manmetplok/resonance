@@ -3,23 +3,24 @@
 //! Kept out of `lib.rs` so the plugin file stays focused on the audio
 //! path. The loader's job is:
 //!   1. Poll an `AtomicI32` load-request slot that the audio thread
-//!      and editor both write to.
-//!   2. Parse the requested `.nam` file on a dedicated thread.
-//!   3. Reset + prime the model with silence so its internal ring
-//!      buffers settle to steady state (kills the model-swap "plop").
-//!   4. Sample the model's nonlinear transfer curve for the editor
-//!      visualisation.
-//!   5. Publish the result through a [`Mailbox`] and update
-//!      `viz`/`model_name` so the UI can pick it up.
+//!      and editor both write to. The value is a **library slot**
+//!      (nam-model-library.md §5.1).
+//!   2. Resolve the slot to a file through the shared library (a read
+//!      lock, on this thread — never the audio thread's business). An
+//!      empty slot loads nothing and unloads nothing.
+//!   3. Parse the `.nam` file, reset + prime the model with silence so its
+//!      internal ring buffers settle to steady state (kills the model-swap
+//!      "plop"), and sample its transfer curve for the editor.
+//!   4. Publish the result through a [`Mailbox`], then record what plays
+//!      in the model reference (what `save_state` persists) and status.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use parking_lot::Mutex;
 use resonance_plugin::Mailbox;
 
+use crate::model_ref::{ModelRef, ModelState};
 use crate::nam::{self, NamInference};
 use crate::params::AmpParams;
 use crate::viz::{AmpViz, CURVE_POINTS};
@@ -55,7 +56,6 @@ impl Drop for LoaderHandle {
 pub struct LoaderDeps {
     pub params: Arc<AmpParams>,
     pub mailbox: Mailbox<Box<dyn NamInference>>,
-    pub model_name: Arc<Mutex<String>>,
     pub load_request: Arc<AtomicI32>,
     pub viz: Arc<AmpViz>,
 }
@@ -76,96 +76,98 @@ pub fn start(deps: LoaderDeps) -> LoaderHandle {
     }
 }
 
+/// Parse, prime and curve-sample the model at `path`, off the audio
+/// thread. Shared by the loader thread and `initialize`'s synchronous
+/// first load.
+///
+/// The NAM parser is hardened to return `Err` on hostile/corrupt input
+/// rather than panic (see `nam::parse::weights::checked_count` and the
+/// WaveNet bounds validation), but `catch_unwind` is defense-in-depth: a
+/// panic anywhere in parse-and-prime — this parser, a future one, or the
+/// priming/curve-sampling DSP itself — must not take the whole loader
+/// thread down for the rest of the session. Without this, one bad file
+/// means every *subsequent* model pick silently does nothing, which is
+/// much harder to diagnose than a single failed load.
+pub fn prepare_model(path: &str, viz: &AmpViz) -> Result<Box<dyn NamInference>, String> {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        nam::parse::load_model_from_file(path).map(|loaded| {
+            let mut model = loaded.model;
+            note_model_sample_rate(viz, loaded.sample_rate);
+            // Reset + prime so the audio thread gets a model that's
+            // already at steady state. This is the core "plop" fix —
+            // WaveNet and LSTM profiles both emit a small transient
+            // for the first few dozen samples as their internal ring
+            // buffers fill and biases propagate.
+            model.reset();
+            prime_model(&mut *model, PRIME_SAMPLES);
+
+            // While we still have exclusive access, sample the
+            // transfer curve for the editor. Runs off the audio
+            // thread so cost is free.
+            let curve = sample_transfer_curve(&mut *model);
+            viz.store_transfer_curve(curve);
+
+            // Prime once more so the state is quiet again after the
+            // DC ramp excursion, before handing the model over.
+            model.reset();
+            prime_model(&mut *model, PRIME_SAMPLES);
+            model
+        })
+    }));
+    match outcome {
+        Ok(result) => result,
+        Err(panic) => {
+            let msg = panic_message(&panic);
+            tracing::error!("panic while loading NAM model {path}: {msg}");
+            Err(msg)
+        }
+    }
+}
+
 fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
     while !stop.load(Ordering::Relaxed) {
-        let idx = deps.load_request.swap(-1, Ordering::AcqRel);
-        if idx < 0 {
+        let slot = deps.load_request.swap(-1, Ordering::AcqRel);
+        if slot < 0 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             continue;
         }
 
-        let path = {
-            let list = deps.params.file_list.lock();
-            if list.is_empty() {
-                // Nothing to index into. Sleep like the no-request case
-                // rather than spinning back to the top of the loop — the
-                // request has already been consumed by the swap above, so
-                // an immediate retry only burns a core.
-                drop(list);
-                std::thread::sleep(std::time::Duration::from_millis(50));
-                continue;
-            }
-            let clamped = (idx as usize).min(list.len() - 1);
-            let p = list[clamped].clone();
-            drop(list);
-            // A blocking lock, not `try_lock`. This is the loader thread,
-            // not the audio thread, and the only other holders (the file
-            // dialog, `initialize`, the state saver) hold it for a string
-            // clone. Dropping the write on contention left `model_path`
-            // pointing at the PREVIOUS model while a different one played
-            // — and `model_path` is what gets persisted and what
-            // `initialize` re-derives `file_select` from, so a lost write
-            // silently reverts the model on the next activation.
-            *deps.params.model_path.lock() = p.clone();
-            p
+        // Slot → file, under the shared library's read lock. An empty slot
+        // means "no model" (§5.1): nothing is loaded, and — unlike the old
+        // directory index — nothing is clamped onto the last entry, and
+        // what is playing keeps playing.
+        let entry = deps.params.library.read().by_slot(slot as u32).cloned();
+        let Some(entry) = entry else {
+            deps.params.status.lock().state = ModelState::EmptySlot(slot as u32);
+            continue;
         };
+        let path = entry.path.to_string_lossy().into_owned();
 
-        // The NAM parser is hardened to return `Err` on hostile/corrupt
-        // input rather than panic (see `nam::parse::weights::checked_count`
-        // and the WaveNet bounds validation), but `catch_unwind` is
-        // defense-in-depth: a panic anywhere in parse-and-prime — this
-        // parser, a future one, or the priming/curve-sampling DSP itself —
-        // must not take the whole loader thread down for the rest of the
-        // session. Without this, one bad file means every *subsequent*
-        // model pick silently does nothing, which is much harder to
-        // diagnose than a single failed load.
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            nam::parse::load_model_from_file(&path).map(|loaded| {
-                let mut model = loaded.model;
-                note_model_sample_rate(&deps.viz, loaded.sample_rate);
-                // Reset + prime so the audio thread gets a model that's
-                // already at steady state. This is the core "plop" fix —
-                // WaveNet and LSTM profiles both emit a small transient
-                // for the first few dozen samples as their internal ring
-                // buffers fill and biases propagate.
-                model.reset();
-                prime_model(&mut *model, PRIME_SAMPLES);
-
-                // While we still have exclusive access, sample the
-                // transfer curve for the editor. Runs off the audio
-                // thread so cost is free.
-                let curve = sample_transfer_curve(&mut *model);
-                deps.viz.store_transfer_curve(curve);
-
-                // Prime once more so the state is quiet again after the
-                // DC ramp excursion, before handing the model over.
-                model.reset();
-                prime_model(&mut *model, PRIME_SAMPLES);
-                model
-            })
-        }));
-
-        match outcome {
-            Ok(Ok(model)) => {
-                let name = Path::new(&path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                *deps.model_name.lock() = name;
+        match prepare_model(&path, &deps.viz) {
+            Ok(model) => {
                 deps.mailbox.post(model);
+                // Recorded after the load, so the reference `save_state`
+                // persists is always the model that is actually playing. A
+                // blocking lock, not `try_lock`: this is the loader thread,
+                // and a lost write here would silently revert the model on
+                // the next activation.
+                *deps.params.model_ref.lock() = ModelRef::from_entry(&entry);
+                let mut st = deps.params.status.lock();
+                st.name = entry.name.clone();
+                st.id = Some(entry.id.clone());
+                st.state = ModelState::Loaded;
+                st.external = false;
+                st.deleted = false;
+                st.notice = None;
             }
-            Ok(Err(e)) => {
-                eprintln!("Failed to load NAM model: {e}");
-                *deps.model_name.lock() = format!("Error: {e}");
-            }
-            Err(panic) => {
-                let msg = panic_message(&panic);
-                eprintln!("Panic while loading NAM model {}: {msg}", path);
-                *deps.model_name.lock() = format!("Error: {msg}");
+            Err(e) => {
+                tracing::warn!("failed to load NAM model {path}: {e}");
+                deps.params.status.lock().state = ModelState::Error(e);
             }
         }
     }
 }
+
 
 /// Best-effort text for a `catch_unwind` payload. `panic!` payloads are
 /// almost always `&str` (a string-literal message) or `String` (a

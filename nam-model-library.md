@@ -196,17 +196,25 @@ recents.
 `file_list` stops being a directory listing. It becomes the library's **slot
 table**: `slots[n] = Some(path) | None`, shared by every amp instance.
 
-- A newly installed model takes the lowest free slot. Deleting a model frees
-  its slot, but the slot is **not reused while any other slot is free** above
-  the high-water mark. In practice slots behave as append-only until 1000
-  models, and only then are freed ones reused. So a preset or an automation
-  lane recalls the same model after other models are added or removed.
+- A newly installed model takes the slot after the high-water mark. Deleting
+  a model frees its slot, but the slot is **not reused while any other slot is
+  free** above the high-water mark. In practice slots behave as append-only
+  until 1000 models, and only then are freed ones reused. So a preset or an
+  automation lane recalls the same model after other models are added or
+  removed. A model whose bytes come back (a re-download or re-import of the
+  same content) gets its old slot back while that slot is still free.
+- Every distinct file gets a slot, including one whose header does not
+  parse, because the old directory listing counted it too; a load of it
+  fails with the parse reason. A byte-identical duplicate gets none: its
+  canonical copy (downloads first, then imports, then path order) holds it.
 - Migration: the first build of the index assigns slots to the existing
   `tone3000/` files in today's sorted order. So `file_select` values that
   point into the downloads directory keep their meaning.
-- `file_select` pointing at an empty slot means "no model", and the loader
-  does not clamp to the last entry (`loader.rs:98` today). It publishes
-  `Missing`.
+- `file_select` pointing at an empty slot loads nothing, and the loader
+  does not clamp to the last entry (`loader.rs:98` before). It also
+  **unloads nothing**: whatever was playing keeps playing (unloading would
+  mean dropping a model on the audio thread), and the status reads
+  "empty slot N". A missing *reference* is the §5.2 step 3 state.
 - ◀/▶ step through the **Library panel's current view** (search + filters +
   sort, favourites first). They do not step through slot order, so "next" is
   what the user sees next. They write the slot number.
@@ -237,9 +245,18 @@ on load (`project_no_real_users_yet`: no migration machinery).
    with `model_id` → load that path, **rewrite `model_path`**, and show a
    one-line notice "Relinked: <name> (file had moved)". This is silent
    auto-relink.
-3. Otherwise → `Resolved::Missing { name, path, source }`. No model is
-   loaded, `model_path` / `model_id` are **kept verbatim**, so a save does not
-   lose the reference, and the editor shows the missing banner (§6.4).
+3. Otherwise → `Resolved::Missing { name, path, source, file_changed }`. No
+   model is loaded, the whole reference is **kept verbatim** (an unparsable
+   `model_source` included), so a save does not lose it, and the editor shows
+   the missing banner (§6.4). `file_changed` marks a path that exists but
+   holds other bytes; the banner then also offers "Use the file at this
+   path".
+
+The reference is written by the loader **after** a load succeeds, so what
+`save_state` persists is always what plays. `initialize` brings the shared
+index up to date first: a full scan once per process, then only a `stat`
+of `library.json`. The index's cached id is used for a file whose size and
+mtime are unchanged; only an unknown file is hashed.
 
 ### 5.3 What "missing" sounds like
 
@@ -402,7 +419,11 @@ There are two scopes:
   `file_list` becomes a view of it, and the "used in N open amps" count is a
   registry of live instance → id that each instance updates on load and drop.
   This also replaces the per-instance Tone3000 worker (G8) with one shared
-  worker that is created lazily on first editor open.
+  worker that is created lazily on first editor open. Each editor factory
+  that opened it holds it, so it is joined when the last such plugin goes
+  (a static that outlived the plugins would leave a thread running into an
+  unloaded `.clap`). A download carries a callback from the requesting
+  editor, which points that instance's `file_select` at the new slot.
 - **Across processes** (a second host, or a second Resonance), there is no
   watcher dependency (the workspace has no `notify` crate, and a plugin
   should not add inotify threads). The design instead:

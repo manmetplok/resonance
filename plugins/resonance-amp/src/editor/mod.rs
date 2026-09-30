@@ -10,12 +10,14 @@
 //!   meters along the bottom.
 //! - Bottom: the gain control strip.
 
+mod actions;
 mod app;
 mod controls;
 mod curve_view;
 mod factory;
 mod header;
 mod meters;
+pub mod missing_banner;
 mod scope_view;
 mod theme;
 #[cfg(feature = "editor")]

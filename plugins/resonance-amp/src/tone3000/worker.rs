@@ -12,7 +12,6 @@
 //! loader thread picks the new .nam up and primes it.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -45,8 +44,9 @@ pub enum Command {
     LoadMore,
     /// Load the model list for a tone; results go to `State::models`.
     ListModels(i64),
-    /// Download a model to disk and queue it for loading.
-    Download(Model),
+    /// Download a model to disk, index it, and hand the new library entry
+    /// to `done` (the requesting instance loads it).
+    Download { model: Model, done: DownloadDone },
     /// Gracefully stop the worker thread.
     Shutdown,
 }
@@ -168,17 +168,28 @@ pub fn apply_search_page(state: &mut State, page: SearchPage, append: bool) {
     };
 }
 
-/// Shared handles the worker needs to reach into to hand off a freshly
-/// downloaded model. These come from the plugin's own state so the
-/// download → load path reuses the existing loader thread wholesale.
-pub struct PluginHooks {
-    /// The shared model library: rescanned after a download so the new
-    /// file gets its slot and its sidecar metadata.
-    pub library: Arc<crate::library::SharedLibrary>,
-    pub file_list: Arc<Mutex<Vec<String>>>,
-    pub model_path: Arc<Mutex<String>>,
-    pub load_request: Arc<AtomicI32>,
-    pub file_select_setter: Arc<dyn Fn(i32) + Send + Sync>,
+/// What to do with a finished download: called on the worker thread with
+/// the new library entry. The requesting editor passes one that points
+/// its own instance's `file_select` at the entry's slot, so one shared
+/// worker serves every amp.
+pub type DownloadDone = Arc<dyn Fn(&resonance_common::nam_library::Entry) + Send + Sync>;
+
+/// The one Tone3000 worker of this process, created on first use (the
+/// first editor open) and shared by every amp instance while any holds it
+/// (nam-model-library.md G8: N amps used to mean N workers, each with its
+/// own token copy). Held by the editor factories, so it lives as long as
+/// the plugins that opened an editor and is joined when the last goes.
+pub fn shared(library: Arc<crate::library::SharedLibrary>) -> Arc<WorkerHandle> {
+    static SHARED: std::sync::OnceLock<Mutex<std::sync::Weak<WorkerHandle>>> =
+        std::sync::OnceLock::new();
+    let slot = SHARED.get_or_init(|| Mutex::new(std::sync::Weak::new()));
+    let mut weak = slot.lock();
+    if let Some(w) = weak.upgrade() {
+        return w;
+    }
+    let worker = Arc::new(spawn(library));
+    *weak = Arc::downgrade(&worker);
+    worker
 }
 
 pub struct WorkerHandle {
@@ -202,14 +213,14 @@ impl Drop for WorkerHandle {
     }
 }
 
-pub fn spawn(hooks: PluginHooks) -> WorkerHandle {
+pub fn spawn(library: Arc<crate::library::SharedLibrary>) -> WorkerHandle {
     let (tx, rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(State::default()));
     let state_for_thread = state.clone();
 
     let join = std::thread::Builder::new()
         .name("amp-tone3000".into())
-        .spawn(move || worker_loop(rx, state_for_thread, hooks))
+        .spawn(move || worker_loop(rx, state_for_thread, library))
         .expect("spawn amp-tone3000 worker");
 
     // Kick off a token-restore attempt immediately so a returning user
@@ -223,7 +234,11 @@ pub fn spawn(hooks: PluginHooks) -> WorkerHandle {
     }
 }
 
-fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHooks) {
+fn worker_loop(
+    rx: Receiver<Command>,
+    state: Arc<Mutex<State>>,
+    library: Arc<crate::library::SharedLibrary>,
+) {
     let client = Tone3000Client::new();
     let mut tokens: Option<StoredTokens> = None;
     let mut active = ActiveSearch::default();
@@ -315,7 +330,7 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
                     Err(e) => set_error(&state, &format!("list models: {e}")),
                 }
             }
-            Command::Download(model) => {
+            Command::Download { model, done } => {
                 let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
                     continue;
                 };
@@ -327,10 +342,12 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>, hooks: PluginHoo
 
                 match client.download_model(&tok, &url) {
                     Ok(bytes) => {
-                        if let Err(e) = finalize_download(&model, &bytes, &hooks, &state) {
-                            set_error(&state, &e);
-                        } else {
-                            state.lock().status = Status::Connected;
+                        match finalize_download(&model, &bytes, &library, &state) {
+                            Ok(entry) => {
+                                state.lock().status = Status::Connected;
+                                done(&entry);
+                            }
+                            Err(e) => set_error(&state, &e),
                         }
                     }
                     Err(ClientError::Unauthorized) => handle_unauthorized(&mut tokens, &state),
@@ -419,15 +436,18 @@ fn set_error(state: &Arc<Mutex<State>>, msg: &str) {
     s.status = Status::Error(msg.to_string());
 }
 
-/// Write the downloaded bytes to the models dir and trigger the amp
-/// loader to swap the new file in.
+/// Write the downloaded bytes and their provenance sidecar into the
+/// library's downloads directory, rescan, and return the new entry.
 fn finalize_download(
     model: &Model,
     bytes: &[u8],
-    hooks: &PluginHooks,
+    library: &crate::library::SharedLibrary,
     state: &Arc<Mutex<State>>,
-) -> Result<(), String> {
-    let dir = super::models_dir().ok_or_else(|| "no data dir".to_string())?;
+) -> Result<resonance_common::nam_library::Entry, String> {
+    let dir = library
+        .root()
+        .map(|r| r.join(resonance_common::nam_library::TONE3000_DIR))
+        .ok_or_else(|| "no data dir".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
     let filename = sanitize_filename(&model.display_label(), model.id);
@@ -447,24 +467,16 @@ fn finalize_download(
     if let Err(e) = resonance_common::nam_library::write_sidecar(&dest, &sidecar) {
         tracing::warn!("could not write {}: {e}", dest.display());
     }
-    if let Err(e) = hooks.library.rescan() {
-        tracing::warn!("model library rescan failed: {e}");
-    }
-
-    // Rescan the directory so file_list reflects the new file, then
-    // point file_select + load_request at it so the existing loader
-    // thread picks it up and primes it like any manual load would.
-    let files = resonance_common::scan_directory(&dir, "nam");
-    let dest_str = dest.to_string_lossy().into_owned();
-    let idx = files.iter().position(|f| f == &dest_str).unwrap_or(0) as i32;
-
-    *hooks.file_list.lock() = files;
-    *hooks.model_path.lock() = dest_str.clone();
-    (hooks.file_select_setter)(idx);
-    hooks.load_request.store(idx, Ordering::Release);
-
+    library
+        .rescan()
+        .map_err(|e| format!("model library rescan failed: {e}"))?;
+    let entry = library
+        .read()
+        .by_path(&dest)
+        .cloned()
+        .ok_or_else(|| format!("{} did not index", dest.display()))?;
     state.lock().last_downloaded = Some(dest);
-    Ok(())
+    Ok(entry)
 }
 
 /// The provenance sidecar for a downloaded `model` of `tone` at `now`

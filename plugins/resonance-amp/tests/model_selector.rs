@@ -1,11 +1,13 @@
 //! The model selector must not move a model the user did not move.
 //!
-//! `file_select` is an index into `file_list`, and `process()` reads any
-//! `file_select != last_file_index` as "the user picked a new model" and
-//! loads `file_list[file_select]`. That makes the baseline the whole
-//! safety property: an activation that leaves it unset makes the FIRST
-//! `process()` call request index 0 — the alphabetically first profile in
-//! the directory — over whatever is actually loaded.
+//! `file_select` is a slot in the model library's slot table, and
+//! `process()` reads any `file_select != last_file_index` as "the user
+//! picked a new model" and loads that slot. That makes the baseline the
+//! whole safety property: an activation that leaves it unset makes the
+//! FIRST `process()` call request slot 0 — the alphabetically first
+//! download, by the slot table's migration order — over whatever is
+//! actually loaded. (Empty slots and adding models while active are in
+//! `model_library.rs`.)
 //!
 //! Which is not where the symptom shows up. The mixer skips the
 //! arrangement render while the transport is stopped, so an effect on an

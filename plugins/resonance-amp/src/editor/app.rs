@@ -2,24 +2,25 @@
 //!
 //! `AmpEditorApp` is the `EditorApp` the runtime drives each frame. It paints
 //! the chrome panels (header, tuner, control strip) and dispatches the centre
-//! to the scope/curve/meters views.
+//! to the scope/curve/meters views, or to the missing-model banner.
 
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
-use parking_lot::Mutex;
 use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::AmpParams;
 use crate::tone3000::worker::WorkerHandle;
 use crate::viz::AmpViz;
 
+use super::missing_banner::{self, MissingBannerState};
 use super::tone3000_panel::Tone3000PanelState;
-use super::{controls, curve_view, header, meters, scope_view, theme, tone3000_panel, tuner_view};
+use super::{
+    actions, controls, curve_view, header, meters, scope_view, theme, tone3000_panel, tuner_view,
+};
 
 pub(crate) struct AmpEditorApp {
     pub(crate) params: Arc<AmpParams>,
-    pub(crate) model_name: Arc<Mutex<String>>,
     pub(crate) load_request: Arc<AtomicI32>,
     pub(crate) viz: Arc<AmpViz>,
     pub(crate) tone3000: Arc<WorkerHandle>,
@@ -32,8 +33,40 @@ pub(crate) struct AmpEditorApp {
     pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Transient bar state (open combo, in-progress rename), editor-only.
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
-    /// The model library shared by every amp in this process.
-    pub(crate) library: Arc<crate::library::SharedLibrary>,
+    pub(crate) missing: MissingBannerState,
+    /// A one-line message for the header (import results, errors).
+    pub(crate) notice: Option<String>,
+}
+
+impl AmpEditorApp {
+    pub(crate) fn new(
+        params: Arc<AmpParams>,
+        load_request: Arc<AtomicI32>,
+        viz: Arc<AmpViz>,
+        tone3000: Arc<WorkerHandle>,
+        presets: Arc<resonance_plugin::presets::PresetSession>,
+    ) -> Self {
+        Self {
+            params,
+            load_request,
+            viz,
+            tone3000,
+            tone3000_panel: Tone3000PanelState::default(),
+            bank: resonance_plugin::presets::PresetBank::new(
+                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::CLAP_ID,
+                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
+            ),
+            presets,
+            preset_editor: resonance_plugin::presets::PresetEditor::default(),
+            missing: MissingBannerState::default(),
+            notice: None,
+        }
+    }
+
+    /// Open the model browser.
+    pub(crate) fn open_library(&mut self) {
+        self.tone3000_panel.open = true;
+    }
 }
 
 impl EditorApp for AmpEditorApp {
@@ -61,12 +94,16 @@ impl EditorApp for AmpEditorApp {
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
 
         if self.tone3000_panel.open {
+            let done = actions::download_done(self);
             let picked = {
-                let library = self.library.read();
-                tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000, &library)
+                let library = self.params.library.read();
+                tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000, &library, &done)
             };
-            if let Some(tone3000_panel::ModelRowAction::Load { path, .. }) = picked {
-                header::load_path(self, &path);
+            if let Some(tone3000_panel::ModelRowAction::Load { slot, .. }) = picked {
+                match slot {
+                    Some(slot) => actions::load_slot(self, slot),
+                    None => self.notice = Some("That model has no slot to load it through".into()),
+                }
             }
         }
     }
@@ -98,7 +135,14 @@ fn draw_center(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     );
 
     let painter = ui.painter_at(avail);
-    scope_view::draw(&painter, scope_rect, &app.viz);
-    curve_view::draw(&painter, curve_rect, &app.viz);
+    let status = app.params.status.lock().clone();
+    if status.is_missing() {
+        // The scope and curve have nothing real to draw with no model: the
+        // banner takes their place (nam-model-library.md §6.4).
+        missing_banner::draw(ui, viz_rect, app, &status);
+    } else {
+        scope_view::draw(&painter, scope_rect, &app.viz);
+        curve_view::draw(&painter, curve_rect, &app.viz);
+    }
     meters::draw(&painter, meter_rect, &app.viz);
 }

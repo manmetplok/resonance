@@ -30,7 +30,7 @@ use resonance_common::nam_library::Library;
 use super::theme;
 use crate::tone3000::client::ArchitectureFilter;
 use crate::tone3000::types::Model;
-use crate::tone3000::worker::{Command, Status, WorkerHandle};
+use crate::tone3000::worker::{Command, DownloadDone, Status, WorkerHandle};
 
 /// What a Tone3000 model row offers, given the local library.
 #[derive(Debug, Clone, PartialEq)]
@@ -142,6 +142,7 @@ pub fn draw(
     panel: &mut Tone3000PanelState,
     worker: &Arc<WorkerHandle>,
     library: &Library,
+    done: &DownloadDone,
 ) -> Option<ModelRowAction> {
     let mut picked = None;
     // Dim the underlying editor behind the overlay.
@@ -164,7 +165,7 @@ pub fn draw(
             frame.show(ui, |ui| {
                 ui.set_width(rect.width());
                 ui.set_height(rect.height());
-                picked = draw_contents(ui, panel, worker, library);
+                picked = draw_contents(ui, panel, worker, library, done);
             });
         });
     picked
@@ -175,6 +176,7 @@ fn draw_contents(
     panel: &mut Tone3000PanelState,
     worker: &Arc<WorkerHandle>,
     library: &Library,
+    done: &DownloadDone,
 ) -> Option<ModelRowAction> {
     draw_header(ui, panel, worker);
     ui.add_space(6.0);
@@ -208,7 +210,7 @@ fn draw_contents(
         }
     };
 
-    let picked = draw_results(ui, worker, &snapshot, library);
+    let picked = draw_results(ui, worker, &snapshot, library, done);
 
     if let Some(err) = snapshot.error {
         ui.add_space(4.0);
@@ -344,6 +346,7 @@ fn draw_results(
     worker: &Arc<WorkerHandle>,
     snap: &Snapshot,
     library: &Library,
+    done: &DownloadDone,
 ) -> Option<ModelRowAction> {
     let mut picked = None;
     let Snapshot {
@@ -425,7 +428,7 @@ fn draw_results(
                             return;
                         }
                         for model in models {
-                            if let Some(p) = draw_model_row(ui, worker, model, library) {
+                            if let Some(p) = draw_model_row(ui, worker, model, library, done) {
                                 picked = Some(p);
                             }
                         }
@@ -517,6 +520,7 @@ fn draw_model_row(
     worker: &Arc<WorkerHandle>,
     model: &crate::tone3000::types::Model,
     library: &Library,
+    done: &DownloadDone,
 ) -> Option<ModelRowAction> {
     let action = model_row_action(model, library);
     let mut picked = None;
@@ -539,7 +543,10 @@ fn draw_model_row(
                     let enabled = model.model_url.is_some();
                     ui.add_enabled_ui(enabled, |ui| {
                         if ui.button("Download").clicked() {
-                            worker.send(Command::Download(model.clone()));
+                            worker.send(Command::Download {
+                                model: model.clone(),
+                                done: done.clone(),
+                            });
                         }
                     });
                 }
