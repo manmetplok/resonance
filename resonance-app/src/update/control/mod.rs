@@ -32,6 +32,7 @@ use iced::Task;
 use resonance_control::methods::control::{HelloParams, HelloResult, HELLO};
 use resonance_control::{Request, Response, RpcError, PROTOCOL_VERSION};
 
+mod amp_models;
 mod arrangement;
 mod assist;
 /// `automation.*` — parameter automation lanes (automation-control-api.md).
@@ -170,6 +171,13 @@ pub fn execute(
     // fallback for `job.wait` — the socket transport serves the
     // blocking form on its reader threads).
     if let Some(response) = job::try_handle(app, request) {
+        return (response, Task::none());
+    }
+
+    // The per-user NAM model library (nam-model-library.md §9.3): about
+    // the machine, not the project — no project needed, no undo entry,
+    // no revision bump.
+    if let Some(response) = amp_models::try_handle(app, request) {
         return (response, Task::none());
     }
 
@@ -431,6 +439,9 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
         // find out what it had to build with before opening a project
         // (todo #1236).
         || methods::plugins::METHODS.contains(&method)
+        // `amp_models.*` is the user's model library, which no project
+        // owns (nam-model-library.md §9.3).
+        || methods::amp_models::METHODS.contains(&method)
         || resonance_control::job::METHODS.contains(&method)
 }
 

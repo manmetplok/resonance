@@ -109,6 +109,8 @@ fn allowlisted_methods() -> Vec<&'static str> {
         methods::song::METHODS,
         methods::project::METHODS,
         methods::plugins::METHODS,
+        // The user's NAM model library: not project state (§9.3).
+        methods::amp_models::METHODS,
         resonance_control::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

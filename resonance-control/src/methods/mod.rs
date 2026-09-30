@@ -10,6 +10,7 @@
 //! carries `{revision}` (see [`crate::common::MutationAck`]).
 //! Methods documented as taking no params use `()`.
 
+pub mod amp_models;
 pub mod arrangement;
 pub mod automation;
 pub mod bus;
@@ -83,6 +84,7 @@ pub fn capabilities() -> Vec<&'static str> {
         render::METHODS,
         meter::METHODS,
         automation::METHODS,
+        amp_models::METHODS,
         crate::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

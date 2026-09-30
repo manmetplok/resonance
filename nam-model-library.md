@@ -508,7 +508,7 @@ while active; the amp returns one over its shared `AmpParams`. So §9.1's
 
 | Method | Params | Returns | Notes |
 |---|---|---|---|
-| `amp_models.list` | `query?`, `favorites_only?`, `gear_type?`, `tone_type?` | `[{slot, id, name, author, gear, gear_type, tone_type, architecture, sample_rate, size_bytes, source, favorite, tags, last_used}]` + `library_generation` | Read-only. The app reads the library via `resonance_common::nam_library`, the same code and files as the plugin, so it needs no running amp instance. The agent then sets `file_select` to `slot` (or to the name, per 9.2). |
+| `amp_models.list` | `query?`, `favorites_only?`, `gear_type?`, `tone_type?` | `[{slot, id, name, author, gear, gear_type, tone_type, architecture, sample_rate, size_bytes, source, favorite, tags, last_used, status, error?}]` + `library_generation` + `total` | Read-only, and answered above the mutation gate: no project needed, no undo entry, no `revision` bump. The app reads (and rescans) the library via `resonance_common::nam_library` and the shared marks store, the same code and files as the plugin, so it needs no running amp instance. `query` is the Library panel's own search (the shared `BrowserModel` over the same rows). Favourites first, then slot order. The agent then sets `Model Select` to `slot` (or to the name, per 9.2). |
 | `amp_models.set_marks` | `id`, `favorite?`, `tags?` | the updated entry | Mutates per-user state, not the project: no undo entry, and it does not bump the project `revision`. The description must say so. |
 
 **Not on MCP** in this spec: delete, import and download. Delete removes user

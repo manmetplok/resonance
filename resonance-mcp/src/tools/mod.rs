@@ -9,6 +9,7 @@
 //! `resonance-control` wire types (schemars feature) — they cannot
 //! drift from the protocol.
 
+pub mod amp_models;
 pub mod arrange;
 pub mod automation;
 pub mod bus;
