@@ -31,3 +31,5 @@ dirs.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 tracing.workspace = true
 thiserror.workspace = true
+# Content ids of NAM models (`nam_library`): sha256 of the file bytes.
+sha2 = "0.10"

@@ -22,6 +22,7 @@ pub mod drum_map;
 #[cfg(feature = "model")]
 pub mod group_identity;
 pub mod library_marks;
+pub mod nam_library;
 #[cfg(feature = "model")]
 pub mod midi_map;
 #[cfg(feature = "model")]

@@ -108,15 +108,10 @@ fn batched_queries_against_one_loaded_registry() {
     let mut reg = InstalledRegistry::default();
     reg.items.push(item("KitA", ContentType::Drumkit));
     reg.items.push(item("KitB", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
 
     // Method-based is_installed answers N queries with zero re-reads.
     assert!(reg.is_installed("KitA", &ContentType::Drumkit));
     assert!(reg.is_installed("KitB", &ContentType::Drumkit));
-    assert!(reg.is_installed("Amp1", &ContentType::AmpModel));
-    // Name/type must both match.
-    assert!(!reg.is_installed("KitA", &ContentType::AmpModel));
-    assert!(!reg.is_installed("Amp1", &ContentType::Drumkit));
     assert!(!reg.is_installed("Missing", &ContentType::Drumkit));
 }
 
@@ -125,17 +120,12 @@ fn installed_set_filters_by_type() {
     let mut reg = InstalledRegistry::default();
     reg.items.push(item("KitA", ContentType::Drumkit));
     reg.items.push(item("KitB", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
 
     let kits = reg.installed_set(&ContentType::Drumkit);
     assert_eq!(kits.len(), 2);
     assert!(kits.contains("KitA"));
     assert!(kits.contains("KitB"));
-    assert!(!kits.contains("Amp1"));
-
-    let amps = reg.installed_set(&ContentType::AmpModel);
-    assert_eq!(amps.len(), 1);
-    assert!(amps.contains("Amp1"));
+    assert!(!kits.contains("Missing"));
 
     let empty = InstalledRegistry::default();
     assert!(empty.installed_set(&ContentType::Drumkit).is_empty());
@@ -145,7 +135,6 @@ fn installed_set_filters_by_type() {
 fn items_of_iterates_matching_items_only() {
     let mut reg = InstalledRegistry::default();
     reg.items.push(item("KitA", ContentType::Drumkit));
-    reg.items.push(item("Amp1", ContentType::AmpModel));
     reg.items.push(item("KitB", ContentType::Drumkit));
 
     let names: Vec<&str> = reg

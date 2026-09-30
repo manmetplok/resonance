@@ -1,8 +1,9 @@
 //! Shared installed-content registry for Resonance plugins.
 //!
-//! Tracks which downloadable assets (drum kits, amp models, etc.) have been
-//! installed, persisted as `$XDG_DATA_HOME/resonance/installed.json`. Both
-//! the drum and amp plugins can read/write this file via the helpers here.
+//! Tracks which downloadable assets (drum kits today) have been installed,
+//! persisted as `$XDG_DATA_HOME/resonance/installed.json`. NAM amp models
+//! are not tracked here: the amp never wrote this file, and
+//! `nam_library`'s `library.json` indexes them (nam-model-library.md D8).
 
 use std::path::{Path, PathBuf};
 
@@ -34,7 +35,6 @@ pub enum RegistryError {
 #[serde(rename_all = "kebab-case")]
 pub enum ContentType {
     Drumkit,
-    AmpModel,
 }
 
 /// One installed asset.

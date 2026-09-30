@@ -461,6 +461,7 @@ const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "decode_wav_channels", // ir: impulse-response decode
     "factory_presets",     // resonance-plugin: the factory-preset codec
     "library_marks",       // favourites/tags/recents shared by every library kind
+    "nam_library",         // amp: the NAM model index, header reader and slot table
     "reveal",              // show a file in the platform file manager
 ];
 
