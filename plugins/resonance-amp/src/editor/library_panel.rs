@@ -199,7 +199,7 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.add_space(4.0);
     app.refresh_rows();
 
-    let detail_h = 96.0;
+    let detail_h = 118.0;
     let footer_h = 28.0;
     let list_h = (ui.available_height() - detail_h - footer_h - 12.0).max(80.0);
     let loaded_key = app
@@ -222,14 +222,21 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                     row_height: 22.0,
                     columns: &COLUMNS,
                     loaded: loaded_key.as_deref(),
-                    show_star: false,
+                    show_star: true,
                     is_error: Some(&is_error),
                 },
             )
         })
         .inner;
+    if let Some(row) = resp.star_clicked {
+        let id = app.rows.rows[row].entry.id.clone();
+        app.toggle_favorite(&id);
+    }
     if let Some(row) = resp.double_clicked {
         load_row(app, row);
+    }
+    if resp.clicked.is_some() {
+        app.tag_draft.clear();
     }
 
     ui.separator();
@@ -276,6 +283,32 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
                         .color(theme::DANGER),
                 );
             }
+            // Personal tags, with completion from every kind's tags and the
+            // seeded vocabulary (library_marks).
+            let tags = app.rows.marks_of(row).map(|m| m.tags.clone()).unwrap_or_default();
+            let suggestions = if app.tag_draft.trim().is_empty() {
+                Vec::new()
+            } else {
+                app.params.library.marks().complete_tag(&app.tag_draft, &tags, 6)
+            };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("tags:").size(11.0).color(theme::TEXT_DIM));
+                let r = library_ui::tag_row(
+                    ui,
+                    ("amp_lib_tags", &entry.id),
+                    &tags,
+                    &mut app.tag_draft,
+                    &suggestions,
+                );
+                let result = match (r.added, r.removed) {
+                    (Some(t), _) => Some(app.params.library.add_tag(&entry.id, &t)),
+                    (None, Some(t)) => Some(app.params.library.remove_tag(&entry.id, &t)),
+                    _ => None,
+                };
+                if let Some(Err(e)) = result {
+                    app.browser.set_error(format!("could not save the tags: {e}"));
+                }
+            });
             let used = app.usage_count(&entry.id);
             if used > 0 {
                 ui.label(

@@ -45,7 +45,7 @@ fn seeded_root(tag: &str) -> (PathBuf, Arc<SharedLibrary>) {
     let root = temp_root(tag);
     std::fs::copy(fixture("a1/wavenet.nam"), root.join("tone3000/a.nam")).unwrap();
     std::fs::copy(fixture("a1/wavenet_a1_standard.nam"), root.join("tone3000/b.nam")).unwrap();
-    let lib = shared_for(Some(root.clone()));
+    let lib = shared_for(Some(root.clone()), Some(root.join("marks")));
     lib.rescan().unwrap();
     (root, lib)
 }
@@ -384,7 +384,7 @@ fn browse_root(tag: &str) -> Arc<SharedLibrary> {
     write("b.nam", r#"{"name":"Darkglass MT900","modeled_by":"Steve","gear_type":"amp_cab","tone_type":"clean"}"#, 2);
     write("c.nam", r#"{"name":"5150 Block Letter","modeled_by":"tonekid","gear_type":"amp","tone_type":"hi_gain"}"#, 3);
     write("d.nam", r#"{"name":"Fuzz Face","modeled_by":"tonekid","gear_type":"pedal","tone_type":"fuzz"}"#, 4);
-    let lib = shared_for(Some(root));
+    let lib = shared_for(Some(root.clone()), Some(root.join("marks")));
     lib.rescan().unwrap();
     lib
 }
@@ -466,12 +466,52 @@ fn prev_next_walk_the_view_not_the_slot_order() {
 }
 
 #[test]
+fn favourites_sort_first_and_marks_follow_the_content_id() {
+    let lib = browse_root("marks");
+    let id = |slot: u32| lib.read().by_slot(slot).unwrap().id.clone();
+    lib.toggle_favorite(&id(3)).unwrap();
+    lib.add_tag(&id(1), "Djent Rhythm").unwrap();
+    let gen = lib.marks_generation();
+    let rows = ModelRows::build(&lib.read(), Some(&lib.marks()), (1, gen));
+    let mut model = BrowserModel::new();
+    model.refresh(&rows, 1);
+    assert_eq!(view_titles(&model, &rows)[0], "Fuzz Face", "the favourite first");
+    model.set_query("tag:djent-rhythm");
+    model.refresh(&rows, 2);
+    assert_eq!(view_titles(&model, &rows), vec!["Darkglass MT900"]);
+    model.set_query("");
+    model.set_favorites_only(true);
+    model.refresh(&rows, 3);
+    assert_eq!(view_titles(&model, &rows), vec!["Fuzz Face"]);
+
+    // Marks are written to the shared store under amp-model:<sha256>.
+    let key = nam_library::mark_key(&id(3));
+    assert!(lib.marks().is_favorite(&key));
+    assert!(key.starts_with("amp-model:"));
+}
+
+#[test]
+fn a_project_restore_is_not_a_recent_pick() {
+    let (root, lib) = seeded_root("recents");
+    let b = root.join("tone3000/b.nam");
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    let blob = json!({ "params": {}, "model_path": b.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let id = hash(&b).unwrap();
+    assert_eq!(lib.marks_of(&id).last_used, None, "opening a project reorders nothing (D10)");
+    lib.record_use(&id).unwrap();
+    assert!(lib.marks_of(&id).last_used.is_some());
+    assert_eq!(lib.marks_of(&id).use_count, 1);
+}
+
+#[test]
 fn the_shared_library_is_one_per_root() {
     let root = temp_root("shared");
-    let a = shared_for(Some(root.clone()));
-    let b = shared_for(Some(root.clone()));
+    let a = shared_for(Some(root.clone()), Some(root.join("marks")));
+    let b = shared_for(Some(root.clone()), Some(root.join("marks")));
     assert!(Arc::ptr_eq(&a, &b));
-    let other = shared_for(Some(temp_root("shared-other")));
+    let other = shared_for(Some(temp_root("shared-other")), None);
     assert!(!Arc::ptr_eq(&a, &other));
     let _ = Library::empty();
 }

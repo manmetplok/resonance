@@ -184,10 +184,13 @@ The same module carries the **seeded facet vocabulary**
 (`electric-guitar`, `bass`, …) and `character` values beside its own
 NAM-only `gear_type` / `tone_type` facets, and `+ tag` completion suggests
 the seeded values as well as every tag already used across kinds.
-Recents are derived from `last_used`, written when a model finishes loading
-in an instance that has an editor open or when the user picks it. It is not
-written by project-open restores, so opening an old project does not reorder
-recents.
+Recents are derived from `last_used`, written when the user picks a model:
+a Library row, ◀/▶, an import, a Tone3000 download or a relink from the
+missing banner (every editor action that points `file_select` at a slot).
+It is not written by project-open restores, so opening an old project does
+not reorder recents, nor by a host or automation moving `file_select` (the
+plugin cannot tell those from a restore). The marks prune pass (§7.2) runs
+after every rescan.
 
 ## 5. Selection, state and the missing model
 

@@ -22,7 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use parking_lot::{Mutex, RwLock, RwLockReadGuard};
+use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use resonance_common::library_marks::{self, Marks, MarksError, MarksStore};
 use resonance_common::nam_library::{self, Library, LibraryError, ScanReport};
 
 pub struct SharedLibrary {
@@ -37,6 +38,9 @@ pub struct SharedLibrary {
     /// Which model each live instance in this process is playing
     /// (instance id → content id), for "used in N open amps".
     usage: Mutex<HashMap<u64, String>>,
+    /// Favourites, tags and recents (`library_marks`, kind `amp-model`),
+    /// shared with every other library kind. GUI/main-thread only.
+    marks: Mutex<MarksStore>,
 }
 
 /// A process-unique id for an amp instance (the usage registry's key).
@@ -52,10 +56,11 @@ fn registry() -> &'static Registry {
     REGISTRY.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-/// The shared library for `root` (`None`: no data dir, an empty library).
-/// Every caller asking for the same root gets the same instance while any
-/// of them holds it.
-pub fn shared_for(root: Option<PathBuf>) -> Arc<SharedLibrary> {
+/// The shared library for `root` (`None`: no data dir, an empty library),
+/// with its marks in `marks_dir` (`None`: a detached store whose writes
+/// fail). Every caller asking for the same root gets the same instance
+/// while any of them holds it; the marks dir of the first caller wins.
+pub fn shared_for(root: Option<PathBuf>, marks_dir: Option<PathBuf>) -> Arc<SharedLibrary> {
     let mut reg = registry().lock();
     reg.retain(|(_, w)| w.strong_count() > 0);
     if let Some(lib) = reg
@@ -65,22 +70,32 @@ pub fn shared_for(root: Option<PathBuf>) -> Arc<SharedLibrary> {
     {
         return lib;
     }
-    let lib = Arc::new(SharedLibrary::new(root.clone()));
+    let lib = Arc::new(SharedLibrary::new(root.clone(), marks_dir));
     reg.push((root, Arc::downgrade(&lib)));
     lib
 }
 
-/// The shared library at [`nam_library::default_root`].
+/// The shared library at [`nam_library::default_root`], with the marks at
+/// [`library_marks::default_library_dir`].
 pub fn shared() -> Arc<SharedLibrary> {
-    shared_for(nam_library::default_root())
+    shared_for(nam_library::default_root(), library_marks::default_library_dir())
 }
 
 impl SharedLibrary {
-    fn new(root: Option<PathBuf>) -> Self {
+    fn new(root: Option<PathBuf>, marks_dir: Option<PathBuf>) -> Self {
         let lib = match &root {
             Some(r) => Library::open(r),
             None => Library::empty(),
         };
+        let marks = marks_dir
+            .and_then(|d| match MarksStore::open(d) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("library marks unreadable: {e}");
+                    None
+                }
+            })
+            .unwrap_or_else(MarksStore::detached);
         Self {
             root,
             lib: RwLock::new(lib),
@@ -88,6 +103,79 @@ impl SharedLibrary {
             revision: AtomicU64::new(1),
             scanned: AtomicBool::new(false),
             usage: Mutex::new(HashMap::new()),
+            marks: Mutex::new(marks),
+        }
+    }
+
+    // -- Marks ---------------------------------------------------------------
+
+    /// The marks store. Never lock it on the audio thread.
+    pub fn marks(&self) -> MutexGuard<'_, MarksStore> {
+        self.marks.lock()
+    }
+
+    /// The marks of model `id`.
+    pub fn marks_of(&self, id: &str) -> Marks {
+        self.marks.lock().marks(&nam_library::mark_key(id))
+    }
+
+    /// The store's write counter (any process, any kind).
+    pub fn marks_generation(&self) -> u64 {
+        self.marks.lock().generation()
+    }
+
+    /// Pick up another process's marks write (one `stat` when unchanged).
+    pub fn refresh_marks(&self) -> bool {
+        self.marks.lock().reload_if_changed().unwrap_or(false)
+    }
+
+    pub fn toggle_favorite(&self, id: &str) -> Result<Marks, MarksError> {
+        self.marks.lock().toggle_favorite(&nam_library::mark_key(id))
+    }
+
+    pub fn set_favorite(&self, id: &str, on: bool) -> Result<Marks, MarksError> {
+        self.marks.lock().set_favorite(&nam_library::mark_key(id), on)
+    }
+
+    pub fn set_tags(&self, id: &str, tags: &[String]) -> Result<Marks, MarksError> {
+        self.marks.lock().set_tags(&nam_library::mark_key(id), tags)
+    }
+
+    pub fn add_tag(&self, id: &str, tag: &str) -> Result<Marks, MarksError> {
+        self.marks.lock().add_tag(&nam_library::mark_key(id), tag)
+    }
+
+    pub fn remove_tag(&self, id: &str, tag: &str) -> Result<Marks, MarksError> {
+        self.marks.lock().remove_tag(&nam_library::mark_key(id), tag)
+    }
+
+    /// Record a user pick of `id` now (never a project-open restore, D10).
+    pub fn record_use(&self, id: &str) -> Result<Marks, MarksError> {
+        self.marks
+            .lock()
+            .record_use(&nam_library::mark_key(id), library_marks::now_unix())
+    }
+
+    /// The orphan pass (§7.2): stamp marks whose model is gone, drop them
+    /// after the retention window.
+    fn prune_marks(&self) {
+        let live: std::collections::HashSet<String> = self
+            .lib
+            .read()
+            .entries()
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+        let mut marks = self.marks.lock();
+        if marks.dir().as_os_str().is_empty() {
+            return;
+        }
+        if let Err(e) = marks.prune_orphans(
+            nam_library::KIND,
+            |id| live.contains(id),
+            library_marks::now_unix(),
+        ) {
+            tracing::warn!("library marks prune failed: {e}");
         }
     }
 
@@ -151,7 +239,9 @@ impl SharedLibrary {
         if self.root.is_none() {
             return Ok(ScanReport::default());
         }
-        self.mutate(|lib| lib.rescan())
+        let report = self.mutate(|lib| lib.rescan())?;
+        self.prune_marks();
+        Ok(report)
     }
 
     /// Rescan once per process; later calls only pick up other processes'

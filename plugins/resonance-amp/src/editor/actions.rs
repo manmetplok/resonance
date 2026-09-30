@@ -11,10 +11,18 @@ use resonance_common::nam_library::{Entry, ImportOutcome};
 use super::AmpEditorApp;
 use crate::tone3000::worker::DownloadDone;
 
-/// Point `file_select` at `slot` and ask the loader for it.
+/// Point `file_select` at `slot` and ask the loader for it. Every caller is
+/// a user pick, so it also counts as a use for Recent (D10: a project-open
+/// restore never does).
 pub(crate) fn load_slot(app: &AmpEditorApp, slot: u32) {
     app.params.file_select.set_value(slot as i32);
     app.load_request.store(slot as i32, Ordering::Release);
+    let id = app.params.library.read().by_slot(slot).map(|e| e.id.clone());
+    if let Some(id) = id {
+        if let Err(e) = app.params.library.record_use(&id) {
+            tracing::warn!("could not record the model pick: {e}");
+        }
+    }
 }
 
 /// Load a library entry. `Err` for an entry without a slot (a duplicate,
@@ -50,6 +58,7 @@ pub(crate) fn download_done(app: &AmpEditorApp) -> DownloadDone {
         if let Some(slot) = entry.slot {
             params.file_select.set_value(slot as i32);
             load_request.store(slot as i32, Ordering::Release);
+            let _ = params.library.record_use(&entry.id);
         }
     })
 }

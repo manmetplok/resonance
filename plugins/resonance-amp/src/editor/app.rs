@@ -20,6 +20,7 @@ use super::missing_banner::{self, MissingBannerState};
 use super::tone3000_panel::Tone3000PanelState;
 use super::{controls, curve_view, header, meters, scope_view, theme, tuner_view};
 use crate::library_rows::ModelRows;
+use resonance_common::library_marks::{FreshnessPoll, BAR_POLL_INTERVAL, BROWSER_POLL_INTERVAL};
 
 pub(crate) struct AmpEditorApp {
     pub(crate) params: Arc<AmpParams>,
@@ -44,6 +45,10 @@ pub(crate) struct AmpEditorApp {
     pub(crate) browser: BrowserModel,
     /// The library as browser rows, rebuilt when the library changes.
     pub(crate) rows: ModelRows,
+    /// The `+ tag` field's text in the detail pane.
+    pub(crate) tag_draft: String,
+    /// Change detection for other processes' marks writes.
+    pub(crate) marks_poll: FreshnessPoll,
 }
 
 impl AmpEditorApp {
@@ -71,6 +76,8 @@ impl AmpEditorApp {
             library_panel: LibraryPanelState::default(),
             browser: BrowserModel::new(),
             rows: ModelRows::default(),
+            tag_draft: String::new(),
+            marks_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
         }
     }
 
@@ -79,14 +86,43 @@ impl AmpEditorApp {
         library_panel::open(self);
     }
 
-    /// Rebuild the rows if the library changed, and refresh the view.
+    /// Rebuild the rows if the library or the marks changed, and refresh
+    /// the view.
     pub(crate) fn refresh_rows(&mut self) {
         let revision = self.params.library.revision();
-        if self.rows.built_from.0 != revision || self.rows.rows.is_empty() {
+        let marks_gen = self.params.library.marks_generation();
+        if self.rows.built_from != (revision, marks_gen) || self.rows.rows.is_empty() {
             let lib = self.params.library.read();
-            self.rows = ModelRows::build(&lib, None, (revision, 0));
+            let marks = self.params.library.marks();
+            self.rows = ModelRows::build(&lib, Some(&marks), (revision, marks_gen));
         }
-        self.browser.refresh(&self.rows, revision);
+        // The view's cache key folds both counters together.
+        self.browser
+            .refresh(&self.rows, revision.wrapping_mul(1_000_003) ^ marks_gen);
+    }
+
+    /// Poll for other processes' changes: every 500 ms while the Library is
+    /// open, every 2 s from the header, one `stat` per path each time.
+    pub(crate) fn poll_freshness(&mut self) {
+        if self.marks_poll.targets().is_empty() {
+            let marks = self.params.library.marks().path();
+            self.marks_poll = FreshnessPoll::new(vec![marks], BAR_POLL_INTERVAL);
+        }
+        self.marks_poll.set_interval(if self.library_panel.open {
+            BROWSER_POLL_INTERVAL
+        } else {
+            BAR_POLL_INTERVAL
+        });
+        if self.marks_poll.check(std::time::Instant::now()) {
+            self.params.library.refresh_marks();
+        }
+    }
+
+    /// Toggle the favourite of model `id`, reporting a failed write.
+    pub(crate) fn toggle_favorite(&mut self, id: &str) {
+        if let Err(e) = self.params.library.toggle_favorite(id) {
+            self.browser.set_error(format!("could not save the favourite: {e}"));
+        }
     }
 
     /// How many amps in this process are playing `id`.
@@ -100,6 +136,7 @@ impl EditorApp for AmpEditorApp {
         theme::apply(ui.ctx());
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(16));
+        self.poll_freshness();
 
         egui::Panel::top("amp_header")
             .exact_size(38.0)

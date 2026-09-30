@@ -81,6 +81,15 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
 
         ui.add_space(12.0);
 
+        // ☆/★ for the loaded model (WARM when set).
+        if let Some(id) = loaded_id.as_deref() {
+            let fav = app.params.library.marks_of(id).favorite;
+            if plugin_gui_core::widgets::star_toggle(ui, fav).clicked() {
+                app.toggle_favorite(id);
+            }
+            ui.add_space(4.0);
+        }
+
         let color = if status.is_missing() || status.deleted {
             theme::WARN
         } else {
