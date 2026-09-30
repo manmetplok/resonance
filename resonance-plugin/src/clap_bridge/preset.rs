@@ -108,7 +108,9 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
         load_key: Option<&CStr>,
     ) -> Result<serde_json::Value, String> {
         let identity = |id: &str, name: &str, source: PresetSource| {
-            serde_json::json!({ "id": id, "name": name, "source": source.as_str(), "modified": false })
+            serde_json::json!({
+                "id": id, "name": name, "source": source.as_str(), "modified": false,
+            })
         };
         match location {
             Location::Plugin => {

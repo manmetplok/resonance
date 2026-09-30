@@ -48,6 +48,7 @@ use crate::param::Param;
 use crate::state::ParamRename;
 
 mod bank;
+pub mod browser;
 mod editor;
 pub mod format;
 mod files;
@@ -67,7 +68,8 @@ pub use library::{
 pub use marks::{mark_key, MarksSource, NoMarks};
 pub use rows::{PresetRow, PresetRows};
 pub use query::{Facets, Hit, Query, QueryResult, Sort};
-pub use session::PresetSession;
+pub use browser::{FormMode, MetaForm, PresetBrowser};
+pub use session::{PresetSession, SoundSnapshot};
 
 /// Environment variable overriding the root directory user presets are
 /// read from and written to. Points at the directory that *contains* the
@@ -402,8 +404,27 @@ pub fn decode_factory_entries(text: &str) -> Vec<FactoryEntry> {
         .collect()
 }
 
+static DEFAULT_ROOTS_OVERRIDE: std::sync::OnceLock<(PathBuf, Option<PathBuf>)> =
+    std::sync::OnceLock::new();
+
+/// Point the process-wide default preset root (and, when given, the
+/// directory of the marks store the default library opens) somewhere else
+/// for the rest of the process — a test seam with no environment variable,
+/// so no `setenv` race with a test harness's threads. The first call wins.
+pub fn override_default_roots(root: PathBuf, marks_dir: Option<PathBuf>) {
+    let _ = DEFAULT_ROOTS_OVERRIDE.set((root, marks_dir));
+}
+
+/// The marks directory [`override_default_roots`] set, if any.
+pub(crate) fn default_marks_dir_override() -> Option<PathBuf> {
+    DEFAULT_ROOTS_OVERRIDE.get().and_then(|(_, m)| m.clone())
+}
+
 /// Root directory containing the per-plugin user preset folders.
 pub fn user_preset_root() -> Option<PathBuf> {
+    if let Some((root, _)) = DEFAULT_ROOTS_OVERRIDE.get() {
+        return Some(root.clone());
+    }
     if let Some(over) = std::env::var_os(USER_PRESET_DIR_ENV) {
         if !over.is_empty() {
             return Some(PathBuf::from(over));

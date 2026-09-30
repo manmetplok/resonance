@@ -371,3 +371,88 @@ fn the_vocabulary_lists_seeded_values_then_values_in_use() {
     assert!(vocab.categories_effect.iter().any(|c| c == "Bus"));
     assert!(vocab.tags.iter().any(|t| t == "shimmer"));
 }
+
+// ---------------------------------------------------------------------------
+// presets.search / presets.rename / presets.delete (slice P4)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn search_finds_presets_across_plugins_with_facets() {
+    let mut app = app();
+    let response = call(
+        &mut app,
+        presets::SEARCH,
+        &presets::SearchParams {
+            plugin_id: None,
+            filter: PresetFilter {
+                query: Some("char:dark".into()),
+                ..Default::default()
+            },
+        },
+    );
+    let result: presets::SearchResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(result.total, 1);
+    assert_eq!(result.hits[0].plugin_id, PLUGIN_ID);
+    assert_eq!(result.hits[0].entry.id, "bass-reese");
+    assert!(result.facets.category.iter().any(|c| c.value == "Bass"));
+    // No project is needed: library state.
+    let (mut bare, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    let r = call(&mut bare, presets::SEARCH, &presets::SearchParams::default());
+    assert!(r.error.is_none(), "{:?}", r.error);
+}
+
+#[test]
+fn rename_keeps_the_id_and_delete_needs_confirm_and_goes_to_the_trash() {
+    let mut app = app();
+    let id = save(&mut app, "Before", None, false);
+    let response = call(
+        &mut app,
+        presets::RENAME,
+        &presets::RenameParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: id.clone(),
+            name: "After".to_owned(),
+        },
+    );
+    let result: presets::EntryResult = serde_json::from_value(response.result.unwrap()).unwrap();
+    assert_eq!(result.entry.name, "After");
+    assert_eq!(result.entry.id, id);
+
+    let refused = call(
+        &mut app,
+        presets::RENAME,
+        &presets::RenameParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: "bass-reese".to_owned(),
+            name: "Mine".to_owned(),
+        },
+    );
+    assert_eq!(refused.error.unwrap().kind(), ErrorKind::InvalidParams);
+
+    let unconfirmed = call(
+        &mut app,
+        presets::DELETE,
+        &presets::DeleteParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: id.clone(),
+            confirm: false,
+        },
+    );
+    let err = unconfirmed.error.expect("refused without confirm");
+    assert!(err.message.contains("After"), "{}", err.message);
+    assert_eq!(names(&list(&mut app, PresetFilter::default())).len(), 3);
+
+    let deleted = call(
+        &mut app,
+        presets::DELETE,
+        &presets::DeleteParams {
+            plugin_id: PLUGIN_ID.to_owned(),
+            preset_id: id,
+            confirm: true,
+        },
+    );
+    let result: presets::DeleteResult = serde_json::from_value(deleted.result.unwrap()).unwrap();
+    assert!(std::path::Path::new(&result.trashed_path).is_file());
+    assert!(result.trashed_path.contains(".trash"), "{}", result.trashed_path);
+    assert_eq!(names(&list(&mut app, PresetFilter::default())).len(), 2);
+}

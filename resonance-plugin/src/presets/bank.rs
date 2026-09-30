@@ -298,6 +298,35 @@ impl PresetBank {
             .map(|r| r.preset)
     }
 
+    /// Duplicate a preset as "<name> copy" (a new user preset).
+    pub fn duplicate(&self, preset: &PresetRef) -> Result<PresetRef, String> {
+        self.library
+            .duplicate(&self.plugin_id, preset, self.plugin.clone())
+            .map(|r| r.preset)
+    }
+
+    /// Import a preset file (see [`PresetLibrary::import`]).
+    pub fn import(
+        &self,
+        path: &std::path::Path,
+        param_ids: &[&str],
+    ) -> Result<(PresetRef, bool), String> {
+        self.library
+            .import(&self.plugin_id, path, param_ids)
+            .map(|(r, reminted)| (r.preset, reminted))
+    }
+
+    /// Export a preset as one file (see [`PresetLibrary::export`]).
+    pub fn export(&self, preset: &PresetRef, path: &std::path::Path) -> Result<(), String> {
+        self.library
+            .export(&self.plugin_id, preset, self.plugin.clone(), path)
+    }
+
+    /// The plugin info saved presets record.
+    pub fn plugin_info(&self) -> &PresetPluginInfo {
+        &self.plugin
+    }
+
     /// Rename a user preset. Its id does not change.
     pub fn rename(&self, preset: &PresetRef, new_name: &str) -> Result<PresetRef, String> {
         self.library

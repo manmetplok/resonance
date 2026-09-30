@@ -278,6 +278,70 @@ impl PresetSession {
     }
 }
 
+/// Everything needed to put a plugin back exactly as it was before an
+/// audition: every parameter value, the chained saver's state, and the
+/// loaded identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoundSnapshot {
+    pub values: Vec<(String, f64)>,
+    pub extra: Option<serde_json::Map<String, serde_json::Value>>,
+    pub current: Option<PresetRef>,
+    pub modified: bool,
+}
+
+impl PresetSession {
+    /// Capture the whole sound (params + extra state + identity).
+    pub fn capture(&self, params: &[&dyn Param]) -> SoundSnapshot {
+        SoundSnapshot {
+            values: params
+                .iter()
+                .map(|p| (p.id().to_string(), p.get_plain()))
+                .collect(),
+            extra: self.inner.as_ref().map(|i| i.save()),
+            current: self.current(),
+            modified: self.is_modified(),
+        }
+    }
+
+    /// Put back a [`capture`](Self::capture)d sound.
+    pub fn restore(&self, snapshot: SoundSnapshot, params: &[&dyn Param]) {
+        for (id, v) in &snapshot.values {
+            if let Some(p) = params.iter().find(|p| p.id() == id) {
+                p.set_plain(*v);
+            }
+        }
+        if let (Some(inner), Some(extra)) = (&self.inner, snapshot.extra) {
+            inner.load(&serde_json::Value::Object(extra));
+        }
+        *self.current.lock() = snapshot.current;
+        self.modified.store(snapshot.modified, Ordering::Relaxed);
+    }
+
+    /// Save the current sound over the loaded **user** preset, in place
+    /// (same id, same metadata, `modified` bumped): the bar's Save.
+    pub fn save_in_place(
+        &self,
+        bank: &PresetBank,
+        params: &[&dyn Param],
+    ) -> Result<PresetRef, String> {
+        let current = self
+            .current()
+            .filter(|c| c.source == PresetSource::User && c.is_resolved())
+            .ok_or_else(|| "Only a loaded user preset can be saved in place".to_string())?;
+        let saved = bank.save_with(
+            &current.name,
+            params,
+            SaveOptions {
+                target: Some(current.id.clone()),
+                extra: self.save_for_preset(),
+                ..SaveOptions::default()
+            },
+        )?;
+        self.set_current(Some(saved.clone()));
+        Ok(saved)
+    }
+}
+
 impl ExtraStateSaver for PresetSession {
     fn preset_keys(&self) -> &'static [&'static str] {
         self.inner.as_ref().map(|i| i.preset_keys()).unwrap_or(&[])

@@ -33,10 +33,23 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn temp_root(tag: &str) -> PathBuf {
+    hermetic_defaults();
     let dir = std::env::temp_dir().join(format!("resonance-amp-lib-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("tone3000")).unwrap();
     dir
+}
+
+/// Point this binary's default roots (the editor's preset bar reads the
+/// default preset library) at a private directory, so no test reads the
+/// user's presets or marks. Idempotent; no environment variable.
+fn hermetic_defaults() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let base = std::env::temp_dir()
+            .join(format!("resonance-amp-lib-defaults-{}", std::process::id()));
+        resonance_amp::library::override_default_roots(base.join("models"), base.join("marks"));
+    });
 }
 
 /// A root with the two A1 fixtures as downloads: `a.nam` (slot 0, the
@@ -1071,4 +1084,29 @@ fn the_shared_library_is_one_per_root() {
     let other = shared_for(Some(temp_root("shared-other")), None);
     assert!(!Arc::ptr_eq(&a, &other));
     let _ = Library::empty();
+}
+
+/// The header's preset bar opens the shared preset browser over the amp
+/// editor, at the editor's minimum size (760×520), listing the amp's user
+/// presets with their detail and actions.
+#[test]
+fn the_preset_browser_opens_over_the_amp_editor_at_its_minimum_size() {
+    let lib = browse_root("preset-browser");
+    let amp = ResonanceAmp::with_library(lib);
+    let bank = resonance_plugin::presets::PresetBank::for_plugin::<ResonanceAmp>();
+    let params: Vec<&dyn resonance_plugin::Param> =
+        (0..amp.param_count()).map(|i| amp.param(i)).collect();
+    let saved = bank.save("Crunch Rhythm", &params).unwrap();
+
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
+    ed.set_size(760.0, 520.0);
+    let drawn = ed.frame();
+    assert!(has(&drawn, "Browse"), "{drawn:?}");
+    ed.open_preset_browser();
+    ed.frame(); // an egui area's first frame only measures it
+    let drawn = ed.frame();
+    for label in ["Presets", "Crunch Rhythm", "Import…", "Enter keep"] {
+        assert!(has(&drawn, label), "{label:?} at 760×520: {drawn:?}");
+    }
+    let _ = bank.delete(&saved);
 }

@@ -18,6 +18,9 @@ pub(super) fn try_handle(app: &mut Resonance, request: &Request) -> Option<Respo
         presets::SET_MARKS => set_marks(app, request),
         presets::UPDATE_META => update_meta(app, request),
         presets::VOCABULARY => vocabulary(app, request),
+        presets::SEARCH => search(app, request),
+        presets::RENAME => rename(app, request),
+        presets::DELETE => delete(app, request),
         _ => return None,
     })
 }
@@ -138,6 +141,112 @@ fn update_meta(app: &mut Resonance, request: &Request) -> Response {
         return failure(request, RpcError::internal(e));
     }
     reply_entry(app, request, &params.plugin_id, &preset.id)
+}
+
+/// `presets.search`.
+fn search(app: &mut Resonance, request: &Request) -> Response {
+    let params: presets::SearchParams = match super::optional_params(request) {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    let lib = crate::plugin_preset_library::library(app);
+    let plugins: Vec<String> = match &params.plugin_id {
+        Some(id) => vec![id.clone()],
+        None => app
+            .plugin_catalog
+            .available_plugins
+            .iter()
+            .map(|p| p.clap_plugin_id.clone())
+            .collect(),
+    };
+    for id in &plugins {
+        let _ = bank_for(app, id);
+    }
+    let result = lib.query(&query_for(&params.filter, plugins));
+    let offset = params.filter.offset.unwrap_or(0) as usize;
+    let limit = params
+        .filter
+        .limit
+        .unwrap_or(super::plugin_presets::DEFAULT_LIMIT) as usize;
+    let hits = result
+        .hits
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(|h| presets::SearchHit {
+            plugin_id: h.plugin_id.clone(),
+            entry: entry_from_hit(h),
+        })
+        .collect();
+    success(
+        request,
+        &presets::SearchResult {
+            total: result.hits.len() as u32,
+            hits,
+            facets: super::plugin_presets::wire_facets(&result.facets),
+            library_generation: lib.marks().generation(),
+        },
+    )
+}
+
+/// `presets.rename`.
+fn rename(app: &mut Resonance, request: &Request) -> Response {
+    let params: presets::RenameParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    let preset = match resolve(app, &params.plugin_id, &params.preset_id) {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    if preset.source == PresetSource::Factory {
+        return failure(
+            request,
+            RpcError::invalid_params("factory presets cannot be renamed; save a copy instead"),
+        );
+    }
+    match bank_for(app, &params.plugin_id).rename(&preset, &params.name) {
+        Ok(p) => reply_entry(app, request, &params.plugin_id, &p.id),
+        Err(e) if e.contains("already exists") => failure(request, RpcError::invalid_params(e)),
+        Err(e) => failure(request, RpcError::internal(e)),
+    }
+}
+
+/// `presets.delete`.
+fn delete(app: &mut Resonance, request: &Request) -> Response {
+    let params: presets::DeleteParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    let preset = match resolve(app, &params.plugin_id, &params.preset_id) {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    if preset.source == PresetSource::Factory {
+        return failure(
+            request,
+            RpcError::invalid_params("factory presets cannot be deleted"),
+        );
+    }
+    if !params.confirm {
+        return failure(
+            request,
+            RpcError::needs_confirmation(format!(
+                "this moves the user preset {:?} of {:?} to the trash (recoverable for 30 \
+                 days); pass confirm: true to delete it",
+                preset.name, params.plugin_id
+            )),
+        );
+    }
+    match bank_for(app, &params.plugin_id).trash(&preset) {
+        Ok(path) => success(
+            request,
+            &presets::DeleteResult {
+                trashed_path: path.to_string_lossy().into_owned(),
+            },
+        ),
+        Err(e) => failure(request, RpcError::internal(e)),
+    }
 }
 
 /// `presets.vocabulary`.

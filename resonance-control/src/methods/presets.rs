@@ -8,7 +8,22 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::plugin_preset::{PluginPresetEntry, PresetMetaInput};
+use super::plugin_preset::{PluginPresetEntry, PresetFacets, PresetFilter, PresetMetaInput};
+
+/// `presets.search` — find presets across every plugin, or one
+/// ([`SearchParams`] -> [`SearchResult`]), before a plugin is even on a
+/// track. Read-only.
+pub const SEARCH: &str = "presets.search";
+
+/// `presets.rename` — rename a **user** preset ([`RenameParams`] ->
+/// [`EntryResult`]). Its id does not change, so stars, tags and every
+/// loaded identity follow it.
+pub const RENAME: &str = "presets.rename";
+
+/// `presets.delete` — move a **user** preset to the trash (recoverable for
+/// 30 days) ([`DeleteParams`] -> [`DeleteResult`]). Destructive: refused
+/// with a summary until `confirm: true`.
+pub const DELETE: &str = "presets.delete";
 
 /// `presets.set_marks` — favourite or personally tag one preset, factory
 /// presets included ([`SetMarksParams`] -> [`EntryResult`]). Per-user
@@ -27,7 +42,68 @@ pub const UPDATE_META: &str = "presets.update_meta";
 pub const VOCABULARY: &str = "presets.vocabulary";
 
 /// All `presets.*` method names.
-pub const METHODS: &[&str] = &[SET_MARKS, UPDATE_META, VOCABULARY];
+pub const METHODS: &[&str] = &[SET_MARKS, UPDATE_META, VOCABULARY, SEARCH, RENAME, DELETE];
+
+/// Params for `presets.search`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SearchParams {
+    /// Only this plugin's presets (its CLAP id); omitted searches every
+    /// plugin the app knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(flatten)]
+    pub filter: PresetFilter,
+}
+
+/// One search hit: the preset and the plugin it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SearchHit {
+    pub plugin_id: String,
+    #[serde(flatten)]
+    pub entry: PluginPresetEntry,
+}
+
+/// Result of `presets.search`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SearchResult {
+    /// Matches before `limit` / `offset`.
+    pub total: u32,
+    pub hits: Vec<SearchHit>,
+    pub facets: PresetFacets,
+    /// The marks store's write counter, for a caller caching results.
+    pub library_generation: u64,
+}
+
+/// Params for `presets.rename`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RenameParams {
+    pub plugin_id: String,
+    pub preset_id: String,
+    pub name: String,
+}
+
+/// Params for `presets.delete`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DeleteParams {
+    pub plugin_id: String,
+    pub preset_id: String,
+    /// Required: without it the call is refused with what would be lost.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub confirm: bool,
+}
+
+/// Result of `presets.delete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct DeleteResult {
+    /// Where the file went (recoverable for 30 days).
+    pub trashed_path: String,
+}
 
 /// Params for `presets.set_marks`. At least one of `favorite` / `tags`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

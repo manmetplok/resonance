@@ -1290,3 +1290,45 @@ what landed and where the code differs from §§4–15.
   with `meta`, star keepers).
 - The editor bar gained the ☆/★ toggle on the loaded preset (marks
   re-read at most every `BAR_REFRESH`).
+
+### P4 — the preset browser
+
+- `presets::browser::PresetBrowser` (ungated): the shared `BrowserModel`
+  over `PresetRows` plus an `AuditionBracket<SoundSnapshot>`
+  (`PresetSession::capture` / `restore`: every param, the chained saver's
+  state, identity and modified flag), the metadata form (`MetaForm`:
+  Save as… / Edit info… / marks-only on a factory preset), rename,
+  duplicate ("<name> copy", `derived_from`), delete to the trash through
+  the model's confirm-in-place state, import (`PresetLibrary::import`:
+  another plugin's preset refused by id, a document naming none of the
+  plugin's params refused, a taken id re-minted and said so, a taken name
+  numbered) and export (`PresetLibrary::export`, one format-1 file,
+  factory presets included). Commit records the pick in the recents.
+- The egui skin (`preset_ui`): the bar is now ◀ ☆ picker • ▶ `Browse`
+  `Save` (in place, user presets only) `Save as…`; Rename and Delete moved
+  into the browser. The browser is an `egui::Area` over the whole editor
+  (drawn by `preset_bar` itself, so the 13 editors needed no change):
+  header, search + a facet menu per facet + ★ only + sort, list
+  (`library_ui::library_list`, ↑/↓ audition, Enter/double-click keep, Esc
+  revert, ☆ per row), detail pane (identity, saved-with, based-on,
+  description, facet pills, personal tags with completion, actions:
+  Edit info / Duplicate / Rename / Export / Reveal / Delete with the
+  confirm row), footer (hint, notice, Import…, Save as…). A click outside
+  keeps and closes, × and Esc revert and close. The form is its own Area.
+  **Deviations from §6.3:** the facets are menus in both layouts rather
+  than a checkbox column; the narrow layout (< 720 px) stacks the detail
+  under the list instead of a disclosure under the row; the detail's
+  actions sit under the name so the gate's 640×260 minimum reaches them
+  without scrolling; the category combo lists both class vocabularies
+  (the bank does not know its plugin's class). **Not built:** `.rpreset`
+  export bundles (§6.4 Export of a selection) — single-preset export only.
+- `rfd` joined `resonance-plugin`'s `editor-widgets` feature for the
+  Import/Export dialogs (sync on the UI thread, as the amp's model picker).
+- `presets.search` (across plugins or one; filters, facets,
+  `library_generation`), `presets.rename` (user presets; D11 clash
+  refused), `presets.delete` (user presets; refused without
+  `confirm: true`; trash, not unlink) with MCP tools.
+- Hermeticity: `presets::override_default_roots` is the test seam for the
+  process-wide default library (no env var); the amp's
+  `library::override_default_roots` sets it too, so the amp's headless
+  editor tests never read the user's presets or marks.

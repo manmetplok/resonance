@@ -5224,6 +5224,7 @@ dependencies = [
  "plugin-gui-core",
  "resonance-common",
  "resonance-plugin",
+ "rfd",
  "serde",
  "serde_json",
  "tracing",

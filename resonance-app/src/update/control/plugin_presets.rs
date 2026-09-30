@@ -343,7 +343,11 @@ pub(crate) struct SaveArgs {
 /// `overwrite_id` names its target outright. Factory presets are never
 /// touched: saving under a factory name creates a user preset that
 /// shadows it, which is what the plugin's own window does.
-pub(crate) fn check_save(app: &Resonance, clap_id: &str, args: &SaveArgs) -> Result<String, RpcError> {
+pub(crate) fn check_save(
+    app: &Resonance,
+    clap_id: &str,
+    args: &SaveArgs,
+) -> Result<String, RpcError> {
     let wanted = args.name.trim();
     if wanted.is_empty() {
         return Err(RpcError::invalid_params("a preset needs a name"));

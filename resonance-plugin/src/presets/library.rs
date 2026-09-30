@@ -239,7 +239,12 @@ impl PresetLibrary {
         let mut slot = self.marks.write();
         slot.get_or_insert_with(|| {
             if self.default_marks {
-                Arc::new(SharedMarks::open_default_or_detached())
+                match super::default_marks_dir_override() {
+                    Some(dir) => Arc::new(
+                        SharedMarks::open(dir).unwrap_or_else(|_| SharedMarks::detached()),
+                    ),
+                    None => Arc::new(SharedMarks::open_default_or_detached()),
+                }
             } else {
                 Arc::new(NoMarks)
             }
@@ -679,6 +684,137 @@ impl PresetLibrary {
         let record = user_record(&file, path);
         upsert_user(index, record.clone());
         Ok(record)
+    }
+
+    /// A user-preset name based on `base` that no user preset of
+    /// `plugin_id` has yet: `base`, else `base 2`, `base 3`, …
+    pub fn unique_name(&self, plugin_id: &str, base: &str) -> String {
+        let records = self.records(plugin_id, Duration::ZERO);
+        let taken = |n: &str| {
+            records
+                .iter()
+                .any(|r| r.preset.source == PresetSource::User && same_name(&r.meta.name, n))
+        };
+        let base = base.trim();
+        if !taken(base) {
+            return base.to_string();
+        }
+        (2..1000)
+            .map(|i| format!("{base} {i}"))
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| format!("{base} {}", format::new_uuid()))
+    }
+
+    /// Copy any preset (factory or user) to a new user preset
+    /// "`<name> copy`": its sound and its metadata, a fresh id, and
+    /// `derived_from` pointing at the original (§6.4 Duplicate).
+    pub fn duplicate(
+        &self,
+        plugin_id: &str,
+        preset: &PresetRef,
+        plugin: PresetPluginInfo,
+    ) -> Result<PresetRecord, String> {
+        let record = self
+            .record(plugin_id, preset)
+            .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
+        let doc: serde_json::Value = self
+            .state_json(plugin_id, preset)
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?;
+        let name = self.unique_name(plugin_id, &format!("{} copy", record.meta.name));
+        self.save(
+            plugin_id,
+            SaveRequest {
+                name,
+                doc,
+                meta: Some(record.meta.clone()),
+                derived_from: Some(record.preset.id.clone()),
+                plugin,
+                id: None,
+                target: None,
+            },
+        )
+    }
+
+    /// Import a preset file (format 1, or a bare state document) for
+    /// `plugin_id` (§6.4 Import). A file for another plugin is refused,
+    /// naming it; one whose document names none of `param_ids` is refused
+    /// as not this plugin's. The file keeps its id unless another preset
+    /// already has it (then it gets a fresh one, and `Ok((record, true))`
+    /// says so); a name another user preset has gets a number.
+    pub fn import(
+        &self,
+        plugin_id: &str,
+        path: &Path,
+        param_ids: &[&str],
+    ) -> Result<(PresetRecord, bool), String> {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("not a preset file: {e}"))?;
+        let stem = stem_of(path);
+        let file = if format::is_envelope(&value) {
+            PresetFile::from_value(value)?
+        } else {
+            let id = format::new_uuid();
+            migrate::convert_legacy_document(value, &stem, plugin_id, self.now(), id)?
+        };
+        if !file.plugin.id.is_empty() && file.plugin.id != plugin_id {
+            return Err(format!("That preset is for {}, not this plugin", file.plugin.id));
+        }
+        let doc = file.state.doc.clone().ok_or("the preset carries no state document")?;
+        let names_ours = doc
+            .get("params")
+            .and_then(|p| p.as_object())
+            .is_some_and(|p| {
+                param_ids.is_empty() || p.keys().any(|k| param_ids.contains(&k.as_str()))
+            });
+        if !names_ours {
+            return Err("That preset names none of this plugin's parameters".to_string());
+        }
+        let records = self.records(plugin_id, Duration::ZERO);
+        let clash = file.id.is_empty() || records.iter().any(|r| r.preset.id == file.id);
+        let wanted = if file.meta.name.is_empty() {
+            &stem
+        } else {
+            &file.meta.name
+        };
+        let name = self.unique_name(plugin_id, wanted);
+        let saved = self.save(
+            plugin_id,
+            SaveRequest {
+                name,
+                doc,
+                meta: Some(file.meta.clone()),
+                derived_from: file.meta.derived_from.clone(),
+                plugin: file.plugin.clone(),
+                id: (!clash).then(|| file.id.clone()),
+                target: None,
+            },
+        )?;
+        Ok((saved, clash))
+    }
+
+    /// Write `preset` as one preset file at `path` (§6.4 Export): the
+    /// format-1 file, factory presets included (with `plugin` filled in).
+    pub fn export(
+        &self,
+        plugin_id: &str,
+        preset: &PresetRef,
+        plugin: PresetPluginInfo,
+        path: &Path,
+    ) -> Result<(), String> {
+        let record = self
+            .record(plugin_id, preset)
+            .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
+        let doc: serde_json::Value = self
+            .state_json(plugin_id, preset)
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?;
+        let mut info = plugin;
+        info.id = plugin_id.to_string();
+        let file = PresetFile::new(record.preset.id.clone(), info, record.meta.clone(), doc);
+        files::atomic_write(path, file.to_text()?.as_bytes())
     }
 
     /// Move a user preset to the trash (D10: recoverable for

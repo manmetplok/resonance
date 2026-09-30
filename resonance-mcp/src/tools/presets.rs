@@ -65,6 +65,70 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Search plugin presets across every plugin (or one: plugin_id), before \
+                       a plugin is even on a track — pick a plugin AND a preset in one read. \
+                       Filters AND: query (tokens match name, author, description, category \
+                       and tags; is:fav, is:recent, is:user, is:factory, tag:, genre:, cat:, \
+                       for:, char:, by: scope a token, e.g. \"for:vocal char:warm\"), \
+                       favorites_only, source, category, instrument, genres, character, tags; \
+                       sort (bank / name / category / recent / modified); limit (default 100) \
+                       and offset. Each hit carries plugin_id and the preset entry (id, \
+                       metadata, favorite, tags). Add the plugin with track_add_effect / \
+                       track_add_instrument (preset: {id}) or load it onto an existing one with \
+                       track_load_plugin_preset (preset_id). Read-only.",
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
+        output_schema = schema_for_output::<presets::SearchResult>()
+    )]
+    async fn presets_search(
+        &self,
+        Parameters(params): Parameters<presets::SearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(presets::SEARCH, &params).await
+    }
+
+    #[tool(
+        description = "Rename a USER preset (by plugin_id + preset_id). Its id does not \
+                       change, so stars, tags and every project that loaded it follow. Names \
+                       are unique per plugin among user presets (case-insensitively): a name \
+                       another user preset has is refused. Factory presets cannot be renamed. \
+                       Library state, not the project: no undo entry, no revision bump.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = schema_for_output::<presets::EntryResult>()
+    )]
+    async fn presets_rename(
+        &self,
+        Parameters(params): Parameters<presets::RenameParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(presets::RENAME, &params).await
+    }
+
+    #[tool(
+        description = "Delete a USER preset: it moves to the preset trash, recoverable for 30 \
+                       days, and its star survives a restore. Destructive, so without \
+                       confirm: true the call is refused with what would be lost. Factory \
+                       presets cannot be deleted. Library state, not the project: edit_undo \
+                       does not take it back.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        ),
+        output_schema = schema_for_output::<presets::DeleteResult>()
+    )]
+    async fn presets_delete(
+        &self,
+        Parameters(params): Parameters<presets::DeleteParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(presets::DELETE, &params).await
+    }
+
+    #[tool(
         description = "The preset metadata vocabulary: the seeded categories (for instrument \
                        and for effect plugins), instrument (\"what it is for\": vocal, \
                        drum-bus, synth-bass, …), genres and character (timbre words: warm, \

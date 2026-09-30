@@ -1,5 +1,6 @@
-//! The shared preset bar for plugin editors: one picker listing factory
-//! and user presets together, plus Save / Rename / Delete.
+//! The shared preset bar for plugin editors — ◀ ☆ picker • ▶, Browse,
+//! Save, Save as… — and the preset browser overlay and metadata form it
+//! opens (plugin-preset-library.md §6.2–§6.5).
 //!
 //! Every plugin editor draws its own preset combo today, four of them
 //! hardcoding "— select —" and none of them able to save (audit findings
@@ -24,8 +25,13 @@
 //! helpers, so DSP-only consumers don't pull in the GUI stack.
 
 use plugin_gui_core::egui;
+use plugin_gui_core::theme::lavender as theme;
+use plugin_gui_core::widgets::{star_toggle, tag_pill};
 
+use crate::library_ui::{self, ColumnSpec, ConfirmOutcome, ListOptions};
+use crate::library_view::{Sort, SortKey, TAGS_FACET};
 use crate::param::Param;
+use crate::presets::{FormMode, MetaForm};
 use crate::presets::{
     NamingKind, PresetBank, PresetEditor, PresetEvent, PresetRecord, PresetRef, PresetSession,
     PresetSource,
@@ -109,43 +115,59 @@ pub fn preset_bar(
             event = editor.step(bank, session, 1, params);
         }
 
-        // Save is always available: it is how a user preset comes into
-        // existence. Rename and Delete apply to user presets only —
-        // the factory bank is read-only.
-        let is_user = current
-            .as_ref()
-            .map(|p| p.source == PresetSource::User)
-            .unwrap_or(false);
-
-        if ui.small_button("Save").clicked() {
-            editor.begin_save(session);
-        }
-        if ui
-            .add_enabled(is_user, egui::Button::new("Rename").small())
-            .clicked()
-        {
-            if let Some(p) = &current {
-                editor.begin_rename(p);
-            }
-        }
-        if ui
-            .add_enabled(is_user, egui::Button::new("Delete").small())
-            .clicked()
-        {
-            if let Some(p) = &current {
-                event = editor.delete(bank, session, p);
-            }
-        }
-
         if session.is_modified() {
             ui.label(egui::RichText::new("•").weak())
                 .on_hover_text("Edited since the preset was loaded");
+        }
+
+        // Browse opens the library overlay; Save overwrites the loaded
+        // user preset in place (factory presets are read-only: Save as…);
+        // Save as… opens the metadata form. Rename and Delete live in the
+        // browser (§6.2): rare, destructive, and they crowded the header.
+        if ui
+            .small_button("Browse")
+            .on_hover_text("Search, filter and audition presets")
+            .clicked()
+        {
+            editor.browser.open(bank, session);
+            editor.browser_just_opened = true;
+        }
+        let is_user = current
+            .as_ref()
+            .is_some_and(|p| p.source == PresetSource::User && p.is_resolved());
+        if ui
+            .add_enabled(is_user, egui::Button::new("Save").small())
+            .on_hover_text("Overwrite the loaded user preset")
+            .clicked()
+        {
+            match session.save_in_place(bank, params) {
+                Ok(p) => event = PresetEvent::Saved(p),
+                Err(e) => editor.set_error(e),
+            }
+        }
+        if ui.small_button("Save as…").clicked() {
+            editor.browser.begin_save_as(bank, session);
         }
     });
 
     if let Some(err) = editor.error() {
         ui.label(egui::RichText::new(err).color(egui::Color32::from_rgb(0xd0, 0x60, 0x60)));
     }
+
+    // The overlays float over the whole editor, wherever the bar sits.
+    if editor.browser.open {
+        let e = browser_overlay(ui.ctx(), id_salt, editor, bank, session, params);
+        if !matches!(e, PresetEvent::None) {
+            event = e;
+        }
+    }
+    if editor.browser.form.is_some() {
+        let e = form_overlay(ui.ctx(), id_salt, editor, bank, session, params);
+        if !matches!(e, PresetEvent::None) {
+            event = e;
+        }
+    }
+    editor.browser_just_opened = false;
 
     event
 }
@@ -234,4 +256,623 @@ fn name_entry_row(
         }
         PresetEvent::None
     }
+}
+
+// ---------------------------------------------------------------------------
+// The browser overlay (§6.3)
+// ---------------------------------------------------------------------------
+
+/// Width at and above which the browser shows list and detail side by
+/// side; narrower editors (gate, stereo) stack them.
+pub const WIDE_LAYOUT: f32 = 720.0;
+
+const DETAIL_WIDTH: f32 = 250.0;
+
+/// The sorts the browser offers, as `(label, sort)`.
+fn sort_options() -> [(&'static str, Sort); 5] {
+    [
+        ("Bank order", Sort::by(SortKey::Natural)),
+        ("Name", Sort::by(SortKey::Title)),
+        ("Category", Sort::by(SortKey::Field("category".into()))),
+        ("Recently used", Sort::by(SortKey::RecentlyUsed)),
+        (
+            "Recently modified",
+            Sort {
+                key: SortKey::Field("modified".into()),
+                descending: true,
+            },
+        ),
+    ]
+}
+
+/// A modal file dialog. Sync on the UI thread, as the amp's model picker
+/// (the Cocoa runtime guards the modal run loop).
+fn pick_preset_file() -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Resonance preset", &["json"])
+        .pick_file()
+}
+
+fn save_preset_file(name: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new()
+        .add_filter("Resonance preset", &["json"])
+        .set_file_name(format!("{name}.json"))
+        .save_file()
+}
+
+/// The browser: an `egui::Area` over the editor body, the plugin's
+/// controls live underneath so an audition is audible. Keys: ↑/↓
+/// audition, Enter keeps, Esc reverts and closes; a click outside keeps
+/// and closes; × reverts and closes.
+fn browser_overlay(
+    ctx: &egui::Context,
+    id_salt: &str,
+    editor: &mut PresetEditor,
+    bank: &PresetBank,
+    session: &PresetSession,
+    params: &[&dyn Param],
+) -> PresetEvent {
+    let mut event = PresetEvent::None;
+    let screen = ctx.content_rect();
+    let rect = screen.shrink(8.0);
+    let wide = rect.width() >= WIDE_LAYOUT;
+    let browser = &mut editor.browser;
+    browser.refresh(bank, crate::library_marks::BROWSER_POLL_INTERVAL);
+    let current_key = session
+        .current()
+        .filter(|c| c.is_resolved())
+        .map(|c| crate::presets::mark_key(bank.plugin_id(), &c.id));
+
+    let mut close: Option<bool> = None;
+    let area = egui::Area::new(egui::Id::new((id_salt, "preset_browser")))
+        .order(egui::Order::Foreground)
+        .fixed_pos(rect.min)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(theme::BG_1)
+                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .corner_radius(6.0)
+                .inner_margin(8.0)
+                .show(ui, |ui| {
+                    let inner = rect.size() - egui::vec2(16.0, 16.0);
+                    ui.set_min_size(inner);
+                    ui.set_max_size(inner);
+
+                    // Header.
+                    ui.horizontal(|ui| {
+                        let title = egui::RichText::new("Presets").strong();
+                        ui.label(title.color(theme::TEXT_1));
+                        if let Some(name) = &bank.plugin_info().name {
+                            let text = egui::RichText::new(format!("· {name}"));
+                            ui.label(text.color(theme::TEXT_3));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let x = ui
+                                .small_button("×")
+                                .on_hover_text("Close (reverts an audition)");
+                            if x.clicked() {
+                                close = Some(false);
+                            }
+                        });
+                    });
+
+                    // Search, filters, sort.
+                    ui.horizontal_wrapped(|ui| {
+                        let width = if wide { 220.0 } else { 150.0 };
+                        library_ui::search_field(ui, &mut browser.model, "Search presets", width);
+                        let rows = browser.rows().clone();
+                        for (facet, label) in crate::presets::rows::FACETS {
+                            library_ui::facet_menu(
+                                ui,
+                                (id_salt, "facet", facet),
+                                label,
+                                &mut browser.model,
+                                &rows,
+                                facet,
+                            );
+                        }
+                        let mut fav = browser.model.favorites_only();
+                        if ui.toggle_value(&mut fav, "★ only").changed() {
+                            browser.model.set_favorites_only(fav);
+                        }
+                        let current_sort = browser.model.sort().clone();
+                        let label = sort_options()
+                            .into_iter()
+                            .find(|(_, s)| *s == current_sort)
+                            .map(|(l, _)| l)
+                            .unwrap_or("Sort");
+                        egui::ComboBox::from_id_salt((id_salt, "sort"))
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for (l, s) in sort_options() {
+                                    if ui.selectable_label(s == current_sort, l).clicked() {
+                                        browser.model.set_sort(s);
+                                    }
+                                }
+                            });
+                    });
+                    browser.refresh(bank, crate::library_marks::BROWSER_POLL_INTERVAL);
+                    let rows = browser.rows().clone();
+                    ui.label(
+                        egui::RichText::new(format!("{} presets", browser.model.view_len()))
+                            .size(11.0)
+                            .color(theme::TEXT_3),
+                    );
+
+                    let footer_h = 26.0;
+                    let body_h = (ui.available_height() - footer_h).max(60.0);
+                    let columns = [ColumnSpec::left(70.0), ColumnSpec::right(14.0)];
+                    let opts = ListOptions {
+                        columns: &columns,
+                        loaded: current_key.as_deref(),
+                        ..ListOptions::default()
+                    };
+                    let list = |ui: &mut egui::Ui, b: &mut crate::presets::PresetBrowser| {
+                        library_ui::library_list(ui, (id_salt, "list"), &mut b.model, &rows, &opts)
+                    };
+                    let response = if wide {
+                        let mut response = Default::default();
+                        ui.horizontal_top(|ui| {
+                            let list_w = (ui.available_width() - DETAIL_WIDTH - 8.0).max(120.0);
+                            let down = egui::Layout::top_down(egui::Align::Min);
+                            ui.allocate_ui_with_layout(egui::vec2(list_w, body_h), down, |ui| {
+                                ui.set_min_height(body_h);
+                                response = list(ui, browser);
+                            });
+                            ui.separator();
+                            ui.allocate_ui_with_layout(egui::vec2(DETAIL_WIDTH, body_h), down, |ui| {
+                                egui::ScrollArea::vertical()
+                                    .id_salt((id_salt, "detail"))
+                                    .show(ui, |ui| {
+                                        let e = detail_pane(ui, id_salt, browser, bank, session);
+                                        if !matches!(e, PresetEvent::None) {
+                                            event = e;
+                                        }
+                                    });
+                            });
+                        });
+                        response
+                    } else {
+                        let list_h = (body_h * 0.6).max(60.0);
+                        let mut response = Default::default();
+                        ui.allocate_ui(egui::vec2(ui.available_width(), list_h), |ui| {
+                            ui.set_min_height(list_h);
+                            response = list(ui, browser);
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .id_salt((id_salt, "detail"))
+                            .max_height((body_h - list_h - 8.0).max(40.0))
+                            .show(ui, |ui| {
+                                let e = detail_pane(ui, id_salt, browser, bank, session);
+                                if !matches!(e, PresetEvent::None) {
+                                    event = e;
+                                }
+                            });
+                        response
+                    };
+
+                    if let Some(row) = response.star_clicked {
+                        let key = rows.rows[row].key.clone();
+                        browser.toggle_favorite(bank, &key);
+                    }
+                    if let Some(row) = response.clicked.or(response.moved) {
+                        let key = rows.rows[row].key.clone();
+                        let e = browser.audition(bank, session, params, &key);
+                        if !matches!(e, PresetEvent::None) {
+                            event = e;
+                        }
+                    }
+                    if let Some(row) = response.double_clicked {
+                        let key = rows.rows[row].key.clone();
+                        let e = browser.commit(bank, session, params, Some(&key));
+                        if !matches!(e, PresetEvent::None) {
+                            event = e;
+                        }
+                    }
+                    if response.escaped {
+                        close = Some(false);
+                    }
+
+                    // Footer.
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("↑↓ audition · Enter keep · Esc revert")
+                                .size(11.0)
+                                .color(theme::TEXT_3),
+                        );
+                        if let Some(n) = browser.model.notice() {
+                            let color = if n.is_error() { theme::BAD } else { theme::TEXT_2 };
+                            ui.label(egui::RichText::new(n.text()).size(11.0).color(color));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("Save as…").clicked() {
+                                browser.begin_save_as(bank, session);
+                            }
+                            if ui.small_button("Import…").clicked() {
+                                if let Some(path) = pick_preset_file() {
+                                    let e = browser.import(bank, params, &path);
+                                    if !matches!(e, PresetEvent::None) {
+                                        event = e;
+                                    }
+                                }
+                            }
+                        });
+                    });
+                });
+        });
+
+    let outside = area.response.clicked_elsewhere()
+        && !editor.browser_just_opened
+        && editor.browser.form.is_none();
+    if outside && close.is_none() {
+        close = Some(true);
+    }
+    if let Some(keep) = close {
+        let e = editor.browser.close(bank, session, params, keep);
+        if !matches!(e, PresetEvent::None) {
+            event = e;
+        }
+    }
+    event
+}
+
+/// Pills for a facet's values (display only).
+fn pills(ui: &mut egui::Ui, label: &str, values: &[String]) {
+    if values.is_empty() {
+        return;
+    }
+    ui.label(egui::RichText::new(label).size(11.0).color(theme::TEXT_3));
+    ui.horizontal_wrapped(|ui| {
+        for v in values {
+            tag_pill(ui, v, false, false);
+        }
+    });
+}
+
+/// The selected preset's detail: identity, metadata, personal tags and
+/// the actions (§6.3 right-hand pane).
+fn detail_pane(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    browser: &mut crate::presets::PresetBrowser,
+    bank: &PresetBank,
+    session: &PresetSession,
+) -> PresetEvent {
+    let mut event = PresetEvent::None;
+    let Some(key) = browser.model.selected().map(str::to_string) else {
+        ui.label(egui::RichText::new("Select a preset").color(theme::TEXT_3));
+        return event;
+    };
+    let Some(record) = browser.record(&key).cloned() else {
+        return event;
+    };
+    let meta = &record.meta;
+    let is_user = record.preset.source == PresetSource::User;
+
+    match &mut browser.rename {
+        Some((k, name)) if *k == key => {
+            let resp = ui.add(egui::TextEdit::singleline(name).desired_width(200.0));
+            resp.request_focus();
+            let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            ui.horizontal(|ui| {
+                if submit || ui.small_button("Rename").clicked() {
+                    event = browser.submit_rename(bank, session);
+                }
+                if ui.small_button("Cancel").clicked() {
+                    browser.rename = None;
+                }
+            });
+        }
+        _ => {
+            ui.label(egui::RichText::new(&meta.name).strong().color(theme::TEXT_1));
+        }
+    }
+    let mut who = Vec::new();
+    if let Some(a) = &meta.author {
+        who.push(format!("by {a}"));
+    }
+    who.push(record.preset.source.as_str().to_string());
+    ui.label(egui::RichText::new(who.join(" · ")).size(11.0).color(theme::TEXT_2));
+    // The actions sit right under the name, so the narrowest editor still
+    // reaches them without scrolling past the metadata.
+    ui.add_space(2.0);
+    ui.horizontal_wrapped(|ui| {
+        let edit_label = if is_user { "Edit info…" } else { "My tags…" };
+        if ui.small_button(edit_label).clicked() {
+            browser.begin_edit(bank, &key);
+        }
+        if ui.small_button("Duplicate").clicked() {
+            event = browser.duplicate(bank, &key);
+        }
+        if ui.add_enabled(is_user, egui::Button::new("Rename").small()).clicked() {
+            browser.begin_rename(&key);
+        }
+        if ui.small_button("Export…").clicked() {
+            if let Some(path) = save_preset_file(&meta.name) {
+                browser.export(bank, &key, &path);
+            }
+        }
+        if let (true, Some(path)) = (is_user, &record.path) {
+            if ui.small_button("Reveal").clicked() {
+                if let Err(e) = crate::reveal::reveal(path) {
+                    browser.model.set_error(format!("Could not show the file: {e}"));
+                }
+            }
+        }
+        if ui.add_enabled(is_user, egui::Button::new("Delete").small()).clicked() {
+            browser.model.begin_delete(key.clone());
+        }
+    });
+    let prompt = format!("Delete '{}'?", meta.name);
+    if let ConfirmOutcome::Confirmed(k) = library_ui::confirm_delete_row(
+        ui,
+        &mut browser.model,
+        &key,
+        &prompt,
+        Some("It moves to the trash and can be recovered for 30 days."),
+    ) {
+        event = browser.delete(bank, session, &k);
+    }
+    ui.add_space(4.0);
+    if let Some(v) = &record.plugin_version {
+        let text = egui::RichText::new(format!("saved with {v}"));
+        ui.label(text.size(11.0).color(theme::TEXT_3));
+    }
+    if let Some(from) = &meta.derived_from {
+        let base = browser
+            .rows()
+            .rows
+            .iter()
+            .find(|r| r.record.preset.id == *from)
+            .map(|r| r.record.meta.name.clone())
+            .unwrap_or_else(|| from.clone());
+        let text = egui::RichText::new(format!("based on {base}"));
+        ui.label(text.size(11.0).color(theme::TEXT_3));
+    }
+    if let Some(d) = &meta.description {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(d).size(11.5).color(theme::TEXT_2));
+    }
+    ui.add_space(4.0);
+    pills(ui, "category", &meta.category.iter().cloned().collect::<Vec<_>>());
+    pills(ui, "for", &meta.instrument);
+    pills(ui, "genres", &meta.genres);
+    pills(ui, "character", &meta.character);
+    pills(ui, "tags", &meta.tags);
+
+    // Personal tags (every preset, factory ones included).
+    ui.label(egui::RichText::new("my tags").size(11.0).color(theme::TEXT_3));
+    let personal = bank
+        .library()
+        .preset_marks(bank.plugin_id(), &record.preset.id)
+        .tags;
+    let suggestions = if browser.tag_draft.trim().is_empty() {
+        Vec::new()
+    } else {
+        bank.library().marks().complete_tag(&browser.tag_draft, &personal, 6)
+    };
+    let tr = library_ui::tag_row(
+        ui,
+        (id_salt, "personal", &key),
+        &personal,
+        &mut browser.tag_draft,
+        &suggestions,
+    );
+    if let Some(t) = tr.added {
+        browser.edit_personal_tag(bank, &key, &t, true);
+    }
+    if let Some(t) = tr.removed {
+        browser.edit_personal_tag(bank, &key, &t, false);
+    }
+
+    event
+}
+
+// ---------------------------------------------------------------------------
+// The metadata form (§6.5)
+// ---------------------------------------------------------------------------
+
+/// Tag completion for one facet row: the seeded values, then used ones.
+fn facet_suggestions(
+    bank: &PresetBank,
+    facet: &str,
+    draft: &str,
+    exclude: &[String],
+) -> Vec<String> {
+    use crate::library_marks::vocab::Facet;
+    let draft = crate::library_marks::normalize_tag(draft).unwrap_or_default();
+    if draft.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = Facet::from_name(facet)
+        .map(|f| f.seeded().iter().map(|s| s.to_string()).collect())
+        .unwrap_or_default();
+    out.extend(bank.library().marks().complete_tag(&draft, exclude, 12));
+    let mut seen = Vec::new();
+    out.retain(|v| {
+        let keep = v.starts_with(&draft) && !exclude.contains(v) && !seen.contains(v);
+        seen.push(v.clone());
+        keep
+    });
+    out.truncate(6);
+    out
+}
+
+fn tag_field(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash,
+    bank: &PresetBank,
+    label: &str,
+    facet: &str,
+    values: &mut Vec<String>,
+    draft: &mut String,
+) {
+    ui.horizontal(|ui| {
+        let text = egui::RichText::new(label).color(theme::TEXT_2);
+        ui.add_sized([72.0, 18.0], egui::Label::new(text));
+        let suggestions = facet_suggestions(bank, facet, draft, values);
+        let r = library_ui::tag_row(ui, id, values, draft, &suggestions);
+        if let Some(t) = r.added.and_then(|t| crate::library_marks::normalize_tag(&t)) {
+            if !values.contains(&t) {
+                values.push(t);
+            }
+        }
+        if let Some(t) = r.removed {
+            values.retain(|v| *v != t);
+        }
+    });
+}
+
+/// The metadata form: Save as… (a new preset), Edit info… (a user
+/// preset's own metadata) or, on a factory preset, marks only.
+fn form_overlay(
+    ctx: &egui::Context,
+    id_salt: &str,
+    editor: &mut PresetEditor,
+    bank: &PresetBank,
+    session: &PresetSession,
+    params: &[&dyn Param],
+) -> PresetEvent {
+    let mut event = PresetEvent::None;
+    let screen = ctx.content_rect();
+    let width = (screen.width() - 32.0).clamp(240.0, 480.0);
+    let pos = egui::pos2(screen.center().x - width / 2.0, screen.min.y + 16.0);
+    let mut submit: Option<bool> = None;
+    let mut cancel = false;
+    let Some(form) = editor.browser.form.as_mut() else {
+        return event;
+    };
+    egui::Area::new(egui::Id::new((id_salt, "preset_form")))
+        .order(egui::Order::Foreground)
+        .fixed_pos(pos)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(theme::BG_2)
+                .stroke(egui::Stroke::new(1.0, theme::LINE))
+                .corner_radius(6.0)
+                .inner_margin(10.0)
+                .show(ui, |ui| {
+                    ui.set_width(width - 20.0);
+                    let title = match form.mode {
+                        FormMode::SaveAs => "Save preset",
+                        FormMode::EditInfo(_) => "Edit preset info",
+                        FormMode::MarksOnly(_) => "My marks",
+                    };
+                    ui.label(egui::RichText::new(title).strong().color(theme::TEXT_1));
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .max_height((screen.height() - 120.0).max(80.0))
+                        .show(ui, |ui| {
+                            form_fields(ui, id_salt, form, bank);
+                        });
+                    if form.name_clash {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "⚠ A user preset named \"{}\" exists.",
+                                    form.name.trim()
+                                ))
+                                .color(theme::WARM),
+                            );
+                            if ui.small_button("Overwrite").clicked() {
+                                submit = Some(true);
+                            }
+                        });
+                    }
+                    if let Some(e) = &form.error {
+                        ui.label(egui::RichText::new(e).color(theme::BAD));
+                    }
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Save").clicked() {
+                                submit = Some(false);
+                            }
+                            if ui.button("Cancel").clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        cancel = true;
+                    }
+                });
+        });
+    if cancel {
+        editor.browser.form = None;
+    } else if let Some(overwrite) = submit {
+        event = editor.browser.submit_form(bank, session, params, overwrite);
+    }
+    event
+}
+
+fn form_fields(ui: &mut egui::Ui, id_salt: &str, form: &mut MetaForm, bank: &PresetBank) {
+    use crate::library_marks::vocab;
+    let row = |ui: &mut egui::Ui, label: &str| {
+        let text = egui::RichText::new(label).color(theme::TEXT_2);
+        ui.add_sized([72.0, 18.0], egui::Label::new(text));
+    };
+    if matches!(form.mode, FormMode::MarksOnly(_)) {
+        ui.horizontal(|ui| {
+            row(ui, "Favourite");
+            if star_toggle(ui, form.favorite).clicked() {
+                form.favorite = !form.favorite;
+            }
+        });
+        let [_, _, _, draft] = &mut form.drafts;
+        let tags = &mut form.personal_tags;
+        tag_field(ui, (id_salt, "f-tags"), bank, "My tags", TAGS_FACET, tags, draft);
+        return;
+    }
+    ui.horizontal(|ui| {
+        row(ui, "Name");
+        ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
+    });
+    form.meta.name = form.name.clone();
+    ui.horizontal(|ui| {
+        row(ui, "Author");
+        let mut author = form.meta.author.clone().unwrap_or_default();
+        if ui
+            .add(egui::TextEdit::singleline(&mut author).desired_width(f32::INFINITY))
+            .changed()
+        {
+            form.meta.author = Some(author);
+        }
+    });
+    ui.horizontal(|ui| {
+        row(ui, "Category");
+        let current = form.meta.category.clone().unwrap_or_default();
+        egui::ComboBox::from_id_salt((id_salt, "f-category"))
+            .selected_text(if current.is_empty() { "(none)" } else { &current })
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_empty(), "(none)").clicked() {
+                    form.meta.category = None;
+                }
+                for c in vocab::CATEGORIES_INSTRUMENT.iter().chain(vocab::CATEGORIES_EFFECT) {
+                    if ui.selectable_label(current == *c, *c).clicked() {
+                        form.meta.category = Some(c.to_string());
+                    }
+                }
+            });
+    });
+    let [d0, d1, d2, d3] = &mut form.drafts;
+    let m = &mut form.meta;
+    tag_field(ui, (id_salt, "f-for"), bank, "For", "instrument", &mut m.instrument, d0);
+    tag_field(ui, (id_salt, "f-genres"), bank, "Genres", "genres", &mut m.genres, d1);
+    tag_field(ui, (id_salt, "f-char"), bank, "Character", "character", &mut m.character, d2);
+    tag_field(ui, (id_salt, "f-tags"), bank, "Tags", TAGS_FACET, &mut m.tags, d3);
+    ui.horizontal(|ui| {
+        row(ui, "Description");
+        let mut desc = form.meta.description.clone().unwrap_or_default();
+        if ui
+            .add(
+                egui::TextEdit::multiline(&mut desc)
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY),
+            )
+            .changed()
+        {
+            form.meta.description = Some(desc);
+        }
+    });
 }

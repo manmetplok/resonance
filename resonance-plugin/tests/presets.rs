@@ -1272,3 +1272,225 @@ fn overlaying_a_preset_replaces_only_what_a_preset_owns() {
     assert_eq!(current["ui_tab"], "meters");
     assert_eq!(current["preset"]["name"], "New");
 }
+
+// ---------------------------------------------------------------------------
+// The preset browser (plugin-preset-library.md P4)
+// ---------------------------------------------------------------------------
+
+mod browser {
+    use super::*;
+    use resonance_plugin::presets::{FormMode, PresetBrowser};
+
+    fn key(p: &PresetRef) -> String {
+        resonance_plugin::presets::mark_key("com.resonance.test", &p.id)
+    }
+
+    fn setup(tag: &str) -> (TempRoot, PresetBank, Arc<PresetSession>, Arc<IrLike>) {
+        let root = TempRoot::new(tag);
+        let bank = root.bank();
+        let extra = Arc::new(IrLike::default());
+        let session = PresetSession::with_extra(extra.clone());
+        (root, bank, session, extra)
+    }
+
+    /// ↑/↓ audition loads provisionally; Esc/× puts the exact prior sound
+    /// back — params, extra state and identity.
+    #[test]
+    fn audition_then_revert_restores_the_whole_prior_sound() {
+        let (_root, bank, session, extra) = setup("br-revert");
+        let params = TestParams::new();
+        *extra.ir_path.lock() = "/irs/original.wav".into();
+        let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+        params.mix.set_plain(0.37);
+        *extra.ir_path.lock() = "/irs/edited.wav".into();
+        session.mark_modified();
+
+        let mut b = PresetBrowser::default();
+        b.open(&bank, &session);
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let e = b.audition(&bank, &session, &params.refs(), &key(&wide()));
+        assert_eq!(e, PresetEvent::Auditioned(wide()));
+        assert_eq!(params.taps.get_plain(), 7.0, "the audition is audible");
+        assert!(b.auditioning());
+        b.audition(&bank, &session, &params.refs(), &key(&init()));
+        assert_eq!(params.taps.get_plain(), 3.0);
+
+        let e = b.close(&bank, &session, &params.refs(), false);
+        assert_eq!(e, PresetEvent::Reverted);
+        assert!((params.mix.get_plain() - 0.37).abs() < 1e-6);
+        assert_eq!(*extra.ir_path.lock(), "/irs/edited.wav");
+        assert_eq!(session.current(), Some(mine));
+        assert!(session.is_modified(), "the modified flag comes back too");
+        assert!(!b.open);
+    }
+
+    /// Enter / a click outside keeps the last audition and records the
+    /// pick in the recents.
+    #[test]
+    fn audition_then_commit_keeps_it_and_records_the_pick() {
+        let (root, _bank, session, _extra) = setup("br-commit");
+        let marks = Arc::new(
+            resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap(),
+        );
+        let bank = root.bank();
+        bank.library().set_marks(marks);
+        let params = TestParams::new();
+        let mut b = PresetBrowser::default();
+        b.open(&bank, &session);
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.audition(&bank, &session, &params.refs(), &key(&wide()));
+        let e = b.close(&bank, &session, &params.refs(), true);
+        assert_eq!(e, PresetEvent::Loaded(wide()));
+        assert_eq!(params.taps.get_plain(), 7.0);
+        let m = bank.library().preset_marks("com.resonance.test", "wide");
+        assert!(m.last_used.is_some() && m.use_count == 1);
+    }
+
+    /// Save as… from the form: metadata from the loaded preset, lineage,
+    /// and a name clash that asks before overwriting.
+    #[test]
+    fn save_as_through_the_form_carries_meta_and_asks_before_overwriting() {
+        let (_root, bank, session, _extra) = setup("br-form");
+        let params = TestParams::new();
+        session.load_preset(&bank, &wide(), &params.refs());
+        let mut b = PresetBrowser::default();
+        b.begin_save_as(&bank, &session);
+        let form = b.form.as_mut().unwrap();
+        assert_eq!(form.mode, FormMode::SaveAs);
+        assert_eq!(form.name, "Wide (edit)");
+        assert_eq!(form.meta.category.as_deref(), Some("Creative"), "pre-filled");
+        form.name = "Big".into();
+        form.meta.genres = vec!["ambient".into()];
+        let e = b.submit_form(&bank, &session, &params.refs(), false);
+        let PresetEvent::Saved(saved) = e else {
+            panic!("expected Saved, got {e:?}");
+        };
+        let record = bank.record(&saved).unwrap();
+        assert_eq!(record.meta.genres, vec!["ambient"]);
+        assert_eq!(record.meta.derived_from.as_deref(), Some("wide"));
+        assert_eq!(session.current(), Some(saved.clone()));
+
+        b.begin_save_as(&bank, &session);
+        b.form.as_mut().unwrap().name = "big".into();
+        assert_eq!(b.submit_form(&bank, &session, &params.refs(), false), PresetEvent::None);
+        assert!(b.form.as_ref().unwrap().name_clash, "asks first");
+        let e = b.submit_form(&bank, &session, &params.refs(), true);
+        assert!(matches!(e, PresetEvent::Saved(ref p) if p.id == saved.id), "{e:?}");
+    }
+
+    /// Edit info… edits a user preset's metadata (and its name); on a
+    /// factory preset the form is marks only.
+    #[test]
+    fn edit_info_on_user_presets_and_marks_only_on_factory_ones() {
+        let (root, bank, session, _extra) = setup("br-edit");
+        bank.library().set_marks(Arc::new(
+            resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap(),
+        ));
+        let params = TestParams::new();
+        let mine = bank.save("Mine", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.begin_edit(&bank, &key(&mine));
+        let form = b.form.as_mut().unwrap();
+        assert!(matches!(form.mode, FormMode::EditInfo(_)));
+        form.name = "Mine Renamed".into();
+        form.meta.character = vec!["warm".into()];
+        form.meta.description = Some("Late.".into());
+        assert!(matches!(
+            b.submit_form(&bank, &session, &params.refs(), false),
+            PresetEvent::MetaChanged(_)
+        ));
+        let r = bank.record(&mine).unwrap();
+        assert_eq!(r.meta.name, "Mine Renamed");
+        assert_eq!(r.preset.id, mine.id, "the id never changes");
+        assert_eq!(r.meta.character, vec!["warm"]);
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.begin_edit(&bank, &key(&wide()));
+        let form = b.form.as_mut().unwrap();
+        assert!(matches!(form.mode, FormMode::MarksOnly(_)));
+        form.favorite = true;
+        form.personal_tags = vec!["keeper".into()];
+        b.submit_form(&bank, &session, &params.refs(), false);
+        let m = bank.library().preset_marks("com.resonance.test", "wide");
+        assert!(m.favorite);
+        assert_eq!(m.tags, vec!["keeper"]);
+    }
+
+    /// Rename, duplicate and the confirm-in-place delete, through the
+    /// browser.
+    #[test]
+    fn rename_duplicate_and_delete_from_the_browser() {
+        let (_root, bank, session, _extra) = setup("br-crud");
+        let params = TestParams::new();
+        let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+
+        b.begin_rename(&key(&mine));
+        b.rename.as_mut().unwrap().1 = "Ours".into();
+        let e = b.submit_rename(&bank, &session);
+        assert!(matches!(e, PresetEvent::Renamed(ref p) if p.id == mine.id && p.name == "Ours"));
+        b.begin_rename(&key(&wide()));
+        assert!(b.rename.is_none(), "factory presets are not renamed");
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let PresetEvent::Saved(copy) = b.duplicate(&bank, &key(&wide())) else {
+            panic!("duplicate")
+        };
+        assert_eq!(copy.name, "Wide copy");
+        assert_eq!(
+            bank.record(&copy).unwrap().meta.derived_from.as_deref(),
+            Some("wide")
+        );
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.model.begin_delete(key(&mine));
+        let armed = b.model.confirm_delete().unwrap();
+        let e = b.delete(&bank, &session, &armed);
+        assert!(matches!(e, PresetEvent::Deleted(_)));
+        assert!(bank.list_user().iter().all(|p| p.id != mine.id));
+        assert_eq!(session.current(), None, "the deleted preset's identity is cleared");
+    }
+
+    /// Export writes a format-1 file; importing it again into another
+    /// library keeps the id, and importing it where the id is taken gives
+    /// a new one. A preset for another plugin is refused by name.
+    #[test]
+    fn export_and_import_round_trip() {
+        let (root, bank, session, _extra) = setup("br-io");
+        let params = TestParams::new();
+        params.mix.set_plain(0.66);
+        let mine = session.save_as(&bank, "Exported", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let path = root.0.join("out.json");
+        b.export(&bank, &key(&mine), &path);
+        let file = PresetFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(file.id, mine.id);
+        assert_eq!(file.plugin.id, "com.resonance.test");
+
+        // Into the same library: the id is taken, so it gets a new one.
+        let e = b.import(&bank, &params.refs(), &path);
+        let PresetEvent::Imported(again) = e else {
+            panic!("import: {e:?}")
+        };
+        assert_ne!(again.id, mine.id);
+        assert_eq!(again.name, "Exported 2", "a taken name gets a number");
+
+        // Into a fresh library: the id is kept.
+        let other = TempRoot::new("br-io-other");
+        let other_bank = other.bank();
+        let (kept, reminted) = other_bank.import(&path, &["mix"]).unwrap();
+        assert!(!reminted);
+        assert_eq!(kept.id, mine.id);
+
+        let foreign = root.0.join("foreign.json");
+        let mut f = file.clone();
+        f.plugin.id = "com.other.plugin".into();
+        std::fs::write(&foreign, f.to_text().unwrap()).unwrap();
+        assert!(matches!(b.import(&bank, &params.refs(), &foreign), PresetEvent::None));
+        let err = b.model.notice().unwrap().text().to_string();
+        assert!(err.contains("com.other.plugin"), "{err}");
+    }
+}

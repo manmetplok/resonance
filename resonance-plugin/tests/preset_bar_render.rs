@@ -91,3 +91,107 @@ fn the_bar_lays_out_in_every_state_it_can_be_in() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ---------------------------------------------------------------------------
+// The browser overlay and the metadata form, read back from the frame's
+// text shapes (plugin-preset-library.md P4)
+// ---------------------------------------------------------------------------
+
+/// Every text the frame painted.
+fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for s in shapes {
+        walk(&s.shape, &mut out);
+    }
+    out
+}
+
+fn has(drawn: &[String], needle: &str) -> bool {
+    drawn.iter().any(|t| t.contains(needle))
+}
+
+/// One frame of the bar (and whatever overlay it opens) in a window of
+/// `size`.
+fn frame(
+    ctx: &egui::Context,
+    size: egui::Vec2,
+    editor: &mut PresetEditor,
+    bank: &PresetBank,
+    session: &PresetSession,
+    params: &[&dyn Param],
+) -> Vec<String> {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(input, |ui| {
+        preset_bar(ui, "test_presets", editor, bank, session, params, "— preset —");
+    });
+    texts(&out.shapes)
+}
+
+/// The browser at a wide editor and at the narrowest editor in the fleet
+/// (the gate's 640×260 minimum): the list, the loaded preset's detail
+/// pane and the footer all draw, in both layouts.
+#[test]
+fn the_browser_draws_its_list_detail_and_footer_wide_and_narrow() {
+    for (tag, size) in [("wide", egui::vec2(1000.0, 600.0)), ("narrow", egui::vec2(640.0, 260.0))] {
+        let root = temp_root(&format!("browser-{tag}"));
+        let bank = PresetBank::new("com.resonance.test", FACTORY)
+            .with_root(root.clone())
+            .with_plugin_info("Test Plugin", "1.0.0");
+        let mix = FloatParam::new("mix", "Mix", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 });
+        let params: Vec<&dyn Param> = vec![&mix];
+        let session = PresetSession::new();
+        session.save_as(&bank, "My Keeper", &params).unwrap();
+        let mut editor = PresetEditor::default();
+        let ctx = egui::Context::default();
+
+        let bar = frame(&ctx, size, &mut editor, &bank, &session, &params);
+        for label in ["Browse", "Save as…", "My Keeper"] {
+            assert!(has(&bar, label), "{tag}: the bar draws {label:?}: {bar:?}");
+        }
+        editor.browser.open(&bank, &session);
+        frame(&ctx, size, &mut editor, &bank, &session, &params); // an area's first frame measures
+        let drawn = frame(&ctx, size, &mut editor, &bank, &session, &params);
+        assert!(editor.browser.open, "{tag}: no click, so it stays open");
+        for label in ["Presets", "· Test Plugin", "Init", "Wide", "My Keeper", "Import…", "Enter keep"] {
+            assert!(has(&drawn, label), "{tag}: the browser draws {label:?}: {drawn:?}");
+        }
+        assert!(has(&drawn, "3 presets"), "{tag}: {drawn:?}");
+        // The detail pane names the selected (loaded) preset and its actions.
+        for label in ["user", "Duplicate", "Edit info…"] {
+            assert!(has(&drawn, label), "{tag}: the detail pane draws {label:?}: {drawn:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// The metadata form (Save as…) draws its fields, pre-filled.
+#[test]
+fn the_metadata_form_draws_its_fields() {
+    let root = temp_root("form");
+    let bank = PresetBank::new("com.resonance.test", FACTORY).with_root(root.clone());
+    let mix = FloatParam::new("mix", "Mix", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 });
+    let params: Vec<&dyn Param> = vec![&mix];
+    let session = PresetSession::new();
+    session.set_current(Some(PresetRef::factory("init", "Init")));
+    let mut editor = PresetEditor::default();
+    let ctx = egui::Context::default();
+    editor.browser.begin_save_as(&bank, &session);
+    let size = egui::vec2(640.0, 260.0);
+    frame(&ctx, size, &mut editor, &bank, &session, &params);
+    let drawn = frame(&ctx, size, &mut editor, &bank, &session, &params);
+    for label in ["Save preset", "Name", "Category", "For", "Genres", "Character", "Save", "Cancel"] {
+        assert!(has(&drawn, label), "the form draws {label:?}: {drawn:?}");
+    }
+    assert!(has(&drawn, "Init (edit)"), "the name is pre-filled: {drawn:?}");
+    let _ = std::fs::remove_dir_all(&root);
+}
