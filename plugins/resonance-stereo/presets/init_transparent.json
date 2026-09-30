@@ -7,7 +7,7 @@
     "name": "Init — Transparent",
     "author": "Resonance",
     "description": "Bit-exact passthrough: 100% width, no mono-maker, no widening algorithm — the transparent starting point.",
-    "category": "Utility",
+    "category": "Init",
     "instrument": [],
     "genres": [],
     "character": ["clean", "static"],

@@ -7,7 +7,7 @@
     "name": "Init — Per-Grain Cloud",
     "author": "Resonance",
     "description": "Neutral Per-Grain cloud at a 2x-overlap 90 ms grain size, 35% feedback and 30% mix — the plain starting patch.",
-    "category": "Utility",
+    "category": "Init",
     "instrument": [],
     "genres": [],
     "character": ["clean", "static"],

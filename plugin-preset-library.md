@@ -324,7 +324,7 @@ agents can filter on reliably, and **free tags**:
 
 | Field | Cardinality | Vocabulary | Notes |
 |---|---|---|---|
-| `category` | 0..1 | per plugin *class*: instruments `Bass, Lead, Pad, Pluck, Keys, Arp, Brass, Strings, Drone, FX, Drums, Init`; effects `Utility, Track, Bus, Master, Creative` | Parsed from today's `"X — Y"` names by the converter |
+| `category` | 0..1 | per plugin *class*: instruments `Bass, Lead, Pad, Pluck, Keys, Arp, Brass, Strings, Drone, FX, Drums, Init`; effects `Init, Utility, Track, Bus, Master, Creative` | Parsed from today's `"X — Y"` names by the converter |
 | `instrument` | 0..n | `vocal, lead-vocal, backing-vocal, guitar, electric-guitar, acoustic-guitar, bass, synth-bass, drums, kick, snare, hats, room, keys, piano, synth, strings, violin, mix-bus, drum-bus, master, full-mix` | "What is it for". For effects it names the source it suits. Answers "compressor presets for vocals" |
 | `genres` | 0..n | seeded list: `ambient, americana, cinematic, drum-and-bass, electronic, folk, hip-hop, house, indie, industrial, jazz, metal, pop, post-metal, rock, singer-songwriter, techno, …` | Superset of `resonance-mastering-assist::Genre` (`targets.rs:52-59`) and the genre skills in the agent plugin |
 | `character` | 0..n | `warm, bright, dark, clean, gritty, saturated, punchy, soft, wide, narrow, lush, dry, subtle, aggressive, vintage, modern, evolving, static, metallic, airy` | Timbre words. Doubles as the vocabulary `warmth-width-depth.md` uses for the colour plugin |
@@ -1098,8 +1098,10 @@ takes an id.
 - P1: every one of the 95 factory files is a format-1 file with `id` and a
   filled `meta` block (category, instrument, genres, character, tags,
   description), written from each preset's parameters. The `state.doc`
-  bodies are byte-identical to before. resonance-delay's six presets moved
-  to `presets/*.json`. `FactoryPreset { id, name, json }`, with `name`
+  bodies are byte-identical to before for eight plugins. resonance-delay's
+  six presets moved from inline strings to `presets/*.json`, and their
+  bodies differ only in number formatting (`0.40` → `0.4`): the values,
+  and so the sound, are the same. `FactoryPreset { id, name, json }`, with `name`
   kept as a literal (D7). Editors build their bank with
   `PresetBank::for_plugin::<P>()`, so user presets record
   `plugin.{name, version}`.
@@ -1120,9 +1122,35 @@ round 2 reconciles it)
 - Factory genres use a few values beyond the seeded list (`trance`,
   `synthwave`, `dubstep`, `lo-fi`, `dub`). §4.4 allows this. Consider
   seeding them in `library_marks::vocab`.
-- The converter keeps each original as `<file>.json.legacy` and removes it
-  on the next process's first index. A legacy document without a `params`
-  object is left in place and logged, not converted.
+- The converter keeps each original as `<file>.json.legacy`, stamped with
+  the conversion time, and a later run removes it once it is 30 days old
+  (not "at the next start", which could be seconds later in the same
+  process). The legacy id is derived from plugin id + file name + bytes
+  (a version-8 UUID), so two converters racing on one file write one
+  preset. A legacy document without a `params` object is left in place
+  and logged, not converted.
+- `Init` is a category for effect banks too (`EFFECT_CATEGORIES`), so
+  every bank's reset preset has one convention. `trance`, `synthwave`,
+  `dubstep`, `dub` and `lo-fi` are seeded genres.
+- Index hygiene (§4.2): a user file whose id is missing, not UUID-shaped,
+  a registered factory id, or shared with a newer file of a different
+  name or sound gets a fresh UUID written into it (and moves to its
+  `<name>-<id8>.json` name). Only true duplicates (same id, name and
+  sound) collapse. A file with an id but no name lists under its stem. A
+  file with `format_version` above 1 is skipped, never quarantined.
+- A case-only rename or re-save moves the file first and rewrites it in
+  place, so it cannot delete itself on a case-insensitive filesystem.
+- `PresetRef`'s `==` is strict `(source, id)`; two unresolved refs are
+  equal only by exact name. `PresetRef::matches` is the lenient,
+  case-insensitive comparison for name-only refs.
+- Every plugin builds its session with `PresetSession::for_plugin::<P>()`
+  (or `for_plugin_with_extra`), which resolves a name-only project
+  identity **at state load** (§13). The bar's per-frame `resolve` reads
+  the cached index only (`BAR_REFRESH`). Because a load may now read the
+  user preset directory, `scripts/run-tests.py` points
+  `RESONANCE_PLUGIN_PRESET_DIR` at a private temp root unless one is set.
+- "Save as…" onto an existing user preset's name keeps that preset's meta
+  and lineage; the loaded preset's meta only seeds a *new* preset.
 
 **Seams for round 2**
 
@@ -1144,3 +1172,17 @@ round 2 reconciles it)
 - *Browser.* `PresetEditor` is untouched in behaviour and is what
   `library_view::BrowserModel` replaces. `PresetLibrary::query` is the
   model's row source.
+
+**Deferred to round 2** (found in review, not fixed here)
+
+- `MarksSource::generation()` is documented as feeding the freshness
+  fingerprint, but nothing calls it and there is no refresh hook; and
+  `PresetMarks::last_used` is an RFC 3339 string where `library_marks`
+  has its own type. Reconcile both when the trait is implemented for the
+  real store.
+- `presets::query` and `library_view::BrowserModel` both implement search,
+  with different token syntax. Choose one engine; the other becomes a
+  thin adapter.
+- `presets::vocab::normalize_facet` and `library_marks::normalize_tag`
+  slug differently (`r&b` → `r-b` here, `rb` there), so `vocab` cannot
+  simply become a re-export: pick one rule and migrate stored values.

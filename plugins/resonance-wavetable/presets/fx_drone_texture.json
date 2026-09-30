@@ -7,7 +7,7 @@
     "name": "FX — Drone Texture",
     "author": "Resonance",
     "description": "Harmonic-sweep and hard-sync tables in full unison, morphed and auto-panned by three slow LFOs through thick chorus and long delay.",
-    "category": "FX",
+    "category": "Drone",
     "instrument": ["synth"],
     "genres": ["ambient", "cinematic"],
     "character": ["evolving", "wide", "lush"],

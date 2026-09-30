@@ -7,7 +7,7 @@
     "name": "Init — Default",
     "author": "Resonance",
     "description": "The plugin's plain defaults: an 8:1 gate that snaps open in 1 ms and closes over 100 ms, a neutral starting point.",
-    "category": "Utility",
+    "category": "Init",
     "instrument": [],
     "genres": [],
     "character": ["clean", "static"],

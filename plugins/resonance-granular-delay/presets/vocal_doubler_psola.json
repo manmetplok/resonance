@@ -6,12 +6,12 @@
   "meta": {
     "name": "Vocal Doubler — PSOLA + HQ",
     "author": "Resonance",
-    "description": "Pitch-synced PSOLA grains at HQ quality, transposed -5 st with a tight 5 ms spray for a clean, transparent vocal double.",
+    "description": "HQ PSOLA grains repitch the voice a fourth down (-5 st), 340 ms late with 30% feedback: a delayed harmony at 35% mix.",
     "category": "Track",
     "instrument": ["vocal", "lead-vocal"],
     "genres": [],
-    "character": ["clean", "subtle"],
-    "tags": ["grains"]
+    "character": ["clean"],
+    "tags": ["harmony", "psola", "grains"]
   },
   "state": {
     "encoding": "resonance-json",
