@@ -9,6 +9,7 @@ use resonance_plugin::*;
 // directly — the same entry point `process()` uses, minus the CLAP
 // buffer plumbing.
 pub mod dsp;
+pub mod library_rows;
 pub mod library;
 mod loader;
 pub mod model_ref;
@@ -124,6 +125,16 @@ impl ResonanceAmp {
             })
         };
         let at_slot = self.params.file_select.value();
+        self.restore_resolved(resolved, &reference, at_slot);
+        let st = self.params.status.lock();
+        let playing = (st.state == ModelState::Loaded).then(|| st.id.clone()).flatten();
+        drop(st);
+        self.params
+            .library
+            .set_usage(self.params.instance_id, playing.as_deref());
+    }
+
+    fn restore_resolved(&mut self, resolved: Resolved, reference: &ModelRef, at_slot: i32) {
         match resolved {
             Resolved::Nothing => {
                 *self.params.status.lock() = ModelStatus::default();
@@ -206,6 +217,13 @@ impl ResonanceAmp {
                 };
             }
         }
+    }
+}
+
+impl Drop for ResonanceAmp {
+    fn drop(&mut self) {
+        // Leave the "used in N open amps" count.
+        self.params.library.set_usage(self.params.instance_id, None);
     }
 }
 

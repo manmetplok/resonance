@@ -59,6 +59,10 @@ const EDITOR_SOURCES: &[(&str, &str)] = &[
     ("curve_view.rs", include_str!("../src/editor/curve_view.rs")),
     ("factory.rs", include_str!("../src/editor/factory.rs")),
     ("header.rs", include_str!("../src/editor/header.rs")),
+    (
+        "library_panel.rs",
+        include_str!("../src/editor/library_panel.rs"),
+    ),
     ("meters.rs", include_str!("../src/editor/meters.rs")),
     (
         "missing_banner.rs",

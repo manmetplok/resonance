@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use resonance_amp::library::{shared_for, SharedLibrary};
+use resonance_amp::library_rows::{step_in_view, view_counter, ModelRows};
+use resonance_plugin::library_view::{BrowserModel, Sort, SortKey};
 use resonance_amp::model_ref::{resolve_model, ModelRef, ModelState, Resolved};
 use resonance_amp::ResonanceAmp;
 use resonance_common::nam_library::{self, Library, Source};
@@ -363,6 +365,104 @@ fn adding_models_while_active_does_not_move_the_loaded_one() {
     assert_eq!(model_keys(&state_of(&amp))["model_path"], json!(b));
     assert_eq!(lib.read().by_slot(2).unwrap().name, "Test LSTM", "the new model appended");
     assert_eq!(amp.param(FILE_SELECT).display(1.0), "b");
+}
+
+// ---------------------------------------------------------------------------
+// The Installed view (library_rows over the shared BrowserModel)
+// ---------------------------------------------------------------------------
+
+/// A root with four models of different gear types and names.
+fn browse_root(tag: &str) -> Arc<SharedLibrary> {
+    let root = temp_root(tag);
+    let write = |name: &str, meta: &str, seed: u32| {
+        let text = format!(
+            r#"{{"version":"0.5.4","architecture":"WaveNet","config":{{}},"weights":[{seed}.0],"sample_rate":48000,"metadata":{meta}}}"#
+        );
+        std::fs::write(root.join("tone3000").join(name), text).unwrap();
+    };
+    write("a.nam", r#"{"name":"Friedman BE-100","modeled_by":"J. Smith","gear_type":"amp","tone_type":"crunch"}"#, 1);
+    write("b.nam", r#"{"name":"Darkglass MT900","modeled_by":"Steve","gear_type":"amp_cab","tone_type":"clean"}"#, 2);
+    write("c.nam", r#"{"name":"5150 Block Letter","modeled_by":"tonekid","gear_type":"amp","tone_type":"hi_gain"}"#, 3);
+    write("d.nam", r#"{"name":"Fuzz Face","modeled_by":"tonekid","gear_type":"pedal","tone_type":"fuzz"}"#, 4);
+    let lib = shared_for(Some(root));
+    lib.rescan().unwrap();
+    lib
+}
+
+fn view_titles(model: &BrowserModel, rows: &ModelRows) -> Vec<String> {
+    model
+        .view()
+        .iter()
+        .map(|&r| rows.rows[r].entry.name.clone())
+        .collect()
+}
+
+#[test]
+fn the_installed_view_searches_filters_and_sorts() {
+    let lib = browse_root("view");
+    let rows = ModelRows::build(&lib.read(), None, (1, 0));
+    let mut model = BrowserModel::new();
+    model.refresh(&rows, 1);
+    assert_eq!(
+        view_titles(&model, &rows),
+        vec!["Friedman BE-100", "Darkglass MT900", "5150 Block Letter", "Fuzz Face"],
+        "slot order by default"
+    );
+
+    model.set_query("tonekid");
+    model.refresh(&rows, 1);
+    assert_eq!(view_titles(&model, &rows), vec!["5150 Block Letter", "Fuzz Face"]);
+    model.set_query("b.nam");
+    model.refresh(&rows, 1);
+    assert_eq!(view_titles(&model, &rows), vec!["Darkglass MT900"], "file names are searched");
+
+    model.set_query("");
+    model.toggle_facet("gear_type", "amp");
+    model.refresh(&rows, 1);
+    assert_eq!(view_titles(&model, &rows), vec!["Friedman BE-100", "5150 Block Letter"]);
+    let types: Vec<(String, usize)> = model
+        .facet_counts(&rows, "gear_type")
+        .into_iter()
+        .map(|c| (c.value, c.count))
+        .collect();
+    assert!(types.contains(&("pedal".to_string(), 1)));
+
+    model.clear_facets();
+    model.set_sort(Sort::by(SortKey::Title));
+    model.refresh(&rows, 1);
+    assert_eq!(
+        view_titles(&model, &rows),
+        vec!["5150 Block Letter", "Darkglass MT900", "Friedman BE-100", "Fuzz Face"]
+    );
+    assert_eq!(rows.rows[0].columns[0], "J. Smith");
+    assert_eq!(rows.rows[0].columns[4], "A1");
+    assert_eq!(rows.rows[0].columns[5], "48k");
+}
+
+#[test]
+fn prev_next_walk_the_view_not_the_slot_order() {
+    let lib = browse_root("step");
+    let rows = ModelRows::build(&lib.read(), None, (1, 0));
+    let id = |slot: u32| lib.read().by_slot(slot).unwrap().id.clone();
+    let mut model = BrowserModel::new();
+    model.set_sort(Sort::by(SortKey::Title));
+    model.refresh(&rows, 1);
+    // Title order: 5150 (slot 2), Darkglass (1), Friedman (0), Fuzz (3).
+    assert_eq!(step_in_view(&model, &rows, Some(&id(2)), 1), Some(1));
+    assert_eq!(step_in_view(&model, &rows, Some(&id(1)), 1), Some(0));
+    assert_eq!(step_in_view(&model, &rows, Some(&id(3)), 1), None, "clamped at the end");
+    assert_eq!(step_in_view(&model, &rows, None, 1), Some(2), "nothing loaded: enter at the top");
+    assert_eq!(step_in_view(&model, &rows, None, -1), Some(3));
+    assert_eq!(view_counter(&model, Some(&id(0))), "3 / 4 in view");
+
+    model.toggle_facet("gear_type", "amp");
+    model.refresh(&rows, 1);
+    assert_eq!(view_counter(&model, Some(&id(1))), "– / 2 in view");
+    assert_eq!(
+        step_in_view(&model, &rows, Some(&id(1)), 1),
+        Some(2),
+        "a loaded model outside the view steps into it"
+    );
 }
 
 #[test]

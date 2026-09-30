@@ -5,6 +5,7 @@
 use plugin_gui_core::egui;
 
 use super::{actions, theme, AmpEditorApp};
+use crate::library_rows::{step_in_view, view_counter};
 
 pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -20,29 +21,19 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        if ui.button("Load Model…").clicked() {
-            load_model_clicked(app);
-        }
-
-        ui.add_space(8.0);
-
-        // Accent-coloured rich-text button so the Tone3000 entry point
-        // is visually distinct from the plain "Load Model…" button
-        // next to it. The label is the darkest surface token rather than
-        // pure black: this is the fleet's only solid-accent fill, and the
-        // canonical accent is a much darker violet than the blue it
-        // replaced (ba todo #1338) — 5.7:1 against it, still past AA, but
-        // the black-on-cyan headroom is gone, so the label has to be the
-        // dark end of the palette and cannot drift lighter.
-        let tone3000_btn = egui::Button::new(
-            egui::RichText::new("Browse Tone3000…")
+        // One entry point for every model source (nam-model-library.md
+        // §6.1). The fleet's only solid-accent fill; the label is the darkest
+        // surface token because the canonical accent is a dark violet
+        // (5.7:1 against it, past AA; ba todo #1338).
+        let library_btn = egui::Button::new(
+            egui::RichText::new("Library…")
                 .color(theme::BG_0)
                 .strong()
                 .size(13.0),
         )
         .fill(theme::ACCENT);
-        if ui.add(tone3000_btn).clicked() {
-            app.tone3000_panel.open = true;
+        if ui.add(library_btn).clicked() {
+            app.open_library();
         }
 
         ui.add_space(8.0);
@@ -69,33 +60,48 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         ui.separator();
         ui.add_space(8.0);
 
-        let slots = slotted(app);
-        ui.add_enabled_ui(slots.len() > 1, |ui| {
+        // ◀/▶ walk the Library panel's current view (search, filters,
+        // sort, favourites first), not slot order: "next" is what the user
+        // sees next (§5.1). They write the slot number.
+        app.refresh_rows();
+        let status = app.params.status.lock().clone();
+        let loaded_id = if status.state == crate::model_ref::ModelState::Loaded {
+            status.id.clone()
+        } else {
+            None
+        };
+        ui.add_enabled_ui(app.browser.view_len() > 0, |ui| {
             if ui.button("◀").clicked() {
-                seek_relative(app, &slots, -1);
+                step(app, loaded_id.as_deref(), -1);
             }
             if ui.button("▶").clicked() {
-                seek_relative(app, &slots, 1);
+                step(app, loaded_id.as_deref(), 1);
             }
         });
 
         ui.add_space(12.0);
 
-        let status = app.params.status.lock().clone();
         let color = if status.is_missing() || status.deleted {
             theme::WARN
         } else {
             theme::TEXT
         };
-        ui.label(egui::RichText::new(status.header_text()).size(13.0).color(color));
+        // The name opens the Library too.
+        let name = ui
+            .add(
+                egui::Label::new(egui::RichText::new(status.header_text()).size(13.0).color(color))
+                    .sense(egui::Sense::click()),
+            )
+            .on_hover_text("Open the model library");
+        if name.clicked() {
+            app.open_library();
+        }
         ui.add_space(8.0);
-        let current = app.params.file_select.value() as u32;
-        let position = match slots.iter().position(|&s| s == current) {
-            Some(i) if !status.is_missing() => format!("{} / {}", i + 1, slots.len()),
-            _ if slots.is_empty() => String::new(),
-            _ => format!("– / {}", slots.len()),
-        };
-        ui.label(egui::RichText::new(position).size(11.0).color(theme::TEXT_DIM));
+        ui.label(
+            egui::RichText::new(view_counter(&app.browser, loaded_id.as_deref()))
+                .size(11.0)
+                .color(theme::TEXT_DIM),
+        );
         if let Some(notice) = status.notice.as_ref().or(app.notice.as_ref()) {
             ui.add_space(8.0);
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::TEXT_DIM));
@@ -134,48 +140,8 @@ pub(crate) fn format_khz(hz: f32) -> String {
     }
 }
 
-/// The occupied slots, in slot order.
-fn slotted(app: &AmpEditorApp) -> Vec<u32> {
-    app.params
-        .library
-        .read()
-        .entries()
-        .iter()
-        .filter_map(|e| e.slot)
-        .collect()
-}
-
-fn load_model_clicked(app: &mut AmpEditorApp) {
-    // A picked file is imported (copied into the library, deduplicated by
-    // content) and loaded through its slot.
-    let Some(path) = actions::pick_nam_files(false).into_iter().next() else {
-        return;
-    };
-    app.notice = match actions::import_and_load(app, &path) {
-        Ok(resonance_common::nam_library::ImportOutcome::AlreadyPresent(_)) => {
-            Some("already in library".into())
-        }
-        Ok(_) => None,
-        Err(e) => Some(e),
-    };
-}
-
-fn seek_relative(app: &AmpEditorApp, slots: &[u32], delta: i32) {
-    if slots.is_empty() {
-        return;
+fn step(app: &mut AmpEditorApp, loaded_id: Option<&str>, delta: i32) {
+    if let Some(slot) = step_in_view(&app.browser, &app.rows, loaded_id, delta) {
+        actions::load_slot(app, slot);
     }
-    let current = app.params.file_select.value() as u32;
-    let playing = !app.params.model_ref.lock().is_empty();
-    // With nothing loaded the selector is parked without that meaning
-    // "that slot is playing", so the first press loads where it points
-    // (or the first model) rather than stepping past it.
-    let target = match slots.iter().position(|&s| s == current) {
-        Some(i) if playing => {
-            let n = slots.len() as i32;
-            slots[(i as i32 + delta).rem_euclid(n) as usize]
-        }
-        Some(i) => slots[i],
-        None => slots[0],
-    };
-    actions::load_slot(app, target);
 }

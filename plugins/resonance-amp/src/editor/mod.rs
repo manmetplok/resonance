@@ -16,6 +16,7 @@ mod controls;
 mod curve_view;
 mod factory;
 mod header;
+mod library_panel;
 mod meters;
 pub mod missing_banner;
 mod scope_view;

@@ -152,6 +152,9 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
                 // and a lost write here would silently revert the model on
                 // the next activation.
                 *deps.params.model_ref.lock() = ModelRef::from_entry(&entry);
+                deps.params
+                    .library
+                    .set_usage(deps.params.instance_id, Some(&entry.id));
                 let mut st = deps.params.status.lock();
                 st.name = entry.name.clone();
                 st.id = Some(entry.id.clone());

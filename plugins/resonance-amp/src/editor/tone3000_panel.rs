@@ -1,7 +1,6 @@
 //! Tone3000 browser overlay panel.
 //!
-//! Rendered on top of the normal amp editor when the user clicks the
-//! "Tone3000…" button in the header. All network activity is delegated
+//! The Library overlay's `Tone3000` tab (`library_panel.rs`). All network activity is delegated
 //! to [`crate::tone3000::worker`], so this file is purely presentation:
 //! it reads the shared `State` each frame, lays out egui widgets, and
 //! posts `Command`s back.
@@ -98,7 +97,6 @@ impl SortMode {
 }
 
 pub struct Tone3000PanelState {
-    pub open: bool,
     pub query: String,
     pub sort: SortMode,
     /// Which NAM architectures to browse. Defaults to
@@ -115,7 +113,6 @@ pub struct Tone3000PanelState {
 impl Default for Tone3000PanelState {
     fn default() -> Self {
         Self {
-            open: false,
             query: String::new(),
             sort: SortMode::Trending,
             architecture: ArchitectureFilter::All,
@@ -135,43 +132,10 @@ impl Tone3000PanelState {
     }
 }
 
-/// Draw the overlay. Returns the path of an installed model the user asked
-/// to load from a model row, if any.
-pub fn draw(
-    ui: &mut egui::Ui,
-    panel: &mut Tone3000PanelState,
-    worker: &Arc<WorkerHandle>,
-    library: &Library,
-    done: &DownloadDone,
-) -> Option<ModelRowAction> {
-    let mut picked = None;
-    // Dim the underlying editor behind the overlay.
-    let screen = ui.ctx().content_rect();
-    ui.painter()
-        .rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
-
-    let margin = 32.0;
-    let rect = screen.shrink(margin);
-    let window_id = egui::Id::new("tone3000_panel_window");
-
-    egui::Area::new(window_id)
-        .fixed_pos(rect.min)
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            let frame = egui::Frame::new()
-                .fill(theme::PANEL)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER))
-                .inner_margin(egui::Margin::same(14));
-            frame.show(ui, |ui| {
-                ui.set_width(rect.width());
-                ui.set_height(rect.height());
-                picked = draw_contents(ui, panel, worker, library, done);
-            });
-        });
-    picked
-}
-
-fn draw_contents(
+/// Draw the Tone3000 browser as the Library overlay's second tab
+/// (nam-model-library.md §6.2). Returns the installed model a row asked to
+/// load, if any.
+pub(crate) fn draw_tab(
     ui: &mut egui::Ui,
     panel: &mut Tone3000PanelState,
     worker: &Arc<WorkerHandle>,
@@ -233,10 +197,6 @@ fn draw_header(ui: &mut egui::Ui, panel: &mut Tone3000PanelState, worker: &Arc<W
         draw_status_pill(ui, &status);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Close").clicked() {
-                panel.open = false;
-            }
-            ui.add_space(6.0);
             match status {
                 Status::Disconnected | Status::Error(_) => {
                     if ui.button("Connect…").clicked() {

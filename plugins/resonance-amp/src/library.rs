@@ -17,6 +17,7 @@
 //! rescan never blocks a reader, and a writer mutex keeps two in-process
 //! mutations from racing each other's swap.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -33,6 +34,15 @@ pub struct SharedLibrary {
     /// when to rebuild their rows.
     revision: AtomicU64,
     scanned: AtomicBool,
+    /// Which model each live instance in this process is playing
+    /// (instance id → content id), for "used in N open amps".
+    usage: Mutex<HashMap<u64, String>>,
+}
+
+/// A process-unique id for an amp instance (the usage registry's key).
+pub fn next_instance_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 type Registry = Mutex<Vec<(Option<PathBuf>, Weak<SharedLibrary>)>>;
@@ -77,7 +87,26 @@ impl SharedLibrary {
             writer: Mutex::new(()),
             revision: AtomicU64::new(1),
             scanned: AtomicBool::new(false),
+            usage: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Record what `instance` is playing (`None`: nothing, or it is gone).
+    pub fn set_usage(&self, instance: u64, id: Option<&str>) {
+        let mut usage = self.usage.lock();
+        match id {
+            Some(id) => {
+                usage.insert(instance, id.to_string());
+            }
+            None => {
+                usage.remove(&instance);
+            }
+        }
+    }
+
+    /// How many live instances in this process are playing `id`.
+    pub fn usage_count(&self, id: &str) -> usize {
+        self.usage.lock().values().filter(|v| *v == id).count()
     }
 
     pub fn root(&self) -> Option<&Path> {

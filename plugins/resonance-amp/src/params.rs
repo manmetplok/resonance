@@ -21,6 +21,9 @@ pub struct AmpParams {
     /// The model library shared by every amp in the process.
     pub library: Arc<SharedLibrary>,
 
+    /// This instance's key in the library's usage registry.
+    pub instance_id: u64,
+
     /// The model selector: a **stable slot** in the library's slot table
     /// (nam-model-library.md §5.1), not a position in a directory listing,
     /// so adding or deleting models never changes what a preset or an
@@ -64,6 +67,7 @@ impl AmpParams {
             file_select: file_select_param(library.clone(), status.clone()),
             status,
             library,
+            instance_id: crate::library::next_instance_id(),
             // Smoothers live on the plugin struct, not here, because
             // sharing `Arc<AmpParams>` with the editor thread forbids
             // `&mut` access through the Arc.

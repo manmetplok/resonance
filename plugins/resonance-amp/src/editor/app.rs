@@ -13,11 +13,13 @@ use crate::params::AmpParams;
 use crate::tone3000::worker::WorkerHandle;
 use crate::viz::AmpViz;
 
+use resonance_plugin::library_view::BrowserModel;
+
+use super::library_panel::{self, LibraryPanelState};
 use super::missing_banner::{self, MissingBannerState};
 use super::tone3000_panel::Tone3000PanelState;
-use super::{
-    actions, controls, curve_view, header, meters, scope_view, theme, tone3000_panel, tuner_view,
-};
+use super::{controls, curve_view, header, meters, scope_view, theme, tuner_view};
+use crate::library_rows::ModelRows;
 
 pub(crate) struct AmpEditorApp {
     pub(crate) params: Arc<AmpParams>,
@@ -36,6 +38,12 @@ pub(crate) struct AmpEditorApp {
     pub(crate) missing: MissingBannerState,
     /// A one-line message for the header (import results, errors).
     pub(crate) notice: Option<String>,
+    pub(crate) library_panel: LibraryPanelState,
+    /// The Installed tab's view-state. Lives here, not in the panel, because
+    /// the header's ◀/▶ step through the same view with the panel closed.
+    pub(crate) browser: BrowserModel,
+    /// The library as browser rows, rebuilt when the library changes.
+    pub(crate) rows: ModelRows,
 }
 
 impl AmpEditorApp {
@@ -60,12 +68,30 @@ impl AmpEditorApp {
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             missing: MissingBannerState::default(),
             notice: None,
+            library_panel: LibraryPanelState::default(),
+            browser: BrowserModel::new(),
+            rows: ModelRows::default(),
         }
     }
 
-    /// Open the model browser.
+    /// Open the Library overlay.
     pub(crate) fn open_library(&mut self) {
-        self.tone3000_panel.open = true;
+        library_panel::open(self);
+    }
+
+    /// Rebuild the rows if the library changed, and refresh the view.
+    pub(crate) fn refresh_rows(&mut self) {
+        let revision = self.params.library.revision();
+        if self.rows.built_from.0 != revision || self.rows.rows.is_empty() {
+            let lib = self.params.library.read();
+            self.rows = ModelRows::build(&lib, None, (revision, 0));
+        }
+        self.browser.refresh(&self.rows, revision);
+    }
+
+    /// How many amps in this process are playing `id`.
+    pub(crate) fn usage_count(&self, id: &str) -> usize {
+        self.params.library.usage_count(id)
     }
 }
 
@@ -93,18 +119,8 @@ impl EditorApp for AmpEditorApp {
 
         egui::CentralPanel::default().show_inside(ui, |ui| draw_center(ui, self));
 
-        if self.tone3000_panel.open {
-            let done = actions::download_done(self);
-            let picked = {
-                let library = self.params.library.read();
-                tone3000_panel::draw(ui, &mut self.tone3000_panel, &self.tone3000, &library, &done)
-            };
-            if let Some(tone3000_panel::ModelRowAction::Load { slot, .. }) = picked {
-                match slot {
-                    Some(slot) => actions::load_slot(self, slot),
-                    None => self.notice = Some("That model has no slot to load it through".into()),
-                }
-            }
+        if self.library_panel.open {
+            library_panel::draw(ui, self);
         }
     }
 }
