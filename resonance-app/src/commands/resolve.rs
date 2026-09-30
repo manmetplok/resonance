@@ -59,6 +59,47 @@ impl CommandId {
             {
                 Available::No("Select a freezable track first")
             }
+            SplitClipAtPlayhead if split_target(r).is_none() => {
+                Available::No("Select a clip under the playhead")
+            }
+            DuplicateSelection if duplicate_target(r).is_none() => {
+                Available::No("Select a section with room after it")
+            }
+            LoopSelection if selection_range(r).is_none() => {
+                Available::No("Select a clip, section or marker region first")
+            }
+            QuantizeSelectedNotes | SelectAllNotes if r.ui.interaction.editing_midi_clip.is_none() => {
+                Available::No("Open a MIDI clip first")
+            }
+            SelectNotesInView => Available::No("Press it in the MIDI editor"),
+            DeleteSelectedNotes if !editor_is(r, false) || editor_selection(r).is_empty() => {
+                Available::No("Select notes in the MIDI editor first")
+            }
+            VocalDeleteNote | VocalToggleSlur if vocal_note(r).is_none() => {
+                Available::No("Select a note in the vocal roll first")
+            }
+            TimelineDeleteSelection if timeline_delete(r).is_none() => {
+                Available::No("Select a clip or global event first")
+            }
+            ExpandedZoomIn | ExpandedZoomOut | ComposeCollapseTrack
+                if r.compose.expanded_track_id.is_none() =>
+            {
+                Available::No("Expand a track in Compose first")
+            }
+            DeleteChordAtPlayhead | ToggleChordPinAtPlayhead if chord_at_playhead(r).is_none() => {
+                Available::No("No chord at the playhead")
+            }
+            ToggleMuteSelected | ToggleSoloSelected | ToggleArmSelected
+                if r.ui.interaction.selected_tracks.is_empty() =>
+            {
+                Available::No("Select a track first")
+            }
+            DeleteSelectedTrack if r.ui.interaction.selected_track.is_none() => {
+                Available::No("Select a track first")
+            }
+            ShowMissingPlugins if !r.has_missing_plugins() => {
+                Available::No("No plugins are missing")
+            }
             CommandPalette
                 if r.root_overlay().is_some_and(|o| !o.allows_palette() && !o.is_palette()) =>
             {
@@ -120,6 +161,95 @@ impl CommandId {
             NextSectionStart => seek(SeekTarget::NextSection),
             AddMarkerAtPlayhead => Message::Marker(MarkerMessage::AddAtPlayhead),
             ToggleFollowPlayhead => Message::Ui(UiMessage::ToggleFollowPlayhead),
+            LoopSelection => {
+                let (loop_in, loop_out) = selection_range(r)?;
+                Message::Transport(TransportMessage::SetLoopRange {
+                    loop_in,
+                    loop_out,
+                    enabled: Some(true),
+                })
+            }
+            // Needs a fresh clip id; `build` allocates it.
+            SplitClipAtPlayhead => match split_target(r)? {
+                SplitTarget::Take(group_id) => {
+                    Message::Take(TakeMessage::SplitCompAtPlayhead { group_id })
+                }
+                SplitTarget::Clip(_) => return None,
+            },
+            DuplicateSelection => {
+                let (definition_id, start_bar) = duplicate_target(r)?;
+                Message::Compose(crate::compose::ComposeMessage::PlaceSection {
+                    definition_id,
+                    start_bar,
+                })
+            }
+            QuantizeSelectedNotes => {
+                let q = &r.midi_quantize;
+                Message::MidiEditor(MidiEditorMessage::Quantize {
+                    grid: q.grid.division(),
+                    strength: q.strength,
+                    swing: q.swing,
+                    mode: q.mode,
+                    quantize_ends: q.quantize_ends,
+                    iterative: q.iterative,
+                })
+            }
+            TimelineDeleteSelection => timeline_delete(r)?,
+            DeleteSelectedNotes => {
+                let clip_id = r.ui.interaction.editing_midi_clip.as_ref()?.clip_id;
+                Message::MidiEditor(MidiEditorMessage::RemoveSelectedNotes { clip_id })
+            }
+            SelectAllNotes => Message::MidiEditor(MidiEditorMessage::SelectAllNotes),
+            SelectNotesInView => return None,
+            VocalDeleteNote => {
+                let (clip_id, note_index) = vocal_note(r)?;
+                Message::MidiEditor(MidiEditorMessage::RemoveNote { clip_id, note_index })
+            }
+            VocalToggleSlur => {
+                let (clip_id, note_index) = vocal_note(r)?;
+                Message::MidiEditor(MidiEditorMessage::ToggleSlur { clip_id, note_index })
+            }
+            ExpandedZoomIn => Message::Compose(crate::compose::ComposeMessage::ExpandedZoomY(2.0)),
+            ExpandedZoomOut => {
+                Message::Compose(crate::compose::ComposeMessage::ExpandedZoomY(-2.0))
+            }
+            ToggleBrowser => Message::Browser(BrowserMessage::ToggleVisible),
+            ToggleReferencePanel => Message::Ui(UiMessage::ToggleReferencePanel),
+            ToggleMarkersOverview => Message::Ui(UiMessage::ToggleMarkersOverview),
+            AddChordAtPlayhead => Message::ChordTrack(ChordTrackMessage::AddAtPlayhead),
+            DeleteChordAtPlayhead => {
+                Message::ChordTrack(ChordTrackMessage::Delete { id: chord_at_playhead(r)? })
+            }
+            ToggleChordPinAtPlayhead => {
+                Message::ChordTrack(ChordTrackMessage::TogglePin { id: chord_at_playhead(r)? })
+            }
+            // Needs a fresh track id; `build` allocates it.
+            AddDrumTrack => return None,
+            ToggleMuteSelected => Message::Track(TrackMessage::ToggleMuteSelected),
+            ToggleSoloSelected => Message::Track(TrackMessage::ToggleSoloSelected),
+            ToggleArmSelected => Message::Track(TrackMessage::ToggleArmSelected),
+            DeleteSelectedTrack => {
+                Message::Track(TrackMessage::RequestRemoveTrack(r.ui.interaction.selected_track?))
+            }
+            RescanPlugins => Message::Plugin(PluginMessage::RescanPlugins),
+            ShowMissingPlugins => Message::Ui(UiMessage::ShowMissingPlugins),
+            ExportStemsMidi => Message::Export(ExportMessage::Open),
+            ImportMidi => Message::Import(ImportMessage::Open),
+            ImportAudio => Message::Pool(PoolMessage::PickFiles),
+            SaveAsTemplate => Message::ProjectIo(ProjectIoMessage::SaveAsTemplate {
+                name: r
+                    .io
+                    .project_path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Untitled".to_string()),
+                description: String::new(),
+                include_markers_and_tempo: true,
+                include_master_chain: true,
+            }),
+            RelinkMissingMedia => Message::Relink(RelinkMessage::ShowModal),
 
             Undo => Message::Undo,
             Redo => Message::Redo,
@@ -170,6 +300,155 @@ impl CommandId {
         };
         Some(message)
     }
+
+    /// [`to_message`](Self::to_message) for a command about to run: the
+    /// commands whose message names an entity the command creates get a
+    /// freshly allocated id here, the way the control API allocates one
+    /// before it dispatches.
+    pub(crate) fn build(self, r: &mut Resonance) -> Option<Message> {
+        match self {
+            CommandId::SplitClipAtPlayhead => match split_target(r)? {
+                SplitTarget::Clip(clip_id) => {
+                    let at_sample = r.transport.playhead;
+                    let new_clip_id = r.media.ids.clips.allocate();
+                    Some(Message::Clip(ClipMessage::SplitClipAt {
+                        clip_id,
+                        new_clip_id,
+                        at_sample,
+                    }))
+                }
+                SplitTarget::Take(_) => self.to_message(r),
+            },
+            CommandId::AddDrumTrack => {
+                let id = r.allocate_track_id();
+                Some(Message::Track(TrackMessage::AddControlTrack {
+                    id,
+                    kind: crate::state::ControlTrackKind::Drums,
+                    name: None,
+                }))
+            }
+            _ => self.to_message(r),
+        }
+    }
+}
+
+/// What Split at Playhead cuts.
+enum SplitTarget {
+    Clip(resonance_audio::types::ClipId),
+    Take(resonance_common::TakeGroupId),
+}
+
+/// The selected audio clip when the playhead is strictly inside it, else a
+/// take lane on the selected track whose slot holds the playhead.
+fn split_target(r: &Resonance) -> Option<SplitTarget> {
+    let pos = r.transport.playhead;
+    if let Some(id) = r.ui.interaction.selected_clip {
+        let clip = r.clips.iter().find(|c| c.id == id)?;
+        if clip.start_sample < pos && pos < clip.start_sample + clip.duration_samples {
+            return Some(SplitTarget::Clip(id));
+        }
+    }
+    let track = r.ui.interaction.selected_track?;
+    r.take_groups
+        .groups
+        .iter()
+        .find(|g| g.track_id == track && g.slot.start < pos && pos < g.slot.end())
+        .map(|g| SplitTarget::Take(g.id))
+}
+
+/// The selected section placement's definition and the bar right after it,
+/// when that span is free.
+fn duplicate_target(r: &Resonance) -> Option<(u64, u32)> {
+    let placement = r.compose.selected_placement()?;
+    let def = r.compose.find_definition(placement.definition_id)?;
+    let start = placement.start_bar.checked_add(def.length_bars)?;
+    let taken = crate::compose::invariants::placement_overlaps(
+        &r.compose.placements,
+        &r.compose.definitions,
+        start,
+        def.length_bars,
+        None,
+    );
+    (!taken).then_some((def.id, start))
+}
+
+/// The selection's span in samples: the selected audio clip, else the
+/// selected MIDI clip, else the selected section placement, else the
+/// selected marker's region.
+pub(crate) fn selection_range(r: &Resonance) -> Option<(u64, u64)> {
+    let i = &r.ui.interaction;
+    if let Some(c) = i.selected_clip.and_then(|id| r.clips.iter().find(|c| c.id == id)) {
+        return Some((c.start_sample, c.start_sample + c.duration_samples));
+    }
+    if let Some(c) = i.selected_midi_clip.and_then(|id| r.midi_clips.iter().find(|c| c.id == id)) {
+        let end = r
+            .tempo_map
+            .tick_to_abs_sample(c.start_sample, c.duration_ticks, r.sample_rate);
+        return Some((c.start_sample, end));
+    }
+    if let Some(p) = r.compose.selected_placement() {
+        let def = r.compose.find_definition(p.definition_id)?;
+        return Some((
+            r.tempo_map.bar_to_sample(p.start_bar),
+            r.tempo_map.bar_to_sample(p.start_bar + def.length_bars),
+        ));
+    }
+    let marker = i.selected_marker_id.and_then(|id| r.markers.get(id))?;
+    let end = marker.end_sample.filter(|&e| e > marker.start_sample)?;
+    Some((marker.start_sample, end))
+}
+
+/// Whether the open MIDI editor is the vocal roll (`true`) or the piano
+/// roll (`false`); `false` for either when no editor is open.
+fn editor_is(r: &Resonance, vocal: bool) -> bool {
+    r.ui.interaction.editing_midi_clip.as_ref().is_some_and(|e| {
+        let is_vocal = matches!(
+            r.classify_editor_variant(e.track_id),
+            crate::view::editor_panel::EditorVariant::Vocal
+        );
+        is_vocal == vocal
+    })
+}
+
+fn editor_selection(r: &Resonance) -> Vec<usize> {
+    r.ui.interaction
+        .editing_midi_clip
+        .as_ref()
+        .map(|e| e.selected_notes.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+/// The vocal roll's selected note.
+fn vocal_note(r: &Resonance) -> Option<(resonance_audio::types::ClipId, usize)> {
+    if !editor_is(r, true) {
+        return None;
+    }
+    let e = r.ui.interaction.editing_midi_clip.as_ref()?;
+    Some((e.clip_id, e.primary_selected()?))
+}
+
+/// What Delete on the timeline removes, in the canvas's own order (after
+/// the canvas-local automation breakpoint, which only the canvas knows).
+fn timeline_delete(r: &Resonance) -> Option<Message> {
+    let i = &r.ui.interaction;
+    if i.selected_global_event.is_some() {
+        return Some(Message::GlobalTrack(GlobalTrackMessage::DeleteSelectedEvent));
+    }
+    if let Some(id) = i.selected_midi_clip {
+        return Some(Message::MidiClip(MidiClipMessage::DeleteMidiClip(id)));
+    }
+    i.selected_clip
+        .map(|id| Message::Clip(ClipMessage::DeleteClip(id)))
+}
+
+/// The chord-track region under the playhead.
+fn chord_at_playhead(r: &Resonance) -> Option<u64> {
+    let pos = r.transport.playhead;
+    r.chord_track
+        .regions
+        .iter()
+        .find(|rg| rg.start_sample <= pos && pos < rg.end_sample)
+        .map(|rg| rg.id)
 }
 
 /// The `[start, end)` samples of the section placement under the playhead.

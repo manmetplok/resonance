@@ -243,8 +243,13 @@ fn every_legacy_chord_matches_the_registry() {
 /// on purpose by the §5 keymap.
 #[test]
 fn modifier_sloppy_legacy_chords_are_dropped_or_reassigned_on_purpose() {
-    // §5.2: ⇧, / ⇧. jump between section starts.
-    let reassigned = [CommandId::PrevSectionStart, CommandId::NextSectionStart];
+    // §5.2: ⇧, / ⇧. jump between section starts; §1.1: global tracks
+    // moved to ⌥⌘G.
+    let reassigned = [
+        CommandId::PrevSectionStart,
+        CommandId::NextSectionStart,
+        CommandId::ToggleGlobalTracks,
+    ];
     let (app, _task) = Resonance::new_for_test();
     for key in all_keys() {
         for mods in all_modifiers() {

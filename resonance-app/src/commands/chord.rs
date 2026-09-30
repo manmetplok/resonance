@@ -260,6 +260,18 @@ fn apply_modifier(mods: &mut Mods, token: &str) -> Option<()> {
     Some(())
 }
 
+impl KeyChord {
+    /// The chord of a `KeyPressed` event, for canvas key handlers.
+    pub fn from_event(event: &iced::Event) -> Option<KeyChord> {
+        match event {
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                KeyChord::from_iced(key, *modifiers)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Which keyboard convention to render chords for (command-palette.md
 /// §4.2): a Linux user never sees a ⌘ they can't press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -385,7 +397,13 @@ impl KeyChord {
                 if ch.is_whitespace() {
                     return None;
                 }
-                ChordKey::Char(ch.to_ascii_lowercase())
+                // `+` is the chord separator in the token form, so it is
+                // modelled as a named key.
+                if ch == '+' {
+                    ChordKey::Named(NamedKey::Plus)
+                } else {
+                    ChordKey::Char(ch.to_ascii_lowercase())
+                }
             }
             Key::Named(named) => ChordKey::Named(match named {
                 N::Enter => NamedKey::Enter,

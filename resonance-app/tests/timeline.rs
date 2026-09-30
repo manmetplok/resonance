@@ -17,6 +17,8 @@ mod common;
 mod arrange_cull;
 #[path = "timeline/arrange_layout.rs"]
 mod arrange_layout;
+#[path = "timeline/selection_commands.rs"]
+mod selection_commands;
 #[path = "timeline/transport_control.rs"]
 mod transport_control;
 #[path = "timeline/arrangement_marker_reducers.rs"]

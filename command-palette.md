@@ -10,6 +10,10 @@ to match; those notes are marked *(as built)*.
 - **P1 landed.** Transport and playhead control, with Space bound.
 - **P2 landed.** The palette (⌘K / ⇧⌘P), recents, `keys_blocked` on every
   canvas, platform keycaps, goldens `command_palette_*`.
+- **P3 landed.** `…Selected` track toggles, split / duplicate / loop
+  selection / quantize, the orphan entry points, the rest of the §5.3–5.6
+  keymap, and the canvas-scoped entries (the four canvases now read their
+  keys from the keymap).
 
 ## 0. Why
 
@@ -278,13 +282,13 @@ seeks; it creates no entry.
 |---|---|---|---|
 | Undo / Redo | `⌘Z` / `⇧⌘Z` (+ `⌘Y`) | L | |
 | Delete Selection | `⌫` / `Del` | L (canvas) | The timeline, MIDI editor and vocal roll entries become registry-scoped entries. |
-| Split Clip at Playhead | `⌘E` | N | `SplitClipAt` currently has no GUI emitter. For takes, it uses `SplitCompAtPlayhead`. |
-| Duplicate Selection | `⌘D` | NEW | Clip/placement duplicate placed right after the original. Check first whether the control API already has a primitive to reuse. |
+| Split Clip at Playhead | `⌘E` | N | `SplitClipAt` currently has no GUI emitter. For takes, it uses `SplitCompAtPlayhead`. *(As built: `SplitClipAt` needs a caller-allocated clip id, so commands that create an entity build their message through `CommandId::build(&mut Resonance)`, which allocates it the way the control API does; Add Drum Track does the same for its track id.)* |
+| Duplicate Selection | `⌘D` | NEW | Clip/placement duplicate placed right after the original. *(As built: section placements only, via the existing `PlaceSection`, unavailable when the bars after it are taken. The only clip primitive, `PoolMessage::PlacePooledAsset`, places the whole asset and would drop trims, fades and gain, so clip duplication waits for a real clip-copy message.)* |
 | Select All Notes | `⌘A` | L (MIDI editor) | |
 | Quantize Selected Notes | `Q` | N | Uses the current quantize panel settings. |
 | Open Selected MIDI Clip | `↵` | L | |
 | Close MIDI Editor | `⌘Esc` | N | |
-| Toggle Slur | `S` / `+` | L (vocal roll) | Canvas-scoped. It shadows the global `S` (solo) only while the vocal roll owns the keys. |
+| Toggle Slur | `S` / `+` | L (vocal roll) | Canvas-scoped. It shadows the global `S` (solo) only while the vocal roll owns the keys. *(As built: `+` is `NamedKey::Plus`, because `+` separates tokens in the chord text form; `⇧S` and `⇧=` are alternates so Shift doesn't break it.)* |
 
 ### 5.4 Tracks and mixer
 
@@ -321,7 +325,7 @@ seeks; it creates no entry.
 | Export Stems / MIDI… | `⇧⌘E` | N | Gives the currently unreachable `ExportMessage::Open` an entry point. |
 | Import MIDI… | `⌘I` | N | |
 | Import Audio to Pool… | `⇧⌘I` | N | |
-| Save as Template… | — (palette) | L msg | Its first entry point (orphan). |
+| Save as Template… | — (palette) | L msg | Its first entry point (orphan). *(As built: "Save as Template", no dialog; it names the template after the project and keeps both capture toggles on.)* |
 | Export Chord Sheet… | — (palette) | L msg | |
 | Settings… | `⌘,` | N | |
 | Rescan Plugins, Relink Missing Media, Show Missing Plugins | — (palette) | L msg | |
@@ -524,6 +528,12 @@ asserts an engine `AudioCommand`.
 - Goldens: the empty state (recents plus suggested), results with
   highlighting and one unavailable row, the no-match state, and Linux
   keycap formatting.
+
+*(As built:)* Add Control Track surfaced as **Add Drum Track** (the control
+kind the GUI add menu lacks); the chord-track actions are Add Chord at
+Playhead, Delete Chord at Playhead, Pin / Unpin Chord at Playhead. Select
+Notes in View is listed but dimmed in the palette, because the view
+rectangle only exists inside the piano roll.
 
 **P3 / P4.** Each new `…Selected` message yields one undo entry for three
 selected tracks. Each orphan command reaches its modal or reducer. The

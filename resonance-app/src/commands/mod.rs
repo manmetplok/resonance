@@ -180,6 +180,7 @@ command_ids! {
     PrevSectionStart,
     NextSectionStart,
     AddMarkerAtPlayhead,
+    LoopSelection,
     TransportSkipBack,
     TransportSkipForward,
     ToggleFollowPlayhead,
@@ -187,8 +188,21 @@ command_ids! {
     // --- Editing ---
     Undo,
     Redo,
+    SplitClipAtPlayhead,
+    DuplicateSelection,
+    QuantizeSelectedNotes,
     OpenSelectedMidiClip,
     CloseMidiEditor,
+    // Canvas-scoped: handled by the canvas that owns the keys, runnable
+    // from the palette against the open surface's selection.
+    TimelineDeleteSelection,
+    DeleteSelectedNotes,
+    SelectAllNotes,
+    SelectNotesInView,
+    VocalDeleteNote,
+    VocalToggleSlur,
+    ExpandedZoomIn,
+    ExpandedZoomOut,
 
     // --- View & Navigation ---
     ViewArrange,
@@ -199,22 +213,35 @@ command_ids! {
     ZoomIn,
     ZoomOut,
     ToggleGlobalTracks,
+    ToggleBrowser,
+    ToggleReferencePanel,
+    ToggleMarkersOverview,
 
     // --- Compose & Vocal ---
     ComposeCreateSection,
     ComposeCollapseTrack,
     ComposeClearChordSelection,
+    AddChordAtPlayhead,
+    DeleteChordAtPlayhead,
+    ToggleChordPinAtPlayhead,
 
     // --- Mixer ---
     AddAudioTrack,
     AddInstrumentTrack,
     AddVocalTrack,
+    AddDrumTrack,
     AddBus,
     OpenAddTrackMenu,
     ToggleMasterFxBypass,
     GroupSelectedTracks,
     FreezeSelectedTracks,
     FreezeAllTracks,
+    ToggleMuteSelected,
+    ToggleSoloSelected,
+    ToggleArmSelected,
+    DeleteSelectedTrack,
+    RescanPlugins,
+    ShowMissingPlugins,
 
     // --- Project ---
     CommandPalette,
@@ -223,6 +250,11 @@ command_ids! {
     SaveProject,
     SaveProjectAs,
     BounceToWav,
+    ExportStemsMidi,
+    ImportMidi,
+    ImportAudio,
+    SaveAsTemplate,
+    RelinkMissingMedia,
     ExportChordSheet,
     OpenSettings,
 }
@@ -239,25 +271,34 @@ impl CommandId {
             | PlayheadToLoopStart | PlayheadToLoopEnd | SetLoopStartAtPlayhead
             | SetLoopEndAtPlayhead | LoopSectionAtPlayhead | NudgeBackBar | NudgeForwardBar
             | NudgeBackBeat | NudgeForwardBeat | PrevMarker | NextMarker | PrevSectionStart
-            | NextSectionStart | AddMarkerAtPlayhead | ToggleFollowPlayhead => {
+            | NextSectionStart | AddMarkerAtPlayhead | ToggleFollowPlayhead | LoopSelection => {
                 CommandCategory::Transport
             }
 
-            Undo | Redo | OpenSelectedMidiClip | CloseMidiEditor => CommandCategory::Editing,
+            Undo | Redo | SplitClipAtPlayhead | DuplicateSelection | QuantizeSelectedNotes
+            | OpenSelectedMidiClip | CloseMidiEditor | TimelineDeleteSelection
+            | DeleteSelectedNotes | SelectAllNotes | SelectNotesInView | VocalDeleteNote
+            | VocalToggleSlur | ExpandedZoomIn | ExpandedZoomOut => CommandCategory::Editing,
 
             ViewArrange | ViewMixer | ViewCompose | TogglePerformanceMode | ExitPerformanceMode
-            | ZoomIn | ZoomOut | ToggleGlobalTracks => CommandCategory::ViewNav,
+            | ZoomIn | ZoomOut | ToggleGlobalTracks | ToggleBrowser | ToggleReferencePanel
+            | ToggleMarkersOverview => CommandCategory::ViewNav,
 
-            ComposeCreateSection | ComposeCollapseTrack | ComposeClearChordSelection => {
+            ComposeCreateSection | ComposeCollapseTrack | ComposeClearChordSelection
+            | AddChordAtPlayhead | DeleteChordAtPlayhead | ToggleChordPinAtPlayhead => {
                 CommandCategory::ComposeVocal
             }
 
             AddAudioTrack | AddInstrumentTrack | AddVocalTrack | AddBus | OpenAddTrackMenu
             | ToggleMasterFxBypass | GroupSelectedTracks | FreezeSelectedTracks
-            | FreezeAllTracks => CommandCategory::Mixer,
+            | FreezeAllTracks | AddDrumTrack | ToggleMuteSelected | ToggleSoloSelected
+            | ToggleArmSelected | DeleteSelectedTrack | RescanPlugins | ShowMissingPlugins => {
+                CommandCategory::Mixer
+            }
 
             CommandPalette | NewProject | OpenProject | SaveProject | SaveProjectAs
-            | BounceToWav | ExportChordSheet | OpenSettings => CommandCategory::Project,
+            | BounceToWav | ExportStemsMidi | ImportMidi | ImportAudio | SaveAsTemplate
+            | RelinkMissingMedia | ExportChordSheet | OpenSettings => CommandCategory::Project,
         }
     }
 
@@ -293,11 +334,23 @@ impl CommandId {
             TransportSkipBack => "Rewind 5 s",
             TransportSkipForward => "Fast-forward 5 s",
             ToggleFollowPlayhead => "Toggle Follow Playhead",
+            LoopSelection => "Loop Selection",
 
             Undo => "Undo",
             Redo => "Redo",
+            SplitClipAtPlayhead => "Split Clip at Playhead",
+            DuplicateSelection => "Duplicate Selection",
+            QuantizeSelectedNotes => "Quantize Selected Notes",
             OpenSelectedMidiClip => "Open Selected MIDI Clip",
             CloseMidiEditor => "Close MIDI Editor",
+            TimelineDeleteSelection => "Delete Selection",
+            DeleteSelectedNotes => "Delete Selected Notes",
+            SelectAllNotes => "Select All Notes",
+            SelectNotesInView => "Select Notes in View",
+            VocalDeleteNote => "Delete Selected Vocal Note",
+            VocalToggleSlur => "Toggle Slur",
+            ExpandedZoomIn => "Zoom Track Editor In",
+            ExpandedZoomOut => "Zoom Track Editor Out",
 
             ViewArrange => "Arrange View",
             ViewMixer => "Mixer View",
@@ -307,20 +360,33 @@ impl CommandId {
             ZoomIn => "Zoom In",
             ZoomOut => "Zoom Out",
             ToggleGlobalTracks => "Toggle Global Tracks",
+            ToggleBrowser => "Toggle Browser",
+            ToggleReferencePanel => "Toggle Reference Panel",
+            ToggleMarkersOverview => "Toggle Markers Overview",
 
             ComposeCreateSection => "New Section…",
             ComposeCollapseTrack => "Collapse Track Editor",
             ComposeClearChordSelection => "Clear Chord Selection",
+            AddChordAtPlayhead => "Add Chord at Playhead",
+            DeleteChordAtPlayhead => "Delete Chord at Playhead",
+            ToggleChordPinAtPlayhead => "Pin / Unpin Chord at Playhead",
 
             AddAudioTrack => "Add Audio Track",
             AddInstrumentTrack => "Add Instrument Track",
             AddVocalTrack => "Add Vocal Track",
+            AddDrumTrack => "Add Drum Track",
             AddBus => "Add Bus",
             OpenAddTrackMenu => "Add Track…",
             ToggleMasterFxBypass => "Toggle Master FX Bypass",
             GroupSelectedTracks => "Group Selected Tracks",
             FreezeSelectedTracks => "Freeze Selected Tracks",
             FreezeAllTracks => "Freeze All Tracks",
+            ToggleMuteSelected => "Mute Selected Tracks",
+            ToggleSoloSelected => "Solo Selected Tracks",
+            ToggleArmSelected => "Arm Selected Tracks",
+            DeleteSelectedTrack => "Delete Selected Track…",
+            RescanPlugins => "Rescan Plugins",
+            ShowMissingPlugins => "Show Missing Plugins",
 
             CommandPalette => "Command Palette",
             NewProject => "New Project",
@@ -328,6 +394,11 @@ impl CommandId {
             SaveProject => "Save",
             SaveProjectAs => "Save As…",
             BounceToWav => "Bounce to WAV…",
+            ExportStemsMidi => "Export Stems / MIDI…",
+            ImportMidi => "Import MIDI…",
+            ImportAudio => "Import Audio to Pool…",
+            SaveAsTemplate => "Save as Template",
+            RelinkMissingMedia => "Relink Missing Media…",
             ExportChordSheet => "Export Chord Sheet…",
             OpenSettings => "Settings…",
         }
@@ -410,6 +481,34 @@ impl CommandId {
             AddMarkerAtPlayhead => &["locator", "flag", "cue"],
             TransportSkipBack | TransportSkipForward => &["seconds", "skip", "scrub"],
             ToggleFollowPlayhead => &["scroll", "track playhead"],
+            LoopSelection => &["cycle", "clip", "region"],
+            SplitClipAtPlayhead => &["cut", "razor", "slice"],
+            DuplicateSelection => &["copy", "repeat", "clone"],
+            QuantizeSelectedNotes => &["grid", "snap", "timing"],
+            TimelineDeleteSelection | DeleteSelectedNotes | VocalDeleteNote => {
+                &["remove", "erase", "backspace"]
+            }
+            SelectAllNotes | SelectNotesInView => &["piano roll", "notes"],
+            VocalToggleSlur => &["legato", "melisma", "lyric"],
+            ExpandedZoomIn | ExpandedZoomOut => &["vertical", "height"],
+            ToggleBrowser => &["media", "files", "pool", "samples"],
+            ToggleReferencePanel => &["a/b", "compare", "reference track"],
+            ToggleMarkersOverview => &["locators", "list"],
+            AddChordAtPlayhead | DeleteChordAtPlayhead | ToggleChordPinAtPlayhead => {
+                &["chord track", "harmony", "region"]
+            }
+            AddDrumTrack => &["new track", "beat", "kit"],
+            ToggleMuteSelected => &["silence", "mute"],
+            ToggleSoloSelected => &["isolate", "solo"],
+            ToggleArmSelected => &["record arm", "enable recording"],
+            DeleteSelectedTrack => &["remove", "trash"],
+            RescanPlugins => &["clap", "scan", "refresh"],
+            ShowMissingPlugins => &["clap", "unavailable"],
+            ExportStemsMidi => &["render", "stems", "midi file"],
+            ImportMidi => &["midi file", "load"],
+            ImportAudio => &["wav", "samples", "load"],
+            SaveAsTemplate => &["preset", "starter"],
+            RelinkMissingMedia => &["missing files", "locate"],
             TransportRecord => &["arm", "capture", "take"],
             TransportToggleLoop => &["cycle", "repeat"],
             TransportToggleMetronome => &["click", "count"],
@@ -454,7 +553,9 @@ impl CommandId {
             | ExportChordSheet | OpenSettings | GroupSelectedTracks | FreezeSelectedTracks
             | FreezeAllTracks | ViewArrange | ViewMixer | ViewCompose | ZoomIn | ZoomOut
             | ToggleGlobalTracks | AddAudioTrack | AddInstrumentTrack | OpenAddTrackMenu
-            | CloseMidiEditor => KeyGate::Always,
+            | CloseMidiEditor | SplitClipAtPlayhead | DuplicateSelection | LoopSelection
+            | ToggleBrowser | DeleteSelectedTrack | ExportStemsMidi | ImportMidi
+            | ImportAudio => KeyGate::Always,
             // Undo / Redo are ⌘ chords but also what a user presses inside a
             // text field (UPD-11); everything else is (or may become) a bare
             // key.
@@ -469,11 +570,19 @@ impl CommandId {
         matches!(
             self,
             ZoomIn | ZoomOut | NudgeBackBar | NudgeForwardBar | NudgeBackBeat | NudgeForwardBeat
+                | ExpandedZoomIn | ExpandedZoomOut
         )
     }
 
     /// Where the command's binding is live.
     pub fn scope(self) -> Scope {
-        Scope::Global
+        use CommandId::*;
+        match self {
+            TimelineDeleteSelection => Scope::Timeline,
+            DeleteSelectedNotes | SelectAllNotes | SelectNotesInView => Scope::MidiEditor,
+            VocalDeleteNote | VocalToggleSlur => Scope::VocalRoll,
+            ExpandedZoomIn | ExpandedZoomOut | ComposeCollapseTrack => Scope::ExpandedEditor,
+            _ => Scope::Global,
+        }
     }
 }

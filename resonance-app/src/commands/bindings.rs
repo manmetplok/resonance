@@ -108,19 +108,35 @@ impl BindingMap {
             ..Mods::NONE
         };
         let named = KeyChord::named;
+        let cmd_alt = Mods {
+            cmd: true,
+            alt: true,
+            ..Mods::NONE
+        };
 
         let entries = vec![
             // Project (§5.6).
             (CommandPalette, KeyChord::char('k', cmd)),
             (CommandPalette, KeyChord::char('p', cmd_shift)),
+            (NewProject, KeyChord::char('n', cmd)),
             (OpenProject, KeyChord::char('o', cmd)),
             (SaveProject, KeyChord::char('s', cmd)),
             (SaveProjectAs, KeyChord::char('s', cmd_shift)),
+            (BounceToWav, KeyChord::char('b', cmd)),
+            (ExportStemsMidi, KeyChord::char('e', cmd_shift)),
+            (ImportMidi, KeyChord::char('i', cmd)),
+            (ImportAudio, KeyChord::char('i', cmd_shift)),
+            (OpenSettings, KeyChord::char(',', cmd)),
             // Editing. Redo keeps ⌘Y as an alternate.
             (Undo, KeyChord::char('z', cmd)),
             (Redo, KeyChord::char('z', cmd_shift)),
             (Redo, KeyChord::char('y', cmd)),
             (OpenSelectedMidiClip, KeyChord::named(NamedKey::Enter, none)),
+            (CloseMidiEditor, KeyChord::named(NamedKey::Escape, cmd)),
+            (SplitClipAtPlayhead, KeyChord::char('e', cmd)),
+            (DuplicateSelection, KeyChord::char('d', cmd)),
+            (QuantizeSelectedNotes, key('q')),
+            (LoopSelection, KeyChord::char('l', cmd)),
             // Transport (§5.1).
             (TransportTogglePlay, named(NamedKey::Space, none)),
             (TransportPlayPause, named(NamedKey::Space, shift)),
@@ -148,15 +164,55 @@ impl BindingMap {
             (PrevSectionStart, KeyChord::char(',', shift)),
             (AddMarkerAtPlayhead, KeyChord::char('m', shift)),
             // View & Navigation.
+            (ViewArrange, KeyChord::char('1', cmd)),
+            (ViewMixer, KeyChord::char('2', cmd)),
+            (ViewCompose, KeyChord::char('3', cmd)),
             (TogglePerformanceMode, key('f')),
             (ExitPerformanceMode, KeyChord::named(NamedKey::Escape, none)),
+            (ZoomIn, KeyChord::char('=', cmd)),
+            (ZoomOut, KeyChord::char('-', cmd)),
+            (ToggleBrowser, KeyChord::char('b', cmd_alt)),
+            (ToggleGlobalTracks, KeyChord::char('g', cmd_alt)),
             // Mixer.
             (GroupSelectedTracks, KeyChord::char('g', cmd)),
             (FreezeSelectedTracks, KeyChord::char('f', cmd)),
             (FreezeAllTracks, KeyChord::char('f', cmd_shift)),
+            (AddAudioTrack, KeyChord::char('t', cmd)),
+            (AddInstrumentTrack, KeyChord::char('t', cmd_shift)),
+            (OpenAddTrackMenu, KeyChord::char('t', cmd_alt)),
+            (ToggleMuteSelected, key('m')),
+            (ToggleSoloSelected, key('s')),
+            (ToggleArmSelected, KeyChord::char('r', shift)),
+            (DeleteSelectedTrack, named(NamedKey::Backspace, cmd)),
+            // Canvas-local keys (§4.3): live only while that canvas owns
+            // the keyboard, where they may shadow a global chord.
+            (TimelineDeleteSelection, named(NamedKey::Delete, none)),
+            (TimelineDeleteSelection, named(NamedKey::Backspace, none)),
+            (DeleteSelectedNotes, named(NamedKey::Delete, none)),
+            (DeleteSelectedNotes, named(NamedKey::Backspace, none)),
+            (SelectAllNotes, KeyChord::char('a', cmd)),
+            (SelectNotesInView, KeyChord::char('a', cmd_shift)),
+            (VocalDeleteNote, named(NamedKey::Delete, none)),
+            (VocalDeleteNote, named(NamedKey::Backspace, none)),
+            (VocalToggleSlur, key('s')),
+            (VocalToggleSlur, KeyChord::char('s', shift)),
+            (VocalToggleSlur, KeyChord::char('=', shift)),
+            (VocalToggleSlur, named(NamedKey::Plus, none)),
+            (ExpandedZoomIn, key('=')),
+            (ExpandedZoomIn, KeyChord::char('=', shift)),
+            (ExpandedZoomIn, named(NamedKey::Plus, none)),
+            (ExpandedZoomOut, key('-')),
+            (ComposeCollapseTrack, KeyChord::named(NamedKey::Escape, none)),
         ];
 
         BindingMap { entries }
+    }
+
+    /// A shared copy of [`resonance_default`](Self::resonance_default), for
+    /// callers that need a `&'static` map (canvas tests).
+    pub fn default_ref() -> &'static BindingMap {
+        static DEFAULT: std::sync::OnceLock<BindingMap> = std::sync::OnceLock::new();
+        DEFAULT.get_or_init(BindingMap::resonance_default)
     }
 
     /// Bind `chord` as `id`'s only chord, dropping its previous chords and

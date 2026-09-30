@@ -116,7 +116,7 @@ impl PaletteState {
 pub fn suggested(view: ViewMode) -> &'static [CommandId] {
     use CommandId::*;
     match view {
-        ViewMode::Arrange => &[TransportToggleLoop, SetLoopStartAtPlayhead, OpenAddTrackMenu],
+        ViewMode::Arrange => &[TransportToggleLoop, SplitClipAtPlayhead, OpenAddTrackMenu],
         ViewMode::Mixer => &[AddBus, ToggleMasterFxBypass, BounceToWav],
         ViewMode::Compose => &[ComposeCreateSection, LoopSectionAtPlayhead],
         ViewMode::Performance => &[TransportTogglePlay, ExitPerformanceMode],

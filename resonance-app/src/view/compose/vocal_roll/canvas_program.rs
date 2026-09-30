@@ -204,41 +204,24 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
                 }
             }
 
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
-                ..
-            })
-            | iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-                key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
-                ..
-            }) => {
-                if let Some(idx) = self.selected_note {
-                    if idx < self.clip.notes.len() {
+            // Registry keys (§4.3): Delete removes the selected note; `s`
+            // / `+` flip its lyric between the slur marker and the
+            // auto-syllabified surface form (OpenUtau-style).
+            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
+                use crate::commands::{CommandId, KeyChord};
+                let chord = KeyChord::from_event(event)?;
+                if let Some(idx) = self.selected_note.filter(|&i| i < self.clip.notes.len()) {
+                    if self.keymap.matches(CommandId::VocalDeleteNote, chord) {
                         return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {
                                 clip_id: self.clip.id,
                                 note_index: idx,
                             })).and_capture());
                     }
-                }
-            }
-
-            // OpenUtau-style slur toggle. Pressing `s` (or `+`) on the
-            // selected note flips its lyric between the slur marker
-            // and the auto-syllabified surface form. Mirrors the
-            // shortcut users coming from OpenUtau / Vocaloid editors
-            // expect.
-            iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { ref text, .. }) => {
-                if let Some(idx) = self.selected_note {
-                    if idx < self.clip.notes.len() {
-                        if let Some(t) = text.as_deref() {
-                            let key = t.trim();
-                            if key.eq_ignore_ascii_case("s") || key == "+" {
-                                return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ToggleSlur {
-                                        clip_id: self.clip.id,
-                                        note_index: idx,
-                                    })).and_capture());
-                            }
-                        }
+                    if self.keymap.matches(CommandId::VocalToggleSlur, chord) {
+                        return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::ToggleSlur {
+                                clip_id: self.clip.id,
+                                note_index: idx,
+                            })).and_capture());
                     }
                 }
             }

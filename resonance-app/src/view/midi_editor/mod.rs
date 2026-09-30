@@ -57,6 +57,9 @@ pub struct QuantizePreview {
 /// Data passed to the piano roll canvas for rendering.
 #[derive(Debug)]
 pub struct PianoRollCanvas<'a> {
+    /// The active keymap: canvas-local keys resolve through it
+    /// (command-palette.md §4.3).
+    pub keymap: &'a crate::commands::BindingMap,
     /// Set while the command palette is open: the canvas ignores key
     /// presses, so Backspace typed into the palette can't delete the
     /// selection this canvas owned the keys for (command-palette.md §7.3).

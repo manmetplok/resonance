@@ -162,7 +162,7 @@ pub(crate) fn execute(r: &mut Resonance, command: CommandId) -> Task<Message> {
     if let Available::No(_) = command.availability(r) {
         return Task::none();
     }
-    let Some(message) = command.to_message(r) else {
+    let Some(message) = command.build(r) else {
         return Task::none();
     };
     crate::palette::record_recent(r, command);

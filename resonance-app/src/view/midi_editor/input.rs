@@ -359,71 +359,52 @@ pub(super) fn handle_event(
             }
         }
 
-        // --- Delete key: remove selected note ---
-        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Delete),
-            ..
-        })
-        | iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Backspace),
-            ..
-        }) => {
-            if !canvas.selected_notes.is_empty() {
+        // --- Registry keys (§4.3): delete, select all, select in view ---
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
+            use crate::commands::{CommandId, KeyChord};
+            let chord = KeyChord::from_event(event)?;
+            let km = canvas.keymap;
+            if km.matches(CommandId::DeleteSelectedNotes, chord) {
+                if !canvas.selected_notes.is_empty() {
+                    return Some(
+                        canvas::Action::publish(Message::MidiEditor(
+                            MidiEditorMessage::RemoveSelectedNotes {
+                                clip_id: canvas.clip.id,
+                            },
+                        ))
+                        .and_capture(),
+                    );
+                }
+            } else if km.matches(CommandId::SelectNotesInView, chord) {
+                let view_rect = Rectangle {
+                    x: grid_x,
+                    y: 0.0,
+                    width: (bounds.width - grid_x).max(0.0),
+                    height: grid_h,
+                };
+                let indices = piano_roll::notes_in_marquee(
+                    &canvas.clip.notes,
+                    &layout,
+                    &viewport,
+                    view_rect,
+                );
                 return Some(
                     canvas::Action::publish(Message::MidiEditor(
-                        MidiEditorMessage::RemoveSelectedNotes {
-                            clip_id: canvas.clip.id,
+                        MidiEditorMessage::SelectNotesInRect {
+                            indices,
+                            additive: false,
                         },
                     ))
                     .and_capture(),
                 );
+            } else if km.matches(CommandId::SelectAllNotes, chord) {
+                return Some(
+                    canvas::Action::publish(Message::MidiEditor(
+                        MidiEditorMessage::SelectAllNotes,
+                    ))
+                    .and_capture(),
+                );
             }
-        }
-
-        // --- Ctrl/Cmd+Shift+A: select the notes currently in view ---
-        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Character(ref c),
-            modifiers,
-            ..
-        }) if modifiers.command()
-            && modifiers.shift()
-            && c.as_str().eq_ignore_ascii_case("a") =>
-        {
-            let view_rect = Rectangle {
-                x: grid_x,
-                y: 0.0,
-                width: (bounds.width - grid_x).max(0.0),
-                height: grid_h,
-            };
-            let indices = piano_roll::notes_in_marquee(
-                &canvas.clip.notes,
-                &layout,
-                &viewport,
-                view_rect,
-            );
-            return Some(
-                canvas::Action::publish(Message::MidiEditor(
-                    MidiEditorMessage::SelectNotesInRect {
-                        indices,
-                        additive: false,
-                    },
-                ))
-                .and_capture(),
-            );
-        }
-
-        // --- Ctrl/Cmd+A: select every note in the clip ---
-        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
-            key: iced::keyboard::Key::Character(ref c),
-            modifiers,
-            ..
-        }) if modifiers.command() && c.as_str().eq_ignore_ascii_case("a") => {
-            return Some(
-                canvas::Action::publish(Message::MidiEditor(
-                    MidiEditorMessage::SelectAllNotes,
-                ))
-                .and_capture(),
-            );
         }
 
         // --- Track modifier state for shift/ctrl-aware mouse clicks ---

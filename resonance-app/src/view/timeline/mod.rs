@@ -42,6 +42,9 @@ pub use self::snap::snap_sample_to_grid_tempo;
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
+    /// The active keymap: canvas-local keys resolve through it
+    /// (command-palette.md §4.3).
+    pub keymap: &'a crate::commands::BindingMap,
     /// Set while the command palette is open: the canvas ignores key
     /// presses, so Backspace typed into the palette can't delete the
     /// selection this canvas owned the keys for (command-palette.md §7.3).
@@ -881,8 +884,8 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 self.handle_release(state)
             }
-            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                self.handle_key(state, key)
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                self.handle_key(state, key, *modifiers)
             }
             _ => None,
         };

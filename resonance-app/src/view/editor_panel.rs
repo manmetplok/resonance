@@ -93,6 +93,7 @@ impl crate::Resonance {
                     + content_ticks as f32 * editor_state.zoom_x;
                 let piano_roll = canvas(PianoRollCanvas {
                     keys_blocked: self.ui.palette.is_some(),
+                    keymap: &self.ui.keymap,
                     clip,
                     track_id: editor_state.track_id,
                     scroll_x: 0.0,

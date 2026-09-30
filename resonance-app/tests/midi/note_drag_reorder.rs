@@ -55,6 +55,7 @@ fn canvas<'a>(
 ) -> PianoRollCanvas<'a> {
     PianoRollCanvas {
         keys_blocked: false,
+        keymap: resonance_app::commands::BindingMap::default_ref(),
         clip,
         track_id: TRACK,
         scroll_x: 0.0,

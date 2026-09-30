@@ -46,7 +46,7 @@ fn place(app: &mut Resonance, sample: u64) {
     let _ = app.update(Message::Transport(TransportMessage::SeekToSample(sample)));
 }
 
-fn section_def(id: u64, length_bars: u32) -> SectionDefinitionState {
+pub(crate) fn section_def(id: u64, length_bars: u32) -> SectionDefinitionState {
     SectionDefinitionState {
         id,
         name: format!("S{id}"),

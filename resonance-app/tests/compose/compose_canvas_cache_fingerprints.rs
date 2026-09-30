@@ -361,6 +361,7 @@ fn expanded_canvas<'a>(
 ) -> ExpandedEditorCanvas<'a> {
     ExpandedEditorCanvas {
         keys_blocked: false,
+        keymap: resonance_app::commands::BindingMap::default_ref(),
         track_id: 1,
         midi_clips: clips,
         section_start: 0,
