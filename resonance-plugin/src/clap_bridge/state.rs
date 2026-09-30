@@ -48,7 +48,27 @@ impl Param for TempParamOwned {
 
 impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
-        let data = if let Some(plugin) = &self.plugin {
+        let data = self.save_bytes();
+        output
+            .write_all(&data)
+            .map_err(|_| PluginError::Message("Failed to write state"))?;
+        Ok(())
+    }
+
+    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
+        let mut data = Vec::new();
+        input
+            .read_to_end(&mut data)
+            .map_err(|_| PluginError::Message("Failed to read state"))?;
+        self.load_bytes(&data)
+    }
+}
+
+impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
+    /// The full state document, whether the plugin object is here or in
+    /// the audio processor. Shared by `clap.state` and the preset form.
+    pub(super) fn save_bytes(&self) -> Vec<u8> {
+        if let Some(plugin) = &self.plugin {
             // Main-thread path: the plugin's own `save_state` composes
             // params with any extra-state saver via the trait default.
             plugin.save_state()
@@ -78,21 +98,14 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
                 }
             }
             serde_json::to_vec(&json).unwrap_or_default()
-        };
-        output
-            .write_all(&data)
-            .map_err(|_| PluginError::Message("Failed to write state"))?;
-        Ok(())
+        }
     }
 
-    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
-        let mut data = Vec::new();
-        input
-            .read_to_end(&mut data)
-            .map_err(|_| PluginError::Message("Failed to read state"))?;
-
+    /// Load a full state document, whether the plugin object is here or in
+    /// the audio processor. Shared by `clap.state` and the preset form.
+    pub(super) fn load_bytes(&mut self, data: &[u8]) -> Result<(), PluginError> {
         if let Some(plugin) = &mut self.plugin {
-            if !plugin.load_state(&data) {
+            if !plugin.load_state(data) {
                 return Err(PluginError::Message("Failed to load state"));
             }
             // Sync loaded values back to shared atomics
@@ -159,7 +172,7 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // until the flag, which is stored once the saver has returned,
             // and the generation keeps the audio thread from applying
             // either half early.
-            let mut state: serde_json::Value = serde_json::from_slice(&data)
+            let mut state: serde_json::Value = serde_json::from_slice(data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
             // Migrate first, exactly as the inactive path's
             // `ResonancePlugin::load_state` default does, so both the

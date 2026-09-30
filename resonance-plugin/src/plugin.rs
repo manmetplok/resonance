@@ -25,6 +25,29 @@ pub trait ExtraStateSaver: Send + Sync {
     /// Implementations typically `state.get("my_key")` into their own
     /// shared storage.
     fn load(&self, state: &serde_json::Value);
+
+    /// Keys of [`save`](Self::save) that are part of the **sound** and
+    /// belong in a preset (plugin-preset-library.md §9.2): amp
+    /// `model_path`/`model_id`/`model_name`/`model_source`, ir `ir_path`,
+    /// wavetable `user_wavetables`, drums `kit_path` and its mic choices.
+    /// Keys not listed are session/UI state and stay out. Loading a
+    /// preset that lacks a listed key hands [`load`](Self::load) a state
+    /// without it, so absence means what it means for a project.
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// What a preset stores of this state: [`save`](Self::save) limited
+    /// to [`preset_keys`](Self::preset_keys). Override to write a
+    /// different form for presets (the amp drops the machine-local path
+    /// and keeps the content id).
+    fn save_for_preset(&self) -> serde_json::Map<String, serde_json::Value> {
+        let keys = self.preset_keys();
+        self.save()
+            .into_iter()
+            .filter(|(k, _)| keys.contains(&k.as_str()))
+            .collect()
+    }
 }
 
 /// Parameter text conversion that works while the plugin object is inside

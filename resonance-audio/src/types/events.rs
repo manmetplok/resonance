@@ -538,6 +538,22 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    /// The answer to `AudioCommand::SavePluginPresetState`. `preset_form`
+    /// is true when the plugin wrote its preset form (state-context);
+    /// false when `data` is its full state (no state-context).
+    PluginPresetStateSaved {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
+        preset_form: bool,
+    },
+    /// The plugin loaded a preset and said so (`clap_host_preset_load.
+    /// loaded`): from its own browser, or for a `from_location` the host
+    /// asked for (plugin-preset-library.md §7, slice P5).
+    PluginPresetLoaded {
+        instance_id: PluginInstanceId,
+        location: crate::types::PluginPresetLocation,
+        load_key: Option<String>,
+    },
     /// The answer to `AudioCommand::ResolvePluginParamText` with this
     /// `token`: the value the plugin says the text names, when it
     /// round-trips.

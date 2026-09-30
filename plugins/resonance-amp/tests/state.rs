@@ -676,3 +676,47 @@ fn the_non_param_state_survives_the_active_state_path() {
         );
     }
 }
+
+/// A preset names the model by content id (the NAM library's sha256
+/// identity), never by path or slot (plugin-preset-library.md §9.3): the
+/// preset form writes an empty `model_path`, keeps `model_id` / name /
+/// source, and leaves `file_select` out. A model with no id is left out
+/// altogether, so loading such a preset keeps the current model.
+#[test]
+fn a_preset_carries_the_model_by_content_id_not_path_or_slot() {
+    let with_id = serde_json::to_vec(&json!({
+        "params": {"file_select": 5.0},
+        "model_path": "/machine/local/models/jcm800.nam",
+        "model_id": "9f2c000000000000000000000000000000000000000000000000000000000000",
+        "model_name": "JCM800",
+        "ui_only": true,
+    }))
+    .unwrap();
+    let mut plugin = new_plugin();
+    assert!(plugin.load_state(&with_id));
+    let saver = plugin.extra_state_saver().expect("the amp persists extra state");
+    let form = saver.save_for_preset();
+    assert_eq!(form.get("model_path"), Some(&json!("")), "no machine-local path: {form:?}");
+    assert_eq!(
+        form.get("model_id"),
+        Some(&json!("9f2c000000000000000000000000000000000000000000000000000000000000"))
+    );
+    assert_eq!(form.get("model_name"), Some(&json!("JCM800")));
+    assert!(form.keys().all(|k| saver.preset_keys().contains(&k.as_str())), "{form:?}");
+
+    let select = (0..plugin.param_count())
+        .map(|i| plugin.param(i))
+        .find(|p| p.id() == "file_select")
+        .unwrap();
+    assert!(select.preset_excluded(), "a slot is this machine's library layout");
+
+    let path_only = serde_json::to_vec(&json!({
+        "params": {},
+        "model_path": "/machine/local/models/external.nam",
+    }))
+    .unwrap();
+    let mut plugin = new_plugin();
+    assert!(plugin.load_state(&path_only));
+    let form = plugin.extra_state_saver().unwrap().save_for_preset();
+    assert!(form.is_empty(), "no content id, no model in the preset: {form:?}");
+}

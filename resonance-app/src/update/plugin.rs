@@ -148,6 +148,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             instance_id,
             values,
             preset_name: _,
+            preset_state,
         } => {
             // Same two steps as SetPluginParam, once per parameter: tell
             // the engine, then move the app's mirror so every reader
@@ -167,6 +168,14 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                     }
                 }
             });
+            // Then the rest of the sound and the identity. After the
+            // params in the engine's queue, so a plugin that lays the
+            // preset over its state sees the new values.
+            if let Some(data) = preset_state {
+                let _ = r
+                    .engine
+                    .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+            }
         }
         PluginMessage::SetPluginSidechain {
             instance_id,

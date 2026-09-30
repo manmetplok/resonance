@@ -71,3 +71,49 @@ pub fn decode(text: &str) -> Vec<(String, String)> {
         })
         .collect()
 }
+
+/// One factory preset as the host reads it from the symbol: its stable
+/// `id` (plugin-preset-library.md §4.2), display `name`, the state document
+/// as JSON text, and its descriptive metadata block as JSON text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FactoryPresetEntry {
+    pub id: String,
+    pub name: String,
+    /// The bare state document (`{"version", "params", …}`).
+    pub json: String,
+    /// The preset's `meta` object (format 1), when the plugin sent one.
+    pub meta: Option<String>,
+}
+
+/// Decode what the plugin SDK's encoder produced, ids and metadata
+/// included. An entry from a build before ids gets one slugged from its
+/// name ([`crate::library_marks::normalize_tag`]). Malformed entries are
+/// skipped, as in [`decode`].
+pub fn decode_entries(text: &str) -> Vec<FactoryPresetEntry> {
+    let Ok(serde_json::Value::Array(entries)) = serde_json::from_str::<serde_json::Value>(text)
+    else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            let name = entry.get("name")?.as_str()?.to_string();
+            let json = serde_json::to_string(entry.get("json")?).ok()?;
+            let id = entry
+                .get("id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| crate::library_marks::normalize_tag(&name))?;
+            let meta = entry
+                .get("meta")
+                .filter(|m| m.is_object())
+                .and_then(|m| serde_json::to_string(m).ok());
+            Some(FactoryPresetEntry {
+                id,
+                name,
+                json,
+                meta,
+            })
+        })
+        .collect()
+}

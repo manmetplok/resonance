@@ -92,6 +92,12 @@ impl resonance_plugin::plugin::ExtraStateSaver for UserWavetables {
         map
     }
 
+    /// User wavetables are the sound, and they are embedded (frames
+    /// base64), so a preset travels whole.
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &[STATE_KEY]
+    }
+
     fn load(&self, state: &Value) {
         let slots = state.get(STATE_KEY);
         for osc in 0..NUM_OSCS {

@@ -69,6 +69,17 @@ pub(super) fn dispatch_plugins(
         AudioCommand::LoadPluginState { instance_id, data } => {
             plugins::handle_load_plugin_state(ctx, instance_id, data)
         }
+        AudioCommand::SavePluginPresetState { instance_id } => {
+            plugins::handle_save_plugin_preset_state(ctx, instance_id)
+        }
+        AudioCommand::LoadPluginPresetState { instance_id, data } => {
+            plugins::handle_load_plugin_preset_state(ctx, instance_id, data)
+        }
+        AudioCommand::LoadPluginPresetFromLocation {
+            instance_id,
+            location,
+            load_key,
+        } => plugins::handle_load_plugin_preset_from_location(ctx, instance_id, location, load_key),
         AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
         _ => unreachable!("dispatch_plugins: unexpected command"),
     }

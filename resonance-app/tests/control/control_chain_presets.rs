@@ -66,14 +66,18 @@ fn scanned_compressor() -> ScannedPlugin {
         vendor: "Resonance".to_owned(),
         is_instrument: false,
         factory_presets: vec![
-            (
-                "Glue".to_owned(),
-                format!(r#"{{"version":1,"params":{{"{THRESHOLD}":-18.0,"{RATIO}":2.0}}}}"#),
-            ),
-            (
-                "Squash".to_owned(),
-                format!(r#"{{"version":1,"params":{{"{THRESHOLD}":-30.0,"{RATIO}":10.0}}}}"#),
-            ),
+            resonance_common::factory_presets::FactoryPresetEntry {
+                id: "glue".to_owned(),
+                name: "Glue".to_owned(),
+                json: format!(r#"{{"version":1,"params":{{"{THRESHOLD}":-18.0,"{RATIO}":2.0}}}}"#),
+                meta: None,
+            },
+            resonance_common::factory_presets::FactoryPresetEntry {
+                id: "squash".to_owned(),
+                name: "Squash".to_owned(),
+                json: format!(r#"{{"version":1,"params":{{"{THRESHOLD}":-30.0,"{RATIO}":10.0}}}}"#),
+                meta: None,
+            },
         ],
     }
 }
@@ -208,12 +212,13 @@ fn param_value(app: &mut Resonance, instance_id: u64, string_id: &str) -> f64 {
 /// Play back the engine's state echo, which is what actually writes a
 /// preset armed by a `save_plugin_preset` call.
 fn echo_state(app: &mut Resonance, instance_id: u64, threshold: f64, ratio: f64) {
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
         instance_id,
         data: format!(
             r#"{{"version":1,"params":{{"{THRESHOLD}":{threshold},"{RATIO}":{ratio}}}}}"#
         )
         .into_bytes(),
+        preset_form: true,
     });
 }
 

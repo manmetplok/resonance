@@ -551,6 +551,13 @@ impl ExtraStateSaver for DrumsExtraState {
         map
     }
 
+    /// The kit and its mic choices are the sound (the articulation
+    /// toggles are params already). Path-only until kits become a library
+    /// kind (plugin-preset-library.md §9.3).
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["kit_path", "overhead_setup_key", "pad_mic_choices"]
+    }
+
     fn load(&self, state: &serde_json::Value) {
         // Always reassign so a null/missing `kit_path` clears any
         // previously remembered path on this instance. The actual loader

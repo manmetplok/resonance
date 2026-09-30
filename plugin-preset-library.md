@@ -1205,3 +1205,56 @@ round 2 reconciles it)
   quarantine (`atomic_file` joined `PLUGIN_COMMON_ITEMS`). A fleet test
   proves every round-1 factory file is still found by each of its own
   metadata values, as facet filters and as typed tokens.
+
+## 19. Round 2 as built (`feat/plugin-presets`)
+
+Round 2 builds P2–P8 on the shared foundation. Each slice below records
+what landed and where the code differs from §§4–15.
+
+### P2 — whole-sound presets
+
+- `ExtraStateSaver::preset_keys()` and `save_for_preset()` (the latter
+  defaults to `save()` limited to the keys). Amp: the four model keys,
+  with `model_path` written **empty** so a preset names its model only by
+  content id (sha256), resolved through `nam_library` on load
+  (`resolve_model`: relink by id, else Missing with the name kept); a
+  model the library has no id for is left out. IR: `ir_path`. Wavetable:
+  `user_wavetables` (embedded frames). Drums: `kit_path`,
+  `overhead_setup_key`, `pad_mic_choices`. IR and drums stay path-only
+  until they become library kinds.
+- `Param::preset_excluded()` (`.excluded_from_presets()` on Float/Int
+  params): the amp's and the IR's `file_select` — a slot / directory
+  index is this machine's layout, not the sound. **Deviation from §9.3**,
+  which kept the amp's `file_select` in the preset: the coordinator's
+  rule for round 2 is ids, never paths or slots. A params-only (legacy)
+  amp preset therefore keeps the current model instead of falling back to
+  its slot.
+- Loading is `presets::overlay_preset`: the preset's params replace the
+  current ones (excluded params keep theirs), each preset key is taken
+  from the preset or removed, session/UI keys stay, the preset's identity
+  replaces the current one. Absence of a preset key means what it means
+  for a project: the wavetable clears its tables, the amp and the IR keep
+  their asset (a legacy params-only preset).
+- Editor and host run the same overlay. The editor's `PresetSession`
+  applies it to its chained saver; the bridge implements
+  `clap.state-context` (`save`/`load` `FOR_PRESET` = the preset form /
+  the overlay) and `clap.preset-load` (`from_location`: `PLUGIN` + a
+  factory id, or a `FILE`), both `[main-thread]`, through the same
+  `load_bytes` the state extension uses (so the active path is the
+  shared-atomics path). **Deviation from §6.7:** the host does not call
+  `from_location` for a load it already has the file for; it sets the
+  params through its own path (mirror, one undo entry) and then sends the
+  preset document with its identity as `AudioCommand::LoadPluginPresetState`
+  (`load_ex(FOR_PRESET)` with no reactivation cycle; a plugin without
+  state-context gets a full state load with the usual cycle). A save is
+  `SavePluginPresetState` (`save_ex(FOR_PRESET)`, falling back to the
+  full state). `from_location` is there for P5/P8 and other hosts.
+- The app now reads presets through one `PresetLibrary`
+  (`resonance-app/src/plugin_preset_library.rs`): the scan's factory
+  banks (`ScannedPlugin::factory_presets` is now
+  `Vec<FactoryPresetEntry {id, name, json, meta}>`, decoded by
+  `resonance_common::factory_presets::decode_entries`) are registered
+  with it, the shared marks store is installed, and a test app gets a
+  private preset root at construction. Undo of a host recall restores the
+  params; the extra state is not part of the snapshot (as before P2 for
+  any plugin-side change).

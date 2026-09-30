@@ -34,7 +34,10 @@ fn a_first_party_bundle_publishes_its_factory_bank() {
 
     // Every entry must be a loadable state document, not a name with an
     // empty or double-encoded body.
-    for (name, json) in presets {
+    for entry in presets {
+        let (name, json) = (&entry.name, &entry.json);
+        assert!(!entry.id.is_empty(), "every factory preset carries its stable id");
+        assert!(entry.meta.is_some(), "and its metadata");
         assert!(!name.is_empty(), "a factory preset with no name");
         let value: serde_json::Value =
             serde_json::from_str(json).unwrap_or_else(|e| panic!("preset '{name}' is not JSON: {e}"));

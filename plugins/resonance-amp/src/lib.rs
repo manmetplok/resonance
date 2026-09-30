@@ -362,6 +362,27 @@ impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
         map
     }
 
+    /// The model reference is the sound (plugin-preset-library.md §9.3).
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["model_path", "model_id", "model_name", "model_source"]
+    }
+
+    /// A preset names its model by **content id** (sha256, the NAM
+    /// library's identity), never by path or slot: `model_path` is written
+    /// empty, so loading the preset on any machine resolves the id through
+    /// the library (`resolve_model`: relink by id, else Missing with the
+    /// name kept). A model the library has no id for is left out entirely,
+    /// and loading such a preset keeps the current model.
+    fn save_for_preset(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = self.save();
+        if !map.contains_key("model_id") {
+            return serde_json::Map::new();
+        }
+        map.insert("model_path".into(), serde_json::Value::String(String::new()));
+        map.retain(|k, _| self.preset_keys().contains(&k.as_str()));
+        map
+    }
+
     fn load(&self, state: &serde_json::Value) {
         // A v1 document carries only `model_path`; the other keys are
         // optional. A document with no `model_path` at all leaves the

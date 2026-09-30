@@ -176,12 +176,36 @@ impl PresetSession {
         preset: &PresetRef,
         params: &[&dyn Param],
     ) -> bool {
-        if !bank.apply(preset, params) {
+        let Some(json) = bank.json_for(preset) else {
             return false;
+        };
+        if !super::apply(&json, params, bank.renames()) {
+            return false;
+        }
+        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&json) {
+            self.apply_extra(&doc);
         }
         let resolved = bank.resolve(preset).unwrap_or_else(|| preset.clone());
         self.set_current(Some(resolved));
         true
+    }
+
+    /// Load a preset's sound-bearing extra state into the chained saver:
+    /// its current state with the preset's keys laid over it
+    /// ([`super::overlay_preset`]), so session/UI keys stay and a key the
+    /// preset lacks is cleared. Call after the params are applied (a saver
+    /// may derive keys from them).
+    pub fn apply_extra(&self, preset_doc: &serde_json::Value) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        let keys = inner.preset_keys();
+        if keys.is_empty() {
+            return;
+        }
+        let mut current = serde_json::Value::Object(inner.save());
+        super::overlay_preset(&mut current, preset_doc, keys, &|_| false);
+        inner.load(&current);
     }
 
     /// Save the current sound as a user preset and make it the loaded
@@ -204,8 +228,13 @@ impl PresetSession {
             Some(loaded) if !overwrites => SaveOptions {
                 meta: Some(loaded.meta.clone()),
                 derived_from: Some(loaded.preset.id.clone()),
+                ..SaveOptions::default()
             },
             _ => SaveOptions::default(),
+        };
+        let options = SaveOptions {
+            extra: self.save_for_preset(),
+            ..options
         };
         let saved = bank.save_with(name, params, options)?;
         self.set_current(Some(saved.clone()));
@@ -250,6 +279,17 @@ impl PresetSession {
 }
 
 impl ExtraStateSaver for PresetSession {
+    fn preset_keys(&self) -> &'static [&'static str] {
+        self.inner.as_ref().map(|i| i.preset_keys()).unwrap_or(&[])
+    }
+
+    fn save_for_preset(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.inner
+            .as_ref()
+            .map(|i| i.save_for_preset())
+            .unwrap_or_default()
+    }
+
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = match &self.inner {
             Some(inner) => inner.save(),

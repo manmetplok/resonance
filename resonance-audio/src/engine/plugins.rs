@@ -82,6 +82,8 @@ pub fn affects_latency(cmd: &AudioCommand) -> bool {
             // that implies a different latency (e.g. a longer IR) must
             // land in the comp table.
             | AudioCommand::LoadPluginState { .. }
+            | AudioCommand::LoadPluginPresetState { .. }
+            | AudioCommand::LoadPluginPresetFromLocation { .. }
             | AudioCommand::SetTrackFxBypass { .. }
             | AudioCommand::SetBusFxBypass { .. }
             // Per-slot bypass: a host-bypassed slot stops running and its
@@ -834,6 +836,68 @@ pub(crate) fn handle_load_plugin_state(
             let _ = ctx
                 .cmd_tx_retry
                 .send(AudioCommand::LoadPluginState { instance_id, data });
+        }
+    }
+}
+
+pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: PluginInstanceId) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(inst) = mutex.try_lock() {
+            if let Some((data, preset_form)) = inst.0.save_preset_state() {
+                let _ = ctx.event_tx.send(AudioEvent::PluginPresetStateSaved {
+                    instance_id,
+                    data,
+                    preset_form,
+                });
+            }
+        } else {
+            let _ = ctx
+                .cmd_tx_retry
+                .send(AudioCommand::SavePluginPresetState { instance_id });
+        }
+    }
+}
+
+pub(crate) fn handle_load_plugin_preset_state(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    data: Vec<u8>,
+) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(mut inst) = mutex.try_lock() {
+            if !inst.0.load_preset_state(&data) {
+                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
+                    "Plugin instance {instance_id} rejected the preset it was given; \
+                     it keeps its previous settings."
+                ))));
+            }
+        } else {
+            let _ = ctx
+                .cmd_tx_retry
+                .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+        }
+    }
+}
+
+pub(crate) fn handle_load_plugin_preset_from_location(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    location: crate::types::PluginPresetLocation,
+    load_key: Option<String>,
+) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(mut inst) = mutex.try_lock() {
+            if !inst.0.load_preset_from_location(&location, load_key.as_deref()) {
+                let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::plugin(format!(
+                    "Plugin instance {instance_id} could not load the preset it was asked for."
+                ))));
+            }
+        } else {
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetFromLocation {
+                instance_id,
+                location,
+                load_key,
+            });
         }
     }
 }

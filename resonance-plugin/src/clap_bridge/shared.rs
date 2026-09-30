@@ -35,6 +35,9 @@ pub(crate) struct ParamMeta {
     pub default: f64,
     pub is_stepped: bool,
     pub is_hidden: bool,
+    /// [`crate::param::Param::preset_excluded`], for the preset form of
+    /// the state while the plugin is in the audio processor.
+    pub preset_excluded: bool,
 }
 
 // ---------------------------------------------------------------------------

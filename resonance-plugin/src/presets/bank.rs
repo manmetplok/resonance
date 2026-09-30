@@ -18,6 +18,10 @@ pub struct SaveOptions {
     pub meta: Option<PresetMeta>,
     /// The id of the preset this one is saved from.
     pub derived_from: Option<String>,
+    /// The sound-bearing extra state to store next to the params
+    /// (`ExtraStateSaver::save_for_preset`): a model reference, an IR, user
+    /// wavetables.
+    pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
 /// The browsable preset set for one plugin: its factory bank plus the
@@ -86,6 +90,13 @@ impl PresetBank {
         bank
     }
 
+    /// Record the plugin's display name in saved presets (the host knows
+    /// the name from the descriptor, not the version).
+    pub fn with_plugin_name(mut self, name: &str) -> Self {
+        self.plugin.name = Some(name.to_string());
+        self
+    }
+
     /// Record the plugin's display name and version in saved presets.
     pub fn with_plugin_info(mut self, name: &str, version: &str) -> Self {
         self.plugin.name = Some(name.to_string());
@@ -99,6 +110,10 @@ impl PresetBank {
 
     pub fn factory(&self) -> &'static [FactoryPreset] {
         self.factory
+    }
+
+    pub fn renames(&self) -> &'static [ParamRename] {
+        self.renames
     }
 
     pub fn library(&self) -> &Arc<PresetLibrary> {
@@ -203,9 +218,12 @@ impl PresetBank {
     /// preset of the same name (case-insensitively) is overwritten in
     /// place, keeping its id; factory presets are never touched.
     ///
-    /// The snapshot is [`crate::state::params_to_json`], which writes
-    /// **every** declared parameter, so a preset can never be a partial
-    /// recall (audit finding P7).
+    /// The snapshot writes **every** declared parameter except the ones
+    /// marked [`Param::preset_excluded`], so a preset can never be a
+    /// partial recall (audit finding P7). [`PresetSession::save_as`]
+    /// (what editors call) adds the plugin's sound-bearing extra state.
+    ///
+    /// [`PresetSession::save_as`]: super::PresetSession::save_as
     pub fn save(&self, name: &str, params: &[&dyn Param]) -> Result<PresetRef, String> {
         self.save_with(name, params, SaveOptions::default())
     }
@@ -217,7 +235,13 @@ impl PresetBank {
         params: &[&dyn Param],
         options: SaveOptions,
     ) -> Result<PresetRef, String> {
-        self.write(name, crate::state::params_to_json(params), options)
+        let mut doc = super::preset_params_json(params);
+        if let Some(obj) = doc.as_object_mut() {
+            for (k, v) in &options.extra {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        self.write(name, doc, options)
     }
 
     /// Write an already-formed state document as a user preset — the blob

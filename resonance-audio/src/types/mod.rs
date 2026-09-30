@@ -137,7 +137,7 @@ pub use clip::{
 };
 pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
-pub use commands::{AudioCommand, IdGrantBlocks, PoolImportFile};
+pub use commands::{AudioCommand, IdGrantBlocks, PluginPresetLocation, PoolImportFile};
 pub use error::{EngineError, EngineErrorKind};
 pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,

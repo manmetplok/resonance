@@ -113,7 +113,79 @@ pub fn apply(json: &str, params: &[&dyn Param], renames: &[ParamRename]) -> bool
         return false;
     };
     crate::state::migrate(&mut value, renames);
-    crate::state::load_params_from_json(params, &value)
+    let kept: Vec<&dyn Param> = params
+        .iter()
+        .copied()
+        .filter(|p| !p.preset_excluded())
+        .collect();
+    crate::state::load_params_from_json(&kept, &value)
+}
+
+// ---------------------------------------------------------------------------
+// Whole-sound presets (plugin-preset-library.md §9.2, slice P2)
+// ---------------------------------------------------------------------------
+
+/// The params half of a preset: [`crate::state::params_to_json`] over
+/// every parameter that is not [`Param::preset_excluded`].
+pub fn preset_params_json(params: &[&dyn Param]) -> serde_json::Value {
+    let kept: Vec<&dyn Param> = params
+        .iter()
+        .copied()
+        .filter(|p| !p.preset_excluded())
+        .collect();
+    crate::state::params_to_json(&kept)
+}
+
+/// Lay a preset's state document over the plugin's current one, in place:
+/// what "loading a preset" means for the whole sound.
+///
+/// - every param the preset carries replaces the current value, except
+///   the ones `excluded` names (they keep the current value);
+/// - each of the plugin's `preset_keys` is taken from the preset, and
+///   *removed* when the preset lacks it — the plugin's state loader then
+///   decides what absence means, exactly as for a project that lacks the
+///   key: the wavetable clears its user tables (a preset without them has
+///   none), the amp and the IR keep their current asset (a params-only,
+///   pre-P2 preset);
+/// - every other key (session and UI state) is left as it is;
+/// - the preset's `"preset"` identity key, if any, replaces the current
+///   one.
+///
+/// Run the plugin's rename migration on `preset_doc` first.
+pub fn overlay_preset(
+    current: &mut serde_json::Value,
+    preset_doc: &serde_json::Value,
+    preset_keys: &[&str],
+    excluded: &dyn Fn(&str) -> bool,
+) {
+    let Some(state) = current.as_object_mut() else {
+        return;
+    };
+    if let Some(preset_params) = preset_doc.get("params").and_then(|p| p.as_object()) {
+        let params = state
+            .entry("params")
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if let Some(params) = params.as_object_mut() {
+            for (id, value) in preset_params {
+                if !excluded(id) {
+                    params.insert(id.clone(), value.clone());
+                }
+            }
+        }
+    }
+    for key in preset_keys {
+        match preset_doc.get(*key) {
+            Some(v) => {
+                state.insert(key.to_string(), v.clone());
+            }
+            None => {
+                state.remove(*key);
+            }
+        }
+    }
+    if let Some(identity) = preset_doc.get(PRESET_STATE_KEY) {
+        state.insert(PRESET_STATE_KEY.to_string(), identity.clone());
+    }
 }
 
 // ---------------------------------------------------------------------------

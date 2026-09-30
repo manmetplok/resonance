@@ -612,6 +612,7 @@ fn save_as_over_an_existing_preset_keeps_its_meta() {
                     ..Default::default()
                 }),
                 derived_from: None,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1150,4 +1151,124 @@ fn a_malformed_entry_does_not_take_the_bank_with_it() {
     let entries = resonance_plugin::presets::decode_factory_entries(text);
     let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, vec!["good", "also-good"]);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-sound presets (plugin-preset-library.md P2)
+// ---------------------------------------------------------------------------
+
+/// A plugin's own extra state: an IR path (the sound, a preset key) and a
+/// UI tab (session state, not a preset key).
+#[derive(Default)]
+struct IrLike {
+    ir_path: parking_lot::Mutex<String>,
+    tab: parking_lot::Mutex<String>,
+}
+
+impl ExtraStateSaver for IrLike {
+    fn save(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("ir_path".into(), serde_json::json!(*self.ir_path.lock()));
+        m.insert("ui_tab".into(), serde_json::json!(*self.tab.lock()));
+        m
+    }
+    fn load(&self, state: &serde_json::Value) {
+        if let Some(p) = state.get("ir_path").and_then(|v| v.as_str()) {
+            *self.ir_path.lock() = p.to_string();
+        }
+        if let Some(t) = state.get("ui_tab").and_then(|v| v.as_str()) {
+            *self.tab.lock() = t.to_string();
+        }
+    }
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["ir_path"]
+    }
+}
+
+/// Saving from the editor stores the sound-bearing extra state and not
+/// the session state; loading lays it over the current state, leaving the
+/// session state alone. Editor and host therefore store and recall the
+/// same thing (the host's path is `clap.state-context`, over the same
+/// saver).
+#[test]
+fn an_editor_preset_is_the_whole_sound_and_only_the_sound() {
+    let root = TempRoot::new("whole-sound");
+    let bank = root.bank();
+    let extra = Arc::new(IrLike::default());
+    *extra.ir_path.lock() = "/irs/a.wav".into();
+    *extra.tab.lock() = "tone".into();
+    let session = PresetSession::with_extra(extra.clone());
+    let params = TestParams::new();
+    params.mix.set_plain(0.2);
+
+    let saved = session.save_as(&bank, "Room A", &params.refs()).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&bank.json_for(&saved).unwrap()).unwrap();
+    assert_eq!(doc["ir_path"], "/irs/a.wav");
+    assert!(doc.get("ui_tab").is_none(), "session state stays out: {doc}");
+    assert!(doc.get("preset").is_none());
+
+    *extra.ir_path.lock() = "/irs/b.wav".into();
+    *extra.tab.lock() = "meters".into();
+    params.mix.set_plain(0.9);
+    assert!(session.load_preset(&bank, &saved, &params.refs()));
+    assert_eq!(*extra.ir_path.lock(), "/irs/a.wav", "the preset's IR is back");
+    assert_eq!(*extra.tab.lock(), "meters", "the UI tab is untouched");
+    assert!((params.mix.get_plain() - 0.2).abs() < 1e-6);
+}
+
+/// A parameter marked `preset_excluded` (the amp's slot, the IR's file
+/// index) is neither written into a preset nor recalled from one, legacy
+/// files that carry it included.
+#[test]
+fn an_excluded_parameter_stays_out_of_presets() {
+    let root = TempRoot::new("excluded");
+    let bank = root.bank();
+    let slot = IntParam::new("file_select", "Slot", 0, IntRange::Linear { min: 0, max: 99 })
+        .excluded_from_presets();
+    let mix = FloatParam::new("mix", "Mix", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 });
+    slot.set_plain(12.0);
+    let params: Vec<&dyn Param> = vec![&slot, &mix];
+    assert!(slot.preset_excluded() && !mix.preset_excluded());
+
+    let saved = bank.save("Excl", &params).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&bank.json_for(&saved).unwrap()).unwrap();
+    assert!(doc["params"].get("file_select").is_none(), "{doc}");
+
+    slot.set_plain(3.0);
+    let legacy = r#"{"params":{"file_select":40.0,"mix":0.1}}"#;
+    assert!(resonance_plugin::presets::apply(legacy, &params, &[]));
+    assert_eq!(slot.get_plain(), 3.0, "an excluded param keeps its value");
+    assert!((mix.get_plain() - 0.1).abs() < 1e-6);
+}
+
+/// `overlay_preset`: params replaced (excluded ones kept), preset keys
+/// taken from the preset or removed, other keys kept, identity replaced.
+#[test]
+fn overlaying_a_preset_replaces_only_what_a_preset_owns() {
+    let mut current = serde_json::json!({
+        "version": 1,
+        "params": {"mix": 0.5, "slot": 4.0, "taps": 2.0},
+        "ir_path": "/old.wav",
+        "user_wavetables": {"osc1": {}},
+        "ui_tab": "meters",
+        "preset": {"name": "Old"},
+    });
+    let preset = serde_json::json!({
+        "params": {"mix": 0.9, "slot": 11.0},
+        "ir_path": "/new.wav",
+        "preset": {"id": "x", "name": "New"},
+    });
+    resonance_plugin::presets::overlay_preset(
+        &mut current,
+        &preset,
+        &["ir_path", "user_wavetables"],
+        &|id| id == "slot",
+    );
+    assert_eq!(current["params"]["mix"], 0.9);
+    assert_eq!(current["params"]["slot"], 4.0, "excluded");
+    assert_eq!(current["params"]["taps"], 2.0, "not in the preset: kept");
+    assert_eq!(current["ir_path"], "/new.wav");
+    assert!(current.get("user_wavetables").is_none(), "a preset key it lacks goes");
+    assert_eq!(current["ui_tab"], "meters");
+    assert_eq!(current["preset"]["name"], "New");
 }

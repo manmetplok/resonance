@@ -668,32 +668,45 @@ pub(super) fn state_saved(
     instance_id: PluginInstanceId,
     data: Vec<u8>,
 ) {
-    // Also feeds the undo system's plugin-state cache so snapshots can
-    // replay internal CLAP state on restore. The project-save path
-    // drains the cache via `SaveAllPluginStates` separately.
-    // A `*.save_plugin_preset` armed this capture: the blob that just
-    // arrived IS the sound, including whatever the plugin keeps outside
-    // its parameters (an amp's model path, an IR's file). Write it before
-    // the cache insert so a failure is reported against the request that
-    // asked for it.
-    if r
-        .presets.pending_plugin_preset_save
+    // Feeds the undo system's plugin-state cache so snapshots can replay
+    // internal CLAP state on restore. The project-save path drains the
+    // cache via `SaveAllPluginStates` separately.
+    r.plugin_mirror.state_cache.insert(instance_id, data.into());
+}
+
+/// A `*.save_plugin_preset` (or a host bar's Save) armed this capture:
+/// the preset form of the plugin's state — its sound, including what it
+/// keeps outside its parameters (an amp's model by content id, an IR's
+/// file), and none of its session state.
+pub(super) fn preset_state_saved(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    data: Vec<u8>,
+    _preset_form: bool,
+) {
+    if !r
+        .presets
+        .pending_plugin_preset_save
         .as_ref()
         .is_some_and(|p| p.instance_id == instance_id)
     {
-        let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
-        if let Err(e) = crate::update::control::write_plugin_preset(
-            r,
-            &pending.clap_id,
-            &pending.name,
-            &data,
-        ) {
-            r.banners.error_message =
-                Some(format!("Could not save preset {:?}: {e}", pending.name));
-        }
+        return;
     }
+    let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
+    if let Err(e) =
+        crate::update::control::write_plugin_preset(r, &pending.clap_id, &pending.name, &data)
+    {
+        r.banners.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
+    }
+}
 
-    r.plugin_mirror.state_cache.insert(instance_id, data.into());
+/// The plugin reports it loaded a preset (P5 fills this in).
+pub(super) fn preset_loaded(
+    _r: &mut Resonance,
+    _instance_id: PluginInstanceId,
+    _location: resonance_audio::types::PluginPresetLocation,
+    _load_key: Option<String>,
+) {
 }
 
 #[allow(clippy::too_many_arguments)]

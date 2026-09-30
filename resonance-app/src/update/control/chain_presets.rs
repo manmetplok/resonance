@@ -197,7 +197,7 @@ pub(super) fn save(
     });
     let _ = app
         .engine
-        .send(resonance_audio::types::AudioCommand::SavePluginState { instance_id });
+        .send(resonance_audio::types::AudioCommand::SavePluginPresetState { instance_id });
 
     (ack(app, request), Task::none())
 }

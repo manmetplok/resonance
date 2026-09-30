@@ -97,7 +97,7 @@ pub struct ClapBundle {
     /// Read once at load time from the first-party
     /// `resonance_factory_presets` symbol. Empty for any plugin that does
     /// not export it, which is every third-party one (ba todo #1333).
-    factory_presets: Vec<(String, String)>,
+    factory_presets: Vec<resonance_common::factory_presets::FactoryPresetEntry>,
     /// The `.clap` this bundle was loaded from. Held as a `CString`
     /// because the entry point's `init` borrows it, and read back by the
     /// scanner: a rescan has to know which files are ALREADY loaded so it
@@ -219,7 +219,7 @@ impl ClapBundle {
     /// Factory presets baked into this plugin, as `(name, state json)`.
     /// Empty for a plugin that ships none, and for every plugin that is
     /// not one of ours.
-    pub fn factory_presets(&self) -> &[(String, String)] {
+    pub fn factory_presets(&self) -> &[resonance_common::factory_presets::FactoryPresetEntry] {
         &self.factory_presets
     }
 
@@ -581,7 +581,9 @@ unsafe fn descriptor_strings(
 /// contracted to return either null or a pointer valid for the lifetime of
 /// the process (see `resonance_plugin::export_clap!`); the string is
 /// copied out here and never freed by us.
-unsafe fn read_factory_presets(library: &libloading::Library) -> Vec<(String, String)> {
+unsafe fn read_factory_presets(
+    library: &libloading::Library,
+) -> Vec<resonance_common::factory_presets::FactoryPresetEntry> {
     type Getter = unsafe extern "C" fn() -> *const std::os::raw::c_char;
     let symbol: libloading::Symbol<Getter> =
         match library.get(resonance_common::factory_presets::FACTORY_PRESETS_SYMBOL) {
@@ -594,7 +596,7 @@ unsafe fn read_factory_presets(library: &libloading::Library) -> Vec<(String, St
         return Vec::new();
     }
     match CStr::from_ptr(raw).to_str() {
-        Ok(text) => resonance_common::factory_presets::decode(text),
+        Ok(text) => resonance_common::factory_presets::decode_entries(text),
         Err(_) => Vec::new(),
     }
 }

@@ -16,6 +16,15 @@ use super::{
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
 /// Commands sent from the GUI to the audio engine.
+/// Where a preset lives, as `clap.preset-load` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginPresetLocation {
+    /// Inside the plugin: the load key names it (a factory preset id).
+    Plugin,
+    /// A file (a user preset, or a third-party plugin's preset file).
+    File(std::path::PathBuf),
+}
+
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     Play,
@@ -576,6 +585,30 @@ pub enum AudioCommand {
     LoadPluginState {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
+    },
+    /// Capture the state to store as a preset: the plugin's preset form
+    /// (`clap.state-context` `FOR_PRESET`) when it has one, else its full
+    /// state. Answered by `AudioEvent::PluginPresetStateSaved`
+    /// (plugin-preset-library.md §6.7, slice P2).
+    SavePluginPresetState {
+        instance_id: PluginInstanceId,
+    },
+    /// Recall a preset's state: laid over the current state by a plugin
+    /// with `clap.state-context` (`FOR_PRESET`, no reactivation), else a
+    /// full state load. The app has already set the params through
+    /// `SetPluginParam` so its mirror agrees; this carries the rest of
+    /// the sound (a model, an IR, user wavetables) and the identity.
+    LoadPluginPresetState {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
+    },
+    /// Ask the plugin to load a preset it owns (`clap.preset-load`
+    /// `from_location`). The plugin reports it with `loaded()`, which
+    /// arrives as `AudioEvent::PluginPresetLoaded`.
+    LoadPluginPresetFromLocation {
+        instance_id: PluginInstanceId,
+        location: PluginPresetLocation,
+        load_key: Option<String>,
     },
     /// Open the plugin's editor window (requires CLAP_EXT_GUI).
     OpenPluginEditor {

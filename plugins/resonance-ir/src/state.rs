@@ -37,6 +37,12 @@ impl resonance_plugin::plugin::ExtraStateSaver for IrExtraState {
         map
     }
 
+    /// The impulse response is the sound. Path-only until IRs become a
+    /// library kind with content ids (plugin-preset-library.md §9.3).
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["ir_path"]
+    }
+
     fn load(&self, state: &serde_json::Value) {
         let Some(path) = state.get("ir_path").and_then(|v| v.as_str()) else {
             return;

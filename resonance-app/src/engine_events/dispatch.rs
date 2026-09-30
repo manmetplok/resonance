@@ -480,6 +480,16 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             return crate::update::control::label_resolved(r, token, value)
         }
         E::PluginScanFailed { failures } => plugins::scan_failed(r, failures),
+        E::PluginPresetStateSaved {
+            instance_id,
+            data,
+            preset_form,
+        } => plugins::preset_state_saved(r, instance_id, data, preset_form),
+        E::PluginPresetLoaded {
+            instance_id,
+            location,
+            load_key,
+        } => plugins::preset_loaded(r, instance_id, location, load_key),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)
         }

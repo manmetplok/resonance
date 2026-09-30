@@ -110,11 +110,11 @@ pub struct ScannedPlugin {
     pub vendor: String,
     /// True if the plugin declared the `instrument` feature in its CLAP descriptor.
     pub is_instrument: bool,
-    /// Factory presets baked into the plugin binary, as
-    /// `(name, state json)`, read at scan time from the first-party
+    /// Factory presets baked into the plugin binary (id, name, state json,
+    /// meta), read at scan time from the first-party
     /// `resonance_factory_presets` symbol. Empty for a plugin that ships
     /// none and for every plugin that is not one of ours (ba todo #1333).
-    pub factory_presets: Vec<(String, String)>,
+    pub factory_presets: Vec<resonance_common::factory_presets::FactoryPresetEntry>,
 }
 
 mod bars;

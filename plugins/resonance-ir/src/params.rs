@@ -131,7 +131,10 @@ impl Default for IrParams {
                     min: 0,
                     max: MAX_FILE_INDEX,
                 },
-            ),
+            )
+            // An index into this machine's directory listing: presets carry
+            // `ir_path` instead.
+            .excluded_from_presets(),
             dry_wet: FloatParam::new(
                 "dry_wet",
                 "Dry/Wet",

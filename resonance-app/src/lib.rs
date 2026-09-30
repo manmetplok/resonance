@@ -26,6 +26,7 @@ pub mod engine_events;
 pub mod focus;
 pub mod message;
 pub mod plugin_chain;
+pub mod plugin_preset_library;
 pub mod plugin_ui;
 pub mod presets;
 pub mod project;
@@ -695,6 +696,11 @@ impl Resonance {
                 user_presets: match host {
                     Host::Machine => presets::load_user_presets(),
                     Host::None => Vec::new(),
+                },
+                // A test app never reads or writes the user's presets.
+                plugin_preset_root: match host {
+                    Host::Machine => None,
+                    Host::None => crate::plugin_preset_library::hermetic_preset_root(),
                 },
                 ..state::PresetState::default()
             },

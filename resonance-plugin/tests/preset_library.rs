@@ -152,6 +152,7 @@ fn seeded(root: &TempRoot) -> (Arc<PresetLibrary>, PresetBank) {
                 ..PresetMeta::default()
             }),
             derived_from: None,
+            ..SaveOptions::default()
         },
     )
     .unwrap();

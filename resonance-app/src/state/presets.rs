@@ -30,6 +30,11 @@ pub struct PresetState {
     /// Root the plugin-preset directories are read from and written to,
     /// when it is not the user's real data directory. A test seam.
     pub plugin_preset_root: Option<std::path::PathBuf>,
+    /// The shared marks store (favourites, personal tags, recents) the
+    /// plugin preset library reads, opened on first use
+    /// (`crate::plugin_preset_library::marks`).
+    pub library_marks:
+        std::sync::OnceLock<std::sync::Arc<resonance_common::library_marks::SharedMarks>>,
     /// Plugin state blobs to apply as PluginAdded events arrive for a
     /// preset-created track. Tuple of (target track id, ordered list of
     /// state blobs matching the preset's plugin chain).

@@ -209,6 +209,12 @@ pub enum PluginMessage {
         /// What to show as the loaded preset afterwards, for the reply
         /// and any future GUI readout.
         preset_name: String,
+        /// The preset's state document with its identity, handed to the
+        /// plugin after the params (`AudioCommand::LoadPluginPresetState`)
+        /// so the rest of the sound — a model, an IR, user wavetables —
+        /// comes along (plugin-preset-library.md §6.7). `None` recalls the
+        /// params only.
+        preset_state: Option<Vec<u8>>,
     },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),

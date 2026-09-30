@@ -71,6 +71,25 @@ pub struct FactoryEntry {
     pub json: String,
 }
 
+impl FactoryEntry {
+    /// An entry from the parts the host reads out of a plugin's factory
+    /// symbol: the bare state document and the `meta` object, both as JSON
+    /// text. Builds the format-1 file so the index reads its metadata.
+    pub fn from_parts(id: &str, name: &str, state_json: &str, meta_json: Option<&str>) -> Self {
+        let doc: serde_json::Value = serde_json::from_str(state_json).unwrap_or_default();
+        let mut meta: PresetMeta = meta_json
+            .and_then(|m| serde_json::from_str(m).ok())
+            .unwrap_or_default();
+        meta.name = name.to_string();
+        let file = PresetFile::new(id, PresetPluginInfo::default(), meta, doc);
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            json: file.to_text().unwrap_or_else(|_| state_json.to_string()),
+        }
+    }
+}
+
 /// What [`PresetLibrary::save`] writes.
 #[derive(Debug, Clone, Default)]
 pub struct SaveRequest {
@@ -258,6 +277,15 @@ impl PresetLibrary {
         index.factory = build_factory(plugin_id, entries);
         index.factory.key = Some(key);
         index.merged = None;
+    }
+
+    /// How many factory presets are registered for `plugin_id`.
+    pub fn factory_len(&self, plugin_id: &str) -> usize {
+        self.plugins
+            .lock()
+            .get(plugin_id)
+            .map(|i| i.factory.records.len())
+            .unwrap_or(0)
     }
 
     /// Register a factory bank that is not a compile-time constant.

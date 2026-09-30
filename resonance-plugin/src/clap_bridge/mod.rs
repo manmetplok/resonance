@@ -10,6 +10,7 @@
 //! - [`ports`] — audio/note port discovery and descriptors
 //! - [`params`] — main-thread + audio-processor parameter handling
 //! - [`state`] — preset/project save/load
+//! - [`preset`] — the preset form of the state (state-context) and preset-load
 //! - [`gui`] — embedded GUI lifecycle
 //! - [`process`] — audio-processor activate/process/deactivate
 
@@ -20,7 +21,9 @@ use clack_extensions::gui::PluginGui;
 use clack_extensions::latency::{PluginLatency, PluginLatencyImpl};
 use clack_extensions::note_ports::PluginNotePorts;
 use clack_extensions::params::PluginParams;
+use clack_extensions::preset_discovery::PluginPresetLoad;
 use clack_extensions::state::PluginState;
+use clack_extensions::state_context::PluginStateContext;
 use clack_plugin::prelude::*;
 
 use crate::plugin::ResonancePlugin;
@@ -31,6 +34,7 @@ mod params;
 mod ports;
 mod process;
 pub mod shared;
+mod preset;
 mod state;
 
 // Re-export the public types so downstream code keeps using
@@ -62,6 +66,10 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         builder.register::<PluginAudioPorts>();
         builder.register::<PluginParams>();
         builder.register::<PluginState>();
+        // The preset form of the state (save/load FOR_PRESET) and loading
+        // a preset by location: plugin-preset-library.md §6.7, §7.
+        builder.register::<PluginStateContext>();
+        builder.register::<PluginPresetLoad>();
 
         if let Some(shared) = shared {
             if shared.midi_input {
@@ -183,6 +191,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 default: p.default_plain(),
                 is_stepped: p.is_stepped(),
                 is_hidden: p.is_hidden(),
+                preset_excluded: p.preset_excluded(),
             });
             param_values.push(AtomicU64::new(p.default_plain().to_bits()));
             clap_id_to_slot.insert(clap_id, i);

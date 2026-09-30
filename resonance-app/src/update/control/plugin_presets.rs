@@ -5,17 +5,24 @@
 //! methods, because addressing a plugin differs per surface. Everything
 //! after "which plugin instance is this?" is the same, and lives here.
 //!
-//! # Where the two sets come from
+//! # One library
 //!
-//! **Factory** presets are compiled into the plugin binary. The scan
-//! reads them from the first-party `resonance_factory_presets` symbol and
-//! parks them on [`ScannedPlugin::factory_presets`], so listing them costs
-//! nothing and works before a plugin is even instantiated.
+//! Both sets come from the same `PresetLibrary` the plugin's own window
+//! uses ([`crate::plugin_preset_library`]): **factory** presets from the
+//! scan (read from each first-party binary's `resonance_factory_presets`
+//! symbol, ids and metadata included), **user** presets from the preset
+//! directory. A preset saved, starred or renamed on either side is on the
+//! other.
 //!
-//! **User** presets are files under the documented preset directory, read
-//! through the very same [`PresetBank`] the plugin's own window uses — so
-//! a preset saved in the GUI is listed here, and one saved here appears in
-//! the GUI, without either side knowing about the other.
+//! # The whole sound (slice P2)
+//!
+//! A recall sets the params through the app's own path (below) and then
+//! hands the plugin the preset's state document with its identity
+//! (`AudioCommand::LoadPluginPresetState`): a first-party plugin lays it
+//! over its current state through `clap.state-context` (`FOR_PRESET`), so
+//! a model, an IR or user wavetables come along and the plugin's bar names
+//! the preset. A save captures the plugin's preset form
+//! (`SavePluginPresetState`), not the whole project state.
 //!
 //! # Why a recall is applied parameter by parameter
 //!
@@ -43,111 +50,72 @@ use resonance_control::methods::plugin_preset::{
 };
 use resonance_control::methods::track::PluginParamView;
 use resonance_control::RpcError;
-use resonance_plugin::presets::PresetBank;
+use resonance_plugin::presets::{PresetBank, PresetRef, PresetSource, PRESET_STATE_KEY};
 
-/// The bank for one plugin: its baked-in factory presets, plus this
-/// user's own directory for it.
-///
-/// Built per call rather than cached — it is a plugin id and a path, and
-/// the user's directory can change under us at any time (they may have
-/// saved from the plugin's own window a second ago).
-fn bank_for(app: &Resonance, clap_id: &str) -> PresetBank {
-    // The bank carries the *user* half only. `PresetBank` takes
-    // `&'static [FactoryPreset]` because inside a plugin the factory bank
-    // is a compile-time constant; the host's copy arrived over a channel
-    // at runtime, so it is kept beside the bank in
-    // [`factory_presets`] rather than forced into it.
-    let bank = PresetBank::new(clap_id, &[]);
-    match &app.presets.plugin_preset_root {
-        Some(root) => bank.with_root(root.clone()),
-        None => bank,
-    }
+/// The bank for one plugin over the app's library.
+pub(crate) fn bank_for(app: &Resonance, clap_id: &str) -> PresetBank {
+    crate::plugin_preset_library::bank(app, clap_id)
 }
 
-/// Factory presets for `clap_id`, as `(name, state json)`.
-fn factory_presets(app: &Resonance, clap_id: &str) -> Vec<(String, String)> {
-    app.plugin_catalog.available_plugins
-        .iter()
-        .find(|p| p.clap_plugin_id == clap_id)
-        .map(|p| p.factory_presets.clone())
-        .unwrap_or_default()
+fn wire_source(source: PresetSource) -> PluginPresetSource {
+    match source {
+        PresetSource::Factory => PluginPresetSource::Factory,
+        PresetSource::User => PluginPresetSource::User,
+    }
 }
 
 /// Every preset available for one plugin instance, factory first.
 pub(crate) fn view(app: &Resonance, clap_id: &str) -> PluginPresetsView {
-    let mut presets: Vec<PluginPresetEntry> = factory_presets(app, clap_id)
+    let presets = bank_for(app, clap_id)
+        .list()
         .into_iter()
-        .map(|(name, _)| PluginPresetEntry {
-            name,
-            source: PluginPresetSource::Factory,
+        .map(|p| PluginPresetEntry {
+            name: p.name,
+            source: wire_source(p.source),
         })
         .collect();
-    presets.extend(
-        bank_for(app, clap_id)
-            .list_user()
-            .into_iter()
-            .map(|p| PluginPresetEntry {
-                name: p.name,
-                source: PluginPresetSource::User,
-            }),
-    );
-
     PluginPresetsView {
         plugin_id: clap_id.to_string(),
         presets,
-        // The loaded-preset identity lives inside the plugin's own state
-        // and does not reach the app (ba todo #1294 is the same gap).
-        // Reporting `None` is the honest answer; inventing one from the
-        // last preset this API loaded would go wrong the moment the user
-        // touched a knob in the plugin's window.
+        // The loaded-preset identity reaches the app with P5; until an
+        // identity event has arrived, `None` is the honest answer.
         current: None,
         modified: false,
     }
 }
 
-/// The state JSON behind one preset, or the error explaining why there is
-/// none.
-///
-/// `source` picks a set; omitted prefers the user's own, so a preset
-/// deliberately saved over a factory name wins unless the caller asks for
-/// the factory original by name.
-fn json_for(
+/// The preset a name (and optional source) addresses: user presets first
+/// unless the caller asks for the factory original, names compared
+/// case-insensitively (they are unique per plugin among user presets).
+pub(crate) fn find(
     app: &Resonance,
     clap_id: &str,
     preset: &str,
     source: Option<PluginPresetSource>,
-) -> Result<String, RpcError> {
+) -> Result<(PresetBank, PresetRef), RpcError> {
     let wanted = preset.trim();
-    let factory = factory_presets(app, clap_id);
     let bank = bank_for(app, clap_id);
-
-    let user = |bank: &PresetBank| {
-        bank.list_user()
-            .into_iter()
-            .find(|p| p.name.eq_ignore_ascii_case(wanted))
-            .and_then(|p| bank.json_for(&p))
+    let all = bank.list();
+    let pick = |s: PresetSource| {
+        all.iter()
+            .find(|p| p.source == s && p.name.eq_ignore_ascii_case(wanted))
+            .cloned()
     };
-    let fact = || {
-        factory
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
-            .map(|(_, json)| json.clone())
-    };
-
     let found = match source {
-        Some(PluginPresetSource::User) => user(&bank),
-        Some(PluginPresetSource::Factory) => fact(),
-        None => user(&bank).or_else(fact),
+        Some(PluginPresetSource::User) => pick(PresetSource::User),
+        Some(PluginPresetSource::Factory) => pick(PresetSource::Factory),
+        None => pick(PresetSource::User).or_else(|| pick(PresetSource::Factory)),
     };
-
-    found.ok_or_else(|| {
-        let mut known: Vec<String> = factory.iter().map(|(n, _)| n.clone()).collect();
-        known.extend(bank.list_user().into_iter().map(|p| p.name));
-        RpcError::not_found(format!(
-            "plugin {clap_id:?} has no preset {wanted:?} (has: [{}])",
-            known.join(", ")
-        ))
-    })
+    match found {
+        Some(p) => Ok((bank, p)),
+        None => {
+            let known: Vec<String> = all.into_iter().map(|p| p.name).collect();
+            Err(RpcError::not_found(format!(
+                "plugin {clap_id:?} has no preset {wanted:?} (has: [{}])",
+                known.join(", ")
+            )))
+        }
+    }
 }
 
 /// Build the one-edit recall message for a preset, or explain why not.
@@ -163,8 +131,22 @@ pub(crate) fn load_message(
     preset: &str,
     source: Option<PluginPresetSource>,
 ) -> Result<Message, RpcError> {
-    let json = json_for(app, clap_id, preset, source)?;
-    let document: serde_json::Value = serde_json::from_str(&json)
+    let (bank, found) = find(app, clap_id, preset, source)?;
+    load_message_for(&bank, &found, instance_id, params)
+}
+
+/// [`load_message`] for a preset already resolved.
+pub(crate) fn load_message_for(
+    bank: &PresetBank,
+    found: &PresetRef,
+    instance_id: PluginInstanceId,
+    params: &[PluginParamView],
+) -> Result<Message, RpcError> {
+    let preset = found.name.as_str();
+    let json = bank
+        .json_for(found)
+        .ok_or_else(|| RpcError::not_found(format!("preset {preset:?} is gone")))?;
+    let mut document: serde_json::Value = serde_json::from_str(&json)
         .map_err(|e| RpcError::internal(format!("preset {preset:?} is not valid JSON: {e}")))?;
     let Some(map) = document.get("params").and_then(|v| v.as_object()) else {
         return Err(RpcError::internal(format!(
@@ -195,6 +177,20 @@ pub(crate) fn load_message(
         )));
     }
 
+    // The whole sound, with the identity the plugin's own bar shows.
+    if let Some(obj) = document.as_object_mut() {
+        obj.insert(
+            PRESET_STATE_KEY.to_string(),
+            serde_json::json!({
+                "id": found.id,
+                "name": found.name,
+                "source": found.source.as_str(),
+                "modified": false,
+            }),
+        );
+    }
+    let preset_state = serde_json::to_vec(&document).ok();
+
     // A preset from an older build may name parameters this plugin no
     // longer has. That is exactly the case `ParamRename` migration
     // handles inside the plugin, and dropping the strays is what the
@@ -203,7 +199,8 @@ pub(crate) fn load_message(
     Ok(Message::Plugin(PluginMessage::LoadPluginPreset {
         instance_id,
         values,
-        preset_name: preset.trim().to_string(),
+        preset_name: found.name.clone(),
+        preset_state,
     }))
 }
 
@@ -236,13 +233,13 @@ pub(crate) fn check_save(
     Ok(())
 }
 
-/// Write the plugin's saved state blob as a user preset.
+/// Write the plugin's preset state as a user preset.
 ///
-/// Called when the engine's `PluginStateSaved` echo lands, because the
-/// plugin is the only thing that knows its current state: the app's
-/// parameter mirror does not see edits made in the plugin's own window
-/// (ba todo #1294), and saving from it would quietly capture the wrong
-/// sound.
+/// Called when the engine's `PluginPresetStateSaved` echo lands: the
+/// plugin is the only thing that knows its current sound (edits made in
+/// its own window never reach the app's mirror). `preset_form` says the
+/// plugin wrote its preset form (params that belong in a preset plus the
+/// sound-bearing extra state); otherwise the blob is its whole state.
 pub(crate) fn write_saved_state(
     app: &Resonance,
     clap_id: &str,
