@@ -4,18 +4,28 @@
 //! `keyboard::listen()` sees key presses a focused `text_input` already
 //! consumed, so Enter (open the selected MIDI clip), `B` (momentary
 //! reference audition) and Cmd-Z / Cmd-Y (project undo / redo) used to
-//! act while the user was typing a track name. They now go through the
-//! same focus probe as `F` and `.`/`,` (`crate::focus`):
-//! `RequestShortcut` probes, `ShortcutResolved` dispatches only when no
-//! text field was focused.
+//! act while the user was typing a track name. Registry shortcuts now go
+//! through the focus probe (`crate::focus`) whenever their command is
+//! `KeyGate::NotWhileTyping` (`ShortcutProbed` dispatches only when no text
+//! field was focused); the held-`B` audition, which is not a registry
+//! command, keeps `RequestShortcut` → `ShortcutResolved`.
 
 use iced::keyboard::{self, key::Named, Key, Modifiers};
-use resonance_app::message::{Message, MidiEditorMessage, UiMessage};
+use resonance_app::commands::{BindingMap, CommandId, KeyGate};
+use resonance_app::message::{Message, UiMessage};
 use resonance_app::reference::ReferenceMessage;
 use resonance_app::state::ViewMode;
-use resonance_app::update::{key_press_message, momentary_audition_message};
+use resonance_app::update::momentary_audition_message;
+use resonance_app::update::shortcuts::key_press_command;
 use resonance_app::Resonance;
 use resonance_audio::types::ABSource;
+
+fn gated_command(key: Key, mods: Modifiers) -> CommandId {
+    let command = key_press_command(&BindingMap::resonance_default(), &key, mods)
+        .unwrap_or_else(|| panic!("{key:?}+{mods:?} is unbound"));
+    assert_eq!(command.gate(), KeyGate::NotWhileTyping, "{command:?} must be typing-gated");
+    command
+}
 
 fn gated_inner(message: Option<Message>) -> Message {
     match message {
@@ -26,29 +36,19 @@ fn gated_inner(message: Option<Message>) -> Message {
 
 #[test]
 fn enter_is_focus_gated() {
-    let inner = gated_inner(key_press_message(Key::Named(Named::Enter), Modifiers::empty()));
-    assert!(matches!(
-        inner,
-        Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip)
-    ));
+    assert_eq!(
+        gated_command(Key::Named(Named::Enter), Modifiers::empty()),
+        CommandId::OpenSelectedMidiClip
+    );
 }
 
 #[test]
 fn cmd_z_and_cmd_y_are_focus_gated() {
     let z = Key::Character("z".into());
     let y = Key::Character("y".into());
-    assert!(matches!(
-        gated_inner(key_press_message(z.clone(), Modifiers::COMMAND)),
-        Message::Undo
-    ));
-    assert!(matches!(
-        gated_inner(key_press_message(z, Modifiers::COMMAND | Modifiers::SHIFT)),
-        Message::Redo
-    ));
-    assert!(matches!(
-        gated_inner(key_press_message(y, Modifiers::COMMAND)),
-        Message::Redo
-    ));
+    assert_eq!(gated_command(z.clone(), Modifiers::COMMAND), CommandId::Undo);
+    assert_eq!(gated_command(z, Modifiers::COMMAND | Modifiers::SHIFT), CommandId::Redo);
+    assert_eq!(gated_command(y, Modifiers::COMMAND), CommandId::Redo);
 }
 
 #[test]

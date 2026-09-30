@@ -11,16 +11,17 @@ impl TimelineCanvas<'_> {
         &self,
         state: &mut TimelineState,
         key: &keyboard::Key,
+        modifiers: keyboard::Modifiers,
     ) -> UpdateResult {
         use keyboard::key::Named;
         // Esc abandons an in-flight drag-to-timeline placement (todo #605).
         if self.drag.is_some() && matches!(key, keyboard::Key::Named(Named::Escape)) {
             return captured(Message::Drag(DragMessage::Cancel));
         }
-        let is_delete = matches!(
-            key,
-            keyboard::Key::Named(Named::Delete) | keyboard::Key::Named(Named::Backspace)
-        );
+        let is_delete = crate::commands::KeyChord::from_iced(key, modifiers).is_some_and(|c| {
+            self.keymap
+                .matches(crate::commands::CommandId::TimelineDeleteSelection, c)
+        });
         // Delete only acts when the timeline was the last surface pressed,
         // not while the user works in the piano roll or a text field.
         if !is_delete || !state.key_focus.owns_keys() {

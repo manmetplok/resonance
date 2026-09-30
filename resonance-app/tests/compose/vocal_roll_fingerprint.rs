@@ -44,6 +44,8 @@ fn canvas<'a>(
     voice_label: &'a str,
 ) -> VocalRollCanvas<'a> {
     VocalRollCanvas {
+        keys_blocked: false,
+        keymap: resonance_app::commands::BindingMap::default_ref(),
         clip,
         track_id: 3,
         params,

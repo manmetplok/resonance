@@ -130,6 +130,8 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     check_output_stream_lost(r);
     // Change-gated periodic autosave (todo #465, code review UPD-07).
     crate::update::project_io::tick_autosave(r);
+    crate::palette::flush_recent(r, false);
+    crate::palette::refresh_availability(r);
     if tasks.is_empty() {
         Task::none()
     } else {

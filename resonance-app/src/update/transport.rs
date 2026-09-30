@@ -15,6 +15,18 @@ pub enum TransportMessage {
     Record,
     Pause,
     Stop,
+    /// Space: play when stopped; when playing, stop and return the
+    /// playhead to where playback started (command-palette.md D1).
+    TogglePlay,
+    /// Seek to `loop_in`, then play.
+    PlayFromLoopStart,
+    /// Move the playhead to a resolved target (bar / beat nudges, loop
+    /// edges, project ends, section starts, a bar). One reducer, so all the
+    /// seek maths lives in `transport_nav`.
+    SeekTo(super::transport_nav::SeekTarget),
+    /// Move one loop edge to the playhead, snapped to the grid; a crossing
+    /// pushes the other edge one bar away. Does not enable the loop.
+    SetLoopPoint { edge: super::transport_nav::LoopEdge },
     SkipBack,
     SkipForward,
     /// Move the playhead to the given sample position (ruler click, etc.).
@@ -57,6 +69,9 @@ impl TransportMessage {
             | Self::Record
             | Self::Pause
             | Self::Stop
+            | Self::TogglePlay
+            | Self::PlayFromLoopStart
+            | Self::SeekTo(_)
             | Self::SkipBack
             | Self::SkipForward
             | Self::SeekToSample(_)
@@ -68,6 +83,7 @@ impl TransportMessage {
             // their GUI counterparts (cycle / loop toggle+drag).
             | Self::SetTimeSignature { .. }
             | Self::SetLoopRange { .. }
+            | Self::SetLoopPoint { .. }
             | Self::ToggleLoop => UndoAction::Record,
         }
     }
@@ -75,6 +91,40 @@ impl TransportMessage {
 
 pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
     match m {
+        TransportMessage::TogglePlay => {
+            if r.transport.playing {
+                // Stop (which also ends a recording pass) and return to
+                // where playback started.
+                let back = r.transport.play_start;
+                let _ = r.engine.send(AudioCommand::Stop);
+                r.transport.playing = false;
+                r.transport.record_pending = false;
+                let _ = r.engine.send(AudioCommand::SeekTo(back));
+                r.transport.playhead = back;
+            } else {
+                return handle(r, TransportMessage::Play);
+            }
+        }
+        TransportMessage::PlayFromLoopStart => {
+            // The user asked for the loop start, so it wins over Play's
+            // Compose auto-loop of the selected section; and it is where a
+            // later Space stop returns to, whether or not we were playing.
+            let start = r.transport.loop_in;
+            let _ = r.engine.send(AudioCommand::SeekTo(start));
+            r.transport.playhead = start;
+            r.transport.play_start = start;
+            if !r.transport.playing {
+                r.session.undo.break_coalesce();
+                let _ = r.engine.send(AudioCommand::Play);
+                r.transport.playing = true;
+            }
+        }
+        TransportMessage::SeekTo(target) => {
+            return super::transport_nav::seek_to(r, target);
+        }
+        TransportMessage::SetLoopPoint { edge } => {
+            return super::transport_nav::set_loop_point(r, edge);
+        }
         TransportMessage::Play => {
             // A fresh Play (not already playing) starts a new live-MIDI
             // capture run (FU-D6a): break any coalesce run so a capture in
@@ -111,11 +161,20 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                     r.transport.playhead = loop_in;
                 }
             }
+            // Where a later Play / Stop toggle returns to. Recorded after
+            // the Compose auto-loop above moved the playhead.
+            if !r.transport.playing {
+                r.transport.play_start = r.transport.playhead;
+            }
             let _ = r.engine.send(AudioCommand::Play);
             r.transport.playing = true;
         }
         TransportMessage::Record => {
             if r.registry.tracks.iter().any(|t| t.record_armed) {
+                r.transport.record_pending = true;
+                if !r.transport.playing {
+                    r.transport.play_start = r.transport.playhead;
+                }
                 let _ = r.engine.send(AudioCommand::Record {
                     precount_bars: r.transport.precount_bars,
                 });
@@ -125,10 +184,12 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         TransportMessage::Pause => {
             let _ = r.engine.send(AudioCommand::Pause);
             r.transport.playing = false;
+            r.transport.record_pending = false;
         }
         TransportMessage::Stop => {
             let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
+            r.transport.record_pending = false;
             r.transport.playhead = 0;
         }
         TransportMessage::SkipBack => {

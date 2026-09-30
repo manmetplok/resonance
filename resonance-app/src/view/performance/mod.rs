@@ -611,7 +611,7 @@ impl Resonance {
             .spacing(16)
             .align_y(alignment::Vertical::Center);
 
-        let hints = key_hint_line();
+        let hints = key_hint_line(self);
 
         let inner = row![left, Space::new().width(Length::Fill), hints]
             .align_y(alignment::Vertical::Center);
@@ -794,14 +794,21 @@ fn stepper_glyph<'a>(glyph: &str) -> Element<'a, Message> {
 }
 
 /// The keyboard-hint line on the footer's right edge.
-fn key_hint_line<'a>() -> Element<'a, Message> {
+fn key_hint_line<'a>(r: &crate::Resonance) -> Element<'a, Message> {
+    use crate::commands::CommandId;
     let mut hints = row![].spacing(8).align_y(alignment::Vertical::Center);
-    let pairs = [
-        ("Space", "play"),
-        ("R", "record"),
-        ("F", "fullscreen"),
-        ("\u{238b}", "exit"),
-    ];
+    // Read from the registry, so the hint is always what the keys do.
+    let pairs: Vec<(String, &str)> = [
+        (CommandId::TransportTogglePlay, "play"),
+        (CommandId::TransportRecord, "record"),
+        (CommandId::TogglePerformanceMode, "fullscreen"),
+        (CommandId::ExitPerformanceMode, "exit"),
+    ]
+    .into_iter()
+    .filter_map(|(id, action)| {
+        crate::view::shortcut_hint::chord_text(r, id).map(|chord| (chord, action))
+    })
+    .collect();
     for (i, (key, action)) in pairs.iter().enumerate() {
         if i > 0 {
             hints = hints.push(

@@ -7,10 +7,11 @@
 //! `#[cfg(test)]` modules.
 
 use resonance_app::commands::{
-    fuzzy_match, BindingMap, ChordKey, CommandCategory, CommandId, KeyChord, KeymapPreset, Mods,
-    NamedKey,
+    fuzzy_match, BindingMap, ChordKey, CommandCategory, CommandId, KeyChord, KeyGate, KeymapPreset,
+    Mods, NamedKey, Scope,
 };
 use resonance_app::message::*;
+use resonance_app::Resonance;
 
 // ---------------------------------------------------------------------------
 // Registry metadata
@@ -19,7 +20,7 @@ use resonance_app::message::*;
 #[test]
 fn all_commands_have_metadata_and_unique_breadcrumbs() {
     let mut seen = std::collections::HashSet::new();
-    for &id in &CommandId::ALL {
+    for &id in CommandId::ALL {
         assert!(
             !id.display_name().is_empty(),
             "{id:?} has an empty display name"
@@ -35,7 +36,10 @@ fn all_commands_have_metadata_and_unique_breadcrumbs() {
             id.display_name()
         );
     }
-    assert_eq!(CommandId::ALL.len(), 37);
+    // `ALL` is generated from the enum declaration, so it can't miss a
+    // variant; it must not repeat one either.
+    let unique: std::collections::HashSet<_> = CommandId::ALL.iter().collect();
+    assert_eq!(unique.len(), CommandId::ALL.len());
 }
 
 #[test]
@@ -52,36 +56,38 @@ fn every_category_has_at_least_one_command() {
 fn to_message_builds_the_expected_variant() {
     // Spot-check that the executor wires representative commands to the
     // correct Message (Message isn't PartialEq, so we match structurally).
+    let (app, _task) = Resonance::new_for_test();
+    let msg = |id: CommandId| id.to_message(&app).expect("parameterless command");
     assert!(matches!(
-        CommandId::SaveProject.to_message(),
+        msg(CommandId::SaveProject),
         Message::ProjectIo(ProjectIoMessage::SaveProject)
     ));
     assert!(matches!(
-        CommandId::SaveProjectAs.to_message(),
+        msg(CommandId::SaveProjectAs),
         Message::ProjectIo(ProjectIoMessage::SaveProjectAs)
     ));
     assert!(matches!(
-        CommandId::Undo.to_message(),
+        msg(CommandId::Undo),
         Message::Undo
     ));
     assert!(matches!(
-        CommandId::Redo.to_message(),
+        msg(CommandId::Redo),
         Message::Redo
     ));
     assert!(matches!(
-        CommandId::OpenSelectedMidiClip.to_message(),
+        msg(CommandId::OpenSelectedMidiClip),
         Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip)
     ));
     assert!(matches!(
-        CommandId::TogglePerformanceMode.to_message(),
-        Message::Ui(UiMessage::RequestPerformanceToggle)
+        msg(CommandId::TogglePerformanceMode),
+        Message::Ui(UiMessage::TogglePerformanceMode)
     ));
     assert!(matches!(
-        CommandId::ExitPerformanceMode.to_message(),
+        msg(CommandId::ExitPerformanceMode),
         Message::Ui(UiMessage::ExitPerformanceMode)
     ));
     assert!(matches!(
-        CommandId::TransportPlay.to_message(),
+        msg(CommandId::TransportPlay),
         Message::Transport(TransportMessage::Play)
     ));
 }
@@ -90,8 +96,10 @@ fn to_message_builds_the_expected_variant() {
 fn every_command_builds_a_message() {
     // Exercising the executor for all commands ensures none panics and the
     // match is exhaustive at runtime as well as compile time.
-    for &id in &CommandId::ALL {
-        let _ = id.to_message();
+    let (app, _task) = Resonance::new_for_test();
+    for &id in CommandId::ALL {
+        let _ = id.to_message(&app);
+        let _ = id.availability(&app);
     }
 }
 
@@ -192,9 +200,10 @@ fn format_tokens_round_trips_through_parse() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn default_table_covers_the_hardcoded_subscription_shortcuts() {
+fn default_table_covers_the_live_shortcuts() {
     let map = BindingMap::resonance_default();
-    // The shortcuts currently hardcoded in update.rs::subscription.
+    // The shortcuts the pre-registry `key_press_message` hardcoded (the
+    // full parity check is `shortcut_parity.rs`).
     assert_eq!(
         map.chord_for(CommandId::SaveProject),
         Some(KeyChord::char('s', Mods::cmd()))
@@ -233,38 +242,95 @@ fn default_table_covers_the_hardcoded_subscription_shortcuts() {
 fn lookup_by_chord_and_by_id_are_consistent() {
     let map = BindingMap::resonance_default();
     for (id, chord) in map.iter() {
-        assert_eq!(map.command_for(chord), Some(id));
-        assert_eq!(map.chord_for(id), Some(chord));
+        assert_eq!(map.command_for(id.scope(), chord), Some(id));
+        assert!(map.matches(id, chord));
+        assert!(map.chords_for(id).any(|c| c == chord));
     }
     // An unbound chord resolves to nothing.
     assert_eq!(
-        map.command_for(KeyChord::char('q', Mods { ctrl: true, alt: true, shift: true, cmd: true })),
+        map.command_for(
+            Scope::Global,
+            KeyChord::char('q', Mods { ctrl: true, alt: true, shift: true, cmd: true })
+        ),
         None
     );
 }
 
 #[test]
-fn binding_table_has_no_duplicate_chords() {
+fn binding_table_has_no_duplicate_chords_within_a_scope() {
     let map = BindingMap::resonance_default();
     let mut seen = std::collections::HashSet::new();
-    for (_id, chord) in map.iter() {
+    for (id, chord) in map.iter() {
         assert!(
-            seen.insert(chord),
-            "chord {} bound twice in default table",
-            chord.format_glyphs()
+            seen.insert((id.scope(), chord)),
+            "chord {} bound twice in scope {:?}",
+            chord.format_glyphs(),
+            id.scope()
         );
     }
+}
+
+#[test]
+fn redo_keeps_cmd_y_as_an_alternate_behind_its_primary() {
+    let map = BindingMap::resonance_default();
+    let chords: Vec<KeyChord> = map.chords_for(CommandId::Redo).collect();
+    assert_eq!(
+        chords,
+        vec![KeyChord::char('z', Mods::cmd_shift()), KeyChord::char('y', Mods::cmd())]
+    );
+    assert_eq!(map.chord_for(CommandId::Redo), Some(KeyChord::char('z', Mods::cmd_shift())));
+}
+
+/// Gate invariant (§3.2): a default binding without ⌘/Ctrl is typing-gated,
+/// so a new single-key binding cannot land ungated. (The dispatcher also
+/// gates every bare chord regardless, which covers presets and rebinding.)
+#[test]
+fn every_bare_key_binding_is_typing_gated() {
+    for (id, chord) in BindingMap::resonance_default().iter() {
+        if !chord.mods.cmd && !chord.mods.ctrl {
+            assert_eq!(
+                id.gate(),
+                KeyGate::NotWhileTyping,
+                "{id:?} on bare {} must be NotWhileTyping",
+                chord.format_glyphs()
+            );
+        }
+    }
+    assert_eq!(CommandId::Undo.gate(), KeyGate::NotWhileTyping);
+    assert_eq!(CommandId::Redo.gate(), KeyGate::NotWhileTyping);
+}
+
+/// Toggles never re-fire on key repeat (holding F used to flap
+/// Performance mode).
+#[test]
+fn only_seeks_and_zooms_repeat() {
+    // Derived from what each command does, not from its name: a command
+    // that repeats must dispatch a seek or a zoom, never a toggle.
+    let (app, _task) = Resonance::new_for_test();
+    let mut repeating = 0;
+    for &id in CommandId::ALL {
+        if !id.repeat() {
+            continue;
+        }
+        repeating += 1;
+        let message = format!("{:?}", id.to_message(&app).expect("a message"));
+        assert!(
+            message.contains("SeekTo(Nudge") || message.contains("Zoom"),
+            "{id:?} repeats but dispatches {message}"
+        );
+    }
+    assert_eq!(repeating, 8, "four nudges and four zooms (view + track editor)");
 }
 
 #[test]
 fn set_rebinds_and_steals_chord_from_previous_owner() {
     let mut map = BindingMap::resonance_default();
     let save_chord = KeyChord::char('s', Mods::cmd());
-    assert_eq!(map.command_for(save_chord), Some(CommandId::SaveProject));
+    assert_eq!(map.command_for(Scope::Global, save_chord), Some(CommandId::SaveProject));
 
     // Rebind Cmd+S to Bounce; SaveProject must lose it.
     map.set(CommandId::BounceToWav, save_chord);
-    assert_eq!(map.command_for(save_chord), Some(CommandId::BounceToWav));
+    assert_eq!(map.command_for(Scope::Global, save_chord), Some(CommandId::BounceToWav));
     assert_ne!(map.chord_for(CommandId::SaveProject), Some(save_chord));
 }
 
@@ -277,7 +343,7 @@ fn all_presets_resolve_every_command() {
         assert!(!map.is_empty());
         for (id, chord) in map.iter() {
             assert_eq!(
-                map.command_for(chord),
+                map.command_for(id.scope(), chord),
                 Some(id),
                 "{:?}: chord {} did not resolve back to {id:?}",
                 preset,
@@ -292,17 +358,32 @@ fn all_presets_resolve_every_command() {
 
 #[test]
 fn preset_overrides_take_effect() {
-    // Ableton remaps Record to Enter; Resonance default keeps it on `R`.
-    let resonance = KeymapPreset::Resonance.bindings();
-    let ableton = KeymapPreset::AbletonLive.bindings();
+    // Logic's Return goes to the beginning, taking Enter from Open Selected
+    // MIDI Clip; `unbound()` reports exactly what a preset takes away.
+    let logic = KeymapPreset::LogicPro.bindings();
     assert_eq!(
-        resonance.chord_for(CommandId::TransportRecord),
-        Some(KeyChord::char('r', Mods::NONE))
-    );
-    assert_eq!(
-        ableton.chord_for(CommandId::TransportRecord),
+        logic.chord_for(CommandId::PlayheadToStart),
         Some(KeyChord::named(NamedKey::Enter, Mods::NONE))
     );
+    assert_eq!(logic.chord_for(CommandId::TransportToggleLoop), Some(KeyChord::char('c', Mods::NONE)));
+    assert_eq!(logic.chord_for(CommandId::OpenSelectedMidiClip), None);
+    let unbound = KeymapPreset::LogicPro.unbound();
+    assert!(unbound.contains(&CommandId::OpenSelectedMidiClip));
+    assert!(unbound.contains(&CommandId::AddAudioTrack), "⌘T went to split");
+    assert!(KeymapPreset::Resonance.unbound().is_empty());
+}
+
+/// No preset may be a no-op: each one changes the table.
+#[test]
+fn every_preset_differs_from_the_defaults() {
+    let default: Vec<_> = BindingMap::resonance_default().iter().collect();
+    for preset in KeymapPreset::ALL {
+        if preset == KeymapPreset::Resonance {
+            continue;
+        }
+        let map: Vec<_> = preset.bindings().iter().collect();
+        assert_ne!(map, default, "{preset:?} changes nothing");
+    }
 }
 
 // ---------------------------------------------------------------------------

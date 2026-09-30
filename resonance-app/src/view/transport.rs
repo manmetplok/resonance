@@ -10,6 +10,8 @@ use iced::widget::{
 };
 use iced::{alignment, mouse, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
+use crate::commands::CommandId;
+use crate::view::shortcut_hint::with_hint as hint;
 use crate::message::*;
 use crate::state::ViewMode;
 use crate::theme::{self, fa};
@@ -76,10 +78,14 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
 
     let tabs = container(
         row![
-            tab_button("Arrange", ViewMode::Arrange, r.ui.view_mode),
-            tab_button("Mixer", ViewMode::Mixer, r.ui.view_mode),
-            tab_button("Compose", ViewMode::Compose, r.ui.view_mode),
-            tab_button("Performance", ViewMode::Performance, r.ui.view_mode),
+            hint(r, tab_button("Arrange", ViewMode::Arrange, r.ui.view_mode), CommandId::ViewArrange),
+            hint(r, tab_button("Mixer", ViewMode::Mixer, r.ui.view_mode), CommandId::ViewMixer),
+            hint(r, tab_button("Compose", ViewMode::Compose, r.ui.view_mode), CommandId::ViewCompose),
+            hint(
+                r,
+                tab_button("Performance", ViewMode::Performance, r.ui.view_mode),
+                CommandId::TogglePerformanceMode,
+            ),
         ]
         .spacing(3)
         .padding(4),
@@ -108,12 +114,17 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
     .height(28)
     .style(|_theme, status| theme::ghost_button_style(status));
 
-    let settings_btn = button(centered_icon(fa::BARS, theme::TEXT_2, 13, 28))
-        .on_press(Message::Ui(UiMessage::OpenSettings))
-        .padding(0)
-        .width(36)
-        .height(28)
-        .style(|_theme, status| theme::ghost_button_style(status));
+    let import_btn = hint(r, import_btn, CommandId::ImportMidi);
+    let settings_btn = hint(
+        r,
+        button(centered_icon(fa::BARS, theme::TEXT_2, 13, 28))
+            .on_press(Message::Ui(UiMessage::OpenSettings))
+            .padding(0)
+            .width(36)
+            .height(28)
+            .style(|_theme, status| theme::ghost_button_style(status)),
+        CommandId::OpenSettings,
+    );
 
     // "Media" toggle for the docked media-browser left panel. Only
     // meaningful in the Arrange view (the panel lives there), so it's hidden
@@ -244,31 +255,51 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
 
     let any_armed = r.registry.tracks.iter().any(|t| t.record_armed);
 
-    let prev_btn = transport_btn(fa::BACKWARD_STEP, Message::Transport(TransportMessage::SkipBack));
-    let stop_btn = transport_btn(fa::STOP, Message::Transport(TransportMessage::Stop));
-    let next_btn = transport_btn(
-        fa::FORWARD_STEP,
-        Message::Transport(TransportMessage::SkipForward),
+    let prev_btn = hint(
+        r,
+        transport_btn(fa::BACKWARD_STEP, Message::Transport(TransportMessage::SkipBack)),
+        CommandId::TransportSkipBack,
+    );
+    let stop_btn = hint(
+        r,
+        transport_btn(fa::STOP, Message::Transport(TransportMessage::Stop)),
+        CommandId::TransportStop,
+    );
+    let next_btn = hint(
+        r,
+        transport_btn(
+            fa::FORWARD_STEP,
+            Message::Transport(TransportMessage::SkipForward),
+        ),
+        CommandId::TransportSkipForward,
     );
 
-    let play_pause = play_pause_button(r);
-    let rec_btn = record_button(any_armed);
+    let play_pause = hint(r, play_pause_button(r), CommandId::TransportPlayPause);
+    let rec_btn = hint(r, record_button(any_armed), CommandId::TransportRecord);
 
-    let loop_btn = loop_toggle_button(r);
-    let metronome_btn = metronome_toggle_button(r);
+    let loop_btn = hint(r, loop_toggle_button(r), CommandId::TransportToggleLoop);
+    let metronome_btn = hint(r, metronome_toggle_button(r), CommandId::TransportToggleMetronome);
 
     // Marker navigation + overview toggle (todo #370). Prev/Next jump the
     // playhead to the adjacent arrangement marker; the flag button opens the
     // markers overview popover anchored under the transport bar.
-    let prev_marker_btn = transport_btn(
-        fa::BACKWARD_FAST,
-        Message::Marker(MarkerMessage::JumpToPrev),
+    let prev_marker_btn = hint(
+        r,
+        transport_btn(
+            fa::BACKWARD_FAST,
+            Message::Marker(MarkerMessage::JumpToPrev),
+        ),
+        CommandId::PrevMarker,
     );
-    let next_marker_btn = transport_btn(
-        fa::FORWARD_FAST,
-        Message::Marker(MarkerMessage::JumpToNext),
+    let next_marker_btn = hint(
+        r,
+        transport_btn(
+            fa::FORWARD_FAST,
+            Message::Marker(MarkerMessage::JumpToNext),
+        ),
+        CommandId::NextMarker,
     );
-    let overview_btn = markers_overview_toggle_button(r);
+    let overview_btn = hint(r, markers_overview_toggle_button(r), CommandId::ToggleMarkersOverview);
 
     let left = row![
         prev_btn,

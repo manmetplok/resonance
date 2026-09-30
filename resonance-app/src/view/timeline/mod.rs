@@ -42,6 +42,15 @@ pub use self::snap::snap_sample_to_grid_tempo;
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
+    /// The active keymap: canvas-local keys resolve through it
+    /// (command-palette.md §4.3).
+    pub keymap: &'a crate::commands::BindingMap,
+    /// Set while any modal overlay (the palette included) is open or the
+    /// Keyboard panel is capturing a chord: the canvas ignores key presses,
+    /// so Backspace typed into a dialog can't delete the selection this
+    /// canvas owned the keys for (command-palette.md §7.3). See
+    /// `Resonance::canvas_keys_blocked`.
+    pub keys_blocked: bool,
     /// `interaction.timeline_key_grant` — see `focus::KeyFocus::sync_grant`.
     pub key_grant: u64,
     pub tracks: &'a [TrackState],
@@ -856,6 +865,11 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
     ) -> Option<canvas::Action<Message>> {
         state.key_focus.sync_grant(self.key_grant);
         state.key_focus.track(event, bounds, cursor);
+        if self.keys_blocked
+            && matches!(event, iced::Event::Keyboard(keyboard::Event::KeyPressed { .. }))
+        {
+            return None;
+        }
         let result = match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 self.handle_wheel(*delta, bounds, cursor)
@@ -872,8 +886,8 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
             iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
                 self.handle_release(state)
             }
-            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, .. }) => {
-                self.handle_key(state, key)
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                self.handle_key(state, key, *modifiers)
             }
             _ => None,
         };
