@@ -548,11 +548,31 @@ fn audition(r: &mut Resonance, index: usize) {
         // plugin's full state under its lock just before this first
         // audition loads (a model, an IR, user tables may exist nowhere
         // else).
-        r.presets.capture_seq += 1;
-        let token = r.presets.capture_seq;
         let state = crate::undo::snapshot::LateBlob::default();
-        r.presets.pending_captures.entry(token).or_default().push(state.clone());
-        r.presets.forced_capture = Some(token);
+        // A revert still waiting on its capture for this plugin: that
+        // capture is this origin too (the sound before any audition) —
+        // take it over instead of letting it land on top of this audition,
+        // and capture nothing new (it would see the first audition).
+        let waiting = r
+            .presets
+            .revert_on_capture
+            .iter()
+            .find(|(_, id)| **id == instance_id)
+            .map(|(t, _)| *t);
+        let token = match waiting {
+            Some(token) => {
+                r.presets.revert_on_capture.remove(&token);
+                r.presets.pending_captures.entry(token).or_default().push(state.clone());
+                token
+            }
+            None => {
+                r.presets.capture_seq += 1;
+                let token = r.presets.capture_seq;
+                r.presets.pending_captures.entry(token).or_default().push(state.clone());
+                r.presets.forced_capture = Some(token);
+                token
+            }
+        };
         if let Some(b) = r.presets.host_browser.as_mut() {
             b.origin = Some(AuditionOrigin {
                 values,

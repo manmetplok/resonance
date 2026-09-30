@@ -498,7 +498,8 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             instance_id,
             token,
             data,
-        } => plugins::state_captured(r, instance_id, token, data),
+            after,
+        } => plugins::state_captured(r, instance_id, token, data, after),
         E::PluginPresetsDiscovered { plugin_id, presets } => {
             plugins::presets_discovered(r, plugin_id, presets)
         }

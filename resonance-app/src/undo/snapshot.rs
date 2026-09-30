@@ -255,6 +255,21 @@ impl crate::Resonance {
             &self.plugin_mirror.state_cache,
         );
 
+        // A preset load whose "after" state has not come back yet: this
+        // snapshot (a redo's, taken by the undo) waits on it, so redo puts
+        // back the state the load left rather than the stale cached one.
+        let mut late_plugin_states = Vec::new();
+        for owed in self.presets.pending_after.values().filter(|o| !o.superseded) {
+            if plugin_states.contains_key(&owed.instance_id)
+                || self.plugin_mirror.index.contains_key(&owed.instance_id)
+            {
+                let late = LateBlob::default();
+                if let Ok(mut s) = owed.slots.lock() {
+                    s.push(late.clone());
+                }
+                late_plugin_states.push((owed.instance_id, late));
+            }
+        }
         UndoSnapshot {
             project: LoadedProject {
                 file,
@@ -262,7 +277,7 @@ impl crate::Resonance {
                 midi_notes,
                 plugin_states,
             },
-            late_plugin_states: Vec::new(),
+            late_plugin_states,
         }
     }
 
@@ -374,6 +389,16 @@ impl crate::Resonance {
         snapshot: UndoSnapshot,
     ) {
         use crate::update::project_io::reconcile::{reconcile_all, Origin, ReconcileCtx};
+
+        // A step run's parked state load belongs to the sound being left:
+        // sent after this restore it would override it (review: undo inside
+        // the step debounce).
+        self.presets.pending_step_state.clear();
+        // An owed "after" state that lands from now on no longer describes
+        // the live plugin; it only fills the snapshots that wait on it.
+        for owed in self.presets.pending_after.values_mut() {
+            owed.superseded = true;
+        }
 
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.

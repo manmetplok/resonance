@@ -429,7 +429,102 @@ fn captured(app: &mut Resonance, token: u64, data: &[u8]) {
         instance_id: INSTANCE,
         token,
         data: data.to_vec(),
+        after: false,
     });
+}
+
+fn captured_after(app: &mut Resonance, token: u64, data: &[u8]) {
+    app.test_apply_engine_event(AudioEvent::PluginStateCaptured {
+        instance_id: INSTANCE,
+        token,
+        data: data.to_vec(),
+        after: true,
+    });
+}
+
+/// Undo, Redo, Undo, Redo of a preset step: each undo pushes the state
+/// from before the load, each redo the state the load left — for a model
+/// (amp) and for user tables (wavetable), and also when the undo comes
+/// before the "after" state has arrived.
+#[test]
+fn undo_and_redo_of_a_preset_load_round_trip_the_whole_state() {
+    const AMP_BEFORE: &[u8] = br#"{"params":{},"model_id":"x"}"#;
+    const AMP_AFTER: &[u8] = br#"{"params":{},"model_id":"y"}"#;
+    const WT_BEFORE: &[u8] = br#"{"params":{},"user_wavetables":{"osc1":{"frames":"AAAA"}}}"#;
+    const WT_AFTER: &[u8] = br#"{"params":{},"user_wavetables":{"osc1":{"frames":"BBBB"}}}"#;
+    for (before, after, late) in [
+        (AMP_BEFORE, AMP_AFTER, false),
+        (WT_BEFORE, WT_AFTER, false),
+        (WT_BEFORE, WT_AFTER, true),
+    ] {
+        let (app, _task, rx) = Resonance::new_for_test_with_capture();
+        let mut app = app_with(app);
+        app.test_seed_plugin_state(INSTANCE, b"stale".to_vec());
+        while rx.try_recv().is_ok() {}
+        ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+        app.test_flush_step_state();
+        let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).expect("a capture");
+        captured(&mut app, token, before);
+        if !late {
+            captured_after(&mut app, token, after);
+        }
+        for round in 0..2 {
+            let _ = app.update(Message::Undo);
+            if late && round == 0 {
+                // The "after" half lands once the undo has already run.
+                captured_after(&mut app, token, after);
+            }
+            let sent = full_state_loads(&rx.try_iter().collect::<Vec<_>>());
+            assert_eq!(sent, vec![before.to_vec()], "undo {round} (late: {late})");
+            let _ = app.update(Message::Redo);
+            let sent = full_state_loads(&rx.try_iter().collect::<Vec<_>>());
+            assert_eq!(sent, vec![after.to_vec()], "redo {round} (late: {late})");
+        }
+    }
+}
+
+/// An undo inside the step debounce is final: the parked state load does
+/// not go out afterwards and override the restored sound.
+#[test]
+fn an_undo_mid_debounce_is_not_overridden() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    let _ = app.update(Message::Undo);
+    while rx.try_recv().is_ok() {}
+    app.test_flush_step_state();
+    let sent: Vec<_> = rx.try_iter().collect();
+    assert!(
+        !sent.iter().any(|c| matches!(c, AudioCommand::LoadPluginPresetState { .. })),
+        "{sent:?}"
+    );
+    assert_eq!(gain(&mut app), Some(1.0), "the pre-step sound");
+}
+
+/// Esc, then a new audition before the first capture arrived: the late
+/// capture no longer lands on the new audition, and it is the new
+/// browser's origin (Esc again restores the sound before any audition).
+#[test]
+fn a_late_capture_does_not_land_on_a_newer_audition() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    while rx.try_recv().is_ok() {}
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    let token = capture_token(&rx.try_iter().collect::<Vec<_>>()).unwrap();
+    app.test_dismiss_overlay();
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let warm = row_index(&app, "warm");
+    ui(&mut app, PresetUiMessage::BrowserAudition(warm));
+    assert_eq!(capture_token(&rx.try_iter().collect::<Vec<_>>()), None, "no second capture");
+    captured(&mut app, token, MODEL_X);
+    assert!(
+        full_state_loads(&rx.try_iter().collect::<Vec<_>>()).is_empty(),
+        "the old revert does not land on the new audition"
+    );
+    app.test_dismiss_overlay();
+    assert_eq!(full_state_loads(&rx.try_iter().collect::<Vec<_>>()), vec![MODEL_X.to_vec()]);
 }
 
 /// Model X by hand, audition a preset (model Y), Esc: the plugin gets its

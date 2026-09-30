@@ -123,6 +123,14 @@ impl std::fmt::Display for PresetAddPick {
     }
 }
 
+/// See `PresetState::pending_after`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PendingAfter {
+    pub instance_id: PluginInstanceId,
+    pub slots: std::sync::Arc<std::sync::Mutex<Vec<crate::undo::snapshot::LateBlob>>>,
+    pub superseded: bool,
+}
+
 /// Track-preset and plugin-preset save/apply state.
 #[derive(Debug, Clone, Default)]
 pub struct PresetState {
@@ -186,6 +194,12 @@ pub struct PresetState {
     /// the capture into this instance when it does.
     pub(crate) revert_on_capture: std::collections::HashMap<u64, PluginInstanceId>,
     pub(crate) capture_seq: u64,
+    /// Captures whose "after" half (the state the load left) is still
+    /// owed, by token: the instance, the late slots of snapshots taken
+    /// before it arrived (shared behind a lock so `snapshot_for_undo(&self)`
+    /// can register one), and whether an undo / redo restore has run since
+    /// (then the arriving state is no longer the live one).
+    pub(crate) pending_after: std::collections::HashMap<u64, PendingAfter>,
     /// A preset to load onto a plugin that is being added, once its
     /// `PluginAdded` echo brings the param list: `(clap id, preset id,
     /// source)` by instance (a `preset` on `*.add_effect`, "with preset…"

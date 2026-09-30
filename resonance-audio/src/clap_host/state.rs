@@ -32,6 +32,20 @@ impl ClapInstance {
         capture_ostream(|stream| unsafe { save_fn(plugin, stream) })
     }
 
+    /// A handle to this instance's `clap.state.save`, for saving without
+    /// holding the instance's lock (review: a large state — user
+    /// wavetables — made the audio thread miss blocks while the engine
+    /// held the lock to save it). CLAP allows `state.save` (`[main-thread]`)
+    /// while `process` runs, so the lock is not what makes it legal.
+    pub fn state_save_handle(&self) -> Option<StateSaveHandle> {
+        let state_ext = self.state_ext?;
+        let save = unsafe { (*state_ext).save }?;
+        Some(StateSaveHandle {
+            plugin: self.plugin,
+            save,
+        })
+    }
+
     /// Load plugin state from a byte buffer via CLAP state extension.
     pub fn load_state(&mut self, data: &[u8]) -> bool {
         let Some(state_ext) = self.state_ext else {
@@ -333,4 +347,29 @@ pub(super) fn feed_istream(data: &[u8], call: impl FnOnce(*const clap_istream) -
     };
 
     call(&stream)
+}
+
+/// See [`ClapInstance::state_save_handle`].
+#[derive(Clone, Copy)]
+pub struct StateSaveHandle {
+    plugin: *const clap_sys::plugin::clap_plugin,
+    save: unsafe extern "C" fn(
+        *const clap_sys::plugin::clap_plugin,
+        *const clap_sys::stream::clap_ostream,
+    ) -> bool,
+}
+
+impl StateSaveHandle {
+    /// Save the plugin's full state.
+    ///
+    /// # Safety
+    /// On the engine (CLAP main) thread, while the instance the handle
+    /// came from is alive — the engine thread is the only one that
+    /// destroys instances, so a handler holding it within one command is
+    /// safe.
+    pub unsafe fn save(&self) -> Option<Vec<u8>> {
+        let (plugin, save) = (self.plugin, self.save);
+        // SAFETY: the caller's contract.
+        capture_ostream(|stream| unsafe { save(plugin, stream) })
+    }
 }

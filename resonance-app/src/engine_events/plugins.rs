@@ -783,8 +783,30 @@ pub(super) fn state_captured(
     instance_id: PluginInstanceId,
     token: u64,
     data: Vec<u8>,
+    after: bool,
 ) {
     let blob: std::sync::Arc<[u8]> = data.into();
+    if after {
+        // The state the load left: the live cache (a fresh `Arc`, so an
+        // undo pushes its own blob over it) and the redo snapshots taken
+        // while it was owed.
+        let mut superseded = false;
+        if let Some(owed) = r.presets.pending_after.remove(&token) {
+            // An undo / redo since the load: the live state is no longer
+            // this one; it only fills the snapshots waiting on it.
+            superseded = owed.superseded;
+            let slots = owed.slots.lock().map(|s| s.clone()).unwrap_or_default();
+            for late in slots {
+                if let Ok(mut slot) = late.lock() {
+                    *slot = Some(blob.clone());
+                }
+            }
+        }
+        if !superseded && r.plugin_slot(instance_id).is_some() {
+            r.plugin_mirror.state_cache.insert(instance_id, blob);
+        }
+        return;
+    }
     for late in r.presets.pending_captures.remove(&token).unwrap_or_default() {
         if let Ok(mut slot) = late.lock() {
             *slot = Some(blob.clone());

@@ -266,13 +266,21 @@ mod handlers {
             capture: Some(42),
         });
         let events = h.drain_events();
-        let captured = events.iter().find_map(|e| match e {
-            AudioEvent::PluginStateCaptured { instance_id: GATE, token: 42, data } => Some(data),
-            _ => None,
-        });
-        let before: serde_json::Value =
-            serde_json::from_slice(captured.expect("a capture")).unwrap();
+        let half = |after: bool| {
+            events.iter().find_map(|e| match e {
+                AudioEvent::PluginStateCaptured {
+                    instance_id: GATE,
+                    token: 42,
+                    data,
+                    after: a,
+                } if *a == after => Some(serde_json::from_slice::<serde_json::Value>(data).unwrap()),
+                _ => None,
+            })
+        };
+        let before = half(false).expect("the state before the load");
         assert_ne!(before["params"]["threshold"].as_f64(), Some(-21.0), "captured before");
+        let after = half(true).expect("and the state the load left (for redo)");
+        assert!((after["params"]["threshold"].as_f64().unwrap() + 21.0).abs() < 1e-6);
         assert_eq!(threshold(&events), Some(-21.0));
         h.poll_plugin_host_requests();
         assert_eq!(threshold(&h.drain_events()), Some(-21.0), "and after the next block");

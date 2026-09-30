@@ -883,23 +883,74 @@ pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: Plu
     }
 }
 
-/// Save the full state for `capture` (an undo entry, an audition's
-/// origin) before a preset load replaces it.
-fn capture_state(
+/// A capture token whose "before" state was already sent (a load retried
+/// after the lock was busy): only the "after" state is still owed.
+const CAPTURE_AFTER_ONLY: u64 = 1 << 63;
+
+/// Save and send the full state for `token`, without holding the
+/// instance's lock (a user-wavetable state is megabytes of base64; holding
+/// the lock through it made the audio thread skip the plugin's blocks).
+fn capture_unlocked(
     ctx: &HandlerCtx,
-    inst: &crate::clap_host::ClapInstance,
+    mutex: &parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
     instance_id: PluginInstanceId,
-    capture: Option<u64>,
-) {
-    let Some(token) = capture else {
-        return;
+    token: u64,
+    after: bool,
+) -> bool {
+    let Some(handle) = mutex.try_lock().map(|inst| inst.0.state_save_handle()) else {
+        return false;
     };
-    if let Some(data) = inst.save_state() {
+    // SAFETY: engine thread; the instance stays in `ctx.plugins()` for the
+    // whole command (only the engine thread removes one).
+    if let Some(data) = handle.and_then(|h| unsafe { h.save() }) {
         let _ = ctx.event_tx.send(AudioEvent::PluginStateCaptured {
             instance_id,
             token,
             data,
+            after,
         });
+    }
+    true
+}
+
+/// The "before" half of a capture; returns the token still owing its
+/// "after" half, or `Err(())` when the lock was busy (retry the command).
+fn capture_before(
+    ctx: &HandlerCtx,
+    mutex: &parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
+    instance_id: PluginInstanceId,
+    capture: Option<u64>,
+) -> Result<Option<u64>, ()> {
+    match capture {
+        None => Ok(None),
+        Some(t) if t & CAPTURE_AFTER_ONLY != 0 => Ok(Some(t & !CAPTURE_AFTER_ONLY)),
+        Some(t) => {
+            if capture_unlocked(ctx, mutex, instance_id, t, false) {
+                Ok(Some(t))
+            } else {
+                Err(())
+            }
+        }
+    }
+}
+
+/// The "after" half, once the load is done (best effort: a busy lock
+/// retries it a few times, then gives up — redo then falls back to the
+/// cached state).
+fn capture_after(
+    ctx: &HandlerCtx,
+    mutex: &parking_lot::Mutex<crate::clap_host::SyncClapInstance>,
+    instance_id: PluginInstanceId,
+    token: Option<u64>,
+) {
+    let Some(token) = token else {
+        return;
+    };
+    for _ in 0..8 {
+        if capture_unlocked(ctx, mutex, instance_id, token, true) {
+            return;
+        }
+        std::thread::yield_now();
     }
 }
 
@@ -925,8 +976,15 @@ pub(crate) fn handle_load_plugin_preset_state(
     capture: Option<u64>,
 ) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        let Ok(after) = capture_before(ctx, mutex, instance_id, capture) else {
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
+            return;
+        };
         if let Some(mut inst) = mutex.try_lock() {
-            capture_state(ctx, &inst.0, instance_id, capture);
             // A plugin with state-context lays the preset over its state
             // with no reactivation; any other takes it as a full state,
             // through the same reload (and failure messages) a project
@@ -952,11 +1010,13 @@ pub(crate) fn handle_load_plugin_preset_state(
             if loaded {
                 refresh_params(ctx, &mut inst.0, instance_id);
             }
+            drop(inst);
+            capture_after(ctx, mutex, instance_id, after);
         } else {
             let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetState {
                 instance_id,
                 data,
-                capture,
+                capture: after.map(|t| t | CAPTURE_AFTER_ONLY),
             });
         }
     }
@@ -986,8 +1046,16 @@ pub(crate) fn handle_load_plugin_preset_from_location(
     capture: Option<u64>,
 ) {
     if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        let Ok(after) = capture_before(ctx, mutex, instance_id, capture) else {
+            let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetFromLocation {
+                instance_id,
+                location,
+                load_key,
+                capture,
+            });
+            return;
+        };
         if let Some(mut inst) = mutex.try_lock() {
-            capture_state(ctx, &inst.0, instance_id, capture);
             if inst.0.load_preset_from_location(&location, load_key.as_deref()) {
                 refresh_params(ctx, &mut inst.0, instance_id);
             } else {
@@ -1000,12 +1068,14 @@ pub(crate) fn handle_load_plugin_preset_from_location(
                      for{detail}"
                 ))));
             }
+            drop(inst);
+            capture_after(ctx, mutex, instance_id, after);
         } else {
             let _ = ctx.cmd_tx_retry.send(AudioCommand::LoadPluginPresetFromLocation {
                 instance_id,
                 location,
                 load_key,
-                capture,
+                capture: after.map(|t| t | CAPTURE_AFTER_ONLY),
             });
         }
     }

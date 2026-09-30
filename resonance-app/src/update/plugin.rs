@@ -256,6 +256,7 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
             },
         );
         let capture = take_capture(r, instance_id);
+        owe_after(r, instance_id, capture);
         let _ = r.engine.send(AudioCommand::LoadPluginPresetFromLocation {
             instance_id,
             location,
@@ -328,12 +329,31 @@ pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
             entry.2 = std::time::Instant::now();
         } else {
             r.presets.pending_step_state.remove(&instance_id);
+            owe_after(r, instance_id, capture);
             let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
                 instance_id,
                 data,
                 capture,
             });
         }
+    }
+}
+
+/// A load with a capture is owed its "after" state (see
+/// `PresetState::pending_after`).
+fn owe_after(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+    capture: Option<u64>,
+) {
+    if let Some(token) = capture {
+        r.presets.pending_after.insert(
+            token,
+            crate::state::presets::PendingAfter {
+                instance_id,
+                ..Default::default()
+            },
+        );
     }
 }
 
@@ -353,6 +373,7 @@ pub(crate) fn flush_step_state(r: &mut Resonance, force: bool) {
         .collect();
     for instance_id in due {
         if let Some((data, capture, _)) = r.presets.pending_step_state.remove(&instance_id) {
+            owe_after(r, instance_id, capture);
             let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
                 instance_id,
                 data,
