@@ -117,6 +117,10 @@ pub struct ClapShared<'a> {
     /// `request_callback` (thread-safe per CLAP); taken in
     /// `on_main_thread`, which runs the comparison.
     pub(crate) preset_compare_due: AtomicBool,
+    /// Per slot: the host automates this param (`set_ignored_params`), so
+    /// its events never trigger a compare — a playing lane would otherwise
+    /// ask for one every block.
+    pub(crate) param_preset_ignored: Vec<AtomicBool>,
 }
 
 impl<'a> ClapShared<'a> {
@@ -128,7 +132,14 @@ impl<'a> ClapShared<'a> {
     /// that keeps the preset-modified flag honest. Realtime-safe (one
     /// atomic swap; the callback request is an atomic store in any sane
     /// host, and is only made once per compare).
-    pub(crate) fn note_host_param_change(&self) {
+    pub(crate) fn note_host_param_change(&self, slot: usize) {
+        if self
+            .param_preset_ignored
+            .get(slot)
+            .is_some_and(|f| f.load(Ordering::Relaxed))
+        {
+            return;
+        }
         if !self.preset_compare_due.swap(true, Ordering::AcqRel) {
             self.host.request_callback();
         }
@@ -278,6 +289,9 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// The last identity report sent to the host
     /// (`com.resonance.preset-session`), for deduplication.
     pub(crate) last_preset_report: Option<String>,
+    /// When the main-thread modified comparison last ran; it runs at most
+    /// once per `MODIFIED_COMPARE_INTERVAL`.
+    pub(crate) last_preset_compare: Option<std::time::Instant>,
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {
@@ -305,7 +319,15 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
             }
         }
         if self.shared.preset_compare_due.swap(false, Ordering::AcqRel) {
-            self.compare_preset_sound();
+            let interval = crate::presets::MODIFIED_COMPARE_INTERVAL;
+            if self.last_preset_compare.is_some_and(|t| t.elapsed() < interval) {
+                // Too soon: stay armed, and come back at a later callback.
+                self.shared.preset_compare_due.store(true, Ordering::Release);
+                self.host_handle.request_callback();
+            } else {
+                self.last_preset_compare = Some(std::time::Instant::now());
+                self.compare_preset_sound();
+            }
         }
         if self.host_handle.take_preset_dirty() {
             self.report_preset_identity();

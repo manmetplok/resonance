@@ -50,6 +50,8 @@ pub struct PresetSession {
     ignored: Mutex<Vec<u32>>,
     notifier: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     last_compare: Mutex<Option<std::time::Instant>>,
+    /// The extra-state hash and the inner saver's revision it was taken at.
+    extra_cache: Mutex<Option<(u64, Option<u64>)>>,
 }
 
 /// What the loaded preset sounded like.
@@ -85,6 +87,7 @@ impl Default for PresetSession {
             ignored: Mutex::new(Vec::new()),
             notifier: Mutex::new(None),
             last_compare: Mutex::new(None),
+            extra_cache: Mutex::new(None),
         }
     }
 }
@@ -198,28 +201,47 @@ impl PresetSession {
         }
     }
 
+    /// The hash of the inner saver's compare state, reused while its
+    /// revision stands still (a large user-wavetable state is serialised
+    /// once per change, not once per compare).
     fn extra_hash(&self) -> Option<u64> {
-        let map = self.save_for_preset();
-        (!map.is_empty()).then(|| hash_extra(&map))
+        let inner = self.inner.as_ref()?;
+        let revision = inner.revision();
+        if let (Some(rev), Some((cached_rev, hash))) = (revision, *self.extra_cache.lock()) {
+            if rev == cached_rev {
+                return hash;
+            }
+        }
+        let map = inner.preset_compare_state();
+        let hash = (!map.is_empty()).then(|| hash_extra(&map));
+        if let Some(rev) = revision {
+            *self.extra_cache.lock() = Some((rev, hash));
+        }
+        hash
+    }
+
+    fn param_differs(baseline: &Baseline, ignored: &[u32], p: &dyn Param) -> bool {
+        if p.preset_excluded() || ignored.contains(&p.clap_id()) {
+            return false;
+        }
+        let span = (p.max_plain() - p.min_plain()).abs().max(1e-12);
+        baseline
+            .values
+            .get(p.id())
+            .is_some_and(|b| (p.get_plain() - b).abs() / span > 1e-6)
     }
 
     /// The params (by display name) that differ from the loaded preset,
     /// ignoring params the host automates and ones presets leave out;
     /// `None` when there is no baseline to compare with.
     pub fn changed_params(&self, params: &[&dyn Param]) -> Option<Vec<String>> {
-        let baseline = self.baseline.lock().clone()?;
-        let ignored = self.ignored.lock().clone();
+        let baseline = self.baseline.lock();
+        let baseline = baseline.as_ref()?;
+        let ignored = self.ignored.lock();
         Some(
             params
                 .iter()
-                .filter(|p| !p.preset_excluded() && !ignored.contains(&p.clap_id()))
-                .filter(|p| {
-                    let span = (p.max_plain() - p.min_plain()).abs().max(1e-12);
-                    baseline
-                        .values
-                        .get(p.id())
-                        .is_some_and(|b| (p.get_plain() - b).abs() / span > 1e-6)
-                })
+                .filter(|p| Self::param_differs(baseline, &ignored, **p))
                 .map(|p| p.name().to_string())
                 .collect(),
         )
@@ -245,14 +267,20 @@ impl PresetSession {
     /// The comparison [`refresh_modified`](Self::refresh_modified) runs,
     /// unthrottled. Returns the flag.
     pub fn compare_modified(&self, params: &[&dyn Param]) -> bool {
-        let Some(changed) = self.changed_params(params) else {
-            return self.is_modified();
+        let modified = {
+            let baseline = self.baseline.lock();
+            let Some(baseline) = baseline.as_ref() else {
+                drop(baseline);
+                return self.is_modified();
+            };
+            let ignored = self.ignored.lock();
+            // A param that moved settles it: no need to touch the extra
+            // state at all.
+            params
+                .iter()
+                .any(|p| Self::param_differs(baseline, &ignored, *p))
+                || baseline.extra_hash != self.extra_hash()
         };
-        let extra_changed = {
-            let baseline = self.baseline.lock().clone();
-            baseline.is_some_and(|b| b.extra_hash != self.extra_hash())
-        };
-        let modified = !changed.is_empty() || extra_changed;
         self.set_modified(modified);
         modified
     }

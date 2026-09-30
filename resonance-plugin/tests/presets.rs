@@ -1573,3 +1573,68 @@ fn identity_changes_are_announced_and_reported() {
     .unwrap();
     assert!(report.modified);
 }
+
+// ---------------------------------------------------------------------------
+// The comparison's cost (review M2)
+// ---------------------------------------------------------------------------
+
+/// A saver with a (pretend) large state that counts how often it is
+/// serialised for the comparison.
+struct Heavy {
+    revision: AtomicU32,
+    serialised: AtomicU32,
+}
+
+impl ExtraStateSaver for Heavy {
+    fn save(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("tables".into(), serde_json::json!(self.revision.load(Ordering::Relaxed)));
+        m
+    }
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["tables"]
+    }
+    fn preset_compare_state(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.serialised.fetch_add(1, Ordering::Relaxed);
+        self.save_for_preset()
+    }
+    fn revision(&self) -> Option<u64> {
+        Some(self.revision.load(Ordering::Relaxed) as u64)
+    }
+    fn load(&self, _state: &serde_json::Value) {}
+}
+
+/// The extra state is serialised once per revision, not once per compare,
+/// and not at all when a param already differs.
+#[test]
+fn the_comparison_reuses_the_extra_hash_until_the_state_changes() {
+    let root = TempRoot::new("heavy");
+    let bank = root.bank();
+    let heavy = Arc::new(Heavy {
+        revision: AtomicU32::new(1),
+        serialised: AtomicU32::new(0),
+    });
+    let session = PresetSession::with_extra(heavy.clone());
+    let params = TestParams::new();
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    let after_load = heavy.serialised.load(Ordering::Relaxed);
+
+    for _ in 0..5 {
+        assert!(!session.compare_modified(&params.refs()));
+    }
+    assert_eq!(heavy.serialised.load(Ordering::Relaxed), after_load, "cached");
+
+    heavy.revision.store(2, Ordering::Relaxed);
+    assert!(session.compare_modified(&params.refs()), "the state changed");
+    assert_eq!(heavy.serialised.load(Ordering::Relaxed), after_load + 1);
+
+    heavy.revision.store(1, Ordering::Relaxed);
+    params.mix.set_plain(0.1);
+    let before = heavy.serialised.load(Ordering::Relaxed);
+    assert!(session.compare_modified(&params.refs()));
+    assert_eq!(
+        heavy.serialised.load(Ordering::Relaxed),
+        before,
+        "a moved param settles it without touching the extra state"
+    );
+}

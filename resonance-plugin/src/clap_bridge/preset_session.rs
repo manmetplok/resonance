@@ -79,6 +79,14 @@ unsafe extern "C" fn set_ignored_params<P: ResonancePlugin>(
         let text = unsafe { CStr::from_ptr(json) }.to_string_lossy();
         let ids = resonance_common::preset_session::parse_ignored_params(&text);
         let main = plugin.main_thread().as_mut();
+        for (slot, flag) in main.shared.param_preset_ignored.iter().enumerate() {
+            let ignored = main
+                .shared
+                .param_metas
+                .get(slot)
+                .is_some_and(|m| ids.contains(&m.clap_id));
+            flag.store(ignored, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(saver) = &main.extra_state_saver {
             saver.set_ignored_params(ids);
         }

@@ -225,6 +225,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             params_dirty: AtomicBool::new(false),
             params_gen: AtomicU64::new(0),
             preset_compare_due: AtomicBool::new(false),
+            param_preset_ignored: (0..count).map(|_| AtomicBool::new(false)).collect(),
         })
     }
 
@@ -270,6 +271,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             extra_state_saver,
             param_text_source,
             last_preset_report: None,
+            last_preset_compare: None,
         })
     }
 }

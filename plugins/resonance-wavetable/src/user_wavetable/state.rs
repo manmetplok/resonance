@@ -98,6 +98,12 @@ impl resonance_plugin::plugin::ExtraStateSaver for UserWavetables {
         &[STATE_KEY]
     }
 
+    /// The frames are megabytes of base64: the preset comparison hashes
+    /// them once per change, keyed on this.
+    fn revision(&self) -> Option<u64> {
+        Some(UserWavetables::revision(self))
+    }
+
     fn load(&self, state: &Value) {
         let slots = state.get(STATE_KEY);
         for osc in 0..NUM_OSCS {

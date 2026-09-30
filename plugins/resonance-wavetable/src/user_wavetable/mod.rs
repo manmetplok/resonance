@@ -84,6 +84,10 @@ pub struct UserWavetables {
     /// finishes after a newer one was requested is discarded, so two quick
     /// "Load…"s can't land out of order.
     requests: [AtomicU64; NUM_OSCS],
+    /// Bumped whenever a slot's content may have changed (a request, a
+    /// finished load, a clear): the state saver's revision, so a preset
+    /// comparison re-serialises the (large) frames only after a change.
+    revision: AtomicU64,
 }
 
 /// A finished import: everything [`UserWavetables::finish`] installs.
@@ -100,6 +104,7 @@ impl UserWavetables {
             slots: Default::default(),
             mailboxes: Default::default(),
             requests: Default::default(),
+            revision: AtomicU64::new(0),
         }
     }
 
@@ -184,7 +189,13 @@ impl UserWavetables {
     }
 
     fn begin(&self, osc: usize) -> u64 {
+        self.revision.fetch_add(1, Ordering::AcqRel);
         self.requests[osc].fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    /// See the `revision` field.
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
     }
 
     /// Publish a finished load — unless a newer request superseded it.
@@ -202,6 +213,7 @@ impl UserWavetables {
         if self.requests[osc].load(Ordering::Acquire) != generation {
             return Err("superseded by a newer load".to_string());
         }
+        self.revision.fetch_add(1, Ordering::AcqRel);
         match built {
             Ok(b) => {
                 *slot = UserSlotInfo {

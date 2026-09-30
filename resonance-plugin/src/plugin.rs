@@ -72,6 +72,23 @@ pub trait ExtraStateSaver: Send + Sync {
     /// thread after host param changes, when no editor frame is running
     /// the comparison.
     fn compare_preset_modified(&self, _params: &[&dyn crate::param::Param]) {}
+
+    /// A counter that changes whenever the sound-bearing extra state does
+    /// (a load, an edit), so the modified comparison can reuse its hash of
+    /// [`preset_compare_state`](Self::preset_compare_state) instead of
+    /// re-serialising it. `None` (the default) re-hashes on every compare,
+    /// which is fine for a few small keys; a saver with a large state (user
+    /// wavetables) implements it.
+    fn revision(&self) -> Option<u64> {
+        None
+    }
+
+    /// What the modified comparison hashes: by default the preset form of
+    /// the extra state. A saver whose preset form carries display-only
+    /// fields (a model's name next to its id) narrows it to the identity.
+    fn preset_compare_state(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.save_for_preset()
+    }
 }
 
 /// Parameter text conversion that works while the plugin object is inside

@@ -170,18 +170,43 @@ fn the_plugin_reports_its_preset_and_whether_it_was_edited() {
         })
     };
 
+    let interval = std::time::Duration::from_millis(120);
     instance.set_param(threshold.id, loaded - 6.0);
     assert_eq!(last_modified(&mut instance), Some(true), "a host edit is an edit");
-    instance.set_param(threshold.id, loaded);
-    assert_eq!(last_modified(&mut instance), Some(false), "and back is not");
 
+    // The comparison is throttled: moving back within the interval defers
+    // it (still armed, a callback still requested) rather than dropping it.
+    instance.set_param(threshold.id, loaded);
+    assert_eq!(last_modified(&mut instance), None, "deferred");
+    assert!(instance.has_requested_callback(), "and re-armed");
+    std::thread::sleep(interval);
+    instance.run_requested_callback();
+    let back = instance.take_preset_reports().into_iter().rev().find_map(|r| match r {
+        R::Identity(Some(i)) => Some(i.modified),
+        _ => None,
+    });
+    assert_eq!(back, Some(false), "and back is not an edit");
+
+    // An automated param's events do not even ask for a comparison: a
+    // playing lane on a large-state plugin must cost nothing.
     assert!(instance.set_preset_ignored_params(&[threshold.id]));
+    std::thread::sleep(interval);
+    instance.run_requested_callback();
+    let _ = instance.take_preset_reports();
     instance.set_param(threshold.id, loaded - 6.0);
-    assert_eq!(
-        last_modified(&mut instance),
-        None,
-        "an automated param moving is not an edit: nothing changed to report"
+    assert!(instance.flush_pending_params());
+    assert!(
+        !instance.has_requested_callback(),
+        "an ignored param triggers no compare"
     );
+    let ratio = instance
+        .query_params()
+        .into_iter()
+        .find(|p| p.id != threshold.id && p.max_value > p.min_value)
+        .expect("another param");
+    instance.set_param(ratio.id, ratio.max_value);
+    assert!(instance.flush_pending_params());
+    assert!(instance.has_requested_callback(), "any other param does");
     drop(instance);
     drop(bundle);
 }

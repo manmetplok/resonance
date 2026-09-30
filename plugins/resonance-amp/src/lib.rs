@@ -383,6 +383,14 @@ impl resonance_plugin::plugin::ExtraStateSaver for AmpExtraState {
         map
     }
 
+    /// The model is the sound, and its content id says which: a name or a
+    /// source changing (a rename in the library, a relink) is not an edit.
+    fn preset_compare_state(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = self.save_for_preset();
+        map.retain(|k, _| k == "model_id");
+        map
+    }
+
     fn load(&self, state: &serde_json::Value) {
         // A v1 document carries only `model_path`; the other keys are
         // optional. A document with no `model_path` at all leaves the
