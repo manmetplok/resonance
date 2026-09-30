@@ -272,6 +272,25 @@ impl PresetLibrary {
         merged
     }
 
+    /// [`record`](Self::record) without touching the disk: looks only at
+    /// what is already in memory, the registered factory bank plus the
+    /// user index **if** something (an editor's bar, a browser, an
+    /// explicit list) has already opened this plugin's directory in this
+    /// process. Never opens a directory, never converts, never writes.
+    /// State load resolves through this, so loading a project, and every
+    /// plugin state test, stays off the user's preset directory.
+    pub fn peek_record(&self, plugin_id: &str, preset: &PresetRef) -> Option<PresetRecord> {
+        let plugins = self.plugins.lock();
+        let index = plugins.get(plugin_id)?;
+        let dir = self.plugin_dir(plugin_id);
+        let users: &[PresetRecord] = match &index.user {
+            Some(u) if u.opened && Some(&u.dir) == dir.as_ref() => &u.records,
+            _ => &[],
+        };
+        let from_factory = find_record(&index.factory.records, preset);
+        from_factory.or_else(|| find_record(users, preset)).cloned()
+    }
+
     /// Force a re-read of `plugin_id`'s user directory.
     pub fn refresh(&self, plugin_id: &str) {
         let mut plugins = self.plugins.lock();

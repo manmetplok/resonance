@@ -152,6 +152,14 @@ impl PresetBank {
         self.record(preset).map(|r| r.preset)
     }
 
+    /// [`resolve`](Self::resolve) from memory only; see
+    /// [`PresetLibrary::peek_record`]. Never touches the disk.
+    pub fn resolve_in_memory(&self, preset: &PresetRef) -> Option<PresetRef> {
+        self.library
+            .peek_record(&self.plugin_id, preset)
+            .map(|r| r.preset)
+    }
+
     /// [`resolve`](Self::resolve) against the index as last read, checking
     /// the directory at most once per `max_age` (for per-frame callers).
     pub fn resolve_cached(&self, preset: &PresetRef, max_age: Duration) -> Option<PresetRef> {

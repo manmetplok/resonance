@@ -697,6 +697,51 @@ fn a_name_only_identity_resolves_at_state_load() {
     assert_eq!(session.current().map(|c| c.is_resolved()), Some(false));
 }
 
+/// Resolving at state load is read-only and never opens a directory the
+/// process has not indexed yet: a plugin's `load_state` under plain
+/// `cargo test` (or a project open) must not read, convert or write the
+/// preset root. A factory identity still resolves, from memory.
+#[test]
+fn a_state_load_with_a_name_only_identity_writes_nothing() {
+    let root = TempRoot::new("load-hermetic");
+    let dir = root.0.join("com.resonance.test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let legacy = dir.join("Legacy.json");
+    std::fs::write(&legacy, r#"{"params":{"mix":0.8},"name":"Legacy"}"#).unwrap();
+    let before = json_files(&dir);
+
+    // A private library, so no other test can have opened this root.
+    let library =
+        Arc::new(resonance_plugin::presets::PresetLibrary::new().with_root(root.0.clone()));
+    let lib = library.clone();
+    let session = PresetSession::resolving(
+        Some(Box::new(move || {
+            PresetBank::new("com.resonance.test", FACTORY).with_library(lib.clone())
+        })),
+        None,
+    );
+    session.load(&serde_json::json!({
+        "params": {},
+        "preset": {"name": "Legacy", "source": "user", "modified": false},
+    }));
+    assert!(!session.current().unwrap().is_resolved(), "left for the bar");
+    let after: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(after, vec!["Legacy.json".to_string()], "nothing converted or written");
+    assert_eq!(json_files(&dir), before);
+    assert!(!root.0.join(".trash").exists());
+
+    session.load(&serde_json::json!({
+        "params": {},
+        "preset": {"name": "Wide", "source": "factory"},
+    }));
+    assert_eq!(session.current().unwrap().id, "wide", "factory resolves from memory");
+    assert_eq!(json_files(&dir), before);
+}
+
 /// Review fix 3: the bar calls `resolve` every frame, so it reads the
 /// cached index and never the directory within `BAR_REFRESH`.
 #[test]

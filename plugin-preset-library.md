@@ -1145,9 +1145,12 @@ round 2 reconciles it)
   case-insensitive comparison for name-only refs.
 - Every plugin builds its session with `PresetSession::for_plugin::<P>()`
   (or `for_plugin_with_extra`), which resolves a name-only project
-  identity **at state load** (§13). The bar's per-frame `resolve` reads
-  the cached index only (`BAR_REFRESH`). Because a load may now read the
-  user preset directory, `scripts/run-tests.py` points
+  identity **at state load** (§13), read-only and from memory: the
+  factory bank, plus the user index only if an editor, bar or explicit
+  list has already opened that directory in the process. A load never
+  opens a directory, converts or writes; an unresolved user identity is
+  left for the bar, whose per-frame `resolve` reads the cached index
+  (`BAR_REFRESH`). `scripts/run-tests.py` also points
   `RESONANCE_PLUGIN_PRESET_DIR` at a private temp root unless one is set.
 - "Save as…" onto an existing user preset's name keeps that preset's meta
   and lineage; the loaded preset's meta only seeds a *new* preset.

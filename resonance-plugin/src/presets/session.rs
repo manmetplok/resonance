@@ -28,9 +28,10 @@ use crate::plugin::ExtraStateSaver;
 /// The identity is persisted as `"preset": {id, name, source, modified}`.
 /// A project written before preset ids existed carries `{name, source}`
 /// only. A session built with [`for_plugin`](Self::for_plugin) (every
-/// plugin's) resolves that to an id by name **at state load** (§13), so
-/// the next save writes the new shape; a session without a bank keeps it
-/// unresolved until [`resolve`](Self::resolve) is called.
+/// plugin's) resolves that to an id by name **at state load** (§13) from
+/// what is already in memory (the factory bank, and the user index if an
+/// editor has opened it), never from the disk; otherwise it stays
+/// unresolved until [`resolve`](Self::resolve), which the bar calls.
 ///
 /// Thread-safety: the bridge may call `save`/`load` while the plugin is
 /// in the audio processor, so state lives behind a mutex and an atomic,
@@ -143,12 +144,15 @@ impl PresetSession {
         self.adopt(&current, found);
     }
 
-    /// Resolve against the directory as it is now (state load).
-    fn resolve_now(&self, bank: &PresetBank) {
+    /// Resolve at state load: from memory only, never the disk. If no
+    /// editor or bar has opened this plugin's preset directory yet, a
+    /// name-only user identity stays unresolved and the bar resolves it
+    /// when it first draws.
+    fn resolve_on_load(&self, bank: &PresetBank) {
         let Some(current) = self.current().filter(|c| !c.is_resolved()) else {
             return;
         };
-        let found = bank.resolve(&current);
+        let found = bank.resolve_in_memory(&current);
         self.adopt(&current, found);
     }
 
@@ -296,7 +300,7 @@ impl ExtraStateSaver for PresetSession {
         });
         self.modified.store(modified, Ordering::Relaxed);
         if let Some(make_bank) = &self.bank {
-            self.resolve_now(&make_bank());
+            self.resolve_on_load(&make_bank());
         }
     }
 }
