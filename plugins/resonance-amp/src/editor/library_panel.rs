@@ -8,7 +8,8 @@
 //! │ …                                                                               │
 //! │ Friedman BE-100 · standard                                                      │
 //! │ by J. Smith · Tone3000 tone #1934 · A2 WaveNet · 48 kHz · ESR 0.0041 · added …  │
-//! │ [Load]  [Reveal]                                                                │
+//! │ tags: (rhythm ×) (djent ×) [+ tag]         used in 2 open amps                  │
+//! │ [Load]  [Reveal]  [Re-download]  [Delete…]                                      │
 //! │ [Import .nam…]  [Rescan]                                    status / last error │
 //! └─────────────────────────────────────────────────────────────────────────────────┘
 //! ```
@@ -18,8 +19,8 @@
 
 use plugin_gui_core::egui;
 use plugin_gui_core::widgets::{chip_button, segmented};
-use resonance_common::nam_library::{EntryStatus, ImportOutcome, Source};
-use resonance_plugin::library_ui::{self, ColumnSpec, ListOptions};
+use resonance_common::nam_library::{Entry, EntryStatus, ImportOutcome, Source};
+use resonance_plugin::library_ui::{self, ColumnSpec, ConfirmOutcome, ListOptions};
 use resonance_plugin::library_view::Sort;
 
 use super::{actions, theme, tone3000_panel, AmpEditorApp};
@@ -199,7 +200,7 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
     ui.add_space(4.0);
     app.refresh_rows();
 
-    let detail_h = 118.0;
+    let detail_h = 150.0;
     let footer_h = 28.0;
     let list_h = (ui.available_height() - detail_h - footer_h - 12.0).max(80.0);
     let loaded_key = app
@@ -327,9 +328,61 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut AmpEditorApp, height: f32) {
                         app.browser.set_error(format!("could not open the file manager: {e}"));
                     }
                 }
+                if let Source::Tone3000 { tone_id, model_id } = entry.source {
+                    if actions::tone3000_connected(app) {
+                        if ui.button("Re-download").clicked() {
+                            actions::redownload(app, tone_id, model_id, Some(entry.name.clone()));
+                            app.browser.set_info(format!("re-downloading \"{}\"…", entry.name));
+                        }
+                    } else if ui.button("Connect… to re-download").clicked() {
+                        app.tone3000.send(crate::tone3000::worker::Command::Authenticate);
+                    }
+                }
+                let key = app.rows.rows[row].key.clone();
+                if app.browser.pending_delete() != Some(key.as_str())
+                    && ui.button("Delete…").clicked()
+                {
+                    app.browser.begin_delete(key);
+                }
             });
+            draw_delete_confirm(ui, app, &entry);
         });
     });
+}
+
+/// The confirm-in-place line of §7.1: "Delete "<name>" (4.1 MB)? [Delete]
+/// [Cancel]", saying who is still using it and what happens to projects.
+fn draw_delete_confirm(ui: &mut egui::Ui, app: &mut AmpEditorApp, entry: &Entry) {
+    let used = app.usage_count(&entry.id);
+    let mut detail = String::from("Projects that use it will show it as missing.");
+    if used > 0 {
+        detail = format!(
+            "Used by {used} open amp{} — they keep playing until reloaded. {detail}",
+            if used == 1 { "" } else { "s" }
+        );
+    }
+    let prompt = format!("Delete \"{}\" ({})?", entry.name, format_size(entry.size_bytes));
+    if let ConfirmOutcome::Confirmed(_) =
+        library_ui::confirm_delete_row(ui, &mut app.browser, &prompt, Some(&detail))
+    {
+        match delete_entry(app, entry) {
+            Ok(()) => app.browser.set_info(format!("deleted \"{}\"", entry.name)),
+            Err(e) => app.browser.set_error(e),
+        }
+    }
+}
+
+/// Delete the file and its sidecar (a real delete, D4). Its slot is freed
+/// under the no-reuse rule; its marks are kept for the orphan window, so a
+/// re-download or re-import keeps the star and tags.
+pub(crate) fn delete_entry(app: &mut AmpEditorApp, entry: &Entry) -> Result<(), String> {
+    app.params
+        .library
+        .mutate(|lib| lib.delete(&entry.path))
+        .map(|_| ())
+        .map_err(|e| e.to_string())?;
+    app.refresh_rows();
+    Ok(())
 }
 
 /// "by J. Smith · Tone3000 tone #1934 · WaveNet A2 · 48 kHz · ESR 0.0041 · added 2026-09-12"

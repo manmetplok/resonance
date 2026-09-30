@@ -136,7 +136,17 @@ fn loader_loop(deps: LoaderDeps, stop: Arc<AtomicBool>) {
         // means "no model" (§5.1): nothing is loaded, and — unlike the old
         // directory index — nothing is clamped onto the last entry, and
         // what is playing keeps playing.
-        let entry = deps.params.library.read().by_slot(slot as u32).cloned();
+        let mut entry = deps.params.library.read().by_slot(slot as u32).cloned();
+        if entry.as_ref().is_none_or(|e| !e.path.is_file()) {
+            // With no editor open nothing polls the library, so a request
+            // for a slot this process has not seen filled (another process
+            // downloaded into it), or whose file went away, refreshes it
+            // first.
+            if let Err(e) = deps.params.library.rescan() {
+                tracing::warn!("model library rescan failed: {e}");
+            }
+            entry = deps.params.library.read().by_slot(slot as u32).cloned();
+        }
         let Some(entry) = entry else {
             deps.params.status.lock().state = ModelState::EmptySlot(slot as u32);
             continue;

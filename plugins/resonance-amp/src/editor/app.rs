@@ -7,6 +7,8 @@
 use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use plugin_gui_core::{egui, EditorApp};
 
 use crate::params::AmpParams;
@@ -49,6 +51,14 @@ pub(crate) struct AmpEditorApp {
     pub(crate) tag_draft: String,
     /// Change detection for other processes' marks writes.
     pub(crate) marks_poll: FreshnessPoll,
+    /// Change detection for the library folders and index (files added or
+    /// deleted in a file manager, another process's rescan).
+    pub(crate) library_poll: FreshnessPoll,
+    /// The background rescan, if one is running. Joined before the editor
+    /// goes away, so no thread outlives the plugin image.
+    pub(crate) rescan_thread: Option<std::thread::JoinHandle<()>>,
+    /// Set by a finished re-download whose bytes differ from the saved id.
+    pub(crate) redownload_notice: Arc<Mutex<Option<String>>>,
 }
 
 impl AmpEditorApp {
@@ -78,6 +88,9 @@ impl AmpEditorApp {
             rows: ModelRows::default(),
             tag_draft: String::new(),
             marks_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
+            library_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
+            rescan_thread: None,
+            redownload_notice: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -113,8 +126,45 @@ impl AmpEditorApp {
         } else {
             BAR_POLL_INTERVAL
         });
-        if self.marks_poll.check(std::time::Instant::now()) {
+        let now = std::time::Instant::now();
+        if self.marks_poll.check(now) {
             self.params.library.refresh_marks();
+        }
+
+        if self.library_poll.targets().is_empty() {
+            let paths = self.params.library.read().watch_paths();
+            self.library_poll = FreshnessPoll::new(paths, BAR_POLL_INTERVAL);
+            self.library_poll.mark_seen(now);
+        }
+        self.library_poll.set_interval(self.marks_poll_interval());
+        if self.rescan_thread.as_ref().is_some_and(|t| t.is_finished()) {
+            if let Some(t) = self.rescan_thread.take() {
+                let _ = t.join();
+            }
+        }
+        if self.rescan_thread.is_none() && self.library_poll.check(now) {
+            // Off the UI thread: a new file has to be hashed. The rescan
+            // only re-hashes files whose size or mtime changed.
+            let library = self.params.library.clone();
+            self.rescan_thread = std::thread::Builder::new()
+                .name("amp-library-rescan".into())
+                .spawn(move || {
+                    if let Err(e) = library.rescan() {
+                        tracing::warn!("model library rescan failed: {e}");
+                    }
+                })
+                .ok();
+        }
+        // The rescan's own index write shows up as one more change on the
+        // next poll; that rescan finds nothing to hash and writes nothing,
+        // so the poll settles.
+    }
+
+    fn marks_poll_interval(&self) -> std::time::Duration {
+        if self.library_panel.open {
+            BROWSER_POLL_INTERVAL
+        } else {
+            BAR_POLL_INTERVAL
         }
     }
 
@@ -128,6 +178,14 @@ impl AmpEditorApp {
     /// How many amps in this process are playing `id`.
     pub(crate) fn usage_count(&self, id: &str) -> usize {
         self.params.library.usage_count(id)
+    }
+}
+
+impl Drop for AmpEditorApp {
+    fn drop(&mut self) {
+        if let Some(t) = self.rescan_thread.take() {
+            let _ = t.join();
+        }
     }
 }
 

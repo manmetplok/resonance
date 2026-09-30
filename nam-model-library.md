@@ -439,12 +439,16 @@ There are two scopes:
     different models both win, even inside the same few milliseconds, and
     the same item is last-writer-wins. The OS releases the lock when a
     process dies. It is never taken on the audio thread.
-  - **Refresh** is poll-based and cheap. While a Library panel is open, or at
-    most once per 2 s from the header, a background thread stats the root and
-    its two subdirectories (mtime), `library.json` and `marks.json`. Only a
-    change triggers a rescan, which hashes only files whose (size, mtime) are
-    new. With no editor open, a refresh runs only at `initialize` and when a
-    load is requested.
+  - **Refresh** is poll-based and cheap. Every 500 ms while the Library
+    panel is open, and at most once per 2 s from the header, the editor
+    frame stats the root and its two subdirectories (mtime + entry count),
+    `library.json` and `marks.json` (`library_marks::FreshnessPoll`, one
+    helper shared with the preset library). A marks change re-reads
+    `marks.json`; a library change starts a rescan on a helper thread
+    (joined when the editor closes, so nothing outlives the plugin image),
+    which hashes only files whose (size, mtime) are new. With no editor
+    open, a refresh runs only at `initialize` and when a load is requested
+    for a slot this process sees empty, or whose file has gone.
   - Slot allocation (the rescan that writes `library.json`) is taken under
     the same primitive: an exclusive `File::lock` on `library.lock` in the
     library root. It replaces the earlier `create_new` lockfile with a 10 s

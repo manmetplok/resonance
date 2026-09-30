@@ -64,7 +64,15 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
         // sort, favourites first), not slot order: "next" is what the user
         // sees next (§5.1). They write the slot number.
         app.refresh_rows();
-        let status = app.params.status.lock().clone();
+        let mut status = app.params.status.lock().clone();
+        // A model deleted from the library keeps playing here until it is
+        // reloaded (§7.3); say so.
+        status.deleted = status.state == crate::model_ref::ModelState::Loaded
+            && !status.external
+            && status
+                .id
+                .as_deref()
+                .is_some_and(|id| app.params.library.read().entry(id).is_none());
         let loaded_id = if status.state == crate::model_ref::ModelState::Loaded {
             status.id.clone()
         } else {
@@ -111,7 +119,12 @@ pub fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                 .size(11.0)
                 .color(theme::TEXT_DIM),
         );
-        if let Some(notice) = status.notice.as_ref().or(app.notice.as_ref()) {
+        let redownloaded = app.redownload_notice.lock().clone();
+        if let Some(notice) = redownloaded
+            .as_ref()
+            .or(status.notice.as_ref())
+            .or(app.notice.as_ref())
+        {
             ui.add_space(8.0);
             ui.label(egui::RichText::new(notice).size(11.0).color(theme::TEXT_DIM));
         }

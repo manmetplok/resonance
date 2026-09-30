@@ -13,7 +13,9 @@ use resonance_amp::tone3000::client::{
     ArchitectureFilter,
 };
 use resonance_amp::tone3000::types::{Model, PaginatedResponse, Tone};
-use resonance_amp::tone3000::worker::{apply_search_page, sanitize_filename, sidecar_for, State};
+use resonance_amp::tone3000::worker::{
+    apply_search_page, find_redownload, sanitize_filename, sidecar_for, State,
+};
 
 /// Recorded-shape search response. Field set matches what the API
 /// returns; extra keys are present on purpose so the "ignore unknown
@@ -408,6 +410,15 @@ fn a_download_sidecar_carries_the_tone_metadata_the_file_lacks() {
     let bare = sidecar_for(&model, None, 0);
     assert_eq!(bare.model_id, Some(48121));
     assert_eq!(bare.tone_title, None);
+}
+
+#[test]
+fn a_redownload_finds_its_model_in_the_relisted_tone() {
+    // The model URL rotates, so a re-download re-lists the tone and picks
+    // the model by id out of whatever order the server returns.
+    let models = decode_models(&models_body(&[5, 48121, 9])).data;
+    assert_eq!(find_redownload(&models, 48121).map(|m| m.id), Some(48121));
+    assert!(find_redownload(&models, 1).is_none(), "gone from the tone");
 }
 
 #[test]

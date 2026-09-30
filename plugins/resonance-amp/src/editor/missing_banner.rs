@@ -45,6 +45,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
         name,
         path,
         file_changed,
+        source,
         ..
     } = &status.state
     else {
@@ -99,6 +100,17 @@ pub(crate) fn draw(ui: &mut egui::Ui, rect: egui::Rect, app: &mut AmpEditorApp, 
                 });
             } else {
                 ui.horizontal(|ui| {
+                    if let Some(nam_library::Source::Tone3000 { tone_id, model_id }) = source {
+                        if actions::tone3000_connected(app) {
+                            if ui.button("Re-download from Tone3000").clicked() {
+                                actions::redownload(app, *tone_id, *model_id, Some(name.clone()));
+                                app.missing.error = None;
+                            }
+                        } else if ui.button("Connect… to re-download").clicked() {
+                            app.tone3000
+                                .send(crate::tone3000::worker::Command::Authenticate);
+                        }
+                    }
                     if *file_changed && ui.button("Use the file at this path").clicked() {
                         relink(app, &PathBuf::from(path));
                     }

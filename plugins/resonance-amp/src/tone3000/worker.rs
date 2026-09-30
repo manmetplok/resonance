@@ -47,6 +47,17 @@ pub enum Command {
     /// Download a model to disk, index it, and hand the new library entry
     /// to `done` (the requesting instance loads it).
     Download { model: Model, done: DownloadDone },
+    /// Re-download a Tone3000 model by id (nam-model-library.md §6.2): the
+    /// pre-signed `model_url` rotates, so the tone is re-listed first to
+    /// find the model and a fresh URL. `title_hint` fills the sidecar's
+    /// tone title when the tone is not in the current search results (the
+    /// missing banner knows the model's saved name).
+    Redownload {
+        tone_id: i64,
+        model_id: i64,
+        title_hint: Option<String>,
+        done: DownloadDone,
+    },
     /// Gracefully stop the worker thread.
     Shutdown,
 }
@@ -330,6 +341,54 @@ fn worker_loop(
                     Err(e) => set_error(&state, &format!("list models: {e}")),
                 }
             }
+            Command::Redownload {
+                tone_id,
+                model_id,
+                title_hint,
+                done,
+            } => {
+                let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
+                    continue;
+                };
+                state.lock().status = Status::LoadingModels;
+                let models = match client.list_models(&tok, tone_id, ArchitectureFilter::All) {
+                    Ok(m) => m,
+                    Err(ClientError::Unauthorized) => {
+                        handle_unauthorized(&mut tokens, &state);
+                        continue;
+                    }
+                    Err(e) => {
+                        set_error(&state, &format!("re-download: list models: {e}"));
+                        continue;
+                    }
+                };
+                let Some(model) = find_redownload(&models, model_id).cloned() else {
+                    set_error(
+                        &state,
+                        &format!("re-download: model {model_id} is no longer on tone {tone_id}"),
+                    );
+                    continue;
+                };
+                let Some(url) = model.model_url.clone() else {
+                    set_error(&state, "model has no download URL");
+                    continue;
+                };
+                state.lock().status = Status::Downloading(model.display_label());
+                match client.download_model(&tok, &url) {
+                    Ok(bytes) => match finalize_download(&model, &bytes, &library, &state) {
+                        Ok(mut entry) => {
+                            if let Some(hint) = title_hint.as_deref() {
+                                entry = fill_title(&library, entry, &model, hint);
+                            }
+                            state.lock().status = Status::Connected;
+                            done(&entry);
+                        }
+                        Err(e) => set_error(&state, &e),
+                    },
+                    Err(ClientError::Unauthorized) => handle_unauthorized(&mut tokens, &state),
+                    Err(e) => set_error(&state, &format!("download: {e}")),
+                }
+            }
             Command::Download { model, done } => {
                 let Some(tok) = ensure_valid_token(&mut tokens, &state) else {
                     continue;
@@ -477,6 +536,43 @@ fn finalize_download(
         .ok_or_else(|| format!("{} did not index", dest.display()))?;
     state.lock().last_downloaded = Some(dest);
     Ok(entry)
+}
+
+/// The model a re-download wants, in a freshly listed tone.
+pub fn find_redownload(models: &[Model], model_id: i64) -> Option<&Model> {
+    models.iter().find(|m| m.id == model_id)
+}
+
+/// Give a re-downloaded file's sidecar the saved tone title when the tone
+/// was not in the search results: `hint` is the model's saved display
+/// name, `"<title> · <size>"`.
+fn fill_title(
+    library: &crate::library::SharedLibrary,
+    entry: resonance_common::nam_library::Entry,
+    model: &Model,
+    hint: &str,
+) -> resonance_common::nam_library::Entry {
+    let Some(mut sc) = resonance_common::nam_library::read_sidecar(&entry.path) else {
+        return entry;
+    };
+    if sc.tone_title.is_some() {
+        return entry;
+    }
+    let title = match model.size.as_deref() {
+        Some(size) => hint
+            .strip_suffix(&format!(" · {size}"))
+            .unwrap_or(hint)
+            .to_string(),
+        None => hint.to_string(),
+    };
+    sc.tone_title = Some(title);
+    if resonance_common::nam_library::write_sidecar(&entry.path, &sc).is_err()
+        || library.rescan().is_err()
+    {
+        return entry;
+    }
+    let refreshed = library.read().by_path(&entry.path).cloned();
+    refreshed.unwrap_or(entry)
 }
 
 /// The provenance sidecar for a downloaded `model` of `tone` at `now`

@@ -505,6 +505,123 @@ fn a_project_restore_is_not_a_recent_pick() {
     assert_eq!(lib.marks_of(&id).use_count, 1);
 }
 
+// ---------------------------------------------------------------------------
+// Delete (L5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_keeps_marks_and_live_instances_and_the_next_activation_is_missing() {
+    let (root, lib) = seeded_root("delete");
+    let b = root.join("tone3000/b.nam");
+    nam_library::write_sidecar(
+        &b,
+        &nam_library::Sidecar {
+            source: nam_library::SOURCE_TONE3000.into(),
+            tone_id: Some(1934),
+            model_id: Some(48121),
+            tone_title: Some("Friedman BE-100".into()),
+            size: Some("standard".into()),
+            ..nam_library::Sidecar::default()
+        },
+    )
+    .unwrap();
+    lib.rescan().unwrap();
+    let id = hash(&b).unwrap();
+    lib.toggle_favorite(&id).unwrap();
+
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    let blob = json!({ "params": {}, "model_path": b.to_string_lossy() });
+    assert!(amp.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    assert_eq!(lib.usage_count(&id), 1, "used in 1 open amp");
+    let saved = state_of(&amp);
+
+    // Delete: the file, its sidecar and its slot go; the marks stay.
+    lib.mutate(|l| l.delete(&b)).unwrap();
+    assert!(!b.exists());
+    assert!(!nam_library::sidecar_path(&b).exists());
+    assert!(lib.read().by_slot(1).is_none());
+    assert!(lib.marks_of(&id).favorite, "the star survives for a re-download");
+
+    // The live instance keeps playing, and keeps its reference.
+    run_blocks(&mut amp, 32);
+    assert_eq!(amp.model_status().state, ModelState::Loaded);
+    assert_eq!(model_keys(&state_of(&amp)), model_keys(&saved));
+
+    // A project reopened later resolves to missing, with Re-download's key.
+    let mut reopened = ResonanceAmp::with_library(lib.clone());
+    assert!(reopened.load_state(&serde_json::to_vec(&saved).unwrap()));
+    assert!(reopened.initialize(SAMPLE_RATE, BLOCK as u32));
+    match reopened.model_status().state {
+        ModelState::Missing { name, source, .. } => {
+            assert_eq!(name, "Friedman BE-100 · standard");
+            assert_eq!(
+                source,
+                Some(Source::Tone3000 {
+                    tone_id: 1934,
+                    model_id: 48121
+                })
+            );
+        }
+        other => panic!("expected Missing, got {other:?}"),
+    }
+
+    // The same bytes coming back take slot 1 again and relink the project.
+    std::fs::copy(fixture("a1/wavenet_a1_standard.nam"), &b).unwrap();
+    lib.rescan().unwrap();
+    assert_eq!(lib.read().slot_of(&id), Some(1));
+    let mut again = ResonanceAmp::with_library(lib.clone());
+    assert!(again.load_state(&serde_json::to_vec(&saved).unwrap()));
+    assert!(again.initialize(SAMPLE_RATE, BLOCK as u32));
+    assert_eq!(again.model_status().state, ModelState::Loaded);
+    drop(amp);
+    drop(reopened);
+    assert_eq!(lib.usage_count(&id), 1, "dropped instances leave the count");
+}
+
+// ---------------------------------------------------------------------------
+// The editor, headless
+// ---------------------------------------------------------------------------
+
+/// Every Library state lays out: closed, open on a populated Installed
+/// tab, a row selected with its detail pane and tags, a pending delete,
+/// an empty search result, and the missing-model banner. CPU-only frames,
+/// no window (the Wayland `editor_open` pair covers the window).
+#[test]
+fn the_editor_lays_out_in_every_library_state() {
+    let lib = browse_root("render");
+    let first = lib.read().by_slot(0).unwrap().id.clone();
+    lib.toggle_favorite(&first).unwrap();
+    lib.add_tag(&first, "rhythm").unwrap();
+    let mut amp = ResonanceAmp::with_library(lib.clone());
+    assert!(amp.initialize(SAMPLE_RATE, BLOCK as u32));
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&amp);
+    ed.frame();
+    ed.open_library();
+    ed.frame();
+    assert!(ed.is_library_open());
+    ed.select_first();
+    ed.frame();
+    ed.begin_delete_selected();
+    ed.frame();
+    ed.set_query("no such model at all");
+    ed.frame();
+    drop(ed);
+
+    let mut missing = ResonanceAmp::with_library(lib);
+    let blob = json!({
+        "params": {},
+        "model_path": "/gone/x.nam",
+        "model_name": "Friedman BE-100 · standard",
+        "model_source": { "tone3000": { "tone_id": 1, "model_id": 2 } },
+    });
+    assert!(missing.load_state(&serde_json::to_vec(&blob).unwrap()));
+    assert!(missing.initialize(SAMPLE_RATE, BLOCK as u32));
+    let mut ed = resonance_amp::editor::HeadlessEditor::new(&missing);
+    ed.frame();
+    ed.frame();
+}
+
 #[test]
 fn the_shared_library_is_one_per_root() {
     let root = temp_root("shared");

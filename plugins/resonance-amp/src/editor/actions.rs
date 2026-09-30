@@ -63,6 +63,41 @@ pub(crate) fn download_done(app: &AmpEditorApp) -> DownloadDone {
     })
 }
 
+/// Re-download a Tone3000 model into this instance. When the downloaded
+/// bytes are not the model the instance's reference was saved with (the
+/// author re-uploaded), `notice` says so once it lands.
+pub(crate) fn redownload(
+    app: &AmpEditorApp,
+    tone_id: i64,
+    model_id: i64,
+    title_hint: Option<String>,
+) {
+    let load = download_done(app);
+    let saved_id = app.params.model_ref.lock().id.clone();
+    let notice = app.redownload_notice.clone();
+    let done: DownloadDone = Arc::new(move |entry: &Entry| {
+        if saved_id.as_deref().is_some_and(|s| s != entry.id) {
+            *notice.lock() =
+                Some("re-downloaded model differs from the one this project was saved with".into());
+        }
+        load(entry);
+    });
+    app.tone3000.send(crate::tone3000::worker::Command::Redownload {
+        tone_id,
+        model_id,
+        title_hint,
+        done,
+    });
+}
+
+/// Whether the Tone3000 worker has a session (re-download needs one).
+pub(crate) fn tone3000_connected(app: &AmpEditorApp) -> bool {
+    !matches!(
+        app.tone3000.state.lock().status,
+        crate::tone3000::worker::Status::Disconnected | crate::tone3000::worker::Status::Error(_)
+    )
+}
+
 /// A modal file dialog for `.nam` files. Sync on the UI thread — the
 /// Wayland runtime's editor thread, or the AppKit main thread under the
 /// Cocoa runtime, where a modal panel is the supported path and the
