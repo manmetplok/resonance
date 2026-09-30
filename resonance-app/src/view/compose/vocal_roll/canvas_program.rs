@@ -210,6 +210,14 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
             iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }) => {
                 use crate::commands::{CommandId, KeyChord};
                 let chord = KeyChord::from_event(event)?;
+                let ours = self.keymap.matches(CommandId::VocalDeleteNote, chord)
+                    || self.keymap.matches(CommandId::VocalToggleSlur, chord);
+                if ours && self.selected_note.filter(|&i| i < self.clip.notes.len()).is_none() {
+                    // The vocal roll owns the keys: its own keys do nothing
+                    // without a note rather than falling through to the
+                    // global meaning (`s` would solo, ⌘⌫ delete a track).
+                    return Some(canvas::Action::capture());
+                }
                 if let Some(idx) = self.selected_note.filter(|&i| i < self.clip.notes.len()) {
                     if self.keymap.matches(CommandId::VocalDeleteNote, chord) {
                         return Some(canvas::Action::publish(Message::MidiEditor(MidiEditorMessage::RemoveNote {

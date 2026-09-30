@@ -55,7 +55,7 @@ pub fn view<'a>(
     let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let canvas = Canvas::new(ExpandedEditorCanvas {
-        keys_blocked: app.ui.palette.is_some(),
+        keys_blocked: app.canvas_keys_blocked(),
         keymap: &app.ui.keymap,
         track_id,
         midi_clips: &app.midi_clips,
@@ -83,9 +83,11 @@ pub struct ExpandedEditorCanvas<'a> {
     /// The active keymap: canvas-local keys resolve through it
     /// (command-palette.md §4.3).
     pub keymap: &'a crate::commands::BindingMap,
-    /// Set while the command palette is open: the canvas ignores key
-    /// presses, so Backspace typed into the palette can't delete the
-    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    /// Set while any modal overlay (the palette included) is open or the
+    /// Keyboard panel is capturing a chord: the canvas ignores key presses,
+    /// so Backspace typed into a dialog can't delete the selection this
+    /// canvas owned the keys for (command-palette.md §7.3). See
+    /// `Resonance::canvas_keys_blocked`.
     pub keys_blocked: bool,
     pub track_id: TrackId,
     pub midi_clips: &'a [MidiClipState],

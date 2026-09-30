@@ -171,6 +171,8 @@ impl crate::Resonance {
             // Arrangement-marker context menu / inline rename float above
             // the arrange timeline (todo #369).
             Overlay::MarkerMenu => menus::view_marker_overlay(self),
+            // Drawn by `view_main_area` in arrange-area space.
+            Overlay::TrackMenu => return None,
             // Floating "Group selected" bar — non-modal, so it layers over
             // the arrange view without blocking it (todo #684).
             Overlay::SelectionBar => selection_bar::view_selection_bar(self),

@@ -77,8 +77,8 @@ pub enum KeyGate {
     /// Fires regardless of text focus (⌘/Ctrl chords a text field never
     /// consumes).
     Always,
-    /// Probed through `UiMessage::RequestShortcut` and dropped while a
-    /// text field is being edited: every bare key, plus Undo / Redo
+    /// Probed through the focus probe (`UiMessage::ShortcutProbed`) and
+    /// dropped while a text field is being edited: every bare key, plus Undo / Redo
     /// (iced has no text undo, UPD-11).
     NotWhileTyping,
 }
@@ -565,6 +565,12 @@ impl CommandId {
             // key.
             _ => KeyGate::NotWhileTyping,
         }
+    }
+
+    /// Whether running this command puts it in the palette's *Recent*:
+    /// not for the commands that only open the palette.
+    pub fn records_recent(self) -> bool {
+        !matches!(self, CommandId::CommandPalette | CommandId::GoToBar)
     }
 
     /// Whether key repeat re-fires this command. True only for nudges and

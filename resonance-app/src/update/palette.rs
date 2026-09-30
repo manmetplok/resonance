@@ -18,14 +18,22 @@ pub const LIST_HEIGHT: f32 = 380.0;
 /// closes any other overlay first.
 pub(crate) fn open(r: &mut Resonance, mode: PaletteMode) -> Task<Message> {
     if r.ui.palette.is_some() {
-        return close(r);
+        // ⌘K toggles it closed; ⌘J (another mode) switches to that mode.
+        return match mode {
+            PaletteMode::Commands => close(r),
+            other => Task::batch([
+                handle(r, PaletteMsg::Query(other.prefix().to_string())),
+                iced::widget::operation::move_cursor_to_end(palette::query_input_id()),
+            ]),
+        };
     }
+    let mut dismissed = Task::none();
     if let Some(overlay) = r.modal_overlay() {
         if !overlay.allows_palette() {
             return Task::none();
         }
         if let Some(dismiss) = overlay.dismiss_message(r) {
-            let _ = r.update(dismiss);
+            dismissed = r.update(dismiss);
         }
     }
     // Closing keeps the last query, pre-selected so typing replaces it and
@@ -42,6 +50,7 @@ pub(crate) fn open(r: &mut Resonance, mode: PaletteMode) -> Task<Message> {
     r.ui.palette = Some(state);
     let id = palette::query_input_id();
     Task::batch([
+        dismissed,
         iced::widget::operation::focus(id.clone()),
         iced::widget::operation::select_all(id),
     ])
@@ -62,6 +71,7 @@ pub(crate) fn handle(r: &mut Resonance, msg: PaletteMsg) -> Task<Message> {
     state.flash = None;
     match msg {
         PaletteMsg::Query(query) => {
+            state.pointer_armed = false;
             state.selected = 0;
             state.scroll_y = 0.0;
             let sections = palette::build(r, &query);
@@ -79,13 +89,22 @@ pub(crate) fn handle(r: &mut Resonance, msg: PaletteMsg) -> Task<Message> {
             if n == 0 {
                 return Task::none();
             }
+            state.pointer_armed = false;
             state.selected = (state.selected as i64 + delta as i64).rem_euclid(n as i64) as usize;
             return follow_selection(state);
         }
         PaletteMsg::Hover(index) => {
-            if index < state.row_count() {
+            if state.pointer_armed && index < state.row_count() {
                 state.selected = index;
             }
+        }
+        PaletteMsg::PointerMoved(at) => {
+            // The first report is where the pointer already was when the
+            // card appeared; only a later, different one is a real move.
+            if state.pointer.is_some_and(|p| p != at) {
+                state.pointer_armed = true;
+            }
+            state.pointer = Some(at);
         }
         PaletteMsg::Scrolled(y) => state.scroll_y = y,
         PaletteMsg::Submit => {
@@ -140,37 +159,58 @@ fn run(r: &mut Resonance, index: usize) -> Task<Message> {
     let Some(state) = r.ui.palette.as_mut() else {
         return Task::none();
     };
-    let Some(row) = state.rows().nth(index) else {
+    let Some(item) = state.rows().nth(index).map(|row| row.item.clone()) else {
         return Task::none();
     };
-    if let Some(reason) = row.unavailable {
+    // Availability can have changed since the row was built (the playhead
+    // moved, a rescan ran): resolve it again and show the reason.
+    let unavailable = match &item {
+        PaletteItem::Command(command) => match command.availability(r) {
+            crate::commands::Available::Yes => None,
+            crate::commands::Available::No(reason) => Some(reason),
+        },
+        PaletteItem::Plugin(id) if !r.plugin_catalog.available_plugins.iter().any(|p| &p.clap_plugin_id == id) => {
+            Some("That plugin is no longer available")
+        }
+        _ => state.rows().nth(index).and_then(|row| row.unavailable),
+    };
+    if let Some(reason) = unavailable {
+        let state = r.ui.palette.as_mut().expect("checked above");
         state.selected = index;
         state.flash = Some(reason);
+        if let Some(row) = state.sections.iter_mut().flat_map(|s| s.rows.iter_mut()).nth(index) {
+            row.unavailable = Some(reason);
+        }
         return Task::none();
     }
-    let item = row.item;
-    let _ = close(r);
+    let closed = close(r);
     use crate::message::{MarkerMessage, PluginMessage, TransportMessage};
     use crate::update::transport_nav::SeekTarget;
     let message = match item {
-        PaletteItem::Command(command) => return crate::update::shortcuts::execute(r, command),
+        PaletteItem::Command(command) => {
+            return Task::batch([closed, crate::update::shortcuts::execute(r, command)]);
+        }
+        PaletteItem::Nudge(n) => Message::Transport(TransportMessage::SeekTo(SeekTarget::NudgeBars(n))),
         PaletteItem::GoTo { bar, beat } => {
             Message::Transport(TransportMessage::SeekTo(SeekTarget::Bar { bar, beat }))
         }
         PaletteItem::Marker(id) => Message::Marker(MarkerMessage::JumpTo(id)),
         PaletteItem::Section { start } => Message::Transport(TransportMessage::SeekToSample(start)),
         PaletteItem::Track(id) => Message::Ui(UiMessage::SelectTrack(Some(id))),
-        PaletteItem::Plugin(index) => {
-            let (Some(track), Some(plugin)) = (
-                r.ui.interaction.selected_track,
-                r.plugin_catalog.available_plugins.get(index).cloned(),
-            ) else {
-                return Task::none();
+        PaletteItem::Plugin(id) => {
+            let plugin = r
+                .plugin_catalog
+                .available_plugins
+                .iter()
+                .find(|p| p.clap_plugin_id == id)
+                .cloned();
+            let (Some(track), Some(plugin)) = (r.ui.interaction.selected_track, plugin) else {
+                return closed;
             };
             Message::Plugin(PluginMessage::AddPluginToTrack(track, plugin))
         }
     };
-    r.update(message)
+    Task::batch([closed, r.update(message)])
 }
 
 /// Keys the palette takes while it is open, before the registry sees them

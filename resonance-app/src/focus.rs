@@ -57,9 +57,11 @@ pub fn any_text_input_focused() -> iced::Task<bool> {
 /// timeline above it). A canvas instead owns the keyboard only while it was
 /// the target of the most recent mouse press: a press inside its bounds
 /// claims the keys, a press anywhere else (another canvas, a text field, a
-/// button) releases them. Focusing a text field takes a click — the app
-/// never focuses one programmatically — so "last pressed inside me" also
-/// means "no text field is being typed into".
+/// button) releases them. Focusing a text field takes a click, with one
+/// exception — the command palette focuses its query field itself — so
+/// "last pressed inside me" means "no text field is being typed into"
+/// only while no modal overlay is open; `Resonance::canvas_keys_blocked`
+/// covers the rest.
 ///
 /// The state lives in the canvas's `Program::State`, which iced keeps in
 /// the widget tree; every canvas sees every mouse press (containers forward

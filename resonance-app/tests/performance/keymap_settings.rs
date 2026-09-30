@@ -45,7 +45,7 @@ fn keyboard_panel(app: &mut Resonance) {
 #[test]
 fn resolve_replays_overrides_onto_the_preset() {
     let settings = KeymapSettings {
-        preset: "AbletonLive".into(),
+        preset: "LogicPro".into(),
         overrides: vec![
             KeymapOverride {
                 command: "TransportToggleMetronome".into(),
@@ -63,9 +63,9 @@ fn resolve_replays_overrides_onto_the_preset() {
     };
     let map = resolve(&settings);
     assert_eq!(
-        map.chord_for(CommandId::TransportRecord),
+        map.chord_for(CommandId::PlayheadToStart),
         Some(KeyChord::named(NamedKey::Enter, Mods::NONE)),
-        "the Ableton preset applies"
+        "the Logic preset applies"
     );
     assert_eq!(map.command_for(Scope::Global, key('j')), Some(CommandId::TransportToggleMetronome));
     assert_eq!(map.chord_for(CommandId::TransportToggleLoop), None, "None unbinds");
@@ -147,11 +147,15 @@ fn reset_restores_one_command_and_presets_switch_the_table() {
     keymap(&mut app, KeymapMsg::Reset(CommandId::TransportToggleLoop));
     assert_eq!(app.test_keymap().chord_for(CommandId::TransportToggleLoop), Some(key('l')));
 
-    keymap(&mut app, KeymapMsg::SetPreset(KeymapPreset::AbletonLive));
-    assert_eq!(app.test_settings().keymap.preset, "AbletonLive");
+    keymap(&mut app, KeymapMsg::SetPreset(KeymapPreset::LogicPro));
+    assert_eq!(app.test_settings().keymap.preset, "LogicPro");
     assert_eq!(
-        app.test_keymap().chord_for(CommandId::TransportRecord),
+        app.test_keymap().chord_for(CommandId::PlayheadToStart),
         Some(KeyChord::named(NamedKey::Enter, Mods::NONE))
+    );
+    assert!(
+        app.test_keymap_editor().unbound_by_preset.contains(&CommandId::OpenSelectedMidiClip),
+        "the panel knows what the preset left unbound"
     );
 }
 

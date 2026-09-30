@@ -59,6 +59,9 @@ pub(crate) fn view_palette_overlay(r: &Resonance) -> Element<'_, Message> {
         ..Default::default()
     });
 
+    // Card-relative pointer reports tell a real move from a row appearing
+    // or scrolling under a resting pointer (see `PaletteMsg::Hover`).
+    let card = mouse_area(card).on_move(|at| msg(PaletteMsg::PointerMoved(at)));
     let placed = container(iced::widget::opaque(card))
         .width(Length::Fill)
         .height(Length::Fill)
@@ -245,12 +248,23 @@ fn result_row(row_: &PaletteRow, index: usize, active: bool, platform: Platform)
         body
     };
     mouse_area(body)
-        .on_enter(msg(PaletteMsg::Hover(index)))
+        .on_move(move |_| msg(PaletteMsg::Hover(index)))
         .on_press(msg(PaletteMsg::Click(index)))
         .into()
 }
 
 fn empty_state(state: &PaletteState) -> Element<'_, Message> {
+    if palette::PaletteMode::of(&state.query).0 != palette::PaletteMode::Commands {
+        return container(
+            text(palette::empty_message(&state.query))
+                .size(15)
+                .color(theme::TEXT_2),
+        )
+        .width(Length::Fill)
+        .padding([48, 20])
+        .align_x(alignment::Horizontal::Center)
+        .into();
+    }
     container(
         column![
             row![

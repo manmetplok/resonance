@@ -218,6 +218,7 @@ pub(crate) fn sync_session_marker(r: &mut Resonance) {
 /// next open offers no recovery, and delete this session's untitled
 /// scratch dir: its work was either saved elsewhere or discarded.
 pub(crate) fn close_session(r: &mut Resonance) {
+    crate::palette::flush_recent(r, true);
     if let Some(dir) = r.io.session_marker_dir.take() {
         session::remove_marker(&dir);
     }

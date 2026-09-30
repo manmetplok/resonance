@@ -262,9 +262,11 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     ]
     .spacing(4)
     .width(150);
-    let (page, page_width): (Element<'_, Message>, f32) = match tab {
-        SettingsTab::General => (dialog_content.into(), 420.0),
-        SettingsTab::Keyboard => (crate::view::settings_keyboard::view_keyboard_page(r), 700.0),
+    // One card size for both pages, so switching tabs doesn't jump.
+    let page_width = crate::view::settings_keyboard::PAGE_WIDTH;
+    let page: Element<'_, Message> = match tab {
+        SettingsTab::General => dialog_content.into(),
+        SettingsTab::Keyboard => crate::view::settings_keyboard::view_keyboard_page(r),
     };
     let dialog_content = column![
         row![rail, page].spacing(20),
@@ -273,7 +275,7 @@ pub(crate) fn view_settings_overlay(r: &Resonance) -> Element<'_, Message> {
     ]
     .spacing(6)
     .padding(24)
-    // Rail + gap + page + padding: the card hugs its page.
+    // Rail + gap + page + padding.
     .width(150.0 + 20.0 + page_width + 48.0);
 
     let dialog = container(dialog_content).style(|_theme| container::Style {

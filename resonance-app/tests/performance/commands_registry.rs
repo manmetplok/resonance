@@ -303,13 +303,23 @@ fn every_bare_key_binding_is_typing_gated() {
 /// Toggles never re-fire on key repeat (holding F used to flap
 /// Performance mode).
 #[test]
-fn toggles_do_not_repeat() {
+fn only_seeks_and_zooms_repeat() {
+    // Derived from what each command does, not from its name: a command
+    // that repeats must dispatch a seek or a zoom, never a toggle.
+    let (app, _task) = Resonance::new_for_test();
+    let mut repeating = 0;
     for &id in CommandId::ALL {
-        if id.display_name().starts_with("Toggle") {
-            assert!(!id.repeat(), "{id:?} is a toggle and must not repeat");
+        if !id.repeat() {
+            continue;
         }
+        repeating += 1;
+        let message = format!("{:?}", id.to_message(&app).expect("a message"));
+        assert!(
+            message.contains("SeekTo(Nudge") || message.contains("Zoom"),
+            "{id:?} repeats but dispatches {message}"
+        );
     }
-    assert!(!CommandId::TogglePerformanceMode.repeat());
+    assert_eq!(repeating, 8, "four nudges and four zooms (view + track editor)");
 }
 
 #[test]
@@ -348,19 +358,32 @@ fn all_presets_resolve_every_command() {
 
 #[test]
 fn preset_overrides_take_effect() {
-    // Ableton remaps Record to Enter, taking Enter away from Open Selected
-    // MIDI Clip.
-    let resonance = KeymapPreset::Resonance.bindings();
-    let ableton = KeymapPreset::AbletonLive.bindings();
-    assert_ne!(
-        resonance.chord_for(CommandId::TransportRecord),
-        ableton.chord_for(CommandId::TransportRecord)
-    );
-    assert_eq!(ableton.chord_for(CommandId::OpenSelectedMidiClip), None);
+    // Logic's Return goes to the beginning, taking Enter from Open Selected
+    // MIDI Clip; `unbound()` reports exactly what a preset takes away.
+    let logic = KeymapPreset::LogicPro.bindings();
     assert_eq!(
-        ableton.chord_for(CommandId::TransportRecord),
+        logic.chord_for(CommandId::PlayheadToStart),
         Some(KeyChord::named(NamedKey::Enter, Mods::NONE))
     );
+    assert_eq!(logic.chord_for(CommandId::TransportToggleLoop), Some(KeyChord::char('c', Mods::NONE)));
+    assert_eq!(logic.chord_for(CommandId::OpenSelectedMidiClip), None);
+    let unbound = KeymapPreset::LogicPro.unbound();
+    assert!(unbound.contains(&CommandId::OpenSelectedMidiClip));
+    assert!(unbound.contains(&CommandId::AddAudioTrack), "⌘T went to split");
+    assert!(KeymapPreset::Resonance.unbound().is_empty());
+}
+
+/// No preset may be a no-op: each one changes the table.
+#[test]
+fn every_preset_differs_from_the_defaults() {
+    let default: Vec<_> = BindingMap::resonance_default().iter().collect();
+    for preset in KeymapPreset::ALL {
+        if preset == KeymapPreset::Resonance {
+            continue;
+        }
+        let map: Vec<_> = preset.bindings().iter().collect();
+        assert_ne!(map, default, "{preset:?} changes nothing");
+    }
 }
 
 // ---------------------------------------------------------------------------

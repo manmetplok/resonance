@@ -207,7 +207,10 @@ impl Resonance {
     /// (todo #684) so `tests/selection_bar.rs` can snapshot it standalone.
     #[doc(hidden)]
     pub fn test_selection_bar_view(&self, count: usize) -> iced::Element<'static, crate::message::Message> {
-        crate::view::selection_bar::selection_bar_with_count(count)
+        crate::view::selection_bar::selection_bar_with_count(
+            count,
+            crate::view::shortcut_hint::chord_text(self, crate::commands::CommandId::GroupSelectedTracks),
+        )
     }
 
     /// Test-only: run the startup default-track send that `Resonance::new`

@@ -67,9 +67,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         Message::Ui(UiMessage::RequestShortcut(_))
         | Message::Ui(UiMessage::ShortcutResolved { .. })
         | Message::Ui(UiMessage::ShortcutKey { .. })
-        | Message::Ui(UiMessage::RunShortcut(_))
         | Message::Ui(UiMessage::ShortcutProbed { .. })
-        | Message::Ui(UiMessage::DismissOverlay)
         // The palette refuses to open over the startup screen itself
         // (`Overlay::allows_palette`); a row's command meets this gate
         // when it re-enters `update()`.
@@ -83,6 +81,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::CloseTrackMenu)
         | Message::Ui(UiMessage::DismissError)
         | Message::Ui(UiMessage::StartNewProject)
+        | Message::Ui(UiMessage::NewEmptyProject)
         | Message::Ui(UiMessage::SelectTrack(_))
         | Message::Ui(UiMessage::SelectBus(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
@@ -170,9 +169,7 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // mid-render exactly as it did before shortcuts went through the
         // registry.
         Message::Ui(UiMessage::ShortcutKey { .. })
-        | Message::Ui(UiMessage::RunShortcut(_))
         | Message::Ui(UiMessage::ShortcutProbed { .. })
-        | Message::Ui(UiMessage::DismissOverlay)
         | Message::Ui(UiMessage::RequestShortcut(_))
         | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.
@@ -241,9 +238,7 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         // mid-render exactly as it did before shortcuts went through the
         // registry.
         Message::Ui(UiMessage::ShortcutKey { .. })
-        | Message::Ui(UiMessage::RunShortcut(_))
         | Message::Ui(UiMessage::ShortcutProbed { .. })
-        | Message::Ui(UiMessage::DismissOverlay)
         | Message::Ui(UiMessage::RequestShortcut(_))
         | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.

@@ -336,7 +336,10 @@ pub fn momentary_audition_message(event: keyboard::Event) -> Option<Message> {
     }
 
     match event {
-        keyboard::Event::KeyPressed { ref key, .. } if is_momentary_key(key) => Some(focus_gated(
+        // Bare B only: ⌘B bounces, ⌥⌘B toggles the browser.
+        keyboard::Event::KeyPressed {
+            ref key, modifiers, ..
+        } if is_momentary_key(key) && modifiers.is_empty() => Some(focus_gated(
             Message::Reference(ReferenceMessage::MomentaryAudition(true)),
         )),
         keyboard::Event::KeyReleased { ref key, .. } if is_momentary_key(key) => {

@@ -39,7 +39,7 @@ impl crate::Resonance {
             .collect();
 
         TimelineCanvas {
-            keys_blocked: self.ui.palette.is_some(),
+            keys_blocked: self.canvas_keys_blocked(),
             keymap: &self.ui.keymap,
             key_grant: self.ui.interaction.timeline_key_grant,
             tracks: &self.registry.tracks,

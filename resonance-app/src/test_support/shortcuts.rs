@@ -12,6 +12,25 @@ impl Resonance {
         self.ui.typing_probe = probe;
     }
 
+    /// Test-only: run a registry command as a keyboard shortcut would
+    /// (availability, typing gate, dispatch), without a chord.
+    #[doc(hidden)]
+    pub fn test_run_shortcut(&mut self, command: crate::commands::CommandId) {
+        let _ = crate::update::shortcuts::run_shortcut(self, command, false);
+    }
+
+    /// Test-only: close the topmost modal overlay, as Esc does.
+    #[doc(hidden)]
+    pub fn test_dismiss_overlay(&mut self) {
+        let _ = crate::update::shortcuts::dismiss_overlay(self);
+    }
+
+    /// Test-only: whether a *Recent* write to settings.json is pending.
+    #[doc(hidden)]
+    pub fn test_recent_write_pending(&self) -> bool {
+        self.ui.recent_dirty_since.is_some()
+    }
+
     /// Test-only: the open command palette.
     #[doc(hidden)]
     pub fn test_palette(&self) -> Option<&crate::palette::PaletteState> {

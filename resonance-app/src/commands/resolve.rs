@@ -23,6 +23,14 @@ impl CommandId {
     pub fn availability(self, r: &Resonance) -> Available {
         use CommandId::*;
         match self {
+            PlayheadToStart | PlayheadToEnd | PlayheadToLoopStart | PlayheadToLoopEnd
+            | NudgeBackBar | NudgeForwardBar | NudgeBackBeat | NudgeForwardBeat
+            | PrevSectionStart | NextSectionStart | PrevMarker | NextMarker | GoToBar
+            | TransportPlayFromLoopStart | TransportSkipBack | TransportSkipForward
+                if r.transport.is_recording() =>
+            {
+                Available::No("Recording")
+            }
             Undo if !r.session.undo.can_undo() => Available::No("Nothing to undo"),
             Redo if !r.session.undo.can_redo() => Available::No("Nothing to redo"),
             TransportRecord if !r.registry.tracks.iter().any(|t| t.record_armed) => {
@@ -94,8 +102,24 @@ impl CommandId {
             {
                 Available::No("Select a track first")
             }
+            ToggleArmSelected
+                if !r
+                    .ui
+                    .interaction
+                    .selected_tracks
+                    .iter()
+                    .any(|&id| !r.freeze.status(id).is_frozen()) =>
+            {
+                Available::No("The selected tracks are frozen")
+            }
             DeleteSelectedTrack if r.ui.interaction.selected_track.is_none() => {
                 Available::No("Select a track first")
+            }
+            NewProject if r.io.has_active_project && r.session.dirty => {
+                Available::No("Save first: the project has unsaved changes")
+            }
+            NewProject | OpenProject if r.io.loading || r.io.saving || r.io.save_state.is_some() => {
+                Available::No("A project load or save is in progress")
             }
             ShowMissingPlugins if !r.has_missing_plugins() => {
                 Available::No("No plugins are missing")
@@ -291,7 +315,10 @@ impl CommandId {
                 Message::Ui(UiMessage::OpenPalette(crate::palette::PaletteMode::Commands))
             }
             GoToBar => Message::Ui(UiMessage::OpenPalette(crate::palette::PaletteMode::GoToBar)),
-            NewProject => Message::Ui(UiMessage::StartNewProject),
+            // With nothing open the startup flow picks a folder; with a
+            // project open it is a fresh untitled one, as `project.new` does.
+            NewProject if !r.io.has_active_project => Message::Ui(UiMessage::StartNewProject),
+            NewProject => Message::Ui(UiMessage::NewEmptyProject),
             OpenProject => Message::ProjectIo(ProjectIoMessage::OpenProject),
             SaveProject => Message::ProjectIo(ProjectIoMessage::SaveProject),
             SaveProjectAs => Message::ProjectIo(ProjectIoMessage::SaveProjectAs),

@@ -175,3 +175,71 @@ fn backspace_typed_into_the_palette_leaves_the_selected_clip_alone() {
     assert!(out.is_none(), "the palette's Backspace reached the timeline: {out:?}");
     assert!(app.test_midi_clip_ids().contains(&CLIP), "the clip survives");
 }
+
+fn backspace_with(modifiers: Modifiers) -> iced::Event {
+    iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: Key::Named(Named::Backspace),
+        modified_key: Key::Named(Named::Backspace),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Backspace),
+        location: keyboard::Location::Standard,
+        modifiers,
+        text: None,
+        repeat: false,
+    })
+}
+
+/// Any modal overlay blocks the canvases, not just the palette: ⌘, opens
+/// Settings, and a Backspace then must not delete the selected clip.
+#[test]
+fn backspace_under_settings_leaves_the_selected_clip_alone() {
+    use resonance_app::commands::{KeyChord, Mods};
+    use resonance_app::message::UiMessage;
+    use resonance_app::update::shortcuts::TypingProbe;
+
+    let mut app = app();
+    app.test_set_typing_probe(TypingProbe::Assume { editing: false });
+    let mut state = unfocused_timeline(&app);
+    select_clip_elsewhere(&mut app);
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::char(',', Mods::cmd()),
+        repeat: false,
+        captured: false,
+    }));
+    assert!(app.root_overlay().is_some(), "⌘, opened Settings");
+    let out = app.test_timeline_canvas_event(&mut state, &backspace_key(), -50.0, -50.0);
+    assert!(out.is_none(), "Backspace under Settings reached the timeline: {out:?}");
+    assert!(app.test_midi_clip_ids().contains(&CLIP));
+}
+
+/// A Keyboard-panel rebind capturing its chord blocks the canvases too.
+#[test]
+fn backspace_while_capturing_a_rebind_leaves_the_clip_alone() {
+    use resonance_app::commands::CommandId;
+    use resonance_app::message::UiMessage;
+    use resonance_app::update::keymap::KeymapMsg;
+
+    let mut app = app();
+    let mut state = unfocused_timeline(&app);
+    select_clip_elsewhere(&mut app);
+    let _ = app.update(Message::Ui(UiMessage::OpenSettings));
+    let _ = app.update(Message::Ui(UiMessage::Keymap(KeymapMsg::BeginRebind(
+        CommandId::TransportToggleLoop,
+    ))));
+    assert!(app.canvas_keys_blocked());
+    let out = app.test_timeline_canvas_event(&mut state, &backspace_key(), -50.0, -50.0);
+    assert!(out.is_none(), "{out:?}");
+}
+
+/// ⌘⌫ and ⇧⌫ over a timeline selection delete the selection, as they did
+/// before the canvas read its keys from the keymap — ⌘⌫ must never fall
+/// through to Delete Selected Track while a clip is selected.
+#[test]
+fn modified_backspace_still_deletes_the_timeline_selection() {
+    for mods in [Modifiers::COMMAND, Modifiers::SHIFT] {
+        let mut app = app();
+        let mut state = unfocused_timeline(&app);
+        select_clip_elsewhere(&mut app);
+        let out = app.test_timeline_canvas_event(&mut state, &backspace_with(mods), -50.0, -50.0);
+        assert!(is_delete_clip(&out), "{mods:?}+Backspace: {out:?}");
+    }
+}

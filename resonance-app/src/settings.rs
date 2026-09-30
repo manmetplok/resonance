@@ -94,21 +94,52 @@ pub struct AppSettings {
     pub arrange: ArrangeSettings,
     /// Audio-engine startup options; absent on older files, defaulted.
     pub audio: AudioSettings,
-    /// Command-palette memory; absent on older files, defaulted.
+    /// Command-palette memory; absent on older files, defaulted. A
+    /// malformed section defaults on its own, keeping the rest.
+    #[serde(deserialize_with = "lenient")]
     pub palette: PaletteSettings,
     /// The keyboard preset and the user's rebindings; absent on older
-    /// files, defaulted to the Resonance keymap.
+    /// files, defaulted to the Resonance keymap. A malformed section (or a
+    /// malformed override inside it) never costs the other settings.
+    #[serde(deserialize_with = "lenient")]
     pub keymap: KeymapSettings,
 }
 
 /// The keymap (command-palette.md §8): a DAW preset plus overrides, replayed
 /// in order onto the preset's table.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default)]
 pub struct KeymapSettings {
     /// `KeymapPreset::key()` of the base preset.
     pub preset: String,
+    #[serde(deserialize_with = "lenient_list")]
     pub overrides: Vec<KeymapOverride>,
+}
+
+/// Deserialize `T`, or its default when the value doesn't fit.
+fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).unwrap_or_default())
+}
+
+/// Deserialize a list, skipping the entries that don't fit.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let serde_json::Value::Array(items) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect())
 }
 
 impl Default for KeymapSettings {
@@ -122,7 +153,7 @@ impl Default for KeymapSettings {
 
 /// One rebinding: `command` (a `CommandId::key()`) gets `chord` (the
 /// `KeyChord::format_tokens` text form), or no chord at all when `None`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KeymapOverride {
     pub command: String,
     pub chord: Option<String>,

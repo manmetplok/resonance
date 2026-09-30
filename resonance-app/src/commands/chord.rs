@@ -54,8 +54,6 @@ pub enum NamedKey {
     ArrowLeft,
     ArrowRight,
     Plus,
-    Minus,
-    Comma,
     Home,
     End,
     PageUp,
@@ -77,8 +75,6 @@ impl NamedKey {
             NamedKey::ArrowLeft => "ArrowLeft",
             NamedKey::ArrowRight => "ArrowRight",
             NamedKey::Plus => "Plus",
-            NamedKey::Minus => "Minus",
-            NamedKey::Comma => "Comma",
             NamedKey::Home => "Home",
             NamedKey::End => "End",
             NamedKey::PageUp => "PageUp",
@@ -100,8 +96,6 @@ impl NamedKey {
             NamedKey::ArrowLeft => "←",
             NamedKey::ArrowRight => "→",
             NamedKey::Plus => "+",
-            NamedKey::Minus => "−",
-            NamedKey::Comma => ",",
             NamedKey::Home => "Home",
             NamedKey::End => "End",
             NamedKey::PageUp => "PgUp",
@@ -122,8 +116,6 @@ impl NamedKey {
             "arrowleft" | "left" | "←" => NamedKey::ArrowLeft,
             "arrowright" | "right" | "→" => NamedKey::ArrowRight,
             "plus" => NamedKey::Plus,
-            "minus" => NamedKey::Minus,
-            "comma" => NamedKey::Comma,
             "home" | "↖" => NamedKey::Home,
             "end" | "↘" => NamedKey::End,
             "pageup" | "pgup" | "⇞" => NamedKey::PageUp,
@@ -188,6 +180,10 @@ impl KeyChord {
             }
             if let Some(named) = NamedKey::from_token(token) {
                 key = Some(ChordKey::Named(named));
+            } else if token.eq_ignore_ascii_case("minus") {
+                key = Some(ChordKey::Char('-'));
+            } else if token.eq_ignore_ascii_case("comma") {
+                key = Some(ChordKey::Char(','));
             } else {
                 let mut chars = token.chars();
                 let c = chars.next()?;
@@ -197,6 +193,12 @@ impl KeyChord {
                 }
                 key = Some(ChordKey::Char(c.to_ascii_lowercase()));
             }
+        }
+        // Off macOS, Ctrl *is* the accelerator: `from_iced` folds it into
+        // `cmd`, so a parsed "Ctrl+S" must too, or it could never match.
+        if Platform::current() == Platform::Other && mods.ctrl {
+            mods.ctrl = false;
+            mods.cmd = true;
         }
         Some(KeyChord { mods, key: key? })
     }
@@ -303,7 +305,6 @@ impl NamedKey {
             NamedKey::Tab => "Tab",
             NamedKey::Backspace => "Backspace",
             NamedKey::Delete => "Del",
-            NamedKey::Minus => "-",
             other => other.glyph(),
         }
     }
@@ -381,6 +382,11 @@ impl KeyChord {
         use iced::keyboard::key::Named as N;
         use iced::keyboard::Key;
 
+        // Off macOS, Super/Logo is the window manager's, not ours: a chord
+        // with it binds nothing (Super+S must not solo a track).
+        if !cfg!(target_os = "macos") && modifiers.logo() {
+            return None;
+        }
         let mods = Mods {
             // `command()` is the platform-correct accelerator modifier.
             cmd: modifiers.command(),

@@ -19,7 +19,7 @@ pub enum SettingsTab {
 
 /// A rebinding that would take a chord from another command, waiting for
 /// the user to confirm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct KeymapConflict {
     pub command: CommandId,
     pub chord: KeyChord,
@@ -37,6 +37,20 @@ pub struct KeymapEditorState {
     /// The active preset's table, to tell edited rows from default ones
     /// without rebuilding it per frame.
     pub baseline: BindingMap,
+    /// What the active preset leaves unbound compared with the defaults.
+    pub unbound_by_preset: Vec<CommandId>,
+}
+
+impl KeymapEditorState {
+    /// Fresh editor state for `settings`' preset.
+    pub fn for_settings(settings: &KeymapSettings) -> Self {
+        let preset = preset_of(settings);
+        Self {
+            baseline: preset.bindings(),
+            unbound_by_preset: preset.unbound(),
+            ..Self::default()
+        }
+    }
 }
 
 /// Keyboard-panel interaction, routed as `UiMessage::Keymap`.
@@ -78,7 +92,8 @@ pub fn resolve(settings: &KeymapSettings) -> BindingMap {
             continue;
         };
         match o.chord.as_deref().map(KeyChord::parse) {
-            Some(Some(chord)) => map.set(id, chord),
+            // A rebind replaces the primary chord; alternates stay.
+            Some(Some(chord)) => map.set_primary(id, chord),
             Some(None) => {}
             None => map.clear(id),
         }
@@ -89,7 +104,9 @@ pub fn resolve(settings: &KeymapSettings) -> BindingMap {
 /// Rebuild the live keymap from settings and persist them.
 fn apply(r: &mut Resonance) {
     r.ui.keymap = resolve(&r.settings.keymap);
-    r.ui.keymap_editor.baseline = preset_of(&r.settings.keymap).bindings();
+    let preset = preset_of(&r.settings.keymap);
+    r.ui.keymap_editor.baseline = preset.bindings();
+    r.ui.keymap_editor.unbound_by_preset = preset.unbound();
     crate::settings::persist(&r.settings);
 }
 
@@ -112,7 +129,9 @@ pub(crate) fn handle(r: &mut Resonance, msg: KeymapMsg) -> Task<Message> {
             editor.capturing = None;
             editor.conflict = None;
             if tab == SettingsTab::Keyboard {
-                editor.baseline = preset_of(&r.settings.keymap).bindings();
+                let preset = preset_of(&r.settings.keymap);
+                editor.baseline = preset.bindings();
+                editor.unbound_by_preset = preset.unbound();
             }
         }
         KeymapMsg::SetPreset(preset) => {

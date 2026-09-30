@@ -97,13 +97,8 @@ pub(crate) fn handle_key(
         return Task::none();
     }
     let modal = r.modal_overlay();
-    if is_plain_escape(chord) && !repeat {
-        if let Some(overlay) = modal {
-            return match overlay.dismiss_message(r) {
-                Some(message) => r.update(message),
-                None => Task::none(),
-            };
-        }
+    if is_plain_escape(chord) && !repeat && modal.is_some() {
+        return dismiss_overlay(r);
     }
     if modal.is_some() && !has_accelerator(chord) {
         return Task::none();
@@ -169,8 +164,14 @@ pub(crate) fn execute(r: &mut Resonance, command: CommandId) -> Task<Message> {
     let Some(message) = command.build(r) else {
         return Task::none();
     };
-    crate::palette::record_recent(r, command);
-    r.update(message)
+    // Only a command that got past the startup / bounce / freeze gates
+    // counts as run.
+    let passes = !r.gates_message(&message);
+    let task = r.update(message);
+    if passes && command.records_recent() {
+        crate::palette::record_recent(r, command);
+    }
+    task
 }
 
 /// Close the topmost modal root overlay, as its backdrop click would.

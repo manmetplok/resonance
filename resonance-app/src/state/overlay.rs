@@ -37,6 +37,10 @@ pub enum Overlay {
     MarkersOverview,
     DrumGroupsManager,
     MarkerMenu,
+    /// The track context menu and its "Save as preset…" prompt. Drawn in
+    /// the arrange area (its anchor is in arrange-area space), not in the
+    /// root stack, but gated and dismissed like any other overlay.
+    TrackMenu,
     /// The floating "Group selected" bar. Non-modal: it layers over the
     /// arrange view without blocking it, so it gates no keys.
     SelectionBar,
@@ -103,6 +107,10 @@ impl Overlay {
                 Message::MarkerUi(MarkerUiMessage::CancelRename)
             }
             Overlay::MarkerMenu => Message::MarkerUi(MarkerUiMessage::CloseMenu),
+            Overlay::TrackMenu if r.ui.interaction.preset_save.is_some() => {
+                Message::Track(TrackMessage::CloseSavePresetPrompt)
+            }
+            Overlay::TrackMenu => Message::Ui(UiMessage::CloseTrackMenu),
         };
         Some(m)
     }
@@ -154,6 +162,10 @@ impl Resonance {
             || self.ui.interaction.marker_rename.is_some()
         {
             Overlay::MarkerMenu
+        } else if self.ui.interaction.track_menu.is_some()
+            || self.ui.interaction.preset_save.is_some()
+        {
+            Overlay::TrackMenu
         } else if matches!(self.ui.view_mode, ViewMode::Arrange)
             && self.ui.interaction.selected_tracks.len() >= 2
         {
@@ -167,5 +179,12 @@ impl Resonance {
     /// The root overlay when it is modal (see [`Overlay::blocks_keys`]).
     pub fn modal_overlay(&self) -> Option<Overlay> {
         self.root_overlay().filter(|o| o.blocks_keys())
+    }
+
+    /// Whether the canvases must ignore key presses: a modal overlay (the
+    /// palette included) is open, or the Keyboard panel is capturing a
+    /// chord. One predicate for all four canvases.
+    pub fn canvas_keys_blocked(&self) -> bool {
+        self.modal_overlay().is_some() || self.ui.keymap_editor.capturing.is_some()
     }
 }

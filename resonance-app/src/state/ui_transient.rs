@@ -64,8 +64,8 @@ pub struct UiTransientState {
     /// menus, ...).
     pub mixer: MixerUiState,
     /// The active keymap: what every global shortcut and canvas-local key
-    /// resolves through (command-palette.md §4). The Resonance default
-    /// until the keymap settings land.
+    /// resolves through (command-palette.md §4): the preset and overrides
+    /// in `settings.keymap`, resolved by `update::keymap::resolve`.
     pub keymap: crate::commands::BindingMap,
     /// How the typing gate asks whether a text field holds focus; always
     /// `Live` outside tests.
@@ -75,6 +75,9 @@ pub struct UiTransientState {
     /// The query the palette closed with, restored (pre-selected) on the
     /// next open so "run it again" is ⌘K ↵.
     pub palette_memory: String,
+    /// Set when *Recent* changed and `settings.json` has not been written
+    /// since; the tick writes it after a quiet spell.
+    pub recent_dirty_since: Option<std::time::Instant>,
     /// The Settings overlay's tab and the Keyboard panel's state.
     pub keymap_editor: crate::update::keymap::KeymapEditorState,
 }

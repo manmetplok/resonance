@@ -4,7 +4,7 @@
 //! entry point reach their modal or reducer.
 
 use resonance_app::commands::{BindingMap, CommandId, KeyChord, Mods, NamedKey, Scope};
-use resonance_app::message::{Message, TransportMessage, UiMessage};
+use resonance_app::message::{Message, TransportMessage};
 use resonance_app::state::{ArrangementMarker, ClipState, ViewMode};
 use resonance_app::update::shortcuts::TypingProbe;
 use resonance_app::Resonance;
@@ -21,7 +21,7 @@ fn app() -> Resonance {
 }
 
 fn run(app: &mut Resonance, command: CommandId) {
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(command)));
+    app.test_run_shortcut(command);
 }
 
 fn undo_len(app: &Resonance) -> usize {
@@ -140,12 +140,12 @@ fn orphan_actions_reach_their_modal_or_reducer() {
     let mut app = app();
     run(&mut app, CommandId::ExportStemsMidi);
     assert!(app.test_export_dialog().is_some(), "Export modal opens");
-    let _ = app.update(Message::Ui(UiMessage::DismissOverlay));
+    app.test_dismiss_overlay();
     assert!(app.test_export_dialog().is_none(), "Esc's dismiss closes it");
 
     run(&mut app, CommandId::ImportMidi);
     assert!(app.test_import_dialog().is_some(), "Import MIDI modal opens");
-    let _ = app.update(Message::Ui(UiMessage::DismissOverlay));
+    app.test_dismiss_overlay();
 
     let markers = app.test_markers().len();
     run(&mut app, CommandId::AddMarkerAtPlayhead);

@@ -66,6 +66,23 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             }
             return project_io::save_project_as_dialog();
         }
+        UiMessage::NewEmptyProject => {
+            if r.session.dirty {
+                r.banners.error_message =
+                    Some("Save the project first: it has unsaved changes".into());
+                return Task::none();
+            }
+            if r.io.loading || r.io.saving || r.io.save_state.is_some() {
+                return Task::none();
+            }
+            if r.refuse_project_switch_during_render() {
+                return Task::none();
+            }
+            crate::update::project_io::instantiate_builtin(
+                r,
+                crate::update::project_io::BuiltinTemplateId::Empty,
+            );
+        }
         UiMessage::SelectTrack(id) => {
             // A track and a bus can't both be selected — the inspector
             // describes one channel.
@@ -240,9 +257,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         } => {
             return crate::update::shortcuts::handle_key(r, chord, repeat, captured);
         }
-        UiMessage::RunShortcut(command) => {
-            return crate::update::shortcuts::run_shortcut(r, command, false);
-        }
         UiMessage::ShortcutProbed { command, editing } => {
             return crate::update::shortcuts::probed(r, command, editing);
         }
@@ -257,9 +271,6 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::Keymap(msg) => {
             return crate::update::keymap::handle(r, msg);
-        }
-        UiMessage::DismissOverlay => {
-            return crate::update::shortcuts::dismiss_overlay(r);
         }
     }
     Task::none()

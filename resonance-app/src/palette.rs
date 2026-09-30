@@ -13,6 +13,10 @@ use crate::Resonance;
 /// How many commands *Recent* remembers.
 pub const RECENT_LIMIT: usize = 8;
 
+/// The most rows a palette list holds, so a large plugin catalog or project
+/// never builds thousands of rows (view-performance rules).
+pub const MAX_ROWS: usize = 200;
+
 /// The text input's widget id, for programmatic focus.
 pub fn query_input_id() -> iced::widget::Id {
     iced::widget::Id::new("command-palette-query")
@@ -92,8 +96,13 @@ pub enum PaletteMsg {
     Move(i32),
     /// ↵: run the selected row.
     Submit,
-    /// The pointer entered row `index`.
+    /// The pointer is over row `index`. Honoured only after a real
+    /// pointer move since the last ↑/↓ or query change (see
+    /// [`PointerMoved`](Self::PointerMoved)): a row appearing or scrolling
+    /// under a resting pointer must not steal the keyboard selection.
     Hover(usize),
+    /// The pointer moved over the card, at this card-relative position.
+    PointerMoved(iced::Point),
     /// Row `index` was clicked.
     Click(usize),
     /// The result list scrolled (keeps the selection-follow offset honest).
@@ -101,19 +110,22 @@ pub enum PaletteMsg {
 }
 
 /// What a row runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteItem {
     Command(CommandId),
     /// `:` — seek to a 1-based bar and beat.
     GoTo { bar: u32, beat: u32 },
+    /// `:+5` / `:-2` — move the playhead by whole bars.
+    Nudge(i32),
     /// `@` — an arrangement marker.
     Marker(u64),
     /// `@` — a section placement, by its start sample.
     Section { start: u64 },
     /// `#` — a track.
     Track(resonance_audio::types::TrackId),
-    /// `+` — a plugin, by index into the scanned catalog.
-    Plugin(usize),
+    /// `+` — a plugin, by its CLAP id (a rescan while the palette is open
+    /// may reorder the catalog).
+    Plugin(String),
 }
 
 /// One result row, fully resolved for drawing.
@@ -149,6 +161,11 @@ pub struct PaletteState {
     pub sections: Vec<PaletteSection>,
     /// The list's current vertical scroll offset, in pixels.
     pub scroll_y: f32,
+    /// The last card-relative pointer position seen.
+    pub pointer: Option<iced::Point>,
+    /// Whether the pointer really moved since the last ↑/↓ or query
+    /// change; `Hover` is ignored until it has.
+    pub pointer_armed: bool,
 }
 
 impl PaletteState {
@@ -177,6 +194,10 @@ pub fn suggested(view: ViewMode) -> &'static [CommandId] {
     }
 }
 
+/// How long *Recent* waits after its last change before writing
+/// `settings.json`, so a burst of shortcuts is one write.
+pub const RECENT_WRITE_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// The recent commands, newest first (unknown keys dropped).
 pub fn recent(r: &Resonance) -> Vec<CommandId> {
     r.settings
@@ -187,17 +208,30 @@ pub fn recent(r: &Resonance) -> Vec<CommandId> {
         .collect()
 }
 
-/// Remember `command` as run: move it to the front of *Recent*.
+/// Remember `command` as run: move it to the front of *Recent*. The
+/// write to `settings.json` is debounced ([`flush_recent`]).
 pub fn record_recent(r: &mut Resonance, command: CommandId) {
     let recent = &mut r.settings.palette.recent;
     let key = command.key();
     if recent.first().is_some_and(|k| k == key) {
         return;
     }
-    recent.retain(|k| k != key);
+    recent.retain(|k| k != key && CommandId::from_key(k).is_some());
     recent.insert(0, key.to_string());
     recent.truncate(RECENT_LIMIT);
-    crate::settings::persist(&r.settings);
+    r.ui.recent_dirty_since = Some(std::time::Instant::now());
+}
+
+/// Write *Recent* once it has been quiet for [`RECENT_WRITE_DELAY`], or
+/// now when `force` (the session is closing).
+pub fn flush_recent(r: &mut Resonance, force: bool) {
+    let Some(since) = r.ui.recent_dirty_since else {
+        return;
+    };
+    if force || since.elapsed() >= RECENT_WRITE_DELAY {
+        r.ui.recent_dirty_since = None;
+        crate::settings::persist(&r.settings);
+    }
 }
 
 fn command_row(r: &Resonance, id: CommandId, ranges: Vec<(usize, usize)>) -> PaletteRow {
@@ -226,8 +260,9 @@ pub fn score(query: &str, id: CommandId) -> Option<(i32, Vec<(usize, usize)>)> {
         .map(|m| m.score / 2)
         .max();
     match (name, keyword) {
-        (Some(n), Some(k)) if k > n.score => Some((k, Vec::new())),
-        (Some(n), _) => Some((n.score, n.ranges)),
+        // A name match keeps its highlight even when a keyword scores more.
+        (Some(n), Some(k)) => Some((n.score.max(k), n.ranges)),
+        (Some(n), None) => Some((n.score, n.ranges)),
         (None, Some(k)) => Some((k, Vec::new())),
         (None, None) => None,
     }
@@ -238,7 +273,7 @@ pub fn build(r: &Resonance, query: &str) -> Vec<PaletteSection> {
     let (mode, rest) = PaletteMode::of(query);
     match mode {
         PaletteMode::Commands => {}
-        PaletteMode::GoToBar => return build_goto(rest),
+        PaletteMode::GoToBar => return build_goto(r, rest),
         PaletteMode::Jump => return build_jump(r, rest),
         PaletteMode::Tracks => return build_tracks(r, rest),
         PaletteMode::Plugins => return build_plugins(r, rest),
@@ -264,6 +299,7 @@ pub fn build(r: &Resonance, query: &str) -> Vec<PaletteSection> {
             .then(b.2.cmp(&a.2))
             .then(a.3.cmp(&b.3))
     });
+    hits.truncate(MAX_ROWS);
     // Group by category; a category sits where its best hit ranks.
     let mut sections: Vec<(CommandCategory, PaletteSection)> = Vec::new();
     for (_, _, _, _, id, ranges) in hits {
@@ -329,36 +365,99 @@ fn one_section(title: &str, rows: Vec<PaletteRow>) -> Vec<PaletteSection> {
     }]
 }
 
-/// `:` — one row, parsed live.
-fn build_goto(rest: &str) -> Vec<PaletteSection> {
+/// `:` — one row, parsed live: `17` (bar), `17.3` (bar and beat), `+5` /
+/// `-2` (bars from the playhead). A bar past the song's end or a beat the
+/// bar's meter doesn't have is shown unavailable with the reason.
+fn build_goto(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
     use crate::theme::fa;
-    let row = match parse_bar(rest) {
-        Some((bar, 1)) if !rest.contains('.') => item_row(
-            PaletteItem::GoTo { bar, beat: 1 },
-            format!("Go to bar {bar}"),
-            Vec::new(),
-            "Transport › Playhead".to_string(),
-            fa::FORWARD_STEP,
-        ),
-        Some((bar, beat)) => item_row(
-            PaletteItem::GoTo { bar, beat },
-            format!("Go to bar {bar}, beat {beat}"),
-            Vec::new(),
-            "Transport › Playhead".to_string(),
-            fa::FORWARD_STEP,
-        ),
-        None => PaletteRow {
-            unavailable: Some("Type a bar, e.g. 17 or 17.3"),
-            ..item_row(
-                PaletteItem::GoTo { bar: 1, beat: 1 },
-                "Go to bar…".to_string(),
-                Vec::new(),
-                "Transport › Playhead".to_string(),
-                fa::FORWARD_STEP,
-            )
-        },
+    let crumb = || "Transport › Playhead".to_string();
+    let row = |item, name: String| item_row(item, name, Vec::new(), crumb(), fa::FORWARD_STEP);
+    let unavailable = |reason: &'static str| PaletteRow {
+        unavailable: Some(reason),
+        ..row(PaletteItem::GoTo { bar: 1, beat: 1 }, "Go to bar…".to_string())
     };
-    one_section("Go to", vec![row])
+    let text = rest.trim();
+    if let Some(n) = text
+        .strip_prefix('+')
+        .map(|d| d.trim().parse::<i32>().ok())
+        .or_else(|| text.strip_prefix('-').map(|d| d.trim().parse::<i32>().ok().map(|n| -n)))
+    {
+        let result = match n {
+            Some(n) if n != 0 => row(
+                PaletteItem::Nudge(n),
+                format!(
+                    "Move {} {} bar{}",
+                    if n > 0 { "forward" } else { "back" },
+                    n.abs(),
+                    if n.abs() == 1 { "" } else { "s" }
+                ),
+            ),
+            _ => unavailable("Type a number of bars, e.g. +4 or -2"),
+        };
+        return one_section("Go to", vec![result]);
+    }
+    let result = match parse_bar(text) {
+        None => unavailable("Type a bar, e.g. 17 or 17.3"),
+        Some((bar, beat)) => {
+            let end = crate::update::transport_nav::project_end(r);
+            let last_bar = if end == 0 {
+                u32::MAX
+            } else {
+                let (b, frac) = r.tempo_map.sample_to_bar(end, r.sample_rate);
+                b + u32::from(frac > 0.0) + 1
+            };
+            let beats = r.tempo_map.numerator_at_bar(bar - 1).max(1) as u32;
+            if bar > last_bar {
+                PaletteRow {
+                    unavailable: Some("Past the end of the song"),
+                    ..row(PaletteItem::GoTo { bar, beat }, format!("Go to bar {bar}"))
+                }
+            } else if beat > beats {
+                PaletteRow {
+                    unavailable: Some("The bar's meter has fewer beats"),
+                    ..row(PaletteItem::GoTo { bar, beat }, format!("Go to bar {bar}, beat {beat}"))
+                }
+            } else if text.contains('.') {
+                row(PaletteItem::GoTo { bar, beat }, format!("Go to bar {bar}, beat {beat}"))
+            } else {
+                row(PaletteItem::GoTo { bar, beat: 1 }, format!("Go to bar {bar}"))
+            }
+        }
+    };
+    one_section("Go to", vec![result])
+}
+
+/// What the empty result list says for `query`, per mode.
+pub fn empty_message(query: &str) -> String {
+    let (mode, rest) = PaletteMode::of(query);
+    let rest = rest.trim();
+    match mode {
+        PaletteMode::Commands => format!("No commands match \u{201c}{query}\u{201d}"),
+        PaletteMode::GoToBar => "Type a bar, e.g. 17 or 17.3".to_string(),
+        PaletteMode::Jump if rest.is_empty() => "No markers or sections".to_string(),
+        PaletteMode::Jump => format!("No markers or sections match \u{201c}{rest}\u{201d}"),
+        PaletteMode::Tracks if rest.is_empty() => "No tracks".to_string(),
+        PaletteMode::Tracks => format!("No tracks match \u{201c}{rest}\u{201d}"),
+        PaletteMode::Plugins if rest.is_empty() => "No plugins for this track".to_string(),
+        PaletteMode::Plugins => format!("No plugins match \u{201c}{rest}\u{201d}"),
+    }
+}
+
+/// Re-resolve every command row's availability (the playhead moves, a
+/// selection changes) without re-ranking. Called on the tick while open.
+pub fn refresh_availability(r: &mut Resonance) {
+    let Some(mut state) = r.ui.palette.take() else {
+        return;
+    };
+    for row in state.sections.iter_mut().flat_map(|s| s.rows.iter_mut()) {
+        if let PaletteItem::Command(id) = row.item {
+            row.unavailable = match id.availability(r) {
+                Available::Yes => None,
+                Available::No(reason) => Some(reason),
+            };
+        }
+    }
+    r.ui.palette = Some(state);
 }
 
 /// Rows whose `name` fuzzy-matches `needle`, best first, stable on ties.
@@ -375,6 +474,7 @@ fn filtered(needle: &str, mut rows: Vec<PaletteRow>) -> Vec<PaletteRow> {
     if !needle.trim().is_empty() {
         scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
     }
+    scored.truncate(MAX_ROWS);
     scored.into_iter().map(|(_, _, row)| row).collect()
 }
 
@@ -433,7 +533,14 @@ fn build_tracks(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
                 PaletteItem::Track(t.id),
                 t.name.clone(),
                 Vec::new(),
-                format!("Track › {:?}", t.track_type),
+                format!(
+                    "Track › {}",
+                    match t.track_type {
+                        resonance_audio::types::TrackType::Audio => "Audio",
+                        resonance_audio::types::TrackType::Instrument => "Instrument",
+                        resonance_audio::types::TrackType::Vocal => "Vocal",
+                    }
+                ),
                 fa::SLIDERS,
             )
         })
@@ -454,7 +561,7 @@ fn build_plugins(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
         let row = PaletteRow {
             unavailable: Some("Select a track first"),
             ..item_row(
-                PaletteItem::Plugin(usize::MAX),
+                PaletteItem::Plugin(String::new()),
                 "Add plugin…".to_string(),
                 Vec::new(),
                 "Mixer › Chain".to_string(),
@@ -470,11 +577,10 @@ fn build_plugins(r: &Resonance, rest: &str) -> Vec<PaletteSection> {
         .plugin_catalog
         .available_plugins
         .iter()
-        .enumerate()
-        .filter(|(_, p)| p.is_instrument == wants_instrument)
-        .map(|(i, p)| {
+        .filter(|p| p.is_instrument == wants_instrument)
+        .map(|p| {
             item_row(
-                PaletteItem::Plugin(i),
+                PaletteItem::Plugin(p.clap_plugin_id.clone()),
                 p.name.clone(),
                 Vec::new(),
                 format!("Add to {} › {}", track.name, p.vendor),

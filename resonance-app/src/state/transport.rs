@@ -13,6 +13,9 @@ pub enum LoopDragTarget {
 pub struct TransportState {
     pub playing: bool,
     pub recording: bool,
+    /// A Record was asked for and the engine has not reported the pass
+    /// started yet (the count-in).
+    pub record_pending: bool,
     pub recording_start_sample: u64,
     pub playhead: u64,
     /// Where the current playback started (set by Play, Record and the
@@ -33,11 +36,19 @@ pub struct TransportState {
     pub dragging_loop: Option<LoopDragTarget>,
 }
 
+impl TransportState {
+    /// Recording, or counting in to record.
+    pub fn is_recording(&self) -> bool {
+        self.recording || self.record_pending
+    }
+}
+
 impl Default for TransportState {
     fn default() -> Self {
         Self {
             playing: false,
             recording: false,
+            record_pending: false,
             recording_start_sample: 0,
             playhead: 0,
             play_start: 0,

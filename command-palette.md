@@ -20,6 +20,30 @@ to match; those notes are marked *(as built)*.
   keymap lives in `settings.json`; Settings has a General / Keyboard nav
   rail with preset, filter, Rebind (press the chord), conflict banner,
   Reset and Reset all; the DAW presets ship (D5).
+- **Review fixes landed.** *(As built:)*
+  - Every canvas ignores keys while any modal overlay (palette included) is
+    open or a rebind is capturing (`Resonance::canvas_keys_blocked`). The
+    track context menu and its preset prompt are `Overlay::TrackMenu`:
+    gated and closed by Esc, though still drawn in the arrange area.
+  - Canvas deletes accept ⇧ and ⌘ with Delete/Backspace again, so ⌘⌫ over
+    a canvas selection never reaches Delete Selected Track. With nothing
+    selected on a key-owning canvas ⌘⌫ does still fall through to it (it
+    asks first). In the vocal roll, `s` / `+` / Delete with no note
+    selected are captured and do nothing. ⌥ variants are not restored.
+  - New Project with a project open makes a fresh untitled one (the
+    `project.new` path). With unsaved changes it is unavailable ("Save
+    first"); there is no GUI discard-confirm yet.
+  - Presets: Logic Pro (C cycle, ⌘U loop selection, ⌘T split, Return to
+    start) and Pro Tools (numpad-style 0/3/4/7). Ableton and FL Studio were
+    dropped: their old tables were wrong or no-ops. The panel lists what a
+    preset leaves unbound. Rebinding replaces the primary chord and keeps
+    the alternates.
+  - Seek commands are unavailable while recording or counting in. Recents
+    skip the palette-opening commands, record only after the gates pass,
+    and are written after 2 s of quiet (and at close).
+  - `:+5` / `:-2` move by bars; a bar past the song end or a beat the
+    meter lacks is an unavailable row. Palette lists cap at 200 rows; the
+    Keyboard page's list is `lazy`.
 
 ## 0. Why
 

@@ -322,6 +322,11 @@ pub enum UiMessage {
     DismissError,
     /// User clicked "New Project" in the startup modal.
     StartNewProject,
+    /// Replace the open project with a fresh, untitled empty one (the New
+    /// Project command) — the control API's `project.new` path. Refused
+    /// while the project has unsaved changes, a load or save is running,
+    /// or an offline render owns the engine.
+    NewEmptyProject,
     /// Select (highlight) a track in the arrange view, or deselect all.
     /// Whether the click replaces or extends the multi-selection is read
     /// from the live modifier state ([`ModifiersChanged`]).
@@ -438,10 +443,6 @@ pub enum UiMessage {
         repeat: bool,
         captured: bool,
     },
-    /// Run a registry command as a keyboard shortcut: dropped when
-    /// unavailable, probed through the typing gate when the command is
-    /// `NotWhileTyping`.
-    RunShortcut(crate::commands::CommandId),
     /// The typing gate's answer for a `NotWhileTyping` shortcut: the
     /// command runs only when no text field held focus (`editing ==
     /// false`).
@@ -449,9 +450,6 @@ pub enum UiMessage {
         command: crate::commands::CommandId,
         editing: bool,
     },
-    /// Close the topmost modal root overlay (Esc), as its backdrop click
-    /// or Cancel button would.
-    DismissOverlay,
     /// Open the command palette in a mode (⌘K / ⇧⌘P); closes it when it
     /// is already open.
     OpenPalette(crate::palette::PaletteMode),
@@ -483,6 +481,7 @@ impl UiMessage {
             | Self::ToggleReferencePanel
             | Self::DismissError
             | Self::StartNewProject
+            | Self::NewEmptyProject
             | Self::SelectTrack(..)
             | Self::SelectBus(..)
             | Self::ModifiersChanged(..)
@@ -514,9 +513,7 @@ impl UiMessage {
             // `update()` and is classified on its own, so one shortcut is
             // one undo entry (or none).
             | Self::ShortcutKey { .. }
-            | Self::RunShortcut(..)
             | Self::ShortcutProbed { .. }
-            | Self::DismissOverlay
             // The palette itself is pure UI; the command a row runs
             // re-enters `update()` and is classified on its own.
             | Self::OpenPalette(..)

@@ -71,6 +71,8 @@ mod reference_undo;
 mod remote_indicator_snapshot;
 #[path = "performance/shortcut_dispatch.rs"]
 mod shortcut_dispatch;
+#[path = "performance/shortcut_review_fixes.rs"]
+mod shortcut_review_fixes;
 #[path = "performance/shortcut_parity.rs"]
 mod shortcut_parity;
 #[path = "performance/shortcut_focus_gate.rs"]

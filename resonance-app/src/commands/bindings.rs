@@ -1,19 +1,20 @@
 //! The binding table and the DAW keymap presets.
 //!
-//! Presets stay in the code, unexposed, until the rebinding UI can show and
-//! fix what they change (command-palette.md D5).
+//! Presets are chosen in Preferences › Keyboard, which also lists what a
+//! preset leaves unbound (command-palette.md D5, §8).
 
 use super::{CommandId, KeyChord, Mods, NamedKey, Scope};
 
 /// A selectable keyboard layout. [`KeymapPreset::Resonance`] is the built-in
-/// default; the others approximate the muscle memory of popular DAWs.
+/// default; the others carry the well-known bindings of their DAW (only
+/// ones we are sure of), applied on top of the defaults. A preset can take
+/// a chord from a default command, which is then unbound: see
+/// [`KeymapPreset::unbound`], shown by the Keyboard panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeymapPreset {
     Resonance,
-    AbletonLive,
     LogicPro,
     ProTools,
-    FlStudio,
 }
 
 impl std::fmt::Display for KeymapPreset {
@@ -23,74 +24,79 @@ impl std::fmt::Display for KeymapPreset {
 }
 
 impl KeymapPreset {
-    pub const ALL: [KeymapPreset; 5] = [
+    pub const ALL: [KeymapPreset; 3] = [
         KeymapPreset::Resonance,
-        KeymapPreset::AbletonLive,
         KeymapPreset::LogicPro,
         KeymapPreset::ProTools,
-        KeymapPreset::FlStudio,
     ];
 
     /// Stable id for settings.json.
     pub fn key(self) -> &'static str {
         match self {
             KeymapPreset::Resonance => "Resonance",
-            KeymapPreset::AbletonLive => "AbletonLive",
             KeymapPreset::LogicPro => "LogicPro",
             KeymapPreset::ProTools => "ProTools",
-            KeymapPreset::FlStudio => "FlStudio",
         }
     }
 
     pub fn display_name(self) -> &'static str {
         match self {
             KeymapPreset::Resonance => "Resonance (default)",
-            KeymapPreset::AbletonLive => "Ableton Live",
             KeymapPreset::LogicPro => "Logic Pro",
             KeymapPreset::ProTools => "Pro Tools",
-            KeymapPreset::FlStudio => "FL Studio",
         }
     }
 
-    /// Resolve this preset into a concrete [`BindingMap`]. Presets are built by
-    /// applying their DAW-specific overrides on top of the Resonance defaults,
-    /// so every [`CommandId`] resolves under every preset.
+    /// Resolve this preset into a concrete [`BindingMap`]: its bindings
+    /// applied on top of the Resonance defaults.
     pub fn bindings(self) -> BindingMap {
         let mut map = BindingMap::resonance_default();
-        for (id, chord) in self.overrides() {
-            map.set(id, chord);
+        for (id, chord, alternate) in self.overrides() {
+            if alternate {
+                map.add_alternate(id, chord);
+            } else {
+                map.set(id, chord);
+            }
         }
         map
     }
 
-    /// DAW-specific deviations from the Resonance defaults.
-    fn overrides(self) -> Vec<(CommandId, KeyChord)> {
+    /// The commands the defaults bind that this preset leaves with no
+    /// chord at all, because it gave their chord to something else.
+    pub fn unbound(self) -> Vec<CommandId> {
+        let default = BindingMap::resonance_default();
+        let preset = self.bindings();
+        CommandId::ALL
+            .iter()
+            .copied()
+            .filter(|&id| default.chord_for(id).is_some() && preset.chord_for(id).is_none())
+            .collect()
+    }
+
+    /// `(command, chord, as an alternate)` — an alternate keeps the
+    /// command's default chord too.
+    fn overrides(self) -> Vec<(CommandId, KeyChord, bool)> {
         use CommandId::*;
         let cmd = Mods::cmd();
         let none = Mods::NONE;
         match self {
             KeymapPreset::Resonance => Vec::new(),
-            KeymapPreset::AbletonLive => vec![
-                (TransportToggleLoop, KeyChord::char('l', cmd)),
-                (TransportRecord, KeyChord::named(NamedKey::Enter, none)),
-                (ViewArrange, KeyChord::named(NamedKey::Tab, none)),
-                (TransportToggleMetronome, KeyChord::char('m', cmd)),
-            ],
+            // Logic Pro: C toggles Cycle, ⌘U sets the locators to the
+            // selection, ⌘T splits at the playhead, Return goes to the
+            // beginning. (R, K, Space, M, S already match.)
             KeymapPreset::LogicPro => vec![
-                (TransportRecord, KeyChord::char('r', none)),
-                (TransportToggleMetronome, KeyChord::char('k', none)),
-                (TransportCycleTimeSignature, KeyChord::char('t', none)),
+                (TransportToggleLoop, KeyChord::char('c', none), false),
+                (LoopSelection, KeyChord::char('u', cmd), false),
+                (SplitClipAtPlayhead, KeyChord::char('t', cmd), false),
+                (PlayheadToStart, KeyChord::named(NamedKey::Enter, none), false),
             ],
+            // Pro Tools' numeric-keypad transport: 0 play/stop, 3 record,
+            // 4 loop playback, 7 click. (⌘E separate already matches.)
             KeymapPreset::ProTools => vec![
-                (TransportRecord, KeyChord::char('3', none)),
-                (TransportTogglePlay, KeyChord::named(NamedKey::Space, none)),
-                (TransportToggleMetronome, KeyChord::char('7', none)),
-                (TransportToggleLoop, KeyChord::char('4', none)),
-            ],
-            KeymapPreset::FlStudio => vec![
-                (TransportRecord, KeyChord::char('r', none)),
-                (TransportToggleLoop, KeyChord::char('l', none)),
-                (SaveProjectAs, KeyChord::char('s', Mods::cmd_shift())),
+                (TransportTogglePlay, KeyChord::char('0', none), true),
+                (TransportRecord, KeyChord::char('3', none), false),
+                (TransportToggleLoop, KeyChord::char('4', none), false),
+                (TransportToggleMetronome, KeyChord::char('7', none), false),
             ],
         }
     }
@@ -204,14 +210,29 @@ impl BindingMap {
             (DeleteSelectedTrack, named(NamedKey::Backspace, cmd)),
             // Canvas-local keys (§4.3): live only while that canvas owns
             // the keyboard, where they may shadow a global chord.
+            // Delete / Backspace with any of ⇧ ⌘ ⌥ too, as the canvases
+            // always accepted: ⌘⌫ over a canvas selection deletes the
+            // selection and never reaches Delete Selected Track.
             (TimelineDeleteSelection, named(NamedKey::Delete, none)),
             (TimelineDeleteSelection, named(NamedKey::Backspace, none)),
+            (TimelineDeleteSelection, named(NamedKey::Delete, shift)),
+            (TimelineDeleteSelection, named(NamedKey::Backspace, shift)),
+            (TimelineDeleteSelection, named(NamedKey::Delete, cmd)),
+            (TimelineDeleteSelection, named(NamedKey::Backspace, cmd)),
             (DeleteSelectedNotes, named(NamedKey::Delete, none)),
             (DeleteSelectedNotes, named(NamedKey::Backspace, none)),
+            (DeleteSelectedNotes, named(NamedKey::Delete, shift)),
+            (DeleteSelectedNotes, named(NamedKey::Backspace, shift)),
+            (DeleteSelectedNotes, named(NamedKey::Delete, cmd)),
+            (DeleteSelectedNotes, named(NamedKey::Backspace, cmd)),
             (SelectAllNotes, KeyChord::char('a', cmd)),
             (SelectNotesInView, KeyChord::char('a', cmd_shift)),
             (VocalDeleteNote, named(NamedKey::Delete, none)),
             (VocalDeleteNote, named(NamedKey::Backspace, none)),
+            (VocalDeleteNote, named(NamedKey::Delete, shift)),
+            (VocalDeleteNote, named(NamedKey::Backspace, shift)),
+            (VocalDeleteNote, named(NamedKey::Delete, cmd)),
+            (VocalDeleteNote, named(NamedKey::Backspace, cmd)),
             (VocalToggleSlur, key('s')),
             (VocalToggleSlur, KeyChord::char('s', shift)),
             (VocalToggleSlur, KeyChord::char('=', shift)),
@@ -240,6 +261,18 @@ impl BindingMap {
             *other_id != id && !(*other_chord == chord && other_id.scope() == id.scope())
         });
         self.entries.push((id, chord));
+    }
+
+    /// Make `chord` `id`'s primary chord, keeping its alternates, and take
+    /// it from any other command in the same scope.
+    pub fn set_primary(&mut self, id: CommandId, chord: KeyChord) {
+        self.entries.retain(|(other_id, other_chord)| {
+            !(*other_chord == chord && other_id.scope() == id.scope())
+        });
+        match self.entries.iter_mut().find(|(other, _)| *other == id) {
+            Some(entry) => entry.1 = chord,
+            None => self.entries.push((id, chord)),
+        }
     }
 
     /// Add `chord` as an alternate for `id`, taking it away from any other

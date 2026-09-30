@@ -98,6 +98,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
                 let back = r.transport.play_start;
                 let _ = r.engine.send(AudioCommand::Stop);
                 r.transport.playing = false;
+                r.transport.record_pending = false;
                 let _ = r.engine.send(AudioCommand::SeekTo(back));
                 r.transport.playhead = back;
             } else {
@@ -105,9 +106,18 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
             }
         }
         TransportMessage::PlayFromLoopStart => {
-            let _ = r.engine.send(AudioCommand::SeekTo(r.transport.loop_in));
-            r.transport.playhead = r.transport.loop_in;
-            return handle(r, TransportMessage::Play);
+            // The user asked for the loop start, so it wins over Play's
+            // Compose auto-loop of the selected section; and it is where a
+            // later Space stop returns to, whether or not we were playing.
+            let start = r.transport.loop_in;
+            let _ = r.engine.send(AudioCommand::SeekTo(start));
+            r.transport.playhead = start;
+            r.transport.play_start = start;
+            if !r.transport.playing {
+                r.session.undo.break_coalesce();
+                let _ = r.engine.send(AudioCommand::Play);
+                r.transport.playing = true;
+            }
         }
         TransportMessage::SeekTo(target) => {
             return super::transport_nav::seek_to(r, target);
@@ -161,6 +171,7 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         }
         TransportMessage::Record => {
             if r.registry.tracks.iter().any(|t| t.record_armed) {
+                r.transport.record_pending = true;
                 if !r.transport.playing {
                     r.transport.play_start = r.transport.playhead;
                 }
@@ -173,10 +184,12 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         TransportMessage::Pause => {
             let _ = r.engine.send(AudioCommand::Pause);
             r.transport.playing = false;
+            r.transport.record_pending = false;
         }
         TransportMessage::Stop => {
             let _ = r.engine.send(AudioCommand::Stop);
             r.transport.playing = false;
+            r.transport.record_pending = false;
             r.transport.playhead = 0;
         }
         TransportMessage::SkipBack => {

@@ -35,14 +35,14 @@ fn query(app: &mut Resonance, q: &str) {
 }
 
 fn first(app: &Resonance) -> CommandId {
-    match app.test_palette().expect("palette open").rows().next().expect("a row").item {
-        PaletteItem::Command(c) => c,
+    match &app.test_palette().expect("palette open").rows().next().expect("a row").item {
+        PaletteItem::Command(c) => *c,
         other => panic!("not a command row: {other:?}"),
     }
 }
 
 fn selected(app: &Resonance) -> CommandId {
-    match app.test_palette().unwrap().selected_row().unwrap().item {
+    match app.test_palette().unwrap().selected_row().unwrap().item.clone() {
         PaletteItem::Command(c) => c,
         other => panic!("not a command row: {other:?}"),
     }
@@ -191,14 +191,14 @@ fn ranking_is_pinned_for_a_fixed_set_of_queries() {
 #[test]
 fn the_empty_query_shows_recents_then_suggestions() {
     let mut app = app();
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(CommandId::TransportToggleMetronome)));
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(CommandId::ToggleGlobalTracks)));
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(CommandId::TransportToggleMetronome)));
+    app.test_run_shortcut(CommandId::TransportToggleMetronome);
+    app.test_run_shortcut(CommandId::ToggleGlobalTracks);
+    app.test_run_shortcut(CommandId::TransportToggleMetronome);
     open(&mut app);
     let state = app.test_palette().unwrap();
     let titles: Vec<&str> = state.sections.iter().map(|s| s.title.as_str()).collect();
     assert_eq!(titles, ["Recent", "Suggested for this view"]);
-    let recent: Vec<PaletteItem> = state.sections[0].rows.iter().map(|r| r.item).collect();
+    let recent: Vec<PaletteItem> = state.sections[0].rows.iter().map(|r| r.item.clone()).collect();
     assert_eq!(
         recent,
         [
@@ -261,7 +261,7 @@ fn at_mode_lists_markers_and_sections_in_timeline_order() {
     let names: Vec<String> = app.test_palette().unwrap().rows().map(|r| r.name.clone()).collect();
     assert_eq!(names, ["Intro", "Bridge"]);
     query(&mut app, "@brid");
-    let rows: Vec<PaletteItem> = app.test_palette().unwrap().rows().map(|r| r.item).collect();
+    let rows: Vec<PaletteItem> = app.test_palette().unwrap().rows().map(|r| r.item.clone()).collect();
     assert_eq!(rows.len(), 1);
     palette(&mut app, PaletteMsg::Submit);
     assert_eq!(app.test_playhead(), late);
@@ -279,7 +279,7 @@ fn hash_mode_selects_a_track_and_plus_mode_needs_one() {
     query(&mut app, "#");
     assert_eq!(app.test_palette().unwrap().row_count(), 2);
     palette(&mut app, PaletteMsg::Move(1));
-    let PaletteItem::Track(id) = app.test_palette().unwrap().selected_row().unwrap().item else {
+    let PaletteItem::Track(id) = app.test_palette().unwrap().selected_row().unwrap().item.clone() else {
         panic!("a track row");
     };
     palette(&mut app, PaletteMsg::Submit);
@@ -320,8 +320,8 @@ fn golden(app: &Resonance, name: &str) {
 #[test]
 fn palette_empty_state_golden() {
     let mut app = demo_app();
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(CommandId::ToggleGlobalTracks)));
-    let _ = app.update(Message::Ui(UiMessage::RunShortcut(CommandId::TransportToggleMetronome)));
+    app.test_run_shortcut(CommandId::ToggleGlobalTracks);
+    app.test_run_shortcut(CommandId::TransportToggleMetronome);
     open(&mut app);
     assert_eq!(app.test_palette().unwrap().sections.len(), 2);
     golden(&app, "command_palette_empty");

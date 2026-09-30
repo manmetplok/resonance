@@ -602,10 +602,10 @@ impl Resonance {
                 typing_probe: Default::default(),
                 palette: None,
                 palette_memory: String::new(),
-                keymap_editor: crate::update::keymap::KeymapEditorState {
-                    baseline: crate::update::keymap::preset_of(&settings.keymap).bindings(),
-                    ..Default::default()
-                },
+                recent_dirty_since: None,
+                keymap_editor: crate::update::keymap::KeymapEditorState::for_settings(
+                    &settings.keymap,
+                ),
             },
             banners: state::Banners::default(),
             master: state::MasterState {

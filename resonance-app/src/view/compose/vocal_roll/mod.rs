@@ -92,9 +92,11 @@ pub struct VocalRollCanvas<'a> {
     /// The active keymap: canvas-local keys resolve through it
     /// (command-palette.md §4.3).
     pub keymap: &'a crate::commands::BindingMap,
-    /// Set while the command palette is open: the canvas ignores key
-    /// presses, so Backspace typed into the palette can't delete the
-    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    /// Set while any modal overlay (the palette included) is open or the
+    /// Keyboard panel is capturing a chord: the canvas ignores key presses,
+    /// so Backspace typed into a dialog can't delete the selection this
+    /// canvas owned the keys for (command-palette.md §7.3). See
+    /// `Resonance::canvas_keys_blocked`.
     pub keys_blocked: bool,
     pub clip: &'a MidiClipState,
     pub track_id: TrackId,
@@ -149,7 +151,7 @@ pub fn build_canvas<'a>(
         .map(|v| v.as_slice())
         .unwrap_or(EMPTY_LYRICS.as_slice());
     Some(VocalRollCanvas {
-        keys_blocked: app.ui.palette.is_some(),
+        keys_blocked: app.canvas_keys_blocked(),
         keymap: &app.ui.keymap,
         clip,
         track_id: editor_state.track_id,

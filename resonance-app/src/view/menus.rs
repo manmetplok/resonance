@@ -521,7 +521,7 @@ fn track_menu_overlay<'a>(
     let menu_col = column![
         track_menu_item(
             "Freeze track",
-            crate::view::shortcut_hint::chord_text(r, crate::commands::CommandId::FreezeSelectedTracks),
+            None,
             Message::Freeze(FreezeMessage::FreezeTrack(id)),
             can_freeze,
         ),
@@ -534,7 +534,7 @@ fn track_menu_overlay<'a>(
         marker_menu_sep(),
         track_menu_item(
             "Freeze selected tracks",
-            None,
+            crate::view::shortcut_hint::chord_text(r, crate::commands::CommandId::FreezeSelectedTracks),
             Message::Freeze(FreezeMessage::FreezeSelectedTracks),
             can_freeze_selected,
         ),
