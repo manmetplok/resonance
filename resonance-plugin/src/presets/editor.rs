@@ -159,7 +159,15 @@ impl PresetEditor {
     ) -> PresetEvent {
         if session.load_preset(bank, preset, params) {
             self.error = None;
-            PresetEvent::Loaded(session.current().unwrap_or_else(|| preset.clone()))
+            let loaded = session.current().unwrap_or_else(|| preset.clone());
+            // A bar pick (combo, ◀ / ▶) is a user pick: it lands in the
+            // recents like a browser keep does.
+            if loaded.is_resolved() {
+                if let Err(e) = bank.library().record_use(bank.plugin_id(), &loaded.id) {
+                    tracing::debug!("presets: recents not recorded: {e}");
+                }
+            }
+            PresetEvent::Loaded(loaded)
         } else {
             self.error = Some(format!("Preset '{}' could not be loaded", preset.name));
             PresetEvent::None

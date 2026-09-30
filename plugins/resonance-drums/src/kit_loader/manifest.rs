@@ -30,7 +30,7 @@ pub struct MicSetup {
 /// User-chosen setup keys per close-mic position for one pad. If an
 /// entry is missing the loader picks the first available setup for that
 /// position from the manifest.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PadMicChoices {
     pub close_setups: BTreeMap<String, String>,
 }

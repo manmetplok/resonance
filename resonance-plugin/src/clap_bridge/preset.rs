@@ -97,6 +97,13 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
         presets::overlay_preset(&mut current, &doc, keys, &|id| {
             excluded.iter().any(|e| e == id)
         });
+        // A preset that names no identity is not "the old preset,
+        // unmodified": the loaded identity goes.
+        if doc.get(PRESET_STATE_KEY).is_none() {
+            if let Some(obj) = current.as_object_mut() {
+                obj.remove(PRESET_STATE_KEY);
+            }
+        }
         let bytes = serde_json::to_vec(&current).unwrap_or_default();
         self.load_bytes(&bytes)
     }

@@ -48,6 +48,9 @@ pub struct ResonanceIr {
     sample_rate: f32,
     /// Atomic load request for the persistent loader thread (-1 = no request).
     load_request: Arc<AtomicI32>,
+    /// A state load's index / "no IR" for the audio thread (see
+    /// `state::IrExtraState::adopt`).
+    adopt: Arc<AtomicI32>,
     /// Handle to the persistent loader thread; dropped on plugin drop.
     loader_handle: Option<LoaderHandle>,
     /// Handle back to the host, from `set_host`. The only way to report a
@@ -111,6 +114,7 @@ impl ResonancePlugin for ResonanceIr {
         let block_size = dsp::block_size_for(44100.0, LatencyMode::default());
         let params = Arc::new(IrParams::default());
         let load_request = Arc::new(AtomicI32::new(-1));
+        let adopt = Arc::new(AtomicI32::new(state::ADOPT_NONE));
         // The preset identity wraps the IR-path saver rather than
         // replacing it: chaining is why `with_extra` exists.
         let presets = resonance_plugin::presets::PresetSession::for_plugin_with_extra::<Self>(Arc::new(
@@ -118,6 +122,7 @@ impl ResonancePlugin for ResonanceIr {
                 ir_path: params.ir_path.clone(),
                 file_list: params.file_list.clone(),
                 load_request: load_request.clone(),
+                adopt: adopt.clone(),
             },
         ));
         Self {
@@ -132,6 +137,7 @@ impl ResonancePlugin for ResonanceIr {
             last_file_index: -1,
             sample_rate: 44100.0,
             load_request,
+            adopt,
             loader_handle: None,
             host: None,
         }
@@ -209,6 +215,21 @@ impl ResonancePlugin for ResonanceIr {
         // Check mailbox for newly loaded convolver — start crossfade.
         if let Some(conv) = self.convolver_mailbox.try_take() {
             self.engine.begin_swap(conv);
+        }
+
+        // A state/preset load's index (or "no IR"), adopted here so the
+        // change detector below sees no change of its own.
+        match self.adopt.swap(state::ADOPT_NONE, Ordering::AcqRel) {
+            state::ADOPT_NONE => {}
+            state::ADOPT_CLEAR => {
+                self.engine.begin_clear();
+                self.params.file_select.set_value(0);
+                self.last_file_index = 0;
+            }
+            idx => {
+                self.params.file_select.set_value(idx);
+                self.last_file_index = idx;
+            }
         }
 
         // Detect file_select param change from host/DAW.

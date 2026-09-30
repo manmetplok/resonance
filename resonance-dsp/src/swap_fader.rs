@@ -187,6 +187,25 @@ impl<T> SwapFader<T> {
         }
     }
 
+    /// Fade the active payload out and leave nothing active (an IR
+    /// cleared by a preset). A pending payload is dropped (retired); a
+    /// fade already running carries on and lands on nothing.
+    pub fn begin_clear(&mut self) {
+        if let Some(old) = self.pending.take() {
+            self.retire(old);
+        }
+        if self.active.is_none() || self.fade_out_remaining > 0 {
+            return;
+        }
+        self.fade_out_remaining = self.fade_samples - self.fade_in_remaining;
+        self.fade_in_remaining = 0;
+        if self.fade_out_remaining == 0 {
+            if let Some(old) = self.active.take() {
+                self.retire(old);
+            }
+        }
+    }
+
     pub fn active(&self) -> Option<&T> {
         self.active.as_ref()
     }

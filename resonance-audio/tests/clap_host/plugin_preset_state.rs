@@ -61,6 +61,10 @@ fn the_ir_preset_form_carries_the_impulse_not_the_index() {
     let state = state_of(&instance);
     assert_eq!(state["ir_path"], "/nonexistent/cab.wav", "{state}");
     assert!((state["params"]["dry_wet"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    assert!(
+        state.get("preset").is_none(),
+        "a preset naming no identity drops the old one: {state}"
+    );
     drop(instance);
     drop(bundle);
 }

@@ -1369,6 +1369,10 @@ mod browser {
         assert_eq!(record.meta.genres, vec!["ambient"]);
         assert_eq!(record.meta.derived_from.as_deref(), Some("wide"));
         assert_eq!(session.current(), Some(saved.clone()));
+        // The saved preset is the new baseline: an edit after it is one
+        // (review M7 — the form used to drop the baseline for good).
+        params.mix.set_plain(0.05);
+        assert!(session.compare_modified(&params.refs()), "modified turns on again");
 
         b.begin_save_as(&bank, &session);
         b.form.as_mut().unwrap().name = "big".into();
@@ -1637,4 +1641,33 @@ fn the_comparison_reuses_the_extra_hash_until_the_state_changes() {
         before,
         "a moved param settles it without touching the extra state"
     );
+}
+
+/// Renaming or deleting the loaded preset announces it (the host shows
+/// the name), and a bar pick lands in the recents.
+#[test]
+fn rename_and_delete_announce_and_bar_picks_are_recent() {
+    let root = TempRoot::new("announce");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = calls.clone();
+    session.set_change_notifier(Arc::new(move || {
+        c.fetch_add(1, Ordering::Relaxed);
+    }));
+    let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+    let before = calls.load(Ordering::Relaxed);
+    let renamed = session.rename(&bank, &mine, "Ours").unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), before + 1, "rename announced");
+    session.delete(&bank, &renamed).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), before + 2, "delete announced");
+    assert_eq!(session.preset_report().as_deref(), Some("{}"));
+
+    let marks = resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap();
+    bank.library().set_marks(Arc::new(marks));
+    let mut editor = PresetEditor::default();
+    editor.pick(&bank, &session, &wide(), &params.refs());
+    let marks = bank.library().preset_marks("com.resonance.test", "wide");
+    assert!(marks.last_used.is_some(), "a bar pick is a recent");
 }

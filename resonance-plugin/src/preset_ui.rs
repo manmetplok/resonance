@@ -119,17 +119,21 @@ pub fn preset_bar(
         // most every 100 ms: a knob turned and back is not an edit, a host
         // change is. The hover names what moved.
         if session.refresh_modified(params) {
-            let hover = match session.changed_params(params) {
-                Some(changed) if !changed.is_empty() => {
-                    let n = changed.len();
-                    let shown: Vec<&str> = changed.iter().take(4).map(String::as_str).collect();
-                    let more = if n > 4 { ", …" } else { "" };
-                    let noun = if n == 1 { "parameter" } else { "parameters" };
-                    format!("{n} {noun} changed: {}{more}", shown.join(", "))
-                }
-                _ => "Edited since the preset was loaded".to_string(),
-            };
-            ui.label(egui::RichText::new("•").weak()).on_hover_text(hover);
+            // The list of what moved is built only while hovered.
+            ui.label(egui::RichText::new("•").weak()).on_hover_ui(|ui| {
+                let hover = match session.changed_params(params) {
+                    Some(changed) if !changed.is_empty() => {
+                        let n = changed.len();
+                        let shown: Vec<&str> =
+                            changed.iter().take(4).map(String::as_str).collect();
+                        let more = if n > 4 { ", …" } else { "" };
+                        let noun = if n == 1 { "parameter" } else { "parameters" };
+                        format!("{n} {noun} changed: {}{more}", shown.join(", "))
+                    }
+                    _ => "Edited since the preset was loaded".to_string(),
+                };
+                ui.label(hover);
+            });
         }
 
         // Browse opens the library overlay; Save overwrites the loaded
@@ -329,7 +333,11 @@ fn browser_overlay(
     let rect = screen.shrink(8.0);
     let wide = rect.width() >= WIDE_LAYOUT;
     let browser = &mut editor.browser;
+    // Once per frame: the refresh (cheap unless the library moved) and the
+    // one copy of the rows the widgets below read while `browser` is
+    // borrowed mutably.
     browser.refresh(bank, crate::library_marks::BROWSER_POLL_INTERVAL);
+    let rows = browser.rows().clone();
     let current_key = session
         .current()
         .filter(|c| c.is_resolved())
@@ -372,8 +380,16 @@ fn browser_overlay(
                     ui.horizontal_wrapped(|ui| {
                         let width = if wide { 220.0 } else { 150.0 };
                         library_ui::search_field(ui, &mut browser.model, "Search presets", width);
-                        let rows = browser.rows().clone();
+                        // A combo does not wrap by itself: start a new row
+                        // when the next one would not fit (a narrow editor).
+                        let wrap = |ui: &mut egui::Ui| {
+                            let need = ui.spacing().combo_width + ui.spacing().item_spacing.x;
+                            if ui.available_size_before_wrap().x < need {
+                                ui.end_row();
+                            }
+                        };
                         for (facet, label) in crate::presets::rows::FACETS {
+                            wrap(ui);
                             library_ui::facet_menu(
                                 ui,
                                 (id_salt, "facet", facet),
@@ -383,6 +399,7 @@ fn browser_overlay(
                                 facet,
                             );
                         }
+                        wrap(ui);
                         let mut fav = browser.model.favorites_only();
                         if ui.toggle_value(&mut fav, "★ only").changed() {
                             browser.model.set_favorites_only(fav);
@@ -393,6 +410,7 @@ fn browser_overlay(
                             .find(|(_, s)| *s == current_sort)
                             .map(|(l, _)| l)
                             .unwrap_or("Sort");
+                        wrap(ui);
                         egui::ComboBox::from_id_salt((id_salt, "sort"))
                             .selected_text(label)
                             .show_ui(ui, |ui| {
@@ -403,8 +421,6 @@ fn browser_overlay(
                                 }
                             });
                     });
-                    browser.refresh(bank, crate::library_marks::BROWSER_POLL_INTERVAL);
-                    let rows = browser.rows().clone();
                     ui.label(
                         egui::RichText::new(format!("{} presets", browser.model.view_len()))
                             .size(11.0)
@@ -414,9 +430,13 @@ fn browser_overlay(
                     let footer_h = 26.0;
                     let body_h = (ui.available_height() - footer_h).max(60.0);
                     let columns = [ColumnSpec::left(70.0), ColumnSpec::right(14.0)];
+                    // The list's keys (↑/↓ audition, Enter keep, Esc close)
+                    // belong to whatever is in front: not while the
+                    // metadata form or a rename has them.
                     let opts = ListOptions {
                         columns: &columns,
                         loaded: current_key.as_deref(),
+                        keyboard: browser.form.is_none() && browser.rename.is_none(),
                         ..ListOptions::default()
                     };
                     let list = |ui: &mut egui::Ui, b: &mut crate::presets::PresetBrowser| {
@@ -486,17 +506,10 @@ fn browser_overlay(
                         close = Some(false);
                     }
 
-                    // Footer.
+                    // Footer: the buttons first (right to left), then the
+                    // notice and the hint in what is left, truncated — so
+                    // the row never grows past a narrow editor.
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("↑↓ audition · Enter keep · Esc revert")
-                                .size(11.0)
-                                .color(theme::TEXT_3),
-                        );
-                        if let Some(n) = browser.model.notice() {
-                            let color = if n.is_error() { theme::BAD } else { theme::TEXT_2 };
-                            ui.label(egui::RichText::new(n.text()).size(11.0).color(color));
-                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.small_button("Save as…").clicked() {
                                 browser.begin_save_as(bank, session);
@@ -509,6 +522,15 @@ fn browser_overlay(
                                     }
                                 }
                             }
+                            if let Some(n) = browser.model.notice() {
+                                let color = if n.is_error() { theme::BAD } else { theme::TEXT_2 };
+                                let text = egui::RichText::new(n.text()).size(11.0).color(color);
+                                ui.add(egui::Label::new(text).truncate());
+                            }
+                            let hint = egui::RichText::new("↑↓ audition · Enter keep · Esc revert")
+                                .size(11.0)
+                                .color(theme::TEXT_3);
+                            ui.add(egui::Label::new(hint).truncate());
                         });
                     });
                 });
@@ -571,7 +593,9 @@ fn detail_pane(
                 if submit || ui.small_button("Rename").clicked() {
                     event = browser.submit_rename(bank, session);
                 }
-                if ui.small_button("Cancel").clicked() {
+                if ui.small_button("Cancel").clicked()
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                {
                     browser.rename = None;
                 }
             });
@@ -659,11 +683,22 @@ fn detail_pane(
         .library()
         .preset_marks(bank.plugin_id(), &record.preset.id)
         .tags;
-    let suggestions = if browser.tag_draft.trim().is_empty() {
-        Vec::new()
-    } else {
-        bank.library().marks().complete_tag(&browser.tag_draft, &personal, 6)
-    };
+    // Completion is recomputed when the draft (or the tags) change, not
+    // every frame.
+    let wanted = format!("{}\u{1f}{}", browser.tag_draft, personal.join(","));
+    if browser.tag_suggest.as_ref().map(|(k, _)| k) != Some(&wanted) {
+        let list = if browser.tag_draft.trim().is_empty() {
+            Vec::new()
+        } else {
+            bank.library().marks().complete_tag(&browser.tag_draft, &personal, 6)
+        };
+        browser.tag_suggest = Some((wanted, list));
+    }
+    let suggestions = browser
+        .tag_suggest
+        .as_ref()
+        .map(|(_, s)| s.clone())
+        .unwrap_or_default();
     let tr = library_ui::tag_row(
         ui,
         (id_salt, "personal", &key),
@@ -805,7 +840,9 @@ fn form_overlay(
                             }
                         });
                     });
-                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    // The form takes Esc for itself: it closes the form, not
+                    // the browser behind it.
+                    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                         cancel = true;
                     }
                 });

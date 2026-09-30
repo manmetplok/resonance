@@ -55,11 +55,11 @@ pub struct MetaForm {
     pub error: Option<String>,
 }
 
-/// Where a row came from, for the source filter of the narrow layout.
-pub const SOURCES: &[PresetSource] = &[PresetSource::Factory, PresetSource::User];
-
 /// The browser.
 pub struct PresetBrowser {
+    /// The personal-tag completion for the current draft, keyed by the
+    /// draft and the tags it excludes (recomputed only when they change).
+    pub tag_suggest: Option<(String, Vec<String>)>,
     pub open: bool,
     pub model: BrowserModel,
     rows: PresetRows,
@@ -78,6 +78,7 @@ impl Default for PresetBrowser {
         // Bank order by default (today's list order), favourites first.
         model.set_sort(Sort::by(SortKey::Natural));
         Self {
+            tag_suggest: None,
             open: false,
             model,
             rows: PresetRows::default(),
@@ -388,7 +389,7 @@ impl PresetBrowser {
                         ..SaveOptions::default()
                     },
                 )
-                .inspect(|saved| session.set_current(Some(saved.clone())))
+                .inspect(|saved| session.set_current_with_baseline(Some(saved.clone()), params))
                 .map(PresetEvent::Saved)
             }
             FormMode::EditInfo(id) => {

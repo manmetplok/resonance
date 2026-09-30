@@ -417,12 +417,19 @@ impl PresetSession {
         new_name: &str,
     ) -> Result<PresetRef, String> {
         let renamed = bank.rename(preset, new_name)?;
-        let mut current = self.current.lock();
-        if current
-            .as_ref()
-            .is_some_and(|c| c.matches(&renamed) || c.matches(preset))
-        {
-            *current = Some(renamed.clone());
+        let followed = {
+            let mut current = self.current.lock();
+            let hit = current
+                .as_ref()
+                .is_some_and(|c| c.matches(&renamed) || c.matches(preset));
+            if hit {
+                *current = Some(renamed.clone());
+            }
+            hit
+        };
+        if followed {
+            // The host shows the name: tell it.
+            self.notify();
         }
         Ok(renamed)
     }
@@ -433,13 +440,20 @@ impl PresetSession {
     pub fn delete(&self, bank: &PresetBank, preset: &PresetRef) -> Result<(), String> {
         let resolved = bank.resolve(preset);
         bank.delete(preset)?;
-        let mut current = self.current.lock();
-        let hit = current.as_ref().is_some_and(|c| {
-            c.matches(preset) || resolved.as_ref().is_some_and(|r| c.matches(r))
-        });
+        let hit = {
+            let mut current = self.current.lock();
+            let hit = current.as_ref().is_some_and(|c| {
+                c.matches(preset) || resolved.as_ref().is_some_and(|r| c.matches(r))
+            });
+            if hit {
+                *current = None;
+                *self.baseline.lock() = None;
+                self.modified.store(false, Ordering::Relaxed);
+            }
+            hit
+        };
         if hit {
-            *current = None;
-            self.modified.store(false, Ordering::Relaxed);
+            self.notify();
         }
         Ok(())
     }

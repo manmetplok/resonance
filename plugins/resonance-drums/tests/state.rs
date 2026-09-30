@@ -62,6 +62,7 @@ fn make_saver_bundle(initial_path: Option<PathBuf>) -> SaverBundle {
         overhead_setup_key: overhead_setup_key.clone(),
         pad_choices: pad_choices.clone(),
         params: params.clone(),
+        reload: None,
     };
     (kit_path, overhead_setup_key, pad_choices, params, saver)
 }
@@ -207,5 +208,53 @@ fn the_param_wins_over_the_legacy_articulation_array() {
         params.pads[0].articulation.value(),
         ARTICULATION_PRIMARY,
         "the legacy array must not override a parameter the file carries"
+    );
+}
+
+/// The whole sound of a drums preset (review M6): loading one that names
+/// a kit while the plugin is running reloads that kit (not only the saved
+/// path); a params-only preset keeps the current kit; the same kit again
+/// does not reload; a mic choice change does.
+#[test]
+fn a_preset_load_reloads_the_kit_it_names_and_keeps_it_when_it_names_none() {
+    let mut drums = ResonanceDrums::new();
+    assert!(drums.initialize(48_000.0, 512));
+    let stamps = drums.bridge.load_generation.clone();
+    let generation = move || stamps.load(std::sync::atomic::Ordering::Acquire);
+    let g0 = generation();
+
+    let with_kit = serde_json::json!({
+        "version": 1,
+        "params": {},
+        "kit_path": "/nonexistent/other-kit/drum_samples.json",
+    });
+    assert!(drums.load_state(&serde_json::to_vec(&with_kit).unwrap()));
+    let g1 = generation();
+    assert_eq!(g1, g0 + 1, "the named kit is loaded, not just remembered");
+
+    let params_only = serde_json::json!({"version": 1, "params": {}});
+    assert!(drums.load_state(&serde_json::to_vec(&params_only).unwrap()));
+    assert_eq!(
+        drums.bridge.kit_path.lock().clone(),
+        Some(PathBuf::from("/nonexistent/other-kit/drum_samples.json")),
+        "a preset without a kit keeps the kit"
+    );
+    let g2 = generation();
+    assert_eq!(g2, g1, "and does not reload it");
+
+    assert!(drums.load_state(&serde_json::to_vec(&with_kit).unwrap()));
+    assert_eq!(
+        generation(),
+        g2,
+        "the same kit again is not a reload"
+    );
+
+    let mut with_mics = with_kit.clone();
+    with_mics["overhead_setup_key"] = serde_json::json!("room");
+    assert!(drums.load_state(&serde_json::to_vec(&with_mics).unwrap()));
+    assert_eq!(
+        generation(),
+        g2 + 1,
+        "other mics are another sound"
     );
 }
