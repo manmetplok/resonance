@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -28.0,
-    "ratio": 20.0,
-    "attack": 5.0,
-    "hold": 40.0,
-    "release": 15.0,
-    "range": 70.0,
-    "hysteresis": 6.0,
-    "key_hpf": 220.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "drums-snare-gate",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Drums — Snare Gate",
+    "author": "Resonance",
+    "description": "Hard gate that snaps open in 5 ms and shuts in 15 ms after a 40 ms hold, a 220 Hz key filter keeping it snare-tight.",
+    "category": "Track",
+    "instrument": ["snare", "drums"],
+    "genres": [],
+    "character": ["aggressive", "punchy"],
+    "tags": ["gate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -28.0,
+        "ratio": 20.0,
+        "attack": 5.0,
+        "hold": 40.0,
+        "release": 15.0,
+        "range": 70.0,
+        "hysteresis": 6.0,
+        "key_hpf": 220.0
+      }
+    }
   }
 }

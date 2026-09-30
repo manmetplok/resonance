@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -16.0,
-    "ratio": 4.0,
-    "attack": 30.0,
-    "release": 250.0,
-    "knee": 8.0,
-    "makeup": 2.0,
-    "mix": 0.5,
-    "detector_mix": 0.5,
-    "sc_hpf_freq": 80.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "drum-bus",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Drum Bus",
+    "author": "Resonance",
+    "description": "4:1 with a 30 ms attack blended 50% parallel under the drum bus for weight without losing transients.",
+    "category": "Bus",
+    "instrument": ["drum-bus", "drums"],
+    "genres": [],
+    "character": ["punchy", "aggressive"],
+    "tags": ["parallel"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -16.0,
+        "ratio": 4.0,
+        "attack": 30.0,
+        "release": 250.0,
+        "knee": 8.0,
+        "makeup": 2.0,
+        "mix": 0.5,
+        "detector_mix": 0.5,
+        "sc_hpf_freq": 80.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }

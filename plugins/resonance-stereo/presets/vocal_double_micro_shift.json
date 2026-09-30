@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.0,
-    "mono_below": 0.0,
-    "mono_slope": 1,
-    "widen_mode": 3,
-    "widen_amount": 0.35,
-    "focus_low": 250.0,
-    "focus_high": 12000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "vocal-micro-shift-double",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Vocal — Micro-shift Double",
+    "author": "Resonance",
+    "description": "Micro-shift detuned-voice doubling at 35%, band-limited between 250 Hz and 12 kHz to leave sibilance untouched.",
+    "category": "Track",
+    "instrument": ["vocal", "lead-vocal"],
+    "genres": [],
+    "character": ["wide", "subtle"],
+    "tags": ["micro-shift", "doubler"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.0,
+        "mono_below": 0.0,
+        "mono_slope": 1,
+        "widen_mode": 3,
+        "widen_amount": 0.35,
+        "focus_low": 250.0,
+        "focus_high": 12000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

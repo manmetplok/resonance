@@ -1,7 +1,11 @@
 # Plugin preset library — one browser, tags, favourites and genre for every plugin
 
-Status: **design, not started** (2026-09-30). Nothing in here is built. Build it
-as vertical slices (§12): each slice lands its data change, both surfaces (the
+Status: **round 1 built on `feat/plugin-presets`** (2026-09-30): P0 minus
+marks and P1 minus the control-API half. D1–D11 are unanswered; the build
+follows every *recommended* option. §18 lists what landed, where the code
+differs from this text, and the seams round 2 (P2–P8, on top of the NAM
+branch's `library_marks` / `library_view`) plugs into. Build the rest as
+vertical slices (§15): each slice lands its data change, both surfaces (the
 plugin's own editor and the host), the control method + MCP tool, and tests
 together. That is the rule `plugin-audit-plan.md` §0 sets and the rule
 `project_control_api_vertical_slices` records.
@@ -320,13 +324,15 @@ agents can filter on reliably, and **free tags**:
 
 | Field | Cardinality | Vocabulary | Notes |
 |---|---|---|---|
-| `category` | 0..1 | per plugin *class*: instruments `Bass, Lead, Pad, Pluck, Keys, Arp, Brass, Strings, Drone, FX, Drums, Init`; effects `Utility, Track, Bus, Master, Creative` | Parsed from today's `"X — Y"` names by the converter |
+| `category` | 0..1 | per plugin *class*: instruments `Bass, Lead, Pad, Pluck, Keys, Arp, Brass, Strings, Drone, FX, Drums, Init`; effects `Init, Utility, Track, Bus, Master, Creative` | Parsed from today's `"X — Y"` names by the converter |
 | `instrument` | 0..n | `vocal, lead-vocal, backing-vocal, guitar, electric-guitar, acoustic-guitar, bass, synth-bass, drums, kick, snare, hats, room, keys, piano, synth, strings, violin, mix-bus, drum-bus, master, full-mix` | "What is it for". For effects it names the source it suits. Answers "compressor presets for vocals" |
 | `genres` | 0..n | seeded list: `ambient, americana, cinematic, drum-and-bass, electronic, folk, hip-hop, house, indie, industrial, jazz, metal, pop, post-metal, rock, singer-songwriter, techno, …` | Superset of `resonance-mastering-assist::Genre` (`targets.rs:52-59`) and the genre skills in the agent plugin |
 | `character` | 0..n | `warm, bright, dark, clean, gritty, saturated, punchy, soft, wide, narrow, lush, dry, subtle, aggressive, vintage, modern, evolving, static, metallic, airy` | Timbre words. Doubles as the vocabulary `warmth-width-depth.md` uses for the colour plugin |
 | `tags` | 0..n | free, lowercase, `[a-z0-9-]`, ≤ 32 chars | Collections ("ferrous"), techniques ("sidechain") |
 
 The vocabulary is a `const` table in `resonance_common::library_marks::vocab` (§4.5).
+Round 1 keeps a local copy in `resonance_plugin::presets::vocab` until that
+module lands; round 2 turns it into a re-export.
 Values outside it are **accepted and kept** (lowercased and slugged) in
 `genres`/`character`/`instrument`. They sort after the seeded values and
 appear in the facet list only when some preset uses them. The MCP schema
@@ -639,8 +645,12 @@ disagree about content. §7 covers keeping *identity* in sync.
   and `modified` is **unknown**. The wire says `"modified": null`; the bar
   shows no dot rather than a lie.
 - **Project persistence** keeps today's `"preset"` session key
-  (`presets.rs:906-951`), now `{ id, source, name, loaded_hash }`. A
-  legacy `{name, source}` key is resolved to an id by name once, at load.
+  (`presets.rs:906-951`), now `{ id, source, name, modified }`
+  (`loaded_hash` arrives with P5's comparison-based modified). A legacy
+  `{name, source}` key loads as an *unresolved* `PresetRef` (empty id,
+  compares by name) and `PresetSession::resolve(bank)` gives it its id the
+  first time a bank is at hand; the bar calls it every frame, free once
+  resolved.
 
 ## 8. Third-party CLAP plugins
 
@@ -671,7 +681,10 @@ pub struct FactoryPreset {
 }
 ```
 
-The exported symbol grows to `[{id, name, json}]`, and `decode` stays
+The exported symbol grows to `[{id, name, json, meta}]`, where `json` stays
+the bare **state document** (not the format-1 file), so the host's current
+`decode` and `load_message` read it unchanged; `id` and `meta` ride
+alongside (`presets::decode_factory_entries` reads them). `decode` stays
 tolerant (`factory_presets.rs` "malformed entries are skipped").
 
 ### 9.2 Sound-bearing extra state
@@ -805,7 +818,10 @@ process), the app itself (control API + host browser), and the user editing
 files by hand.
 
 1. **Preset files: one writer per file, atomic replace.** Every write goes
-   through `resonance_common::atomic_write` (temp + fsync + rename). This
+   through temp + fsync + rename. (Built as a local copy in
+   `presets/fs.rs`: `resonance-plugin` may only name `PLUGIN_COMMON_ITEMS`,
+   and `atomic_file` is not on that list; swap in
+   `resonance_common::atomic_write` if the list grows.) This
    replaces `std::fs::write` at `presets.rs:357/394/431`. Two concurrent
    saves of *different* presets never touch the same file. Two concurrent
    saves of the *same* preset are last-writer-wins, and each file is always
@@ -1039,3 +1055,137 @@ collections" beyond tags (a `project:<name>` tag convention covers the
 vendors' native preset formats (`.fxp`, `.vstpreset`, `.nksf`); MIDI program
 change → preset mapping (the external-instrument device presets of epic #40
 are a different system).
+
+## 18. Round 1 as built (`feat/plugin-presets`)
+
+Scope: P0 without `library_marks`, and P1 without the control-API half.
+Nothing in `resonance-common`, `resonance-control`, `resonance-mcp`,
+`resonance-audio` or `tools/arch-invariants` changed. The one edit in
+`resonance-app` is a compile fix: `plugin_presets.rs` passes the
+`PresetRef` it already has to `json_for`, because `PresetRef::user` now
+takes an id.
+
+**Landed**
+
+- `resonance-plugin/src/presets/` (was `presets.rs`): `format` (the
+  format-1 envelope, `PresetMeta`, UUIDv4, RFC 3339), `library`
+  (`PresetLibrary`), `query`, `marks`, `migrate`, `vocab`, `bank`,
+  `session`, `editor`, `fs`. Tests: `tests/presets.rs` (rewritten),
+  `tests/preset_library.rs` (new), `tests/preset_bar_render.rs`,
+  `tests/fleet_preset_adoption.rs` (factory-file checks + pinned ids).
+- `PresetLibrary`: one per root per process (`shared`, `shared_for_root`).
+  Factory records are registered by the caller; user records are indexed
+  from `<root>/<clap id>/`. The legacy converter and the trash purge run on
+  a directory's first index in a process. After that the directory is
+  re-read only when its fingerprint changes (dir mtime, entry count, newest
+  entry mtime). The fingerprint is checked at most once per `max_age`:
+  `Duration::ZERO` for explicit reads, `preset_ui::BAR_REFRESH` (2 s) for
+  the bar. The bar reads `records_cached` and no longer touches the disk
+  per frame. Its visuals are unchanged.
+- Ids: UUIDv4 for user presets (kept by rename, re-save and overwrite),
+  slugs for factory presets. `PresetRef { id, source, name }` compares by
+  `(source, id)`. An id-less ("unresolved") ref compares by name.
+- The trash is `<root>/.trash/<clap id>/<unix secs>-<file>`, purged after
+  30 days (D10). Names are unique per plugin among user presets,
+  case-insensitively (D11). Saving under an existing name overwrites that
+  preset in place and keeps its id and lineage. Rename refuses a clash.
+- "Save as…" from a loaded preset copies the loaded preset's descriptive
+  meta and sets `derived_from`.
+- The query engine implements §6.4 search and facets in full (scoped
+  tokens, accent folding, name hits first, per-facet counts with the
+  other facets applied, the five sorts plus favourites-first) over
+  whatever marks source is installed.
+- P1: every one of the 95 factory files is a format-1 file with `id` and a
+  filled `meta` block (category, instrument, genres, character, tags,
+  description), written from each preset's parameters. The `state.doc`
+  bodies are byte-identical to before for eight plugins. resonance-delay's
+  six presets moved from inline strings to `presets/*.json`, and their
+  bodies differ only in number formatting (`0.40` → `0.4`): the values,
+  and so the sound, are the same. `FactoryPreset { id, name, json }`, with `name`
+  kept as a literal (D7). Editors build their bank with
+  `PresetBank::for_plugin::<P>()`, so user presets record
+  `plugin.{name, version}`.
+
+**Where the code differs from the text above** (this section wins until
+round 2 reconciles it)
+
+- The atomic write is a local copy (§11 item 1). The vocabulary is a local
+  copy (§4.4).
+- The symbol's `json` stays the bare state document (§9.1).
+- A whole preset file is accepted wherever a state document is.
+  `state::migrate` unwraps the envelope, so `load_state(preset_file)` and
+  `presets::load` both work. P2's "host loads a preset" path can hand the
+  file over as it is.
+- Factory files carry `plugin.id` but no `plugin.version`. Nothing reads
+  one yet.
+- `Query.category` is a list (OR), like the other facets.
+- Factory genres use a few values beyond the seeded list (`trance`,
+  `synthwave`, `dubstep`, `lo-fi`, `dub`). §4.4 allows this. Consider
+  seeding them in `library_marks::vocab`.
+- The converter keeps each original as `<file>.json.legacy`, stamped with
+  the conversion time, and a later run removes it once it is 30 days old
+  (not "at the next start", which could be seconds later in the same
+  process). The legacy id is derived from plugin id + file name + bytes
+  (a version-8 UUID), so two converters racing on one file write one
+  preset. A legacy document without a `params` object is left in place
+  and logged, not converted.
+- `Init` is a category for effect banks too (`EFFECT_CATEGORIES`), so
+  every bank's reset preset has one convention. `trance`, `synthwave`,
+  `dubstep`, `dub` and `lo-fi` are seeded genres.
+- Index hygiene (§4.2): a user file whose id is missing, not UUID-shaped,
+  a registered factory id, or shared with a newer file of a different
+  name or sound gets a fresh UUID written into it (and moves to its
+  `<name>-<id8>.json` name). Only true duplicates (same id, name and
+  sound) collapse. A file with an id but no name lists under its stem. A
+  file with `format_version` above 1 is skipped, never quarantined.
+- A case-only rename or re-save moves the file first and rewrites it in
+  place, so it cannot delete itself on a case-insensitive filesystem.
+- `PresetRef`'s `==` is strict `(source, id)`; two unresolved refs are
+  equal only by exact name. `PresetRef::matches` is the lenient,
+  case-insensitive comparison for name-only refs.
+- Every plugin builds its session with `PresetSession::for_plugin::<P>()`
+  (or `for_plugin_with_extra`), which resolves a name-only project
+  identity **at state load** (§13), read-only and from memory: the
+  factory bank, plus the user index only if an editor, bar or explicit
+  list has already opened that directory in the process. A load never
+  opens a directory, converts or writes; an unresolved user identity is
+  left for the bar, whose per-frame `resolve` reads the cached index
+  (`BAR_REFRESH`). `scripts/run-tests.py` also points
+  `RESONANCE_PLUGIN_PRESET_DIR` at a private temp root unless one is set.
+- "Save as…" onto an existing user preset's name keeps that preset's meta
+  and lineage; the loaded preset's meta only seeds a *new* preset.
+
+**Seams for round 2**
+
+- *Marks.* `presets::marks::MarksSource` (`marks(key)`, `generation()`),
+  installed per library with `PresetLibrary::set_marks`. The default is
+  `NoMarks`. Keys come from `mark_key(plugin_id, preset_id)` =
+  `plugin-preset:<clap>:<id>`. Implement the trait for
+  `library_marks` and install it into `PresetLibrary::shared()` (and
+  `shared_for_root`) at startup. Query already reads favourites, personal
+  tags and `last_used` through it. Writes stay on the store's own API.
+  `presets::vocab` becomes a re-export of `library_marks::vocab`.
+- *Control-API ids.* `PresetBank::list_user()` / `records()` already carry
+  ids and meta. The factory half needs `ScannedPlugin.factory_presets` to
+  keep the id (the symbol carries it, and `decode_factory_entries` parses
+  it), then `PresetLibrary::register_factory_entries` in `bank_for`, which
+  lets `plugin_presets.rs` drop its parallel factory list. After that,
+  `PluginPresetEntry` gains `id` / meta fields and `load_plugin_preset`
+  gains `preset_id`.
+- *Browser.* `PresetEditor` is untouched in behaviour and is what
+  `library_view::BrowserModel` replaces. `PresetLibrary::query` is the
+  model's row source.
+
+**Deferred to round 2** (found in review, not fixed here)
+
+- `MarksSource::generation()` is documented as feeding the freshness
+  fingerprint, but nothing calls it and there is no refresh hook; and
+  `PresetMarks::last_used` is an RFC 3339 string where `library_marks`
+  has its own type. Reconcile both when the trait is implemented for the
+  real store.
+- `presets::query` and `library_view::BrowserModel` both implement search,
+  with different token syntax. Choose one engine; the other becomes a
+  thin adapter.
+- `presets::vocab::normalize_facet` and `library_marks::normalize_tag`
+  slug differently (`r&b` → `r-b` here, `rb` there), so `vocab` cannot
+  simply become a re-export: pick one rule and migrate stored values.

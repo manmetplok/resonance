@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -12.0,
-    "ratio": 1.8,
-    "attack": 50.0,
-    "release": 400.0,
-    "knee": 12.0,
-    "makeup": 0.5,
-    "mix": 1.0,
-    "detector_mix": 0.7,
-    "sc_hpf_freq": 40.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 1,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "master-glue",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Master — Glue",
+    "author": "Resonance",
+    "description": "Very gentle 1.8:1 master-buss glue, slow 50 ms attack and RMS-leaning detection for transparent leveling.",
+    "category": "Master",
+    "instrument": ["master", "full-mix"],
+    "genres": [],
+    "character": ["subtle", "clean"],
+    "tags": ["glue"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -12.0,
+        "ratio": 1.8,
+        "attack": 50.0,
+        "release": 400.0,
+        "knee": 12.0,
+        "makeup": 0.5,
+        "mix": 1.0,
+        "detector_mix": 0.7,
+        "sc_hpf_freq": 40.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 1,
+        "release_mode": 0
+      }
+    }
   }
 }

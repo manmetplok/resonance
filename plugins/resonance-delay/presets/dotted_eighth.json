@@ -1,0 +1,45 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "dotted-eighth",
+  "plugin": { "id": "com.resonance.delay" },
+  "meta": {
+    "name": "Dotted Eighth",
+    "author": "Resonance",
+    "description": "Tempo-synced 1/8-dotted stereo echo, clean character, moderate feedback for a classic rhythmic repeat.",
+    "category": "Track",
+    "instrument": [],
+    "genres": [],
+    "character": ["clean", "subtle"],
+    "tags": ["tempo-sync"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "sync": 1.0,
+        "division": 8.0,
+        "time_ms": 375.0,
+        "feedback": 0.4,
+        "mix": 0.35,
+        "character": 0.0,
+        "routing": 0.0,
+        "stereo_offset": 0.0,
+        "hi_cut": 8000.0,
+        "lo_cut": 120.0,
+        "drive": 0.1,
+        "mod_rate": 0.4,
+        "mod_depth": 0.05,
+        "freeze": 0.0,
+        "gate_on": 0.0,
+        "gate_rate": 7.0,
+        "gate_width": 0.5,
+        "gate_shape": 0.05,
+        "gate_depth": 1.0,
+        "duck_amount": 0.0,
+        "duck_threshold": -24.0,
+        "duck_release": 200.0
+      }
+    }
+  }
+}

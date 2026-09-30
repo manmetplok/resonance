@@ -1,26 +1,45 @@
 {
-  "params": {
-    "predelay": 25.0,
-    "er_level": 0.35,
-    "er_time": 0.55,
-    "size": 0.65,
-    "decay": 3.5,
-    "damping": 5000.0,
-    "diffusion": 0.90,
-    "mod_rate": 0.6,
-    "mod_depth": 0.25,
-    "width": 1.0,
-    "mix": 0.35,
-    "freeze": 0,
-    "wet_hpf_on": 0,
-    "wet_hpf_freq": 600.0,
-    "wet_lpf_on": 0,
-    "wet_lpf_freq": 10000.0,
-    "wet_filter_slope": 0,
-    "duck_amount": 0.0,
-    "duck_threshold": -30.0,
-    "duck_attack": 15.0,
-    "duck_release": 200.0,
-    "er_tail_balance": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "warm-hall",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Warm Hall",
+    "author": "Resonance",
+    "description": "Warm hall: 3.5 s decay with damping rolled to 5 kHz for a dark tail, 65% size and full width for a natural room.",
+    "category": "Bus",
+    "instrument": ["vocal", "strings", "piano"],
+    "genres": ["cinematic"],
+    "character": ["warm", "lush"],
+    "tags": ["hall"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 25.0,
+        "er_level": 0.35,
+        "er_time": 0.55,
+        "size": 0.65,
+        "decay": 3.5,
+        "damping": 5000.0,
+        "diffusion": 0.90,
+        "mod_rate": 0.6,
+        "mod_depth": 0.25,
+        "width": 1.0,
+        "mix": 0.35,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0
+      }
+    }
   }
 }

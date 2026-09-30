@@ -75,10 +75,7 @@ impl AmpEditorApp {
             viz,
             tone3000,
             tone3000_panel: Tone3000PanelState::default(),
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceAmp as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceAmp>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             missing: MissingBannerState::default(),

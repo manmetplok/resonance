@@ -1,0 +1,45 @@
+{
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "slapback",
+  "plugin": { "id": "com.resonance.delay" },
+  "meta": {
+    "name": "Slapback",
+    "author": "Resonance",
+    "description": "Free-running 80 ms single-repeat slap with low feedback and a bright, near-dry tone, for classic slapback echo.",
+    "category": "Track",
+    "instrument": ["vocal", "guitar"],
+    "genres": ["rock", "americana"],
+    "character": ["bright", "punchy", "dry"],
+    "tags": ["slapback"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "sync": 0.0,
+        "division": 4.0,
+        "time_ms": 80.0,
+        "feedback": 0.15,
+        "mix": 0.5,
+        "character": 0.0,
+        "routing": 0.0,
+        "stereo_offset": 0.0,
+        "hi_cut": 10000.0,
+        "lo_cut": 80.0,
+        "drive": 0.05,
+        "mod_rate": 0.3,
+        "mod_depth": 0.02,
+        "freeze": 0.0,
+        "gate_on": 0.0,
+        "gate_rate": 7.0,
+        "gate_width": 0.5,
+        "gate_shape": 0.05,
+        "gate_depth": 1.0,
+        "duck_amount": 0.0,
+        "duck_threshold": -24.0,
+        "duck_release": 200.0
+      }
+    }
+  }
+}

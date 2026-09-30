@@ -1,17 +1,36 @@
 {
-  "params": {
-    "mode": 1,
-    "drive": 0.55,
-    "bias": 0.4,
-    "response": 0.0,
-    "tone": -0.5,
-    "mix": 0.8,
-    "auto_gain": 1,
-    "output": 0.0,
-    "oversample": 1,
-    "speed": 1,
-    "flutter": 0.0,
-    "tape_quality": 0,
-    "tape_solver": 1
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "drums-tape-15",
+  "plugin": { "id": "com.resonance.color" },
+  "meta": {
+    "name": "Drums — Tape 15",
+    "author": "Resonance",
+    "description": "Tape voicing at 15 ips with moderate drive and a slight dark tilt, for warm vintage drum-bus saturation.",
+    "category": "Bus",
+    "instrument": ["drums", "drum-bus"],
+    "genres": [],
+    "character": ["warm", "vintage"],
+    "tags": ["tape"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "mode": 1,
+        "drive": 0.55,
+        "bias": 0.4,
+        "response": 0.0,
+        "tone": -0.5,
+        "mix": 0.8,
+        "auto_gain": 1,
+        "output": 0.0,
+        "oversample": 1,
+        "speed": 1,
+        "flutter": 0.0,
+        "tape_quality": 0,
+        "tape_solver": 1
+      }
+    }
   }
 }

@@ -25,7 +25,7 @@ fn the_bank_has_the_named_presets_and_no_duplicates() {
 fn every_preset_is_a_full_snapshot_and_loads_exactly() {
     let fresh = StereoParams::default();
     for entry in PRESETS {
-        let value: serde_json::Value = serde_json::from_str(entry.json)
+        let value: serde_json::Value = serde_json::from_str(&entry.state_json())
             .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
         let map = value
             .get("params")

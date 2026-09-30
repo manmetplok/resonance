@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -40.0,
-    "ratio": 8.0,
-    "attack": 1.0,
-    "hold": 20.0,
-    "release": 100.0,
-    "range": 60.0,
-    "hysteresis": 6.0,
-    "key_hpf": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "init-default",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Init — Default",
+    "author": "Resonance",
+    "description": "The plugin's plain defaults: an 8:1 gate that snaps open in 1 ms and closes over 100 ms, a neutral starting point.",
+    "category": "Init",
+    "instrument": [],
+    "genres": [],
+    "character": ["clean", "static"],
+    "tags": []
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -40.0,
+        "ratio": 8.0,
+        "attack": 1.0,
+        "hold": 20.0,
+        "release": 100.0,
+        "range": 60.0,
+        "hysteresis": 6.0,
+        "key_hpf": 0.0
+      }
+    }
   }
 }

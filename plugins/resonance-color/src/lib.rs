@@ -65,7 +65,7 @@ impl ResonancePlugin for ResonanceColor {
     fn new() -> Self {
         Self {
             params: Arc::new(ColorParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: ColorViz::new(),
             dsp: None,
         }

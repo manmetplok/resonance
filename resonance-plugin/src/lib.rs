@@ -43,7 +43,8 @@ pub use resonance_common::{library_marks, reveal};
 pub use logging::DEFAULT_LOG_FILTER;
 pub use param::{BoolParam, FloatParam, IntParam, Param};
 pub use presets::{
-    FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetRef, PresetSession, PresetSource,
+    FactoryPreset, PresetBank, PresetEditor, PresetEvent, PresetLibrary, PresetRef, PresetSession,
+    PresetSource,
 };
 pub use state::{ParamRename, STATE_VERSION};
 pub use plugin::{

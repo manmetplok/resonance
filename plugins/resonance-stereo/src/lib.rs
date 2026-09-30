@@ -70,7 +70,7 @@ impl ResonancePlugin for ResonanceStereo {
     fn new() -> Self {
         Self {
             params: Arc::new(StereoParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             viz: StereoViz::new(),
             dsp: None,
         }

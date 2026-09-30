@@ -41,7 +41,7 @@ fn the_bank_is_exactly_the_spec_names() {
 fn every_preset_is_a_full_snapshot_that_loads_verbatim() {
     let fresh = ColorParams::default();
     for entry in PRESETS {
-        let value: serde_json::Value = serde_json::from_str(entry.json)
+        let value: serde_json::Value = serde_json::from_str(&entry.state_json())
             .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
         let map = value["params"]
             .as_object()

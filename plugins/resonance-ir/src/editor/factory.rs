@@ -77,10 +77,7 @@ impl EditorFactory for IrEditorFactory {
             ir_info: self.ir_info.clone(),
             load_request: self.load_request.clone(),
             viz: self.viz.clone(),
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceIr as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceIr as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceIr>(),
             presets: self.presets.clone(),
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
         };

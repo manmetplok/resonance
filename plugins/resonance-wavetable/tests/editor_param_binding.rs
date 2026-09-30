@@ -721,7 +721,7 @@ fn every_factory_preset_loads_bit_identically() {
     let params = WavetableParams::default();
     for entry in PRESETS {
         let value: serde_json::Value =
-            serde_json::from_str(entry.json).unwrap_or_else(|e| panic!("{}: {e}", entry.name));
+            serde_json::from_str(&entry.state_json()).unwrap_or_else(|e| panic!("{}: {e}", entry.name));
         let map = value
             .get("params")
             .and_then(|v| v.as_object())
@@ -768,7 +768,7 @@ fn the_init_preset_matches_every_declared_default() {
         .iter()
         .find(|e| e.name == "Init")
         .expect("an Init preset");
-    let value: serde_json::Value = serde_json::from_str(init.json).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&init.state_json()).unwrap();
     let map = value.get("params").and_then(|v| v.as_object()).unwrap();
 
     let mut disagree: Vec<(String, f32, f32)> = Vec::new();

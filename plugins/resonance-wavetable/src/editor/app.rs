@@ -74,10 +74,7 @@ impl WavetableEditorApp {
             selected_osc: 0,
             selected_lfo: 0,
             selected_mod_slot: 0,
-            bank: resonance_plugin::presets::PresetBank::new(
-                <crate::ResonanceWavetable as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceWavetable as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceWavetable>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             snapshot,

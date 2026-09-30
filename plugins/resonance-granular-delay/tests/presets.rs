@@ -71,7 +71,7 @@ fn preset_values(id: &str) -> Vec<f64> {
     PRESETS
         .iter()
         .map(|entry| {
-            let value: serde_json::Value = serde_json::from_str(entry.json)
+            let value: serde_json::Value = serde_json::from_str(&entry.state_json())
                 .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
             value
                 .get("params")
@@ -213,7 +213,7 @@ fn every_preset_is_a_full_snapshot_and_loads() {
     for entry in PRESETS {
         // Parse the raw JSON independently of the loader so a malformed
         // file fails loudly with its name.
-        let value: serde_json::Value = serde_json::from_str(entry.json)
+        let value: serde_json::Value = serde_json::from_str(&entry.state_json())
             .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
         let map = value
             .get("params")

@@ -95,10 +95,7 @@ impl GateEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceGate as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceGate as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceGate>(),
             presets,
             preset_editor: PresetEditor::default(),
         }

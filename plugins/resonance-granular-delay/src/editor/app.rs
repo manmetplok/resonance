@@ -51,10 +51,7 @@ impl GranularEditorApp {
         Self {
             params,
             viz,
-            bank: PresetBank::new(
-                <crate::ResonanceGranularDelay as resonance_plugin::ResonancePlugin>::CLAP_ID,
-                <crate::ResonanceGranularDelay as resonance_plugin::ResonancePlugin>::FACTORY_PRESETS,
-            ),
+            bank: PresetBank::for_plugin::<crate::ResonanceGranularDelay>(),
             presets,
             preset_editor: PresetEditor::default(),
             hero_drag: None,

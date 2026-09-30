@@ -18,7 +18,7 @@ fn param_enumeration_covers_declared_count() {
 fn every_factory_preset_parses() {
     assert!(!PRESETS.is_empty());
     for entry in PRESETS {
-        let value: serde_json::Value = serde_json::from_str(entry.json)
+        let value: serde_json::Value = serde_json::from_str(&entry.state_json())
             .unwrap_or_else(|e| panic!("preset {:?} invalid: {e}", entry.name));
         assert!(
             value.get("params").and_then(|v| v.as_object()).is_some(),

@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -45.0,
-    "ratio": 6.0,
-    "attack": 8.0,
-    "hold": 80.0,
-    "release": 60.0,
-    "range": 40.0,
-    "hysteresis": 8.0,
-    "key_hpf": 90.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "vocal-noise-gate",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Vocal — Noise Gate",
+    "author": "Resonance",
+    "description": "Moderate 6:1 gate at -45 dB with an 8 ms attack and 90 Hz key filter, quieting mic bleed without sounding clipped.",
+    "category": "Track",
+    "instrument": ["vocal"],
+    "genres": [],
+    "character": ["clean", "subtle"],
+    "tags": ["noise-gate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -45.0,
+        "ratio": 6.0,
+        "attack": 8.0,
+        "hold": 80.0,
+        "release": 60.0,
+        "range": 40.0,
+        "hysteresis": 8.0,
+        "key_hpf": 90.0
+      }
+    }
   }
 }

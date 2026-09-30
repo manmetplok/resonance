@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.0,
-    "mono_below": 120.0,
-    "mono_slope": 2,
-    "widen_mode": 0,
-    "widen_amount": 0.5,
-    "focus_low": 150.0,
-    "focus_high": 20000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "mono-bass-below-120",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Mono Bass Below 120",
+    "author": "Resonance",
+    "description": "Corrective mono-maker: folds side content below 120 Hz to mono at a steep 24 dB/oct slope, width otherwise untouched.",
+    "category": "Utility",
+    "instrument": [],
+    "genres": [],
+    "character": ["clean", "subtle"],
+    "tags": ["mono-bass"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.0,
+        "mono_below": 120.0,
+        "mono_slope": 2,
+        "widen_mode": 0,
+        "widen_amount": 0.5,
+        "focus_low": 150.0,
+        "focus_high": 20000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

@@ -89,7 +89,7 @@ impl ResonancePlugin for ResonanceEq {
     fn new() -> Self {
         Self {
             params: Arc::new(EqParams::default()),
-            presets: resonance_plugin::presets::PresetSession::new(),
+            presets: resonance_plugin::presets::PresetSession::for_plugin::<Self>(),
             dsp: None,
             output_gain_smoother: Smoother::new(SmoothingStyle::Logarithmic(20.0)),
             analyzer_state: AnalyzerState::new(),

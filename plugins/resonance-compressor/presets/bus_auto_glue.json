@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -16.0,
-    "ratio": 2.0,
-    "attack": 20.0,
-    "release": 300.0,
-    "knee": 6.0,
-    "makeup": 0.0,
-    "mix": 1.0,
-    "detector_mix": 0.5,
-    "sc_hpf_freq": 80.0,
-    "sc_hpf_on": 1,
-    "auto_makeup": 1,
-    "release_mode": 1
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "bus-auto-glue",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Bus — Auto Glue",
+    "author": "Resonance",
+    "description": "2:1 with a 20 ms attack and program-dependent Auto release, transients pass, sustained sections recover slowly.",
+    "category": "Bus",
+    "instrument": ["mix-bus", "drum-bus"],
+    "genres": [],
+    "character": ["punchy", "clean"],
+    "tags": ["glue", "auto-release"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -16.0,
+        "ratio": 2.0,
+        "attack": 20.0,
+        "release": 300.0,
+        "knee": 6.0,
+        "makeup": 0.0,
+        "mix": 1.0,
+        "detector_mix": 0.5,
+        "sc_hpf_freq": 80.0,
+        "sc_hpf_on": 1,
+        "auto_makeup": 1,
+        "release_mode": 1
+      }
+    }
   }
 }

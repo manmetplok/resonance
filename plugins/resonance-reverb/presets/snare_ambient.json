@@ -1,26 +1,45 @@
 {
-  "params": {
-    "predelay": 30.0,
-    "er_level": 0.35,
-    "er_time": 0.50,
-    "size": 0.55,
-    "decay": 2.8,
-    "damping": 6000.0,
-    "diffusion": 0.85,
-    "mod_rate": 0.8,
-    "mod_depth": 0.25,
-    "width": 1.0,
-    "mix": 0.25,
-    "freeze": 0,
-    "wet_hpf_on": 0,
-    "wet_hpf_freq": 600.0,
-    "wet_lpf_on": 0,
-    "wet_lpf_freq": 10000.0,
-    "wet_filter_slope": 0,
-    "duck_amount": 0.0,
-    "duck_threshold": -30.0,
-    "duck_attack": 15.0,
-    "duck_release": 200.0,
-    "er_tail_balance": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "snare-ambient",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Snare Ambient",
+    "author": "Resonance",
+    "description": "Medium 0.55-size room with a 2.8 s tail and full width, a spacious ambient snare sound at a modest 25% mix.",
+    "category": "Track",
+    "instrument": ["snare"],
+    "genres": [],
+    "character": ["wide", "lush"],
+    "tags": ["room"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 30.0,
+        "er_level": 0.35,
+        "er_time": 0.50,
+        "size": 0.55,
+        "decay": 2.8,
+        "damping": 6000.0,
+        "diffusion": 0.85,
+        "mod_rate": 0.8,
+        "mod_depth": 0.25,
+        "width": 1.0,
+        "mix": 0.25,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0
+      }
+    }
   }
 }

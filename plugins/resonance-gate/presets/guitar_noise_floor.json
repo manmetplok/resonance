@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -55.0,
-    "ratio": 10.0,
-    "attack": 5.0,
-    "hold": 200.0,
-    "release": 80.0,
-    "range": 55.0,
-    "hysteresis": 12.0,
-    "key_hpf": 60.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "guitar-noise-floor",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Guitar — Noise Floor",
+    "author": "Resonance",
+    "description": "Hard 10:1 gate at -55 dB with a wide 12 dB hysteresis and 55 dB range, for stripping amp hiss between guitar phrases.",
+    "category": "Track",
+    "instrument": ["guitar", "electric-guitar"],
+    "genres": [],
+    "character": ["clean"],
+    "tags": ["noise-gate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -55.0,
+        "ratio": 10.0,
+        "attack": 5.0,
+        "hold": 200.0,
+        "release": 80.0,
+        "range": 55.0,
+        "hysteresis": 12.0,
+        "key_hpf": 60.0
+      }
+    }
   }
 }

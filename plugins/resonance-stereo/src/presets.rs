@@ -16,30 +16,37 @@ pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 /// gentle master width), then the character modes.
 pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {
+        id: "init-transparent",
         name: "Init — Transparent",
         json: include_str!("../presets/init_transparent.json"),
     },
     PresetEntry {
+        id: "mono-bass-below-120",
         name: "Mono Bass Below 120",
         json: include_str!("../presets/mono_bass_below_120.json"),
     },
     PresetEntry {
+        id: "widen-mono-source",
         name: "Widen Mono Source",
         json: include_str!("../presets/widen_mono_source.json"),
     },
     PresetEntry {
+        id: "master-gentle-width",
         name: "Master — Gentle Width",
         json: include_str!("../presets/master_gentle_width.json"),
     },
     PresetEntry {
+        id: "vocal-micro-shift-double",
         name: "Vocal — Micro-shift Double",
         json: include_str!("../presets/vocal_double_micro_shift.json"),
     },
     PresetEntry {
+        id: "pad-diffuse-wide",
         name: "Pad — Diffuse Wide",
         json: include_str!("../presets/pad_diffuse_wide.json"),
     },
     PresetEntry {
+        id: "haas-safe",
         name: "Haas — Safe",
         json: include_str!("../presets/haas_safe.json"),
     },

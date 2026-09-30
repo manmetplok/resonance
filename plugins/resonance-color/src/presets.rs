@@ -22,22 +22,27 @@ pub use resonance_plugin::presets::FactoryPreset as PresetEntry;
 
 pub const PRESETS: &[PresetEntry] = &[
     PresetEntry {
+        id: "bus-warm-glue",
         name: "Bus — Warm Glue",
         json: include_str!("../presets/bus_warm_glue.json"),
     },
     PresetEntry {
+        id: "bass-iron",
         name: "Bass — Iron",
         json: include_str!("../presets/bass_iron.json"),
     },
     PresetEntry {
+        id: "vocal-tube-air",
         name: "Vocal — Tube Air",
         json: include_str!("../presets/vocal_tube_air.json"),
     },
     PresetEntry {
+        id: "drums-tape-15",
         name: "Drums — Tape 15",
         json: include_str!("../presets/drums_tape_15.json"),
     },
     PresetEntry {
+        id: "master-subtle-tape",
         name: "Master — Subtle Tape",
         json: include_str!("../presets/master_subtle_tape.json"),
     },

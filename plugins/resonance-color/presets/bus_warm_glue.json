@@ -1,17 +1,36 @@
 {
-  "params": {
-    "mode": 4,
-    "drive": 0.55,
-    "bias": 0.7,
-    "response": 3.0,
-    "tone": -1.0,
-    "mix": 0.6,
-    "auto_gain": 1,
-    "output": 0.0,
-    "oversample": 1,
-    "speed": 1,
-    "flutter": 0.0,
-    "tape_quality": 0,
-    "tape_solver": 1
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "bus-warm-glue",
+  "plugin": { "id": "com.resonance.color" },
+  "meta": {
+    "name": "Bus — Warm Glue",
+    "author": "Resonance",
+    "description": "Warm voicing blended 60% wet with a dark output tilt, for gentle glue saturation on a group bus.",
+    "category": "Bus",
+    "instrument": ["mix-bus", "drum-bus"],
+    "genres": [],
+    "character": ["warm", "subtle"],
+    "tags": ["glue"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "mode": 4,
+        "drive": 0.55,
+        "bias": 0.7,
+        "response": 3.0,
+        "tone": -1.0,
+        "mix": 0.6,
+        "auto_gain": 1,
+        "output": 0.0,
+        "oversample": 1,
+        "speed": 1,
+        "flutter": 0.0,
+        "tape_quality": 0,
+        "tape_solver": 1
+      }
+    }
   }
 }
