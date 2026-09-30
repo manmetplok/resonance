@@ -34,6 +34,7 @@ pub mod pool;
 pub mod project_io;
 pub mod reference;
 pub mod relink;
+pub mod shortcuts;
 pub mod takes;
 pub mod tempo_reanchor;
 pub mod tick;

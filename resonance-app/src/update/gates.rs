@@ -70,7 +70,11 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // Focus-gated shortcut envelope: allow — the wrapped message
         // re-enters `update()` on resolution and meets this gate then.
         Message::Ui(UiMessage::RequestShortcut(_))
-        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
+        | Message::Ui(UiMessage::ShortcutResolved { .. })
+        | Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::RunShortcut(_))
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        | Message::Ui(UiMessage::DismissOverlay) => false,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)
@@ -159,6 +163,16 @@ fn bounce_blocks_message(message: &crate::message::Message) -> bool {
         // synthesized mutating messages re-enter `update()` and are
         // blocked by this gate individually.
         Message::Control(_) => false,
+        // Keyboard envelopes: the message a shortcut resolves to re-enters
+        // `update()` and meets this gate on its own, so ⌘S still saves
+        // mid-render exactly as it did before shortcuts went through the
+        // registry.
+        Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::RunShortcut(_))
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        | Message::Ui(UiMessage::DismissOverlay)
+        | Message::Ui(UiMessage::RequestShortcut(_))
+        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)
@@ -220,6 +234,16 @@ fn freeze_blocks_message(message: &crate::message::Message) -> bool {
         // answered; synthesized mutating messages re-enter `update()`
         // and are blocked by this gate individually.
         Message::Control(_) => false,
+        // Keyboard envelopes: the message a shortcut resolves to re-enters
+        // `update()` and meets this gate on its own, so ⌘S still saves
+        // mid-render exactly as it did before shortcuts went through the
+        // registry.
+        Message::Ui(UiMessage::ShortcutKey { .. })
+        | Message::Ui(UiMessage::RunShortcut(_))
+        | Message::Ui(UiMessage::ShortcutProbed { .. })
+        | Message::Ui(UiMessage::DismissOverlay)
+        | Message::Ui(UiMessage::RequestShortcut(_))
+        | Message::Ui(UiMessage::ShortcutResolved { .. }) => false,
         // Everything else: block.
         Message::Compose(_)
         | Message::Transport(_)

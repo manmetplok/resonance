@@ -1,0 +1,122 @@
+//! State-aware half of the registry: whether a command can run right now,
+//! and the [`Message`] it dispatches (command-palette.md §3.1, §3.4).
+//!
+//! [`CommandId::availability`] is the authority on "can this run". It feeds
+//! the palette's dimmed rows and the shortcut path, which drops an
+//! unavailable command without dispatching anything. Its reasons are never
+//! stricter than the reducer: a reducer that would no-op anyway may still
+//! report `Yes`.
+//!
+//! [`CommandId::to_message`] builds the message, resolving a selection
+//! target where the command acts on one. It returns `None` only when there
+//! is no target to name; a single-target command emits the existing
+//! id-carrying message and a multi-target command emits one `…Selected`
+//! reducer message, so every command lands as exactly one undo entry.
+
+use super::{Available, CommandId};
+use crate::message::*;
+use crate::state::ViewMode;
+use crate::Resonance;
+
+impl CommandId {
+    /// Whether this command can run against `r`, with the reason when not.
+    pub fn availability(self, r: &Resonance) -> Available {
+        use CommandId::*;
+        match self {
+            Undo if !r.session.undo.can_undo() => Available::No("Nothing to undo"),
+            Redo if !r.session.undo.can_redo() => Available::No("Nothing to redo"),
+            TransportRecord if !r.registry.tracks.iter().any(|t| t.record_armed) => {
+                Available::No("Arm a track to record")
+            }
+            OpenSelectedMidiClip if r.ui.interaction.selected_midi_clip.is_none() => {
+                Available::No("Select a MIDI clip first")
+            }
+            CloseMidiEditor if r.ui.interaction.editing_midi_clip.is_none() => {
+                Available::No("No MIDI editor is open")
+            }
+            NextMarker | PrevMarker if r.markers.is_empty() => {
+                Available::No("The project has no markers")
+            }
+            ExitPerformanceMode if r.ui.view_mode != ViewMode::Performance => {
+                Available::No("Not in Performance mode")
+            }
+            GroupSelectedTracks if r.ui.interaction.selected_tracks.len() < 2 => {
+                Available::No("Select two or more tracks")
+            }
+            FreezeSelectedTracks
+                if crate::update::freeze::selected_freezable_tracks(r).is_empty() =>
+            {
+                Available::No("Select a freezable track first")
+            }
+            _ => Available::Yes,
+        }
+    }
+
+    /// Build the [`Message`] this command dispatches, or `None` when it
+    /// needs a target that `r` doesn't have. A fresh `Message` is built per
+    /// call, so commands never need `Message: Clone`.
+    pub fn to_message(self, r: &Resonance) -> Option<Message> {
+        let _ = r;
+        use CommandId::*;
+        let message = match self {
+            TransportPlay => Message::Transport(TransportMessage::Play),
+            TransportStop => Message::Transport(TransportMessage::Stop),
+            TransportPause => Message::Transport(TransportMessage::Pause),
+            TransportRecord => Message::Transport(TransportMessage::Record),
+            TransportSkipBack => Message::Transport(TransportMessage::SkipBack),
+            TransportSkipForward => Message::Transport(TransportMessage::SkipForward),
+            TransportToggleLoop => Message::Transport(TransportMessage::ToggleLoop),
+            TransportToggleMetronome => Message::Transport(TransportMessage::ToggleMetronome),
+            TransportCycleTimeSignature => {
+                Message::Transport(TransportMessage::CycleTimeSignature)
+            }
+            NextMarker => Message::Marker(MarkerMessage::JumpToNext),
+            PrevMarker => Message::Marker(MarkerMessage::JumpToPrev),
+
+            Undo => Message::Undo,
+            Redo => Message::Redo,
+            OpenSelectedMidiClip => {
+                Message::MidiEditor(MidiEditorMessage::OpenSelectedMidiClip)
+            }
+            CloseMidiEditor => Message::MidiEditor(MidiEditorMessage::CloseMidiEditor),
+
+            ViewArrange => Message::Ui(UiMessage::SwitchView(ViewMode::Arrange)),
+            ViewMixer => Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)),
+            ViewCompose => Message::Ui(UiMessage::SwitchView(ViewMode::Compose)),
+            TogglePerformanceMode => Message::Ui(UiMessage::TogglePerformanceMode),
+            ExitPerformanceMode => Message::Ui(UiMessage::ExitPerformanceMode),
+            ZoomIn => Message::Viewport(ViewportMessage::ZoomIn),
+            ZoomOut => Message::Viewport(ViewportMessage::ZoomOut),
+            ToggleGlobalTracks => Message::Ui(UiMessage::ToggleGlobalTracks),
+
+            ComposeCreateSection => {
+                Message::Compose(crate::compose::ComposeMessage::OpenCreateSectionDialog)
+            }
+            ComposeCollapseTrack => {
+                Message::Compose(crate::compose::ComposeMessage::CollapseTrack)
+            }
+            ComposeClearChordSelection => {
+                Message::Compose(crate::compose::ComposeMessage::ClearChordSelection)
+            }
+
+            AddAudioTrack => Message::Track(TrackMessage::AddTrack),
+            AddInstrumentTrack => Message::Track(TrackMessage::AddInstrumentTrack),
+            AddVocalTrack => Message::Track(TrackMessage::AddVocalTrack),
+            AddBus => Message::Bus(BusMessage::AddBus),
+            OpenAddTrackMenu => Message::Ui(UiMessage::OpenAddTrackMenu),
+            ToggleMasterFxBypass => Message::Master(MasterMessage::ToggleMasterFxBypass),
+            GroupSelectedTracks => Message::Group(GroupMessage::CreateGroupFromSelection),
+            FreezeSelectedTracks => Message::Freeze(FreezeMessage::FreezeSelectedTracks),
+            FreezeAllTracks => Message::Freeze(FreezeMessage::FreezeAllTracks),
+
+            NewProject => Message::Ui(UiMessage::StartNewProject),
+            OpenProject => Message::ProjectIo(ProjectIoMessage::OpenProject),
+            SaveProject => Message::ProjectIo(ProjectIoMessage::SaveProject),
+            SaveProjectAs => Message::ProjectIo(ProjectIoMessage::SaveProjectAs),
+            BounceToWav => Message::ProjectIo(ProjectIoMessage::BounceToWav),
+            ExportChordSheet => Message::ProjectIo(ProjectIoMessage::ExportChordSheet),
+            OpenSettings => Message::Ui(UiMessage::OpenSettings),
+        };
+        Some(message)
+    }
+}

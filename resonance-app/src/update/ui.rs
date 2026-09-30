@@ -256,6 +256,22 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 return r.update(*message);
             }
         }
+        UiMessage::ShortcutKey {
+            chord,
+            repeat,
+            captured,
+        } => {
+            return crate::update::shortcuts::handle_key(r, chord, repeat, captured);
+        }
+        UiMessage::RunShortcut(command) => {
+            return crate::update::shortcuts::run_shortcut(r, command, false);
+        }
+        UiMessage::ShortcutProbed { command, editing } => {
+            return crate::update::shortcuts::probed(r, command, editing);
+        }
+        UiMessage::DismissOverlay => {
+            return crate::update::shortcuts::dismiss_overlay(r);
+        }
         UiMessage::MarkerNavResolved { forward, editing } => {
             // Suppress navigation when the key was typed into a focused text
             // field; otherwise jump to the adjacent marker.

@@ -458,6 +458,30 @@ pub enum UiMessage {
     /// Close the track context menu (backdrop click, or after an entry
     /// dispatched its action).
     CloseTrackMenu,
+    /// A global key press, forwarded by the keyboard subscription
+    /// (command-palette.md §4.1). `captured` is set when a widget (a
+    /// focused text field, a key-owning canvas) already consumed it. The
+    /// reducer applies the overlay gate, looks the chord up in the active
+    /// keymap, drops key repeat the command doesn't want, and runs it.
+    ShortcutKey {
+        chord: crate::commands::KeyChord,
+        repeat: bool,
+        captured: bool,
+    },
+    /// Run a registry command as a keyboard shortcut: dropped when
+    /// unavailable, probed through the typing gate when the command is
+    /// `NotWhileTyping`.
+    RunShortcut(crate::commands::CommandId),
+    /// The typing gate's answer for a `NotWhileTyping` shortcut: the
+    /// command runs only when no text field held focus (`editing ==
+    /// false`).
+    ShortcutProbed {
+        command: crate::commands::CommandId,
+        editing: bool,
+    },
+    /// Close the topmost modal root overlay (Esc), as its backdrop click
+    /// or Cancel button would.
+    DismissOverlay,
 }
 
 impl UiMessage {
@@ -510,7 +534,14 @@ impl UiMessage {
             | Self::DismissMissingPlugins
             | Self::ShowMissingPlugins
             | Self::OpenTrackMenu { .. }
-            | Self::CloseTrackMenu => UndoAction::Skip,
+            | Self::CloseTrackMenu
+            // Keyboard envelopes: the message they resolve to re-enters
+            // `update()` and is classified on its own, so one shortcut is
+            // one undo entry (or none).
+            | Self::ShortcutKey { .. }
+            | Self::RunShortcut(..)
+            | Self::ShortcutProbed { .. }
+            | Self::DismissOverlay => UndoAction::Skip,
         }
     }
 }

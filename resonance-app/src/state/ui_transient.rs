@@ -63,4 +63,11 @@ pub struct UiTransientState {
     /// Mixer-panel UI state (selection, collapsed inspector groups, open
     /// menus, ...).
     pub mixer: MixerUiState,
+    /// The active keymap: what every global shortcut and canvas-local key
+    /// resolves through (command-palette.md §4). The Resonance default
+    /// until the keymap settings land.
+    pub keymap: crate::commands::BindingMap,
+    /// How the typing gate asks whether a text field holds focus; always
+    /// `Live` outside tests.
+    pub typing_probe: crate::update::shortcuts::TypingProbe,
 }

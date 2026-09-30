@@ -597,6 +597,8 @@ impl Resonance {
                 last_arrangement_shift: None,
                 interaction: ClipInteractionState::default(),
                 mixer: MixerUiState::default(),
+                keymap: crate::commands::BindingMap::resonance_default(),
+                typing_probe: Default::default(),
             },
             banners: state::Banners::default(),
             master: state::MasterState {

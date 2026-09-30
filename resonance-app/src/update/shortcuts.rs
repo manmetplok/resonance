@@ -1,0 +1,170 @@
+//! Global keyboard dispatch through the command registry
+//! (command-palette.md §3.2, §4.1).
+//!
+//! The keyboard subscription can't read state, so it forwards every key
+//! press as a [`UiMessage::ShortcutKey`] and the reducer here does the
+//! rest, in this order:
+//!
+//! 1. a key a widget already consumed (a focused text field, a canvas that
+//!    owns the keys) is dropped;
+//! 2. Esc resolves to closing the topmost root overlay before it means
+//!    anything else;
+//! 3. while a modal root overlay shows, only ⌘/Ctrl chords dispatch;
+//! 4. the chord is looked up in the active [`BindingMap`] (global scope);
+//! 5. key repeat is dropped unless the command wants it;
+//! 6. [`run_shortcut`]: availability, then the typing gate, then dispatch.
+
+use iced::Task;
+
+use crate::commands::{Available, BindingMap, CommandId, KeyChord, KeyGate, NamedKey, Scope};
+use crate::message::{Message, UiMessage};
+use crate::Resonance;
+
+/// The command a global key press maps to under `bindings`, if any. A
+/// thin, state-free seam so the chord table is testable without a live
+/// keyboard subscription.
+pub fn key_press_command(
+    bindings: &BindingMap,
+    key: &iced::keyboard::Key,
+    modifiers: iced::keyboard::Modifiers,
+) -> Option<CommandId> {
+    let chord = KeyChord::from_iced(key, modifiers)?;
+    bindings.command_for(Scope::Global, chord)
+}
+
+/// The keyboard-subscription mapper: every key press becomes a
+/// [`UiMessage::ShortcutKey`], carrying whether a widget captured it.
+pub(crate) fn key_event_message(
+    event: iced::Event,
+    status: iced::event::Status,
+) -> Option<Message> {
+    let iced::Event::Keyboard(event) = event else {
+        return None;
+    };
+    match event {
+        iced::keyboard::Event::KeyPressed {
+            key,
+            modifiers,
+            repeat,
+            ..
+        } => {
+            let chord = KeyChord::from_iced(&key, modifiers)?;
+            Some(Message::Ui(UiMessage::ShortcutKey {
+                chord,
+                repeat,
+                captured: status == iced::event::Status::Captured,
+            }))
+        }
+        // Track the live modifier state so a track-header click can tell
+        // a plain select from an additive (Cmd/Shift) one — the mouse
+        // press itself carries no modifiers (todo #684).
+        iced::keyboard::Event::ModifiersChanged(mods) => {
+            Some(Message::Ui(UiMessage::ModifiersChanged(mods)))
+        }
+        _ => None,
+    }
+}
+
+fn is_plain_escape(chord: KeyChord) -> bool {
+    chord == KeyChord::named(NamedKey::Escape, crate::commands::Mods::NONE)
+}
+
+/// Whether `chord` carries the ⌘ (macOS) / Ctrl (elsewhere) accelerator.
+fn has_accelerator(chord: KeyChord) -> bool {
+    chord.mods.cmd || chord.mods.ctrl
+}
+
+/// Reduce one global key press (see the module docs for the order).
+pub(crate) fn handle_key(
+    r: &mut Resonance,
+    chord: KeyChord,
+    repeat: bool,
+    captured: bool,
+) -> Task<Message> {
+    // A focused text field or a key-owning canvas already acted on it.
+    if captured {
+        return Task::none();
+    }
+    let modal = r.modal_overlay();
+    if is_plain_escape(chord) && !repeat {
+        if let Some(overlay) = modal {
+            return match overlay.dismiss_message(r) {
+                Some(message) => r.update(message),
+                None => Task::none(),
+            };
+        }
+    }
+    if modal.is_some() && !has_accelerator(chord) {
+        return Task::none();
+    }
+    let Some(command) = r.ui.keymap.command_for(Scope::Global, chord) else {
+        return Task::none();
+    };
+    if repeat && !command.repeat() {
+        return Task::none();
+    }
+    // A bare key is typing-gated whatever the command says, so a rebound
+    // or preset keymap can't put an ungated letter on a command.
+    run_shortcut(r, command, !has_accelerator(chord))
+}
+
+/// How the typing gate learns whether a text field holds focus. `Live`
+/// probes the widget tree (`crate::focus`); the fixed answers exist so
+/// tests can drive a shortcut end to end without a widget tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TypingProbe {
+    #[default]
+    Live,
+    Assume { editing: bool },
+}
+
+/// Run `command` as a keyboard shortcut: dropped when unavailable, and
+/// probed through the typing gate when it is [`KeyGate::NotWhileTyping`]
+/// (or `force_gate` is set, for a bare-key chord).
+pub(crate) fn run_shortcut(r: &mut Resonance, command: CommandId, force_gate: bool) -> Task<Message> {
+    if let Available::No(_) = command.availability(r) {
+        return Task::none();
+    }
+    let gate = if force_gate { KeyGate::NotWhileTyping } else { command.gate() };
+    match gate {
+        KeyGate::Always => execute(r, command),
+        KeyGate::NotWhileTyping => match r.ui.typing_probe {
+            TypingProbe::Live => crate::focus::any_text_input_focused().map(move |editing| {
+                Message::Ui(UiMessage::ShortcutProbed { command, editing })
+            }),
+            TypingProbe::Assume { editing } => {
+                r.update(Message::Ui(UiMessage::ShortcutProbed { command, editing }))
+            }
+        },
+    }
+}
+
+/// The typing gate's answer for a `NotWhileTyping` shortcut.
+pub(crate) fn probed(r: &mut Resonance, command: CommandId, editing: bool) -> Task<Message> {
+    if editing {
+        return Task::none();
+    }
+    execute(r, command)
+}
+
+/// Dispatch `command`'s message now. Availability is re-checked because a
+/// typing probe resolves a frame after the key press; the message
+/// re-enters `update()`, so it meets every gate and is classified for undo
+/// on its own.
+pub(crate) fn execute(r: &mut Resonance, command: CommandId) -> Task<Message> {
+    if let Available::No(_) = command.availability(r) {
+        return Task::none();
+    }
+    match command.to_message(r) {
+        Some(message) => r.update(message),
+        None => Task::none(),
+    }
+}
+
+/// Close the topmost modal root overlay, as its backdrop click would.
+pub(crate) fn dismiss_overlay(r: &mut Resonance) -> Task<Message> {
+    match r.modal_overlay().and_then(|o| o.dismiss_message(r)) {
+        Some(message) => r.update(message),
+        None => Task::none(),
+    }
+}
