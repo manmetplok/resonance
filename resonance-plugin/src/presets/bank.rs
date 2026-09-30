@@ -294,6 +294,7 @@ impl PresetBank {
                     id: options.id,
                     target: options.target,
                     blob: None,
+                    blob_preset_form: None,
                 },
             )
             .map(|r| r.preset)
@@ -306,6 +307,7 @@ impl PresetBank {
         &self,
         name: &str,
         blob: &[u8],
+        preset_form: bool,
         options: SaveOptions,
     ) -> Result<PresetRef, String> {
         self.library
@@ -320,6 +322,7 @@ impl PresetBank {
                     id: options.id,
                     target: options.target,
                     blob: Some(blob.to_vec()),
+                    blob_preset_form: Some(preset_form),
                 },
             )
             .map(|r| r.preset)

@@ -286,6 +286,14 @@ impl ClapInstance {
             .swap(false, std::sync::atomic::Ordering::AcqRel)
     }
 
+    /// Whether this is one of Resonance's own plugins: it serves
+    /// `com.resonance.preset-session` (every plugin built on the SDK's
+    /// bridge does). Provenance decides how its state is stored in a
+    /// preset, never the state's content.
+    pub fn is_first_party(&self) -> bool {
+        self.extension(EXTENSION_ID).is_some()
+    }
+
     /// Tell a Resonance plugin which params the host automates, so its
     /// modified comparison leaves them out (D8). False for a plugin
     /// without `com.resonance.preset-session`. `[main-thread]`.

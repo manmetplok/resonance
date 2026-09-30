@@ -118,6 +118,9 @@ pub struct SaveRequest {
     /// A third-party plugin's opaque state instead of `doc` (§8 tier T0):
     /// stored as `state.encoding = "clap-state"`; `doc` is then ignored.
     pub blob: Option<Vec<u8>>,
+    /// For a blob: whether it is the plugin's preset form (`Some(true)`),
+    /// its full state (`Some(false)`), or unknown (`None`).
+    pub blob_preset_form: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -600,7 +603,10 @@ impl PresetLibrary {
         };
         let mut file = PresetFile::new(id, plugin, meta.normalized(), doc);
         if let Some(blob) = &request.blob {
-            file.state = format::PresetState::clap_blob(blob);
+            file.state = match request.blob_preset_form {
+                Some(form) => format::PresetState::clap_blob_form(blob, form),
+                None => format::PresetState::clap_blob(blob),
+            };
         }
         let path = dir.join(files::preset_file_name(&name, &file.id));
         if let Some(old) = &old_path {
@@ -754,6 +760,7 @@ impl PresetLibrary {
                 id: None,
                 target: None,
                 blob,
+                blob_preset_form: None,
             },
         )
     }
@@ -817,6 +824,7 @@ impl PresetLibrary {
                 id: (!clash).then(|| file.id.clone()),
                 target: None,
                 blob,
+                blob_preset_form: None,
             },
         )?;
         Ok((saved, clash))

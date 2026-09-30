@@ -159,6 +159,11 @@ pub struct PresetState {
     pub doc: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blob: Option<String>,
+    /// For a blob: `"preset"` when it is the plugin's preset form
+    /// (`clap.state-context` `FOR_PRESET`), `"full"` when it is its whole
+    /// state. Absent for a document.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub form: Option<String>,
 }
 
 impl PresetState {
@@ -170,6 +175,15 @@ impl PresetState {
             encoding: ENCODING_CLAP_STATE.to_string(),
             doc: None,
             blob: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            form: None,
+        }
+    }
+
+    /// [`clap_blob`](Self::clap_blob) recording which form it is.
+    pub fn clap_blob_form(bytes: &[u8], preset_form: bool) -> Self {
+        Self {
+            form: Some(if preset_form { "preset" } else { "full" }.to_string()),
+            ..Self::clap_blob(bytes)
         }
     }
 
@@ -190,6 +204,7 @@ impl PresetState {
             encoding: ENCODING_RESONANCE_JSON.to_string(),
             doc: Some(doc),
             blob: None,
+            form: None,
         }
     }
 }

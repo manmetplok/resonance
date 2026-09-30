@@ -219,6 +219,7 @@ fn echo_state(app: &mut Resonance, instance_id: u64, threshold: f64, ratio: f64)
         )
         .into_bytes(),
         preset_form: true,
+        first_party: true,
     });
 }
 

@@ -90,7 +90,7 @@ use reply::{failure, success};
 
 pub(crate) use clip::{import_result, place_result};
 pub(crate) use job::export_kind_to_rpc;
-pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
+pub(crate) use plugin_presets::{write_saved_state as write_plugin_preset, SavedStateKind};
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
 pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};

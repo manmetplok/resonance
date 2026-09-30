@@ -487,7 +487,8 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             instance_id,
             data,
             preset_form,
-        } => plugins::preset_state_saved(r, instance_id, data, preset_form),
+            first_party,
+        } => plugins::preset_state_saved(r, instance_id, data, preset_form, first_party),
         E::PluginPresetLoaded {
             instance_id,
             location,

@@ -609,19 +609,20 @@ pub(crate) fn apply_meta_input(meta: &mut PresetMeta, input: &PresetMetaInput) {
 /// Called when the engine's `PluginPresetStateSaved` echo lands: the
 /// plugin is the only thing that knows its current sound (edits made in
 /// its own window never reach the app's mirror).
-/// `blob` as a first-party state document, when it is one.
-fn resonance_document(blob: &[u8]) -> Option<serde_json::Value> {
-    let document: serde_json::Value = serde_json::from_slice(blob).ok()?;
-    document
-        .get("params")
-        .is_some_and(|p| p.is_object())
-        .then_some(document)
+/// Where a captured preset state came from and what it is.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SavedStateKind {
+    /// One of our plugins (it serves `com.resonance.preset-session`).
+    pub first_party: bool,
+    /// The plugin's preset form (state-context), not its full state.
+    pub preset_form: bool,
 }
 
 pub(crate) fn write_saved_state(
     app: &Resonance,
     pending: &crate::PendingPluginPresetSave,
     blob: &[u8],
+    kind: SavedStateKind,
 ) -> Result<PresetRecord, String> {
     let bank = bank_for(app, &pending.clap_id);
     let meta = pending.meta.as_ref().map(|input| {
@@ -635,12 +636,17 @@ pub(crate) fn write_saved_state(
         target: pending.target.clone(),
         ..Default::default()
     };
-    // A first-party plugin's state is a JSON document with a `params`
-    // object; anything else is a third-party plugin's opaque state, kept
-    // as a `clap-state` blob (§8 tier T0).
-    let saved = match resonance_document(blob) {
-        Some(document) => bank.write_user_preset_with(pending.name.trim(), &document, options)?,
-        None => bank.write_user_blob_with(pending.name.trim(), blob, options)?,
+    // Provenance decides, not content (§8 tier T0): one of our plugins
+    // hands back its state document; any other plugin's state is opaque
+    // and kept as a `clap-state` blob — even one that happens to be JSON
+    // with a `params` object, which the param-by-param recall could never
+    // load.
+    let saved = if kind.first_party {
+        let document: serde_json::Value = serde_json::from_slice(blob)
+            .map_err(|e| format!("the plugin's state is not a Resonance document: {e}"))?;
+        bank.write_user_preset_with(pending.name.trim(), &document, options)?
+    } else {
+        bank.write_user_blob_with(pending.name.trim(), blob, kind.preset_form, options)?
     };
     if let Some(favorite) = pending.favorite {
         bank.library()

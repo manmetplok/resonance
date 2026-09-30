@@ -686,7 +686,8 @@ pub(super) fn preset_state_saved(
     r: &mut Resonance,
     instance_id: PluginInstanceId,
     data: Vec<u8>,
-    _preset_form: bool,
+    preset_form: bool,
+    first_party: bool,
 ) {
     if !r
         .presets
@@ -697,7 +698,16 @@ pub(super) fn preset_state_saved(
         return;
     }
     let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
-    if let Err(e) = crate::update::control::write_plugin_preset(r, &pending, &data) {
+    let saved = crate::update::control::write_plugin_preset(
+        r,
+        &pending,
+        &data,
+        crate::update::control::SavedStateKind {
+            first_party,
+            preset_form,
+        },
+    );
+    if let Err(e) = saved {
         r.banners.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
     }
 }

@@ -541,10 +541,14 @@ pub enum AudioEvent {
     /// The answer to `AudioCommand::SavePluginPresetState`. `preset_form`
     /// is true when the plugin wrote its preset form (state-context);
     /// false when `data` is its full state (no state-context).
+    /// `first_party` is provenance, not content: the instance serves
+    /// `com.resonance.preset-session`, so `data` is a Resonance state
+    /// document; anything else is opaque, whatever it looks like.
     PluginPresetStateSaved {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
         preset_form: bool,
+        first_party: bool,
     },
     /// The plugin loaded a preset and said so (`clap_host_preset_load.
     /// loaded`): from its own browser, or for a `from_location` the host

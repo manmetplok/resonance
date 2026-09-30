@@ -805,7 +805,7 @@ fn an_opaque_state_round_trips_as_a_clap_state_preset() {
         .with_root(root.0.clone())
         .with_plugin_info("Vendor Synth", "2.1");
     let saved = bank
-        .write_user_blob_with("Glass", OPAQUE, SaveOptions::default())
+        .write_user_blob_with("Glass", OPAQUE, false, SaveOptions::default())
         .expect("save a blob");
     assert_eq!(bank.blob_for(&saved).as_deref(), Some(OPAQUE));
     assert_eq!(bank.json_for(&saved), None, "no document to parse");

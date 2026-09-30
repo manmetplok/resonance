@@ -31,6 +31,7 @@ fn the_ir_preset_form_carries_the_impulse_not_the_index() {
     let mut instance = bundle.create_instance(&id, 48_000).expect("create_instance");
     assert!(instance.has_preset_state(), "first-party plugins implement state-context");
     assert!(instance.has_preset_load(), "and preset-load");
+    assert!(instance.is_first_party(), "and the preset-session extension: provenance");
 
     let (form, preset_form) = instance.save_preset_state().expect("preset state");
     assert!(preset_form);

@@ -872,6 +872,7 @@ pub(crate) fn handle_save_plugin_preset_state(ctx: &HandlerCtx, instance_id: Plu
                     instance_id,
                     data,
                     preset_form,
+                    first_party: inst.0.is_first_party(),
                 });
             }
         } else {

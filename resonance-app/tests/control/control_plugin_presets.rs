@@ -288,6 +288,7 @@ fn saving_adds_a_user_preset_the_list_then_reports() {
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":1234.0,"{DRIVE}":0.25}}}}"#)
             .into_bytes(),
         preset_form: true,
+        first_party: true,
     });
 
     let view = presets(&mut app);
@@ -326,6 +327,7 @@ fn a_saved_preset_recalls_what_it_captured() {
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":1234.0,"{DRIVE}":0.25}}}}"#)
             .into_bytes(),
         preset_form: true,
+        first_party: true,
     });
 
     // Move away from it, then recall.
@@ -391,6 +393,7 @@ fn overwriting_a_user_preset_needs_the_flag() {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":100.0}}}}"#).into_bytes(),
         preset_form: true,
+        first_party: true,
     });
 
     let refused = save(&mut app, false);
@@ -437,6 +440,7 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":777.0}}}}"#).into_bytes(),
         preset_form: true,
+        first_party: true,
     });
 
     let view = presets(&mut app);

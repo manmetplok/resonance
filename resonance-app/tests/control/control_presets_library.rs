@@ -148,6 +148,7 @@ fn save(app: &mut Resonance, name: &str, meta: Option<PresetMetaInput>, favorite
         instance_id: INSTANCE,
         data: br#"{"version":1,"params":{"cutoff":777.0,"drive":0.5}}"#.to_vec(),
         preset_form: true,
+        first_party: true,
     });
     result.id
 }
@@ -710,6 +711,7 @@ fn a_third_party_plugins_state_saves_and_loads_as_an_opaque_preset() {
         instance_id: VENDOR_INSTANCE,
         data: OPAQUE.to_vec(),
         preset_form: false,
+        first_party: false,
     });
 
     let listed: PluginPresetsView = serde_json::from_value(
@@ -756,4 +758,76 @@ fn a_third_party_plugins_state_saves_and_loads_as_an_opaque_preset() {
         params: refreshed,
     });
     assert_eq!(app.test_plugin_param(VENDOR_INSTANCE, clap_id("cutoff")), Some(1234.0));
+}
+
+/// Provenance, not content (review M3): a third-party plugin whose state
+/// happens to be JSON with a `params` object (nih-plug style) is still
+/// saved as an opaque blob, and loads back whole — a param-by-param recall
+/// of it could never load.
+#[test]
+fn a_third_party_json_state_is_kept_opaque() {
+    use resonance_audio::types::AudioCommand;
+    let nih_style = br#"{"params":{"cutoff":"0.25","gain":"-3 dB"},"fields":{}}"#;
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = with_plugin(app);
+    app.test_add_track(VENDOR_TRACK, TrackType::Instrument);
+    app.test_push_track_plugin(
+        VENDOR_TRACK,
+        PluginSlotState::new(
+            VENDOR_INSTANCE,
+            "Vendor Synth".to_owned(),
+            VENDOR_ID.to_owned(),
+            "/nonexistent/vendor.clap".to_owned(),
+            params(),
+            false,
+        ),
+    );
+    let saved = call(
+        &mut app,
+        track_proto::SAVE_PLUGIN_PRESET,
+        &track_proto::SavePluginPresetParams {
+            track_id: ProtoTrackId(VENDOR_TRACK),
+            plugin_id: Some(VENDOR_ID.to_owned()),
+            occurrence: None,
+            name: "Nih".to_owned(),
+            overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
+        },
+    );
+    assert!(saved.error.is_none(), "{:?}", saved.error);
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
+        instance_id: VENDOR_INSTANCE,
+        data: nih_style.to_vec(),
+        preset_form: false,
+        first_party: false,
+    });
+    while rx.try_recv().is_ok() {}
+    let loaded = call(
+        &mut app,
+        track_proto::LOAD_PLUGIN_PRESET,
+        &track_proto::LoadPluginPresetParams {
+            track_id: ProtoTrackId(VENDOR_TRACK),
+            plugin_id: Some(VENDOR_ID.to_owned()),
+            occurrence: None,
+            preset: "Nih".to_owned(),
+            source: None,
+            preset_id: None,
+            extra: None,
+        },
+    );
+    assert!(loaded.error.is_none(), "it loads: {:?}", loaded.error);
+    let cmds: Vec<_> = rx.try_iter().collect();
+    let sent = cmds.iter().find_map(|c| match c {
+        AudioCommand::LoadPluginPresetState { instance_id: VENDOR_INSTANCE, data, .. } => {
+            Some(data.clone())
+        }
+        _ => None,
+    });
+    assert_eq!(sent.as_deref(), Some(&nih_style[..]), "whole and untouched");
+    assert!(
+        !cmds.iter().any(|c| matches!(c, AudioCommand::SetPluginParam { instance_id: VENDOR_INSTANCE, .. })),
+        "no param-by-param recall of an opaque state"
+    );
 }
