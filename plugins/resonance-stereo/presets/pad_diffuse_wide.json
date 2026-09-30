@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.2,
-    "mono_below": 150.0,
-    "mono_slope": 2,
-    "widen_mode": 2,
-    "widen_amount": 0.8,
-    "focus_low": 200.0,
-    "focus_high": 20000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "pad-diffuse-wide",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Pad — Diffuse Wide",
+    "author": "Resonance",
+    "description": "Diffuse widening at 80% above 200 Hz plus a 120% width boost, for a lush, spread-out pad image.",
+    "category": "Track",
+    "instrument": ["synth"],
+    "genres": [],
+    "character": ["wide", "lush", "airy"],
+    "tags": ["diffusion"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.2,
+        "mono_below": 150.0,
+        "mono_slope": 2,
+        "widen_mode": 2,
+        "widen_amount": 0.8,
+        "focus_low": 200.0,
+        "focus_high": 20000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

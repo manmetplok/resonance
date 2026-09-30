@@ -11,7 +11,7 @@ use resonance_delay::presets::{load_preset, PRESETS};
 fn params_map(
     entry: &resonance_delay::presets::PresetEntry,
 ) -> serde_json::Map<String, serde_json::Value> {
-    let value: serde_json::Value = serde_json::from_str(entry.json)
+    let value: serde_json::Value = serde_json::from_str(&entry.state_json())
         .unwrap_or_else(|e| panic!("preset '{}' is invalid JSON: {e}", entry.name));
     value
         .get("params")

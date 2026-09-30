@@ -1,26 +1,45 @@
 {
-  "params": {
-    "predelay": 12.0,
-    "er_level": 0.35,
-    "er_time": 0.35,
-    "size": 0.35,
-    "decay": 1.5,
-    "damping": 10000.0,
-    "diffusion": 0.92,
-    "mod_rate": 1.8,
-    "mod_depth": 0.20,
-    "width": 0.95,
-    "mix": 0.25,
-    "freeze": 0,
-    "wet_hpf_on": 0,
-    "wet_hpf_freq": 600.0,
-    "wet_lpf_on": 0,
-    "wet_lpf_freq": 10000.0,
-    "wet_filter_slope": 0,
-    "duck_amount": 0.0,
-    "duck_threshold": -30.0,
-    "duck_attack": 15.0,
-    "duck_release": 200.0,
-    "er_tail_balance": 0.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "snare-plate",
+  "plugin": { "id": "com.resonance.reverb" },
+  "meta": {
+    "name": "Snare Plate",
+    "author": "Resonance",
+    "description": "Bright plate on snare: 1.5 s decay, damping rolled up to 10 kHz for metallic sheen, tight 0.35 size, 25% mix.",
+    "category": "Track",
+    "instrument": ["snare"],
+    "genres": [],
+    "character": ["bright", "metallic"],
+    "tags": ["plate"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "predelay": 12.0,
+        "er_level": 0.35,
+        "er_time": 0.35,
+        "size": 0.35,
+        "decay": 1.5,
+        "damping": 10000.0,
+        "diffusion": 0.92,
+        "mod_rate": 1.8,
+        "mod_depth": 0.20,
+        "width": 0.95,
+        "mix": 0.25,
+        "freeze": 0,
+        "wet_hpf_on": 0,
+        "wet_hpf_freq": 600.0,
+        "wet_lpf_on": 0,
+        "wet_lpf_freq": 10000.0,
+        "wet_filter_slope": 0,
+        "duck_amount": 0.0,
+        "duck_threshold": -30.0,
+        "duck_attack": 15.0,
+        "duck_release": 200.0,
+        "er_tail_balance": 0.0
+      }
+    }
   }
 }

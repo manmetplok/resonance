@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -48.0,
-    "ratio": 4.0,
-    "attack": 12.0,
-    "hold": 250.0,
-    "release": 100.0,
-    "range": 18.0,
-    "hysteresis": 10.0,
-    "key_hpf": 100.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "dialogue-room-tone",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Dialogue — Room Tone",
+    "author": "Resonance",
+    "description": "Gentle 4:1 expander with a 250 ms hold and 18 dB range, keeping room tone audible while trimming noise between lines.",
+    "category": "Track",
+    "instrument": ["vocal"],
+    "genres": [],
+    "character": ["subtle", "clean"],
+    "tags": ["expander", "room-tone"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -48.0,
+        "ratio": 4.0,
+        "attack": 12.0,
+        "hold": 250.0,
+        "release": 100.0,
+        "range": 18.0,
+        "hysteresis": 10.0,
+        "key_hpf": 100.0
+      }
+    }
   }
 }

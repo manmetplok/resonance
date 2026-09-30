@@ -1,15 +1,34 @@
 {
-  "params": {
-    "width": 1.0,
-    "mono_below": 0.0,
-    "mono_slope": 1,
-    "widen_mode": 0,
-    "widen_amount": 0.5,
-    "focus_low": 150.0,
-    "focus_high": 20000.0,
-    "balance": 0.0,
-    "rotation": 0.0,
-    "solo_side": 0,
-    "mono_check": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "init-transparent",
+  "plugin": { "id": "com.resonance.stereo" },
+  "meta": {
+    "name": "Init — Transparent",
+    "author": "Resonance",
+    "description": "Bit-exact passthrough: 100% width, no mono-maker, no widening algorithm — the transparent starting point.",
+    "category": "Utility",
+    "instrument": [],
+    "genres": [],
+    "character": ["clean", "static"],
+    "tags": []
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "width": 1.0,
+        "mono_below": 0.0,
+        "mono_slope": 1,
+        "widen_mode": 0,
+        "widen_amount": 0.5,
+        "focus_low": 150.0,
+        "focus_high": 20000.0,
+        "balance": 0.0,
+        "rotation": 0.0,
+        "solo_side": 0,
+        "mono_check": 0
+      }
+    }
   }
 }

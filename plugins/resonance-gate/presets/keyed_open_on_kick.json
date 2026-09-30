@@ -1,12 +1,31 @@
 {
-  "params": {
-    "threshold": -30.0,
-    "ratio": 20.0,
-    "attack": 5.0,
-    "hold": 30.0,
-    "release": 25.0,
-    "range": 60.0,
-    "hysteresis": 6.0,
-    "key_hpf": 40.0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "keyed-open-on-kick",
+  "plugin": { "id": "com.resonance.gate" },
+  "meta": {
+    "name": "Keyed — Open on Kick",
+    "author": "Resonance",
+    "description": "Hard 20:1 keyed gate, fast 5 ms open and 25 ms close, full 60 dB range — opens a track on an external kick trigger.",
+    "category": "Creative",
+    "instrument": ["bass", "synth-bass"],
+    "genres": ["house", "techno"],
+    "character": ["aggressive", "punchy"],
+    "tags": ["sidechain", "keyed"]
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -30.0,
+        "ratio": 20.0,
+        "attack": 5.0,
+        "hold": 30.0,
+        "release": 25.0,
+        "range": 60.0,
+        "hysteresis": 6.0,
+        "key_hpf": 40.0
+      }
+    }
   }
 }

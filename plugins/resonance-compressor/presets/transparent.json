@@ -1,16 +1,35 @@
 {
-  "params": {
-    "threshold": -18.0,
-    "ratio": 2.5,
-    "attack": 25.0,
-    "release": 180.0,
-    "knee": 10.0,
-    "makeup": 1.5,
-    "mix": 1.0,
-    "detector_mix": 0.5,
-    "sc_hpf_freq": 60.0,
-    "sc_hpf_on": 0,
-    "auto_makeup": 0,
-    "release_mode": 0
+  "format": "resonance.preset",
+  "format_version": 1,
+  "id": "transparent",
+  "plugin": { "id": "com.resonance.compressor" },
+  "meta": {
+    "name": "Transparent",
+    "author": "Resonance",
+    "description": "Moderate 2.5:1 with a soft knee and balanced peak/RMS detection, a transparent starting point for general leveling.",
+    "category": "Utility",
+    "instrument": [],
+    "genres": [],
+    "character": ["clean", "subtle"],
+    "tags": []
+  },
+  "state": {
+    "encoding": "resonance-json",
+    "doc": {
+      "params": {
+        "threshold": -18.0,
+        "ratio": 2.5,
+        "attack": 25.0,
+        "release": 180.0,
+        "knee": 10.0,
+        "makeup": 1.5,
+        "mix": 1.0,
+        "detector_mix": 0.5,
+        "sc_hpf_freq": 60.0,
+        "sc_hpf_on": 0,
+        "auto_makeup": 0,
+        "release_mode": 0
+      }
+    }
   }
 }
