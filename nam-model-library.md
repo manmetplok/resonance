@@ -1,10 +1,19 @@
 # NAM model library: managing installed amp models
 
-Status: **design, not built** (2026-09-30). Build it as the vertical slices in
-§12. Each slice lands its storage change, plugin behaviour, editor UI and tests
-together, and the control-API slices follow the one-tool-per-method rule
-(`project_control_api_vertical_slices`). Touches `resonance-common` (new
-library module), `plugins/resonance-amp` (state, selector, editor) and, in the
+Status: **built, branch `feat/nam-library`, unmerged** (2026-09-30): the
+shared foundation (F: `library_marks`, `reveal`, `library_view`, the list
+widget) and slices L0–L7b of §12. The open decisions D1–D10 (§13) were not
+answered; every one is built as its **recommended** option (D3 copy-on-import
+included) and can still be revisited. Where the code had to differ from the
+design, the section says so in place (§5.1 empty slots, §5.2 `file_changed`,
+§8 worker ownership and refresh, §9.2 as built). Each slice landed its
+storage change, plugin behaviour, editor UI and tests together, and the
+control-API slices follow the one-tool-per-method rule
+(`project_control_api_vertical_slices`). Touches `resonance-common`
+(`nam_library`, `library_marks`, `reveal`), `resonance-plugin`
+(`library_view`, `library_ui`, the bridge's `param_text_source`),
+`plugin-gui-core` (`star_toggle`, `tag_pill`), `plugins/resonance-amp`
+(state, selector, editor), `resonance-audio` (`param_from_text`) and, in the
 MCP slices, `resonance-control` / `resonance-app` / `resonance-mcp`.
 
 ## 0. Why
