@@ -1,24 +1,27 @@
 //! `clap.preset-discovery-factory`: indexing a plugin's presets without
 //! instantiating it (plugin-preset-library.md §8 tier T1, slice P8).
 //!
-//! The indexer asks each provider for its file types and locations, then
-//! for the metadata of every location — a `PLUGIN` location as a whole, a
-//! `FILE` location per file (walking a directory for the declared
-//! extensions). What comes back is a flat list of [`DiscoveredPreset`]s:
-//! name, load key, location, the plugin ids it is for, creators,
-//! description, features and flags.
+//! Each provider is created and `init`ed; what it declares during `init`
+//! (file types, locations) is copied out and sealed — a declaration after
+//! `init` is ignored, so the provider can never grow a list the indexer is
+//! walking. Then it is asked for the metadata of each `PLUGIN` location as
+//! a whole and of each file of each `FILE` location (a directory walked,
+//! depth-capped, for the declared extensions), and destroyed.
 //!
 //! Threading: none of this touches a plugin instance, so it runs on the
-//! scan's discovery worker (`engine::scan`), never on the engine or audio
-//! thread. A provider is created, used and destroyed on that one thread,
-//! which is all CLAP asks.
+//! scan's single discovery worker (`engine::scan`), never on the engine or
+//! audio thread. A provider is created, used and destroyed on that thread.
 //!
-//! The result is cached per plugin id in `<library>/discovered/<id>.json`,
-//! keyed by the binary's size and modification time, so a start does not
-//! re-index an unchanged plugin.
+//! Cache (`<cache>/preset-discovery/<bundle>.json`): per provider, its
+//! declarations and `PLUGIN`-location presets, keyed on the binary's size
+//! and mtime; and per file of its `FILE` locations, that file's presets
+//! keyed on the file's size and mtime (ns). A start with the binary
+//! unchanged re-walks the `FILE` locations and asks the provider only
+//! about files that are new or changed; `force` (a rescan) re-indexes all.
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use clap_sys::factory::preset_discovery::*;
 use clap_sys::timestamp::clap_timestamp;
@@ -26,59 +29,36 @@ use clap_sys::universal_plugin_id::clap_universal_plugin_id;
 use clap_sys::version::CLAP_VERSION;
 use serde::{Deserialize, Serialize};
 
-/// Where a discovered preset lives, as `clap.preset-load` names it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DiscoveredLocation {
-    Plugin,
-    File(PathBuf),
-}
-
-/// One preset a provider described.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DiscoveredPreset {
-    pub name: String,
-    pub location: DiscoveredLocation,
-    pub load_key: Option<String>,
-    /// CLAP plugin ids (`abi == "clap"`) the preset is for. Empty means
-    /// "the plugins of this bundle".
-    pub plugin_ids: Vec<String>,
-    pub creators: Vec<String>,
-    pub description: Option<String>,
-    pub features: Vec<String>,
-    /// `CLAP_PRESET_DISCOVERY_IS_*`.
-    pub flags: u32,
-}
-
-impl DiscoveredPreset {
-    pub fn is_favorite(&self) -> bool {
-        self.flags & CLAP_PRESET_DISCOVERY_IS_FAVORITE != 0
-    }
-
-    /// A stable id for the preset within its plugin: the load key for a
-    /// `PLUGIN` location, the path (plus the key) for a file.
-    pub fn stable_id(&self) -> String {
-        match (&self.location, &self.load_key) {
-            (DiscoveredLocation::Plugin, Some(k)) => format!("plugin:{k}"),
-            (DiscoveredLocation::Plugin, None) => format!("plugin:{}", self.name),
-            (DiscoveredLocation::File(p), Some(k)) => format!("file:{}#{k}", p.display()),
-            (DiscoveredLocation::File(p), None) => format!("file:{}", p.display()),
-        }
-    }
-}
+pub use crate::types::{DiscoveredLocation, DiscoveredPreset};
 
 // ---------------------------------------------------------------------------
-// Indexer
+// Declarations and receiver
 // ---------------------------------------------------------------------------
+
+/// One declared location.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Location {
+    kind: u32,
+    flags: u32,
+    path: Option<String>,
+}
 
 #[derive(Default)]
 struct IndexerState {
     extensions: Vec<String>,
-    locations: Vec<(u32, Option<String>)>,
+    locations: Vec<Location>,
+    /// Set once `init` returned: later declarations are ignored.
+    sealed: bool,
 }
 
 #[derive(Default)]
 struct ReceiverState {
     location: Option<DiscoveredLocation>,
+    /// The flags of the location being read, which a preset inherits when
+    /// it never calls `set_flags`.
+    location_flags: u32,
+    /// The file being read, whose stem names a preset with no name.
+    file_stem: Option<String>,
     presets: Vec<DiscoveredPreset>,
 }
 
@@ -91,9 +71,41 @@ unsafe fn opt_str(p: *const c_char) -> Option<String> {
     }
 }
 
+/// A path as a C string, byte-exact on unix (non-UTF-8 names included).
+fn c_path(path: &Path) -> Option<CString> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        CString::new(path.as_os_str().as_bytes()).ok()
+    }
+    #[cfg(not(unix))]
+    {
+        CString::new(path.to_string_lossy().into_owned()).ok()
+    }
+}
+
+/// A C path back to a `PathBuf`, byte-exact on unix.
+unsafe fn path_from(p: *const c_char) -> Option<PathBuf> {
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: as for `opt_str`.
+    let bytes = unsafe { CStr::from_ptr(p) }.to_bytes();
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Some(PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
+    }
+    #[cfg(not(unix))]
+    {
+        Some(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
+    }
+}
+
 unsafe fn indexer_state<'a>(indexer: *const clap_preset_discovery_indexer) -> &'a mut IndexerState {
-    // SAFETY: `indexer_data` is the `IndexerState` `index_factory` owns
-    // for the whole indexing run, on this one thread.
+    // SAFETY: `indexer_data` is the `IndexerState` the indexing run owns,
+    // used on this one thread, and never borrowed elsewhere while a
+    // provider call is running.
     unsafe { &mut *((*indexer).indexer_data as *mut IndexerState) }
 }
 
@@ -106,8 +118,12 @@ unsafe extern "C" fn declare_filetype(
     }
     // SAFETY: see `indexer_state`; `filetype` is valid for the call.
     unsafe {
+        let state = indexer_state(indexer);
+        if state.sealed {
+            return false;
+        }
         if let Some(ext) = opt_str((*filetype).file_extension).filter(|e| !e.is_empty()) {
-            indexer_state(indexer)
+            state
                 .extensions
                 .push(ext.trim_start_matches('.').to_ascii_lowercase());
         }
@@ -124,9 +140,15 @@ unsafe extern "C" fn declare_location(
     }
     // SAFETY: as for `declare_filetype`.
     unsafe {
-        let kind = (*location).kind;
-        let path = opt_str((*location).location);
-        indexer_state(indexer).locations.push((kind, path));
+        let state = indexer_state(indexer);
+        if state.sealed {
+            return false;
+        }
+        state.locations.push(Location {
+            kind: (*location).kind,
+            flags: (*location).flags,
+            path: path_from((*location).location).map(|p| p.to_string_lossy().into_owned()),
+        });
     }
     true
 }
@@ -181,15 +203,19 @@ unsafe extern "C" fn begin_preset(
         let Some(location) = state.location.clone() else {
             return false;
         };
+        let name = opt_str(name)
+            .filter(|n| !n.is_empty())
+            .or_else(|| state.file_stem.clone())
+            .unwrap_or_default();
         state.presets.push(DiscoveredPreset {
-            name: opt_str(name).unwrap_or_default(),
+            name,
             location,
             load_key: opt_str(load_key),
             plugin_ids: Vec::new(),
             creators: Vec::new(),
             description: None,
             features: Vec::new(),
-            flags: 0,
+            flags: state.location_flags,
         });
     }
     true
@@ -205,7 +231,10 @@ unsafe extern "C" fn add_plugin_id(
     // SAFETY: as for `begin_preset`.
     unsafe {
         let abi = opt_str((*plugin_id).abi).unwrap_or_default();
-        if let (true, Some(id), Some(p)) = (abi == "clap", opt_str((*plugin_id).id), current(receiver)) {
+        if abi != "clap" {
+            return;
+        }
+        if let (Some(id), Some(p)) = (opt_str((*plugin_id).id), current(receiver)) {
             p.plugin_ids.push(id);
         }
     }
@@ -217,7 +246,10 @@ unsafe extern "C" fn set_soundpack_id(
 ) {
 }
 
-unsafe extern "C" fn set_flags(receiver: *const clap_preset_discovery_metadata_receiver, flags: u32) {
+unsafe extern "C" fn set_flags(
+    receiver: *const clap_preset_discovery_metadata_receiver,
+    flags: u32,
+) {
     // SAFETY: as for `begin_preset`.
     if let Some(p) = unsafe { current(receiver) } {
         p.flags = flags;
@@ -299,111 +331,116 @@ fn walk(dir: &Path, extensions: &[String], depth: usize, out: &mut Vec<PathBuf>)
     }
 }
 
-/// Index every provider of `factory`.
-///
-/// # Safety
-/// `factory` is a live `clap_preset_discovery_factory` (from a loaded
-/// bundle's `get_factory`, or a test's), used on this thread only.
-pub unsafe fn index_factory(factory: *const clap_preset_discovery_factory) -> Vec<DiscoveredPreset> {
-    let mut out = Vec::new();
-    if factory.is_null() {
-        return out;
-    }
-    // SAFETY: the caller guarantees `factory`; every provider call below
-    // follows preset-discovery.h (init before use, destroy after).
-    unsafe {
-        let (Some(count), Some(get_descriptor), Some(create)) = (
-            (*factory).count,
-            (*factory).get_descriptor,
-            (*factory).create,
-        ) else {
-            return out;
-        };
-        for i in 0..count(factory) {
-            let desc = get_descriptor(factory, i);
-            if desc.is_null() || (*desc).id.is_null() {
-                continue;
-            }
-            let mut state = IndexerState::default();
-            let indexer = clap_preset_discovery_indexer {
+// ---------------------------------------------------------------------------
+// A live provider
+// ---------------------------------------------------------------------------
+
+/// A created and initialised provider, destroyed on drop.
+struct Provider {
+    ptr: *const clap_preset_discovery_provider,
+    /// Owns what the indexer struct points at; boxed so its address holds.
+    _state: Box<IndexerState>,
+    _indexer: Box<clap_preset_discovery_indexer>,
+    extensions: Vec<String>,
+    locations: Vec<Location>,
+}
+
+impl Provider {
+    /// Create and `init` the provider `id` of `factory`.
+    ///
+    /// # Safety
+    /// `factory` is live and used on this thread only.
+    unsafe fn open(factory: *const clap_preset_discovery_factory, id: *const c_char) -> Option<Self> {
+        // SAFETY: forwarded; preset-discovery.h: create, then init before use.
+        unsafe {
+            let create = (*factory).create?;
+            let mut state = Box::<IndexerState>::default();
+            let indexer = Box::new(clap_preset_discovery_indexer {
                 clap_version: CLAP_VERSION,
                 name: c"Resonance".as_ptr(),
                 vendor: c"Resonance".as_ptr(),
                 url: c"".as_ptr(),
                 version: c"0.1.0".as_ptr(),
-                indexer_data: &mut state as *mut IndexerState as *mut c_void,
+                indexer_data: &mut *state as *mut IndexerState as *mut c_void,
                 declare_filetype: Some(declare_filetype),
                 declare_location: Some(declare_location),
                 declare_soundpack: Some(declare_soundpack),
                 get_extension: Some(indexer_get_extension),
+            });
+            let ptr = create(factory, &*indexer, id);
+            if ptr.is_null() {
+                return None;
+            }
+            let ok = (*ptr).init.is_some_and(|init| init(ptr));
+            // Copy the declarations out and seal: from here on nothing the
+            // provider declares can change what is being walked.
+            state.sealed = true;
+            let (extensions, locations) = (state.extensions.clone(), state.locations.clone());
+            let provider = Self {
+                ptr,
+                _state: state,
+                _indexer: indexer,
+                extensions,
+                locations,
             };
-            let provider = create(factory, &indexer, (*desc).id);
-            if provider.is_null() {
-                continue;
-            }
-            let ok = (*provider).init.is_some_and(|init| init(provider));
-            if ok {
-                index_provider(provider, &state, &mut out);
-            }
-            if let Some(destroy) = (*provider).destroy {
-                destroy(provider);
-            }
+            ok.then_some(provider)
         }
     }
-    out
+
+    /// The presets at one location (`None` path = `PLUGIN`).
+    fn metadata(&self, location: &Location, file: Option<&Path>) -> Vec<DiscoveredPreset> {
+        // SAFETY: the provider is initialised and live for `self`.
+        unsafe {
+            let Some(get_metadata) = (*self.ptr).get_metadata else {
+                return Vec::new();
+            };
+            let mut state = ReceiverState {
+                location: Some(match file {
+                    Some(f) => DiscoveredLocation::File(f.to_path_buf()),
+                    None => DiscoveredLocation::Plugin,
+                }),
+                location_flags: location.flags,
+                file_stem: file
+                    .and_then(|f| f.file_stem())
+                    .map(|s| s.to_string_lossy().into_owned()),
+                presets: Vec::new(),
+            };
+            let receiver = clap_preset_discovery_metadata_receiver {
+                receiver_data: &mut state as *mut ReceiverState as *mut c_void,
+                on_error: Some(on_error),
+                begin_preset: Some(begin_preset),
+                add_plugin_id: Some(add_plugin_id),
+                set_soundpack_id: Some(set_soundpack_id),
+                set_flags: Some(set_flags),
+                add_creator: Some(add_creator),
+                set_description: Some(set_description),
+                set_timestamps: Some(set_timestamps),
+                add_feature: Some(add_feature),
+                add_extra_info: Some(add_extra_info),
+            };
+            let c = file.and_then(c_path);
+            if file.is_some() && c.is_none() {
+                return Vec::new();
+            }
+            get_metadata(
+                self.ptr,
+                location.kind,
+                c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+                &receiver,
+            );
+            std::mem::take(&mut state.presets)
+        }
+    }
 }
 
-unsafe fn index_provider(
-    provider: *const clap_preset_discovery_provider,
-    state: &IndexerState,
-    out: &mut Vec<DiscoveredPreset>,
-) {
-    // SAFETY: `provider` is initialized and live for this call.
-    unsafe {
-        let Some(get_metadata) = (*provider).get_metadata else {
-            return;
-        };
-        let mut receiver_state = ReceiverState::default();
-        let receiver = clap_preset_discovery_metadata_receiver {
-            receiver_data: &mut receiver_state as *mut ReceiverState as *mut c_void,
-            on_error: Some(on_error),
-            begin_preset: Some(begin_preset),
-            add_plugin_id: Some(add_plugin_id),
-            set_soundpack_id: Some(set_soundpack_id),
-            set_flags: Some(set_flags),
-            add_creator: Some(add_creator),
-            set_description: Some(set_description),
-            set_timestamps: Some(set_timestamps),
-            add_feature: Some(add_feature),
-            add_extra_info: Some(add_extra_info),
-        };
-        for (kind, location) in &state.locations {
-            if *kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN {
-                (*receiver.receiver_data.cast::<ReceiverState>()).location =
-                    Some(DiscoveredLocation::Plugin);
-                get_metadata(provider, *kind, std::ptr::null(), &receiver);
-                continue;
-            }
-            let Some(root) = location.as_deref().map(PathBuf::from) else {
-                continue;
-            };
-            let files = if root.is_dir() {
-                let mut files = Vec::new();
-                walk(&root, &state.extensions, 0, &mut files);
-                files
-            } else {
-                vec![root]
-            };
-            for file in files {
-                let Ok(c_path) = CString::new(file.to_string_lossy().into_owned()) else {
-                    continue;
-                };
-                (*receiver.receiver_data.cast::<ReceiverState>()).location =
-                    Some(DiscoveredLocation::File(file.clone()));
-                get_metadata(provider, *kind, c_path.as_ptr(), &receiver);
+impl Drop for Provider {
+    fn drop(&mut self) {
+        // SAFETY: created by `open`, destroyed once, on this thread.
+        unsafe {
+            if let Some(destroy) = (*self.ptr).destroy {
+                destroy(self.ptr);
             }
         }
-        out.append(&mut receiver_state.presets);
     }
 }
 
@@ -411,57 +448,70 @@ unsafe fn index_provider(
 // Cache
 // ---------------------------------------------------------------------------
 
-/// The binary's identity for the cache: size and modification time.
-fn stamp(binary: &Path) -> Option<(u64, u64)> {
-    let meta = std::fs::metadata(binary).ok()?;
+/// A file's identity: size and mtime in nanoseconds.
+fn file_stamp(path: &Path) -> Option<(u64, u128)> {
+    let meta = std::fs::metadata(path).ok()?;
     let modified = meta
         .modified()
         .ok()?
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
-        .as_secs();
+        .as_nanos();
     Some((meta.len(), modified))
 }
 
-#[derive(Serialize, Deserialize)]
-struct CacheFile {
-    binary: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FileEntry {
+    path: PathBuf,
     size: u64,
-    modified: u64,
+    modified_ns: u128,
     presets: Vec<DiscoveredPreset>,
 }
 
-fn cache_path(cache_dir: &Path, plugin_id: &str) -> PathBuf {
-    let safe: String = plugin_id
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProviderCache {
+    id: String,
+    extensions: Vec<String>,
+    locations: Vec<Location>,
+    plugin_presets: Vec<DiscoveredPreset>,
+    files: Vec<FileEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CacheFile {
+    binary: PathBuf,
+    size: u64,
+    modified_ns: u128,
+    providers: Vec<ProviderCache>,
+}
+
+fn cache_path(cache_dir: &Path, binary: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    binary.hash(&mut h);
+    let stem: String = binary
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
         .collect();
-    cache_dir.join("discovered").join(format!("{safe}.json"))
+    cache_dir
+        .join("preset-discovery")
+        .join(format!("{stem}-{:016x}.json", h.finish()))
 }
 
-/// The cached presets of `plugin_id`, when the cache was written for this
-/// exact binary.
-pub fn read_cache(cache_dir: &Path, plugin_id: &str, binary: &Path) -> Option<Vec<DiscoveredPreset>> {
-    let (size, modified) = stamp(binary)?;
-    let text = std::fs::read_to_string(cache_path(cache_dir, plugin_id)).ok()?;
+fn read_cache(cache_dir: &Path, binary: &Path) -> Option<CacheFile> {
+    let (size, modified_ns) = file_stamp(binary)?;
+    let text = std::fs::read_to_string(cache_path(cache_dir, binary)).ok()?;
     let file: CacheFile = serde_json::from_str(&text).ok()?;
-    (file.size == size && file.modified == modified && file.binary == binary.to_string_lossy())
-        .then_some(file.presets)
+    (file.size == size && file.modified_ns == modified_ns && file.binary == binary)
+        .then_some(file)
 }
 
-/// Write the cache for `plugin_id` (best effort, atomically).
-pub fn write_cache(cache_dir: &Path, plugin_id: &str, binary: &Path, presets: &[DiscoveredPreset]) {
-    let Some((size, modified)) = stamp(binary) else {
-        return;
-    };
-    let file = CacheFile {
-        binary: binary.to_string_lossy().into_owned(),
-        size,
-        modified,
-        presets: presets.to_vec(),
-    };
-    let path = cache_path(cache_dir, plugin_id);
-    if let (Some(parent), Ok(text)) = (path.parent(), serde_json::to_string_pretty(&file)) {
+fn write_cache(cache_dir: &Path, file: &CacheFile) {
+    let path = cache_path(cache_dir, &file.binary);
+    if let (Some(parent), Ok(text)) = (path.parent(), serde_json::to_string_pretty(file)) {
         if std::fs::create_dir_all(parent).is_ok() {
             if let Err(e) = resonance_common::atomic_file::atomic_write(&path, text.as_bytes()) {
                 tracing::debug!("preset discovery: cache not written: {e}");
@@ -470,8 +520,153 @@ pub fn write_cache(cache_dir: &Path, plugin_id: &str, binary: &Path, presets: &[
     }
 }
 
-/// The presets of each of `plugin_ids` (a bundle's plugins), from the
-/// cache when it is fresh, else by indexing `factory` (and caching).
+/// The provider ids of `factory`.
+unsafe fn provider_ids(factory: *const clap_preset_discovery_factory) -> Vec<CString> {
+    // SAFETY: forwarded from the caller.
+    unsafe {
+        let (Some(count), Some(get_descriptor)) = ((*factory).count, (*factory).get_descriptor)
+        else {
+            return Vec::new();
+        };
+        (0..count(factory))
+            .filter_map(|i| {
+                let desc = get_descriptor(factory, i);
+                (!desc.is_null() && !(*desc).id.is_null())
+                    .then(|| CStr::from_ptr((*desc).id).to_owned())
+            })
+            .collect()
+    }
+}
+
+/// Re-walk `cache`'s `FILE` locations, reusing each unchanged file's
+/// entry and asking the provider (opened on first need) about the rest.
+fn refresh_files(
+    factory: *const clap_preset_discovery_factory,
+    cache: &mut ProviderCache,
+    cancel: &AtomicBool,
+) {
+    let mut provider: Option<Option<Provider>> = None;
+    let old: std::collections::HashMap<PathBuf, FileEntry> =
+        cache.files.drain(..).map(|f| (f.path.clone(), f)).collect();
+    for location in cache.locations.clone() {
+        if location.kind != CLAP_PRESET_DISCOVERY_LOCATION_FILE {
+            continue;
+        }
+        let Some(root) = location.path.as_deref().map(PathBuf::from) else {
+            continue;
+        };
+        let files = if root.is_dir() {
+            let mut files = Vec::new();
+            walk(&root, &cache.extensions, 0, &mut files);
+            files
+        } else if root.exists() {
+            vec![root]
+        } else {
+            Vec::new()
+        };
+        for file in files {
+            if cancel.load(Ordering::Relaxed) {
+                return;
+            }
+            let Some((size, modified_ns)) = file_stamp(&file) else {
+                continue;
+            };
+            if let Some(entry) = old
+                .get(&file)
+                .filter(|e| e.size == size && e.modified_ns == modified_ns)
+            {
+                cache.files.push(entry.clone());
+                continue;
+            }
+            let provider = provider.get_or_insert_with(|| {
+                let Ok(id) = CString::new(cache.id.clone()) else {
+                    return None;
+                };
+                // SAFETY: `factory` is live and on this thread (the caller's
+                // contract).
+                unsafe { Provider::open(factory, id.as_ptr()) }
+            });
+            let presets = provider
+                .as_ref()
+                .map(|p| p.metadata(&location, Some(&file)))
+                .unwrap_or_default();
+            cache.files.push(FileEntry {
+                path: file,
+                size,
+                modified_ns,
+                presets,
+            });
+        }
+    }
+}
+
+/// Index every provider of `factory` from scratch.
+fn index_all(
+    factory: *const clap_preset_discovery_factory,
+    cancel: &AtomicBool,
+) -> Vec<ProviderCache> {
+    let mut out = Vec::new();
+    // SAFETY: the caller's contract (see `discover`).
+    for id in unsafe { provider_ids(factory) } {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        // SAFETY: as above.
+        let Some(provider) = (unsafe { Provider::open(factory, id.as_ptr()) }) else {
+            continue;
+        };
+        let plugin_presets = provider
+            .locations
+            .iter()
+            .filter(|l| l.kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN)
+            .flat_map(|l| provider.metadata(l, None))
+            .collect();
+        let mut cache = ProviderCache {
+            id: id.to_string_lossy().into_owned(),
+            extensions: provider.extensions.clone(),
+            locations: provider.locations.clone(),
+            plugin_presets,
+            files: Vec::new(),
+        };
+        drop(provider);
+        refresh_files(factory, &mut cache, cancel);
+        out.push(cache);
+    }
+    out
+}
+
+/// Every preset of `factory`, flattened (index order: `PLUGIN` locations,
+/// then files by path).
+///
+/// # Safety
+/// `factory` is a live `clap_preset_discovery_factory` (from a loaded
+/// bundle's `get_factory`, or a test's), used on this thread only.
+pub unsafe fn index_factory(factory: *const clap_preset_discovery_factory) -> Vec<DiscoveredPreset> {
+    if factory.is_null() {
+        return Vec::new();
+    }
+    flatten(&index_all(factory, &AtomicBool::new(false)))
+}
+
+fn flatten(providers: &[ProviderCache]) -> Vec<DiscoveredPreset> {
+    providers
+        .iter()
+        .flat_map(|p| {
+            p.plugin_presets
+                .iter()
+                .cloned()
+                .chain(p.files.iter().flat_map(|f| f.presets.iter().cloned()))
+        })
+        .collect()
+}
+
+/// The presets of each of `plugin_ids` (a bundle's plugins).
+///
+/// With a fresh cache for this binary (and no `force`), the declarations
+/// and `PLUGIN` presets come from it and only new or changed files are
+/// read; otherwise every provider is indexed. A preset naming no plugin
+/// goes to a bundle's only plugin, never to all of several. `cancel`
+/// stops between files.
 ///
 /// # Safety
 /// As for [`index_factory`].
@@ -480,33 +675,51 @@ pub unsafe fn discover(
     binary: &Path,
     plugin_ids: &[String],
     cache_dir: Option<&Path>,
+    force: bool,
+    cancel: &AtomicBool,
 ) -> Vec<(String, Vec<DiscoveredPreset>)> {
-    if let Some(dir) = cache_dir {
-        let cached: Option<Vec<_>> = plugin_ids
-            .iter()
-            .map(|id| read_cache(dir, id, binary).map(|p| (id.clone(), p)))
-            .collect();
-        if let Some(cached) = cached {
-            return cached;
-        }
+    if factory.is_null() {
+        return Vec::new();
     }
-    // SAFETY: forwarded from the caller.
-    let all = unsafe { index_factory(factory) };
-    let per_plugin: Vec<(String, Vec<DiscoveredPreset>)> = plugin_ids
+    let cached = if force {
+        None
+    } else {
+        cache_dir.and_then(|dir| read_cache(dir, binary))
+    };
+    let providers = match cached {
+        Some(mut file) => {
+            for provider in &mut file.providers {
+                refresh_files(factory, provider, cancel);
+            }
+            file.providers
+        }
+        None => index_all(factory, cancel),
+    };
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+    if let (Some(dir), Some((size, modified_ns))) = (cache_dir, file_stamp(binary)) {
+        write_cache(
+            dir,
+            &CacheFile {
+                binary: binary.to_path_buf(),
+                size,
+                modified_ns,
+                providers: providers.clone(),
+            },
+        );
+    }
+    let all = flatten(&providers);
+    let single = plugin_ids.len() == 1;
+    plugin_ids
         .iter()
         .map(|id| {
             let mine = all
                 .iter()
-                .filter(|p| p.plugin_ids.is_empty() || p.plugin_ids.contains(id))
+                .filter(|p| p.plugin_ids.contains(id) || (single && p.plugin_ids.is_empty()))
                 .cloned()
                 .collect();
             (id.clone(), mine)
         })
-        .collect();
-    if let Some(dir) = cache_dir {
-        for (id, presets) in &per_plugin {
-            write_cache(dir, id, binary, presets);
-        }
-    }
-    per_plugin
+        .collect()
 }

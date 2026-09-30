@@ -483,6 +483,40 @@ fn undoing_a_preset_load_restores_the_full_state_it_replaced() {
     );
 }
 
+/// A `loaded()` echo of a discovered preset keeps the library's identity
+/// (review M5), and a provider favourite the user un-starred stays
+/// un-starred when the plugin is discovered again.
+#[test]
+fn a_loaded_echo_confirms_a_discovered_identity_and_unstars_stick() {
+    let mut app = app();
+    let listing = || AudioEvent::PluginPresetsDiscovered {
+        plugin_id: PLUGIN_ID.to_owned(),
+        presets: vec![
+            discovered("Sub Drop", "bank/1", 0),
+            discovered("Air Lift", "bank/2", 1 << 3),
+        ],
+    };
+    app.test_apply_engine_event(listing());
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
+    app.test_apply_engine_event(AudioEvent::PluginPresetLoaded {
+        instance_id: INSTANCE,
+        location: resonance_audio::types::PluginPresetLocation::Plugin,
+        load_key: Some("bank/2".into()),
+    });
+    let identity = app.test_presets().plugin_preset_identity.get(&INSTANCE).cloned().unwrap();
+    assert_eq!((identity.id.as_str(), identity.name.as_str()), ("plugin:bank/2", "Air Lift"));
+
+    ui(&mut app, PresetUiMessage::ToggleFavorite(INSTANCE));
+    app.test_apply_engine_event(listing());
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let air = app.test_presets().host_browser.as_ref().unwrap().list.rows
+        .iter()
+        .find(|r| r.name == "Air Lift")
+        .cloned()
+        .unwrap();
+    assert!(!air.favorite, "the provider's favourite is seeded once, not every start");
+}
+
 // ---------------------------------------------------------------------------
 // Goldens
 // ---------------------------------------------------------------------------

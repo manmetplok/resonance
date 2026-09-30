@@ -1,13 +1,16 @@
 //! The `clap.preset-discovery-factory` indexer (plugin-preset-library.md
 //! §8 tier T1, slice P8) against a hand-rolled provider: a `PLUGIN`
 //! location with two presets, and a `FILE` directory walked for the
-//! declared extension; then the per-plugin cache, keyed by the binary.
+//! declared extension; then the cache — declarations per binary, presets
+//! per file — and the rules for flags, names and plugin ids.
 //!
-//! Everything writes under a private temp directory.
+//! Everything writes under a private temp directory. The fake provider's
+//! statics make these tests share one lock.
 
 use std::ffi::{c_char, c_void, CStr};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use clap_sys::factory::preset_discovery::*;
 use clap_sys::universal_plugin_id::clap_universal_plugin_id;
@@ -16,10 +19,15 @@ use resonance_audio::test_support::discovery::{self, DiscoveredLocation};
 
 const PLUGIN: &CStr = c"com.vendor.synth";
 
-/// The folder the fake provider declares; set per test run.
-static FOLDER: std::sync::Mutex<Option<std::ffi::CString>> = std::sync::Mutex::new(None);
-/// How many times a provider was created (the cache must avoid it).
+/// The fake provider is process-global; one test at a time drives it.
+static SERIAL: Mutex<()> = Mutex::new(());
+/// The folder the fake provider declares; set per test.
+static FOLDER: Mutex<Option<std::ffi::CString>> = Mutex::new(None);
+/// Providers created, and files read (what the cache must avoid).
 static CREATED: AtomicU32 = AtomicU32::new(0);
+static FILES_READ: AtomicU32 = AtomicU32::new(0);
+/// What a `declare_location` made during `get_metadata` returned.
+static LATE_DECLARE_ACCEPTED: AtomicBool = AtomicBool::new(false);
 
 static DESC: clap_preset_discovery_provider_descriptor = clap_preset_discovery_provider_descriptor {
     clap_version: CLAP_VERSION,
@@ -44,13 +52,20 @@ unsafe extern "C" fn get_descriptor(
     &DESC
 }
 
+fn user_location(path: *const c_char) -> clap_preset_discovery_location {
+    clap_preset_discovery_location {
+        flags: CLAP_PRESET_DISCOVERY_IS_USER_CONTENT,
+        name: c"User".as_ptr(),
+        kind: CLAP_PRESET_DISCOVERY_LOCATION_FILE,
+        location: path,
+    }
+}
+
 unsafe extern "C" fn init(provider: *const clap_preset_discovery_provider) -> bool {
     unsafe {
         let b = &*((*provider).provider_data as *const ProviderBox);
         let indexer = b.indexer;
-        let declare_filetype = (*indexer).declare_filetype.unwrap();
-        let declare_location = (*indexer).declare_location.unwrap();
-        declare_filetype(
+        (*indexer).declare_filetype.unwrap()(
             indexer,
             &clap_preset_discovery_filetype {
                 name: c"Vendor preset".as_ptr(),
@@ -58,7 +73,7 @@ unsafe extern "C" fn init(provider: *const clap_preset_discovery_provider) -> bo
                 file_extension: c"vpr".as_ptr(),
             },
         );
-        declare_location(
+        (*indexer).declare_location.unwrap()(
             indexer,
             &clap_preset_discovery_location {
                 flags: CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT,
@@ -68,15 +83,7 @@ unsafe extern "C" fn init(provider: *const clap_preset_discovery_provider) -> bo
             },
         );
         let folder = FOLDER.lock().unwrap().clone().unwrap();
-        declare_location(
-            indexer,
-            &clap_preset_discovery_location {
-                flags: CLAP_PRESET_DISCOVERY_IS_USER_CONTENT,
-                name: c"User".as_ptr(),
-                kind: CLAP_PRESET_DISCOVERY_LOCATION_FILE,
-                location: folder.as_ptr(),
-            },
-        );
+        (*indexer).declare_location.unwrap()(indexer, &user_location(folder.as_ptr()));
     }
     true
 }
@@ -87,14 +94,14 @@ unsafe extern "C" fn destroy(provider: *const clap_preset_discovery_provider) {
     }
 }
 
-unsafe fn preset(
+unsafe fn factory_preset(
     r: *const clap_preset_discovery_metadata_receiver,
     name: &CStr,
-    key: Option<&CStr>,
+    key: &CStr,
     flags: u32,
 ) {
     unsafe {
-        (*r).begin_preset.unwrap()(r, name.as_ptr(), key.map_or(std::ptr::null(), |k| k.as_ptr()));
+        (*r).begin_preset.unwrap()(r, name.as_ptr(), key.as_ptr());
         (*r).add_plugin_id.unwrap()(
             r,
             &clap_universal_plugin_id {
@@ -109,29 +116,32 @@ unsafe fn preset(
 }
 
 unsafe extern "C" fn get_metadata(
-    _provider: *const clap_preset_discovery_provider,
+    provider: *const clap_preset_discovery_provider,
     kind: u32,
-    location: *const c_char,
+    _location: *const c_char,
     r: *const clap_preset_discovery_metadata_receiver,
 ) -> bool {
     unsafe {
         if kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN {
-            preset(r, c"Deep Bass", Some(c"bank0/1"), CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT);
-            preset(
+            // A misbehaving provider declaring while it is being walked.
+            let b = &*((*provider).provider_data as *const ProviderBox);
+            let late = (*b.indexer).declare_location.unwrap()(
+                b.indexer,
+                &user_location(c"/nowhere".as_ptr()),
+            );
+            LATE_DECLARE_ACCEPTED.store(late, Ordering::SeqCst);
+            factory_preset(r, c"Deep Bass", c"bank0/1", CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT);
+            factory_preset(
                 r,
                 c"Glass Pad",
-                Some(c"bank0/2"),
+                c"bank0/2",
                 CLAP_PRESET_DISCOVERY_IS_FACTORY_CONTENT | CLAP_PRESET_DISCOVERY_IS_FAVORITE,
             );
         } else {
-            let path = CStr::from_ptr(location).to_string_lossy();
-            let stem = std::path::Path::new(&*path)
-                .file_stem()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            let name = std::ffi::CString::new(stem).unwrap();
-            preset(r, &name, None, CLAP_PRESET_DISCOVERY_IS_USER_CONTENT);
+            FILES_READ.fetch_add(1, Ordering::SeqCst);
+            // No name (the file's stem names it), no flags (the location's
+            // apply), no plugin id (a single-plugin bundle's own).
+            (*r).begin_preset.unwrap()(r, std::ptr::null(), std::ptr::null());
         }
     }
     true
@@ -166,56 +176,115 @@ static FACTORY: clap_preset_discovery_factory = clap_preset_discovery_factory {
     create: Some(create),
 };
 
-fn temp(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "resonance-preset-discovery-{}-{tag}",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+struct Fixture {
+    root: PathBuf,
+    folder: PathBuf,
+    binary: PathBuf,
+    cache: PathBuf,
 }
 
-/// Everything a provider says arrives, the folder is walked for the
-/// declared extension only, and a second discovery of the same binary is
-/// served from the cache without creating a provider.
-#[test]
-fn a_provider_is_indexed_and_the_result_cached_by_binary() {
-    let root = temp("index");
-    let folder = root.join("presets");
-    std::fs::create_dir_all(folder.join("sub")).unwrap();
-    std::fs::write(folder.join("Warm Keys.vpr"), b"x").unwrap();
-    std::fs::write(folder.join("sub").join("Night.VPR"), b"x").unwrap();
-    std::fs::write(folder.join("readme.txt"), b"x").unwrap();
-    *FOLDER.lock().unwrap() =
-        Some(std::ffi::CString::new(folder.to_string_lossy().into_owned()).unwrap());
-    let binary = root.join("vendor.clap");
-    std::fs::write(&binary, b"binary").unwrap();
-    let cache = root.join("library");
-    let ids = vec![PLUGIN.to_string_lossy().into_owned()];
+impl Fixture {
+    fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "resonance-preset-discovery-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let folder = root.join("presets");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        std::fs::write(folder.join("Warm Keys.vpr"), b"x").unwrap();
+        std::fs::write(folder.join("sub").join("Night.VPR"), b"x").unwrap();
+        std::fs::write(folder.join("readme.txt"), b"x").unwrap();
+        *FOLDER.lock().unwrap() =
+            Some(std::ffi::CString::new(folder.to_string_lossy().into_owned()).unwrap());
+        let binary = root.join("vendor.clap");
+        std::fs::write(&binary, b"binary").unwrap();
+        let cache = root.join("cache");
+        Self {
+            root,
+            folder,
+            binary,
+            cache,
+        }
+    }
 
-    let before = CREATED.load(Ordering::SeqCst);
-    let found = unsafe { discovery::discover(&FACTORY, &binary, &ids, Some(&cache)) };
-    assert_eq!(CREATED.load(Ordering::SeqCst), before + 1);
+    fn discover(&self, ids: &[&str], force: bool) -> Vec<(String, Vec<resonance_audio::types::DiscoveredPreset>)> {
+        let ids: Vec<String> = ids.iter().map(|s| s.to_string()).collect();
+        unsafe {
+            discovery::discover(
+                &FACTORY,
+                &self.binary,
+                &ids,
+                Some(&self.cache),
+                force,
+                &AtomicBool::new(false),
+            )
+        }
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn names(presets: &[resonance_audio::types::DiscoveredPreset]) -> Vec<&str> {
+    presets.iter().map(|p| p.name.as_str()).collect()
+}
+
+/// Everything a provider says arrives; a file preset with no name, flags
+/// or plugin id takes the file's stem, its location's flags and the
+/// bundle's only plugin; a declaration after `init` is refused.
+#[test]
+fn a_provider_is_indexed_with_the_fallback_rules() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("index");
+    let found = f.discover(&["com.vendor.synth"], false);
     let (plugin, presets) = &found[0];
     assert_eq!(plugin, "com.vendor.synth");
-    let names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
-    assert_eq!(names, vec!["Deep Bass", "Glass Pad", "Warm Keys", "Night"]);
+    assert_eq!(names(presets), vec!["Deep Bass", "Glass Pad", "Warm Keys", "Night"]);
     assert_eq!(presets[0].location, DiscoveredLocation::Plugin);
     assert_eq!(presets[0].load_key.as_deref(), Some("bank0/1"));
     assert_eq!(presets[0].creators, vec!["Jane".to_string()]);
     assert_eq!(presets[0].features, vec!["bass".to_string()]);
     assert!(presets[1].is_favorite());
     assert!(matches!(&presets[2].location, DiscoveredLocation::File(p) if p.ends_with("Warm Keys.vpr")));
-    assert!(cache.join("discovered").join("com.vendor.synth.json").exists());
+    assert_eq!(presets[2].flags, CLAP_PRESET_DISCOVERY_IS_USER_CONTENT, "the location's flags");
+    assert!(!LATE_DECLARE_ACCEPTED.load(Ordering::SeqCst), "sealed after init");
+}
 
-    let again = unsafe { discovery::discover(&FACTORY, &binary, &ids, Some(&cache)) };
-    assert_eq!(again, found);
-    assert_eq!(CREATED.load(Ordering::SeqCst), before + 1, "served from the cache");
+/// The cache: an unchanged binary reads no unchanged file again; a new or
+/// changed file is read alone; a rescan (`force`) re-indexes everything.
+#[test]
+fn the_cache_keeps_files_by_their_own_stamp() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("cache");
+    let first = f.discover(&["com.vendor.synth"], false);
+    let (created, read) = (CREATED.load(Ordering::SeqCst), FILES_READ.load(Ordering::SeqCst));
 
-    // A new binary (size changed) is indexed again.
-    std::fs::write(&binary, b"binary v2").unwrap();
-    let _ = unsafe { discovery::discover(&FACTORY, &binary, &ids, Some(&cache)) };
-    assert_eq!(CREATED.load(Ordering::SeqCst), before + 2);
-    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(f.discover(&["com.vendor.synth"], false), first);
+    assert_eq!(CREATED.load(Ordering::SeqCst), created, "no provider for nothing new");
+    assert_eq!(FILES_READ.load(Ordering::SeqCst), read);
+
+    std::fs::write(f.folder.join("Dawn.vpr"), b"x").unwrap();
+    std::fs::write(f.folder.join("Warm Keys.vpr"), b"changed").unwrap();
+    let again = f.discover(&["com.vendor.synth"], false);
+    assert_eq!(names(&again[0].1), vec!["Deep Bass", "Glass Pad", "Dawn", "Warm Keys", "Night"]);
+    assert_eq!(FILES_READ.load(Ordering::SeqCst), read + 2, "only the new and the changed file");
+
+    let read = FILES_READ.load(Ordering::SeqCst);
+    let _ = f.discover(&["com.vendor.synth"], true);
+    assert_eq!(FILES_READ.load(Ordering::SeqCst), read + 3, "a rescan reads every file");
+}
+
+/// A preset that names no plugin belongs to a bundle's only plugin, never
+/// to every plugin of a bundle with several.
+#[test]
+fn an_unnamed_plugin_is_not_everyone() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("plugins");
+    let found = f.discover(&["com.vendor.synth", "com.vendor.fx"], false);
+    assert_eq!(names(&found[0].1), vec!["Deep Bass", "Glass Pad"]);
+    assert!(found[1].1.is_empty());
 }

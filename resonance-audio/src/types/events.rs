@@ -571,7 +571,7 @@ pub enum AudioEvent {
     /// worker after a scan (or its cache).
     PluginPresetsDiscovered {
         plugin_id: String,
-        presets: Vec<crate::clap_host::discovery::DiscoveredPreset>,
+        presets: Vec<crate::types::DiscoveredPreset>,
     },
     /// A preset state load finished (`AudioCommand::LoadPluginPresetState`):
     /// every param as the plugin now reports it, so the app's mirror

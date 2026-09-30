@@ -96,6 +96,20 @@ pub fn split_key(key: &str) -> Option<(&str, &str)> {
     (!kind.is_empty()).then_some((kind, id))
 }
 
+/// Environment variable that overrides Resonance's cache directory (the
+/// preset-discovery index). Tests point it at a private directory.
+pub const CACHE_DIR_ENV: &str = "RESONANCE_CACHE_DIR";
+
+/// The cache directory: [`CACHE_DIR_ENV`] if set and non-empty, else
+/// `<cache dir>/resonance` (`$XDG_CACHE_HOME/resonance` on Linux). What is
+/// here can always be rebuilt.
+pub fn default_cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(CACHE_DIR_ENV).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    dirs::cache_dir().map(|d| d.join("resonance"))
+}
+
 /// The library directory: [`LIBRARY_DIR_ENV`] if set and non-empty, else
 /// `<data dir>/resonance/library`. `None` only on a platform with no data
 /// dir at all.

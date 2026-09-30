@@ -63,7 +63,7 @@ pub(crate) fn scan_plugins(
     let dirs = scan_dirs();
     let (scanned, failures) = load_bundles(&dirs, bundles);
     report(&dirs, scanned, failures, event_tx);
-    spawn_discovery(bundles, event_tx);
+    spawn_discovery(bundles, event_tx, false);
 }
 
 /// The live rescan: pick up newly installed plugins WITHOUT disturbing
@@ -95,15 +95,26 @@ pub fn rescan_plugins_in(
 ) {
     let (scanned, failures) = load_bundles(dirs, bundles);
     report(dirs, scanned, failures, event_tx);
-    spawn_discovery(bundles, event_tx);
+    // A rescan is the user asking to look again: re-index everything.
+    spawn_discovery(bundles, event_tx, true);
 }
+
+/// The one preset-discovery worker, and how to stop it.
+struct DiscoveryWorker {
+    handle: std::thread::JoinHandle<()>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+static DISCOVERY: std::sync::Mutex<Option<DiscoveryWorker>> = std::sync::Mutex::new(None);
 
 /// Index the presets of every bundle with a `clap.preset-discovery-
 /// factory` on a worker thread (slice P8): never on the engine thread,
 /// which a slow provider walking a large preset folder would stall. Each
 /// plugin's list arrives as `AudioEvent::PluginPresetsDiscovered`; the
-/// results are cached in `<library>/discovered/` by binary size + mtime.
-fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>) {
+/// index is cached under the cache dir (`preset-discovery/`). There is
+/// one worker: a scan while it runs waits for it to finish first (it is
+/// cancelled and joined), so two never index at once.
+fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force: bool) {
     let jobs: Vec<_> = bundles
         .iter()
         .filter_map(|b| {
@@ -115,21 +126,37 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>) {
     if jobs.is_empty() {
         return;
     }
+    let Ok(mut slot) = DISCOVERY.lock() else {
+        return;
+    };
+    if let Some(previous) = slot.take() {
+        previous.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = previous.handle.join();
+    }
     let event_tx = event_tx.clone();
-    let cache_dir = resonance_common::library_marks::default_library_dir();
+    let cache_dir = resonance_common::library_marks::default_cache_dir();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker_cancel = cancel.clone();
     let spawned = std::thread::Builder::new()
         .name("preset-discovery".into())
         .spawn(move || {
             for (factory, binary, ids) in jobs {
-                // SAFETY: the factory outlives the process's use of it (the
-                // library is never unloaded) and this thread is its only
-                // caller.
+                if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                // SAFETY: the factory pointer stays valid for the process
+                // (a bundle's library is never unloaded), and this worker
+                // is the only thread that calls into it or into the
+                // providers it creates — the previous worker was joined
+                // before this one started.
                 let found = unsafe {
                     crate::clap_host::discovery::discover(
                         factory.0,
                         &binary,
                         &ids,
                         cache_dir.as_deref(),
+                        force,
+                        &worker_cancel,
                     )
                 };
                 for (plugin_id, presets) in found {
@@ -137,8 +164,18 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>) {
                 }
             }
         });
-    if let Err(e) = spawned {
-        tracing::warn!("preset discovery: worker not started: {e}");
+    match spawned {
+        Ok(handle) => *slot = Some(DiscoveryWorker { handle, cancel }),
+        Err(e) => tracing::warn!("preset discovery: worker not started: {e}"),
+    }
+}
+
+/// Stop and join the discovery worker (engine shutdown).
+pub(crate) fn shutdown_discovery() {
+    let worker = DISCOVERY.lock().ok().and_then(|mut s| s.take());
+    if let Some(worker) = worker {
+        worker.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = worker.handle.join();
     }
 }
 

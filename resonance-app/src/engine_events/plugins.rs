@@ -732,12 +732,25 @@ pub(super) fn preset_loaded(
     {
         return;
     }
-    let (source, id, name) = match location {
-        L::Plugin => {
+    // A preset the plugin's discovery listed is named the way the library
+    // lists it (its stable id and discovered name), so a `loaded()` echo of
+    // a host load confirms that identity instead of replacing it.
+    let clap_id = r.with_plugin_mut(instance_id, |slot| slot.clap_plugin_id.clone());
+    let as_discovered = match &location {
+        L::Plugin => resonance_audio::types::DiscoveredLocation::Plugin,
+        L::File(p) => resonance_audio::types::DiscoveredLocation::File(p.clone()),
+    };
+    let discovered = clap_id
+        .and_then(|id| r.presets.discovered.get(&id))
+        .and_then(|list| list.iter().find(|p| p.is_at(&as_discovered, load_key.as_deref())))
+        .map(|p| (p.stable_id(), p.name.clone()));
+    let (source, id, name) = match (discovered, location) {
+        (Some((id, name)), _) => (PluginPresetSource::Factory, id, name),
+        (None, L::Plugin) => {
             let key = load_key.unwrap_or_default();
             (PluginPresetSource::Factory, key.clone(), key)
         }
-        L::File(path) => {
+        (None, L::File(path)) => {
             let stem = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().into_owned())
@@ -822,10 +835,17 @@ pub(super) fn presets_discovered(
         ));
     }
     lib.register_factory_entries(&plugin_id, entries);
+    // A provider's favourite is starred the first time it is seen, and
+    // only then: the mark records that, so un-starring it sticks.
+    const SEEDED: &str = "discovery_favorite_seeded";
     for p in presets.iter().filter(|p| p.is_favorite()) {
-        let id = p.stable_id();
-        if lib.preset_marks(&plugin_id, &id) == resonance_common::library_marks::Marks::default() {
-            let _ = lib.set_favorite(&plugin_id, &id, true);
+        let key = resonance_plugin::presets::mark_key(&plugin_id, &p.stable_id());
+        let seeded = lib.marks().marks(&key).extra.contains_key(SEEDED);
+        if !seeded {
+            let _ = lib.marks().update(&key, &|m| {
+                m.favorite = true;
+                m.extra.insert(SEEDED.to_string(), serde_json::Value::Bool(true));
+            });
         }
     }
     r.presets.discovered.insert(plugin_id, presets);
