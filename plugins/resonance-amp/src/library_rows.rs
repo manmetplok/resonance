@@ -192,6 +192,7 @@ impl LibraryRows for ModelRows {
             "tone_type" => e.tone_type.as_deref().into_iter().collect(),
             "architecture" => vec![r.arch_short.as_str()],
             "author" => e.author.as_deref().into_iter().collect(),
+            "source" => vec![e.source.label()],
             _ => Vec::new(),
         }
     }

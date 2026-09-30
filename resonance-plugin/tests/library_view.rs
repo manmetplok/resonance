@@ -239,6 +239,51 @@ fn scoped_tokens_filter_by_field() {
 }
 
 #[test]
+fn the_search_syntax_is_the_preset_librarys_superset() {
+    use resonance_plugin::library_view::{parse_search, SearchToken};
+    let facet = |f: &str, v: &str| SearchToken::Facet {
+        facet: f.into(),
+        value: v.into(),
+    };
+    assert_eq!(
+        parse_search("cat:Bass for:vocal char:dark is:user is:starred genres:metal by:Jo", &[]),
+        vec![
+            facet("category", "bass"),
+            facet("instrument", "vocal"),
+            facet("character", "dark"),
+            facet("source", "user"),
+            SearchToken::Favorite,
+            facet("genres", "metal"),
+            facet("author", "jo"),
+        ]
+    );
+    assert_eq!(
+        parse_search("http://x gear_type:amp empty:", &["gear_type"]),
+        vec![
+            SearchToken::Text("http://x".into()),
+            facet("gear_type", "amp"),
+            SearchToken::Text("empty:".into()),
+        ]
+    );
+}
+
+#[test]
+fn one_slug_rule_for_marks_and_preset_metadata() {
+    // library_marks::normalize_tag and the preset library's
+    // normalize_facet must agree, or a tag typed in one browser would not
+    // match the same tag set in the other.
+    use resonance_plugin::library_marks::normalize_tag;
+    use resonance_plugin::presets::vocab::normalize_facet;
+    for raw in [
+        "R&B", "Drum & Bass", "  Djent Rhythm ", "Café_Crème", "lo-fi", "--x--", "!!!", "a/b",
+        "Shoegaze", "ÅÄÖ", "0123456789012345678901234567890123456789",
+    ] {
+        assert_eq!(normalize_tag(raw), normalize_facet(raw), "{raw:?}");
+    }
+    assert_eq!(normalize_tag("R&B").as_deref(), Some("r-b"));
+}
+
+#[test]
 fn facets_or_within_and_across_with_counts_on_the_other_facets() {
     let rows = rows();
     let mut model = BrowserModel::new();

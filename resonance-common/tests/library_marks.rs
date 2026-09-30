@@ -271,6 +271,34 @@ fn tags_normalise_to_lowercase_slugs() {
 }
 
 #[test]
+fn shared_marks_serve_readers_and_writers_through_one_lock() {
+    use resonance_common::library_marks::SharedMarks;
+    let dir = temp_dir("shared");
+    let shared = std::sync::Arc::new(SharedMarks::open(&dir).unwrap());
+    shared
+        .update("plugin-preset:com.x:y", |m| {
+            m.favorite = true;
+            m.last_used = Some(T0);
+        })
+        .unwrap();
+    let m = shared.marks("plugin-preset:com.x:y");
+    assert!(m.favorite);
+    assert_eq!(
+        m.last_used_rfc3339().as_deref(),
+        library_marks::format_timestamp(T0).as_deref(),
+        "RFC 3339 for consumers that carry the time as text"
+    );
+    assert_eq!(shared.generation(), 1);
+    assert!(!shared.refresh(), "nothing changed on disk");
+    MarksStore::open(&dir)
+        .unwrap()
+        .add_tag("plugin-preset:com.x:y", "pad")
+        .unwrap();
+    assert!(shared.refresh(), "the refresh hook sees another writer");
+    assert_eq!(shared.marks("plugin-preset:com.x:y").tags, vec!["pad"]);
+}
+
+#[test]
 fn tag_completion_reads_every_kind_then_the_seeded_vocabulary() {
     let dir = temp_dir("complete");
     let mut store = MarksStore::open(&dir).unwrap();

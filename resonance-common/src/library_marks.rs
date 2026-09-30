@@ -104,16 +104,19 @@ pub fn default_library_dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join(LIBRARY_SUBDIR))
 }
 
-/// Normalise a free tag: lowercase, `[a-z0-9-]` only (whitespace and `_`
-/// become `-`, runs collapse, other characters drop), trimmed of `-`, at
-/// most [`MAX_TAG_LEN`] bytes. `None` when nothing is left.
+/// Normalise a free tag or facet value: accents folded, lowercase
+/// `[a-z0-9-]` only, every run of anything else collapsed to one `-`
+/// (`"R&B"` → `"r-b"`, `"Drum & Bass"` → `"drum-bass"`), trimmed of `-`, at
+/// most [`MAX_TAG_LEN`] bytes. `None` when nothing is left. The one slug
+/// rule for every library kind (the preset library's `normalize_facet`
+/// spells it the same way).
 pub fn normalize_tag(raw: &str) -> Option<String> {
     let mut out = String::with_capacity(raw.len());
     for ch in vocab::fold_accents(raw).chars() {
         let c = ch.to_ascii_lowercase();
         if c.is_ascii_alphanumeric() {
             out.push(c);
-        } else if (c.is_whitespace() || c == '-' || c == '_') && !out.ends_with('-') {
+        } else if !out.is_empty() && !out.ends_with('-') {
             out.push('-');
         }
     }
@@ -203,6 +206,70 @@ impl Marks {
 
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == tag)
+    }
+
+    /// `last_used` as the RFC 3339 string the file stores, for consumers
+    /// that carry it as text.
+    pub fn last_used_rfc3339(&self) -> Option<String> {
+        self.last_used.and_then(format_timestamp)
+    }
+}
+
+/// A [`MarksStore`] shared between threads (an editor, a host-side
+/// browser, an index's freshness poll) behind one lock. Everything takes
+/// `&self`, so it can sit in an `Arc` and back a read-only trait object (a
+/// preset index's marks source) while writers use the same instance.
+#[derive(Debug)]
+pub struct SharedMarks {
+    store: std::sync::Mutex<MarksStore>,
+}
+
+impl SharedMarks {
+    pub fn new(store: MarksStore) -> Self {
+        Self {
+            store: std::sync::Mutex::new(store),
+        }
+    }
+
+    /// Open the store in `dir`.
+    pub fn open(dir: impl Into<PathBuf>) -> Result<Self, MarksError> {
+        MarksStore::open(dir).map(Self::new)
+    }
+
+    /// Open the store at [`default_library_dir`], or a detached one when
+    /// there is none (or it cannot be read), so callers need no `Option`.
+    pub fn open_default_or_detached() -> Self {
+        Self::new(MarksStore::open_default().unwrap_or_else(|e| {
+            tracing::warn!("library marks unavailable: {e}");
+            MarksStore::detached()
+        }))
+    }
+
+    /// The store itself, for anything not wrapped here. Never hold it on
+    /// an audio thread. A poisoned lock is recovered: the store's state is
+    /// always a whole file's worth.
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, MarksStore> {
+        self.store.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// The marks of `key`, or the defaults.
+    pub fn marks(&self, key: &str) -> Marks {
+        self.lock().marks(key)
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.lock().generation()
+    }
+
+    /// The refresh hook: re-read the file if another writer changed it
+    /// (one `stat` when not). Returns whether anything changed.
+    pub fn refresh(&self) -> bool {
+        self.lock().reload_if_changed().unwrap_or(false)
+    }
+
+    /// [`MarksStore::update`] through the shared lock.
+    pub fn update(&self, key: &str, f: impl FnOnce(&mut Marks)) -> Result<Marks, MarksError> {
+        self.lock().update(key, f)
     }
 }
 

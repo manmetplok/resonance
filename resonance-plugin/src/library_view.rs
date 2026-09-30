@@ -24,12 +24,18 @@
 //!
 //! - a plain token matches the title, the row's [`LibraryRows::search_text`]
 //!   and its tags (content and personal);
-//! - `is:fav` (or `is:favorite` / `is:favourite`) keeps favourites,
-//!   `is:recent` keeps rows with a recorded use;
-//! - `tag:<t>` matches a tag, `by:<name>` the `author` facet, `genre:<g>` the
-//!   `genres` facet, and `<facet>:<value>` any facet the rows declare in
-//!   [`LibraryRows::facet_names`]. A `word:` prefix that is none of these is
-//!   plain text (so `http://…` still searches).
+//! - `is:fav` (or `is:favorite` / `is:favourite` / `is:starred`) keeps
+//!   favourites, `is:recent` keeps rows with a recorded use, and any other
+//!   `is:<v>` scopes the `source` facet (`is:user`, `is:factory`,
+//!   `is:tone3000`);
+//! - `tag:<t>` matches a tag, `by:<name>` the `author` facet, `genre:<g>`
+//!   the `genres` facet, `cat:` `category`, `for:` `instrument`, `char:`
+//!   `character` (the preset library's spellings), and `<facet>:<value>`
+//!   any facet the rows declare in [`LibraryRows::facet_names`]. A `word:`
+//!   prefix that is none of these is plain text (so `http://…` still
+//!   searches). [`parse_search`] is the one tokenizer.
+//!
+//! Matching is substring matching, a superset of the token-prefix rule.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -43,6 +49,10 @@ pub const TAGS_FACET: &str = "tags";
 
 /// The facet `by:` searches.
 pub const AUTHOR_FACET: &str = "author";
+
+/// The facet `is:<value>` searches (other than `is:fav` / `is:recent`):
+/// where an item comes from (`user`, `factory`, `tone3000`, `imported`).
+pub const SOURCE_FACET: &str = "source";
 
 /// A sortable value one row offers for one field.
 #[derive(Debug, Clone, PartialEq)]
@@ -214,57 +224,76 @@ fn fold(text: &str) -> String {
     fold_accents(text).to_lowercase()
 }
 
-/// A parsed search token.
-enum Token {
+/// One parsed search token (see the module docs for the syntax). Public so
+/// every library kind parses one syntax, whatever evaluates it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SearchToken {
+    /// A plain token, lowercased and accent-folded.
     Text(String),
+    /// `is:fav` / `is:favorite` / `is:favourite` / `is:starred`.
     Favorite,
+    /// `is:recent`.
     Recent,
+    /// A scoped token: `tag:` / `by:` / `genre:` / `cat:` / `for:` /
+    /// `char:` / `is:<source>` or `<facet>:` for a facet the rows declare.
+    /// `value` is lowercased and accent-folded.
     Facet { facet: String, value: String },
 }
 
-fn parse_query(query: &str, facet_names: &[&str]) -> Vec<Token> {
+/// The facet an alias scopes to: the shared spellings the preset library's
+/// query uses too (`cat:` = category, `for:` = instrument, `char:` =
+/// character, `by:` = author, `genre:` = genres, `tag:` = tags).
+fn facet_alias(scope: &str) -> Option<&'static str> {
+    Some(match scope {
+        "tag" | "tags" => TAGS_FACET,
+        "by" | "author" => AUTHOR_FACET,
+        "genre" | "genres" => "genres",
+        "cat" | "category" => "category",
+        "for" | "instrument" => "instrument",
+        "char" | "character" => "character",
+        _ => return None,
+    })
+}
+
+/// Split a search string into tokens. `facet_names` are the extra facets
+/// a `<facet>:<value>` token may scope to; a `word:` prefix that is no
+/// alias and no such facet is plain text (so `http://…` still searches).
+/// `is:<value>` other than fav/recent scopes the `source` facet
+/// (`is:user`, `is:factory`, `is:imported`).
+pub fn parse_search(query: &str, facet_names: &[&str]) -> Vec<SearchToken> {
     query
         .split_whitespace()
         .map(|raw| {
             let lower = fold(raw);
             if let Some((scope, value)) = lower.split_once(':') {
-                match scope {
-                    "is" if matches!(value, "fav" | "favorite" | "favourite" | "favorites") => {
-                        return Token::Favorite
+                if !value.is_empty() {
+                    if scope == "is" {
+                        return match value {
+                            "fav" | "favorite" | "favourite" | "favorites" | "starred" => {
+                                SearchToken::Favorite
+                            }
+                            "recent" => SearchToken::Recent,
+                            other => SearchToken::Facet {
+                                facet: SOURCE_FACET.into(),
+                                value: other.into(),
+                            },
+                        };
                     }
-                    "is" if value == "recent" => return Token::Recent,
-                    "tag" | "tags" => {
-                        return Token::Facet {
-                            facet: TAGS_FACET.into(),
+                    if let Some(facet) = facet_alias(scope) {
+                        return SearchToken::Facet {
+                            facet: facet.into(),
                             value: value.into(),
-                        }
+                        };
                     }
-                    "by" => {
-                        return Token::Facet {
-                            facet: AUTHOR_FACET.into(),
+                    if let Some(f) = facet_names.iter().find(|f| fold(f) == scope) {
+                        return SearchToken::Facet {
+                            facet: f.to_string(),
                             value: value.into(),
-                        }
+                        };
                     }
-                    "genre" => {
-                        return Token::Facet {
-                            facet: "genres".into(),
-                            value: value.into(),
-                        }
-                    }
-                    s if facet_names.iter().any(|f| fold(f) == s) => {
-                        return Token::Facet {
-                            facet: facet_names
-                                .iter()
-                                .find(|f| fold(f) == s)
-                                .map(|f| f.to_string())
-                                .unwrap_or_default(),
-                            value: value.into(),
-                        }
-                    }
-                    _ => {}
                 }
             }
-            Token::Text(lower)
+            SearchToken::Text(lower)
         })
         .collect()
 }
@@ -290,14 +319,14 @@ fn facet_values_of<'a>(rows: &'a dyn LibraryRows, row: usize, facet: &str) -> Ve
     }
 }
 
-fn token_matches(rows: &dyn LibraryRows, row: usize, token: &Token) -> bool {
+fn token_matches(rows: &dyn LibraryRows, row: usize, token: &SearchToken) -> bool {
     match token {
-        Token::Favorite => rows.marks(row).is_some_and(|m| m.favorite),
-        Token::Recent => rows.marks(row).is_some_and(|m| m.last_used.is_some()),
-        Token::Facet { facet, value } => facet_values_of(rows, row, facet)
+        SearchToken::Favorite => rows.marks(row).is_some_and(|m| m.favorite),
+        SearchToken::Recent => rows.marks(row).is_some_and(|m| m.last_used.is_some()),
+        SearchToken::Facet { facet, value } => facet_values_of(rows, row, facet)
             .iter()
             .any(|v| fold(v).contains(value.as_str())),
-        Token::Text(t) => {
+        SearchToken::Text(t) => {
             fold(rows.title(row)).contains(t.as_str())
                 || rows
                     .search_text(row)
@@ -503,7 +532,7 @@ impl BrowserModel {
         &self,
         rows: &dyn LibraryRows,
         row: usize,
-        tokens: &[Token],
+        tokens: &[SearchToken],
         skip_facet: Option<&str>,
     ) -> bool {
         if self.favorites_only && !rows.marks(row).is_some_and(|m| m.favorite) {
@@ -526,7 +555,7 @@ impl BrowserModel {
 
     fn compute(&self, rows: &dyn LibraryRows, skip_facet: Option<&str>) -> Vec<usize> {
         let names = rows.facet_names();
-        let tokens = parse_query(&self.query, &names);
+        let tokens = parse_search(&self.query, &names);
         let mut view: Vec<usize> = (0..rows.row_count())
             .filter(|&r| self.passes(rows, r, &tokens, skip_facet))
             .collect();
