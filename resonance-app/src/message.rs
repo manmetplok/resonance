@@ -452,6 +452,13 @@ pub enum UiMessage {
     /// Close the topmost modal root overlay (Esc), as its backdrop click
     /// or Cancel button would.
     DismissOverlay,
+    /// Open the command palette in a mode (⌘K / ⇧⌘P); closes it when it
+    /// is already open.
+    OpenPalette(crate::palette::PaletteMode),
+    /// Close the command palette, keeping its query for next time.
+    ClosePalette,
+    /// Command-palette interaction.
+    Palette(crate::palette::PaletteMsg),
 }
 
 impl UiMessage {
@@ -507,7 +514,12 @@ impl UiMessage {
             | Self::ShortcutKey { .. }
             | Self::RunShortcut(..)
             | Self::ShortcutProbed { .. }
-            | Self::DismissOverlay => UndoAction::Skip,
+            | Self::DismissOverlay
+            // The palette itself is pure UI; the command a row runs
+            // re-enters `update()` and is classified on its own.
+            | Self::OpenPalette(..)
+            | Self::ClosePalette
+            | Self::Palette(..) => UndoAction::Skip,
         }
     }
 }

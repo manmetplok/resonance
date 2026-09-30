@@ -8,6 +8,8 @@ to match; those notes are marked *(as built)*.
 
 - **P0 landed.** The registry is the live dispatch.
 - **P1 landed.** Transport and playhead control, with Space bound.
+- **P2 landed.** The palette (⌘K / ⇧⌘P), recents, `keys_blocked` on every
+  canvas, platform keycaps, goldens `command_palette_*`.
 
 ## 0. Why
 
@@ -386,7 +388,12 @@ On Linux the keycaps read `Ctrl` `L`, per §4.2.
   add bus, bypass master FX, bounce; Compose suggests new section, loop
   section; Performance suggests play/stop and exit.
 - **Query.** `fuzzy_match` on the name, then on the keywords at a lower
-  weight. Rank by score, then a recent-use boost, then available before
+  weight (half the score). *(As built:)* `fuzzy_match` now tries every
+  occurrence of the first query character as the alignment start, and a
+  match that begins at a word boundary takes no leading-gap penalty, so
+  "loop st" finds "Playhead to Loop Start" as well as "Set Loop Start…";
+  ties then fall to registry order, which puts the playhead commands
+  before Play from Loop Start. Rank by score, then a recent-use boost, then available before
   unavailable, then registry order. Results group by category in
   `CommandCategory::ALL` order, and categories are ordered by their best
   hit. Ranking must be deterministic, because tests pin it.
@@ -419,6 +426,13 @@ On Linux the keycaps read `Ctrl` `L`, per §4.2.
   set. A test pins this (§10).
 - **Keeping state.** Closing the palette keeps the last query, pre-selected
   so typing replaces it. That makes "run it again" cheap.
+- *(As built:)* results are rebuilt in the reducer on each palette message
+  and stored on `r.ui.palette`, so `view()` never ranks anything. Recents
+  are persisted as `CommandId::key()` strings (the variant name, derived by
+  the same macro as `ALL`), which lands the §8 stable id in P2. The palette
+  is `Overlay::Palette`, so the overlay gate and Esc order apply to it
+  unchanged; while it is open the reducer takes Esc (even captured), ↑/↓
+  and an uncaptured ↵ before the registry.
 
 ### 7.4 Argument modes (phase 4)
 

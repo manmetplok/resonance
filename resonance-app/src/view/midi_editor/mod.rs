@@ -57,6 +57,10 @@ pub struct QuantizePreview {
 /// Data passed to the piano roll canvas for rendering.
 #[derive(Debug)]
 pub struct PianoRollCanvas<'a> {
+    /// Set while the command palette is open: the canvas ignores key
+    /// presses, so Backspace typed into the palette can't delete the
+    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    pub keys_blocked: bool,
     pub clip: &'a MidiClipState,
     pub track_id: TrackId,
     pub scroll_x: f32,

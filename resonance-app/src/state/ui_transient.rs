@@ -70,4 +70,9 @@ pub struct UiTransientState {
     /// How the typing gate asks whether a text field holds focus; always
     /// `Live` outside tests.
     pub typing_probe: crate::update::shortcuts::TypingProbe,
+    /// The open command palette, if any (command-palette.md §7).
+    pub palette: Option<crate::palette::PaletteState>,
+    /// The query the palette closed with, restored (pre-selected) on the
+    /// next open so "run it again" is ⌘K ↵.
+    pub palette_memory: String,
 }

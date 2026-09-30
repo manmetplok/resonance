@@ -55,6 +55,7 @@ fn clip(notes: Vec<MidiNote>) -> Vec<MidiClipState> {
 
 fn canvas<'a>(clips: &'a [MidiClipState], tm: &'a TempoMap) -> ExpandedEditorCanvas<'a> {
     ExpandedEditorCanvas {
+        keys_blocked: false,
         track_id: 1,
         midi_clips: clips,
         section_start: tm.bar_to_sample(SECTION_BAR),

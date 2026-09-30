@@ -110,7 +110,9 @@ impl BindingMap {
         let named = KeyChord::named;
 
         let entries = vec![
-            // Project.
+            // Project (§5.6).
+            (CommandPalette, KeyChord::char('k', cmd)),
+            (CommandPalette, KeyChord::char('p', cmd_shift)),
             (OpenProject, KeyChord::char('o', cmd)),
             (SaveProject, KeyChord::char('s', cmd)),
             (SaveProjectAs, KeyChord::char('s', cmd_shift)),

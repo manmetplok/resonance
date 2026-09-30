@@ -31,7 +31,7 @@ impl canvas::Program<Message> for VocalRollCanvas<'_> {
 
         state.key_focus.track(event, bounds, cursor);
         if matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
-            && !state.key_focus.owns_keys()
+            && (!state.key_focus.owns_keys() || self.keys_blocked)
         {
             return None;
         }

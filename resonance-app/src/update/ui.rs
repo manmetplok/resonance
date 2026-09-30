@@ -244,6 +244,15 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::ShortcutProbed { command, editing } => {
             return crate::update::shortcuts::probed(r, command, editing);
         }
+        UiMessage::OpenPalette(mode) => {
+            return crate::update::palette::open(r, mode);
+        }
+        UiMessage::ClosePalette => {
+            return crate::update::palette::close(r);
+        }
+        UiMessage::Palette(msg) => {
+            return crate::update::palette::handle(r, msg);
+        }
         UiMessage::DismissOverlay => {
             return crate::update::shortcuts::dismiss_overlay(r);
         }

@@ -13,6 +13,8 @@
 #[path = "common/mod.rs"]
 mod common;
 
+#[path = "performance/command_palette.rs"]
+mod command_palette;
 #[path = "performance/commands_registry.rs"]
 mod commands_registry;
 #[path = "performance/keycap_styles.rs"]

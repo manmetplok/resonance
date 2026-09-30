@@ -23,6 +23,7 @@ pub mod midi_editor;
 pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
+pub(crate) mod palette;
 pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
@@ -144,6 +145,7 @@ impl crate::Resonance {
             // The freeze progress modal (design doc #181, todo #582) is the
             // same blocking overlay — a freeze IS a bounce-in-place run.
             Overlay::FreezeProgress => bounce_progress::view_freeze_progress_overlay(self),
+            Overlay::Palette => palette::view_palette_overlay(self),
             Overlay::ConfirmQuit => confirm_quit::view_confirm_quit_overlay(self),
             Overlay::ConfirmDeleteTrack => {
                 let track_id = self.modals.confirm_delete_track?;

@@ -16,6 +16,7 @@ use resonance_music_theory::TableRegistry;
 pub mod chord_box;
 pub mod chord_sheet_pdf;
 pub mod commands;
+pub mod palette;
 pub mod chord_track;
 pub mod compose;
 pub mod control_jobs;
@@ -599,6 +600,8 @@ impl Resonance {
                 mixer: MixerUiState::default(),
                 keymap: crate::commands::BindingMap::resonance_default(),
                 typing_probe: Default::default(),
+                palette: None,
+                palette_memory: String::new(),
             },
             banners: state::Banners::default(),
             master: state::MasterState {

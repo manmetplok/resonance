@@ -54,6 +54,7 @@ fn canvas<'a>(
     tempo: &'a TempoMap,
 ) -> PianoRollCanvas<'a> {
     PianoRollCanvas {
+        keys_blocked: false,
         clip,
         track_id: TRACK,
         scroll_x: 0.0,

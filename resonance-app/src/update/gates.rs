@@ -69,7 +69,13 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::ShortcutKey { .. })
         | Message::Ui(UiMessage::RunShortcut(_))
         | Message::Ui(UiMessage::ShortcutProbed { .. })
-        | Message::Ui(UiMessage::DismissOverlay) => false,
+        | Message::Ui(UiMessage::DismissOverlay)
+        // The palette refuses to open over the startup screen itself
+        // (`Overlay::allows_palette`); a row's command meets this gate
+        // when it re-enters `update()`.
+        | Message::Ui(UiMessage::OpenPalette(_))
+        | Message::Ui(UiMessage::ClosePalette)
+        | Message::Ui(UiMessage::Palette(_)) => false,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)

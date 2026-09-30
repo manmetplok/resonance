@@ -136,3 +136,42 @@ fn a_control_call_that_selects_internally_grants_nothing() {
     let out = app.test_timeline_canvas_event(&mut state, &delete_key(), -50.0, -50.0);
     assert!(out.is_none(), "a control call stole the keys: {out:?}");
 }
+
+fn backspace_key() -> iced::Event {
+    iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key: Key::Named(Named::Backspace),
+        modified_key: Key::Named(Named::Backspace),
+        physical_key: keyboard::key::Physical::Code(keyboard::key::Code::Backspace),
+        location: keyboard::Location::Standard,
+        modifiers: Modifiers::empty(),
+        text: None,
+        repeat: false,
+    })
+}
+
+/// The command palette focuses its field programmatically, which breaks the
+/// "focusing a field takes a click" assumption behind `KeyFocus`: a
+/// timeline that owned the keys before ⌘K would act on Backspace typed into
+/// the palette and delete the selected clip (command-palette.md §7.3).
+#[test]
+fn backspace_typed_into_the_palette_leaves_the_selected_clip_alone() {
+    use resonance_app::message::UiMessage;
+    use resonance_app::palette::PaletteMode;
+
+    // Control: with the palette closed, Backspace deletes the clip, so the
+    // check below is not vacuous.
+    let mut app = app();
+    let mut state = unfocused_timeline(&app);
+    select_clip_elsewhere(&mut app);
+    let out = app.test_timeline_canvas_event(&mut state, &backspace_key(), -50.0, -50.0);
+    assert!(is_delete_clip(&out), "control: Backspace deletes: {out:?}");
+
+    let mut app = self::app();
+    let mut state = unfocused_timeline(&app);
+    select_clip_elsewhere(&mut app);
+    let _ = app.update(Message::Ui(UiMessage::OpenPalette(PaletteMode::Commands)));
+    assert!(app.test_palette().is_some());
+    let out = app.test_timeline_canvas_event(&mut state, &backspace_key(), -50.0, -50.0);
+    assert!(out.is_none(), "the palette's Backspace reached the timeline: {out:?}");
+    assert!(app.test_midi_clip_ids().contains(&CLIP), "the clip survives");
+}

@@ -1,0 +1,190 @@
+//! Command-palette reducer (command-palette.md §7.2, §7.3).
+
+use iced::Task;
+
+use crate::message::{Message, UiMessage};
+use crate::palette::{self, PaletteItem, PaletteMode, PaletteMsg, PaletteState};
+use crate::Resonance;
+
+/// Row height in the result list, and a section header's (the list is laid
+/// out at fixed heights so the reducer can keep the selection in view).
+pub const ROW_HEIGHT: f32 = 50.0;
+pub const HEADER_HEIGHT: f32 = 30.0;
+/// The list's visible height.
+pub const LIST_HEIGHT: f32 = 380.0;
+
+/// Open the palette (or close it, when it is already open — ⌘K toggles).
+/// It never opens over the recovery, startup or progress overlays, and it
+/// closes any other overlay first.
+pub(crate) fn open(r: &mut Resonance, mode: PaletteMode) -> Task<Message> {
+    if r.ui.palette.is_some() {
+        return close(r);
+    }
+    if let Some(overlay) = r.modal_overlay() {
+        if !overlay.allows_palette() {
+            return Task::none();
+        }
+        if let Some(dismiss) = overlay.dismiss_message(r) {
+            let _ = r.update(dismiss);
+        }
+    }
+    // Closing keeps the last query, pre-selected so typing replaces it and
+    // ↵ runs it again. Opening in another mode seeds that mode's prefix.
+    let query = match mode {
+        PaletteMode::Commands => r.ui.palette_memory.clone(),
+    };
+    let query = if query.starts_with(mode.prefix()) { query } else { mode.prefix().to_string() };
+    let mut state = PaletteState {
+        query,
+        ..PaletteState::default()
+    };
+    state.sections = palette::build(r, &state.query);
+    r.ui.palette = Some(state);
+    let id = palette::query_input_id();
+    Task::batch([
+        iced::widget::operation::focus(id.clone()),
+        iced::widget::operation::select_all(id),
+    ])
+}
+
+/// Close the palette, remembering its query.
+pub(crate) fn close(r: &mut Resonance) -> Task<Message> {
+    if let Some(state) = r.ui.palette.take() {
+        r.ui.palette_memory = state.query;
+    }
+    Task::none()
+}
+
+pub(crate) fn handle(r: &mut Resonance, msg: PaletteMsg) -> Task<Message> {
+    let Some(state) = r.ui.palette.as_mut() else {
+        return Task::none();
+    };
+    state.flash = None;
+    match msg {
+        PaletteMsg::Query(query) => {
+            state.selected = 0;
+            state.scroll_y = 0.0;
+            let sections = palette::build(r, &query);
+            if let Some(state) = r.ui.palette.as_mut() {
+                state.query = query;
+                state.sections = sections;
+            }
+            return iced::widget::operation::scroll_to(
+                palette::list_id(),
+                iced::widget::scrollable::AbsoluteOffset { x: 0.0, y: 0.0 },
+            );
+        }
+        PaletteMsg::Move(delta) => {
+            let n = state.row_count();
+            if n == 0 {
+                return Task::none();
+            }
+            state.selected = (state.selected as i64 + delta as i64).rem_euclid(n as i64) as usize;
+            return follow_selection(state);
+        }
+        PaletteMsg::Hover(index) => {
+            if index < state.row_count() {
+                state.selected = index;
+            }
+        }
+        PaletteMsg::Scrolled(y) => state.scroll_y = y,
+        PaletteMsg::Submit => {
+            let index = state.selected;
+            return run(r, index);
+        }
+        PaletteMsg::Click(index) => return run(r, index),
+    }
+    Task::none()
+}
+
+/// The selected row's top edge in list coordinates.
+fn row_top(state: &PaletteState, index: usize) -> f32 {
+    let mut y = 0.0;
+    let mut seen = 0;
+    for section in &state.sections {
+        y += HEADER_HEIGHT;
+        if index < seen + section.rows.len() {
+            return y + (index - seen) as f32 * ROW_HEIGHT;
+        }
+        seen += section.rows.len();
+        y += section.rows.len() as f32 * ROW_HEIGHT;
+    }
+    y
+}
+
+/// Scroll just enough to keep the selected row visible.
+fn follow_selection(state: &mut PaletteState) -> Task<Message> {
+    let top = row_top(state, state.selected);
+    let y = if top < state.scroll_y {
+        top - HEADER_HEIGHT
+    } else if top + ROW_HEIGHT > state.scroll_y + LIST_HEIGHT {
+        top + ROW_HEIGHT - LIST_HEIGHT
+    } else {
+        return Task::none();
+    };
+    state.scroll_y = y.max(0.0);
+    iced::widget::operation::scroll_to(
+        palette::list_id(),
+        iced::widget::scrollable::AbsoluteOffset {
+            x: 0.0,
+            y: state.scroll_y,
+        },
+    )
+}
+
+/// Run row `index`: close the palette, then dispatch directly — bypassing
+/// the typing gate, since the palette's own field had the focus and the
+/// user picked the command explicitly. Every other gate still applies. An
+/// unavailable row does nothing but flash its reason.
+fn run(r: &mut Resonance, index: usize) -> Task<Message> {
+    let Some(state) = r.ui.palette.as_mut() else {
+        return Task::none();
+    };
+    let Some(row) = state.rows().nth(index) else {
+        return Task::none();
+    };
+    if let Some(reason) = row.unavailable {
+        state.selected = index;
+        state.flash = Some(reason);
+        return Task::none();
+    }
+    let item = row.item;
+    let _ = close(r);
+    match item {
+        PaletteItem::Command(command) => crate::update::shortcuts::execute(r, command),
+    }
+}
+
+/// Keys the palette takes while it is open, before the registry sees them
+/// (the global subscription delivers them; see `shortcuts::handle_key`).
+/// Returns `None` when the key is not the palette's.
+pub(crate) fn key(
+    r: &mut Resonance,
+    chord: crate::commands::KeyChord,
+    captured: bool,
+) -> Option<Task<Message>> {
+    use crate::commands::{KeyChord, Mods, NamedKey};
+    let named = |n| KeyChord::named(n, Mods::NONE);
+    if chord == named(NamedKey::Escape) {
+        // The query field captures Esc (it unfocuses itself), so this runs
+        // whatever the capture status.
+        return Some(close(r));
+    }
+    if chord == named(NamedKey::ArrowUp) {
+        return Some(handle(r, PaletteMsg::Move(-1)));
+    }
+    if chord == named(NamedKey::ArrowDown) {
+        return Some(handle(r, PaletteMsg::Move(1)));
+    }
+    if chord == named(NamedKey::Enter) && !captured {
+        // The field submits ↵ itself while it has focus; this covers a
+        // click that took the focus away.
+        return Some(handle(r, PaletteMsg::Submit));
+    }
+    None
+}
+
+/// `UiMessage` helper for the view.
+pub fn msg(m: PaletteMsg) -> Message {
+    Message::Ui(UiMessage::Palette(m))
+}

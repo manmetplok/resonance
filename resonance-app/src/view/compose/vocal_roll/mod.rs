@@ -89,6 +89,10 @@ pub(super) fn chord_label(chord: &resonance_music_theory::Chord) -> String {
 /// drag/preview state lives in `VocalRollState`.
 #[derive(Debug)]
 pub struct VocalRollCanvas<'a> {
+    /// Set while the command palette is open: the canvas ignores key
+    /// presses, so Backspace typed into the palette can't delete the
+    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    pub keys_blocked: bool,
     pub clip: &'a MidiClipState,
     pub track_id: TrackId,
     pub params: &'a VocalParams,
@@ -142,6 +146,7 @@ pub fn build_canvas<'a>(
         .map(|v| v.as_slice())
         .unwrap_or(EMPTY_LYRICS.as_slice());
     Some(VocalRollCanvas {
+        keys_blocked: app.ui.palette.is_some(),
         clip,
         track_id: editor_state.track_id,
         params,

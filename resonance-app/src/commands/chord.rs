@@ -260,6 +260,96 @@ fn apply_modifier(mods: &mut Mods, token: &str) -> Option<()> {
     Some(())
 }
 
+/// Which keyboard convention to render chords for (command-palette.md
+/// §4.2): a Linux user never sees a ⌘ they can't press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    /// Glyph caps (⌃⌥⇧⌘), `cmd` is Command.
+    Mac,
+    /// Word caps (Ctrl, Alt, Shift), `cmd` is Ctrl.
+    Other,
+}
+
+impl Platform {
+    /// The platform this binary was built for.
+    pub fn current() -> Platform {
+        if cfg!(target_os = "macos") {
+            Platform::Mac
+        } else {
+            Platform::Other
+        }
+    }
+}
+
+impl NamedKey {
+    /// Keycap label on non-Mac keyboards.
+    fn word(self) -> &'static str {
+        match self {
+            NamedKey::Enter => "Enter",
+            NamedKey::Escape => "Esc",
+            NamedKey::Space => "Space",
+            NamedKey::Tab => "Tab",
+            NamedKey::Backspace => "Backspace",
+            NamedKey::Delete => "Del",
+            NamedKey::Minus => "-",
+            other => other.glyph(),
+        }
+    }
+}
+
+impl KeyChord {
+    /// The chord as separate keycap labels, modifiers first: `["⇧", "⌘",
+    /// "S"]` on macOS, `["Ctrl", "Shift", "S"]` elsewhere.
+    pub fn keycaps(self, platform: Platform) -> Vec<String> {
+        let mut caps: Vec<String> = Vec::new();
+        match platform {
+            Platform::Mac => {
+                for (on, glyph) in [
+                    (self.mods.ctrl, "⌃"),
+                    (self.mods.alt, "⌥"),
+                    (self.mods.shift, "⇧"),
+                    (self.mods.cmd, "⌘"),
+                ] {
+                    if on {
+                        caps.push(glyph.to_string());
+                    }
+                }
+            }
+            Platform::Other => {
+                for (on, word) in [
+                    (self.mods.cmd || self.mods.ctrl, "Ctrl"),
+                    (self.mods.alt, "Alt"),
+                    (self.mods.shift, "Shift"),
+                ] {
+                    if on {
+                        caps.push(word.to_string());
+                    }
+                }
+            }
+        }
+        caps.push(match (self.key, platform) {
+            (ChordKey::Char(c), _) => c.to_uppercase().collect(),
+            (ChordKey::Named(n), Platform::Mac) => n.glyph().to_string(),
+            (ChordKey::Named(n), Platform::Other) => n.word().to_string(),
+        });
+        caps
+    }
+
+    /// Inline text form for tooltips: `⇧⌘S` on macOS, `Ctrl+Shift+S`
+    /// elsewhere.
+    pub fn format_for(self, platform: Platform) -> String {
+        match platform {
+            Platform::Mac => self.format_glyphs(),
+            Platform::Other => self.keycaps(platform).join("+"),
+        }
+    }
+
+    /// [`format_for`](Self::format_for) the current platform.
+    pub fn format_for_platform(self) -> String {
+        self.format_for(Platform::current())
+    }
+}
+
 impl std::fmt::Display for KeyChord {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.format_glyphs())

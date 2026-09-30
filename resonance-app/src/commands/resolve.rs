@@ -59,6 +59,11 @@ impl CommandId {
             {
                 Available::No("Select a freezable track first")
             }
+            CommandPalette
+                if r.root_overlay().is_some_and(|o| !o.allows_palette() && !o.is_palette()) =>
+            {
+                Available::No("Not available here")
+            }
             _ => Available::Yes,
         }
     }
@@ -152,6 +157,9 @@ impl CommandId {
             FreezeSelectedTracks => Message::Freeze(FreezeMessage::FreezeSelectedTracks),
             FreezeAllTracks => Message::Freeze(FreezeMessage::FreezeAllTracks),
 
+            CommandPalette => {
+                Message::Ui(UiMessage::OpenPalette(crate::palette::PaletteMode::Commands))
+            }
             NewProject => Message::Ui(UiMessage::StartNewProject),
             OpenProject => Message::ProjectIo(ProjectIoMessage::OpenProject),
             SaveProject => Message::ProjectIo(ProjectIoMessage::SaveProject),

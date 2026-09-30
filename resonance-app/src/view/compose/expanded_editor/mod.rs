@@ -55,6 +55,7 @@ pub fn view<'a>(
     let section_end = app.tempo_map.bar_to_sample(placement.start_bar + definition.length_bars);
 
     let canvas = Canvas::new(ExpandedEditorCanvas {
+        keys_blocked: app.ui.palette.is_some(),
         track_id,
         midi_clips: &app.midi_clips,
         section_start,
@@ -78,6 +79,10 @@ pub fn view<'a>(
 }
 
 pub struct ExpandedEditorCanvas<'a> {
+    /// Set while the command palette is open: the canvas ignores key
+    /// presses, so Backspace typed into the palette can't delete the
+    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    pub keys_blocked: bool,
     pub track_id: TrackId,
     pub midi_clips: &'a [MidiClipState],
     pub section_start: u64,
@@ -208,6 +213,11 @@ impl<'a> canvas::Program<Message> for ExpandedEditorCanvas<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
+        if self.keys_blocked
+            && matches!(event, iced::Event::Keyboard(iced::keyboard::Event::KeyPressed { .. }))
+        {
+            return None;
+        }
         self.update_inner(state, event, bounds, cursor)
     }
 }

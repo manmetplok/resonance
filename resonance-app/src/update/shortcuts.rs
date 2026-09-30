@@ -81,6 +81,13 @@ pub(crate) fn handle_key(
     repeat: bool,
     captured: bool,
 ) -> Task<Message> {
+    // The open palette takes Esc, ↑/↓ and ↵ first — Esc even though its
+    // query field captured it.
+    if r.ui.palette.is_some() {
+        if let Some(task) = crate::update::palette::key(r, chord, captured) {
+            return task;
+        }
+    }
     // A focused text field or a key-owning canvas already acted on it.
     if captured {
         return Task::none();
@@ -155,10 +162,11 @@ pub(crate) fn execute(r: &mut Resonance, command: CommandId) -> Task<Message> {
     if let Available::No(_) = command.availability(r) {
         return Task::none();
     }
-    match command.to_message(r) {
-        Some(message) => r.update(message),
-        None => Task::none(),
-    }
+    let Some(message) = command.to_message(r) else {
+        return Task::none();
+    };
+    crate::palette::record_recent(r, command);
+    r.update(message)
 }
 
 /// Close the topmost modal root overlay, as its backdrop click would.

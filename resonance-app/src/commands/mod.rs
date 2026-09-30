@@ -24,7 +24,7 @@ mod fuzzy;
 mod resolve;
 
 pub use bindings::{BindingMap, KeymapPreset};
-pub use chord::{ChordKey, KeyChord, Mods, NamedKey};
+pub use chord::{ChordKey, KeyChord, Mods, NamedKey, Platform};
 pub use fuzzy::{fuzzy_match, FuzzyMatch};
 
 // ===========================================================================
@@ -133,6 +133,21 @@ macro_rules! command_ids {
         impl CommandId {
             /// Every command, in registry/palette order (declaration order).
             pub const ALL: &'static [CommandId] = &[ $( CommandId::$variant ),* ];
+
+            /// Stable string id, used wherever a command is persisted (the
+            /// palette's recents, keymap overrides), so saved state
+            /// survives enum reordering. It is the variant name: renaming
+            /// a variant is a format change.
+            pub fn key(self) -> &'static str {
+                match self {
+                    $( CommandId::$variant => stringify!($variant) ),*
+                }
+            }
+
+            /// The command whose [`key`](Self::key) is `key`.
+            pub fn from_key(key: &str) -> Option<CommandId> {
+                CommandId::ALL.iter().copied().find(|c| c.key() == key)
+            }
         }
     };
 }
@@ -141,7 +156,6 @@ command_ids! {
     // --- Transport ---
     TransportTogglePlay,
     TransportPlayPause,
-    TransportPlayFromLoopStart,
     TransportPlay,
     TransportStop,
     TransportRecord,
@@ -155,6 +169,7 @@ command_ids! {
     PlayheadToLoopEnd,
     SetLoopStartAtPlayhead,
     SetLoopEndAtPlayhead,
+    TransportPlayFromLoopStart,
     LoopSectionAtPlayhead,
     NudgeBackBar,
     NudgeForwardBar,
@@ -202,6 +217,7 @@ command_ids! {
     FreezeAllTracks,
 
     // --- Project ---
+    CommandPalette,
     NewProject,
     OpenProject,
     SaveProject,
@@ -240,8 +256,8 @@ impl CommandId {
             | ToggleMasterFxBypass | GroupSelectedTracks | FreezeSelectedTracks
             | FreezeAllTracks => CommandCategory::Mixer,
 
-            NewProject | OpenProject | SaveProject | SaveProjectAs | BounceToWav
-            | ExportChordSheet | OpenSettings => CommandCategory::Project,
+            CommandPalette | NewProject | OpenProject | SaveProject | SaveProjectAs
+            | BounceToWav | ExportChordSheet | OpenSettings => CommandCategory::Project,
         }
     }
 
@@ -306,6 +322,7 @@ impl CommandId {
             FreezeSelectedTracks => "Freeze Selected Tracks",
             FreezeAllTracks => "Freeze All Tracks",
 
+            CommandPalette => "Command Palette",
             NewProject => "New Project",
             OpenProject => "Open Project…",
             SaveProject => "Save",
@@ -322,19 +339,53 @@ impl CommandId {
         format!("{} › {}", self.category().display_name(), self.display_name())
     }
 
-    /// Optional decorative glyph for the palette row. `None` for the many
-    /// commands without a distinctive icon.
+    /// The palette row's glyph: a Font Awesome codepoint (`theme::ICON_FONT`).
+    /// Commands without a distinctive icon use their category's.
     pub fn glyph(self) -> Option<char> {
+        use crate::theme::fa;
         use CommandId::*;
-        match self {
-            TransportTogglePlay | TransportPlay | TransportPlayFromLoopStart => Some('▶'),
-            TransportStop => Some('■'),
-            TransportPlayPause => Some('⏸'),
-            TransportRecord => Some('●'),
-            TransportSkipBack | PlayheadToStart => Some('⏮'),
-            TransportSkipForward | PlayheadToEnd => Some('⏭'),
-            _ => None,
-        }
+        let icon = match self {
+            TransportTogglePlay | TransportPlay | TransportPlayFromLoopStart => fa::PLAY,
+            TransportStop => fa::STOP,
+            TransportPlayPause => fa::PAUSE,
+            TransportRecord => fa::CIRCLE,
+            TransportSkipBack => fa::BACKWARD_FAST,
+            TransportSkipForward => fa::FORWARD_FAST,
+            PlayheadToStart | NudgeBackBar | NudgeBackBeat | PrevSectionStart => {
+                fa::BACKWARD_STEP
+            }
+            PlayheadToEnd | NudgeForwardBar | NudgeForwardBeat | NextSectionStart => {
+                fa::FORWARD_STEP
+            }
+            TransportToggleMetronome => fa::METRONOME,
+            TransportToggleLoop | PlayheadToLoopStart | PlayheadToLoopEnd
+            | SetLoopStartAtPlayhead | SetLoopEndAtPlayhead | LoopSectionAtPlayhead => {
+                fa::ARROW_ROTATE_LEFT
+            }
+            PrevMarker | NextMarker | AddMarkerAtPlayhead => fa::FLAG,
+            Undo | Redo => fa::ARROW_ROTATE_LEFT,
+            ZoomIn => fa::MAGNIFYING_GLASS_PLUS,
+            ZoomOut => fa::MAGNIFYING_GLASS_MINUS,
+            TogglePerformanceMode | ExitPerformanceMode => fa::GUITAR,
+            FreezeSelectedTracks | FreezeAllTracks => fa::SNOWFLAKE,
+            AddVocalTrack => fa::MICROPHONE,
+            AddInstrumentTrack => fa::MUSIC,
+            AddAudioTrack => fa::WAVE_SQUARE,
+            OpenProject => fa::FOLDER_OPEN,
+            SaveProject | SaveProjectAs => fa::FLOPPY_DISK,
+            BounceToWav => fa::COMPACT_DISC,
+            CommandPalette => fa::MAGNIFYING_GLASS,
+            OpenSettings => fa::SLIDERS,
+            _ => match self.category() {
+                CommandCategory::Transport => fa::CLOCK,
+                CommandCategory::Editing => fa::BARS,
+                CommandCategory::ViewNav => fa::EYE,
+                CommandCategory::ComposeVocal => fa::MUSIC,
+                CommandCategory::Mixer => fa::SLIDERS,
+                CommandCategory::Project => fa::FOLDER,
+            },
+        };
+        Some(icon)
     }
 
     /// Search aliases. [`fuzzy_match`] runs over the display name first and
@@ -381,6 +432,7 @@ impl CommandId {
             ToggleMasterFxBypass => &["master", "effects", "mastering"],
             GroupSelectedTracks => &["folder", "link"],
             FreezeSelectedTracks | FreezeAllTracks => &["render", "bounce", "cpu"],
+            CommandPalette => &["search", "find", "actions"],
             NewProject => &["create", "file"],
             OpenProject => &["load", "file"],
             SaveProject | SaveProjectAs => &["write", "file"],
@@ -398,7 +450,7 @@ impl CommandId {
         use CommandId::*;
         match self {
             // ⌘/Ctrl-only chords a text field never consumes.
-            SaveProject | SaveProjectAs | OpenProject | NewProject | BounceToWav
+            CommandPalette | SaveProject | SaveProjectAs | OpenProject | NewProject | BounceToWav
             | ExportChordSheet | OpenSettings | GroupSelectedTracks | FreezeSelectedTracks
             | FreezeAllTracks | ViewArrange | ViewMixer | ViewCompose | ZoomIn | ZoomOut
             | ToggleGlobalTracks | AddAudioTrack | AddInstrumentTrack | OpenAddTrackMenu

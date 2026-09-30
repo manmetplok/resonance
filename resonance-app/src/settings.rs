@@ -94,6 +94,19 @@ pub struct AppSettings {
     pub arrange: ArrangeSettings,
     /// Audio-engine startup options; absent on older files, defaulted.
     pub audio: AudioSettings,
+    /// Command-palette memory; absent on older files, defaulted.
+    pub palette: PaletteSettings,
+}
+
+/// What the command palette remembers between sessions
+/// (command-palette.md §7.2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PaletteSettings {
+    /// The last commands run from the palette or a shortcut, newest
+    /// first, de-duplicated, as `CommandId::key()` strings. Unknown keys
+    /// (a renamed command) are skipped on read.
+    pub recent: Vec<String>,
 }
 
 /// Audio-engine options read once at startup, before the engine exists.

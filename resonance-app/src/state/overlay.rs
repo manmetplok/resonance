@@ -21,6 +21,9 @@ pub enum Overlay {
     BounceProgress,
     MixdownProgress,
     FreezeProgress,
+    /// The command palette: above every other overlay but the recovery,
+    /// startup and progress ones.
+    Palette,
     ConfirmQuit,
     ConfirmDeleteTrack,
     BounceDialog,
@@ -60,6 +63,11 @@ impl Overlay {
         )
     }
 
+    /// Whether this is the command palette itself.
+    pub fn is_palette(self) -> bool {
+        matches!(self, Overlay::Palette)
+    }
+
     /// What Esc sends to close this overlay — the same effect as its
     /// backdrop click or Cancel button. `None` for the overlays Esc must not
     /// close: the startup screen, and the progress modals (stopping a render
@@ -74,6 +82,7 @@ impl Overlay {
             | Overlay::MixdownProgress
             | Overlay::FreezeProgress
             | Overlay::SelectionBar => return None,
+            Overlay::Palette => Message::Ui(UiMessage::ClosePalette),
             Overlay::ConfirmQuit => Message::Ui(UiMessage::CancelQuit),
             Overlay::ConfirmDeleteTrack => Message::Track(TrackMessage::CancelRemoveTrack),
             Overlay::BounceDialog => Message::Track(TrackMessage::Bounce(BounceMessage::Cancel)),
@@ -113,6 +122,8 @@ impl Resonance {
             Overlay::MixdownProgress
         } else if self.freeze.any_in_flight() {
             Overlay::FreezeProgress
+        } else if self.ui.palette.is_some() {
+            Overlay::Palette
         } else if self.modals.confirm_quit.is_some() {
             Overlay::ConfirmQuit
         } else if self.modals.confirm_delete_track.is_some() {

@@ -92,6 +92,7 @@ impl crate::Resonance {
                 let content_w = crate::view::midi_editor::KEYBOARD_WIDTH
                     + content_ticks as f32 * editor_state.zoom_x;
                 let piano_roll = canvas(PianoRollCanvas {
+                    keys_blocked: self.ui.palette.is_some(),
                     clip,
                     track_id: editor_state.track_id,
                     scroll_x: 0.0,

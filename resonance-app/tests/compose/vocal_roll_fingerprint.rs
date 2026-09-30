@@ -44,6 +44,7 @@ fn canvas<'a>(
     voice_label: &'a str,
 ) -> VocalRollCanvas<'a> {
     VocalRollCanvas {
+        keys_blocked: false,
         clip,
         track_id: 3,
         params,

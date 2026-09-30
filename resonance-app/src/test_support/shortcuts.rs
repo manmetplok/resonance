@@ -12,6 +12,24 @@ impl Resonance {
         self.ui.typing_probe = probe;
     }
 
+    /// Test-only: the open command palette.
+    #[doc(hidden)]
+    pub fn test_palette(&self) -> Option<&crate::palette::PaletteState> {
+        self.ui.palette.as_ref()
+    }
+
+    /// Test-only: the query the palette will reopen with.
+    #[doc(hidden)]
+    pub fn test_palette_memory(&self) -> &str {
+        &self.ui.palette_memory
+    }
+
+    /// Test-only: every MIDI clip id on the timeline.
+    #[doc(hidden)]
+    pub fn test_midi_clip_ids(&self) -> Vec<resonance_audio::types::ClipId> {
+        self.midi_clips.iter().map(|c| c.id).collect()
+    }
+
     /// Test-only: the active keymap.
     #[doc(hidden)]
     pub fn test_keymap(&self) -> &crate::commands::BindingMap {

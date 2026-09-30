@@ -42,6 +42,10 @@ pub use self::snap::snap_sample_to_grid_tempo;
 /// Data passed to the timeline canvas for rendering.
 #[derive(Debug)]
 pub struct TimelineCanvas<'a> {
+    /// Set while the command palette is open: the canvas ignores key
+    /// presses, so Backspace typed into the palette can't delete the
+    /// selection this canvas owned the keys for (command-palette.md §7.3).
+    pub keys_blocked: bool,
     /// `interaction.timeline_key_grant` — see `focus::KeyFocus::sync_grant`.
     pub key_grant: u64,
     pub tracks: &'a [TrackState],
@@ -856,6 +860,11 @@ impl canvas::Program<Message> for TimelineCanvas<'_> {
     ) -> Option<canvas::Action<Message>> {
         state.key_focus.sync_grant(self.key_grant);
         state.key_focus.track(event, bounds, cursor);
+        if self.keys_blocked
+            && matches!(event, iced::Event::Keyboard(keyboard::Event::KeyPressed { .. }))
+        {
+            return None;
+        }
         let result = match event {
             iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
                 self.handle_wheel(*delta, bounds, cursor)
