@@ -575,7 +575,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // plugin, and copying `shared` over it would snap the knob back.
         reconcile_params(&self.plugin, self.shared);
 
-        main_thread.plugin = Some(self.plugin);
+        let mut plugin = self.plugin;
+        plugin.deactivate();
+        main_thread.plugin = Some(plugin);
     }
 
     fn reset(&mut self) {

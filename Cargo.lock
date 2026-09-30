@@ -4951,6 +4951,7 @@ version = "0.1.0"
 dependencies = [
  "alsa-sys",
  "arc-swap",
+ "base64 0.22.1",
  "bytemuck",
  "clap-sys",
  "cpal",

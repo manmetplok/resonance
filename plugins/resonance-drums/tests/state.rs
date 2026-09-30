@@ -258,3 +258,25 @@ fn a_preset_load_reloads_the_kit_it_names_and_keeps_it_when_it_names_none() {
         "other mics are another sound"
     );
 }
+
+/// A full-state reload is deactivate → load → activate: the kit it names
+/// is loaded once, by `initialize`, not also by the load in between
+/// (verification item 7).
+#[test]
+fn a_full_state_reload_loads_the_kit_once() {
+    let mut drums = ResonanceDrums::new();
+    assert!(drums.initialize(48_000.0, 512));
+    let stamps = drums.bridge.load_generation.clone();
+    let generation = move || stamps.load(std::sync::atomic::Ordering::Acquire);
+    let g0 = generation();
+    drums.deactivate();
+    let state = serde_json::json!({
+        "version": 1,
+        "params": {},
+        "kit_path": "/nonexistent/reload-kit/drum_samples.json",
+    });
+    assert!(drums.load_state(&serde_json::to_vec(&state).unwrap()));
+    assert_eq!(generation(), g0, "inactive: the load only records the kit");
+    assert!(drums.initialize(48_000.0, 512));
+    assert_eq!(generation(), g0 + 1, "one load, from initialize");
+}

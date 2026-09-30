@@ -334,6 +334,13 @@ impl ResonancePlugin for ResonanceDrums {
         self.sampler.reset();
     }
 
+    /// Inactive, there is no rate to decode a kit at: a state load in this
+    /// window (a full-state reload's deactivate → load → activate) only
+    /// records the kit, and `initialize` loads it once.
+    fn deactivate(&mut self) {
+        self.bridge.sample_rate.store(0, Ordering::Release);
+    }
+
     fn process(
         &mut self,
         outputs: &mut [resonance_plugin::OutputBuffer<'_>],

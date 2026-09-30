@@ -101,6 +101,12 @@ pub mod test_support {
     /// `_in` variant takes the directories to scan, so the test drives a
     /// temp dir rather than the machine's real plugin folders.
     pub use crate::engine::scan::{rescan_plugins, rescan_plugins_in};
+    /// The discovery worker's lifecycle (slice P8 review), for a blocking
+    /// provider.
+    pub use crate::engine::scan::{
+        shutdown_discovery, spawn_discovery_jobs, DISCOVERY_SHUTDOWN_WAIT,
+    };
+    pub use crate::clap_host::DiscoveryFactory;
     /// Build a `ClapInstance` around a hand-rolled raw `clap_plugin` —
     /// see `tests/clap_host/clap_latency_tracking.rs` (doc #260 finding #10).
     pub use crate::clap_host::__instance_from_raw_for_test;

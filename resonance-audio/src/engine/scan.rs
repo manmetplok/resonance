@@ -99,7 +99,7 @@ pub fn rescan_plugins_in(
     spawn_discovery(bundles, event_tx, true);
 }
 
-/// The one preset-discovery worker, and how to stop it.
+/// The current preset-discovery worker, and how to stop it.
 struct DiscoveryWorker {
     handle: std::thread::JoinHandle<()>,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -107,13 +107,22 @@ struct DiscoveryWorker {
 
 static DISCOVERY: std::sync::Mutex<Option<DiscoveryWorker>> = std::sync::Mutex::new(None);
 
+/// Factories a worker is inside right now (by address). A provider can
+/// hang in `get_metadata`; a cancelled worker stuck in one is abandoned,
+/// never joined on the engine thread, and a newer worker skips its factory
+/// rather than call into it from a second thread.
+static BUSY_FACTORIES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// How long engine shutdown waits for the discovery worker before it
+/// abandons it (bundles are never unloaded, so an abandoned worker only
+/// ever touches live code; the process exits around it).
+pub const DISCOVERY_SHUTDOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Index the presets of every bundle with a `clap.preset-discovery-
 /// factory` on a worker thread (slice P8): never on the engine thread,
 /// which a slow provider walking a large preset folder would stall. Each
 /// plugin's list arrives as `AudioEvent::PluginPresetsDiscovered`; the
-/// index is cached under the cache dir (`preset-discovery/`). There is
-/// one worker: a scan while it runs waits for it to finish first (it is
-/// cancelled and joined), so two never index at once.
+/// index is cached under the cache dir (`preset-discovery/`).
 fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force: bool) {
     let jobs: Vec<_> = bundles
         .iter()
@@ -126,15 +135,31 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force:
     if jobs.is_empty() {
         return;
     }
+    spawn_discovery_jobs(
+        jobs,
+        event_tx,
+        force,
+        resonance_common::library_marks::default_cache_dir(),
+    );
+}
+
+/// [`spawn_discovery`] over given factories and cache dir (the test seam).
+/// A previous worker is cancelled and left to finish on its own — never
+/// joined here, on the engine thread, where a hung provider would wedge
+/// rescans.
+pub fn spawn_discovery_jobs(
+    jobs: Vec<(crate::clap_host::DiscoveryFactory, PathBuf, Vec<String>)>,
+    event_tx: &Sender<AudioEvent>,
+    force: bool,
+    cache_dir: Option<PathBuf>,
+) {
     let Ok(mut slot) = DISCOVERY.lock() else {
         return;
     };
     if let Some(previous) = slot.take() {
         previous.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = previous.handle.join();
     }
     let event_tx = event_tx.clone();
-    let cache_dir = resonance_common::library_marks::default_cache_dir();
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let worker_cancel = cancel.clone();
     let spawned = std::thread::Builder::new()
@@ -144,11 +169,24 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force:
                 if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
+                let key = factory.0 as usize;
+                {
+                    let Ok(mut busy) = BUSY_FACTORIES.lock() else {
+                        return;
+                    };
+                    if busy.contains(&key) {
+                        tracing::warn!(
+                            "preset discovery: {} is still busy in an earlier scan; skipped",
+                            binary.display()
+                        );
+                        continue;
+                    }
+                    busy.push(key);
+                }
                 // SAFETY: the factory pointer stays valid for the process
-                // (a bundle's library is never unloaded), and this worker
-                // is the only thread that calls into it or into the
-                // providers it creates — the previous worker was joined
-                // before this one started.
+                // (a bundle's library is never unloaded), and `BUSY_FACTORIES`
+                // makes this worker the only thread inside it (an abandoned
+                // worker still in it keeps it marked, and is skipped).
                 let found = unsafe {
                     crate::clap_host::discovery::discover(
                         factory.0,
@@ -159,6 +197,9 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force:
                         &worker_cancel,
                     )
                 };
+                if let Ok(mut busy) = BUSY_FACTORIES.lock() {
+                    busy.retain(|k| *k != key);
+                }
                 for (plugin_id, presets) in found {
                     let event = AudioEvent::PluginPresetsDiscovered { plugin_id, presets };
                     let _ = event_tx.send(event);
@@ -171,13 +212,24 @@ fn spawn_discovery(bundles: &[ClapBundle], event_tx: &Sender<AudioEvent>, force:
     }
 }
 
-/// Stop and join the discovery worker (engine shutdown).
-pub(crate) fn shutdown_discovery() {
+/// Stop the discovery worker (engine shutdown): cancel it, wait at most
+/// [`DISCOVERY_SHUTDOWN_WAIT`], then abandon it. Returns whether it ended.
+pub fn shutdown_discovery() -> bool {
     let worker = DISCOVERY.lock().ok().and_then(|mut s| s.take());
-    if let Some(worker) = worker {
-        worker.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        let _ = worker.handle.join();
+    let Some(worker) = worker else {
+        return true;
+    };
+    worker.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    let deadline = std::time::Instant::now() + DISCOVERY_SHUTDOWN_WAIT;
+    while !worker.handle.is_finished() {
+        if std::time::Instant::now() >= deadline {
+            tracing::warn!("preset discovery: a provider did not return; abandoning the worker");
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
+    let _ = worker.handle.join();
+    true
 }
 
 /// The directories a scan looks in, in priority order.

@@ -216,6 +216,55 @@ fn the_plugin_reports_its_preset_and_whether_it_was_edited() {
     drop(bundle);
 }
 
+/// The cost of a capture's full-state save on the worst case in the fleet
+/// (the wavetable with both user tables full: 2 × 256 × 2048 f32, ~5.6 MB
+/// of base64). The save runs through `StateSaveHandle` — outside the
+/// instance lock, which the audio thread's `try_lock` would otherwise find
+/// taken for the whole save — and this prints what it costs so the number
+/// is on record (review verification item 8).
+#[test]
+fn a_worst_case_capture_saves_outside_the_lock() {
+    use base64::Engine as _;
+    let Some(path) = plugin_binary("resonance-wavetable") else {
+        return;
+    };
+    let bundle = ClapBundle::load(&path).expect("the wavetable bundle should load");
+    let id = bundle.descriptors()[0].id.clone();
+    let mut instance = bundle.create_instance(&id, 48_000).expect("create_instance");
+    let frames: Vec<u8> = (0..256 * 2048)
+        .flat_map(|i| ((i as f32 * 0.001).sin()).to_le_bytes())
+        .collect();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&frames);
+    let slot = |name: &str| {
+        serde_json::json!({"path": "", "name": name, "frame_size": 2048, "frames": b64})
+    };
+    let state = serde_json::json!({
+        "version": 1,
+        "params": {},
+        "user_wavetables": {"osc1": slot("a"), "osc2": slot("b")},
+    });
+    assert!(instance.reload_with_state(&serde_json::to_vec(&state).unwrap()));
+
+    let started = std::time::Instant::now();
+    let handle = instance.state_save_handle().expect("a state extension");
+    let locked = started.elapsed();
+    let started = std::time::Instant::now();
+    // SAFETY: this thread is the instance's main thread; it outlives the call.
+    let saved = unsafe { handle.save() }.expect("a state");
+    let unlocked = started.elapsed();
+    eprintln!(
+        "wavetable worst-case capture: {} bytes, {:?} under the lock (handle), {:?} saving \
+         outside it",
+        saved.len(),
+        locked,
+        unlocked
+    );
+    assert!(saved.len() > 5_000_000, "both tables are in it");
+    assert!(locked < std::time::Duration::from_millis(1), "only the handle under the lock");
+    drop(instance);
+    drop(bundle);
+}
+
 // ---------------------------------------------------------------------------
 // The engine's handlers (review: engine-handler tests)
 // ---------------------------------------------------------------------------

@@ -58,6 +58,7 @@ opus = ["dep:opus", "dep:ogg"]
 test-internals = []
 
 [dev-dependencies]
+base64 = "0.22"
 # Turns on `test-internals` for this crate's own tests and benches. As a
 # dev-dependency, resolver 2 unifies the feature into test/bench builds
 # only — `cargo build` of this crate or of resonance-app never sees it.

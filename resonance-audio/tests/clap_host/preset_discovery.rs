@@ -28,6 +28,10 @@ static CREATED: AtomicU32 = AtomicU32::new(0);
 static FILES_READ: AtomicU32 = AtomicU32::new(0);
 /// What a `declare_location` made during `get_metadata` returned.
 static LATE_DECLARE_ACCEPTED: AtomicBool = AtomicBool::new(false);
+/// While set, `get_metadata` hangs (a provider that never returns);
+/// `ENTERED` says it got there.
+static BLOCK: AtomicBool = AtomicBool::new(false);
+static ENTERED: AtomicBool = AtomicBool::new(false);
 
 static DESC: clap_preset_discovery_provider_descriptor = clap_preset_discovery_provider_descriptor {
     clap_version: CLAP_VERSION,
@@ -121,6 +125,12 @@ unsafe extern "C" fn get_metadata(
     _location: *const c_char,
     r: *const clap_preset_discovery_metadata_receiver,
 ) -> bool {
+    if BLOCK.load(Ordering::SeqCst) {
+        ENTERED.store(true, Ordering::SeqCst);
+        while BLOCK.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
     unsafe {
         if kind == CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN {
             // A misbehaving provider declaring while it is being walked.
@@ -294,4 +304,44 @@ fn an_unnamed_plugin_is_not_everyone() {
     let found = f.discover(&["com.vendor.synth", "com.vendor.fx"], false);
     assert_eq!(names(&found[0].1), vec!["Deep Bass", "Glass Pad"]);
     assert!(found[1].1.is_empty());
+}
+
+/// A provider that hangs in `get_metadata` never wedges the engine
+/// thread: shutdown waits a bounded time and abandons the worker, and a
+/// new scan starts at once and skips the factory still in use
+/// (verification item 3).
+#[test]
+fn a_hung_provider_does_not_wedge_rescan_or_shutdown() {
+    use resonance_audio::test_support::{
+        shutdown_discovery, spawn_discovery_jobs, DiscoveryFactory, DISCOVERY_SHUTDOWN_WAIT,
+    };
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let f = Fixture::new("hang");
+    BLOCK.store(true, Ordering::SeqCst);
+    ENTERED.store(false, Ordering::SeqCst);
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let job = || {
+        vec![(
+            DiscoveryFactory(&FACTORY),
+            f.binary.clone(),
+            vec!["com.vendor.synth".to_string()],
+        )]
+    };
+    spawn_discovery_jobs(job(), &tx, true, Some(f.cache.clone()));
+    let waited = std::time::Instant::now();
+    while !ENTERED.load(Ordering::SeqCst) {
+        assert!(waited.elapsed() < std::time::Duration::from_secs(5), "the worker ran");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let t = std::time::Instant::now();
+    assert!(!shutdown_discovery(), "the hung worker is abandoned, not joined");
+    assert!(t.elapsed() < DISCOVERY_SHUTDOWN_WAIT + std::time::Duration::from_secs(1));
+
+    let t = std::time::Instant::now();
+    spawn_discovery_jobs(job(), &tx, true, Some(f.cache.clone()));
+    assert!(t.elapsed() < std::time::Duration::from_millis(500), "a rescan does not wait");
+    assert!(shutdown_discovery(), "the new worker skipped the busy factory and ended");
+
+    BLOCK.store(false, Ordering::SeqCst);
 }

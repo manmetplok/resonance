@@ -470,6 +470,12 @@ pub trait ResonancePlugin: Send + 'static {
     /// Reset all internal state (e.g. delay lines, filters).
     fn reset(&mut self);
 
+    /// The host deactivated the plugin (`clap_plugin.deactivate`); the next
+    /// [`initialize`](Self::initialize) comes with the next activation.
+    /// A plugin that starts work from a state load while active (the drums'
+    /// kit loader) uses it to leave that work to `initialize` instead.
+    fn deactivate(&mut self) {}
+
     /// Process a buffer of audio.
     ///
     /// `outputs` is a slice of stereo buffer pairs, one per declared output

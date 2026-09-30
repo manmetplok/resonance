@@ -531,7 +531,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
         };
         match next {
             Some(Ok(AudioCommand::ShutDown)) => {
-                super::scan::shutdown_discovery();
+                let _ = super::scan::shutdown_discovery();
                 break;
             }
             Some(Ok(cmd)) => {
@@ -546,7 +546,7 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                 }
             }
             Some(Err(crossbeam_channel::RecvError)) => {
-                super::scan::shutdown_discovery();
+                let _ = super::scan::shutdown_discovery();
                 break;
             }
             None => {}
