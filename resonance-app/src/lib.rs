@@ -598,10 +598,14 @@ impl Resonance {
                 last_arrangement_shift: None,
                 interaction: ClipInteractionState::default(),
                 mixer: MixerUiState::default(),
-                keymap: crate::commands::BindingMap::resonance_default(),
+                keymap: crate::update::keymap::resolve(&settings.keymap),
                 typing_probe: Default::default(),
                 palette: None,
                 palette_memory: String::new(),
+                keymap_editor: crate::update::keymap::KeymapEditorState {
+                    baseline: crate::update::keymap::preset_of(&settings.keymap).bindings(),
+                    ..Default::default()
+                },
             },
             banners: state::Banners::default(),
             master: state::MasterState {

@@ -75,4 +75,6 @@ pub struct UiTransientState {
     /// The query the palette closed with, restored (pre-selected) on the
     /// next open so "run it again" is ⌘K ↵.
     pub palette_memory: String,
+    /// The Settings overlay's tab and the Keyboard panel's state.
+    pub keymap_editor: crate::update::keymap::KeymapEditorState,
 }

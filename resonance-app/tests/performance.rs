@@ -17,6 +17,8 @@ mod common;
 mod command_palette;
 #[path = "performance/commands_registry.rs"]
 mod commands_registry;
+#[path = "performance/keymap_settings.rs"]
+mod keymap_settings;
 #[path = "performance/keycap_styles.rs"]
 mod keycap_styles;
 #[path = "performance/performance_beat_cue.rs"]

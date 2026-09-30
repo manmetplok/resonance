@@ -24,6 +24,7 @@ pub mod group;
 pub mod marker;
 pub mod marker_ui;
 pub mod import;
+pub mod keymap;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;

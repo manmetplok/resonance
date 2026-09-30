@@ -16,6 +16,12 @@ pub enum KeymapPreset {
     FlStudio,
 }
 
+impl std::fmt::Display for KeymapPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
 impl KeymapPreset {
     pub const ALL: [KeymapPreset; 5] = [
         KeymapPreset::Resonance,
@@ -24,6 +30,17 @@ impl KeymapPreset {
         KeymapPreset::ProTools,
         KeymapPreset::FlStudio,
     ];
+
+    /// Stable id for settings.json.
+    pub fn key(self) -> &'static str {
+        match self {
+            KeymapPreset::Resonance => "Resonance",
+            KeymapPreset::AbletonLive => "AbletonLive",
+            KeymapPreset::LogicPro => "LogicPro",
+            KeymapPreset::ProTools => "ProTools",
+            KeymapPreset::FlStudio => "FlStudio",
+        }
+    }
 
     pub fn display_name(self) -> &'static str {
         match self {

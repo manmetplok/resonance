@@ -96,6 +96,36 @@ pub struct AppSettings {
     pub audio: AudioSettings,
     /// Command-palette memory; absent on older files, defaulted.
     pub palette: PaletteSettings,
+    /// The keyboard preset and the user's rebindings; absent on older
+    /// files, defaulted to the Resonance keymap.
+    pub keymap: KeymapSettings,
+}
+
+/// The keymap (command-palette.md §8): a DAW preset plus overrides, replayed
+/// in order onto the preset's table.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeymapSettings {
+    /// `KeymapPreset::key()` of the base preset.
+    pub preset: String,
+    pub overrides: Vec<KeymapOverride>,
+}
+
+impl Default for KeymapSettings {
+    fn default() -> Self {
+        Self {
+            preset: "Resonance".to_string(),
+            overrides: Vec::new(),
+        }
+    }
+}
+
+/// One rebinding: `command` (a `CommandId::key()`) gets `chord` (the
+/// `KeyChord::format_tokens` text form), or no chord at all when `None`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeymapOverride {
+    pub command: String,
+    pub chord: Option<String>,
 }
 
 /// What the command palette remembers between sessions

@@ -75,7 +75,8 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         // when it re-enters `update()`.
         | Message::Ui(UiMessage::OpenPalette(_))
         | Message::Ui(UiMessage::ClosePalette)
-        | Message::Ui(UiMessage::Palette(_)) => false,
+        | Message::Ui(UiMessage::Palette(_))
+        | Message::Ui(UiMessage::Keymap(_)) => false,
         // Benign UI: allow.
         Message::Ui(UiMessage::CloseSettings)
         | Message::Ui(UiMessage::CloseAddTrackMenu)

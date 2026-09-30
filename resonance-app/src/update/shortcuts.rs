@@ -81,6 +81,10 @@ pub(crate) fn handle_key(
     repeat: bool,
     captured: bool,
 ) -> Task<Message> {
+    // A Keyboard-panel rebind listening for its chord takes every key.
+    if let Some(task) = crate::update::keymap::key(r, chord, repeat) {
+        return task;
+    }
     // The open palette takes Esc, ↑/↓ and ↵ first — Esc even though its
     // query field captured it.
     if r.ui.palette.is_some() {

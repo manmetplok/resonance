@@ -30,6 +30,12 @@ impl Resonance {
         self.midi_clips.iter().map(|c| c.id).collect()
     }
 
+    /// Test-only: the Keyboard panel's state.
+    #[doc(hidden)]
+    pub fn test_keymap_editor(&self) -> &crate::update::keymap::KeymapEditorState {
+        &self.ui.keymap_editor
+    }
+
     /// Test-only: the active keymap.
     #[doc(hidden)]
     pub fn test_keymap(&self) -> &crate::commands::BindingMap {

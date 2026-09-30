@@ -1,7 +1,7 @@
 # Command palette, keyboard shortcuts and transport control commands
 
-Status: **building** on `feat/command-palette` (2026-09-30), one phase per
-slice (§9). The open decisions in §11 were never answered, so the build
+Status: **built** on `feat/command-palette` (2026-09-30), P0–P5, one
+phase per slice (§9). The open decisions in §11 were never answered, so the build
 takes the **recommended** option for each (D1–D7). Where the code and this
 spec disagreed, the build followed the code and this document was corrected
 to match; those notes are marked *(as built)*.
@@ -15,6 +15,11 @@ to match; those notes are marked *(as built)*.
   keymap, and the canvas-scoped entries (the four canvases now read their
   keys from the keymap).
 - **P4 landed.** `:` `@` `#` `+` argument modes and ⌘J.
+- **P5 landed.** Tooltips (transport buttons, view tabs, Import, Settings),
+  the track-menu hints and the Performance footer read the registry; the
+  keymap lives in `settings.json`; Settings has a General / Keyboard nav
+  rail with preset, filter, Rebind (press the chord), conflict banner,
+  Reset and Reset all; the DAW presets ship (D5).
 
 ## 0. Why
 
@@ -476,6 +481,15 @@ start.
   The Settings view first needs a nav rail (it is a single column today).
   The DAW presets in `commands.rs` stay in the code, unexposed, until then
   (D5).
+- *(As built:)* the command id is the variant name (`CommandId::key()`,
+  e.g. `"TransportTogglePlay"`, landed in P2 for recents), not a dotted
+  path. Overrides are `{command, chord: Option<tokens>}` replayed in order
+  onto the preset (`None` unbinds); a rebind whose chord belongs to
+  another command asks first and names the owner, and confirming takes the
+  chord from it. A bare chord is typing-gated regardless of the command, so
+  a preset or override can't put an ungated letter on a command. The
+  Performance footer's exit hint now reads `Esc` (the registry's keycap)
+  instead of `⎋`, and the track menu reads `Ctrl+F` on Linux.
 
 ## 9. Build plan (vertical slices)
 

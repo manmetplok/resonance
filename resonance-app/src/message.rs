@@ -459,6 +459,8 @@ pub enum UiMessage {
     ClosePalette,
     /// Command-palette interaction.
     Palette(crate::palette::PaletteMsg),
+    /// Preferences › Keyboard: the settings tab, preset and rebinding.
+    Keymap(crate::update::keymap::KeymapMsg),
 }
 
 impl UiMessage {
@@ -519,7 +521,9 @@ impl UiMessage {
             // re-enters `update()` and is classified on its own.
             | Self::OpenPalette(..)
             | Self::ClosePalette
-            | Self::Palette(..) => UndoAction::Skip,
+            | Self::Palette(..)
+            // Keymap edits are user settings, not project state.
+            | Self::Keymap(..) => UndoAction::Skip,
         }
     }
 }

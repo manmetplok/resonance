@@ -34,6 +34,8 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::CloseSettings => {
             r.ui.mixer.settings_open = false;
+            r.ui.keymap_editor.capturing = None;
+            r.ui.keymap_editor.conflict = None;
         }
         UiMessage::OpenAddTrackMenu => {
             r.ui.mixer.add_track_menu_open = true;
@@ -252,6 +254,9 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::Palette(msg) => {
             return crate::update::palette::handle(r, msg);
+        }
+        UiMessage::Keymap(msg) => {
+            return crate::update::keymap::handle(r, msg);
         }
         UiMessage::DismissOverlay => {
             return crate::update::shortcuts::dismiss_overlay(r);
