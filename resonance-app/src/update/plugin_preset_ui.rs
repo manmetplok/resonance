@@ -127,19 +127,35 @@ pub fn handle(r: &mut Resonance, m: PresetUiMessage) -> Task<Message> {
             r.presets.media_presets = list;
         }
         PresetUiMessage::MediaSelect(index) => {
+            if index < r.presets.media_presets.rows.len() {
+                r.presets.media_presets.selected = Some(index);
+            }
+        }
+        PresetUiMessage::MediaPress(index) => {
             if let Some(row) = r.presets.media_presets.rows.get(index).cloned() {
                 r.presets.media_presets.selected = Some(index);
-                // A press on a row also arms a drag onto a track header.
-                r.presets.dragging = Some(row);
-                r.presets.drag_over = None;
+                r.presets.dragging = Some(crate::state::presets::PresetDrag {
+                    row,
+                    origin: None,
+                    moved: false,
+                });
             }
         }
-        PresetUiMessage::DragOver(track) => {
-            if r.presets.dragging.is_some() {
-                r.presets.drag_over = track;
+        PresetUiMessage::DragMoved(at) => {
+            if let Some(drag) = r.presets.dragging.as_mut() {
+                match drag.origin {
+                    None => drag.origin = Some(at),
+                    Some(o) => {
+                        let (dx, dy) = (at.x - o.x, at.y - o.y);
+                        if (dx * dx + dy * dy).sqrt() > crate::state::presets::PresetDrag::THRESHOLD {
+                            drag.moved = true;
+                        }
+                    }
+                }
             }
         }
-        PresetUiMessage::DragEnd => return drag_end(r),
+        PresetUiMessage::DropOnTrack(track_id) => return drop_on_track(r, track_id),
+        PresetUiMessage::DragEnd => r.presets.dragging = None,
         PresetUiMessage::MediaLoad(index) => return media_load(r, index),
         PresetUiMessage::MediaToggleRowFavorite(index) => {
             if let Some(row) = r.presets.media_presets.rows.get(index).cloned() {
@@ -502,11 +518,10 @@ fn media_load(r: &mut Resonance, index: usize) -> Task<Message> {
     recorded_load(r, instance_id, &row.plugin_id, &row.id, row.source)
 }
 
-fn drag_end(r: &mut Resonance) -> Task<Message> {
-    let (Some(row), Some(track_id)) = (r.presets.dragging.take(), r.presets.drag_over.take())
-    else {
+fn drop_on_track(r: &mut Resonance, track_id: resonance_audio::types::TrackId) -> Task<Message> {
+    // Only a real drag drops: a press released without moving is a click.
+    let Some(row) = r.presets.dragging.take().filter(|d| d.moved).map(|d| d.row) else {
         r.presets.dragging = None;
-        r.presets.drag_over = None;
         return Task::none();
     };
     let Some(plugin) = r

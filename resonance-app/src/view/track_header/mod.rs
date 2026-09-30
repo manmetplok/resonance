@@ -432,21 +432,17 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                     }
                     let header = track::view_track_header(r, track, is_selected, (menu_x, menu_y));
                     // While a preset is dragged from the media browser, a
-                    // header is a drop target: it reports the pointer over
-                    // it, and the release (a window-level listener) adds
-                    // the plugin with that preset here (slice P8).
+                    // release over a header drops it there (slice P8). The
+                    // wrapper is always present so arming a drag keeps the
+                    // tree's shape; it only listens while armed.
+                    let area = iced::widget::mouse_area(header);
                     let header: Element<'static, Message> = if r.presets.dragging.is_some() {
-                        let track_id = track.id;
-                        iced::widget::mouse_area(header)
-                            .on_enter(Message::Plugin(PluginMessage::PresetUi(
-                                PresetUiMessage::DragOver(Some(track_id)),
-                            )))
-                            .on_exit(Message::Plugin(PluginMessage::PresetUi(
-                                PresetUiMessage::DragOver(None),
-                            )))
-                            .into()
+                        area.on_release(Message::Plugin(PluginMessage::PresetUi(
+                            PresetUiMessage::DropOnTrack(track.id),
+                        )))
+                        .into()
                     } else {
-                        header
+                        area.into()
                     };
                     lane_col = lane_col.push(header);
                 }

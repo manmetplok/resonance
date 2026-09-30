@@ -351,37 +351,19 @@ fn discovered_presets_are_listed_and_load_through_the_plugin() {
     );
 }
 
-/// Pressing a Presets-tab row arms a drag; releasing over a track header
-/// adds the plugin there with that preset; releasing anywhere else only
-/// cancels.
+/// Selecting a row (keyboard, programmatic) is not arming a drag: only a
+/// real press on the row does (the widget tests in `io::preset_tab_widgets`
+/// drive the press and the drag).
 #[test]
-fn a_preset_dragged_onto_a_track_adds_the_plugin_with_it() {
+fn selecting_a_row_does_not_arm_a_drag() {
     let mut app = app();
     ui(&mut app, PresetUiMessage::MediaSearch("bright".into()));
     ui(&mut app, PresetUiMessage::MediaSelect(0));
-    assert!(app.test_presets().dragging.is_some());
-    ui(&mut app, PresetUiMessage::DragEnd);
-    assert!(app.test_presets().dragging.is_none(), "a plain click cancels");
-    assert_eq!(app.test_registry().tracks[0].plugins.len(), 1);
-
-    let next = app.test_next_plugin_id();
-    ui(&mut app, PresetUiMessage::MediaSelect(0));
-    ui(&mut app, PresetUiMessage::DragOver(Some(TRACK)));
-    ui(&mut app, PresetUiMessage::DragEnd);
-    assert_eq!(app.test_registry().tracks[0].plugins.len(), 2, "added to the chain");
-    app.test_apply_engine_event(AudioEvent::PluginAdded {
-        track_id: TRACK,
-        instance_id: next,
-        plugin_name: "Test EQ".to_owned(),
-        clap_plugin_id: PLUGIN_ID.to_owned(),
-        clap_file_path: "/nonexistent/test-eq.clap".to_owned(),
-        params: params(),
-        has_gui: false,
-        has_sidechain_input: false,
-        output_port_count: 1,
-        output_port_names: Vec::new(),
-    });
-    assert_eq!(app.test_plugin_param(next, clap_id("gain")), Some(7.0));
+    assert_eq!(app.test_presets().media_presets.selected, Some(0));
+    assert!(app.test_presets().dragging.is_none());
+    ui(&mut app, PresetUiMessage::MediaPress(0));
+    ui(&mut app, PresetUiMessage::DropOnTrack(TRACK));
+    assert_eq!(app.test_registry().tracks[0].plugins.len(), 1, "no movement, no drop");
 }
 
 // ---------------------------------------------------------------------------

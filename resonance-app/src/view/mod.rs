@@ -56,9 +56,23 @@ use iced::{alignment, Element, Length};
 impl crate::Resonance {
     pub fn view(&self) -> Element<'_, Message> {
         let base = self.view_base();
-        match self.view_root_overlay() {
+        let root: Element<'_, Message> = match self.view_root_overlay() {
             Some(overlay) => stack![base, overlay].into(),
             None => base,
+        };
+        // A preset drag from the media browser (slice P8) follows the
+        // pointer and ends on any release. The wrapper is always there so
+        // arming a drag never changes the tree's shape (which would reset
+        // every scroll offset and focus); it only listens while armed.
+        let area = iced::widget::mouse_area(root);
+        if self.presets.dragging.is_some() {
+            area.on_move(|at| {
+                Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragMoved(at)))
+            })
+            .on_release(Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd)))
+            .into()
+        } else {
+            area.into()
         }
     }
 

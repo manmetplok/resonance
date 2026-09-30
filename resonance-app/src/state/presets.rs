@@ -36,6 +36,22 @@ pub struct HostPresetRow {
     pub favorite: bool,
 }
 
+/// A press on a Presets-tab row. It is a drag only once the pointer has
+/// moved past [`PresetDrag::THRESHOLD`]; a release before that is a click
+/// and disarms it without dropping anything.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresetDrag {
+    pub row: HostPresetRow,
+    /// Where the pointer was first seen after the press.
+    pub origin: Option<iced::Point>,
+    pub moved: bool,
+}
+
+impl PresetDrag {
+    /// Pointer travel, in logical pixels, that turns a press into a drag.
+    pub const THRESHOLD: f32 = 4.0;
+}
+
 /// A host preset list: its query and the rows it matched, recomputed in
 /// `update` (never per frame) whenever the query or the library changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -124,10 +140,9 @@ pub struct PresetState {
     /// What each plugin's preset-discovery factory listed (slice P8), by
     /// CLAP id; registered with the library as read-only factory presets.
     pub discovered: std::collections::HashMap<String, Vec<resonance_audio::types::DiscoveredPreset>>,
-    /// The preset being dragged from the media browser's Presets tab onto
-    /// a track (slice P8), and the track header under the pointer.
-    pub dragging: Option<HostPresetRow>,
-    pub drag_over: Option<resonance_audio::types::TrackId>,
+    /// A press on a Presets-tab row, which becomes a drag onto a track
+    /// header once the pointer moves (slice P8).
+    pub dragging: Option<PresetDrag>,
     /// The preset browser over one plugin, when open (a root overlay).
     pub host_browser: Option<HostPresetBrowser>,
     /// The media browser's Presets tab.

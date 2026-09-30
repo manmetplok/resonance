@@ -148,11 +148,14 @@ pub enum PresetUiMessage {
     /// Load the row onto the selected plugin slot (same plugin only).
     MediaLoad(usize),
     MediaToggleRowFavorite(usize),
-    /// The pointer entered (`Some`) or left (`None`) a track header while
-    /// a preset is dragged from the media browser.
-    DragOver(Option<TrackId>),
-    /// The mouse button was released anywhere while a preset drag was
-    /// armed: drop it on the header under the pointer, or cancel.
+    /// A press on a Presets-tab row: selects it and arms a drag.
+    MediaPress(usize),
+    /// The pointer moved (window coordinates) while a drag is armed.
+    DragMoved(iced::Point),
+    /// Released over a track header while a drag is armed: add the plugin
+    /// there with the preset, if the pointer really moved.
+    DropOnTrack(TrackId),
+    /// Released anywhere while a drag is armed: disarm (after any drop).
     DragEnd,
     /// "with preset…" in an add picker: add the plugin, then load the
     /// preset onto it once it exists.

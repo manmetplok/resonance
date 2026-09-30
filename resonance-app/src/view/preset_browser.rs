@@ -129,15 +129,39 @@ fn preset_row<'a>(
         .on_press(on_star)
         .style(|_theme, status| theme::ghost_button_style(status))
         .padding([2, 4]);
-    let body = button(label)
-        .on_press(on_click)
+    // A container, not a button: a button captures the press, and the
+    // mouse area's double-click would then never see it.
+    let body = container(label)
         .width(Length::Fill)
         .padding([4, 8])
-        .style(move |_theme, status| crate::view::browser::row_button_style(selected, status));
-    row![mouse_area(body).on_double_click(on_double), star]
+        .style(move |_theme| row_style(selected));
+    let body = mouse_area(body)
+        .on_press(on_click)
+        .on_double_click(on_double)
+        .interaction(iced::mouse::Interaction::Pointer);
+    row![body, star]
         .spacing(4)
         .align_y(alignment::Vertical::Center)
         .into()
+}
+
+/// A preset row's card: the Files tab's row look, WARM when selected.
+fn row_style(selected: bool) -> container::Style {
+    let (bg, border) = if selected {
+        (theme::WARM_DIM, theme::WARM_LINE)
+    } else {
+        (theme::BG_3, theme::LINE_2)
+    };
+    container::Style {
+        background: Some(iced::Background::Color(bg)),
+        text_color: Some(theme::TEXT_1),
+        border: iced::Border {
+            color: border,
+            width: 1.0,
+            radius: theme::RADIUS_SM.into(),
+        },
+        ..Default::default()
+    }
 }
 
 fn search_row<'a>(
@@ -318,7 +342,7 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
             row_data,
             list.selected == Some(i),
             list.plugin.is_none(),
-            ui(PresetUiMessage::MediaSelect(i)),
+            ui(PresetUiMessage::MediaPress(i)),
             ui(PresetUiMessage::MediaLoad(i)),
             ui(PresetUiMessage::MediaToggleRowFavorite(i)),
         ));
