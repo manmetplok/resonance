@@ -15,7 +15,8 @@ use resonance_app::state::ViewMode;
 use resonance_app::Resonance;
 use resonance_common::library_marks::{self, MarksStore};
 use resonance_common::nam_library;
-use resonance_control::methods::amp_models::{AmpModelList, AmpModelSource};
+use resonance_control::methods::amp_models::{AmpModelEntry, AmpModelList, AmpModelSource};
+use resonance_control::ErrorKind;
 
 use crate::common::call;
 
@@ -117,5 +118,56 @@ fn amp_models_list_and_marks_need_no_project_and_touch_no_revision() {
     let only = list(&mut app, serde_json::json!({ "favorites_only": true }));
     assert_eq!(only.models.len(), 1);
 
-    assert_eq!(app.revision(), revision, "reading the library is not a project edit");
+    // -- amp_models.set_marks --------------------------------------------
+    let lstm_id = all.models[1].id.clone();
+    let updated: AmpModelEntry = call(
+        &mut app,
+        "amp_models.set_marks",
+        serde_json::json!({ "id": &lstm_id[..10], "favorite": true, "tags": ["Clean Lead", "lstm"] }),
+    )
+    .result()
+    .expect("a unique id prefix addresses the model");
+    assert_eq!(updated.id, lstm_id);
+    assert!(updated.favorite);
+    assert_eq!(updated.tags, vec!["clean-lead", "lstm"], "tags are normalised");
+    // The plugin's store sees it: same file, same key.
+    let store = MarksStore::open(marks_dir).unwrap();
+    let marks = store.marks(&nam_library::mark_key(&lstm_id));
+    assert!(marks.favorite);
+    assert_eq!(marks.tags, vec!["clean-lead", "lstm"]);
+    assert_eq!(
+        names(&list(&mut app, serde_json::json!({ "query": "tag:clean-lead" }))),
+        vec!["Test LSTM"]
+    );
+
+    // Tags replace; favorite alone leaves tags alone.
+    let cleared: AmpModelEntry = call(
+        &mut app,
+        "amp_models.set_marks",
+        serde_json::json!({ "id": lstm_id, "tags": [] }),
+    )
+    .result()
+    .unwrap();
+    assert!(cleared.tags.is_empty());
+    assert!(cleared.favorite, "not mentioned, not changed");
+
+    let error = call(&mut app, "amp_models.set_marks", serde_json::json!({ "id": lstm_id }))
+        .error
+        .expect("nothing to set is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    let error = call(
+        &mut app,
+        "amp_models.set_marks",
+        serde_json::json!({ "id": "ffffffffffff", "favorite": true }),
+    )
+    .error
+    .expect("an unknown id is refused");
+    assert_eq!(error.kind(), ErrorKind::NotFound);
+
+    assert_eq!(
+        app.revision(),
+        revision,
+        "the library and its marks are the user's, not the project's: no revision bump \
+         (and so no undo entry, which is one per revision)"
+    );
 }

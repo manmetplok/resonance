@@ -16,8 +16,13 @@ use serde::{Deserialize, Serialize};
 /// [`AmpModelList`]). Read-only.
 pub const LIST: &str = "amp_models.list";
 
+/// `amp_models.set_marks` — favourite or tag one model ([`SetMarksParams`]
+/// -> [`AmpModelEntry`]). Per-user state, not the project: no undo entry,
+/// no `revision` bump.
+pub const SET_MARKS: &str = "amp_models.set_marks";
+
 /// All `amp_models.*` method names — what `control.hello` advertises.
-pub const METHODS: &[&str] = &[LIST];
+pub const METHODS: &[&str] = &[LIST, SET_MARKS];
 
 /// Params for `amp_models.list`. Every filter is optional and they AND.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +104,22 @@ pub struct AmpModelEntry {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+}
+
+/// Params for `amp_models.set_marks`. At least one of `favorite` / `tags`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetMarksParams {
+    /// The model's content id from `amp_models.list` (a unique prefix of
+    /// at least 8 characters also works).
+    pub id: String,
+    /// Star or un-star it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
+    /// REPLACE its personal tags (normalised to lowercase `a-z0-9-`); `[]`
+    /// clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
 }
 
 /// Result of `amp_models.list`.

@@ -42,4 +42,30 @@ impl ResonanceMcp {
     ) -> Result<CallToolResult, McpError> {
         self.invoke_structured(amp_models::LIST, &params).await
     }
+
+    #[tool(
+        description = "Star or tag one installed NAM amp model: favorite (true/false) and/or \
+                       tags (REPLACES its personal tags; [] clears them; normalised to \
+                       lowercase a-z0-9-). id is the model's id from amp_models_list (a \
+                       unique prefix of 8+ characters works). Returns the updated model. \
+                       \
+                       This is the user's own per-machine state, shared with the amp's \
+                       Library panel — NOT a project edit: it records no undo entry \
+                       (edit_undo does not take it back) and does not bump the project \
+                       revision. Favourites sort first in amp_models_list and in the amp's \
+                       ◀/▶ stepping.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        ),
+        output_schema = schema_for_output::<amp_models::AmpModelEntry>()
+    )]
+    async fn amp_models_set_marks(
+        &self,
+        Parameters(params): Parameters<amp_models::SetMarksParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke_structured(amp_models::SET_MARKS, &params).await
+    }
 }

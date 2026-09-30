@@ -12,7 +12,7 @@
 use resonance_common::library_marks::{Marks, MarksStore};
 use resonance_common::nam_library::{self, Entry, EntryStatus, Library, Source};
 use resonance_control::methods::amp_models::{self, AmpModelEntry, AmpModelList, AmpModelSource};
-use resonance_control::{Request, Response};
+use resonance_control::{Request, Response, RpcError};
 use resonance_plugin::library_view::{BrowserModel, LibraryRows};
 
 use super::reply::{failure, success};
@@ -22,6 +22,7 @@ use crate::Resonance;
 pub(super) fn try_handle(_app: &mut Resonance, request: &Request) -> Option<Response> {
     match request.method.as_str() {
         amp_models::LIST => Some(list(request)),
+        amp_models::SET_MARKS => Some(set_marks(request)),
         _ => None,
     }
 }
@@ -181,4 +182,72 @@ fn list(request: &Request) -> Response {
         total: lib.len(),
     };
     success(request, &result)
+}
+
+/// The canonical entry of `id`: an exact content id, or a unique prefix of
+/// at least 8 hex digits.
+fn find_entry<'a>(lib: &'a Library, id: &str) -> Result<&'a Entry, RpcError> {
+    let id = id.trim().to_ascii_lowercase();
+    if let Some(e) = lib.entry(&id) {
+        return Ok(e);
+    }
+    if id.len() >= 8 {
+        let mut hits = lib
+            .entries()
+            .iter()
+            .filter(|e| !matches!(e.status, EntryStatus::DuplicateOf(_)) && e.id.starts_with(&id));
+        match (hits.next(), hits.next()) {
+            (Some(e), None) => return Ok(e),
+            (Some(_), Some(_)) => {
+                return Err(RpcError::invalid_params(format!(
+                    "id prefix {id:?} matches more than one model; send more of the id"
+                )))
+            }
+            _ => {}
+        }
+    }
+    Err(RpcError::not_found(format!(
+        "no installed amp model with id {id:?}; amp_models_list reports the ids"
+    )))
+}
+
+/// `amp_models.set_marks` — star and/or re-tag one model in the shared
+/// marks store (the same store, key and lock the amp's Library panel
+/// uses). Per-user state: no undo entry, no `revision` bump.
+fn set_marks(request: &Request) -> Response {
+    let params: amp_models::SetMarksParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return failure(request, e),
+    };
+    if params.favorite.is_none() && params.tags.is_none() {
+        return failure(
+            request,
+            RpcError::invalid_params("nothing to set: pass favorite and/or tags"),
+        );
+    }
+    let lib = open_library();
+    let entry = match find_entry(&lib, &params.id) {
+        Ok(e) => e.clone(),
+        Err(e) => return failure(request, e),
+    };
+    let mut store = open_marks();
+    let tags = params
+        .tags
+        .as_ref()
+        .map(|t| resonance_common::library_marks::normalize_tags(t));
+    let updated = store.update(&entry.mark_key(), |m| {
+        if let Some(f) = params.favorite {
+            m.favorite = f;
+        }
+        if let Some(t) = tags {
+            m.tags = t;
+        }
+    });
+    match updated {
+        Ok(marks) => success(request, &wire_entry(&entry, Some(&marks))),
+        Err(e) => failure(
+            request,
+            RpcError::internal(format!("could not save the marks: {e}")),
+        ),
+    }
 }
