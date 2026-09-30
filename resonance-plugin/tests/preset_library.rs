@@ -787,3 +787,44 @@ fn a_static_factory_bank_registers_with_its_ids() {
     let bank = PresetBank::new(PLUGIN, BANK).with_library(root.library());
     assert_eq!(bank.list(), vec![PresetRef::factory("only", "Only")]);
 }
+
+// ---------------------------------------------------------------------------
+// Third-party (opaque) presets — slice P7
+// ---------------------------------------------------------------------------
+
+/// Not UTF-8, not JSON: what a third-party plugin's `clap.state` looks like.
+const OPAQUE: &[u8] = &[0x00, 0xff, 0xfe, 0x80, b'V', b'S', b'T', 0x01, 0xc3, 0x28];
+
+/// A blob preset is a `clap-state` file with base64 bytes and no doc; it
+/// is listed, read back byte-exact, duplicated and exported/imported like
+/// any other, and never offers a state document.
+#[test]
+fn an_opaque_state_round_trips_as_a_clap_state_preset() {
+    let root = TempRoot::new("blob");
+    let bank = PresetBank::new(PLUGIN, &[])
+        .with_root(root.0.clone())
+        .with_plugin_info("Vendor Synth", "2.1");
+    let saved = bank
+        .write_user_blob_with("Glass", OPAQUE, SaveOptions::default())
+        .expect("save a blob");
+    assert_eq!(bank.blob_for(&saved).as_deref(), Some(OPAQUE));
+    assert_eq!(bank.json_for(&saved), None, "no document to parse");
+
+    let files = files_in(&root.dir());
+    assert_eq!(files.len(), 1, "{files:?}");
+    let text = std::fs::read_to_string(root.dir().join(&files[0])).unwrap();
+    let file = PresetFile::parse(&text).expect("a format-1 file");
+    assert_eq!(file.state.encoding, "clap-state");
+    assert!(file.state.doc.is_none());
+    assert_eq!(file.plugin.version.as_deref(), Some("2.1"));
+
+    let copy = bank.duplicate(&saved).expect("duplicate");
+    assert_eq!(bank.blob_for(&copy).as_deref(), Some(OPAQUE));
+
+    let out = root.0.join("export.json");
+    bank.library()
+        .export(PLUGIN, &saved, file.plugin.clone(), &out)
+        .expect("export");
+    let (imported, _) = bank.library().import(PLUGIN, &out, &[]).expect("import");
+    assert_eq!(bank.blob_for(&imported.preset).as_deref(), Some(OPAQUE));
+}

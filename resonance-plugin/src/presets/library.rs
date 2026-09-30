@@ -115,6 +115,9 @@ pub struct SaveRequest {
     /// addresses. It keeps its id and takes `name`; refused if it does not
     /// exist or another user preset already has `name`.
     pub target: Option<String>,
+    /// A third-party plugin's opaque state instead of `doc` (§8 tier T0):
+    /// stored as `state.encoding = "clap-state"`; `doc` is then ignored.
+    pub blob: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,6 +415,17 @@ impl PresetLibrary {
         }
     }
 
+    /// The opaque state behind a blob-encoded (third-party) user preset.
+    /// `None` for a document preset, or when it is gone or unreadable.
+    pub fn state_blob(&self, plugin_id: &str, preset: &PresetRef) -> Option<Vec<u8>> {
+        let record = self.record(plugin_id, preset)?;
+        let path = record.path.as_ref()?;
+        let file = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|t| PresetFile::parse(&t).ok())?;
+        file.state.blob_bytes()
+    }
+
     /// The rows of `plugin_ids` (every plugin this library knows when
     /// empty), with marks fresh from the store: what a browser and
     /// `presets.search` read.
@@ -584,7 +598,10 @@ impl PresetLibrary {
                 (id, meta, None)
             }
         };
-        let file = PresetFile::new(id, plugin, meta.normalized(), doc);
+        let mut file = PresetFile::new(id, plugin, meta.normalized(), doc);
+        if let Some(blob) = &request.blob {
+            file.state = format::PresetState::clap_blob(blob);
+        }
         let path = dir.join(files::preset_file_name(&name, &file.id));
         if let Some(old) = &old_path {
             files::move_before_rewrite(old, &path)?;
@@ -717,10 +734,14 @@ impl PresetLibrary {
         let record = self
             .record(plugin_id, preset)
             .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
-        let doc: serde_json::Value = self
-            .state_json(plugin_id, preset)
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?;
+        let blob = self.state_blob(plugin_id, preset);
+        let doc: serde_json::Value = match &blob {
+            Some(_) => serde_json::Value::Null,
+            None => self
+                .state_json(plugin_id, preset)
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?,
+        };
         let name = self.unique_name(plugin_id, &format!("{} copy", record.meta.name));
         self.save(
             plugin_id,
@@ -732,6 +753,7 @@ impl PresetLibrary {
                 plugin,
                 id: None,
                 target: None,
+                blob,
             },
         )
     }
@@ -762,11 +784,15 @@ impl PresetLibrary {
         if !file.plugin.id.is_empty() && file.plugin.id != plugin_id {
             return Err(format!("That preset is for {}, not this plugin", file.plugin.id));
         }
-        let doc = file.state.doc.clone().ok_or("the preset carries no state document")?;
-        let names_ours = doc
-            .get("params")
-            .and_then(|p| p.as_object())
-            .is_some_and(|p| {
+        // A third-party blob is opaque: its plugin id is the only check.
+        let blob = file.state.blob_bytes();
+        let doc = match &blob {
+            Some(_) if !file.plugin.id.is_empty() => serde_json::Value::Null,
+            Some(_) => return Err("That preset names no plugin".to_string()),
+            None => file.state.doc.clone().ok_or("the preset carries no state document")?,
+        };
+        let names_ours = blob.is_some()
+            || doc.get("params").and_then(|p| p.as_object()).is_some_and(|p| {
                 param_ids.is_empty() || p.keys().any(|k| param_ids.contains(&k.as_str()))
             });
         if !names_ours {
@@ -790,6 +816,7 @@ impl PresetLibrary {
                 plugin: file.plugin.clone(),
                 id: (!clash).then(|| file.id.clone()),
                 target: None,
+                blob,
             },
         )?;
         Ok((saved, clash))
@@ -807,13 +834,20 @@ impl PresetLibrary {
         let record = self
             .record(plugin_id, preset)
             .ok_or_else(|| format!("No preset named '{}'", preset.name))?;
-        let doc: serde_json::Value = self
-            .state_json(plugin_id, preset)
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?;
+        let blob = self.state_blob(plugin_id, preset);
+        let doc: serde_json::Value = match &blob {
+            Some(_) => serde_json::Value::Null,
+            None => self
+                .state_json(plugin_id, preset)
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .ok_or_else(|| format!("Preset '{}' is unreadable", preset.name))?,
+        };
         let mut info = plugin;
         info.id = plugin_id.to_string();
-        let file = PresetFile::new(record.preset.id.clone(), info, record.meta.clone(), doc);
+        let mut file = PresetFile::new(record.preset.id.clone(), info, record.meta.clone(), doc);
+        if let Some(blob) = &blob {
+            file.state = format::PresetState::clap_blob(blob);
+        }
         files::atomic_write(path, file.to_text()?.as_bytes())
     }
 

@@ -346,9 +346,17 @@ pub(crate) fn load_request(
     let (bank, found) = find(app, clap_id, args.preset, args.preset_id, args.source)?;
     let mut message = load_message_for(&bank, &found, instance_id, params)?;
     if !args.extra {
-        if let Message::Plugin(PluginMessage::LoadPluginPreset { preset_state, .. }) = &mut message
+        // An opaque (third-party) preset has no params to recall on their
+        // own: `extra: false` cannot split it, so it loads whole.
+        if let Message::Plugin(PluginMessage::LoadPluginPreset {
+            preset_state,
+            values,
+            ..
+        }) = &mut message
         {
-            *preset_state = None;
+            if !values.is_empty() {
+                *preset_state = None;
+            }
         }
     }
     if let Err(e) = bank.library().record_use(clap_id, &found.id) {
@@ -369,6 +377,18 @@ pub(crate) fn load_message_for(
     params: &[PluginParamView],
 ) -> Result<Message, RpcError> {
     let preset = found.name.as_str();
+    // A third-party preset is opaque: the whole thing goes to the plugin
+    // and the mirror follows the engine's refresh (§8 tier T0).
+    if let Some(blob) = bank.blob_for(found) {
+        return Ok(Message::Plugin(PluginMessage::LoadPluginPreset {
+            instance_id,
+            values: Vec::new(),
+            preset_name: found.name.clone(),
+            preset_state: Some(blob),
+            preset_id: found.id.clone(),
+            preset_source: wire_source(found.source),
+        }));
+    }
     let json = bank
         .json_for(found)
         .ok_or_else(|| RpcError::not_found(format!("preset {preset:?} is gone")))?;
@@ -557,30 +577,39 @@ pub(crate) fn apply_meta_input(meta: &mut PresetMeta, input: &PresetMetaInput) {
 /// Called when the engine's `PluginPresetStateSaved` echo lands: the
 /// plugin is the only thing that knows its current sound (edits made in
 /// its own window never reach the app's mirror).
+/// `blob` as a first-party state document, when it is one.
+fn resonance_document(blob: &[u8]) -> Option<serde_json::Value> {
+    let document: serde_json::Value = serde_json::from_slice(blob).ok()?;
+    document
+        .get("params")
+        .is_some_and(|p| p.is_object())
+        .then_some(document)
+}
+
 pub(crate) fn write_saved_state(
     app: &Resonance,
     pending: &crate::PendingPluginPresetSave,
     blob: &[u8],
 ) -> Result<PresetRecord, String> {
-    let text = std::str::from_utf8(blob).map_err(|e| format!("plugin state is not utf-8: {e}"))?;
-    let document: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("plugin state is not JSON: {e}"))?;
     let bank = bank_for(app, &pending.clap_id);
     let meta = pending.meta.as_ref().map(|input| {
         let mut meta = PresetMeta::default();
         apply_meta_input(&mut meta, input);
         meta
     });
-    let saved = bank.write_user_preset_with(
-        pending.name.trim(),
-        &document,
-        resonance_plugin::presets::SaveOptions {
-            meta,
-            id: Some(pending.id.clone()),
-            target: pending.target.clone(),
-            ..Default::default()
-        },
-    )?;
+    let options = resonance_plugin::presets::SaveOptions {
+        meta,
+        id: Some(pending.id.clone()),
+        target: pending.target.clone(),
+        ..Default::default()
+    };
+    // A first-party plugin's state is a JSON document with a `params`
+    // object; anything else is a third-party plugin's opaque state, kept
+    // as a `clap-state` blob (§8 tier T0).
+    let saved = match resonance_document(blob) {
+        Some(document) => bank.write_user_preset_with(pending.name.trim(), &document, options)?,
+        None => bank.write_user_blob_with(pending.name.trim(), blob, options)?,
+    };
     if let Some(favorite) = pending.favorite {
         bank.library()
             .set_favorite(&pending.clap_id, &saved.id, favorite)?;

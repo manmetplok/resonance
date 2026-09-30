@@ -751,6 +751,24 @@ pub(super) fn preset_loaded(
     );
 }
 
+/// The plugin's params after a preset state load: the mirror takes every
+/// value and its text (a third-party preset's values are only known to the
+/// plugin, slice P7). Ids the mirror does not have are ignored.
+pub(super) fn params_refreshed(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    params: Vec<ParamInfo>,
+) {
+    r.with_plugin_mut(instance_id, |slot| {
+        for fresh in &params {
+            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                p.current_value = fresh.current_value;
+                p.text = fresh.text.clone();
+            }
+        }
+    });
+}
+
 /// A Resonance plugin reported its loaded preset and modified flag
 /// (`com.resonance.preset-session`). The report is the truth from now on.
 pub(super) fn preset_identity(

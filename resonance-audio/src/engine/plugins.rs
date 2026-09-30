@@ -886,6 +886,13 @@ pub(crate) fn handle_load_plugin_preset_state(
                     "Plugin instance {instance_id} rejected the preset it was given; \
                      it keeps its previous settings."
                 ))));
+            } else {
+                // The mirror follows what the plugin actually took (an
+                // opaque preset's values are known only to the plugin).
+                let _ = ctx.event_tx.send(AudioEvent::PluginParamsRefreshed {
+                    instance_id,
+                    params: inst.0.query_params(),
+                });
             }
         } else {
             let _ = ctx

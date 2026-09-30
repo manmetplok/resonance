@@ -162,6 +162,28 @@ pub struct PresetState {
 }
 
 impl PresetState {
+    /// A third-party plugin's opaque `clap.state` (or state-context
+    /// preset) bytes, base64 in the file (§8 tier T0).
+    pub fn clap_blob(bytes: &[u8]) -> Self {
+        use base64::Engine as _;
+        Self {
+            encoding: ENCODING_CLAP_STATE.to_string(),
+            doc: None,
+            blob: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+        }
+    }
+
+    /// The blob's bytes; `None` for a document or undecodable base64.
+    pub fn blob_bytes(&self) -> Option<Vec<u8>> {
+        use base64::Engine as _;
+        if self.encoding != ENCODING_CLAP_STATE {
+            return None;
+        }
+        base64::engine::general_purpose::STANDARD
+            .decode(self.blob.as_deref()?)
+            .ok()
+    }
+
     /// A first-party state document.
     pub fn json(doc: serde_json::Value) -> Self {
         Self {

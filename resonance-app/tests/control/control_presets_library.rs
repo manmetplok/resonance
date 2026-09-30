@@ -655,3 +655,105 @@ fn an_instrument_added_with_a_preset_comes_up_with_that_sound() {
     .unwrap();
     assert_eq!(view.current.map(|c| c.id), Some("bass-reese".to_owned()));
 }
+
+// ---------------------------------------------------------------------------
+// Third-party (opaque) presets — slice P7
+// ---------------------------------------------------------------------------
+
+const VENDOR_TRACK: u64 = 83;
+const VENDOR_INSTANCE: u64 = 902;
+const VENDOR_ID: &str = "com.vendor.synth";
+const OPAQUE: &[u8] = &[0x00, 0xff, 0xfe, 0x80, b'V', b'S', b'T', 0x01, 0xc3, 0x28];
+
+/// A third-party plugin's state is not a Resonance document: the save
+/// stores it as a `clap-state` blob, the load hands the same bytes back
+/// through `LoadPluginPresetState` (one undo entry), and the mirror takes
+/// the values the plugin reports afterwards.
+#[test]
+fn a_third_party_plugins_state_saves_and_loads_as_an_opaque_preset() {
+    use resonance_audio::types::AudioCommand;
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = with_plugin(app);
+    app.test_add_track(VENDOR_TRACK, TrackType::Instrument);
+    app.test_push_track_plugin(
+        VENDOR_TRACK,
+        PluginSlotState::new(
+            VENDOR_INSTANCE,
+            "Vendor Synth".to_owned(),
+            VENDOR_ID.to_owned(),
+            "/nonexistent/vendor.clap".to_owned(),
+            params(),
+            false,
+        ),
+    );
+    while rx.try_recv().is_ok() {}
+    let saved = call(
+        &mut app,
+        track_proto::SAVE_PLUGIN_PRESET,
+        &track_proto::SavePluginPresetParams {
+            track_id: ProtoTrackId(VENDOR_TRACK),
+            plugin_id: Some(VENDOR_ID.to_owned()),
+            occurrence: None,
+            name: "Glass".to_owned(),
+            overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
+        },
+    );
+    assert!(saved.error.is_none(), "{:?}", saved.error);
+    assert!(rx.try_iter().any(|c| matches!(
+        c,
+        AudioCommand::SavePluginPresetState { instance_id: VENDOR_INSTANCE }
+    )));
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
+        instance_id: VENDOR_INSTANCE,
+        data: OPAQUE.to_vec(),
+        preset_form: false,
+    });
+
+    let listed: PluginPresetsView = serde_json::from_value(
+        call(
+            &mut app,
+            track_proto::PLUGIN_PRESETS,
+            &track_proto::PluginPresetsParams {
+                track_id: ProtoTrackId(VENDOR_TRACK),
+                plugin_id: Some(VENDOR_ID.to_owned()),
+                occurrence: None,
+                filter: PresetFilter::default(),
+            },
+        )
+        .result
+        .expect("plugin_presets"),
+    )
+    .unwrap();
+    assert_eq!(names(&listed), vec!["Glass"]);
+
+    let loaded = call(
+        &mut app,
+        track_proto::LOAD_PLUGIN_PRESET,
+        &track_proto::LoadPluginPresetParams {
+            track_id: ProtoTrackId(VENDOR_TRACK),
+            plugin_id: Some(VENDOR_ID.to_owned()),
+            occurrence: None,
+            preset: "Glass".to_owned(),
+            source: None,
+            preset_id: None,
+            extra: Some(false),
+        },
+    );
+    assert!(loaded.error.is_none(), "{:?}", loaded.error);
+    let sent = rx.try_iter().find_map(|c| match c {
+        AudioCommand::LoadPluginPresetState { instance_id: VENDOR_INSTANCE, data } => Some(data),
+        _ => None,
+    });
+    assert_eq!(sent.as_deref(), Some(OPAQUE), "the bytes go back untouched, extra or not");
+
+    let mut refreshed = params();
+    refreshed[0].current_value = 1234.0;
+    app.test_apply_engine_event(AudioEvent::PluginParamsRefreshed {
+        instance_id: VENDOR_INSTANCE,
+        params: refreshed,
+    });
+    assert_eq!(app.test_plugin_param(VENDOR_INSTANCE, clap_id("cutoff")), Some(1234.0));
+}

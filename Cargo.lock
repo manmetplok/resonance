@@ -5215,6 +5215,7 @@ dependencies = [
 name = "resonance-plugin"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "clack-extensions",
  "clack-host",
  "clack-plugin",

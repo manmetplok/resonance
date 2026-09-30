@@ -293,9 +293,41 @@ impl PresetBank {
                     plugin: self.plugin.clone(),
                     id: options.id,
                     target: options.target,
+                    blob: None,
                 },
             )
             .map(|r| r.preset)
+    }
+
+    /// Write a third-party plugin's opaque state as a user preset
+    /// (`state.encoding = "clap-state"`, §8 tier T0). Same naming and
+    /// overwrite rules as [`write_user_preset_with`](Self::write_user_preset_with).
+    pub fn write_user_blob_with(
+        &self,
+        name: &str,
+        blob: &[u8],
+        options: SaveOptions,
+    ) -> Result<PresetRef, String> {
+        self.library
+            .save(
+                &self.plugin_id,
+                SaveRequest {
+                    name: name.to_string(),
+                    doc: serde_json::Value::Null,
+                    meta: options.meta,
+                    derived_from: options.derived_from,
+                    plugin: self.plugin.clone(),
+                    id: options.id,
+                    target: options.target,
+                    blob: Some(blob.to_vec()),
+                },
+            )
+            .map(|r| r.preset)
+    }
+
+    /// The opaque state of a blob-encoded preset (`None` for a document).
+    pub fn blob_for(&self, preset: &PresetRef) -> Option<Vec<u8>> {
+        self.library.state_blob(&self.plugin_id, preset)
     }
 
     /// Duplicate a preset as "<name> copy" (a new user preset).

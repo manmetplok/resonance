@@ -1422,3 +1422,25 @@ what landed and where the code differs from §§4–15.
 - Commands: `PreviousPluginPreset`, `NextPluginPreset`,
   `BrowsePluginPresets` (Mixer, unbound by default, need a selected
   available plugin).
+
+### P7 — third-party presets (tier T0)
+
+- `PresetState::clap_blob` / `blob_bytes` (base64, `resonance-plugin`
+  gained the `base64` dependency); `SaveRequest.blob`,
+  `PresetBank::write_user_blob_with` / `blob_for`,
+  `PresetLibrary::state_blob`; duplicate, export and import carry the blob
+  (import checks only the plugin id — the bytes are opaque).
+- Save: the existing `SavePluginPresetState` (state-context `FOR_PRESET`
+  when the plugin has it, else its full state). The app keeps a state that
+  is a JSON document with a `params` object as `resonance-json` and
+  anything else as `clap-state`. **Deviation:** the split is by content,
+  not by vendor; a third-party plugin whose state happens to be such a
+  JSON document is treated as first-party (and its params are recalled by
+  id, which then fail loudly rather than silently).
+- Load: a blob preset is a `LoadPluginPreset` with no values and the bytes
+  as `preset_state` (one undo entry; `extra: false` cannot split it and
+  loads it whole); the engine lays it over with state-context or reloads
+  the full state, then emits `AudioEvent::PluginParamsRefreshed` (every
+  param via `query_params`) and the app's mirror takes those values.
+- Identity is what the host loaded (`modified_known: false`; host edits
+  set `modified`). Marks, search, metadata and the host UI work unchanged.

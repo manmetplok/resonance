@@ -493,6 +493,10 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             location,
             load_key,
         } => plugins::preset_loaded(r, instance_id, location, load_key),
+        E::PluginParamsRefreshed {
+            instance_id,
+            params,
+        } => plugins::params_refreshed(r, instance_id, params),
         E::PluginPresetIdentity {
             instance_id,
             identity,

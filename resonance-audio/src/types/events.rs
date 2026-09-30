@@ -554,6 +554,14 @@ pub enum AudioEvent {
         location: crate::types::PluginPresetLocation,
         load_key: Option<String>,
     },
+    /// A preset state load finished (`AudioCommand::LoadPluginPresetState`):
+    /// every param as the plugin now reports it, so the app's mirror
+    /// follows a load it could not predict — a third-party plugin's opaque
+    /// preset (plugin-preset-library.md §8 tier T0, slice P7).
+    PluginParamsRefreshed {
+        instance_id: PluginInstanceId,
+        params: Vec<crate::types::ParamInfo>,
+    },
     /// A Resonance plugin reported its loaded preset and modified flag
     /// (`com.resonance.preset-session`, slice P5): from its own browser, a
     /// host load, or an edit that made it differ from the preset (or stop
