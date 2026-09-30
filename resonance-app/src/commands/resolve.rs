@@ -124,6 +124,11 @@ impl CommandId {
             ShowMissingPlugins if !r.has_missing_plugins() => {
                 Available::No("No plugins are missing")
             }
+            PreviousPluginPreset | NextPluginPreset | BrowsePluginPresets
+                if !r.selected_plugin_available() =>
+            {
+                Available::No("Select a plugin first")
+            }
             CommandPalette | GoToBar
                 if r.root_overlay().is_some_and(|o| !o.allows_palette() && !o.is_palette()) =>
             {
@@ -257,6 +262,15 @@ impl CommandId {
             }
             RescanPlugins => Message::Plugin(PluginMessage::RescanPlugins),
             ShowMissingPlugins => Message::Ui(UiMessage::ShowMissingPlugins),
+            PreviousPluginPreset | NextPluginPreset => {
+                Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::Step {
+                    instance_id: r.ui.mixer.selected_plugin?,
+                    delta: if self == NextPluginPreset { 1 } else { -1 },
+                }))
+            }
+            BrowsePluginPresets => Message::Plugin(PluginMessage::PresetUi(
+                PresetUiMessage::OpenBrowser(r.ui.mixer.selected_plugin?),
+            )),
             ExportStemsMidi => Message::Export(ExportMessage::Open),
             ImportMidi => Message::Import(ImportMessage::Open),
             ImportAudio => Message::Pool(PoolMessage::PickFiles),

@@ -298,6 +298,33 @@ pub(crate) fn apply_pending_preset(app: &mut Resonance, instance_id: PluginInsta
     }
 }
 
+/// The recall for one preset onto a plugin slot, by id: the host preset
+/// surfaces' load (slice P6). The slot's params are read from the mirror.
+pub(crate) fn host_load_message(
+    app: &mut Resonance,
+    instance_id: PluginInstanceId,
+    clap_id: &str,
+    preset_id: &str,
+    source: PluginPresetSource,
+) -> Result<Message, RpcError> {
+    let params = app
+        .with_plugin_mut(instance_id, |slot| {
+            slot.params
+                .iter()
+                .map(super::view_model::param_view)
+                .collect::<Vec<_>>()
+        })
+        .ok_or_else(|| RpcError::not_found(format!("no plugin instance {instance_id}")))?;
+    let (bank, found) = find(app, clap_id, "", Some(preset_id), Some(source))?;
+    load_message_for(&bank, &found, instance_id, &params)
+}
+
+/// A plugin's presets in bank order (factory as declared, then the user's
+/// by name): what the bar's ◀ / ▶ walk.
+pub(crate) fn bank_order(app: &Resonance, clap_id: &str) -> Vec<PresetRef> {
+    bank_for(app, clap_id).list()
+}
+
 /// What a `*.load_plugin_preset` asks for.
 pub(crate) struct LoadArgs<'a> {
     pub preset: &'a str,

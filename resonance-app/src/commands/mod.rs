@@ -243,6 +243,10 @@ command_ids! {
     DeleteSelectedTrack,
     RescanPlugins,
     ShowMissingPlugins,
+    // The selected plugin's presets (plugin-preset-library.md §6.6).
+    PreviousPluginPreset,
+    NextPluginPreset,
+    BrowsePluginPresets,
 
     // --- Project ---
     CommandPalette,
@@ -294,7 +298,8 @@ impl CommandId {
             AddAudioTrack | AddInstrumentTrack | AddVocalTrack | AddBus | OpenAddTrackMenu
             | ToggleMasterFxBypass | GroupSelectedTracks | FreezeSelectedTracks
             | FreezeAllTracks | AddDrumTrack | ToggleMuteSelected | ToggleSoloSelected
-            | ToggleArmSelected | DeleteSelectedTrack | RescanPlugins | ShowMissingPlugins => {
+            | ToggleArmSelected | DeleteSelectedTrack | RescanPlugins | ShowMissingPlugins
+            | PreviousPluginPreset | NextPluginPreset | BrowsePluginPresets => {
                 CommandCategory::Mixer
             }
 
@@ -390,6 +395,9 @@ impl CommandId {
             DeleteSelectedTrack => "Delete Selected Track…",
             RescanPlugins => "Rescan Plugins",
             ShowMissingPlugins => "Show Missing Plugins",
+            PreviousPluginPreset => "Previous Preset",
+            NextPluginPreset => "Next Preset",
+            BrowsePluginPresets => "Browse Presets…",
 
             CommandPalette => "Command Palette",
             NewProject => "New Project",
@@ -437,6 +445,8 @@ impl CommandId {
                 fa::ARROW_ROTATE_LEFT
             }
             PrevMarker | NextMarker | AddMarkerAtPlayhead => fa::FLAG,
+            PreviousPluginPreset => fa::BACKWARD_STEP,
+            NextPluginPreset => fa::FORWARD_STEP,
             Undo | Redo => fa::ARROW_ROTATE_LEFT,
             ZoomIn => fa::MAGNIFYING_GLASS_PLUS,
             ZoomOut => fa::MAGNIFYING_GLASS_MINUS,
@@ -508,6 +518,8 @@ impl CommandId {
             DeleteSelectedTrack => &["remove", "trash"],
             RescanPlugins => &["clap", "scan", "refresh"],
             ShowMissingPlugins => &["clap", "unavailable"],
+            PreviousPluginPreset | NextPluginPreset => &["plugin", "patch", "program", "step"],
+            BrowsePluginPresets => &["plugin", "patch", "library", "favorites"],
             ExportStemsMidi => &["render", "stems", "midi file"],
             ImportMidi => &["midi file", "load"],
             ImportAudio => &["wav", "samples", "load"],

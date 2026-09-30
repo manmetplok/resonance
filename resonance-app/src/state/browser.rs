@@ -38,6 +38,10 @@ pub enum BrowserTab {
     Files,
     /// The project's media pool: imported assets with usage counts.
     Pool,
+    /// The plugin preset library across every plugin (slice P6): search,
+    /// a plugin filter, stars; a double-click loads onto the selected
+    /// plugin slot when it is the same plugin.
+    Presets,
 }
 
 /// A completed folder scan: the child folders and the probed audio files

@@ -376,6 +376,14 @@ fn plugin_edit_target(
             Some(*track_id)
         }
         TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
+        // An audition moves the sound as a recall would; the loads that
+        // stick are gated as `LoadPluginPreset` / the add they become.
+        PresetUi(crate::message::PresetUiMessage::BrowserAudition(_)) => r
+            .presets
+            .host_browser
+            .as_ref()
+            .and_then(|b| r.track_of_plugin(b.instance_id)),
+        PresetUi(_) => None,
         // Refreshing the catalog edits no track's signal, so it is never
         // gated — a frozen track stays frozen through a rescan.
         RescanPlugins => None,

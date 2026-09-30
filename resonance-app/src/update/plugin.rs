@@ -6,6 +6,7 @@ use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
     match m {
+        PluginMessage::PresetUi(m) => return crate::update::plugin_preset_ui::handle(r, m),
         PluginMessage::SetPluginBypass {
             instance_id,
             bypassed,

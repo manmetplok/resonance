@@ -58,15 +58,17 @@ impl crate::Resonance {
             }
         };
 
-        // Header with plugin name, optional Open Editor button, and close.
-        let mut header = row![
-            text(plugin.plugin_name.clone())
-                .size(12)
-                .color(theme::ACCENT),
-            Space::new().width(Length::Fill),
-        ]
+        // Header with plugin name, the preset bar (any plugin with an
+        // instance behind it, §6.6), optional Open Editor button, and close.
+        let mut header = row![text(plugin.plugin_name.clone())
+            .size(12)
+            .color(theme::ACCENT)]
         .spacing(8)
         .align_y(alignment::Vertical::Center);
+        if plugin.availability.reason().is_none() {
+            header = header.push(crate::view::preset_browser::preset_bar(self, plugin));
+        }
+        header = header.push(Space::new().width(Length::Fill));
 
         if plugin.has_gui {
             let label = if plugin.editor_open {

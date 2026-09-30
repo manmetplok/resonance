@@ -33,6 +33,8 @@ pub enum Overlay {
     MissingPlugins,
     Relink,
     Settings,
+    /// The preset browser a plugin panel's bar opens (slice P6).
+    PresetBrowser,
     AddTrackMenu,
     MarkersOverview,
     DrumGroupsManager,
@@ -96,6 +98,10 @@ impl Overlay {
             Overlay::MissingPlugins => Message::Ui(UiMessage::DismissMissingPlugins),
             Overlay::Relink => Message::Relink(RelinkMessage::DismissModal),
             Overlay::Settings => Message::Ui(UiMessage::CloseSettings),
+            // Esc reverts the audition; a backdrop click keeps it.
+            Overlay::PresetBrowser => Message::Plugin(PluginMessage::PresetUi(
+                PresetUiMessage::CloseBrowser { keep: false },
+            )),
             Overlay::AddTrackMenu => Message::Ui(UiMessage::CloseAddTrackMenu),
             Overlay::MarkersOverview => Message::Ui(UiMessage::CloseMarkersOverview),
             Overlay::DrumGroupsManager => Message::Compose(
@@ -150,6 +156,8 @@ impl Resonance {
             Overlay::Relink
         } else if self.ui.mixer.settings_open {
             Overlay::Settings
+        } else if self.presets.host_browser.is_some() {
+            Overlay::PresetBrowser
         } else if self.ui.mixer.add_track_menu_open {
             Overlay::AddTrackMenu
         } else if self.ui.mixer.markers_overview_open {

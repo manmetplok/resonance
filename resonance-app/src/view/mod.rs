@@ -24,6 +24,7 @@ pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
 pub(crate) mod palette;
+pub(crate) mod preset_browser;
 pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
@@ -165,6 +166,7 @@ impl crate::Resonance {
             // Missing-files relink modal (doc #175, todo #607).
             Overlay::Relink => relink_dialog::view_relink_dialog_overlay(self),
             Overlay::Settings => settings::view_settings_overlay(self),
+            Overlay::PresetBrowser => preset_browser::view_preset_browser_overlay(self),
             Overlay::AddTrackMenu => menus::view_add_track_menu(self),
             Overlay::MarkersOverview => markers_overview::view_markers_overview_overlay(self),
             Overlay::DrumGroupsManager => compose::drum_groups_manager::view(self),

@@ -174,6 +174,13 @@ impl Resonance {
         self.presets.plugin_preset_root = Some(root);
     }
 
+    /// Test-only: the preset state (the host preset surfaces' lists, the
+    /// per-slot loaded-preset identity).
+    #[doc(hidden)]
+    pub fn test_presets(&self) -> &crate::state::PresetState {
+        &self.presets
+    }
+
     /// Test-only: mark the open project dirty (or clean) so the
     /// control-endpoint destructive-op guards (`needs_confirmation` on
     /// `project.new`/`project.open` with unsaved changes, doc #265) can

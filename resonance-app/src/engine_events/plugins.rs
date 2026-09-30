@@ -439,6 +439,7 @@ pub(crate) fn mirror_track_plugin_move(
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.plugin_catalog.available_plugins = plugins;
     r.ui.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
+    crate::update::plugin_preset_ui::rebuild_caches(r);
     // A scan answers exactly one `PluginsScanned`, whether it was the
     // startup scan or a live rescan, so this is where a rescan ends
     // (ba todo #1307).

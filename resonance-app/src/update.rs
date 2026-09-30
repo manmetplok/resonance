@@ -31,6 +31,7 @@ pub mod midi_editor;
 pub mod mixer;
 pub mod palette;
 pub mod plugin;
+pub mod plugin_preset_ui;
 pub mod plugin_replace;
 pub mod pool;
 pub mod project_io;

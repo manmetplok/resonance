@@ -1382,3 +1382,43 @@ what landed and where the code differs from §§4–15.
   `modified` rather than `"modified": null`, so the field keeps its type
   and no protocol bump is needed; `modified_known: false` means
   `modified` only knows the host's own edits.
+
+### P6 — host UI
+
+- `update::plugin_preset_ui` + `view::preset_browser`, driven by
+  `PluginMessage::PresetUi(PresetUiMessage)` (all `UndoAction::Skip`; a
+  load that sticks is re-dispatched as the recorded `LoadPluginPreset`,
+  whose body is now `update::plugin::apply_preset_load`, reusable
+  unrecorded). Lists (`HostPresetList`) are recomputed in `update` on a
+  query change or a star, never in `view`.
+- **Bar** in the plugin panel header, for every plugin with an instance:
+  ◀ name • ▶ ★ Presets…; ◀/▶ are recorded loads in bank order (wrapping),
+  the name and Presets… open the browser. Tooltips come from the registry.
+- **Browser overlay** (`Overlay::PresetBrowser`, in `root_overlay()` after
+  Settings, so `canvas_keys_blocked` gates keys and Esc dismisses): search
+  (library syntax), ★ only, rows with category / "user" and a star. Click
+  auditions (unrecorded; the first remembers `AuditionOrigin` — values and
+  identity); Load, double-click or a backdrop click keeps: the origin goes
+  back into the mirror only and the pick is re-dispatched recorded, so the
+  one entry undoes to the origin. Esc / × / Revert revert (the origin
+  preset's state, when it was a library preset, then every origin value).
+  **Limit:** a revert from an origin that was no library preset restores
+  the params but not the extra state the audition loaded.
+- **Media browser Presets tab** (`BrowserTab::Presets`): every plugin's
+  presets, a plugin pick list (choices cached on a scan), ★ only;
+  double-click loads onto the selected plugin slot when it is the same
+  plugin (recorded), else says why in the banner.
+- **"▸ with preset…"** under the inspector's add pickers (track chain and
+  bus chain): the user's favourites of the same plugin kind, cached on a
+  scan and on a host star. **Deviation from §6.6:** a second pick list
+  rather than a submenu (iced's pick list has none); the strip pickers
+  are unchanged.
+- `preset` on `track.add_effect` / `add_instrument`, `bus.add_effect`,
+  `master.add_effect`: an id or name, checked before the add, parked by
+  instance id (`pending_plugin_presets`) and loaded unrecorded on the
+  `PluginAdded` echo, so the add and the load are one undo step; an
+  instrument swap parks on the replacement, re-setting the same one loads
+  at once.
+- Commands: `PreviousPluginPreset`, `NextPluginPreset`,
+  `BrowsePluginPresets` (Mixer, unbound by default, need a selected
+  available plugin).

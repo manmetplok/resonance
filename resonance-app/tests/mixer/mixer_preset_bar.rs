@@ -1,0 +1,330 @@
+//! The host's preset surfaces (plugin-preset-library.md §6.6, §6.7; slice
+//! P6): the plugin panel's bar, the browser overlay it opens, the media
+//! browser's Presets tab and "with preset…" adds, driven through their
+//! messages, plus goldens of the bar and the overlay.
+//!
+//! Every app has a private preset root and marks store (a test app gets
+//! both at construction), so nothing here reads the user's library.
+
+use crate::common;
+
+use iced::Size;
+use iced_test::simulator::Simulator;
+use resonance_app::commands::CommandId;
+use resonance_app::message::{Message, PluginMessage, PresetAddOwner, PresetUiMessage, UiMessage};
+use resonance_app::state::presets::PresetAddPick;
+use resonance_app::state::{Overlay, PluginSlotState, ViewMode};
+use resonance_app::{theme, Resonance};
+use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, ScannedPlugin, TrackType};
+use resonance_common::factory_presets::FactoryPresetEntry;
+use resonance_control::methods::plugin_preset::PluginPresetSource;
+
+const TRACK: u64 = 5;
+const INSTANCE: u64 = 950;
+const PLUGIN_ID: &str = "com.resonance.test-eq";
+
+fn clap_id(s: &str) -> u32 {
+    resonance_plugin::stable_hash(s)
+}
+
+fn params() -> Vec<ParamInfo> {
+    ["gain", "freq"]
+        .into_iter()
+        .map(|id| ParamInfo {
+            id: clap_id(id),
+            name: id.to_owned(),
+            min_value: 0.0,
+            max_value: 20_000.0,
+            default_value: 1.0,
+            current_value: 1.0,
+            ..Default::default()
+        })
+        .collect()
+}
+
+fn factory(id: &str, name: &str, gain: f64, category: &str) -> FactoryPresetEntry {
+    FactoryPresetEntry {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        json: format!(r#"{{"version":1,"params":{{"gain":{gain},"freq":440.0}}}}"#),
+        meta: Some(serde_json::json!({ "category": category }).to_string()),
+    }
+}
+
+fn scanned() -> ScannedPlugin {
+    ScannedPlugin {
+        clap_file_path: "/nonexistent/test-eq.clap".to_owned(),
+        clap_plugin_id: PLUGIN_ID.to_owned(),
+        name: "Test EQ".to_owned(),
+        vendor: "Resonance".to_owned(),
+        is_instrument: false,
+        factory_presets: vec![
+            factory("warm", "Warm", 3.0, "EQ"),
+            factory("bright", "Bright", 7.0, "EQ"),
+            factory("flat", "Flat", 1.0, "Utility"),
+        ],
+    }
+}
+
+fn app_with(app: Resonance) -> Resonance {
+    let mut app = app;
+    app.test_set_active_project(true);
+    // The history only records once the project has a path.
+    app.test_set_project_path(std::path::PathBuf::from("/tmp/preset-bar.rprj"));
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![scanned()],
+    });
+    app.test_add_track(TRACK, TrackType::Audio);
+    app.test_push_track_plugin(
+        TRACK,
+        PluginSlotState::new(
+            INSTANCE,
+            "Test EQ".to_owned(),
+            PLUGIN_ID.to_owned(),
+            "/nonexistent/test-eq.clap".to_owned(),
+            params(),
+            false,
+        ),
+    );
+    let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
+    let _ = app.update(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+    app
+}
+
+fn app() -> Resonance {
+    let (app, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
+    app_with(app)
+}
+
+fn ui(app: &mut Resonance, m: PresetUiMessage) {
+    let _ = app.update(Message::Plugin(PluginMessage::PresetUi(m)));
+}
+
+fn gain(app: &mut Resonance) -> Option<f64> {
+    app.test_plugin_param(INSTANCE, clap_id("gain"))
+}
+
+fn current_id(app: &Resonance) -> Option<String> {
+    app.test_presets()
+        .plugin_preset_identity
+        .get(&INSTANCE)
+        .map(|i| i.id.clone())
+}
+
+fn row_index(app: &Resonance, id: &str) -> usize {
+    app.test_presets()
+        .host_browser
+        .as_ref()
+        .expect("browser open")
+        .list
+        .rows
+        .iter()
+        .position(|r| r.id == id)
+        .unwrap_or_else(|| panic!("no row {id}"))
+}
+
+fn undo_len(app: &Resonance) -> usize {
+    app.test_undo_history().undo_len()
+}
+
+/// ◀ / ▶ walk the bank in order and wrap; each step is one recorded load
+/// that names the preset.
+#[test]
+fn next_and_previous_walk_the_bank_and_record_one_entry_each() {
+    let mut app = app();
+    let before = undo_len(&app);
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    assert_eq!(current_id(&app).as_deref(), Some("warm"));
+    assert_eq!(gain(&mut app), Some(3.0));
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    assert_eq!(current_id(&app).as_deref(), Some("bright"));
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: -1 });
+    assert_eq!(current_id(&app).as_deref(), Some("flat"), "wraps to the last");
+    assert_eq!(undo_len(&app), before + 4);
+}
+
+/// The audition bracket (§6.7): auditions record nothing, keeping records
+/// ONE entry whose undo returns to the sound the browser opened on.
+#[test]
+fn auditions_record_nothing_and_keeping_is_one_undo_back_to_the_origin() {
+    let mut app = app();
+    let before = undo_len(&app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    assert_eq!(app.root_overlay(), Some(Overlay::PresetBrowser));
+    let warm = row_index(&app, "warm");
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(warm));
+    assert_eq!(gain(&mut app), Some(3.0));
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    assert_eq!(gain(&mut app), Some(7.0));
+    assert_eq!(undo_len(&app), before, "auditions are not history");
+
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: true });
+    assert_eq!(app.root_overlay(), None);
+    assert_eq!(gain(&mut app), Some(7.0));
+    assert_eq!(current_id(&app).as_deref(), Some("bright"));
+    assert_eq!(undo_len(&app), before + 1, "one entry for the whole bracket");
+
+    let _ = app.update(Message::Undo);
+    assert_eq!(gain(&mut app), Some(1.0), "undo returns to the origin, not to Warm");
+}
+
+/// Esc (the overlay's dismiss) reverts: the origin's values go back to
+/// the engine and the mirror, and nothing is recorded.
+#[test]
+fn esc_reverts_the_audition() {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = app_with(app);
+    let before = undo_len(&app);
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    while rx.try_recv().is_ok() {}
+    app.test_dismiss_overlay();
+    assert_eq!(app.root_overlay(), None);
+    assert_eq!(gain(&mut app), Some(1.0));
+    assert_eq!(current_id(&app), None);
+    let sent_gain = rx.try_iter().any(|c| {
+        matches!(c, AudioCommand::SetPluginParam { instance_id: INSTANCE, param_id, value }
+            if param_id == clap_id("gain") && value == 1.0)
+    });
+    assert!(sent_gain, "the engine hears the origin again");
+    assert_eq!(undo_len(&app), before);
+}
+
+/// Stars from the browser and the bar land in the shared marks store and
+/// feed the favourites filter and the add pickers' "with preset…".
+#[test]
+fn stars_filter_the_lists_and_feed_the_add_pickers() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let flat = row_index(&app, "flat");
+    ui(&mut app, PresetUiMessage::BrowserToggleRowFavorite(flat));
+    ui(&mut app, PresetUiMessage::BrowserFavoritesOnly(true));
+    let rows: Vec<String> = app.test_presets().host_browser.as_ref().unwrap().list.rows
+        .iter()
+        .map(|r| r.id.clone())
+        .collect();
+    assert_eq!(rows, vec!["flat".to_string()]);
+    let picks: Vec<String> = app.test_presets().fx_favorite_picks.iter()
+        .map(|p| p.preset_id.clone())
+        .collect();
+    assert_eq!(picks, vec!["flat".to_string()]);
+    ui(&mut app, PresetUiMessage::CloseBrowser { keep: false });
+
+    // The bar's star toggles the loaded preset.
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    ui(&mut app, PresetUiMessage::ToggleFavorite(INSTANCE));
+    assert_eq!(app.test_presets().fx_favorite_picks.len(), 2);
+}
+
+/// The media tab lists every plugin's presets; a double-click loads onto
+/// the selected slot of the same plugin as one recorded load.
+#[test]
+fn the_media_tab_searches_and_loads_onto_the_selected_plugin() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::MediaSearch("bri".into()));
+    let rows = &app.test_presets().media_presets.rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].plugin_name, "Test EQ");
+    let before = undo_len(&app);
+    ui(&mut app, PresetUiMessage::MediaLoad(0));
+    assert_eq!(gain(&mut app), Some(7.0));
+    assert_eq!(undo_len(&app), before + 1);
+}
+
+/// "with preset…": the add happens now, the preset lands on the echo.
+#[test]
+fn adding_with_a_preset_loads_it_when_the_plugin_arrives() {
+    let mut app = app();
+    let next = app.test_next_plugin_id();
+    ui(
+        &mut app,
+        PresetUiMessage::AddWithPreset {
+            owner: PresetAddOwner::Track(TRACK),
+            pick: PresetAddPick {
+                plugin: scanned(),
+                preset_id: "bright".into(),
+                preset_name: "Bright".into(),
+                source: PluginPresetSource::Factory,
+            },
+        },
+    );
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: TRACK,
+        instance_id: next,
+        plugin_name: "Test EQ".to_owned(),
+        clap_plugin_id: PLUGIN_ID.to_owned(),
+        clap_file_path: "/nonexistent/test-eq.clap".to_owned(),
+        params: params(),
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: Vec::new(),
+    });
+    assert_eq!(app.test_plugin_param(next, clap_id("gain")), Some(7.0));
+}
+
+/// The commands follow the plugin panel's selection.
+#[test]
+fn the_preset_commands_need_a_selected_plugin() {
+    let (mut bare, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
+    bare.test_set_active_project(true);
+    assert!(!CommandId::NextPluginPreset.availability(&bare).is_yes());
+    let mut app = app();
+    assert!(CommandId::BrowsePluginPresets.availability(&app).is_yes());
+    let open = CommandId::BrowsePluginPresets.to_message(&app).expect("a target");
+    let _ = app.update(open);
+    assert_eq!(app.root_overlay(), Some(Overlay::PresetBrowser));
+    app.test_dismiss_overlay();
+    let next = CommandId::NextPluginPreset.to_message(&app).expect("a target");
+    let _ = app.update(next);
+    assert_eq!(current_id(&app).as_deref(), Some("warm"));
+}
+
+// ---------------------------------------------------------------------------
+// Goldens
+// ---------------------------------------------------------------------------
+
+fn snapshot_to(app: &Resonance, path: &str) {
+    let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![theme::ICON_FONT_BYTES.into()];
+    for face in theme::UI_FONT_FACES {
+        fonts.push((*face).into());
+    }
+    let settings = iced::Settings {
+        fonts,
+        default_font: theme::UI_FONT,
+        ..iced::Settings::default()
+    };
+    let mut sim = Simulator::with_size(settings, Size::new(1440.0, 1000.0), app.view());
+    let snap = sim
+        .snapshot(&theme::resonance_theme())
+        .expect("snapshot should render");
+    common::assert_golden(&snap, path);
+}
+
+/// The panel's bar with a preset loaded and edited: ◀ Warm • ▶ ☆ Presets….
+#[test]
+fn preset_bar_golden() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::Step { instance_id: INSTANCE, delta: 1 });
+    let _ = app.update(Message::Plugin(PluginMessage::SetPluginParam(
+        INSTANCE,
+        clap_id("freq"),
+        880.0,
+    )));
+    snapshot_to(&app, "tests/snapshots/plugin_preset_bar.png");
+}
+
+/// The browser mid-audition, one row starred.
+#[test]
+fn preset_browser_overlay_golden() {
+    let mut app = app();
+    ui(&mut app, PresetUiMessage::OpenBrowser(INSTANCE));
+    let warm = row_index(&app, "warm");
+    ui(&mut app, PresetUiMessage::BrowserToggleRowFavorite(warm));
+    let bright = row_index(&app, "bright");
+    ui(&mut app, PresetUiMessage::BrowserAudition(bright));
+    snapshot_to(&app, "tests/snapshots/plugin_preset_browser.png");
+}
