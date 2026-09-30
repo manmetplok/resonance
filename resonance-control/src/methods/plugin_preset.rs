@@ -232,6 +232,12 @@ pub struct PluginPresetsView {
     pub current: Option<PluginPresetEntry>,
     /// Whether a parameter has moved since `current` was loaded.
     pub modified: bool,
+    /// Whether the plugin itself reports `modified` (a Resonance plugin
+    /// compares its sound with the preset, leaving automated params out).
+    /// False when the host only knows its own edits — then `modified`
+    /// misses changes made in the plugin's window.
+    #[serde(default)]
+    pub modified_known: bool,
     /// How many presets match before `limit` / `offset`.
     #[serde(default)]
     pub total: u32,

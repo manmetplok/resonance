@@ -147,7 +147,12 @@ pub(crate) const DEFAULT_LIMIT: u32 = 100;
 
 /// Every preset available for one plugin instance, filtered and sorted
 /// (factory first in bank order by default), with facet counts.
-pub(crate) fn view(app: &Resonance, clap_id: &str, filter: &PresetFilter) -> PluginPresetsView {
+pub(crate) fn view(
+    app: &Resonance,
+    clap_id: &str,
+    instance_id: PluginInstanceId,
+    filter: &PresetFilter,
+) -> PluginPresetsView {
     let lib = crate::plugin_preset_library::library(app);
     // Make sure the bank (and so the factory registration) exists.
     let _ = bank_for(app, clap_id);
@@ -162,11 +167,29 @@ pub(crate) fn view(app: &Resonance, clap_id: &str, filter: &PresetFilter) -> Plu
         .take(limit)
         .map(entry_from_hit)
         .collect();
+    // The loaded preset, as the plugin last reported it (or as the host
+    // last loaded it, for a plugin that does not report): the full entry
+    // when the library still has it, a bare one when it does not.
+    let identity = app.presets.plugin_preset_identity.get(&instance_id);
+    let current = identity.map(|i| {
+        let full = lib.query(&query_for(&PresetFilter::default(), vec![clap_id.to_string()]));
+        full.hits
+            .iter()
+            .find(|h| h.record.preset.id == i.id && wire_source(h.record.preset.source) == i.source)
+            .map(entry_from_hit)
+            .unwrap_or_else(|| PluginPresetEntry {
+                name: i.name.clone(),
+                source: i.source,
+                id: i.id.clone(),
+                ..PluginPresetEntry::default()
+            })
+    });
     PluginPresetsView {
         plugin_id: clap_id.to_string(),
         presets,
-        current: None,
-        modified: false,
+        current,
+        modified: identity.is_some_and(|i| i.modified),
+        modified_known: identity.is_some_and(|i| i.reported),
         total,
         facets: wire_facets(&result.facets),
     }
@@ -322,6 +345,8 @@ pub(crate) fn load_message_for(
         values,
         preset_name: found.name.clone(),
         preset_state,
+        preset_id: found.id.clone(),
+        preset_source: wire_source(found.source),
     }))
 }
 

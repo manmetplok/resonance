@@ -68,6 +68,10 @@ pub struct HostHandle {
     /// A serial rather than a flag, so a late report from an editor the
     /// host has since destroyed cannot be pinned on its successor.
     gui_closed: AtomicU64,
+    /// The loaded preset identity or its modified flag changed and the
+    /// host has not been told. Set from any thread (the session's
+    /// notifier), consumed on the main thread.
+    preset_dirty: AtomicBool,
 }
 
 impl HostHandle {
@@ -85,6 +89,7 @@ impl HostHandle {
             latency: AtomicU32::new(initial_latency),
             latency_dirty: AtomicBool::new(false),
             gui_closed: AtomicU64::new(0),
+            preset_dirty: AtomicBool::new(false),
         })
     }
 
@@ -189,6 +194,19 @@ impl HostHandle {
     pub(crate) fn report_gui_closed(&self, editor_serial: u64) {
         self.gui_closed.store(editor_serial, Ordering::Release);
         self.request_callback();
+    }
+
+    /// The preset identity or its modified flag changed: latch it and ask
+    /// for a main-thread callback, where the bridge reports it.
+    pub(crate) fn report_preset_change(&self) {
+        if !self.preset_dirty.swap(true, Ordering::AcqRel) {
+            self.request_callback();
+        }
+    }
+
+    /// Take the "preset identity changed" flag.
+    pub(crate) fn take_preset_dirty(&self) -> bool {
+        self.preset_dirty.swap(false, Ordering::AcqRel)
     }
 
     /// Take the pending self-close report: the serial of the editor that

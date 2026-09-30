@@ -554,6 +554,14 @@ pub enum AudioEvent {
         location: crate::types::PluginPresetLocation,
         load_key: Option<String>,
     },
+    /// A Resonance plugin reported its loaded preset and modified flag
+    /// (`com.resonance.preset-session`, slice P5): from its own browser, a
+    /// host load, or an edit that made it differ from the preset (or stop
+    /// differing). `None` when nothing is loaded.
+    PluginPresetIdentity {
+        instance_id: PluginInstanceId,
+        identity: Option<resonance_common::preset_session::IdentityReport>,
+    },
     /// The answer to `AudioCommand::ResolvePluginParamText` with this
     /// `token`: the value the plugin says the text names, when it
     /// round-trips.

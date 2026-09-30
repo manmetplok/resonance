@@ -456,3 +456,134 @@ fn rename_keeps_the_id_and_delete_needs_confirm_and_goes_to_the_trash() {
     assert!(result.trashed_path.contains(".trash"), "{}", result.trashed_path);
     assert_eq!(names(&list(&mut app, PresetFilter::default())).len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// The loaded preset's identity (slice P5)
+// ---------------------------------------------------------------------------
+
+fn load_by_id(app: &mut Resonance, id: &str) {
+    let response = call(
+        app,
+        track_proto::LOAD_PLUGIN_PRESET,
+        &track_proto::LoadPluginPresetParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            preset: String::new(),
+            source: None,
+            preset_id: Some(id.to_owned()),
+            extra: None,
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+}
+
+/// A host load names the preset straight away; a host param edit marks a
+/// plugin that does not report as modified. Once the plugin reports, its
+/// report is the truth: identity, modified, and `modified_known`.
+#[test]
+fn the_view_reports_the_loaded_preset_and_whether_it_was_edited() {
+    use resonance_app::message::{Message, PluginMessage};
+    let mut app = app();
+    assert!(list(&mut app, PresetFilter::default()).current.is_none());
+
+    load_by_id(&mut app, "pad-glass");
+    let view = list(&mut app, PresetFilter::default());
+    let current = view.current.as_ref().expect("the host load names the preset");
+    assert_eq!((current.id.as_str(), current.name.as_str()), ("pad-glass", "Pad — Glass"));
+    assert_eq!(current.category.as_deref(), Some("Pad"), "the full entry");
+    assert!(!view.modified);
+    assert!(!view.modified_known);
+
+    let _ = app.update(Message::Plugin(PluginMessage::SetPluginParam(
+        INSTANCE,
+        clap_id("drive"),
+        0.7,
+    )));
+    assert!(list(&mut app, PresetFilter::default()).modified, "a host edit");
+
+    // The plugin reports (its own browser picked another preset, edited).
+    app.test_apply_engine_event(AudioEvent::PluginPresetIdentity {
+        instance_id: INSTANCE,
+        identity: Some(resonance_common::preset_session::IdentityReport {
+            source: "factory".into(),
+            id: "bass-reese".into(),
+            name: "Bass — Reese".into(),
+            modified: false,
+        }),
+    });
+    let view = list(&mut app, PresetFilter::default());
+    assert_eq!(view.current.as_ref().map(|c| c.id.as_str()), Some("bass-reese"));
+    assert!(!view.modified);
+    assert!(view.modified_known);
+    // A reporting plugin compares for itself: a host edit is not assumed.
+    let _ = app.update(Message::Plugin(PluginMessage::SetPluginParam(
+        INSTANCE,
+        clap_id("drive"),
+        0.2,
+    )));
+    assert!(!list(&mut app, PresetFilter::default()).modified);
+
+    app.test_apply_engine_event(AudioEvent::PluginPresetIdentity {
+        instance_id: INSTANCE,
+        identity: None,
+    });
+    assert!(list(&mut app, PresetFilter::default()).current.is_none());
+}
+
+/// A third-party plugin's `loaded()` is its identity when it reports
+/// nothing else: a factory preset by load key.
+#[test]
+fn a_plugin_that_only_says_loaded_is_named_by_its_load_key() {
+    let mut app = app();
+    app.test_apply_engine_event(AudioEvent::PluginPresetLoaded {
+        instance_id: INSTANCE,
+        location: resonance_audio::types::PluginPresetLocation::Plugin,
+        load_key: Some("pad-glass".into()),
+    });
+    let view = list(&mut app, PresetFilter::default());
+    assert_eq!(view.current.as_ref().map(|c| c.name.as_str()), Some("Pad — Glass"));
+    assert!(!view.modified_known);
+}
+
+/// The params under an enabled automation lane are sent to the plugin,
+/// which leaves them out of its modified comparison (D8).
+#[test]
+fn automated_params_are_sent_to_the_plugin_as_ignored() {
+    use resonance_audio::types::AudioCommand;
+    use resonance_common::{AutomationLane, AutomationTarget, Breakpoint, CurveKind};
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let mut app = with_plugin(app);
+    while rx.try_recv().is_ok() {}
+    let target = AutomationTarget::PluginParam {
+        instance: INSTANCE,
+        param_id: clap_id("cutoff"),
+    };
+    let lane = AutomationLane::new(
+        7,
+        target.clone(),
+        vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
+    );
+    app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane });
+    let sent: Vec<_> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            AudioCommand::SetPluginPresetIgnoredParams {
+                instance_id,
+                clap_ids,
+            } => Some((instance_id, clap_ids)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec![(INSTANCE, vec![clap_id("cutoff")])]);
+
+    app.test_apply_engine_event(AudioEvent::AutomationLaneCleared { target });
+    let sent: Vec<_> = rx
+        .try_iter()
+        .filter_map(|c| match c {
+            AudioCommand::SetPluginPresetIgnoredParams { clap_ids, .. } => Some(clap_ids),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec![Vec::<u32>::new()], "the last lane gone: nothing ignored");
+}

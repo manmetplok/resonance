@@ -1494,3 +1494,82 @@ mod browser {
         assert!(err.contains("com.other.plugin"), "{err}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Modified as a comparison, and the identity report (slice P5)
+// ---------------------------------------------------------------------------
+
+/// Modified compares the live sound with the loaded preset: an edit sets
+/// it, moving back clears it, an automated param never sets it; the
+/// hover lists what moved by display name.
+#[test]
+fn modified_is_a_comparison_with_the_loaded_preset() {
+    let root = TempRoot::new("compare");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    assert!(!session.compare_modified(&params.refs()));
+
+    params.mix.set_plain(0.2);
+    assert!(session.compare_modified(&params.refs()));
+    assert_eq!(session.changed_params(&params.refs()), Some(vec!["Mix".to_string()]));
+
+    params.mix.set_plain(0.9);
+    assert!(!session.compare_modified(&params.refs()), "turned back is not an edit");
+
+    session.set_ignored_params(vec![params.mix.clap_id()]);
+    params.mix.set_plain(0.1);
+    assert!(!session.compare_modified(&params.refs()), "the host automates it");
+    params.taps.set_plain(2.0);
+    assert!(session.compare_modified(&params.refs()));
+}
+
+/// Without a baseline (nothing loaded) the comparison leaves the flag as
+/// it is, rather than calling every sound "unmodified".
+#[test]
+fn with_nothing_loaded_there_is_nothing_to_compare() {
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    params.mix.set_plain(0.1);
+    assert_eq!(session.changed_params(&params.refs()), None);
+    assert!(!session.compare_modified(&params.refs()));
+}
+
+/// Every change of identity or modified flag runs the notifier the bridge
+/// installed (that is what gets it reported on the main thread), and the
+/// report is the `preset_session` JSON.
+#[test]
+fn identity_changes_are_announced_and_reported() {
+    let root = TempRoot::new("report");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = calls.clone();
+    session.set_change_notifier(Arc::new(move || {
+        c.fetch_add(1, Ordering::Relaxed);
+    }));
+    assert_eq!(session.preset_report().as_deref(), Some("{}"), "nothing loaded");
+
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    let after_load = calls.load(Ordering::Relaxed);
+    assert!(after_load >= 1);
+    let report = resonance_common::preset_session::IdentityReport::parse(
+        &session.preset_report().unwrap(),
+    )
+    .expect("a report");
+    assert_eq!((report.source.as_str(), report.id.as_str()), ("factory", "wide"));
+    assert!(!report.modified);
+
+    params.mix.set_plain(0.2);
+    session.compare_modified(&params.refs());
+    assert_eq!(calls.load(Ordering::Relaxed), after_load + 1);
+    session.compare_modified(&params.refs());
+    assert_eq!(calls.load(Ordering::Relaxed), after_load + 1, "no change, no call");
+    let report = resonance_common::preset_session::IdentityReport::parse(
+        &session.preset_report().unwrap(),
+    )
+    .unwrap();
+    assert!(report.modified);
+}

@@ -1332,3 +1332,53 @@ what landed and where the code differs from §§4–15.
   process-wide default library (no env var); the amp's
   `library::override_default_roots` sets it too, so the amp's headless
   editor tests never read the user's presets or marks.
+
+### P5 — identity to the host
+
+- `resonance_common::preset_session` is the one ABI both ends read:
+  `EXTENSION_ID = "com.resonance.preset-session/1"`, a host half
+  (`report(host, json)`) and a plugin half (`set_ignored_params(plugin,
+  json)`), `c_void` pointers so neither end needs the other's CLAP
+  bindings. **Deviation from §7:** one `report` call carrying the whole
+  identity (`{source, id, name, modified}`, `{}` for nothing loaded)
+  instead of a `modified_changed(bool)` edge next to `loaded()` — the
+  host then never has to stitch two callbacks together, and a
+  deduplicated report is as cheap as an edge.
+- Plugin side: `PresetSession` keeps a `Baseline` (every param's plain
+  value plus a hash of the preset-form extra state) from a load, a save
+  and a state load that says "unmodified"; `compare_modified` sets the
+  flag from it (1e-6 of the param's span; ignored and preset-excluded
+  params left out) and `changed_params` names what moved for the bar's
+  hover. It runs from the editor frame (`refresh_modified`, at most every
+  100 ms) **and** on the main thread after host param events: the bridge's
+  `process` / `flush` arms set `ClapShared::preset_compare_due` and
+  request a callback (one atomic swap on the audio thread), and
+  `on_main_thread` compares against the shared atomics
+  (`TempParamOwned::all_from`). Every change of identity or flag runs the
+  notifier the bridge installed, which requests a callback; the report goes
+  out from `on_main_thread`, deduplicated, followed by CLAP's `loaded()`
+  when a factory identity changed (a file location is announced from
+  `from_location` itself, as CLAP asks).
+- Host side (`clap_host::preset_state`): `HostData` serves
+  `clap_host_preset_load` (`loaded`, `on_error`) and the session's host
+  half; the callbacks only queue `PresetHostReport`s, which
+  `poll_plugin_host_requests` drains after `run_requested_callback` into
+  `AudioEvent::PluginPresetIdentity { instance_id, identity }` /
+  `PluginPresetLoaded` / an engine error. `AudioCommand::
+  SetPluginPresetIgnoredParams` calls the plugin half on the engine
+  (main) thread.
+- App: `PresetState::plugin_preset_identity` (per instance
+  `SlotPresetIdentity { source, id, name, modified, reported }`) — a side
+  map rather than a `PluginSlotState` field. A host load sets it
+  optimistically (`LoadPluginPreset` gained `preset_id` /
+  `preset_source`); a report replaces it and is the truth from then on;
+  `loaded()` from a plugin that does not report names it by load key or
+  file. For a non-reporting plugin a host `SetPluginParam` sets
+  `modified`. The automation mirror sends the enabled lanes' param ids on
+  every plugin-param lane change and on plugin add.
+- Wire: `*.plugin_presets` fills `current` (the full entry, or a bare one
+  when the library lost it) and `modified`, and gains **`modified_known`**
+  (the plugin reported the flag). **Deviation from §7:** a bool beside
+  `modified` rather than `"modified": null`, so the field keeps its type
+  and no protocol bump is needed; `modified_known: false` means
+  `modified` only knows the host's own edits.

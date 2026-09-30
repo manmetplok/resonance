@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
-use crate::clap_host::{ClapBundle, ClapBundleError};
+use crate::clap_host::{ClapBundle, ClapBundleError, PresetHostReport};
 use crate::types::*;
 
 use super::external_instrument::ExternalInstruments;
@@ -239,6 +239,22 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             // that is where a plugin reports a self-closed editor
             // (`clap_host_gui.closed()`, PLG-01) or a latency change.
             inst.0.run_requested_callback();
+            // What the plugin said about its preset, from that callback or
+            // a `from_location` / state load since the last poll.
+            for report in inst.0.take_preset_reports() {
+                let event = match report {
+                    PresetHostReport::Identity(identity) => {
+                        AudioEvent::PluginPresetIdentity { instance_id, identity }
+                    }
+                    PresetHostReport::Loaded { location, load_key } => {
+                        AudioEvent::PluginPresetLoaded { instance_id, location, load_key }
+                    }
+                    PresetHostReport::Error { message } => AudioEvent::Error(EngineError::plugin(
+                        format!("Plugin instance {instance_id} could not load a preset: {message}"),
+                    )),
+                };
+                let _ = ctx.event_tx.send(event);
+            }
             // The user closed the editor from the floating window's own
             // titlebar and the plugin told us via `clap_host_gui.closed()`
             // (ba todo #1347). `take_gui_closed` finishes the CLAP-side
@@ -875,6 +891,22 @@ pub(crate) fn handle_load_plugin_preset_state(
             let _ = ctx
                 .cmd_tx_retry
                 .send(AudioCommand::LoadPluginPresetState { instance_id, data });
+        }
+    }
+}
+
+pub(crate) fn handle_set_plugin_preset_ignored_params(
+    ctx: &HandlerCtx,
+    instance_id: PluginInstanceId,
+    clap_ids: Vec<u32>,
+) {
+    if let Some(mutex) = ctx.plugins().get(&instance_id) {
+        if let Some(mut inst) = mutex.try_lock() {
+            inst.0.set_preset_ignored_params(&clap_ids);
+        } else {
+            let _ = ctx
+                .cmd_tx_retry
+                .send(AudioCommand::SetPluginPresetIgnoredParams { instance_id, clap_ids });
         }
     }
 }

@@ -132,12 +132,12 @@ pub(super) fn view(
     occurrence: Option<u32>,
     filter: &resonance_control::methods::plugin_preset::PresetFilter,
 ) -> (Response, Task<Message>) {
-    let (clap_id, _, _) = match resolve(app, chain, plugin_id, occurrence) {
+    let (clap_id, _, instance_id) = match resolve(app, chain, plugin_id, occurrence) {
         Ok(resolved) => resolved,
         Err(e) => return reject(request, e),
     };
     (
-        super::success(request, &plugin_presets::view(app, &clap_id, filter)),
+        super::success(request, &plugin_presets::view(app, &clap_id, instance_id, filter)),
         Task::none(),
     )
 }

@@ -35,6 +35,7 @@ mod ports;
 mod process;
 pub mod shared;
 mod preset;
+mod preset_session;
 mod state;
 
 // Re-export the public types so downstream code keeps using
@@ -70,6 +71,7 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         // a preset by location: plugin-preset-library.md §6.7, §7.
         builder.register::<PluginStateContext>();
         builder.register::<PluginPresetLoad>();
+        builder.register::<preset_session::PluginPresetSessionExt>();
 
         if let Some(shared) = shared {
             if shared.midi_input {
@@ -222,6 +224,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             param_renames: temp.param_renames(),
             params_dirty: AtomicBool::new(false),
             params_gen: AtomicU64::new(0),
+            preset_compare_due: AtomicBool::new(false),
         })
     }
 
@@ -248,6 +251,13 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         let editor_factory = plugin.editor_factory();
         let extra_state_saver = plugin.extra_state_saver();
         let param_text_source = plugin.param_text_source();
+        // The loaded-preset identity reaches the host from `on_main_thread`
+        // (com.resonance.preset-session): the session flags a change from
+        // whatever thread it happens on.
+        if let Some(saver) = &extra_state_saver {
+            let handle = host_handle.clone();
+            saver.set_change_notifier(std::sync::Arc::new(move || handle.report_preset_change()));
+        }
 
         Ok(ClapMainThread {
             host,
@@ -259,6 +269,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             editor_serial: 0,
             extra_state_saver,
             param_text_source,
+            last_preset_report: None,
         })
     }
 }

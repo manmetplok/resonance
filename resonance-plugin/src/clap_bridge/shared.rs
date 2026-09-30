@@ -111,11 +111,27 @@ pub struct ClapShared<'a> {
     /// `AtomicU64` rather than `AtomicU32` only so the bridge's shared-state
     /// constructor needs no further imports; a wrap takes 2^64 loads.
     pub(crate) params_gen: AtomicU64,
+    /// A param moved from the host (an event in `process` or `flush`)
+    /// since the main thread last compared the sound with the loaded
+    /// preset (slice P5). Set on the audio thread with a
+    /// `request_callback` (thread-safe per CLAP); taken in
+    /// `on_main_thread`, which runs the comparison.
+    pub(crate) preset_compare_due: AtomicBool,
 }
 
 impl<'a> ClapShared<'a> {
     pub fn find_slot(&self, clap_id: u32) -> Option<usize> {
         self.clap_id_to_slot.get(&clap_id).copied()
+    }
+
+    /// A host param event landed: ask for the main-thread comparison
+    /// that keeps the preset-modified flag honest. Realtime-safe (one
+    /// atomic swap; the callback request is an atomic store in any sane
+    /// host, and is only made once per compare).
+    pub(crate) fn note_host_param_change(&self) {
+        if !self.preset_compare_due.swap(true, Ordering::AcqRel) {
+            self.host.request_callback();
+        }
     }
 
     pub fn get_value(&self, slot: usize) -> f64 {
@@ -259,6 +275,9 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// Parameter text conversion harvested at construction, for
     /// `value_to_text` / `text_to_value` while the plugin is active.
     pub(crate) param_text_source: Option<std::sync::Arc<dyn crate::plugin::ParamTextSource>>,
+    /// The last identity report sent to the host
+    /// (`com.resonance.preset-session`), for deduplication.
+    pub(crate) last_preset_report: Option<String>,
 }
 
 impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainThread<'a, P> {
@@ -284,6 +303,12 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
             if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
                 latency.changed(&mut self.host);
             }
+        }
+        if self.shared.preset_compare_due.swap(false, Ordering::AcqRel) {
+            self.compare_preset_sound();
+        }
+        if self.host_handle.take_preset_dirty() {
+            self.report_preset_identity();
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {
             if serial == self.editor_serial && self.editor.is_some() {

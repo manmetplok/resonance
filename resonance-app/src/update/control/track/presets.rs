@@ -99,7 +99,7 @@ pub(super) fn plugin_presets(app: &mut Resonance, request: &Request) -> (Respons
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let (clap_id, _, _) = match resolve(
+    let (clap_id, _, instance_id) = match resolve(
         app,
         request,
         params.track_id.0,
@@ -110,7 +110,10 @@ pub(super) fn plugin_presets(app: &mut Resonance, request: &Request) -> (Respons
         Err(response) => return (response, Task::none()),
     };
     (
-        success(request, &plugin_presets::view(app, &clap_id, &params.filter)),
+        success(
+            request,
+            &plugin_presets::view(app, &clap_id, instance_id, &params.filter),
+        ),
         Task::none(),
     )
 }

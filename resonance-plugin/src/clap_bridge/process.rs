@@ -129,6 +129,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                                 // The landed value, not the wire value —
                                 // see the note in `clap_bridge/params.rs`.
                                 self.shared.set_value(slot, param.get_plain());
+                                self.shared.note_host_param_change();
                             }
                         }
                     }

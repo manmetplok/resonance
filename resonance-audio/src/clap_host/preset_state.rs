@@ -11,11 +11,14 @@
 //! (a state-context load is an ordinary main-thread call that must work
 //! while active; Resonance's own bridge does).
 
-use std::ffi::{c_void, CStr};
+use std::ffi::{c_char, c_void, CStr};
 
 use clap_sys::ext::preset_load::{
-    clap_plugin_preset_load, CLAP_EXT_PRESET_LOAD, CLAP_EXT_PRESET_LOAD_COMPAT,
+    clap_host_preset_load, clap_plugin_preset_load, CLAP_EXT_PRESET_LOAD,
+    CLAP_EXT_PRESET_LOAD_COMPAT,
 };
+use clap_sys::host::clap_host;
+use resonance_common::preset_session::{HostPresetSession, PluginPresetSession, EXTENSION_ID};
 use clap_sys::ext::state_context::{
     clap_plugin_state_context, CLAP_EXT_STATE_CONTEXT, CLAP_STATE_CONTEXT_FOR_PRESET,
 };
@@ -130,5 +133,152 @@ impl ClapInstance {
                 key.as_ref().map_or(std::ptr::null(), |k| k.as_ptr()),
             )
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plugin's reports back (slice P5)
+// ---------------------------------------------------------------------------
+
+/// What a plugin told the host about its loaded preset since the last
+/// drain, in the order it said it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetHostReport {
+    /// `com.resonance.preset-session` `report`: the identity and modified
+    /// flag; `None` for "nothing loaded".
+    Identity(Option<resonance_common::preset_session::IdentityReport>),
+    /// `clap_host_preset_load.loaded()`.
+    Loaded {
+        location: PresetLocation,
+        load_key: Option<String>,
+    },
+    /// `clap_host_preset_load.on_error()`.
+    Error { message: String },
+}
+
+/// The host's `clap_host_preset_load` vtable.
+pub(super) fn host_preset_load_ext() -> clap_host_preset_load {
+    clap_host_preset_load {
+        on_error: Some(host_preset_on_error),
+        loaded: Some(host_preset_loaded),
+    }
+}
+
+/// The host's `com.resonance.preset-session` vtable.
+pub(super) fn host_preset_session_ext() -> HostPresetSession {
+    HostPresetSession {
+        report: Some(host_preset_report),
+    }
+}
+
+unsafe fn c_str(p: *const c_char) -> Option<String> {
+    if p.is_null() {
+        None
+    } else {
+        // SAFETY: a NUL-terminated string from the plugin, valid for the call.
+        Some(unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned())
+    }
+}
+
+unsafe fn location_from(kind: u32, location: *const c_char) -> Option<PresetLocation> {
+    use clap_sys::factory::preset_discovery::{
+        CLAP_PRESET_DISCOVERY_LOCATION_FILE, CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN,
+    };
+    match kind {
+        CLAP_PRESET_DISCOVERY_LOCATION_PLUGIN => Some(PresetLocation::Plugin),
+        CLAP_PRESET_DISCOVERY_LOCATION_FILE => {
+            // SAFETY: as for `c_str`.
+            unsafe { c_str(location) }.map(|p| PresetLocation::File(p.into()))
+        }
+        _ => None,
+    }
+}
+
+/// `[main-thread]` per CLAP; only queued here, drained by the engine's
+/// host-request poll.
+unsafe extern "C" fn host_preset_loaded(
+    host: *const clap_host,
+    kind: u32,
+    location: *const c_char,
+    load_key: *const c_char,
+) {
+    // SAFETY: the host pointer is ours; strings valid for the call.
+    unsafe {
+        let Some(data) = super::host_data_from(host) else {
+            return;
+        };
+        let Some(location) = location_from(kind, location) else {
+            return;
+        };
+        data.preset_reports.lock().push(PresetHostReport::Loaded {
+            location,
+            load_key: c_str(load_key),
+        });
+    }
+}
+
+unsafe extern "C" fn host_preset_on_error(
+    host: *const clap_host,
+    _kind: u32,
+    _location: *const c_char,
+    _load_key: *const c_char,
+    os_error: i32,
+    msg: *const c_char,
+) {
+    // SAFETY: as for `host_preset_loaded`.
+    unsafe {
+        let Some(data) = super::host_data_from(host) else {
+            return;
+        };
+        let message = c_str(msg).unwrap_or_else(|| format!("preset load failed ({os_error})"));
+        data.preset_reports.lock().push(PresetHostReport::Error { message });
+    }
+}
+
+unsafe extern "C" fn host_preset_report(host: *const c_void, json: *const c_char) {
+    // SAFETY: as for `host_preset_loaded`.
+    unsafe {
+        let Some(data) = super::host_data_from(host as *const clap_host) else {
+            return;
+        };
+        let Some(text) = c_str(json) else {
+            return;
+        };
+        let identity = resonance_common::preset_session::IdentityReport::parse(&text);
+        data.preset_reports.lock().push(PresetHostReport::Identity(identity));
+    }
+}
+
+impl ClapInstance {
+    /// Everything the plugin reported about its preset since the last
+    /// call. Engine thread.
+    pub fn take_preset_reports(&mut self) -> Vec<PresetHostReport> {
+        std::mem::take(&mut *self.host_data.preset_reports.lock())
+    }
+
+    /// Tell a Resonance plugin which params the host automates, so its
+    /// modified comparison leaves them out (D8). False for a plugin
+    /// without `com.resonance.preset-session`. `[main-thread]`.
+    pub fn set_preset_ignored_params(&mut self, clap_ids: &[u32]) -> bool {
+        let Some(ext) = self
+            .extension(EXTENSION_ID)
+            .map(|p| p as *const PluginPresetSession)
+        else {
+            return false;
+        };
+        // SAFETY: `ext` came from `get_extension` for this id, whose layout
+        // is `PluginPresetSession` on both ends.
+        let Some(set) = (unsafe { (*ext).set_ignored_params }) else {
+            return false;
+        };
+        let Ok(json) = std::ffi::CString::new(
+            resonance_common::preset_session::ignored_params_json(clap_ids),
+        )
+        else {
+            return false;
+        };
+        // SAFETY: the plugin is live; the string outlives the call.
+        unsafe { set(self.plugin as *const c_void, json.as_ptr()) };
+        true
     }
 }

@@ -118,3 +118,70 @@ fn preset_load_takes_a_factory_id_or_a_file() {
     drop(instance);
     drop(bundle);
 }
+
+/// The identity reaches the host (`com.resonance.preset-session`, slice
+/// P5): a factory load is reported with the identity and CLAP's own
+/// `loaded()`; a host param change flips `modified` (the plugin compares on
+/// its main thread, editor or not), moving it back clears it, and a param
+/// the host says it automates is left out of the comparison.
+#[test]
+fn the_plugin_reports_its_preset_and_whether_it_was_edited() {
+    use resonance_audio::test_support::PresetHostReport as R;
+    let Some(path) = plugin_binary("resonance-gate") else {
+        return;
+    };
+    let bundle = ClapBundle::load(&path).expect("the gate bundle should load");
+    let id = bundle.descriptors()[0].id.clone();
+    let mut instance = bundle.create_instance(&id, 48_000).expect("create_instance");
+    let _ = instance.take_preset_reports();
+
+    assert!(instance.load_preset_from_location(
+        &PluginPresetLocation::Plugin,
+        Some("drums-snare-gate")
+    ));
+    let reports = instance.take_preset_reports();
+    let identity = reports.iter().find_map(|r| match r {
+        R::Identity(Some(i)) => Some(i.clone()),
+        _ => None,
+    });
+    let identity = identity.unwrap_or_else(|| panic!("an identity report: {reports:?}"));
+    assert_eq!(identity.id, "drums-snare-gate");
+    assert_eq!(identity.source, "factory");
+    assert!(!identity.modified);
+    assert!(
+        reports.iter().any(|r| matches!(r,
+            R::Loaded { location: PluginPresetLocation::Plugin, load_key: Some(k) }
+                if k == "drums-snare-gate")),
+        "CLAP's loaded() for other hosts too: {reports:?}"
+    );
+
+    let threshold = instance
+        .query_params()
+        .into_iter()
+        .find(|p| p.name.eq_ignore_ascii_case("threshold"))
+        .expect("the gate has a Threshold");
+    let loaded = threshold.current_value;
+    let mut last_modified = |instance: &mut resonance_audio::test_support::ClapInstance| {
+        assert!(instance.flush_pending_params());
+        instance.run_requested_callback();
+        instance.take_preset_reports().into_iter().rev().find_map(|r| match r {
+            R::Identity(Some(i)) => Some(i.modified),
+            _ => None,
+        })
+    };
+
+    instance.set_param(threshold.id, loaded - 6.0);
+    assert_eq!(last_modified(&mut instance), Some(true), "a host edit is an edit");
+    instance.set_param(threshold.id, loaded);
+    assert_eq!(last_modified(&mut instance), Some(false), "and back is not");
+
+    assert!(instance.set_preset_ignored_params(&[threshold.id]));
+    instance.set_param(threshold.id, loaded - 6.0);
+    assert_eq!(
+        last_modified(&mut instance),
+        None,
+        "an automated param moving is not an edit: nothing changed to report"
+    );
+    drop(instance);
+    drop(bundle);
+}

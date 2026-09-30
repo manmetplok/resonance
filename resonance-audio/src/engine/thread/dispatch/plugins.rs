@@ -80,6 +80,10 @@ pub(super) fn dispatch_plugins(
             location,
             load_key,
         } => plugins::handle_load_plugin_preset_from_location(ctx, instance_id, location, load_key),
+        AudioCommand::SetPluginPresetIgnoredParams {
+            instance_id,
+            clap_ids,
+        } => plugins::handle_set_plugin_preset_ignored_params(ctx, instance_id, clap_ids),
         AudioCommand::SaveAllPluginStates => plugins::handle_save_all_plugin_states(ctx),
         _ => unreachable!("dispatch_plugins: unexpected command"),
     }

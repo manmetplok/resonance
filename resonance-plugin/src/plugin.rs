@@ -48,6 +48,30 @@ pub trait ExtraStateSaver: Send + Sync {
             .filter(|(k, _)| keys.contains(&k.as_str()))
             .collect()
     }
+
+    /// The bridge hands the saver a callback to run whenever the loaded
+    /// preset identity or its modified flag changes (from any thread): it
+    /// asks the host for a main-thread callback, where the change is
+    /// reported (`com.resonance.preset-session`, CLAP `preset-load`
+    /// `loaded`). Only `PresetSession` uses it.
+    fn set_change_notifier(&self, _notify: Arc<dyn Fn() + Send + Sync>) {}
+
+    /// The identity to report to the host, as
+    /// `resonance_common::preset_session` JSON; `None` for a saver that
+    /// tracks no identity.
+    fn preset_report(&self) -> Option<String> {
+        None
+    }
+
+    /// The CLAP ids of the params the host automates, which a modified
+    /// comparison leaves out (plugin-preset-library.md D8).
+    fn set_ignored_params(&self, _clap_ids: Vec<u32>) {}
+
+    /// Compare the live params with the loaded preset now (unthrottled)
+    /// and update the modified flag: the bridge calls it on the main
+    /// thread after host param changes, when no editor frame is running
+    /// the comparison.
+    fn compare_preset_modified(&self, _params: &[&dyn crate::param::Param]) {}
 }
 
 /// Parameter text conversion that works while the plugin object is inside

@@ -215,6 +215,10 @@ pub enum PluginMessage {
         /// comes along (plugin-preset-library.md §6.7). `None` recalls the
         /// params only.
         preset_state: Option<Vec<u8>>,
+        /// The preset's id and source: the slot's loaded-preset identity
+        /// until the plugin reports its own (slice P5).
+        preset_id: String,
+        preset_source: resonance_control::methods::plugin_preset::PluginPresetSource,
     },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),

@@ -115,9 +115,21 @@ pub fn preset_bar(
             event = editor.step(bank, session, 1, params);
         }
 
-        if session.is_modified() {
-            ui.label(egui::RichText::new("•").weak())
-                .on_hover_text("Edited since the preset was loaded");
+        // Modified is a comparison with the loaded preset (§7), re-run at
+        // most every 100 ms: a knob turned and back is not an edit, a host
+        // change is. The hover names what moved.
+        if session.refresh_modified(params) {
+            let hover = match session.changed_params(params) {
+                Some(changed) if !changed.is_empty() => {
+                    let n = changed.len();
+                    let shown: Vec<&str> = changed.iter().take(4).map(String::as_str).collect();
+                    let more = if n > 4 { ", …" } else { "" };
+                    let noun = if n == 1 { "parameter" } else { "parameters" };
+                    format!("{n} {noun} changed: {}{more}", shown.join(", "))
+                }
+                _ => "Edited since the preset was loaded".to_string(),
+            };
+            ui.label(egui::RichText::new("•").weak()).on_hover_text(hover);
         }
 
         // Browse opens the library overlay; Save overwrites the loaded

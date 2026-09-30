@@ -90,7 +90,9 @@ pub use types::*;
 /// (resolver 2 keeps dev-dependency features out of normal builds).
 #[cfg(feature = "test-internals")]
 pub mod test_support {
-    pub use crate::clap_host::{ClapBundle, ClapInstance, PluginMap, PluginSlot, SyncClapInstance};
+    pub use crate::clap_host::{
+        ClapBundle, ClapInstance, PluginMap, PluginSlot, PresetHostReport, SyncClapInstance,
+    };
     /// The live, additive plugin rescan (ba todo #1307) — exposed so
     /// `tests/clap_host/plugin_rescan.rs` can assert it never loads a bundle it
     /// already holds, which is what keeps running instances safe. The

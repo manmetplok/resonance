@@ -143,13 +143,39 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                     param.current_value = value;
                 }
             });
+            // A plugin that reports its own modified flag compares; for one
+            // that does not, a host edit is the one edit the host sees.
+            if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
+                if !identity.reported {
+                    identity.modified = true;
+                }
+            }
         }
         PluginMessage::LoadPluginPreset {
             instance_id,
             values,
-            preset_name: _,
+            preset_name,
             preset_state,
+            preset_id,
+            preset_source,
         } => {
+            // The identity, optimistically: a reporting plugin confirms it
+            // (and keeps `reported`); for any other it is all there is.
+            let reported = r
+                .presets
+                .plugin_preset_identity
+                .get(&instance_id)
+                .is_some_and(|i| i.reported);
+            r.presets.plugin_preset_identity.insert(
+                instance_id,
+                crate::state::presets::SlotPresetIdentity {
+                    source: preset_source,
+                    id: preset_id,
+                    name: preset_name,
+                    modified: false,
+                    reported,
+                },
+            );
             // Same two steps as SetPluginParam, once per parameter: tell
             // the engine, then move the app's mirror so every reader
             // (generic panel, `track.plugin_params`, its MCP tool) agrees

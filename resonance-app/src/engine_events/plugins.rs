@@ -698,13 +698,85 @@ pub(super) fn preset_state_saved(
     }
 }
 
-/// The plugin reports it loaded a preset (P5 fills this in).
+/// The plugin says it loaded a preset (`clap_host_preset_load.loaded`).
+/// For a plugin that reports its identity itself this adds nothing; for
+/// any other it is the identity: a factory preset by its load key, a file
+/// by its path (slice P5; P8 names discovered presets properly).
 pub(super) fn preset_loaded(
-    _r: &mut Resonance,
-    _instance_id: PluginInstanceId,
-    _location: resonance_audio::types::PluginPresetLocation,
-    _load_key: Option<String>,
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    location: resonance_audio::types::PluginPresetLocation,
+    load_key: Option<String>,
 ) {
+    use resonance_audio::types::PluginPresetLocation as L;
+    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    if r
+        .presets
+        .plugin_preset_identity
+        .get(&instance_id)
+        .is_some_and(|i| i.reported)
+    {
+        return;
+    }
+    let (source, id, name) = match location {
+        L::Plugin => {
+            let key = load_key.unwrap_or_default();
+            (PluginPresetSource::Factory, key.clone(), key)
+        }
+        L::File(path) => {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let id = match load_key {
+                Some(k) => format!("{}#{k}", path.display()),
+                None => path.display().to_string(),
+            };
+            (PluginPresetSource::User, id, stem)
+        }
+    };
+    r.presets.plugin_preset_identity.insert(
+        instance_id,
+        crate::state::presets::SlotPresetIdentity {
+            source,
+            id,
+            name,
+            modified: false,
+            reported: false,
+        },
+    );
+}
+
+/// A Resonance plugin reported its loaded preset and modified flag
+/// (`com.resonance.preset-session`). The report is the truth from now on.
+pub(super) fn preset_identity(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    identity: Option<resonance_common::preset_session::IdentityReport>,
+) {
+    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    match identity {
+        Some(report) => {
+            let source = if report.source == "factory" {
+                PluginPresetSource::Factory
+            } else {
+                PluginPresetSource::User
+            };
+            r.presets.plugin_preset_identity.insert(
+                instance_id,
+                crate::state::presets::SlotPresetIdentity {
+                    source,
+                    id: report.id,
+                    name: report.name,
+                    modified: report.modified,
+                    reported: true,
+                },
+            );
+        }
+        None => {
+            r.presets.plugin_preset_identity.remove(&instance_id);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -10,6 +10,19 @@
 use crate::{PendingPluginPresetSave, PendingPresetSave};
 use resonance_audio::types::{PluginInstanceId, TrackId};
 
+/// The preset a plugin slot has loaded, and whether it was edited since
+/// (slice P5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotPresetIdentity {
+    pub source: resonance_control::methods::plugin_preset::PluginPresetSource,
+    pub id: String,
+    pub name: String,
+    pub modified: bool,
+    /// The plugin reports its own identity and modified flag
+    /// (`com.resonance.preset-session`); the host no longer guesses.
+    pub reported: bool,
+}
+
 /// Track-preset and plugin-preset save/apply state.
 #[derive(Debug, Clone, Default)]
 pub struct PresetState {
@@ -27,6 +40,9 @@ pub struct PresetState {
     /// A `*.save_plugin_preset` waiting for the plugin to hand back its
     /// state (ba todo #1333).
     pub(crate) pending_plugin_preset_save: Option<PendingPluginPresetSave>,
+    /// Each plugin slot's loaded preset, keyed by instance: reported by
+    /// the plugin, else set by the host's own loads (slice P5).
+    pub plugin_preset_identity: std::collections::HashMap<PluginInstanceId, SlotPresetIdentity>,
     /// Root the plugin-preset directories are read from and written to,
     /// when it is not the user's real data directory. A test seam.
     pub plugin_preset_root: Option<std::path::PathBuf>,

@@ -206,7 +206,11 @@ impl<'a, P: ResonancePlugin> PluginPresetLoadImpl for ClapMainThread<'a, P> {
         let host_ext = self.host.shared().get_extension::<HostPresetLoad>();
         match result {
             Ok(()) => {
-                if let Some(ext) = host_ext {
+                // The identity report (and, for a factory preset, CLAP's
+                // `loaded()`) goes out now, from this main-thread call; a
+                // file location is announced here as CLAP asks.
+                self.report_preset_identity();
+                if let (Location::File { .. }, Some(ext)) = (location, host_ext) {
                     ext.loaded(&mut self.host, location, load_key);
                 }
                 Ok(())

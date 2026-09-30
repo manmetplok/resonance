@@ -69,7 +69,7 @@ pub use marks::{mark_key, MarksSource, NoMarks};
 pub use rows::{PresetRow, PresetRows};
 pub use query::{Facets, Hit, Query, QueryResult, Sort};
 pub use browser::{FormMode, MetaForm, PresetBrowser};
-pub use session::{PresetSession, SoundSnapshot};
+pub use session::{Baseline, PresetSession, SoundSnapshot, MODIFIED_COMPARE_INTERVAL};
 
 /// Environment variable overriding the root directory user presets are
 /// read from and written to. Points at the directory that *contains* the

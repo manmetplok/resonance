@@ -13,9 +13,35 @@ use crate::plugin::ResonancePlugin;
 
 /// Temporary param used for serialization when the plugin instance is active
 /// (owned by `ClapAudioProcessor`) and not accessible from the main thread.
-struct TempParamOwned {
-    id: String,
-    value: f64,
+/// Carries the metadata the preset-modified comparison reads, too.
+pub(super) struct TempParamOwned {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) value: f64,
+    pub(super) min: f64,
+    pub(super) max: f64,
+    pub(super) clap_id: u32,
+    pub(super) preset_excluded: bool,
+}
+
+impl TempParamOwned {
+    /// Every param as the shared atomics hold it.
+    pub(super) fn all_from(shared: &super::shared::ClapShared<'_>) -> Vec<Self> {
+        shared
+            .param_metas
+            .iter()
+            .enumerate()
+            .map(|(i, meta)| TempParamOwned {
+                id: meta.str_id.clone(),
+                name: meta.name.clone(),
+                value: shared.get_value(i),
+                min: meta.min,
+                max: meta.max,
+                clap_id: meta.clap_id,
+                preset_excluded: meta.preset_excluded,
+            })
+            .collect()
+    }
 }
 
 impl Param for TempParamOwned {
@@ -23,7 +49,7 @@ impl Param for TempParamOwned {
         &self.id
     }
     fn name(&self) -> &str {
-        &self.id
+        &self.name
     }
     fn get_plain(&self) -> f64 {
         self.value
@@ -33,10 +59,16 @@ impl Param for TempParamOwned {
         self.value
     }
     fn min_plain(&self) -> f64 {
-        0.0
+        self.min
     }
     fn max_plain(&self) -> f64 {
-        1.0
+        self.max
+    }
+    fn clap_id(&self) -> u32 {
+        self.clap_id
+    }
+    fn preset_excluded(&self) -> bool {
+        self.preset_excluded
     }
     fn display(&self, value: f64) -> String {
         format!("{:.4}", value)
@@ -78,16 +110,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
             // Serialize params from the shared atomics and merge any
             // extra-state saver's output using the same `"extra" ->
             // top-level` shape the plugin would produce.
-            let temp_params: Vec<TempParamOwned> = self
-                .shared
-                .param_metas
-                .iter()
-                .enumerate()
-                .map(|(i, meta)| TempParamOwned {
-                    id: meta.str_id.clone(),
-                    value: self.shared.get_value(i),
-                })
-                .collect();
+            let temp_params = TempParamOwned::all_from(&self.shared);
             let refs: Vec<&dyn Param> = temp_params.iter().map(|p| p as &dyn Param).collect();
             let mut json = crate::state::params_to_json(&refs);
             if let Some(saver) = &self.extra_state_saver {

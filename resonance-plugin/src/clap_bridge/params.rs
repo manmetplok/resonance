@@ -121,6 +121,7 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                                 }
                             }
                             self.shared.set_value(slot, landed);
+                            self.shared.note_host_param_change();
                         }
                     }
                 }
@@ -148,6 +149,7 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             if slot < self.plugin.param_count() {
                                 self.plugin.param(slot).set_plain(e.value());
                             }
+                            self.shared.note_host_param_change();
                             // Mirror into the shared atomics, exactly as
                             // the `ParamValue` arm of `process()` does.
                             // While the plugin is active the main-thread

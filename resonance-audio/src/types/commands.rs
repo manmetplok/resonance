@@ -610,6 +610,13 @@ pub enum AudioCommand {
         location: PluginPresetLocation,
         load_key: Option<String>,
     },
+    /// The CLAP ids of the params the host automates on this instance: a
+    /// Resonance plugin leaves them out of its preset-modified comparison
+    /// (`com.resonance.preset-session`, D8). Ignored by other plugins.
+    SetPluginPresetIgnoredParams {
+        instance_id: PluginInstanceId,
+        clap_ids: Vec<u32>,
+    },
     /// Open the plugin's editor window (requires CLAP_EXT_GUI).
     OpenPluginEditor {
         instance_id: PluginInstanceId,
