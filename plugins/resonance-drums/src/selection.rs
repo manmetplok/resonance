@@ -614,7 +614,6 @@ impl KitSelection {
         }
         KitRef::from_manifest_path(manifest, self.library.root().as_deref())
     }
-
 }
 
 fn fold(text: &str) -> String {
@@ -933,8 +932,12 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
     let fallback_path = fallback.as_ref().and_then(|f| resolve(f).map(|(p, _)| p));
     // A kit another process indexed since this one read the index (a
     // rename found by id): look once more after re-reading it.
-    let found = resolve(&wanted)
-        .or_else(|| sel.library.reload_if_changed().then(|| resolve(&wanted)).flatten());
+    let found = resolve(&wanted).or_else(|| {
+        sel.library
+            .reload_if_changed()
+            .then(|| resolve(&wanted))
+            .flatten()
+    });
     Some(match found {
         Some((path, _)) => StateKit {
             fallback: fallback_path.filter(|f| *f != path),

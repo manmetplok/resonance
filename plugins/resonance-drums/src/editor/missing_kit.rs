@@ -65,7 +65,10 @@ struct CandidateKey {
 /// The plok.org index entry the missing kit can be downloaded as: its
 /// manifest hash, else its name, in the worker's index or the one cached
 /// on disk. Cached ([`MissingKitState::candidate`]).
-pub(crate) fn download_candidate(app: &mut DrumsEditorApp, missing: &KitRef) -> Option<ServerKit> {
+pub(crate) fn download_candidate(
+    app: &mut DrumsEditorApp,
+    missing: &KitRef,
+) -> Option<ServerKit> {
     let key = {
         let state = app.library.download().state.lock();
         CandidateKey {

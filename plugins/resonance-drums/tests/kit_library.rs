@@ -254,7 +254,11 @@ fn the_selection_params_are_declared_as_specified() {
     let plugin = ResonanceDrums::new();
     let select = plugin.param(KIT_SELECT);
     assert_eq!(select.id(), "kit_select");
-    assert_eq!(select.min_plain(), PARKED_KIT as f64, "-2: parked (external or missing)");
+    assert_eq!(
+        select.min_plain(),
+        PARKED_KIT as f64,
+        "-2: parked (external or missing)"
+    );
     assert_eq!(select.max_plain(), selection::MAX_KIT_SLOT as f64);
     assert!(select.is_stepped());
     assert!(!select.is_automatable(), "a kit swap is no automation lane");
@@ -879,7 +883,11 @@ fn a_state_load_racing_the_watcher_is_never_undone_by_a_stale_host_write() {
         watcher.join().unwrap();
         let _ = selection::apply_pending(&bridge);
 
-        assert_eq!(bridge.wanted_kit_path(), Some(alpha.clone()), "round {round}");
+        assert_eq!(
+            bridge.wanted_kit_path(),
+            Some(alpha.clone()),
+            "round {round}"
+        );
         assert_eq!(
             *bridge.kit_fallback.lock(),
             Some(charlie.clone()),
@@ -955,7 +963,11 @@ fn an_external_kit_parks_at_minus_two_and_minus_two_brings_it_back() {
     assert!(plugin.bridge.params.selection.missing().is_none());
 
     host_writes(&plugin, NO_KIT).unwrap();
-    assert_eq!(plugin.bridge.wanted_kit_path(), None, "-1 is the built-in kit");
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        None,
+        "-1 is the built-in kit"
+    );
     assert_eq!(
         select.display(PARKED_KIT as f64),
         "Yankee (external)",
@@ -1000,8 +1012,14 @@ fn a_missing_kit_parks_at_minus_two_and_minus_two_restores_it() {
     );
 
     host_writes(&plugin, NO_KIT).unwrap();
-    assert!(sel.missing().is_none(), "the built-in kit, chosen: no banner");
-    assert_eq!(saver_for(&plugin).save()["kit_ref"], serde_json::Value::Null);
+    assert!(
+        sel.missing().is_none(),
+        "the built-in kit, chosen: no banner"
+    );
+    assert_eq!(
+        saver_for(&plugin).save()["kit_ref"],
+        serde_json::Value::Null
+    );
 
     host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
     assert!(sel.missing().is_none());
@@ -1009,7 +1027,11 @@ fn a_missing_kit_parks_at_minus_two_and_minus_two_restores_it() {
 
     host_writes(&plugin, PARKED_KIT).unwrap();
     assert!(sel.missing().is_some(), "missing again");
-    assert_eq!(plugin.bridge.wanted_kit_path(), None, "the built-in kit plays");
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        None,
+        "the built-in kit plays"
+    );
     assert_eq!(kit_select_text(&plugin), "Gone Kit (missing)");
     assert_eq!(saver_for(&plugin).save()["kit_ref"], missing_ref(&home));
 }
@@ -1049,9 +1071,16 @@ fn kit_select_parses_numbers_and_numeric_names_sanely() {
     let plugin = plugin_on(&lib);
     let select = plugin.param(KIT_SELECT);
     let twelve = slot_of(&lib, "12");
-    assert_ne!(twelve, 12, "the fixture needs the name and the slot to differ");
+    assert_ne!(
+        twelve, 12,
+        "the fixture needs the name and the slot to differ"
+    );
     assert_eq!(select.display(twelve as f64), "12");
-    assert_eq!(select.parse("12"), Some(twelve as f64), "the name, as it reads");
+    assert_eq!(
+        select.parse("12"),
+        Some(twelve as f64),
+        "the name, as it reads"
+    );
     assert_eq!(select.parse("slot 12"), Some(12.0));
     assert_eq!(select.parse("(empty slot 40)"), Some(40.0));
     assert_eq!(select.display(40.0), "(empty slot 40)");
@@ -1063,7 +1092,11 @@ fn kit_select_parses_numbers_and_numeric_names_sanely() {
     assert_eq!(select.parse("slot -1"), None);
     // Every text a value reads as parses back to it.
     for v in [NO_KIT, PARKED_KIT, alpha, twelve, 40] {
-        assert_eq!(select.parse(&select.display(v as f64)), Some(v as f64), "{v}");
+        assert_eq!(
+            select.parse(&select.display(v as f64)),
+            Some(v as f64),
+            "{v}"
+        );
     }
 }
 
@@ -1134,13 +1167,13 @@ fn kit_load_progress_says_empty_slot_and_failed() {
         Some("empty slot")
     );
 
-    let broken_slot = lib
-        .read()
-        .entries()
-        .iter()
-        .find(|e| e.manifest_path.starts_with(&broken))
-        .and_then(|e| e.slot)
-        .expect("a kit whose manifest does not parse still holds a slot") as i32;
+    let broken_slot =
+        lib.read()
+            .entries()
+            .iter()
+            .find(|e| e.manifest_path.starts_with(&broken))
+            .and_then(|e| e.slot)
+            .expect("a kit whose manifest does not parse still holds a slot") as i32;
     assert!(host_writes(&plugin, broken_slot).is_err());
     assert_eq!(progress.get_plain(), 0.0);
     assert_eq!(progress.display(0.0), "failed");
@@ -1169,7 +1202,10 @@ fn live_kit_select_follows_a_state_load() {
         source.live_value(KIT_SELECT),
         Some(slot_of(&lib, "Alpha Kit") as f64)
     );
-    assert!(source.live_value(KIT_LOAD_PROGRESS).unwrap() < 1.0, "loading");
+    assert!(
+        source.live_value(KIT_LOAD_PROGRESS).unwrap() < 1.0,
+        "loading"
+    );
     let missing = serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) });
     saver_for(&plugin).load(&missing);
     assert_eq!(source.live_value(KIT_SELECT), Some(PARKED_KIT as f64));
@@ -1218,7 +1254,11 @@ fn the_host_render_mode_reaches_the_sampler() {
 // ---------------------------------------------------------------------------
 
 fn edits(plugin: &ResonanceDrums) -> u64 {
-    plugin.bridge.host_asks.kit_select_edits.load(Ordering::Relaxed)
+    plugin
+        .bridge
+        .host_asks
+        .kit_select_edits
+        .load(Ordering::Relaxed)
 }
 
 /// The editor's Library Load (here: an import, which loads the kit it
@@ -1240,7 +1280,11 @@ fn a_library_load_is_one_host_edit_and_a_state_load_is_none() {
     assert_eq!(plugin.bridge.params.kit_select.value(), gamma, "loaded");
     assert_eq!(edits(&plugin), 1, "one undoable edit");
 
-    let rescans = plugin.bridge.host_asks.value_rescans.load(Ordering::Relaxed);
+    let rescans = plugin
+        .bridge
+        .host_asks
+        .value_rescans
+        .load(Ordering::Relaxed);
     let state = serde_json::json!({
         "params": {},
         "kit_ref": KitRef::from_manifest_path(
@@ -1256,7 +1300,12 @@ fn a_library_load_is_one_host_edit_and_a_state_load_is_none() {
     );
     assert_eq!(edits(&plugin), 1, "a state load is no edit");
     assert!(
-        plugin.bridge.host_asks.value_rescans.load(Ordering::Relaxed) > rescans,
+        plugin
+            .bridge
+            .host_asks
+            .value_rescans
+            .load(Ordering::Relaxed)
+            > rescans,
         "but the host re-reads the value"
     );
 
@@ -1302,16 +1351,24 @@ fn the_banner_reads_the_cached_index_once() {
     let index = serde_json::json!({ "drumkits": [{
         "name": "Gone Kit", "file": "gone.zip", "manifest_sha256": "d".repeat(64),
     }] });
-    let cache = home.root().join(resonance_drums::download::INDEX_CACHE_FILE);
+    let cache = home
+        .root()
+        .join(resonance_drums::download::INDEX_CACHE_FILE);
     std::fs::write(&cache, serde_json::to_vec(&index).unwrap()).unwrap();
 
     let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
     editor.frame(Vec::new());
-    assert!(editor.frame(Vec::new()).widget("missing.download").is_some());
+    assert!(editor
+        .frame(Vec::new())
+        .widget("missing.download")
+        .is_some());
     std::fs::remove_file(&cache).unwrap();
     for _ in 0..3 {
         assert!(
-            editor.frame(Vec::new()).widget("missing.download").is_some(),
+            editor
+                .frame(Vec::new())
+                .widget("missing.download")
+                .is_some(),
             "the index was read from disk again"
         );
     }
