@@ -9,6 +9,7 @@ use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{
     self, LoadedMicBank, LoadedPad, LoadedSample, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX,
 };
+use crate::kit_loader::KitLoadProgress;
 use crate::params::DrumParams;
 use crate::voice::{
     fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
@@ -105,6 +106,10 @@ pub struct DrumSampler {
     /// output port as `f32::to_bits`, `[left, right]`. Written at the end
     /// of `render_block`; `None` when running headless / in tests.
     out_peak: Option<Arc<[AtomicU32; 2]>>,
+    /// Kit load progress, told each time a kit is taken from the mailbox
+    /// (one atomic add) so `kit_load_progress` reaches 1.0 only once the
+    /// kit is really in place. `None` headless / in tests.
+    load_progress: Option<Arc<KitLoadProgress>>,
     /// Receives new kit versions from the loader thread; `try_recv` at the
     /// top of each process block swaps in a freshly loaded kit without
     /// blocking. The audio thread is not the only receiver: a loader
@@ -196,6 +201,7 @@ impl DrumSampler {
             globals: GlobalSettings::default(),
             last_rr: None,
             out_peak: None,
+            load_progress: None,
             kit_receiver,
             janitor_sender,
             retired_pads: std::array::from_fn(|_| None),
@@ -274,6 +280,12 @@ impl DrumSampler {
     /// plugin's real output level instead of a dead bar.
     pub fn set_out_peak(&mut self, out_peak: Arc<[AtomicU32; 2]>) {
         self.out_peak = Some(out_peak);
+    }
+
+    /// Attach the kit load progress the bridge publishes, so taking a kit
+    /// from the mailbox marks the load complete.
+    pub fn set_load_progress(&mut self, progress: Arc<KitLoadProgress>) {
+        self.load_progress = Some(progress);
     }
 
     /// Bytes of decoded sample data this kit holds, counting every mic
@@ -363,6 +375,9 @@ impl DrumSampler {
             let Ok(new_pads) = self.kit_receiver.try_recv() else {
                 return;
             };
+            if let Some(progress) = &self.load_progress {
+                progress.note_taken();
+            }
             for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
                 // Voices of an earlier retired kit keep their own fade
                 // against their own slot.

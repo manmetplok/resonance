@@ -3,31 +3,39 @@
 //! audio thread via a `crossbeam_channel`.
 //!
 //! The loader runs on a dedicated background thread — never on the audio
-//! thread and never on the editor/UI thread. It only touches:
-//!   * the filesystem (read JSON + WAVs),
-//!   * the shared `kit_path` / `kit_status` arcs (for reporting),
-//!   * the SPSC channel (for publishing the new pad set).
+//! thread and never on the editor/UI thread — and decodes on a small pool
+//! of scoped workers it starts per load. It only touches:
+//!   * the filesystem (read JSON + WAVs), through the process-wide
+//!     [`cache`] of decoded takes (E5),
+//!   * the bridge's reporting state (`kit_path`, `kit_status`, progress,
+//!     memory figures, the last build for incremental reloads),
+//!   * the one-slot mailbox (for publishing the new pad set).
 
-use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use crossbeam_channel::TrySendError;
 
-use crate::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::LoadedPad;
+use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::kit::{LoadedPad, SampleData};
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::KitBridge;
 
+pub mod cache;
 pub mod decode;
 pub mod fallback;
 pub mod manifest;
+pub mod progress;
 
+pub use cache::{SampleCache, SampleKey};
 pub use fallback::build_fallback_pad;
 pub use manifest::{parse_vel_index, KitManifest, MicSetup, PadMicChoices};
+pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
-use decode::{load_bank_for_position, load_overhead_bank};
+use decode::{assemble_bank, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
 
 // ---------------------------------------------------------------------------
 // Drum-piece -> pad slot mapping.
@@ -117,6 +125,7 @@ pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
 // Status reported by the loader thread, rendered by the editor.
 // ---------------------------------------------------------------------------
 
+
 /// Everything a kit is decoded from except the sample rate: the manifest
 /// and the mic / articulation choices. Two loads with equal requests at
 /// the same rate decode the same kit.
@@ -126,6 +135,81 @@ pub struct KitRequest {
     pub overhead_setup_key: String,
     pub pad_choices: [PadMicChoices; NUM_PADS],
     pub articulations: [bool; NUM_PADS],
+}
+
+impl KitRequest {
+    /// What pad `pad` of this request is built from, besides the kit.
+    pub fn pad_request(&self, pad: usize) -> PadRequest {
+        PadRequest {
+            articulation: self.articulations[pad],
+            close_setups: self.pad_choices[pad].clone(),
+            overhead_setup_key: self.overhead_setup_key.clone(),
+        }
+    }
+}
+
+/// What one pad is built from, besides the kit and the rate. Two builds
+/// of a pad with equal `PadRequest`s from the same manifest at the same
+/// rate are the same pad, which is what lets a reload keep it (E4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PadRequest {
+    pub articulation: bool,
+    pub close_setups: PadMicChoices,
+    pub overhead_setup_key: String,
+}
+
+/// The manifest file as it was when a kit was built from it, so a reload
+/// can tell an untouched manifest from an edited one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifestStamp {
+    pub modified: Option<std::time::SystemTime>,
+    pub len: u64,
+}
+
+impl ManifestStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        Some(Self {
+            modified: meta.modified().ok(),
+            len: meta.len(),
+        })
+    }
+}
+
+/// A finished kit build, kept on the bridge ([`KitBridge::built_kit`]) so
+/// the next load of the same kit at the same rate rebuilds only the pads
+/// whose [`PadRequest`] changed (E4) and clones the rest. Its pads share
+/// their sample memory with the kit the sampler plays, so keeping it
+/// costs no audio memory of its own.
+#[derive(Clone)]
+pub struct BuiltKit {
+    pub path: PathBuf,
+    pub manifest: Option<ManifestStamp>,
+    pub sample_rate: f32,
+    pub pad_requests: Vec<PadRequest>,
+    pub pads: Vec<LoadedPad>,
+}
+
+impl BuiltKit {
+    /// Pad `pad` of this build, if a build of `request` at `sample_rate`
+    /// would give the same pad.
+    fn reusable_pad(
+        &self,
+        path: &Path,
+        manifest: Option<&ManifestStamp>,
+        sample_rate: f32,
+        pad: usize,
+        request: &PadRequest,
+    ) -> Option<&LoadedPad> {
+        let same_kit = self.path == path
+            && manifest.is_some()
+            && self.manifest.as_ref() == manifest
+            && self.sample_rate.to_bits() == sample_rate.to_bits();
+        if !same_kit || self.pad_requests.get(pad) != Some(request) {
+            return None;
+        }
+        self.pads.get(pad)
+    }
 }
 
 /// The kit a loader last put in the audio thread's mailbox, and the rate
@@ -143,25 +227,62 @@ pub enum KitStatus {
     #[default]
     Empty,
     Loading { path: PathBuf },
-    Loaded { name: String, num_pads: usize },
+    /// The kit is loaded. `unreadable` sample files could not be read or
+    /// decoded and were left out (E6) — the editor shows "3 samples
+    /// unreadable"; `unreadable_paths` holds the first few of them.
+    Loaded {
+        name: String,
+        num_pads: usize,
+        unreadable: usize,
+        unreadable_paths: Vec<PathBuf>,
+    },
     Error { message: String },
 }
 
+/// What one load did: the decode counter (a test hook as much as a
+/// readout) and the partial-kit tally.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LoadStats {
+    /// Pads carried over unchanged from the previous build (E4).
+    pub reused_pads: usize,
+    /// Pads built by this load (from the manifest or the built-in kit).
+    pub rebuilt_pads: usize,
+    /// Sample files the rebuilt pads reference.
+    pub files: usize,
+    /// Files decoded from disk by this load.
+    pub decoded: usize,
+    /// Files the shared cache already held (another instance, or this
+    /// instance's previous kit).
+    pub cached: usize,
+    /// Files that could not be read or decoded, and were left out.
+    pub unreadable: usize,
+    /// The first few unreadable files.
+    pub unreadable_paths: Vec<PathBuf>,
+    /// Bytes of decoded audio the kit holds.
+    pub kit_bytes: u64,
+    /// Of `kit_bytes`, what this load found already decoded by someone
+    /// other than this instance — memory shared with another instance.
+    pub shared_bytes: u64,
+}
 
-/// Output of a successful kit load — the decoded pads + a snapshot of
-/// the manifest's mic catalog for the GUI.
+/// Output of a successful kit load — the decoded pads, a snapshot of the
+/// manifest's mic catalog for the GUI, and what the load did.
 pub struct LoadedKit {
     pub pads: Vec<LoadedPad>,
     pub catalog: ManifestMicCatalog,
+    pub stats: LoadStats,
+    /// The build, for the next load to reuse pads from.
+    pub built: BuiltKit,
 }
 
 // ---------------------------------------------------------------------------
-// Public loader entrypoint.
+// Public loader entrypoints.
 // ---------------------------------------------------------------------------
 
 /// Parse the manifest at `manifest_path`, decode every referenced sample at
 /// `target_sr`, and return the assembled pad list + catalog of available
-/// mic setups for the GUI.
+/// mic setups for the GUI. A full load: nothing is reused from an earlier
+/// build (the shared cache still serves takes another kit holds).
 ///
 /// `articulations` is a per-pad boolean: when true, the loader uses the
 /// alternate (ohne Teppich) piece name for that pad instead of the primary.
@@ -172,6 +293,40 @@ pub fn load_kit_from_manifest(
     pad_choices: &[PadMicChoices; NUM_PADS],
     articulations: &[bool; NUM_PADS],
 ) -> Result<LoadedKit, String> {
+    let request = KitRequest {
+        path: manifest_path.to_path_buf(),
+        overhead_setup_key: overhead_setup_key.to_string(),
+        pad_choices: pad_choices.clone(),
+        articulations: *articulations,
+    };
+    load_kit(&request, target_sr, None, cache::global(), &|| {}, &|_| {})
+}
+
+/// Load `request` at `target_sr`.
+///
+/// - Pads whose [`PadRequest`] is unchanged from `previous` (same kit,
+///   same manifest file, same rate) are cloned from it — no file is
+///   touched for them (E4).
+/// - Every other pad's files are fetched through `cache`, decoding only
+///   what no one holds yet (E5), on [`decode::decode_workers`] threads.
+/// - A file that cannot be read or decoded drops that take, a layer left
+///   empty, a bank left empty; the kit still loads and the count is in
+///   [`LoadStats::unreadable`] (E6). A pad whose every file failed is
+///   silent: it keeps its slot with no banks, and plays nothing. Only a
+///   kit in which *no* file could be read fails.
+///
+/// `set_total` is told how many files the load reads once it knows, and
+/// `file_done` runs once per file finished (on a decode worker).
+pub fn load_kit(
+    request: &KitRequest,
+    target_sr: f32,
+    previous: Option<&BuiltKit>,
+    cache: &SampleCache,
+    file_done: &(dyn Fn() + Sync),
+    set_total: &dyn Fn(usize),
+) -> Result<LoadedKit, String> {
+    let manifest_path = request.path.as_path();
+    let manifest_stamp = ManifestStamp::of(manifest_path);
     let bytes = std::fs::read(manifest_path).map_err(|e| format!("read manifest: {e}"))?;
 
     // Two-phase parse: first as raw JSON so we can strip the optional
@@ -192,30 +347,163 @@ pub fn load_kit_from_manifest(
 
     let catalog = ManifestMicCatalog::from_manifest(&manifest);
 
-    let mut pads = Vec::with_capacity(NUM_PADS);
+    // 1. Plan: reuse, built-in fallback, or the piece's banks per pad.
+    enum PadPlan {
+        Reuse(LoadedPad),
+        Fallback,
+        Piece {
+            close: Vec<decode::BankPlan>,
+            overhead: Option<decode::BankPlan>,
+        },
+    }
+    let pad_requests: Vec<PadRequest> = (0..NUM_PADS).map(|i| request.pad_request(i)).collect();
+    let mut jobs = Jobs::default();
+    let mut plans = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
-        let piece_name = if articulations[pad_idx] && !DRUMMICA_ARTICULATION_ALT[pad_idx].is_empty()
-        {
-            DRUMMICA_ARTICULATION_ALT[pad_idx]
-        } else {
-            DRUMMICA_MAPPING[pad_idx]
+        if let Some(pad) = previous.and_then(|prev| {
+            prev.reusable_pad(
+                manifest_path,
+                manifest_stamp.as_ref(),
+                target_sr,
+                pad_idx,
+                &pad_requests[pad_idx],
+            )
+        }) {
+            plans.push(PadPlan::Reuse(pad.clone()));
+            continue;
+        }
+        let piece_name = piece_name_for(pad_idx, request.articulations[pad_idx]);
+        let Some(piece) = manifest.get(piece_name) else {
+            plans.push(PadPlan::Fallback);
+            continue;
         };
-        let pad = match manifest.get(piece_name) {
-            Some(piece) => build_pad_from_piece(
-                mapping,
+        let mut close = Vec::with_capacity(mapping.close_mic_positions.len());
+        for position in mapping.close_mic_positions {
+            if let Some(bank) = plan_bank_for_position(
                 piece_name,
                 piece,
                 kit_dir,
-                target_sr,
-                overhead_setup_key,
-                &pad_choices[pad_idx],
-            )?,
-            None => build_fallback_pad(mapping, target_sr)?,
+                position,
+                request.pad_choices[pad_idx]
+                    .close_setups
+                    .get(*position)
+                    .map(String::as_str),
+                &mut jobs,
+            )? {
+                close.push(bank);
+            }
+        }
+        // Overhead bank: look up the global overhead setup key directly. If
+        // the piece doesn't have that specific setup, fall back to any
+        // OH-prefixed setup the piece does have so the pad still makes sound.
+        let overhead = plan_overhead_bank(
+            piece_name,
+            piece,
+            kit_dir,
+            &request.overhead_setup_key,
+            &mut jobs,
+        )?;
+        plans.push(PadPlan::Piece { close, overhead });
+    }
+
+    // 2. Decode.
+    set_total(jobs.paths.len());
+    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done);
+
+    // 3. Assemble. Takes this instance already held (its previous build)
+    // are not "shared" with anyone else just because the cache served them.
+    let own: HashSet<*const SampleData> = previous
+        .map(|prev| sample_ptrs(&prev.pads))
+        .unwrap_or_default();
+    let mut tally = Tally::default();
+    let mut stats = LoadStats {
+        files: jobs.paths.len(),
+        ..LoadStats::default()
+    };
+    let mut pads = Vec::with_capacity(NUM_PADS);
+    for (plan, mapping) in plans.into_iter().zip(PAD_MAPPINGS.iter()) {
+        let pad = match plan {
+            PadPlan::Reuse(pad) => {
+                stats.reused_pads += 1;
+                pad
+            }
+            PadPlan::Fallback => {
+                stats.rebuilt_pads += 1;
+                build_fallback_pad(mapping, target_sr)?
+            }
+            PadPlan::Piece { close, overhead } => {
+                stats.rebuilt_pads += 1;
+                LoadedPad {
+                    name: mapping.name.to_string(),
+                    choke_group: mapping.choke_group,
+                    output_group: mapping.output_group,
+                    close_mics: close
+                        .iter()
+                        .filter_map(|bank| {
+                            assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
+                        })
+                        .collect(),
+                    overhead: overhead.as_ref().and_then(|bank| {
+                        assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
+                    }),
+                }
+            }
         };
         pads.push(pad);
     }
 
-    Ok(LoadedKit { pads, catalog })
+    if tally.unreadable > 0 && tally.decoded + tally.cached == 0 && stats.reused_pads == 0 {
+        return Err(format!(
+            "none of the kit's {} sample files could be read (first: {})",
+            tally.unreadable,
+            tally
+                .unreadable_paths
+                .first()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        ));
+    }
+
+    stats.decoded = tally.decoded;
+    stats.cached = tally.cached;
+    stats.unreadable = tally.unreadable;
+    stats.unreadable_paths = tally.unreadable_paths;
+    stats.shared_bytes = tally.shared_bytes;
+    stats.kit_bytes = crate::sample_info::total_sample_bytes(&pads) as u64;
+
+    let built = BuiltKit {
+        path: request.path.clone(),
+        manifest: manifest_stamp,
+        sample_rate: target_sr,
+        pad_requests,
+        pads: pads.clone(),
+    };
+    Ok(LoadedKit {
+        pads,
+        catalog,
+        stats,
+        built,
+    })
+}
+
+/// The manifest piece pad `pad_idx` plays: its alternate (ohne Teppich)
+/// piece when `articulation` is set and it has one.
+fn piece_name_for(pad_idx: usize, articulation: bool) -> &'static str {
+    if articulation && !DRUMMICA_ARTICULATION_ALT[pad_idx].is_empty() {
+        DRUMMICA_ARTICULATION_ALT[pad_idx]
+    } else {
+        DRUMMICA_MAPPING[pad_idx]
+    }
+}
+
+/// Every take a kit references, by address.
+fn sample_ptrs(pads: &[LoadedPad]) -> HashSet<*const SampleData> {
+    pads.iter()
+        .flat_map(|pad| pad.close_mics.iter().chain(pad.overhead.iter()))
+        .flat_map(|bank| bank.layers.iter())
+        .flat_map(|layer| layer.round_robins.iter())
+        .map(|take| Arc::as_ptr(take.shared()))
+        .collect()
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -232,6 +520,11 @@ pub fn load_kit_from_manifest(
 /// reaches the audio thread if the host is still running at `target_sr`
 /// when it lands: one that straddles a deactivation is dropped, and the
 /// `initialize` that follows reloads the pending kit at the new rate.
+///
+/// The load is incremental (E4): pads unchanged since the last build
+/// ([`KitBridge::built_kit`]) are reused, so a mic or articulation change
+/// decodes only the pads it touches. Progress is published on
+/// [`KitBridge::load_progress`].
 pub fn spawn_loader(
     manifest_path: PathBuf,
     target_sr: f32,
@@ -247,6 +540,7 @@ pub fn spawn_loader(
         let mut pending = bridge.pending_kit.lock();
         let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *pending = Some((stamp, manifest_path.clone()));
+        bridge.load_progress.begin(stamp);
         stamp
     };
     // Record what this load is being built from, in call order, so the
@@ -254,13 +548,20 @@ pub fn spawn_loader(
     // actually (being) decoded rather than re-triggering every poll.
     *bridge.loaded_articulations.lock() = articulations;
 
+    let request = KitRequest {
+        path: manifest_path,
+        overhead_setup_key,
+        pad_choices,
+        articulations,
+    };
+
     std::thread::Builder::new()
         .name("resonance-drums-loader".to_string())
         .spawn(move || {
             // Publish "Loading" only if we're still the latest load.
             if bridge.load_generation.load(Ordering::Acquire) == stamp {
                 *bridge.kit_status.lock() = KitStatus::Loading {
-                    path: manifest_path.clone(),
+                    path: request.path.clone(),
                 };
             }
 
@@ -270,20 +571,29 @@ pub fn spawn_loader(
                 let _ = gate.recv();
             }
 
+            // A superseded load does not decode at all.
+            if bridge.load_generation.load(Ordering::Acquire) != stamp {
+                return;
+            }
+
+            let previous = bridge.built_kit.lock().clone();
+            let progress = &bridge.load_progress;
             let outcome = catch_unwind(AssertUnwindSafe(|| {
-                load_kit_from_manifest(
-                    &manifest_path,
+                load_kit(
+                    &request,
                     target_sr,
-                    &overhead_setup_key,
-                    &pad_choices,
-                    &articulations,
+                    previous.as_ref(),
+                    cache::global(),
+                    &|| progress.file_done(stamp),
+                    &|total| progress.set_total(stamp, total.min(u32::MAX as usize) as u32),
                 )
             }));
+            drop(previous);
 
             // Only the newest load is allowed to write final state. The
             // check and the hand-off happen under one lock, so an older
             // load cannot pass the check and then send after a newer one.
-            let _handoff = bridge.kit_handoff.lock();
+            let handoff = bridge.kit_handoff.lock();
             if bridge.load_generation.load(Ordering::Acquire) != stamp {
                 return;
             }
@@ -293,37 +603,45 @@ pub fn spawn_loader(
             if bridge.sample_rate.load(Ordering::Acquire) != target_sr.to_bits() {
                 return;
             }
-            let request = KitRequest {
-                path: manifest_path.clone(),
-                overhead_setup_key,
-                pad_choices,
-                articulations,
-            };
 
             match outcome {
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
-                    let name = kit_display_name(&manifest_path, drumkits_root().as_deref());
+                    let name = kit_display_name(&request.path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
-                    let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    hand_off_kit_locked(&bridge, kit.pads);
+                    let ordinal = hand_off_kit_locked(&bridge, kit.pads);
+                    bridge.load_progress.handed_off(ordinal);
                     *bridge.handed_off.lock() = Some(HandedOffKit {
-                        request,
+                        request: request.clone(),
                         sample_rate: target_sr,
                     });
-                    bridge.kit_bytes.store(bytes, Ordering::Relaxed);
+                    *bridge.built_kit.lock() = Some(kit.built);
+                    bridge
+                        .kit_bytes
+                        .store(kit.stats.kit_bytes, Ordering::Relaxed);
+                    bridge
+                        .kit_shared_bytes
+                        .store(kit.stats.shared_bytes, Ordering::Relaxed);
                     *bridge.pad_samples.lock() = infos;
-                    *bridge.kit_path.lock() = Some(manifest_path);
-                    *bridge.kit_status.lock() = KitStatus::Loaded { name, num_pads };
+                    *bridge.kit_path.lock() = Some(request.path.clone());
+                    *bridge.kit_status.lock() = KitStatus::Loaded {
+                        name,
+                        num_pads,
+                        unreadable: kit.stats.unreadable,
+                        unreadable_paths: kit.stats.unreadable_paths.clone(),
+                    };
+                    *bridge.load_stats.lock() = kit.stats;
                 }
                 Ok(Err(message)) => {
+                    bridge.load_progress.failed();
                     *bridge.kit_status.lock() = KitStatus::Error { message };
                 }
                 Err(_) => {
+                    bridge.load_progress.failed();
                     *bridge.kit_status.lock() = KitStatus::Error {
                         message: "loader panicked".to_string(),
                     };
@@ -331,10 +649,16 @@ pub fn spawn_loader(
             }
             // Finished, one way or the other: nothing is pending any
             // more (unless a newer load has recorded itself meanwhile).
-            let mut pending = bridge.pending_kit.lock();
-            if pending.as_ref().map(|(s, _)| *s) == Some(stamp) {
-                *pending = None;
+            {
+                let mut pending = bridge.pending_kit.lock();
+                if pending.as_ref().map(|(s, _)| *s) == Some(stamp) {
+                    *pending = None;
+                }
             }
+            drop(handoff);
+            // Takes no kit holds any more (the kit this one replaced may
+            // still be playing out; a later load sweeps those).
+            cache::global().sweep();
         })
         .expect("spawn drums kit loader thread");
 }
@@ -398,70 +722,33 @@ pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> S
 /// calls [`hand_off_kit_locked`] instead.
 pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     let _handoff = bridge.kit_handoff.lock();
-    hand_off_kit_locked(bridge, pads);
+    let ordinal = hand_off_kit_locked(bridge, pads);
+    bridge.load_progress.handed_off(ordinal);
     // Not a loader's kit: what the sampler will hold is no longer known.
     *bridge.handed_off.lock() = None;
+    *bridge.built_kit.lock() = None;
 }
 
 /// [`hand_off_kit`] for a caller already holding
-/// [`KitBridge::kit_handoff`].
-fn hand_off_kit_locked(bridge: &KitBridge, pads: Vec<LoadedPad>) {
+/// [`KitBridge::kit_handoff`]. Returns the kit's send ordinal (see
+/// [`progress`]).
+fn hand_off_kit_locked(bridge: &KitBridge, pads: Vec<LoadedPad>) -> u64 {
     let mut pads = pads;
     loop {
         match bridge.kit_sender.try_send(pads) {
-            Ok(()) => return,
+            Ok(()) => return bridge.load_progress.note_sent(),
             Err(TrySendError::Full(back)) => {
                 pads = back;
                 // Freed here, off the audio thread. Empty if the audio
                 // thread took it in the meantime; the retry then fits.
-                drop(bridge.kit_reclaim.try_recv());
+                if let Ok(stale) = bridge.kit_reclaim.try_recv() {
+                    bridge.load_progress.note_reclaimed();
+                    drop(stale);
+                }
             }
             // Unreachable while the bridge holds `kit_reclaim`: the
             // channel cannot disconnect under it.
-            Err(TrySendError::Disconnected(_)) => return,
+            Err(TrySendError::Disconnected(_)) => return bridge.load_progress.note_sent(),
         }
     }
-}
-
-// ---------------------------------------------------------------------------
-// Internals
-// ---------------------------------------------------------------------------
-
-fn build_pad_from_piece(
-    mapping: &PadMapping,
-    piece_name: &str,
-    piece: &BTreeMap<String, MicSetup>,
-    kit_dir: &Path,
-    target_sr: f32,
-    overhead_setup_key: &str,
-    choices: &PadMicChoices,
-) -> Result<LoadedPad, String> {
-    // Close-mic banks: one per position in PadMapping::close_mic_positions
-    // (already empty for cymbals). For kick/snare that's two banks.
-    let mut close_mics = Vec::with_capacity(mapping.close_mic_positions.len());
-    for position in mapping.close_mic_positions {
-        if let Some(bank) = load_bank_for_position(
-            piece_name,
-            piece,
-            kit_dir,
-            target_sr,
-            position,
-            choices.close_setups.get(*position).map(String::as_str),
-        )? {
-            close_mics.push(bank);
-        }
-    }
-
-    // Overhead bank: look up the global overhead setup key directly. If
-    // the piece doesn't have that specific setup, fall back to any
-    // OH-prefixed setup the piece does have so the pad still makes sound.
-    let overhead = load_overhead_bank(piece_name, piece, kit_dir, target_sr, overhead_setup_key)?;
-
-    Ok(LoadedPad {
-        name: mapping.name.to_string(),
-        choke_group: mapping.choke_group,
-        output_group: mapping.output_group,
-        close_mics,
-        overhead,
-    })
 }

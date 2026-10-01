@@ -266,6 +266,8 @@ fn kit_stepping_follows_the_load_in_flight() {
     *bridge.kit_status.lock() = KitStatus::Loaded {
         name: "A".to_string(),
         num_pads: 30,
+        unreadable: 0,
+        unreadable_paths: Vec::new(),
     };
     assert_eq!(step(None), Some(a.clone()), "settled: the loaded kit");
 
