@@ -35,7 +35,7 @@ pub use fallback::build_fallback_pad;
 pub use manifest::{parse_vel_index, KitManifest, MicSetup, PadMicChoices};
 pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
-use decode::{assemble_bank, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
+use decode::{assemble_pad, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
 
 // ---------------------------------------------------------------------------
 // Drum-piece -> pad slot mapping.
@@ -310,8 +310,11 @@ pub fn load_kit_from_manifest(
 ///   touched for them (E4).
 /// - Every other pad's files are fetched through `cache`, decoding only
 ///   what no one holds yet (E5), on [`decode::decode_workers`] threads.
-/// - A file that cannot be read or decoded drops that take, a layer left
-///   empty, a bank left empty; the kit still loads and the count is in
+/// - A file that cannot be read or decoded drops that take's cell (its
+///   velocity and round robin) from every bank of the pad, so the banks
+///   stay aligned; a layer left empty, a bank left empty — or never
+///   readable at all — goes too (see [`decode::assemble_pad`]). The kit
+///   still loads and the count is in
 ///   [`LoadStats::unreadable`] (E6). A pad whose every file failed is
 ///   silent: it keeps its slot with no banks, and plays nothing. Only a
 ///   kit in which *no* file could be read fails.
@@ -434,19 +437,20 @@ pub fn load_kit(
             }
             PadPlan::Piece { close, overhead } => {
                 stats.rebuilt_pads += 1;
+                let (close_mics, overhead) = assemble_pad(
+                    &close,
+                    overhead.as_ref(),
+                    &results,
+                    &jobs.paths,
+                    &own,
+                    &mut tally,
+                );
                 LoadedPad {
                     name: mapping.name.to_string(),
                     choke_group: mapping.choke_group,
                     output_group: mapping.output_group,
-                    close_mics: close
-                        .iter()
-                        .filter_map(|bank| {
-                            assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
-                        })
-                        .collect(),
-                    overhead: overhead.as_ref().and_then(|bank| {
-                        assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
-                    }),
+                    close_mics,
+                    overhead,
                 }
             }
         };

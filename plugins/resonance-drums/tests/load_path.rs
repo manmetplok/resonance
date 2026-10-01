@@ -77,6 +77,10 @@ enum Damage {
     OneSnareTake,
     /// Every closed-hat file.
     WholeHat,
+    /// Both KickIn takes of the soft layer (Vel01).
+    KickInSoftLayer,
+    /// Every kick overhead file.
+    WholeKickOh,
 }
 
 struct Kit {
@@ -132,6 +136,14 @@ fn fixture_kit(damage: Damage) -> Kit {
             // Missing outright, not just corrupt.
             std::fs::remove_file(dir.join("hat_2.wav")).unwrap();
             write_corrupt(&dir.join("hatoh.wav"));
+        }
+        Damage::KickInSoftLayer => {
+            write_corrupt(&dir.join("kin_1_1.wav"));
+            write_corrupt(&dir.join("kin_2_1.wav"));
+        }
+        Damage::WholeKickOh => {
+            write_corrupt(&dir.join("koh_1.wav"));
+            write_corrupt(&dir.join("koh_2.wav"));
         }
     }
     let setup = |pos: &str, rounds: &str| {
@@ -612,6 +624,219 @@ fn a_pad_whose_every_file_fails_is_silent_not_the_built_in_sample() {
         0.0,
         "the broken hat must be silent, not the built-in fallback"
     );
+}
+
+/// The take a kit holds for `file` of `kit`, as the shared cache has it.
+fn take_of(kit: &Kit, file: &str) -> Arc<resonance_drums::kit::SampleData> {
+    use resonance_drums::kit_loader::cache::{self, SampleKey};
+    let key = SampleKey::for_file(&kit.dir.join(file), RATE).unwrap();
+    cache::global().lookup(&key).expect("a take some kit holds")
+}
+
+/// A sampler playing `pads`, outside any plugin, so a test can look at
+/// its voices. The sender keeps the mailbox connected.
+fn sampler_on(pads: Vec<LoadedPad>) -> (DrumSampler, crossbeam_channel::Sender<Vec<LoadedPad>>) {
+    let (tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(RATE);
+    sampler.pads = pads;
+    (sampler, tx)
+}
+
+/// Strike `note` and render one block. Returns, for each voice the hit
+/// started that is still playing after the block, the take it reads.
+fn strike_takes(sampler: &mut DrumSampler, note: u8, velocity: f32) -> Vec<*const ()> {
+    use resonance_drums::voice::VoiceDestination;
+    let params = DrumParams::default();
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))
+        .collect();
+    let mut ports: Vec<PortBuffers<'_>> = bufs
+        .iter_mut()
+        .map(|(l, r)| PortBuffers {
+            left: l.as_mut_slice(),
+            right: r.as_mut_slice(),
+        })
+        .collect();
+    sampler.reset();
+    sampler.render_block(
+        &mut ports,
+        BLOCK,
+        &params,
+        &[Hit {
+            frame: 0,
+            note,
+            velocity,
+        }],
+    );
+    sampler
+        .voices
+        .iter()
+        .filter(|v| v.active)
+        .map(|v| {
+            let pad = &sampler.pads[v.pad_index];
+            let bank = match v.destination {
+                VoiceDestination::CloseMic { bank_index, .. } => &pad.close_mics[bank_index],
+                VoiceDestination::Overhead { .. } => pad.overhead.as_ref().unwrap(),
+            };
+            Arc::as_ptr(bank.layers[v.layer_index].round_robins[v.rr_index].shared()) as *const ()
+        })
+        .collect()
+}
+
+fn ptr(take: &Arc<resonance_drums::kit::SampleData>) -> *const () {
+    Arc::as_ptr(take) as *const ()
+}
+
+/// KickIn's soft layer is unreadable. Dropping it from KickIn alone
+/// would leave KickIn one layer and the KickOut / OH banks two: a soft
+/// hit would play KickIn's loud take over KickOut's soft one. The cells
+/// go from every bank, so every bank keeps the loud layer only, and a
+/// hit at any velocity plays the loud strike on every mic.
+#[test]
+fn a_dropped_layer_keeps_every_bank_on_the_same_velocity_layer() {
+    let kit = fixture_kit(Damage::KickInSoftLayer);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 2, "{stats:?}");
+    let kick = built_pad(&plugin, 0);
+    assert_eq!(kick.close_mics.len(), 2, "KickIn and KickOut both load");
+    for bank in kick.close_mics.iter().chain(kick.overhead.iter()) {
+        assert_eq!(bank.layers.len(), 1, "{} keeps one layer", bank.position);
+    }
+
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let loud = [
+        ptr(&take_of(&kit, "kin_1_2.wav")),
+        ptr(&take_of(&kit, "kin_2_2.wav")),
+        ptr(&take_of(&kit, "kout_2.wav")),
+        ptr(&take_of(&kit, "koh_2.wav")),
+    ];
+    for velocity in [0.05, 0.4, 1.0] {
+        for _ in 0..2 {
+            let takes = strike_takes(&mut sampler, drum_map::KICK, velocity);
+            assert_eq!(takes.len(), 3, "KickIn, KickOut and OH all sound");
+            for take in takes {
+                assert!(
+                    loud.contains(&take),
+                    "a bank played a take of the dropped soft layer"
+                );
+            }
+        }
+    }
+}
+
+/// Banks of different shapes — the fixture's KickIn has two round robins,
+/// KickOut and the overhead one — each play the take at the hit's
+/// relative position, the same velocity layer on every mic, and no voice
+/// is dropped on the hits whose round robin the smaller banks lack.
+#[test]
+fn banks_of_different_shapes_all_sound_on_every_hit() {
+    let kit = fixture_kit(Damage::None);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    settle(&plugin);
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let soft = [
+        ptr(&take_of(&kit, "kin_1_1.wav")),
+        ptr(&take_of(&kit, "kin_2_1.wav")),
+        ptr(&take_of(&kit, "kout_1.wav")),
+        ptr(&take_of(&kit, "koh_1.wav")),
+    ];
+    let mut kick_in = Vec::new();
+    for _ in 0..4 {
+        let takes = strike_takes(&mut sampler, drum_map::KICK, 0.1);
+        assert_eq!(takes.len(), 3, "a voice was dropped: {takes:?}");
+        assert!(takes.iter().all(|t| soft.contains(t)), "not all on the soft layer");
+        assert!(takes.contains(&soft[2]) && takes.contains(&soft[3]));
+        kick_in.extend(takes.iter().copied().filter(|t| *t == soft[0] || *t == soft[1]));
+    }
+    assert!(
+        kick_in.contains(&soft[0]) && kick_in.contains(&soft[1]),
+        "KickIn walks both its round robins"
+    );
+}
+
+/// A snare whose top mic and overhead each recorded two round robins.
+fn two_take_snare_kit(broken_oh_rr2: bool) -> Kit {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-load-path-snare-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    write_wav(&dir.join("top_1.wav"), 1, 0.1);
+    write_wav(&dir.join("top_2.wav"), 1, 0.2);
+    write_wav(&dir.join("oh_1.wav"), 2, 0.3);
+    if broken_oh_rr2 {
+        write_corrupt(&dir.join("oh_2.wav"));
+    } else {
+        write_wav(&dir.join("oh_2.wav"), 2, 0.4);
+    }
+    let manifest = r#"{
+  "SD Snare Normal": {
+    "04_SNTop": {"brand":"t","channel":"1","mic":"m","position":"SNTop",
+      "rounds":{"RR1":{"Vel01":"top_1.wav"},"RR2":{"Vel01":"top_2.wav"}}},
+    "23_OHsAB_e914": {"brand":"t","channel":"1","mic":"m","position":"OHsAB",
+      "rounds":{"RR1":{"Vel01":"oh_1.wav"},"RR2":{"Vel01":"oh_2.wav"}}}
+  }
+}"#;
+    let manifest_path = dir.join("drum_samples.json");
+    std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
+    Kit {
+        dir,
+        manifest: manifest_path,
+    }
+}
+
+/// The overhead's second round robin is unreadable. Dropped from the
+/// overhead alone, every second hit would pick round robin 2 on the top
+/// mic and find no overhead take there: the overhead silent on
+/// alternate hits. The cell goes from both banks, so every hit plays the
+/// one strike both mics have.
+#[test]
+fn a_dropped_overhead_take_does_not_silence_the_overhead_on_alternate_hits() {
+    let kit = two_take_snare_kit(true);
+    let mut plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 1, "{stats:?}");
+    render(&mut plugin, &[]); // the audio thread takes the kit
+    for n in 0..4 {
+        plugin.reset();
+        let ports = render(&mut plugin, &hit(drum_map::SNARE));
+        let (l, r) = &ports[resonance_drums::kit::OVERHEAD_PORT_INDEX];
+        let peak = l.iter().chain(r).fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "the overhead is silent on hit {n}");
+    }
+
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let strike = [ptr(&take_of(&kit, "top_1.wav")), ptr(&take_of(&kit, "oh_1.wav"))];
+    for _ in 0..4 {
+        let mut takes = strike_takes(&mut sampler, drum_map::SNARE, 1.0);
+        takes.sort();
+        let mut want = strike.to_vec();
+        want.sort();
+        assert_eq!(takes, want, "the top mic and overhead play different strikes");
+    }
+}
+
+/// A bank none of whose files can be read is dropped as a bank: its
+/// failures do not take the other banks' cells with them.
+#[test]
+fn a_wholly_unreadable_overhead_does_not_silence_the_close_mics() {
+    let kit = fixture_kit(Damage::WholeKickOh);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 2, "{stats:?}");
+    let kick = built_pad(&plugin, 0);
+    assert!(kick.overhead.is_none());
+    assert_eq!(kick.close_mics.len(), 2);
+    assert_eq!(kick.close_mics[0].layers.len(), 2);
+    assert_eq!(kick.close_mics[0].layers[0].round_robins.len(), 2);
 }
 
 // ---------------------------------------------------------------------------

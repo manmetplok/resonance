@@ -19,6 +19,20 @@ pub fn pick_velocity_layer(velocity: f32, n_layers: usize) -> usize {
     ((velocity.clamp(0.0, 1.0) * n_layers as f32) as usize).min(n_layers - 1)
 }
 
+/// Map index `index` of `n_from` onto `n_to` by relative position: the
+/// result is the one of `n_to` equal buckets that holds the centre of
+/// bucket `index` of `n_from`. With equal counts it is the identity, so banks that
+/// share a shape play exactly the cell the reference bank picked; a bank
+/// with fewer layers (or takes) plays its nearest one instead of none
+/// (drums-plugin-rework.md §7 E7). Integer arithmetic only — this runs
+/// in `note_on` on the audio thread. `n_to == 0` gives 0.
+pub fn map_relative(index: usize, n_from: usize, n_to: usize) -> usize {
+    if n_to == n_from || n_from == 0 {
+        return index.min(n_to.saturating_sub(1));
+    }
+    ((2 * index + 1) * n_to / (2 * n_from)).min(n_to.saturating_sub(1))
+}
+
 /// Advance a round-robin counter and return the RR index for this trigger.
 /// Wraps the counter at `u32::MAX` so it can run indefinitely.
 pub fn pick_rr(counter: &mut u32, n_rrs: usize) -> usize {
