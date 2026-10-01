@@ -37,6 +37,7 @@ fn make_pad_with_oh(mapping_index: usize) -> LoadedPad {
         choke_group: m.choke_group,
         output_group: m.output_group,
         close_mics,
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OHsAB".to_string(),
             setup_key: String::new(),
@@ -52,6 +53,7 @@ fn make_silent_pad(mapping_index: usize) -> LoadedPad {
         choke_group: m.choke_group,
         output_group: m.output_group,
         close_mics: Vec::new(),
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }

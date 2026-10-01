@@ -46,6 +46,7 @@ fn dc_pads(level: f32, sample_frames: usize) -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![dc_layer(level, sample_frames)],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()

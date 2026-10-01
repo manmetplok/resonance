@@ -49,7 +49,16 @@ fn levels_display_and_parse_in_db() {
 
     // The ids the trims answer to.
     let ids: Vec<&str> = p.pads[1].trims.iter().map(|t| t.id()).collect();
-    assert_eq!(ids, ["pad_1_mic1_trim", "pad_1_mic2_trim", "pad_1_oh_trim"]);
+    assert_eq!(
+        ids,
+        [
+            "pad_1_mic1_trim",
+            "pad_1_mic2_trim",
+            "pad_1_oh_trim",
+            "pad_1_bleed_trim",
+            "pad_1_room_trim",
+        ]
+    );
     // Pads never recorded with two close mics don't offer the second trim.
     let hat = drum_map::pad_index_for_note(drum_map::HIHAT_CLOSED).unwrap();
     assert!(p.pads[hat].trim(MicSlot::Close2).is_hidden());

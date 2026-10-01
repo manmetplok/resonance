@@ -87,6 +87,7 @@ fn dc_kit(level: f32) -> Vec<LoadedPad> {
             } else {
                 Vec::new()
             },
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()

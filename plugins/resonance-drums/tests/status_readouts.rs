@@ -31,6 +31,7 @@ fn tom_pad(mapping_index: usize) -> LoadedPad {
             setup_key: "07_Tom01_md421".to_string(),
             layers: vec![layer(0.25, 1), layer(0.5, 3)],
         }],
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OHsAB".to_string(),
             setup_key: "23_OHsAB_e914".to_string(),
@@ -46,6 +47,7 @@ fn silent_pad(mapping_index: usize) -> LoadedPad {
         choke_group: m.choke_group,
         output_group: m.output_group,
         close_mics: Vec::new(),
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }

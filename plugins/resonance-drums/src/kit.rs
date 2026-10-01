@@ -309,10 +309,72 @@ pub struct LoadedPad {
     /// silent). A built-in-kit pad holds one pseudo-bank of its embedded
     /// sample.
     pub close_mics: Vec<LoadedMicBank>,
-    /// Overhead mic bank. `None` when the library ships no overhead
-    /// recording for this pad, when the kit lacks the pad's piece, and on
-    /// the built-in kit.
+    /// Overhead mic bank — overhead **slot 1** (`overhead_setup_key`,
+    /// `oh_1_level`). `None` when the library ships no overhead recording
+    /// for this pad, when the kit lacks the pad's piece, and on the
+    /// built-in kit.
     pub overhead: Option<LoadedMicBank>,
+    /// The E15 banks beyond the defaults, all off unless turned on:
+    /// overhead slots 2 and 3, bleed banks (another piece's close mic
+    /// recorded on this piece's hits — SN Btm on the kick and toms) and
+    /// the room bank, in that order. At most
+    /// [`MAX_EXTRA_BANKS`]. Each shares the hit's (layer, take) cell with
+    /// the pad's other banks, mapped by relative position.
+    pub extra_banks: Vec<ExtraBank>,
+}
+
+/// What an [`ExtraBank`] is: which trim and kit-wide level scale it and
+/// where it is routed (E15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BankKind {
+    /// An overhead setup layered on slot 1: `slot` is 1 or 2 (overhead
+    /// slots 2 and 3, `oh_2_level` / `oh_3_level`). Trimmed by
+    /// `pad_N_oh_trim` like slot 1, and routed like it.
+    Overhead { slot: u8 },
+    /// Another piece's close mic, heard on this piece's hits (SN Btm on
+    /// the kick and toms). `bleed_level`, `pad_N_bleed_trim`.
+    Bleed,
+    /// A room mic (position `Room*`). `room_level`, `pad_N_room_trim`.
+    Room,
+}
+
+/// The most overhead setups a kit plays at once (slot 1 included).
+pub const MAX_OVERHEAD_SLOTS: usize = 3;
+/// The most bleed banks one pad plays.
+pub const MAX_BLEED_BANKS: usize = 2;
+/// The most room banks one pad plays (one kit-wide room setup).
+pub const MAX_ROOM_BANKS: usize = 1;
+/// The most [`LoadedPad::extra_banks`] a pad holds: two more overheads,
+/// the bleed banks and the room bank. With two close mics and overhead
+/// slot 1 that is [`crate::voice::MAX_BANKS_PER_HIT`].
+pub const MAX_EXTRA_BANKS: usize = MAX_OVERHEAD_SLOTS - 1 + MAX_BLEED_BANKS + MAX_ROOM_BANKS;
+
+const _: () = assert!(2 + 1 + MAX_EXTRA_BANKS == crate::voice::MAX_BANKS_PER_HIT);
+
+/// One of a pad's E15 banks.
+#[derive(Clone)]
+pub struct ExtraBank {
+    pub kind: BankKind,
+    pub bank: LoadedMicBank,
+}
+
+impl LoadedPad {
+    /// Every bank the pad holds: close mics, overhead slot 1, then the
+    /// extra banks.
+    pub fn banks(&self) -> impl Iterator<Item = &LoadedMicBank> {
+        self.close_mics
+            .iter()
+            .chain(self.overhead.iter())
+            .chain(self.extra_banks.iter().map(|extra| &extra.bank))
+    }
+
+    /// The pad's first bank of `kind`, if it holds one.
+    pub fn extra_bank(&self, kind: BankKind) -> Option<&LoadedMicBank> {
+        self.extra_banks
+            .iter()
+            .find(|extra| extra.kind == kind)
+            .map(|extra| &extra.bank)
+    }
 }
 
 impl LoadedSample {

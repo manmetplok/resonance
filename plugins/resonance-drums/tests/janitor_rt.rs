@@ -83,6 +83,7 @@ fn kit(tag: &str) -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![0.1; 2 * 48_000])])],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()
@@ -103,6 +104,7 @@ fn mono_kit(tag: &str) -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![take.clone()])],
             }],
+            extra_banks: Vec::new(),
             overhead: Some(LoadedMicBank {
                 position: "OH".to_string(),
                 setup_key: String::new(),

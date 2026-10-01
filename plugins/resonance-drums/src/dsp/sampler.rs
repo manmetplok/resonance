@@ -8,7 +8,8 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{
-    LoadedMicBank, LoadedPad, SampleData, VelocityLayer, MAIN_PORT_INDEX, OVERHEAD_PORT_INDEX,
+    BankKind, LoadedMicBank, LoadedPad, SampleData, VelocityLayer, MAIN_PORT_INDEX,
+    MAX_OVERHEAD_SLOTS, OVERHEAD_PORT_INDEX,
 };
 use crate::kit_loader::KitLoadProgress;
 use crate::level::db_to_gain;
@@ -19,8 +20,8 @@ use crate::stream::{
     HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN, NO_RING,
 };
 use crate::voice::{
-    fade_frames, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
-    STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
+    fade_frames, Voice, VoiceDestination, VoiceState, MAX_BANKS_PER_HIT, MAX_VOICES,
+    RELEASE_FADE_MS, STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
 };
 
 use super::janitor;
@@ -82,6 +83,49 @@ impl OutputMode {
         } else {
             Self::Stereo
         }
+    }
+}
+
+/// The kit-wide bank levels a voice is scaled by besides its pad's trim
+/// (E15), indexed: the overhead slots ([`MAX_OVERHEAD_SLOTS`] of them,
+/// `oh_N_level`), then bleed and room (their level, or silence while
+/// off), then [`LEVEL_UNITY`] — a close mic's, which has none.
+const LEVEL_BLEED: usize = MAX_OVERHEAD_SLOTS;
+const LEVEL_ROOM: usize = MAX_OVERHEAD_SLOTS + 1;
+const LEVEL_UNITY: usize = MAX_OVERHEAD_SLOTS + 2;
+const BANK_LEVELS: usize = MAX_OVERHEAD_SLOTS + 3;
+
+/// The kit-wide bank levels in gain, from the params (see [`LEVEL_BLEED`]).
+/// Exactly 1.0 for a level at 0 dB, so a default kit plays bit for bit as
+/// it did before the levels existed.
+fn bank_levels(params: &DrumParams) -> [f32; BANK_LEVELS] {
+    let mut levels = [1.0f32; BANK_LEVELS];
+    for (level, param) in levels.iter_mut().zip(params.oh_levels.iter()) {
+        *level = db_to_gain(param.value());
+    }
+    levels[LEVEL_BLEED] = if params.bleed_enabled() {
+        db_to_gain(params.bleed_level.value())
+    } else {
+        0.0
+    };
+    levels[LEVEL_ROOM] = if params.room_enabled() {
+        db_to_gain(params.room_level.value())
+    } else {
+        0.0
+    };
+    levels
+}
+
+/// The trim slot and kit-wide level (an index into [`bank_levels`]) of a
+/// voice playing `kind`.
+fn extra_gain_slots(kind: BankKind) -> (MicSlot, usize) {
+    match kind {
+        BankKind::Overhead { slot } => (
+            MicSlot::Overhead,
+            (slot as usize).min(MAX_OVERHEAD_SLOTS - 1),
+        ),
+        BankKind::Bleed => (MicSlot::Bleed, LEVEL_BLEED),
+        BankKind::Room => (MicSlot::Room, LEVEL_ROOM),
     }
 }
 
@@ -379,6 +423,10 @@ pub struct DrumSampler {
     cur_pad_volume: [f32; NUM_PADS],
     cur_pad_pan: [f32; NUM_PADS],
     cur_pad_trim: [[f32; MIC_SLOTS]; NUM_PADS],
+    /// The kit-wide bank levels (E15, see [`bank_levels`]), last block's
+    /// and this block's, ramped between like the trims.
+    prev_bank_level: [f32; BANK_LEVELS],
+    cur_bank_level: [f32; BANK_LEVELS],
     /// `1 / frames` for the block in progress (0 for an empty block).
     block_inv_frames: f32,
     /// True when `begin_block` found nothing to render: spans are no-ops
@@ -485,6 +533,8 @@ impl DrumSampler {
             cur_pad_volume: [1.0; NUM_PADS],
             cur_pad_pan: [0.0; NUM_PADS],
             cur_pad_trim: [[1.0; MIC_SLOTS]; NUM_PADS],
+            prev_bank_level: [1.0; BANK_LEVELS],
+            cur_bank_level: [1.0; BANK_LEVELS],
             block_inv_frames: 0.0,
             block_idle: true,
             streams: AudioStreams::with_registration(set, Some(registration)),
@@ -733,6 +783,7 @@ impl DrumSampler {
                         choke_group: mapping.choke_group,
                         output_group: mapping.output_group,
                         close_mics: Vec::new(),
+                        extra_banks: Vec::new(),
                         overhead: None,
                     });
                 }
@@ -910,9 +961,11 @@ impl DrumSampler {
     }
 
     /// Trigger a note-on event. Allocates **one voice per loaded mic bank**
-    /// for the matching pad — so a kick hit fires up to 3 voices (KickIn,
-    /// KickOut, OH), a tom hit fires 2 (close + OH), and a cymbal hit on
-    /// Drummica fires only 1 (the overhead). All voices for a hit share
+    /// for the matching pad — so by default a kick hit fires 3 voices
+    /// (KickIn, KickOut, OH), a tom hit fires 2 (close + OH), and a cymbal
+    /// hit on Drummica fires only 1 (the overhead). With the E15 banks on
+    /// (more overhead setups, bleed, room) a hit fires up to
+    /// [`MAX_BANKS_PER_HIT`]. All voices for a hit share
     /// the same velocity layer, round-robin index, choke group, and age
     /// so they play in lockstep.
     ///
@@ -970,10 +1023,18 @@ impl DrumSampler {
         // selection. Prefer a close-mic bank (that's where the dynamics
         // tend to live); fall back to overhead. If neither exists the pad
         // is silent and note_on is a no-op.
+        // An overhead slot layered on slot 1 (E15) leads when slot 1
+        // plays nothing on the pad; bleed and room never lead.
         let reference_layers: &[VelocityLayer] = if let Some(first) = pad.close_mics.first() {
             &first.layers
         } else if let Some(oh) = &pad.overhead {
             &oh.layers
+        } else if let Some(oh) = pad
+            .extra_banks
+            .iter()
+            .find(|extra| matches!(extra.kind, BankKind::Overhead { .. }))
+        {
+            &oh.bank.layers
         } else {
             return;
         };
@@ -1026,8 +1087,14 @@ impl DrumSampler {
         // play on the pad's output port and the overhead on Overhead —
         // unless the pad has no close mic, when the overhead take is the
         // pad's sound and stays on the pad's own port.
-        let (output_port, oh_port) = match self.globals.output_mode {
-            OutputMode::Stereo => (MAIN_PORT_INDEX as u8, MAIN_PORT_INDEX as u8),
+        // E15: bleed and room are ambience — the Overhead port in Multi,
+        // whatever the pad (a cymbal's room too), Main in Stereo.
+        let (output_port, oh_port, ambience_port) = match self.globals.output_mode {
+            OutputMode::Stereo => (
+                MAIN_PORT_INDEX as u8,
+                MAIN_PORT_INDEX as u8,
+                MAIN_PORT_INDEX as u8,
+            ),
             OutputMode::Multi => {
                 let close = settings.close_port(pad);
                 let oh = if pad.close_mics.is_empty() {
@@ -1035,7 +1102,7 @@ impl DrumSampler {
                 } else {
                     OVERHEAD_PORT_INDEX as u8
                 };
-                (close, oh)
+                (close, oh, OVERHEAD_PORT_INDEX as u8)
             }
         };
         let has_overhead = pad.overhead.is_some();
@@ -1048,15 +1115,17 @@ impl DrumSampler {
         // Build the list of destinations we need to allocate a voice for.
         // Kick + snare: one CloseMic voice per bank (two, trimmed by
         // mic1/mic2). Tom + hat: one CloseMic voice (mic1). Cymbal: no
-        // close mic. Plus an Overhead
-        // voice if the pad has one loaded.
-        let mut destinations: [Option<VoiceDestination>; 3] = [None, None, None];
+        // close mic. Plus an Overhead voice if the pad has one loaded,
+        // and one per E15 bank (more overheads, bleed, room): up to
+        // `MAX_BANKS_PER_HIT`, on the stack.
+        let mut destinations: [Option<VoiceDestination>; MAX_BANKS_PER_HIT] =
+            [None; MAX_BANKS_PER_HIT];
         // The (layer, take) each destination's bank plays.
-        let mut cells = [(0usize, 0usize); 3];
+        let mut cells = [(0usize, 0usize); MAX_BANKS_PER_HIT];
         // The ring each destination streams its take's tail through (E14).
         // Claimed now, while the pad is at hand: the reader starts filling
         // it at once, while the voice plays its head.
-        let mut rings = [NO_RING; 3];
+        let mut rings = [NO_RING; MAX_BANKS_PER_HIT];
         let streams = &mut self.streams;
         // Offline, a hit may wait for the reader to take a pending
         // request, which frees its ring.
@@ -1067,7 +1136,7 @@ impl DrumSampler {
         // the head is clamped to its last frame — out of reach of the
         // shipped preloads (≥ 32 k frames) at any rate up to 192 kHz,
         // whose 100 ms is 19.2 k frames.
-        let mut starts = [0usize; 3];
+        let mut starts = [0usize; MAX_BANKS_PER_HIT];
         let start_frames = settings.start_frames as usize;
         let rate = settings.rate;
         let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> (u8, usize) {
@@ -1112,6 +1181,25 @@ impl DrumSampler {
             }
             destinations[dest_count] = Some(VoiceDestination::Overhead {
                 output_port: oh_port,
+            });
+            dest_count += 1;
+        }
+        // E15: the extra banks share the hit's cell, mapped onto each by
+        // relative position like every other bank. Overhead slots route
+        // as slot 1 does; bleed and room to the ambience port.
+        for (bank_index, extra) in pad.extra_banks.iter().enumerate() {
+            if dest_count >= destinations.len() {
+                break;
+            }
+            cells[dest_count] = cell_in(&extra.bank);
+            (rings[dest_count], starts[dest_count]) = ring_for(&extra.bank, cells[dest_count]);
+            let port = match extra.kind {
+                BankKind::Overhead { .. } => oh_port,
+                BankKind::Bleed | BankKind::Room => ambience_port,
+            };
+            destinations[dest_count] = Some(VoiceDestination::Extra {
+                bank_index: bank_index as u8,
+                output_port: port,
             });
             dest_count += 1;
         }
@@ -1356,17 +1444,20 @@ impl DrumSampler {
                 pad_trim[i][slot] = db_to_gain(trim.value());
             }
         }
+        let levels = bank_levels(params);
         if !self.pad_prev_valid {
             // First block ever: start the ramps at the current values
             // so we don't sweep in from arbitrary defaults.
             self.prev_pad_volume = pad_volume;
             self.prev_pad_pan = pad_pan;
             self.prev_pad_trim = pad_trim;
+            self.prev_bank_level = levels;
             self.pad_prev_valid = true;
         }
         self.cur_pad_volume = pad_volume;
         self.cur_pad_pan = pad_pan;
         self.cur_pad_trim = pad_trim;
+        self.cur_bank_level = levels;
         self.block_inv_frames = if frames > 0 {
             1.0 / frames as f32
         } else {
@@ -1394,6 +1485,7 @@ impl DrumSampler {
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
         let pad_trim = &self.cur_pad_trim;
+        let bank_level = &self.cur_bank_level;
         // A voice whose tail will not come fades out over this, ending
         // where its frames end.
         let cut_fade = self.release_frames as usize;
@@ -1418,10 +1510,36 @@ impl DrumSampler {
             };
 
             // Resolve the voice's source bank from its destination tag.
-            let bank: Option<&LoadedMicBank> = match voice.destination {
-                VoiceDestination::CloseMic { bank_index, .. } => pad.close_mics.get(bank_index),
-                VoiceDestination::Overhead { .. } => pad.overhead.as_ref(),
-            };
+            // Which port does this voice sum into, and which trim and
+            // kit-wide level scale it?
+            let (bank, port_index, slot, level): (Option<&LoadedMicBank>, usize, MicSlot, usize) =
+                match voice.destination {
+                    VoiceDestination::CloseMic {
+                        bank_index,
+                        output_port,
+                    } => (
+                        pad.close_mics.get(bank_index),
+                        output_port as usize,
+                        MicSlot::close(bank_index),
+                        LEVEL_UNITY,
+                    ),
+                    VoiceDestination::Overhead { output_port } => (
+                        pad.overhead.as_ref(),
+                        output_port as usize,
+                        MicSlot::Overhead,
+                        0,
+                    ),
+                    VoiceDestination::Extra {
+                        bank_index,
+                        output_port,
+                    } => match pad.extra_banks.get(bank_index as usize) {
+                        Some(extra) => {
+                            let (slot, level) = extra_gain_slots(extra.kind);
+                            (Some(&extra.bank), output_port as usize, slot, level)
+                        }
+                        None => (None, 0, MicSlot::Close1, LEVEL_UNITY),
+                    },
+                };
             let Some(bank) = bank else {
                 voice.active = false;
                 continue;
@@ -1475,21 +1593,14 @@ impl DrumSampler {
                 }
             }
 
-            // Which port does this voice sum into, and what's the
-            // destination-specific gain multiplier? Computed at both
-            // the previous and current block's param snapshots so the
-            // inner loop can ramp between them.
-            let (port_index, slot) = match voice.destination {
-                VoiceDestination::CloseMic {
-                    output_port,
-                    bank_index,
-                } => (output_port as usize, MicSlot::close(bank_index)),
-                VoiceDestination::Overhead { output_port } => {
-                    (output_port as usize, MicSlot::Overhead)
-                }
-            };
-            let dest_gain0 = self.prev_pad_trim[pad_index][slot as usize];
-            let dest_gain1 = pad_trim[pad_index][slot as usize];
+            // The destination-specific gain: the pad's trim for the
+            // bank's slot times the bank's kit-wide level (E15; exactly
+            // the trim for a close mic, and for a bank at 0 dB). At both
+            // the previous and current block's snapshots so the inner
+            // loop can ramp between them.
+            let dest_gain0 =
+                self.prev_pad_trim[pad_index][slot as usize] * self.prev_bank_level[level];
+            let dest_gain1 = pad_trim[pad_index][slot as usize] * bank_level[level];
             let vol0 = self.prev_pad_volume[pad_index];
             let vol1 = pad_volume[pad_index];
             let (pan_l0, pan_r0) =
@@ -1780,6 +1891,7 @@ impl DrumSampler {
         self.prev_pad_volume = self.cur_pad_volume;
         self.prev_pad_pan = self.cur_pad_pan;
         self.prev_pad_trim = self.cur_pad_trim;
+        self.prev_bank_level = self.cur_bank_level;
 
         // Apply master volume in-place over every port. Linearly
         // interpolate from the previous block's value to the current

@@ -28,6 +28,7 @@ fn pad_with_takes(mapping_index: usize, layers: usize, takes: usize) -> LoadedPa
                         .collect()))
                 .collect(),
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }

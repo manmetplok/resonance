@@ -25,18 +25,20 @@ use crate::kit::{LoadedPad, SampleData};
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::KitBridge;
 
+pub mod banks;
 pub mod cache;
 pub mod decode;
 pub mod fallback;
 pub mod manifest;
 pub mod progress;
 
+pub use banks::{BankRequest, MicBankSetups, MIC_BANKS_STATE_KEY};
 pub use cache::{SampleCache, SampleKey};
 pub use fallback::{build_fallback_pad, build_fallback_pad_sourced};
 pub use manifest::{parse_vel_index, KitManifest, MicSetup, PadMicChoices};
 pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
-use decode::{assemble_pad, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
+use decode::{assemble_pad, plan_bank_for_position, plan_overhead_bank, plan_setup, Jobs, Tally};
 
 // The pad -> piece mapping (the Drummica table, `_meta.pads` overrides,
 // articulation pairs, display names) is `crate::pad_map`'s.
@@ -62,6 +64,8 @@ pub struct KitRequest {
     /// Frames of each take kept resident; the rest of a longer take
     /// streams from disk (E14). 0 keeps every take whole.
     pub preload: u32,
+    /// The E15 banks: overhead slots 2 and 3, bleed, room. Off by default.
+    pub banks: BankRequest,
 }
 
 impl KitRequest {
@@ -75,6 +79,7 @@ impl KitRequest {
             articulation: self.articulations[pad],
             close_setups: self.pad_choices[pad].clone(),
             overhead_setup_key: has_overhead.then(|| self.overhead_setup_key.clone()),
+            extra_banks: Vec::new(),
         }
     }
 }
@@ -89,6 +94,11 @@ pub struct PadRequest {
     /// `None` for a pad the overhead key cannot change: the built-in
     /// pads, and pieces with no overhead setup.
     pub overhead_setup_key: Option<String>,
+    /// The E15 banks the pad plays, as resolved against its piece
+    /// ([`banks::resolve_extra_banks`]): empty unless one is on and the
+    /// piece has it, so turning a bank on rebuilds only the pads that
+    /// gain one.
+    pub extra_banks: Vec<(crate::kit::BankKind, String)>,
 }
 
 /// Whether the overhead setup key can change what `piece` loads as its
@@ -194,9 +204,7 @@ fn hold_takes<'a>(
 ) {
     for (pad, shared) in pads {
         for take in pad
-            .close_mics
-            .iter()
-            .chain(pad.overhead.iter())
+            .banks()
             .flat_map(|bank| bank.layers.iter())
             .flat_map(|layer| layer.round_robins.iter())
         {
@@ -383,6 +391,7 @@ pub fn load_kit_from_manifest(
         pad_choices: pad_choices.clone(),
         articulations: *articulations,
         preload: crate::stream::DEFAULT_PRELOAD,
+        banks: BankRequest::default(),
     };
     load_kit(
         &request,
@@ -466,7 +475,7 @@ pub fn load_kit(
         .parent()
         .ok_or_else(|| "manifest path has no parent directory".to_string())?;
 
-    let catalog = ManifestMicCatalog::from_manifest(&manifest);
+    let catalog = ManifestMicCatalog::with_bleed(&manifest, &kit_pads);
 
     // 1. Plan: reuse, absent (D7: silent, never the built-in sample), or
     // the piece's banks per pad.
@@ -476,15 +485,26 @@ pub fn load_kit(
         Piece {
             close: Vec<decode::BankPlan>,
             overhead: Option<decode::BankPlan>,
+            extras: Vec<(crate::kit::BankKind, decode::BankPlan)>,
         },
     }
     let pad_requests: Vec<PadRequest> = (0..NUM_PADS)
         .map(|i| {
-            let has_overhead = kit_pads
+            let piece = kit_pads
                 .piece_for(i, request.articulations[i])
-                .and_then(|piece| manifest.get(piece))
+                .and_then(|piece| manifest.get(piece));
+            let has_overhead = piece
                 .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
             let mut pad = request.pad_request(i, has_overhead);
+            if let Some(piece) = piece {
+                pad.extra_banks = banks::resolve_extra_banks(
+                    i,
+                    piece,
+                    &request.overhead_setup_key,
+                    &request.pad_choices,
+                    &request.banks,
+                );
+            }
             // The parameter only means something on a pad the kit pairs:
             // elsewhere both values play the same piece, and moving it
             // must not rebuild the pad.
@@ -542,7 +562,18 @@ pub fn load_kit(
             &request.overhead_setup_key,
             &mut jobs,
         )?;
-        plans.push(PadPlan::Piece { close, overhead });
+        // The E15 banks, as the pad's request resolved them.
+        let mut extras = Vec::with_capacity(pad_requests[pad_idx].extra_banks.len());
+        for (kind, key) in &pad_requests[pad_idx].extra_banks {
+            if let Some(plan) = plan_setup(piece_name, piece, kit_dir, key, &mut jobs)? {
+                extras.push((*kind, plan));
+            }
+        }
+        plans.push(PadPlan::Piece {
+            close,
+            overhead,
+            extras,
+        });
     }
 
     // 2. Decode.
@@ -591,17 +622,23 @@ pub fn load_kit(
                         choke_group: mapping.choke_group,
                         output_group: mapping.output_group,
                         close_mics: Vec::new(),
+                        extra_banks: Vec::new(),
                         overhead: None,
                     },
                     PadBuild::default(),
                 )
             }
-            PadPlan::Piece { close, overhead } => {
+            PadPlan::Piece {
+                close,
+                overhead,
+                extras,
+            } => {
                 stats.rebuilt_pads += 1;
                 let mut pad_tally = Tally::default();
-                let (close_mics, overhead) = assemble_pad(
+                let (close_mics, overhead, extra_banks) = assemble_pad(
                     &close,
                     overhead.as_ref(),
+                    &extras,
                     &results,
                     &jobs.paths,
                     &held,
@@ -616,6 +653,7 @@ pub fn load_kit(
                     output_group: kit_pad.output_group(pad_idx),
                     close_mics,
                     overhead,
+                    extra_banks,
                 };
                 let build = PadBuild {
                     unreadable: pad_tally.unreadable,
@@ -684,6 +722,7 @@ pub fn same_request_masked(a: &KitRequest, b: &KitRequest, pads: &KitPads) -> bo
         && a.overhead_setup_key == b.overhead_setup_key
         && a.pad_choices == b.pad_choices
         && a.preload == b.preload
+        && a.banks == b.banks
         && crate::articulation::masked(a.articulations, pads)
             == crate::articulation::masked(b.articulations, pads)
 }
@@ -729,6 +768,11 @@ pub fn spawn_loader(
     // articulation watcher compares the params against the kit that is
     // actually (being) decoded rather than re-triggering every poll.
     *bridge.loaded_articulations.lock() = articulations;
+    // The E15 banks the kit is built with: their setups (state) and
+    // on/off params, recorded like the articulations so the watcher
+    // reloads when a param moves.
+    let banks = bridge.bank_request();
+    *bridge.loaded_bank_flags.lock() = (banks.bleed, banks.room);
 
     let request = KitRequest {
         path: manifest_path,
@@ -736,6 +780,7 @@ pub fn spawn_loader(
         pad_choices,
         articulations,
         preload: bridge.stream_preload.load(Ordering::Relaxed),
+        banks,
     };
 
     std::thread::Builder::new()

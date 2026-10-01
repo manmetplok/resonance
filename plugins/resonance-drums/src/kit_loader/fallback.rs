@@ -57,6 +57,7 @@ fn build_pad(mapping: &PadMapping, sample: LoadedSample) -> LoadedPad {
             setup_key: String::new(),
             layers: vec![VelocityLayer::new(vec![sample])],
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }

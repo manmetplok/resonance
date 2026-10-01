@@ -62,6 +62,7 @@ fn ramp_pads() -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![ramp_sample(frames)])],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()
@@ -453,4 +454,120 @@ fn reset_clears_the_tails() {
     assert_eq!(sampler.tail_voices_active(), 0);
     let out = render_frames(&mut sampler, &mut bufs, &params, BLOCK, &[]);
     assert!(out.iter().all(|s| *s == 0.0), "a tail rang on after reset");
+}
+
+/// E15: a hit plays up to eight banks — two close mics, three overhead
+/// setups, two bleed banks and the room — so 16 hits fill all 128 voices,
+/// and every hit after that steals eight sounding voices on one frame.
+/// That still never clicks (E1): each victim fades in a tail slot.
+///
+/// At 96 kHz the steal fade is 288 frames; a hit every `SPACING_8` frames
+/// keeps at most three hits' victims (24) fading at once, inside the 32
+/// tail slots, so no fade is cut short and the bound below is the whole
+/// story.
+#[test]
+fn saturating_128_voices_with_every_mic_bank_does_not_click() {
+    use resonance_drums::kit::{BankKind, ExtraBank};
+    use resonance_drums::params::BANK_ON;
+    use resonance_drums::voice::MAX_BANKS_PER_HIT;
+
+    const SR_8: f32 = 96_000.0;
+    const SPACING_8: usize = 100;
+    const ATTACK_8: usize = 256;
+    const SATURATE: usize = MAX_VOICES / MAX_BANKS_PER_HIT;
+    const HITS_8: usize = SATURATE + 48;
+    assert_eq!(MAX_VOICES, 128);
+    assert_eq!(MAX_BANKS_PER_HIT, 8);
+
+    let frames = HITS_8 * SPACING_8 + 8 * BLOCK;
+    let ramp = || {
+        let mut data = Vec::with_capacity(frames * 2);
+        for i in 0..frames {
+            let v = LEVEL * (i.min(ATTACK_8) as f32 / ATTACK_8 as f32);
+            data.push(v);
+            data.push(v);
+        }
+        LoadedSample::from_data(data)
+    };
+    let bank = || LoadedMicBank {
+        position: "test".to_string(),
+        setup_key: String::new(),
+        layers: vec![VelocityLayer::new(vec![ramp()])],
+    };
+    let extra = |kind| ExtraBank { kind, bank: bank() };
+    let pads: Vec<LoadedPad> = PAD_MAPPINGS
+        .iter()
+        .map(|m| LoadedPad {
+            name: m.name.to_string(),
+            choke_group: None,
+            output_group: m.output_group,
+            close_mics: vec![bank(), bank()],
+            overhead: Some(bank()),
+            extra_banks: vec![
+                extra(BankKind::Overhead { slot: 1 }),
+                extra(BankKind::Overhead { slot: 2 }),
+                extra(BankKind::Bleed),
+                extra(BankKind::Bleed),
+                extra(BankKind::Room),
+            ],
+        })
+        .collect();
+
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR_8);
+    sampler.pads = pads;
+    let params = DrumParams::default();
+    params.master_volume.set_value(0.0);
+    params.bleed_on.set_value(BANK_ON);
+    params.room_on.set_value(BANK_ON);
+    for pad in &params.pads {
+        pad.volume.set_value(0.0);
+        pad.choke.set_value(0);
+    }
+    sampler.update_global_settings(&params);
+
+    let notes: Vec<u8> = PAD_MAPPINGS.iter().map(|m| m.note).collect();
+    let all: Vec<(usize, u8)> = (0..HITS_8)
+        .map(|i| (i * SPACING_8, notes[i % NUM_PADS]))
+        .collect();
+    let total = HITS_8 * SPACING_8 + 4 * BLOCK;
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    let mut mix = Vec::with_capacity(total);
+    let mut peak_active = 0;
+    let mut peak_tails = 0;
+    for b in 0..total.div_ceil(BLOCK) {
+        let start = b * BLOCK;
+        let hits: Vec<Hit> = all
+            .iter()
+            .filter(|(at, _)| (start..start + BLOCK).contains(at))
+            .map(|&(at, note)| Hit {
+                frame: at - start,
+                note,
+                velocity: 1.0,
+            })
+            .collect();
+        mix.extend(render_frames(&mut sampler, &mut bufs, &params, BLOCK, &hits));
+        peak_active = peak_active.max(sampler.voices.iter().filter(|v| v.active).count());
+        peak_tails = peak_tails.max(sampler.tail_voices_active());
+    }
+    assert_eq!(peak_active, MAX_VOICES, "the pattern must saturate every voice");
+    assert!(peak_tails >= 2 * MAX_BANKS_PER_HIT, "steals were exercised: {peak_tails}");
+    assert!(peak_tails <= TAIL_SLOTS);
+    assert!(mix.iter().any(|s| s.abs() > LEVEL), "near silence");
+
+    // E1's bound, with eight voices starting and eight fading per hit.
+    let n = fade_frames(STEAL_FADE_MS, SR_8) as f32;
+    let per_hit = MAX_BANKS_PER_HIT as f32;
+    let onsets = (ATTACK_8 as f32 / SPACING_8 as f32).ceil() * per_hit * LEVEL / ATTACK_8 as f32;
+    let fades = (n / SPACING_8 as f32).ceil() * per_hit * LEVEL * FRAC_PI_2 / n;
+    let bound = 1.25 * (onsets + fades);
+    assert!(bound < 0.5 * LEVEL, "bound {bound} would not tell a click apart");
+    let (step, at) = max_step(&mix);
+    assert!(
+        step <= bound,
+        "an 8-bank steal clicks: a {step} step at frame {at} (bound {bound}, a hard cut is {LEVEL})"
+    );
 }

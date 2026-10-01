@@ -52,7 +52,7 @@ pub mod kit_loader;
 #[doc(hidden)]
 pub mod library;
 pub mod level;
-mod mic_catalog;
+pub mod mic_catalog;
 pub mod pad_map;
 pub mod params;
 pub mod reload;
@@ -66,8 +66,8 @@ pub mod voice;
 use articulation::ArticulationWatcher;
 use kit::LoadedPad;
 use kit_loader::{
-    BuiltKit, HandedOffKit, HeldKit, KitLoadProgress, KitRequest, KitStatus, LoadStats,
-    PadMicChoices, DEFAULT_OVERHEAD_SETUP,
+    BankRequest, BuiltKit, HandedOffKit, HeldKit, KitLoadProgress, KitRequest, KitStatus,
+    LoadStats, MicBankSetups, PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
@@ -141,6 +141,15 @@ pub struct KitBridge {
     /// User-chosen global overhead setup key. Defaults to
     /// `DEFAULT_OVERHEAD_SETUP` and persists via plugin state.
     pub overhead_setup_key: Arc<Mutex<String>>,
+    /// The E15 bank setups: overhead slots 2 and 3 and the room setup
+    /// (slot 1 is `overhead_setup_key`). Persists via plugin state
+    /// (`mic_banks`). Change it with [`KitBridge::set_overhead_slot`] /
+    /// [`KitBridge::set_room_setup`], which reload the kit.
+    pub mic_banks: Arc<Mutex<MicBankSetups>>,
+    /// `bleed_on` / `room_on` as the kit in memory (or the load in flight)
+    /// was built with them, like `loaded_articulations`: what tells the
+    /// watcher a bank param moved. Written by [`kit_loader::spawn_loader`].
+    pub loaded_bank_flags: Arc<Mutex<(bool, bool)>>,
     /// The plugin's parameters. Shared here so everything off the audio
     /// thread — the editor, the loader, the articulation watcher — reads
     /// a pad's articulation from the one place that holds it (see
@@ -365,7 +374,58 @@ impl KitBridge {
             pad_choices: self.pad_choices.lock().clone(),
             articulations: self.articulations(),
             preload: self.stream_preload.load(Ordering::Relaxed),
+            banks: self.bank_request(),
         })
+    }
+
+    /// The E15 banks a load now builds: the setups (state) and the
+    /// `bleed_on` / `room_on` params.
+    pub fn bank_request(&self) -> BankRequest {
+        BankRequest {
+            setups: self.mic_banks.lock().clone(),
+            bleed: self.params.bleed_enabled(),
+            room: self.params.room_enabled(),
+        }
+    }
+
+    /// Whether `bleed_on` / `room_on` moved since the kit in memory (or
+    /// the load in flight) was built.
+    pub fn bank_flags_moved(&self) -> bool {
+        *self.loaded_bank_flags.lock() != (self.params.bleed_enabled(), self.params.room_enabled())
+    }
+
+    /// The kit-wide overhead setups, slot 1 first (`""`: an empty slot).
+    pub fn overhead_slots(&self) -> [String; kit::MAX_OVERHEAD_SLOTS] {
+        let banks = self.mic_banks.lock();
+        let first = self.overhead_setup_key.lock().clone();
+        std::array::from_fn(|slot| match slot {
+            0 => first.clone(),
+            n => banks.extra_overheads[n - 1].clone(),
+        })
+    }
+
+    /// Put `setup` in overhead slot `slot` (0-based: 0 is slot 1, the
+    /// `overhead_setup_key`; `""` empties slots 2 and 3) and reload the
+    /// kit — only the pads whose overheads change are rebuilt, and only
+    /// the newly chosen setup's files decoded (E4). Returns whether a
+    /// load started (none without a kit or a sample rate; the choice is
+    /// kept for the next load either way). For the editor's Setup tab.
+    pub fn set_overhead_slot(&self, slot: usize, setup: &str) -> bool {
+        match slot {
+            0 => *self.overhead_setup_key.lock() = setup.to_string(),
+            n if n < kit::MAX_OVERHEAD_SLOTS => {
+                self.mic_banks.lock().extra_overheads[n - 1] = setup.to_string()
+            }
+            _ => return false,
+        }
+        reload::reload_kit_acting(self)
+    }
+
+    /// Choose the room setup (`""`: the kit's first) and reload the kit.
+    /// Heard only with `room_on`.
+    pub fn set_room_setup(&self, setup: &str) -> bool {
+        self.mic_banks.lock().room = setup.to_string();
+        reload::reload_kit_acting(self)
     }
 
     /// Abandon an in-flight load unless it is for `keep`: a state load
@@ -492,6 +552,8 @@ impl ResonancePlugin for ResonanceDrums {
                 PadMicChoices::default()
             }))),
             overhead_setup_key: Arc::new(Mutex::new(DEFAULT_OVERHEAD_SETUP.to_string())),
+            mic_banks: Arc::new(Mutex::new(MicBankSetups::default())),
+            loaded_bank_flags: Arc::new(Mutex::new((false, false))),
             params: params.clone(),
             loaded_articulations: Arc::new(Mutex::new(params.articulations())),
             articulation_wake,
@@ -532,6 +594,7 @@ impl ResonancePlugin for ResonanceDrums {
             DrumsExtraState {
                 kit_path: bridge.kit_path.clone(),
                 overhead_setup_key: bridge.overhead_setup_key.clone(),
+                mic_banks: bridge.mic_banks.clone(),
                 pad_choices: bridge.pad_choices.clone(),
                 params: params.clone(),
                 reload: Some(bridge.clone()),
@@ -988,6 +1051,8 @@ impl ResonanceDrums {
 pub struct DrumsExtraState {
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
     pub overhead_setup_key: Arc<Mutex<String>>,
+    /// The E15 bank setups (`mic_banks`): overhead slots 2 and 3, room.
+    pub mic_banks: Arc<Mutex<MicBankSetups>>,
     pub pad_choices: Arc<Mutex<[PadMicChoices; drum_map::NUM_PADS]>>,
     /// Read-only here: the saver mirrors the articulation params into the
     /// legacy key on save, and migrates the legacy key into them on load.
@@ -1043,6 +1108,12 @@ impl ExtraStateSaver for DrumsExtraState {
             "overhead_setup_key".to_string(),
             serde_json::Value::String(self.overhead_setup_key.lock().clone()),
         );
+        // E15: overhead slots 2 and 3 and the room setup. (Bleed and room
+        // on/off and every bank level are params.)
+        map.insert(
+            kit_loader::MIC_BANKS_STATE_KEY.to_string(),
+            self.mic_banks.lock().to_json(),
+        );
         // Per-pad close-mic choices as an array of `{position: setup_key}` maps.
         let choices = self.pad_choices.lock();
         let pads_array: Vec<serde_json::Value> = choices
@@ -1089,7 +1160,12 @@ impl ExtraStateSaver for DrumsExtraState {
     /// toggles are params already). The kit goes by reference, so a
     /// preset recalls it by content id after a rename or a move (§5.2).
     fn preset_keys(&self) -> &'static [&'static str] {
-        &[selection::KIT_REF_KEY, "overhead_setup_key", "pad_mic_choices"]
+        &[
+            selection::KIT_REF_KEY,
+            "overhead_setup_key",
+            kit_loader::MIC_BANKS_STATE_KEY,
+            "pad_mic_choices",
+        ]
     }
 
     fn load(&self, state: &serde_json::Value) {
@@ -1127,6 +1203,7 @@ impl ExtraStateSaver for DrumsExtraState {
         let before = (
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
+            self.mic_banks.lock().clone(),
             self.pad_choices.lock().clone(),
             preload(),
         );
@@ -1174,6 +1251,12 @@ impl ExtraStateSaver for DrumsExtraState {
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
             *self.overhead_setup_key.lock() = s.to_string();
         }
+        // A state from before E15 has no `mic_banks`: what the instance
+        // has stays (a fresh one: every extra bank off), as for every
+        // other key a document leaves out.
+        if let Some(banks) = state.get(kit_loader::MIC_BANKS_STATE_KEY) {
+            *self.mic_banks.lock() = MicBankSetups::from_json(banks);
+        }
 
         if let Some(arr) = state.get("pad_mic_choices").and_then(|v| v.as_array()) {
             let mut guard = self.pad_choices.lock();
@@ -1218,6 +1301,7 @@ impl ExtraStateSaver for DrumsExtraState {
         let after = (
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
+            self.mic_banks.lock().clone(),
             self.pad_choices.lock().clone(),
             preload(),
         );
@@ -1230,7 +1314,7 @@ impl ExtraStateSaver for DrumsExtraState {
                         rate,
                         bridge,
                         after.1,
-                        after.2,
+                        after.3,
                         bridge.articulations(),
                     ),
                     // No kit (or a missing one) while running: the

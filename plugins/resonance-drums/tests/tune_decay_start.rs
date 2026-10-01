@@ -96,6 +96,7 @@ fn kick_kit(take: LoadedSample) -> Vec<LoadedPad> {
             } else {
                 Vec::new()
             },
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()

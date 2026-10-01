@@ -1,6 +1,15 @@
 //! Voice management for polyphonic drum sample playback.
 
-pub const MAX_VOICES: usize = 64;
+/// The hard cap on simultaneously sounding voices (and `polyphony`'s
+/// top). A hit takes one voice per mic bank it plays — up to
+/// [`MAX_BANKS_PER_HIT`] with every E15 bank on — so the cap is 128:
+/// sixteen fully-miked hits ringing at once.
+pub const MAX_VOICES: usize = 128;
+
+/// The most mic banks one hit plays, and so the most voices it takes
+/// (E15): two close mics, three overhead setups, two bleed banks and a
+/// room bank.
+pub const MAX_BANKS_PER_HIT: usize = 8;
 
 /// Extra slots a stolen voice is moved into so it can fade out instead of
 /// being overwritten mid-sample (E1). They sit outside the polyphony
@@ -8,15 +17,20 @@ pub const MAX_VOICES: usize = 64;
 /// needs [`STEAL_FADE_MS`] to die away.
 ///
 /// Steals are not spread out in time: they bunch on the frames hits land
-/// on. One hit takes up to three voices (two close mics + overhead), a
+/// on. One hit takes up to [`MAX_BANKS_PER_HIT`] voices, a
 /// host delivers a flam, a fill or a pad "chord" as several hits on the
 /// same frame, and a low polyphony ceiling makes every one of those a
 /// steal. So the count that matters is how many *sounding* voices can be
 /// stolen within one fade (144 frames at 48 kHz), and that is bounded by
 /// how many were sounding — up to [`MAX_VOICES`] — not by a hit rate.
-/// Thirty-two covers half the voice pool going at once; past that the
+/// Thirty-two covers four fully-miked hits stolen at once; past that the
 /// quietest tail is reused (of equally loud ones, the least heard), which
 /// is the least audible cut there is.
+///
+/// Kept at 32 when E15 doubled [`MAX_VOICES`] (the spec's sketch said 16):
+/// halving the tails would make a burst cut more full-level voices, and
+/// with [`crate::stream::SPARE_RINGS`] trimmed to fit, every ring still
+/// has a `u8` index below [`crate::stream::NO_RING`].
 pub const TAIL_SLOTS: usize = 32;
 
 /// Choke / release fade, in milliseconds: what a choke group (the open
@@ -77,7 +91,16 @@ pub enum VoiceDestination {
     /// close mics; a pad with none (the overhead-only cymbals) keeps its
     /// overhead take on its own port, since it is the pad's sound (E11).
     /// Main in Stereo. See `DrumSampler::note_on`.
+    ///
+    /// This is overhead **slot 1** (`oh_1_level`); the other overhead
+    /// slots, bleed and room are [`VoiceDestination::Extra`].
     Overhead { output_port: u8 },
+    /// One of the pad's E15 banks (`LoadedPad::extra_banks[bank_index]`):
+    /// overhead slot 2 or 3, a bleed bank or the room bank. Its kind
+    /// picks the trim (`pad_N_oh_trim`, `pad_N_bleed_trim`,
+    /// `pad_N_room_trim`) and the kit-wide level (`oh_N_level`,
+    /// `bleed_level`, `room_level`) that scale the voice.
+    Extra { bank_index: u8, output_port: u8 },
 }
 
 /// `Copy`: a voice is plain data, so moving a stolen one into a tail slot

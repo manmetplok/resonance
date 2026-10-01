@@ -223,7 +223,7 @@ pub const RING_BYTES: usize = RING_FRAMES * 2 * std::mem::size_of::<f32>();
 /// threads) does not run a fast pattern out of rings. A claim takes the
 /// lowest free ring, so the spare ones are rarely touched — and a ring
 /// never served holds no sample storage.
-pub const SPARE_RINGS: usize = 96;
+pub const SPARE_RINGS: usize = 80;
 
 /// The rings a sampler with `voices` main voices and `tails` tail slots
 /// has.
@@ -240,11 +240,10 @@ pub const NO_RING: u8 = u8::MAX;
 /// 64-bit words in a set of ring indices.
 const RING_WORDS: usize = NUM_RINGS.div_ceil(64);
 
+// E15's 128 voices + 32 tail slots + the spares: still indexable by a
+// `u8` below `NO_RING` (240 rings, in four words).
 const _: () = assert!(NUM_RINGS < NO_RING as usize);
-// E15 raises the cap to 128 voices + 16 tail slots: still indexable by a
-// `u8` below `NO_RING`, in four words.
-const _: () = assert!(rings_for(128, 16) < NO_RING as usize);
-const _: () = assert!(rings_for(128, 16).div_ceil(64) == 4);
+const _: () = assert!(NUM_RINGS.div_ceil(64) == 4);
 
 /// The most frames one reader pass fetches for one ring, so one long
 /// read never holds up the others. Also all a ring gets while its voice

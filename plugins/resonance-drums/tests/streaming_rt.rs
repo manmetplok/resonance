@@ -120,6 +120,7 @@ fn kit(cache: &SampleCache, dir: &Path, tag: &str) -> Vec<LoadedPad> {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: vec![bank("a.wav"), bank("b.wav")],
+            extra_banks: Vec::new(),
             overhead: Some(bank("oh.wav")),
         })
         .collect()
@@ -260,6 +261,7 @@ fn layered_kit(cache: &SampleCache, dir: &Path) -> Vec<LoadedPad> {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: vec![bank("a.wav"), bank("b.wav")],
+            extra_banks: Vec::new(),
             overhead: Some(bank("oh.wav")),
         })
         .collect()
@@ -377,6 +379,128 @@ fn the_playing_features_never_touch_the_heap_on_the_audio_thread() {
     assert_eq!(
         events, 0,
         "the audio thread allocated or freed {events} times while playing"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// E15: every mic bank on — eight streamed banks a hit (two close mics,
+/// three overhead setups, two bleed banks, the room), 128 voices
+/// saturated and stolen into tails, the bank levels moving, Stereo and
+/// Multi — and the audio thread still never touches the heap.
+#[test]
+fn every_mic_bank_never_touches_the_heap_on_the_audio_thread() {
+    use resonance_drums::kit::{BankKind, ExtraBank};
+    use resonance_drums::params::{BANK_ON, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO};
+    use resonance_drums::voice::MAX_VOICES;
+
+    let dir = std::env::temp_dir().join(format!("drums-banks-rt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_wav(&dir.join("a.wav"), 1, 44_100, 1);
+    write_wav(&dir.join("b.wav"), 2, 40_000, 2);
+    write_wav(&dir.join("oh.wav"), 2, 44_100, 3);
+    write_wav(&dir.join("room.wav"), 2, 42_000, 4);
+    let cache = SampleCache::new();
+    let take = |name: &str| {
+        let (data, _) = cache
+            .get_or_decode_preload(&dir.join(name), HOST, PRELOAD)
+            .unwrap();
+        assert!(data.tail().is_some(), "{name} streams");
+        LoadedSample::from_shared(data)
+    };
+    let bank = |name: &str| LoadedMicBank {
+        position: name.to_string(),
+        setup_key: String::new(),
+        layers: vec![VelocityLayer::new(vec![take(name)])],
+    };
+    let extra = |kind, name: &str| ExtraBank {
+        kind,
+        bank: bank(name),
+    };
+    let kit = |tag: &str| -> Vec<LoadedPad> {
+        PAD_MAPPINGS
+            .iter()
+            .map(|m| LoadedPad {
+                name: format!("{tag}:{}", m.name),
+                choke_group: m.choke_group,
+                output_group: m.output_group,
+                close_mics: vec![bank("a.wav"), bank("b.wav")],
+                overhead: Some(bank("oh.wav")),
+                extra_banks: vec![
+                    extra(BankKind::Overhead { slot: 1 }, "oh.wav"),
+                    extra(BankKind::Overhead { slot: 2 }, "b.wav"),
+                    extra(BankKind::Bleed, "a.wav"),
+                    extra(BankKind::Bleed, "b.wav"),
+                    extra(BankKind::Room, "room.wav"),
+                ],
+            })
+            .collect()
+    };
+
+    let (kit_tx, kit_rx) = bounded(1);
+    let mut sampler = DrumSampler::new(kit_rx);
+    sampler.set_sample_rate(HOST);
+    sampler.set_render_mode(RenderMode::Realtime);
+    sampler.pads = kit("boot");
+    let params = DrumParams::default();
+    params.bleed_on.set_value(BANK_ON);
+    params.room_on.set_value(BANK_ON);
+    params.output_mode.set_value(OUTPUT_MODE_MULTI);
+    sampler.update_global_settings(&params);
+    let mut bufs = Bufs(
+        (0..NUM_OUTPUT_PORTS)
+            .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))
+            .collect(),
+    );
+    render(&mut sampler, &mut bufs, &params, &[]);
+
+    let mut events = 0;
+    let mut peak = 0.0f32;
+    let mut peak_voices = 0;
+    for b in 0..900usize {
+        if b % 300 == 150 {
+            let _ = kit_tx.try_send(kit(&format!("k{b}")));
+        }
+        // The bank levels and routing move, as automation would.
+        params.oh_levels[(b / 7) % 3].set_value(-((b % 13) as f32));
+        params.bleed_level.set_value(-((b % 5) as f32) * 2.0);
+        params.room_level.set_value(((b % 3) as f32) - 1.0);
+        params.output_mode.set_value(if (b / 100) % 2 == 0 {
+            OUTPUT_MODE_MULTI
+        } else {
+            OUTPUT_MODE_STEREO
+        });
+        let hits: Vec<Hit> = (0..6)
+            .map(|k| {
+                let n = b * 6 + k;
+                Hit {
+                    frame: k * 21,
+                    note: PAD_MAPPINGS[(n * 7) % NUM_PADS].note,
+                    velocity: 0.9,
+                }
+            })
+            .collect();
+        events += heap_events(|| {
+            sampler.update_global_settings(&params);
+            sampler.try_swap_kit();
+            if b % 50 == 0 {
+                sampler.choke_note(drum_map::HIHAT_OPEN);
+            }
+            render(&mut sampler, &mut bufs, &params, &hits);
+        });
+        peak_voices = peak_voices.max(sampler.voices.iter().filter(|v| v.active).count());
+        peak = bufs
+            .0
+            .iter()
+            .flat_map(|(l, r)| l.iter().chain(r))
+            .fold(peak, |m, s| m.max(s.abs()));
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+    assert!(peak > 0.0, "silent: the test proves nothing");
+    assert_eq!(peak_voices, MAX_VOICES, "the pattern saturates every voice");
+    assert!(sampler.tail_voices_active() > 0 || sampler.stream_rings_claimed() > 0);
+    assert_eq!(
+        events, 0,
+        "the audio thread allocated or freed {events} times with every mic bank on"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

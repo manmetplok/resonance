@@ -150,6 +150,7 @@ fn make_test_pad(
             setup_key: String::new(),
             layers,
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }
@@ -228,6 +229,7 @@ fn note_on_empty_pad_is_noop() {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: Vec::new(),
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect();
@@ -359,6 +361,7 @@ fn all_voices_from_single_hit_share_rr_index() {
                 layers: layers(),
             },
         ],
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OH".to_string(),
             setup_key: String::new(),

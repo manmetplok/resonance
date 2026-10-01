@@ -69,6 +69,7 @@ fn kit() -> Vec<LoadedPad> {
             } else {
                 Vec::new()
             },
+            extra_banks: Vec::new(),
             overhead: (i == 0).then(|| bank("OHsAB", &[-40.0, -30.0, -20.0])),
         })
         .collect()

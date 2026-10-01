@@ -42,6 +42,7 @@ fn dc_pads(level: f32, silent_note: Option<u8>) -> Vec<LoadedPad> {
                     setup_key: String::new(),
                     layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![v; frames * 2])])],
                 }],
+                extra_banks: Vec::new(),
                 overhead: None,
             }
         })
