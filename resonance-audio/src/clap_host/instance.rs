@@ -744,6 +744,29 @@ impl ClapInstance {
         self.idle_hold_frames = self.sample_rate.saturating_mul(crate::limits::IDLE_HOLD_SECS);
     }
 
+    /// Consume a pending `clap_host.request_process()` (see
+    /// `HostData::process_requested`) and, on an active instance, re-arm
+    /// the stopped-transport window with it: each request buys
+    /// `limits::IDLE_HOLD_SECS` of blocks, and a plugin that needs more
+    /// asks again. Returns whether the window was armed. A request on an
+    /// inactive instance is consumed and dropped — `process()` would not
+    /// run it, so a hold armed now would never count down.
+    ///
+    /// Audio thread, under the instance lock: one atomic swap, no
+    /// allocation. Consuming only under the lock means a block that finds
+    /// the slot contended leaves the request for the next one.
+    pub fn take_process_request(&mut self) -> bool {
+        use std::sync::atomic::Ordering;
+        if !self.host_data.process_requested.swap(false, Ordering::AcqRel) {
+            return false;
+        }
+        if !self.active {
+            return false;
+        }
+        self.arm_idle_hold();
+        true
+    }
+
     /// Whether this instrument should be processed although the transport
     /// is stopped and nothing monitors its track (code review MIX-08):
     /// note events are waiting, or a live note arrived within the last

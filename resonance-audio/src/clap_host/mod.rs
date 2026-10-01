@@ -114,6 +114,16 @@ pub(super) struct HostData {
     /// bridge relies on it to deliver `clap_host_gui.closed()` for an
     /// editor the user closed from its own titlebar (PLG-01).
     pub callback_requested: AtomicBool,
+    /// Set by `clap_host.request_process()` (`[thread-safe]`): the plugin
+    /// wants `process()` called although nothing would otherwise run it —
+    /// in practice a stopped transport on an unmonitored track, where an
+    /// idle instance is not processed (code review MIX-08). The drum
+    /// plugin installs a kit picked while stopped from `process()`, and
+    /// asks for one this way. Consumed on the audio thread by
+    /// [`ClapInstance::take_process_request`] in the stopped-transport
+    /// pass, which buys the instance `limits::IDLE_HOLD_SECS` of blocks;
+    /// cleared by every `process()`, which satisfies it.
+    pub process_requested: AtomicBool,
     /// `clap_host_gui` vtable served from `host_get_extension`. Lives
     /// inside the pinned `HostData` for the same reason as
     /// `latency_ext`: the pointer we hand the plugin must stay valid
@@ -330,7 +340,20 @@ unsafe extern "C" fn host_params_request_flush(host: *const clap_host) {
     }
 }
 
-unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
+/// `clap_host.request_process()` — `[thread-safe]`. Latched; see
+/// `HostData::process_requested`. Only atomics: a plugin may call this
+/// from its audio thread, a worker, or the main thread.
+///
+/// CLAP phrases it as "activate and start processing". Our instances are
+/// activated when created and stay active; one is only deactivated after
+/// a failed (re)activation, whose retry belongs to the restart path
+/// (`request_restart`), not to a wake-up request. So a request on an
+/// inactive instance is dropped (`ClapInstance::take_process_request`).
+unsafe extern "C" fn host_request_process(host: *const clap_host) {
+    if let Some(data) = host_data_from(host) {
+        data.process_requested.store(true, Ordering::Release);
+    }
+}
 unsafe extern "C" fn host_request_callback(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
         data.callback_requested.store(true, Ordering::Release);
@@ -357,6 +380,7 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         latency_changed: AtomicBool::new(false),
         restart_requested: AtomicBool::new(false),
         callback_requested: AtomicBool::new(false),
+        process_requested: AtomicBool::new(false),
         gui_ext: clap_host_gui {
             resize_hints_changed: Some(host_gui_resize_hints_changed),
             request_resize: Some(host_gui_request_resize),
