@@ -22,7 +22,8 @@
 //! So one watcher thread per plugin instance compares the parameters
 //! against [`KitBridge::loaded_articulations`] — the set the kit in
 //! memory was actually built with — and spawns a loader when they
-//! differ. It sleeps on a channel between checks: the editor pings that
+//! differ on a pad the kit pairs ([`masked`]): the articulation of a pad
+//! with no alternate in this kit moves nothing. It sleeps on a channel between checks: the editor pings that
 //! channel so a chip click reloads immediately, and the poll timeout
 //! covers writers that cannot ping it (automation, the control API).
 
@@ -32,6 +33,8 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
+use crate::drum_map::NUM_PADS;
+use crate::pad_map::KitPads;
 use crate::reload::reload_kit;
 use crate::KitBridge;
 
@@ -101,9 +104,9 @@ pub fn spawn_watcher(bridge: &KitBridge, wake: Receiver<()>) -> ArticulationWatc
             if !thread_alive.load(Ordering::Acquire) {
                 break;
             }
-            apply_pending(&bridge);
-            // The same thread acts on `kit_select` (drums-plugin-rework.md
-            // §5.1): a host or control-API write loads the kit from here.
+            // One look at everything a host or the control API may have
+            // moved — `stream_preload`, `kit_select` (drums-plugin-rework.md
+            // §5.1), the articulations — starting at most one load.
             crate::selection::watch(&bridge);
         });
 
@@ -116,19 +119,48 @@ pub fn spawn_watcher(bridge: &KitBridge, wake: Receiver<()>) -> ArticulationWatc
     ArticulationWatcher { alive }
 }
 
+/// `articulations` with every pad `pads` does not pair cleared: on such a
+/// pad both values play the same piece, so its parameter is no part of
+/// what a load decodes (the loader masks it the same way per pad).
+pub fn masked(articulations: [bool; NUM_PADS], pads: &KitPads) -> [bool; NUM_PADS] {
+    std::array::from_fn(|i| {
+        articulations[i] && pads.pads.get(i).is_some_and(|pad| pad.articulation.is_some())
+    })
+}
+
 /// Reload the kit if the articulation parameters no longer match what
 /// the loaded kit was built from. Returns true when a load was started.
 ///
 /// Public so the editor can apply a chip click without waiting for the
 /// watcher's next wake, and so tests can drive the same step the watcher
-/// drives.
+/// drives. Takes [`crate::selection::KitSelection::acting`], so it never
+/// interleaves with a `kit_select` act or a state load.
 pub fn apply_pending(bridge: &KitBridge) -> bool {
+    let _acting = bridge.params.selection.acting();
+    apply_pending_locked(bridge, false)
+}
+
+/// [`apply_pending`] for a caller holding
+/// [`crate::selection::KitSelection::acting`]. `also_reload`: something
+/// else the kit is built from moved too (the streaming preload), so reload
+/// even when the articulations did not — one load for both.
+///
+/// The comparison is over the pads the kit in place pairs
+/// ([`KitPadsHandle::current`](crate::pad_map::KitPadsHandle::current)):
+/// moving the articulation of a pad the kit has no alternate for reloads
+/// nothing (it would fade every voice out, restart the round robins and
+/// drop `kit_load_progress` to 0, to build the same kit).
+pub fn apply_pending_locked(bridge: &KitBridge, also_reload: bool) -> bool {
     let wanted = bridge.articulations();
+    let pads = bridge.kit_pads.current();
     // Take the comparison out of the `if` condition: the temporary guard
     // would otherwise live until the end of the statement, and
     // `spawn_loader` locks the same mutex.
-    let unchanged = *bridge.loaded_articulations.lock() == wanted;
-    if unchanged {
+    let loaded = *bridge.loaded_articulations.lock();
+    let unchanged = masked(loaded, &pads) == masked(wanted, &pads);
+    if unchanged && !also_reload {
+        // Not adopted: once another kit pairs the pad, the raw
+        // difference is a change to load.
         return false;
     }
     if reload_kit(bridge) {

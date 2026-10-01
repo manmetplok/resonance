@@ -168,6 +168,13 @@ impl KitLoadProgress {
         self.sent.fetch_add(1, Ordering::AcqRel) + 1
     }
 
+    /// The send ordinal of the last kit that went into the mailbox: what a
+    /// load that hands nothing off (it rebuilt the kit already sent) is
+    /// complete with. Call under `kit_handoff`.
+    pub fn last_sent(&self) -> u64 {
+        self.sent.load(Ordering::Acquire)
+    }
+
     /// A kit left the mailbox without reaching the audio thread (taken back
     /// by a newer hand-off, or discarded by `initialize`).
     pub fn note_reclaimed(&self) {

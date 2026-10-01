@@ -43,7 +43,7 @@ use plugin_gui_core::egui;
 // can keep their existing `super::reload_kit` import path. The helper
 // itself lives at `crate::reload` because the articulation watcher needs
 // it in headless builds too.
-pub(crate) use crate::reload::reload_kit;
+pub(crate) use crate::reload::reload_kit_acting as reload_kit;
 
 /// The width left in `ui` once `inset` — the fixed gaps of a row about to
 /// be split into columns, or a widget's own chrome — is taken off,

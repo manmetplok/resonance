@@ -41,3 +41,12 @@ pub fn reload_kit(bridge: &KitBridge) -> bool {
     );
     true
 }
+
+/// [`reload_kit`] under [`crate::selection::KitSelection::acting`], for a
+/// caller that does not hold it (the editor's mic and overhead picks): a
+/// reload must not interleave with a `kit_select` act or a state load,
+/// which could otherwise revert the kit they just chose.
+pub fn reload_kit_acting(bridge: &KitBridge) -> bool {
+    let _acting = bridge.params.selection.acting();
+    reload_kit(bridge)
+}

@@ -667,6 +667,18 @@ pub fn load_kit(
     })
 }
 
+/// Whether `a` and `b` build the same kit given its pads `pads`: equal but
+/// for the articulation of pads the kit does not pair
+/// ([`crate::articulation::masked`]).
+pub fn same_request_masked(a: &KitRequest, b: &KitRequest, pads: &KitPads) -> bool {
+    a.path == b.path
+        && a.overhead_setup_key == b.overhead_setup_key
+        && a.pad_choices == b.pad_choices
+        && a.preload == b.preload
+        && crate::articulation::masked(a.articulations, pads)
+            == crate::articulation::masked(b.articulations, pads)
+}
+
 /// Spawn a background loader thread. Writes status updates and the kit path
 /// to `bridge`, and publishes the finished pad vec through `bridge.kit_sender`.
 ///
@@ -782,12 +794,27 @@ pub fn spawn_loader(
                     // the editor and the articulation text describe the
                     // kit the sampler takes, never one still decoding. A
                     // label change asks the host for a text rescan.
-                    crate::pad_map::publish(&bridge, Arc::new(kit.kit_pads));
+                    let kit_pads = Arc::new(kit.kit_pads);
+                    crate::pad_map::publish(&bridge, kit_pads.clone());
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    let ordinal = hand_off_kit_locked(&bridge, kit.pads);
+                    // A reload that rebuilt nothing, of the kit the
+                    // sampler already holds, hands nothing off: a swap
+                    // would fade every voice out and restart the round
+                    // robins to play the same samples. The load completes
+                    // with the kit already sent.
+                    let same_kit = kit.stats.rebuilt_pads == 0
+                        && bridge.handed_off.lock().as_ref().is_some_and(|h| {
+                            h.sample_rate.to_bits() == target_sr.to_bits()
+                                && same_request_masked(&h.request, &request, &kit_pads)
+                        });
+                    let ordinal = if same_kit {
+                        bridge.load_progress.last_sent()
+                    } else {
+                        hand_off_kit_locked(&bridge, kit.pads)
+                    };
                     bridge.load_progress.handed_off(stamp, ordinal);
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),

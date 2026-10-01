@@ -640,8 +640,13 @@ pub struct StartedLoad {
 ///
 /// `Ok(None)`: nothing to do, or nothing to load.
 pub fn apply_pending(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
+    let _acting = bridge.params.selection.act.lock();
+    apply_pending_locked(bridge)
+}
+
+/// [`apply_pending`] under `act`.
+fn apply_pending_locked(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
     let sel = &bridge.params.selection;
-    let _acting = sel.act.lock();
     let value = bridge.params.kit_select.value();
     if sel.acted.load(Ordering::Acquire) == value {
         return Ok(None);
@@ -1250,16 +1255,37 @@ impl resonance_plugin::Param for ProgressParam {
 /// (`clap_host.request_process`), once per load. A host that ignores
 /// that (Resonance's does today) takes the kit — and `kit_load_progress`
 /// reaches 1.0 — at its next block: Play, a monitored track, a note.
+///
+/// One tick starts **at most one load**, all of it under
+/// [`KitSelection::acting`] (so a state load cannot interleave with it):
+///
+/// 1. a moved `stream_preload` is stored, without reloading;
+/// 2. a moved `kit_select` is acted on — its load reads the preload and
+///    the articulations as they are now;
+/// 3. only if that started no load, one reload when the preload moved or
+///    an articulation moved on a pad the kit pairs
+///    ([`crate::articulation::apply_pending_locked`]).
 pub fn watch(bridge: &KitBridge) {
-    match apply_pending(bridge) {
-        Ok(_) => {}
-        Err(e) => tracing::warn!("kit_select: {e}"),
+    {
+        let _acting = bridge.params.selection.act.lock();
+        // Stored the way `stream::set_preload` stores it, which also
+        // keeps the param and the bridge's figure equal.
+        let frames = crate::stream::preload_frames(bridge.params.stream_preload.value());
+        let preload_moved = bridge.stream_preload.swap(frames, Ordering::Relaxed) != frames;
+        let started = match apply_pending_locked(bridge) {
+            Ok(started) => started.is_some(),
+            Err(e) => {
+                tracing::warn!("kit_select: {e}");
+                false
+            }
+        };
+        if !started {
+            crate::articulation::apply_pending_locked(bridge, preload_moved);
+        }
     }
-    // A `stream_preload` moved the same ways reloads the kit.
-    crate::stream::apply_preload_param(bridge);
+    let sel = &bridge.params.selection;
     // The library changed (a rename, a delete, a kit added in a slot):
     // what a value names may have changed with it.
-    let sel = &bridge.params.selection;
     if let Some(revision) = sel.library.revision_if_open() {
         let seen = sel.seen_revision.swap(revision, Ordering::AcqRel);
         if seen != 0 && seen != revision {

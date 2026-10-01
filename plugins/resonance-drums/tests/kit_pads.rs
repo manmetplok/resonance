@@ -564,3 +564,148 @@ fn a_drummica_piece_moved_by_meta_pads_keeps_its_alternate() {
     assert_eq!(pads.piece_for(TOM_PADS[2], true), Some("SD Tom01 ohne Teppich"));
     assert!(!pads.is_present(TOM_HIGH_PAD));
 }
+
+// ---------------------------------------------------------------------------
+// The watcher: masked articulations, one load per tick, `acting()`
+// ---------------------------------------------------------------------------
+
+fn generation(plugin: &ResonanceDrums) -> u64 {
+    plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Load `kit` and let the audio thread take it, so the progress is
+/// complete and the mailbox empty.
+fn load_and_take(plugin: &mut ResonanceDrums, kit: &str) {
+    load(plugin, kit);
+    for _ in 0..4 {
+        render(plugin, &[]);
+    }
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// Moving the articulation of a pad the kit has no alternate for loads
+/// nothing: a reload would fade every voice, restart the round robins and
+/// drop the progress to 0 to build the same kit.
+#[test]
+fn an_unpaired_pads_articulation_reloads_nothing() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    assert!(plugin.bridge.kit_pads.current().pads[SNARE_PAD].articulation.is_none());
+    let before = generation(&plugin);
+
+    plugin.bridge.params.pads[SNARE_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    assert!(!articulation::apply_pending(&plugin.bridge));
+    resonance_drums::selection::watch(&plugin.bridge);
+    assert_eq!(generation(&plugin), before, "a load started");
+    assert!(plugin.bridge.load_progress.is_complete());
+
+    // A paired pad still reloads.
+    plugin.bridge.params.pads[KICK_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    assert!(articulation::apply_pending(&plugin.bridge));
+    settle(&plugin);
+}
+
+/// A reload that rebuilds no pad of the kit the sampler holds hands
+/// nothing off: the load is complete at once, with no block run.
+#[test]
+fn a_reload_that_rebuilds_nothing_hands_nothing_off() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let taken = plugin.bridge.load_progress.kits_taken();
+    assert!(resonance_drums::reload::reload_kit(&plugin.bridge));
+    settle(&plugin);
+    assert_eq!(plugin.bridge.load_stats.lock().rebuilt_pads, 0);
+    assert!(
+        plugin.bridge.load_progress.is_complete(),
+        "the reload waits for a kit the audio thread is never sent"
+    );
+    for _ in 0..4 {
+        render(&mut plugin, &[]);
+    }
+    assert_eq!(plugin.bridge.load_progress.kits_taken(), taken, "a kit was swapped in");
+}
+
+/// One watcher tick starts at most one load: a moved preload and a moved
+/// articulation are one reload, and a moved `kit_select` takes both with
+/// it.
+#[test]
+fn one_watcher_tick_starts_one_load() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let before = generation(&plugin);
+    {
+        // Held so the instance's own watcher thread cannot act between
+        // the writes.
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.bridge.params.stream_preload.set_value(0);
+        plugin.bridge.params.pads[KICK_PAD]
+            .articulation
+            .set_value(ARTICULATION_ALT);
+    }
+    resonance_drums::selection::watch(&plugin.bridge);
+    settle(&plugin);
+    assert_eq!(generation(&plugin), before + 1, "one tick, one load");
+    assert_eq!(
+        plugin
+            .bridge
+            .stream_preload
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(*plugin.bridge.loaded_articulations.lock(), plugin.bridge.articulations());
+
+    // A `kit_select` that loads a kit, with the preload and an
+    // articulation moved in the same tick: its load is the only one, and
+    // it is built with both.
+    use resonance_drums::selection::{self, NO_KIT, PARKED_KIT};
+    selection::load_unslotted_now(&plugin.bridge, fixture("it_techno"));
+    settle(&plugin);
+    plugin.bridge.params.kit_select.set_value(NO_KIT);
+    selection::watch(&plugin.bridge);
+    wait_for_builtin_pads(&plugin);
+    let before = generation(&plugin);
+    {
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.bridge.params.stream_preload.set_value(1);
+        plugin.bridge.params.pads[KICK_PAD]
+            .articulation
+            .set_value(ARTICULATION_PRIMARY);
+        plugin.bridge.params.kit_select.set_value(PARKED_KIT);
+    }
+    selection::watch(&plugin.bridge);
+    settle(&plugin);
+    assert_eq!(generation(&plugin), before + 1, "one tick, one load");
+    let handed = plugin.bridge.handed_off.lock().clone().expect("it_techno handed off");
+    assert_eq!(handed.request.path, fixture("it_techno"));
+    assert_eq!(handed.request.preload, resonance_drums::stream::DEFAULT_PRELOAD);
+    assert_eq!(handed.request.articulations, plugin.bridge.articulations());
+}
+
+/// The articulation step waits for whoever holds `acting()` — a state
+/// load, a `kit_select` act — rather than reload in the middle of it.
+#[test]
+fn an_articulation_reload_waits_for_acting() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let before = generation(&plugin);
+    let bridge = plugin.bridge.clone();
+    let acting = plugin.bridge.params.selection.acting();
+    plugin.bridge.params.pads[KICK_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    let worker = std::thread::spawn(move || articulation::apply_pending(&bridge));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(generation(&plugin), before, "reloaded under another act");
+    drop(acting);
+    // Either this call or the instance's watcher started it.
+    let _ = worker.join().unwrap();
+    assert_eq!(generation(&plugin), before + 1);
+    settle(&plugin);
+}
