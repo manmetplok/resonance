@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use resonance_drums::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use resonance_drums::kit_loader::{
-    build_fallback_pad, load_kit_from_manifest, parse_vel_index, PadMicChoices,
-    DEFAULT_OVERHEAD_SETUP,
+    build_fallback_pad, kit_display_name, load_kit_from_manifest, parse_vel_index,
+    PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
 
 /// Resolve the drummica manifest, or `None` when this run is not opted in.
@@ -216,3 +216,29 @@ fn fallback_pads_all_decode() {
 // Avoid unused-import on PadMapping (test below only borrows from PAD_MAPPINGS).
 #[allow(dead_code)]
 fn _ensure_pad_mapping_in_scope(_: &PadMapping) {}
+
+/// A kit is named after the directory it was installed under — the one
+/// directly below the drumkits root — however deep its manifest sits. A
+/// downloaded zip extracts to `drumkits/Drummica/drummica/…`, and naming
+/// it from the manifest's parent showed "drummica" next to a picker that
+/// listed "Drummica" (drums-plugin-rework.md §10 K0).
+#[test]
+fn kit_name_comes_from_the_directory_under_the_drumkits_root() {
+    let root = std::path::Path::new("/data/resonance/drumkits");
+    let nested = root.join("Drummica/drummica/drum_samples.json");
+    assert_eq!(kit_display_name(&nested, Some(root)), "Drummica");
+    let flat = root.join("IT_Techno/drum_samples.json");
+    assert_eq!(kit_display_name(&flat, Some(root)), "IT_Techno");
+}
+
+#[test]
+fn kit_name_outside_the_drumkits_root_is_the_manifest_directory() {
+    let root = std::path::Path::new("/data/resonance/drumkits");
+    let elsewhere = std::path::Path::new("/home/me/kits/Studio A/v2/drum_samples.json");
+    assert_eq!(kit_display_name(elsewhere, Some(root)), "v2");
+    assert_eq!(kit_display_name(elsewhere, None), "v2");
+    // A manifest dropped straight into the root has no kit directory of
+    // its own; it is named like any other loose manifest.
+    let loose = root.join("drum_samples.json");
+    assert_eq!(kit_display_name(&loose, Some(root)), "drumkits");
+}

@@ -250,11 +250,7 @@ pub fn spawn_loader(
             match outcome {
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
-                    let name = manifest_path
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "kit".to_string());
+                    let name = kit_display_name(&manifest_path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
@@ -278,6 +274,50 @@ pub fn spawn_loader(
             }
         })
         .expect("spawn drums kit loader thread");
+}
+
+/// The per-user directory installed kits live in:
+/// `$XDG_DATA_HOME/resonance/drumkits`, next to the shared registry's
+/// `installed.json`. `None` when no data directory can be determined.
+pub fn drumkits_root() -> Option<PathBuf> {
+    resonance_common::registry::registry_path()
+        .and_then(|p| p.parent().map(|dir| dir.join("drumkits")))
+}
+
+/// The name a kit is shown under, from its manifest's location.
+///
+/// A kit inside `drumkits_root` is named after the directory directly
+/// under the root, however deep the manifest sits: a downloaded zip
+/// extracts to `drumkits/Drummica/drummica/drum_samples.json`, and the
+/// kit is "Drummica" — the name it was installed (and is listed) under —
+/// not the inner "drummica". Anywhere else the manifest's own directory
+/// names the kit.
+pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> String {
+    let under_root = |path: &Path, root: &Path| -> Option<String> {
+        let rel = path.strip_prefix(root).ok()?;
+        let mut parts = rel.components();
+        let top = parts.next()?;
+        // The manifest itself directly in the root has no kit directory.
+        parts.next()?;
+        Some(top.as_os_str().to_string_lossy().into_owned())
+    };
+    if let Some(root) = drumkits_root {
+        if let Some(name) = under_root(manifest_path, root) {
+            return name;
+        }
+        // The same check on resolved paths, for a root or manifest given
+        // through a symlink or with `..` in it.
+        if let (Ok(path), Ok(root)) = (manifest_path.canonicalize(), root.canonicalize()) {
+            if let Some(name) = under_root(&path, &root) {
+                return name;
+            }
+        }
+    }
+    manifest_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "kit".to_string())
 }
 
 /// Put `pads` in the audio thread's one-slot kit mailbox, latest wins.
