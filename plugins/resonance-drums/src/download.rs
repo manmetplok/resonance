@@ -146,6 +146,9 @@ pub struct WorkerConfig {
     /// touch the real one — through this rather than `$XDG_DATA_HOME`,
     /// which `dirs::data_dir` ignores on macOS.
     pub data_dir: Option<PathBuf>,
+    /// The per-read stall limit, [`READ_TIMEOUT`] by default. Tests
+    /// shorten it to see a stalled transfer fail in milliseconds.
+    pub read_timeout: Duration,
 }
 
 impl Default for WorkerConfig {
@@ -153,6 +156,7 @@ impl Default for WorkerConfig {
         Self {
             index_url: INDEX_URL.to_string(),
             data_dir: None,
+            read_timeout: READ_TIMEOUT,
         }
     }
 }
@@ -314,16 +318,17 @@ struct Worker {
 // ---------------------------------------------------------------------------
 
 fn worker_loop(rx: Receiver<Command>, worker: Worker) {
+    let read_timeout = worker.config.read_timeout;
     let config = ureq::Agent::config_builder()
         .timeout_connect(Some(Duration::from_secs(10)))
-        .timeout_send_request(Some(READ_TIMEOUT))
-        .timeout_recv_response(Some(READ_TIMEOUT))
+        .timeout_send_request(Some(read_timeout))
+        .timeout_recv_response(Some(read_timeout))
         // No total body budget — large downloads need more time. A
         // stalled body is caught per read by `ReadTimeout` instead.
         .build();
     let agent = ureq::Agent::with_parts(
         config,
-        read_timeout::ReadTimeout::new(READ_TIMEOUT),
+        read_timeout::ReadTimeout::new(read_timeout),
         ureq::unversioned::resolver::DefaultResolver::default(),
     );
     let state = &worker.state;
@@ -549,7 +554,8 @@ fn sanitize(name: &str) -> String {
 /// A per-read timeout for ureq 3, which only offers a total budget for a
 /// response body (`ConfigBuilder::timeout_recv_body`) — unusable for a
 /// multi-GiB download. This connector wraps ureq's default chain (TCP,
-/// proxies, TLS) and caps every wait on the socket at [`READ_TIMEOUT`],
+/// proxies, TLS) and caps every wait on the socket at the configured read
+/// timeout ([`READ_TIMEOUT`] unless a test sets another),
 /// so a connection that goes silent fails instead of hanging the worker
 /// forever.
 ///

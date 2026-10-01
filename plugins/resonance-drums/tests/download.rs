@@ -80,6 +80,16 @@ fn serve(mut stream: TcpStream) {
             let _ = stream.write_all(head.as_bytes());
             let _ = stream.write_all(&vec![0u8; 104_857]);
         }
+        // Headers and a first chunk, then silence with the connection
+        // held open — a server that has gone quiet mid-body.
+        "/stall.zip" => {
+            let head = "HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\
+                        Content-Type: application/zip\r\n\r\n";
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&[0u8; 4096]);
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_secs(60));
+        }
         // A small, valid kit.
         "/good.zip" => send_body(&mut stream, &zip_of(&good_kit_entries())),
         _ => {
@@ -266,6 +276,33 @@ fn a_download_installs_into_the_injected_data_dir() {
         "registry entry missing: {registry}"
     );
     assert!(!part_file(&home.kits_dir(), "Good_Kit").exists());
+}
+
+/// The per-read timeout: a server that sends headers and then stalls
+/// fails the download once one read has waited that long — not the 30 s
+/// default here, a test-sized one — and leaves no `.part` behind.
+#[test]
+fn a_stalled_body_times_out_and_leaves_no_part() {
+    let home = DataHome::new("stall");
+    let limit = Duration::from_millis(300);
+    let worker = download::spawn_with(WorkerConfig {
+        read_timeout: limit,
+        ..home.config(&start_server())
+    });
+    let started = Instant::now();
+    worker.send(Command::Download(kit("Stall Kit", "stall.zip")));
+    wait_for("the stalled download to fail", Duration::from_secs(10), || {
+        matches!(worker.state.lock().status, Status::Error(_))
+    });
+    let took = started.elapsed();
+    assert!(
+        took < limit * 10,
+        "a {limit:?} read timeout took {took:?} to fire"
+    );
+    let entries: Vec<_> = std::fs::read_dir(home.kits_dir())
+        .map(|d| d.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(entries.is_empty(), "left behind: {entries:?}");
 }
 
 /// No thread until the first command: every plugin instance owns a
