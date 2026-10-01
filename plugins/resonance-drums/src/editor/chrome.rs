@@ -58,7 +58,7 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             }
             ui.add_space(6.0);
             if ui.button("Download kits…").clicked() {
-                download_panel::open(&mut app.download_panel);
+                download_panel::open(&mut app.download_panel, &app.download_worker);
             }
         });
     });

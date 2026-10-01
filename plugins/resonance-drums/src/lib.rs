@@ -33,7 +33,7 @@ pub use editor::test_draw_pad_inspector;
 #[doc(hidden)]
 pub use editor::{
     test_render_editor_frame, test_run_download_panel_frame, EditorFrameProbe, ProbedRect,
-    ProbedText,
+    ProbedText, TestDownloadPanel,
 };
 pub mod kit;
 pub mod kit_loader;

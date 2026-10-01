@@ -234,21 +234,100 @@ pub fn test_render_editor_frame(
     }
 }
 
-/// Test-only: render the Download Kits overlay in isolation at `size`,
-/// starting `open`, with `events` injected as the settled frame's input.
-/// Returns whether the panel is still open afterwards and every shape
-/// that frame painted, so a test can check both what Esc does and the
-/// backdrop's paint order relative to the panel without a live window —
+/// Test-only: the Download Kits overlay in isolation, driven frame by
+/// frame on one `egui::Context` — open it, feed it input, close it, open
+/// it again — so a test can check what survives a close and what Esc,
+/// the Close button and a backdrop click each do, without a live window.
 /// `download_panel` is a private module outside this crate
 /// (drums-plugin-rework.md §9, K0).
 ///
-/// Runs two passes on the same `egui::Context`: `egui::Modal` only knows
-/// it is the topmost modal from the second pass onward (the first pass
-/// is what registers it in `ctx`'s memory at all), so a single pass sees
-/// an unsettled frame — no backdrop click-catching and Esc not yet wired
-/// up — the same way the live runtime's first repaint after opening the
-/// panel would. `events` apply to the settled (second) pass, matching
-/// when a real user's input could first land on it.
+/// It drives whatever worker it is handed. Opening the panel can send
+/// that worker a `FetchIndex`, so a test that calls [`Self::open`] should
+/// hand it a worker pointed at a local index
+/// (`download::spawn_with_index`), never the plugin's own, which fetches
+/// from the real server.
+#[doc(hidden)]
+pub struct TestDownloadPanel {
+    panel: download_panel::DownloadPanelState,
+    worker: Arc<crate::download::WorkerHandle>,
+    ctx: egui::Context,
+    screen: egui::Rect,
+}
+
+impl TestDownloadPanel {
+    pub fn new(worker: Arc<crate::download::WorkerHandle>, size: (f32, f32)) -> Self {
+        Self {
+            panel: download_panel::DownloadPanelState::default(),
+            worker,
+            ctx: egui::Context::default(),
+            screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1)),
+        }
+    }
+
+    /// What the header's "Download kits…" button does.
+    pub fn open(&mut self) {
+        download_panel::open(&mut self.panel, &self.worker);
+    }
+
+    /// Open the panel without the open-time index fetch — for tests that
+    /// only care about the modal's mechanics and must not touch a worker.
+    pub fn open_without_fetch(&mut self) {
+        self.panel.open = true;
+        self.panel.did_initial_fetch = true;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.panel.open
+    }
+
+    /// Whether opening left the index fetch still to do (`false`) or
+    /// skipped it (`true`).
+    pub fn did_initial_fetch(&self) -> bool {
+        self.panel.did_initial_fetch
+    }
+
+    /// Arm a kit's delete, as the first click on its "Delete" does.
+    pub fn arm_delete(&mut self, name: &str) {
+        self.panel.pending_delete = Some(name.to_string());
+    }
+
+    pub fn pending_delete(&self) -> Option<&str> {
+        self.panel.pending_delete.as_deref()
+    }
+
+    /// Run one frame with `events` as its input, drawing the panel if it
+    /// is open, as `DrumsEditorApp::ui` does. Returns what it painted.
+    ///
+    /// `egui::Modal` only knows it is the topmost modal from its second
+    /// frame onward (the first is what registers it in `ctx`'s memory at
+    /// all), so input meant for a settled panel belongs in the second
+    /// frame after opening — the same as the live runtime's first repaint
+    /// after the click that opened it.
+    pub fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+        let input = egui::RawInput {
+            screen_rect: Some(self.screen),
+            events,
+            ..Default::default()
+        };
+        let (panel, worker) = (&mut self.panel, &self.worker);
+        let output = self.ctx.run_ui(input, |ui| {
+            if panel.open {
+                download_panel::draw(ui, panel, worker);
+            }
+        });
+        output.shapes
+    }
+}
+
+/// Test-only: render the Download Kits overlay in isolation at `size`,
+/// starting `open`, with `events` injected as the settled frame's input.
+/// Returns whether the panel is still open afterwards and every shape
+/// that frame painted. A two-frame [`TestDownloadPanel`] session (see its
+/// `frame` for why two).
+///
+/// Hermetic: the panel opens with its index fetch already marked done, so
+/// nothing is sent to `plugin`'s download worker — which would otherwise
+/// go to the real server on every run of these tests.
 #[doc(hidden)]
 pub fn test_run_download_panel_frame(
     plugin: &crate::ResonanceDrums,
@@ -256,23 +335,11 @@ pub fn test_run_download_panel_frame(
     events: Vec<egui::Event>,
     open: bool,
 ) -> (bool, Vec<egui::epaint::ClippedShape>) {
-    let mut panel = download_panel::DownloadPanelState::default();
-    panel.open = open;
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
-    let run = |ctx: &egui::Context, panel: &mut download_panel::DownloadPanelState, events| {
-        let input = egui::RawInput {
-            screen_rect: Some(screen),
-            events,
-            ..Default::default()
-        };
-        ctx.run_ui(input, |ui| {
-            if panel.open {
-                download_panel::draw(ui, panel, &plugin.download_worker);
-            }
-        })
-    };
-    let _settle = run(&ctx, &mut panel, Vec::new());
-    let output = run(&ctx, &mut panel, events);
-    (panel.open, output.shapes)
+    let mut session = TestDownloadPanel::new(plugin.download_worker.clone(), size);
+    if open {
+        session.open_without_fetch();
+    }
+    let _settle = session.frame(Vec::new());
+    let shapes = session.frame(events);
+    (session.is_open(), shapes)
 }
