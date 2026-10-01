@@ -725,7 +725,12 @@ fn a_pad_whose_every_file_fails_is_silent_not_the_built_in_sample() {
 /// The take a kit holds for `file` of `kit`, as the shared cache has it.
 fn take_of(kit: &Kit, file: &str) -> Arc<resonance_drums::kit::SampleData> {
     use resonance_drums::kit_loader::cache::{self, SampleKey};
-    let key = SampleKey::for_file(&kit.dir.join(file), RATE).unwrap();
+    let key = SampleKey::for_file_preload(
+        &kit.dir.join(file),
+        RATE,
+        resonance_drums::stream::DEFAULT_PRELOAD,
+    )
+    .unwrap();
     cache::global().lookup(&key).expect("a take some kit holds")
 }
 
@@ -1186,6 +1191,7 @@ fn request_for(kit: &Kit) -> resonance_drums::kit_loader::KitRequest {
         overhead_setup_key: DEFAULT_OVERHEAD_SETUP.to_string(),
         pad_choices: std::array::from_fn(|_| PadMicChoices::default()),
         articulations: [false; NUM_PADS],
+        preload: resonance_drums::stream::DEFAULT_PRELOAD,
     }
 }
 

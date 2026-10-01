@@ -36,6 +36,8 @@ pub fn build_fallback_pad_sourced(
         modified: None,
         len: bytes.len() as u64,
         rate_bits: target_sr.to_bits(),
+        // Embedded bytes have no file to stream from.
+        preload: 0,
     };
     let (data, source) = cache::global()
         .get_or_insert_with(key, || decode_sample(bytes.to_vec(), target_sr))

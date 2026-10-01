@@ -19,9 +19,11 @@
 //! # Disk streaming (E14)
 //!
 //! What the cache shares is whatever [`SampleData`] the decode closure
-//! builds. When streaming lands, that becomes the resident head of a take
-//! (plus how to find its tail on disk); the key, the sharing and the sweep
-//! stay as they are.
+//! builds: with a preload, the resident head of a long take plus how to
+//! find its tail on disk ([`crate::stream`]). The preload is part of the
+//! key — a take split at 64 k frames is not the take split at 32 k — and
+//! the sharing and the sweep are as for whole takes. The ring a voice
+//! streams the tail through is per voice, never shared.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -31,7 +33,7 @@ use std::time::SystemTime;
 
 use parking_lot::Mutex;
 
-use crate::kit::{decode_sample, SampleData};
+use crate::kit::{decode_sample_streamed, SampleData};
 
 /// What identifies one decoded take: the file as it is on disk now, and
 /// the rate it was decoded at. A file rewritten in place (new mtime or
@@ -44,11 +46,20 @@ pub struct SampleKey {
     pub len: u64,
     /// Target rate as `f32::to_bits`.
     pub rate_bits: u32,
+    /// Frames kept resident of a longer take (E14); 0 keeps it whole.
+    pub preload: u32,
 }
 
 impl SampleKey {
-    /// The key of `path` as it is on disk now, decoded at `sample_rate`.
+    /// The key of `path` as it is on disk now, decoded whole at
+    /// `sample_rate`.
     pub fn for_file(path: &Path, sample_rate: f32) -> std::io::Result<Self> {
+        Self::for_file_preload(path, sample_rate, 0)
+    }
+
+    /// The key of `path` as it is on disk now, decoded at `sample_rate`
+    /// with `preload` frames resident (0: whole).
+    pub fn for_file_preload(path: &Path, sample_rate: f32, preload: u32) -> std::io::Result<Self> {
         let path = path.canonicalize()?;
         let meta = std::fs::metadata(&path)?;
         Ok(Self {
@@ -56,6 +67,7 @@ impl SampleKey {
             modified: meta.modified().ok(),
             len: meta.len(),
             rate_bits: sample_rate.to_bits(),
+            preload,
         })
     }
 }
@@ -119,6 +131,18 @@ impl SampleCache {
         self.get_or_decode_with_hook(path, sample_rate, || {})
     }
 
+    /// [`get_or_decode`](Self::get_or_decode) keeping only `preload`
+    /// frames of a longer take resident; its tail streams from the file
+    /// (E14). `preload == 0` is `get_or_decode`.
+    pub fn get_or_decode_preload(
+        &self,
+        path: &Path,
+        sample_rate: f32,
+        preload: u32,
+    ) -> Result<(Arc<SampleData>, Source), String> {
+        self.get_or_decode_inner(path, sample_rate, preload, || {})
+    }
+
     /// [`get_or_decode`](Self::get_or_decode) with `after_read` run
     /// between the read and the second stat. Test hook: lets a test
     /// rewrite the file exactly there.
@@ -129,15 +153,28 @@ impl SampleCache {
         sample_rate: f32,
         after_read: impl FnOnce(),
     ) -> Result<(Arc<SampleData>, Source), String> {
-        let key = SampleKey::for_file(path, sample_rate)
+        self.get_or_decode_inner(path, sample_rate, 0, after_read)
+    }
+
+    fn get_or_decode_inner(
+        &self,
+        path: &Path,
+        sample_rate: f32,
+        preload: u32,
+        after_read: impl FnOnce(),
+    ) -> Result<(Arc<SampleData>, Source), String> {
+        let key = SampleKey::for_file_preload(path, sample_rate, preload)
             .map_err(|e| format!("read {}: {e}", path.display()))?;
         let read_key = key.clone();
         self.get_or_insert_checked(key, || {
             let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
             after_read();
-            let unchanged =
-                SampleKey::for_file(path, sample_rate).is_ok_and(|after| after == read_key);
-            let sample = decode_sample(bytes, sample_rate)
+            let unchanged = SampleKey::for_file_preload(path, sample_rate, preload)
+                .is_ok_and(|after| after == read_key);
+            // A tail streams from the canonical path, with the length the
+            // bytes were read at: a file rewritten since is not read.
+            let len = bytes.len() as u64;
+            let sample = decode_sample_streamed(bytes, sample_rate, preload, &read_key.path, len)
                 .map_err(|e| format!("decode {}: {e}", path.display()))?;
             Ok((sample, unchanged))
         })

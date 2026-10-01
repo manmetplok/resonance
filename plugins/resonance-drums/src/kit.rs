@@ -3,7 +3,10 @@
 //! samples for each bank are organised as velocity layers with
 //! per-layer round-robin takes.
 
+use std::path::Path;
 use std::sync::Arc;
+
+use crate::stream::TailSource;
 
 /// The decoded audio of one take, at the host rate. Immutable once built
 /// and shared through `Arc`: the process-wide sample cache
@@ -16,12 +19,14 @@ use std::sync::Arc;
 /// the floats the old duplicate-to-stereo decode did.
 ///
 /// The take is `frames` long, of which the first `resident_frames` are in
-/// memory. Today the two are always equal. Disk streaming (E14, K6b)
-/// keeps only a head resident and streams the rest; everything that
-/// reads samples goes through `resident_frames` / [`samples`] so that
-/// split does not reshape the readers.
+/// memory. A take decoded with a preload (disk streaming, E14) keeps only
+/// that **head** resident when it is longer; the rest — its [`tail`] — is
+/// read from the file while a voice plays ([`crate::stream`]). Everything
+/// that reads samples goes through `resident_frames` / [`samples`] for
+/// the head.
 ///
 /// [`samples`]: SampleData::samples
+/// [`tail`]: SampleData::tail
 pub struct SampleData {
     /// Interleaved, `channels` per frame, `resident_frames` frames.
     samples: Box<[f32]>,
@@ -29,6 +34,8 @@ pub struct SampleData {
     channels: usize,
     /// Frames in the whole take.
     frames: usize,
+    /// Where frames `resident_frames..frames` are, for a streamed take.
+    tail: Option<Arc<TailSource>>,
 }
 
 impl SampleData {
@@ -42,7 +49,23 @@ impl SampleData {
             samples: samples.into_boxed_slice(),
             channels,
             frames,
+            tail: None,
         }
+    }
+
+    /// A streamed take: `head` resident (interleaved, `channels` per
+    /// frame), the take `frames` long in all, the rest read from `tail`.
+    pub fn split(head: Vec<f32>, channels: usize, frames: usize, tail: Arc<TailSource>) -> Self {
+        let mut data = Self::new(head, channels);
+        data.frames = frames.max(data.frames);
+        data.tail = Some(tail);
+        data
+    }
+
+    /// Where the frames past the head are, for a streamed take; `None`
+    /// when the whole take is resident.
+    pub fn tail(&self) -> Option<&Arc<TailSource>> {
+        self.tail.as_ref()
     }
 
     /// A mono take.
@@ -66,8 +89,8 @@ impl SampleData {
     }
 
     /// Frames held in memory, from the start of the take. Equal to
-    /// [`frames`](Self::frames) until disk streaming (E14) splits a take
-    /// into a resident head and a streamed tail.
+    /// [`frames`](Self::frames) unless disk streaming (E14) split the
+    /// take into a resident head and a streamed tail.
     pub fn resident_frames(&self) -> usize {
         self.samples.len() / self.channels
     }
@@ -246,4 +269,42 @@ pub fn decode_sample(data: Vec<u8>, target_sample_rate: f32) -> Result<SampleDat
     let decoded =
         resonance_common::decode_wav_native(data, target_sample_rate).map_err(|e| e.to_string())?;
     Ok(SampleData::new(decoded.samples, decoded.channels))
+}
+
+/// [`decode_sample`] of the file at `path` (whose bytes `data` are, and
+/// which is `file_len` long), keeping only the first `preload` frames
+/// resident when the take is longer than that by at least
+/// [`crate::stream::MIN_STREAMED_TAIL`] — the rest streams from the file
+/// (E14). `preload == 0` keeps every take whole. The frames are the same
+/// either way, bit for bit.
+pub fn decode_sample_streamed(
+    data: Vec<u8>,
+    target_sample_rate: f32,
+    preload: u32,
+    path: &Path,
+    file_len: u64,
+) -> Result<SampleData, String> {
+    if preload == 0 {
+        return decode_sample(data, target_sample_rate);
+    }
+    let split = resonance_common::decode_wav_split(
+        data,
+        target_sample_rate,
+        preload as usize,
+        crate::stream::MIN_STREAMED_TAIL,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(match split.tail {
+        None => SampleData::new(split.samples, split.channels),
+        Some(tail) => SampleData::split(
+            split.samples,
+            split.channels,
+            split.frames,
+            Arc::new(TailSource {
+                path: path.to_path_buf(),
+                file_len,
+                tail,
+            }),
+        ),
+    })
 }

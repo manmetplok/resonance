@@ -152,6 +152,445 @@ pub fn decode_wav_native(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Head + tail decoding (drums-plugin-rework.md E14: disk streaming).
+// ---------------------------------------------------------------------------
+
+/// How a WAV's `data` chunk stores one sample.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcmEncoding {
+    U8,
+    S16,
+    S24,
+    S32,
+    F32,
+    F64,
+}
+
+impl PcmEncoding {
+    /// Bytes per sample.
+    pub fn bytes(self) -> usize {
+        match self {
+            Self::U8 => 1,
+            Self::S16 => 2,
+            Self::S24 => 3,
+            Self::S32 | Self::F32 => 4,
+            Self::F64 => 8,
+        }
+    }
+
+    /// One little-endian sample as `f32`, by the same arithmetic
+    /// symphonia's sample conversion uses (so the floats match its
+    /// decode bit for bit — which [`decode_wav_split`] also checks, per
+    /// file, before it trusts a tail to this).
+    #[inline]
+    fn to_f32(self, b: &[u8]) -> f32 {
+        match self {
+            Self::U8 => (b[0] as f32 / 128.0) - 1.0,
+            Self::S16 => i16::from_le_bytes([b[0], b[1]]) as f32 / 32_768.0,
+            Self::S24 => {
+                let v = i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8;
+                v as f32 / 8_388_608.0
+            }
+            Self::S32 => {
+                (i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64 / 2_147_483_648.0) as f32
+            }
+            Self::F32 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            Self::F64 => {
+                f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32
+            }
+        }
+    }
+}
+
+/// Where a plain-PCM WAV keeps its samples, read from its header: enough
+/// to read any frame straight from the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WavPcmLayout {
+    /// Byte offset of the first frame.
+    pub data_offset: u64,
+    /// Whole frames in the `data` chunk (clamped to the bytes present).
+    pub frames: u64,
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub encoding: PcmEncoding,
+    /// Bytes per frame.
+    pub block_align: u16,
+}
+
+impl WavPcmLayout {
+    /// Parse the RIFF/WAVE header of `bytes` (the whole file). `None` for
+    /// anything but integer or float PCM in a well-formed `fmt ` and
+    /// `data` chunk — such a file is simply never streamed.
+    pub fn parse(bytes: &[u8]) -> Option<Self> {
+        let u16_at = |at: usize| -> Option<u16> {
+            Some(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?))
+        };
+        let u32_at = |at: usize| -> Option<u32> {
+            Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?))
+        };
+        if bytes.get(0..4)? != b"RIFF" || bytes.get(8..12)? != b"WAVE" {
+            return None;
+        }
+        let mut fmt: Option<(u16, u16, u32, u16, u16)> = None;
+        let mut at = 12usize;
+        while at + 8 <= bytes.len() {
+            let id = &bytes[at..at + 4];
+            let size = u32_at(at + 4)? as usize;
+            let body = at + 8;
+            if id == b"fmt " {
+                let mut tag = u16_at(body)?;
+                let channels = u16_at(body + 2)?;
+                let rate = u32_at(body + 4)?;
+                let block_align = u16_at(body + 12)?;
+                let bits = u16_at(body + 14)?;
+                if tag == 0xFFFE {
+                    // WAVE_FORMAT_EXTENSIBLE: the sub-format GUID opens
+                    // with the real tag.
+                    if size < 40 {
+                        return None;
+                    }
+                    // A narrower valid width than the container would
+                    // need masking; leave such files resident.
+                    if u16_at(body + 18)? != bits {
+                        return None;
+                    }
+                    tag = u16_at(body + 24)?;
+                }
+                fmt = Some((tag, channels, rate, block_align, bits));
+            } else if id == b"data" {
+                let (tag, channels, rate, block_align, bits) = fmt?;
+                let encoding = match (tag, bits) {
+                    (1, 8) => PcmEncoding::U8,
+                    (1, 16) => PcmEncoding::S16,
+                    (1, 24) => PcmEncoding::S24,
+                    (1, 32) => PcmEncoding::S32,
+                    (3, 32) => PcmEncoding::F32,
+                    (3, 64) => PcmEncoding::F64,
+                    _ => return None,
+                };
+                if channels == 0
+                    || rate == 0
+                    || block_align as usize != channels as usize * encoding.bytes()
+                {
+                    return None;
+                }
+                let present = bytes.len().saturating_sub(body).min(size);
+                return Some(Self {
+                    data_offset: body as u64,
+                    frames: (present / block_align as usize) as u64,
+                    channels,
+                    sample_rate: rate,
+                    encoding,
+                    block_align,
+                });
+            }
+            at = body.checked_add(size)?.checked_add(size & 1)?;
+        }
+        None
+    }
+
+    /// Convert whole raw frames to interleaved `f32`, keeping `keep`
+    /// channels (1: the first; 2: the first two), appended to `out`.
+    pub fn convert(&self, raw: &[u8], keep: usize, out: &mut Vec<f32>) {
+        let width = self.encoding.bytes();
+        for frame in raw.chunks_exact(self.block_align as usize) {
+            for ch in 0..keep {
+                out.push(self.encoding.to_f32(&frame[ch * width..]));
+            }
+        }
+    }
+
+    /// True when converting the whole `data` chunk of `bytes` gives
+    /// exactly `decoded` (every channel, interleaved, bit for bit) — the
+    /// check that a tail read through this layout matches the decode.
+    fn matches(&self, bytes: &[u8], decoded: &[f32]) -> bool {
+        let channels = self.channels as usize;
+        if decoded.len() as u64 != self.frames * channels as u64 {
+            return false;
+        }
+        let start = self.data_offset as usize;
+        let end = start + self.frames as usize * self.block_align as usize;
+        let Some(data) = bytes.get(start..end) else {
+            return false;
+        };
+        let width = self.encoding.bytes();
+        data.chunks_exact(width)
+            .zip(decoded)
+            .all(|(raw, &want)| self.encoding.to_f32(raw).to_bits() == want.to_bits())
+    }
+}
+
+/// The part of a take [`decode_wav_split`] leaves on disk: how to read
+/// any of its frames, at the target rate, from the original file.
+///
+/// Every frame [`WavTail::read`] produces is bit-identical to the same
+/// frame of [`decode_wav_native`] of the whole file: no resampling is a
+/// straight conversion of the stored samples, and resampling evaluates
+/// the very kernel the one-shot conversion does over the same input
+/// frames ([`crate::resample::ResampleKernel`]). There is no decoder or
+/// filter state to carry across the head/tail boundary.
+#[derive(Clone)]
+pub struct WavTail {
+    layout: WavPcmLayout,
+    /// 1 (mono) or 2, as the decode keeps them.
+    channels: usize,
+    kernel: Option<crate::resample::ResampleKernel>,
+    /// Frames of the whole take at the target rate.
+    frames: u64,
+}
+
+/// Reusable buffers for [`WavTail::read`], one per reading thread.
+#[derive(Default)]
+pub struct TailScratch {
+    raw: Vec<u8>,
+    window: Vec<f32>,
+    row: Vec<f32>,
+}
+
+impl WavTail {
+    /// 1 or 2 channels per output frame.
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Frames of the whole take at the target rate.
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
+
+    /// The file's layout.
+    pub fn layout(&self) -> &WavPcmLayout {
+        &self.layout
+    }
+
+    /// True when the tail is converted to another rate as it is read.
+    pub fn resamples(&self) -> bool {
+        self.kernel.is_some()
+    }
+
+    /// Fill `out` (whole frames, [`channels`](Self::channels) per frame)
+    /// with the take's frames from `out_start` on, read from `file` —
+    /// the file the tail was split from. Frames past the end of the take
+    /// are an error, as is a short read (the file shrank).
+    pub fn read(
+        &self,
+        file: &std::fs::File,
+        out_start: u64,
+        out: &mut [f32],
+        scratch: &mut TailScratch,
+    ) -> std::io::Result<()> {
+        let n = (out.len() / self.channels) as u64;
+        if n == 0 {
+            return Ok(());
+        }
+        if out_start + n > self.frames {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "read past the end of the take",
+            ));
+        }
+        let (first, last) = match &self.kernel {
+            None => (out_start, out_start + n - 1),
+            Some(k) => {
+                let (lo, hi) = k.input_span(out_start, out_start + n);
+                let max = self.layout.frames as i64 - 1;
+                (lo.clamp(0, max) as u64, hi.clamp(0, max) as u64)
+            }
+        };
+        let align = self.layout.block_align as u64;
+        let len = ((last - first + 1) * align) as usize;
+        scratch.raw.resize(len, 0);
+        read_exact_at(file, &mut scratch.raw, self.layout.data_offset + first * align)?;
+        match &self.kernel {
+            None => {
+                scratch.window.clear();
+                self.layout.convert(&scratch.raw, self.channels, &mut scratch.window);
+                out[..scratch.window.len()].copy_from_slice(&scratch.window);
+            }
+            Some(k) => {
+                scratch.window.clear();
+                self.layout.convert(&scratch.raw, self.channels, &mut scratch.window);
+                let frames = self.layout.frames;
+                let window = &scratch.window;
+                match self.channels {
+                    1 => k.render::<1>(frames, window, first, out_start, out, &mut scratch.row),
+                    _ => k.render::<2>(frames, window, first, out_start, out, &mut scratch.row),
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn read_exact_at(file: &std::fs::File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        match file.seek_read(buf, offset) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "short read",
+                ))
+            }
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+/// A take decoded by [`decode_wav_split`]: its first frames in memory,
+/// and — when it was long enough to split — how to read the rest.
+pub struct SplitAudio {
+    /// Interleaved, `channels` per frame: the whole take, or its head.
+    pub samples: Vec<f32>,
+    /// 1 or 2, as [`decode_wav_native`] keeps them.
+    pub channels: usize,
+    /// Frames of the whole take at the target rate.
+    pub frames: usize,
+    /// The frames past `samples`, on disk. `None`: `samples` is the
+    /// whole take.
+    pub tail: Option<WavTail>,
+}
+
+/// [`decode_wav_native`], keeping only the first `head_frames` frames in
+/// memory when the take is longer than `head_frames + min_tail_frames`;
+/// the rest is described by [`SplitAudio::tail`], to be read from the
+/// file on demand.
+///
+/// The head is bit-identical to the same frames of the full decode, and
+/// so is every frame the tail reads. A file is split only when its PCM
+/// can be read straight from disk — plain integer or float PCM whose
+/// conversion matches the decoder's output bit for bit (checked over the
+/// whole file here). Anything else (another codec, an odd header, a
+/// mismatch) comes back whole, exactly as `decode_wav_native` gives it.
+/// `head_frames == 0` never splits.
+pub fn decode_wav_split(
+    data: Vec<u8>,
+    target_sample_rate: f32,
+    head_frames: usize,
+    min_tail_frames: usize,
+) -> Result<SplitAudio, WavDecodeError> {
+    let layout = if head_frames > 0 {
+        WavPcmLayout::parse(&data)
+    } else {
+        None
+    };
+    let bytes = std::sync::Arc::new(data);
+    let cursor = Cursor::new(SharedBytes(bytes.clone()));
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("wav");
+    let decoded = decode_source_to_interleaved(mss, hint, "WAV")?;
+    let source_rate = decoded.sample_rate;
+    let resample = (source_rate - target_sample_rate).abs() > 1.0;
+    let kernel = if resample {
+        crate::resample::ResampleKernel::for_rates(source_rate, target_sample_rate)
+    } else {
+        None
+    };
+    let in_frames = (decoded.samples.len() / decoded.channels) as u64;
+    let out_frames = kernel.as_ref().map_or(in_frames, |k| k.out_len(in_frames));
+    let channels = if decoded.channels == 1 { 1 } else { 2 };
+
+    let streamable = layout.filter(|l| {
+        out_frames > (head_frames + min_tail_frames) as u64
+            && l.channels as usize == decoded.channels
+            && l.sample_rate as f32 == source_rate
+            && l.matches(&bytes, &decoded.samples)
+    });
+    drop(bytes);
+    let Some(layout) = streamable else {
+        // Whole, exactly as `decode_wav_native` builds it.
+        let samples = if channels == 1 {
+            if resample {
+                linear_resample_mono(&decoded.samples, source_rate, target_sample_rate)
+            } else {
+                decoded.samples
+            }
+        } else {
+            let stereo = if decoded.channels == 2 {
+                decoded.samples
+            } else {
+                to_stereo_interleaved(&decoded.samples, decoded.channels)
+            };
+            if resample {
+                linear_resample_stereo(&stereo, source_rate, target_sample_rate)
+            } else {
+                stereo
+            }
+        };
+        let frames = samples.len() / channels;
+        return Ok(SplitAudio {
+            samples,
+            channels,
+            frames,
+            tail: None,
+        });
+    };
+
+    // Keep the first `channels` of every frame, then the head of that.
+    let kept = if decoded.channels == channels {
+        decoded.samples
+    } else {
+        let mut kept = Vec::with_capacity(in_frames as usize * channels);
+        for frame in decoded.samples.chunks_exact(decoded.channels) {
+            kept.extend_from_slice(&frame[..channels]);
+        }
+        kept
+    };
+    let head = match &kernel {
+        None => {
+            let mut kept = kept;
+            kept.truncate(head_frames * channels);
+            kept.shrink_to_fit();
+            kept
+        }
+        Some(k) => {
+            let mut head = vec![0.0f32; head_frames * channels];
+            let mut row = Vec::new();
+            match channels {
+                1 => k.render::<1>(in_frames, &kept, 0, 0, &mut head, &mut row),
+                _ => k.render::<2>(in_frames, &kept, 0, 0, &mut head, &mut row),
+            }
+            head
+        }
+    };
+    Ok(SplitAudio {
+        samples: head,
+        channels,
+        frames: out_frames as usize,
+        tail: Some(WavTail {
+            layout,
+            channels,
+            kernel,
+            frames: out_frames,
+        }),
+    })
+}
+
+/// File bytes the decoder reads while the caller keeps them too (to check
+/// the decode against the raw PCM).
+struct SharedBytes(std::sync::Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 /// Decode a WAV file from bytes into separate left/right channels,
 /// resampled to the target sample rate if necessary.
 pub fn decode_wav_channels(

@@ -1,7 +1,8 @@
 //! Core drum sampler engine: sample loading, voice management, and audio rendering.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, Sender};
 
@@ -9,6 +10,8 @@ use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
 use crate::kit_loader::KitLoadProgress;
 use crate::params::DrumParams;
+use crate::stream::reader::ReaderPool;
+use crate::stream::{AudioStreams, RenderMode, Ring, StreamSet, NO_RING};
 use crate::voice::{
     fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
     STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
@@ -74,6 +77,26 @@ const RETIRED_KITS: usize = 4;
 /// The rate the sampler assumes until told otherwise
 /// ([`DrumSampler::set_sample_rate`]).
 const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
+
+/// Audio time the offline detector ([`RenderMode::Auto`]) measures its
+/// render speed over, in seconds.
+const OFFLINE_WINDOW_SECS: f64 = 0.25;
+/// Faster than this many times real time over a window, rendering is
+/// taken to be offline; it stays offline until it drops below
+/// [`OFFLINE_EXIT_RATIO`].
+const OFFLINE_ENTER_RATIO: f64 = 3.0;
+const OFFLINE_EXIT_RATIO: f64 = 1.5;
+/// A gap between two blocks longer than this many blocks, and than
+/// [`OFFLINE_PAUSE_MIN`], ends an offline verdict (see
+/// `update_render_timing`).
+const OFFLINE_PAUSE_BLOCKS: u32 = 4;
+const OFFLINE_PAUSE_MIN: Duration = Duration::from_millis(20);
+/// The most an offline block waits for the disk reader in all, before
+/// the missing frames are given up as an underrun.
+const OFFLINE_WAIT_PER_BLOCK: Duration = Duration::from_millis(500);
+/// After a wait ran out, this much audio renders without waiting — a dead
+/// reader must not slow a bounce to a crawl.
+const OFFLINE_WAIT_HOLDOFF_SECS: f32 = 1.0;
 
 pub struct DrumSampler {
     pub pads: Vec<LoadedPad>,
@@ -174,11 +197,40 @@ pub struct DrumSampler {
     /// True when `begin_block` found nothing to render: spans are no-ops
     /// and `end_block` only publishes the (silent) OUT meter.
     block_idle: bool,
+    /// Disk streaming (E14): this sampler's tail rings and its underrun
+    /// counter. See [`crate::stream`].
+    streams: AudioStreams,
+    /// How missing tail frames are treated (see [`RenderMode`]).
+    render_mode: RenderMode,
+    /// This block renders offline: a missing tail frame is waited for.
+    offline: bool,
+    /// [`RenderMode::Auto`]'s measurement: the window's start, the audio
+    /// frames rendered since, and the start of the previous block.
+    timing_start: Option<Instant>,
+    timing_frames: u64,
+    /// The last window measured faster than real time.
+    timing_fast: bool,
+    /// Time this window spent waiting for the reader (not rendering).
+    timing_waited: Duration,
+    last_block_start: Option<Instant>,
+    last_block_frames: usize,
+    /// Offline wait left for the block in progress.
+    offline_wait_left: Duration,
+    /// Frames left to render without waiting, after a wait ran out.
+    offline_holdoff: u64,
 }
 
 impl DrumSampler {
     pub fn new(kit_receiver: Receiver<Vec<LoadedPad>>) -> Self {
         Self::with_janitor(kit_receiver, janitor::spawn())
+    }
+
+    /// [`new`](Self::new) with its tails streamed by `pool` instead of the
+    /// process-wide reader pool. Test hook: a test's own pool can be shut
+    /// down mid-render.
+    #[doc(hidden)]
+    pub fn with_reader_pool(kit_receiver: Receiver<Vec<LoadedPad>>, pool: &ReaderPool) -> Self {
+        Self::with_janitor_and_pool(kit_receiver, janitor::spawn(), pool)
     }
 
     /// [`new`](Self::new) with the caller's janitor channel instead of a
@@ -189,6 +241,16 @@ impl DrumSampler {
         kit_receiver: Receiver<Vec<LoadedPad>>,
         janitor_sender: Sender<Vec<LoadedPad>>,
     ) -> Self {
+        Self::with_janitor_and_pool(kit_receiver, janitor_sender, ReaderPool::global())
+    }
+
+    fn with_janitor_and_pool(
+        kit_receiver: Receiver<Vec<LoadedPad>>,
+        janitor_sender: Sender<Vec<LoadedPad>>,
+        pool: &ReaderPool,
+    ) -> Self {
+        let set = StreamSet::new();
+        pool.register(&set);
         Self {
             pads: Vec::new(),
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
@@ -222,7 +284,61 @@ impl DrumSampler {
             cur_pad_balance: [0.5; NUM_PADS],
             block_inv_frames: 0.0,
             block_idle: true,
+            streams: AudioStreams::new(set),
+            render_mode: RenderMode::Auto,
+            offline: false,
+            timing_start: None,
+            timing_frames: 0,
+            timing_fast: false,
+            timing_waited: Duration::ZERO,
+            last_block_start: None,
+            last_block_frames: 0,
+            offline_wait_left: OFFLINE_WAIT_PER_BLOCK,
+            offline_holdoff: 0,
         }
+    }
+
+    /// Publish stream underruns on `counter` (the bridge's) instead of
+    /// the sampler's own.
+    pub fn set_underrun_counter(&mut self, counter: Arc<AtomicU64>) {
+        self.streams.underruns = counter;
+    }
+
+    /// Stream underruns so far (see [`crate::stream`]).
+    pub fn stream_underruns(&self) -> u64 {
+        self.streams.underruns.load(Ordering::Relaxed)
+    }
+
+    /// Of [`stream_underruns`](Self::stream_underruns), the hits whose
+    /// take found no free ring.
+    pub fn stream_ring_misses(&self) -> u64 {
+        self.streams.ring_misses()
+    }
+
+    /// This sampler's tail rings (test hooks: stall or slow its reader).
+    pub fn stream_set(&self) -> &Arc<StreamSet> {
+        self.streams.set()
+    }
+
+    /// Rings the sampler holds for voices (or has not yet seen let go).
+    pub fn stream_rings_claimed(&self) -> usize {
+        self.streams.claimed_count()
+    }
+
+    /// Say how the sampler is being rendered: live, offline (a bounce),
+    /// or [`RenderMode::Auto`] to tell from the block timing. The hook a
+    /// CLAP `render` extension would call.
+    pub fn set_render_mode(&mut self, mode: RenderMode) {
+        self.render_mode = mode;
+        self.offline = mode == RenderMode::Offline;
+        self.timing_start = None;
+        self.timing_fast = false;
+        self.last_block_start = None;
+    }
+
+    /// Whether the block in progress (or the last one) rendered offline.
+    pub fn renders_offline(&self) -> bool {
+        self.offline
     }
 
     /// Set the host sample rate the fades are timed against, so a choke
@@ -609,6 +725,22 @@ impl DrumSampler {
         let mut destinations: [Option<VoiceDestination>; 3] = [None, None, None];
         // The (layer, take) each destination's bank plays.
         let mut cells = [(0usize, 0usize); 3];
+        // The ring each destination streams its take's tail through (E14).
+        // Claimed now, while the pad is at hand: the reader starts filling
+        // it at once, while the voice plays its head.
+        let mut rings = [NO_RING; 3];
+        let streams = &mut self.streams;
+        // Offline, a hit may wait for the reader to take a pending
+        // request, which frees its ring.
+        let mut wait = (self.offline && self.offline_holdoff == 0)
+            .then_some(&mut self.offline_wait_left);
+        let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> u8 {
+            let take = bank.layers.get(layer).and_then(|l| l.round_robins.get(rr));
+            match take.and_then(|t| t.tail().map(|tail| (tail, t.resident_frames()))) {
+                Some((tail, head)) => streams.claim(tail, head, wait.as_deref_mut()),
+                None => NO_RING,
+            }
+        };
         let cell_in = |bank: &LoadedMicBank| -> (usize, usize) {
             let layer = map_relative(layer_index, n_layers, bank.layers.len());
             let takes = bank
@@ -620,6 +752,7 @@ impl DrumSampler {
         let mut dest_count = 0;
         for bank_index in 0..close_mic_count.min(2) {
             cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
+            rings[dest_count] = ring_for(&pad.close_mics[bank_index], cells[dest_count]);
             let balance_side = match (close_mic_count, bank_index) {
                 (2, 0) => BalanceSide::Left,
                 (2, 1) => BalanceSide::Right,
@@ -647,6 +780,7 @@ impl DrumSampler {
             };
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
+                rings[dest_count] = ring_for(oh, cells[dest_count]);
             }
             destinations[dest_count] = Some(VoiceDestination::Overhead {
                 output_port: oh_port,
@@ -660,8 +794,8 @@ impl DrumSampler {
         // single unit.
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
-        for (dest_slot, &(bank_layer, bank_rr)) in
-            destinations.iter().zip(&cells).take(dest_count)
+        for ((dest_slot, &(bank_layer, bank_rr)), &ring) in
+            destinations.iter().zip(&cells).zip(&rings).take(dest_count)
         {
             let Some(dest) = dest_slot else {
                 continue;
@@ -686,6 +820,7 @@ impl DrumSampler {
             voice.state = VoiceState::Playing;
             voice.release_pos = 0;
             voice.age = shared_age;
+            voice.ring = ring;
         }
     }
 
@@ -700,6 +835,70 @@ impl DrumSampler {
     /// voices out rather than clicking them off.
     pub fn choke_note(&mut self, note: u8) {
         janitor::choke_note(&mut self.voices, note, self.release_frames);
+    }
+
+    /// Decide whether this block renders offline (see [`RenderMode`]) and
+    /// refill its offline wait budget.
+    ///
+    /// Under [`RenderMode::Auto`] rendering is offline while audio has
+    /// been rendering more than [`OFFLINE_ENTER_RATIO`] times faster than
+    /// the wall clock over the last window (until it drops below
+    /// [`OFFLINE_EXIT_RATIO`]) — which a live callback, paced by the audio
+    /// device, never sustains. Time spent waiting for the reader is not
+    /// render time and is left out. A pause between blocks longer than
+    /// [`OFFLINE_PAUSE_BLOCKS`] blocks (and [`OFFLINE_PAUSE_MIN`]) starts
+    /// over as live: that is live playback resuming after a bounce, which
+    /// must not inherit the bounce's verdict. One clock read per block
+    /// (vDSO, no syscall).
+    fn update_render_timing(&mut self, frames: usize) {
+        // What the last block spent waiting for the reader.
+        let waited = OFFLINE_WAIT_PER_BLOCK.saturating_sub(self.offline_wait_left);
+        self.offline_wait_left = OFFLINE_WAIT_PER_BLOCK;
+        self.offline_holdoff = self.offline_holdoff.saturating_sub(frames as u64);
+        match self.render_mode {
+            RenderMode::Realtime => self.offline = false,
+            RenderMode::Offline => self.offline = true,
+            RenderMode::Auto => {
+                let now = Instant::now();
+                let rate = self.sample_rate as f64;
+                let paused = self.last_block_start.is_some_and(|prev| {
+                    let block = Duration::from_secs_f64(self.last_block_frames as f64 / rate);
+                    let gap = now.duration_since(prev).saturating_sub(waited);
+                    gap > (block * OFFLINE_PAUSE_BLOCKS).max(OFFLINE_PAUSE_MIN)
+                });
+                self.last_block_start = Some(now);
+                self.last_block_frames = frames;
+                match self.timing_start {
+                    Some(start) if !paused => {
+                        self.timing_waited += waited;
+                        self.timing_frames += frames as u64;
+                        let audio = self.timing_frames as f64 / rate;
+                        if audio >= OFFLINE_WINDOW_SECS {
+                            let wall = now
+                                .duration_since(start)
+                                .saturating_sub(self.timing_waited)
+                                .as_secs_f64();
+                            let ratio = if self.timing_fast {
+                                OFFLINE_EXIT_RATIO
+                            } else {
+                                OFFLINE_ENTER_RATIO
+                            };
+                            self.timing_fast = audio > ratio * wall;
+                            self.timing_start = Some(now);
+                            self.timing_frames = 0;
+                            self.timing_waited = Duration::ZERO;
+                        }
+                    }
+                    _ => {
+                        self.timing_fast = false;
+                        self.timing_start = Some(now);
+                        self.timing_frames = 0;
+                        self.timing_waited = Duration::ZERO;
+                    }
+                }
+                self.offline = self.timing_fast;
+            }
+        }
     }
 
     /// Render `frames` samples into each of the 7 output ports in
@@ -753,6 +952,8 @@ impl DrumSampler {
             port.right[..frames].fill(0.0);
         }
 
+        self.update_render_timing(frames);
+
         self.block_idle = self.pads.is_empty() && self.retired_pads.iter().all(Option::is_none);
         if self.block_idle {
             return;
@@ -805,6 +1006,11 @@ impl DrumSampler {
             return;
         }
         let inv_frames = self.block_inv_frames;
+        let streams = &self.streams;
+        let offline = self.offline;
+        let offline_wait_left = &mut self.offline_wait_left;
+        let offline_holdoff = &mut self.offline_holdoff;
+        let holdoff_frames = (OFFLINE_WAIT_HOLDOFF_SECS * self.sample_rate) as u64;
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
         let pad_oh = &self.cur_pad_oh;
@@ -855,6 +1061,17 @@ impl DrumSampler {
             let stride = sample.channels();
             let right_offset = stride - 1;
             let resident = sample.resident_frames();
+            // A streamed take (E14) is `total` long: frames past the
+            // resident head come from the voice's ring, as far as the
+            // reader has written it.
+            let total = sample.frames();
+            let ring: Option<&Ring> = if voice.ring == NO_RING {
+                None
+            } else {
+                streams.ring(voice.ring)
+            };
+            let mut written = ring.map_or(0, |r| r.published().0);
+            let mut missing = false;
 
             // Which port does this voice sum into, and what's the
             // destination-specific gain multiplier? Computed at both
@@ -918,7 +1135,7 @@ impl DrumSampler {
             let port_r = &mut port.right[..end];
 
             for frame in start..end {
-                if voice.position >= resident {
+                if voice.position >= total {
                     voice.active = false;
                     break;
                 }
@@ -927,9 +1144,32 @@ impl DrumSampler {
                     break;
                 }
 
-                let idx = voice.position * stride;
-                let sample_l = data[idx];
-                let sample_r = data[idx + right_offset];
+                let (sample_l, sample_r) = if voice.position < resident {
+                    let idx = voice.position * stride;
+                    (data[idx], data[idx + right_offset])
+                } else if let Some(ring) = ring {
+                    let at = (voice.position - resident) as u64;
+                    if at >= written && offline && *offline_holdoff == 0 {
+                        written = wait_for_frame(ring, at, offline_wait_left);
+                        // The budget ran out (not a failed stream, which
+                        // returns at once): stop waiting for a while.
+                        if at >= written && offline_wait_left.is_zero() {
+                            *offline_holdoff = holdoff_frames;
+                        }
+                    }
+                    if at < written {
+                        (ring.sample(at, stride, 0), ring.sample(at, stride, right_offset))
+                    } else {
+                        // Not delivered yet: silence, and on in time.
+                        missing = true;
+                        (0.0, 0.0)
+                    }
+                } else {
+                    // A streamed take that found no ring ends with its
+                    // head (counted when the claim failed).
+                    voice.active = false;
+                    break;
+                };
                 let env = voice.current_gain();
                 let gain = env * vol * dest_gain;
 
@@ -946,6 +1186,17 @@ impl DrumSampler {
                     voice.release_pos += 1;
                 }
             }
+            if let Some(ring) = ring {
+                // Room for the reader: every ring frame before the
+                // voice's position is done with.
+                if voice.position > resident {
+                    ring.read
+                        .store((voice.position - resident) as u64, Ordering::Release);
+                }
+            }
+            if missing {
+                streams.underruns.fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -958,6 +1209,9 @@ impl DrumSampler {
         frames: usize,
         params: &DrumParams,
     ) {
+        // Let go of the rings of voices that ended this block (E14).
+        self.streams
+            .sweep(self.voices.iter().chain(self.tails.iter()));
         if self.block_idle {
             // Nothing to render — the ports are silent, and the OUT meter
             // must say so rather than hold its last value.
@@ -1044,5 +1298,43 @@ impl DrumSampler {
     pub fn reset(&mut self) {
         janitor::reset_all(&mut self.voices);
         janitor::reset_all(&mut self.tails);
+        self.streams
+            .sweep(self.voices.iter().chain(self.tails.iter()));
+        // A render after a reset (a bounce) is measured afresh.
+        self.timing_start = None;
+        self.timing_fast = false;
+        self.last_block_start = None;
+        if self.render_mode == RenderMode::Auto {
+            self.offline = false;
+        }
+    }
+}
+
+/// Offline only: wait for the reader to deliver ring frame `at`, for at
+/// most what is left of `budget` (which is charged for the wait). Spins
+/// briefly, then sleeps in short steps. Returns the ring's `write` — past
+/// `at` unless the wait ran out or the stream failed.
+fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> u64 {
+    let began = Instant::now();
+    // The reader only writes where the voice has made room.
+    ring.read.store(at, Ordering::Release);
+    let mut spins = 0u32;
+    loop {
+        let (written, failed) = ring.published();
+        if written > at || failed {
+            *budget = budget.saturating_sub(began.elapsed());
+            return written;
+        }
+        let waited = began.elapsed();
+        if waited >= *budget {
+            *budget = Duration::ZERO;
+            return written;
+        }
+        if spins < 64 {
+            spins += 1;
+            std::hint::spin_loop();
+        } else {
+            std::thread::sleep(Duration::from_micros(50));
+        }
     }
 }
