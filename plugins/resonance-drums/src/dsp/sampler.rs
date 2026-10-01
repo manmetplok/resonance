@@ -200,6 +200,9 @@ pub struct DrumSampler {
     /// Disk streaming (E14): this sampler's tail rings and its underrun
     /// counter. See [`crate::stream`].
     streams: AudioStreams,
+    /// Where the bytes of ring storage the streams hold are published
+    /// (the bridge's `stream_ring_bytes`), once a block.
+    ring_bytes_out: Option<Arc<AtomicU64>>,
     /// How missing tail frames are treated (see [`RenderMode`]).
     render_mode: RenderMode,
     /// This block renders offline: a missing tail frame is waited for.
@@ -285,6 +288,7 @@ impl DrumSampler {
             block_inv_frames: 0.0,
             block_idle: true,
             streams: AudioStreams::new(set),
+            ring_bytes_out: None,
             render_mode: RenderMode::Auto,
             offline: false,
             timing_start: None,
@@ -302,6 +306,12 @@ impl DrumSampler {
     /// the sampler's own.
     pub fn set_underrun_counter(&mut self, counter: Arc<AtomicU64>) {
         self.streams.underruns = counter;
+    }
+
+    /// Publish the bytes of ring storage this sampler's streams hold on
+    /// `counter` (the bridge's), once a block.
+    pub fn set_ring_bytes_counter(&mut self, counter: Arc<AtomicU64>) {
+        self.ring_bytes_out = Some(counter);
     }
 
     /// Stream underruns so far (see [`crate::stream`]).
@@ -1212,6 +1222,9 @@ impl DrumSampler {
         // Let go of the rings of voices that ended this block (E14).
         self.streams
             .sweep(self.voices.iter().chain(self.tails.iter()));
+        if let Some(out) = &self.ring_bytes_out {
+            out.store(self.streams.set.ring_bytes(), Ordering::Relaxed);
+        }
         if self.block_idle {
             // Nothing to render — the ports are silent, and the OUT meter
             // must say so rather than hold its last value.

@@ -11,8 +11,11 @@
 //!
 //! # Threads and ownership
 //!
-//! - **Rings** are preallocated with the sampler ([`StreamSet`],
-//!   [`NUM_RINGS`] of them, [`RING_FRAMES`] stereo frames each). A voice
+//! - **Rings** are created with the sampler ([`StreamSet`], [`NUM_RINGS`]
+//!   of them, [`RING_FRAMES`] stereo frames each), but their sample
+//!   storage is allocated by a reader the first time the ring is served
+//!   (see `Ring::data`): an untouched ring costs a few hundred bytes, and
+//!   [`StreamSet::ring_bytes`] says what the used ones hold. A voice
 //!   holds a ring by index ([`crate::voice::Voice::ring`]); moving a
 //!   stolen voice to a tail slot moves the index with it.
 //! - **The audio thread** claims a ring at note-on and hands it the
@@ -79,7 +82,7 @@ pub mod reader;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
 use resonance_common::WavTail;
@@ -137,20 +140,37 @@ pub const MIN_STREAMED_TAIL: usize = 8_192;
 /// filled while the head plays.
 pub const RING_FRAMES: usize = 16_384;
 
-/// Rings per sampler: one for every main voice and tail slot, plus room
-/// for rings whose voices have ended but which the reader has not handed
-/// back yet — 96 more, so even a reader held off the CPU for a while
-/// (they are not realtime threads) does not run a fast pattern out of
-/// rings. A claim takes the lowest free ring, so the spare ones are
-/// rarely touched, and an untouched ring costs no resident memory
-/// ([`zeroed_atomics`]).
-pub const NUM_RINGS: usize = MAX_VOICES + TAIL_SLOTS + 96;
+/// Bytes of sample storage a ring holds once it has been used.
+pub const RING_BYTES: usize = RING_FRAMES * 2 * std::mem::size_of::<f32>();
+
+/// Rings beyond one per main voice and tail slot: room for rings whose
+/// voices have ended but which the reader has not handed back yet, so
+/// even a reader held off the CPU for a while (they are not realtime
+/// threads) does not run a fast pattern out of rings. A claim takes the
+/// lowest free ring, so the spare ones are rarely touched — and a ring
+/// never served holds no sample storage.
+pub const SPARE_RINGS: usize = 96;
+
+/// The rings a sampler with `voices` main voices and `tails` tail slots
+/// has.
+pub const fn rings_for(voices: usize, tails: usize) -> usize {
+    voices + tails + SPARE_RINGS
+}
+
+/// Rings per sampler (see [`rings_for`]).
+pub const NUM_RINGS: usize = rings_for(MAX_VOICES, TAIL_SLOTS);
 
 /// [`Voice::ring`] of a voice that streams nothing.
 pub const NO_RING: u8 = u8::MAX;
 
+/// 64-bit words in a set of ring indices.
+const RING_WORDS: usize = NUM_RINGS.div_ceil(64);
+
 const _: () = assert!(NUM_RINGS < NO_RING as usize);
-const _: () = assert!(NUM_RINGS <= 64 * RING_WORDS);
+// E15 raises the cap to 128 voices + 16 tail slots: still indexable by a
+// `u8` below `NO_RING`, in four words.
+const _: () = assert!(rings_for(128, 16) < NO_RING as usize);
+const _: () = assert!(rings_for(128, 16).div_ceil(64) == 4);
 
 /// The most frames one reader pass fetches for one ring, so one long
 /// read never holds up the others.
@@ -190,8 +210,11 @@ pub struct Ring {
     /// length in ring frames: what the readers' lock-free scans go by.
     pub(crate) reader_gen: AtomicU32,
     pub(crate) reader_end: AtomicU64,
-    /// `RING_FRAMES * 2` sample slots, as `f32` bits.
-    pub(crate) data: Box<[AtomicU32]>,
+    /// `RING_FRAMES * 2` sample slots, as `f32` bits — allocated by the
+    /// reader that first serves the ring, before it publishes a frame.
+    /// The audio thread only ever `get`s it (one atomic load, never a
+    /// wait).
+    data: OnceLock<Box<[AtomicU32]>>,
     /// The reader's side of the ring. Only reader threads lock it (with
     /// `try_lock`, as the claim that one thread serves it at a time).
     pub(crate) reader: Mutex<reader::ReaderSide>,
@@ -208,7 +231,7 @@ impl Ring {
             read: AtomicU64::new(0),
             reader_gen: AtomicU32::new(0),
             reader_end: AtomicU64::new(0),
-            data: zeroed_atomics(RING_FRAMES * 2),
+            data: OnceLock::new(),
             reader: Mutex::new(reader::ReaderSide::default()),
         }
     }
@@ -226,11 +249,30 @@ impl Ring {
     }
 
     /// Sample `ch` (0 or 1) of ring frame `frame`, which must be below
-    /// what [`published`](Self::published) said.
+    /// what [`published`](Self::published) said (and so is stored).
     #[inline]
     pub(crate) fn sample(&self, frame: u64, stride: usize, ch: usize) -> f32 {
+        let Some(data) = self.data.get() else {
+            return 0.0;
+        };
         let slot = (frame as usize % RING_FRAMES) * stride + ch;
-        f32::from_bits(self.data[slot].load(Ordering::Relaxed))
+        f32::from_bits(data[slot].load(Ordering::Relaxed))
+    }
+
+    /// Reader: the ring's sample storage, allocated on first use, and
+    /// whether this call allocated it. Callers hold the `reader` lock.
+    pub(crate) fn data_or_alloc(&self) -> (&[AtomicU32], bool) {
+        let mut fresh = false;
+        let data = self.data.get_or_init(|| {
+            fresh = true;
+            (0..RING_FRAMES * 2).map(|_| AtomicU32::new(0)).collect()
+        });
+        (data, fresh)
+    }
+
+    /// Whether the ring holds sample storage (it has been served).
+    pub fn has_storage(&self) -> bool {
+        self.data.get().is_some()
     }
 
     /// Reader: take the pending request, if any, as (source, generation,
@@ -279,21 +321,12 @@ impl Drop for Ring {
     }
 }
 
-/// `n` atomics, all zero, from a zeroed allocation: the pages are only
-/// committed when a reader first writes them, so a sampler that never
-/// streams costs no resident memory for its rings.
-fn zeroed_atomics(n: usize) -> Box<[AtomicU32]> {
-    let zeroed: Box<[u32]> = vec![0u32; n].into_boxed_slice();
-    let ptr = Box::into_raw(zeroed) as *mut [AtomicU32];
-    // SAFETY: `AtomicU32` has the same size, alignment and bit validity
-    // as `u32` (documented), so the boxed slice is reinterpreted as is.
-    unsafe { Box::from_raw(ptr) }
-}
-
 /// One sampler's rings, shared with the reader pool, plus the test hooks
 /// that slow or stop the reader for it.
 pub struct StreamSet {
     pub(crate) rings: Box<[Ring]>,
+    /// Rings holding sample storage.
+    allocated: AtomicU32,
     /// Test hook: while set, the reader leaves this set alone entirely —
     /// a stalled disk, or a reader that never comes back.
     pub(crate) paused: AtomicBool,
@@ -306,6 +339,7 @@ impl StreamSet {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             rings: (0..NUM_RINGS).map(|_| Ring::new()).collect(),
+            allocated: AtomicU32::new(0),
             paused: AtomicBool::new(false),
             read_latency_us: AtomicU32::new(0),
         })
@@ -335,9 +369,23 @@ impl StreamSet {
             })
             .count()
     }
-}
 
-const RING_WORDS: usize = 3;
+    /// Rings holding sample storage (ever served).
+    pub fn rings_allocated(&self) -> usize {
+        self.allocated.load(Ordering::Relaxed) as usize
+    }
+
+    /// Bytes of ring sample storage this set holds: only rings that have
+    /// been served hold any.
+    pub fn ring_bytes(&self) -> u64 {
+        self.rings_allocated() as u64 * RING_BYTES as u64
+    }
+
+    /// Reader: count a ring that just got its storage.
+    pub(crate) fn note_allocated(&self) {
+        self.allocated.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 /// A set of ring indices.
 #[derive(Clone, Copy, Default)]

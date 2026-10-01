@@ -183,7 +183,7 @@ fn admin_all(sets: &[Arc<StreamSet>]) -> (bool, bool) {
             open |= active != 0 || served != 0 || pending;
             if pending || (served != 0 && served != active) {
                 if let Some(mut side) = ring.reader.try_lock() {
-                    worked |= admin(ring, &mut side);
+                    worked |= admin(set, ring, &mut side);
                 }
             }
         }
@@ -219,7 +219,7 @@ fn wants_fill(ring: &Ring) -> Option<u64> {
 /// Drop a stream the audio thread has let go of, and take a pending
 /// request (see the protocol in the module docs). Returns whether it did
 /// anything.
-fn admin(ring: &Ring, side: &mut ReaderSide) -> bool {
+fn admin(set: &StreamSet, ring: &Ring, side: &mut ReaderSide) -> bool {
     let mut worked = false;
     if side.gen != 0 && ring.active_gen.load(Ordering::Acquire) != side.gen {
         side.reset();
@@ -239,6 +239,11 @@ fn admin(ring: &Ring, side: &mut ReaderSide) -> bool {
     let file = File::open(&source.path)
         .ok()
         .filter(|f| f.metadata().is_ok_and(|m| m.len() == source.file_len));
+    // The ring's storage, allocated the first time it is served — here,
+    // before any frame is published, never on the audio thread.
+    if ring.data_or_alloc().1 {
+        set.note_allocated();
+    }
     let tagged = (gen as u64) << 32;
     if file.is_none() {
         let _ = ring.wpos.compare_exchange(
@@ -316,10 +321,11 @@ fn fill(
         );
         return true;
     }
+    let (data, _) = ring.data_or_alloc();
     for (j, frame) in out.chunks_exact(stride).enumerate() {
         let slot = ((next as usize + j) % RING_FRAMES) * stride;
         for (ch, &s) in frame.iter().enumerate() {
-            ring.data[slot + ch].store(s.to_bits(), Ordering::Relaxed);
+            data[slot + ch].store(s.to_bits(), Ordering::Relaxed);
         }
     }
     let published = next + n as u64;

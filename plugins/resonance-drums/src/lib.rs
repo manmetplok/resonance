@@ -218,6 +218,11 @@ pub struct KitBridge {
     /// played silence for tail frames the disk reader had not delivered
     /// yet. Written by the audio thread.
     pub stream_underruns: Arc<AtomicU64>,
+    /// Bytes of ring storage the streams hold (only rings that have been
+    /// used hold any: [`stream::StreamSet::ring_bytes`]), on top of the
+    /// kit's heads in `kit_bytes`. Written by the audio thread once a
+    /// block.
+    pub stream_ring_bytes: Arc<AtomicU64>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -420,6 +425,7 @@ impl ResonancePlugin for ResonanceDrums {
             host: Arc::new(Mutex::new(None)),
             stream_preload: Arc::new(AtomicU32::new(stream::DEFAULT_PRELOAD)),
             stream_underruns: Arc::new(AtomicU64::new(0)),
+            stream_ring_bytes: Arc::new(AtomicU64::new(0)),
         };
         // Counted in the kit library's "used in N open drum instances".
         // The download worker is not per instance any more: the editor
@@ -431,6 +437,7 @@ impl ResonancePlugin for ResonanceDrums {
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
         sampler.set_underrun_counter(bridge.stream_underruns.clone());
+        sampler.set_ring_bytes_counter(bridge.stream_ring_bytes.clone());
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
         // The preset identity wraps the kit saver rather than replacing
         // it: chaining is why `with_extra` exists.

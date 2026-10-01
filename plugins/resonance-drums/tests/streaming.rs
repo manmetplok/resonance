@@ -706,6 +706,37 @@ fn only_heads_are_resident() {
     );
 }
 
+/// Ring storage is allocated by the reader for the rings it serves, and
+/// only those: a sampler that streams nothing holds none, and one hit's
+/// three voices hold three rings' worth.
+#[test]
+fn only_rings_in_use_hold_storage() {
+    use resonance_drums::stream::RING_BYTES;
+    let fixture = Fixture::new("ring-memory", 48_000, 0.5);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::new(1);
+    let (mut s, _t) = sampler(fixture.kit(&cache, 4_096), &pool, RenderMode::Realtime);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    ports.render(&mut s, 128, &params, &[]);
+    assert_eq!(s.stream_set().ring_bytes(), 0, "no stream, no storage");
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    ports.render(&mut s, 128, &params, &hit);
+    assert_eq!(s.stream_rings_claimed(), 3);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while s.stream_set().rings_allocated() < 3 {
+        assert!(Instant::now() < deadline, "the reader never served the rings");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(s.stream_set().rings_allocated(), 3);
+    assert_eq!(s.stream_set().ring_bytes(), 3 * RING_BYTES as u64);
+    pool.shutdown();
+}
+
 // ---------------------------------------------------------------------------
 // Through the plugin: loader, state, `process`.
 // ---------------------------------------------------------------------------
@@ -1004,6 +1035,13 @@ fn drummica_default_setup_memory_and_bit_identity() {
             ports.render(&mut s, 512, &params, &hits_at(b));
             ports.append_bits(512, &mut out);
         }
+        // Ring storage is memory too: what the streamed render's rings
+        // hold, on top of the heads.
+        eprintln!(
+            "drummica ring storage: {} rings, {:.1} MiB",
+            s.stream_set().rings_allocated(),
+            s.stream_set().ring_bytes() as f64 / (1024.0 * 1024.0)
+        );
         (out, s.stream_underruns())
     };
     let (reference, _) = render_kit(whole, RenderMode::Realtime);
