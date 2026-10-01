@@ -12,7 +12,7 @@ use crate::kit::{
 use crate::params::DrumParams;
 use crate::voice::{
     fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
-    SWAP_FADE_MS,
+    STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
 };
 
 use super::janitor;
@@ -78,6 +78,12 @@ const DEFAULT_SAMPLE_RATE: f32 = 48_000.0;
 pub struct DrumSampler {
     pub pads: Vec<LoadedPad>,
     pub voices: Vec<Voice>,
+    /// Stolen voices fading out (E1): when a hit needs a slot and every
+    /// one is busy, the victim is copied here and faded over
+    /// [`STEAL_FADE_MS`] while the hit takes its slot clean. Rendered with
+    /// `voices`, but not counted against polyphony and never a steal
+    /// candidate.
+    tails: Vec<Voice>,
     voice_counter: u64,
     /// Monotonic round-robin counter per (pad, layer). Advanced on each
     /// note_on; indexed modulo the layer's RR count to pick the next take.
@@ -124,6 +130,8 @@ pub struct DrumSampler {
     release_frames: u32,
     /// [`SWAP_FADE_MS`] in frames at `sample_rate`: kit swaps.
     swap_frames: u32,
+    /// [`STEAL_FADE_MS`] in frames at `sample_rate`: stolen voices.
+    steal_frames: u32,
     /// Last block's master volume snapshot. Used to interpolate from
     /// the previous block's value to the current one across the block
     /// so automation tweaks don't click. Initialized to 1.0 so the
@@ -162,6 +170,7 @@ impl DrumSampler {
         Self {
             pads: Vec::new(),
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
+            tails: (0..TAIL_SLOTS).map(|_| Voice::new()).collect(),
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
@@ -177,6 +186,7 @@ impl DrumSampler {
             sample_rate: DEFAULT_SAMPLE_RATE,
             release_frames: fade_frames(RELEASE_FADE_MS, DEFAULT_SAMPLE_RATE),
             swap_frames: fade_frames(SWAP_FADE_MS, DEFAULT_SAMPLE_RATE),
+            steal_frames: fade_frames(STEAL_FADE_MS, DEFAULT_SAMPLE_RATE),
             prev_master_volume: 1.0,
             prev_pad_volume: [1.0; NUM_PADS],
             prev_pad_pan: [0.0; NUM_PADS],
@@ -201,12 +211,18 @@ impl DrumSampler {
             self.sample_rate = sample_rate;
             self.release_frames = fade_frames(RELEASE_FADE_MS, sample_rate);
             self.swap_frames = fade_frames(SWAP_FADE_MS, sample_rate);
+            self.steal_frames = fade_frames(STEAL_FADE_MS, sample_rate);
         }
     }
 
     /// The host rate fades are timed against.
     pub fn sample_rate(&self) -> f32 {
         self.sample_rate
+    }
+
+    /// How many stolen voices are still fading out in tail slots.
+    pub fn tail_voices_active(&self) -> usize {
+        self.tails.iter().filter(|v| v.active).count()
     }
 
     /// Refresh the global trigger settings from the params. Called once
@@ -312,7 +328,7 @@ impl DrumSampler {
                         .enumerate()
                         .min_by_key(|(_, stamp)| **stamp)
                         .expect("RETIRED_KITS > 0");
-                    for voice in &mut self.voices {
+                    for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
                         if voice.retired && voice.retired_slot as usize == oldest {
                             voice.active = false;
                         }
@@ -324,7 +340,7 @@ impl DrumSampler {
                 }
             };
             let mut any_fading = false;
-            for voice in &mut self.voices {
+            for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
                 // Voices of an earlier retired kit keep their own fade
                 // against their own slot.
                 if voice.active && !voice.retired {
@@ -345,6 +361,29 @@ impl DrumSampler {
                 self.ship_to_janitor(old_pads);
             }
         }
+    }
+
+    /// Move the sounding voice in main slot `idx` to a tail slot and fade
+    /// it out there, so the slot can take a new hit without cutting the
+    /// old one dead (E1). A struct copy — nothing allocates.
+    ///
+    /// With every tail busy the one closest to silence is reused: its
+    /// fade already has the fewest frames (and least level) left.
+    fn steal_to_tail(&mut self, idx: usize) {
+        let tail = match self.tails.iter().position(|t| !t.active) {
+            Some(t) => t,
+            None => self
+                .tails
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, t)| t.release_len.saturating_sub(t.release_pos))
+                .map(|(t, _)| t)
+                .unwrap_or(0),
+        };
+        let mut victim = self.voices[idx];
+        victim.force_fade(self.steal_frames);
+        self.tails[tail] = victim;
+        self.voices[idx].active = false;
     }
 
     fn ship_to_janitor(&self, pads: Vec<LoadedPad>) {
@@ -492,6 +531,9 @@ impl DrumSampler {
             let dest = *dest;
             let voice_idx =
                 janitor::find_free_voice(&self.voices, pad_index, self.globals.max_voices);
+            if self.voices[voice_idx].active {
+                self.steal_to_tail(voice_idx);
+            }
             let voice = &mut self.voices[voice_idx];
             voice.active = true;
             voice.pad_index = pad_index;
@@ -631,7 +673,7 @@ impl DrumSampler {
         let pad_oh = &self.cur_pad_oh;
         let pad_balance = &self.cur_pad_balance;
 
-        for voice in &mut self.voices {
+        for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
             if !voice.active {
                 continue;
             }
@@ -788,6 +830,7 @@ impl DrumSampler {
             let in_use = self
                 .voices
                 .iter()
+                .chain(self.tails.iter())
                 .any(|v| v.active && v.retired && v.retired_slot as usize == slot);
             if !in_use {
                 if let Some(retired) = self.retired_pads[slot].take() {
@@ -870,5 +913,6 @@ impl DrumSampler {
     /// between the cut and the next block, so there is no click to fade.
     pub fn reset(&mut self) {
         janitor::reset_all(&mut self.voices);
+        janitor::reset_all(&mut self.tails);
     }
 }

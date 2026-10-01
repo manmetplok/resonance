@@ -2,6 +2,14 @@
 
 pub const MAX_VOICES: usize = 64;
 
+/// Extra slots a stolen voice is moved into so it can fade out instead of
+/// being overwritten mid-sample (E1). They sit outside the polyphony
+/// count: a steal still frees the main slot at once, and the victim only
+/// needs [`STEAL_FADE_MS`] to die away. Sixteen tails fading at once
+/// means a steal every 0.19 ms (9 frames at 48 kHz) — far denser than a
+/// kit is played; past that the most-faded tail is reused.
+pub const TAIL_SLOTS: usize = 16;
+
 /// Choke / release fade, in milliseconds: what a choke group (the open
 /// hat cut by a closed or pedal hat) and a host choke fade over. Long
 /// enough that a ringing cymbal is cut without a click, short enough
@@ -13,6 +21,12 @@ pub const RELEASE_FADE_MS: f32 = 25.0;
 /// is held in memory until they end. (CLAP `reset` does not fade: see
 /// `DrumSampler::reset`.)
 pub const SWAP_FADE_MS: f32 = 5.0;
+
+/// Fade for a voice stolen to make room for a new hit, in milliseconds.
+/// The shortest fade: the victim shares the output with the hit
+/// replacing it, and 3 ms of equal-power fade is already well clear of
+/// a click.
+pub const STEAL_FADE_MS: f32 = 3.0;
 
 /// A fade length in milliseconds as a whole number of frames at
 /// `sample_rate`, never less than one — so a fade lasts the same time at
@@ -76,7 +90,9 @@ pub enum BalanceSide {
     Right,
 }
 
-#[derive(Clone)]
+/// `Copy`: a voice is plain data, so moving a stolen one into a tail slot
+/// is a struct copy on the audio thread, never an allocation.
+#[derive(Clone, Copy)]
 pub struct Voice {
     pub active: bool,
     pub pad_index: usize,
