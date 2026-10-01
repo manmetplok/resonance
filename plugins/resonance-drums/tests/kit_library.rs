@@ -20,7 +20,7 @@ use resonance_drums::kit::NUM_OUTPUT_PORTS;
 use resonance_drums::kit_loader::KitStatus;
 use resonance_drums::library::{Roots, SharedKitLibrary};
 use resonance_drums::params::GLOBAL_PARAMS;
-use resonance_drums::selection::{self, KitRef, ResolvedBy, NO_KIT};
+use resonance_drums::selection::{self, KitRef, ResolvedBy, NO_KIT, PARKED_KIT};
 use resonance_drums::{DrumsExtraState, ResonanceDrums, TestEditor};
 use resonance_plugin::plugin::ExtraStateSaver;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
@@ -254,7 +254,7 @@ fn the_selection_params_are_declared_as_specified() {
     let plugin = ResonanceDrums::new();
     let select = plugin.param(KIT_SELECT);
     assert_eq!(select.id(), "kit_select");
-    assert_eq!(select.min_plain(), NO_KIT as f64);
+    assert_eq!(select.min_plain(), PARKED_KIT as f64, "-2: parked (external or missing)");
     assert_eq!(select.max_plain(), selection::MAX_KIT_SLOT as f64);
     assert!(select.is_stepped());
     assert!(!select.is_automatable(), "a kit swap is no automation lane");
@@ -650,9 +650,14 @@ fn a_missing_kit_plays_the_built_in_kit_says_so_and_is_kept() {
     assert!(plugin.load_state(&serde_json::to_vec(&state).unwrap()));
     assert!(plugin.bridge.wanted_kit_path().is_none());
     assert_eq!(kit_select_text(&plugin), "Gone Kit (missing)");
+    assert_eq!(
+        plugin.param(KIT_SELECT).get_plain(),
+        PARKED_KIT as f64,
+        "parked, not \"built-in\""
+    );
     let source = plugin.param_text_source().unwrap();
     assert_eq!(
-        source.display(KIT_SELECT, NO_KIT as f64).as_deref(),
+        source.display(KIT_SELECT, PARKED_KIT as f64).as_deref(),
         Some("Gone Kit (missing)"),
         "the same while the plugin is active"
     );
@@ -913,5 +918,151 @@ fn an_editor_pick_racing_the_watcher_starts_one_load() {
             before + 1,
             "round {round}: the pick was acted on twice"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parked: -2 is an external or missing kit, -1 is always built-in
+// ---------------------------------------------------------------------------
+
+/// Write `value` the way a host does, and let the instance act on it.
+fn host_writes(plugin: &ResonanceDrums, value: i32) -> Result<(), String> {
+    plugin.param(KIT_SELECT).set_plain(value as f64);
+    selection::apply_pending(&plugin.bridge).map(|_| ())
+}
+
+/// An external kit (no slot) reads -2 "<name> (external)", which parses
+/// back to -2. -1 then really is the built-in kit, a slot is that kit, and
+/// writing -2 again — a host's undo of the pick — brings the external kit
+/// back.
+#[test]
+fn an_external_kit_parks_at_minus_two_and_minus_two_brings_it_back() {
+    let home = Home::new("parked-external");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let outside = home.outside_kit("Yankee", "Yankee Kit", 0.2);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&outside, Some(&home.root())).to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    let select = plugin.param(KIT_SELECT);
+    assert_eq!(select.get_plain(), PARKED_KIT as f64);
+    assert_eq!(kit_select_text(&plugin), "Yankee (external)");
+    assert_eq!(select.parse("Yankee (external)"), Some(PARKED_KIT as f64));
+    assert_eq!(select.display(NO_KIT as f64), "None (built-in kit)");
+    assert!(plugin.bridge.params.selection.missing().is_none());
+
+    host_writes(&plugin, NO_KIT).unwrap();
+    assert_eq!(plugin.bridge.wanted_kit_path(), None, "-1 is the built-in kit");
+    assert_eq!(
+        select.display(PARKED_KIT as f64),
+        "Yankee (external)",
+        "still remembered"
+    );
+
+    let a = slot_of(&lib, "Alpha Kit");
+    host_writes(&plugin, a).unwrap();
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        Some(home.root().join("Alpha/kit/drum_samples.json"))
+    );
+
+    // Undo of the pick: the host writes the value from before it.
+    host_writes(&plugin, PARKED_KIT).unwrap();
+    assert_eq!(plugin.bridge.wanted_kit_path(), Some(outside.clone()));
+    assert_eq!(kit_select_text(&plugin), "Yankee (external)");
+    // And a save names it.
+    let saved = saver_for(&plugin).save();
+    let r = KitRef::from_json(&saved["kit_ref"]).unwrap();
+    assert_eq!(r.abs_path.as_deref(), Some(outside.as_path()));
+}
+
+/// A missing kit is parked too: -2 "<name> (missing)". -1 leaves it for
+/// the built-in kit (no banner, a save names no kit); a pick plays the
+/// pick; writing -2 goes back to "missing" — banner, saved reference and
+/// all.
+#[test]
+fn a_missing_kit_parks_at_minus_two_and_minus_two_restores_it() {
+    let home = Home::new("parked-missing");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let state = serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) });
+    saver_for(&plugin).load(&state);
+    let sel = &plugin.bridge.params.selection;
+    assert_eq!(plugin.param(KIT_SELECT).get_plain(), PARKED_KIT as f64);
+    assert!(sel.missing().is_some());
+    assert_eq!(
+        plugin.param(KIT_SELECT).parse("Gone Kit (missing)"),
+        Some(PARKED_KIT as f64)
+    );
+
+    host_writes(&plugin, NO_KIT).unwrap();
+    assert!(sel.missing().is_none(), "the built-in kit, chosen: no banner");
+    assert_eq!(saver_for(&plugin).save()["kit_ref"], serde_json::Value::Null);
+
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    assert!(sel.missing().is_none());
+    assert!(plugin.bridge.wanted_kit_path().is_some());
+
+    host_writes(&plugin, PARKED_KIT).unwrap();
+    assert!(sel.missing().is_some(), "missing again");
+    assert_eq!(plugin.bridge.wanted_kit_path(), None, "the built-in kit plays");
+    assert_eq!(kit_select_text(&plugin), "Gone Kit (missing)");
+    assert_eq!(saver_for(&plugin).save()["kit_ref"], missing_ref(&home));
+}
+
+/// -2 with no parked kit remembered names nothing to go back to: the
+/// write is refused and what plays keeps playing.
+#[test]
+fn minus_two_with_nothing_parked_changes_nothing() {
+    let home = Home::new("parked-none");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    let wanted = plugin.bridge.wanted_kit_path();
+    assert_eq!(
+        plugin.param(KIT_SELECT).display(PARKED_KIT as f64),
+        "(no external kit)"
+    );
+    assert_eq!(
+        plugin.param(KIT_SELECT).parse("(no external kit)"),
+        Some(PARKED_KIT as f64)
+    );
+    assert!(host_writes(&plugin, PARKED_KIT).is_err());
+    assert_eq!(plugin.bridge.wanted_kit_path(), wanted);
+}
+
+/// Numbers and names that look like numbers: `"slot N"` and `"(empty slot
+/// N)"` are always slot N; a kit's exact name beats a bare number (a kit
+/// called "12" is picked by name, as its text reads); otherwise a bare
+/// number is that value.
+#[test]
+fn kit_select_parses_numbers_and_numeric_names_sanely() {
+    let home = Home::new("numeric");
+    home.kit("Twelve", "12", 0.1);
+    home.kit("Alpha", "Alpha Kit", 0.2);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let select = plugin.param(KIT_SELECT);
+    let twelve = slot_of(&lib, "12");
+    assert_ne!(twelve, 12, "the fixture needs the name and the slot to differ");
+    assert_eq!(select.display(twelve as f64), "12");
+    assert_eq!(select.parse("12"), Some(twelve as f64), "the name, as it reads");
+    assert_eq!(select.parse("slot 12"), Some(12.0));
+    assert_eq!(select.parse("(empty slot 40)"), Some(40.0));
+    assert_eq!(select.display(40.0), "(empty slot 40)");
+    let alpha = slot_of(&lib, "Alpha Kit");
+    assert_eq!(select.parse(&alpha.to_string()), Some(alpha as f64));
+    assert_eq!(select.parse("-1"), Some(NO_KIT as f64));
+    assert_eq!(select.parse("-2"), Some(PARKED_KIT as f64));
+    assert_eq!(select.parse("-3"), None);
+    assert_eq!(select.parse("slot -1"), None);
+    // Every text a value reads as parses back to it.
+    for v in [NO_KIT, PARKED_KIT, alpha, twelve, 40] {
+        assert_eq!(select.parse(&select.display(v as f64)), Some(v as f64), "{v}");
     }
 }

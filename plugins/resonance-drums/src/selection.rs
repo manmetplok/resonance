@@ -3,13 +3,23 @@
 //!
 //! # `kit_select`
 //!
-//! A stepped parameter whose value is a **slot** in the shared kit
-//! library's slot table (`drumkit_library::Library::by_slot`), or
-//! [`NO_KIT`] for the built-in kit. Slots are never reused while others
-//! are free, so a value recalls the same kit after kits are added or
-//! deleted. Its text is the kit's name, and a name parses back to the slot
-//! ([`Library::find`]) — which is what makes the control API's
-//! `ParamValue::Label` pick a kit by name.
+//! A stepped parameter. Its values:
+//!
+//! | value | meaning | text |
+//! |---|---|---|
+//! | `0..=`[`MAX_KIT_SLOT`] | a **slot** in the shared kit library's slot table (`drumkit_library::Library::by_slot`) | the kit's name; `"(empty slot N)"` |
+//! | [`NO_KIT`] (-1) | the built-in kit — writing it always switches to the built-in kit | `"None (built-in kit)"` |
+//! | [`PARKED_KIT`] (-2) | **parked**: a kit with no slot — one from outside the library (or one the index has not slotted yet), or a kit the project named that is not on this machine | `"<name> (external)"`, `"<name> (missing)"`; `"(no external kit)"` with none remembered |
+//!
+//! Slots are never reused while others are free, so a value recalls the
+//! same kit after kits are added or deleted. Every text parses back to
+//! its value ([`KitSelection::parse`]) — which is what makes the control
+//! API's `ParamValue::Label` pick a kit by name.
+//!
+//! The parked kit is **remembered** when the selection moves on: writing
+//! [`PARKED_KIT`] again returns to it (re-loads the external kit, or goes
+//! back to "missing"), so a host's undo of a pick made from an external
+//! or missing kit restores that kit. Only a newer parked kit replaces it.
 //!
 //! The parameter is **not automatable** (a kit swap is a multi-gigabyte
 //! decode) and **not in the state**: a slot is this machine's library
@@ -48,6 +58,9 @@ use crate::KitBridge;
 
 /// `kit_select`'s value for "no kit chosen": the built-in kit plays.
 pub const NO_KIT: i32 = -1;
+/// `kit_select`'s value for a kit with no library slot: an external kit,
+/// or a missing one (see the module docs). Its lowest value.
+pub const PARKED_KIT: i32 = -2;
 /// The highest `kit_select` value: the library's last slot.
 pub const MAX_KIT_SLOT: i32 = drumkit_library::MAX_SLOT as i32;
 
@@ -349,17 +362,52 @@ pub struct KitSelection {
     /// sees a write as a change exactly once. Written under `act`; read
     /// lock-free (text, progress).
     acted: AtomicI32,
-    /// The reference a state asked for that resolved to nothing: kept
-    /// verbatim (a save writes it back), shown as missing.
-    missing: Mutex<Option<KitRef>>,
-    /// A kit playing that holds no slot (loaded by path, from outside the
-    /// library or before the library indexed it): `kit_select` parks at
-    /// [`NO_KIT`] and reads as this name.
-    unslotted: Mutex<Option<String>>,
+    /// The kit [`PARKED_KIT`] stands for: the last kit with no slot this
+    /// instance played or was asked for. Kept when the selection moves on,
+    /// so writing [`PARKED_KIT`] returns to it.
+    parked: Mutex<Option<Parked>>,
     /// The reference the wanted kit was resolved from, so a save keeps
     /// its id and name even when the library does not know the kit.
     resolved_from: Mutex<Option<(PathBuf, KitRef)>>,
 }
+
+/// What [`PARKED_KIT`] stands for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Parked {
+    /// The reference a state asked for that resolved to nothing: kept
+    /// verbatim (a save writes it back), shown as missing; the built-in
+    /// kit plays.
+    Missing(KitRef),
+    /// A kit played by its manifest, which holds no slot (from outside the
+    /// library, or one the index has not slotted yet).
+    External {
+        manifest: PathBuf,
+        /// The reference it was resolved from (or made for it), so a save
+        /// keeps its id and name.
+        from: KitRef,
+    },
+}
+
+impl Parked {
+    /// `kit_select`'s text for [`PARKED_KIT`] standing for this.
+    pub fn text(&self) -> String {
+        match self {
+            Parked::Missing(r) => format!("{}{MISSING_SUFFIX}", r.display_name()),
+            Parked::External { from, .. } => format!("{}{EXTERNAL_SUFFIX}", from.display_name()),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Parked::Missing(r) | Parked::External { from: r, .. } => r.display_name(),
+        }
+    }
+}
+
+const MISSING_SUFFIX: &str = " (missing)";
+const EXTERNAL_SUFFIX: &str = " (external)";
+/// [`PARKED_KIT`]'s text with no parked kit remembered.
+pub const NO_PARKED_TEXT: &str = "(no external kit)";
 
 impl KitSelection {
     pub fn new() -> Self {
@@ -369,10 +417,21 @@ impl KitSelection {
         }
     }
 
-    /// The missing kit's reference, if the state asked for one that
-    /// resolved to nothing.
+    /// The missing kit's reference, while `kit_select` is parked on a kit
+    /// the state asked for that resolved to nothing.
     pub fn missing(&self) -> Option<KitRef> {
-        self.missing.lock().clone()
+        if self.acted() != PARKED_KIT {
+            return None;
+        }
+        match self.parked.lock().as_ref()? {
+            Parked::Missing(r) => Some(r.clone()),
+            Parked::External { .. } => None,
+        }
+    }
+
+    /// What [`PARKED_KIT`] stands for, whether or not it is selected.
+    pub fn parked(&self) -> Option<Parked> {
+        self.parked.lock().clone()
     }
 
     /// The value `kit_select` was last acted on at.
@@ -387,20 +446,17 @@ impl KitSelection {
         self.act.lock()
     }
 
-    /// `kit_select`'s text for `value`: the slot's kit name, `"<name>
-    /// (missing)"` for a missing kit, the playing kit's name where it holds
-    /// no slot, `"None (built-in kit)"`, `"(empty slot N)"`. Never blocks:
-    /// a library mid-swap reads as `"slot N"`.
+    /// `kit_select`'s text for `value` (the table in the module docs).
+    /// Never blocks: a library mid-swap reads as `"slot N"`, a parked kit
+    /// being replaced as `"external kit"`.
     pub fn text(&self, value: i32) -> String {
-        if value == self.acted() {
-            if let Some(m) = self.missing.try_lock().and_then(|m| m.clone()) {
-                return format!("{} (missing)", m.display_name());
-            }
-            if let Some(name) = self.unslotted.try_lock().and_then(|n| n.clone()) {
-                return name;
-            }
+        if value <= PARKED_KIT {
+            return match self.parked.try_lock() {
+                Some(p) => p.as_ref().map_or(NO_PARKED_TEXT.to_string(), Parked::text),
+                None => "external kit".to_string(),
+            };
         }
-        if value <= NO_KIT {
+        if value == NO_KIT {
             return "None (built-in kit)".to_string();
         }
         match self
@@ -413,10 +469,21 @@ impl KitSelection {
         }
     }
 
-    /// The `kit_select` value `text` names: `"none"` / `"built-in"` is
-    /// [`NO_KIT`]; a number (`"12"`, `"slot 12"`) is that slot; else a kit
-    /// name or id prefix (`Library::find`). `None` when nothing (or more
-    /// than one kit) matches.
+    /// The `kit_select` value `text` names. Every [`text`](Self::text)
+    /// parses back to its value. In order:
+    ///
+    /// 1. `"none"` / `"built-in"` / `"None (built-in kit)"`: [`NO_KIT`].
+    /// 2. The parked kit's text, or its name with `" (missing)"` /
+    ///    `" (external)"`: [`PARKED_KIT`]. (`"(no external kit)"` too.)
+    /// 3. `"slot N"` and `"(empty slot N)"`: slot N, always.
+    /// 4. A kit's **exact** name (case and diacritics folded): its slot —
+    ///    before a bare number, so a kit named `"12"` is picked by its
+    ///    name, the way its text reads.
+    /// 5. A bare number: that value (-2, -1 or a slot).
+    /// 6. [`Library::find`]'s looser matches: an id prefix (6+ hex
+    ///    digits), a unique name prefix, a unique substring.
+    ///
+    /// `None` when nothing (or more than one kit) matches.
     pub fn parse(&self, text: &str) -> Option<i32> {
         let t = text.trim();
         let lower = t.to_ascii_lowercase();
@@ -426,12 +493,47 @@ impl KitSelection {
         ) {
             return Some(NO_KIT);
         }
-        let digits = lower.strip_prefix("slot ").unwrap_or(&lower);
-        if let Ok(n) = digits.trim().parse::<i32>() {
-            return (NO_KIT..=MAX_KIT_SLOT).contains(&n).then_some(n);
+        if lower == NO_PARKED_TEXT {
+            return Some(PARKED_KIT);
         }
-        // `"<name> (missing)"`, as the text reads, still names the kit.
-        let name = t.strip_suffix(" (missing)").unwrap_or(t);
+        let suffixed = [MISSING_SUFFIX, EXTERNAL_SUFFIX]
+            .iter()
+            .find_map(|suffix| t.strip_suffix(suffix));
+        if let Some(name) = suffixed {
+            let parked = self.parked.lock().as_ref().map(Parked::name);
+            if parked.is_some_and(|p| fold(&p) == fold(name)) {
+                return Some(PARKED_KIT);
+            }
+        }
+        let in_range = |n: i32| (PARKED_KIT..=MAX_KIT_SLOT).contains(&n).then_some(n);
+        let slot_number = lower
+            .strip_prefix("slot ")
+            .or_else(|| {
+                lower
+                    .strip_prefix("(empty slot ")
+                    .and_then(|r| r.strip_suffix(')'))
+            })
+            .and_then(|d| d.trim().parse::<i32>().ok());
+        if let Some(n) = slot_number {
+            return (n >= 0).then_some(n).and_then(in_range);
+        }
+        // `"<name> (missing)"`, as the text reads, still names the kit
+        // when it is in the library now.
+        let name = suffixed.unwrap_or(t);
+        let exact = self
+            .library
+            .with(|lib| {
+                lib.find(name)
+                    .filter(|e| fold(&e.name) == fold(name))
+                    .and_then(|e| e.slot)
+            })
+            .flatten();
+        if let Some(slot) = exact {
+            return Some(slot as i32);
+        }
+        if let Ok(n) = t.parse::<i32>() {
+            return in_range(n);
+        }
         self.library
             .with(|lib| lib.find(name).and_then(|e| e.slot))
             .flatten()
@@ -467,10 +569,10 @@ impl KitSelection {
         KitRef::from_manifest_path(manifest, self.library.root().as_deref())
     }
 
-    fn clear_notes(&self) {
-        *self.missing.lock() = None;
-        *self.unslotted.lock() = None;
-    }
+}
+
+fn fold(text: &str) -> String {
+    resonance_common::library_marks::vocab::fold(text.trim())
 }
 
 /// What a selection started: the manifest a load is on its way for, and
@@ -528,8 +630,23 @@ pub fn select_now(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>,
 
 fn select(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
     let sel = &bridge.params.selection;
-    if value <= NO_KIT {
-        sel.clear_notes();
+    if value <= PARKED_KIT {
+        return match sel.parked() {
+            None => Err("no external or missing kit to return to".to_string()),
+            // Back to "missing": the built-in kit plays, the banner and a
+            // save name the reference again.
+            Some(Parked::Missing(_)) => {
+                play_builtin(bridge);
+                Ok(None)
+            }
+            Some(Parked::External { manifest, from }) => {
+                let started = start_kit(bridge, manifest.clone());
+                *sel.resolved_from.lock() = Some((manifest, from));
+                Ok(Some(started))
+            }
+        };
+    }
+    if value == NO_KIT {
         play_builtin(bridge);
         return Ok(None);
     }
@@ -547,7 +664,6 @@ fn select(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String>
         return Err(message);
     };
     loadable(&entry)?;
-    sel.clear_notes();
     *sel.resolved_from.lock() = None;
     Ok(Some(start_kit(bridge, entry.manifest_path.clone())))
 }
@@ -600,7 +716,7 @@ pub fn start_kit(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
 
 /// Load the kit at `manifest`, which has no library slot to name it (an
 /// import the index has not slotted, a relinked folder): `kit_select`
-/// parks at [`NO_KIT`] and reads as the kit's name.
+/// parks at [`PARKED_KIT`] and reads as `"<name> (external)"`.
 pub fn load_unslotted_now(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
     let _acting = bridge.params.selection.act.lock();
     park_unslotted(bridge, &manifest);
@@ -610,12 +726,14 @@ pub fn load_unslotted_now(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad 
 /// Under `act`.
 fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
     let sel = &bridge.params.selection;
-    sel.clear_notes();
     *sel.resolved_from.lock() = None;
-    let name = sel.ref_for_manifest(manifest).display_name();
-    *sel.unslotted.lock() = Some(name);
-    bridge.params.kit_select.set_value(NO_KIT);
-    sel.acted.store(NO_KIT, Ordering::Release);
+    let from = sel.ref_for_manifest(manifest);
+    *sel.parked.lock() = Some(Parked::External {
+        manifest: manifest.to_path_buf(),
+        from,
+    });
+    bridge.params.kit_select.set_value(PARKED_KIT);
+    sel.acted.store(PARKED_KIT, Ordering::Release);
     bridge.request_params_rescan();
 }
 
@@ -769,15 +887,13 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
     })
 }
 
-/// Record what a state load resolved: the missing reference, the slot
-/// `kit_select` now reads (the kit's library slot, else [`NO_KIT`]), and
-/// the name it shows when the kit holds no slot. The kit itself is loaded
-/// by the caller — all of it, from resolving the state to starting the
-/// load, under [`KitSelection::acting`].
+/// Record what a state load resolved: the value `kit_select` now reads
+/// (the kit's library slot; else [`PARKED_KIT`] for a kit with no slot or
+/// a missing one, which becomes the parked kit; else [`NO_KIT`]). The kit
+/// itself is loaded by the caller — all of it, from resolving the state to
+/// starting the load, under [`KitSelection::acting`].
 pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) {
     let sel = &bridge_params.selection;
-    sel.clear_notes();
-    *sel.missing.lock() = kit.missing.clone();
     *sel.resolved_from.lock() = match (&kit.path, &kit.from) {
         (Some(p), Some(r)) => Some((p.clone(), r.clone())),
         _ => None,
@@ -792,18 +908,22 @@ pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit
             })
             .flatten()
     });
-    let value = slot.map_or(NO_KIT, |s| s as i32);
-    if let (Some(path), None) = (&kit.path, slot) {
-        let r = sel.ref_for_manifest(path);
-        let root = sel.library.root();
-        let inside = root.as_deref().is_some_and(|r| path.starts_with(r));
-        let name = r.display_name();
-        *sel.unslotted.lock() = Some(if inside {
-            name
-        } else {
-            format!("{name} (external)")
-        });
-    }
+    let value = match (&kit.path, slot, &kit.missing) {
+        (Some(_), Some(slot), _) => slot as i32,
+        (Some(path), None, _) => {
+            let from = sel.ref_for_manifest(path);
+            *sel.parked.lock() = Some(Parked::External {
+                manifest: path.clone(),
+                from,
+            });
+            PARKED_KIT
+        }
+        (None, _, Some(missing)) => {
+            *sel.parked.lock() = Some(Parked::Missing(missing.clone()));
+            PARKED_KIT
+        }
+        (None, _, None) => NO_KIT,
+    };
     bridge_params.kit_select.set_value(value);
     sel.acted.store(value, Ordering::Release);
 }

@@ -112,7 +112,7 @@ impl Default for DrumParams {
                 "Kit",
                 NO_KIT,
                 IntRange::Linear {
-                    min: NO_KIT,
+                    min: crate::selection::PARKED_KIT,
                     max: MAX_KIT_SLOT,
                 },
             )
