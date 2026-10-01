@@ -1044,8 +1044,86 @@ fn saving_mid_decode_persists_the_kit_being_loaded() {
         saved.get("kit_path").and_then(|v| v.as_str()),
         Some(b.manifest.to_string_lossy().as_ref())
     );
+    // …and, while the pick may still fail, the kit that loaded last.
+    assert_eq!(
+        saved.get("kit_path_fallback").and_then(|v| v.as_str()),
+        Some(a.manifest.to_string_lossy().as_ref())
+    );
     go.send(()).unwrap();
     settle(&plugin);
+    // Settled: nothing to fall back to.
+    assert!(saver.save().get("kit_path_fallback").is_none());
+}
+
+fn saver_for(plugin: &ResonanceDrums) -> DrumsExtraState {
+    DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    }
+}
+
+/// A project saved mid-pick reopens on the pick — and if that kit will
+/// not load, on the kit that last loaded, not on the built-in kit.
+#[test]
+fn a_reopen_whose_kit_fails_loads_the_last_good_kit() {
+    let a = fixture_kit(Damage::None);
+    let missing = a.dir.join("gone").join("drum_samples.json");
+    let mut plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({
+        "kit_path": missing.to_string_lossy(),
+        "kit_path_fallback": a.manifest.to_string_lossy(),
+    }));
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(a.manifest.as_path())
+    );
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+    assert!(strike_peak(&mut plugin, drum_map::SNARE) > 0.01);
+}
+
+/// When the wanted kit loads, the fallback is not used, and is dropped.
+#[test]
+fn a_reopen_whose_kit_loads_ignores_the_fallback() {
+    let a = fixture_kit(Damage::None);
+    let b = fixture_kit(Damage::None);
+    let plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({
+        "kit_path": b.manifest.to_string_lossy(),
+        "kit_path_fallback": a.manifest.to_string_lossy(),
+    }));
+    let mut plugin = plugin;
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(b.manifest.as_path())
+    );
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+}
+
+/// A state from before the fallback key (or saved with nothing pending)
+/// loads as it always did.
+#[test]
+fn a_state_without_a_fallback_still_loads() {
+    let a = fixture_kit(Damage::None);
+    let plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({ "kit_path": a.manifest.to_string_lossy() }));
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+    let mut plugin = plugin;
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(a.manifest.as_path())
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -74,6 +74,11 @@ pub struct KitBridge {
     /// not `kit_path`, is the kit the user wants — see
     /// [`KitBridge::wanted_kit_path`].
     pub pending_kit: Arc<Mutex<Option<(u64, PathBuf)>>>,
+    /// The last kit that loaded, as a project saved mid-pick recorded it
+    /// (`kit_path_fallback`): if the kit the project wants fails to load
+    /// on reopen, the loader loads this one instead of leaving the
+    /// built-in kit. Consumed by the first load that finishes.
+    pub kit_fallback: Arc<Mutex<Option<PathBuf>>>,
     /// What the last loader hand-off put in the mailbox, and at what rate.
     /// Lets `initialize` tell whether the kit the sampler holds is still
     /// the right one. Written under `kit_handoff`.
@@ -340,6 +345,7 @@ impl ResonancePlugin for ResonanceDrums {
         let bridge = KitBridge {
             kit_path: Arc::new(Mutex::new(None)),
             pending_kit: Arc::new(Mutex::new(None)),
+            kit_fallback: Arc::new(Mutex::new(None)),
             handed_off: Arc::new(Mutex::new(None)),
             decode_gate: Arc::new(Mutex::new(None)),
             kit_status: Arc::new(Mutex::new(KitStatus::Empty)),
@@ -750,6 +756,15 @@ impl ExtraStateSaver for DrumsExtraState {
             Some(bridge) => bridge.wanted_kit_path(),
             None => self.kit_path.lock().clone(),
         };
+        // But that pick may yet fail, and a project that reopens on a
+        // kit that will not load reopens on the built-in kit. So while it
+        // is pending, the kit that last loaded goes along as the fallback
+        // the reopen tries next (a reopen whose fallback has not been
+        // used up yet passes its own on). Older builds ignore the key.
+        let fallback = self.reload.as_ref().and_then(|bridge| {
+            let other = |path: Option<PathBuf>| path.filter(|p| Some(p) != wanted.as_ref());
+            other(self.kit_path.lock().clone()).or_else(|| other(bridge.kit_fallback.lock().clone()))
+        });
         let path = wanted.map(|p| p.to_string_lossy().into_owned());
         map.insert(
             "kit_path".to_string(),
@@ -758,6 +773,12 @@ impl ExtraStateSaver for DrumsExtraState {
                 None => serde_json::Value::Null,
             },
         );
+        if let Some(fallback) = fallback {
+            map.insert(
+                "kit_path_fallback".to_string(),
+                serde_json::Value::String(fallback.to_string_lossy().into_owned()),
+            );
+        }
         map.insert(
             "overhead_setup_key".to_string(),
             serde_json::Value::String(self.overhead_setup_key.lock().clone()),
@@ -825,6 +846,12 @@ impl ExtraStateSaver for DrumsExtraState {
             // A load in flight for another kit is superseded by this one.
             if let Some(bridge) = &self.reload {
                 bridge.supersede_pending(path.as_deref());
+                // The kit to load should `kit_path` fail; absent in
+                // states saved with nothing pending, and in older ones.
+                *bridge.kit_fallback.lock() = state
+                    .get("kit_path_fallback")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from);
             }
             *self.kit_path.lock() = path;
         }

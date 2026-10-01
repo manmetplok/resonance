@@ -803,6 +803,7 @@ pub fn spawn_loader(
                 return;
             }
 
+            let kit_loaded = matches!(outcome, Ok(Ok(_)));
             match outcome {
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
@@ -848,6 +849,26 @@ pub fn spawn_loader(
                         message: "loader panicked".to_string(),
                     };
                 }
+            }
+            // The project's last-good kit, if it named one: tried when
+            // this — the first load since the project opened — failed.
+            // Either way it has served its purpose.
+            let fallback = bridge
+                .kit_fallback
+                .lock()
+                .take()
+                .filter(|path| *path != request.path && !kit_loaded);
+            if let Some(path) = fallback {
+                // Started before this load lets go of `pending_kit`, so
+                // the kit is never "settled" on the failure in between.
+                spawn_loader(
+                    path,
+                    target_sr,
+                    &bridge,
+                    request.overhead_setup_key.clone(),
+                    request.pad_choices.clone(),
+                    request.articulations,
+                );
             }
             // Finished, one way or the other: nothing is pending any
             // more (unless a newer load has recorded itself meanwhile).
