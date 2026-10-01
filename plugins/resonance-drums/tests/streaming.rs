@@ -289,7 +289,7 @@ fn first_difference(a: &[u32], b: &[u32], frames: usize) -> Option<(usize, usize
 fn streamed_takes(pads: &[LoadedPad]) -> (usize, usize) {
     let takes: Vec<&LoadedSample> = pads
         .iter()
-        .flat_map(|p| p.close_mics.iter().chain(p.overhead.iter()))
+        .flat_map(|p| p.banks())
         .flat_map(|b| b.layers.iter().flat_map(|l| l.round_robins.iter()))
         .collect();
     let streamed = takes.iter().filter(|t| t.tail().is_some()).count();
@@ -394,6 +394,90 @@ fn streamed_render_is_bit_identical_live_with_a_small_preload() {
     // The rings wrap many times, and every claim is within a ring of its
     // tail from the start.
     assert_bit_identical("live-44k1-small", 44_100, 4_096, Streaming::LiveStepped);
+}
+
+/// E15: with every extra mic bank on — two more overhead setups, two
+/// bleed banks and a room, eight streamed voices a hit — a streamed
+/// render is still bit-identical to the resident one (declared offline,
+/// through the resampler).
+#[test]
+fn streamed_render_with_every_mic_bank_is_bit_identical() {
+    use resonance_drums::kit::{BankKind, ExtraBank};
+    use resonance_drums::params::BANK_ON;
+
+    let fixture = Fixture::new("banks", 44_100, 1.6);
+    let cache = SampleCache::new();
+    let with_banks = |preload: u32| -> Vec<LoadedPad> {
+        let take = |path: &Path| -> LoadedSample {
+            let (data, _) = cache.get_or_decode_preload(path, HOST, preload).unwrap();
+            LoadedSample::from_shared(data)
+        };
+        let bank = |path: &Path| LoadedMicBank {
+            position: "E15".to_string(),
+            setup_key: String::new(),
+            layers: vec![VelocityLayer::new(vec![take(path)])],
+        };
+        let mut pads = fixture.kit(&cache, preload);
+        for (i, pad) in pads.iter_mut().enumerate() {
+            pad.extra_banks = vec![
+                ExtraBank {
+                    kind: BankKind::Overhead { slot: 1 },
+                    bank: bank(&fixture.overhead[(i + 1) % 2]),
+                },
+                ExtraBank {
+                    kind: BankKind::Overhead { slot: 2 },
+                    bank: bank(&fixture.close[(i + 2) % 4]),
+                },
+                ExtraBank {
+                    kind: BankKind::Bleed,
+                    bank: bank(&fixture.close[(i + 3) % 4]),
+                },
+                ExtraBank {
+                    kind: BankKind::Bleed,
+                    bank: bank(&fixture.close[i % 4]),
+                },
+                ExtraBank {
+                    kind: BankKind::Room,
+                    bank: bank(&fixture.overhead[i % 2]),
+                },
+            ];
+        }
+        pads
+    };
+    let resident = with_banks(0);
+    let streamed = with_banks(4_096);
+    let (n, all) = streamed_takes(&streamed);
+    assert_eq!(n, all, "every take streams, the extra banks' too");
+    assert_eq!(all, NUM_PADS * 8);
+
+    let params = DrumParams::default();
+    params.bleed_on.set_value(BANK_ON);
+    params.room_on.set_value(BANK_ON);
+    params.oh_levels[1].set_value(-3.0);
+    params.room_level.set_value(-6.0);
+    let run = |s: &mut DrumSampler| -> Vec<u32> {
+        const FRAMES: usize = 128;
+        let blocks = (1.7 * HOST) as usize / FRAMES;
+        let quiet_after = (0.8 * HOST) as usize / FRAMES;
+        let mut ports = Ports::new(FRAMES);
+        let mut out = Vec::new();
+        for b in 0..blocks {
+            ports.render(s, FRAMES, &params, &pattern(b, FRAMES, 2, quiet_after));
+            ports.append_bits(FRAMES, &mut out);
+        }
+        out
+    };
+    let pool = ReaderPool::new(2);
+    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
+    let reference = run(&mut a);
+    let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Offline);
+    let got = run(&mut b);
+    assert!(loud(&reference) > 0.05, "the reference render is silent");
+    assert_eq!(b.stream_underruns(), 0, "{} hits found no ring", b.stream_ring_misses());
+    if let Some((block, port, frame)) = first_difference(&reference, &got, 128) {
+        panic!("streamed render with every bank differs at block {block}, port {port}, frame {frame}");
+    }
+    pool.shutdown();
 }
 
 /// A clock the test drives, for the timing detector: `advance` moves it
@@ -1373,7 +1457,7 @@ fn only_heads_are_resident() {
     let mut seen = std::collections::HashSet::new();
     for take in keep_streamed
         .iter()
-        .flat_map(|p| p.close_mics.iter().chain(p.overhead.iter()))
+        .flat_map(|p| p.banks())
         .flat_map(|b| b.layers.iter().flat_map(|l| l.round_robins.iter()))
     {
         assert_eq!(take.resident_frames(), PRELOAD as usize);
@@ -1854,4 +1938,92 @@ fn drummica_default_setup_memory_and_bit_identity() {
         panic!("drummica: streamed render differs at block {block}, port {port}, frame {frame}");
     }
     pool.shutdown();
+}
+
+/// E15 on the real library: Drummica with OH AB + OH XY layered, bleed
+/// and room on (Drummica has no room mics, so room adds nothing), at the
+/// default preload. Turning the banks on decodes only their files (E4),
+/// and the instance's resident memory stays bounded. Skipped without
+/// `RESONANCE_DRUMMICA_PATH`; run in release with `--nocapture` for the
+/// figures.
+#[test]
+fn drummica_every_mic_bank_memory() {
+    use resonance_drums::kit_loader::{BankRequest, MicBankSetups};
+
+    let Some(manifest) = drummica_manifest() else {
+        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+        return;
+    };
+    let cache = SampleCache::new();
+    let mib = |bytes: u64| bytes as f64 / (1024.0 * 1024.0);
+    let load = |request: &resonance_drums::kit_loader::KitRequest,
+                previous: Option<&resonance_drums::kit_loader::BuiltKit>| {
+        let began = Instant::now();
+        let kit = resonance_drums::kit_loader::load_kit(
+            request,
+            HOST,
+            previous,
+            None,
+            &cache,
+            &|| {},
+            &|_| {},
+            &|| false,
+        )
+        .expect("drummica loads");
+        (kit, began.elapsed())
+    };
+    let plain = drummica_request(&manifest, resonance_drums::stream::DEFAULT_PRELOAD);
+    let (default_kit, took) = load(&plain, None);
+    let default_bytes = cache.stats().resident_bytes;
+    eprintln!(
+        "drummica default setup: {} files, {:.1} MiB resident, loaded in {took:.1?}",
+        default_kit.stats.files,
+        mib(default_bytes)
+    );
+
+    let mut banked = plain.clone();
+    banked.banks = BankRequest {
+        setups: MicBankSetups {
+            extra_overheads: ["25_OHsXY_USM69i".to_string(), String::new()],
+            room: String::new(),
+        },
+        bleed: true,
+        room: true,
+    };
+    let (kit, took) = load(&banked, Some(&default_kit.built));
+    let bytes = cache.stats().resident_bytes;
+    let voices: usize = kit
+        .pads
+        .iter()
+        .map(|p| p.banks().count())
+        .max()
+        .unwrap_or(0);
+    let (streamed, takes) = streamed_takes(&kit.pads);
+    eprintln!(
+        "drummica OH AB + OH XY + bleed + room: {} more files decoded ({} cached), \
+         {:.1} MiB resident ({:+.1} MiB), {streamed}/{takes} takes streamed, \
+         up to {voices} voices a hit, loaded in {took:.1?}",
+        kit.stats.decoded,
+        kit.stats.cached,
+        mib(bytes),
+        mib(bytes) - mib(default_bytes),
+    );
+    assert_eq!(kit.stats.reused_pads + kit.stats.rebuilt_pads, NUM_PADS);
+    // Every rebuilt pad's old banks came from the cache: only the new
+    // banks' files decode.
+    let new_files = kit.stats.files - kit.stats.cached;
+    assert_eq!(kit.stats.decoded, new_files);
+    let has = |pad: usize, kind: resonance_drums::kit::BankKind| {
+        kit.pads[pad].extra_banks.iter().any(|e| e.kind == kind)
+    };
+    use resonance_drums::kit::BankKind;
+    assert!(has(0, BankKind::Bleed), "SN Btm bleeds on the kick");
+    assert!(has(9, BankKind::Bleed), "and on the toms");
+    assert!(!has(1, BankKind::Bleed), "the snare's SN Btm is its own");
+    assert!(has(12, BankKind::Overhead { slot: 1 }), "the crash layers OH XY");
+    assert!(!kit.pads.iter().any(|p| p.extra_bank(BankKind::Room).is_some()));
+    assert_eq!(voices, 5, "kick: in, out, OH AB, OH XY, SN Btm");
+    // Bounded: the extra banks are heads too, under ~2x the default.
+    assert!(bytes < 2 * default_bytes, "{bytes} vs {default_bytes}");
+    assert!(bytes < 1 << 30, "every bank on holds {bytes} bytes");
 }

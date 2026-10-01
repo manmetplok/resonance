@@ -74,11 +74,13 @@ impl ManifestMicCatalog {
                 if !entry.contains(setup_key) {
                     entry.push(setup_key.clone());
                 }
-                setups.entry(setup_key.clone()).or_insert_with(|| SetupInfo {
-                    position: setup.position.clone(),
-                    brand: setup.brand.clone(),
-                    mic: setup.mic.clone(),
-                });
+                setups
+                    .entry(setup_key.clone())
+                    .or_insert_with(|| SetupInfo {
+                        position: setup.position.clone(),
+                        brand: setup.brand.clone(),
+                        mic: setup.mic.clone(),
+                    });
             }
         }
         Self {
@@ -102,12 +104,13 @@ impl ManifestMicCatalog {
                     if !is_bleed_position(pad, &setup.position) {
                         continue;
                     }
-                    let source = bleed.entry(setup.position.clone()).or_insert_with(|| {
-                        BleedSource {
-                            position: setup.position.clone(),
-                            ..BleedSource::default()
-                        }
-                    });
+                    let source =
+                        bleed
+                            .entry(setup.position.clone())
+                            .or_insert_with(|| BleedSource {
+                                position: setup.position.clone(),
+                                ..BleedSource::default()
+                            });
                     if !source.setups.contains(key) {
                         source.setups.push(key.clone());
                     }
