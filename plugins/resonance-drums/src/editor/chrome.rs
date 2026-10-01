@@ -391,6 +391,33 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         };
         plain(ui, "SAMPLES", &kit_text);
 
+        // Disk streaming (E14): the ring storage the streams hold, on top
+        // of the kits' heads above — measured by the audio thread — and,
+        // only once there are any, the stream underruns (blocks a voice
+        // played silence for frames the disk had not delivered).
+        let ring = app.bridge.stream_ring_bytes.load(Ordering::Relaxed);
+        if ring > 0 {
+            ui.add_space(8.0);
+            plain(ui, "STREAM", &sample_info::format_bytes(ring));
+        }
+        let underruns = app.bridge.stream_underruns.load(Ordering::Relaxed);
+        if underruns > 0 {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{underruns} underrun{}",
+                    if underruns == 1 { "" } else { "s" }
+                ))
+                .color(theme::WARN)
+                .size(10.5)
+                .monospace(),
+            )
+            .on_hover_text(
+                "Times a streamed sample played silence because the disk had not \
+                 delivered it yet. Raise the preload, or use a faster disk.",
+            );
+        }
+
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(peak_db_text(peak))

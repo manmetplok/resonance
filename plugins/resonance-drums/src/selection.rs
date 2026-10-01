@@ -292,6 +292,20 @@ impl LibraryHandle {
 
     /// Use `library` rather than the process default (an editor test's
     /// own root). `false` once one is in use already.
+    /// Re-read the library's index if another process rewrote it since
+    /// ([`crate::library::SharedKitLibrary::reload_if_changed`]): for a
+    /// lookup that missed. Whether anything changed; `false` headless.
+    pub fn reload_if_changed(&self) -> bool {
+        #[cfg(feature = "editor")]
+        {
+            self.shared().reload_if_changed()
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            false
+        }
+    }
+
     /// The library's revision, if this instance has opened it — never
     /// opens it.
     pub fn revision_if_open(&self) -> Option<u64> {
@@ -561,10 +575,15 @@ impl KitSelection {
         if let Ok(n) = t.parse::<i32>() {
             return in_range(n);
         }
-        self.library
-            .with(|lib| lib.find(name).and_then(|e| e.slot))
-            .flatten()
-            .map(|s| s as i32)
+        let find = || {
+            self.library
+                .with(|lib| lib.find(name).and_then(|e| e.slot))
+                .flatten()
+                .map(|s| s as i32)
+        };
+        // A miss may be a kit another process indexed since this one read
+        // the index: look once more after re-reading it.
+        find().or_else(|| self.library.reload_if_changed().then(find).flatten())
     }
 
     /// The reference a save writes for the kit at `manifest`: the library
@@ -912,7 +931,11 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
         by_library.unwrap_or_else(|| r.resolve(None, root.as_deref()))
     };
     let fallback_path = fallback.as_ref().and_then(|f| resolve(f).map(|(p, _)| p));
-    Some(match resolve(&wanted) {
+    // A kit another process indexed since this one read the index (a
+    // rename found by id): look once more after re-reading it.
+    let found = resolve(&wanted)
+        .or_else(|| sel.library.reload_if_changed().then(|| resolve(&wanted)).flatten());
+    Some(match found {
         Some((path, _)) => StateKit {
             fallback: fallback_path.filter(|f| *f != path),
             path: Some(path),

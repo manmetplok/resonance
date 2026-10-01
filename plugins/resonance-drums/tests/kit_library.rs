@@ -1316,3 +1316,84 @@ fn the_banner_reads_the_cached_index_once() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The library behind kit_select, with no editor open (review finding 10)
+// ---------------------------------------------------------------------------
+
+/// A name this process's index does not know may be a kit another process
+/// (another drums instance's editor, in another host) indexed since: the
+/// lookup re-reads the index once before it gives up.
+#[test]
+fn a_name_lookup_miss_re_reads_an_index_another_process_rewrote() {
+    let home = Home::new("reload-miss");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    assert_eq!(plugin.param(KIT_SELECT).parse("Bravo Kit"), None);
+
+    // "Another process": its own library over the same root scans a kit
+    // in and writes the index.
+    home.kit("Bravo", "Bravo Kit", 0.2);
+    let other = home.library();
+    let b = slot_of(&other, "Bravo Kit");
+    assert!(lib.read().find("Bravo Kit").is_none(), "not re-read yet");
+
+    assert_eq!(plugin.param(KIT_SELECT).parse("Bravo Kit"), Some(b as f64));
+    assert_eq!(plugin.param(KIT_SELECT).display(b as f64), "Bravo Kit");
+}
+
+/// The process-wide library, opened by an instance with no editor, scans
+/// once in the background: a kit dropped into the root by hand (never
+/// indexed) is found without an editor ever opening.
+#[test]
+fn the_shared_library_scans_once_when_first_opened() {
+    let home = Home::new("first-open");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = resonance_drums::library::shared_for(Roots {
+        root: Some(home.root()),
+        marks_dir: Some(home.0.join("library")),
+        installed_json: None,
+        worker: WorkerConfig {
+            index_url: "http://127.0.0.1:9/index.json".into(),
+            ..WorkerConfig::default()
+        },
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lib.read().find("Alpha Kit").is_none() {
+        assert!(Instant::now() < deadline, "the library was never scanned");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status bar: disk streaming
+// ---------------------------------------------------------------------------
+
+/// The status bar shows the streams' ring memory beside the samples', and
+/// the underrun count once there is one.
+#[test]
+fn the_status_bar_shows_stream_memory_and_underruns() {
+    let home = Home::new("status-stream");
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let mut editor = TestEditor::new(&plugin, lib, (960.0, 640.0));
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(!frame.shows("STREAM"), "no rings in use, no readout");
+    assert!(!frame.strings().iter().any(|s| s.contains("underrun")));
+
+    plugin
+        .bridge
+        .stream_ring_bytes
+        .store(3 * 1024 * 1024, Ordering::Relaxed);
+    plugin.bridge.stream_underruns.store(3, Ordering::Relaxed);
+    let frame = editor.frame(Vec::new());
+    assert!(frame.shows("STREAM"), "{:?}", frame.strings());
+    assert!(
+        frame.strings().iter().any(|s| s.contains("MB")),
+        "{:?}",
+        frame.strings()
+    );
+    assert!(frame.shows("3 underruns"), "{:?}", frame.strings());
+}
