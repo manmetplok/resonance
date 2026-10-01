@@ -221,3 +221,28 @@ fn two_back_to_back_loads_play_the_second_kit() {
         "status says the second kit loaded, but the kick plays at {level} (first kit = 0.25)"
     );
 }
+
+/// `hand_off_kit` serialises on `kit_handoff` itself. It used to leave
+/// that to the caller, so a direct call (as the tests above make) could
+/// slip between a loader's generation check and its send.
+#[test]
+fn hand_off_kit_waits_for_the_handoff_lock() {
+    let plugin = booted_plugin();
+    let bridge = plugin.bridge.clone();
+    let held = bridge.kit_handoff.lock();
+    let (done_tx, done_rx) = crossbeam_channel::bounded::<()>(1);
+    let sender = bridge.clone();
+    let t = std::thread::spawn(move || {
+        hand_off_kit(&sender, dc_kit(0.5));
+        let _ = done_tx.send(());
+    });
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "hand_off_kit sent while another thread held kit_handoff"
+    );
+    drop(held);
+    done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("hand_off_kit never finished once the lock was free");
+    t.join().unwrap();
+}

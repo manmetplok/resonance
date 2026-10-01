@@ -257,7 +257,7 @@ pub fn spawn_loader(
                     // both describe the takes this load actually decoded.
                     let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    hand_off_kit(&bridge, kit.pads);
+                    hand_off_kit_locked(&bridge, kit.pads);
                     bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                     *bridge.pad_samples.lock() = infos;
                     *bridge.kit_path.lock() = Some(manifest_path);
@@ -327,9 +327,20 @@ pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> S
 /// (loader) thread, then send the new one. The audio thread only ever
 /// `try_recv`s, so it sees either the stale kit (taken before we got to
 /// it — then our retry finds the slot empty) or the new one; never
-/// nothing in place of the newest. Callers serialise on
-/// [`KitBridge::kit_handoff`].
+/// nothing in place of the newest.
+///
+/// Takes [`KitBridge::kit_handoff`] itself, so it cannot race a loader's
+/// hand-off. Must not be called with that lock already held (it is not
+/// reentrant) — the loader, which holds it across its generation check,
+/// calls [`hand_off_kit_locked`] instead.
 pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
+    let _handoff = bridge.kit_handoff.lock();
+    hand_off_kit_locked(bridge, pads);
+}
+
+/// [`hand_off_kit`] for a caller already holding
+/// [`KitBridge::kit_handoff`].
+fn hand_off_kit_locked(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     let mut pads = pads;
     loop {
         match bridge.kit_sender.try_send(pads) {
