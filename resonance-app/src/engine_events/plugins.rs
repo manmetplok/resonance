@@ -1226,6 +1226,8 @@ pub(crate) fn bus_removed(
         r.ui.mixer.selected_plugin = None;
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -1344,6 +1346,8 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
         r.ui.mixer.selected_plugin = None;
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
