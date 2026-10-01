@@ -321,6 +321,19 @@ pub struct PadParams {
     /// The overhead trim scales the pad's overhead take wherever it is
     /// routed. The second close mic's trim is hidden on pads that are
     /// never recorded with two.
+    ///
+    /// **Defaults: 0 dB on every slot, deliberately.** v1's default
+    /// balance of 0.5 played each of a pad's two close mics at ×0.5
+    /// (−6 dB), so a fresh v2 instance plays the kick's and snare's close
+    /// mics 6 dB hotter than a fresh v1 instance did. Not matched by a
+    /// −6 dB default, because v1 applied the balance only when the
+    /// *loaded* pad had two close banks, while a trim is per bank slot:
+    /// a −6 dB `mic1_trim` default would also turn down the built-in
+    /// kit's one-bank kick and snare (and every one-close-mic kit's),
+    /// which v1 played at full. A trim's natural rest is unity, the mix
+    /// between two mics is the user's (and E15's per-mic catalogue), and
+    /// a v1 *state* keeps its sound exactly: [`upgrade_v1_levels`]
+    /// writes the −6 dB its balance meant.
     pub trims: [FloatParam; MIC_SLOTS],
     /// Choke group (E12): [`CHOKE_KIT`] (−1, "Kit", the default), 0 =
     /// none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a pad fades out every
