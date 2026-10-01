@@ -112,10 +112,8 @@ impl SampleCache {
         let key = SampleKey::for_file(path, sample_rate)
             .map_err(|e| format!("read {}: {e}", path.display()))?;
         self.get_or_insert_with(key, || {
-            let bytes =
-                std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            decode_sample(bytes, sample_rate)
-                .map_err(|e| format!("decode {}: {e}", path.display()))
+            let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            decode_sample(bytes, sample_rate).map_err(|e| format!("decode {}: {e}", path.display()))
         })
     }
 

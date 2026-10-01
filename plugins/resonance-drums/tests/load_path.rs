@@ -107,7 +107,9 @@ fn fixture_kit(damage: Damage) -> Kit {
         level += 0.01;
         write_wav(&dir.join(name), channels, level);
     };
-    for f in ["kin_1_1", "kin_1_2", "kin_2_1", "kin_2_2", "kinalt_1", "kinalt_2"] {
+    for f in [
+        "kin_1_1", "kin_1_2", "kin_2_1", "kin_2_2", "kinalt_1", "kinalt_2",
+    ] {
         wav(&format!("{f}.wav"), 1);
     }
     wav("kout_1.wav", 1);
@@ -133,9 +135,7 @@ fn fixture_kit(damage: Damage) -> Kit {
         }
     }
     let setup = |pos: &str, rounds: &str| {
-        format!(
-            r#"{{"brand":"t","channel":"1","mic":"m","position":"{pos}","rounds":{rounds}}}"#
-        )
+        format!(r#"{{"brand":"t","channel":"1","mic":"m","position":"{pos}","rounds":{rounds}}}"#)
     };
     let manifest = format!(
         r#"{{
@@ -163,14 +163,29 @@ fn fixture_kit(damage: Damage) -> Kit {
             "KickIn",
             r#"{"RR1":{"Vel01":"kin_1_1.wav","Vel02":"kin_1_2.wav"},"RR2":{"Vel01":"kin_2_1.wav","Vel02":"kin_2_2.wav"}}"#
         ),
-        kinalt = setup("KickIn", r#"{"RR1":{"Vel01":"kinalt_1.wav","Vel02":"kinalt_2.wav"}}"#),
-        kout = setup("KickOut", r#"{"RR1":{"Vel01":"kout_1.wav","Vel02":"kout_2.wav"}}"#),
-        koh = setup("OHsAB", r#"{"RR1":{"Vel01":"koh_1.wav","Vel02":"koh_2.wav"}}"#),
+        kinalt = setup(
+            "KickIn",
+            r#"{"RR1":{"Vel01":"kinalt_1.wav","Vel02":"kinalt_2.wav"}}"#
+        ),
+        kout = setup(
+            "KickOut",
+            r#"{"RR1":{"Vel01":"kout_1.wav","Vel02":"kout_2.wav"}}"#
+        ),
+        koh = setup(
+            "OHsAB",
+            r#"{"RR1":{"Vel01":"koh_1.wav","Vel02":"koh_2.wav"}}"#
+        ),
         ohne_in = setup("KickIn", r#"{"RR1":{"Vel01":"ohne_in.wav"}}"#),
         ohne_oh = setup("OHsAB", r#"{"RR1":{"Vel01":"ohne_oh.wav"}}"#),
-        sn = setup("SNTop", r#"{"RR1":{"Vel01":"sn_1.wav"},"RR2":{"Vel01":"sn_2.wav"}}"#),
+        sn = setup(
+            "SNTop",
+            r#"{"RR1":{"Vel01":"sn_1.wav"},"RR2":{"Vel01":"sn_2.wav"}}"#
+        ),
         snoh = setup("OHsAB", r#"{"RR1":{"Vel01":"snoh.wav"}}"#),
-        hat = setup("Hat", r#"{"RR1":{"Vel01":"hat_1.wav"},"RR2":{"Vel01":"hat_2.wav"}}"#),
+        hat = setup(
+            "Hat",
+            r#"{"RR1":{"Vel01":"hat_1.wav"},"RR2":{"Vel01":"hat_2.wav"}}"#
+        ),
         hatoh = setup("OHsAB", r#"{"RR1":{"Vel01":"hatoh.wav"}}"#),
     );
     let manifest_path = dir.join("drum_samples.json");
@@ -263,7 +278,14 @@ fn strike_peak(plugin: &mut ResonanceDrums, note: u8) -> f32 {
 }
 
 fn built_pad(plugin: &ResonanceDrums, pad: usize) -> LoadedPad {
-    plugin.bridge.built_kit.lock().as_ref().expect("a built kit").pads[pad].clone()
+    plugin
+        .bridge
+        .built_kit
+        .lock()
+        .as_ref()
+        .expect("a built kit")
+        .pads[pad]
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +299,10 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
     pick(&plugin, &kit);
     let first = settle(&plugin);
     assert_eq!(first.files, 14, "{first:?}");
-    assert_eq!(first.decoded, 14, "a fresh kit decodes every file: {first:?}");
+    assert_eq!(
+        first.decoded, 14,
+        "a fresh kit decodes every file: {first:?}"
+    );
     assert_eq!(first.reused_pads, 0);
     let snare_before = built_pad(&plugin, 1);
 
@@ -287,14 +312,20 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
         .insert("KickIn".to_string(), "02_KickIn_alt".to_string());
     assert!(reload_kit(&plugin.bridge));
     let second = settle(&plugin);
-    assert_eq!(second.rebuilt_pads, 1, "only the kick is rebuilt: {second:?}");
+    assert_eq!(
+        second.rebuilt_pads, 1,
+        "only the kick is rebuilt: {second:?}"
+    );
     assert_eq!(second.reused_pads, NUM_PADS - 1);
     // Kick: KickIn alt (2) + KickOut (2) + OH (2). Only the two alt files
     // are new; the other four are the takes the previous kit holds.
     assert_eq!(second.files, 6, "{second:?}");
     assert_eq!(second.decoded, 2, "{second:?}");
     assert_eq!(second.cached, 4, "{second:?}");
-    assert_eq!(second.shared_bytes, 0, "the instance's own takes are not 'shared'");
+    assert_eq!(
+        second.shared_bytes, 0,
+        "the instance's own takes are not 'shared'"
+    );
 
     let kick = built_pad(&plugin, 0);
     assert_eq!(kick.close_mics[0].setup_key, "02_KickIn_alt");
@@ -323,7 +354,11 @@ fn an_articulation_change_decodes_only_that_pads_files() {
     // SD Kick ohne Teppich: one KickIn file and one OH file.
     assert_eq!(stats.files, 2, "{stats:?}");
     assert_eq!(stats.decoded, 2, "{stats:?}");
-    assert_eq!(built_pad(&plugin, 0).close_mics.len(), 1, "ohne has KickIn only");
+    assert_eq!(
+        built_pad(&plugin, 0).close_mics.len(),
+        1,
+        "ohne has KickIn only"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -352,15 +387,24 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
         built_pad(&b, 2),
     ]) as u64;
     assert_eq!(second.shared_bytes, file_bytes, "{second:?}");
-    assert_eq!(b.bridge.kit_shared_bytes.load(Ordering::Relaxed), file_bytes);
-    assert_eq!(first.shared_bytes, 0, "the first instance shares with no one");
+    assert_eq!(
+        b.bridge.kit_shared_bytes.load(Ordering::Relaxed),
+        file_bytes
+    );
+    assert_eq!(
+        first.shared_bytes, 0,
+        "the first instance shares with no one"
+    );
 
     for pad in [0, 1, 2] {
         let (pa, pb) = (built_pad(&a, pad), built_pad(&b, pad));
         for (ba, bb) in pa.close_mics.iter().zip(&pb.close_mics) {
             for (la, lb) in ba.layers.iter().zip(&bb.layers) {
                 for (ta, tb) in la.round_robins.iter().zip(&lb.round_robins) {
-                    assert!(Arc::ptr_eq(ta.shared(), tb.shared()), "pad {pad} not shared");
+                    assert!(
+                        Arc::ptr_eq(ta.shared(), tb.shared()),
+                        "pad {pad} not shared"
+                    );
                 }
             }
         }
@@ -377,7 +421,11 @@ fn a_mono_file_stays_mono_and_a_stereo_one_stereo() {
     let close = &kick.close_mics[0].layers[0].round_robins[0];
     assert_eq!(close.channels(), 1);
     assert_eq!(close.frames(), TAKE_FRAMES);
-    assert_eq!(close.bytes(), TAKE_FRAMES * 4, "frames × 1 channel × 4 bytes");
+    assert_eq!(
+        close.bytes(),
+        TAKE_FRAMES * 4,
+        "frames × 1 channel × 4 bytes"
+    );
     let oh = &kick.overhead.as_ref().unwrap().layers[0].round_robins[0];
     assert_eq!(oh.channels(), 2);
     assert_eq!(oh.bytes(), TAKE_FRAMES * 2 * 4);
@@ -434,12 +482,32 @@ fn render_bits(pads: Vec<LoadedPad>) -> Vec<u32> {
     for block in 0..12 {
         let hits: Vec<Hit> = match block {
             0 => vec![
-                Hit { frame: 0, note: drum_map::KICK, velocity: 0.9 },
-                Hit { frame: 17, note: drum_map::SNARE, velocity: 0.5 },
+                Hit {
+                    frame: 0,
+                    note: drum_map::KICK,
+                    velocity: 0.9,
+                },
+                Hit {
+                    frame: 17,
+                    note: drum_map::SNARE,
+                    velocity: 0.5,
+                },
             ],
-            3 => vec![Hit { frame: 64, note: drum_map::HIHAT_CLOSED, velocity: 0.7 }],
-            5 => vec![Hit { frame: 5, note: drum_map::HIHAT_OPEN, velocity: 1.0 }],
-            8 => vec![Hit { frame: 99, note: drum_map::HIHAT_PEDAL, velocity: 0.8 }],
+            3 => vec![Hit {
+                frame: 64,
+                note: drum_map::HIHAT_CLOSED,
+                velocity: 0.7,
+            }],
+            5 => vec![Hit {
+                frame: 5,
+                note: drum_map::HIHAT_OPEN,
+                velocity: 1.0,
+            }],
+            8 => vec![Hit {
+                frame: 99,
+                note: drum_map::HIHAT_PEDAL,
+                velocity: 0.8,
+            }],
             _ => Vec::new(),
         };
         {
@@ -473,7 +541,10 @@ fn a_mono_take_renders_bit_identical_to_its_duplicated_stereo_take() {
     );
     assert_eq!(a.len(), b.len());
     let first_diff = a.iter().zip(&b).position(|(x, y)| x != y);
-    assert_eq!(first_diff, None, "mono and duplicated-stereo renders differ");
+    assert_eq!(
+        first_diff, None,
+        "mono and duplicated-stereo renders differ"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -504,9 +575,18 @@ fn a_corrupt_take_is_counted_and_the_kit_still_loads_and_plays() {
     assert_eq!(snare.close_mics[0].layers[0].round_robins.len(), 1);
 
     render(&mut plugin, &[]); // the audio thread takes the kit
-    assert!(strike_peak(&mut plugin, drum_map::KICK) > 0.01, "kick silent");
-    assert!(strike_peak(&mut plugin, drum_map::SNARE) > 0.01, "snare silent");
-    assert!(strike_peak(&mut plugin, drum_map::HIHAT_CLOSED) > 0.01, "hat silent");
+    assert!(
+        strike_peak(&mut plugin, drum_map::KICK) > 0.01,
+        "kick silent"
+    );
+    assert!(
+        strike_peak(&mut plugin, drum_map::SNARE) > 0.01,
+        "snare silent"
+    );
+    assert!(
+        strike_peak(&mut plugin, drum_map::HIHAT_CLOSED) > 0.01,
+        "hat silent"
+    );
 }
 
 #[test]
@@ -517,10 +597,16 @@ fn a_pad_whose_every_file_fails_is_silent_not_the_built_in_sample() {
     let stats = settle(&plugin);
     assert_eq!(stats.unreadable, 3, "{stats:?}");
     let hat = built_pad(&plugin, 2);
-    assert!(hat.close_mics.is_empty() && hat.overhead.is_none(), "hat has banks");
+    assert!(
+        hat.close_mics.is_empty() && hat.overhead.is_none(),
+        "hat has banks"
+    );
 
     render(&mut plugin, &[]);
-    assert!(strike_peak(&mut plugin, drum_map::KICK) > 0.01, "kick silent");
+    assert!(
+        strike_peak(&mut plugin, drum_map::KICK) > 0.01,
+        "kick silent"
+    );
     assert_eq!(
         strike_peak(&mut plugin, drum_map::HIHAT_CLOSED),
         0.0,
@@ -553,7 +639,10 @@ fn progress_completes_only_once_a_process_block_has_taken_the_kit() {
     let handed = plugin.bridge.load_progress.snapshot();
     assert_eq!(handed.phase, LoadPhase::HandedOff);
     assert_eq!((handed.files_done, handed.files_total), (14, 14));
-    assert!(!handed.complete, "complete before the audio thread took the kit");
+    assert!(
+        !handed.complete,
+        "complete before the audio thread took the kit"
+    );
     assert!(handed.fraction() < 1.0);
 
     render(&mut plugin, &[]);
@@ -575,7 +664,10 @@ fn a_newer_load_restarts_progress_and_the_stale_kit_never_completes_it() {
     assert!(!plugin.bridge.load_progress.is_complete());
     render(&mut plugin, &[]);
     assert!(plugin.bridge.load_progress.is_complete());
-    assert_eq!(plugin.bridge.kit_path.lock().as_deref(), Some(b.manifest.as_path()));
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(b.manifest.as_path())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +715,10 @@ fn unused_cache_entries_are_swept_once_no_kit_holds_them() {
     assert_eq!(cache.stats().resident_bytes, sample.bytes() as u64);
     assert_eq!(cache.sweep(), 0, "a held take is kept");
     drop(sample);
-    assert!(cache.lookup(&key).is_none(), "the cache must not keep it alive");
+    assert!(
+        cache.lookup(&key).is_none(),
+        "the cache must not keep it alive"
+    );
     assert_eq!(cache.sweep(), 1);
     assert_eq!(cache.stats().entries, 0);
     // A different rate is a different take.
