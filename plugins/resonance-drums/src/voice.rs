@@ -5,10 +5,19 @@ pub const MAX_VOICES: usize = 64;
 /// Extra slots a stolen voice is moved into so it can fade out instead of
 /// being overwritten mid-sample (E1). They sit outside the polyphony
 /// count: a steal still frees the main slot at once, and the victim only
-/// needs [`STEAL_FADE_MS`] to die away. Sixteen tails fading at once
-/// means a steal every 0.19 ms (9 frames at 48 kHz) — far denser than a
-/// kit is played; past that the most-faded tail is reused.
-pub const TAIL_SLOTS: usize = 16;
+/// needs [`STEAL_FADE_MS`] to die away.
+///
+/// Steals are not spread out in time: they bunch on the frames hits land
+/// on. One hit takes up to three voices (two close mics + overhead), a
+/// host delivers a flam, a fill or a pad "chord" as several hits on the
+/// same frame, and a low polyphony ceiling makes every one of those a
+/// steal. So the count that matters is how many *sounding* voices can be
+/// stolen within one fade (144 frames at 48 kHz), and that is bounded by
+/// how many were sounding — up to [`MAX_VOICES`] — not by a hit rate.
+/// Thirty-two covers half the voice pool going at once; past that the
+/// quietest tail is reused (of equally loud ones, the least heard), which
+/// is the least audible cut there is.
+pub const TAIL_SLOTS: usize = 32;
 
 /// Choke / release fade, in milliseconds: what a choke group (the open
 /// hat cut by a closed or pedal hat) and a host choke fade over. Long

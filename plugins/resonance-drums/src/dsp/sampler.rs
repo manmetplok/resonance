@@ -243,6 +243,11 @@ impl DrumSampler {
         self.tails.iter().filter(|v| v.active).count()
     }
 
+    /// The tail slots themselves, active or not.
+    pub fn tail_voices(&self) -> &[Voice] {
+        &self.tails
+    }
+
     /// Refresh the global trigger settings from the params. Called once
     /// per block from `process()`, before any event is drained, so every
     /// hit in the block is started under the same settings.
@@ -441,23 +446,35 @@ impl DrumSampler {
     /// it out there, so the slot can take a new hit without cutting the
     /// old one dead (E1). A struct copy — nothing allocates.
     ///
-    /// With every tail busy the one closest to silence is reused: its
-    /// fade already has the fewest frames (and least level) left.
+    /// With every tail busy the quietest one is reused — the one whose cut
+    /// is least audible. Equally quiet tails (every victim of a burst on
+    /// one frame starts its fade at the same gain) go by fewest fade
+    /// frames left, then by least heard: a victim that had not rendered a
+    /// frame before it was stolen goes before one that was sounding.
+    /// (Comparing frames left alone picked tail 0 every time a burst of
+    /// steals filled the tails at once, cutting a full-level voice.)
     fn steal_to_tail(&mut self, idx: usize) {
+        let victim = self.voices[idx];
+        self.voices[idx].active = false;
         let tail = match self.tails.iter().position(|t| !t.active) {
             Some(t) => t,
             None => self
                 .tails
                 .iter()
                 .enumerate()
-                .min_by_key(|(_, t)| t.release_len.saturating_sub(t.release_pos))
+                .min_by(|(_, a), (_, b)| {
+                    let left = |t: &Voice| t.release_len.saturating_sub(t.release_pos);
+                    a.current_gain()
+                        .total_cmp(&b.current_gain())
+                        .then_with(|| left(a).cmp(&left(b)))
+                        .then_with(|| a.position.cmp(&b.position))
+                })
                 .map(|(t, _)| t)
                 .unwrap_or(0),
         };
-        let mut victim = self.voices[idx];
+        let mut victim = victim;
         victim.force_fade(self.steal_frames);
         self.tails[tail] = victim;
-        self.voices[idx].active = false;
     }
 
     /// Trigger a note-on event. Allocates **one voice per loaded mic bank**

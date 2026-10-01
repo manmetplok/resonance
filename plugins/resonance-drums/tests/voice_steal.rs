@@ -20,7 +20,7 @@ use resonance_drums::kit::{
     LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
 };
 use resonance_drums::params::DrumParams;
-use resonance_drums::voice::{fade_frames, MAX_VOICES, STEAL_FADE_MS};
+use resonance_drums::voice::{fade_frames, MAX_VOICES, STEAL_FADE_MS, TAIL_SLOTS};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -219,4 +219,159 @@ fn a_stolen_voice_fades_out_in_a_tail_slot() {
         0,
         "the tail must be gone after one steal fade"
     );
+}
+
+/// Render `frames` frames (at most `BLOCK`) and return the left channel
+/// of every port summed.
+fn render_frames(
+    sampler: &mut DrumSampler,
+    bufs: &mut [(Vec<f32>, Vec<f32>)],
+    params: &DrumParams,
+    frames: usize,
+    hits: &[Hit],
+) -> Vec<f32> {
+    {
+        let mut ports: Vec<PortBuffers<'_>> = bufs
+            .iter_mut()
+            .map(|(l, r)| PortBuffers {
+                left: l.as_mut_slice(),
+                right: r.as_mut_slice(),
+            })
+            .collect();
+        sampler.render_block(&mut ports, frames, params, hits);
+    }
+    (0..frames)
+        .map(|i| bufs.iter().map(|(l, _)| l[i]).sum())
+        .collect()
+}
+
+/// A burst of hits on one frame with a low polyphony ceiling: every hit
+/// past the ceiling is a steal, all in the same frame. The sounding
+/// victims need a tail each; the old overflow rule (fewest fade frames
+/// left, which ties for every tail filled on the same frame) reused tail
+/// 0 again and again, hard-cutting a full-level voice.
+#[test]
+fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
+    const POLY: usize = 4;
+    const BURST: usize = 20;
+    assert!(BURST > 16, "the burst must overflow the old 16 tails");
+
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR);
+    sampler.pads = ramp_pads();
+    let params = DrumParams::default();
+    params.master_volume.set_value(1.0);
+    for pad in &params.pads {
+        pad.volume.set_value(1.0);
+    }
+    params.polyphony.set_value(POLY as i32);
+    sampler.update_global_settings(&params);
+    let notes: Vec<u8> = PAD_MAPPINGS.iter().map(|m| m.note).collect();
+
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    // POLY voices sounding at their held level.
+    let first: Vec<Hit> = (0..POLY)
+        .map(|i| Hit {
+            frame: 0,
+            note: notes[i],
+            velocity: 1.0,
+        })
+        .collect();
+    let mut mix = render_frames(&mut sampler, &mut bufs, &params, BLOCK, &first);
+    let held = *mix.last().unwrap();
+    assert!(
+        (held - POLY as f32 * LEVEL).abs() < 1e-4,
+        "the {POLY} voices must be sounding at their held level, mix = {held}"
+    );
+
+    // The burst, on one frame, every hit on a pad of its own.
+    let burst: Vec<Hit> = (0..BURST)
+        .map(|i| Hit {
+            frame: 0,
+            note: notes[POLY + i % (NUM_PADS - POLY)],
+            velocity: 1.0,
+        })
+        .collect();
+    mix.extend(render_frames(&mut sampler, &mut bufs, &params, BLOCK, &burst));
+
+    // The only things moving the mix: POLY steal fades of the sounding
+    // voices, and BURST onsets — every hit of the burst starts, the ones
+    // stolen on the same frame inside their own steal fade.
+    let n = fade_frames(STEAL_FADE_MS, SR) as f32;
+    let fades = POLY as f32 * LEVEL * FRAC_PI_2 / n;
+    let onsets = BURST as f32 * LEVEL / ATTACK as f32;
+    let bound = 1.25 * (fades + onsets);
+    assert!(bound < 0.5 * LEVEL, "bound {bound} would not tell a cut apart");
+    let (step, at) = max_step(&mix);
+    assert!(
+        step <= bound,
+        "a {step} step at frame {at} (bound {bound}; a hard cut of one voice is {LEVEL})"
+    );
+}
+
+/// Overflowing the tails reuses the quietest one. Fill every tail with a
+/// sounding victim, let them fade a little, then steal one more sounding
+/// voice: the tail it takes must be the one furthest into its fade.
+#[test]
+fn overflowing_the_tails_reuses_the_quietest() {
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR);
+    sampler.pads = ramp_pads();
+    let params = DrumParams::default();
+    params.polyphony.set_value(1);
+    sampler.update_global_settings(&params);
+    let note = PAD_MAPPINGS[0].note;
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    // One sounding voice stolen per frame: TAIL_SLOTS + 1 victims, each
+    // a frame further into its fade than the next.
+    sampler.note_on(note, 1.0);
+    for _ in 0..=TAIL_SLOTS {
+        render_frames(&mut sampler, &mut bufs, &params, 1, &[]);
+        sampler.note_on(note, 1.0);
+    }
+    assert!(TAIL_SLOTS + 1 < fade_frames(STEAL_FADE_MS, SR) as usize);
+    assert_eq!(sampler.tail_voices_active(), TAIL_SLOTS);
+    // Victim k (0-based) was stolen after sounding one frame and has
+    // faded TAIL_SLOTS - k frames since, so its read position is
+    // TAIL_SLOTS + 1 - k. The one reused must be victim 0 — the furthest
+    // into its fade, i.e. the quietest — leaving positions 1..=TAIL_SLOTS.
+    let mut positions: Vec<usize> = sampler
+        .tail_voices()
+        .iter()
+        .filter(|v| v.active)
+        .map(|v| v.position)
+        .collect();
+    positions.sort_unstable();
+    let want: Vec<usize> = (1..=TAIL_SLOTS).collect();
+    assert_eq!(positions, want, "the quietest tail was not the one reused");
+}
+
+/// CLAP `reset` kills the tails too: nothing fades into the next render.
+#[test]
+fn reset_clears_the_tails() {
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR);
+    sampler.pads = ramp_pads();
+    let params = DrumParams::default();
+    params.polyphony.set_value(1);
+    sampler.update_global_settings(&params);
+    let note = PAD_MAPPINGS[0].note;
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    sampler.note_on(note, 1.0);
+    render_frames(&mut sampler, &mut bufs, &params, 1, &[]);
+    sampler.note_on(note, 1.0);
+    assert_eq!(sampler.tail_voices_active(), 1);
+    sampler.reset();
+    assert_eq!(sampler.tail_voices_active(), 0);
+    let out = render_frames(&mut sampler, &mut bufs, &params, BLOCK, &[]);
+    assert!(out.iter().all(|s| *s == 0.0), "a tail rang on after reset");
 }
