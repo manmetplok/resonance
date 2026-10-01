@@ -921,6 +921,55 @@ pub(super) fn param_values_changed(
     });
 }
 
+/// The plugin changed a param itself and reported it (CLAP output
+/// parameter events). An ordinary param goes through `update` as
+/// [`PluginMessage::ParamEditedByPlugin`], so it takes an undo entry, a
+/// revision and the dirty flag like any edit. A read-only output only
+/// moves the mirror (there is nothing to undo), and so does any edit a
+/// gate would refuse — no project open, a bounce running: the plugin has
+/// it either way, and the mirror must not fall behind.
+///
+/// [`PluginMessage::ParamEditedByPlugin`]: crate::message::PluginMessage::ParamEditedByPlugin
+pub(super) fn param_edited(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    edit: resonance_audio::types::PluginParamEdit,
+) -> iced::Task<crate::message::Message> {
+    let read_only = r
+        .with_plugin_mut(instance_id, |slot| {
+            slot.params
+                .iter()
+                .find(|p| p.id == edit.param_id)
+                .map(|p| p.read_only)
+        })
+        .flatten();
+    let Some(read_only) = read_only else {
+        return iced::Task::none();
+    };
+    let message = crate::message::Message::Plugin(
+        crate::message::PluginMessage::ParamEditedByPlugin {
+            instance_id,
+            param_id: edit.param_id,
+            value: edit.value,
+            text: edit.text.clone(),
+            gesture: edit.gesture,
+        },
+    );
+    if read_only || r.gates_message(&message) {
+        param_values_changed(
+            r,
+            instance_id,
+            vec![resonance_audio::types::ParamValueUpdate {
+                id: edit.param_id,
+                value: edit.value,
+                text: edit.text,
+            }],
+        );
+        return iced::Task::none();
+    }
+    r.update(message)
+}
+
 /// A Resonance plugin reported its loaded preset and modified flag
 /// (`com.resonance.preset-session`). The report is the truth from now on.
 pub(super) fn preset_identity(

@@ -239,6 +239,16 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             // that is where a plugin reports a self-closed editor
             // (`clap_host_gui.closed()`, PLG-01) or a latency change.
             inst.0.run_requested_callback();
+            // A plugin that changed a param itself asked for a flush to
+            // deliver it (its transport may be stopped); then whatever it
+            // reported — from that flush or from `process()` since the
+            // last poll — goes to the app as edits.
+            inst.0.service_flush_request();
+            for edit in inst.0.take_param_edits() {
+                let _ = ctx
+                    .event_tx
+                    .send(AudioEvent::PluginParamEdited { instance_id, edit });
+            }
             // A load asked for a second look at the params, or the plugin
             // asked for a rescan (`clap_host_params.rescan`). Values only
             // when that is all it said: this runs under the lock the audio

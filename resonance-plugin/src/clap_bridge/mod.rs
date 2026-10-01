@@ -31,6 +31,7 @@ use crate::plugin::ResonancePlugin;
 mod gui;
 mod midi;
 mod param_flags;
+mod param_output;
 mod params;
 mod ports;
 mod process;
@@ -251,7 +252,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         // Hand the plugin its handle to the host, before it can be activated
         // and before anything else may query it. Plugins that never talk back
         // to the host use the default `set_host`, which drops it.
-        let host_handle = crate::host::HostHandle::new(shared.host, plugin.latency_samples());
+        let clap_ids: Vec<u32> = shared.param_metas.iter().map(|m| m.clap_id).collect();
+        let host_handle =
+            crate::host::HostHandle::new(shared.host, plugin.latency_samples(), &clap_ids);
         plugin.set_host(host_handle.clone());
 
         // Harvest the editor factory and any extra-state saver before the

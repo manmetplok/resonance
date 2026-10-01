@@ -128,6 +128,24 @@ pub struct ParamValueUpdate {
     pub text: String,
 }
 
+/// A parameter change the plugin made itself and reported to the host
+/// (CLAP output parameter events): from its own editor, its own browser —
+/// anything but a host write. See
+/// [`crate::types::AudioEvent::PluginParamEdited`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginParamEdit {
+    pub param_id: u32,
+    /// The value the edit ended on.
+    pub value: f64,
+    /// The plugin's `value_to_text` of `value`; empty when it has none.
+    pub text: String,
+    /// True when the plugin bracketed the change in a gesture
+    /// (`GESTURE_BEGIN` … `GESTURE_END`): one deliberate edit, reported
+    /// once it ended. False for a bare value outside any gesture, which a
+    /// plugin may send continuously.
+    pub gesture: bool,
+}
+
 /// Every field empty or zero, except `automatable`: an ordinary parameter
 /// is automatable, and a hand-built one (a test fixture, a placeholder)
 /// should not lose its lane by omission.

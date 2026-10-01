@@ -161,7 +161,7 @@ pub use export::{
 pub use tempo::{
     arrival_bpm_at_bar, avg_bpm_for_bar, bar_len_quarters, bar_len_ticks, beat_len_ticks,
     bpm_at_bar, deserialize_bpm, sanitize_bpm, sample_frac_to_tick_frac, tick_frac_to_sample_frac,
-    ticks_to_quarters, InputDeviceInfo, ParamInfo, ParamValueUpdate, PluginDescInfo, PluginScanFailure, ScannedPlugin, SignaturePoint,
+    ticks_to_quarters, InputDeviceInfo, ParamInfo, ParamValueUpdate, PluginDescInfo, PluginParamEdit, PluginScanFailure, ScannedPlugin, SignaturePoint,
     TempoMap, TempoPoint, DEFAULT_BPM, MAX_BPM, MIN_BPM, TICKS_PER_QUARTER_NOTE,
     TICKS_PER_WHOLE_NOTE,
 };

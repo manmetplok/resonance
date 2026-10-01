@@ -164,6 +164,12 @@ pub(super) struct HostData {
     /// Consumed by `ClapInstance::take_params_refresh`, which decides how
     /// much to re-read.
     pub(super) params_refresh: std::sync::atomic::AtomicU32,
+    /// Set by `clap_host_params.request_flush()`: the plugin has output
+    /// events to deliver (a param it changed itself) and wants a
+    /// `params.flush` even if no `process()` is coming — a stopped
+    /// transport runs none. Consumed by
+    /// [`ClapInstance::service_flush_request`] on the engine thread.
+    pub(super) flush_requested: AtomicBool,
 }
 
 impl HostData {
@@ -315,7 +321,14 @@ unsafe extern "C" fn host_params_rescan(host: *const clap_host, flags: u32) {
 
 unsafe extern "C" fn host_params_clear(_host: *const clap_host, _param_id: u32, _flags: u32) {}
 
-unsafe extern "C" fn host_params_request_flush(_host: *const clap_host) {}
+/// `clap_host_params.request_flush` — `[thread-safe]`. Latched; the
+/// engine thread's poll runs the flush (under the instance lock, which
+/// excludes a concurrent `process()`).
+unsafe extern "C" fn host_params_request_flush(host: *const clap_host) {
+    if let Some(data) = host_data_from(host) {
+        data.flush_requested.store(true, Ordering::Release);
+    }
+}
 
 unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
 unsafe extern "C" fn host_request_callback(host: *const clap_host) {
@@ -365,6 +378,7 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
             request_flush: Some(host_params_request_flush),
         },
         params_refresh: std::sync::atomic::AtomicU32::new(0),
+        flush_requested: AtomicBool::new(false),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {

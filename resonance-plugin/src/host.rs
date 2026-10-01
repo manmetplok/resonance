@@ -18,7 +18,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use clack_extensions::params::ParamRescanFlags;
+use clack_extensions::params::{HostParams, ParamRescanFlags};
 use clack_plugin::prelude::HostSharedHandle;
 
 /// Top bit of `HostHandle::calls`: the handle has been retired.
@@ -89,12 +89,26 @@ pub struct HostHandle {
     /// it after the block, once the values it would re-read are in its
     /// mirror. 0 when none.
     rescan_deferred: AtomicU32,
+    /// Per param slot: the plugin set this param itself and announced it
+    /// ([`Self::announce_param_change`]); the bridge has not reported it
+    /// to the host yet.
+    announced: Box<[AtomicBool]>,
+    /// Any slot in `announced` is set: the audio thread checks this one
+    /// flag per block instead of walking every slot.
+    announced_any: AtomicBool,
+    /// CLAP param id → slot, for [`Self::announce_param_change`]. Fixed at
+    /// construction; read-only after.
+    announce_slots: std::collections::HashMap<u32, usize>,
 }
 
 impl HostHandle {
     /// Wrap the bridge's host handle. Called once per plugin instance, on the
     /// main thread, before the plugin can ever be activated.
-    pub(crate) fn new(host: HostSharedHandle<'_>, initial_latency: u32) -> Arc<Self> {
+    pub(crate) fn new(
+        host: HostSharedHandle<'_>,
+        initial_latency: u32,
+        param_clap_ids: &[u32],
+    ) -> Arc<Self> {
         // SAFETY: the erased lifetime is re-established by `calls` — see the
         // field docs. This handle is created inside `new_main_thread`, where
         // the host pointer is live by construction.
@@ -110,6 +124,13 @@ impl HostHandle {
             params_rescan: AtomicU32::new(0),
             in_process: AtomicBool::new(false),
             rescan_deferred: AtomicU32::new(0),
+            announced: param_clap_ids.iter().map(|_| AtomicBool::new(false)).collect(),
+            announced_any: AtomicBool::new(false),
+            announce_slots: param_clap_ids
+                .iter()
+                .enumerate()
+                .map(|(slot, &id)| (id, slot))
+                .collect(),
         })
     }
 
@@ -234,6 +255,47 @@ impl HostHandle {
         }
     }
 
+    /// Tell the host that the plugin changed parameter `param_id` (its
+    /// string id, as [`crate::param::Param::id`] returns it) itself — from
+    /// its own editor or browser, not from a host write — so the host
+    /// records it as **one undoable edit** and follows the value. The
+    /// plugin must already have set the new value (`set_value` /
+    /// `set_plain`) when it calls this.
+    ///
+    /// This is CLAP's output parameter events: the bridge reports the
+    /// param as a gesture begin, its current value and a gesture end, in
+    /// the next `process()` block (right after the plugin returns, so a
+    /// change made inside `process()` goes out in that same block) or the
+    /// next `params.flush` — the bridge asks the host for one
+    /// (`clap_host_params.request_flush`) when no block is running, since
+    /// a host with its transport stopped may run none. Several calls for
+    /// one param before then are one edit, at its latest value.
+    ///
+    /// For a value the plugin moves continuously on its own (a progress,
+    /// a meter), use a read-only param and
+    /// [`Self::request_params_rescan`] instead: that updates what the host
+    /// shows without recording anything.
+    ///
+    /// Realtime-safe: a hash of `param_id`, a map lookup and a few atomics
+    /// — and outside `process()`, the host's `[thread-safe]`
+    /// `request_flush`. An unknown id is ignored.
+    pub fn announce_param_change(&self, param_id: &str) {
+        let Some(&slot) = self.announce_slots.get(&crate::stable_hash(param_id)) else {
+            return;
+        };
+        self.announced[slot].store(true, Ordering::SeqCst);
+        self.announced_any.store(true, Ordering::SeqCst);
+        // Inside a block the bridge reports it as the block ends; outside
+        // one, ask for a flush so it does not wait for the next block.
+        if !self.in_process.load(Ordering::SeqCst) {
+            self.with_host(|host| {
+                if let Some(params) = host.get_extension::<HostParams>() {
+                    params.request_flush(host);
+                }
+            });
+        }
+    }
+
     /// Ask the host to call the plugin back on the main thread.
     pub fn request_callback(&self) {
         self.with_host(|host| host.request_callback());
@@ -310,6 +372,35 @@ impl HostHandle {
     /// that the values it announces are published.
     pub(crate) fn post_deferred_rescan(&self, flags: u32) {
         self.post_params_rescan(flags);
+    }
+
+    /// Take the next announced param slot ([`Self::announce_param_change`])
+    /// for the bridge to report, or `None` when none is pending.
+    /// Wait-free; any thread.
+    pub(crate) fn take_announced(&self) -> Option<usize> {
+        if !self.announced_any.load(Ordering::SeqCst) {
+            return None;
+        }
+        self.announced_any.store(false, Ordering::SeqCst);
+        let found = self
+            .announced
+            .iter()
+            .position(|flag| flag.swap(false, Ordering::SeqCst));
+        if found.is_some() {
+            // There may be more: keep the fast-path flag up until a walk
+            // finds nothing.
+            self.announced_any.store(true, Ordering::SeqCst);
+        }
+        found
+    }
+
+    /// Put an announcement back (the bridge could not report it now: no
+    /// room in the host's event list, or a state load is publishing).
+    pub(crate) fn rearm_announced(&self, slot: usize) {
+        if let Some(flag) = self.announced.get(slot) {
+            flag.store(true, Ordering::SeqCst);
+            self.announced_any.store(true, Ordering::SeqCst);
+        }
     }
 
     /// Take the pending rescan: its CLAP flags, empty when none.

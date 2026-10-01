@@ -123,8 +123,19 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     fn flush(
         &mut self,
         input_parameter_changes: &InputEvents,
-        _output_parameter_changes: &mut OutputEvents,
+        output_parameter_changes: &mut OutputEvents,
     ) {
+        // Inactive: the plugin is here. Report what it announced
+        // (`HostHandle::announce_param_change`) — this is the flush it
+        // asked the host for — before applying the host's own writes.
+        if let Some(plugin) = &self.plugin {
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                output_parameter_changes,
+            );
+        }
         for event in input_parameter_changes {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -171,8 +182,20 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
     fn flush(
         &mut self,
         input_parameter_changes: &InputEvents,
-        _output_parameter_changes: &mut OutputEvents,
+        output_parameter_changes: &mut OutputEvents,
     ) {
+        // Active with no block running (a host with its transport
+        // stopped): report what the plugin announced, as `process()`
+        // would have.
+        {
+            let plugin = &self.plugin;
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                output_parameter_changes,
+            );
+        }
         for event in input_parameter_changes {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;

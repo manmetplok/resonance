@@ -83,6 +83,15 @@ pub struct ClapInstance {
     /// — so a values rescan re-reads values only and formats only the ones
     /// that moved. Engine thread; the lock is never contended.
     pub(super) param_value_cache: parking_lot::Mutex<Vec<(u32, f64)>>,
+    /// Output parameter events the plugin pushed during `process()` or
+    /// `params.flush` (its own edits), raw, in order, until the engine
+    /// thread folds them ([`ClapInstance::take_param_edits`]).
+    /// Pre-allocated; the audio thread never grows it — a full buffer
+    /// refuses the push, which a plugin retries later.
+    pub(super) out_param_events: Vec<super::params::OutParamEvent>,
+    /// Gestures the plugin has opened and not yet closed, with the last
+    /// value each carried: a gesture may span many blocks. Engine thread.
+    pub(super) open_gestures: Vec<(u32, Option<f64>)>,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -164,6 +173,8 @@ impl ClapInstance {
             // process() call after a fresh plugin add doesn't allocate
             // on the audio thread.
             param_value_cache: parking_lot::Mutex::new(Vec::new()),
+            out_param_events: Vec::with_capacity(super::params::OUT_PARAM_EVENT_CAPACITY),
+            open_gestures: Vec::new(),
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),

@@ -478,6 +478,17 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             self.push_back_params();
             self.host_handle.post_deferred_rescan(rescan);
         }
+        // Params the plugin changed itself and announced
+        // (`HostHandle::announce_param_change`), as complete edits.
+        {
+            let plugin = &self.plugin;
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                events.output,
+            );
+        }
 
         // port_views borrows end here (OutputBuffer has no Drop impl).
 

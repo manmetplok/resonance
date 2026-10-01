@@ -14,7 +14,14 @@ use clap_sys::ext::params::{
     CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
     CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES,
 };
+use clap_sys::events::{
+    clap_event_header, clap_event_param_gesture, clap_event_param_value, clap_input_events,
+    clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_GESTURE_BEGIN,
+    CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_VALUE,
+};
 use clap_sys::host::clap_host;
+use clap_sys::process::{clap_process, CLAP_PROCESS_CONTINUE};
+use std::mem::size_of;
 use clap_sys::plugin::clap_plugin;
 
 use resonance_audio::test_support::{ClapInstance, ParamsRefresh, __instance_from_raw_for_test};
@@ -34,8 +41,78 @@ pub(crate) struct FakeState {
     /// Whether the fake serves `com.resonance.param-flags` (a first-party
     /// plugin does; a third-party one does not).
     pub first_party: bool,
+    /// `params.flush` calls.
+    pub flushes: u32,
     /// The host vtable the instance was created with, for calling back.
     pub host: *const clap_host,
+    /// Output parameter events the next `process()` or `params.flush`
+    /// pushes: `(kind, param id, value)`, kind `b` / `v` / `e`.
+    pub emit: Vec<(char, u32, f64)>,
+}
+
+/// Push `state.emit` into the host's output list, as a plugin reporting
+/// its own edits does.
+unsafe fn push_emitted(state: &mut FakeState, out: *const clap_output_events) {
+    for (kind, id, value) in state.emit.drain(..) {
+        let header = |type_: u16, size: usize| clap_event_header {
+            size: size as u32,
+            time: 0,
+            space_id: CLAP_CORE_EVENT_SPACE_ID,
+            type_,
+            flags: 0,
+        };
+        let pushed = match kind {
+            'v' => {
+                let e = clap_event_param_value {
+                    header: header(CLAP_EVENT_PARAM_VALUE, size_of::<clap_event_param_value>()),
+                    param_id: id,
+                    cookie: ptr::null_mut(),
+                    note_id: -1,
+                    port_index: -1,
+                    channel: -1,
+                    key: -1,
+                    value,
+                };
+                ((*out).try_push.unwrap())(out, &e.header)
+            }
+            _ => {
+                let type_ = if kind == 'b' {
+                    CLAP_EVENT_PARAM_GESTURE_BEGIN
+                } else {
+                    CLAP_EVENT_PARAM_GESTURE_END
+                };
+                let e = clap_event_param_gesture {
+                    header: header(type_, size_of::<clap_event_param_gesture>()),
+                    param_id: id,
+                };
+                ((*out).try_push.unwrap())(out, &e.header)
+            }
+        };
+        assert!(pushed, "the host has room");
+    }
+}
+
+unsafe extern "C" fn fake_process(plugin: *const clap_plugin, process: *const clap_process) -> i32 {
+    push_emitted(fake_state(plugin), (*process).out_events);
+    CLAP_PROCESS_CONTINUE
+}
+
+unsafe extern "C" fn fake_flush(
+    plugin: *const clap_plugin,
+    _in: *const clap_input_events,
+    out: *const clap_output_events,
+) {
+    let state = fake_state(plugin);
+    state.flushes += 1;
+    push_emitted(state, out);
+}
+
+/// Call the host's `clap_host_params.request_flush()`, as the plugin would.
+pub(crate) unsafe fn plugin_requests_flush(state: *mut FakeState) {
+    let host = (*state).host;
+    let ext = ((*host).get_extension.expect("get_extension"))(host, CLAP_EXT_PARAMS.as_ptr())
+        as *const clap_host_params;
+    ((*ext).request_flush.expect("request_flush"))(host);
 }
 
 /// Call the host's `clap_host_params.rescan(flags)`, as the plugin would.
@@ -135,7 +212,7 @@ static FAKE_PARAMS_EXT: clap_plugin_params = clap_plugin_params {
     get_value: Some(fake_get_value),
     value_to_text: Some(fake_value_to_text),
     text_to_value: None,
-    flush: None,
+    flush: Some(fake_flush),
 };
 
 unsafe extern "C" fn fake_is_state_excluded(_plugin: *const c_void, id: u32) -> bool {
@@ -168,6 +245,8 @@ pub(crate) fn make_instance(first_party: bool) -> (ClapInstance, *mut FakeState)
         |host| {
             let state = Box::into_raw(Box::new(FakeState {
                 host,
+                emit: Vec::new(),
+                flushes: 0,
                 kit: -1.0,
                 progress: 0.0,
                 text_calls: 0,
@@ -185,7 +264,7 @@ pub(crate) fn make_instance(first_party: bool) -> (ClapInstance, *mut FakeState)
                 start_processing: Some(fake_start_processing),
                 stop_processing: Some(fake_stop_processing),
                 reset: None,
-                process: None,
+                process: Some(fake_process),
                 get_extension: Some(fake_get_extension),
                 on_main_thread: None,
             });
@@ -283,4 +362,56 @@ fn the_rescan_flags_decide_how_much_is_reread() {
     // A load's second look is a full re-read.
     instance.request_params_refresh();
     assert_eq!(instance.take_params_refresh(), ParamsRefresh::Full);
+}
+
+/// A param the plugin changed itself and reported as output events is
+/// folded into one edit per gesture — reported when the gesture ends, with
+/// its last value and the plugin's text — and a gesture may span blocks.
+#[test]
+fn output_param_events_fold_into_one_edit_per_gesture() {
+    let (mut instance, state) = make_instance(true);
+    let mut l = [0.0f32; 64];
+    let mut r = [0.0f32; 64];
+
+    unsafe { (*state).emit = vec![('b', P_KIT, 0.0), ('v', P_KIT, 3.0)] };
+    instance.process(&mut l, &mut r, 64);
+    assert!(instance.take_param_edits().is_empty(), "the gesture is still open");
+
+    unsafe { (*state).emit = vec![('v', P_KIT, 4.0), ('e', P_KIT, 0.0)] };
+    instance.process(&mut l, &mut r, 64);
+    let edits = instance.take_param_edits();
+    assert_eq!(edits.len(), 1, "{edits:?}");
+    assert_eq!(edits[0].param_id, P_KIT);
+    assert_eq!(edits[0].value, 4.0, "the value it ended on");
+    assert_eq!(edits[0].text, "Kit 4");
+    assert!(edits[0].gesture);
+
+    // Bare values outside a gesture: the last one per param.
+    unsafe { (*state).emit = vec![('v', P_GAIN, 0.1), ('v', P_GAIN, 0.2)] };
+    instance.process(&mut l, &mut r, 64);
+    let edits = instance.take_param_edits();
+    assert_eq!(edits.len(), 1, "{edits:?}");
+    assert_eq!((edits[0].value, edits[0].gesture), (0.2, false));
+}
+
+/// With no `process()` coming (transport stopped), the plugin asks for a
+/// flush; the engine's poll runs it and collects what it reported.
+#[test]
+fn a_requested_flush_delivers_the_plugins_edit() {
+    let (mut instance, state) = make_instance(true);
+    instance.service_flush_request();
+    assert_eq!(unsafe { (*state).flushes }, 0, "nothing was requested");
+
+    unsafe {
+        (*state).emit = vec![('b', P_KIT, 0.0), ('v', P_KIT, 7.0), ('e', P_KIT, 0.0)];
+        plugin_requests_flush(state);
+    }
+    instance.service_flush_request();
+    assert_eq!(unsafe { (*state).flushes }, 1);
+    let edits = instance.take_param_edits();
+    assert_eq!(edits.len(), 1);
+    assert_eq!((edits[0].param_id, edits[0].value), (P_KIT, 7.0));
+
+    instance.service_flush_request();
+    assert_eq!(unsafe { (*state).flushes }, 1, "one flush per request");
 }

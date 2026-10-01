@@ -162,6 +162,36 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 }
             }
         }
+        PluginMessage::ParamEditedByPlugin {
+            instance_id,
+            param_id,
+            value,
+            text,
+            gesture: _,
+        } => {
+            let state_excluded = r
+                .with_plugin_mut(instance_id, |p| {
+                    let param = p.params.iter_mut().find(|pp| pp.id == param_id)?;
+                    param.current_value = value;
+                    param.text = text;
+                    Some(param.state_excluded)
+                })
+                .flatten();
+            // A param the state carries in its own form (the drums'
+            // `kit_select`, recalled from the blob's kit reference) is
+            // not in the undo snapshot's param list, so the snapshot's
+            // BLOB is what an undo restores it from: refresh the cached
+            // blob now, so the entry just recorded (holding the old one)
+            // differs from the live cache and an undo pushes it.
+            if state_excluded == Some(true) {
+                let _ = r.engine.send(AudioCommand::SavePluginState { instance_id });
+            }
+            if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
+                if !identity.reported {
+                    identity.modified = true;
+                }
+            }
+        }
         m @ PluginMessage::LoadPluginPreset { .. } => apply_preset_load(r, m),
         m @ PluginMessage::LoadPluginPresetFromLocation { .. } => apply_preset_load(r, m),
         PluginMessage::PresetStep { load, .. } => {
