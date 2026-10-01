@@ -7,7 +7,7 @@ pub mod janitor;
 pub mod sampler;
 pub mod voice_pick;
 
-pub use sampler::{DrumSampler, GlobalSettings, Hit, PortBuffers};
+pub use sampler::{DrumSampler, GlobalSettings, Hit, PadSettings, PortBuffers, FROM_KIT};
 pub use voice_pick::{
     map_relative, pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS,
     NO_LAST_TAKE,

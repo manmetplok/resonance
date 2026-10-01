@@ -53,6 +53,45 @@ impl Default for GlobalSettings {
     }
 }
 
+/// A [`PadSettings`] field that defers to what the kit itself says
+/// ([`LoadedPad`]): what a headless sampler that is never handed params
+/// does, as the sampler always did.
+pub const FROM_KIT: u8 = u8::MAX;
+
+/// One pad's trigger settings, snapshotted once per block from its
+/// params with the [`GlobalSettings`]: they decide how a hit on the pad
+/// is *started*, so block rate is the right granularity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PadSettings {
+    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`].
+    pub choke: u8,
+}
+
+impl Default for PadSettings {
+    fn default() -> Self {
+        Self { choke: FROM_KIT }
+    }
+}
+
+impl PadSettings {
+    /// This pad's settings from its params.
+    pub fn from_params(pad: &crate::params::PadParams) -> Self {
+        Self {
+            choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
+        }
+    }
+
+    /// The choke group a hit on `pad` joins.
+    #[inline]
+    fn choke_group(&self, pad: &LoadedPad) -> Option<u8> {
+        match self.choke {
+            FROM_KIT => pad.choke_group,
+            0 => None,
+            group => Some(group),
+        }
+    }
+}
+
 /// A note-on at a frame offset inside the block, for
 /// [`DrumSampler::render_block`].
 #[derive(Clone, Copy, Debug)]
@@ -152,6 +191,8 @@ pub struct DrumSampler {
     rr_rng: u32,
     /// Global trigger settings, refreshed once per block from the params.
     globals: GlobalSettings,
+    /// Per-pad trigger settings, refreshed with `globals`.
+    pad_settings: [PadSettings; NUM_PADS],
     /// Shared display state for the editor: packed `rr_index | (n_rrs << 16)`.
     /// Written after each `note_on`; `None` when running headless / in tests.
     last_rr: Option<Arc<[AtomicU32; NUM_PADS]>>,
@@ -302,6 +343,7 @@ impl DrumSampler {
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
             rr_rng: 0x9E37_79B9,
             globals: GlobalSettings::default(),
+            pad_settings: [PadSettings::default(); NUM_PADS],
             last_rr: None,
             out_peak: None,
             load_progress: None,
@@ -472,11 +514,22 @@ impl DrumSampler {
             velocity_curve: params.velocity_curve.value(),
             round_robin: RoundRobinMode::from_param(params.round_robin_mode.value()),
         };
+        for (settings, pad) in self.pad_settings.iter_mut().zip(params.pads.iter()) {
+            *settings = PadSettings::from_params(pad);
+        }
     }
 
     /// The settings hits are currently started with.
     pub fn global_settings(&self) -> GlobalSettings {
         self.globals
+    }
+
+    /// The settings a hit on pad `index` is currently started with.
+    pub fn pad_settings(&self, index: usize) -> PadSettings {
+        self.pad_settings
+            .get(index)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Attach the shared last-RR display array so the editor can show
@@ -801,7 +854,8 @@ impl DrumSampler {
         // multi-layer kits have the velocity layer already shaped so we
         // use a flat trigger gain.
         let trigger_gain = if n_layers > 1 { 1.0 } else { velocity };
-        let choke_group = pad.choke_group;
+        let settings = self.pad_settings[pad_index];
+        let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
         let output_port = pad.output_group.index() as u8;
         let has_overhead = pad.overhead.is_some();

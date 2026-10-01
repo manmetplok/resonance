@@ -19,7 +19,7 @@ use crate::velocity;
 use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
-pub const PARAMS_PER_PAD: usize = 7;
+pub const PARAMS_PER_PAD: usize = 8;
 
 /// Number of global params ahead of the per-pad block, used for param
 /// indexing. The flat index is an enumeration order, not an identity:
@@ -211,6 +211,40 @@ pub struct PadParams {
     /// routed. The second close mic's trim is hidden on pads that are
     /// never recorded with two.
     pub trims: [FloatParam; MIC_SLOTS],
+    /// Choke group (E12): 0 = none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a
+    /// pad fades out every sounding voice of the same group — the open
+    /// hat cut by the closed or pedal hat. Defaults to the Drummica table
+    /// ([`PAD_MAPPINGS`]): every hi-hat in group 1, nothing else choked.
+    pub choke: IntParam,
+}
+
+/// The highest choke group a pad can be put in.
+pub const MAX_CHOKE_GROUP: i32 = 8;
+
+/// How a choke group reads: `None`, `Group 1` … `Group 8`.
+pub fn choke_label(group: i32) -> String {
+    if group <= 0 {
+        "None".to_string()
+    } else {
+        format!("Group {group}")
+    }
+}
+
+/// Parse [`choke_label`] (or a bare number) back to a group.
+pub fn choke_from_label(text: &str) -> Option<i32> {
+    let t = text.trim();
+    if t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("off") {
+        return Some(0);
+    }
+    let digits = if t.len() >= 5 && t[..5].eq_ignore_ascii_case("group") {
+        t[5..].trim()
+    } else {
+        t
+    };
+    digits
+        .parse::<i32>()
+        .ok()
+        .map(|g| g.clamp(0, MAX_CHOKE_GROUP))
 }
 
 /// A static id or name for a per-pad parameter.
@@ -282,6 +316,17 @@ impl PadParams {
                 }
             },
             trims,
+            choke: IntParam::new(
+                id("choke"),
+                name("Choke Group"),
+                mapping.choke_group.map_or(0, i32::from),
+                IntRange::Linear {
+                    min: 0,
+                    max: MAX_CHOKE_GROUP,
+                },
+            )
+            .with_value_to_string(Arc::new(choke_label))
+            .with_string_to_value(Arc::new(choke_from_label)),
         }
     }
 
@@ -325,6 +370,7 @@ impl DrumParams {
             4 => &pad.trims[0],
             5 => &pad.trims[1],
             6 => &pad.trims[2],
+            7 => &pad.choke,
             _ => &pad.volume,
         }
     }

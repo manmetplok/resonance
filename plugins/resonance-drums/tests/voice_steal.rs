@@ -82,6 +82,8 @@ fn render_pattern() -> (Vec<f32>, usize) {
     params.master_volume.set_value(0.0); // 0 dB: unity
     for pad in &params.pads {
         pad.volume.set_value(0.0); // 0 dB: unity
+        // No choke groups (the kit has none; the hats default to one).
+        pad.choke.set_value(0);
     }
     sampler.update_global_settings(&params);
 
@@ -264,6 +266,8 @@ fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
     params.master_volume.set_value(0.0); // 0 dB: unity
     for pad in &params.pads {
         pad.volume.set_value(0.0); // 0 dB: unity
+        // No choke groups (the kit has none; the hats default to one).
+        pad.choke.set_value(0);
     }
     params.polyphony.set_value(POLY as i32);
     sampler.update_global_settings(&params);
