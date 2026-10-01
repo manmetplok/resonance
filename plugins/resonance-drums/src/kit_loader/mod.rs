@@ -11,7 +11,7 @@
 //!     memory figures, the last build for incremental reloads),
 //!   * the one-slot mailbox (for publishing the new pad set).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -31,11 +31,11 @@ pub mod manifest;
 pub mod progress;
 
 pub use cache::{SampleCache, SampleKey};
-pub use fallback::build_fallback_pad;
+pub use fallback::{build_fallback_pad, build_fallback_pad_sourced};
 pub use manifest::{parse_vel_index, KitManifest, MicSetup, PadMicChoices};
 pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
-use decode::{assemble_bank, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
+use decode::{assemble_pad, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
 
 // ---------------------------------------------------------------------------
 // Drum-piece -> pad slot mapping.
@@ -122,9 +122,8 @@ const DRUMMICA_ARTICULATION_ALT: [&str; NUM_PADS] = [
 pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
 
 // ---------------------------------------------------------------------------
-// Status reported by the loader thread, rendered by the editor.
+// Requests, builds and the status reported by the loader thread.
 // ---------------------------------------------------------------------------
-
 
 /// Everything a kit is decoded from except the sample rate: the manifest
 /// and the mic / articulation choices. Two loads with equal requests at
@@ -139,11 +138,15 @@ pub struct KitRequest {
 
 impl KitRequest {
     /// What pad `pad` of this request is built from, besides the kit.
-    pub fn pad_request(&self, pad: usize) -> PadRequest {
+    /// `has_overhead`: whether the pad's piece has an overhead to pick
+    /// with the overhead key at all (see [`piece_uses_overhead_key`]);
+    /// if not, the key is no part of the pad, and changing it must not
+    /// rebuild it.
+    pub fn pad_request(&self, pad: usize, has_overhead: bool) -> PadRequest {
         PadRequest {
             articulation: self.articulations[pad],
             close_setups: self.pad_choices[pad].clone(),
-            overhead_setup_key: self.overhead_setup_key.clone(),
+            overhead_setup_key: has_overhead.then(|| self.overhead_setup_key.clone()),
         }
     }
 }
@@ -155,7 +158,19 @@ impl KitRequest {
 pub struct PadRequest {
     pub articulation: bool,
     pub close_setups: PadMicChoices,
-    pub overhead_setup_key: String,
+    /// `None` for a pad the overhead key cannot change: the built-in
+    /// pads, and pieces with no overhead setup.
+    pub overhead_setup_key: Option<String>,
+}
+
+/// Whether the overhead setup key can change what `piece` loads as its
+/// overhead: it holds the key itself, or an OH setup the overhead falls
+/// back to (see `decode::plan_overhead_bank`).
+pub fn piece_uses_overhead_key(
+    piece: &std::collections::BTreeMap<String, MicSetup>,
+    key: &str,
+) -> bool {
+    piece.contains_key(key) || piece.values().any(|setup| setup.position.starts_with("OH"))
 }
 
 /// The manifest file as it was when a kit was built from it, so a reload
@@ -179,8 +194,9 @@ impl ManifestStamp {
 /// A finished kit build, kept on the bridge ([`KitBridge::built_kit`]) so
 /// the next load of the same kit at the same rate rebuilds only the pads
 /// whose [`PadRequest`] changed (E4) and clones the rest. Its pads share
-/// their sample memory with the kit the sampler plays, so keeping it
-/// costs no audio memory of its own.
+/// their sample memory with the kit the sampler plays while the sampler
+/// plays it; once it does not, the build alone keeps that memory alive,
+/// which is why `initialize` drops a build that cannot donate.
 #[derive(Clone)]
 pub struct BuiltKit {
     pub path: PathBuf,
@@ -188,11 +204,135 @@ pub struct BuiltKit {
     pub sample_rate: f32,
     pub pad_requests: Vec<PadRequest>,
     pub pads: Vec<LoadedPad>,
+    /// What building each pad found, in pad order.
+    pub pad_builds: Vec<PadBuild>,
+}
+
+/// What building one pad found, kept with the build so a reload that
+/// reuses the pad still reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PadBuild {
+    /// The pad's files that could not be read or decoded.
+    pub unreadable: usize,
+    /// The first few of them.
+    pub unreadable_paths: Vec<PathBuf>,
+    /// Bytes of the pad's takes that another instance held when this one
+    /// got them (see [`is_shared`]).
+    pub shared_bytes: u64,
+    /// Those takes, by [`take_addr`].
+    pub shared_takes: HashSet<usize>,
+}
+
+/// A kit this instance holds outside its last build — the built-in kit
+/// `initialize` installed — and which of its takes it found shared.
+/// Kept on the bridge ([`KitBridge::builtin_kit`]) while the sampler
+/// plays it, so a load can tell those takes from another instance's.
+#[derive(Clone, Default)]
+pub struct HeldKit {
+    pub pads: Vec<LoadedPad>,
+    pub shared_takes: HashSet<usize>,
+}
+
+/// Takes an instance already holds, by [`take_addr`], each with whether
+/// it was shared with another instance when this instance got it.
+pub type HeldTakes = HashMap<usize, bool>;
+
+/// A take's identity in [`HeldTakes`]: its address. Only compared while
+/// the take is held, so the address cannot have been reused.
+pub fn take_addr(sample: &Arc<SampleData>) -> usize {
+    Arc::as_ptr(sample) as usize
+}
+
+/// Whether a take fetched from `source` is memory shared with another
+/// instance. A decode is this instance's alone. A cache hit is shared —
+/// unless this instance already held the take, in which case it is
+/// whatever it was when this instance first got it: a reload must
+/// neither count the instance's own takes as shared nor forget that a
+/// take it reuses is shared.
+pub fn is_shared(sample: &Arc<SampleData>, source: cache::Source, held: &HeldTakes) -> bool {
+    match source {
+        cache::Source::Decoded => false,
+        cache::Source::Cached => held.get(&take_addr(sample)).copied().unwrap_or(true),
+    }
+}
+
+/// Add every take of `pads` to `held`, marked shared when its address
+/// is in `shared`.
+fn hold_takes<'a>(
+    held: &mut HeldTakes,
+    pads: impl IntoIterator<Item = (&'a LoadedPad, &'a HashSet<usize>)>,
+) {
+    for (pad, shared) in pads {
+        for take in pad
+            .close_mics
+            .iter()
+            .chain(pad.overhead.iter())
+            .flat_map(|bank| bank.layers.iter())
+            .flat_map(|layer| layer.round_robins.iter())
+        {
+            let addr = take_addr(take.shared());
+            held.insert(addr, shared.contains(&addr));
+        }
+    }
+}
+
+/// The built-in kit `pads`, measured: the bytes of it another instance
+/// already held, and the kit to keep as [`KitBridge::builtin_kit`].
+/// `sources` says where each pad's take came from (`None`: the pad has
+/// none), as [`fallback::build_fallback_pad_sourced`] reported it; `held`
+/// is what this instance held before.
+pub fn measure_builtin_kit(
+    pads: &[LoadedPad],
+    sources: &[Option<cache::Source>],
+    held: &HeldTakes,
+) -> (u64, HeldKit) {
+    let mut shared_bytes = 0;
+    let mut kit = HeldKit::default();
+    for (pad, source) in pads.iter().zip(sources) {
+        if let Some(source) = source {
+            for take in pad
+                .close_mics
+                .iter()
+                .flat_map(|bank| bank.layers.iter())
+                .flat_map(|layer| layer.round_robins.iter())
+            {
+                if is_shared(take.shared(), *source, held) {
+                    shared_bytes += take.bytes() as u64;
+                    kit.shared_takes.insert(take_addr(take.shared()));
+                }
+            }
+        }
+        kit.pads.push(pad.clone());
+    }
+    (shared_bytes, kit)
+}
+
+impl HeldKit {
+    /// This kit's takes as [`HeldTakes`].
+    pub fn held_takes(&self, held: &mut HeldTakes) {
+        hold_takes(held, self.pads.iter().map(|pad| (pad, &self.shared_takes)));
+    }
+}
+
+impl BuiltKit {
+    /// This build's takes as [`HeldTakes`].
+    pub fn held_takes(&self, held: &mut HeldTakes) {
+        hold_takes(
+            held,
+            self.pads
+                .iter()
+                .zip(self.pad_builds.iter().map(|b| &b.shared_takes)),
+        );
+    }
 }
 
 impl BuiltKit {
     /// Pad `pad` of this build, if a build of `request` at `sample_rate`
     /// would give the same pad.
+    ///
+    /// A pad that lost takes is never reused: the files may be readable
+    /// now (a kit still extracting, a disk remounted), and a reload is
+    /// the moment to try them again.
     fn reusable_pad(
         &self,
         path: &Path,
@@ -200,7 +340,7 @@ impl BuiltKit {
         sample_rate: f32,
         pad: usize,
         request: &PadRequest,
-    ) -> Option<&LoadedPad> {
+    ) -> Option<(&LoadedPad, &PadBuild)> {
         let same_kit = self.path == path
             && manifest.is_some()
             && self.manifest.as_ref() == manifest
@@ -208,7 +348,11 @@ impl BuiltKit {
         if !same_kit || self.pad_requests.get(pad) != Some(request) {
             return None;
         }
-        self.pads.get(pad)
+        let build = self.pad_builds.get(pad)?;
+        if build.unreadable > 0 {
+            return None;
+        }
+        Some((self.pads.get(pad)?, build))
     }
 }
 
@@ -254,14 +398,17 @@ pub struct LoadStats {
     /// Files the shared cache already held (another instance, or this
     /// instance's previous kit).
     pub cached: usize,
-    /// Files that could not be read or decoded, and were left out.
+    /// The kit's files that could not be read or decoded, and were left
+    /// out — every pad's, not only the pads this load rebuilt.
     pub unreadable: usize,
     /// The first few unreadable files.
     pub unreadable_paths: Vec<PathBuf>,
     /// Bytes of decoded audio the kit holds.
     pub kit_bytes: u64,
-    /// Of `kit_bytes`, what this load found already decoded by someone
-    /// other than this instance — memory shared with another instance.
+    /// Of `kit_bytes`, what was already decoded by another instance when
+    /// this instance got it — memory shared with another instance. Over
+    /// the whole kit: a reused pad carries its figure from the load that
+    /// built it.
     pub shared_bytes: u64,
 }
 
@@ -299,8 +446,20 @@ pub fn load_kit_from_manifest(
         pad_choices: pad_choices.clone(),
         articulations: *articulations,
     };
-    load_kit(&request, target_sr, None, cache::global(), &|| {}, &|_| {})
+    load_kit(
+        &request,
+        target_sr,
+        None,
+        None,
+        cache::global(),
+        &|| {},
+        &|_| {},
+        &|| false,
+    )
 }
+
+/// The error a [`load_kit`] that was cancelled mid-decode returns.
+pub const LOAD_CANCELLED: &str = "load cancelled";
 
 /// Load `request` at `target_sr`.
 ///
@@ -309,21 +468,33 @@ pub fn load_kit_from_manifest(
 ///   touched for them (E4).
 /// - Every other pad's files are fetched through `cache`, decoding only
 ///   what no one holds yet (E5), on [`decode::decode_workers`] threads.
-/// - A file that cannot be read or decoded drops that take, a layer left
-///   empty, a bank left empty; the kit still loads and the count is in
+/// - A file that cannot be read or decoded drops that take's cell (its
+///   velocity and round robin) from every bank of the pad, so the banks
+///   stay aligned; a layer left empty, a bank left empty — or never
+///   readable at all — goes too (see [`decode::assemble_pad`]). The kit
+///   still loads and the count is in
 ///   [`LoadStats::unreadable`] (E6). A pad whose every file failed is
 ///   silent: it keeps its slot with no banks, and plays nothing. Only a
 ///   kit in which *no* file could be read fails.
 ///
+/// `builtin` is the built-in kit this instance plays, if it does: with
+/// `previous`, what tells this instance's own takes from another's when
+/// the cache serves them ([`LoadStats::shared_bytes`]).
+///
 /// `set_total` is told how many files the load reads once it knows, and
 /// `file_done` runs once per file finished (on a decode worker).
+/// `cancelled` is asked before each file: once it says yes, the decode
+/// stops starting files and the load fails with [`LOAD_CANCELLED`].
+#[allow(clippy::too_many_arguments)]
 pub fn load_kit(
     request: &KitRequest,
     target_sr: f32,
     previous: Option<&BuiltKit>,
+    builtin: Option<&HeldKit>,
     cache: &SampleCache,
     file_done: &(dyn Fn() + Sync),
     set_total: &dyn Fn(usize),
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<LoadedKit, String> {
     let manifest_path = request.path.as_path();
     let manifest_stamp = ManifestStamp::of(manifest_path);
@@ -349,18 +520,25 @@ pub fn load_kit(
 
     // 1. Plan: reuse, built-in fallback, or the piece's banks per pad.
     enum PadPlan {
-        Reuse(LoadedPad),
+        Reuse(LoadedPad, PadBuild),
         Fallback,
         Piece {
             close: Vec<decode::BankPlan>,
             overhead: Option<decode::BankPlan>,
         },
     }
-    let pad_requests: Vec<PadRequest> = (0..NUM_PADS).map(|i| request.pad_request(i)).collect();
+    let pad_requests: Vec<PadRequest> = (0..NUM_PADS)
+        .map(|i| {
+            let has_overhead = manifest
+                .get(piece_name_for(i, request.articulations[i]))
+                .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
+            request.pad_request(i, has_overhead)
+        })
+        .collect();
     let mut jobs = Jobs::default();
     let mut plans = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
-        if let Some(pad) = previous.and_then(|prev| {
+        if let Some((pad, build)) = previous.and_then(|prev| {
             prev.reusable_pad(
                 manifest_path,
                 manifest_stamp.as_ref(),
@@ -369,7 +547,7 @@ pub fn load_kit(
                 &pad_requests[pad_idx],
             )
         }) {
-            plans.push(PadPlan::Reuse(pad.clone()));
+            plans.push(PadPlan::Reuse(pad.clone(), build.clone()));
             continue;
         }
         let piece_name = piece_name_for(pad_idx, request.articulations[pad_idx]);
@@ -408,48 +586,94 @@ pub fn load_kit(
 
     // 2. Decode.
     set_total(jobs.paths.len());
-    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done);
+    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done, cancelled);
+    if cancelled() {
+        return Err(LOAD_CANCELLED.to_string());
+    }
 
-    // 3. Assemble. Takes this instance already held (its previous build)
-    // are not "shared" with anyone else just because the cache served them.
-    let own: HashSet<*const SampleData> = previous
-        .map(|prev| sample_ptrs(&prev.pads))
-        .unwrap_or_default();
+    // 3. Assemble. Takes this instance already held (its previous build,
+    // the built-in kit it plays) are not "shared" with anyone else just
+    // because the cache served them — nor stop being shared because a
+    // reload served them again (see `is_shared`).
+    let mut held = HeldTakes::new();
+    if let Some(prev) = previous {
+        prev.held_takes(&mut held);
+    }
+    if let Some(builtin) = builtin {
+        builtin.held_takes(&mut held);
+    }
     let mut tally = Tally::default();
     let mut stats = LoadStats {
         files: jobs.paths.len(),
         ..LoadStats::default()
     };
     let mut pads = Vec::with_capacity(NUM_PADS);
+    let mut pad_builds = Vec::with_capacity(NUM_PADS);
     for (plan, mapping) in plans.into_iter().zip(PAD_MAPPINGS.iter()) {
-        let pad = match plan {
-            PadPlan::Reuse(pad) => {
+        let (pad, build) = match plan {
+            PadPlan::Reuse(pad, build) => {
                 stats.reused_pads += 1;
-                pad
+                (pad, build)
             }
             PadPlan::Fallback => {
                 stats.rebuilt_pads += 1;
-                build_fallback_pad(mapping, target_sr)?
+                let (pad, source) = fallback::build_fallback_pad_sourced(mapping, target_sr)?;
+                let mut pad_tally = Tally::default();
+                for take in pad
+                    .close_mics
+                    .iter()
+                    .flat_map(|bank| bank.layers.iter())
+                    .flat_map(|layer| layer.round_robins.iter())
+                {
+                    pad_tally.note_kept(take.shared(), source, &held);
+                }
+                let build = PadBuild {
+                    shared_bytes: pad_tally.shared_bytes,
+                    shared_takes: pad_tally.shared_takes,
+                    ..PadBuild::default()
+                };
+                (pad, build)
             }
             PadPlan::Piece { close, overhead } => {
                 stats.rebuilt_pads += 1;
-                LoadedPad {
+                let mut pad_tally = Tally::default();
+                let (close_mics, overhead) = assemble_pad(
+                    &close,
+                    overhead.as_ref(),
+                    &results,
+                    &jobs.paths,
+                    &held,
+                    &mut pad_tally,
+                );
+                tally.decoded += pad_tally.decoded;
+                tally.cached += pad_tally.cached;
+                let pad = LoadedPad {
                     name: mapping.name.to_string(),
                     choke_group: mapping.choke_group,
                     output_group: mapping.output_group,
-                    close_mics: close
-                        .iter()
-                        .filter_map(|bank| {
-                            assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
-                        })
-                        .collect(),
-                    overhead: overhead.as_ref().and_then(|bank| {
-                        assemble_bank(bank, &results, &jobs.paths, &own, &mut tally)
-                    }),
-                }
+                    close_mics,
+                    overhead,
+                };
+                let build = PadBuild {
+                    unreadable: pad_tally.unreadable,
+                    unreadable_paths: pad_tally.unreadable_paths,
+                    shared_bytes: pad_tally.shared_bytes,
+                    shared_takes: pad_tally.shared_takes,
+                };
+                (pad, build)
             }
         };
+        // Every pad's unreadable files and shared bytes count, reused or
+        // rebuilt: the kit's figures are the kit's, not this load's.
+        tally.unreadable += build.unreadable;
+        tally.shared_bytes += build.shared_bytes;
+        for path in &build.unreadable_paths {
+            if tally.unreadable_paths.len() < decode::UNREADABLE_PATHS_KEPT {
+                tally.unreadable_paths.push(path.clone());
+            }
+        }
         pads.push(pad);
+        pad_builds.push(build);
     }
 
     if tally.unreadable > 0 && tally.decoded + tally.cached == 0 && stats.reused_pads == 0 {
@@ -477,6 +701,7 @@ pub fn load_kit(
         sample_rate: target_sr,
         pad_requests,
         pads: pads.clone(),
+        pad_builds,
     };
     Ok(LoadedKit {
         pads,
@@ -494,16 +719,6 @@ fn piece_name_for(pad_idx: usize, articulation: bool) -> &'static str {
     } else {
         DRUMMICA_MAPPING[pad_idx]
     }
-}
-
-/// Every take a kit references, by address.
-fn sample_ptrs(pads: &[LoadedPad]) -> HashSet<*const SampleData> {
-    pads.iter()
-        .flat_map(|pad| pad.close_mics.iter().chain(pad.overhead.iter()))
-        .flat_map(|bank| bank.layers.iter())
-        .flat_map(|layer| layer.round_robins.iter())
-        .map(|take| Arc::as_ptr(take.shared()))
-        .collect()
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -577,18 +792,24 @@ pub fn spawn_loader(
             }
 
             let previous = bridge.built_kit.lock().clone();
+            let builtin = bridge.builtin_kit.lock().clone();
             let progress = &bridge.load_progress;
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 load_kit(
                     &request,
                     target_sr,
                     previous.as_ref(),
+                    builtin.as_ref(),
                     cache::global(),
                     &|| progress.file_done(stamp),
                     &|total| progress.set_total(stamp, total.min(u32::MAX as usize) as u32),
+                    // Superseded: a newer pick (or a state load) wants
+                    // another kit; stop decoding this one.
+                    &|| bridge.load_generation.load(Ordering::Acquire) != stamp,
                 )
             }));
             drop(previous);
+            drop(builtin);
 
             // Only the newest load is allowed to write final state. The
             // check and the hand-off happen under one lock, so an older
@@ -604,6 +825,7 @@ pub fn spawn_loader(
                 return;
             }
 
+            let kit_loaded = matches!(outcome, Ok(Ok(_)));
             match outcome {
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
@@ -614,12 +836,15 @@ pub fn spawn_loader(
                     // both describe the takes this load actually decoded.
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
                     let ordinal = hand_off_kit_locked(&bridge, kit.pads);
-                    bridge.load_progress.handed_off(ordinal);
+                    bridge.load_progress.handed_off(stamp, ordinal);
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),
                         sample_rate: target_sr,
                     });
                     *bridge.built_kit.lock() = Some(kit.built);
+                    // The sampler moves off the built-in kit (if it was
+                    // on it); its takes are no longer this instance's.
+                    *bridge.builtin_kit.lock() = None;
                     bridge
                         .kit_bytes
                         .store(kit.stats.kit_bytes, Ordering::Relaxed);
@@ -637,15 +862,35 @@ pub fn spawn_loader(
                     *bridge.load_stats.lock() = kit.stats;
                 }
                 Ok(Err(message)) => {
-                    bridge.load_progress.failed();
+                    bridge.load_progress.failed(stamp);
                     *bridge.kit_status.lock() = KitStatus::Error { message };
                 }
                 Err(_) => {
-                    bridge.load_progress.failed();
+                    bridge.load_progress.failed(stamp);
                     *bridge.kit_status.lock() = KitStatus::Error {
                         message: "loader panicked".to_string(),
                     };
                 }
+            }
+            // The project's last-good kit, if it named one: tried when
+            // this — the first load since the project opened — failed.
+            // Either way it has served its purpose.
+            let fallback = bridge
+                .kit_fallback
+                .lock()
+                .take()
+                .filter(|path| *path != request.path && !kit_loaded);
+            if let Some(path) = fallback {
+                // Started before this load lets go of `pending_kit`, so
+                // the kit is never "settled" on the failure in between.
+                spawn_loader(
+                    path,
+                    target_sr,
+                    &bridge,
+                    request.overhead_setup_key.clone(),
+                    request.pad_choices.clone(),
+                    request.articulations,
+                );
             }
             // Finished, one way or the other: nothing is pending any
             // more (unless a newer load has recorded itself meanwhile).
@@ -723,10 +968,11 @@ pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> S
 pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     let _handoff = bridge.kit_handoff.lock();
     let ordinal = hand_off_kit_locked(bridge, pads);
-    bridge.load_progress.handed_off(ordinal);
+    bridge.load_progress.handed_off_directly(ordinal);
     // Not a loader's kit: what the sampler will hold is no longer known.
     *bridge.handed_off.lock() = None;
     *bridge.built_kit.lock() = None;
+    *bridge.builtin_kit.lock() = None;
 }
 
 /// [`hand_off_kit`] for a caller already holding

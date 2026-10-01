@@ -430,3 +430,178 @@ fn a_state_load_supersedes_a_pick_still_decoding() {
     let level = kick_level(&mut plugin);
     assert!((level - w.level).abs() < 1e-3, "kick plays at {level}");
 }
+
+// ---------------------------------------------------------------------------
+// The last build is not kept for a kit nobody wants
+// ---------------------------------------------------------------------------
+
+/// A weak handle on the take the kit's kick plays, from the last build.
+fn built_kick_take(
+    plugin: &ResonanceDrums,
+) -> std::sync::Weak<resonance_drums::kit::SampleData> {
+    let built = plugin.bridge.built_kit.lock();
+    let pad = &built.as_ref().expect("a built kit").pads[0];
+    std::sync::Arc::downgrade(pad.close_mics[0].layers[0].round_robins[0].shared())
+}
+
+/// Re-activating with another kit wanted puts the sampler on the built-in
+/// kit while that kit decodes. The old kit's build must go with it: it
+/// would otherwise stay resident through the decode — and for good, if
+/// the new kit fails to load.
+#[test]
+fn reactivating_for_another_kit_frees_the_old_kit_before_the_decode() {
+    use resonance_plugin::plugin::ExtraStateSaver;
+
+    let w = temp_kit(0.25);
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &w, FILE_RATE);
+    render(&mut plugin, &[]);
+    let w_take = built_kick_take(&plugin);
+    assert!(w_take.upgrade().is_some());
+
+    // A project load while inactive names X; the re-activation loads it.
+    plugin.deactivate();
+    let saver = resonance_drums::DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    };
+    saver.load(&serde_json::json!({ "kit_path": x.manifest.to_string_lossy() }));
+    let go = gate(&plugin);
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    assert!(plugin.bridge.built_kit.lock().is_none());
+    assert!(
+        w_take.upgrade().is_none(),
+        "kit W is still resident while X decodes"
+    );
+    go.send(()).unwrap();
+    wait_settled(&plugin, &x);
+}
+
+/// The same with no kit wanted at all: the built-in kit plays, and the
+/// last build is dropped.
+#[test]
+fn reactivating_with_no_kit_wanted_frees_the_old_kit() {
+    use resonance_plugin::plugin::ExtraStateSaver;
+
+    let w = temp_kit(0.25);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &w, FILE_RATE);
+    render(&mut plugin, &[]);
+    let w_take = built_kick_take(&plugin);
+
+    plugin.deactivate();
+    let saver = resonance_drums::DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    };
+    saver.load(&serde_json::json!({ "kit_path": null }));
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    assert!(plugin.bridge.built_kit.lock().is_none());
+    assert!(w_take.upgrade().is_none(), "kit W is still resident");
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// A re-activation at the same rate for the same kit keeps the build:
+/// it is what makes the reload cheap.
+#[test]
+fn reactivating_for_the_same_kit_keeps_the_build() {
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &x, FILE_RATE);
+    render(&mut plugin, &[]);
+    reactivate(&mut plugin, FILE_RATE);
+    assert!(plugin.bridge.built_kit.lock().is_some());
+}
+
+// ---------------------------------------------------------------------------
+// Progress across a re-activation
+// ---------------------------------------------------------------------------
+
+/// A kit left in the mailbox at the old rate is discarded by
+/// `initialize`. Its reclaim reaches the ordinal the progress awaits, so
+/// unless the progress is moved off that kit first it reads complete
+/// for a kit that never plays — until the reload begins. A reader
+/// polling all the while must never see it.
+#[test]
+fn a_kit_discarded_by_initialize_never_reads_as_complete() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    // Handed off at 48 kHz, never taken.
+    load_and_wait(&plugin, &x, FILE_RATE);
+    assert!(!plugin.bridge.load_progress.is_complete());
+
+    let go = gate(&plugin);
+    let stop = Arc::new(AtomicBool::new(false));
+    let progress = plugin.bridge.load_progress.clone();
+    let reader = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut seen_complete = false;
+            while !stop.load(Ordering::Acquire) {
+                seen_complete |= progress.is_complete();
+            }
+            seen_complete
+        })
+    };
+    reactivate(&mut plugin, OTHER_RATE);
+    stop.store(true, Ordering::Release);
+    assert!(
+        !reader.join().unwrap(),
+        "the discarded 48 kHz kit read as complete during the re-activation"
+    );
+    assert!(!plugin.bridge.load_progress.is_complete());
+
+    go.send(()).unwrap();
+    wait_settled(&plugin, &x);
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// A reload of the kit the sampler already holds that gives up on the
+/// rate check while the plugin is inactive leaves its kit pending. The
+/// re-activation at the kit's rate keeps the installed kit — and must
+/// still finish the load, not leave it pending and "loading" forever.
+#[test]
+fn a_reload_that_gave_up_while_inactive_is_finished_by_the_reactivation() {
+    use resonance_drums::kit_loader::LoadPhase;
+
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &x, FILE_RATE);
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+
+    // The same request again: a reload with nothing changed.
+    let go = gate(&plugin);
+    assert!(resonance_drums::reload::reload_kit(&plugin.bridge));
+    plugin.deactivate();
+    go.send(()).unwrap();
+    // Give the loader time to reach its rate check and give up (rate 0).
+    std::thread::sleep(Duration::from_millis(200));
+    ungate(&plugin);
+    assert!(plugin.bridge.pending_kit.lock().is_some());
+
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    wait_settled(&plugin, &x);
+    render(&mut plugin, &[]);
+    let snap = plugin.bridge.load_progress.snapshot();
+    assert!(snap.complete, "{snap:?}");
+    assert_eq!(snap.phase, LoadPhase::HandedOff);
+    assert_eq!(
+        plugin.bridge.load_stats.lock().decoded,
+        0,
+        "finishing the reload decoded the kit again"
+    );
+    let level = kick_level(&mut plugin);
+    assert!((level - x.level).abs() < 1e-3, "kick plays at {level}");
+}

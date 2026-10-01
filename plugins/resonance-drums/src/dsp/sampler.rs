@@ -16,7 +16,8 @@ use crate::voice::{
 
 use super::janitor;
 use super::voice_pick::{
-    pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS, NO_LAST_TAKE,
+    map_relative, pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS,
+    NO_LAST_TAKE,
 };
 
 /// The global settings a hit is started with, snapshotted once per
@@ -301,15 +302,30 @@ impl DrumSampler {
     /// into the pad's assigned close-mic output port (or Main for Clap /
     /// Cowbell) with nothing on the Overhead port.
     pub fn load_defaults(&mut self, sample_rate: f32) {
+        self.load_defaults_sourced(sample_rate);
+    }
+
+    /// [`load_defaults`](Self::load_defaults), returning per pad where
+    /// its take came from: the shared cache (someone held it) or a fresh
+    /// decode; `None` for a pad that got no take.
+    pub fn load_defaults_sourced(
+        &mut self,
+        sample_rate: f32,
+    ) -> Vec<Option<crate::kit_loader::cache::Source>> {
         self.set_sample_rate(sample_rate);
         self.pads.clear();
+        let mut sources = Vec::with_capacity(PAD_MAPPINGS.len());
 
         for mapping in &PAD_MAPPINGS {
             // The embedded WAVs are mono, and stay mono (E5); the shared
             // cache gives every instance the same copy.
-            match crate::kit_loader::build_fallback_pad(mapping, sample_rate) {
-                Ok(pad) => self.pads.push(pad),
+            match crate::kit_loader::build_fallback_pad_sourced(mapping, sample_rate) {
+                Ok((pad, source)) => {
+                    self.pads.push(pad);
+                    sources.push(Some(source));
+                }
                 Err(e) => {
+                    sources.push(None);
                     eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     self.pads.push(LoadedPad {
                         name: mapping.name.to_string(),
@@ -321,6 +337,7 @@ impl DrumSampler {
                 }
             }
         }
+        sources
     }
 
     /// Install `pads` as the live kit at once, with every voice silenced.
@@ -496,6 +513,13 @@ impl DrumSampler {
     /// the same velocity layer, round-robin index, choke group, and age
     /// so they play in lockstep.
     ///
+    /// The layer and take are picked on the reference bank (the first
+    /// close bank, else the overhead). A bank of the same shape plays
+    /// that very cell — the same strike, on another mic. A bank whose
+    /// recording has fewer layers or takes there plays the one at the
+    /// same relative position ([`map_relative`], E7) rather than going
+    /// silent.
+    ///
     /// The cymbal case is special: with no close bank the overhead take is
     /// the pad's whole sound, so it is summed into the pad's own group
     /// port (Cymbals) rather than the shared Overhead port — otherwise the
@@ -583,8 +607,19 @@ impl DrumSampler {
         // BalanceSide::None. Cymbal: no close mic. Plus an Overhead
         // voice if the pad has one loaded.
         let mut destinations: [Option<VoiceDestination>; 3] = [None, None, None];
+        // The (layer, take) each destination's bank plays.
+        let mut cells = [(0usize, 0usize); 3];
+        let cell_in = |bank: &LoadedMicBank| -> (usize, usize) {
+            let layer = map_relative(layer_index, n_layers, bank.layers.len());
+            let takes = bank
+                .layers
+                .get(layer)
+                .map_or(0, |l| l.round_robins.len());
+            (layer, map_relative(rr_index, n_rrs, takes))
+        };
         let mut dest_count = 0;
         for bank_index in 0..close_mic_count.min(2) {
+            cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
             let balance_side = match (close_mic_count, bank_index) {
                 (2, 0) => BalanceSide::Left,
                 (2, 1) => BalanceSide::Right,
@@ -610,18 +645,24 @@ impl DrumSampler {
             } else {
                 OVERHEAD_PORT_INDEX as u8
             };
+            if let Some(oh) = &pad.overhead {
+                cells[dest_count] = cell_in(oh);
+            }
             destinations[dest_count] = Some(VoiceDestination::Overhead {
                 output_port: oh_port,
             });
             dest_count += 1;
         }
 
-        // Allocate one voice per destination. All share pad, note, layer,
-        // rr, choke group, and base gain. Age is bumped together so voice
-        // stealing treats the set as a single unit.
+        // Allocate one voice per destination. All share pad, note, the
+        // hit's cell (mapped onto each bank), choke group, and base gain.
+        // Age is bumped together so voice stealing treats the set as a
+        // single unit.
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
-        for dest_slot in destinations.iter().take(dest_count) {
+        for (dest_slot, &(bank_layer, bank_rr)) in
+            destinations.iter().zip(&cells).take(dest_count)
+        {
             let Some(dest) = dest_slot else {
                 continue;
             };
@@ -637,8 +678,8 @@ impl DrumSampler {
             voice.note = note;
             voice.base_gain = trigger_gain;
             voice.destination = dest;
-            voice.layer_index = layer_index;
-            voice.rr_index = rr_index;
+            voice.layer_index = bank_layer;
+            voice.rr_index = bank_rr;
             voice.position = 0;
             voice.choke_group = choke_group;
             voice.retired = false;

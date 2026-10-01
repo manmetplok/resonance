@@ -528,3 +528,35 @@ fn many_layers_each_with_own_rr_counter() {
     }
 }
 
+/// Mapping a hit onto a bank of another shape (E7): equal shapes are the
+/// identity, a smaller bank takes the bucket at the same relative
+/// position, and every index lands inside the target.
+#[test]
+fn map_relative_keeps_relative_position() {
+    use resonance_drums::dsp::map_relative;
+    for n in 1..8 {
+        for i in 0..n {
+            assert_eq!(map_relative(i, n, n), i);
+        }
+    }
+    // Two takes onto one: both play it.
+    assert_eq!(map_relative(0, 2, 1), 0);
+    assert_eq!(map_relative(1, 2, 1), 0);
+    // Four layers onto two: soft half, loud half.
+    let mapped: Vec<usize> = (0..4).map(|i| map_relative(i, 4, 2)).collect();
+    assert_eq!(mapped, vec![0, 0, 1, 1]);
+    // One layer onto three: the middle one.
+    assert_eq!(map_relative(0, 1, 3), 1);
+    // Three onto five: soft, middle, loud.
+    let mapped: Vec<usize> = (0..3).map(|i| map_relative(i, 3, 5)).collect();
+    assert_eq!(mapped, vec![0, 2, 4]);
+    for from in 1..12 {
+        for to in 1..12 {
+            for i in 0..from {
+                assert!(map_relative(i, from, to) < to);
+            }
+        }
+    }
+    assert_eq!(map_relative(3, 4, 0), 0);
+}
+

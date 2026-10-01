@@ -52,8 +52,8 @@ pub mod voice;
 use articulation::ArticulationWatcher;
 use kit::LoadedPad;
 use kit_loader::{
-    BuiltKit, HandedOffKit, KitLoadProgress, KitRequest, KitStatus, LoadStats, PadMicChoices,
-    DEFAULT_OVERHEAD_SETUP,
+    BuiltKit, HandedOffKit, HeldKit, KitLoadProgress, KitRequest, KitStatus, LoadStats,
+    PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
@@ -74,6 +74,11 @@ pub struct KitBridge {
     /// not `kit_path`, is the kit the user wants — see
     /// [`KitBridge::wanted_kit_path`].
     pub pending_kit: Arc<Mutex<Option<(u64, PathBuf)>>>,
+    /// The last kit that loaded, as a project saved mid-pick recorded it
+    /// (`kit_path_fallback`): if the kit the project wants fails to load
+    /// on reopen, the loader loads this one instead of leaving the
+    /// built-in kit. Consumed by the first load that finishes.
+    pub kit_fallback: Arc<Mutex<Option<PathBuf>>>,
     /// What the last loader hand-off put in the mailbox, and at what rate.
     /// Lets `initialize` tell whether the kit the sampler holds is still
     /// the right one. Written under `kit_handoff`.
@@ -156,15 +161,28 @@ pub struct KitBridge {
     /// from the decoded takes. Published alongside every kit build; read by
     /// the inspector's SAMPLE stage. Empty until the first kit is built.
     pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
-    /// Of `kit_bytes`, the bytes the last load found already decoded by
-    /// another instance (through the shared sample cache, E5) — memory
-    /// this kit costs nothing extra for. The process-wide total is
+    /// Of `kit_bytes`, the bytes another instance already held when this
+    /// one got them (through the shared sample cache, E5) — memory this
+    /// kit costs nothing extra for. Over the whole kit, the built-in one
+    /// included; see [`kit_loader::is_shared`]. The process-wide total is
     /// `kit_loader::cache::global().stats().resident_bytes`.
     pub kit_shared_bytes: Arc<AtomicU64>,
     /// The last kit a loader built, kept so the next load of the same kit
-    /// at the same rate rebuilds only the pads that changed (E4). Shares
-    /// its sample memory with the kit the sampler plays.
+    /// at the same rate rebuilds only the pads that changed (E4).
+    ///
+    /// It holds its takes alive by itself: while the sampler plays this
+    /// build the two share the memory, but once the sampler moves on
+    /// (to the built-in kit, at a re-activation) the build alone keeps
+    /// that kit resident. So `initialize` drops it whenever it cannot
+    /// donate to the next load — another rate, another kit, or none —
+    /// and a direct [`kit_loader::hand_off_kit`] drops it too.
     pub built_kit: Arc<Mutex<Option<BuiltKit>>>,
+    /// The built-in kit `initialize` installed, while the sampler plays
+    /// it (cleared once a loaded kit is handed off), with which of its
+    /// takes another instance already held. Lets a load — and the next
+    /// `initialize` — tell this instance's own takes from shared ones
+    /// ([`Self::kit_shared_bytes`]).
+    pub builtin_kit: Arc<Mutex<Option<HeldKit>>>,
     /// What the last successful load did: files decoded vs found in the
     /// cache, pads reused, unreadable files. Read by tests as the decode
     /// counter.
@@ -258,11 +276,11 @@ impl KitBridge {
         if Some(path.as_path()) == keep {
             return;
         }
-        self.load_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *pending = None;
         // No load is outstanding any more; one the state names is
         // started by the caller (and restarts the progress).
-        self.load_progress.idle();
+        self.load_progress.idle(generation);
         let mut status = self.kit_status.lock();
         if matches!(*status, KitStatus::Loading { .. }) {
             *status = KitStatus::Empty;
@@ -327,6 +345,7 @@ impl ResonancePlugin for ResonanceDrums {
         let bridge = KitBridge {
             kit_path: Arc::new(Mutex::new(None)),
             pending_kit: Arc::new(Mutex::new(None)),
+            kit_fallback: Arc::new(Mutex::new(None)),
             handed_off: Arc::new(Mutex::new(None)),
             decode_gate: Arc::new(Mutex::new(None)),
             kit_status: Arc::new(Mutex::new(KitStatus::Empty)),
@@ -351,6 +370,7 @@ impl ResonancePlugin for ResonanceDrums {
             pad_samples: Arc::new(Mutex::new(Vec::new())),
             kit_shared_bytes: Arc::new(AtomicU64::new(0)),
             built_kit: Arc::new(Mutex::new(None)),
+            builtin_kit: Arc::new(Mutex::new(None)),
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
         };
@@ -423,9 +443,17 @@ impl ResonancePlugin for ResonanceDrums {
     /// If the sampler then already holds the wanted kit, at this rate and
     /// with these mic and articulation choices, nothing is decoded again
     /// (E4's "`initialize` at an unchanged rate reuses the loaded kit").
+    ///
+    /// A load still pending then is either decoding for this rate or one
+    /// that gave up on the rate check while the plugin was inactive (it
+    /// leaves no trace of which). When the sampler already holds the
+    /// wanted kit, that load is started again rather than trusted to
+    /// land: every pad comes from the last build (E4), so it decodes
+    /// nothing, and it clears `pending_kit` and finishes the progress —
+    /// which a load that gave up never would.
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         let wanted = self.bridge.wanted_request();
-        let reuse = {
+        let (reuse, pending) = {
             let _handoff = self.bridge.kit_handoff.lock();
             self.bridge
                 .sample_rate
@@ -438,17 +466,31 @@ impl ResonancePlugin for ResonanceDrums {
                         self.bridge.load_progress.note_taken();
                     }
                     _ => {
+                        // The load that sent it is over, and its kit
+                        // never plays: it must not read as complete once
+                        // the reclaim count reaches its ordinal. Back to
+                        // "loading" — the reload below (or `idle`, with
+                        // no kit wanted) moves it on.
+                        self.bridge
+                            .load_progress
+                            .begin(self.bridge.load_generation.load(Ordering::Acquire));
                         drop(pads);
                         self.bridge.load_progress.note_reclaimed();
                         *handed = None;
                     }
                 }
             }
-            // A build at another rate cannot donate a single pad to the
-            // next load; letting it go now frees its memory before that
-            // load decodes, instead of after.
+            // A build at another rate, or of a kit that is no longer
+            // wanted (none: the built-in kit; or another kit), cannot
+            // donate a single pad to the next load. The sampler is about
+            // to drop it too, so letting it go now frees its memory
+            // before that load decodes, instead of after — and at all,
+            // should that load fail.
             let mut built = self.bridge.built_kit.lock();
-            if built.as_ref().is_some_and(|b| b.sample_rate != sample_rate) {
+            let donates = built.as_ref().is_some_and(|b| {
+                b.sample_rate == sample_rate && wanted.as_ref().is_some_and(|w| w.path == b.path)
+            });
+            if !donates {
                 *built = None;
             }
             drop(built);
@@ -460,22 +502,49 @@ impl ResonancePlugin for ResonanceDrums {
                 // The sampler goes back to the built-in kit below.
                 *handed = None;
             }
-            reuse
+            (reuse, self.bridge.pending_kit.lock().is_some())
         };
         if reuse {
             self.sampler.set_sample_rate(sample_rate);
+            if pending {
+                if let Some(request) = wanted {
+                    kit_loader::spawn_loader(
+                        request.path,
+                        sample_rate,
+                        &self.bridge,
+                        request.overhead_setup_key,
+                        request.pad_choices,
+                        request.articulations,
+                    );
+                }
+            }
             return true;
         }
 
-        self.sampler.load_defaults(sample_rate);
+        // What this instance holds already, so the built-in kit's takes
+        // it held before (a re-activation on it) are not taken for
+        // another instance's. Both stay alive until replaced below.
+        let mut held = kit_loader::HeldTakes::new();
+        if let Some(builtin) = self.bridge.builtin_kit.lock().as_ref() {
+            builtin.held_takes(&mut held);
+        }
+        if let Some(built) = self.bridge.built_kit.lock().as_ref() {
+            built.held_takes(&mut held);
+        }
+        let sources = self.sampler.load_defaults_sourced(sample_rate);
+        let (shared_bytes, builtin) =
+            kit_loader::measure_builtin_kit(&self.sampler.pads, &sources, &held);
+        *self.bridge.builtin_kit.lock() = Some(builtin);
         // Publish what the fallback kit actually costs and what it holds,
         // so the status bar and the inspector's SAMPLE stage describe the
         // kit that is really loaded rather than a placeholder.
-        self.publish_kit_facts(sample_rate);
+        self.publish_kit_facts(sample_rate, shared_bytes);
 
         if wanted.is_none() {
             // The built-in kit is the wanted kit, and it is in place.
-            self.bridge.load_progress.idle();
+            self.bridge
+                .load_progress
+                .idle(self.bridge.load_generation.load(Ordering::Acquire));
         }
         if let Some(request) = wanted {
             kit_loader::spawn_loader(
@@ -628,19 +697,22 @@ impl ResonanceDrums {
         }
     }
 
-    /// Measure the kit the sampler currently holds and publish the two
-    /// facts the editor displays about it: how much decoded audio is in
-    /// memory, and what sample each pad plays at full velocity.
+    /// Measure the kit the sampler currently holds and publish the facts
+    /// the editor displays about it: how much decoded audio is in memory,
+    /// how much of that another instance holds too (`shared_bytes`), and
+    /// what sample each pad plays at full velocity.
     ///
     /// Called from `initialize` for the embedded fallback kit; the loader
-    /// thread publishes the same two facts for kits it loads from disk
-    /// (see `kit_loader::spawn_loader`). Both callers are off the audio
+    /// thread publishes the same facts for kits it loads from disk (see
+    /// `kit_loader::spawn_loader`). Both callers are off the audio
     /// thread — nothing here runs in `process`.
-    fn publish_kit_facts(&self, sample_rate: f32) {
+    fn publish_kit_facts(&self, sample_rate: f32, shared_bytes: u64) {
         self.bridge
             .kit_bytes
             .store(self.sampler.total_sample_bytes() as u64, Ordering::Relaxed);
-        self.bridge.kit_shared_bytes.store(0, Ordering::Relaxed);
+        self.bridge
+            .kit_shared_bytes
+            .store(shared_bytes, Ordering::Relaxed);
         *self.bridge.pad_samples.lock() =
             sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
     }
@@ -684,6 +756,15 @@ impl ExtraStateSaver for DrumsExtraState {
             Some(bridge) => bridge.wanted_kit_path(),
             None => self.kit_path.lock().clone(),
         };
+        // But that pick may yet fail, and a project that reopens on a
+        // kit that will not load reopens on the built-in kit. So while it
+        // is pending, the kit that last loaded goes along as the fallback
+        // the reopen tries next (a reopen whose fallback has not been
+        // used up yet passes its own on). Older builds ignore the key.
+        let fallback = self.reload.as_ref().and_then(|bridge| {
+            let other = |path: Option<PathBuf>| path.filter(|p| Some(p) != wanted.as_ref());
+            other(self.kit_path.lock().clone()).or_else(|| other(bridge.kit_fallback.lock().clone()))
+        });
         let path = wanted.map(|p| p.to_string_lossy().into_owned());
         map.insert(
             "kit_path".to_string(),
@@ -692,6 +773,12 @@ impl ExtraStateSaver for DrumsExtraState {
                 None => serde_json::Value::Null,
             },
         );
+        if let Some(fallback) = fallback {
+            map.insert(
+                "kit_path_fallback".to_string(),
+                serde_json::Value::String(fallback.to_string_lossy().into_owned()),
+            );
+        }
         map.insert(
             "overhead_setup_key".to_string(),
             serde_json::Value::String(self.overhead_setup_key.lock().clone()),
@@ -759,6 +846,12 @@ impl ExtraStateSaver for DrumsExtraState {
             // A load in flight for another kit is superseded by this one.
             if let Some(bridge) = &self.reload {
                 bridge.supersede_pending(path.as_deref());
+                // The kit to load should `kit_path` fail; absent in
+                // states saved with nothing pending, and in older ones.
+                *bridge.kit_fallback.lock() = state
+                    .get("kit_path_fallback")
+                    .and_then(|v| v.as_str())
+                    .map(PathBuf::from);
             }
             *self.kit_path.lock() = path;
         }

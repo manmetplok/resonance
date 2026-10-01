@@ -77,6 +77,10 @@ enum Damage {
     OneSnareTake,
     /// Every closed-hat file.
     WholeHat,
+    /// Both KickIn takes of the soft layer (Vel01).
+    KickInSoftLayer,
+    /// Every kick overhead file.
+    WholeKickOh,
 }
 
 struct Kit {
@@ -132,6 +136,14 @@ fn fixture_kit(damage: Damage) -> Kit {
             // Missing outright, not just corrupt.
             std::fs::remove_file(dir.join("hat_2.wav")).unwrap();
             write_corrupt(&dir.join("hatoh.wav"));
+        }
+        Damage::KickInSoftLayer => {
+            write_corrupt(&dir.join("kin_1_1.wav"));
+            write_corrupt(&dir.join("kin_2_1.wav"));
+        }
+        Damage::WholeKickOh => {
+            write_corrupt(&dir.join("koh_1.wav"));
+            write_corrupt(&dir.join("koh_2.wav"));
         }
     }
     let setup = |pos: &str, rounds: &str| {
@@ -322,8 +334,11 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
     assert_eq!(second.files, 6, "{second:?}");
     assert_eq!(second.decoded, 2, "{second:?}");
     assert_eq!(second.cached, 4, "{second:?}");
+    // (The kit-wide figure also counts built-in pads other tests may
+    // hold; the kick's own is what this load decided.)
+    let kick_build = plugin.bridge.built_kit.lock().as_ref().unwrap().pad_builds[0].clone();
     assert_eq!(
-        second.shared_bytes, 0,
+        kick_build.shared_bytes, 0,
         "the instance's own takes are not 'shared'"
     );
 
@@ -335,6 +350,66 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
         snare_before.close_mics[0].layers[0].round_robins[0].shared(),
         snare_after.close_mics[0].layers[0].round_robins[0].shared(),
     ));
+}
+
+/// A reload that leaves the snare alone still reports its unreadable
+/// take — and since a partial pad is never reused, it tries the take
+/// again, and picks it up once the file is readable.
+#[test]
+fn a_reload_keeps_reporting_and_retries_a_partial_pad() {
+    let kit = fixture_kit(Damage::OneSnareTake);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    assert_eq!(settle(&plugin).unreadable, 1);
+
+    // A kick mic change, the snare untouched and its file still broken.
+    plugin.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "02_KickIn_alt".to_string());
+    assert!(reload_kit(&plugin.bridge));
+    let second = settle(&plugin);
+    assert_eq!(second.unreadable, 1, "the reload forgot the snare: {second:?}");
+    assert_eq!(second.unreadable_paths, vec![kit.dir.join("sn_2.wav")]);
+    assert_eq!(second.rebuilt_pads, 2, "kick and the partial snare: {second:?}");
+    match &*plugin.bridge.kit_status.lock() {
+        KitStatus::Loaded { unreadable, .. } => assert_eq!(*unreadable, 1),
+        other => panic!("status {other:?}"),
+    }
+
+    // The file comes good; the next reload of anything picks it up.
+    write_wav(&kit.dir.join("sn_2.wav"), 1, 0.4);
+    plugin.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "01_KickIn_e901".to_string());
+    assert!(reload_kit(&plugin.bridge));
+    let third = settle(&plugin);
+    assert_eq!(third.unreadable, 0, "{third:?}");
+    assert_eq!(built_pad(&plugin, 1).close_mics[0].layers[0].round_robins.len(), 2);
+    let status = plugin.bridge.kit_status.lock().clone();
+    match status {
+        KitStatus::Loaded { unreadable, .. } => assert_eq!(unreadable, 0),
+        other => panic!("status {other:?}"),
+    }
+}
+
+/// The overhead pick only touches pads that have an overhead to pick:
+/// the built-in pads filling the pieces the kit lacks are kept.
+#[test]
+fn an_overhead_change_rebuilds_only_pads_with_an_overhead() {
+    let kit = fixture_kit(Damage::None);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    settle(&plugin);
+    plugin
+        .bridge
+        .overhead_setup_key
+        .lock()
+        .push_str("-other");
+    assert!(reload_kit(&plugin.bridge));
+    let stats = settle(&plugin);
+    // Kick, snare and hat have an OH setup; nothing else in the fixture does.
+    assert_eq!(stats.rebuilt_pads, 3, "{stats:?}");
+    assert_eq!(stats.reused_pads, NUM_PADS - 3);
 }
 
 #[test]
@@ -378,23 +453,19 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
     let second = settle(&b);
     assert_eq!(second.decoded, 0, "the second instance decoded: {second:?}");
     assert_eq!(second.cached, 14);
-    // Every byte of the kit's own files is shared. (The built-in pads
-    // filling the pieces the fixture lacks are shared too, but they are
-    // not files of the kit and are not counted.)
-    let file_bytes = resonance_drums::sample_info::total_sample_bytes(&[
-        built_pad(&b, 0),
-        built_pad(&b, 1),
-        built_pad(&b, 2),
-    ]) as u64;
-    assert_eq!(second.shared_bytes, file_bytes, "{second:?}");
+    // Every byte of the kit is shared: its files, and the built-in pads
+    // filling the pieces the fixture lacks, which A holds too.
+    assert_eq!(second.shared_bytes, second.kit_bytes, "{second:?}");
     assert_eq!(
         b.bridge.kit_shared_bytes.load(Ordering::Relaxed),
-        file_bytes
+        second.kit_bytes
     );
-    assert_eq!(
-        first.shared_bytes, 0,
-        "the first instance shares with no one"
-    );
+    // The first instance shares none of the kit's files. (Its built-in
+    // pads may be shared with whatever other test holds them.)
+    let a_builds = a.bridge.built_kit.lock().as_ref().unwrap().pad_builds.clone();
+    for (pad, build) in a_builds.iter().enumerate().take(3) {
+        assert_eq!(build.shared_bytes, 0, "pad {pad} of the first instance");
+    }
 
     for pad in [0, 1, 2] {
         let (pa, pb) = (built_pad(&a, pad), built_pad(&b, pad));
@@ -409,6 +480,43 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
             }
         }
     }
+
+    // A reload in B rebuilds the kick only, but the figure is still the
+    // whole kit's: the reused snare and hat keep theirs, and the kick's
+    // KickOut / OH takes B already held stay shared. Only the new KickIn
+    // files, which A does not hold, are B's alone.
+    b.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "02_KickIn_alt".to_string());
+    assert!(reload_kit(&b.bridge));
+    let third = settle(&b);
+    assert_eq!(third.reused_pads, NUM_PADS - 1);
+    let kick_in_alt = resonance_drums::sample_info::total_sample_bytes(&[LoadedPad {
+        overhead: None,
+        close_mics: vec![built_pad(&b, 0).close_mics[0].clone()],
+        ..built_pad(&b, 0)
+    }]) as u64;
+    assert_eq!(
+        third.shared_bytes,
+        third.kit_bytes - kick_in_alt,
+        "{third:?}"
+    );
+    assert_eq!(
+        b.bridge.kit_shared_bytes.load(Ordering::Relaxed),
+        third.shared_bytes
+    );
+}
+
+/// The built-in kit is shared memory too: a second instance booting
+/// while another holds it reports all of it shared, not 0.
+#[test]
+fn a_second_instance_on_the_built_in_kit_reports_it_shared() {
+    let a = booted();
+    let b = booted();
+    let kit_bytes = b.bridge.kit_bytes.load(Ordering::Relaxed);
+    assert!(kit_bytes > 0);
+    assert_eq!(b.bridge.kit_shared_bytes.load(Ordering::Relaxed), kit_bytes);
+    drop(a);
 }
 
 #[test]
@@ -614,6 +722,219 @@ fn a_pad_whose_every_file_fails_is_silent_not_the_built_in_sample() {
     );
 }
 
+/// The take a kit holds for `file` of `kit`, as the shared cache has it.
+fn take_of(kit: &Kit, file: &str) -> Arc<resonance_drums::kit::SampleData> {
+    use resonance_drums::kit_loader::cache::{self, SampleKey};
+    let key = SampleKey::for_file(&kit.dir.join(file), RATE).unwrap();
+    cache::global().lookup(&key).expect("a take some kit holds")
+}
+
+/// A sampler playing `pads`, outside any plugin, so a test can look at
+/// its voices. The sender keeps the mailbox connected.
+fn sampler_on(pads: Vec<LoadedPad>) -> (DrumSampler, crossbeam_channel::Sender<Vec<LoadedPad>>) {
+    let (tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(RATE);
+    sampler.pads = pads;
+    (sampler, tx)
+}
+
+/// Strike `note` and render one block. Returns, for each voice the hit
+/// started that is still playing after the block, the take it reads.
+fn strike_takes(sampler: &mut DrumSampler, note: u8, velocity: f32) -> Vec<*const ()> {
+    use resonance_drums::voice::VoiceDestination;
+    let params = DrumParams::default();
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))
+        .collect();
+    let mut ports: Vec<PortBuffers<'_>> = bufs
+        .iter_mut()
+        .map(|(l, r)| PortBuffers {
+            left: l.as_mut_slice(),
+            right: r.as_mut_slice(),
+        })
+        .collect();
+    sampler.reset();
+    sampler.render_block(
+        &mut ports,
+        BLOCK,
+        &params,
+        &[Hit {
+            frame: 0,
+            note,
+            velocity,
+        }],
+    );
+    sampler
+        .voices
+        .iter()
+        .filter(|v| v.active)
+        .map(|v| {
+            let pad = &sampler.pads[v.pad_index];
+            let bank = match v.destination {
+                VoiceDestination::CloseMic { bank_index, .. } => &pad.close_mics[bank_index],
+                VoiceDestination::Overhead { .. } => pad.overhead.as_ref().unwrap(),
+            };
+            Arc::as_ptr(bank.layers[v.layer_index].round_robins[v.rr_index].shared()) as *const ()
+        })
+        .collect()
+}
+
+fn ptr(take: &Arc<resonance_drums::kit::SampleData>) -> *const () {
+    Arc::as_ptr(take) as *const ()
+}
+
+/// KickIn's soft layer is unreadable. Dropping it from KickIn alone
+/// would leave KickIn one layer and the KickOut / OH banks two: a soft
+/// hit would play KickIn's loud take over KickOut's soft one. The cells
+/// go from every bank, so every bank keeps the loud layer only, and a
+/// hit at any velocity plays the loud strike on every mic.
+#[test]
+fn a_dropped_layer_keeps_every_bank_on_the_same_velocity_layer() {
+    let kit = fixture_kit(Damage::KickInSoftLayer);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 2, "{stats:?}");
+    let kick = built_pad(&plugin, 0);
+    assert_eq!(kick.close_mics.len(), 2, "KickIn and KickOut both load");
+    for bank in kick.close_mics.iter().chain(kick.overhead.iter()) {
+        assert_eq!(bank.layers.len(), 1, "{} keeps one layer", bank.position);
+    }
+
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let loud = [
+        ptr(&take_of(&kit, "kin_1_2.wav")),
+        ptr(&take_of(&kit, "kin_2_2.wav")),
+        ptr(&take_of(&kit, "kout_2.wav")),
+        ptr(&take_of(&kit, "koh_2.wav")),
+    ];
+    for velocity in [0.05, 0.4, 1.0] {
+        for _ in 0..2 {
+            let takes = strike_takes(&mut sampler, drum_map::KICK, velocity);
+            assert_eq!(takes.len(), 3, "KickIn, KickOut and OH all sound");
+            for take in takes {
+                assert!(
+                    loud.contains(&take),
+                    "a bank played a take of the dropped soft layer"
+                );
+            }
+        }
+    }
+}
+
+/// Banks of different shapes — the fixture's KickIn has two round robins,
+/// KickOut and the overhead one — each play the take at the hit's
+/// relative position, the same velocity layer on every mic, and no voice
+/// is dropped on the hits whose round robin the smaller banks lack.
+#[test]
+fn banks_of_different_shapes_all_sound_on_every_hit() {
+    let kit = fixture_kit(Damage::None);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    settle(&plugin);
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let soft = [
+        ptr(&take_of(&kit, "kin_1_1.wav")),
+        ptr(&take_of(&kit, "kin_2_1.wav")),
+        ptr(&take_of(&kit, "kout_1.wav")),
+        ptr(&take_of(&kit, "koh_1.wav")),
+    ];
+    let mut kick_in = Vec::new();
+    for _ in 0..4 {
+        let takes = strike_takes(&mut sampler, drum_map::KICK, 0.1);
+        assert_eq!(takes.len(), 3, "a voice was dropped: {takes:?}");
+        assert!(takes.iter().all(|t| soft.contains(t)), "not all on the soft layer");
+        assert!(takes.contains(&soft[2]) && takes.contains(&soft[3]));
+        kick_in.extend(takes.iter().copied().filter(|t| *t == soft[0] || *t == soft[1]));
+    }
+    assert!(
+        kick_in.contains(&soft[0]) && kick_in.contains(&soft[1]),
+        "KickIn walks both its round robins"
+    );
+}
+
+/// A snare whose top mic and overhead each recorded two round robins.
+fn two_take_snare_kit(broken_oh_rr2: bool) -> Kit {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-load-path-snare-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    write_wav(&dir.join("top_1.wav"), 1, 0.1);
+    write_wav(&dir.join("top_2.wav"), 1, 0.2);
+    write_wav(&dir.join("oh_1.wav"), 2, 0.3);
+    if broken_oh_rr2 {
+        write_corrupt(&dir.join("oh_2.wav"));
+    } else {
+        write_wav(&dir.join("oh_2.wav"), 2, 0.4);
+    }
+    let manifest = r#"{
+  "SD Snare Normal": {
+    "04_SNTop": {"brand":"t","channel":"1","mic":"m","position":"SNTop",
+      "rounds":{"RR1":{"Vel01":"top_1.wav"},"RR2":{"Vel01":"top_2.wav"}}},
+    "23_OHsAB_e914": {"brand":"t","channel":"1","mic":"m","position":"OHsAB",
+      "rounds":{"RR1":{"Vel01":"oh_1.wav"},"RR2":{"Vel01":"oh_2.wav"}}}
+  }
+}"#;
+    let manifest_path = dir.join("drum_samples.json");
+    std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
+    Kit {
+        dir,
+        manifest: manifest_path,
+    }
+}
+
+/// The overhead's second round robin is unreadable. Dropped from the
+/// overhead alone, every second hit would pick round robin 2 on the top
+/// mic and find no overhead take there: the overhead silent on
+/// alternate hits. The cell goes from both banks, so every hit plays the
+/// one strike both mics have.
+#[test]
+fn a_dropped_overhead_take_does_not_silence_the_overhead_on_alternate_hits() {
+    let kit = two_take_snare_kit(true);
+    let mut plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 1, "{stats:?}");
+    render(&mut plugin, &[]); // the audio thread takes the kit
+    for n in 0..4 {
+        plugin.reset();
+        let ports = render(&mut plugin, &hit(drum_map::SNARE));
+        let (l, r) = &ports[resonance_drums::kit::OVERHEAD_PORT_INDEX];
+        let peak = l.iter().chain(r).fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "the overhead is silent on hit {n}");
+    }
+
+    let (mut sampler, _tx) = sampler_on(plugin.bridge.built_kit.lock().as_ref().unwrap().pads.clone());
+    let strike = [ptr(&take_of(&kit, "top_1.wav")), ptr(&take_of(&kit, "oh_1.wav"))];
+    for _ in 0..4 {
+        let mut takes = strike_takes(&mut sampler, drum_map::SNARE, 1.0);
+        takes.sort();
+        let mut want = strike.to_vec();
+        want.sort();
+        assert_eq!(takes, want, "the top mic and overhead play different strikes");
+    }
+}
+
+/// A bank none of whose files can be read is dropped as a bank: its
+/// failures do not take the other banks' cells with them.
+#[test]
+fn a_wholly_unreadable_overhead_does_not_silence_the_close_mics() {
+    let kit = fixture_kit(Damage::WholeKickOh);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 2, "{stats:?}");
+    let kick = built_pad(&plugin, 0);
+    assert!(kick.overhead.is_none());
+    assert_eq!(kick.close_mics.len(), 2);
+    assert_eq!(kick.close_mics[0].layers.len(), 2);
+    assert_eq!(kick.close_mics[0].layers[0].round_robins.len(), 2);
+}
+
 // ---------------------------------------------------------------------------
 // Progress
 // ---------------------------------------------------------------------------
@@ -670,6 +991,50 @@ fn a_newer_load_restarts_progress_and_the_stale_kit_never_completes_it() {
     );
 }
 
+/// A loader checks its stamp under `kit_handoff`, but a newer pick can
+/// begin between that check and the old loader's `handed_off` / `failed`.
+/// Those late writes must land nowhere: the newer load is still decoding.
+#[test]
+fn progress_writes_of_a_superseded_load_land_nowhere() {
+    use resonance_drums::kit_loader::KitLoadProgress;
+    let progress = KitLoadProgress::new();
+    progress.begin(1);
+    progress.set_total(1, 10);
+    progress.begin(2);
+
+    progress.handed_off(1, progress.note_sent());
+    progress.note_taken();
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::Decoding, "{snap:?}");
+    assert!(!snap.complete, "a superseded hand-off completed the newer load");
+
+    progress.failed(1);
+    progress.set_total(1, 10);
+    progress.file_done(1);
+    progress.idle(1);
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::Decoding, "{snap:?}");
+    assert_eq!((snap.files_done, snap.files_total), (0, 0), "{snap:?}");
+
+    // An older `begin` cannot take the progress back either.
+    progress.begin(1);
+    assert_eq!(progress.snapshot().phase, LoadPhase::Decoding);
+    progress.set_total(2, 3);
+    progress.file_done(2);
+    assert_eq!(progress.snapshot().files_total, 3);
+
+    // The current load's own writes land.
+    let ordinal = progress.note_sent();
+    progress.handed_off(2, ordinal);
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::HandedOff);
+    assert!(!snap.complete);
+    progress.note_taken();
+    assert!(progress.is_complete());
+    progress.failed(2);
+    assert_eq!(progress.snapshot().phase, LoadPhase::Failed);
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -699,8 +1064,195 @@ fn saving_mid_decode_persists_the_kit_being_loaded() {
         saved.get("kit_path").and_then(|v| v.as_str()),
         Some(b.manifest.to_string_lossy().as_ref())
     );
+    // …and, while the pick may still fail, the kit that loaded last.
+    assert_eq!(
+        saved.get("kit_path_fallback").and_then(|v| v.as_str()),
+        Some(a.manifest.to_string_lossy().as_ref())
+    );
     go.send(()).unwrap();
     settle(&plugin);
+    // Settled: nothing to fall back to.
+    assert!(saver.save().get("kit_path_fallback").is_none());
+}
+
+fn saver_for(plugin: &ResonanceDrums) -> DrumsExtraState {
+    DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    }
+}
+
+/// A project saved mid-pick reopens on the pick — and if that kit will
+/// not load, on the kit that last loaded, not on the built-in kit.
+#[test]
+fn a_reopen_whose_kit_fails_loads_the_last_good_kit() {
+    let a = fixture_kit(Damage::None);
+    let missing = a.dir.join("gone").join("drum_samples.json");
+    let mut plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({
+        "kit_path": missing.to_string_lossy(),
+        "kit_path_fallback": a.manifest.to_string_lossy(),
+    }));
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(a.manifest.as_path())
+    );
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+    assert!(strike_peak(&mut plugin, drum_map::SNARE) > 0.01);
+}
+
+/// When the wanted kit loads, the fallback is not used, and is dropped.
+#[test]
+fn a_reopen_whose_kit_loads_ignores_the_fallback() {
+    let a = fixture_kit(Damage::None);
+    let b = fixture_kit(Damage::None);
+    let plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({
+        "kit_path": b.manifest.to_string_lossy(),
+        "kit_path_fallback": a.manifest.to_string_lossy(),
+    }));
+    let mut plugin = plugin;
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(b.manifest.as_path())
+    );
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+}
+
+/// A state from before the fallback key (or saved with nothing pending)
+/// loads as it always did.
+#[test]
+fn a_state_without_a_fallback_still_loads() {
+    let a = fixture_kit(Damage::None);
+    let plugin = ResonanceDrums::new();
+    saver_for(&plugin).load(&serde_json::json!({ "kit_path": a.manifest.to_string_lossy() }));
+    assert!(plugin.bridge.kit_fallback.lock().is_none());
+    let mut plugin = plugin;
+    assert!(plugin.initialize(RATE, BLOCK as u32));
+    settle(&plugin);
+    assert_eq!(
+        plugin.bridge.kit_path.lock().as_deref(),
+        Some(a.manifest.as_path())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Decode pool: cancellation, process-wide budget
+// ---------------------------------------------------------------------------
+
+/// A kit whose kick has `takes` round robins on one KickIn setup.
+fn many_take_kit(takes: usize) -> Kit {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-load-path-many-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    let mut rounds = Vec::new();
+    for i in 0..takes {
+        write_wav(&dir.join(format!("k{i}.wav")), 1, 0.1);
+        rounds.push(format!(r#""RR{i}":{{"Vel01":"k{i}.wav"}}"#));
+    }
+    let manifest = format!(
+        r#"{{"SD Kick mit Teppich":{{"01_KickIn_e901":{{"brand":"t","channel":"1","mic":"m","position":"KickIn","rounds":{{{}}}}}}}}}"#,
+        rounds.join(",")
+    );
+    let manifest_path = dir.join("drum_samples.json");
+    std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
+    Kit {
+        dir,
+        manifest: manifest_path,
+    }
+}
+
+fn request_for(kit: &Kit) -> resonance_drums::kit_loader::KitRequest {
+    resonance_drums::kit_loader::KitRequest {
+        path: kit.manifest.clone(),
+        overhead_setup_key: DEFAULT_OVERHEAD_SETUP.to_string(),
+        pad_choices: std::array::from_fn(|_| PadMicChoices::default()),
+        articulations: [false; NUM_PADS],
+    }
+}
+
+/// A superseded load stops decoding: once it is cancelled no further
+/// file is started, and it fails rather than handing anything off.
+#[test]
+fn a_cancelled_load_stops_decoding() {
+    use resonance_drums::kit_loader::cache::SampleCache;
+    use resonance_drums::kit_loader::{decode, load_kit, LOAD_CANCELLED};
+    use std::sync::atomic::AtomicUsize;
+
+    const FILES: usize = 64;
+    let kit = many_take_kit(FILES);
+    let cache = SampleCache::new();
+    let done = AtomicUsize::new(0);
+    let outcome = load_kit(
+        &request_for(&kit),
+        RATE,
+        None,
+        None,
+        &cache,
+        &|| {
+            done.fetch_add(1, Ordering::SeqCst);
+        },
+        &|_| {},
+        // Cancelled as soon as the first file is in.
+        &|| done.load(Ordering::SeqCst) >= 1,
+    );
+    assert_eq!(outcome.err().as_deref(), Some(LOAD_CANCELLED));
+    // Each decode thread may have started one file before it saw the
+    // cancel; none starts another.
+    let decoded = cache.decode_count() as usize;
+    assert!(
+        decoded <= 1 + decode::decode_workers(FILES),
+        "{decoded} of {FILES} files decoded after the cancel"
+    );
+}
+
+/// Every load in the process draws its decode threads from one budget
+/// of cores/2: several instances loading at once never run more.
+#[test]
+fn concurrent_loads_share_one_decode_thread_budget() {
+    use resonance_drums::kit_loader::cache::SampleCache;
+    use resonance_drums::kit_loader::{decode, load_kit};
+
+    let kits: Vec<Kit> = (0..4).map(|_| many_take_kit(48)).collect();
+    std::thread::scope(|scope| {
+        for kit in &kits {
+            scope.spawn(move || {
+                let cache = SampleCache::new();
+                let kit = load_kit(
+                    &request_for(kit),
+                    RATE,
+                    None,
+                    None,
+                    &cache,
+                    &|| {},
+                    &|_| {},
+                    &|| false,
+                )
+                .expect("load");
+                assert_eq!(kit.stats.decoded, 48);
+            });
+        }
+    });
+    let (capacity, peak) = decode::decode_slot_usage();
+    assert!(peak >= 1);
+    assert!(
+        peak <= capacity,
+        "{peak} decode threads ran at once; the budget is {capacity}"
+    );
 }
 
 #[test]
@@ -726,4 +1278,32 @@ fn unused_cache_entries_are_swept_once_no_kit_holds_them() {
     let (_s44, src) = cache.get_or_decode(&path, 44_100.0).unwrap();
     assert_eq!(src, resonance_drums::kit_loader::cache::Source::Decoded);
     assert_eq!(cache.decode_count(), 3);
+}
+
+/// A file rewritten between the stat that keys it and the read is not
+/// cached under the old key: the next load would otherwise be served a
+/// decode of whichever version the read happened to see.
+#[test]
+fn a_file_rewritten_during_its_read_is_not_cached() {
+    use resonance_drums::kit_loader::cache::{SampleCache, SampleKey, Source};
+    let kit = fixture_kit(Damage::None);
+    let cache = SampleCache::new();
+    let path = kit.dir.join("kin_1_1.wav");
+    let before = SampleKey::for_file(&path, RATE).unwrap();
+    let (first, src) = cache
+        .get_or_decode_with_hook(&path, RATE, || write_wav(&path, 2, 0.3))
+        .unwrap();
+    assert_eq!(src, Source::Decoded);
+    assert_eq!(first.channels(), 1, "the read saw the mono version");
+    assert!(
+        cache.lookup(&before).is_none(),
+        "a take read from a file that changed under the read was cached"
+    );
+    // The next fetch reads the file as it is now.
+    let (second, src) = cache.get_or_decode(&path, RATE).unwrap();
+    assert_eq!(src, Source::Decoded);
+    assert_eq!(second.channels(), 2);
+    let (third, src) = cache.get_or_decode(&path, RATE).unwrap();
+    assert_eq!(src, Source::Cached, "an unchanged file is cached as before");
+    assert!(Arc::ptr_eq(&second, &third));
 }
