@@ -156,6 +156,14 @@ fn a_v1_state_converts_linear_levels_to_db_once() {
 }
 
 #[test]
+fn a_typographic_minus_parses() {
+    assert_eq!(level::db_from_label("\u{2212}6 dB"), Some(-6.0));
+    assert_eq!(level::db_from_label(" \u{2212}12.5dB "), Some(-12.5));
+    assert_eq!(level::db_from_label("\u{2212}inf dB"), Some(MIN_DB));
+    assert_eq!(level::db_from_label("-3"), Some(-3.0));
+}
+
+#[test]
 fn a_state_without_params_is_left_alone() {
     let mut no_params = serde_json::json!({ "kit_ref": null });
     assert!(!upgrade_v1_levels(&mut no_params));

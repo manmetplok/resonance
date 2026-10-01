@@ -381,6 +381,18 @@ fn a_tuned_voice_in_big_live_blocks_is_served_inside_the_block() {
     }
 }
 
+/// The tune resolves to the cent, as it reads: a value between two
+/// cents plays the cent its label shows.
+#[test]
+fn tune_plays_the_cent_it_shows() {
+    use resonance_drums::dsp::PadSettings;
+    let p = DrumParams::default();
+    p.pads[0].tune.set_value(1.004_9);
+    assert_eq!(tune_label(p.pads[0].tune.value()), "+1.00 st");
+    let rate = PadSettings::from_params(&p.pads[0], SR).rate;
+    assert_eq!(rate, (1.0f32 / 12.0).exp2());
+}
+
 #[test]
 fn the_reader_deadline_runs_in_output_time() {
     assert_eq!(Pace::at_rate(4_096, 1.0), Pace::unity(4_096));

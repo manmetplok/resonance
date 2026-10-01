@@ -91,6 +91,9 @@ pub const MAX_HUMANIZE: f32 = 20.0;
 /// The velocity humanize generator's seed (any nonzero word).
 const VEL_RNG_SEED: u32 = 0x2545_F491;
 
+/// The Random round-robin generator's seed (any nonzero word).
+const RR_RNG_SEED: u32 = 0x9E37_79B9;
+
 /// A [`PadSettings`] field that defers to what the kit itself says
 /// ([`LoadedPad`]): what a headless sampler that is never handed params
 /// does, as the sampler always did.
@@ -139,7 +142,9 @@ impl PadSettings {
     pub fn from_params(pad: &crate::params::PadParams, sample_rate: f32) -> Self {
         use crate::params::{DECAY_OFF_MS, MAX_TUNE_ST};
         let frames = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
-        let tune = pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST);
+        // Resolved to the cent, as the param reads (`tune_label`): an
+        // automation value between two cents plays the cent it shows.
+        let tune = ((pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST)) * 100.0).round() / 100.0;
         let decay_ms = pad.decay.value();
         let choke = pad.choke.value();
         Self {
@@ -291,8 +296,9 @@ pub struct DrumSampler {
     /// repeats whatever Cycle just played.
     rr_last: [[u16; MAX_LAYERS]; NUM_PADS],
     /// Xorshift state for the Random round-robin mode. Seeded to a fixed
-    /// constant so a render is reproducible: bouncing the same project
-    /// twice gives the same takes.
+    /// constant, and re-seeded by `reset` (a bounce resets first) with
+    /// the cycle counters, so a render is reproducible: bouncing the same
+    /// project twice gives the same takes.
     rr_rng: u32,
     /// Xorshift state for velocity humanize (E7), apart from `rr_rng` so
     /// turning humanize on does not move which takes Random picks. Fixed
@@ -455,7 +461,7 @@ impl DrumSampler {
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
-            rr_rng: 0x9E37_79B9,
+            rr_rng: RR_RNG_SEED,
             vel_rng: VEL_RNG_SEED,
             globals: GlobalSettings::default(),
             pad_settings: [PadSettings::default(); NUM_PADS],
@@ -937,6 +943,13 @@ impl DrumSampler {
     /// one layer hands over to the next. A single-layer pad (the built-in
     /// kit) keeps the velocity as its gain.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        // An unmapped note plays nothing, and draws nothing from the
+        // humanize generator: a stray note must not shift every humanized
+        // velocity after it.
+        let pad_index = match drum_map::pad_index_for_note(note) {
+            Some(i) => i,
+            None => return,
+        };
         let humanize = self.globals.velocity_humanize;
         let velocity = if humanize > 0.0 {
             // Uniform in -1..1, in MIDI velocity steps; never below the
@@ -947,10 +960,6 @@ impl DrumSampler {
             velocity
         };
         let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
-        let pad_index = match drum_map::pad_index_for_note(note) {
-            Some(i) => i,
-            None => return,
-        };
 
         if pad_index >= self.pads.len() {
             return;
@@ -1839,14 +1848,29 @@ impl DrumSampler {
     /// exactly the leftover `reset` exists to remove. Nothing is audible
     /// between the cut and the next block, so there is no click to fade.
     pub fn reset(&mut self) {
-        janitor::reset_all(&mut self.voices);
-        janitor::reset_all(&mut self.tails);
-        // A render after a reset (a bounce) humanizes as the last did.
+        self.silence();
+        // A render after a reset (a bounce) humanizes, and walks the
+        // round robins, as the last did: the same project bounces to the
+        // same takes every time.
         self.vel_rng = VEL_RNG_SEED;
-        self.streams
-            .sweep(self.voices.iter().chain(self.tails.iter()));
+        self.rr_rng = RR_RNG_SEED;
+        self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
+        self.rr_last = [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS];
         // A render after a reset (a bounce) is measured afresh.
         self.restart_render_timing();
+    }
+
+    /// Kill every voice and tail at once and let their rings go, keeping
+    /// the round-robin walk, the humanize generator and the render timing
+    /// where they are: [`reset`](Self::reset) without its restart. A test
+    /// hook — a test that inspects only the voices of the next hit while
+    /// the takes walk on.
+    #[doc(hidden)]
+    pub fn silence(&mut self) {
+        janitor::reset_all(&mut self.voices);
+        janitor::reset_all(&mut self.tails);
+        self.streams
+            .sweep(self.voices.iter().chain(self.tails.iter()));
     }
 }
 

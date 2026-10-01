@@ -762,7 +762,7 @@ fn strike_takes(sampler: &mut DrumSampler, note: u8, velocity: f32) -> Vec<*cons
             right: r.as_mut_slice(),
         })
         .collect();
-    sampler.reset();
+    sampler.silence();
     sampler.render_block(
         &mut ports,
         BLOCK,

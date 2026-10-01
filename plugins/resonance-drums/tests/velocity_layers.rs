@@ -317,6 +317,19 @@ fn humanize_is_deterministic_and_moves_the_velocity() {
     let _ = kick_level_no_reset(&mut s, &params, 0.5);
     let again = kick_level(&mut s, &params, 0.5).0;
     assert_eq!(first, again);
+
+    // A note no pad plays draws nothing from the generator: the next
+    // kick is humanized as if it had not come.
+    let mut s = sampler();
+    s.update_global_settings(&params);
+    let _ = kick_level(&mut s, &params, 0.5);
+    let want = kick_level_no_reset(&mut s, &params, 0.5);
+    let mut s = sampler();
+    s.update_global_settings(&params);
+    let _ = kick_level(&mut s, &params, 0.5);
+    s.note_on(0, 0.5); // unmapped
+    let got = kick_level_no_reset(&mut s, &params, 0.5);
+    assert_eq!(got, want, "an unmapped note moved the humanize sequence");
 }
 
 /// [`kick_level`] without the reset (voices of earlier hits are long
