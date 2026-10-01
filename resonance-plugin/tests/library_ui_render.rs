@@ -247,3 +247,128 @@ fn the_facet_menu_and_kit_widgets_lay_out() {
     assert!(drawn.iter().any(|t| t == "Kind: even"), "one ▾ (the combo's own): {drawn:?}");
     assert!(drawn.iter().any(|t| t == "metal"));
 }
+
+/// Every text the frame painted with its visible rect (clipped).
+fn visible_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push((t.galley.text().to_string(), t.visual_bounding_rect().intersect(clip)))
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for s in shapes {
+        walk(&s.shape, s.clip_rect, &mut out);
+    }
+    out
+}
+
+/// A search field above the list, with the field focused: what the list
+/// reports when `k` is pressed in the field.
+fn typed_key_reaches_the_list(k: egui::Key) -> ListResponse {
+    let rows = rows(20);
+    let mut model = BrowserModel::new();
+    model.refresh(&rows, 1);
+    model.select("amp-model:0005");
+    let ctx = egui::Context::default();
+    let field_id = std::cell::Cell::new(None);
+    let mut last = ListResponse::default();
+    let mut run = |events: Vec<egui::Event>, model: &mut BrowserModel| {
+        frame(&ctx, egui::vec2(760.0, 400.0), events, |ui| {
+            let r = search_field(ui, model, "search…", 200.0);
+            field_id.set(Some(r.id));
+            model.refresh(&rows, 1);
+            last = library_list(ui, "list", model, &rows, &ListOptions::default());
+        });
+        last
+    };
+    run(vec![], &mut model);
+    ctx.memory_mut(|m| m.request_focus(field_id.get().unwrap()));
+    run(vec![], &mut model);
+    // Typing filters the selected row out of the view.
+    run(vec![egui::Event::Text("0007".into())], &mut model);
+    assert_eq!(model.query(), "0007");
+    assert_eq!(model.view().len(), 1);
+    assert_eq!(model.selected(), Some("amp-model:0005"));
+    run(vec![key(k)], &mut model)
+}
+
+/// Enter in the search field ends the edit; it must not load the
+/// selection — least of all one the search has filtered out of view.
+/// (egui surrenders the field's focus on Enter before the list runs, so
+/// "is a text field focused" alone said no.)
+#[test]
+fn enter_in_the_search_field_does_not_activate_the_selection() {
+    let r = typed_key_reaches_the_list(egui::Key::Enter);
+    assert_eq!(r.double_clicked, None, "Enter in the search field loaded a row");
+}
+
+/// Esc in the search field only leaves the field. (egui clears the focus
+/// on Esc before any widget runs.)
+#[test]
+fn escape_in_the_search_field_is_not_the_lists() {
+    let r = typed_key_reaches_the_list(egui::Key::Escape);
+    assert!(!r.escaped, "Esc in the search field reached the list");
+}
+
+/// With no field focused, Enter on a selection outside the view does
+/// nothing; on one inside it, it activates.
+#[test]
+fn enter_only_activates_a_selection_in_view() {
+    let rows = rows(20);
+    let mut model = BrowserModel::new();
+    model.set_query("0007");
+    model.refresh(&rows, 1);
+    model.select("amp-model:0005");
+    let ctx = egui::Context::default();
+    let mut last = ListResponse::default();
+    frame(&ctx, egui::vec2(760.0, 400.0), vec![key(egui::Key::Enter)], |ui| {
+        last = library_list(ui, "list", &mut model, &rows, &ListOptions::default());
+    });
+    assert_eq!(last.double_clicked, None);
+    model.select("amp-model:0007");
+    frame(&ctx, egui::vec2(760.0, 400.0), vec![key(egui::Key::Enter)], |ui| {
+        last = library_list(ui, "list", &mut model, &rows, &ListOptions::default());
+    });
+    assert_eq!(last.double_clicked, Some(7));
+}
+
+/// A prompt too long for one line with the buttons: the buttons go under
+/// it and stay inside the window, and the prompt is elided.
+#[test]
+fn a_long_confirm_prompt_keeps_its_buttons_on_screen() {
+    let rows = rows(3);
+    let mut model = BrowserModel::new();
+    model.refresh(&rows, 1);
+    model.begin_delete("amp-model:0000");
+    let ctx = egui::Context::default();
+    let size = egui::vec2(360.0, 300.0);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+    let prompt = format!("Delete \"{}\" (8.5 GB)?", "A Very Long Kit Name ".repeat(6));
+    let input = egui::RawInput {
+        screen_rect: Some(screen),
+        ..Default::default()
+    };
+    let out = ctx.run_ui(input, |ui| {
+        confirm_delete_row(ui, &mut model, "amp-model:0000", &prompt, Some("detail"));
+    });
+    let drawn = visible_texts(&out.shapes);
+    for button in ["Delete", "Cancel"] {
+        let (_, rect) = drawn
+            .iter()
+            .find(|(t, _)| t == button)
+            .unwrap_or_else(|| panic!("{button} not drawn: {drawn:?}"));
+        assert!(
+            rect.width() > 0.0 && screen.expand(1.0).contains_rect(*rect),
+            "{button} is off screen: {rect:?}"
+        );
+    }
+    let (_, prompt_rect) = drawn
+        .iter()
+        .find(|(t, _)| t.starts_with("Delete \"A Very"))
+        .expect("prompt drawn");
+    assert!(prompt_rect.max.x <= size.x + 1.0, "the prompt overflows: {prompt_rect:?}");
+}
