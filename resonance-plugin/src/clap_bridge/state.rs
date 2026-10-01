@@ -22,6 +22,7 @@ pub(super) struct TempParamOwned {
     pub(super) max: f64,
     pub(super) clap_id: u32,
     pub(super) preset_excluded: bool,
+    pub(super) state_excluded: bool,
 }
 
 impl TempParamOwned {
@@ -39,6 +40,7 @@ impl TempParamOwned {
                 max: meta.max,
                 clap_id: meta.clap_id,
                 preset_excluded: meta.preset_excluded,
+                state_excluded: meta.state_excluded,
             })
             .collect()
     }
@@ -69,6 +71,9 @@ impl Param for TempParamOwned {
     }
     fn preset_excluded(&self) -> bool {
         self.preset_excluded
+    }
+    fn state_excluded(&self) -> bool {
+        self.state_excluded
     }
     fn display(&self, value: f64) -> String {
         format!("{:.4}", value)

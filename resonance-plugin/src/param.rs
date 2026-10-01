@@ -106,6 +106,32 @@ pub trait Param: Send + Sync {
     fn preset_excluded(&self) -> bool {
         false
     }
+    /// Whether a host may automate this parameter — CLAP's
+    /// `IS_AUTOMATABLE`, which the bridge sets for every parameter that
+    /// does not opt out. A control whose every change is heavy work (the
+    /// drums' `kit_select` swaps a multi-gigabyte kit) opts out: it can
+    /// still be set, recalled and undone, but a host offers no lane for
+    /// it.
+    fn is_automatable(&self) -> bool {
+        true
+    }
+    /// Whether this parameter is an output: the plugin writes it and
+    /// nothing else may (CLAP `IS_READONLY`) — a load progress, a meter.
+    /// A host or a state load writing one is ignored, it is never
+    /// automatable, and it is never saved ([`Param::state_excluded`]).
+    fn is_read_only(&self) -> bool {
+        false
+    }
+    /// Whether plugin state leaves this parameter out: it is neither
+    /// written nor recalled by a state or a preset (so it implies
+    /// [`Param::preset_excluded`]'s effect). For a value derived from
+    /// something the state carries in its own form — the drums'
+    /// `kit_select` slot is this machine's library layout, and the kit
+    /// travels as a content reference instead — and for every
+    /// [`read-only`](Param::is_read_only) output.
+    fn state_excluded(&self) -> bool {
+        self.is_read_only()
+    }
     /// Whether this parameter is stepped (integer/bool).
     fn is_stepped(&self) -> bool {
         false
@@ -140,6 +166,12 @@ pub struct FloatParam {
     string_to_value: Option<Arc<dyn Fn(&str) -> Option<f32> + Send + Sync>>,
     hidden: bool,
     preset_excluded: bool,
+    /// See [`Param::is_automatable`].
+    automatable: bool,
+    /// See [`Param::is_read_only`].
+    read_only: bool,
+    /// See [`Param::state_excluded`].
+    state_excluded: bool,
 }
 
 impl FloatParam {
@@ -156,6 +188,9 @@ impl FloatParam {
             string_to_value: None,
             hidden: false,
             preset_excluded: false,
+            automatable: true,
+            read_only: false,
+            state_excluded: false,
         }
     }
 
@@ -191,6 +226,31 @@ impl FloatParam {
 
     /// Leave this parameter out of presets — see [`Param::preset_excluded`].
     pub fn excluded_from_presets(mut self) -> Self {
+        self.preset_excluded = true;
+        self
+    }
+
+    /// Offer no automation lane for this parameter — see
+    /// [`Param::is_automatable`].
+    pub fn not_automatable(mut self) -> Self {
+        self.automatable = false;
+        self
+    }
+
+    /// Leave this parameter out of plugin state and presets — see
+    /// [`Param::state_excluded`].
+    pub fn excluded_from_state(mut self) -> Self {
+        self.state_excluded = true;
+        self.preset_excluded = true;
+        self
+    }
+
+    /// Make this parameter an output only the plugin writes — see
+    /// [`Param::is_read_only`]. Also not automatable and not saved.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self.automatable = false;
+        self.state_excluded = true;
         self.preset_excluded = true;
         self
     }
@@ -273,7 +333,8 @@ impl Param for FloatParam {
         self.value() as f64
     }
     fn set_plain(&self, v: f64) {
-        if !v.is_finite() {
+        // An output: only the plugin writes it (through `set_value`).
+        if !v.is_finite() || self.read_only {
             return;
         }
         // Clamp to the declared range so a misbehaving host or a
@@ -329,6 +390,15 @@ impl Param for FloatParam {
     fn preset_excluded(&self) -> bool {
         self.preset_excluded
     }
+    fn is_automatable(&self) -> bool {
+        self.automatable
+    }
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+    fn state_excluded(&self) -> bool {
+        self.state_excluded
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,6 +422,12 @@ pub struct IntParam {
     string_to_value: Option<Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>>,
     hidden: bool,
     preset_excluded: bool,
+    /// See [`Param::is_automatable`].
+    automatable: bool,
+    /// See [`Param::is_read_only`].
+    read_only: bool,
+    /// See [`Param::state_excluded`].
+    state_excluded: bool,
 }
 
 impl IntParam {
@@ -368,6 +444,9 @@ impl IntParam {
             string_to_value: None,
             hidden: false,
             preset_excluded: false,
+            automatable: true,
+            read_only: false,
+            state_excluded: false,
         }
     }
 
@@ -378,6 +457,31 @@ impl IntParam {
 
     /// Leave this parameter out of presets — see [`Param::preset_excluded`].
     pub fn excluded_from_presets(mut self) -> Self {
+        self.preset_excluded = true;
+        self
+    }
+
+    /// Offer no automation lane for this parameter — see
+    /// [`Param::is_automatable`].
+    pub fn not_automatable(mut self) -> Self {
+        self.automatable = false;
+        self
+    }
+
+    /// Leave this parameter out of plugin state and presets — see
+    /// [`Param::state_excluded`].
+    pub fn excluded_from_state(mut self) -> Self {
+        self.state_excluded = true;
+        self.preset_excluded = true;
+        self
+    }
+
+    /// Make this parameter an output only the plugin writes — see
+    /// [`Param::is_read_only`]. Also not automatable and not saved.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self.automatable = false;
+        self.state_excluded = true;
         self.preset_excluded = true;
         self
     }
@@ -482,7 +586,8 @@ impl Param for IntParam {
         // clamped to the declared range before truncation. Mirrors the
         // FloatParam clamp so a buggy host can't shove an int param
         // far outside its bounds either.
-        if !v.is_finite() {
+        // An output: only the plugin writes it (through `set_value`).
+        if !v.is_finite() || self.read_only {
             return;
         }
         let clamped = v.clamp(self.min_plain(), self.max_plain());
@@ -518,6 +623,15 @@ impl Param for IntParam {
     }
     fn preset_excluded(&self) -> bool {
         self.preset_excluded
+    }
+    fn is_automatable(&self) -> bool {
+        self.automatable
+    }
+    fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+    fn state_excluded(&self) -> bool {
+        self.state_excluded
     }
     fn is_stepped(&self) -> bool {
         true

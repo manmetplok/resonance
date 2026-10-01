@@ -53,10 +53,11 @@ pub struct ParamRename {
     pub to: &'static str,
 }
 
-/// Serialize all parameters to a JSON value.
+/// Serialize all parameters to a JSON value — every one that is not
+/// [`Param::state_excluded`].
 pub fn params_to_json(params: &[&dyn Param]) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    for p in params {
+    for p in params.iter().filter(|p| !p.state_excluded()) {
         map.insert(p.id().to_string(), serde_json::json!(p.get_plain()));
     }
     serde_json::json!({ VERSION_KEY: STATE_VERSION, "params": map })
@@ -139,7 +140,9 @@ pub fn load_params_from_json(params: &[&dyn Param], state: &serde_json::Value) -
     let Some(param_map) = state.get("params").and_then(|v| v.as_object()) else {
         return false;
     };
-    for p in params {
+    // A state-excluded param is never recalled, even from a file that
+    // (written before it was excluded) carries it.
+    for p in params.iter().filter(|p| !p.state_excluded()) {
         if let Some(val) = param_map.get(p.id()).and_then(|v| v.as_f64()) {
             p.set_plain(val);
         }
@@ -193,6 +196,9 @@ pub(crate) fn load_params_from_shared_json(
         return false;
     };
     for (i, meta) in param_metas.iter().enumerate() {
+        if meta.state_excluded {
+            continue;
+        }
         if let Some(val) = param_map.get(&meta.str_id).and_then(|v| v.as_f64()) {
             if i < param_values.len() {
                 if !val.is_finite() {

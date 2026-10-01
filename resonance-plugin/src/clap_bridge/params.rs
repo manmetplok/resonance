@@ -28,7 +28,15 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
             return;
         };
         let meta = &self.shared.param_metas[meta_idx];
-        let mut flags = ParamInfoFlags::IS_AUTOMATABLE;
+        // Automatable unless the param opts out (a control too heavy for
+        // a lane, or a read-only output the plugin alone writes).
+        let mut flags = ParamInfoFlags::empty();
+        if meta.is_automatable {
+            flags |= ParamInfoFlags::IS_AUTOMATABLE;
+        }
+        if meta.is_read_only {
+            flags |= ParamInfoFlags::IS_READONLY;
+        }
         if meta.is_stepped {
             flags |= ParamInfoFlags::IS_STEPPED;
         }
@@ -103,6 +111,11 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
                 if let CoreEventSpace::ParamValue(e) = core_event {
                     if let Some(clap_id) = e.param_id() {
                         if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            // An output only the plugin writes: a host
+                            // write is not a value it can take.
+                            if self.shared.param_metas[slot].is_read_only {
+                                continue;
+                            }
                             // Store what the param LANDED on, not the raw
                             // wire value: `set_plain` clamps, rounds and
                             // demotes through f32, so storing `e.value()`
@@ -146,6 +159,9 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                 if let CoreEventSpace::ParamValue(e) = core_event {
                     if let Some(clap_id) = e.param_id() {
                         if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            if self.shared.param_metas[slot].is_read_only {
+                                continue;
+                            }
                             if slot < self.plugin.param_count() {
                                 self.plugin.param(slot).set_plain(e.value());
                             }

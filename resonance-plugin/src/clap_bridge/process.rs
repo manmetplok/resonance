@@ -117,7 +117,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     CoreEventSpace::ParamValue(e) => {
                         if let Some(clap_id) = e.param_id() {
                             let value = e.value();
-                            if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            if let Some(slot) = self
+                                .shared
+                                .find_slot(clap_id.get())
+                                .filter(|&s| !self.shared.param_metas[s].is_read_only)
+                            {
                                 // Applied instantly, block-quantized — the
                                 // bridge does not smooth automation. Plugins
                                 // de-zipper by feeding their `Smoother`s from
