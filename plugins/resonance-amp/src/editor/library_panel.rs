@@ -84,8 +84,9 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut AmpEditorApp) {
                 });
         });
     // Esc closes the overlay — but not while a text field (search, a tag)
-    // is being typed in: there it only leaves the field.
-    if !ui.ctx().text_edit_focused() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+    // is being typed in: there it only leaves the field (egui drops the
+    // focus before this runs, hence "had focus").
+    if !library_ui::text_field_had_focus(ui.ctx()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         app.library_panel.open = false;
     }
 }

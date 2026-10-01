@@ -407,6 +407,60 @@ impl TestEditor {
         v.sort();
         v
     }
+
+    /// Mark `name` as a download this editor asked for, as Download /
+    /// Re-download / Update do before posting it to the worker.
+    pub fn add_my_download(&mut self, name: &str) {
+        self.app.my_downloads.insert(name.to_string());
+    }
+
+    /// The name of the kit selected in the Installed tab.
+    pub fn selected_name(&mut self) -> Option<String> {
+        self.app.refresh_rows();
+        let row = self.app.browser.selected_row()?;
+        Some(self.app.rows.rows[row].entry.name.clone())
+    }
+
+    /// The running library job's footer label, if one is running.
+    pub fn job_running(&self) -> Option<String> {
+        self.app
+            .jobs
+            .busy()
+            .then(|| self.app.jobs.label().unwrap_or_default().to_string())
+    }
+
+    /// How many library actions wait for the running job.
+    pub fn queued_actions(&self) -> usize {
+        self.app.queued.len()
+    }
+
+    /// Hold the library's job slot with a scan-kind job that runs until
+    /// the returned flag is set — standing in for a background rescan the
+    /// freshness poll started.
+    pub fn hold_job_slot(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = release.clone();
+        let started = self
+            .app
+            .jobs
+            .start(jobs::JobKind::Scan, "scanning…", false, move |_| {
+                while !flag.load(std::sync::atomic::Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                jobs::JobDone::Rescanned {
+                    result: Ok(()),
+                    skipped: false,
+                    user: false,
+                }
+            });
+        assert!(started, "a job was already running");
+        release
+    }
+
+    /// What the import dialog does once the user picked `src`.
+    pub fn picked_for_import(&mut self, src: std::path::PathBuf) {
+        self.app.run_or_queue(app::Queued::Import(src));
+    }
 }
 
 /// Test-only: which kit the header's ◀/▶ step from, given `bridge` and

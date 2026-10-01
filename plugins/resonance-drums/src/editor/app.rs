@@ -16,16 +16,18 @@
 //! header's kit dropdown and ◀/▶ walk the same view with the overlay
 //! closed (drums-plugin-rework.md §6.1).
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use plugin_gui_core::{egui, widgets, EditorApp};
-use resonance_common::drumkit_library::{self, Entry, ImportOutcome};
+use resonance_common::drumkit_library::{self, Entry, EntryStatus, ImportOutcome};
 use resonance_common::library_marks::{FreshnessPoll, BAR_POLL_INTERVAL, BROWSER_POLL_INTERVAL};
 use resonance_plugin::kit_rows::KitRows;
 use resonance_plugin::library_view::BrowserModel;
 
+use crate::download::Status;
 use crate::kit;
 use crate::library::SharedKitLibrary;
 use crate::params::{DrumParams, ROUND_ROBIN_LABELS};
@@ -33,7 +35,7 @@ use crate::velocity;
 use crate::voice::MAX_VOICES;
 use crate::KitBridge;
 
-use super::jobs::{JobDone, Jobs, Picker};
+use super::jobs::{JobDone, JobKind, Jobs, Picker};
 use super::kit_browser::{self, LoadKind};
 use super::library_panel::{self, LibraryPanelState};
 use super::{chrome, pad_grid, pad_inspector, theme};
@@ -65,14 +67,25 @@ pub(crate) struct DrumsEditorApp {
     /// The import's file dialog, on its own thread.
     pub(crate) picker: Picker,
     /// The kits THIS editor asked the shared worker to download, so only
-    /// it jumps to the new row when one lands.
+    /// it jumps to the new row when one lands — or reports one that failed.
     pub(crate) my_downloads: HashSet<String>,
+    /// Library actions the user asked for while a job held the library,
+    /// started in order as each job finishes — a confirmed delete or a
+    /// picked import folder is never dropped because a background rescan
+    /// happened to be running.
+    pub(crate) queued: VecDeque<Queued>,
+    /// Kits whose sample files were checked this session
+    /// (`check_missing_files`), so each is stat'ed once.
+    missing_checked: HashSet<String>,
     /// The worker's install counter last seen.
     seen_installs: u64,
     /// The last kit load this editor started, so ◀/▶ step from the kit on
     /// its way rather than the one it replaces
     /// (`kit_browser::kit_path_for_stepping`).
     pub(crate) requested_kit: Option<kit_browser::RequestedKit>,
+    /// The library name of the kit last seen playing, by manifest — what
+    /// the header still calls it once its folder is deleted.
+    pub(crate) last_loaded_name: Option<(PathBuf, String)>,
     /// Displayed OUT meter level per channel. Rises instantly to the peak
     /// the audio thread published and falls back with a fixed decay, so
     /// the bar tracks real output instead of sitting dead.
@@ -111,8 +124,11 @@ impl DrumsEditorApp {
             jobs: Jobs::default(),
             picker: Picker::default(),
             my_downloads: HashSet::new(),
+            queued: VecDeque::new(),
+            missing_checked: HashSet::new(),
             seen_installs,
             requested_kit: None,
+            last_loaded_name: None,
             out_meter: [0.0; 2],
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,
@@ -120,7 +136,7 @@ impl DrumsEditorApp {
         };
         // Opening an editor is when the library is brought up to date: on
         // the job thread, so the first frame is not held up by hashing.
-        app.start_rescan();
+        app.start_rescan(false);
         app
     }
 
@@ -157,19 +173,91 @@ impl DrumsEditorApp {
     }
 
     /// Start a background rescan (plus measuring kits of unknown size)
-    /// unless a job is running.
-    pub(crate) fn start_rescan(&mut self) -> bool {
+    /// unless a job is running. `user`: the Rescan button, whose outcome
+    /// is reported — including losing the library to another writer.
+    pub(crate) fn start_rescan(&mut self, user: bool) -> bool {
         let library = self.library.clone();
-        self.jobs.start("scanning…", false, move |ctx| {
-            let result = match library.rescan() {
-                // Another writer (a download installing) rescans when done.
-                None => Ok(()),
-                Some(Ok(_)) => Ok(()),
-                Some(Err(e)) => Err(e.to_string()),
-            };
-            library.measure_unsized(&ctx.cancel);
-            JobDone::Rescanned(result)
-        })
+        self.jobs
+            .start(JobKind::Scan, "scanning…", false, move |ctx| {
+                let (result, skipped) = match library.rescan() {
+                    // Another writer (a download installing) rescans when done.
+                    None => (Ok(()), true),
+                    Some(Ok(_)) => (Ok(()), false),
+                    Some(Err(e)) => (Err(e.to_string()), false),
+                };
+                if !skipped {
+                    library.measure_unsized(&ctx.cancel);
+                }
+                JobDone::Rescanned {
+                    result,
+                    skipped,
+                    user,
+                }
+            })
+    }
+
+    /// Run `action` now, or after the running job when there is one.
+    pub(crate) fn run_or_queue(&mut self, action: Queued) {
+        if self.jobs.busy() {
+            if !self.queued.contains(&action) {
+                self.queued.push_back(action);
+            }
+            return;
+        }
+        match action {
+            Queued::Delete(key) => library_panel::start_delete(self, &key),
+            Queued::Import(src) => library_panel::start_import(self, src),
+            Queued::Rescan => {
+                self.start_rescan(true);
+            }
+        }
+    }
+
+    /// Check the selected kit's (and the loaded kit's) sample files once,
+    /// on a job, so a kit with files gone shows it before it is loaded.
+    fn check_missing_lazily(&mut self) {
+        if self.jobs.busy() {
+            return;
+        }
+        let mut candidates = Vec::new();
+        if self.library_panel.open {
+            if let Some(row) = self.browser.selected_row() {
+                candidates.push(self.rows.rows[row].entry.clone());
+            }
+        }
+        if let Some(e) = self.loaded_entry() {
+            candidates.push(e);
+        }
+        let Some(entry) = candidates.into_iter().find(|e| {
+            !self.missing_checked.contains(&e.id)
+                && matches!(e.status, EntryStatus::Ok | EntryStatus::MissingFiles(_))
+        }) else {
+            return;
+        };
+        self.missing_checked.insert(entry.id.clone());
+        let library = self.library.clone();
+        let id = entry.id.clone();
+        self.jobs.start(
+            JobKind::Check,
+            format!("checking \"{}\"…", entry.name),
+            false,
+            move |_| {
+                let result = match library.try_mutate(|lib| lib.check_missing_files(&id)) {
+                    None => Err(String::new()),
+                    Some(Ok(n)) => Ok(n),
+                    Some(Err(e)) => Err(e.to_string()),
+                };
+                JobDone::CheckedFiles { id, result }
+            },
+        );
+    }
+
+    /// The library's files were just written by this editor's own job (or
+    /// the download worker): take their current state as seen, so the
+    /// freshness poll does not answer with a rescan of its own — which
+    /// held the job slot when the user's next action came.
+    fn rebaseline_library_poll(&mut self) {
+        self.library_poll = FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL);
     }
 
     /// Rebuild the rows if the library or the marks changed, and refresh
@@ -190,56 +278,197 @@ impl DrumsEditorApp {
         }
     }
 
-    /// Apply a finished background job, and a closed import dialog.
+    /// Apply a finished background job, and a closed import dialog; then
+    /// start what was queued behind it.
     pub(crate) fn poll_jobs(&mut self) {
         if let Some(Some(src)) = self.picker.poll() {
-            library_panel::start_import(self, src);
+            self.run_or_queue(Queued::Import(src));
         }
         if let Some(done) = self.jobs.poll() {
             self.apply_job(done);
         }
+        self.start_queued();
+    }
+
+    /// Start the next queued action, else a lazy missing-files check.
+    fn start_queued(&mut self) {
+        if self.jobs.busy() {
+            return;
+        }
+        match self.queued.pop_front() {
+            Some(action) => self.run_or_queue(action),
+            None => self.check_missing_lazily(),
+        }
     }
 
     pub(crate) fn apply_job(&mut self, done: JobDone) {
+        let wrote = !matches!(done, JobDone::CheckedFiles { .. });
         match done {
-            JobDone::Rescanned(Ok(())) => {}
-            JobDone::Rescanned(Err(e)) => self.browser.set_error(format!("rescan failed: {e}")),
+            JobDone::Rescanned {
+                result,
+                skipped,
+                user,
+            } => match result {
+                Err(e) => self.browser.set_error(format!("rescan failed: {e}")),
+                Ok(()) if user && skipped => self.browser.set_error(format!(
+                    "rescan skipped: {} It is rescanned when that finishes.",
+                    library_panel::BUSY_WHY
+                )),
+                Ok(()) if user => {
+                    let n = self.library.read().len();
+                    self.browser.set_info(format!(
+                        "rescanned: {n} kit{}",
+                        if n == 1 { "" } else { "s" }
+                    ));
+                }
+                Ok(()) => {}
+            },
             JobDone::Imported(result) => match *result {
                 Ok(outcome) => {
                     self.refresh_rows();
                     self.browser.select(outcome.entry().mark_key());
                     self.library_panel.tab = library_panel::Tab::Installed;
-                    let text = match &outcome {
-                        ImportOutcome::Added(e) => format!("imported \"{}\"", e.name),
-                        ImportOutcome::AlreadyPresent(e) => {
-                            format!("\"{}\" is already in the library", e.name)
+                    match &outcome {
+                        // A kit imported on its own is what the user wants
+                        // to hear next: load it, as the amp does.
+                        ImportOutcome::Added(e) => {
+                            let entry = self
+                                .library
+                                .read()
+                                .entry(&e.id)
+                                .cloned()
+                                .unwrap_or_else(|| e.clone());
+                            match kit_browser::load_library_kit(
+                                &self.bridge,
+                                &self.library,
+                                &entry,
+                                LoadKind::Pick,
+                            ) {
+                                Ok(req) => {
+                                    self.requested_kit = Some(req);
+                                    self.browser
+                                        .set_info(format!("imported and loaded \"{}\"", e.name));
+                                }
+                                Err(why) => self.browser.set_error(format!(
+                                    "imported \"{}\", but could not load it: {why}",
+                                    e.name
+                                )),
+                            }
                         }
-                    };
-                    self.browser.set_info(text);
+                        ImportOutcome::AlreadyPresent(e) => self
+                            .browser
+                            .set_info(format!("\"{}\" is already in the library", e.name)),
+                    }
                 }
                 Err(e) => self.browser.set_error(e),
             },
-            JobDone::Deleted { name, result } => {
+            JobDone::Deleted {
+                name,
+                result,
+                view_pos,
+            } => {
                 self.refresh_rows();
                 match result {
-                    Ok(()) => self.browser.set_info(format!("deleted \"{name}\"")),
+                    Ok(()) => {
+                        // The row's neighbour takes the selection, so the
+                        // detail pane is not left blank after a delete.
+                        let view = self.browser.view();
+                        match view_pos.filter(|_| !view.is_empty()) {
+                            Some(pos) => {
+                                let row = view[pos.min(view.len() - 1)];
+                                let key = self.rows.rows[row].key.clone();
+                                self.browser.select(key);
+                            }
+                            None => self.browser.clear_selection(),
+                        }
+                        self.browser.set_info(format!("deleted \"{name}\""));
+                    }
                     Err(e) => self.browser.set_error(e),
                 }
             }
+            JobDone::CheckedFiles { id, result } => match result {
+                Ok(_) => self.refresh_rows(),
+                // Lost the library to another writer: try again later.
+                Err(e) if e.is_empty() => {
+                    self.missing_checked.remove(&id);
+                }
+                Err(e) => tracing::warn!("missing-files check of {id}: {e}"),
+            },
+        }
+        if wrote {
+            self.rebaseline_library_poll();
         }
     }
 
-    /// Block until the running job is done and apply it. For tests.
+    /// Block until the running job and everything queued behind it are
+    /// done, applying each. For tests.
     pub(crate) fn finish_jobs(&mut self) {
-        if let Some(done) = self.jobs.wait() {
-            self.apply_job(done);
+        // Bounded: a check that keeps losing the library to a download
+        // would otherwise retry for ever.
+        for _ in 0..64 {
+            if let Some(done) = self.jobs.wait() {
+                self.apply_job(done);
+            }
+            if let Some(action) = self.queued.pop_front() {
+                self.run_or_queue(action);
+                continue;
+            }
+            self.check_missing_lazily();
+            if !self.jobs.busy() {
+                break;
+            }
         }
     }
 
     /// React to a download the shared worker finished: when it is one this
     /// editor asked for, select the new row on the Installed tab and offer
-    /// Load (§4.1).
+    /// Load (§4.1); when one of them stopped without installing (an error,
+    /// a cancel), say so — a failed Re-download used to vanish silently.
     fn poll_downloads(&mut self) {
+        self.poll_installs();
+        self.poll_failed_downloads();
+    }
+
+    /// The downloads this editor asked for that ended without installing.
+    fn poll_failed_downloads(&mut self) {
+        if self.my_downloads.is_empty() {
+            return;
+        }
+        let ended: Vec<(String, String, bool)> = {
+            let s = self.library.download().state.lock();
+            // Not ended while running or queued — nor while an install
+            // the counter has not shown this editor yet is pending.
+            if s.installs != self.seen_installs {
+                return;
+            }
+            self.my_downloads
+                .iter()
+                .filter(|n| !s.is_working_on(n))
+                .map(|n| {
+                    let (why, error) = match (&s.status, &s.last_error) {
+                        (Status::Cancelled(k), _) if k == n => {
+                            (format!("the download of \"{n}\" was cancelled"), false)
+                        }
+                        (Status::Error(e), _) | (_, Some(e)) => {
+                            (format!("could not download \"{n}\": {e}"), true)
+                        }
+                        _ => (format!("the download of \"{n}\" stopped"), true),
+                    };
+                    (n.clone(), why, error)
+                })
+                .collect()
+        };
+        for (name, why, error) in ended {
+            self.my_downloads.remove(&name);
+            if error {
+                self.browser.set_error(why);
+            } else {
+                self.browser.set_info(why);
+            }
+        }
+    }
+
+    fn poll_installs(&mut self) {
         let installed = {
             let s = self.library.download().state.lock();
             if s.installs == self.seen_installs {
@@ -248,6 +477,8 @@ impl DrumsEditorApp {
             self.seen_installs = s.installs;
             s.last_installed.clone()
         };
+        // The worker rescanned the library itself.
+        self.rebaseline_library_poll();
         let Some(installed) = installed else {
             return;
         };
@@ -288,11 +519,11 @@ impl DrumsEditorApp {
             self.library_poll.mark_seen(now);
         }
         self.library_poll.set_interval(interval);
-        if !self.jobs.busy() && self.library_poll.check(now) {
+        if !self.jobs.busy() && self.queued.is_empty() && self.library_poll.check(now) {
             // Off the UI thread. A rescan only re-hashes manifests whose
             // size or mtime changed and writes nothing when nothing did,
             // so the poll settles.
-            self.start_rescan();
+            self.start_rescan(false);
         }
     }
 
@@ -317,6 +548,17 @@ impl DrumsEditorApp {
             Err(e) => self.browser.set_error(e),
         }
     }
+}
+
+/// A library action waiting for the running job.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Queued {
+    /// A confirmed delete of the row with this key.
+    Delete(String),
+    /// A kit folder or `.zip` picked for import.
+    Import(PathBuf),
+    /// The Rescan button.
+    Rescan,
 }
 
 impl EditorApp for DrumsEditorApp {

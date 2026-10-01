@@ -54,7 +54,9 @@ pub struct ListOptions<'a> {
     /// rows room: 34 px or more).
     pub show_subtitle: bool,
     /// ↑/↓ move the selection, Enter activates it, Esc reports
-    /// [`ListResponse::escaped`] — while no text field is being edited.
+    /// [`ListResponse::escaped`] — while no text field is being edited,
+    /// nor was when the frame began ([`text_field_had_focus`]). Enter only
+    /// activates a selection that is in the current view.
     pub keyboard: bool,
     /// Rows to draw in the danger colour (e.g. unreadable files).
     pub is_error: Option<&'a dyn Fn(usize) -> bool>,
@@ -91,6 +93,52 @@ pub struct ListResponse {
     pub escaped: bool,
 }
 
+/// Records, at the end of every pass, whether a text field had keyboard
+/// focus — so the next pass can know it had focus *at its start*.
+///
+/// egui takes the focus away from a single-line `TextEdit` before any
+/// caller code sees the key: Esc clears it in `Memory::begin_pass`, and
+/// Enter surrenders it inside the field's own `show`. By the time a list
+/// or an overlay asks [`egui::Context::text_edit_focused`], it is `false`
+/// in exactly the frame where the key was meant for the field — so Esc
+/// closed the overlay and Enter in the search box loaded the selected row.
+struct TextFocusPlugin;
+
+#[derive(Clone, Copy, Default)]
+struct TextFocusAtEnd(bool);
+
+fn text_focus_id() -> egui::Id {
+    egui::Id::new("resonance_library_ui_text_focus_at_end")
+}
+
+impl egui::Plugin for TextFocusPlugin {
+    fn debug_name(&self) -> &'static str {
+        "resonance_library_ui_text_focus"
+    }
+
+    fn on_end_pass(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let focused = ctx.text_edit_focused();
+        ctx.data_mut(|d| d.insert_temp(text_focus_id(), TextFocusAtEnd(focused)));
+    }
+}
+
+/// Whether a text field is being typed in: focused now, or focused when
+/// this frame began (so an Esc or Enter this frame was the field's — it
+/// only left the field). Keyboard shortcuts that share Esc / Enter / the
+/// arrows with a text field must check this, not
+/// [`egui::Context::text_edit_focused`].
+///
+/// The first call on a context installs the end-of-pass hook that makes
+/// it work, so on that one frame this only knows about the current focus.
+pub fn text_field_had_focus(ctx: &egui::Context) -> bool {
+    ctx.add_plugin(TextFocusPlugin);
+    ctx.text_edit_focused()
+        || ctx
+            .data(|d| d.get_temp::<TextFocusAtEnd>(text_focus_id()))
+            .is_some_and(|f| f.0)
+}
+
 /// The search field, bound to the model's query. Returns the text edit's
 /// response (`changed()` when the query moved).
 pub fn search_field(ui: &mut egui::Ui, model: &mut BrowserModel, hint: &str, width: f32) -> egui::Response {
@@ -122,7 +170,7 @@ pub fn library_list(
 
     // Keyboard, before layout, so the scroll can follow the move.
     let mut scroll_to: Option<usize> = None;
-    if opts.keyboard && !ui.ctx().text_edit_focused() {
+    if opts.keyboard && !text_field_had_focus(ui.ctx()) {
         let (up, down, enter, esc) = ui.input(|i| {
             (
                 i.key_pressed(egui::Key::ArrowUp),
@@ -138,8 +186,14 @@ pub fn library_list(
                 scroll_to = model.view().iter().position(|&r| r == row);
             }
         }
+        // Only a selection the user can see: a row filtered out of the
+        // view stays selected (clearing the search brings it back), but
+        // Enter must not load what is not on screen.
         if enter {
-            out.double_clicked = model.selected_row();
+            out.double_clicked = model
+                .selected()
+                .filter(|k| model.position_in_view(k).is_some())
+                .and_then(|_| model.selected_row());
         }
         out.escaped = esc;
     }
@@ -207,6 +261,7 @@ fn draw_row(
     if resp.double_clicked() {
         out.double_clicked = Some(row);
     }
+    let mut title_elided = false;
 
     if ui.is_rect_visible(rect) {
         let painter = ui.painter_at(rect);
@@ -275,14 +330,14 @@ fn draw_row(
         } else {
             rect.min.x + 6.0
         };
-        let title_rect = egui::Rect::from_x_y_ranges(title_left..=right, rect.y_range());
-        painter.with_clip_rect(title_rect).text(
-            egui::pos2(title_left, line_y),
-            egui::Align2::LEFT_CENTER,
-            rows.title(row),
-            font,
-            title_color,
-        );
+        // Elided with "…" rather than cut off at the first column: a cut
+        // title reads as a different, shorter name. The full title is on
+        // the row's hover.
+        let title_w = (right - title_left).max(0.0);
+        let galley = elided(&painter, rows.title(row), font, title_color, title_w);
+        title_elided = galley.elided;
+        let pos = egui::pos2(title_left, line_y - galley.size().y * 0.5);
+        painter.galley(pos, galley, title_color);
         if two_lines {
             let sub_rect = egui::Rect::from_x_y_ranges(title_left..=rect.max.x - 6.0, rect.y_range());
             let subtitle = rows.subtitle(row);
@@ -297,7 +352,23 @@ fn draw_row(
             }
         }
     }
+    if title_elided {
+        resp.on_hover_text(rows.title(row));
+    }
     out
+}
+
+/// `text` laid out on one line, elided with "…" to `width`.
+fn elided(
+    painter: &egui::Painter,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    painter.layout_job(job)
 }
 
 /// A facet filter as a menu button: `label` (with the selection) listing
@@ -363,27 +434,81 @@ pub fn confirm_delete_row(
     prompt: &str,
     detail: Option<&str>,
 ) -> ConfirmOutcome {
+    confirm_delete_row_blocked(ui, model, key, prompt, detail, None)
+}
+
+/// Width the `[Delete] [Cancel]` pair needs beside the prompt.
+const CONFIRM_BUTTONS_W: f32 = 130.0;
+
+/// [`confirm_delete_row`] with `Delete` disabled while `blocked` says why
+/// (e.g. "wait for the scan to finish"). The delete stays armed, so the
+/// user confirms once the reason has passed.
+///
+/// The prompt is one line, elided with "…" (full text on hover). When it
+/// does not fit beside the buttons they go on their own line under it, so
+/// a long name can never push them past the panel's edge.
+pub fn confirm_delete_row_blocked(
+    ui: &mut egui::Ui,
+    model: &mut BrowserModel,
+    key: &str,
+    prompt: &str,
+    detail: Option<&str>,
+    blocked: Option<&str>,
+) -> ConfirmOutcome {
     if model.pending_delete() != Some(key) {
         return ConfirmOutcome::None;
     }
     let mut outcome = ConfirmOutcome::None;
+    let mut buttons = |ui: &mut egui::Ui, model: &mut BrowserModel| {
+        let delete = egui::Button::new(egui::RichText::new("Delete").color(theme::BG_0))
+            .fill(theme::BAD);
+        let r = ui.add_enabled(blocked.is_none(), delete);
+        let r = match blocked {
+            Some(why) => r.on_disabled_hover_text(why),
+            None => r,
+        };
+        if r.clicked() {
+            if let Some(key) = model.confirm_delete() {
+                outcome = ConfirmOutcome::Confirmed(key);
+            }
+        }
+        if ui.button("Cancel").clicked() {
+            model.cancel_delete();
+            outcome = ConfirmOutcome::Cancelled;
+        }
+        if let Some(why) = blocked {
+            ui.add(
+                egui::Label::new(egui::RichText::new(why).size(11.0).color(theme::TEXT_3))
+                    .truncate(),
+            );
+        }
+    };
     ui.vertical(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(prompt).color(theme::BAD));
-            let delete = egui::Button::new(egui::RichText::new("Delete").color(theme::BG_0))
-                .fill(theme::BAD);
-            if ui.add(delete).clicked() {
-                if let Some(key) = model.confirm_delete() {
-                    outcome = ConfirmOutcome::Confirmed(key);
-                }
-            }
-            if ui.button("Cancel").clicked() {
-                model.cancel_delete();
-                outcome = ConfirmOutcome::Cancelled;
-            }
-        });
+        let text = egui::RichText::new(prompt).color(theme::BAD);
+        let natural = egui::WidgetText::from(text.clone())
+            .into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
+            )
+            .size()
+            .x;
+        if natural + CONFIRM_BUTTONS_W <= ui.available_width() {
+            ui.horizontal(|ui| {
+                ui.label(text);
+                buttons(ui, model);
+            });
+        } else {
+            ui.add(egui::Label::new(text).truncate())
+                .on_hover_text(prompt);
+            ui.horizontal(|ui| buttons(ui, model));
+        }
         if let Some(detail) = detail {
-            ui.label(egui::RichText::new(detail).size(11.0).color(theme::TEXT_3));
+            ui.add(
+                egui::Label::new(egui::RichText::new(detail).size(11.0).color(theme::TEXT_3))
+                    .wrap(),
+            );
         }
     });
     outcome

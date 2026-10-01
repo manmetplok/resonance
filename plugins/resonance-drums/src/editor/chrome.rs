@@ -6,6 +6,7 @@
 use std::sync::atomic::Ordering;
 
 use plugin_gui_core::egui;
+use resonance_common::drumkit_library::EntryStatus;
 use resonance_plugin::kit_rows::{step_in_view, view_counter};
 
 use crate::kit_loader::KitStatus;
@@ -83,6 +84,14 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let loaded_id = loaded.as_ref().map(|e| e.id.clone());
     let mut pick: Option<(usize, LoadKind)> = None;
     let mut step: Option<i32> = None;
+    // A kit deleted from the library keeps playing here until it is
+    // reloaded; say so, as the amp's header does, rather than falling
+    // back to "— no kit —" for a kit that is plainly still sounding.
+    let deleted = deleted_kit_name(app, loaded.as_ref());
+    // ◀/▶ are live only where there is somewhere to step to: clamped at
+    // the view's ends, as `step_in_view` is.
+    let can_prev = step_in_view(&app.browser, &app.rows, loaded_id.as_deref(), -1).is_some();
+    let can_next = step_in_view(&app.browser, &app.rows, loaded_id.as_deref(), 1).is_some();
 
     ui.horizontal_centered(|ui| {
         ui.label(
@@ -112,17 +121,22 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             .inner_margin(egui::Margin::symmetric(10, 4));
         pill.show(ui, |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let can_step = app.browser.view_len() > 0;
-                if pill_arrow(ui, "◀", can_step) {
+                let prev = pill_arrow(ui, "◀", can_prev);
+                probe(ui, "kit.prev", prev.rect);
+                if can_prev {
+                    probe(ui, "kit.prev.enabled", prev.rect);
+                }
+                if prev.clicked() {
                     step = Some(-1);
                 }
 
                 // The library's name for the kit ("Drummica", or its
                 // `_meta.name`), not the manifest's directory. A kit loaded
                 // from outside the library falls back to the loader's name.
-                let display = match &loaded {
-                    Some(e) => e.name.clone(),
-                    None => {
+                let display = match (&loaded, &deleted) {
+                    (Some(e), _) => e.name.clone(),
+                    (None, Some(name)) => format!("{name} (deleted)"),
+                    (None, None) => {
                         let name = current_kit_name(app);
                         if name.is_empty() {
                             "— no kit —".to_string()
@@ -166,7 +180,12 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                     });
                 probe(ui, "kit.combo", combo.response.rect);
 
-                if pill_arrow(ui, "▶", can_step) {
+                let next = pill_arrow(ui, "▶", can_next);
+                probe(ui, "kit.next", next.rect);
+                if can_next {
+                    probe(ui, "kit.next.enabled", next.rect);
+                }
+                if next.clicked() {
                     step = Some(1);
                 }
             });
@@ -177,6 +196,7 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 .size(10.5)
                 .color(theme::TEXT_3),
         );
+        draw_kit_warnings(ui, app, loaded.as_ref(), deleted.is_some());
     });
 
     if let Some(delta) = step {
@@ -197,13 +217,109 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     }
 }
 
-/// One of the pill's frameless ◀ / ▶ buttons. True when clicked.
-fn pill_arrow(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> bool {
+/// One of the pill's frameless ◀ / ▶ buttons.
+fn pill_arrow(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> egui::Response {
     ui.add_enabled(
         enabled,
         egui::Button::new(egui::RichText::new(glyph).color(theme::TEXT_3).size(9.0)).frame(false),
     )
-    .clicked()
+}
+
+/// The name of the kit this instance plays when it is no longer in the
+/// library because its folder is gone: the library name it was last shown
+/// under, else the loader's.
+fn deleted_kit_name(
+    app: &mut DrumsEditorApp,
+    loaded: Option<&resonance_common::drumkit_library::Entry>,
+) -> Option<String> {
+    let path = app.bridge.kit_path.lock().clone()?;
+    if let Some(e) = loaded {
+        app.last_loaded_name = Some((path, e.name.clone()));
+        return None;
+    }
+    if path.exists() {
+        return None;
+    }
+    match &app.last_loaded_name {
+        Some((p, name)) if *p == path => Some(name.clone()),
+        _ => {
+            let name = current_kit_name(app);
+            Some(if name.is_empty() {
+                path.parent()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "kit".into())
+            } else {
+                name
+            })
+        }
+    }
+}
+
+/// What is wrong with the playing kit, beside the counter: deleted from
+/// the library, sample files missing from its folder (the lazy
+/// `check_missing_files`), or samples the loader could not read (E6) —
+/// each with the detail on hover.
+fn draw_kit_warnings(
+    ui: &mut egui::Ui,
+    app: &DrumsEditorApp,
+    loaded: Option<&resonance_common::drumkit_library::Entry>,
+    deleted: bool,
+) {
+    let warn = |ui: &mut egui::Ui, name: &str, text: String, hover: String| {
+        ui.add_space(10.0);
+        let l = ui
+            .add(
+                egui::Label::new(egui::RichText::new(text).color(theme::BAD).size(10.5)).truncate(),
+            )
+            .on_hover_text(hover);
+        probe(ui, name, l.rect);
+    };
+    if deleted {
+        warn(
+            ui,
+            "kit.deleted",
+            "deleted from the library".into(),
+            "This kit's folder was deleted. It keeps playing until it is reloaded; \
+             a project that uses it will show it as missing."
+                .into(),
+        );
+    }
+    if let Some(EntryStatus::MissingFiles(n)) = loaded.map(|e| &e.status) {
+        warn(
+            ui,
+            "kit.missing",
+            format!("{n} file{} missing", if *n == 1 { "" } else { "s" }),
+            format!(
+                "{n} of this kit's sample files are gone from its folder. \
+                 Re-download or re-import it to restore them."
+            ),
+        );
+    }
+    let unreadable = match &*app.bridge.kit_status.lock() {
+        KitStatus::Loaded {
+            unreadable,
+            unreadable_paths,
+            ..
+        } if *unreadable > 0 => Some((*unreadable, unreadable_paths.clone())),
+        _ => None,
+    };
+    if let Some((n, paths)) = unreadable {
+        let mut hover = String::from("Left out of the kit — they could not be read or decoded:");
+        for p in &paths {
+            hover.push('\n');
+            hover.push_str(&p.display().to_string());
+        }
+        if n > paths.len() {
+            hover.push_str(&format!("\n… and {} more", n - paths.len()));
+        }
+        warn(
+            ui,
+            "kit.unreadable",
+            format!("{n} sample{} unreadable", if n == 1 { "" } else { "s" }),
+            hover,
+        );
+    }
 }
 
 /// Status bar. Every figure here is a measurement published by the audio

@@ -20,7 +20,13 @@
 //! foreground layer, beneath the panel — never above it, which is what made
 //! the old Download Kits overlay a near-black screen (§1.2) — and it senses
 //! clicks, so nothing reaches the pads behind it. Esc and Close close it; a
-//! click on the backdrop does not.
+//! click on the backdrop does not. Esc typed in a text field only leaves
+//! the field, and Esc with a delete armed only disarms it.
+//!
+//! The footer and the selected kit's action row (with the delete confirm)
+//! are pinned at the bottom; the list and the detail facts share what is
+//! left. A 35-piece kit's facts run long, and with the actions inside the
+//! detail's scroll they sat below the fold at the minimum window size.
 //!
 //! The behaviour lives in the shared `BrowserModel` and `kit_rows`; this
 //! file only turns clicks into their calls. Anything that hashes, copies
@@ -37,8 +43,8 @@ use resonance_plugin::kit_rows::{sort_options, FACETS};
 use resonance_plugin::library_ui::{self, ColumnSpec, ConfirmOutcome, ListOptions};
 use resonance_plugin::library_view::Sort;
 
-use super::app::DrumsEditorApp;
-use super::jobs::{JobDone, PickKind};
+use super::app::{DrumsEditorApp, Queued};
+use super::jobs::{JobDone, JobKind, PickKind};
 use super::kit_browser::LoadKind;
 use super::{plok_panel, probe, theme};
 use crate::download::{Command, ServerKit};
@@ -84,10 +90,12 @@ const MARGIN: f32 = 20.0;
 const FRAME_MARGIN: i8 = 12;
 
 /// Open the overlay: on Installed, or on plok.org when nothing is
-/// installed. A delete armed before is never still armed.
+/// installed. A delete armed before is never still armed, and a notice
+/// from the last visit is not shown again.
 pub(crate) fn open(app: &mut DrumsEditorApp) {
     app.library_panel.open = true;
     app.browser.cancel_delete();
+    app.browser.clear_notice();
     let empty = app.library.read().is_empty();
     set_tab(app, if empty { Tab::Plok } else { Tab::Installed });
 }
@@ -131,15 +139,21 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     // Esc closes, as does Close; a click on the backdrop does not — a
     // stray click outside a panel this size is far likelier a miss than a
     // request to dismiss it, and `should_close` would count it. Esc while
-    // typing in a field, or with a menu open, is left to those.
+    // typing in a field, or with a menu open, is left to those: egui has
+    // already taken the field's focus away by now, hence "had focus".
+    // With a delete armed, Esc backs out of that first.
     let escape = response.is_top_modal
         && !response.any_popup_open
-        && !ui.ctx().text_edit_focused()
+        && !library_ui::text_field_had_focus(ui.ctx())
         && ui
             .ctx()
             .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     if escape {
-        close(app);
+        if app.browser.pending_delete().is_some() {
+            app.browser.cancel_delete();
+        } else {
+            close(app);
+        }
     }
 }
 
@@ -199,7 +213,9 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     // Search, switches, facets, sort. Wrapped: at the editor's minimum
     // width the row does not fit on one line.
     ui.horizontal_wrapped(|ui| {
-        library_ui::search_field(ui, &mut app.browser, "search name, tag, mic, piece…", 190.0);
+        let search =
+            library_ui::search_field(ui, &mut app.browser, "search name, tag, mic, piece…", 190.0);
+        probe(ui, "library.search", search.rect);
         if widgets::chip_button(ui, "★ only", app.browser.favorites_only()) {
             let on = !app.browser.favorites_only();
             app.browser.set_favorites_only(on);
@@ -240,9 +256,24 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.add_space(4.0);
     app.refresh_rows();
 
-    let footer_h = 30.0;
-    let detail_h = (ui.available_height() * 0.45).clamp(120.0, 210.0);
-    let list_h = (ui.available_height() - detail_h - footer_h - 16.0).max(60.0);
+    // Pinned first, from the bottom up, so they claim their height before
+    // the list and the detail facts share the rest.
+    egui::Panel::bottom("drums_lib_footer")
+        .frame(egui::Frame::NONE)
+        .resizable(false)
+        .show_separator_line(false)
+        .show_inside(ui, |ui| {
+            ui.separator();
+            draw_footer(ui, app);
+        });
+    egui::Panel::bottom("drums_lib_actions")
+        .frame(egui::Frame::NONE)
+        .resizable(false)
+        .show_separator_line(false)
+        .show_inside(ui, |ui| draw_actions(ui, app));
+
+    let detail_h = (ui.available_height() * 0.45).clamp(60.0, 200.0);
+    let list_h = (ui.available_height() - detail_h - 12.0).max(44.0);
     let loaded_key = app.loaded_entry().map(|e| e.mark_key());
     let rows = &app.rows;
     let is_error = |row: usize| {
@@ -283,8 +314,6 @@ fn draw_installed(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .max_height(detail_h)
         .auto_shrink([false, true])
         .show(ui, |ui| draw_detail(ui, app));
-    ui.separator();
-    draw_footer(ui, app);
 }
 
 fn plural(n: usize) -> &'static str {
@@ -343,7 +372,6 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         return;
     };
     let entry = app.rows.rows[row].entry.clone();
-    let key = app.rows.rows[row].key.clone();
     let shown = ui.vertical(|ui| {
         ui.label(
             egui::RichText::new(&entry.name)
@@ -464,52 +492,74 @@ fn draw_detail(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             }
         });
         let used = app.library.usage_count(&entry.id);
-        ui.label(
-            egui::RichText::new(format!("used in {used} open drum instance{}", plural(used)))
-                .size(11.0)
-                .color(theme::TEXT_DIM),
-        );
-
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(entry.is_loadable(), egui::Button::new("Load"))
-                .clicked()
-            {
-                app.load_entry(&entry, LoadKind::Pick);
-            }
-            if ui.button("Reveal").clicked() {
-                if let Err(e) = resonance_common::reveal::reveal(&entry.dir) {
-                    app.browser
-                        .set_error(format!("could not open the file manager: {e}"));
-                }
-            }
-            if let Some(kit) = redownload_kit(app, &entry) {
-                let busy = app.library.download().state.lock().is_working_on(&kit.name);
-                if ui
-                    .add_enabled(!busy, egui::Button::new("Re-download"))
-                    .on_hover_text("Download this kit from plok.org again and replace it in place")
-                    .clicked()
-                {
-                    app.my_downloads.insert(kit.name.clone());
-                    app.browser
-                        .set_info(format!("re-downloading \"{}\"…", entry.name));
-                    app.library.download().send(Command::Redownload {
-                        kit,
-                        existing_dir: entry.dir.clone(),
-                    });
-                }
-            }
-            if app.browser.pending_delete() != Some(key.as_str())
-                && ui
-                    .add_enabled(!app.jobs.busy(), egui::Button::new("Delete…"))
-                    .clicked()
-            {
-                app.browser.begin_delete(key.clone());
-            }
-        });
-        draw_delete_confirm(ui, app, &key, &entry);
+        if used > 0 {
+            ui.label(
+                egui::RichText::new(format!("used in {used} open drum instance{}", plural(used)))
+                    .size(11.0)
+                    .color(theme::TEXT_DIM),
+            );
+        }
     });
     probe(ui, "library.detail", shown.response.rect);
+}
+
+/// The selected kit's actions — `[Load] [Reveal] [Re-download]
+/// [Delete…]` — and the delete confirm, pinned under the detail facts.
+fn draw_actions(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
+    let Some(row) = app.browser.selected_row() else {
+        return;
+    };
+    let entry = app.rows.rows[row].entry.clone();
+    let key = app.rows.rows[row].key.clone();
+    ui.add_space(4.0);
+    let shown = ui.horizontal_wrapped(|ui| {
+        let b = ui.add_enabled(entry.is_loadable(), egui::Button::new("Load"));
+        probe(ui, "library.action.load", b.rect);
+        if b.clicked() {
+            app.load_entry(&entry, LoadKind::Pick);
+        }
+        let b = ui.button("Reveal");
+        probe(ui, "library.action.reveal", b.rect);
+        if b.clicked() {
+            if let Err(e) = resonance_common::reveal::reveal(&entry.dir) {
+                app.browser
+                    .set_error(format!("could not open the file manager: {e}"));
+            }
+        }
+        if let Some(kit) = redownload_kit(app, &entry) {
+            let busy = app.library.download().state.lock().is_working_on(&kit.name);
+            let b = ui
+                .add_enabled(!busy, egui::Button::new("Re-download"))
+                .on_hover_text("Download this kit from plok.org again and replace it in place");
+            probe(ui, "library.action.redownload", b.rect);
+            if b.clicked() {
+                app.my_downloads.insert(kit.name.clone());
+                app.browser
+                    .set_info(format!("re-downloading \"{}\"…", entry.name));
+                app.library.download().send(Command::Redownload {
+                    kit,
+                    existing_dir: entry.dir.clone(),
+                });
+            }
+        }
+        // Arming does no I/O, so it is never disabled; the confirm is
+        // what waits for a running job.
+        if app.browser.pending_delete() != Some(key.as_str()) {
+            let b = ui.button("Delete…");
+            probe(ui, "library.action.delete", b.rect);
+            if b.clicked() {
+                app.browser.begin_delete(key.clone());
+                // The pinned panel is sized from its last frame's
+                // content; lay this frame out again with the confirm in
+                // it, or its last line is clipped for a frame.
+                ui.ctx()
+                    .request_discard("the delete confirm grew the action row");
+            }
+        }
+    });
+    probe(ui, "library.actions", shown.response.rect);
+    draw_delete_confirm(ui, app, &key, &entry);
+    ui.add_space(4.0);
 }
 
 fn warn(ui: &mut egui::Ui, text: &str) {
@@ -550,8 +600,10 @@ fn redownload_kit(app: &DrumsEditorApp, entry: &Entry) -> Option<ServerKit> {
 /// entry — is what gets deleted.
 fn draw_delete_confirm(ui: &mut egui::Ui, app: &mut DrumsEditorApp, key: &str, entry: &Entry) {
     let used = app.library.usage_count(&entry.id);
-    let mut detail =
-        String::from("The folder is removed from disk. Favourites and tags are kept for 90 days.");
+    let mut detail = String::from(
+        "The folder is removed from disk. Projects that use it will show it as missing. \
+         Favourites and tags are kept for 90 days.",
+    );
     if used > 0 {
         detail = format!(
             "Used by {used} open drum instance{}; they keep playing until reloaded. {detail}",
@@ -562,59 +614,112 @@ fn draw_delete_confirm(ui: &mut egui::Ui, app: &mut DrumsEditorApp, key: &str, e
         .size_bytes
         .map(format_bytes)
         .unwrap_or_else(|| "size unknown".into());
-    let prompt = format!("Delete \"{}\" ({size})?", entry.name);
-    if let ConfirmOutcome::Confirmed(confirmed) =
-        library_ui::confirm_delete_row(ui, &mut app.browser, key, &prompt, Some(&detail))
-    {
+    let prompt = format!(
+        "Delete \"{}\" ({size})?",
+        elide(&entry.name, PROMPT_NAME_CHARS)
+    );
+    // A scan, import or delete holds the library: the confirm waits for
+    // it rather than racing it (and losing — a delete the library refuses
+    // as busy used to be dropped with the confirm already spent).
+    let blocked = app.jobs.writing().then(|| {
+        format!(
+            "waiting for {} to finish",
+            app.jobs
+                .label()
+                .unwrap_or("the library")
+                .trim_end_matches('…')
+        )
+    });
+    if let ConfirmOutcome::Confirmed(confirmed) = library_ui::confirm_delete_row_blocked(
+        ui,
+        &mut app.browser,
+        key,
+        &prompt,
+        Some(&detail),
+        blocked.as_deref(),
+    ) {
         start_delete(app, &confirmed);
     }
 }
 
-/// Delete the kit whose row key is `key`, as a job. The library rescans
-/// (freeing its slot) and the marks orphan pass stamps its marks.
+/// How much of a kit's name the delete prompt shows before eliding it.
+const PROMPT_NAME_CHARS: usize = 40;
+
+/// `text`, cut to `max` characters with "…" when longer.
+fn elide(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut s: String = text.chars().take(max.saturating_sub(1)).collect();
+    s.push('…');
+    s
+}
+
+/// Delete the kit whose row key is `key`, as a job — or, while a job is
+/// running, once it finishes. The library rescans (freeing its slot) and
+/// the marks orphan pass stamps its marks.
 pub(crate) fn start_delete(app: &mut DrumsEditorApp, key: &str) {
+    if app.jobs.busy() {
+        app.run_or_queue(Queued::Delete(key.to_string()));
+        return;
+    }
     let Some(row) = app.rows.rows.iter().find(|r| r.key == key) else {
         app.browser
             .set_error("that kit is no longer in the library");
         return;
     };
     let (dir, name) = (row.entry.dir.clone(), row.entry.name.clone());
+    let view_pos = app.browser.position_in_view(key);
     let library = app.library.clone();
-    let started = app
-        .jobs
-        .start(format!("deleting \"{name}\"…"), false, move |_| {
+    let started = app.jobs.start(
+        JobKind::Delete,
+        format!("deleting \"{name}\"…"),
+        false,
+        move |_| {
             let result = match library.delete(&dir) {
-                None => Err(BUSY.to_string()),
+                None => Err(format!("could not delete \"{name}\": {BUSY}")),
                 Some(Ok(_)) => Ok(()),
                 Some(Err(e)) => Err(format!("could not delete \"{name}\": {e}")),
             };
-            JobDone::Deleted { name, result }
-        });
+            JobDone::Deleted {
+                name,
+                result,
+                view_pos,
+            }
+        },
+    );
     if !started {
         app.browser
-            .set_error("the library is busy; try again in a moment");
+            .set_error(format!("could not start the delete: {BUSY}"));
     }
 }
 
-const BUSY: &str = "the library is busy installing a kit; try again in a moment";
+/// Why the library refused a write: another writer holds it — a download
+/// installing, or another drum editor's import, delete or scan. Not only
+/// "installing a kit", as this used to say.
+pub(crate) const BUSY_WHY: &str =
+    "the library is busy (a download or another drum editor is writing to it).";
+
+const BUSY: &str =
+    "the library is busy (a download or another drum editor is writing to it); try again in a moment";
 
 fn draw_footer(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
-    ui.horizontal(|ui| {
+    let shown = ui.horizontal(|ui| {
         import_button(ui, app);
-        if ui
-            .add_enabled(!app.jobs.busy(), egui::Button::new("Rescan"))
-            .clicked()
-        {
-            app.start_rescan();
+        let b = ui.add_enabled(!app.jobs.writing(), egui::Button::new("Rescan"));
+        probe(ui, "library.rescan", b.rect);
+        if b.clicked() {
+            app.run_or_queue(Queued::Rescan);
         }
         draw_job_status(ui, app);
     });
+    probe(ui, "library.footer", shown.response.rect);
 }
 
 /// `[Import kit folder / .zip… ▾]`: a folder or a zip, picked in a dialog
 /// on its own thread, then copied in as a job.
 fn import_button(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
-    let enabled = !app.jobs.busy() && !app.picker.busy();
+    let enabled = !app.jobs.writing() && !app.picker.busy();
     ui.add_enabled_ui(enabled, |ui| {
         ui.menu_button("Import kit folder / .zip…", |ui| {
             if ui.button("A kit folder…").clicked() {
@@ -640,7 +745,11 @@ fn draw_job_status(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         return;
     }
-    if let Some(label) = app.jobs.label().map(str::to_string) {
+    if let Some(mut label) = app.jobs.label().map(str::to_string) {
+        let waiting = app.queued.len();
+        if waiting > 0 {
+            label.push_str(&format!(" · {waiting} waiting"));
+        }
         ui.label(egui::RichText::new(label).size(11.0).color(theme::TEXT_DIM));
         if app.jobs.cancellable() {
             if let Some(p) = app.jobs.progress() {
@@ -671,21 +780,34 @@ fn draw_job_status(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         } else {
             theme::TEXT_DIM
         };
-        ui.add(egui::Label::new(egui::RichText::new(n.text()).size(11.0).color(color)).truncate());
+        // One line, elided: the full text — a long error is the part the
+        // user needs — is on hover.
+        let text = n.text().to_string();
+        let l = ui
+            .add(egui::Label::new(egui::RichText::new(&text).size(11.0).color(color)).truncate())
+            .on_hover_text(text);
+        probe(ui, "library.notice", l.rect);
     }
 }
 
 /// Copy `src` (a kit folder or a `.zip`) into the library, as a job with
-/// progress and Cancel. A cancel leaves nothing behind.
+/// progress and Cancel — or, while a job is running, once it finishes. A
+/// cancel leaves nothing behind.
 pub(crate) fn start_import(app: &mut DrumsEditorApp, src: PathBuf) {
+    if app.jobs.busy() {
+        app.run_or_queue(Queued::Import(src));
+        return;
+    }
     let library = app.library.clone();
     let name = src
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "kit".into());
-    let started = app
-        .jobs
-        .start(format!("importing \"{name}\"…"), true, move |ctx| {
+    let started = app.jobs.start(
+        JobKind::Import,
+        format!("importing \"{name}\"…"),
+        true,
+        move |ctx| {
             let progress = ctx.progress.clone();
             let job = ImportJob::new()
                 .cancel(&ctx.cancel)
@@ -698,10 +820,11 @@ pub(crate) fn start_import(app: &mut DrumsEditorApp, src: PathBuf) {
                 }
                 Some(Err(e)) => Err(format!("could not import \"{name}\": {e}")),
             }))
-        });
+        },
+    );
     if !started {
         app.browser
-            .set_error("the library is busy; try again in a moment");
+            .set_error(format!("could not start the import: {BUSY}"));
     }
 }
 
