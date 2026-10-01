@@ -469,6 +469,19 @@ impl Resonance {
         self.ui.mixer.plugin_window_id()
     }
 
+    /// Test-only: the focused plugin slot (`MixerUiState::focused_slot`).
+    #[doc(hidden)]
+    pub fn test_focused_slot(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        self.ui.mixer.focused_slot
+    }
+
+    /// Test-only: the slot the preset commands would act on right now —
+    /// the focused slot while it resolves, never in Performance mode.
+    #[doc(hidden)]
+    pub fn test_preset_target(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        crate::update::plugin_window::preset_target(self)
+    }
+
     /// Test-only: the generic plugin window's whole state (position, drag).
     #[doc(hidden)]
     pub fn test_plugin_window_state(&self) -> Option<crate::state::PluginWindowState> {

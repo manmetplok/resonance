@@ -180,7 +180,27 @@ fn bypass_button(
         .into()
 }
 
-/// One plugin row of a CHAIN group: bullet · name · ▲▼ · BYP.
+/// "Params": the host-drawn generic parameter window for this slot, even
+/// when the plugin has its own GUI (`PluginMessage::OpenGenericParams`)
+/// — the way to the parameter list and the preset bar for a plugin whose
+/// editor does not show them. A later batch folds it into the row's ☰
+/// menu (mixer-cleanup.md §3.2).
+fn params_button(
+    instance_id: resonance_audio::types::PluginInstanceId,
+) -> Element<'static, Message> {
+    button(
+        text("Params")
+            .size(9)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
+    )
+    .padding([2, 5])
+    .on_press(Message::Plugin(PluginMessage::OpenGenericParams(instance_id)))
+    .style(|_theme, status| theme::small_button_style(status))
+    .into()
+}
+
+/// One plugin row of a CHAIN group: bullet · name · ▲▼ · Params · BYP.
 ///
 /// `moves` carries the two reorder messages for this slot (ba todo
 /// #1302); either side is `None` when the move is unavailable, and the
@@ -222,6 +242,8 @@ pub(super) fn chain_row(
             Space::new().width(Length::Fill),
             reorder::move_buttons(moves, 10.0, 3),
             Space::new().width(8),
+            params_button(instance_id),
+            Space::new().width(4),
             bypass_button(instance_id, bypassed),
         ]
         .align_y(iced::alignment::Vertical::Center),

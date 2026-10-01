@@ -50,10 +50,21 @@ pub(super) fn automation_group(
         .into()
 }
 
-/// Hash everything [`automation_group`] draws for `chan`: each lane's
-/// target, label and Read state, and the picker's option source (the
-/// plugin params and device params). Folded into the owner's inspector
-/// fingerprint.
+/// Hash everything [`automation_group`] draws for `chan`, cheaply: it
+/// runs every frame the inspector is on screen, so it builds no label
+/// and walks no parameter list. It hashes stand-ins instead:
+///
+/// - each of the owner's lanes by (id, target, Read state), folded
+///   order-independently (`lanes` is a `HashMap`);
+/// - each slot by id and name, and its parameter list by identity — the
+///   `Vec`'s address and length. Parameter names, ids and the hidden flag
+///   are never edited in place (a list is only ever replaced whole; the
+///   in-place writers touch values, text and units, which this group does
+///   not draw), so a changed name set means a new allocation;
+/// - the device params by the same slice identity.
+///
+/// The labels, their order and the picker's options are all functions of
+/// these, and are built only inside the lazy body.
 pub(super) fn hash_into<H: Hasher>(
     h: &mut H,
     r: &crate::Resonance,
@@ -61,25 +72,26 @@ pub(super) fn hash_into<H: Hasher>(
     plugins: &[PluginSlotState],
     device_params: &[DeviceParam],
 ) {
-    for (lane, label) in lanes::lanes_for(&r.automation, chan, plugins, device_params) {
-        lane.target.hash(h);
-        lane.enabled.hash(h);
-        label.hash(h);
+    let mut lanes_sum = 0u64;
+    let mut lanes_count = 0usize;
+    for lane in lanes::owned_lanes(&r.automation, chan, plugins) {
+        let mut lh = std::collections::hash_map::DefaultHasher::new();
+        lane.id.hash(&mut lh);
+        lane.target.hash(&mut lh);
+        lane.enabled.hash(&mut lh);
+        lanes_sum = lanes_sum.wrapping_add(lh.finish());
+        lanes_count += 1;
     }
+    lanes_count.hash(h);
+    lanes_sum.hash(h);
     for slot in plugins {
         slot.instance_id.hash(h);
         slot.plugin_name.hash(h);
-        for p in &slot.params {
-            p.id.hash(h);
-            p.name.hash(h);
-            p.hidden.hash(h);
-        }
+        slot.params.as_ptr().hash(h);
+        slot.params.len().hash(h);
     }
-    for p in device_params {
-        p.id.hash(h);
-        p.name.hash(h);
-        p.group.hash(h);
-    }
+    device_params.as_ptr().hash(h);
+    device_params.len().hash(h);
 }
 
 /// One lane: target name · READ · ✕.

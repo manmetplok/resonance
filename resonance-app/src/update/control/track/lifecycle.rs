@@ -90,8 +90,14 @@ pub(super) fn set_color(app: &mut Resonance, request: &Request) -> (Response, Ta
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if find_track(app, params.track_id.0).is_none() {
+    let Some(target) = find_track(app, params.track_id.0) else {
         return not_found_track(request, params.track_id.0);
+    };
+    if target.sub_track.is_some() {
+        return reject(
+            request,
+            RpcError::invalid_params("sub-tracks follow their parent's colour"),
+        );
     }
     let Some(color) = track::parse_hex_color(&params.color) else {
         return reject(

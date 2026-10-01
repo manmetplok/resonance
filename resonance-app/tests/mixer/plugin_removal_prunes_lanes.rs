@@ -235,6 +235,22 @@ fn removing_a_master_effect_drops_its_lanes_and_undo_restores_them() {
     );
 }
 
+/// Deleting a whole bus takes its insert chain without a per-plugin
+/// removal, so its plugins' lanes — and the bus's own fader lane — went
+/// nowhere and reloaded onto the next bus (and plugin) handed those ids.
+/// The bus deletion prunes them all, and its undo brings them back.
+#[test]
+fn deleting_a_bus_drops_its_own_and_its_plugins_lanes_and_undo_restores_them() {
+    let mut f = fixture("bus-delete");
+    lane(&mut f, AutomationTarget::BusGain(BUS));
+    drain(&f.rx);
+    remove_then_undo(
+        &mut f,
+        Message::Bus(BusMessage::RemoveBus(BUS)),
+        &[param(BUS_COMP, 1), AutomationTarget::BusGain(BUS)],
+    );
+}
+
 /// A removal nobody mirrored yet arrives as the engine's echo (a plugin
 /// the engine dropped on its own). The echo path prunes the same way.
 #[test]

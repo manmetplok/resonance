@@ -4,8 +4,8 @@
 //! A track shows, in order: CHAIN → SENDS → ROUTING → AUTOMATION →
 //! TRACK. A bus shows CHAIN → ROUTING → AUTOMATION → BUS, the master
 //! CHAIN → AUTOMATION → MASTER. Each group folds independently
-//! (`MixerInspectorGroup`); BUS and MASTER share TRACK's key, since they
-//! sit in its slot and only one owner is ever shown.
+//! (`MixerInspectorGroup`); TRACK, BUS and MASTER each have their own
+//! group key, so folding one owner's group leaves the others open.
 //!
 //! The implementation is split into focused submodules to keep each
 //! section's reason-to-change isolated:

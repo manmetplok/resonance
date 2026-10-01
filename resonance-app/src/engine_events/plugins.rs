@@ -336,7 +336,7 @@ pub(crate) fn track_removed(
     track_id: TrackId,
     instance_id: PluginInstanceId,
 ) {
-    r.ui.mixer.close_plugin_window_for(instance_id);
+    r.ui.mixer.forget_plugin(instance_id);
     if let Some(track) = r.registry.tracks.iter_mut().find(|t| t.id == track_id) {
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
@@ -1063,7 +1063,7 @@ pub(crate) fn bus_removed(
     if let Some(bus) = r.registry.busses.iter_mut().find(|b| b.id == bus_id) {
         bus.plugins.retain(|p| p.instance_id != instance_id);
     }
-    r.ui.mixer.close_plugin_window_for(instance_id);
+    r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
@@ -1179,7 +1179,7 @@ pub(super) fn master_removed_echo(r: &mut Resonance, instance_id: PluginInstance
 /// nobody mirrored yet.
 pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     r.master.plugins.retain(|p| p.instance_id != instance_id);
-    r.ui.mixer.close_plugin_window_for(instance_id);
+    r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
@@ -1279,6 +1279,12 @@ pub(super) fn editor_state(
     open: bool,
     failure: Option<resonance_audio::types::PluginEditorFailure>,
 ) {
+    // The echo can trail the slot's removal (the editor closed because
+    // the plugin went): there is nothing left to mirror, and no window to
+    // fall back to.
+    if r.plugin_slot(instance_id).is_none() {
+        return;
+    }
     r.with_plugin_mut(instance_id, |slot| slot.editor_open = open);
     if failure.is_some() {
         crate::update::plugin_window::open_generic(r, instance_id);

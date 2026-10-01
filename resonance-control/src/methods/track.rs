@@ -18,7 +18,8 @@ pub const ADD: &str = "track.add";
 /// stay valid (ba doc #275 P1.7).
 pub const RENAME: &str = "track.rename";
 /// `track.set_color` — set a track's identity colour ([`SetColorParams`]
-/// -> `MutationAck`). Undoable like any edit.
+/// -> `MutationAck`). Undoable like any edit. A parent's colour carries
+/// to its sub-tracks; a sub-track id is refused with `invalid_params`.
 pub const SET_COLOR: &str = "track.set_color";
 /// `track.delete` — delete a track; destructive, requires
 /// `"confirm": true` ([`DeleteParams`] -> `MutationAck`).

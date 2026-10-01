@@ -118,7 +118,8 @@ fn choices_for(
         _ => full_base(),
     };
     let mut out: Vec<AutoChoice> = base.to_vec();
-    for slot in plugins {
+    for (index, slot) in plugins.iter().enumerate() {
+        let slot_name = slot_label(plugins, index);
         for param in &slot.params {
             // CLAP's IS_HIDDEN: the plugin asks that this parameter not
             // be presented as a control. It stays in the app's mirror
@@ -132,7 +133,7 @@ fn choices_for(
                     instance: slot.instance_id,
                     param_id: param.id,
                 },
-                label: Rc::from(format!("{}: {}", slot.plugin_name, param.name)),
+                label: Rc::from(format!("{}: {}", slot_name, param.name)),
             });
         }
     }
@@ -409,9 +410,11 @@ pub(crate) fn add_lane_message_for_label(
 }
 
 /// Every lane whose target belongs to `chan`, with its label, in the
-/// strip header's priority order (gain, pan, mute, device, plugin
-/// params). Ties break by label then lane id so the list never
-/// reshuffles between frames — `lanes` is a `HashMap`.
+/// order the inspector lists them: gain, pan, mute, device params, then
+/// plugin params grouped per plugin — by chain slot, then parameter id —
+/// so one plugin's lanes sit together in chain order. Remaining ties
+/// break by label then lane id so the list never reshuffles between
+/// frames — `lanes` is a `HashMap`.
 pub(super) fn lanes_for<'a>(
     automation: &'a AutomationState,
     chan: AutoChan,
@@ -425,28 +428,73 @@ pub(super) fn lanes_for<'a>(
         .map(|lane| (lane, lane_label(&lane.target, plugins, device_params)))
         .collect();
     lanes.sort_by(|(a, la), (b, lb)| {
-        priority(&a.target)
-            .cmp(&priority(&b.target))
+        list_order(&a.target, plugins)
+            .cmp(&list_order(&b.target, plugins))
             .then_with(|| la.cmp(lb))
             .then_with(|| a.id.cmp(&b.id))
     });
     lanes
 }
 
+/// The lanes [`lanes_for`] lists for `chan`, unsorted and unlabelled —
+/// the cheap walk the inspector's fingerprint hashes.
+pub(super) fn owned_lanes<'a>(
+    automation: &'a AutomationState,
+    chan: AutoChan,
+    plugins: &'a [PluginSlotState],
+) -> impl Iterator<Item = &'a AutomationLane> + 'a {
+    automation
+        .lanes
+        .values()
+        .filter(move |lane| belongs(&lane.target, chan, plugins))
+}
+
+/// The inspector list's sort key for a lane: the built-in tiers of
+/// [`priority`] first, then plugin params by (chain slot, param id).
+fn list_order(target: &AutomationTarget, plugins: &[PluginSlotState]) -> (u32, usize, u32) {
+    match target {
+        AutomationTarget::PluginParam { instance, param_id } => {
+            let slot = plugins
+                .iter()
+                .position(|p| p.instance_id == *instance)
+                .unwrap_or(usize::MAX);
+            (10, slot, *param_id)
+        }
+        other => (priority(other), 0, 0),
+    }
+}
+
+/// The name a chain slot goes by in a lane label: the plugin's name, with
+/// its ordinal among same-named slots ("Comp #2") when the chain holds
+/// more than one instance of it — otherwise two instances' lanes would
+/// read identically.
+pub(crate) fn slot_label(plugins: &[PluginSlotState], index: usize) -> String {
+    let name = &plugins[index].plugin_name;
+    let same = |p: &&PluginSlotState| p.plugin_name == *name;
+    if plugins.iter().filter(same).count() < 2 {
+        return name.clone();
+    }
+    let ordinal = plugins[..=index].iter().filter(same).count();
+    format!("{name} #{ordinal}")
+}
+
 /// The full human label of a lane target: [`target_label`], except that
 /// a plugin-param lane names its plugin and parameter (the picker's
-/// `"<plugin>: <param>"` label) rather than a bare "Param" — the
-/// inspector lists several lanes, and "Param" twice says nothing.
+/// `"<plugin>: <param>"` label, with the slot ordinal of
+/// [`slot_label`]) rather than a bare "Param" — the inspector lists
+/// several lanes, and "Param" twice says nothing.
 pub(super) fn lane_label(
     target: &AutomationTarget,
     plugins: &[PluginSlotState],
     device_params: &[DeviceParam],
 ) -> String {
     if let AutomationTarget::PluginParam { instance, param_id } = target {
-        if let Some(slot) = plugins.iter().find(|p| p.instance_id == *instance) {
+        if let Some(index) = plugins.iter().position(|p| p.instance_id == *instance) {
+            let slot = &plugins[index];
+            let slot_name = slot_label(plugins, index);
             return match slot.params.iter().find(|p| p.id == *param_id) {
-                Some(param) => format!("{}: {}", slot.plugin_name, param.name),
-                None => format!("{}: #{}", slot.plugin_name, param_id),
+                Some(param) => format!("{}: {}", slot_name, param.name),
+                None => format!("{}: #{}", slot_name, param_id),
             };
         }
     }

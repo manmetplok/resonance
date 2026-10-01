@@ -154,6 +154,12 @@ pub fn handle(r: &mut Resonance, m: ExternalInstrumentMessage) -> Task<Message> 
             // Only meaningful for an existing track; ignore stray ids.
             if r.registry.tracks.iter().any(|t| t.id == track_id) {
                 enable_external_instrument(r, track_id);
+                // The pairing's onboarding card and pickers live in the
+                // inspector's TRACK group: unfold it, or enabling from a
+                // folded group (or over the wire) shows nothing happening.
+                r.ui.mixer
+                    .collapsed_inspector_groups
+                    .remove(&crate::state::MixerInspectorGroup::Track);
             }
         }
         M::Disable(track_id) => {

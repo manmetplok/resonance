@@ -614,6 +614,7 @@ impl Resonance {
                 keymap_editor: crate::update::keymap::KeymapEditorState::for_settings(
                     &settings.keymap,
                 ),
+                window_size: state::DEFAULT_WINDOW_SIZE,
             },
             banners: state::Banners::default(),
             master: state::MasterState {

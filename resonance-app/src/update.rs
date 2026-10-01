@@ -258,6 +258,10 @@ impl crate::Resonance {
             iced::window::Event::FilesHoveredLeft => {
                 Some(Message::Import(ImportMessage::HoverLeft))
             }
+            // The window's size, for the floating plugin window's clamp.
+            iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size) => {
+                Some(Message::Ui(UiMessage::WindowResized(size)))
+            }
             _ => None,
         });
 
@@ -269,6 +273,15 @@ impl crate::Resonance {
         if self.presets.dragging.is_some() {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::plugin_preset_ui::drag_end_event(&event)
+            }));
+        }
+
+        // A generic plugin window's title-bar drag ends when the window
+        // loses focus: its release is then delivered elsewhere, and the
+        // window would otherwise stay stuck to the pointer.
+        if self.ui.mixer.plugin_window.is_some_and(|w| w.drag.is_some()) {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::plugin_window::drag_end_event(&event)
             }));
         }
 

@@ -37,6 +37,12 @@ pub struct PluginWindowDragState {
     pub grab: Option<iced::Vector>,
 }
 
+/// How much of the title bar, measured from its left edge, always stays
+/// inside the app window — enough to grab it and drag it back.
+pub const PLUGIN_WINDOW_GRAB_WIDTH: f32 = 120.0;
+/// Height of the title bar strip that always stays inside the app window.
+pub const PLUGIN_WINDOW_GRAB_HEIGHT: f32 = 30.0;
+
 impl PluginWindowState {
     pub fn new(instance_id: PluginInstanceId, position: iced::Point) -> Self {
         Self {
@@ -45,21 +51,49 @@ impl PluginWindowState {
             drag: None,
         }
     }
+
+    /// `position` pulled inside `viewport` so that a grab strip of the
+    /// title bar ([`PLUGIN_WINDOW_GRAB_WIDTH`] x
+    /// [`PLUGIN_WINDOW_GRAB_HEIGHT`]) stays on screen: never above or
+    /// left of the app window's edge, never past its right or bottom
+    /// edge minus that strip.
+    pub fn clamp(position: iced::Point, viewport: iced::Size) -> iced::Point {
+        let max_x = (viewport.width - PLUGIN_WINDOW_GRAB_WIDTH).max(0.0);
+        let max_y = (viewport.height - PLUGIN_WINDOW_GRAB_HEIGHT).max(0.0);
+        iced::Point::new(position.x.clamp(0.0, max_x), position.y.clamp(0.0, max_y))
+    }
+
+    /// Whether a window at `position` still has its grab strip inside
+    /// `viewport` (it would not move under [`Self::clamp`]).
+    pub fn title_on_screen(position: iced::Point, viewport: iced::Size) -> bool {
+        Self::clamp(position, viewport) == position
+    }
 }
 
 impl MixerUiState {
-    /// The plugin the generic window shows, if one is open. This is "the
-    /// selected plugin" for the preset commands and the media tab's
-    /// double-click load.
+    /// The plugin the generic window shows, if one is open. (The preset
+    /// commands act on [`MixerUiState::focused_slot`], not on this: a
+    /// plugin with its own GUI never opens the generic window.)
     pub fn plugin_window_id(&self) -> Option<PluginInstanceId> {
         self.plugin_window.map(|w| w.instance_id)
     }
 
-    /// Close the generic window if it shows `instance_id` — the slot was
-    /// removed, replaced or reloaded away.
+    /// Close the generic window if it shows `instance_id`. The slot stays
+    /// focused ([`MixerUiState::focused_slot`]).
     pub fn close_plugin_window_for(&mut self, instance_id: PluginInstanceId) {
         if self.plugin_window_id() == Some(instance_id) {
             self.plugin_window = None;
+        }
+    }
+
+    /// The slot `instance_id` is gone (removed, replaced, its owner
+    /// deleted): close its window and drop it as the focused slot, so
+    /// neither the window nor a preset command can act on an id the
+    /// engine may hand to the next plugin added.
+    pub fn forget_plugin(&mut self, instance_id: PluginInstanceId) {
+        self.close_plugin_window_for(instance_id);
+        if self.focused_slot == Some(instance_id) {
+            self.focused_slot = None;
         }
     }
 }

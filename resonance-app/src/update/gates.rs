@@ -85,6 +85,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::SelectTrack(_))
         | Message::Ui(UiMessage::SelectBus(_))
         | Message::Ui(UiMessage::SelectMaster)
+        | Message::Ui(UiMessage::WindowResized(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
@@ -382,7 +383,9 @@ fn plugin_edit_target(
         | ClosePluginEditor(_)
         | OpenPluginWindow(_)
         | ClosePluginWindow(_)
-        | PluginWindowDrag(_) => None,
+        | PluginWindowDrag(_)
+        | OpenGenericParams(_)
+        | FocusSlot(_) => None,
         // An audition moves the sound as a recall would; the loads that
         // stick are gated as `LoadPluginPreset` / the add they become.
         PresetUi(crate::message::PresetUiMessage::BrowserAudition(_)) => r

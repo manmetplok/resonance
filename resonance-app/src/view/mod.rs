@@ -63,9 +63,19 @@ impl crate::Resonance {
         // layer is always there so opening or closing the window never
         // changes the tree's shape (which would reset the strips' scroll
         // offsets under it).
-        let window: Element<'_, Message> = self
-            .view_plugin_window()
-            .unwrap_or_else(|| Space::new().into());
+        //
+        // The Arrange track menu (and its "Save as preset…" prompt) is the
+        // one overlay drawn inside the base view rather than in the root
+        // stack, so the window would land on top of it; while it is up
+        // the window is not drawn at all.
+        let track_menu_up = self.ui.interaction.track_menu.is_some()
+            || self.ui.interaction.preset_save.is_some();
+        let window: Element<'_, Message> = if track_menu_up {
+            None
+        } else {
+            self.view_plugin_window()
+        }
+        .unwrap_or_else(|| Space::new().into());
         let base: Element<'_, Message> = stack![base, window].into();
         let root: Element<'_, Message> = match self.view_root_overlay() {
             Some(overlay) => stack![base, overlay].into(),

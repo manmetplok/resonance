@@ -339,6 +339,14 @@ pub enum PluginMessage {
     ClosePluginWindow(PluginInstanceId),
     /// Title-bar drag of the generic window.
     PluginWindowDrag(PluginWindowDrag),
+    /// Open the host-drawn generic parameter window for a slot even when
+    /// the plugin has its own GUI — the way to its parameter list and
+    /// preset bar for a plugin whose editor hides them. Focuses the slot.
+    OpenGenericParams(PluginInstanceId),
+    /// Make a slot the focused one (`MixerUiState::focused_slot`,
+    /// mixer-cleanup.md §2.1) and select the channel it sits on, without
+    /// opening anything. The preset commands then act on it.
+    FocusSlot(PluginInstanceId),
 }
 
 /// A step of the generic plugin window's title-bar drag.
@@ -404,6 +412,8 @@ impl PluginMessage {
             | Self::OpenPluginWindow(_)
             | Self::ClosePluginWindow(_)
             | Self::PluginWindowDrag(_)
+            | Self::OpenGenericParams(_)
+            | Self::FocusSlot(_)
             // A rescan changes what the machine offers, not what the
             // project contains — there is nothing to undo (todo #1307).
             | Self::RescanPlugins
@@ -584,6 +594,10 @@ pub enum UiMessage {
     /// (mixer-cleanup.md §3.3). Clears the track and bus selections: the
     /// inspector shows exactly one channel.
     SelectMaster,
+    /// The app window was opened or resized (`window::Event::Opened` /
+    /// `Resized`). Kept as `UiTransientState::window_size`, which the
+    /// floating generic plugin window clamps its position to.
+    WindowResized(iced::Size),
 }
 
 impl UiMessage {
@@ -609,6 +623,7 @@ impl UiMessage {
             | Self::NewEmptyProject
             | Self::SelectTrack(..)
             | Self::SelectBus(..)
+            | Self::WindowResized(..)
             | Self::ModifiersChanged(..)
             | Self::ConfirmSaveAndQuit
             | Self::ConfirmDiscardAndQuit

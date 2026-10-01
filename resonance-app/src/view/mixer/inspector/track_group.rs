@@ -71,9 +71,11 @@ pub(super) fn track_group(
         col = col.push(super::external_instrument::external_instrument_group(
             r, track, ext,
         ));
-    } else if track.track_type == TrackType::Instrument {
+    } else if track.track_type == TrackType::Instrument && track.sub_track.is_none() {
         // Dispatches `Enable`, which drops the user onto the onboarding
-        // ("Unconfigured") card above.
+        // ("Unconfigured") card above. Not on a sub-track: it is one of
+        // its parent plugin's output ports, with no MIDI of its own to
+        // send out to hardware.
         col = col.push(Space::new().height(8)).push(super::widgets::action_button(
             "External hardware instrument",
             Some(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(

@@ -75,6 +75,7 @@ impl Resonance {
     /// Test-only: select a track so `FreezeSelectedTracks` has a target.
     #[doc(hidden)]
     pub fn test_select_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        self.ui.clear_channel_selection();
         self.ui.interaction.selected_track = Some(track_id);
     }
 
@@ -170,6 +171,9 @@ impl Resonance {
     /// the per-click `SelectTrack` plumbing.
     #[doc(hidden)]
     pub fn test_set_selected_tracks(&mut self, ids: Vec<resonance_audio::types::TrackId>) {
+        if !ids.is_empty() {
+            self.ui.clear_channel_selection();
+        }
         self.ui.interaction.selected_track = ids.last().copied();
         self.ui.interaction.selected_tracks = ids;
     }

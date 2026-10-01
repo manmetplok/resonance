@@ -4,7 +4,6 @@
 //! `resonance-app/tests/` can exercise the real view / update loop via
 //! `iced_test` — the binary itself is a thin shim.
 
-use iced::Size;
 use resonance_app::{parse_startup_tab, theme, Resonance, STARTUP_TAB};
 
 // `RUST_LOG` unset: `warn` everywhere, `info` from the workspace crates
@@ -48,8 +47,8 @@ fn main() -> iced::Result {
         .subscription(Resonance::subscription)
         .theme(theme::resonance_theme())
         .window(iced::window::Settings {
-            size: Size::new(1440.0, 900.0),
-            min_size: Some(Size::new(1440.0, 900.0)),
+            size: resonance_app::state::DEFAULT_WINDOW_SIZE,
+            min_size: Some(resonance_app::state::DEFAULT_WINDOW_SIZE),
             exit_on_close_request: false,
             ..Default::default()
         })

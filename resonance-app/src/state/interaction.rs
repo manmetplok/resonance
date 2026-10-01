@@ -211,15 +211,19 @@ impl ClipInteractionState {
     /// `None` clears the selection entirely. Keeps `selected_track` (the
     /// primary highlight) and `selected_tracks` (the Arrange multi-selection)
     /// in agreement so a normal click never leaves a stale group highlighted.
-    pub fn select_single_track(&mut self, id: Option<TrackId>) {
+    ///
+    /// Callers go through [`UiTransientState::select_track`](crate::state::UiTransientState::select_track),
+    /// which also takes the mixer's bus / master selection off.
+    pub(crate) fn select_single_track(&mut self, id: Option<TrackId>) {
         self.selected_track = id;
         self.selected_tracks = id.into_iter().collect();
     }
 
     /// Toggle a track in the multi-selection (an additive Cmd/Shift click).
     /// The primary `selected_track` follows the most recent member, or clears
-    /// when the set empties.
-    pub fn toggle_track_selection(&mut self, id: TrackId) {
+    /// when the set empties. Callers go through
+    /// [`UiTransientState::toggle_track_selection`](crate::state::UiTransientState::toggle_track_selection).
+    pub(crate) fn toggle_track_selection(&mut self, id: TrackId) {
         if let Some(pos) = self.selected_tracks.iter().position(|&t| t == id) {
             self.selected_tracks.remove(pos);
         } else {

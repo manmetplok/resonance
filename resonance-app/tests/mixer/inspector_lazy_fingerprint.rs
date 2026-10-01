@@ -187,3 +187,79 @@ fn inspector_bypassed_plugin_golden() {
         .expect("snapshot should render");
     crate::common::assert_golden(&snap, "tests/snapshots/mixer_inspector_plugin_bypassed.png");
 }
+
+// ---------------------------------------------------------------------------
+// AUTOMATION: the fingerprint hashes cheap stand-ins (lane id / target /
+// Read state, each slot's parameter-list identity) instead of building
+// every label per frame. These pin that the stand-ins still move when
+// what the group draws moves.
+// ---------------------------------------------------------------------------
+
+fn gain_lane(track_id: u64) -> resonance_common::AutomationTarget {
+    resonance_common::AutomationTarget::TrackGain(track_id)
+}
+
+#[test]
+fn track_fingerprint_tracks_lane_read_toggle() {
+    use resonance_app::message::AutomationMessage;
+    let mut app = app();
+    app.test_add_track(TRACK, TrackType::Audio);
+    let fp = |app: &Resonance| app.test_inspector_fingerprint(TRACK).unwrap();
+    let empty = fp(&app);
+    assert_eq!(empty, fp(&app), "stable while nothing changes");
+
+    let _ = app.update(Message::Automation(AutomationMessage::AddLane(gain_lane(TRACK))));
+    let read_on = fp(&app);
+    assert_ne!(empty, read_on, "a new lane redraws the group");
+
+    let _ = app.update(Message::Automation(AutomationMessage::ToggleRead(gain_lane(TRACK))));
+    let read_off = fp(&app);
+    assert_ne!(read_on, read_off, "the Read state is part of the key");
+
+    let _ = app.update(Message::Automation(AutomationMessage::ToggleRead(gain_lane(TRACK))));
+    assert_eq!(read_on, fp(&app), "toggling back restores the key");
+}
+
+/// Adding a plugin changes the `+ Add lane` options (its parameters), and
+/// a slot's parameter list replaced whole (a recovered or re-adopted
+/// instance) changes them too — the list is keyed by identity.
+#[test]
+fn track_fingerprint_tracks_plugin_add_and_param_list() {
+    let mut app = app();
+    app.test_add_track(TRACK, TrackType::Audio);
+    let fp = |app: &Resonance| app.test_inspector_fingerprint(TRACK).unwrap();
+    let bare = fp(&app);
+    app.test_apply_engine_event(plugin_added(TRACK));
+    let with_plugin = fp(&app);
+    assert_ne!(bare, with_plugin, "a plugin add redraws the picker");
+
+    let track = app
+        .test_registry_mut()
+        .tracks
+        .iter_mut()
+        .find(|t| t.id == TRACK)
+        .unwrap();
+    track.plugins[0].params = vec![resonance_audio::types::ParamInfo {
+        id: 1,
+        name: "Low Gain".into(),
+        ..Default::default()
+    }];
+    assert_ne!(with_plugin, fp(&app), "a replaced parameter list redraws the picker");
+}
+
+#[test]
+fn bus_fingerprint_tracks_lane_read_toggle() {
+    use resonance_app::message::AutomationMessage;
+    use resonance_common::AutomationTarget;
+    let mut app = app();
+    app.test_add_bus(BUS, "Drum Bus");
+    let fp = |app: &Resonance| app.test_bus_inspector_fingerprint(BUS).unwrap();
+    let _ = app.update(Message::Automation(AutomationMessage::AddLane(
+        AutomationTarget::BusGain(BUS),
+    )));
+    let read_on = fp(&app);
+    let _ = app.update(Message::Automation(AutomationMessage::ToggleRead(
+        AutomationTarget::BusGain(BUS),
+    )));
+    assert_ne!(read_on, fp(&app), "the bus lane's Read state is part of the key");
+}

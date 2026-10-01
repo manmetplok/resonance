@@ -11,13 +11,17 @@
 //! option list (`test_inspector_add_lane_message`).
 
 use iced::Size;
+use iced_test::selector::{Candidate, Target};
 use iced_test::simulator::Simulator;
 use resonance_app::message::{
-    AutomationMessage, BusMessage, Message, ProjectIoMessage, TrackMessage, UiMessage,
+    AutomationMessage, BusMessage, ExternalInstrumentMessage, Message, PluginMessage,
+    ProjectIoMessage, TrackMessage, UiMessage,
 };
-use resonance_app::state::{MidiClipState, MixerInspectorGroup, PluginSlotState, ViewMode};
+use resonance_app::state::{
+    MidiClipState, MixerInspectorGroup, PluginSlotState, SubTrackLink, TrackState, ViewMode,
+};
 use resonance_app::{theme, Resonance};
-use resonance_audio::types::TrackType;
+use resonance_audio::types::{ParamInfo, TrackType};
 use resonance_common::AutomationTarget;
 
 const AUDIO: u64 = 1;
@@ -82,6 +86,42 @@ fn y_of(ui: &mut Simulator<'_, Message>, label: &str) -> f32 {
         .unwrap_or_else(|e| panic!("{label} should render: {e:?}"))
         .bounds()
         .y
+}
+
+/// Left edge of the inspector pane: it is the right-most column of the
+/// 1440-wide simulator, and nothing else draws text right of here.
+const INSPECTOR_LEFT: f32 = 1440.0 - theme::INSPECTOR_WIDTH;
+
+/// A selector for the text `label` drawn **inside the inspector** — the
+/// strips still draw some of the same labels (their lane header's READ
+/// and "Volume", a slot's plugin name), and a plain text selector would
+/// match those first and pass with the inspector row gone.
+fn in_inspector(label: &str) -> impl FnMut(Candidate<'_>) -> Option<Target> + Send {
+    let label = label.to_owned();
+    move |c: Candidate<'_>| {
+        let hit = matches!(
+            &c,
+            Candidate::Text { content, bounds, .. }
+                if *content == label && bounds.x >= INSPECTOR_LEFT
+        );
+        hit.then(|| Target::from(c))
+    }
+}
+
+/// The vertical position of `label` inside the inspector.
+fn inspector_y(ui: &mut Simulator<'_, Message>, label: &str) -> f32 {
+    ui.find(in_inspector(label))
+        .unwrap_or_else(|e| panic!("{label} should render in the inspector: {e:?}"))
+        .bounds()
+        .y
+}
+
+/// Click `label` inside the inspector and return the raised messages.
+fn click_in_inspector(app: &Resonance, label: &str) -> Vec<Message> {
+    let mut ui = simulator(app);
+    ui.click(in_inspector(label))
+        .unwrap_or_else(|e| panic!("{label} should be clickable in the inspector: {e:?}"));
+    ui.into_messages().collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -224,8 +264,10 @@ fn automation_add_lane_then_read_toggle() {
     let fp_lane = app.test_inspector_fingerprint(AUDIO).unwrap();
     assert_ne!(fp_empty, fp_lane, "a new lane redraws the group");
 
-    // The lane row renders and its READ toggle raises ToggleRead.
-    let messages = click(&app, "READ");
+    // The lane row renders and its READ toggle raises ToggleRead. The
+    // strip's lane header draws a READ too, so the click is scoped to the
+    // inspector pane.
+    let messages = click_in_inspector(&app, "READ");
     let toggle = messages
         .into_iter()
         .find(|m| {
@@ -259,9 +301,79 @@ fn automation_lists_every_lane() {
         let add = app.test_inspector_add_lane_message(Some(AUDIO), label).unwrap();
         let _ = app.update(add);
     }
+    // Scoped to the inspector: the strip's lane header shows the primary
+    // lane's label ("Volume") as well.
     let mut sim = simulator(&app);
-    let (v, p, m) = (y_of(&mut sim, "Volume"), y_of(&mut sim, "Pan"), y_of(&mut sim, "Mute"));
+    let (v, p, m) = (
+        inspector_y(&mut sim, "Volume"),
+        inspector_y(&mut sim, "Pan"),
+        inspector_y(&mut sim, "Mute"),
+    );
     assert!(v < p && p < m, "priority order gain, pan, mute");
+}
+
+fn param(id: u32, name: &str) -> ParamInfo {
+    ParamInfo {
+        id,
+        name: name.to_owned(),
+        ..Default::default()
+    }
+}
+
+fn comp_slot(instance: u64) -> PluginSlotState {
+    PluginSlotState::new(
+        instance,
+        "Comp".into(),
+        "com.resonance.comp".into(),
+        "/plugins/comp.clap".into(),
+        vec![param(1, "Threshold"), param(2, "Ratio")],
+        false,
+    )
+}
+
+/// Two instances of one plugin: their lanes carry the slot ordinal
+/// ("Comp #1" / "Comp #2"), and plugin-param lanes list per plugin in
+/// chain order, then by parameter id — not alphabetically across
+/// plugins.
+#[test]
+fn automation_plugin_lanes_are_disambiguated_and_grouped_per_slot() {
+    let mut app = app();
+    app.test_push_track_plugin(AUDIO, comp_slot(61));
+    app.test_push_track_plugin(AUDIO, comp_slot(62));
+    ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
+    for (instance, param_id) in [(62, 2), (61, 2), (62, 1), (61, 1)] {
+        let _ = app.update(Message::Automation(AutomationMessage::AddLane(
+            AutomationTarget::PluginParam { instance, param_id },
+        )));
+    }
+    let labels = ["Comp #1: Threshold", "Comp #1: Ratio", "Comp #2: Threshold", "Comp #2: Ratio"];
+    let mut sim = simulator(&app);
+    let ys: Vec<f32> = labels.iter().map(|l| inspector_y(&mut sim, l)).collect();
+    for (pair, y) in labels.windows(2).zip(ys.windows(2)) {
+        assert!(y[0] < y[1], "{} must sit above {} ({ys:?})", pair[0], pair[1]);
+    }
+    assert!(
+        sim.find(in_inspector("Comp: Threshold")).is_err(),
+        "no ambiguous label is left"
+    );
+    // The `+ Add lane` picker names them the same way.
+    assert!(app
+        .test_inspector_add_lane_message(Some(AUDIO), "Comp #2: Ratio")
+        .is_some());
+}
+
+/// A single instance keeps the bare plugin name.
+#[test]
+fn automation_single_instance_label_has_no_ordinal() {
+    let mut app = app();
+    app.test_push_track_plugin(AUDIO, comp_slot(61));
+    ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
+    let _ = app.update(Message::Automation(AutomationMessage::AddLane(
+        AutomationTarget::PluginParam { instance: 61, param_id: 1 },
+    )));
+    simulator(&app)
+        .find(in_inspector("Comp: Threshold"))
+        .expect("the bare name");
 }
 
 // ---------------------------------------------------------------------------
@@ -332,10 +444,18 @@ fn master_inspector_shows_chain_automation_and_bounce() {
     // Master automation is gain only, and the lane lands in the group.
     assert!(app.test_inspector_add_lane_message(None, "Pan").is_none());
     let before = app.test_master_inspector_fingerprint();
+    assert!(
+        simulator(&app).find(in_inspector("Volume")).is_err(),
+        "no lane row before the lane exists"
+    );
     let add = app.test_inspector_add_lane_message(None, "Volume").unwrap();
     let _ = app.update(add);
     assert_ne!(before, app.test_master_inspector_fingerprint());
-    simulator(&app).find("Volume").expect("master gain lane row");
+    // Scoped to the inspector: the master strip's lane header shows
+    // "Volume" too once the lane exists.
+    simulator(&app)
+        .find(in_inspector("Volume"))
+        .expect("master gain lane row");
 }
 
 /// The master inspector on the demo project, with a gain lane: CHAIN,
@@ -381,5 +501,91 @@ fn bus_inspector_delete_bus_raises_remove_bus() {
             .iter()
             .any(|m| matches!(m, Message::Bus(BusMessage::RemoveBus(id)) if *id == BUS)),
         "DELETE BUS raises RemoveBus: {messages:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fold keys: TRACK, BUS and MASTER fold independently
+// ---------------------------------------------------------------------------
+
+#[test]
+fn owner_groups_fold_on_their_own_keys() {
+    let mut app = app();
+    app.test_push_master_plugin(eq_slot());
+    // Fold TRACK on a track.
+    ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
+    ui(&mut app, UiMessage::ToggleMixerInspectorGroup(MixerInspectorGroup::Track));
+    assert!(simulator(&app).find("MONO").is_err(), "TRACK folded");
+
+    // BUS and MASTER stay open.
+    ui(&mut app, UiMessage::SelectBus(Some(BUS)));
+    simulator(&app).find("DELETE BUS").expect("BUS is open");
+    ui(&mut app, UiMessage::SelectMaster);
+    simulator(&app)
+        .find("BOUNCE TO WAV")
+        .expect("MASTER is open");
+
+    // Folding MASTER leaves BUS and TRACK as they were.
+    ui(&mut app, UiMessage::ToggleMixerInspectorGroup(MixerInspectorGroup::Master));
+    assert!(simulator(&app).find("BOUNCE TO WAV").is_err(), "MASTER folded");
+    ui(&mut app, UiMessage::SelectBus(Some(BUS)));
+    simulator(&app).find("DELETE BUS").expect("BUS still open");
+    ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
+    assert!(simulator(&app).find("MONO").is_err(), "TRACK still folded");
+}
+
+/// Enabling external hardware unfolds TRACK, where its pairing lives.
+#[test]
+fn enabling_external_hardware_unfolds_track() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(INST)));
+    ui(&mut app, UiMessage::ToggleMixerInspectorGroup(MixerInspectorGroup::Track));
+    let _ = app.update(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(INST)));
+    simulator(&app).find("MONO").expect("TRACK unfolded");
+}
+
+/// A sub-track is one output of its parent's plugin: it has no MIDI of
+/// its own to send to hardware, so TRACK does not offer the pairing.
+#[test]
+fn sub_tracks_do_not_offer_external_hardware() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(INST)));
+    simulator(&app)
+        .find("External hardware instrument")
+        .expect("a plain instrument track offers it");
+
+    const SUB: u64 = 9;
+    let mut sub = TrackState::new_instrument(SUB, 2);
+    sub.sub_track = Some(SubTrackLink {
+        parent_track_id: INST,
+        output_port_index: 1,
+    });
+    app.test_push_track(sub);
+    ui(&mut app, UiMessage::SelectTrack(Some(SUB)));
+    let mut sim = simulator(&app);
+    sim.find("MONO").expect("TRACK is open on the sub-track");
+    assert!(sim.find("External hardware instrument").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// CHAIN: the Params button
+// ---------------------------------------------------------------------------
+
+/// "Params" on a CHAIN row opens the generic window for that slot — the
+/// route to a GUI plugin's parameters and presets.
+#[test]
+fn chain_params_button_raises_open_generic_params() {
+    let mut app = app();
+    let mut slot = eq_slot();
+    slot.has_gui = true;
+    app.test_push_track_plugin(AUDIO, slot);
+    ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
+    let messages = click_in_inspector(&app, "Params");
+    assert!(
+        messages.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::OpenGenericParams(id)) if *id == PLUGIN
+        )),
+        "Params raises OpenGenericParams: {messages:?}"
     );
 }

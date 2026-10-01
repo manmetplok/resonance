@@ -8,9 +8,9 @@ use resonance_audio::types::*;
 /// [`MixerUiState::collapsed_inspector_groups`] and carried by
 /// `UiMessage::ToggleMixerInspectorGroup`.
 ///
-/// `Track` is the owner's own options group: TRACK on a track, BUS on a
-/// bus, MASTER on the master. They share one key because they sit in
-/// the same slot and only one owner is ever shown.
+/// The owner's own options group has a key per owner kind: TRACK on a
+/// track, BUS on a bus, MASTER on the master. They sit in the same slot,
+/// but folding one must not fold the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MixerInspectorGroup {
     Chain,
@@ -18,16 +18,20 @@ pub enum MixerInspectorGroup {
     Routing,
     Automation,
     Track,
+    Bus,
+    Master,
 }
 
 impl MixerInspectorGroup {
-    /// Every group, in display order.
-    pub const ALL: [MixerInspectorGroup; 5] = [
+    /// Every group, in display order (the three owner groups last).
+    pub const ALL: [MixerInspectorGroup; 7] = [
         MixerInspectorGroup::Chain,
         MixerInspectorGroup::Sends,
         MixerInspectorGroup::Routing,
         MixerInspectorGroup::Automation,
         MixerInspectorGroup::Track,
+        MixerInspectorGroup::Bus,
+        MixerInspectorGroup::Master,
     ];
 }
 
@@ -37,6 +41,15 @@ pub struct MixerUiState {
     /// The open host-drawn generic plugin window, if any (see
     /// [`crate::state::plugin_window`]).
     pub plugin_window: Option<crate::state::PluginWindowState>,
+    /// The plugin slot the user is working on (mixer-cleanup.md §2.1):
+    /// set when its window opens (`OpenPluginWindow`, `OpenPluginEditor`,
+    /// `OpenGenericParams`) or it is focused (`FocusSlot`), and cleared
+    /// when the slot goes away or a project loads. It outlives the
+    /// window: closing the window leaves the slot focused. The preset
+    /// commands (◀ / ▶ / browse) and the media tab's double-click load
+    /// act on it — through `Resonance::preset_target`, which also
+    /// refuses a slot that is gone or hidden (Performance mode).
+    pub focused_slot: Option<PluginInstanceId>,
     /// Bus whose strip is selected, if any — the bus counterpart of
     /// [`ClipInteractionState::selected_track`](crate::state::ClipInteractionState::selected_track),
     /// which the mixer inspector reads to decide what to show. It is a

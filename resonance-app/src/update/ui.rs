@@ -85,21 +85,18 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::SelectTrack(id) => {
             // A track and a bus can't both be selected — the inspector
-            // describes one channel.
-            if id.is_some() {
-                r.ui.mixer.selected_bus = None;
-                r.ui.mixer.selected_master = false;
-            }
+            // describes one channel. Both helpers below take the bus /
+            // master selection off when they select a track.
             match id {
                 // An additive (Cmd/Shift) click on a track toggles it in the
                 // multi-selection and leaves any clip selection alone.
                 Some(track_id) if r.ui.interaction.select_additive => {
-                    r.ui.interaction.toggle_track_selection(track_id);
+                    r.ui.toggle_track_selection(track_id);
                 }
                 // A plain click (or an explicit deselect-all) replaces the
                 // selection and drops the clip selection, as before.
                 _ => {
-                    r.ui.interaction.select_single_track(id);
+                    r.ui.select_track(id);
                     r.ui.interaction.selected_clip = None;
                     r.ui.interaction.selected_midi_clip = None;
                 }
@@ -112,7 +109,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // inspector describes one of them.
             if id.is_some() {
                 r.ui.mixer.selected_master = false;
-                r.ui.interaction.select_single_track(None);
+                r.ui.select_track(None);
                 r.ui.interaction.selected_clip = None;
                 r.ui.interaction.selected_midi_clip = None;
             }
@@ -122,7 +119,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // time, so the track and bus highlights go.
             r.ui.mixer.selected_master = true;
             r.ui.mixer.selected_bus = None;
-            r.ui.interaction.select_single_track(None);
+            r.ui.select_track(None);
             r.ui.interaction.selected_clip = None;
             r.ui.interaction.selected_midi_clip = None;
         }
@@ -130,12 +127,15 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // Right-click selects the track (so the menu's "Freeze selected
             // tracks" entry targets what was clicked) and opens the context
             // menu anchored at the row (design doc #181, todo #581).
-            r.ui.interaction.select_single_track(Some(id));
+            r.ui.select_track(Some(id));
             r.ui.interaction.track_menu = Some(crate::state::TrackMenuState {
                 track_id: id,
                 x,
                 y,
             });
+        }
+        UiMessage::WindowResized(size) => {
+            crate::update::plugin_window::viewport_resized(r, size);
         }
         UiMessage::CloseTrackMenu => {
             r.ui.interaction.track_menu = None;

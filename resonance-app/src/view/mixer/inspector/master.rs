@@ -44,7 +44,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
                 super::collapsed(r, MixerInspectorGroup::Automation),
             ),
             Space::new().height(18),
-            master_group(r, super::collapsed(r, MixerInspectorGroup::Track)),
+            master_group(r, super::collapsed(r, MixerInspectorGroup::Master)),
         ]
         .spacing(0)
         .width(Length::Fill)
@@ -146,7 +146,7 @@ fn chain_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Messag
 /// MASTER — the master's own actions. Bounce renders the project to a
 /// WAV (the same message the master strip's Bounce button sends).
 fn master_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Message> {
-    let header = super::widgets::group_header("MASTER", MixerInspectorGroup::Track, collapsed);
+    let header = super::widgets::group_header("MASTER", MixerInspectorGroup::Master, collapsed);
     if collapsed {
         return header;
     }

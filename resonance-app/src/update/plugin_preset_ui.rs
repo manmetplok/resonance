@@ -43,12 +43,10 @@ impl Resonance {
             .find(|p| p.instance_id == instance_id)
     }
 
-    /// Whether the plugin panel's plugin is there to take a preset: the
-    /// preset commands' availability.
+    /// Whether the focused slot is there to take a preset: the preset
+    /// commands' availability.
     pub(crate) fn selected_plugin_available(&self) -> bool {
-        self.ui
-            .mixer
-            .plugin_window_id()
+        crate::update::plugin_window::preset_target(self)
             .and_then(|id| self.plugin_slot(id))
             .is_some_and(|slot| slot.availability.reason().is_none())
     }
@@ -696,9 +694,9 @@ fn media_load(r: &mut Resonance, index: usize) -> Task<Message> {
         return Task::none();
     };
     r.presets.media_presets.selected = Some(index);
-    let Some(instance_id) = r.ui.mixer.plugin_window_id() else {
+    let Some(instance_id) = crate::update::plugin_window::preset_target(r) else {
         r.banners.error_message = Some(format!(
-            "Select a {} slot to load {:?} onto",
+            "Open a {} plugin's window in the mixer to load {:?} onto it",
             row.plugin_name, row.name
         ));
         return Task::none();

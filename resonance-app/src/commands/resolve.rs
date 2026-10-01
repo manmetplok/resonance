@@ -264,12 +264,14 @@ impl CommandId {
             ShowMissingPlugins => Message::Ui(UiMessage::ShowMissingPlugins),
             PreviousPluginPreset | NextPluginPreset => {
                 Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::Step {
-                    instance_id: r.ui.mixer.plugin_window_id()?,
+                    instance_id: crate::update::plugin_window::preset_target(r)?,
                     delta: if self == NextPluginPreset { 1 } else { -1 },
                 }))
             }
             BrowsePluginPresets => Message::Plugin(PluginMessage::PresetUi(
-                PresetUiMessage::OpenBrowser(r.ui.mixer.plugin_window_id()?),
+                PresetUiMessage::OpenBrowser(
+                    crate::update::plugin_window::preset_target(r)?,
+                ),
             )),
             ExportStemsMidi => Message::Export(ExportMessage::Open),
             ImportMidi => Message::Import(ImportMessage::Open),

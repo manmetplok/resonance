@@ -62,7 +62,7 @@ pub(super) fn view<'a>(r: &'a crate::Resonance, bus: &'a BusState) -> Element<'a
                 collapsed(r, MixerInspectorGroup::Automation),
             ),
             Space::new().height(18),
-            bus_group(bus, collapsed(r, MixerInspectorGroup::Track)),
+            bus_group(bus, collapsed(r, MixerInspectorGroup::Bus)),
         ]
         .spacing(0)
         .width(Length::Fill)
@@ -350,7 +350,7 @@ fn chain_group(
 /// BUS group: **Delete bus**, the same `RemoveBus` the strip's trash icon
 /// sends (mixer-cleanup.md §3.3 — the trash leaves the strip later).
 fn bus_group(bus: &BusState, collapsed: bool) -> Element<'static, Message> {
-    let header = super::widgets::group_header("BUS", MixerInspectorGroup::Track, collapsed);
+    let header = super::widgets::group_header("BUS", MixerInspectorGroup::Bus, collapsed);
     if collapsed {
         return header;
     }

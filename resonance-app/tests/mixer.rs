@@ -77,6 +77,10 @@ mod mixer_inspector_sends_snapshot;
 mod mixer_strip_external_instrument;
 #[path = "mixer/mixer_sub_track_grouping.rs"]
 mod mixer_sub_track_grouping;
+#[path = "mixer/mixer_selection_exclusivity.rs"]
+mod mixer_selection_exclusivity;
+#[path = "mixer/plugin_focus_window.rs"]
+mod plugin_focus_window;
 #[path = "mixer/plugin_bypass_persistence.rs"]
 mod plugin_bypass_persistence;
 #[path = "mixer/plugin_removal_prunes_lanes.rs"]

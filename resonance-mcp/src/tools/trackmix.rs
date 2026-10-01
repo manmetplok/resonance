@@ -45,7 +45,8 @@ impl ResonanceMcp {
                        mixer strip. color is \"#rrggbb\" hex, the same form song_tracks \
                        reports each track's colour in. New tracks get one automatically, so \
                        use this only to recolour (e.g. one colour per instrument family). \
-                       Busses have no colour.",
+                       Sub-tracks take their parent's colour: set the parent's (refused on a \
+                       sub-track). Busses have no colour.",
         annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
     )]
     async fn track_set_color(

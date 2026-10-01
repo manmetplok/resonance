@@ -363,13 +363,12 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
         }
         rows.into()
     });
-    let target = r
-        .ui
-        .mixer
-        .plugin_window_id()
+    let target = crate::update::plugin_window::preset_target(r)
         .and_then(|id| r.plugin_slot(id))
         .map(|slot| format!("Double-click loads onto {}", slot.plugin_name))
-        .unwrap_or_else(|| "Select a plugin slot, then double-click a preset".to_string());
+        .unwrap_or_else(|| {
+            "Open a plugin's window in the mixer, then double-click a preset".to_string()
+        });
 
     column![
         search_row(

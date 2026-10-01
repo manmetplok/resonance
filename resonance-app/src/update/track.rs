@@ -543,7 +543,23 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
             r.with_track_mut(track_id, |t| t.name = name);
         }
         TrackMessage::SetTrackColor(track_id, color) => {
-            r.with_track_mut(track_id, |t| t.color = color);
+            // A sub-track is one output of its parent's plugin and wears
+            // the parent's colour: setting it directly is a no-op (the
+            // control path refuses it with a reason), and setting the
+            // parent's recolours its sub-tracks in the same undo step.
+            let is_sub = r
+                .registry
+                .tracks
+                .iter()
+                .any(|t| t.id == track_id && t.sub_track.is_some());
+            if !is_sub {
+                for t in r.registry.tracks.iter_mut().filter(|t| {
+                    t.id == track_id
+                        || t.sub_track.as_ref().is_some_and(|s| s.parent_track_id == track_id)
+                }) {
+                    t.color = color;
+                }
+            }
         }
         TrackMessage::ToggleTrackFxBypass(id) => {
             let new_bypass = r.with_track_mut(id, |t| {
