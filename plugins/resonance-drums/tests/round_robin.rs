@@ -29,6 +29,7 @@ fn make_pad(
             setup_key: String::new(),
             layers,
         }],
+        extra_banks: Vec::new(),
         overhead: None,
     }
 }
@@ -294,6 +295,7 @@ fn empty_pad_triggers_no_voices() {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: Vec::new(),
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect();
@@ -327,6 +329,7 @@ fn all_voices_from_multi_bank_hit_share_rr() {
                 layers: layers(),
             },
         ],
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OH".to_string(),
             setup_key: String::new(),
@@ -445,6 +448,7 @@ fn overhead_only_pad_uses_rr() {
                     choke_group: None,
                     output_group: OutputGroup::Cymbals,
                     close_mics: Vec::new(),
+                    extra_banks: Vec::new(),
                     overhead: Some(LoadedMicBank {
                         position: "OH".to_string(),
                         setup_key: String::new(),

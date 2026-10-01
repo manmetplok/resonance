@@ -79,6 +79,7 @@ fn make_saver_bundle(initial_path: Option<PathBuf>) -> SaverBundle {
     let saver = DrumsExtraState {
         kit_path: kit_path.clone(),
         overhead_setup_key: overhead_setup_key.clone(),
+        mic_banks: Default::default(),
         pad_choices: pad_choices.clone(),
         params: params.clone(),
         reload: None,

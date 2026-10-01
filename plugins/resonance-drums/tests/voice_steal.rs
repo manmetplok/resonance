@@ -62,6 +62,7 @@ fn ramp_pads() -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![ramp_sample(frames)])],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()

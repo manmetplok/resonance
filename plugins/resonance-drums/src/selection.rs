@@ -879,6 +879,7 @@ pub fn play_builtin(bridge: &KitBridge) {
                             choke_group: mapping.choke_group,
                             output_group: mapping.output_group,
                             close_mics: Vec::new(),
+                            extra_banks: Vec::new(),
                             overhead: None,
                         });
                         sources.push(None);
@@ -1299,8 +1300,18 @@ pub fn watch(bridge: &KitBridge) {
                 false
             }
         };
+        // `bleed_on` / `room_on` (E15): a moved one loads (or lets go
+        // of) just those banks.
+        let banks_moved = bridge.bank_flags_moved();
         if !started {
-            crate::articulation::apply_pending_locked(bridge, preload_moved);
+            let reloaded =
+                crate::articulation::apply_pending_locked(bridge, preload_moved || banks_moved);
+            if banks_moved && !reloaded {
+                // Nothing to reload (no kit, no rate yet): the next load
+                // reads the params as they are then.
+                *bridge.loaded_bank_flags.lock() =
+                    (bridge.params.bleed_enabled(), bridge.params.room_enabled());
+            }
         }
     }
     let sel = &bridge.params.selection;

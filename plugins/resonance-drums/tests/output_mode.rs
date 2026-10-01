@@ -64,6 +64,7 @@ fn drummica_shaped_kit() -> Vec<LoadedPad> {
                 .enumerate()
                 .map(|(b, pos)| bank(pos, i * 3 + b))
                 .collect(),
+            extra_banks: Vec::new(),
             overhead: Some(bank("OHsAB", i * 3 + 2)),
         })
         .collect()

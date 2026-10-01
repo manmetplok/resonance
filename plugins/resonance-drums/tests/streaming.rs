@@ -158,6 +158,7 @@ impl Fixture {
                     bank("A", &self.close[i % 4]),
                     bank("B", &self.close[(i + 1) % 4]),
                 ],
+                extra_banks: Vec::new(),
                 overhead: Some(bank("OH", &self.overhead[i % 2])),
             })
             .collect()
@@ -833,6 +834,7 @@ fn single_voice_kit(cache: &SampleCache, path: &Path, preload: u32) -> Vec<Loade
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![LoadedSample::from_shared(data.clone())])],
             }],
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect()
@@ -1458,6 +1460,7 @@ fn saver_for(plugin: &resonance_drums::ResonanceDrums) -> resonance_drums::Drums
     resonance_drums::DrumsExtraState {
         kit_path: plugin.bridge.kit_path.clone(),
         overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        mic_banks: plugin.bridge.mic_banks.clone(),
         pad_choices: plugin.bridge.pad_choices.clone(),
         params: plugin.bridge.params.clone(),
         reload: Some(plugin.bridge.clone()),
@@ -1755,6 +1758,7 @@ fn drummica_request(manifest: &Path, preload: u32) -> resonance_drums::kit_loade
         pad_choices: std::array::from_fn(|_| Default::default()),
         articulations: [false; NUM_PADS],
         preload,
+        banks: Default::default(),
     }
 }
 

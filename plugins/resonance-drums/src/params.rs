@@ -20,14 +20,14 @@ use crate::velocity;
 use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
-pub const PARAMS_PER_PAD: usize = 13;
+pub const PARAMS_PER_PAD: usize = 15;
 
 /// Number of global params ahead of the per-pad block, used for param
 /// indexing. The flat index is an enumeration order, not an identity:
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 9;
+pub const GLOBAL_PARAMS: usize = 16;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
@@ -149,6 +149,28 @@ pub struct DrumParams {
     /// state either: the state keeps carrying the preload as frames under
     /// its own key (`stream_preload`), as it did before the param existed.
     pub stream_preload: ChoiceParam,
+    /// The kit-wide level of each overhead slot (E15), in dB, −∞ … +6,
+    /// default 0 dB: `oh_1_level` scales overhead slot 1 (the
+    /// `overhead_setup_key` setup every kit plays), `oh_2_level` and
+    /// `oh_3_level` the setups layered on it. A slot is on when a setup is
+    /// chosen for it (plugin state, `mic_banks`); slots 2 and 3 are off by
+    /// default. On top of each pad's `pad_N_oh_trim`.
+    pub oh_levels: [FloatParam; MAX_OVERHEAD_SLOTS],
+    /// Bleed banks on/off (E15), default off: another piece's close mic
+    /// heard on this piece's hits (SN Btm on the kick and toms). Turning
+    /// it on loads only the bleed banks; off mutes them at once (ramped)
+    /// and lets their samples go. Not automatable: a change is a load.
+    pub bleed_on: ChoiceParam,
+    /// The bleed banks' kit-wide level, dB, −∞ … +6, default 0 dB. On top
+    /// of each pad's `pad_N_bleed_trim`.
+    pub bleed_level: FloatParam,
+    /// Room bank on/off (E15), default off: the kit's room setup (a
+    /// position `Room*`; which one is plugin state, `mic_banks.room`).
+    /// Not automatable: a change is a load.
+    pub room_on: ChoiceParam,
+    /// The room bank's kit-wide level, dB, −∞ … +6, default 0 dB. On top
+    /// of each pad's `pad_N_room_trim`.
+    pub room_level: FloatParam,
     /// What `kit_select` means beyond a slot (a missing kit, a kit with no
     /// slot), and the library handle its text and the loader resolve
     /// against. Shared with the bridge, the saver and the editor.
@@ -239,6 +261,15 @@ impl Default for DrumParams {
             )
             .not_automatable()
             .excluded_from_state(),
+            oh_levels: std::array::from_fn(|slot| {
+                level_param(OH_LEVEL_IDS[slot], OH_LEVEL_NAMES[slot], MAX_VOLUME_DB)
+            }),
+            bleed_on: ChoiceParam::new(BLEED_ON_ID, "Bleed", BANK_OFF, BANK_ON_LABELS)
+                .not_automatable(),
+            bleed_level: level_param(BLEED_LEVEL_ID, "Bleed Level", MAX_VOLUME_DB),
+            room_on: ChoiceParam::new(ROOM_ON_ID, "Room", BANK_OFF, BANK_ON_LABELS)
+                .not_automatable(),
+            room_level: level_param(ROOM_LEVEL_ID, "Room Level", MAX_VOLUME_DB),
             selection,
             pads: std::array::from_fn(PadParams::new),
         }
@@ -246,6 +277,16 @@ impl Default for DrumParams {
 }
 
 impl DrumParams {
+    /// Whether the bleed banks are on (E15).
+    pub fn bleed_enabled(&self) -> bool {
+        self.bleed_on.value() != BANK_OFF
+    }
+
+    /// Whether the room bank is on (E15).
+    pub fn room_enabled(&self) -> bool {
+        self.room_on.value() != BANK_OFF
+    }
+
     /// The articulation of every pad, in the shape the kit loader takes:
     /// false = primary piece, true = the alternate one.
     ///
@@ -258,27 +299,52 @@ impl DrumParams {
 }
 
 /// The mic slots a pad's per-mic trims are indexed by: its first and
-/// second close-mic bank and its overhead. E15 (bleed and room banks)
-/// extends this list; a slot's trim id is `pad_N_<key>_trim` with the
-/// slot's [`MIC_SLOT_KEYS`] entry.
+/// second close-mic bank, its overheads (every overhead slot), and its
+/// bleed and room banks (E15). A slot's trim id is `pad_N_<key>_trim`
+/// with the slot's [`MIC_SLOT_KEYS`] entry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MicSlot {
     /// The pad's first close-mic bank (kick In, snare Top, the tom, …).
     Close1 = 0,
     /// The pad's second close-mic bank (kick Out, snare Btm).
     Close2 = 1,
-    /// The overhead bank.
+    /// The overhead banks — one trim for every overhead slot: the mix
+    /// *between* overhead setups is kit-wide (`oh_N_level`), how much of
+    /// a pad the overheads carry is the pad's.
     Overhead = 2,
+    /// The pad's bleed banks (E15).
+    Bleed = 3,
+    /// The pad's room bank (E15).
+    Room = 4,
 }
 
 /// How many [`MicSlot`]s a pad has a trim for.
-pub const MIC_SLOTS: usize = 3;
+pub const MIC_SLOTS: usize = 5;
 
 /// Each [`MicSlot`]'s part of its trim's id (`pad_N_<key>_trim`).
-pub const MIC_SLOT_KEYS: [&str; MIC_SLOTS] = ["mic1", "mic2", "oh"];
+pub const MIC_SLOT_KEYS: [&str; MIC_SLOTS] = ["mic1", "mic2", "oh", "bleed", "room"];
 
 /// Each [`MicSlot`]'s part of its trim's name.
-const MIC_SLOT_NAMES: [&str; MIC_SLOTS] = ["Close Mic 1", "Close Mic 2", "OH"];
+const MIC_SLOT_NAMES: [&str; MIC_SLOTS] = ["Close Mic 1", "Close Mic 2", "OH", "Bleed", "Room"];
+
+/// The most overhead setups that play at once (E15).
+pub use crate::kit::MAX_OVERHEAD_SLOTS;
+
+/// `oh_N_level`'s ids, slot 1 first.
+pub const OH_LEVEL_IDS: [&str; MAX_OVERHEAD_SLOTS] = ["oh_1_level", "oh_2_level", "oh_3_level"];
+const OH_LEVEL_NAMES: [&str; MAX_OVERHEAD_SLOTS] = ["OH 1 Level", "OH 2 Level", "OH 3 Level"];
+/// `bleed_on` / `room_on`'s labels: a choice rather than a bool so it
+/// can be marked not automatable (a change is a load).
+pub const BANK_ON_LABELS: &[&str] = &["Off", "On"];
+/// `bleed_on` / `room_on` off (the default) and on.
+pub const BANK_OFF: i32 = 0;
+pub const BANK_ON: i32 = 1;
+/// The bleed banks' on/off and level ids (E15).
+pub const BLEED_ON_ID: &str = "bleed_on";
+pub const BLEED_LEVEL_ID: &str = "bleed_level";
+/// The room bank's on/off and level ids (E15).
+pub const ROOM_ON_ID: &str = "room_on";
+pub const ROOM_LEVEL_ID: &str = "room_level";
 
 impl MicSlot {
     /// The slot of close-mic bank `bank_index` (0 or 1).
@@ -316,7 +382,10 @@ pub struct PadParams {
     /// nothing ([`crate::articulation`] masks it).
     pub articulation: ChoiceParam,
     /// Per-mic trims in dB, −∞ … +12, default 0 dB, indexed by
-    /// [`MicSlot`]: `pad_N_mic1_trim`, `pad_N_mic2_trim`, `pad_N_oh_trim`.
+    /// [`MicSlot`]: `pad_N_mic1_trim`, `pad_N_mic2_trim`, `pad_N_oh_trim`,
+    /// and (E15) `pad_N_bleed_trim`, `pad_N_room_trim` — the last two at
+    /// the end of the pad's block ([`DrumParams::param_at`]), so the
+    /// fields before them keep their places.
     /// They replace v1's `balance` (between the two close mics) and
     /// `oh_blend` (the overhead's level), which [`upgrade_v1_levels`]
     /// converts.
@@ -699,6 +768,13 @@ impl DrumParams {
             6 => return &self.output_mode,
             7 => return &self.velocity_humanize,
             8 => return &self.stream_preload,
+            9 => return &self.oh_levels[0],
+            10 => return &self.oh_levels[1],
+            11 => return &self.oh_levels[2],
+            12 => return &self.bleed_on,
+            13 => return &self.bleed_level,
+            14 => return &self.room_on,
+            15 => return &self.room_level,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
@@ -718,6 +794,8 @@ impl DrumParams {
             10 => &pad.hold,
             11 => &pad.decay,
             12 => &pad.start,
+            13 => &pad.trims[MicSlot::Bleed as usize],
+            14 => &pad.trims[MicSlot::Room as usize],
             _ => &pad.volume,
         }
     }

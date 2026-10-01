@@ -120,6 +120,7 @@ fn kit(cache: &SampleCache, dir: &Path, tag: &str) -> Vec<LoadedPad> {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: vec![bank("a.wav"), bank("b.wav")],
+            extra_banks: Vec::new(),
             overhead: Some(bank("oh.wav")),
         })
         .collect()
@@ -260,6 +261,7 @@ fn layered_kit(cache: &SampleCache, dir: &Path) -> Vec<LoadedPad> {
             choke_group: m.choke_group,
             output_group: m.output_group,
             close_mics: vec![bank("a.wav"), bank("b.wav")],
+            extra_banks: Vec::new(),
             overhead: Some(bank("oh.wav")),
         })
         .collect()

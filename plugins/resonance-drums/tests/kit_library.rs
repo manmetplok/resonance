@@ -235,6 +235,7 @@ fn saver_for(plugin: &ResonanceDrums) -> DrumsExtraState {
     DrumsExtraState {
         kit_path: plugin.bridge.kit_path.clone(),
         overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        mic_banks: plugin.bridge.mic_banks.clone(),
         pad_choices: plugin.bridge.pad_choices.clone(),
         params: plugin.bridge.params.clone(),
         reload: Some(plugin.bridge.clone()),

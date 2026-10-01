@@ -171,6 +171,7 @@ fn drummica_shaped_pad(index: usize) -> LoadedPad {
                 layers: vec![layer(0.5)],
             })
             .collect(),
+        extra_banks: Vec::new(),
         overhead: Some(LoadedMicBank {
             position: "OHsAB".to_string(),
             setup_key: String::new(),

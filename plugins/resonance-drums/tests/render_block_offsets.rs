@@ -35,6 +35,7 @@ fn sampler() -> DrumSampler {
                     layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![0.5; 64])])],
                 })
                 .collect(),
+            extra_banks: Vec::new(),
             overhead: None,
         })
         .collect();

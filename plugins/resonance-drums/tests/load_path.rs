@@ -498,6 +498,7 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
     let third = settle(&b);
     assert_eq!(third.reused_pads, NUM_PADS - 1);
     let kick_in_alt = resonance_drums::sample_info::total_sample_bytes(&[LoadedPad {
+        extra_banks: Vec::new(),
         overhead: None,
         close_mics: vec![built_pad(&b, 0).close_mics[0].clone()],
         ..built_pad(&b, 0)
@@ -566,6 +567,7 @@ fn one_take_kit(mono: &[f32], as_mono: bool) -> Vec<LoadedPad> {
                 setup_key: String::new(),
                 layers: vec![VelocityLayer::new(vec![take()])],
             }],
+            extra_banks: Vec::new(),
             overhead: Some(LoadedMicBank {
                 position: "OH".to_string(),
                 setup_key: String::new(),
@@ -782,6 +784,9 @@ fn strike_takes(sampler: &mut DrumSampler, note: u8, velocity: f32) -> Vec<*cons
             let bank = match v.destination {
                 VoiceDestination::CloseMic { bank_index, .. } => &pad.close_mics[bank_index],
                 VoiceDestination::Overhead { .. } => pad.overhead.as_ref().unwrap(),
+                VoiceDestination::Extra { bank_index, .. } => {
+                    &pad.extra_banks[bank_index as usize].bank
+                }
             };
             Arc::as_ptr(bank.layers[v.layer_index].round_robins[v.rr_index].shared()) as *const ()
         })
@@ -1063,6 +1068,7 @@ fn saving_mid_decode_persists_the_kit_being_loaded() {
     let saver = DrumsExtraState {
         kit_path: plugin.bridge.kit_path.clone(),
         overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        mic_banks: plugin.bridge.mic_banks.clone(),
         pad_choices: plugin.bridge.pad_choices.clone(),
         params: plugin.bridge.params.clone(),
         reload: Some(plugin.bridge.clone()),
@@ -1091,6 +1097,7 @@ fn saver_for(plugin: &ResonanceDrums) -> DrumsExtraState {
     DrumsExtraState {
         kit_path: plugin.bridge.kit_path.clone(),
         overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        mic_banks: plugin.bridge.mic_banks.clone(),
         pad_choices: plugin.bridge.pad_choices.clone(),
         params: plugin.bridge.params.clone(),
         reload: Some(plugin.bridge.clone()),
@@ -1195,6 +1202,7 @@ fn request_for(kit: &Kit) -> resonance_drums::kit_loader::KitRequest {
         pad_choices: std::array::from_fn(|_| PadMicChoices::default()),
         articulations: [false; NUM_PADS],
         preload: resonance_drums::stream::DEFAULT_PRELOAD,
+        banks: Default::default(),
     }
 }
 

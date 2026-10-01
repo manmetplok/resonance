@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock};
 
 use parking_lot::{Condvar, Mutex};
 
-use crate::kit::{LoadedMicBank, LoadedSample, SampleData, VelocityLayer};
+use crate::kit::{BankKind, ExtraBank, LoadedMicBank, LoadedSample, SampleData, VelocityLayer};
 
 use super::cache::{SampleCache, Source};
 use super::manifest::{parse_vel_index, MicSetup};
@@ -115,6 +115,27 @@ pub(super) fn plan_overhead_bank(
     Ok(Some(BankPlan {
         position: setup.position.clone(),
         setup_key,
+        layers,
+    }))
+}
+
+/// Plan the bank of the setup `setup_key` of `piece` exactly — no
+/// fallback (an E15 bank: the setup was resolved against the piece by
+/// [`super::banks::resolve_extra_banks`]). `None` if the piece lacks it.
+pub(super) fn plan_setup(
+    piece_name: &str,
+    piece: &BTreeMap<String, MicSetup>,
+    kit_dir: &Path,
+    setup_key: &str,
+    jobs: &mut Jobs,
+) -> Result<Option<BankPlan>, String> {
+    let Some(setup) = piece.get(setup_key) else {
+        return Ok(None);
+    };
+    let layers = plan_layers(piece_name, setup, kit_dir, jobs)?;
+    Ok(Some(BankPlan {
+        position: setup.position.clone(),
+        setup_key: setup_key.to_string(),
         layers,
     }))
 }
@@ -369,15 +390,24 @@ impl Tally {
 /// Banks whose recordings legitimately differ in shape (a close mic with
 /// two round robins where the overhead has one) keep their shapes; the
 /// sampler maps a hit onto each by relative position (E7).
+///
+/// `extras` are the pad's E15 banks; they take part in the alignment like
+/// any other bank.
 pub(super) fn assemble_pad(
     close: &[BankPlan],
     overhead: Option<&BankPlan>,
+    extras: &[(BankKind, BankPlan)],
     results: &[Fetched],
     paths: &[PathBuf],
     held: &HeldTakes,
     tally: &mut Tally,
-) -> (Vec<LoadedMicBank>, Option<LoadedMicBank>) {
-    let banks = || close.iter().chain(overhead);
+) -> (Vec<LoadedMicBank>, Option<LoadedMicBank>, Vec<ExtraBank>) {
+    let banks = || {
+        close
+            .iter()
+            .chain(overhead)
+            .chain(extras.iter().map(|(_, plan)| plan))
+    };
     let readable = |plan: &BankPlan| {
         plan.layers
             .iter()
@@ -435,5 +465,9 @@ pub(super) fn assemble_pad(
     };
     let close_banks = close.iter().filter_map(&mut build).collect();
     let overhead_bank = overhead.and_then(&mut build);
-    (close_banks, overhead_bank)
+    let extra_banks = extras
+        .iter()
+        .filter_map(|(kind, plan)| build(plan).map(|bank| ExtraBank { kind: *kind, bank }))
+        .collect();
+    (close_banks, overhead_bank, extra_banks)
 }

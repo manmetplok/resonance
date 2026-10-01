@@ -126,8 +126,7 @@ pub fn total_sample_bytes(pads: &[LoadedPad]) -> usize {
     };
     pads.iter()
         .map(|pad| {
-            pad.close_mics.iter().map(bank_bytes).sum::<usize>()
-                + pad.overhead.as_ref().map(bank_bytes).unwrap_or(0)
+            pad.banks().map(bank_bytes).sum::<usize>()
         })
         .sum()
 }
