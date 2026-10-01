@@ -3,14 +3,32 @@
 
 use resonance_audio::types::*;
 
-/// The three collapsible groups in the mixer inspector. Used as the key
-/// of [`MixerUiState::collapsed_inspector_groups`] and carried by
+/// The collapsible groups in the mixer inspector, in display order
+/// (mixer-cleanup.md §3.1). Used as the key of
+/// [`MixerUiState::collapsed_inspector_groups`] and carried by
 /// `UiMessage::ToggleMixerInspectorGroup`.
+///
+/// `Track` is the owner's own options group: TRACK on a track, BUS on a
+/// bus, MASTER on the master. They share one key because they sit in
+/// the same slot and only one owner is ever shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MixerInspectorGroup {
-    Signal,
-    Routing,
     Chain,
+    Sends,
+    Routing,
+    Automation,
+    Track,
+}
+
+impl MixerInspectorGroup {
+    /// Every group, in display order.
+    pub const ALL: [MixerInspectorGroup; 5] = [
+        MixerInspectorGroup::Chain,
+        MixerInspectorGroup::Sends,
+        MixerInspectorGroup::Routing,
+        MixerInspectorGroup::Automation,
+        MixerInspectorGroup::Track,
+    ];
 }
 
 /// Pure UI state for the mixer view and its menus.
@@ -43,4 +61,10 @@ pub struct MixerUiState {
     /// overview jumps so several sections can be auditioned in a row. Never
     /// persisted to projects (todo #370).
     pub markers_overview_open: bool,
+    /// Whether the MASTER strip is selected, so the inspector describes
+    /// the master (mixer-cleanup.md §3.3). Mutually exclusive with the
+    /// track selection and [`Self::selected_bus`]: `UiMessage::SelectMaster`
+    /// clears both, and `SelectTrack(Some(_))` / `SelectBus(Some(_))`
+    /// clear this.
+    pub selected_master: bool,
 }

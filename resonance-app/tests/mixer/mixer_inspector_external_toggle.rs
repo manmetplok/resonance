@@ -7,7 +7,7 @@
 //! was unreachable through the UI. These tests drive the inspector purely
 //! via UI-dispatched messages:
 //!  - a plain instrument track renders the "External hardware instrument"
-//!    enable affordance in the ROUTING group;
+//!    enable affordance in the TRACK group;
 //!  - pressing it lands the user on the onboarding ("Unassigned") card;
 //!  - the external group offers a "Use built-in instrument" disable action
 //!    that returns the plain ROUTING view;
@@ -57,7 +57,7 @@ fn app_with_instrument_track() -> Resonance {
     app
 }
 
-/// A plain instrument track shows the enable affordance in ROUTING, and no
+/// A plain instrument track shows the enable affordance in TRACK, and no
 /// external-instrument surface yet.
 #[test]
 fn plain_instrument_shows_enable_affordance() {
@@ -66,7 +66,7 @@ fn plain_instrument_shows_enable_affordance() {
 
     ui.find("ROUTING").expect("generic ROUTING group");
     ui.find("External hardware instrument")
-        .expect("enable affordance in the ROUTING group");
+        .expect("enable affordance in the TRACK group");
     assert!(
         ui.find("EXTERNAL INSTRUMENT").is_err(),
         "plain track must not render the External Instrument group"
@@ -74,7 +74,7 @@ fn plain_instrument_shows_enable_affordance() {
 }
 
 /// Enabling via the inspector message lands the user on the onboarding
-/// ("Unassigned") card and swaps ROUTING for the External Instrument group.
+/// ("Unassigned") card and grows the External Instrument section in TRACK.
 #[test]
 fn enable_reaches_onboarding_card() {
     let mut app = app_with_instrument_track();
@@ -89,7 +89,7 @@ fn enable_reaches_onboarding_card() {
     ui.find("Pick the synth's MIDI output device + channel below.")
         .expect("onboarding card step 1 after Enable");
     ui.find("EXTERNAL INSTRUMENT")
-        .expect("External Instrument group replaces generic ROUTING");
+        .expect("External Instrument section in TRACK");
     // The enable affordance is gone once the track is external.
     assert!(
         ui.find("External hardware instrument").is_err(),

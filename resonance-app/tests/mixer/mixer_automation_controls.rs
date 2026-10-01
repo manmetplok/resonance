@@ -78,8 +78,8 @@ fn read_toggle_appears_only_once_a_lane_exists() {
 // the fingerprints in `view/mixer/strip_fingerprint.rs`. The cached
 // subtree is reused until the hash moves, so every rendered facet MUST
 // move it — a missed field means the strip keeps drawing stale state —
-// while the live meter levels (rendered outside the lazy region, like
-// the inspector's SIGNAL group) must NOT.
+// while the live meter levels (rendered outside the lazy region) must
+// NOT.
 // ---------------------------------------------------------------------
 
 /// Demo track 2 — "Synth Bass", hosting plugin instance `2 * 100`.

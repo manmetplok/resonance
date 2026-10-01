@@ -127,23 +127,10 @@ pub(super) fn chain_group(
     col.into()
 }
 
-/// The dashed-looking "Empty chain" placeholder row. Shared with the bus
-/// inspector so an empty track chain and an empty bus chain read the
-/// same.
+/// The "Empty chain" placeholder row. Shared with the bus and master
+/// inspectors so every empty chain reads the same.
 pub(super) fn empty_chain_row() -> Element<'static, Message> {
-    container(text("Empty chain").size(11).color(theme::TEXT_3))
-        .padding([8, 10])
-        .width(Length::Fill)
-        .style(|_theme| container::Style {
-            background: Some(iced::Background::Color(theme::BG_2)),
-            border: iced::Border {
-                color: theme::LINE_2,
-                width: 1.0,
-                radius: theme::RADIUS_MD.into(),
-            },
-            ..Default::default()
-        })
-        .into()
+    super::widgets::placeholder_row("Empty chain")
 }
 
 /// The BYP control: a real toggle since ba todo #1305.

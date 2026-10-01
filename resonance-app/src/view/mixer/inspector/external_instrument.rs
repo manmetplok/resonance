@@ -1,7 +1,12 @@
-//! External-instrument ROUTING group — replaces the generic ROUTING
-//! fields for a track paired with a hardware synth (todo #454, doc #169).
-//! Covers MIDI output, audio return, patch (Bank/Program), latency
-//! compensation, return monitoring, and the offline alert.
+//! External-instrument section of the TRACK group — the hardware-synth
+//! pairing for a track (todo #454, doc #169). Covers MIDI output, audio
+//! return, patch (Bank/Program), latency compensation, return
+//! monitoring, playback source and the offline alert.
+//!
+//! It used to replace the whole ROUTING group; since the mixer cleanup
+//! (mixer-cleanup.md §3.1) it renders inside TRACK under an "EXTERNAL
+//! INSTRUMENT" sub-label, and ROUTING keeps only the output picker for
+//! an external track.
 //!
 //! Widget helpers (`alert_action_button`, `pgnum_tile`, `preset_hint_chip`)
 //! live in `widgets`. The audio-return device list helper (`return_device_choices`)
@@ -31,12 +36,8 @@ pub(super) fn external_instrument_group(
     // (see `routing_group`) so a normal track and an external one read
     // with the same vertical cadence.
     let mut col = column![
-        super::widgets::group_header(
-            "EXTERNAL INSTRUMENT",
-            crate::state::MixerInspectorGroup::Routing,
-            false,
-        ),
-        Space::new().height(10),
+        super::widgets::sub_label("EXTERNAL INSTRUMENT"),
+        Space::new().height(6),
         ext_midi_output_block(r, track, ext),
         Space::new().height(8),
         ext_audio_return_block(r, track, ext),
@@ -48,8 +49,6 @@ pub(super) fn external_instrument_group(
         ext_monitoring_block(track),
         Space::new().height(8),
         ext_playback_source_block(r, track),
-        Space::new().height(8),
-        super::io::output_block(r, track),
         Space::new().height(10),
         disable_external_row(track.id),
     ]

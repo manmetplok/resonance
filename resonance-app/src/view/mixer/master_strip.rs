@@ -70,10 +70,16 @@ impl crate::Resonance {
             .width(theme::MASTER_STRIP_WIDTH)
             .height(Length::Fill);
 
-        container(strip_content)
-            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
-            .style(theme::card_selected)
-            .into()
+        // Clicking the strip (anywhere a control doesn't take the press)
+        // selects the master, so the inspector describes it — the same
+        // outside-the-container `mouse_area` the track and bus strips use.
+        iced::widget::mouse_area(
+            container(strip_content)
+                .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
+                .style(theme::card_selected),
+        )
+        .on_press(Message::Ui(UiMessage::SelectMaster))
+        .into()
     }
 
     /// The non-live upper region of the master strip — everything above

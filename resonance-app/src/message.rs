@@ -447,8 +447,8 @@ pub enum UiMessage {
     CancelQuit,
     /// Toggle the global tracks area (tempo, time signature) in the arrange view.
     ToggleGlobalTracks,
-    /// Fold / unfold one of the mixer-inspector groups (SIGNAL /
-    /// ROUTING / CHAIN). Runtime UI state only.
+    /// Fold / unfold one of the mixer-inspector groups (CHAIN / SENDS /
+    /// ROUTING / AUTOMATION / TRACK). Runtime UI state only.
     ToggleMixerInspectorGroup(MixerInspectorGroup),
     /// Fold / unfold a track's take lane — the stack of cycle-recorded
     /// takes shown beneath it (epic #15, doc #165). Runtime UI state only:
@@ -556,6 +556,10 @@ pub enum UiMessage {
     Palette(crate::palette::PaletteMsg),
     /// Preferences › Keyboard: the settings tab, preset and rebinding.
     Keymap(crate::update::keymap::KeymapMsg),
+    /// Select the MASTER strip, so the inspector describes the master
+    /// (mixer-cleanup.md §3.3). Clears the track and bus selections: the
+    /// inspector shows exactly one channel.
+    SelectMaster,
 }
 
 impl UiMessage {
@@ -617,7 +621,8 @@ impl UiMessage {
             | Self::ClosePalette
             | Self::Palette(..)
             // Keymap edits are user settings, not project state.
-            | Self::Keymap(..) => UndoAction::Skip,
+            | Self::Keymap(..)
+            | Self::SelectMaster => UndoAction::Skip,
         }
     }
 }
