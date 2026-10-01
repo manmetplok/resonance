@@ -33,3 +33,10 @@ tracing.workspace = true
 thiserror.workspace = true
 # Content ids of NAM models (`nam_library`): sha256 of the file bytes.
 sha2 = "0.10"
+# Kit import from a .zip (`drumkit_library`); the same build the drums
+# plugin's downloader uses, so the workspace compiles one zip.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# The import disk check (`drumkit_library::free_space`, statvfs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
