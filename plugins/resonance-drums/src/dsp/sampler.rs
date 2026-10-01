@@ -25,8 +25,8 @@ use crate::voice::{
 
 use super::janitor;
 use super::voice_pick::{
-    map_relative, pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS,
-    NO_LAST_TAKE,
+    map_relative, next_random, pick_layer_by_level, pick_rr, pick_rr_random, RoundRobinMode,
+    MAX_LAYERS, NO_LAST_TAKE,
 };
 
 /// The global settings a hit is started with, snapshotted once per
@@ -41,6 +41,9 @@ pub struct GlobalSettings {
     pub max_voices: usize,
     /// Velocity curve, -1 (hard) … 0 (linear) … +1 (soft).
     pub velocity_curve: f32,
+    /// Velocity humanize (E7): each hit's velocity moves by up to ± this
+    /// many MIDI steps (0..20), from a fixed-seed generator. 0 is off.
+    pub velocity_humanize: f32,
     /// How a layer's takes are walked.
     pub round_robin: RoundRobinMode,
     /// Where hits sound (E11). A headless sampler never handed params
@@ -54,6 +57,7 @@ impl Default for GlobalSettings {
         Self {
             max_voices: MAX_VOICES,
             velocity_curve: 0.0,
+            velocity_humanize: 0.0,
             round_robin: RoundRobinMode::Cycle,
             output_mode: OutputMode::Multi,
         }
@@ -80,6 +84,12 @@ impl OutputMode {
         }
     }
 }
+
+/// The most `velocity_humanize` moves a hit, in MIDI velocity steps.
+pub const MAX_HUMANIZE: f32 = 20.0;
+
+/// The velocity humanize generator's seed (any nonzero word).
+const VEL_RNG_SEED: u32 = 0x2545_F491;
 
 /// A [`PadSettings`] field that defers to what the kit itself says
 /// ([`LoadedPad`]): what a headless sampler that is never handed params
@@ -265,6 +275,11 @@ pub struct DrumSampler {
     /// constant so a render is reproducible: bouncing the same project
     /// twice gives the same takes.
     rr_rng: u32,
+    /// Xorshift state for velocity humanize (E7), apart from `rr_rng` so
+    /// turning humanize on does not move which takes Random picks. Fixed
+    /// seed, and re-seeded by `reset` (a bounce resets first), so a
+    /// humanized render is reproducible.
+    vel_rng: u32,
     /// Global trigger settings, refreshed once per block from the params.
     globals: GlobalSettings,
     /// Per-pad trigger settings, refreshed with `globals`.
@@ -418,6 +433,7 @@ impl DrumSampler {
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
             rr_rng: 0x9E37_79B9,
+            vel_rng: VEL_RNG_SEED,
             globals: GlobalSettings::default(),
             pad_settings: [PadSettings::default(); NUM_PADS],
             last_rr: None,
@@ -588,6 +604,7 @@ impl DrumSampler {
         self.globals = GlobalSettings {
             max_voices: (params.polyphony.value().max(1) as usize).min(MAX_VOICES),
             velocity_curve: params.velocity_curve.value(),
+            velocity_humanize: params.velocity_humanize.value().clamp(0.0, MAX_HUMANIZE),
             round_robin: RoundRobinMode::from_param(params.round_robin_mode.value()),
             output_mode: OutputMode::from_param(params.output_mode.value()),
         };
@@ -865,11 +882,28 @@ impl DrumSampler {
     /// port and the overhead bank on the Overhead port — for every pad,
     /// so a cymbal recorded on the overheads only plays on Overhead.
     ///
-    /// The incoming velocity is shaped by the global velocity curve
-    /// first, so the curve moves both which layer fires and how hard it
-    /// is struck — the two things velocity means here. At the default
-    /// (linear) the shaping is an exact identity.
+    /// The incoming velocity is humanized first (E7: ± up to
+    /// `velocity_humanize` MIDI steps, from a fixed-seed generator, so a
+    /// render is reproducible; nothing at all at 0), then shaped by the
+    /// global velocity curve, so the curve moves both which layer fires
+    /// and how hard it is struck — the two things velocity means here. At
+    /// the default (linear) the shaping is an exact identity.
+    ///
+    /// The layer is picked by its **measured loudness** (E7,
+    /// [`pick_layer_by_level`]) and played at the gain that puts the hit
+    /// at the level the velocity asks for, so loudness has no step where
+    /// one layer hands over to the next. A single-layer pad (the built-in
+    /// kit) keeps the velocity as its gain.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        let humanize = self.globals.velocity_humanize;
+        let velocity = if humanize > 0.0 {
+            // Uniform in -1..1, in MIDI velocity steps; never below the
+            // softest note-on a MIDI note can be.
+            let unit = next_random(&mut self.vel_rng) as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            (velocity + unit * humanize / 127.0).clamp(1.0 / 127.0, 1.0)
+        } else {
+            velocity
+        };
         let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
         let pad_index = match drum_map::pad_index_for_note(note) {
             Some(i) => i,
@@ -896,7 +930,14 @@ impl DrumSampler {
             return;
         }
         let n_layers = reference_layers.len();
-        let layer_index = pick_velocity_layer(velocity, n_layers);
+        // Single-layer pads (the built-in kit) bake dynamics into the MIDI
+        // velocity; multi-layer kits pick the layer whose measured level
+        // is nearest the velocity's and make up the rest in gain (E7).
+        let (layer_index, trigger_gain) = if n_layers > 1 {
+            pick_layer_by_level(velocity, n_layers, |i| reference_layers[i].level_db())
+        } else {
+            (0, velocity)
+        };
         let layer = &reference_layers[layer_index];
         if layer.round_robins.is_empty() {
             return;
@@ -927,10 +968,6 @@ impl DrumSampler {
             );
         }
 
-        // Single-layer fallback pads bake dynamics into the MIDI velocity;
-        // multi-layer kits have the velocity layer already shaped so we
-        // use a flat trigger gain.
-        let trigger_gain = if n_layers > 1 { 1.0 } else { velocity };
         let settings = self.pad_settings[pad_index];
         let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
@@ -1715,6 +1752,8 @@ impl DrumSampler {
     pub fn reset(&mut self) {
         janitor::reset_all(&mut self.voices);
         janitor::reset_all(&mut self.tails);
+        // A render after a reset (a bounce) humanizes as the last did.
+        self.vel_rng = VEL_RNG_SEED;
         self.streams
             .sweep(self.voices.iter().chain(self.tails.iter()));
         // A render after a reset (a bounce) is measured afresh.

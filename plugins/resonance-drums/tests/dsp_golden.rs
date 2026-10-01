@@ -358,6 +358,7 @@ fn pin(p: &DrumParams) {
     p.master_volume.set_value(0.0);
     p.polyphony.set_value(MAX_VOICES as i32);
     p.velocity_curve.set_value(0.0);
+    p.velocity_humanize.set_value(0.0);
     p.round_robin_mode.set_value(0);
     p.output_mode.set_value(OUTPUT_MODE_MULTI);
     for (pad, mapping) in p.pads.iter().zip(PAD_MAPPINGS.iter()) {

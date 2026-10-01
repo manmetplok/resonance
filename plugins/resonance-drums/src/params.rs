@@ -27,7 +27,7 @@ pub const PARAMS_PER_PAD: usize = 13;
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 7;
+pub const GLOBAL_PARAMS: usize = 8;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
@@ -38,6 +38,28 @@ pub const OUTPUT_MODE_LABELS: &[&str] = &["Stereo", "Multi"];
 pub const OUTPUT_MODE_STEREO: i32 = 0;
 /// `output_mode`: per-pad ports plus the Overhead port.
 pub const OUTPUT_MODE_MULTI: i32 = 1;
+
+/// How the velocity humanize reads: `Off`, or `±5` (MIDI steps).
+pub fn humanize_label(steps: f32) -> String {
+    let rounded = (steps * 10.0).round() / 10.0;
+    if rounded <= 0.0 {
+        "Off".to_string()
+    } else if rounded.fract() == 0.0 {
+        format!("±{rounded:.0}")
+    } else {
+        format!("±{rounded:.1}")
+    }
+}
+
+/// Parse [`humanize_label`] (`Off`, `±5`, `+5`, `5`).
+pub fn humanize_from_label(text: &str) -> Option<f32> {
+    let t = text.trim();
+    if t.eq_ignore_ascii_case("off") {
+        return Some(0.0);
+    }
+    let digits = t.trim_start_matches(['±', '+']).trim();
+    digits.parse::<f32>().ok().filter(|v| v.is_finite()).map(f32::abs)
+}
 
 /// How many parameters this plugin exposes: the globals, then one block
 /// of [`PARAMS_PER_PAD`] per pad.
@@ -83,6 +105,11 @@ pub struct DrumParams {
     /// (a port list cannot change while a host holds it); in Stereo the
     /// six beside Main are silent. Not automatable: routing, not playing.
     pub output_mode: ChoiceParam,
+    /// Velocity humanize (E7): every hit's velocity moves at random by up
+    /// to ± this many MIDI steps, 0 … 20, default 0 (off). Applied before
+    /// the velocity curve, from a fixed-seed generator, so a render is
+    /// reproducible.
+    pub velocity_humanize: FloatParam,
     /// What `kit_select` means beyond a slot (a missing kit, a kit with no
     /// slot), and the library handle its text and the loader resolve
     /// against. Shared with the bridge, the saver and the editor.
@@ -153,6 +180,17 @@ impl Default for DrumParams {
                 OUTPUT_MODE_LABELS,
             )
             .not_automatable(),
+            velocity_humanize: FloatParam::new(
+                "velocity_humanize",
+                "Velocity Humanize",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: crate::dsp::sampler::MAX_HUMANIZE,
+                },
+            )
+            .with_value_to_string(Arc::new(humanize_label))
+            .with_string_to_value(Arc::new(humanize_from_label)),
             selection,
             pads: std::array::from_fn(PadParams::new),
         }
@@ -538,6 +576,7 @@ impl DrumParams {
             4 => return &self.kit_select,
             5 => return &self.kit_load_progress,
             6 => return &self.output_mode,
+            7 => return &self.velocity_humanize,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
