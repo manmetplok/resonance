@@ -65,8 +65,23 @@ pub fn humanize_from_label(text: &str) -> Option<f32> {
 /// of [`PARAMS_PER_PAD`] per pad.
 pub const PARAM_COUNT: usize = GLOBAL_PARAMS + crate::drum_map::NUM_PADS * PARAMS_PER_PAD;
 
+/// The master level's id. Not v1's `master_volume`: that id held a
+/// linear gain, and a host that re-sends a project's saved values by id
+/// after the state (the app's param overrides, an automation lane) would
+/// land those linear values on the dB param, after the state's one-shot
+/// conversion. Under a new id they name no param and are dropped.
+pub const MASTER_LEVEL_ID: &str = "master_level";
+/// v1's id for the master, as a linear gain ([`upgrade_v1_levels`]).
+pub const V1_MASTER_VOLUME_ID: &str = "master_volume";
+/// A pad level's id is `pad_N_<this>` — not v1's `pad_N_volume`, for the
+/// reason [`MASTER_LEVEL_ID`] gives.
+pub const PAD_LEVEL_FIELD: &str = "level";
+/// v1's `pad_N_<this>`, a linear gain ([`upgrade_v1_levels`]).
+pub const V1_PAD_VOLUME_FIELD: &str = "volume";
+
 pub struct DrumParams {
-    /// Master level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
+    /// Master level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB. Its id is
+    /// [`MASTER_LEVEL_ID`] (`master_level`).
     pub master_volume: FloatParam,
     /// Ceiling on simultaneously sounding voices. A hit uses one voice
     /// per loaded mic bank (a kick with in/out mics plus overheads uses
@@ -133,7 +148,7 @@ impl Default for DrumParams {
         let text_sel = selection.clone();
         let parse_sel = selection.clone();
         Self {
-            master_volume: level_param("master_volume", "Master Volume", MAX_VOLUME_DB),
+            master_volume: level_param(MASTER_LEVEL_ID, "Master Volume", MAX_VOLUME_DB),
             polyphony: IntParam::new(
                 "polyphony",
                 "Polyphony",
@@ -262,7 +277,8 @@ impl MicSlot {
 }
 
 pub struct PadParams {
-    /// Pad level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
+    /// Pad level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB. Its id is
+    /// `pad_N_level` ([`PAD_LEVEL_FIELD`]).
     pub volume: FloatParam,
     pub pan: FloatParam,
     pub mute: BoolParam,
@@ -496,7 +512,7 @@ impl PadParams {
         });
 
         Self {
-            volume: level_param(id("volume"), name("Volume"), MAX_VOLUME_DB),
+            volume: level_param(id(PAD_LEVEL_FIELD), name("Volume"), MAX_VOLUME_DB),
             pan: FloatParam::new(
                 id("pan"),
                 name("Pan"),
@@ -620,55 +636,97 @@ impl DrumParams {
     }
 }
 
-/// Bring a v1 state's levels up to v2, in place: returns whether it did.
+/// Bring a v1 state's levels up to v2, in place: returns whether it
+/// changed anything.
 ///
 /// v1 stored `master_volume` and `pad_N_volume` as linear gains (0..1,
 /// default 0.8), a pad's two close mics as one `pad_N_balance` (0..1:
 /// the first mic at `1 − b`, the second at `b`, and only on pads that
 /// had two), and its overhead level as `pad_N_oh_blend` (0..1). v2 has
-/// them all in dB and the mics as separate trims (E9). A state is v1 when
-/// its params carry any `balance` or `oh_blend` — every v1 save wrote
-/// every one, and v2 writes none — so a v2 state is never converted twice.
+/// them all in dB under **new ids** — `master_level`, `pad_N_level` and
+/// the per-mic trims (E9) — so nothing that addresses a param by its v1
+/// id (a project's re-sent param overrides, an automation lane) can put
+/// a linear value on a dB param after this conversion: it names no param
+/// and is dropped. A state is v1 when its params carry any `balance` or
+/// `oh_blend` — every v1 save wrote every one, and v2 writes none.
 ///
 /// The conversion keeps the sound: each gain becomes the dB that plays
 /// it ([`level::gain_to_db`], so a silent 0 becomes −∞), and a pad's two
 /// mics keep the gains the balance gave them. A pad with one close mic
 /// ignored the balance in v1, so its trim stays at 0 dB.
 ///
+/// The balance is converted against the **static** pad table
+/// ([`PAD_MAPPINGS`]`[i].close_mic_positions`): whether pad `i` has two
+/// close mics is what the Drummica table says, not what the kit the
+/// state names loads — a state is upgraded before (and without) any kit
+/// being loaded, so there is nothing else to go by. A kit whose pad has
+/// two close mics where the table says one (or the other way round)
+/// therefore gets 0 dB trims where v1 split the balance; its levels are
+/// still the v1 ones, only that pad's mic balance is reset.
+///
+/// A state saved by a build between the dB switch and the id change (K7
+/// development builds: dB values under the old ids, no `balance`) has
+/// its values moved to the new ids as they are, not converted again.
+/// Either way a value already under a new id is never overwritten, so
+/// the upgrade is idempotent.
+///
 /// Run on the state before its params are read
-/// (`ResonanceDrums::load_state`). A state loaded into an *active*
-/// plugin through the CLAP bridge's shared-atomics path is not seen
-/// here first, so it is not converted; the app always loads plugin state
-/// inactive (`ClapInstance::reload_with_state` cycles the activation).
+/// (`ResonanceDrums::load_state`).
 pub fn upgrade_v1_levels(state: &mut serde_json::Value) -> bool {
     let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
         return false;
     };
-    let is_v1 = (0..NUM_PADS).any(|i| {
-        params.contains_key(&format!("pad_{i}_balance"))
-            || params.contains_key(&format!("pad_{i}_oh_blend"))
-    });
-    if !is_v1 {
-        return false;
-    }
+    let is_v1 = is_v1_params(params);
     let to_db = |gain: f64| serde_json::Value::from(level::gain_to_db(gain as f32) as f64);
-    if let Some(v) = params.get("master_volume").and_then(|v| v.as_f64()) {
-        params.insert("master_volume".to_string(), to_db(v));
+    let mut changed = false;
+    // Move `from` to `to`, converting a v1 gain; a value already under
+    // `to` wins.
+    let mut carry = |params: &mut serde_json::Map<String, serde_json::Value>,
+                     from: &str,
+                     to: &str| {
+        let Some(old) = params.remove(from) else {
+            return;
+        };
+        changed = true;
+        if params.contains_key(to) {
+            return;
+        }
+        let value = match old.as_f64() {
+            Some(v) if is_v1 => to_db(v),
+            _ => old,
+        };
+        params.insert(to.to_string(), value);
+    };
+    carry(params, V1_MASTER_VOLUME_ID, MASTER_LEVEL_ID);
+    for i in 0..NUM_PADS {
+        carry(
+            params,
+            &format!("pad_{i}_{V1_PAD_VOLUME_FIELD}"),
+            &format!("pad_{i}_{PAD_LEVEL_FIELD}"),
+        );
+    }
+    if !is_v1 {
+        return changed;
     }
     for (i, mapping) in PAD_MAPPINGS.iter().enumerate() {
         let key = |field: &str| format!("pad_{i}_{field}");
-        if let Some(v) = params.get(&key("volume")).and_then(|v| v.as_f64()) {
-            params.insert(key("volume"), to_db(v));
-        }
         if let Some(b) = params.remove(&key("balance")).and_then(|v| v.as_f64()) {
             if mapping.close_mic_positions.len() == 2 {
-                params.insert(key("mic1_trim"), to_db(1.0 - b));
-                params.insert(key("mic2_trim"), to_db(b));
+                params.entry(key("mic1_trim")).or_insert(to_db(1.0 - b));
+                params.entry(key("mic2_trim")).or_insert(to_db(b));
             }
         }
         if let Some(o) = params.remove(&key("oh_blend")).and_then(|v| v.as_f64()) {
-            params.insert(key("oh_trim"), to_db(o));
+            params.entry(key("oh_trim")).or_insert(to_db(o));
         }
     }
     true
+}
+
+/// Whether a state's params are v1's: any `balance` or `oh_blend`.
+pub fn is_v1_params(params: &serde_json::Map<String, serde_json::Value>) -> bool {
+    (0..NUM_PADS).any(|i| {
+        params.contains_key(&format!("pad_{i}_balance"))
+            || params.contains_key(&format!("pad_{i}_oh_blend"))
+    })
 }
