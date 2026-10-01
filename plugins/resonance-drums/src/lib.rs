@@ -1283,11 +1283,18 @@ impl ExtraStateSaver for DrumsExtraState {
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
             *self.overhead_setup_key.lock() = s.to_string();
         }
-        // A state from before E15 has no `mic_banks`: what the instance
-        // has stays (a fresh one: every extra bank off), as for every
-        // other key a document leaves out.
+        // The bank setups travel with the mic choices: every state and
+        // preset that names `overhead_setup_key` has carried `mic_banks`
+        // since E15. One that names the mic choices without it predates
+        // the banks and meant none — slots 2 and 3 empty, the default
+        // room — whether it is a project reopened or a preset recalled
+        // over an instance that has banks set. A document with neither (a
+        // params-only preset) leaves the instance's as they are, like
+        // every other key it leaves out.
         if let Some(banks) = state.get(kit_loader::MIC_BANKS_STATE_KEY) {
             *self.mic_banks.lock() = MicBankSetups::from_json(banks);
+        } else if state.get("overhead_setup_key").is_some() {
+            *self.mic_banks.lock() = MicBankSetups::default();
         }
 
         if let Some(arr) = state.get("pad_mic_choices").and_then(|v| v.as_array()) {

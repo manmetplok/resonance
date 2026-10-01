@@ -773,6 +773,23 @@ fn bank_choices_round_trip_and_older_states_load_without_them() {
         "the rest loads as before"
     );
     assert_eq!(fresh.bridge.params.oh_levels[2].value(), 0.0);
+
+    // ... and so does one loaded over an instance that has banks set
+    // (a project reopened in place, a pre-E15 preset recalled): it
+    // predates the banks, so it meant none.
+    assert!(dst.load_state(&serde_json::to_vec(&old).unwrap()));
+    assert_eq!(*dst.bridge.mic_banks.lock(), MicBankSetups::default());
+    assert_eq!(
+        dst.bridge.overhead_slots(),
+        [DEFAULT_OVERHEAD_SETUP.to_string(), String::new(), String::new()]
+    );
+
+    // A params-only document (no mic choices at all) leaves them be.
+    assert!(dst.load_state(&bytes));
+    let params_only = serde_json::json!({ "params": { "pad_0_level": -1.0 } });
+    assert!(dst.load_state(&serde_json::to_vec(&params_only).unwrap()));
+    assert_eq!(dst.bridge.mic_banks.lock().room, ROOM_FAR);
+    assert_eq!(dst.bridge.overhead_slots()[1], OH_XY);
 }
 
 /// The new params sit where the plan says: globals after

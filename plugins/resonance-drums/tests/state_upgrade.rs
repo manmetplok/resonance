@@ -391,3 +391,47 @@ fn a_pre_e15_polyphony_at_its_maximum_loads_at_todays() {
     resonance_drums::upgrade_state(&mut twice);
     assert_eq!(once, twice);
 }
+
+/// The instance's saved state.
+fn saved(instance: &mut PluginInstance<TestHost>) -> Value {
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginState>()
+        .expect("state extension");
+    let mut bytes = Vec::new();
+    ext.save(&mut instance.plugin_handle(), &mut bytes)
+        .expect("save");
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// A preset from before E15 names the mic choices but no `mic_banks`: it
+/// predates the banks, so recalling it over an instance with banks set
+/// empties them, as reopening such a project does. A preset with no mic
+/// choices at all (params only) leaves them alone.
+#[test]
+fn a_pre_e15_preset_recalls_no_extra_banks() {
+    let banks = serde_json::json!({"overheads": ["25_OHsXY", ""], "room": "31_RoomFar"});
+    let mut instance = hosted();
+    assert!(load(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": {}, "mic_banks": banks.clone() })
+    ));
+    assert_eq!(saved(&mut instance)["mic_banks"], banks);
+
+    load_preset(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": { "pad_0_level": -1.0 } }),
+    );
+    assert_eq!(saved(&mut instance)["mic_banks"], banks, "params only: kept");
+
+    load_preset(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": { "pad_0_level": -2.0 },
+            "overhead_setup_key": "23_OHsAB_e914" }),
+    );
+    assert_eq!(
+        saved(&mut instance)["mic_banks"],
+        serde_json::json!({"overheads": ["", ""], "room": ""}),
+        "a pre-E15 preset meant no extra banks"
+    );
+}
