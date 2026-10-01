@@ -746,3 +746,38 @@ fn a_kit_with_no_mappable_piece_fails_to_load() {
     assert_eq!(err, resonance_drums::kit_loader::NO_MAPPABLE_PADS);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A chip click writes the pad's articulation param (announced to the host
+/// as one undoable edit) and the watcher reloads the kit from it.
+#[test]
+fn an_articulation_chip_click_moves_the_param_and_reloads() {
+    use resonance_drums::TestEditor;
+
+    let plugin = booted();
+    load(&plugin, "it_techno");
+    let before = plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire);
+    let mut editor = TestEditor::new(&plugin, resonance_drums::library::shared(), (960.0, 640.0));
+    editor.select_pad(KICK_PAD);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    let chip = frame.widget("articulation.1").expect("the deep chip").rect;
+    editor.click(chip.center());
+    assert_eq!(
+        plugin.bridge.params.pads[KICK_PAD].articulation.value(),
+        ARTICULATION_ALT
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire)
+        == before
+    {
+        assert!(Instant::now() < deadline, "the click reloaded nothing");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    settle(&plugin);
+}
