@@ -422,9 +422,13 @@ pub struct ResonanceDrums {
 /// this one reads, in place. Idempotent.
 ///
 /// - v1's linear levels become dB under the new ids
-///   ([`params::upgrade_v1_levels`], E9).
+///   ([`params::upgrade_v1_levels`], E9);
+/// - a state from before `output_mode` existed plays Multi, as it did
+///   ([`params::upgrade_output_mode`], E11/D5: Stereo is a fresh
+///   instance's default only).
 pub fn upgrade_state(state: &mut serde_json::Value) {
     params::upgrade_v1_levels(state);
+    params::upgrade_output_mode(state);
 }
 
 /// `kit_select`'s and `kit_load_progress`'s host-order indices in

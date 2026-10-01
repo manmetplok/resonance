@@ -233,3 +233,65 @@ fn the_upgrade_is_idempotent() {
     resonance_drums::upgrade_state(&mut twice);
     assert_eq!(once, twice);
 }
+
+// ---------------------------------------------------------------------------
+// Output mode (E11, D5): Stereo for a fresh instance, Multi for a state
+// saved before the param existed — it played multi-out.
+// ---------------------------------------------------------------------------
+
+const STEREO: f64 = resonance_drums::params::OUTPUT_MODE_STEREO as f64;
+const MULTI: f64 = resonance_drums::params::OUTPUT_MODE_MULTI as f64;
+
+#[test]
+fn a_fresh_instance_is_stereo_and_stays_stereo_through_its_own_state() {
+    let mut instance = hosted();
+    assert_eq!(value(&mut instance, "output_mode"), STEREO);
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginState>()
+        .expect("state extension");
+    let mut saved = Vec::new();
+    ext.save(&mut instance.plugin_handle(), &mut saved)
+        .expect("save");
+    let mut reopened = hosted();
+    assert!(load(&mut reopened, &serde_json::from_slice(&saved).unwrap()));
+    assert_eq!(value(&mut reopened, "output_mode"), STEREO);
+}
+
+#[test]
+fn a_v1_state_loads_as_multi_on_both_bridge_paths() {
+    let mut inactive = hosted();
+    assert!(load(&mut inactive, &v1_state()));
+    assert_eq!(value(&mut inactive, "output_mode"), MULTI);
+
+    let mut active = hosted();
+    let processor = active
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load(&mut active, &v1_state()));
+    assert_eq!(value(&mut active, "output_mode"), MULTI);
+    active.deactivate(processor);
+    assert_eq!(value(&mut active, "output_mode"), MULTI);
+}
+
+/// A v2 state from before K7 (dB levels under the new ids, no
+/// `output_mode`) played multi-out too.
+#[test]
+fn a_pre_k7_state_without_an_output_mode_loads_as_multi() {
+    let mut instance = hosted();
+    let pre_k7 = serde_json::json!({ "version": 1, "params": { "pad_0_level": -3.0 } });
+    assert!(load(&mut instance, &pre_k7));
+    assert_eq!(value(&mut instance, "output_mode"), MULTI);
+}
+
+#[test]
+fn a_state_that_names_its_mode_keeps_it() {
+    for mode in [STEREO, MULTI] {
+        let mut instance = hosted();
+        let state = serde_json::json!({ "version": 1, "params": {
+            "pad_0_level": -3.0, "output_mode": mode,
+        } });
+        assert!(load(&mut instance, &state));
+        assert_eq!(value(&mut instance, "output_mode"), mode);
+    }
+}

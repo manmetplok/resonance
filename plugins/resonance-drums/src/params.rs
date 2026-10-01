@@ -38,6 +38,8 @@ pub const OUTPUT_MODE_LABELS: &[&str] = &["Stereo", "Multi"];
 pub const OUTPUT_MODE_STEREO: i32 = 0;
 /// `output_mode`: per-pad ports plus the Overhead port.
 pub const OUTPUT_MODE_MULTI: i32 = 1;
+/// The id of the output mode param.
+pub const OUTPUT_MODE_ID: &str = "output_mode";
 
 /// How the velocity humanize reads: `Off`, or `±5` (MIDI steps).
 pub fn humanize_label(steps: f32) -> String {
@@ -119,6 +121,11 @@ pub struct DrumParams {
     /// the Overhead port. The plugin declares all seven ports either way
     /// (a port list cannot change while a host holds it); in Stereo the
     /// six beside Main are silent. Not automatable: routing, not playing.
+    ///
+    /// Stereo is the default for a *fresh* instance only: a state saved
+    /// before the param existed played multi-out, and loads as Multi
+    /// ([`upgrade_output_mode`]), so a project's sub-tracks keep their
+    /// sound.
     pub output_mode: ChoiceParam,
     /// Velocity humanize (E7): every hit's velocity moves at random by up
     /// to ± this many MIDI steps, 0 … 20, default 0 (off). Applied before
@@ -199,7 +206,7 @@ impl Default for DrumParams {
             .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
             .read_only(),
             output_mode: ChoiceParam::new(
-                "output_mode",
+                OUTPUT_MODE_ID,
                 "Output Mode",
                 OUTPUT_MODE_STEREO,
                 OUTPUT_MODE_LABELS,
@@ -720,6 +727,29 @@ pub fn upgrade_v1_levels(state: &mut serde_json::Value) -> bool {
             params.entry(key("oh_trim")).or_insert(to_db(o));
         }
     }
+    true
+}
+
+/// A state saved before `output_mode` existed (v1, and every v2 build
+/// before K7) played multi-out: each pad on its group's port, the
+/// overheads on Overhead. The param defaults to Stereo for a fresh
+/// instance (D5), so such a state — params present, `output_mode` not —
+/// is given Multi, once, in place: the sub-tracks a project built on the
+/// old routing keep sounding. Returns whether it did. Idempotent: a state
+/// that names a mode keeps it.
+///
+/// A preset never carries the mode (it is routing, not sound: excluded
+/// from presets), so a preset document gets it here too, and it is
+/// dropped again where the preset is applied — the instance keeps its
+/// own mode.
+pub fn upgrade_output_mode(state: &mut serde_json::Value) -> bool {
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    if params.is_empty() || params.contains_key(OUTPUT_MODE_ID) {
+        return false;
+    }
+    params.insert(OUTPUT_MODE_ID.to_string(), OUTPUT_MODE_MULTI.into());
     true
 }
 
