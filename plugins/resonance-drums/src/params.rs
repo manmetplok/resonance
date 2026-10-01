@@ -117,8 +117,10 @@ pub struct DrumParams {
     /// [`OUTPUT_MODE_LABELS`]. **Stereo** (the default for a fresh
     /// instance) sums every pad and mic to Main, so a host that only
     /// reads port 0 hears the whole kit. **Multi** routes each pad's
-    /// close mics to its `pad_N_output` port and every overhead take to
-    /// the Overhead port. The plugin declares all seven ports either way
+    /// close mics to its `pad_N_output` port and its overhead take to the
+    /// Overhead port — except on a pad with no close mic (the cymbals,
+    /// recorded on the overheads only), whose overhead take is its sound
+    /// and stays on its `pad_N_output` port. The plugin declares all seven ports either way
     /// (a port list cannot change while a host holds it); in Stereo the
     /// six beside Main are silent. Not automatable: routing, not playing.
     ///
@@ -328,8 +330,8 @@ pub struct PadParams {
     /// Which output port the pad's close mics play on in Multi output
     /// mode (E11), one of [`OUTPUT_PORT_NAMES`]. Defaults to the
     /// Drummica table (kick → Kick, …, Count Stick → Main). Its overhead
-    /// take always goes to the Overhead port in Multi, and everything to
-    /// Main in Stereo. Not automatable: routing, not playing. Not in
+    /// take goes to the Overhead port in Multi — or here, on a pad with no
+    /// close mic — and everything to Main in Stereo. Not automatable: routing, not playing. Not in
     /// presets either (see `output_mode`).
     pub output: ChoiceParam,
     /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the

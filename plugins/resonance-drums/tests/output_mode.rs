@@ -4,8 +4,10 @@
 //!   mics and overheads — on Main, every other port silent. Port 0 is
 //!   the full kit.
 //! - **Multi**: each pad's close mics on its `pad_N_output` port (by
-//!   default the Drummica table), and every pad's overhead take on the
-//!   Overhead port — the cymbals' included.
+//!   default the Drummica table), and a close-miked pad's overhead take
+//!   on the Overhead port. A pad with no close mic (the cymbals, recorded
+//!   on the overheads only) keeps its overhead take — its whole sound —
+//!   on its own port, so the Cymbals sub-track is not silent (ba #1232).
 
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
@@ -17,6 +19,8 @@ use resonance_drums::params::{DrumParams, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO}
 use resonance_plugin::Param;
 
 const SR: f32 = 48_000.0;
+/// The Cymbals port (`OutputGroup::Cymbals`).
+const CYMBALS_PORT: usize = 5;
 const BLOCK: usize = 256;
 const BLOCKS: usize = 8;
 
@@ -175,20 +179,28 @@ fn stereo_puts_the_whole_kit_on_main() {
     }
 }
 
+/// A cymbal has no close mic: its overhead take is its whole sound, so in
+/// Multi it plays on the cymbal's own port (Cymbals) — the Cymbals
+/// sub-track is not silent (ba #1232) — not on Overhead.
 #[test]
-fn multi_puts_the_cymbals_overheads_on_the_overhead_port() {
+fn multi_keeps_the_overhead_only_cymbals_on_their_own_port() {
     let params = DrumParams::default();
     params.output_mode.set_value(OUTPUT_MODE_MULTI);
     let ports = render(&params, &[drum_map::CRASH_16_EDGE, drum_map::RIDE_TIP]);
-    assert!(
-        rms(&ports[OVERHEAD_PORT_INDEX]) > 0.01,
-        "the cymbal is on Overhead"
-    );
+    assert!(rms(&ports[CYMBALS_PORT]) > 0.01, "the cymbals are on Cymbals");
     for (port, data) in ports.iter().enumerate() {
-        if port != OVERHEAD_PORT_INDEX {
+        if port != CYMBALS_PORT {
             assert_eq!(rms(data), 0.0, "the cymbal leaked onto port {port}");
         }
     }
+
+    // It follows the pad's `pad_N_output`, like a close mic.
+    let crash = drum_map::pad_index_for_note(drum_map::CRASH_16_EDGE).unwrap();
+    params.pads[crash].output.set_value(MAIN_PORT_INDEX as i32);
+    let ports = render(&params, &[drum_map::CRASH_16_EDGE]);
+    assert!(rms(&ports[MAIN_PORT_INDEX]) > 0.01);
+    assert_eq!(rms(&ports[CYMBALS_PORT]), 0.0);
+    assert_eq!(rms(&ports[OVERHEAD_PORT_INDEX]), 0.0);
 }
 
 #[test]

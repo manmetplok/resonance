@@ -73,9 +73,10 @@ pub enum VoiceDestination {
     /// Overhead mic bank, scaled by the per-pad `pad_N_oh_trim` param.
     ///
     /// `output_port` is the shared Overhead port
-    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode — for every pad,
-    /// the overhead-only cymbals included (E11) — and Main in Stereo.
-    /// See `DrumSampler::note_on`.
+    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode for a pad with
+    /// close mics; a pad with none (the overhead-only cymbals) keeps its
+    /// overhead take on its own port, since it is the pad's sound (E11).
+    /// Main in Stereo. See `DrumSampler::note_on`.
     Overhead { output_port: u8 },
 }
 

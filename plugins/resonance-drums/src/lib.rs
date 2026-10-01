@@ -574,10 +574,11 @@ impl ResonancePlugin for ResonanceDrums {
 
     fn output_layout(&self) -> Vec<resonance_plugin::OutputPortSpec> {
         // 7 stereo output ports: Main + 5 drum groups + Overhead, declared
-        // unconditionally — the plugin has no stereo-only mode. See the pad
-        // mapping in `drum_map.rs` for which pad feeds which port, and
-        // `kit::OUTPUT_PORT_NAMES` for the shared name list the editor's KIT
-        // card reads back.
+        // in both output modes — a host holds the port list, so it cannot
+        // change with `output_mode`; Stereo (E11) leaves all but Main
+        // silent. `pad_N_output` says which pad feeds which port in Multi
+        // (defaults in `drum_map.rs`), and `kit::OUTPUT_PORT_NAMES` is the
+        // shared name list the editor's KIT card reads back.
         kit::OUTPUT_PORT_NAMES
             .iter()
             .map(|name| resonance_plugin::OutputPortSpec {

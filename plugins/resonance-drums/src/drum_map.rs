@@ -26,8 +26,10 @@ pub struct PadMapping {
     pub choke_group: Option<u8>,
     /// The default of `pad_N_output` (E11): the port this pad's close
     /// signal plays on in Multi output mode, and where a headless sampler
-    /// never handed params routes it. The overhead take goes to the
-    /// Overhead port (Multi) or Main (Stereo) regardless of this field.
+    /// never handed params routes it. A close-miked pad's overhead take
+    /// goes to the Overhead port (Multi) or Main (Stereo) regardless of
+    /// this field; a pad with no close mic plays its overhead take here
+    /// in Multi.
     pub output_group: OutputGroup,
     /// Mic positions the loader tries to load for this pad's close-mic
     /// bank. Order matters: the first position listed becomes bank 0

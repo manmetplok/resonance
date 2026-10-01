@@ -879,8 +879,10 @@ impl DrumSampler {
     ///
     /// Routing (E11): in [`OutputMode::Stereo`] every voice sums to Main;
     /// in [`OutputMode::Multi`] the close banks play on the pad's output
-    /// port and the overhead bank on the Overhead port — for every pad,
-    /// so a cymbal recorded on the overheads only plays on Overhead.
+    /// port and the overhead bank on the Overhead port. A pad with no
+    /// close mic — a cymbal recorded on the overheads only, whose
+    /// overhead take *is* its sound — keeps that take on its own port
+    /// (Cymbals), so the Cymbals sub-track is not silent (ba #1232).
     ///
     /// The incoming velocity is humanized first (E7: ± up to
     /// `velocity_humanize` MIDI steps, from a fixed-seed generator, so a
@@ -972,10 +974,20 @@ impl DrumSampler {
         let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
         // E11: in Stereo every bank sums to Main; in Multi the close mics
-        // play on the pad's output port and the overhead on Overhead.
+        // play on the pad's output port and the overhead on Overhead —
+        // unless the pad has no close mic, when the overhead take is the
+        // pad's sound and stays on the pad's own port.
         let (output_port, oh_port) = match self.globals.output_mode {
             OutputMode::Stereo => (MAIN_PORT_INDEX as u8, MAIN_PORT_INDEX as u8),
-            OutputMode::Multi => (settings.close_port(pad), OVERHEAD_PORT_INDEX as u8),
+            OutputMode::Multi => {
+                let close = settings.close_port(pad);
+                let oh = if pad.close_mics.is_empty() {
+                    close
+                } else {
+                    OVERHEAD_PORT_INDEX as u8
+                };
+                (close, oh)
+            }
         };
         let has_overhead = pad.overhead.is_some();
 
@@ -1040,11 +1052,11 @@ impl DrumSampler {
             dest_count += 1;
         }
         if has_overhead && dest_count < destinations.len() {
-            // Every pad's overhead take goes to the Overhead port in
-            // Multi — the pads the library records with overheads only
-            // (every cymbal, ride and china piece in Drummica) included,
-            // which until E11 played on their own group port (Cymbals).
-            // Stereo has a stereo kit on Main for whoever wants one port.
+            // In Multi a close-miked pad's overhead take goes to the
+            // Overhead port; a pad the library records with overheads
+            // only (every cymbal, ride and china piece in Drummica) plays
+            // it on its own port (Cymbals), since that take is the pad's
+            // whole sound. Stereo puts it on Main with everything else.
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
                 (rings[dest_count], starts[dest_count]) = ring_for(oh, cells[dest_count]);
