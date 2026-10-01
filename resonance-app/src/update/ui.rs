@@ -7,6 +7,35 @@ use crate::update::project_io;
 use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
+    // The channel the mixer inspector describes, before this message:
+    // a change of owner drops the CHAIN rows' transient state (a drag,
+    // the preset prompt, replace mode, popovers), which would otherwise
+    // live on unseen and act on a later release or key.
+    let owner_before = inspector_owner(r);
+    let task = handle_inner(r, m);
+    if inspector_owner(r) != owner_before {
+        r.ui.mixer.reset_chain_ui();
+    }
+    task
+}
+
+/// Which channel the mixer inspector describes: the selected track, bus
+/// or the master.
+fn inspector_owner(
+    r: &Resonance,
+) -> (
+    Option<resonance_audio::types::TrackId>,
+    Option<resonance_audio::types::BusId>,
+    bool,
+) {
+    (
+        r.ui.interaction.selected_track,
+        r.ui.mixer.selected_bus,
+        r.ui.mixer.selected_master,
+    )
+}
+
+fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
     match m {
         UiMessage::SwitchView(mode) => {
             // Track the view to return to when leaving Performance mode.
@@ -18,7 +47,16 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 (from, ViewMode::Performance) => r.ui.pre_performance_view = Some(from),
                 _ => r.ui.pre_performance_view = None,
             }
+            let leaving = r.ui.view_mode != mode;
             r.ui.view_mode = mode;
+            if leaving {
+                // Nothing of the mixer's transient editing state survives
+                // a tab switch: a strip rename commits (leaving the field
+                // is a blur), and the CHAIN rows' drag, prompt, replace
+                // mode and popovers close.
+                r.ui.mixer.reset_chain_ui();
+                return crate::update::strip_rename::commit(r);
+            }
         }
         UiMessage::TogglePerformanceMode => {
             toggle_performance_mode(r);
@@ -149,8 +187,8 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         UiMessage::StripRenamePointer => {
             return crate::update::strip_rename::pointer(r);
         }
-        UiMessage::StripRenameFocusProbed(focused) => {
-            return crate::update::strip_rename::focus_probed(r, focused);
+        UiMessage::StripRenameHovered(hovered) => {
+            crate::update::strip_rename::hovered(r, hovered);
         }
         UiMessage::WindowResized(size) => {
             crate::update::plugin_window::viewport_resized(r, size);

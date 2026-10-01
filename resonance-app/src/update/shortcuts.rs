@@ -7,7 +7,9 @@
 //!
 //! 1. a key a widget already consumed (a focused text field, a canvas that
 //!    owns the keys) is dropped — except Esc, which first cancels an open
-//!    mixer strip rename, whose field captured it;
+//!    mixer strip rename, then closes one layer of the inspector CHAIN's
+//!    transient state (drag, preset prompt, replace mode, popovers),
+//!    whose fields may have captured it;
 //! 2. Esc resolves to closing the topmost root overlay (or, with none up,
 //!    the generic plugin window) before it means anything else;
 //! 3. while a modal root overlay shows, only ⌘/Ctrl chords dispatch;
@@ -107,8 +109,20 @@ pub(crate) fn handle_key(
     }
     // Esc cancels an open strip rename. Its field captured the key (a
     // focused `text_input` takes Esc and unfocuses itself), so this sits
-    // before the drop below.
-    if is_plain_escape(chord) && !repeat && crate::update::strip_rename::escape(r) {
+    // before the drop below. An Esc the field did not capture closes a
+    // rename left open too, but goes on to mean what Esc means.
+    if is_plain_escape(chord) && !repeat && crate::update::strip_rename::escape(r, captured) {
+        return Task::none();
+    }
+    // Esc closes the inspector CHAIN's transient state, one layer per
+    // press: a drag, the preset-name prompt (whose field captured the
+    // key), replace mode, then a slot menu / colour palette. Not under a
+    // modal overlay, which Esc closes first.
+    if is_plain_escape(chord)
+        && !repeat
+        && r.modal_overlay().is_none()
+        && crate::update::chain_ui::escape(r)
+    {
         return Task::none();
     }
     // A focused text field or a key-owning canvas already acted on it.

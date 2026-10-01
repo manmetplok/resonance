@@ -21,8 +21,13 @@ use crate::message::*;
 use crate::state::PluginSlotState;
 use crate::theme;
 
-/// Text size of a slot line's plugin name.
-const SLOT_LINE_TEXT_SIZE: f32 = 10.0;
+/// Text size of a slot line's plugin name: the 11 px floor
+/// (ux-guidelines.md, Typography).
+const SLOT_LINE_TEXT_SIZE: f32 = 11.0;
+
+/// Text size of the FX header switch's label and the pan value: the
+/// 11 px floor.
+const STRIP_SMALL_TEXT_SIZE: f32 = 11.0;
 
 /// Diameter of a slot line's state dot.
 const SLOT_DOT: f32 = 6.0;
@@ -154,9 +159,11 @@ pub(super) fn slot_line(
         .into()
 }
 
-/// The dim "No instrument" line of an instrument track with an empty
-/// instrument slot. A click selects the track, which puts the
-/// inspector's add picker (`+ Add instrument`) in front of the user.
+/// The dim "No instrument" line of an instrument track without an
+/// instrument. A click selects the track and cues the inspector's
+/// `+ Add instrument` picker (`ChainUiMessage::CueInstrumentPicker`):
+/// iced cannot focus a `pick_list`, so the picker is drawn with an accent
+/// border and a line saying what to do.
 pub(super) fn empty_instrument_line(track_id: TrackId) -> Element<'static, Message> {
     let line = row![
         container(Space::new().width(SLOT_DOT).height(SLOT_DOT)).style(|_theme| {
@@ -177,7 +184,9 @@ pub(super) fn empty_instrument_line(track_id: TrackId) -> Element<'static, Messa
     .spacing(6)
     .align_y(alignment::Vertical::Center);
     mouse_area(container(line).width(Length::Fill).padding([3, 5]))
-        .on_press(Message::Ui(UiMessage::SelectTrack(Some(track_id))))
+        .on_press(Message::Plugin(PluginMessage::ChainUi(
+            ChainUiMessage::CueInstrumentPicker(track_id),
+        )))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
 }
@@ -219,34 +228,81 @@ fn instrument_divider() -> Element<'static, Message> {
         .into()
 }
 
-/// What the slot list's fixed instrument section shows.
-pub(super) enum InstrumentSlot<'a> {
+/// Where a chain's instrument sits, for the slot list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum InstrumentSlot {
     /// Not an instrument chain (audio track, bus, master, external
-    /// instrument): every slot is an effect line.
+    /// instrument, sub-track): every slot is an effect line.
     None,
-    /// An instrument track with an empty instrument slot.
+    /// An instrument track without an instrument.
     Empty(TrackId),
-    /// An instrument track's slot 0.
-    Filled(&'a PluginSlotState),
+    /// The instrument is the chain's slot at this index
+    /// (`plugin_chain::displayed_instrument_slot`).
+    At(usize),
 }
 
-/// The slot list: the instrument line (fixed, hairline under it) and the
-/// effect lines in a vertical scrollable that absorbs the strip's slack,
-/// so a long chain scrolls and the fader never moves.
+impl InstrumentSlot {
+    /// What `track`'s strip shows: the instrument where the chain
+    /// actually holds it (never "slot 0 because this is an instrument
+    /// track"), "No instrument" for a plain instrument track without
+    /// one, and plain effect lines everywhere else.
+    pub(crate) fn of_track(r: &crate::Resonance, track: &crate::state::TrackState) -> Self {
+        if let Some(i) = crate::plugin_chain::displayed_instrument_slot(r, track) {
+            InstrumentSlot::At(i)
+        } else if crate::plugin_chain::lacks_instrument(r, track) {
+            InstrumentSlot::Empty(track.id)
+        } else {
+            InstrumentSlot::None
+        }
+    }
+}
+
+/// The slot list, in chain order. An instrument in slot 0 (the normal
+/// shape) and the "No instrument" line sit fixed above the effects, with
+/// a hairline under them; the effect lines are in a vertical scrollable
+/// that absorbs the strip's slack, so a long chain scrolls and the fader
+/// never moves. An instrument further down the chain (an effect was put
+/// ahead of it) is drawn in its place among the effect lines, still with
+/// its accent and hairline, so the strip shows the order the engine runs.
 pub(super) fn slot_list(
-    instrument: InstrumentSlot<'_>,
-    effects: &[PluginSlotState],
+    instrument: InstrumentSlot,
+    plugins: &[PluginSlotState],
     chain_bypassed: bool,
     focused: Option<resonance_audio::types::PluginInstanceId>,
 ) -> Element<'static, Message> {
-    let mut fx_column = column![].spacing(1).width(Length::Fill);
-    for plugin in effects {
-        fx_column = fx_column.push(slot_line(
+    let line = |index: usize, plugin: &PluginSlotState| {
+        slot_line(
             plugin,
-            false,
+            instrument == InstrumentSlot::At(index),
             chain_bypassed,
             focused == Some(plugin.instance_id),
-        ));
+        )
+    };
+
+    let mut list = column![]
+        .spacing(3)
+        .width(Length::Fill)
+        .height(Length::Fill);
+    let scrolled_from = match instrument {
+        InstrumentSlot::Empty(track_id) => {
+            list = list
+                .push(empty_instrument_line(track_id))
+                .push(instrument_divider());
+            0
+        }
+        InstrumentSlot::At(0) if !plugins.is_empty() => {
+            list = list.push(line(0, &plugins[0])).push(instrument_divider());
+            1
+        }
+        _ => 0,
+    };
+
+    let mut fx_column = column![].spacing(1).width(Length::Fill);
+    for (index, plugin) in plugins.iter().enumerate().skip(scrolled_from) {
+        fx_column = fx_column.push(line(index, plugin));
+        if instrument == InstrumentSlot::At(index) {
+            fx_column = fx_column.push(instrument_divider());
+        }
     }
     let fx_scroll = iced::widget::Scrollable::with_direction(
         fx_column,
@@ -257,28 +313,6 @@ pub(super) fn slot_list(
     .width(Length::Fill)
     .height(Length::Fill);
 
-    let mut list = column![]
-        .spacing(3)
-        .width(Length::Fill)
-        .height(Length::Fill);
-    match instrument {
-        InstrumentSlot::None => {}
-        InstrumentSlot::Empty(track_id) => {
-            list = list
-                .push(empty_instrument_line(track_id))
-                .push(instrument_divider());
-        }
-        InstrumentSlot::Filled(plugin) => {
-            list = list
-                .push(slot_line(
-                    plugin,
-                    true,
-                    chain_bypassed,
-                    focused == Some(plugin.instance_id),
-                ))
-                .push(instrument_divider());
-        }
-    }
     list.push(fx_scroll).into()
 }
 
@@ -293,10 +327,12 @@ pub(super) fn fx_header(bypassed: bool, toggle: Message) -> Element<'static, Mes
     let switch = button(
         row![
             text("FX")
-                .size(9)
+                .size(STRIP_SMALL_TEXT_SIZE)
                 .font(theme::UI_FONT_SEMIBOLD)
                 .color(label_color),
-            theme::icon(theme::fa::POWER_OFF).size(9).color(power_color),
+            theme::icon(theme::fa::POWER_OFF)
+                .size(STRIP_SMALL_TEXT_SIZE - 1.0)
+                .color(power_color),
         ]
         .spacing(5)
         .align_y(alignment::Vertical::Center),
@@ -321,7 +357,7 @@ pub(super) fn pan_block(knob: Element<'static, Message>, pan: f32) -> Element<'s
         container(knob).width(Length::Fill).center_x(Length::Fill),
         container(
             text(crate::util::format_pan(pan))
-                .size(9)
+                .size(STRIP_SMALL_TEXT_SIZE)
                 .font(Font::MONOSPACE)
                 .color(theme::TEXT_2),
         )

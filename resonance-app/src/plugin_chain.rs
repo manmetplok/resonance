@@ -73,6 +73,34 @@ pub(crate) fn instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> 
     }
 }
 
+/// The chain index the mixer **draws** as the instrument slot (accent
+/// tint, fixed handle, the strip's instrument line), if any.
+///
+/// [`instrument_slot`], minus the two kinds of `Instrument` track that
+/// have no instrument plugin to show: a sub-track (fed by one output of
+/// its parent's instrument; its chain is effects only) and an external
+/// instrument (the synth is outboard hardware; every plugin is an insert
+/// over the audio return). Never "slot 0 because the track is an
+/// instrument track": an effect ahead of the instrument, or an
+/// instrument removed from under its effects, is drawn as it is.
+pub(crate) fn displayed_instrument_slot(app: &Resonance, t: &TrackState) -> Option<usize> {
+    if t.sub_track.is_some() || app.devices.external_instruments.contains_key(&t.id) {
+        return None;
+    }
+    instrument_slot(app, t)
+}
+
+/// Whether the mixer offers an instrument for `t`: a plain instrument
+/// track (not a sub-track, not external) with no instrument in its
+/// chain. Its strip reads "No instrument" and its CHAIN group offers the
+/// `+ Add instrument` picker.
+pub(crate) fn lacks_instrument(app: &Resonance, t: &TrackState) -> bool {
+    t.track_type == TrackType::Instrument
+        && t.sub_track.is_none()
+        && !app.devices.external_instruments.contains_key(&t.id)
+        && instrument_slot(app, t).is_none()
+}
+
 /// The lowest chain index an **effect** may occupy once `moving` has
 /// been lifted out of the chain.
 ///

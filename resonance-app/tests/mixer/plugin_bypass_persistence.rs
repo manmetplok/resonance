@@ -337,66 +337,96 @@ fn undo_says_nothing_about_slots_that_did_not_move() {
 // ---------------------------------------------------------------------------
 
 /// A human can bypass a plugin on ALL THREE chains, not just the two the
-/// inspector draws.
+/// inspector used to draw.
 ///
-/// The first cut wired the inspector chain row, which covers a selected
-/// track and a selected bus. `view/mixer/inspector/mod.rs` has no master
-/// branch — the master chain is drawn only by the strip — so a master
-/// plugin could be bypassed over MCP and not by hand. That is exactly the
-/// inversion ba doc #276's dual-surface rule exists to prevent, and this
-/// todo's DONE WHEN names the master chain explicitly.
+/// The first cut wired only a selected track's and bus's chain rows, so
+/// a master plugin could be bypassed over MCP and not by hand — exactly
+/// the inversion ba doc #276's dual-surface rule exists to prevent, and
+/// this todo's DONE WHEN names the master chain explicitly. Since
+/// mixer-cleanup.md §3.3 the master has an inspector, and every chain's
+/// bypass is its CHAIN row's dot: pressed here through the rendered view
+/// for the track, the bus and the master.
+///
+/// The dot SETS rather than toggles, to the opposite of the slot's
+/// state — so the button and the wire raise the identical message and
+/// cannot drift apart, and a bypassed slot's dot is not a one-way trip.
 #[test]
-fn every_chain_offers_a_bypass_control_including_the_master() {
-    let app = app_with_chains();
-    for (instance_id, chain) in [
-        (TRACK_EQ, "track"),
-        (BUS_EQ, "bus"),
-        (MASTER_EQ, "master"),
+fn every_chain_rows_dot_sets_the_opposite_bypass_including_the_master() {
+    use resonance_app::message::{Message, PluginMessage, UiMessage};
+    use resonance_app::state::ViewMode;
+
+    let mut app = app_with_chains();
+    let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
+    for (instance_id, select, chain) in [
+        (TRACK_EQ, UiMessage::SelectTrack(Some(GTR)), "track"),
+        (BUS_EQ, UiMessage::SelectBus(Some(BUS)), "bus"),
+        (MASTER_EQ, UiMessage::SelectMaster, "master"),
     ] {
+        let _ = app.update(Message::Ui(select));
+        let pressed = press_in_inspector(&app, "\u{25cf}");
         assert!(
-            app.test_strip_bypass_toggle(instance_id).is_some(),
-            "the {chain} chain draws no bypass control, so an agent can \
-             bypass it and a human cannot"
+            matches!(
+                pressed.as_slice(),
+                [Message::Plugin(PluginMessage::SetPluginBypass { instance_id: i, bypassed: true })]
+                    if *i == instance_id
+            ),
+            "the {chain} chain's dot must ask a running slot for bypassed: true \
+             (an agent can bypass it, so a human must be able to): {pressed:?}"
+        );
+
+        bypass(&mut app, instance_id);
+        let pressed = press_in_inspector(&app, "\u{25cb}");
+        assert!(
+            matches!(
+                pressed.as_slice(),
+                [Message::Plugin(PluginMessage::SetPluginBypass { instance_id: i, bypassed: false })]
+                    if *i == instance_id
+            ),
+            "a bypassed {chain} slot's dot must ask for bypassed: false — a \
+             control that always sent `true` would look like a toggle and be \
+             a one-way trip: {pressed:?}"
         );
     }
 }
 
-/// The control SETS rather than toggles, and it sets the opposite of what
-/// the slot currently is — so the button and the wire raise the identical
-/// message and cannot drift apart.
-#[test]
-fn the_strip_control_sets_the_opposite_of_the_current_state() {
-    use resonance_app::message::{Message, PluginMessage};
+/// Press the first `label` drawn inside the mixer inspector (below its
+/// caption — the transport bar shares the column) and return the
+/// messages the view raised.
+fn press_in_inspector(
+    app: &Resonance,
+    label: &'static str,
+) -> Vec<resonance_app::message::Message> {
+    use iced_test::selector::{Candidate, Target};
+    use resonance_app::theme;
+    let left = 1440.0 - theme::INSPECTOR_WIDTH;
+    let top = simulator(app)
+        .find("INSPECTOR")
+        .expect("the inspector renders")
+        .bounds()
+        .y;
+    let mut ui = simulator(app);
+    ui.click(move |c: Candidate<'_>| {
+        let hit = matches!(
+            &c,
+            Candidate::Text { content, bounds, .. }
+                if *content == label && bounds.x >= left && bounds.y >= top
+        );
+        hit.then(|| Target::from(c))
+    })
+    .unwrap_or_else(|e| panic!("{label:?} should be pressable in the inspector: {e:?}"));
+    ui.into_messages().collect()
+}
 
-    let mut app = app_with_chains();
-    let (message, _) = app
-        .test_strip_bypass_toggle(MASTER_EQ)
-        .expect("the master slot draws a bypass control");
-    assert!(
-        matches!(
-            message,
-            Message::Plugin(PluginMessage::SetPluginBypass {
-                instance_id,
-                bypassed: true,
-            }) if instance_id == MASTER_EQ
-        ),
-        "a running slot's control must ask for bypassed: true"
-    );
-
-    bypass(&mut app, MASTER_EQ);
-    let (message, _) = app
-        .test_strip_bypass_toggle(MASTER_EQ)
-        .expect("still drawn once bypassed");
-    assert!(
-        matches!(
-            message,
-            Message::Plugin(PluginMessage::SetPluginBypass {
-                instance_id,
-                bypassed: false,
-            }) if instance_id == MASTER_EQ
-        ),
-        "a bypassed slot's control must ask for bypassed: false — a \
-         control that always sent `true` would look like a toggle and be \
-         a one-way trip"
-    );
+fn simulator(app: &Resonance) -> iced_test::simulator::Simulator<'_, resonance_app::message::Message> {
+    use resonance_app::theme;
+    let mut fonts: Vec<std::borrow::Cow<'static, [u8]>> = vec![theme::ICON_FONT_BYTES.into()];
+    for face in theme::UI_FONT_FACES {
+        fonts.push((*face).into());
+    }
+    let settings = iced::Settings {
+        fonts,
+        default_font: theme::UI_FONT,
+        ..iced::Settings::default()
+    };
+    iced_test::simulator::Simulator::with_size(settings, iced::Size::new(1440.0, 2000.0), app.view())
 }

@@ -81,6 +81,11 @@ impl crate::Resonance {
                     self.ui.interaction.timeline_key_grant.wrapping_add(1);
             }
         }
+        // A strip rename never outlives its track, whichever path removed
+        // it (a remove, an undo-restore, a project load, the control API).
+        if outermost {
+            crate::update::strip_rename::prune(self);
+        }
         // Iced repaints after each update, so refreshing here means the
         // labels are always exact at paint time (no one-frame staleness)
         // without the view layer ever writing state. No-op when the
@@ -278,9 +283,10 @@ impl crate::Resonance {
             }));
         }
 
-        // An open strip rename commits when its field loses focus; iced's
-        // `text_input` has no blur callback, so every press is followed
-        // by a focus probe (`update::strip_rename`).
+        // An open strip rename commits on a press off its field; iced's
+        // `text_input` has no blur callback, so every press is reported
+        // and checked against the pointer's hover over the field
+        // (`update::strip_rename`).
         if self.ui.mixer.renaming.is_some() {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::strip_rename::pointer_event(&event)
@@ -296,11 +302,20 @@ impl crate::Resonance {
             }));
         }
 
-        // A CHAIN-row drag (mixer-cleanup.md S7) drops on any left
-        // release and is disarmed when the window loses focus.
+        // A CHAIN-row drag (mixer-cleanup.md S7) drops on a left release
+        // over a row, and is disarmed by a press (its release was lost)
+        // or the window losing focus.
         if self.ui.mixer.chain_drag.is_some() {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::chain_ui::drag_end_event(&event)
+            }));
+        }
+
+        // An open CHAIN slot menu or colour palette closes on a press
+        // anywhere else (click-away).
+        if self.ui.mixer.popover_open() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::chain_ui::popover_press_event(&event)
             }));
         }
 

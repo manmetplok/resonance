@@ -497,64 +497,13 @@ impl Resonance {
         }
     }
 
-    /// Test-only: the channel-strip slot's floating-editor toggle for
-    /// `instance_id`, as the mixer would draw it — the message the glyph
-    /// carries and the colour it is tinted (ba todo #1306).
-    ///
-    /// `None` means the strip draws no editor control for that slot.
-    ///
-    /// The click routing is covered end-to-end by pressing the real
-    /// button in `tests/mixer_generic_param_panel.rs`; this hook exists
-    /// for the tint, which the widget tree does not expose — `iced_test`
-    /// can read a text candidate's content but never its colour.
-    #[doc(hidden)]
-    pub fn test_strip_editor_toggle(
-        &self,
-        instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> Option<(crate::message::Message, iced::Color)> {
-        let plugin = self
-            .registry
-            .tracks
-            .iter()
-            .flat_map(|t| t.plugins.iter())
-            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master.plugins.iter())
-            .find(|p| p.instance_id == instance_id)?;
-        crate::view::mixer::editor_toggle_spec(plugin)
-    }
-
-    /// Test-only: what the mixer STRIP's per-slot bypass control carries
-    /// and how it is tinted, for a slot in any of the three chains
-    /// (ba todo #1305).
-    ///
-    /// The strip is the only surface that draws the MASTER chain — the
-    /// inspector handles a selected bus and a selected track and has no
-    /// master branch — so this is what a test uses to show a human can
-    /// reach a master plugin's bypass, not only an MCP client.
-    #[doc(hidden)]
-    pub fn test_strip_bypass_toggle(
-        &self,
-        instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> Option<(crate::message::Message, iced::Color)> {
-        let plugin = self
-            .registry
-            .tracks
-            .iter()
-            .flat_map(|t| t.plugins.iter())
-            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master.plugins.iter())
-            .find(|p| p.instance_id == instance_id)?;
-        Some(crate::view::mixer::bypass_toggle_spec(plugin))
-    }
-
     /// Test-only: declare that a seeded plugin has a GUI, as a real
     /// scan result would (ba todo #1306).
     ///
     /// Every plugin the test seeds defaults to `has_gui: false`, which
     /// is the configuration NONE of the eleven bundled plugins actually
-    /// ship in — so without this the strip's editor toggle never
-    /// reaches a golden and the 140 px row is only ever pixel-checked
-    /// one control short.
+    /// ship in — so without this a CHAIN row's `↗` only ever toggles the
+    /// generic window, never the plugin's own editor.
     #[doc(hidden)]
     pub fn test_set_plugin_has_gui(
         &mut self,

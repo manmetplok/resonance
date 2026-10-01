@@ -232,6 +232,16 @@ impl ClipInteractionState {
         self.selected_track = self.selected_tracks.last().copied();
     }
 
+    /// Make `id` the primary selected track without dropping the rest of
+    /// the multi-selection: a member moves to the end (the most recent),
+    /// a non-member joins. Focusing a plugin slot does this — it is not a
+    /// selection gesture, so it never thins the selection out.
+    pub(crate) fn make_primary_track(&mut self, id: TrackId) {
+        self.selected_tracks.retain(|&t| t != id);
+        self.selected_tracks.push(id);
+        self.selected_track = Some(id);
+    }
+
     /// Drop a track from the selection (e.g. when it is removed). Clears the
     /// primary highlight when it pointed at the gone track.
     pub fn deselect_track(&mut self, id: TrackId) {

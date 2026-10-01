@@ -22,7 +22,7 @@ use iced::widget::{
     button, column, container, mouse_area, pick_list, row, text, text_input, Space,
 };
 use iced::{alignment, Element, Length};
-use resonance_audio::types::{PluginInstanceId, ScannedPlugin, TrackType};
+use resonance_audio::types::{PluginInstanceId, ScannedPlugin};
 
 use crate::message::{
     ChainUiMessage, Message, PluginMessage, PresetAddOwner, PresetUiMessage,
@@ -65,99 +65,136 @@ pub(super) fn chain_group(
     )]
     .spacing(10);
 
-    // Instrument tracks render the instrument slot (plugin index 0) plus
-    // any FX rows after it. Audio tracks render every plugin as an FX
-    // row. Both end with the "+ FX" picker.
-    //
-    // External-instrument tracks are typed `Instrument` but their synth
-    // is outboard hardware — there is no plugin slot to fill, and the
-    // mixer runs every plugin on such a track as an insert effect over
-    // the audio return. Offering an instrument slot here would build a
-    // chain the engine renders differently from how it reads.
-    let is_instrument = track.track_type == TrackType::Instrument
-        && !r.devices.external_instruments.contains_key(&track.id);
+    // The instrument slot is drawn where the chain actually holds the
+    // instrument (`plugin_chain::displayed_instrument_slot`), never
+    // "row 0 because this is an instrument track": a sub-track's chain
+    // is effects only, an external instrument's synth is outboard
+    // hardware (every plugin there is an insert over the audio return),
+    // and an instrument track can have an effect ahead of its instrument
+    // or no instrument at all.
+    let instrument_index = crate::plugin_chain::displayed_instrument_slot(r, track);
     col = col.push(chain_rows(
         r,
         PluginOwner::Track(track.id),
         &track.plugins,
-        is_instrument,
+        instrument_index,
     ));
 
     if let Some(replace) = replace_picker(r, &track.plugins) {
         return col.push(replace).into();
     }
 
-    // Functional add-plugin picker. Instrument tracks with an empty
-    // chain get the instrument picker first; everyone else gets the FX
-    // picker. Skipped when no plugins have been scanned yet. Options
-    // come from `view_caches.{fx,instrument}_plugins` — Rc clones, not
-    // a per-frame filter pass.
-    let needs_instrument =
-        is_instrument && track.plugins.is_empty() && track.sub_track.is_none();
-    let candidates = if needs_instrument {
+    // Functional add pickers. An instrument track without an instrument
+    // gets the instrument picker first — and, once it has effects, the
+    // FX picker under it, so neither kind is out of reach. Everyone else
+    // gets the FX picker. A picker is skipped when nothing of its kind
+    // has been scanned. Options come from
+    // `view_caches.{fx,instrument}_plugins` — Rc clones, not a per-frame
+    // filter pass.
+    let lacks_instrument = crate::plugin_chain::lacks_instrument(r, track);
+    if lacks_instrument {
+        // The strip's "No instrument" line cues this picker (§2.1):
+        // iced cannot focus a pick_list, so the cue is an accent border
+        // and a line saying what to do.
+        let cued = r.ui.mixer.instrument_picker_cue == Some(track.id);
+        if cued && !r.ui.view_caches.instrument_plugins.is_empty() {
+            col = col.push(
+                text("Pick an instrument to play this track")
+                    .size(11)
+                    .color(theme::ACCENT_SOFT),
+            );
+        }
+        col = push_add_pickers(r, col, track.id, true, cued);
+    }
+    if !lacks_instrument || !track.plugins.is_empty() {
+        col = push_add_pickers(r, col, track.id, false, false);
+    }
+
+    col.into()
+}
+
+/// The `+ Add instrument` / `+ Add to chain` picker and its "▸ with
+/// preset…" companion, pushed onto `col`. `cued` draws the picker with
+/// an accent border (the strip's "No instrument" line pointed here).
+fn push_add_pickers(
+    r: &crate::Resonance,
+    mut col: iced::widget::Column<'static, Message>,
+    track_id: resonance_audio::types::TrackId,
+    instrument: bool,
+    cued: bool,
+) -> iced::widget::Column<'static, Message> {
+    let candidates = if instrument {
         r.ui.view_caches.instrument_plugins.clone()
     } else {
         r.ui.view_caches.fx_plugins.clone()
     };
-    if !candidates.is_empty() {
-        let track_id = track.id;
-        let placeholder = if needs_instrument {
-            "+ Add instrument"
-        } else {
-            "+ Add to chain"
-        };
-        let picker = pick_list(
-            candidates,
-            None::<ScannedPlugin>,
-            move |plugin: ScannedPlugin| {
-                Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin))
+    if candidates.is_empty() {
+        return col;
+    }
+    let placeholder = if instrument {
+        "+ Add instrument"
+    } else {
+        "+ Add to chain"
+    };
+    let picker = pick_list(
+        candidates,
+        None::<ScannedPlugin>,
+        move |plugin: ScannedPlugin| {
+            Message::Plugin(PluginMessage::AddPluginToTrack(track_id, plugin))
+        },
+    )
+    .placeholder(placeholder)
+    .text_size(12)
+    .padding([8, 10])
+    .width(Length::Fill)
+    .style(move |theme, status| {
+        let mut style = pick_list::default(theme, status);
+        if cued {
+            style.border.color = theme::ACCENT;
+            style.border.width = 1.0;
+        }
+        style
+    });
+    col = col.push(picker);
+    // "▸ with preset…": the user's favourite presets of the same kind
+    // of plugin (§6.6), precomputed on a scan or a star.
+    let picks = if instrument {
+        r.presets.instrument_favorite_picks.clone()
+    } else {
+        r.presets.fx_favorite_picks.clone()
+    };
+    if !picks.is_empty() {
+        let with_preset = pick_list(
+            picks,
+            None::<crate::state::presets::PresetAddPick>,
+            move |pick| {
+                Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
+                    owner: PresetAddOwner::Track(track_id),
+                    pick,
+                }))
             },
         )
-        .placeholder(placeholder)
+        .placeholder("\u{25b8} with preset\u{2026}")
         .text_size(12)
         .padding([8, 10])
         .width(Length::Fill);
-        col = col.push(picker);
-        // "▸ with preset…": the user's favourite presets of the same kind
-        // of plugin (§6.6), precomputed on a scan or a star.
-        let picks = if needs_instrument {
-            r.presets.instrument_favorite_picks.clone()
-        } else {
-            r.presets.fx_favorite_picks.clone()
-        };
-        if !picks.is_empty() {
-            let with_preset = pick_list(
-                picks,
-                None::<crate::state::presets::PresetAddPick>,
-                move |pick| {
-                    Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
-                        owner: PresetAddOwner::Track(track_id),
-                        pick,
-                    }))
-                },
-            )
-            .placeholder("\u{25b8} with preset\u{2026}")
-            .text_size(12)
-            .padding([8, 10])
-            .width(Length::Fill);
-            col = col.push(with_preset);
-        }
+        col = col.push(with_preset);
     }
-
-    col.into()
+    col
 }
 
 /// Every row of `owner`'s chain (or the "Empty chain" placeholder), with
 /// the drag's drop indicator, the open slot menu, the preset prompt and
 /// a missing plugin's recovery folded in under their rows.
 ///
-/// `is_instrument_track` marks slot 0 as the instrument slot: accent
-/// tint, and a handle that does not drag (the slot is fixed).
+/// `instrument_index` is the instrument slot, if the chain has one
+/// (`plugin_chain::displayed_instrument_slot`): accent tint, and a handle
+/// that does not drag (the slot is fixed).
 pub(super) fn chain_rows(
     r: &crate::Resonance,
     owner: PluginOwner,
     plugins: &[PluginSlotState],
-    is_instrument_track: bool,
+    instrument_index: Option<usize>,
 ) -> Element<'static, Message> {
     if plugins.is_empty() {
         return empty_chain_row();
@@ -176,7 +213,7 @@ pub(super) fn chain_rows(
     let len = plugins.len();
     let mut col = column![].spacing(6);
     for (index, plugin) in plugins.iter().enumerate() {
-        let is_instrument_slot = is_instrument_track && index == 0;
+        let is_instrument_slot = instrument_index == Some(index);
         let indicator = match (dragged_index, target_index) {
             (Some(from), Some(to)) if to == index && from != to && drop_ok => {
                 Some(from < to)
@@ -188,12 +225,13 @@ pub(super) fn chain_rows(
         }
         let row_el = chain_row(r, owner, plugin, is_instrument_slot, dragged_index == Some(index));
         // The wrapper is always there so arming a drag never changes the
-        // tree's shape; it only listens while a drag is armed.
+        // tree's shape; it only listens while a drag is armed. Entering
+        // a row makes it the drop target and leaving it clears that
+        // again, so a release that lands off every row drops nothing.
         let area = mouse_area(row_el);
         let area = if drag.is_some() {
-            area.on_enter(Message::Plugin(PluginMessage::ChainUi(
-                ChainUiMessage::DragOver(plugin.instance_id),
-            )))
+            area.on_enter(ui(ChainUiMessage::DragOver(plugin.instance_id)))
+                .on_exit(ui(ChainUiMessage::DragLeave(plugin.instance_id)))
         } else {
             area
         };
@@ -249,7 +287,10 @@ fn chain_row(
     let focused = r.ui.mixer.focused_slot == Some(instance_id);
 
     // ⠿ — drags the row. The instrument slot is fixed (the instrument
-    // floor), so its handle is drawn faint and grabs nothing.
+    // floor), so its handle is drawn faint and grabs nothing. A release
+    // over a handle drops too: a press and its release delivered in one
+    // event batch reach the handle before the window-level release
+    // listener exists, and would otherwise leave the drag armed.
     let handle_color = if is_instrument_slot {
         theme::TEXT_4
     } else {
@@ -262,6 +303,7 @@ fn chain_row(
     } else {
         mouse_area(handle)
             .on_press(ui(ChainUiMessage::DragStart(instance_id)))
+            .on_release(ui(ChainUiMessage::DragDrop))
             .interaction(iced::mouse::Interaction::Grab)
             .into()
     };
@@ -308,11 +350,9 @@ fn chain_row(
             .style(|_theme, status| theme::small_button_style(status))
     };
     let menu_open = r.ui.mixer.slot_menu == Some(instance_id);
-    let open = icon_button(
-        GLYPH_OPEN,
-        theme::TEXT_2,
-        Message::Plugin(PluginMessage::OpenPluginWindow(instance_id)),
-    );
+    // ↗ — lit while the slot's window is up, and then it closes it.
+    let (open_message, open_color) = open_toggle_spec(r, plugin);
+    let open = icon_button(GLYPH_OPEN, open_color, open_message);
     let menu = icon_button(
         GLYPH_MENU,
         if menu_open { theme::ACCENT } else { theme::TEXT_2 },
@@ -355,6 +395,38 @@ fn chain_row(
         ..Default::default()
     })
     .into()
+}
+
+/// What a row's `↗` carries and how it is tinted: open the slot's window,
+/// or — while that window is up — close it, tinted accent so the row
+/// says the window is open.
+///
+/// A plugin with its own GUI toggles its floating editor
+/// ([`crate::view::mixer::editor_toggle_spec`], which follows the
+/// engine's report, never the press). Anything else — no GUI, missing,
+/// unavailable — opens the host-drawn generic window, so the toggle
+/// follows that window.
+pub(crate) fn open_toggle_spec(
+    r: &crate::Resonance,
+    plugin: &PluginSlotState,
+) -> (Message, iced::Color) {
+    let id = plugin.instance_id;
+    if plugin.availability.reason().is_none() {
+        if let Some(spec) = crate::view::mixer::editor_toggle_spec(plugin) {
+            return spec;
+        }
+    }
+    if r.ui.mixer.plugin_window_id() == Some(id) {
+        (
+            Message::Plugin(PluginMessage::ClosePluginWindow(id)),
+            theme::ACCENT,
+        )
+    } else {
+        (
+            Message::Plugin(PluginMessage::OpenPluginWindow(id)),
+            theme::TEXT_DIM,
+        )
+    }
 }
 
 /// The accent line marking where a dragged row will land.
@@ -468,9 +540,16 @@ fn slot_menu(
         .into()
 }
 
+/// The widget id of the "Save preset…" name field. One prompt is open
+/// at a time, so one id serves every row.
+pub(crate) fn preset_name_input_id() -> iced::widget::Id {
+    iced::widget::Id::new("chain-preset-name")
+}
+
 /// The "Save preset…" name prompt under a row.
 fn preset_save_prompt(prompt: &crate::state::SlotPresetSaveState) -> Element<'static, Message> {
     let input = text_input("Preset name", &prompt.name)
+        .id(preset_name_input_id())
         .on_input(|s| ui(ChainUiMessage::PresetSaveName(s)))
         .on_submit(ui(ChainUiMessage::CommitPresetSave))
         .size(12)
@@ -646,10 +725,15 @@ pub(crate) fn hash_chain_ui<H: std::hash::Hasher>(
     mixer.replacing_slot.hash(h);
     mixer.slot_preset_save.hash(h);
     mixer.chain_drag.hash(h);
+    mixer.instrument_picker_cue.hash(h);
+    // ↗ follows the slot's window: its editor, or the generic window.
+    mixer.plugin_window_id().hash(h);
     for p in plugins {
         p.availability.reason().hash(h);
         p.clap_plugin_id.hash(h);
         p.clap_file_path.hash(h);
+        p.has_gui.hash(h);
+        p.editor_open.hash(h);
     }
     // The drop indicator asks the chain rule, which reads the catalog.
     std::rc::Rc::as_ptr(&r.ui.view_caches.instrument_plugins).hash(h);

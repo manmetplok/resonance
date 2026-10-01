@@ -54,16 +54,34 @@ pub(crate) fn open_generic(r: &mut Resonance, instance_id: PluginInstanceId) {
 /// Make `instance_id` the focused slot and select the channel it sits
 /// on (`PluginMessage::FocusSlot`). A slot that does not exist changes
 /// nothing.
+///
+/// Focusing a slot is not a selection gesture, so it never thins out a
+/// multi-track selection: a track already in the selection just becomes
+/// the primary one (the inspector's), and an additive (Cmd/Shift) click
+/// adds its track to the selection. A plain click on a slot of a track
+/// outside the selection selects that track alone, as a click on its
+/// strip does.
 pub(crate) fn focus(r: &mut Resonance, instance_id: PluginInstanceId) {
     let Some((owner, _)) = crate::update::plugin_replace::locate_slot(r, instance_id) else {
         return;
     };
-    r.ui.mixer.focused_slot = Some(instance_id);
     match owner {
         PluginLocator::Track(track_id) => {
-            r.ui.select_track(Some(track_id));
-            r.ui.interaction.selected_clip = None;
-            r.ui.interaction.selected_midi_clip = None;
+            let selected = r.ui.interaction.selected_tracks.contains(&track_id);
+            if selected || r.ui.interaction.select_additive {
+                if r.ui.interaction.selected_track != Some(track_id) {
+                    // The inspector changes owner: drop the old owner's
+                    // transient CHAIN state, as `UiMessage::SelectTrack`
+                    // does.
+                    r.ui.mixer.reset_chain_ui();
+                }
+                r.ui.clear_channel_selection();
+                r.ui.interaction.make_primary_track(track_id);
+            } else {
+                let _ = r.update(Message::Ui(crate::message::UiMessage::SelectTrack(Some(
+                    track_id,
+                ))));
+            }
         }
         PluginLocator::Bus(bus_id) => {
             let _ = r.update(Message::Ui(crate::message::UiMessage::SelectBus(Some(bus_id))));
@@ -72,6 +90,7 @@ pub(crate) fn focus(r: &mut Resonance, instance_id: PluginInstanceId) {
             let _ = r.update(Message::Ui(crate::message::UiMessage::SelectMaster));
         }
     }
+    r.ui.mixer.focused_slot = Some(instance_id);
 }
 
 /// One step of the title-bar drag.

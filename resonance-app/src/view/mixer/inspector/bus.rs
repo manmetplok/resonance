@@ -291,7 +291,7 @@ fn chain_group(
         r,
         PluginOwner::Bus(bus.id),
         &bus.plugins,
-        false,
+        None,
     ));
     if let Some(replace) = super::chain::replace_picker(r, &bus.plugins) {
         return col.push(replace).into();

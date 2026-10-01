@@ -515,9 +515,12 @@ pub const CLIP_LANE_INSET: f32 = 10.0;
 /// fits about [`MIXER_SLOT_LINE_CHARS`] characters on one line.
 pub const MIXER_STRIP_WIDTH: f32 = 160.0;
 /// How many characters of a plugin name a strip's slot line shows
-/// before it ellipsises (size-10 text in a 160 px strip). The line never
-/// wraps: it is `Wrapping::None` in a clipped container as well.
-pub const MIXER_SLOT_LINE_CHARS: usize = 18;
+/// before it ellipsises (size-11 text — the type floor — in a 160 px
+/// strip, which leaves 118 px beside the state dot). Measured: 17
+/// characters with the ellipsis fit even an all-caps name ("WAVES
+/// MAXXBASS M…" is 116 px); 18 clip it. The line never wraps: it is
+/// `Wrapping::None` in a clipped container as well.
+pub const MIXER_SLOT_LINE_CHARS: usize = 17;
 /// Sub-track strip width on the Mixer. Sub-tracks are fed from one
 /// non-main output of their parent's instrument plugin — they have no
 /// FX chain, no input, and no record arm, so the strip is narrower than

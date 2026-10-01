@@ -145,9 +145,12 @@ pub struct PresetState {
     /// plugin states for this track and save it as a user preset under
     /// this name (ba todo #1303).
     pub pending_preset_save: Option<PendingPresetSave>,
-    /// A `*.save_plugin_preset` waiting for the plugin to hand back its
-    /// state (ba todo #1333).
-    pub(crate) pending_plugin_preset_save: Option<PendingPluginPresetSave>,
+    /// Each `*.save_plugin_preset` (or CHAIN-row "Save preset…") waiting
+    /// for its plugin to hand back its state (ba todo #1333), keyed by
+    /// instance so saves of two different plugins in flight at once do
+    /// not replace each other.
+    pub(crate) pending_plugin_preset_saves:
+        std::collections::HashMap<PluginInstanceId, PendingPluginPresetSave>,
     /// Each plugin slot's loaded preset, keyed by instance: reported by
     /// the plugin, else set by the host's own loads (slice P5).
     pub plugin_preset_identity: std::collections::HashMap<PluginInstanceId, SlotPresetIdentity>,

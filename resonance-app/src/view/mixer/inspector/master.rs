@@ -97,7 +97,7 @@ fn chain_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Messag
         r,
         PluginOwner::Master,
         &r.master.plugins,
-        false,
+        None,
     ));
     if let Some(replace) = super::chain::replace_picker(r, &r.master.plugins) {
         return col.push(replace).into();

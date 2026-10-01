@@ -94,7 +94,7 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::CommitStripRename)
         | Message::Ui(UiMessage::CancelStripRename)
         | Message::Ui(UiMessage::StripRenamePointer)
-        | Message::Ui(UiMessage::StripRenameFocusProbed(_))
+        | Message::Ui(UiMessage::StripRenameHovered(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)

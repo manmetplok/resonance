@@ -96,6 +96,18 @@ pub struct MixerUiState {
     /// The track whose inspector colour palette is open (§3.1). Keyed by
     /// track so selecting another track does not show it open there.
     pub color_palette: Option<TrackId>,
+    /// Set when a popover (slot menu / colour palette) is opened while
+    /// another one was already open — i.e. by a press the click-away
+    /// listener also sees. That listener's `ChainUiMessage::Dismiss`
+    /// arrives after the widget's own message for the same press, so it
+    /// spends this flag instead of closing what the press just opened.
+    pub popover_switched: bool,
+    /// The instrument track whose CHAIN `+ Add instrument` picker is cued
+    /// (accent border and a "pick an instrument" line): set by a click on
+    /// the strip's "No instrument" line (mixer-cleanup.md §2.1). iced
+    /// cannot focus a `pick_list`, so this is the honest stand-in. Keyed
+    /// by track; drawn only while that track still lacks an instrument.
+    pub instrument_picker_cue: Option<TrackId>,
     /// The inline rename open on a track strip's head (mixer-cleanup.md
     /// §2.3): the track and the edit buffer. Set by a double-click on the
     /// strip's name (`UiMessage::BeginStripRename`); Enter or a click
@@ -103,6 +115,12 @@ pub struct MixerUiState {
     /// and the control API's rename share one path), Esc drops it.
     /// Runtime UI state, never persisted.
     pub renaming: Option<(TrackId, String)>,
+    /// Whether the pointer is over the open rename field. A press while
+    /// it is not commits the rename (`update::strip_rename`): a press on
+    /// a layer above the strips — the floating plugin window, a modal —
+    /// never reaches the field, so its focus state cannot say the user
+    /// clicked away. Not drawn, so not hashed.
+    pub rename_hovered: bool,
 }
 
 /// An in-progress "Save preset…" prompt on a CHAIN row.
@@ -122,8 +140,15 @@ pub struct ChainDragState {
     /// The slot being dragged.
     pub instance_id: PluginInstanceId,
     /// The slot whose row the pointer is over: the dragged slot takes
-    /// its place on release. `None` until the pointer enters a row.
+    /// its place on release. `None` until the pointer enters a row, and
+    /// again once it leaves that row — a release off every row drops
+    /// nothing.
     pub over: Option<PluginInstanceId>,
+    /// Armed by a press while another drag was still armed (a stuck one
+    /// whose release was lost). The window-level press listener sees
+    /// that same press after the handle's `DragStart`, and spends this
+    /// instead of disarming the drag the press just started.
+    pub rearmed: bool,
 }
 
 impl MixerUiState {
@@ -132,6 +157,24 @@ impl MixerUiState {
     pub fn dismiss_inspector_popovers(&mut self) {
         self.slot_menu = None;
         self.color_palette = None;
+        self.popover_switched = false;
+    }
+
+    /// Whether a slot menu or the colour palette is open.
+    pub fn popover_open(&self) -> bool {
+        self.slot_menu.is_some() || self.color_palette.is_some()
+    }
+
+    /// Drop every transient CHAIN / strip affordance: a drag, the preset
+    /// prompt, replace mode, the popovers and the instrument-picker cue.
+    /// Run when the view switches or the inspector changes owner, so none
+    /// of them survives off-screen to act on a later release or key.
+    pub fn reset_chain_ui(&mut self) {
+        self.chain_drag = None;
+        self.slot_preset_save = None;
+        self.replacing_slot = None;
+        self.instrument_picker_cue = None;
+        self.dismiss_inspector_popovers();
     }
 
     /// Drop every CHAIN-row affordance that names `instance_id` (its

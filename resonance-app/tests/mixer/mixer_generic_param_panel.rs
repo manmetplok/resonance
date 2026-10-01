@@ -387,63 +387,147 @@ fn double_clicking_a_gui_slot_line_opens_the_floating_editor() {
     assert_eq!(app.test_focused_slot(), Some(INSTANCE));
 }
 
-/// The editor toggle's tint decision (`editor_toggle_spec`, shared by the
-/// surfaces that draw the toggle) tracks the ENGINE's report rather than
-/// the press (ba todo #1347), so a window that refused to open leaves the
-/// glyph down instead of lit over nothing.
+/// Font Awesome `up-right-from-square`: a CHAIN row's `↗`.
+const GLYPH_OPEN: &str = "\u{f35d}";
+
+/// Press the `↗` of the first CHAIN row in the inspector (whatever owner
+/// is selected) and return the messages the view raised. The transport
+/// bar draws icons in the same column, so only glyphs below the
+/// inspector's caption count.
+fn press_chain_open(app: &Resonance) -> Vec<Message> {
+    use iced_test::selector::Target;
+    let inspector_left = 1440.0 - theme::INSPECTOR_WIDTH;
+    let top = simulator(app)
+        .find("INSPECTOR")
+        .expect("the inspector renders")
+        .bounds()
+        .y;
+    let mut ui = simulator(app);
+    ui.click(move |c: Candidate<'_>| {
+        let hit = matches!(
+            &c,
+            Candidate::Text { content, bounds, .. }
+                if *content == GLYPH_OPEN && bounds.x >= inspector_left && bounds.y >= top
+        );
+        hit.then(|| Target::from(c))
+    })
+    .expect("the CHAIN row draws its ↗");
+    ui.into_messages().collect()
+}
+
+fn gui_slot(instance: u64, name: &str) -> PluginSlotState {
+    PluginSlotState::new(
+        instance,
+        name.to_owned(),
+        format!("com.example.{instance}"),
+        format!("/plugins/{instance}.clap"),
+        vec![],
+        true,
+    )
+}
+
+/// The CHAIN row's `↗` on a GUI plugin toggles its floating editor, on a
+/// track, a bus and the master alike: pressed closed it opens the
+/// editor; once the ENGINE reports the editor open the glyph is accented
+/// and the same press closes it (ba todo #1347 — the tint follows the
+/// engine's report, never the press, so a window that refused to open
+/// leaves the glyph down instead of lit over nothing).
 ///
-/// Asserted through the view's own decision rather than the widget
-/// tree: `iced_test` can read a text candidate's content but never its
-/// colour.
+/// Every press goes through the rendered inspector; the tint is read
+/// through the view's own decision (`test_chain_open_toggle`), since
+/// `iced_test` cannot read a colour.
 #[test]
-fn the_editor_toggle_is_tinted_while_the_editor_is_open() {
+fn the_chain_open_toggle_follows_the_editor_on_every_chain() {
+    const BUS: u64 = 5;
+    const BUS_FX: u64 = INSTANCE + 10;
+    const MASTER_FX: u64 = INSTANCE + 20;
     let mut app = app_with_plugin(true);
-    assert_eq!(
-        app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
-        Some(theme::TEXT_DIM),
-        "closed: the glyph sits back in the dim icon ramp"
-    );
+    app.test_add_bus(BUS, "Gtr Bus");
+    app.test_push_bus_plugin(BUS, gui_slot(BUS_FX, "Bus Glue"));
+    app.test_push_master_plugin(gui_slot(MASTER_FX, "Limiter"));
 
-    // The press alone does not tint it: the flag moves only on the
-    // engine's report.
-    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
-    assert_eq!(
-        app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
-        Some(theme::TEXT_DIM),
-        "pressing open must not tint anything until the engine confirms"
-    );
+    let owners = [
+        (UiMessage::SelectTrack(Some(TRACK)), INSTANCE),
+        (UiMessage::SelectBus(Some(BUS)), BUS_FX),
+        (UiMessage::SelectMaster, MASTER_FX),
+    ];
+    for (select, id) in owners {
+        app.test_dispatch(Message::Ui(select));
+        let tint = |app: &Resonance| app.test_chain_open_toggle(id).map(|(_, t)| t);
+        assert_eq!(tint(&app), Some(theme::TEXT_DIM), "{id}: closed sits back");
 
-    app.test_apply_engine_event(AudioEvent::PluginEditorState {
-        instance_id: INSTANCE,
-        open: true,
-        failure: None,
-    });
-    assert_eq!(
-        app.test_strip_editor_toggle(INSTANCE).map(|(m, t)| {
-            (matches!(m, Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE))), t)
-        }),
-        Some((true, theme::ACCENT)),
-        "open: accented, and the same control closes it"
-    );
+        let pressed = press_chain_open(&app);
+        assert!(
+            matches!(pressed.as_slice(), [Message::Plugin(PluginMessage::OpenPluginEditor(i))] if *i == id),
+            "{id}: ↗ opens the editor: {pressed:?}"
+        );
+        for m in pressed {
+            app.test_dispatch(m);
+        }
+        assert_eq!(
+            tint(&app),
+            Some(theme::TEXT_DIM),
+            "{id}: the press alone tints nothing until the engine confirms"
+        );
 
-    app.test_dispatch(Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE)));
-    app.test_apply_engine_event(AudioEvent::PluginEditorState {
-        instance_id: INSTANCE,
-        open: false,
-        failure: None,
-    });
-    assert_eq!(
-        app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
-        Some(theme::TEXT_DIM),
-        "and it goes back down again"
-    );
+        app.test_apply_engine_event(AudioEvent::PluginEditorState {
+            instance_id: id,
+            open: true,
+            failure: None,
+        });
+        assert_eq!(tint(&app), Some(theme::ACCENT), "{id}: open is accented");
+        let pressed = press_chain_open(&app);
+        assert!(
+            matches!(pressed.as_slice(), [Message::Plugin(PluginMessage::ClosePluginEditor(i))] if *i == id),
+            "{id}: the same ↗ closes the open editor: {pressed:?}"
+        );
+        app.test_apply_engine_event(AudioEvent::PluginEditorState {
+            instance_id: id,
+            open: false,
+            failure: None,
+        });
+        assert_eq!(tint(&app), Some(theme::TEXT_DIM), "{id}: and back down");
+    }
+}
 
+/// A plugin with no GUI: `↗` opens the generic window, reads accented
+/// while that window shows this plugin, and closes it.
+#[test]
+fn the_chain_open_toggle_follows_the_generic_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Ui(UiMessage::SelectTrack(Some(TRACK))));
+    let tint = |app: &Resonance| app.test_chain_open_toggle(INSTANCE).map(|(_, t)| t);
+    assert_eq!(tint(&app), Some(theme::TEXT_DIM));
+
+    let pressed = press_chain_open(&app);
     assert!(
-        app_with_plugin(false)
-            .test_strip_editor_toggle(INSTANCE)
-            .is_none(),
-        "no GUI, no control to tint"
+        matches!(
+            pressed.as_slice(),
+            [Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE))]
+        ),
+        "{pressed:?}"
     );
+    for m in pressed {
+        app.test_dispatch(m);
+    }
+    assert_eq!(app.test_plugin_window(), Some(INSTANCE));
+    assert_eq!(tint(&app), Some(theme::ACCENT), "lit while its window is up");
+
+    // Off the inspector, so the press below reaches the row.
+    app.test_place_plugin_window(Point::new(20.0, 20.0));
+    let pressed = press_chain_open(&app);
+    assert!(
+        matches!(
+            pressed.as_slice(),
+            [Message::Plugin(PluginMessage::ClosePluginWindow(INSTANCE))]
+        ),
+        "the lit ↗ closes the window: {pressed:?}"
+    );
+    for m in pressed {
+        app.test_dispatch(m);
+    }
+    assert_eq!(app.test_plugin_window(), None);
+    assert_eq!(tint(&app), Some(theme::TEXT_DIM));
 }
 
 /// The visible bounds of the text `label` in the open generic window's
@@ -667,10 +751,14 @@ fn a_refused_open_leaves_the_slot_closed_and_offers_the_generic_window() {
         failure: Some(resonance_audio::types::PluginEditorFailure::CreateFailed),
     });
 
+    // The CHAIN row's ↗, pressed for real (the fallback window moved
+    // off the inspector first).
+    app.test_dispatch(Message::Ui(UiMessage::SelectTrack(Some(TRACK))));
+    app.test_place_plugin_window(Point::new(20.0, 20.0));
     assert!(
         matches!(
-            app.test_strip_editor_toggle(INSTANCE).map(|(msg, _)| msg),
-            Some(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)))
+            press_chain_open(&app).as_slice(),
+            [Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE))]
         ),
         "after a refused open the toggle must still OFFER to open, not \
          offer to close a window that is not there"
@@ -706,10 +794,11 @@ fn a_titlebar_close_clears_the_flag_without_the_app_asking() {
         failure: None,
     });
 
+    app.test_dispatch(Message::Ui(UiMessage::SelectTrack(Some(TRACK))));
     assert!(
         matches!(
-            app.test_strip_editor_toggle(INSTANCE).map(|(msg, _)| msg),
-            Some(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)))
+            press_chain_open(&app).as_slice(),
+            [Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE))]
         ),
         "the slot must go back to offering an open once the window is gone"
     );

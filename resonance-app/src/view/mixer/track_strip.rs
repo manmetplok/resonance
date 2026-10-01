@@ -305,24 +305,15 @@ impl crate::Resonance {
             track.fx_bypassed,
             Message::Track(TrackMessage::ToggleTrackFxBypass(track.id)),
         );
-        // Slot 0 of a (non-external) instrument track is the instrument:
-        // fixed above the scrolling effects, accent with a hairline under
-        // it. External instruments run every plugin as an insert over the
-        // audio return, so their whole chain is effects — the same rule
-        // the inspector's CHAIN group applies.
-        let is_instrument_chain =
-            track.track_type == TrackType::Instrument && ext_state.is_none();
-        let (instrument, effects) = if is_instrument_chain {
-            match track.plugins.split_first() {
-                Some((first, rest)) => (InstrumentSlot::Filled(first), rest),
-                None => (InstrumentSlot::Empty(track.id), &track.plugins[..]),
-            }
-        } else {
-            (InstrumentSlot::None, &track.plugins[..])
-        };
+        // The instrument line is the slot that actually holds the
+        // instrument (accent, hairline under it) — the same rule the
+        // inspector's CHAIN group applies. External instruments run every
+        // plugin as an insert over the audio return, so their whole chain
+        // is effects; a plain instrument track without an instrument
+        // reads "No instrument".
         let slots = super::strip_parts::slot_list(
-            instrument,
-            effects,
+            InstrumentSlot::of_track(self, track),
+            &track.plugins,
             track.fx_bypassed,
             self.ui.mixer.focused_slot,
         );
@@ -373,14 +364,21 @@ impl crate::Resonance {
             .as_ref()
             .filter(|(id, _)| *id == track.id)
         {
-            return text_input("Track name", buffer)
-                .id(crate::update::strip_rename::input_id())
-                .on_input(|s| Message::Ui(UiMessage::StripRenameInput(s)))
-                .on_submit(Message::Ui(UiMessage::CommitStripRename))
-                .size(12)
-                .padding([2, 4])
-                .width(Length::Fill)
-                .into();
+            // The mouse area reports whether the pointer is over the
+            // field: a press while it is not commits the rename
+            // (`update::strip_rename`).
+            return mouse_area(
+                text_input("Track name", buffer)
+                    .id(crate::update::strip_rename::input_id())
+                    .on_input(|s| Message::Ui(UiMessage::StripRenameInput(s)))
+                    .on_submit(Message::Ui(UiMessage::CommitStripRename))
+                    .size(12)
+                    .padding([2, 4])
+                    .width(Length::Fill),
+            )
+            .on_enter(Message::Ui(UiMessage::StripRenameHovered(true)))
+            .on_exit(Message::Ui(UiMessage::StripRenameHovered(false)))
+            .into();
         }
         // Truncate first, then clip in a width-Fill container:
         // `Wrapping::None` alone isn't enough when the parent has a
@@ -417,7 +415,8 @@ impl crate::Resonance {
     /// - 2 px lavender left-edge rail (`MIXER_SUB_STRIP_RAIL`,
     ///   saturating to `_SELECTED` when the sub-track is the
     ///   selected track) — the at-a-glance parent → child cue.
-    /// - Slimmer control set (mixer-cleanup.md §2.4): one-line name,
+    /// - Slimmer control set (mixer-cleanup.md §2.4): the parent's colour
+    ///   band and a one-line name,
     ///   M / S, the FX switch, centred pan, fader. No record-arm or
     ///   monitor (sub-tracks are fed from the parent plugin's fan-out,
     ///   never from a hardware input) and no slot lines.
@@ -452,9 +451,9 @@ impl crate::Resonance {
 
         // The head / M-S / FX switch / pan block are non-live — cache
         // them behind `lazy` keyed on the slim sub-strip fingerprint.
-        let fp = super::strip_fingerprint::sub_strip_fingerprint(track);
+        let fp = super::strip_fingerprint::sub_strip_fingerprint(self, track);
         let body_top = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
-            sub_channel_strip_body(track)
+            sub_channel_strip_body(track, sub_track_color(self, track))
         });
 
         let is_selected = self.ui.interaction.selected_track == Some(track.id);
@@ -585,12 +584,22 @@ impl crate::Resonance {
 
 }
 
+/// The colour a sub-track strip's band wears: its parent's, looked up
+/// rather than trusted from the copy `SetTrackColor` makes, so the
+/// cluster reads as one instrument however the sub-track came to be.
+pub(super) fn sub_track_color(r: &crate::Resonance, track: &TrackState) -> [u8; 3] {
+    track
+        .sub_track
+        .and_then(|link| r.registry.tracks.iter().find(|t| t.id == link.parent_track_id))
+        .map_or(track.color, |parent| parent.color)
+}
+
 /// The non-live upper region of a sub-track strip (mixer-cleanup.md
 /// §2.4): one-line name, M / S, the FX switch, the centred pan. Built
 /// inside the sub-strip's `lazy` region, so it returns an owned
 /// (`'static`) tree and must only read state that
 /// [`super::strip_fingerprint::sub_strip_fingerprint`] hashes.
-fn sub_channel_strip_body(track: &TrackState) -> Element<'static, Message> {
+fn sub_channel_strip_body(track: &TrackState, color: [u8; 3]) -> Element<'static, Message> {
     // Show the port label (after "→") rather than the full name —
     // "Drums → Kick" becomes "Kick", which fits the narrower strip.
     let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
@@ -603,10 +612,17 @@ fn sub_channel_strip_body(track: &TrackState) -> Element<'static, Message> {
     )
     .width(Length::Fill)
     .clip(true);
+    // The colour band: a sub-track wears its parent's colour
+    // (`SetTrackColor` copies it onto every sub-track), so the cluster
+    // reads as one instrument.
     let head: Element<'static, Message> = container(
-        row![name_text]
-            .align_y(alignment::Vertical::Center)
-            .height(28),
+        row![
+            super::strip_parts::color_band(theme::track_color(color)),
+            name_text
+        ]
+        .spacing(6)
+        .align_y(alignment::Vertical::Center)
+        .height(28),
     )
     .width(Length::Fill)
     .height(STRIP_HEAD_HEIGHT)

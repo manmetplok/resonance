@@ -86,15 +86,20 @@ Width **160 px** (Q2; `MIXER_STRIP_WIDTH` 140 → 160). Top to bottom:
 
 - One line per chain slot: a state dot and the plugin name, `Wrapping::None`
   in a clipped `Fill` container, with an ellipsis from `util::short` sized
-  for 160 px (about 18 characters at size 10). **Never two lines.**
+  for 160 px (17 characters at size 11, the type floor; measured so even an
+  all-caps name fits). **Never two lines.**
 - Dot states: `●` active, `○` bypassed (dimmed name), BAD-pink `●` for a
   missing or unavailable plugin (`availability.reason().is_some()`). When
   the whole chain is bypassed (`track.fx_bypassed`), every line dims and the
   FX header switch reads off.
-- Instrument slot (index 0 on a non-external instrument track): accent
-  colour with a hairline under it. An empty instrument slot shows a dim
-  `No instrument` line. Clicking it selects the track and focuses the
-  inspector's add picker.
+- Instrument slot (the slot that holds the instrument,
+  `plugin_chain::displayed_instrument_slot` — never on a sub-track or an
+  external instrument): accent colour with a hairline under it. A plain
+  instrument track without an instrument shows a dim `No instrument`
+  line. Clicking it selects the track and cues the inspector's
+  `+ Add instrument` picker (iced cannot focus a `pick_list`, so the cue
+  is an accent border and a "Pick an instrument" line, and a folded CHAIN
+  group opens).
 - **Click** selects the owner and focuses that slot in the inspector's CHAIN
   (`MixerUiState::focused_slot: Option<PluginInstanceId>`, which replaces
   `selected_plugin`), scrolling it into view and highlighting the row.

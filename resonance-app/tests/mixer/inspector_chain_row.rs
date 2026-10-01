@@ -143,6 +143,17 @@ fn one(messages: Vec<Message>) -> Message {
     m
 }
 
+/// The slot a ⠿ click armed, when the click raised exactly the
+/// handle's press (`DragStart`) and its release (`DragDrop`).
+fn grip_messages(messages: Vec<Message>) -> Option<u64> {
+    match messages.as_slice() {
+        [Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragStart(i))), Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragDrop))] => {
+            Some(*i)
+        }
+        m => panic!("⠿ click: {m:?}"),
+    }
+}
+
 fn shows(app: &Resonance, label: &str) -> bool {
     let top = inspector_top(app);
     simulator(app).find(in_inspector(label, 0, top)).is_ok()
@@ -187,10 +198,12 @@ fn every_row_control_raises_its_message_on_track_bus_and_master() {
             ),
             "☰ opens {name}'s menu: {menu:?}"
         );
-        assert!(matches!(
-            one(click(&app, GLYPH_GRIP, 0)),
-            Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragStart(i))) if i == id
-        ));
+        // A click on ⠿ arms the drag and, its release landing on the
+        // handle too, drops it again at once (nothing hovered: no move)
+        // — so a press and release in one event batch never leave a
+        // drag armed (code review C3).
+        let grip = grip_messages(click(&app, GLYPH_GRIP, 0));
+        assert_eq!(grip, Some(id), "⠿ arms a drag of {name}, then disarms it");
         let remove = one(click(&app, "\u{00d7}", 0));
         let removes_this = match &remove {
             Message::Plugin(PluginMessage::RemovePluginFromTrack(t, i)) => {
@@ -250,10 +263,7 @@ fn the_instrument_slots_handle_does_not_drag() {
         sim.into_messages().next().is_none(),
         "pressing the instrument's handle arms nothing"
     );
-    assert!(matches!(
-        one(click(&app, GLYPH_GRIP, 1)),
-        Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragStart(91)))
-    ));
+    assert_eq!(grip_messages(click(&app, GLYPH_GRIP, 1)), Some(91));
 }
 
 // ---------------------------------------------------------------------------
@@ -416,8 +426,8 @@ fn save_preset_prompts_for_a_name_and_arms_the_capture() {
     ));
     chain_ui(&mut app, ChainUiMessage::CommitPresetSave);
     assert_eq!(
-        app.test_pending_plugin_preset_save(),
-        Some((TRACK_FX, "Warm Glue".to_owned()))
+        app.test_pending_plugin_preset_save(TRACK_FX),
+        Some("Warm Glue".to_owned())
     );
     assert!(app.test_slot_preset_save().is_none());
 }
@@ -622,4 +632,507 @@ fn a_sub_track_has_no_swatch() {
     assert!(simulator(&app)
         .find(iced::widget::Id::new("inspector-color-swatch"))
         .is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// Code-review fixes (mixer cleanup batch 2)
+// ---------------------------------------------------------------------------
+
+fn press_event() -> iced::Event {
+    iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
+}
+
+fn release_event() -> iced::Event {
+    iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))
+}
+
+fn moved(at: iced::Point) -> iced::Event {
+    iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: at })
+}
+
+fn centre(b: iced::Rectangle) -> iced::Point {
+    iced::Point::new(b.x + b.width / 2.0, b.y + b.height / 2.0)
+}
+
+/// The visible bounds of the `nth` `label` inside the inspector.
+fn inspector_bounds(app: &Resonance, label: &str, nth: usize) -> iced::Rectangle {
+    let top = inspector_top(app);
+    simulator(app)
+        .find(in_inspector(label, nth, top))
+        .unwrap_or_else(|e| panic!("{label} #{nth} should render in the inspector: {e:?}"))
+        .bounds()
+}
+
+fn track_chain(app: &Resonance) -> Vec<u64> {
+    app.test_chain_slots(resonance_app::TestChain::Track(TRACK))
+        .into_iter()
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
+/// Arm a drag of the first row by pressing its ⠿ (press only — the
+/// button stays down), then walk the pointer over the rows along
+/// `path`, all through the rendered view; dispatch what the rows
+/// raised. Returns those messages.
+fn drag_through_view(app: &mut Resonance, path: &[iced::Point]) -> Vec<Message> {
+    let grip = inspector_bounds(app, GLYPH_GRIP, 0);
+    let armed: Vec<Message> = {
+        let mut sim = simulator(app);
+        sim.point_at(centre(grip));
+        let _ = sim.simulate([press_event()]);
+        sim.into_messages().collect()
+    };
+    assert!(
+        matches!(
+            armed.as_slice(),
+            [Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragStart(TRACK_FX)))]
+        ),
+        "{armed:?}"
+    );
+    for m in armed {
+        let _ = app.update(m);
+    }
+    // One simulator for the whole walk: the rows' hover state lives in
+    // its widget tree.
+    let walked: Vec<Message> = {
+        let mut sim = simulator(app);
+        for &at in path {
+            sim.point_at(at);
+            let _ = sim.simulate([moved(at)]);
+        }
+        sim.into_messages().collect()
+    };
+    for m in walked.clone() {
+        let _ = app.update(m);
+    }
+    walked
+}
+
+/// The window-level release, as the drag's subscription maps it.
+fn release(app: &mut Resonance) {
+    let drop = resonance_app::update::chain_ui::drag_end_event(&release_event())
+        .expect("a release ends an armed drag");
+    let _ = app.update(drop);
+}
+
+/// C1: entering a row makes it the drop target and LEAVING it clears
+/// that — so a release after the pointer left every row moves nothing
+/// (it used to move the plugin to the last row entered).
+#[test]
+fn a_release_after_leaving_the_rows_moves_nothing() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    let before = track_chain(&app);
+    let verb = inspector_bounds(&app, "Plate Verb", 0);
+    let header = inspector_bounds(&app, "CHAIN", 0);
+    let walked = drag_through_view(&mut app, &[centre(verb), centre(header)]);
+    assert!(
+        walked.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragOver(TRACK_FX2)))
+        )),
+        "entering the row is reported: {walked:?}"
+    );
+    assert!(
+        walked.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragLeave(TRACK_FX2)))
+        )),
+        "and so is leaving it: {walked:?}"
+    );
+    assert_eq!(app.test_chain_drag().and_then(|d| d.over), None);
+
+    let revision = app.revision();
+    release(&mut app);
+    assert_eq!(track_chain(&app), before, "released off the rows: no move");
+    assert_eq!(app.revision(), revision);
+    assert_eq!(app.test_chain_drag(), None, "and the drag is over");
+}
+
+/// C1, the other half: released while over a row, the drop lands there.
+#[test]
+fn a_release_over_a_row_drops_there() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    let verb = inspector_bounds(&app, "Plate Verb", 0);
+    drag_through_view(&mut app, &[centre(verb)]);
+    assert_eq!(app.test_chain_drag().and_then(|d| d.over), Some(TRACK_FX2));
+    release(&mut app);
+    assert_eq!(track_chain(&app), vec![TRACK_FX2, TRACK_FX]);
+}
+
+/// C1: an armed drag does not survive the inspector changing owner or
+/// the view switching.
+#[test]
+fn selection_change_and_view_switch_drop_an_armed_drag() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX));
+    ui(&mut app, UiMessage::SelectBus(Some(BUS)));
+    assert_eq!(app.test_chain_drag(), None, "another owner");
+
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX));
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    assert!(app.test_chain_drag().is_some(), "re-selecting the owner keeps it");
+    ui(&mut app, UiMessage::SwitchView(ViewMode::Arrange));
+    assert_eq!(app.test_chain_drag(), None, "a view switch");
+}
+
+/// C3: a click on ⠿ whose press and release arrive in one event batch
+/// reaches the handle as both, before the window-level release listener
+/// exists — dispatched in order, it leaves no drag armed.
+#[test]
+fn a_click_on_the_handle_leaves_no_drag_armed() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    let before = track_chain(&app);
+    for m in click(&app, GLYPH_GRIP, 0) {
+        let _ = app.update(m);
+    }
+    assert_eq!(app.test_chain_drag(), None);
+    assert_eq!(track_chain(&app), before);
+}
+
+/// C3: a press while a drag is armed means its release was lost — the
+/// drag disarms. Unless that press is the one that just re-armed it on
+/// another handle: the handle's `DragStart` arrives before the press
+/// listener's message for the same press, and is not undone by it.
+#[test]
+fn a_press_disarms_a_stuck_drag_but_not_the_one_it_starts() {
+    let pressed = resonance_app::update::chain_ui::drag_end_event(&press_event())
+        .expect("a press is reported while a drag is armed");
+    assert!(matches!(
+        pressed,
+        Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragPointerPressed))
+    ));
+
+    let mut app = app();
+    // Stuck: armed, its release never came, then a press elsewhere.
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX));
+    let _ = app.update(pressed.clone());
+    assert_eq!(app.test_chain_drag(), None, "the stuck drag is gone");
+
+    // Re-grabbed on another handle while stuck: the new drag survives
+    // its own press, and the next press (the lost release again) ends it.
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX));
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX2));
+    let _ = app.update(pressed.clone());
+    assert_eq!(app.test_chain_drag().map(|d| d.instance_id), Some(TRACK_FX2));
+    let _ = app.update(pressed);
+    assert_eq!(app.test_chain_drag(), None);
+}
+
+fn esc(app: &mut Resonance, captured: bool) {
+    use resonance_app::commands::{KeyChord, Mods, NamedKey};
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
+        repeat: false,
+        captured,
+    }));
+}
+
+/// C4: Esc closes the CHAIN's transient state one layer per press: a
+/// drag, then the preset prompt (whose field captured the key), then
+/// replace mode, then the slot menu.
+#[test]
+fn escape_closes_drag_prompt_replace_and_menu_in_turn() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    chain_ui(&mut app, ChainUiMessage::DragStart(TRACK_FX));
+    esc(&mut app, false);
+    assert_eq!(app.test_chain_drag(), None);
+
+    chain_ui(&mut app, ChainUiMessage::BeginReplace(TRACK_FX2));
+    chain_ui(&mut app, ChainUiMessage::BeginPresetSave(TRACK_FX));
+    chain_ui(&mut app, ChainUiMessage::ToggleSlotMenu(TRACK_FX2));
+    esc(&mut app, true);
+    assert!(app.test_slot_preset_save().is_none(), "the prompt first");
+    assert!(app.test_replacing_slot().is_some());
+    esc(&mut app, false);
+    assert_eq!(app.test_replacing_slot(), None, "then replace mode");
+    assert_eq!(app.test_slot_menu(), Some(TRACK_FX2));
+    esc(&mut app, false);
+    assert_eq!(app.test_slot_menu(), None, "then the menu");
+
+    chain_ui(&mut app, ChainUiMessage::ToggleColorPalette(TRACK));
+    esc(&mut app, false);
+    assert_eq!(app.test_color_palette(), None, "and the palette");
+}
+
+/// C4: a press anywhere closes an open slot menu or palette (click-away),
+/// except the press that just opened another one in its place.
+#[test]
+fn a_press_elsewhere_closes_the_menu_but_not_the_one_it_opens() {
+    use resonance_app::update::chain_ui::popover_press_event;
+    let mut app = app();
+    let dismiss = popover_press_event(&press_event()).expect("a press is a click-away");
+
+    chain_ui(&mut app, ChainUiMessage::ToggleSlotMenu(TRACK_FX));
+    let _ = app.update(dismiss.clone());
+    assert_eq!(app.test_slot_menu(), None, "click-away");
+
+    // Menu A open; ☰ of B pressed: the widget's toggle comes first, the
+    // listener's dismiss for that same press after it.
+    chain_ui(&mut app, ChainUiMessage::ToggleSlotMenu(TRACK_FX));
+    chain_ui(&mut app, ChainUiMessage::ToggleSlotMenu(TRACK_FX2));
+    let _ = app.update(dismiss.clone());
+    assert_eq!(app.test_slot_menu(), Some(TRACK_FX2), "B stays open");
+    let _ = app.update(dismiss.clone());
+    assert_eq!(app.test_slot_menu(), None, "the next press closes it");
+
+    chain_ui(&mut app, ChainUiMessage::ToggleColorPalette(TRACK));
+    let _ = app.update(dismiss);
+    assert_eq!(app.test_color_palette(), None);
+}
+
+/// C5: "Save preset…" puts the caret in the name field (a focus +
+/// select-all task on the field's id), and Enter in it saves.
+#[test]
+fn the_preset_prompt_takes_focus_and_enter_saves() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    let task = app.update(Message::Plugin(PluginMessage::ChainUi(
+        ChainUiMessage::BeginPresetSave(TRACK_FX),
+    )));
+    assert!(task.units() > 0, "opening the prompt focuses its field");
+
+    let mut sim = simulator(&app);
+    sim.click(Resonance::test_preset_name_input_id())
+        .expect("the name field carries the focus target's id");
+    let _ = sim.tap_key(iced::keyboard::Key::Named(iced::keyboard::key::Named::Enter));
+    let messages: Vec<Message> = sim.into_messages().collect();
+    assert!(
+        messages.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::CommitPresetSave))
+        )),
+        "Enter commits: {messages:?}"
+    );
+}
+
+/// A private preset root, removed when the test ends.
+struct TempRoot(std::path::PathBuf);
+
+impl TempRoot {
+    fn new(tag: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "resonance-chain-presets-{}-{tag}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The plugin hands its state back, as the engine does after an armed
+/// capture: the pending save is written.
+fn state_saved(app: &mut Resonance) {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
+        instance_id: TRACK_FX,
+        data: br#"{"version":1,"params":{"1":0.5}}"#.to_vec(),
+        preset_form: true,
+        first_party: true,
+    });
+}
+
+fn gui_save(app: &mut Resonance, name: &str) {
+    chain_ui(app, ChainUiMessage::BeginPresetSave(TRACK_FX));
+    chain_ui(app, ChainUiMessage::PresetSaveName(name.to_owned()));
+    chain_ui(app, ChainUiMessage::CommitPresetSave);
+}
+
+/// C6: a GUI save never replaces a save still waiting on the same
+/// plugin's state — say one the control API armed. It is refused with a
+/// banner, the prompt stays open, and the pending save is untouched.
+#[test]
+fn a_gui_save_waits_for_a_pending_save_of_the_same_plugin() {
+    let root = TempRoot::new("pending");
+    let mut app = app();
+    app.test_set_plugin_preset_root(root.0.clone());
+    let armed = crate::common::call(
+        &mut app,
+        "track.save_plugin_preset",
+        serde_json::json!({
+            "track_id": TRACK,
+            "plugin_id": format!("com.resonance.p{TRACK_FX}"),
+            "name": "From Agent",
+            "overwrite": false,
+        }),
+    );
+    assert!(armed.error.is_none(), "{:?}", armed.error);
+    assert_eq!(
+        app.test_pending_plugin_preset_save(TRACK_FX),
+        Some("From Agent".to_owned())
+    );
+
+    gui_save(&mut app, "From Gui");
+    assert_eq!(
+        app.test_pending_plugin_preset_save(TRACK_FX),
+        Some("From Agent".to_owned()),
+        "the control API's save is not replaced"
+    );
+    assert!(app.test_slot_preset_save().is_some(), "the prompt stays open");
+    assert!(app.test_error_message_is_set(), "and says why");
+
+    // Once that save lands, the same commit goes through.
+    state_saved(&mut app);
+    chain_ui(&mut app, ChainUiMessage::CommitPresetSave);
+    assert_eq!(
+        app.test_pending_plugin_preset_save(TRACK_FX),
+        Some("From Gui".to_owned())
+    );
+}
+
+/// C6: whether the name is taken is asked again at commit time. A name
+/// saved since the prompt last looked turns the button into "Overwrite"
+/// and needs a second press; that press overwrites the preset in place
+/// (same id), it does not add a second one of the same name.
+#[test]
+fn a_name_taken_since_the_last_keystroke_needs_a_confirmed_overwrite() {
+    let root = TempRoot::new("overwrite");
+    let mut app = app();
+    app.test_set_plugin_preset_root(root.0.clone());
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+
+    // The prompt is typed while the name is still free...
+    chain_ui(&mut app, ChainUiMessage::BeginPresetSave(TRACK_FX));
+    chain_ui(&mut app, ChainUiMessage::PresetSaveName("Warm Glue".to_owned()));
+    assert!(!app.test_slot_preset_save().unwrap().exists, "the button reads Save");
+
+    // ...then, with the prompt still open, the control API saves a
+    // preset of that very name, and it lands.
+    let armed = crate::common::call(
+        &mut app,
+        "track.save_plugin_preset",
+        serde_json::json!({
+            "track_id": TRACK,
+            "plugin_id": format!("com.resonance.p{TRACK_FX}"),
+            "name": "Warm Glue",
+            "overwrite": false,
+        }),
+    );
+    assert!(armed.error.is_none(), "{:?}", armed.error);
+    state_saved(&mut app);
+    let id = app
+        .test_user_preset_id(TRACK_FX, "Warm Glue")
+        .expect("the control API's save wrote the preset");
+
+    // The prompt's press, made while it still read "Save", does not
+    // overwrite that preset unannounced.
+    chain_ui(&mut app, ChainUiMessage::CommitPresetSave);
+    assert_eq!(app.test_pending_plugin_preset_save(TRACK_FX), None, "nothing armed");
+    let now = app.test_slot_preset_save().expect("the prompt stays open");
+    assert!(now.exists, "the button now reads Overwrite");
+    assert!(shows(&app, "Overwrite"));
+
+    // The confirmed press overwrites the same preset.
+    chain_ui(&mut app, ChainUiMessage::CommitPresetSave);
+    assert_eq!(
+        app.test_pending_plugin_preset_save(TRACK_FX),
+        Some("Warm Glue".to_owned())
+    );
+    state_saved(&mut app);
+    assert_eq!(
+        app.test_user_preset_id(TRACK_FX, "Warm Glue"),
+        Some(id),
+        "overwritten in place, not added again"
+    );
+}
+
+/// C2: the inspector draws the instrument slot where the chain holds the
+/// instrument. A sub-track's chain is effects only — its first row drags
+/// like any effect — and an effect ahead of an instrument drags while
+/// the instrument's handle is fixed.
+#[test]
+fn the_instrument_slot_is_the_instrument_not_row_zero() {
+    let mut app = app();
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![
+            ScannedPlugin {
+                clap_file_path: "/plugins/p80.clap".to_owned(),
+                clap_plugin_id: "com.resonance.p80".to_owned(),
+                name: "Sub EQ".to_owned(),
+                vendor: "Resonance".to_owned(),
+                ..Default::default()
+            },
+            ScannedPlugin {
+                clap_file_path: "/plugins/p82.clap".to_owned(),
+                clap_plugin_id: "com.resonance.p82".to_owned(),
+                name: "Synth".to_owned(),
+                vendor: "Resonance".to_owned(),
+                is_instrument: true,
+                ..Default::default()
+            },
+        ],
+    });
+
+    // A sub-track (instrument-typed) with a scanned effect on it.
+    const SUB: u64 = 9;
+    let mut sub = TrackState::new_instrument(SUB, 2);
+    sub.sub_track = Some(SubTrackLink {
+        parent_track_id: INST,
+        output_port_index: 1,
+    });
+    app.test_push_track(sub);
+    app.test_push_track_plugin(SUB, slot(80, "Sub EQ"));
+    ui(&mut app, UiMessage::SelectTrack(Some(SUB)));
+    assert_eq!(
+        grip_messages(click(&app, GLYPH_GRIP, 0)),
+        Some(80),
+        "a sub-track's first row is an effect: its handle drags"
+    );
+
+    // An instrument track with an effect ahead of its instrument.
+    app.test_push_track_plugin(INST, slot(80 + 1, "Pre Drive"));
+    app.test_push_track_plugin(INST, slot(82, "Synth"));
+    ui(&mut app, UiMessage::SelectTrack(Some(INST)));
+    // "Pre Drive" (p81) is not scanned, but it is not slot 0's only
+    // claim: the scanned instrument further down is the instrument.
+    assert_eq!(grip_messages(click(&app, GLYPH_GRIP, 0)), Some(81));
+    let top = inspector_top(&app);
+    let mut sim = simulator(&app);
+    sim.click(in_inspector(GLYPH_GRIP, 1, top)).expect("the second handle renders");
+    assert!(
+        sim.into_messages().next().is_none(),
+        "the instrument's handle is fixed, wherever it sits"
+    );
+}
+
+/// S6: focusing a slot is not a selection gesture. A plain click on a
+/// slot of a track inside a multi-selection keeps the selection (that
+/// track becomes the primary one); an additive one adds its track.
+#[test]
+fn focusing_a_slot_keeps_the_multi_selection() {
+    let mut app = app();
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
+    let additive = iced::keyboard::Modifiers::SHIFT;
+    ui(&mut app, UiMessage::ModifiersChanged(additive));
+    ui(&mut app, UiMessage::SelectTrack(Some(INST)));
+    ui(&mut app, UiMessage::ModifiersChanged(iced::keyboard::Modifiers::empty()));
+    assert_eq!(app.test_selected_tracks(), &[TRACK, INST]);
+
+    let _ = app.update(Message::Plugin(PluginMessage::FocusSlot(TRACK_FX)));
+    assert_eq!(app.test_focused_slot(), Some(TRACK_FX));
+    assert_eq!(app.test_selected_tracks(), &[INST, TRACK], "both still selected");
+    assert_eq!(app.test_selected_track(), Some(TRACK), "the slot's track leads");
+
+    // A plain click on a slot of a track outside the selection selects
+    // that track alone, as a click on its strip does.
+    const OTHER: u64 = 3;
+    app.test_add_track(OTHER, TrackType::Audio);
+    app.test_push_track_plugin(OTHER, slot(79, "Other FX"));
+    let _ = app.update(Message::Plugin(PluginMessage::FocusSlot(79)));
+    assert_eq!(app.test_selected_tracks(), &[OTHER]);
+
+    // An additive one adds it.
+    ui(&mut app, UiMessage::ModifiersChanged(additive));
+    let _ = app.update(Message::Plugin(PluginMessage::FocusSlot(TRACK_FX)));
+    assert_eq!(app.test_selected_tracks(), &[OTHER, TRACK]);
 }

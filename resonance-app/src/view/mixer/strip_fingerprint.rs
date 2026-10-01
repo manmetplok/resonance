@@ -86,9 +86,11 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     track.record_armed.hash(&mut h);
     track.monitor_enabled.hash(&mut h);
     track.fx_bypassed.hash(&mut h);
-    // Slot lines (the instrument/effects split is a function of the
-    // track type, hashed above, and the external flag, hashed below).
+    // Slot lines, and where the instrument line sits — a function of
+    // the plugin catalog (which plugins are instruments), not only of
+    // the track, so it is hashed as resolved.
     hash_chain(&mut h, &track.plugins, r.ui.mixer.focused_slot);
+    super::strip_parts::InstrumentSlot::of_track(r, track).hash(&mut h);
     // External-instrument head pill, offline flag and summary chips.
     let ext = r.devices.external_instruments.get(&track.id);
     ext.is_some().hash(&mut h);
@@ -125,13 +127,15 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     h.finish()
 }
 
-/// Fingerprint for a sub-track strip's lazy body (name, M / S, FX
-/// switch, pan). The rail/border selection tint and the fader/meter
-/// block are built outside the lazy region.
-pub(super) fn sub_strip_fingerprint(track: &TrackState) -> u64 {
+/// Fingerprint for a sub-track strip's lazy body (colour band, name,
+/// M / S, FX switch, pan). The rail/border selection tint and the
+/// fader/meter block are built outside the lazy region.
+pub(super) fn sub_strip_fingerprint(r: &crate::Resonance, track: &TrackState) -> u64 {
     let mut h = DefaultHasher::new();
     track.id.hash(&mut h);
     track.name.hash(&mut h);
+    // The colour band: the parent's colour.
+    super::track_strip::sub_track_color(r, track).hash(&mut h);
     track.muted.hash(&mut h);
     track.soloed.hash(&mut h);
     track.fx_bypassed.hash(&mut h);
@@ -182,7 +186,7 @@ impl crate::Resonance {
     ) -> Option<u64> {
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
         Some(if track.sub_track.is_some() {
-            sub_strip_fingerprint(track)
+            sub_strip_fingerprint(self, track)
         } else {
             track_strip_fingerprint(self, track)
         })
@@ -220,9 +224,8 @@ impl crate::Resonance {
         let mut found = None;
         for track in &self.registry.tracks {
             if let Some(i) = track.plugins.iter().position(|p| p.instance_id == instance_id) {
-                let instrument = i == 0
-                    && track.track_type == resonance_audio::types::TrackType::Instrument
-                    && !self.devices.external_instruments.contains_key(&track.id);
+                let instrument = super::strip_parts::InstrumentSlot::of_track(self, track)
+                    == super::strip_parts::InstrumentSlot::At(i);
                 found = Some((&track.plugins[i], instrument, track.fx_bypassed));
             }
         }

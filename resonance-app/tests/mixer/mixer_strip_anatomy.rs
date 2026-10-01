@@ -14,9 +14,9 @@ use iced_test::selector::Candidate;
 use iced_test::simulator::Simulator;
 use resonance_app::commands::{KeyChord, Mods, NamedKey};
 use resonance_app::message::{
-    BusMessage, MasterMessage, Message, PluginMessage, TrackMessage, UiMessage,
+    BusMessage, ChainUiMessage, MasterMessage, Message, PluginMessage, TrackMessage, UiMessage,
 };
-use resonance_app::state::{PluginSlotState, ViewMode};
+use resonance_app::state::{MixerInspectorGroup, PluginSlotState, ViewMode};
 use resonance_app::update::shortcuts::TypingProbe;
 use resonance_app::{theme, Resonance};
 use resonance_audio::types::{AudioEvent, ScannedPlugin, TrackType};
@@ -149,7 +149,7 @@ fn a_long_plugin_name_stays_on_one_line() {
     assert!(label.chars().count() <= theme::MIXER_SLOT_LINE_CHARS);
 
     let b = bounds_of(&app, &label);
-    assert!(b.height < 18.0, "one line of size-10 text, got {b:?}");
+    assert!(b.height < 18.0, "one line of size-11 text, got {b:?}");
     assert!(
         b.width <= theme::MIXER_STRIP_WIDTH - 20.0,
         "inside the strip's content width, got {b:?}"
@@ -251,17 +251,24 @@ fn bus_and_master_slot_lines_focus_and_open() {
 }
 
 /// An instrument track with an empty instrument slot shows a dim
-/// "No instrument" line; clicking it selects the track, which puts the
-/// inspector's add picker in front of the user.
+/// "No instrument" line; clicking it selects the track and cues the
+/// inspector's `+ Add instrument` picker. iced cannot focus a pick_list,
+/// so the cue is the picker's accent border and a line saying what to
+/// do — and it opens a folded CHAIN group to show them.
 #[test]
-fn an_empty_instrument_slot_reads_no_instrument_and_selects_the_track() {
+fn an_empty_instrument_slot_reads_no_instrument_and_cues_the_picker() {
     let mut app = app();
+    let _ = app.update(Message::Ui(UiMessage::ToggleMixerInspectorGroup(
+        MixerInspectorGroup::Chain,
+    )));
     let at = bounds_of(&app, "No instrument");
     let messages = press(&app, at, 1);
     assert!(
         matches!(
             messages.as_slice(),
-            [Message::Ui(UiMessage::SelectTrack(Some(EMPTY_SYNTH)))]
+            [Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::CueInstrumentPicker(
+                EMPTY_SYNTH
+            )))]
         ),
         "{messages:?}"
     );
@@ -269,10 +276,75 @@ fn an_empty_instrument_slot_reads_no_instrument_and_selects_the_track() {
         let _ = app.update(m);
     }
     // The inspector now describes the track (its header repeats the
-    // name the strip shows) — where the `+ Add instrument` picker is.
+    // name the strip shows), its CHAIN is open, and the picker is cued.
     let name = track_name(&app, EMPTY_SYNTH);
-    let shown = texts(&app).into_iter().filter(|(c, _)| *c == name).count();
+    let drawn = texts(&app);
+    let shown = drawn.iter().filter(|(c, _)| *c == name).count();
     assert_eq!(shown, 2, "strip head + inspector header");
+    assert_eq!(app.test_instrument_picker_cue(), Some(EMPTY_SYNTH));
+    assert!(
+        drawn
+            .iter()
+            .any(|(c, _)| c == "Pick an instrument to play this track"),
+        "the cue says what to do"
+    );
+
+    // Another track's selection does not carry the cue along.
+    let _ = app.update(Message::Ui(UiMessage::SelectTrack(Some(AUDIO))));
+    assert_eq!(app.test_instrument_picker_cue(), None);
+}
+
+/// The instrument line is the slot that actually holds the instrument,
+/// not slot 0 of every instrument-typed track (code review C2): an effect
+/// put ahead of the instrument stays an effect line, the instrument keeps
+/// its accent where it sits, and an instrument track whose instrument
+/// was removed reads "No instrument" over its remaining effects.
+#[test]
+fn the_instrument_line_follows_the_instrument_not_slot_zero() {
+    let mut app = app();
+    // `com.resonance.wave` is scanned as an instrument; the others are
+    // scanned effects.
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![
+            ScannedPlugin {
+                clap_file_path: "/plugins/wave.clap".to_owned(),
+                clap_plugin_id: "com.resonance.wave".to_owned(),
+                name: "Resonance Wave".to_owned(),
+                vendor: "Resonance".to_owned(),
+                is_instrument: true,
+                factory_presets: Vec::new(),
+            },
+            ScannedPlugin {
+                clap_file_path: "/plugins/x.clap".to_owned(),
+                clap_plugin_id: format!("com.resonance.{}", 801),
+                name: "Pre EQ".to_owned(),
+                vendor: "Resonance".to_owned(),
+                is_instrument: false,
+                factory_presets: Vec::new(),
+            },
+        ],
+    });
+    const PRE: u64 = 801;
+    const SYNTH2: u64 = 7;
+    const WAVE2: u64 = 802;
+    app.test_add_track(SYNTH2, TrackType::Instrument);
+    app.test_push_track_plugin(SYNTH2, slot(PRE, "Pre EQ"));
+    let mut wave = slot(WAVE2, "Wave Two");
+    wave.clap_plugin_id = "com.resonance.wave".to_owned();
+    app.test_push_track_plugin(SYNTH2, wave);
+
+    let line = |app: &Resonance, id| app.test_strip_slot_line(id).unwrap().4;
+    assert!(!line(&app, PRE), "the effect in slot 0 is an effect line");
+    assert!(line(&app, WAVE2), "the instrument in slot 1 is the instrument line");
+
+    // Remove the instrument: the strip says so over the effect left.
+    let _ = app.update(Message::Plugin(PluginMessage::RemovePluginFromTrack(SYNTH2, WAVE2)));
+    assert!(!line(&app, PRE));
+    let no_instrument = texts(&app)
+        .into_iter()
+        .filter(|(c, _)| c == "No instrument")
+        .count();
+    assert_eq!(no_instrument, 2, "EMPTY_SYNTH and the stripped SYNTH2");
 }
 
 // ---------------------------------------------------------------------------
@@ -439,18 +511,139 @@ fn typing_in_the_rename_field_fires_no_shortcut() {
     assert!(app.test_transport_playing());
 }
 
-/// Blur: a press that leaves the field unfocused commits; one that keeps
-/// it focused (a press inside the field) leaves it open.
+/// Blur: a press while the pointer is off the field commits; one with
+/// the pointer over the field (a press inside it) leaves it open. The
+/// double-click that opened the field was on it, so it starts hovered.
 #[test]
-fn losing_focus_commits_the_rename() {
+fn a_press_off_the_field_commits_the_rename() {
     let mut app = app();
     let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
     let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameFocusProbed(true)));
-    assert!(app.test_strip_renaming().is_some());
-    let _ = app.update(Message::Ui(UiMessage::StripRenameFocusProbed(false)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenamePointer));
+    assert!(app.test_strip_renaming().is_some(), "a press in the field");
+    let _ = app.update(Message::Ui(UiMessage::StripRenameHovered(false)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenamePointer));
     assert_eq!(app.test_strip_renaming(), None);
     assert_eq!(track_name(&app, AUDIO), "Bass DI");
+}
+
+/// The bug this guards: a press on a layer above the strips — here the
+/// floating plugin window — never reaches the rename field, so the field
+/// still says it is focused and kept taking keys after the user clicked
+/// away. The pointer leaving the field is what counts: driven through
+/// the rendered view (the field's own mouse area reports the leave), the
+/// press on the window commits the rename, and Space then plays instead
+/// of typing a space into the name.
+#[test]
+fn a_press_on_the_plugin_window_commits_the_rename_and_frees_the_keys() {
+    use resonance_app::update::strip_rename::pointer_event;
+    let mut app = app();
+    app.test_set_typing_probe(TypingProbe::Assume { editing: false });
+    let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(EQ)));
+    app.test_place_plugin_window(Point::new(500.0, 300.0));
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
+
+    let field = simulator(&app)
+        .find(iced::widget::Id::new("mixer-strip-rename"))
+        .expect("the rename field is drawn")
+        .bounds();
+    let window = app.test_plugin_window_state().expect("open").position;
+    let moves: Vec<Message> = {
+        let mut ui = simulator(&app);
+        let moved = |at: Point| {
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: at })
+        };
+        let on_field = Point::new(field.x + 10.0, field.y + field.height / 2.0);
+        let on_window = Point::new(window.x + 120.0, window.y + 80.0);
+        ui.point_at(on_field);
+        let _ = ui.simulate([moved(on_field)]);
+        ui.point_at(on_window);
+        let _ = ui.simulate([moved(on_window)]);
+        ui.into_messages().collect()
+    };
+    assert!(
+        moves
+            .iter()
+            .any(|m| matches!(m, Message::Ui(UiMessage::StripRenameHovered(false)))),
+        "leaving the field for the window is reported: {moves:?}"
+    );
+    for m in moves {
+        let _ = app.update(m);
+    }
+    assert!(app.test_strip_renaming().is_some(), "still open before the press");
+
+    let press = iced::Event::Mouse(iced::mouse::Event::ButtonPressed(
+        iced::mouse::Button::Left,
+    ));
+    let pointer = pointer_event(&press).expect("a press is reported while renaming");
+    let _ = app.update(pointer);
+    assert_eq!(app.test_strip_renaming(), None, "the press committed it");
+    assert_eq!(track_name(&app, AUDIO), "Bass DI");
+
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(NamedKey::Space, Mods::NONE),
+        repeat: false,
+        captured: false,
+    }));
+    assert!(app.test_transport_playing(), "Space plays");
+}
+
+/// An Esc the field did not capture (it lost focus some other way) still
+/// drops a rename left open — and still means what Esc means: here it
+/// closes the generic plugin window too.
+#[test]
+fn an_uncaptured_escape_drops_a_stale_rename_and_falls_through() {
+    let mut app = app();
+    let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(EQ)));
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
+        repeat: false,
+        captured: false,
+    }));
+    assert_eq!(app.test_strip_renaming(), None);
+    assert_eq!(app.test_plugin_window(), None, "Esc went on to close the window");
+}
+
+/// Switching tabs commits an open rename (leaving the field is a blur).
+#[test]
+fn switching_tabs_commits_the_rename() {
+    let mut app = app();
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
+    let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Arrange)));
+    assert_eq!(app.test_strip_renaming(), None);
+    assert_eq!(track_name(&app, AUDIO), "Bass DI");
+}
+
+/// The rename never outlives its track, and undo / redo drop it before
+/// they change the name under it.
+#[test]
+fn the_rename_is_dropped_with_its_track_and_by_undo() {
+    let mut app = app();
+    app.test_set_project_path(std::path::PathBuf::from("/tmp/strip-rename-undo.rprj"));
+    let before = track_name(&app, AUDIO);
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("First".into())));
+    let _ = app.update(Message::Ui(UiMessage::CommitStripRename));
+    assert_eq!(track_name(&app, AUDIO), "First");
+
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Second".into())));
+    let _ = app.update(Message::Undo);
+    assert_eq!(app.test_strip_renaming(), None, "undo dropped the open rename");
+    assert_eq!(track_name(&app, AUDIO), before, "and nothing re-committed it");
+
+    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(SYNTH)));
+    let _ = app.update(Message::Track(TrackMessage::RequestRemoveTrack(SYNTH)));
+    // A track with content asks first.
+    let _ = app.update(Message::Track(TrackMessage::ConfirmRemoveTrack));
+    assert!(
+        !app.test_registry().tracks.iter().any(|t| t.id == SYNTH),
+        "the track was removed"
+    );
+    assert_eq!(app.test_strip_renaming(), None, "its track is gone");
 }
 
 #[test]

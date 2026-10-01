@@ -35,12 +35,15 @@ pub(super) fn toggle_button(
     .on_press(msg)
     .style(move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered);
+        // Off reads as an enabled control (normal text in an outline, the
+        // same as an enabled action button), never as the dim TEXT_4 of a
+        // disabled one beside it; on is the accent.
         let (bg, border, txt) = if on {
             (on_bg, on_color, on_color)
         } else if hovered {
-            (theme::BG_3, theme::LINE, theme::TEXT_1)
+            (theme::BG_3, theme::ACCENT_LINE, theme::TEXT_1)
         } else {
-            (theme::BG_2, theme::LINE, theme::TEXT_3)
+            (theme::BG_2, theme::LINE, theme::TEXT_2)
         };
         button::Style {
             background: Some(iced::Background::Color(bg)),

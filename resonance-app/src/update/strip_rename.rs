@@ -7,17 +7,28 @@
 //! `TrackMessage::SetTrackName`, so undo and the control API's
 //! `track_rename` stay one path.
 //!
-//! Commit: Enter (`on_submit`), or the field losing focus. iced's
-//! `text_input` has no blur callback, so while a rename is open the app
-//! subscribes to mouse presses ([`pointer_event`]) and, after each one,
-//! probes whether the field still holds focus ([`input_id`]). A press
-//! inside the field keeps it; a press anywhere else unfocuses it and
-//! commits.
+//! Commit: Enter (`on_submit`), or a press anywhere off the field.
+//! iced's `text_input` has no blur callback, so while a rename is open
+//! the field sits in a mouse area that reports whether the pointer is
+//! over it ([`hovered`]) and the app subscribes to mouse presses
+//! ([`pointer_event`]). A press while the pointer is off the field
+//! commits. The decision is by pointer, not by asking the field whether
+//! it still holds focus: a press on a layer above the strips (the
+//! floating plugin window, a modal) never reaches the field, which would
+//! then report itself focused and keep taking keys after the user
+//! clicked away. Switching views commits too.
 //!
 //! Cancel: Esc. A focused `text_input` captures Esc (and unfocuses
-//! itself), so the shortcut reducer hands Esc to [`escape`] before its
-//! "a widget captured this key" drop. Every other key the field captures
-//! is dropped there, so typing a name never fires a global shortcut.
+//! itself), so the shortcut reducer hands a captured Esc to [`escape`]
+//! before its "a widget captured this key" drop. An Esc the field did
+//! not capture (the field lost focus some other way) closes the rename
+//! and still means whatever else Esc means. Every other key the field
+//! captures is dropped there, so typing a name never fires a global
+//! shortcut.
+//!
+//! The rename never outlives its track: [`prune`] drops it after any
+//! update that removed the track, and undo / redo drop it before they
+//! run (the name under the field may be about to change).
 
 use iced::Task;
 
@@ -51,6 +62,10 @@ pub(crate) fn begin(r: &mut Resonance, track_id: TrackId) -> Task<Message> {
         return Task::none();
     }
     r.ui.mixer.renaming = Some((track_id, track.name.clone()));
+    // The double-click that opened the field landed on the name the
+    // field replaces, so the pointer starts out over it. Its mouse area
+    // reports any move from here on.
+    r.ui.mixer.rename_hovered = true;
     Task::batch([
         iced::widget::operation::focus(input_id()),
         iced::widget::operation::select_all(input_id()),
@@ -69,6 +84,7 @@ pub(crate) fn commit(r: &mut Resonance) -> Task<Message> {
     let Some((track_id, buffer)) = r.ui.mixer.renaming.take() else {
         return Task::none();
     };
+    r.ui.mixer.rename_hovered = false;
     let name = buffer.trim();
     let current = r
         .registry
@@ -86,39 +102,51 @@ pub(crate) fn commit(r: &mut Resonance) -> Task<Message> {
 
 pub(crate) fn cancel(r: &mut Resonance) {
     r.ui.mixer.renaming = None;
+    r.ui.mixer.rename_hovered = false;
 }
 
-/// A mouse press while the field is open: probe its focus once the press
-/// has been delivered to the widgets.
-pub(crate) fn pointer(r: &Resonance) -> Task<Message> {
-    if r.ui.mixer.renaming.is_none() {
-        return Task::none();
-    }
-    iced::widget::operation::is_focused(input_id())
-        .map(|focused| Message::Ui(UiMessage::StripRenameFocusProbed(focused)))
-}
-
-pub(crate) fn focus_probed(r: &mut Resonance, focused: bool) -> Task<Message> {
-    if focused {
+/// A mouse press while the field is open: one off the field commits.
+pub(crate) fn pointer(r: &mut Resonance) -> Task<Message> {
+    if r.ui.mixer.renaming.is_none() || r.ui.mixer.rename_hovered {
         return Task::none();
     }
     commit(r)
 }
 
-/// Esc while a strip rename is open cancels it. `true` when it did, so
-/// the shortcut reducer stops there.
-pub(crate) fn escape(r: &mut Resonance) -> bool {
+/// The pointer entered or left the open field.
+pub(crate) fn hovered(r: &mut Resonance, hovered: bool) {
+    if r.ui.mixer.renaming.is_some() {
+        r.ui.mixer.rename_hovered = hovered;
+    }
+}
+
+/// Esc while a strip rename is open cancels it. `true` when the key is
+/// spent: the field captured it, so it was typed into the field and
+/// means nothing else. An Esc the field did not capture still closes a
+/// rename left open (its field is no longer focused) but returns `false`,
+/// so the key goes on to close the topmost overlay or window.
+pub(crate) fn escape(r: &mut Resonance, captured: bool) -> bool {
     if r.ui.mixer.renaming.is_none() {
         return false;
     }
     cancel(r);
-    true
+    captured
 }
 
-/// The subscription mapper while a rename is open: every left press,
-/// captured or not (a button elsewhere captures its own press but still
-/// takes focus away from the field).
-pub(crate) fn pointer_event(event: &iced::Event) -> Option<Message> {
+/// Drop a rename whose track is gone (removed, or undone away). Cheap: a
+/// scan of the track list, only while a rename is open.
+pub(crate) fn prune(r: &mut Resonance) {
+    if let Some((track_id, _)) = r.ui.mixer.renaming.as_ref() {
+        if !r.registry.tracks.iter().any(|t| t.id == *track_id) {
+            cancel(r);
+        }
+    }
+}
+
+/// The subscription mapper while a rename is open: every press, captured
+/// or not (a button elsewhere captures its own press, and a layer above
+/// the strips captures every press on it).
+pub fn pointer_event(event: &iced::Event) -> Option<Message> {
     match event {
         iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
         | iced::Event::Touch(iced::touch::Event::FingerPressed { .. }) => {

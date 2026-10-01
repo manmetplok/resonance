@@ -365,7 +365,9 @@ pub enum ChainUiMessage {
     /// A slot-menu entry or palette swatch was picked: close whatever
     /// inspector popover is open, then dispatch the entry's message.
     Pick(Box<Message>),
-    /// Close the open slot menu / palette without doing anything.
+    /// Click-away: a press landed somewhere while a slot menu or the
+    /// colour palette was open (`chain_ui::popover_press_event`). Closes
+    /// it, unless that same press just opened it.
     Dismiss,
     /// "Browse presets…": focus the slot, then open the preset browser
     /// on it.
@@ -385,6 +387,13 @@ pub enum ChainUiMessage {
     DragStart(PluginInstanceId),
     /// The pointer entered the row of this slot while a drag is armed.
     DragOver(PluginInstanceId),
+    /// The pointer left the row of this slot while a drag is armed: it
+    /// is no longer the drop target.
+    DragLeave(PluginInstanceId),
+    /// A press while a drag is armed means its release was lost (it came
+    /// in the same event batch as the press, or outside the window):
+    /// disarm, unless this press is the one that just re-armed it.
+    DragPointerPressed,
     /// The button came up: move the dragged slot to the hovered row's
     /// place, if the chain rules allow it, and disarm.
     DragDrop,
@@ -392,6 +401,9 @@ pub enum ChainUiMessage {
     DragCancel,
     /// The header swatch: open (or close) the track-colour palette.
     ToggleColorPalette(TrackId),
+    /// The strip's "No instrument" line: select the track and cue its
+    /// CHAIN group's `+ Add instrument` picker.
+    CueInstrumentPicker(TrackId),
 }
 
 /// A step of the generic plugin window's title-bar drag.
@@ -658,12 +670,14 @@ pub enum UiMessage {
     CommitStripRename,
     /// Drop the strip rename without renaming (Esc).
     CancelStripRename,
-    /// A mouse press landed while a strip rename is open. Probes whether
-    /// the field still holds focus; if not, the press was elsewhere and
-    /// the rename commits (iced's `text_input` has no blur callback).
+    /// A mouse press landed while a strip rename is open. Unless the
+    /// pointer is over the field, the press was elsewhere and the rename
+    /// commits (iced's `text_input` has no blur callback, and a press on
+    /// a layer above the strips never reaches the field at all).
     StripRenamePointer,
-    /// The answer to [`Self::StripRenamePointer`]'s focus probe.
-    StripRenameFocusProbed(bool),
+    /// The pointer entered (`true`) or left (`false`) the open rename
+    /// field.
+    StripRenameHovered(bool),
 }
 
 impl UiMessage {
@@ -736,7 +750,7 @@ impl UiMessage {
             | Self::CommitStripRename
             | Self::CancelStripRename
             | Self::StripRenamePointer
-            | Self::StripRenameFocusProbed(..) => UndoAction::Skip,
+            | Self::StripRenameHovered(..) => UndoAction::Skip,
         }
     }
 }

@@ -666,6 +666,10 @@ impl crate::Resonance {
             return None;
         }
         let (snapshot, label) = self.session.undo.pop_undo()?;
+        // An open strip rename is dropped: the name under its field may be
+        // about to change (or its track to go), and committing the buffer
+        // afterwards would undo the undo.
+        crate::update::strip_rename::cancel(self);
         // An import whose entry this undo pops must not place its clip
         // when the file lands later (code review UPD-04).
         self.media.pool_import.drop_undone(self.session.undo.undo_len());
@@ -691,6 +695,7 @@ impl crate::Resonance {
             return None;
         }
         let (snapshot, label) = self.session.undo.pop_redo()?;
+        crate::update::strip_rename::cancel(self);
         // Built once (FU-A13k) — see `try_undo`.
         let current = self.snapshot_for_undo();
         self.restore_from_snapshot_against(&current.project.file, snapshot);

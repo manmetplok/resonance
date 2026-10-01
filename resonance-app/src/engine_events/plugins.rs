@@ -691,15 +691,9 @@ pub(super) fn preset_state_saved(
     preset_form: bool,
     first_party: bool,
 ) {
-    if !r
-        .presets
-        .pending_plugin_preset_save
-        .as_ref()
-        .is_some_and(|p| p.instance_id == instance_id)
-    {
+    let Some(pending) = r.presets.pending_plugin_preset_saves.remove(&instance_id) else {
         return;
-    }
-    let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
+    };
     let saved = crate::update::control::write_plugin_preset(
         r,
         &pending,

@@ -215,41 +215,13 @@ impl crate::Resonance {
     }
 }
 
-/// What a per-slot bypass control carries and how it is tinted (ba doc
-/// #275 finding X3, todo #1305).
-///
-/// The strips no longer draw one — a slot line shows bypass as its
-/// state dot, and the control lives on the inspector's CHAIN row
-/// (mixer-cleanup.md §2.2) — but the decision keeps one home so every
-/// surface that offers it raises the same message. `iced_test` reads a
-/// text candidate's content but never its colour, so the tint is only
-/// assertable through this (`test_strip_bypass_toggle`).
-///
-/// Sends a SET, never a toggle, so the inspector row and the control API
-/// raise the identical message and cannot drift.
-pub(crate) fn bypass_toggle_spec(plugin: &PluginSlotState) -> (Message, Color) {
-    let color = if plugin.bypassed {
-        theme::WARM
-    } else {
-        theme::TEXT_3
-    };
-    (
-        Message::Plugin(PluginMessage::SetPluginBypass {
-            instance_id: plugin.instance_id,
-            bypassed: !plugin.bypassed,
-        }),
-        color,
-    )
-}
-
 /// What a slot's floating-editor toggle carries and how it is tinted:
 /// the message a press raises, and the glyph colour (ba todo #1306).
 ///
-/// `None` is the "draw no control at all" answer, for a plugin that
-/// declares no GUI. The strips no longer draw the toggle (a slot line's
-/// double-click opens the plugin's window, mixer-cleanup.md §2.1); the
-/// decision keeps one home for the surfaces that do, and a test can read
-/// it back (`test_strip_editor_toggle`) — the tint is not observable
+/// `None` for a plugin that declares no GUI: it has no editor to toggle
+/// (its `↗` follows the generic window instead). Drawn by the inspector
+/// CHAIN row's `↗` (`inspector::chain::open_toggle_spec`), and readable
+/// by a test (`test_chain_open_toggle`) — the tint is not observable
 /// through the widget tree, and "the glyph lights up while the window is
 /// open" is the only feedback a press gives, since the engine reports
 /// neither success nor failure per instance (ba todo #1347).

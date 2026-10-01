@@ -207,79 +207,12 @@ pub fn monitor_button<'a>(
         .padding(0)
 }
 
-/// Mono/Stereo toggle button. One hollow circle for mono, two for stereo.
-pub fn mono_button<'a>(
-    is_mono: bool,
-    track_id: TrackId,
-    size: u16,
-) -> iced::widget::Button<'a, Message> {
-    let glyph = if is_mono {
-        fa::CIRCLE_HOLLOW
-    } else {
-        fa::CIRCLE_HOLLOW_DOUBLE
-    };
-    let color = if is_mono { theme::TEXT_2 } else { theme::ACCENT_SOFT };
-    button(icon_button(glyph, color, size))
-        .on_press(Message::Track(TrackMessage::ToggleTrackMono(track_id)))
-        .style(move |_theme, status| theme::mono_button_style(is_mono, status))
-        .padding(0)
-}
-
-/// FX bypass toggle button. Small "FX" text label; dim when the
-/// effects chain is active (normal state) and tinted with the accent
-/// colour when bypassed (so the user can see at a glance which strips
-/// have their chain disabled).
-pub fn fx_bypass_button<'a>(
-    bypassed: bool,
-    on_press: Message,
-    size: u16,
-) -> iced::widget::Button<'a, Message> {
-    let color = if bypassed { theme::ACCENT } else { theme::TEXT_3 };
-    // Same `size + 10` cell as `icon_button` so the FX toggle lines up
-    // with its icon-button siblings.
-    let cell = (size + 10) as f32;
-    let label = container(
-        text("FX")
-            .size(f32::from(size - 1))
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(color)
-            .line_height(LineHeight::Relative(1.0)),
-    )
-    .width(cell)
-    .height(cell)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill);
-    button(label)
-        .on_press(on_press)
-        .style(|_theme, status| theme::small_button_style(status))
-        .padding(0)
-}
-
 /// Trash/delete button (gray trash can).
 pub fn delete_button<'a>(on_press: Message, size: u16) -> iced::widget::Button<'a, Message> {
     button(icon_button(fa::TRASH, theme::TEXT_3, size))
         .on_press(on_press)
         .style(|_theme, status| theme::small_button_style(status))
         .padding(0)
-}
-
-/// "Bounce in place" trigger — uses the audio-waveform glyph to imply
-/// rendering MIDI/synth output to a flat audio track. Greyed out when
-/// `enabled` is false (typically: source has no MIDI clips, or no
-/// internal synth + no MIDI Out).
-pub fn bounce_button<'a>(
-    track_id: TrackId,
-    enabled: bool,
-    size: u16,
-) -> iced::widget::Button<'a, Message> {
-    let color = if enabled { theme::TEXT_2 } else { theme::TEXT_4 };
-    let mut b = button(icon_button(fa::WAVE_SQUARE, color, size))
-        .style(|_theme, status| theme::small_button_style(status))
-        .padding(0);
-    if enabled {
-        b = b.on_press(Message::Track(TrackMessage::BounceInPlace(track_id)));
-    }
-    b
 }
 
 /// Bus remove button — same style as delete, used on bus strips.

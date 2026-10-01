@@ -37,14 +37,50 @@ impl Resonance {
         self.ui.mixer.color_palette
     }
 
-    /// Test-only: the instance and name of an armed plugin-preset save
-    /// (waiting on the engine's state capture).
+    /// Test-only: the name of `instance_id`'s armed plugin-preset save
+    /// (waiting on the engine's state capture), if one is armed.
     #[doc(hidden)]
-    pub fn test_pending_plugin_preset_save(&self) -> Option<(PluginInstanceId, String)> {
+    pub fn test_pending_plugin_preset_save(&self, instance_id: PluginInstanceId) -> Option<String> {
         self.presets
-            .pending_plugin_preset_save
-            .as_ref()
-            .map(|p| (p.instance_id, p.name.clone()))
+            .pending_plugin_preset_saves
+            .get(&instance_id)
+            .map(|p| p.name.clone())
+    }
+
+    /// Test-only: the id of the user preset named `name` (any case) of
+    /// the plugin behind `instance_id`, if one exists.
+    #[doc(hidden)]
+    pub fn test_user_preset_id(&self, instance_id: PluginInstanceId, name: &str) -> Option<String> {
+        let clap_id = self.plugin_slot(instance_id)?.clap_plugin_id.clone();
+        crate::update::control::plugin_presets::bank_for(self, &clap_id)
+            .list_user()
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+            .map(|p| p.id.clone())
+    }
+
+    /// Test-only: the widget id of the CHAIN preset prompt's name field.
+    #[doc(hidden)]
+    pub fn test_preset_name_input_id() -> iced::widget::Id {
+        crate::view::mixer::inspector::chain::preset_name_input_id()
+    }
+
+    /// Test-only: the track whose CHAIN `+ Add instrument` picker is cued.
+    #[doc(hidden)]
+    pub fn test_instrument_picker_cue(&self) -> Option<TrackId> {
+        self.ui.mixer.instrument_picker_cue
+    }
+
+    /// Test-only: what a CHAIN row's `↗` carries and how it is tinted —
+    /// the tint is the only feedback that the slot's window is open, and
+    /// `iced_test` cannot read a colour.
+    #[doc(hidden)]
+    pub fn test_chain_open_toggle(
+        &self,
+        instance_id: PluginInstanceId,
+    ) -> Option<(Message, iced::Color)> {
+        let slot = self.plugin_slot(instance_id)?;
+        Some(crate::view::mixer::inspector::chain::open_toggle_spec(self, slot))
     }
 
     /// Test-only: the ☰ menu entries of `instance_id`'s CHAIN row, as
