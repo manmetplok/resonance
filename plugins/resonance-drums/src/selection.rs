@@ -292,6 +292,19 @@ impl LibraryHandle {
 
     /// Use `library` rather than the process default (an editor test's
     /// own root). `false` once one is in use already.
+    /// The library's revision, if this instance has opened it — never
+    /// opens it.
+    pub fn revision_if_open(&self) -> Option<u64> {
+        #[cfg(feature = "editor")]
+        {
+            self.cell.get().map(|lib| lib.revision())
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            None
+        }
+    }
+
     #[cfg(feature = "editor")]
     pub fn set(&self, library: Arc<crate::library::SharedKitLibrary>) -> bool {
         self.cell.set(library).is_ok()
@@ -372,6 +385,9 @@ pub struct KitSelection {
     /// The load generation the host was last asked to process for
     /// ([`watch`]).
     process_asked: AtomicU64,
+    /// The library revision the watcher last saw ([`watch`]): a change
+    /// may rename the kit in a slot, which is `kit_select`'s text.
+    seen_revision: AtomicU64,
     /// The kit [`PARKED_KIT`] stands for: the last kit with no slot this
     /// instance played or was asked for. Kept when the selection moves on,
     /// so writing [`PARKED_KIT`] returns to it.
@@ -638,12 +654,15 @@ const ACT_FAILED: u8 = 2;
 
 /// Set `kit_select` to `value` and act on it even if it already holds it —
 /// the editor's pick (a pick of the playing kit reloads it, which retries
-/// a kit that failed).
+/// a kit that failed). A user's edit: the host records it as one undoable
+/// change ([`KitBridge::announce_kit_select`]), never only a rescan — a
+/// rescan landing before the edit would move the host's copy first, and
+/// the edit would record no change.
 pub fn select_now(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
     let _acting = bridge.params.selection.act.lock();
     bridge.params.kit_select.set_value(value);
     let out = act(bridge, value);
-    bridge.request_params_rescan();
+    bridge.announce_kit_select();
     out
 }
 
@@ -737,25 +756,36 @@ pub fn start_kit(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
 /// Load the kit at `manifest`, which has no library slot to name it (an
 /// import the index has not slotted, a relinked folder): `kit_select`
 /// parks at [`PARKED_KIT`] and reads as `"<name> (external)"`.
+///
+/// A user's edit, like [`select_now`].
 pub fn load_unslotted_now(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
     let _acting = bridge.params.selection.act.lock();
-    park_unslotted(bridge, &manifest);
-    start_kit(bridge, manifest)
+    let renamed = park_unslotted(bridge, &manifest);
+    let started = start_kit(bridge, manifest);
+    bridge.announce_kit_select();
+    if renamed {
+        // Parked before as well: the value did not move, its text did.
+        bridge.request_params_text_rescan();
+    }
+    started
 }
 
-/// Under `act`.
-fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
+/// Under `act`. Whether `kit_select` was parked on another kit already
+/// (its value stays, its text changes).
+fn park_unslotted(bridge: &KitBridge, manifest: &Path) -> bool {
     let sel = &bridge.params.selection;
     *sel.resolved_from.lock() = None;
     let from = sel.ref_for_manifest(manifest);
-    *sel.parked.lock() = Some(Parked::External {
+    let parked = Parked::External {
         manifest: manifest.to_path_buf(),
         from,
-    });
+    };
+    let was_parked = bridge.params.kit_select.value() == PARKED_KIT;
+    let changed = sel.parked.lock().replace(parked.clone()) != Some(parked);
     bridge.params.kit_select.set_value(PARKED_KIT);
     sel.act_error.store(ACT_OK, Ordering::Release);
     sel.acted.store(PARKED_KIT, Ordering::Release);
-    bridge.request_params_rescan();
+    was_parked && changed
 }
 
 /// Play the built-in kit: no kit is wanted any more. A load in flight is
@@ -913,8 +943,14 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
 /// a missing one, which becomes the parked kit; else [`NO_KIT`]). The kit
 /// itself is loaded by the caller — all of it, from resolving the state to
 /// starting the load, under [`KitSelection::acting`].
-pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) {
+///
+/// Returns whether `kit_select` kept its value but not its text (parked
+/// before and after, on another kit): the host must re-read the text.
+/// Either way the host is told with a rescan, never an edit — a state load
+/// is no user's pick.
+pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) -> bool {
     let sel = &bridge_params.selection;
+    let before = (bridge_params.kit_select.value(), sel.parked());
     *sel.resolved_from.lock() = match (&kit.path, &kit.from) {
         (Some(p), Some(r)) => Some((p.clone(), r.clone())),
         _ => None,
@@ -948,6 +984,7 @@ pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit
     bridge_params.kit_select.set_value(value);
     sel.act_error.store(ACT_OK, Ordering::Release);
     sel.acted.store(value, Ordering::Release);
+    value == PARKED_KIT && before.0 == PARKED_KIT && before.1 != sel.parked()
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,13 +1223,21 @@ pub fn watch(bridge: &KitBridge) {
         Ok(_) => {}
         Err(e) => tracing::warn!("kit_select: {e}"),
     }
+    // The library changed (a rename, a delete, a kit added in a slot):
+    // what a value names may have changed with it.
+    let sel = &bridge.params.selection;
+    if let Some(revision) = sel.library.revision_if_open() {
+        let seen = sel.seen_revision.swap(revision, Ordering::AcqRel);
+        if seen != 0 && seen != revision {
+            bridge.request_params_text_rescan();
+        }
+    }
     let host = bridge.host.lock().clone();
     publish_progress(&bridge.params, &bridge.load_progress, host.as_deref());
     let snap = bridge.load_progress.snapshot();
     let active = bridge.sample_rate.load(Ordering::Acquire) != 0;
     if snap.phase == LoadPhase::HandedOff && !snap.complete && active {
         let generation = bridge.load_generation.load(Ordering::Acquire);
-        let sel = &bridge.params.selection;
         if sel.process_asked.swap(generation, Ordering::AcqRel) != generation {
             if let Some(host) = &host {
                 host.request_process();

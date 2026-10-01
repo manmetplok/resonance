@@ -206,6 +206,11 @@ pub struct KitBridge {
     /// The host, once the CLAP bridge hands it over (`set_host`): told to
     /// re-read the params when the plugin moves `kit_select` itself.
     pub host: Arc<Mutex<Option<Arc<HostHandle>>>>,
+    /// What this instance asked the host for, counted whether or not a
+    /// host is attached — so a test can tell a user's kit pick (one
+    /// undoable edit) from a state load (a rescan, never an edit).
+    #[doc(hidden)]
+    pub host_asks: Arc<HostAsks>,
 
     // --- Disk streaming (E14, slice K6b) -------------------------------
     /// Frames of each take kept in memory; the rest of a longer take
@@ -231,6 +236,18 @@ pub struct KitBridge {
     /// main thread whenever the host sets the mode; the audio thread
     /// reads it once a block, so it applies from the next block on.
     pub host_render_mode: Arc<AtomicU8>,
+}
+
+/// Counts of [`KitBridge`]'s requests to the host. Test surface.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct HostAsks {
+    /// `announce_param_change("kit_select")`: user edits of the kit.
+    pub kit_select_edits: AtomicU64,
+    /// `request_params_rescan` (values).
+    pub value_rescans: AtomicU64,
+    /// `request_params_text_rescan` (values and text).
+    pub text_rescans: AtomicU64,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -286,12 +303,38 @@ impl KitBridge {
         let _ = self.articulation_wake.try_send(());
     }
 
-    /// Have the host re-read the params (values and text): the plugin
-    /// moved `kit_select` itself, or what its value names changed. A no-op
-    /// before the bridge handed the host over (and in tests).
+    /// Have the host re-read the params' values: the plugin moved
+    /// `kit_select` itself without the user asking (a state load), or
+    /// `kit_load_progress` moved. Never an undoable edit. A no-op before
+    /// the bridge handed the host over (and in tests).
     pub fn request_params_rescan(&self) {
+        self.host_asks.value_rescans.fetch_add(1, Ordering::Relaxed);
         if let Some(host) = self.host.lock().as_ref() {
             host.request_params_rescan();
+        }
+    }
+
+    /// Have the host re-read the params' values **and text**: what an
+    /// unchanged `kit_select` value names changed (a kit renamed in its
+    /// slot, another parked kit).
+    pub fn request_params_text_rescan(&self) {
+        self.host_asks.text_rescans.fetch_add(1, Ordering::Relaxed);
+        if let Some(host) = self.host.lock().as_ref() {
+            host.request_params_text_rescan();
+        }
+    }
+
+    /// The user changed `kit_select` from the plugin's own UI (a Library
+    /// Load, the kit dropdown, ◀/▶, a relink): the host records it as one
+    /// undoable edit. Call it after the value is set — and only for a
+    /// user's pick: a value derived from a state load is
+    /// [`Self::request_params_rescan`], or an undo would record an edit.
+    pub fn announce_kit_select(&self) {
+        self.host_asks
+            .kit_select_edits
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(host) = self.host.lock().as_ref() {
+            host.announce_param_change("kit_select");
         }
     }
 
@@ -437,6 +480,7 @@ impl ResonancePlugin for ResonanceDrums {
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
             host: Arc::new(Mutex::new(None)),
+            host_asks: Arc::new(HostAsks::default()),
             stream_preload: Arc::new(AtomicU32::new(stream::DEFAULT_PRELOAD)),
             stream_underruns: Arc::new(AtomicU64::new(0)),
             stream_ring_bytes: Arc::new(AtomicU64::new(0)),
@@ -1076,10 +1120,16 @@ impl ExtraStateSaver for DrumsExtraState {
                 *bridge.kit_fallback.lock() = kit.fallback.clone();
             }
             *self.kit_path.lock() = kit.path.clone();
-            // `kit_select` follows the reference: the kit's slot here.
-            selection::adopt_state_kit(&self.params, &kit);
+            // `kit_select` follows the reference: the kit's slot here. The
+            // host re-reads it — a rescan, never an edit: a state load
+            // (an undo's included) is no user's pick.
+            let text_changed = selection::adopt_state_kit(&self.params, &kit);
             if let Some(bridge) = &self.reload {
-                bridge.request_params_rescan();
+                if text_changed {
+                    bridge.request_params_text_rescan();
+                } else {
+                    bridge.request_params_rescan();
+                }
             }
         }
 

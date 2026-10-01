@@ -1212,3 +1212,79 @@ fn the_host_render_mode_reaches_the_sampler() {
     plugin.set_render_mode(false);
     assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_REALTIME);
 }
+
+// ---------------------------------------------------------------------------
+// Host undo: a user's pick is one edit, a state load is none
+// ---------------------------------------------------------------------------
+
+fn edits(plugin: &ResonanceDrums) -> u64 {
+    plugin.bridge.host_asks.kit_select_edits.load(Ordering::Relaxed)
+}
+
+/// The editor's Library Load (here: an import, which loads the kit it
+/// added through the same entry point as Load) is announced to the host
+/// as one undoable `kit_select` edit. A state load moving `kit_select` —
+/// which is what a host's undo of that edit is, in Resonance — and a host
+/// write are not: a rescan at most.
+#[test]
+fn a_library_load_is_one_host_edit_and_a_state_load_is_none() {
+    let home = Home::new("announce");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let outside = home.outside_kit("Gamma", "Gamma Kit", 0.3);
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
+    editor.picked_for_import(outside.parent().unwrap().to_path_buf());
+    editor.finish_jobs();
+    let gamma = slot_of(&lib, "Gamma Kit");
+    assert_eq!(plugin.bridge.params.kit_select.value(), gamma, "loaded");
+    assert_eq!(edits(&plugin), 1, "one undoable edit");
+
+    let rescans = plugin.bridge.host_asks.value_rescans.load(Ordering::Relaxed);
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(
+            &home.root().join("Alpha/kit/drum_samples.json"),
+            Some(&home.root())
+        )
+        .to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    assert_eq!(
+        plugin.bridge.params.kit_select.value(),
+        slot_of(&lib, "Alpha Kit")
+    );
+    assert_eq!(edits(&plugin), 1, "a state load is no edit");
+    assert!(
+        plugin.bridge.host_asks.value_rescans.load(Ordering::Relaxed) > rescans,
+        "but the host re-reads the value"
+    );
+
+    host_writes(&plugin, gamma).unwrap();
+    assert_eq!(edits(&plugin), 1, "the host's own write is no new edit");
+}
+
+/// The kit in a slot changed (removed here): `kit_select`'s value is
+/// unchanged and its text is not, so the watcher asks the host to re-read
+/// the text.
+#[test]
+fn a_library_change_asks_the_host_to_re_read_kit_select_text() {
+    let home = Home::new("rename-text");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let a = slot_of(&lib, "Alpha Kit");
+    // Let the watcher see the library once.
+    std::thread::sleep(Duration::from_millis(250));
+    let before = plugin.bridge.host_asks.text_rescans.load(Ordering::Relaxed);
+    lib.delete(&home.root().join("Alpha")).unwrap().unwrap();
+    assert_eq!(
+        plugin.param(KIT_SELECT).display(a as f64),
+        format!("(empty slot {a})")
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while plugin.bridge.host_asks.text_rescans.load(Ordering::Relaxed) == before {
+        assert!(Instant::now() < deadline, "no text rescan");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
