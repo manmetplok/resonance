@@ -133,10 +133,14 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 // The library's name for the kit ("Drummica", or its
                 // `_meta.name`), not the manifest's directory. A kit loaded
                 // from outside the library falls back to the loader's name.
-                let display = match (&loaded, &deleted) {
-                    (Some(e), _) => e.name.clone(),
-                    (None, Some(name)) => format!("{name} (deleted)"),
-                    (None, None) => {
+                let missing = app.params.selection.missing();
+                let display = match (&loaded, &deleted, &missing) {
+                    (Some(e), _, _) => e.name.clone(),
+                    (None, Some(name), _) => format!("{name} (deleted)"),
+                    // The kit the project names is not here (§5.3): say
+                    // so, as `kit_select`'s text does, not "— no kit —".
+                    (None, None, Some(m)) => format!("{} (missing)", m.display_name()),
+                    (None, None, None) => {
                         let name = current_kit_name(app);
                         if name.is_empty() {
                             "— no kit —".to_string()
@@ -196,6 +200,7 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 .size(10.5)
                 .color(theme::TEXT_3),
         );
+        draw_load_progress(ui, app);
         draw_kit_warnings(ui, app, loaded.as_ref(), deleted.is_some());
     });
 
@@ -254,6 +259,31 @@ fn deleted_kit_name(
             })
         }
     }
+}
+
+/// The kit load's progress (§5.4), while one is under way: the same
+/// figure `kit_load_progress` reports to the host — 100% only once the
+/// audio thread has the kit.
+fn draw_load_progress(ui: &mut egui::Ui, app: &DrumsEditorApp) {
+    let snap = app.bridge.load_progress.snapshot();
+    if snap.complete || snap.phase == crate::kit_loader::LoadPhase::Failed {
+        return;
+    }
+    ui.add_space(10.0);
+    let text = if snap.files_total > 0 {
+        format!(
+            "loading {:.0}% ({}/{} files)",
+            snap.fraction() * 100.0,
+            snap.files_done,
+            snap.files_total
+        )
+    } else {
+        "loading…".to_string()
+    };
+    let l = ui.add(
+        egui::Label::new(egui::RichText::new(text).color(theme::TEXT_2).size(10.5)).truncate(),
+    );
+    probe(ui, "kit.progress", l.rect);
 }
 
 /// What is wrong with the playing kit, beside the counter: deleted from

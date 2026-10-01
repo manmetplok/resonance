@@ -26,6 +26,7 @@ mod factory;
 mod jobs;
 mod kit_browser;
 mod library_panel;
+mod missing_kit;
 mod pad_grid;
 mod pad_inspector;
 mod plok_panel;
@@ -272,6 +273,9 @@ impl TestEditor {
         size: (f32, f32),
     ) -> Self {
         crate::library::isolate_for_tests();
+        // The plugin's `kit_select` resolves against the same library the
+        // editor shows (unless something already opened another).
+        plugin.params.selection.library.set(library.clone());
         let mut app = app::DrumsEditorApp::new(
             plugin.params.clone(),
             plugin.bridge.clone(),
@@ -472,6 +476,23 @@ impl TestEditor {
     /// What the import dialog does once the user picked `src`.
     pub fn picked_for_import(&mut self, src: std::path::PathBuf) {
         self.app.run_or_queue(app::Queued::Import(src));
+    }
+
+    /// What the missing-kit banner's `Locate folder…` does once the user
+    /// picked `dir` (the folder is checked on a job: `finish_jobs`).
+    pub fn locate_missing(&mut self, dir: std::path::PathBuf) {
+        missing_kit::picked(&mut self.app, dir);
+    }
+
+    /// A located folder holding another kit, waiting for "Use this kit
+    /// anyway?".
+    pub fn missing_mismatch(&self) -> Option<std::path::PathBuf> {
+        self.app.missing_kit.mismatch.clone()
+    }
+
+    /// The banner's last error, if any.
+    pub fn missing_error(&self) -> Option<String> {
+        self.app.missing_kit.error.clone()
     }
 }
 

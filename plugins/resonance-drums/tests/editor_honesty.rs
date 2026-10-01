@@ -16,6 +16,7 @@ const LIBRARY_PANEL: &str = include_str!("../src/editor/library_panel.rs");
 const PLOK_PANEL: &str = include_str!("../src/editor/plok_panel.rs");
 const KIT_BROWSER: &str = include_str!("../src/editor/kit_browser.rs");
 const JOBS: &str = include_str!("../src/editor/jobs.rs");
+const MISSING_KIT: &str = include_str!("../src/editor/missing_kit.rs");
 const DOWNLOAD: &str = include_str!("../src/download.rs");
 const LIBRARY: &str = include_str!("../src/library.rs");
 
@@ -29,6 +30,7 @@ fn no_tab_says_coming_soon() {
         ("pad_grid.rs", PAD_GRID),
         ("library_panel.rs", LIBRARY_PANEL),
         ("plok_panel.rs", PLOK_PANEL),
+        ("missing_kit.rs", MISSING_KIT),
     ] {
         assert!(
             !src.to_lowercase().contains("coming soon"),
@@ -122,6 +124,7 @@ fn no_control_discards_its_interaction() {
         ("pad_inspector.rs", PAD_INSPECTOR),
         ("library_panel.rs", LIBRARY_PANEL),
         ("plok_panel.rs", PLOK_PANEL),
+        ("missing_kit.rs", MISSING_KIT),
     ] {
         let discarded = discarded_widget_calls(src);
         assert!(
@@ -251,6 +254,7 @@ fn no_file_dialog_runs_on_the_editor_thread() {
         ("kit_browser.rs", KIT_BROWSER),
         ("library_panel.rs", LIBRARY_PANEL),
         ("plok_panel.rs", PLOK_PANEL),
+        ("missing_kit.rs", MISSING_KIT),
     ] {
         assert!(!src.contains("rfd::"), "{name} opens a file dialog on the UI thread");
     }
