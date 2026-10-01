@@ -285,7 +285,11 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
         },
     );
     let parts = part_files(&kits_dir, "Slow_Kit");
-    assert_eq!(parts.len(), 1, "the transfer should be streaming into a .part");
+    assert_eq!(
+        parts.len(),
+        1,
+        "the transfer should be streaming into a .part"
+    );
     let part = parts[0].clone();
 
     let started = Instant::now();
@@ -370,19 +374,25 @@ fn a_cancel_mid_extraction_stops_and_leaves_nothing() {
     // Two entries are out, in the staging directory.
     let kits_dir = home.kits_dir();
     assert!(
-        listing(&kits_dir).iter().any(|n| n.ends_with(".extracting")),
+        listing(&kits_dir)
+            .iter()
+            .any(|n| n.ends_with(".extracting")),
         "extraction should be under way: {:?}",
         listing(&kits_dir)
     );
 
     drop(worker);
     let _ = go_tx.send(());
-    wait_for("the cancelled extraction to clean up", Duration::from_secs(10), || {
-        listing(&kits_dir).is_empty()
-    });
-    wait_for("the worker to report the cancel", Duration::from_secs(10), || {
-        matches!(state.lock().status, Status::Error(_))
-    });
+    wait_for(
+        "the cancelled extraction to clean up",
+        Duration::from_secs(10),
+        || listing(&kits_dir).is_empty(),
+    );
+    wait_for(
+        "the worker to report the cancel",
+        Duration::from_secs(10),
+        || matches!(state.lock().status, Status::Error(_)),
+    );
     assert!(
         !home.0.join("installed.json").exists(),
         "a cancelled kit was recorded as installed"
@@ -450,11 +460,17 @@ fn a_starting_worker_sweeps_stale_download_leftovers() {
 
     assert!(!old_legacy.exists(), "an hour-old leftover survived");
     assert!(mine.exists(), "this process's own download was swept");
-    assert!(fresh_legacy.exists(), "a fresh leftover of unknown owner was swept");
+    assert!(
+        fresh_legacy.exists(),
+        "a fresh leftover of unknown owner was swept"
+    );
     assert!(unrelated.exists());
     if cfg!(target_os = "linux") {
         assert!(!dead_part.exists(), "a dead process's .part survived");
-        assert!(!dead_staging.exists(), "a dead process's staging dir survived");
+        assert!(
+            !dead_staging.exists(),
+            "a dead process's staging dir survived"
+        );
     }
 }
 
@@ -467,7 +483,10 @@ fn a_download_installs_into_the_injected_data_dir() {
     worker.send(Command::Download(kit("Good Kit", "good.zip")));
     wait_for("the download to finish", Duration::from_secs(10), || {
         let status = worker.state.lock().status.clone();
-        assert!(!matches!(status, Status::Error(_)), "download failed: {status:?}");
+        assert!(
+            !matches!(status, Status::Error(_)),
+            "download failed: {status:?}"
+        );
         matches!(status, Status::Done(_))
     });
     let dest = home.kits_dir().join("Good_Kit");
@@ -496,9 +515,11 @@ fn a_stalled_body_times_out_and_leaves_no_part() {
     });
     let started = Instant::now();
     worker.send(Command::Download(kit("Stall Kit", "stall.zip")));
-    wait_for("the stalled download to fail", Duration::from_secs(10), || {
-        matches!(worker.state.lock().status, Status::Error(_))
-    });
+    wait_for(
+        "the stalled download to fail",
+        Duration::from_secs(10),
+        || matches!(worker.state.lock().status, Status::Error(_)),
+    );
     let took = started.elapsed();
     assert!(
         took < limit * 10,
@@ -528,12 +549,13 @@ fn the_worker_thread_starts_on_the_first_command() {
     let worker = download::spawn_with_index("http://127.0.0.1:1/index.json".to_string());
     assert!(!worker.is_running());
     worker.send(Command::FetchIndex);
-    assert!(worker.is_running(), "the first command must start the thread");
-    wait_for(
-        "the refused fetch to fail",
-        Duration::from_secs(10),
-        || matches!(worker.state.lock().status, Status::Error(_)),
+    assert!(
+        worker.is_running(),
+        "the first command must start the thread"
     );
+    wait_for("the refused fetch to fail", Duration::from_secs(10), || {
+        matches!(worker.state.lock().status, Status::Error(_))
+    });
     drop(worker);
 
     // A handle that never started drops at once, and a lone Shutdown

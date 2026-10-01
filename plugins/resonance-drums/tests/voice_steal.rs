@@ -254,7 +254,7 @@ fn render_frames(
 fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
     const POLY: usize = 4;
     const BURST: usize = 20;
-    assert!(BURST > 16, "the burst must overflow the old 16 tails");
+    const { assert!(BURST > 16, "the burst must overflow the old 16 tails") };
 
     let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
     let mut sampler = DrumSampler::new(rx);
@@ -295,7 +295,13 @@ fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
             velocity: 1.0,
         })
         .collect();
-    mix.extend(render_frames(&mut sampler, &mut bufs, &params, BLOCK, &burst));
+    mix.extend(render_frames(
+        &mut sampler,
+        &mut bufs,
+        &params,
+        BLOCK,
+        &burst,
+    ));
 
     // The only things moving the mix: POLY steal fades of the sounding
     // voices, and BURST onsets — every hit of the burst starts, the ones
@@ -304,7 +310,10 @@ fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
     let fades = POLY as f32 * LEVEL * FRAC_PI_2 / n;
     let onsets = BURST as f32 * LEVEL / ATTACK as f32;
     let bound = 1.25 * (fades + onsets);
-    assert!(bound < 0.5 * LEVEL, "bound {bound} would not tell a cut apart");
+    assert!(
+        bound < 0.5 * LEVEL,
+        "bound {bound} would not tell a cut apart"
+    );
     let (step, at) = max_step(&mix);
     assert!(
         step <= bound,

@@ -538,8 +538,7 @@ fn stream_and_extract(
     }
     // Every entry is out: replace whatever was installed under this name.
     if dest.exists() {
-        std::fs::remove_dir_all(&dest)
-            .map_err(|e| format!("replace {}: {e}", dest.display()))?;
+        std::fs::remove_dir_all(&dest).map_err(|e| format!("replace {}: {e}", dest.display()))?;
     }
     std::fs::rename(staging, &dest)
         .map_err(|e| format!("move {} into place: {e}", dest.display()))?;

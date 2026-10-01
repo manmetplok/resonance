@@ -167,12 +167,18 @@ fn a_full_janitor_leaves_the_kit_parked_until_there_is_room() {
         render(&mut sampler, &mut bufs, &params);
         render(&mut sampler, &mut bufs, &params);
     });
-    assert_eq!(events, 0, "a full janitor must not mean a free on the audio thread");
+    assert_eq!(
+        events, 0,
+        "a full janitor must not mean a free on the audio thread"
+    );
     assert_eq!(sampler.retired_kits_parked(), 1, "kit a must stay parked");
     assert!(sampler.pads[0].name.starts_with("b:"));
 
     // Room again: the next block ships it.
-    assert!(janitor_rx.recv().unwrap().is_empty(), "the filler goes first");
+    assert!(
+        janitor_rx.recv().unwrap().is_empty(),
+        "the filler goes first"
+    );
     render(&mut sampler, &mut bufs, &params);
     assert_eq!(sampler.retired_kits_parked(), 0);
     let shipped = janitor_rx.try_recv().expect("kit a reaches the janitor");
@@ -213,7 +219,10 @@ fn every_slot_and_the_janitor_full_defers_the_swap() {
     // Drain the janitor and the deferred kit goes in.
     let _ = janitor_rx.recv().unwrap();
     sampler.try_swap_kit();
-    assert!(kit_rx_is_empty(&kit_tx), "the deferred kit must be taken now");
+    assert!(
+        kit_rx_is_empty(&kit_tx),
+        "the deferred kit must be taken now"
+    );
     let next = format!("k{}:", swaps + 1);
     assert!(sampler.pads[0].name.starts_with(&next));
 }

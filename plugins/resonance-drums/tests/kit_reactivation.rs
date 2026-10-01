@@ -259,7 +259,11 @@ fn a_first_pick_decoding_across_a_rate_change_is_reloaded_at_the_new_rate() {
         KitStatus::Loaded { .. }
     ));
     let frames = kick_frames(&mut plugin, x.level);
-    assert_decoded_at(frames, OTHER_RATE, "first pick across a 48k -> 44.1k re-activation");
+    assert_decoded_at(
+        frames,
+        OTHER_RATE,
+        "first pick across a 48k -> 44.1k re-activation",
+    );
 }
 
 #[test]
