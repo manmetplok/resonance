@@ -117,6 +117,7 @@ mod aux_send;
 pub mod sidechain;
 mod clip;
 mod commands;
+mod preset_discovery;
 mod error;
 mod events;
 mod reference;
@@ -137,7 +138,11 @@ pub use clip::{
 };
 pub use freeze::FrozenSource;
 pub use vocal_tuning::{F0Frame, GlobalTuning, NoteBlob, NoteEdit, TuningScale, VocalTuning};
-pub use commands::{AudioCommand, IdGrantBlocks, PoolImportFile};
+pub use commands::{AudioCommand, IdGrantBlocks, PluginPresetLocation, PoolImportFile};
+pub use preset_discovery::{
+    DiscoveredLocation, DiscoveredPreset, DISCOVERY_IS_FACTORY_CONTENT, DISCOVERY_IS_FAVORITE,
+    DISCOVERY_IS_USER_CONTENT,
+};
 pub use error::{EngineError, EngineErrorKind};
 pub use events::{
     AudioEvent, BouncedClipData, ExportErrorKind, ExportPhase, ImportStage, PluginEditorFailure,

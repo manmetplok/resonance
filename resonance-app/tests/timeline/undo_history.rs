@@ -21,17 +21,15 @@ fn label(id: f32) -> String {
 }
 
 fn dummy_snapshot(id: f32) -> UndoSnapshot {
-    UndoSnapshot {
-        project: LoadedProject {
-            file: ProjectFile {
-                bpm: id,
-                ..ProjectFile::default()
-            },
-            project_dir: PathBuf::new(),
-            midi_notes: HashMap::new(),
-            plugin_states: HashMap::new(),
+    UndoSnapshot::new(LoadedProject {
+        file: ProjectFile {
+            bpm: id,
+            ..ProjectFile::default()
         },
-    }
+        project_dir: PathBuf::new(),
+        midi_notes: HashMap::new(),
+        plugin_states: HashMap::new(),
+    })
 }
 
 #[test]

@@ -17,7 +17,9 @@ use iced::widget::{column, container, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::{ScannedPlugin, SendSource, TrackOutput};
 
-use crate::message::{BusMessage, Message, MixerMessage};
+use crate::message::{
+    BusMessage, Message, MixerMessage, PluginMessage, PresetAddOwner, PresetUiMessage,
+};
 use crate::state::{BusState, MixerInspectorGroup};
 use crate::theme;
 use crate::util::format_pan;
@@ -146,6 +148,7 @@ pub(crate) fn fingerprint(
         }
     }
     Rc::as_ptr(&r.ui.view_caches.fx_plugins).hash(&mut h);
+    Rc::as_ptr(&r.presets.fx_favorite_picks).hash(&mut h);
     h.finish()
 }
 
@@ -366,6 +369,23 @@ fn chain_group(
         .padding([8, 10])
         .width(Length::Fill);
         col = col.push(picker);
+        if !r.presets.fx_favorite_picks.is_empty() {
+            let with_preset = pick_list(
+                r.presets.fx_favorite_picks.clone(),
+                None::<crate::state::presets::PresetAddPick>,
+                move |pick| {
+                    Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
+                        owner: PresetAddOwner::Bus(bus_id),
+                        pick,
+                    }))
+                },
+            )
+            .placeholder("\u{25b8} with preset\u{2026}")
+            .text_size(12)
+            .padding([8, 10])
+            .width(Length::Fill);
+            col = col.push(with_preset);
+        }
     }
 
     col.into()

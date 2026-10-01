@@ -612,6 +612,7 @@ fn save_as_over_an_existing_preset_keeps_its_meta() {
                     ..Default::default()
                 }),
                 derived_from: None,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1150,4 +1151,523 @@ fn a_malformed_entry_does_not_take_the_bank_with_it() {
     let entries = resonance_plugin::presets::decode_factory_entries(text);
     let ids: Vec<&str> = entries.iter().map(|e| e.id.as_str()).collect();
     assert_eq!(ids, vec!["good", "also-good"]);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-sound presets (plugin-preset-library.md P2)
+// ---------------------------------------------------------------------------
+
+/// A plugin's own extra state: an IR path (the sound, a preset key) and a
+/// UI tab (session state, not a preset key).
+#[derive(Default)]
+struct IrLike {
+    ir_path: parking_lot::Mutex<String>,
+    tab: parking_lot::Mutex<String>,
+}
+
+impl ExtraStateSaver for IrLike {
+    fn save(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("ir_path".into(), serde_json::json!(*self.ir_path.lock()));
+        m.insert("ui_tab".into(), serde_json::json!(*self.tab.lock()));
+        m
+    }
+    fn load(&self, state: &serde_json::Value) {
+        if let Some(p) = state.get("ir_path").and_then(|v| v.as_str()) {
+            *self.ir_path.lock() = p.to_string();
+        }
+        if let Some(t) = state.get("ui_tab").and_then(|v| v.as_str()) {
+            *self.tab.lock() = t.to_string();
+        }
+    }
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["ir_path"]
+    }
+}
+
+/// Saving from the editor stores the sound-bearing extra state and not
+/// the session state; loading lays it over the current state, leaving the
+/// session state alone. Editor and host therefore store and recall the
+/// same thing (the host's path is `clap.state-context`, over the same
+/// saver).
+#[test]
+fn an_editor_preset_is_the_whole_sound_and_only_the_sound() {
+    let root = TempRoot::new("whole-sound");
+    let bank = root.bank();
+    let extra = Arc::new(IrLike::default());
+    *extra.ir_path.lock() = "/irs/a.wav".into();
+    *extra.tab.lock() = "tone".into();
+    let session = PresetSession::with_extra(extra.clone());
+    let params = TestParams::new();
+    params.mix.set_plain(0.2);
+
+    let saved = session.save_as(&bank, "Room A", &params.refs()).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&bank.json_for(&saved).unwrap()).unwrap();
+    assert_eq!(doc["ir_path"], "/irs/a.wav");
+    assert!(doc.get("ui_tab").is_none(), "session state stays out: {doc}");
+    assert!(doc.get("preset").is_none());
+
+    *extra.ir_path.lock() = "/irs/b.wav".into();
+    *extra.tab.lock() = "meters".into();
+    params.mix.set_plain(0.9);
+    assert!(session.load_preset(&bank, &saved, &params.refs()));
+    assert_eq!(*extra.ir_path.lock(), "/irs/a.wav", "the preset's IR is back");
+    assert_eq!(*extra.tab.lock(), "meters", "the UI tab is untouched");
+    assert!((params.mix.get_plain() - 0.2).abs() < 1e-6);
+}
+
+/// A parameter marked `preset_excluded` (the amp's slot, the IR's file
+/// index) is neither written into a preset nor recalled from one, legacy
+/// files that carry it included.
+#[test]
+fn an_excluded_parameter_stays_out_of_presets() {
+    let root = TempRoot::new("excluded");
+    let bank = root.bank();
+    let slot = IntParam::new("file_select", "Slot", 0, IntRange::Linear { min: 0, max: 99 })
+        .excluded_from_presets();
+    let mix = FloatParam::new("mix", "Mix", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 });
+    slot.set_plain(12.0);
+    let params: Vec<&dyn Param> = vec![&slot, &mix];
+    assert!(slot.preset_excluded() && !mix.preset_excluded());
+
+    let saved = bank.save("Excl", &params).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&bank.json_for(&saved).unwrap()).unwrap();
+    assert!(doc["params"].get("file_select").is_none(), "{doc}");
+
+    slot.set_plain(3.0);
+    let legacy = r#"{"params":{"file_select":40.0,"mix":0.1}}"#;
+    assert!(resonance_plugin::presets::apply(legacy, &params, &[]));
+    assert_eq!(slot.get_plain(), 3.0, "an excluded param keeps its value");
+    assert!((mix.get_plain() - 0.1).abs() < 1e-6);
+}
+
+/// `overlay_preset`: params replaced (excluded ones kept), preset keys
+/// taken from the preset or removed, other keys kept, identity replaced.
+#[test]
+fn overlaying_a_preset_replaces_only_what_a_preset_owns() {
+    let mut current = serde_json::json!({
+        "version": 1,
+        "params": {"mix": 0.5, "slot": 4.0, "taps": 2.0},
+        "ir_path": "/old.wav",
+        "user_wavetables": {"osc1": {}},
+        "ui_tab": "meters",
+        "preset": {"name": "Old"},
+    });
+    let preset = serde_json::json!({
+        "params": {"mix": 0.9, "slot": 11.0},
+        "ir_path": "/new.wav",
+        "preset": {"id": "x", "name": "New"},
+    });
+    resonance_plugin::presets::overlay_preset(
+        &mut current,
+        &preset,
+        &["ir_path", "user_wavetables"],
+        &|id| id == "slot",
+    );
+    assert_eq!(current["params"]["mix"], 0.9);
+    assert_eq!(current["params"]["slot"], 4.0, "excluded");
+    assert_eq!(current["params"]["taps"], 2.0, "not in the preset: kept");
+    assert_eq!(current["ir_path"], "/new.wav");
+    assert!(current.get("user_wavetables").is_none(), "a preset key it lacks goes");
+    assert_eq!(current["ui_tab"], "meters");
+    assert_eq!(current["preset"]["name"], "New");
+}
+
+// ---------------------------------------------------------------------------
+// The preset browser (plugin-preset-library.md P4)
+// ---------------------------------------------------------------------------
+
+mod browser {
+    use super::*;
+    use resonance_plugin::presets::{FormMode, PresetBrowser};
+
+    fn key(p: &PresetRef) -> String {
+        resonance_plugin::presets::mark_key("com.resonance.test", &p.id)
+    }
+
+    fn setup(tag: &str) -> (TempRoot, PresetBank, Arc<PresetSession>, Arc<IrLike>) {
+        let root = TempRoot::new(tag);
+        let bank = root.bank();
+        let extra = Arc::new(IrLike::default());
+        let session = PresetSession::with_extra(extra.clone());
+        (root, bank, session, extra)
+    }
+
+    /// ↑/↓ audition loads provisionally; Esc/× puts the exact prior sound
+    /// back — params, extra state and identity.
+    #[test]
+    fn audition_then_revert_restores_the_whole_prior_sound() {
+        let (_root, bank, session, extra) = setup("br-revert");
+        let params = TestParams::new();
+        *extra.ir_path.lock() = "/irs/original.wav".into();
+        let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+        params.mix.set_plain(0.37);
+        *extra.ir_path.lock() = "/irs/edited.wav".into();
+        session.mark_modified();
+
+        let mut b = PresetBrowser::default();
+        b.open(&bank, &session);
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let e = b.audition(&bank, &session, &params.refs(), &key(&wide()));
+        assert_eq!(e, PresetEvent::Auditioned(wide()));
+        assert_eq!(params.taps.get_plain(), 7.0, "the audition is audible");
+        assert!(b.auditioning());
+        b.audition(&bank, &session, &params.refs(), &key(&init()));
+        assert_eq!(params.taps.get_plain(), 3.0);
+
+        let e = b.close(&bank, &session, &params.refs(), false);
+        assert_eq!(e, PresetEvent::Reverted);
+        assert!((params.mix.get_plain() - 0.37).abs() < 1e-6);
+        assert_eq!(*extra.ir_path.lock(), "/irs/edited.wav");
+        assert_eq!(session.current(), Some(mine));
+        assert!(session.is_modified(), "the modified flag comes back too");
+        assert!(!b.open);
+    }
+
+    /// Enter / a click outside keeps the last audition and records the
+    /// pick in the recents.
+    #[test]
+    fn audition_then_commit_keeps_it_and_records_the_pick() {
+        let (root, _bank, session, _extra) = setup("br-commit");
+        let marks = Arc::new(
+            resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap(),
+        );
+        let bank = root.bank();
+        bank.library().set_marks(marks);
+        let params = TestParams::new();
+        let mut b = PresetBrowser::default();
+        b.open(&bank, &session);
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.audition(&bank, &session, &params.refs(), &key(&wide()));
+        let e = b.close(&bank, &session, &params.refs(), true);
+        assert_eq!(e, PresetEvent::Loaded(wide()));
+        assert_eq!(params.taps.get_plain(), 7.0);
+        let m = bank.library().preset_marks("com.resonance.test", "wide");
+        assert!(m.last_used.is_some() && m.use_count == 1);
+    }
+
+    /// Save as… from the form: metadata from the loaded preset, lineage,
+    /// and a name clash that asks before overwriting.
+    #[test]
+    fn save_as_through_the_form_carries_meta_and_asks_before_overwriting() {
+        let (_root, bank, session, _extra) = setup("br-form");
+        let params = TestParams::new();
+        session.load_preset(&bank, &wide(), &params.refs());
+        let mut b = PresetBrowser::default();
+        b.begin_save_as(&bank, &session);
+        let form = b.form.as_mut().unwrap();
+        assert_eq!(form.mode, FormMode::SaveAs);
+        assert_eq!(form.name, "Wide (edit)");
+        assert_eq!(form.meta.category.as_deref(), Some("Creative"), "pre-filled");
+        form.name = "Big".into();
+        form.meta.genres = vec!["ambient".into()];
+        let e = b.submit_form(&bank, &session, &params.refs(), false);
+        let PresetEvent::Saved(saved) = e else {
+            panic!("expected Saved, got {e:?}");
+        };
+        let record = bank.record(&saved).unwrap();
+        assert_eq!(record.meta.genres, vec!["ambient"]);
+        assert_eq!(record.meta.derived_from.as_deref(), Some("wide"));
+        assert_eq!(session.current(), Some(saved.clone()));
+        // The saved preset is the new baseline: an edit after it is one
+        // (review M7 — the form used to drop the baseline for good).
+        params.mix.set_plain(0.05);
+        assert!(session.compare_modified(&params.refs()), "modified turns on again");
+
+        b.begin_save_as(&bank, &session);
+        b.form.as_mut().unwrap().name = "big".into();
+        assert_eq!(b.submit_form(&bank, &session, &params.refs(), false), PresetEvent::None);
+        assert!(b.form.as_ref().unwrap().name_clash, "asks first");
+        let e = b.submit_form(&bank, &session, &params.refs(), true);
+        assert!(matches!(e, PresetEvent::Saved(ref p) if p.id == saved.id), "{e:?}");
+    }
+
+    /// Edit info… edits a user preset's metadata (and its name); on a
+    /// factory preset the form is marks only.
+    #[test]
+    fn edit_info_on_user_presets_and_marks_only_on_factory_ones() {
+        let (root, bank, session, _extra) = setup("br-edit");
+        bank.library().set_marks(Arc::new(
+            resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap(),
+        ));
+        let params = TestParams::new();
+        let mine = bank.save("Mine", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.begin_edit(&bank, &key(&mine));
+        let form = b.form.as_mut().unwrap();
+        assert!(matches!(form.mode, FormMode::EditInfo(_)));
+        form.name = "Mine Renamed".into();
+        form.meta.character = vec!["warm".into()];
+        form.meta.description = Some("Late.".into());
+        assert!(matches!(
+            b.submit_form(&bank, &session, &params.refs(), false),
+            PresetEvent::MetaChanged(_)
+        ));
+        let r = bank.record(&mine).unwrap();
+        assert_eq!(r.meta.name, "Mine Renamed");
+        assert_eq!(r.preset.id, mine.id, "the id never changes");
+        assert_eq!(r.meta.character, vec!["warm"]);
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.begin_edit(&bank, &key(&wide()));
+        let form = b.form.as_mut().unwrap();
+        assert!(matches!(form.mode, FormMode::MarksOnly(_)));
+        form.favorite = true;
+        form.personal_tags = vec!["keeper".into()];
+        b.submit_form(&bank, &session, &params.refs(), false);
+        let m = bank.library().preset_marks("com.resonance.test", "wide");
+        assert!(m.favorite);
+        assert_eq!(m.tags, vec!["keeper"]);
+    }
+
+    /// Rename, duplicate and the confirm-in-place delete, through the
+    /// browser.
+    #[test]
+    fn rename_duplicate_and_delete_from_the_browser() {
+        let (_root, bank, session, _extra) = setup("br-crud");
+        let params = TestParams::new();
+        let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+
+        b.begin_rename(&key(&mine));
+        b.rename.as_mut().unwrap().1 = "Ours".into();
+        let e = b.submit_rename(&bank, &session);
+        assert!(matches!(e, PresetEvent::Renamed(ref p) if p.id == mine.id && p.name == "Ours"));
+        b.begin_rename(&key(&wide()));
+        assert!(b.rename.is_none(), "factory presets are not renamed");
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let PresetEvent::Saved(copy) = b.duplicate(&bank, &key(&wide())) else {
+            panic!("duplicate")
+        };
+        assert_eq!(copy.name, "Wide copy");
+        assert_eq!(
+            bank.record(&copy).unwrap().meta.derived_from.as_deref(),
+            Some("wide")
+        );
+
+        b.refresh(&bank, std::time::Duration::ZERO);
+        b.model.begin_delete(key(&mine));
+        let armed = b.model.confirm_delete().unwrap();
+        let e = b.delete(&bank, &session, &armed);
+        assert!(matches!(e, PresetEvent::Deleted(_)));
+        assert!(bank.list_user().iter().all(|p| p.id != mine.id));
+        assert_eq!(session.current(), None, "the deleted preset's identity is cleared");
+    }
+
+    /// Export writes a format-1 file; importing it again into another
+    /// library keeps the id, and importing it where the id is taken gives
+    /// a new one. A preset for another plugin is refused by name.
+    #[test]
+    fn export_and_import_round_trip() {
+        let (root, bank, session, _extra) = setup("br-io");
+        let params = TestParams::new();
+        params.mix.set_plain(0.66);
+        let mine = session.save_as(&bank, "Exported", &params.refs()).unwrap();
+        let mut b = PresetBrowser::default();
+        b.refresh(&bank, std::time::Duration::ZERO);
+        let path = root.0.join("out.json");
+        b.export(&bank, &key(&mine), &path);
+        let file = PresetFile::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(file.id, mine.id);
+        assert_eq!(file.plugin.id, "com.resonance.test");
+
+        // Into the same library: the id is taken, so it gets a new one.
+        let e = b.import(&bank, &params.refs(), &path);
+        let PresetEvent::Imported(again) = e else {
+            panic!("import: {e:?}")
+        };
+        assert_ne!(again.id, mine.id);
+        assert_eq!(again.name, "Exported 2", "a taken name gets a number");
+
+        // Into a fresh library: the id is kept.
+        let other = TempRoot::new("br-io-other");
+        let other_bank = other.bank();
+        let (kept, reminted) = other_bank.import(&path, &["mix"]).unwrap();
+        assert!(!reminted);
+        assert_eq!(kept.id, mine.id);
+
+        let foreign = root.0.join("foreign.json");
+        let mut f = file.clone();
+        f.plugin.id = "com.other.plugin".into();
+        std::fs::write(&foreign, f.to_text().unwrap()).unwrap();
+        assert!(matches!(b.import(&bank, &params.refs(), &foreign), PresetEvent::None));
+        let err = b.model.notice().unwrap().text().to_string();
+        assert!(err.contains("com.other.plugin"), "{err}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Modified as a comparison, and the identity report (slice P5)
+// ---------------------------------------------------------------------------
+
+/// Modified compares the live sound with the loaded preset: an edit sets
+/// it, moving back clears it, an automated param never sets it; the
+/// hover lists what moved by display name.
+#[test]
+fn modified_is_a_comparison_with_the_loaded_preset() {
+    let root = TempRoot::new("compare");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    assert!(!session.compare_modified(&params.refs()));
+
+    params.mix.set_plain(0.2);
+    assert!(session.compare_modified(&params.refs()));
+    assert_eq!(session.changed_params(&params.refs()), Some(vec!["Mix".to_string()]));
+
+    params.mix.set_plain(0.9);
+    assert!(!session.compare_modified(&params.refs()), "turned back is not an edit");
+
+    session.set_ignored_params(vec![params.mix.clap_id()]);
+    params.mix.set_plain(0.1);
+    assert!(!session.compare_modified(&params.refs()), "the host automates it");
+    params.taps.set_plain(2.0);
+    assert!(session.compare_modified(&params.refs()));
+}
+
+/// Without a baseline (nothing loaded) the comparison leaves the flag as
+/// it is, rather than calling every sound "unmodified".
+#[test]
+fn with_nothing_loaded_there_is_nothing_to_compare() {
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    params.mix.set_plain(0.1);
+    assert_eq!(session.changed_params(&params.refs()), None);
+    assert!(!session.compare_modified(&params.refs()));
+}
+
+/// Every change of identity or modified flag runs the notifier the bridge
+/// installed (that is what gets it reported on the main thread), and the
+/// report is the `preset_session` JSON.
+#[test]
+fn identity_changes_are_announced_and_reported() {
+    let root = TempRoot::new("report");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = calls.clone();
+    session.set_change_notifier(Arc::new(move || {
+        c.fetch_add(1, Ordering::Relaxed);
+    }));
+    assert_eq!(session.preset_report().as_deref(), Some("{}"), "nothing loaded");
+
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    let after_load = calls.load(Ordering::Relaxed);
+    assert!(after_load >= 1);
+    let report = resonance_common::preset_session::IdentityReport::parse(
+        &session.preset_report().unwrap(),
+    )
+    .expect("a report");
+    assert_eq!((report.source.as_str(), report.id.as_str()), ("factory", "wide"));
+    assert!(!report.modified);
+
+    params.mix.set_plain(0.2);
+    session.compare_modified(&params.refs());
+    assert_eq!(calls.load(Ordering::Relaxed), after_load + 1);
+    session.compare_modified(&params.refs());
+    assert_eq!(calls.load(Ordering::Relaxed), after_load + 1, "no change, no call");
+    let report = resonance_common::preset_session::IdentityReport::parse(
+        &session.preset_report().unwrap(),
+    )
+    .unwrap();
+    assert!(report.modified);
+}
+
+// ---------------------------------------------------------------------------
+// The comparison's cost (review M2)
+// ---------------------------------------------------------------------------
+
+/// A saver with a (pretend) large state that counts how often it is
+/// serialised for the comparison.
+struct Heavy {
+    revision: AtomicU32,
+    serialised: AtomicU32,
+}
+
+impl ExtraStateSaver for Heavy {
+    fn save(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("tables".into(), serde_json::json!(self.revision.load(Ordering::Relaxed)));
+        m
+    }
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["tables"]
+    }
+    fn preset_compare_state(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.serialised.fetch_add(1, Ordering::Relaxed);
+        self.save_for_preset()
+    }
+    fn revision(&self) -> Option<u64> {
+        Some(self.revision.load(Ordering::Relaxed) as u64)
+    }
+    fn load(&self, _state: &serde_json::Value) {}
+}
+
+/// The extra state is serialised once per revision, not once per compare,
+/// and not at all when a param already differs.
+#[test]
+fn the_comparison_reuses_the_extra_hash_until_the_state_changes() {
+    let root = TempRoot::new("heavy");
+    let bank = root.bank();
+    let heavy = Arc::new(Heavy {
+        revision: AtomicU32::new(1),
+        serialised: AtomicU32::new(0),
+    });
+    let session = PresetSession::with_extra(heavy.clone());
+    let params = TestParams::new();
+    assert!(session.load_preset(&bank, &wide(), &params.refs()));
+    let after_load = heavy.serialised.load(Ordering::Relaxed);
+
+    for _ in 0..5 {
+        assert!(!session.compare_modified(&params.refs()));
+    }
+    assert_eq!(heavy.serialised.load(Ordering::Relaxed), after_load, "cached");
+
+    heavy.revision.store(2, Ordering::Relaxed);
+    assert!(session.compare_modified(&params.refs()), "the state changed");
+    assert_eq!(heavy.serialised.load(Ordering::Relaxed), after_load + 1);
+
+    heavy.revision.store(1, Ordering::Relaxed);
+    params.mix.set_plain(0.1);
+    let before = heavy.serialised.load(Ordering::Relaxed);
+    assert!(session.compare_modified(&params.refs()));
+    assert_eq!(
+        heavy.serialised.load(Ordering::Relaxed),
+        before,
+        "a moved param settles it without touching the extra state"
+    );
+}
+
+/// Renaming or deleting the loaded preset announces it (the host shows
+/// the name), and a bar pick lands in the recents.
+#[test]
+fn rename_and_delete_announce_and_bar_picks_are_recent() {
+    let root = TempRoot::new("announce");
+    let bank = root.bank();
+    let session = PresetSession::new();
+    let params = TestParams::new();
+    let calls = Arc::new(AtomicU32::new(0));
+    let c = calls.clone();
+    session.set_change_notifier(Arc::new(move || {
+        c.fetch_add(1, Ordering::Relaxed);
+    }));
+    let mine = session.save_as(&bank, "Mine", &params.refs()).unwrap();
+    let before = calls.load(Ordering::Relaxed);
+    let renamed = session.rename(&bank, &mine, "Ours").unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), before + 1, "rename announced");
+    session.delete(&bank, &renamed).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), before + 2, "delete announced");
+    assert_eq!(session.preset_report().as_deref(), Some("{}"));
+
+    let marks = resonance_plugin::library_marks::SharedMarks::open(root.0.join("marks")).unwrap();
+    bank.library().set_marks(Arc::new(marks));
+    let mut editor = PresetEditor::default();
+    editor.pick(&bank, &session, &wide(), &params.refs());
+    let marks = bank.library().preset_marks("com.resonance.test", "wide");
+    assert!(marks.last_used.is_some(), "a bar pick is a recent");
 }

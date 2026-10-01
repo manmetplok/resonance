@@ -13,9 +13,35 @@ use crate::plugin::ResonancePlugin;
 
 /// Temporary param used for serialization when the plugin instance is active
 /// (owned by `ClapAudioProcessor`) and not accessible from the main thread.
-struct TempParamOwned {
-    id: String,
-    value: f64,
+/// Carries the metadata the preset-modified comparison reads, too.
+pub(super) struct TempParamOwned {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) value: f64,
+    pub(super) min: f64,
+    pub(super) max: f64,
+    pub(super) clap_id: u32,
+    pub(super) preset_excluded: bool,
+}
+
+impl TempParamOwned {
+    /// Every param as the shared atomics hold it.
+    pub(super) fn all_from(shared: &super::shared::ClapShared<'_>) -> Vec<Self> {
+        shared
+            .param_metas
+            .iter()
+            .enumerate()
+            .map(|(i, meta)| TempParamOwned {
+                id: meta.str_id.clone(),
+                name: meta.name.clone(),
+                value: shared.get_value(i),
+                min: meta.min,
+                max: meta.max,
+                clap_id: meta.clap_id,
+                preset_excluded: meta.preset_excluded,
+            })
+            .collect()
+    }
 }
 
 impl Param for TempParamOwned {
@@ -23,7 +49,7 @@ impl Param for TempParamOwned {
         &self.id
     }
     fn name(&self) -> &str {
-        &self.id
+        &self.name
     }
     fn get_plain(&self) -> f64 {
         self.value
@@ -33,10 +59,16 @@ impl Param for TempParamOwned {
         self.value
     }
     fn min_plain(&self) -> f64 {
-        0.0
+        self.min
     }
     fn max_plain(&self) -> f64 {
-        1.0
+        self.max
+    }
+    fn clap_id(&self) -> u32 {
+        self.clap_id
+    }
+    fn preset_excluded(&self) -> bool {
+        self.preset_excluded
     }
     fn display(&self, value: f64) -> String {
         format!("{:.4}", value)
@@ -48,37 +80,7 @@ impl Param for TempParamOwned {
 
 impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
     fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
-        let data = if let Some(plugin) = &self.plugin {
-            // Main-thread path: the plugin's own `save_state` composes
-            // params with any extra-state saver via the trait default.
-            plugin.save_state()
-        } else {
-            // Audio-processor path: the owned plugin is currently inside
-            // `ClapAudioProcessor`, so we can't call `save_state` directly.
-            // Serialize params from the shared atomics and merge any
-            // extra-state saver's output using the same `"extra" ->
-            // top-level` shape the plugin would produce.
-            let temp_params: Vec<TempParamOwned> = self
-                .shared
-                .param_metas
-                .iter()
-                .enumerate()
-                .map(|(i, meta)| TempParamOwned {
-                    id: meta.str_id.clone(),
-                    value: self.shared.get_value(i),
-                })
-                .collect();
-            let refs: Vec<&dyn Param> = temp_params.iter().map(|p| p as &dyn Param).collect();
-            let mut json = crate::state::params_to_json(&refs);
-            if let Some(saver) = &self.extra_state_saver {
-                if let Some(obj) = json.as_object_mut() {
-                    for (k, v) in saver.save() {
-                        obj.insert(k, v);
-                    }
-                }
-            }
-            serde_json::to_vec(&json).unwrap_or_default()
-        };
+        let data = self.save_bytes();
         output
             .write_all(&data)
             .map_err(|_| PluginError::Message("Failed to write state"))?;
@@ -90,9 +92,43 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
         input
             .read_to_end(&mut data)
             .map_err(|_| PluginError::Message("Failed to read state"))?;
+        self.load_bytes(&data)
+    }
+}
 
+impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
+    /// The full state document, whether the plugin object is here or in
+    /// the audio processor. Shared by `clap.state` and the preset form.
+    pub(super) fn save_bytes(&self) -> Vec<u8> {
+        if let Some(plugin) = &self.plugin {
+            // Main-thread path: the plugin's own `save_state` composes
+            // params with any extra-state saver via the trait default.
+            plugin.save_state()
+        } else {
+            // Audio-processor path: the owned plugin is currently inside
+            // `ClapAudioProcessor`, so we can't call `save_state` directly.
+            // Serialize params from the shared atomics and merge any
+            // extra-state saver's output using the same `"extra" ->
+            // top-level` shape the plugin would produce.
+            let temp_params = TempParamOwned::all_from(&self.shared);
+            let refs: Vec<&dyn Param> = temp_params.iter().map(|p| p as &dyn Param).collect();
+            let mut json = crate::state::params_to_json(&refs);
+            if let Some(saver) = &self.extra_state_saver {
+                if let Some(obj) = json.as_object_mut() {
+                    for (k, v) in saver.save() {
+                        obj.insert(k, v);
+                    }
+                }
+            }
+            serde_json::to_vec(&json).unwrap_or_default()
+        }
+    }
+
+    /// Load a full state document, whether the plugin object is here or in
+    /// the audio processor. Shared by `clap.state` and the preset form.
+    pub(super) fn load_bytes(&mut self, data: &[u8]) -> Result<(), PluginError> {
         if let Some(plugin) = &mut self.plugin {
-            if !plugin.load_state(&data) {
+            if !plugin.load_state(data) {
                 return Err(PluginError::Message("Failed to load state"));
             }
             // Sync loaded values back to shared atomics
@@ -159,7 +195,7 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
             // until the flag, which is stored once the saver has returned,
             // and the generation keeps the audio thread from applying
             // either half early.
-            let mut state: serde_json::Value = serde_json::from_slice(&data)
+            let mut state: serde_json::Value = serde_json::from_slice(data)
                 .map_err(|_| PluginError::Message("Failed to load state"))?;
             // Migrate first, exactly as the inactive path's
             // `ResonancePlugin::load_state` default does, so both the

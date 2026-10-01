@@ -34,9 +34,26 @@ pub struct UndoSnapshot {
     /// cause the restore path to reinstantiate the plugin with default
     /// internal state and rely on the replayed parameter values.
     pub project: LoadedProject,
+    /// Plugin states that arrive after the snapshot was taken: the full
+    /// state a preset load saved (under the plugin's lock) just before it
+    /// replaced it, so undoing the load puts back the model / IR / user
+    /// tables the preset changed, not the possibly stale cached blob. A
+    /// filled entry overrides `project.plugin_states` at restore.
+    pub(crate) late_plugin_states: Vec<(PluginInstanceId, LateBlob)>,
 }
 
+/// A plugin state filled in after the snapshot that holds it.
+pub(crate) type LateBlob = Arc<std::sync::Mutex<Option<Arc<[u8]>>>>;
+
 impl UndoSnapshot {
+    /// A snapshot of `project` with no late plugin states.
+    pub fn new(project: LoadedProject) -> Self {
+        Self {
+            project,
+            late_plugin_states: Vec::new(),
+        }
+    }
+
     /// True when `self` and `other` describe the same undoable state — the
     /// check that tells a gesture that edited something from a click that
     /// moved nothing (code review STATE-07). Compares every captured part:
@@ -72,6 +89,9 @@ pub enum CoalesceKey {
     BusPan(u64),
     MasterVolume,
     PluginParam { instance_id: u64, param_id: u32 },
+    /// Consecutive ◀ / ▶ preset steps on one plugin: one entry for the
+    /// run, back to where it started.
+    PluginPresetStep(u64),
     /// The reference-track manual trim fader.
     ReferenceTrim,
     /// An aux-send level slider drag, keyed by the send's id.
@@ -235,6 +255,21 @@ impl crate::Resonance {
             &self.plugin_mirror.state_cache,
         );
 
+        // A preset load whose "after" state has not come back yet: this
+        // snapshot (a redo's, taken by the undo) waits on it, so redo puts
+        // back the state the load left rather than the stale cached one.
+        let mut late_plugin_states = Vec::new();
+        for owed in self.presets.pending_after.values().filter(|o| !o.superseded) {
+            if plugin_states.contains_key(&owed.instance_id)
+                || self.plugin_mirror.index.contains_key(&owed.instance_id)
+            {
+                let late = LateBlob::default();
+                if let Ok(mut s) = owed.slots.lock() {
+                    s.push(late.clone());
+                }
+                late_plugin_states.push((owed.instance_id, late));
+            }
+        }
         UndoSnapshot {
             project: LoadedProject {
                 file,
@@ -242,6 +277,7 @@ impl crate::Resonance {
                 midi_notes,
                 plugin_states,
             },
+            late_plugin_states,
         }
     }
 
@@ -354,13 +390,32 @@ impl crate::Resonance {
     ) {
         use crate::update::project_io::reconcile::{reconcile_all, Origin, ReconcileCtx};
 
+        // A step run's parked state load belongs to the sound being left:
+        // sent after this restore it would override it (review: undo inside
+        // the step debounce).
+        self.presets.pending_step_state.clear();
+        // An owed "after" state that lands from now on no longer describes
+        // the live plugin; it only fills the snapshots that wait on it.
+        for owed in self.presets.pending_after.values_mut() {
+            owed.superseded = true;
+        }
+
         // Pause playback and stop recording. Recording should already be
         // blocked by `can_undo_redo_now`, but belt-and-braces.
         let _ = self.engine.send(AudioCommand::Stop);
         self.transport.playing = false;
         self.transport.recording = false;
 
-        let UndoSnapshot { project: target } = snapshot;
+        let UndoSnapshot {
+            project: mut target,
+            late_plugin_states,
+        } = snapshot;
+        for (instance_id, late) in late_plugin_states {
+            let filled = late.lock().ok().and_then(|b| b.clone());
+            if let Some(blob) = filled {
+                target.plugin_states.insert(instance_id, blob);
+            }
+        }
         let project_path = self.io.project_path.clone();
         let ctx = ReconcileCtx {
             origin: Origin::Undo,

@@ -14,6 +14,10 @@
 mod clap_all_notes_off;
 #[path = "clap_host/clap_bundle_path.rs"]
 mod clap_bundle_path;
+#[path = "clap_host/plugin_preset_state.rs"]
+mod plugin_preset_state;
+#[path = "clap_host/preset_discovery.rs"]
+mod preset_discovery;
 #[path = "clap_host/clap_factory_presets.rs"]
 mod clap_factory_presets;
 #[path = "clap_host/clap_ffi_hardening.rs"]

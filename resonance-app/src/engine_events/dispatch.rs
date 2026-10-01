@@ -439,19 +439,22 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             has_sidechain_input,
             output_port_count,
             output_port_names,
-        } => plugins::track_added(
-            r,
-            track_id,
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-            has_sidechain_input,
-            output_port_count,
-            output_port_names,
-        ),
+        } => {
+            plugins::track_added(
+                r,
+                track_id,
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+                has_sidechain_input,
+                output_port_count,
+                output_port_names,
+            );
+            automation::sync_preset_ignored_params(r, instance_id, false);
+        }
         E::PluginRemoved {
             track_id,
             instance_id,
@@ -480,6 +483,34 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             return crate::update::control::label_resolved(r, token, value)
         }
         E::PluginScanFailed { failures } => plugins::scan_failed(r, failures),
+        E::PluginPresetStateSaved {
+            instance_id,
+            data,
+            preset_form,
+            first_party,
+        } => plugins::preset_state_saved(r, instance_id, data, preset_form, first_party),
+        E::PluginPresetLoaded {
+            instance_id,
+            location,
+            load_key,
+        } => plugins::preset_loaded(r, instance_id, location, load_key),
+        E::PluginStateCaptured {
+            instance_id,
+            token,
+            data,
+            after,
+        } => plugins::state_captured(r, instance_id, token, data, after),
+        E::PluginPresetsDiscovered { plugin_id, presets } => {
+            plugins::presets_discovered(r, plugin_id, presets)
+        }
+        E::PluginParamsRefreshed {
+            instance_id,
+            params,
+        } => plugins::params_refreshed(r, instance_id, params),
+        E::PluginPresetIdentity {
+            instance_id,
+            identity,
+        } => plugins::preset_identity(r, instance_id, identity),
         E::PluginStateSaved { instance_id, data } => {
             plugins::state_saved(r, instance_id, data)
         }
@@ -501,17 +532,20 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             params,
             has_gui,
             has_sidechain_input,
-        } => plugins::bus_added(
-            r,
-            bus_id,
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-            has_sidechain_input,
-        ),
+        } => {
+            plugins::bus_added(
+                r,
+                bus_id,
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+                has_sidechain_input,
+            );
+            automation::sync_preset_ignored_params(r, instance_id, false);
+        }
         E::BusPluginRemoved {
             bus_id,
             instance_id,
@@ -529,16 +563,19 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
             params,
             has_gui,
             has_sidechain_input,
-        } => plugins::master_added(
-            r,
-            instance_id,
-            plugin_name,
-            clap_plugin_id,
-            clap_file_path,
-            params,
-            has_gui,
-            has_sidechain_input,
-        ),
+        } => {
+            plugins::master_added(
+                r,
+                instance_id,
+                plugin_name,
+                clap_plugin_id,
+                clap_file_path,
+                params,
+                has_gui,
+                has_sidechain_input,
+            );
+            automation::sync_preset_ignored_params(r, instance_id, false);
+        }
         E::MasterPluginRemoved { instance_id } => plugins::master_removed_echo(r, instance_id),
         E::MasterPluginMoved {
             instance_id,

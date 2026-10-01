@@ -190,6 +190,14 @@ impl ClapInstance {
     /// under the instance lock, before the other host-request flags are
     /// read — whatever the callback reports (`clap_host_gui.closed`,
     /// `clap_host_latency.changed`) is then picked up in the same poll.
+    /// Whether the plugin has asked for `on_main_thread` since the last
+    /// [`run_requested_callback`](Self::run_requested_callback).
+    pub fn has_requested_callback(&self) -> bool {
+        self.host_data
+            .callback_requested
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub fn run_requested_callback(&mut self) {
         use std::sync::atomic::Ordering;
         if !self.host_data.callback_requested.swap(false, Ordering::AcqRel) {

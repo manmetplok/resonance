@@ -111,6 +111,11 @@ impl HeadlessEditor {
         }
     }
 
+    /// Open the preset browser the header's preset bar offers.
+    pub fn open_preset_browser(&mut self) {
+        self.app.preset_editor.browser.open(&self.app.bank, &self.app.presets);
+    }
+
     pub fn open_library(&mut self) {
         self.app.open_library();
         self.app.library_panel.tab = library_panel::Tab::Installed;

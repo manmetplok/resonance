@@ -63,6 +63,8 @@ mod import_placement_stale;
 mod import_progress_dialog;
 #[path = "io/media_browser_scaffold.rs"]
 mod media_browser_scaffold;
+#[path = "io/preset_tab_widgets.rs"]
+mod preset_tab_widgets;
 #[path = "io/midi_clip_lossless_roundtrip.rs"]
 mod midi_clip_lossless_roundtrip;
 #[path = "io/offline_render_gate.rs"]

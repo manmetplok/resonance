@@ -463,6 +463,8 @@ const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "library_marks",       // favourites/tags/recents shared by every library kind
     "nam_library",         // amp: the NAM model index, header reader and slot table
     "reveal",              // show a file in the platform file manager
+    "atomic_file",         // resonance-plugin: atomic replace + quarantine for preset files
+    "preset_session",      // resonance-plugin: the preset-identity CLAP extension ABI
 ];
 
 /// The plugins that declare a `resonance-common` dependency at all. The

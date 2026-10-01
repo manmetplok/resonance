@@ -293,6 +293,8 @@ pub(crate) fn inspector_fingerprint(
     Rc::as_ptr(&r.ui.view_caches.output_choices).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.fx_plugins).hash(&mut h);
     Rc::as_ptr(&r.ui.view_caches.instrument_plugins).hash(&mut h);
+    Rc::as_ptr(&r.presets.fx_favorite_picks).hash(&mut h);
+    Rc::as_ptr(&r.presets.instrument_favorite_picks).hash(&mut h);
     // Audio input picker uses `r.devices.input.devices` directly (its options
     // include the per-device channel count, which the cached choice
     // lists above don't carry).

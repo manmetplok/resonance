@@ -27,141 +27,36 @@ impl ClapInstance {
     pub fn save_state(&self) -> Option<Vec<u8>> {
         let state_ext = self.state_ext?;
         let save_fn = unsafe { (*state_ext).save }?;
+        let plugin = self.plugin;
+        // SAFETY: `plugin` is live for `self`, the stream for the call.
+        capture_ostream(|stream| unsafe { save_fn(plugin, stream) })
+    }
 
-        let mut buf: Vec<u8> = Vec::new();
-
-        /// `clap_ostream.write`, invoked by the plugin from inside
-        /// `state.save()`. stream.h contract: returns the number of
-        /// bytes written, -1 on write error.
-        ///
-        /// Hardened against a misbehaving plugin: a null `buffer` with
-        /// `size == 0` is a flush-style no-op (0 bytes written); a null
-        /// `buffer` with a non-zero `size` reports -1 instead of being
-        /// dereferenced (even `from_raw_parts(null, 0)` alone is UB, so
-        /// every check precedes slice construction); a `size` that would
-        /// push the accumulated state past [`MAX_STATE_BYTES`] reports
-        /// -1 *before* the slice read or any allocation. The body runs
-        /// under `catch_unwind` because a panic (Vec growth, slice ops)
-        /// must not unwind across the C ABI into the plugin.
-        unsafe extern "C" fn ostream_write(
-            stream: *const clap_ostream,
-            buffer: *const c_void,
-            size: u64,
-        ) -> i64 {
-            std::panic::catch_unwind(|| {
-                if size == 0 {
-                    return 0;
-                }
-                if buffer.is_null() {
-                    return -1;
-                }
-                // SAFETY: `stream` is the `clap_ostream` built by
-                // `save_state` below; its ctx points at the local `buf`,
-                // which outlives the `save_fn` call.
-                let buf = unsafe { &mut *((*stream).ctx as *mut Vec<u8>) };
-                if size > (MAX_STATE_BYTES - buf.len()) as u64 {
-                    return -1;
-                }
-                // SAFETY: `buffer` is non-null and the plugin contracts
-                // it to cover `size` bytes; `size` is now known sane
-                // (bounded by MAX_STATE_BYTES), so the slice read and
-                // the Vec growth it feeds are both bounded.
-                let slice = unsafe { std::slice::from_raw_parts(buffer as *const u8, size as usize) };
-                buf.extend_from_slice(slice);
-                size as i64
-            })
-            .unwrap_or(-1)
-        }
-
-        let stream = clap_ostream {
-            ctx: &mut buf as *mut Vec<u8> as *mut c_void,
-            write: Some(ostream_write),
-        };
-
-        let ok = unsafe { save_fn(self.plugin, &stream) };
-        if ok {
-            Some(buf)
-        } else {
-            None
-        }
+    /// A handle to this instance's `clap.state.save`, for saving without
+    /// holding the instance's lock (review: a large state — user
+    /// wavetables — made the audio thread miss blocks while the engine
+    /// held the lock to save it). CLAP allows `state.save` (`[main-thread]`)
+    /// while `process` runs, so the lock is not what makes it legal.
+    pub fn state_save_handle(&self) -> Option<StateSaveHandle> {
+        let state_ext = self.state_ext?;
+        let save = unsafe { (*state_ext).save }?;
+        Some(StateSaveHandle {
+            plugin: self.plugin,
+            save,
+        })
     }
 
     /// Load plugin state from a byte buffer via CLAP state extension.
     pub fn load_state(&mut self, data: &[u8]) -> bool {
-        let state_ext = match self.state_ext {
-            Some(ext) => ext,
-            None => return false,
+        let Some(state_ext) = self.state_ext else {
+            return false;
         };
-        let load_fn = match unsafe { (*state_ext).load } {
-            Some(f) => f,
-            None => return false,
+        let Some(load_fn) = (unsafe { (*state_ext).load }) else {
+            return false;
         };
-
-        struct IstreamCtx {
-            data: *const u8,
-            len: usize,
-            pos: usize,
-        }
-
-        /// `clap_istream.read`, invoked by the plugin from inside
-        /// `state.load()`. stream.h contract: returns the number of
-        /// bytes read, 0 for end of file, -1 for a read error.
-        ///
-        /// Hardened against a misbehaving plugin: `size == 0` reads
-        /// zero bytes (0 is also the only representable answer); a null
-        /// `buffer` with a non-zero `size` reports -1 instead of being
-        /// written through. The body runs under `catch_unwind` because
-        /// a panic must not unwind across the C ABI into the plugin.
-        unsafe extern "C" fn istream_read(
-            stream: *const clap_istream,
-            buffer: *mut c_void,
-            size: u64,
-        ) -> i64 {
-            std::panic::catch_unwind(|| {
-                if size == 0 {
-                    return 0;
-                }
-                if buffer.is_null() {
-                    return -1;
-                }
-                // SAFETY: `stream` is the `clap_istream` built by
-                // `load_state` below; its ctx points at the local
-                // `IstreamCtx`, which outlives the `load_fn` call.
-                let ctx = unsafe { &mut *((*stream).ctx as *mut IstreamCtx) };
-                let remaining = ctx.len - ctx.pos;
-                let to_read = (size as usize).min(remaining);
-                if to_read == 0 {
-                    return 0;
-                }
-                // SAFETY: `buffer` is non-null and the plugin contracts
-                // it to cover `size` bytes; `to_read <= size` and the
-                // source range `pos..pos + to_read` stays inside the
-                // `data..data + len` slice the ctx was built from.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        ctx.data.add(ctx.pos),
-                        buffer as *mut u8,
-                        to_read,
-                    );
-                }
-                ctx.pos += to_read;
-                to_read as i64
-            })
-            .unwrap_or(-1)
-        }
-
-        let mut ctx = IstreamCtx {
-            data: data.as_ptr(),
-            len: data.len(),
-            pos: 0,
-        };
-
-        let stream = clap_istream {
-            ctx: &mut ctx as *mut IstreamCtx as *mut c_void,
-            read: Some(istream_read),
-        };
-
-        unsafe { load_fn(self.plugin, &stream) }
+        let plugin = self.plugin;
+        // SAFETY: as for `save_state`.
+        feed_istream(data, |stream| unsafe { load_fn(plugin, stream) })
     }
 
     /// True while the plugin is activated (and so processed). False only
@@ -319,5 +214,162 @@ impl ClapInstance {
     /// re-send the same error on every request (ENG-12).
     pub(crate) fn take_restart_failure_report(&mut self) -> bool {
         !std::mem::replace(&mut self.restart_failure_reported, true)
+    }
+}
+
+/// Run a plugin call that writes into a host `clap_ostream`, and return
+/// what it wrote (`None` if the call reported failure). Shared by
+/// `clap.state` and `clap.state-context` saves.
+pub(super) fn capture_ostream(call: impl FnOnce(*const clap_ostream) -> bool) -> Option<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::new();
+
+    /// `clap_ostream.write`, invoked by the plugin from inside
+    /// `state.save()`. stream.h contract: returns the number of
+    /// bytes written, -1 on write error.
+    ///
+    /// Hardened against a misbehaving plugin: a null `buffer` with
+    /// `size == 0` is a flush-style no-op (0 bytes written); a null
+    /// `buffer` with a non-zero `size` reports -1 instead of being
+    /// dereferenced (even `from_raw_parts(null, 0)` alone is UB, so
+    /// every check precedes slice construction); a `size` that would
+    /// push the accumulated state past [`MAX_STATE_BYTES`] reports
+    /// -1 *before* the slice read or any allocation. The body runs
+    /// under `catch_unwind` because a panic (Vec growth, slice ops)
+    /// must not unwind across the C ABI into the plugin.
+    unsafe extern "C" fn ostream_write(
+        stream: *const clap_ostream,
+        buffer: *const c_void,
+        size: u64,
+    ) -> i64 {
+        std::panic::catch_unwind(|| {
+            if size == 0 {
+                return 0;
+            }
+            if buffer.is_null() {
+                return -1;
+            }
+            // SAFETY: `stream` is the `clap_ostream` built by
+            // `save_state` below; its ctx points at the local `buf`,
+            // which outlives the `save_fn` call.
+            let buf = unsafe { &mut *((*stream).ctx as *mut Vec<u8>) };
+            if size > (MAX_STATE_BYTES - buf.len()) as u64 {
+                return -1;
+            }
+            // SAFETY: `buffer` is non-null and the plugin contracts
+            // it to cover `size` bytes; `size` is now known sane
+            // (bounded by MAX_STATE_BYTES), so the slice read and
+            // the Vec growth it feeds are both bounded.
+            let slice = unsafe { std::slice::from_raw_parts(buffer as *const u8, size as usize) };
+            buf.extend_from_slice(slice);
+            size as i64
+        })
+        .unwrap_or(-1)
+    }
+
+    let stream = clap_ostream {
+        ctx: &mut buf as *mut Vec<u8> as *mut c_void,
+        write: Some(ostream_write),
+    };
+
+    let ok = call(&stream);
+    if ok {
+        Some(buf)
+    } else {
+        None
+    }
+}
+
+/// Run a plugin call that reads `data` from a host `clap_istream`.
+/// Shared by `clap.state` and `clap.state-context` loads.
+pub(super) fn feed_istream(data: &[u8], call: impl FnOnce(*const clap_istream) -> bool) -> bool {
+    struct IstreamCtx {
+        data: *const u8,
+        len: usize,
+        pos: usize,
+    }
+
+    /// `clap_istream.read`, invoked by the plugin from inside
+    /// `state.load()`. stream.h contract: returns the number of
+    /// bytes read, 0 for end of file, -1 for a read error.
+    ///
+    /// Hardened against a misbehaving plugin: `size == 0` reads
+    /// zero bytes (0 is also the only representable answer); a null
+    /// `buffer` with a non-zero `size` reports -1 instead of being
+    /// written through. The body runs under `catch_unwind` because
+    /// a panic must not unwind across the C ABI into the plugin.
+    unsafe extern "C" fn istream_read(
+        stream: *const clap_istream,
+        buffer: *mut c_void,
+        size: u64,
+    ) -> i64 {
+        std::panic::catch_unwind(|| {
+            if size == 0 {
+                return 0;
+            }
+            if buffer.is_null() {
+                return -1;
+            }
+            // SAFETY: `stream` is the `clap_istream` built by
+            // `load_state` below; its ctx points at the local
+            // `IstreamCtx`, which outlives the `load_fn` call.
+            let ctx = unsafe { &mut *((*stream).ctx as *mut IstreamCtx) };
+            let remaining = ctx.len - ctx.pos;
+            let to_read = (size as usize).min(remaining);
+            if to_read == 0 {
+                return 0;
+            }
+            // SAFETY: `buffer` is non-null and the plugin contracts
+            // it to cover `size` bytes; `to_read <= size` and the
+            // source range `pos..pos + to_read` stays inside the
+            // `data..data + len` slice the ctx was built from.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    ctx.data.add(ctx.pos),
+                    buffer as *mut u8,
+                    to_read,
+                );
+            }
+            ctx.pos += to_read;
+            to_read as i64
+        })
+        .unwrap_or(-1)
+    }
+
+    let mut ctx = IstreamCtx {
+        data: data.as_ptr(),
+        len: data.len(),
+        pos: 0,
+    };
+
+    let stream = clap_istream {
+        ctx: &mut ctx as *mut IstreamCtx as *mut c_void,
+        read: Some(istream_read),
+    };
+
+    call(&stream)
+}
+
+/// See [`ClapInstance::state_save_handle`].
+#[derive(Clone, Copy)]
+pub struct StateSaveHandle {
+    plugin: *const clap_sys::plugin::clap_plugin,
+    save: unsafe extern "C" fn(
+        *const clap_sys::plugin::clap_plugin,
+        *const clap_sys::stream::clap_ostream,
+    ) -> bool,
+}
+
+impl StateSaveHandle {
+    /// Save the plugin's full state.
+    ///
+    /// # Safety
+    /// On the engine (CLAP main) thread, while the instance the handle
+    /// came from is alive — the engine thread is the only one that
+    /// destroys instances, so a handler holding it within one command is
+    /// safe.
+    pub unsafe fn save(&self) -> Option<Vec<u8>> {
+        let (plugin, save) = (self.plugin, self.save);
+        // SAFETY: the caller's contract.
+        capture_ostream(|stream| unsafe { save(plugin, stream) })
     }
 }

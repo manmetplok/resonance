@@ -25,11 +25,13 @@
 //!   its own titlebar stops reading as open.
 
 mod bundle;
+pub mod discovery;
 mod gui;
 mod instance;
 mod param_meta;
 mod params;
 mod process;
+mod preset_state;
 mod state;
 pub(crate) mod thread_check;
 mod thread_pool;
@@ -38,6 +40,8 @@ pub use bundle::ClapBundle;
 pub use bundle::bundle_binary_path;
 pub use bundle::ClapBundleError;
 pub use instance::{ClapInstance, StereoBufMut};
+pub use bundle::DiscoveryFactory;
+pub use preset_state::PresetHostReport;
 pub use param_meta::{choice_labels, label_round_trips, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
@@ -128,6 +132,20 @@ pub(super) struct HostData {
     /// True while the plugin is inside `process()`: the only time CLAP
     /// lets it use the host's thread pool.
     pub(super) in_process: AtomicBool,
+    /// `clap_host_preset_load` vtable served from `host_get_extension`.
+    pub(super) preset_load_ext: clap_sys::ext::preset_load::clap_host_preset_load,
+    /// `com.resonance.preset-session` vtable, likewise.
+    pub(super) preset_session_ext: resonance_common::preset_session::HostPresetSession,
+    /// What the plugin reported about its preset (`loaded`, `on_error`,
+    /// the identity report), queued by the main-thread callbacks and
+    /// drained by `ClapInstance::take_preset_reports`.
+    pub(super) preset_reports: Mutex<Vec<preset_state::PresetHostReport>>,
+    /// `clap_host_params` vtable (rescan / clear / request_flush).
+    pub(super) params_ext: clap_sys::ext::params::clap_host_params,
+    /// The app's param mirror should be re-read: the plugin asked for a
+    /// values rescan, or a preset load wants a second look after the next
+    /// block. Consumed by `ClapInstance::take_params_refresh`.
+    pub(super) params_refresh: AtomicBool,
 }
 
 impl HostData {
@@ -145,7 +163,7 @@ impl HostData {
 /// Recover the `HostData` behind a `clap_host` pointer handed back by a
 /// plugin. Returns `None` for null / not-yet-wired pointers so a
 /// misbehaving plugin calling into us mid-construction can't crash.
-unsafe fn host_data_from<'a>(host: *const clap_host) -> Option<&'a HostData> {
+pub(super) unsafe fn host_data_from<'a>(host: *const clap_host) -> Option<&'a HostData> {
     if host.is_null() {
         return None;
     }
@@ -175,6 +193,17 @@ unsafe extern "C" fn host_get_extension(
     }
     if id == CLAP_EXT_THREAD_POOL.to_bytes() {
         return thread_pool::host_thread_pool_ptr();
+    }
+    if id == clap_sys::ext::preset_load::CLAP_EXT_PRESET_LOAD.to_bytes()
+        || id == clap_sys::ext::preset_load::CLAP_EXT_PRESET_LOAD_COMPAT.to_bytes()
+    {
+        return &data.preset_load_ext as *const _ as *const c_void;
+    }
+    if id == clap_sys::ext::params::CLAP_EXT_PARAMS.to_bytes() {
+        return &data.params_ext as *const _ as *const c_void;
+    }
+    if id == resonance_common::preset_session::EXTENSION_ID.to_bytes() {
+        return &data.preset_session_ext as *const _ as *const c_void;
     }
     ptr::null()
 }
@@ -242,6 +271,25 @@ unsafe extern "C" fn host_gui_request_hide(_host: *const clap_host) -> bool {
     false
 }
 
+/// `clap_host_params.rescan` — `[main-thread]`. A values (or text)
+/// rescan is what a plugin sends after changing params itself (a preset it
+/// loaded); the mirror re-reads them on the next host-request poll. An
+/// info rescan (params added/removed) needs a re-instantiation the host
+/// does not do live.
+unsafe extern "C" fn host_params_rescan(host: *const clap_host, flags: u32) {
+    use clap_sys::ext::params::{CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES};
+    if flags & (CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT) == 0 {
+        return;
+    }
+    if let Some(data) = host_data_from(host) {
+        data.params_refresh.store(true, Ordering::Release);
+    }
+}
+
+unsafe extern "C" fn host_params_clear(_host: *const clap_host, _param_id: u32, _flags: u32) {}
+
+unsafe extern "C" fn host_params_request_flush(_host: *const clap_host) {}
+
 unsafe extern "C" fn host_request_process(_host: *const clap_host) {}
 unsafe extern "C" fn host_request_callback(host: *const clap_host) {
     if let Some(data) = host_data_from(host) {
@@ -281,6 +329,15 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
         plugin: std::sync::atomic::AtomicPtr::new(ptr::null_mut()),
         thread_pool_exec: std::sync::OnceLock::new(),
         in_process: AtomicBool::new(false),
+        preset_load_ext: preset_state::host_preset_load_ext(),
+        preset_session_ext: preset_state::host_preset_session_ext(),
+        preset_reports: Mutex::new(Vec::new()),
+        params_ext: clap_sys::ext::params::clap_host_params {
+            rescan: Some(host_params_rescan),
+            clear: Some(host_params_clear),
+            request_flush: Some(host_params_request_flush),
+        },
+        params_refresh: AtomicBool::new(false),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {

@@ -172,6 +172,21 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_set_plugin_preset_root(&mut self, root: std::path::PathBuf) {
         self.presets.plugin_preset_root = Some(root);
+        self.presets.library_cache = std::sync::OnceLock::new();
+    }
+
+    /// Test-only: send the parked state loads of preset step runs now,
+    /// as the tick does once a run has been quiet for the debounce.
+    #[doc(hidden)]
+    pub fn test_flush_step_state(&mut self) {
+        crate::update::plugin::flush_step_state(self, true);
+    }
+
+    /// Test-only: the preset state (the host preset surfaces' lists, the
+    /// per-slot loaded-preset identity).
+    #[doc(hidden)]
+    pub fn test_presets(&self) -> &crate::state::PresetState {
+        &self.presets
     }
 
     /// Test-only: mark the open project dirty (or clean) so the

@@ -14,9 +14,11 @@ editor-widgets = [
     "dep:wayland-plugin-gui",
     "dep:cocoa-plugin-gui",
     "dep:plugin-gui-core",
+    "dep:rfd",
 ]
 
 [dependencies]
+base64 = "0.22"
 clack-plugin = { workspace = true }
 clack-extensions = { workspace = true }
 resonance-common = { path = "../resonance-common", default-features = false }
@@ -31,6 +33,8 @@ tracing.workspace = true
 # events (ARCH-05).
 tracing-subscriber.workspace = true
 plugin-gui-core = { path = "../plugin-gui-core", optional = true }
+# The preset browser's Import / Export file dialogs (editor only).
+rfd = { workspace = true, optional = true }
 
 # The platform GUI runtimes behind `editor_host::RuntimeEditor`. Target-gated
 # so each platform builds only its own windowing stack; both crates stay

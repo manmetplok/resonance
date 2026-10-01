@@ -163,6 +163,9 @@ pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
         .flat_map(|t| t.plugins.iter().map(|p| p.instance_id))
         .collect();
     drop_track_references(r, track_id, &removed_plugin_ids);
+    for &id in &removed_plugin_ids {
+        crate::update::plugin_preset_ui::forget_instance(r, id);
+    }
     for id in removed_plugin_ids {
         r.plugin_mirror.index.remove(&id);
         // …and any key route pointing AT one of them: a track deletion
@@ -443,6 +446,7 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         .map(|b| b.plugins.iter().map(|p| p.instance_id).collect())
         .unwrap_or_default();
     for id in removed_plugin_ids {
+        crate::update::plugin_preset_ui::forget_instance(r, id);
         r.plugin_mirror.index.remove(&id);
         // A bus deletion takes the bus's whole insert chain with it
         // without a per-plugin `BusPluginRemoved` echo, so a key route

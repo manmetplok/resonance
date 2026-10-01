@@ -259,6 +259,7 @@ impl ResonancePlugin for ResonanceDrums {
                 overhead_setup_key: bridge.overhead_setup_key.clone(),
                 pad_choices: bridge.pad_choices.clone(),
                 params: params.clone(),
+                reload: Some(bridge.clone()),
             },
         ));
         Self {
@@ -331,6 +332,13 @@ impl ResonancePlugin for ResonanceDrums {
 
     fn reset(&mut self) {
         self.sampler.reset();
+    }
+
+    /// Inactive, there is no rate to decode a kit at: a state load in this
+    /// window (a full-state reload's deactivate → load → activate) only
+    /// records the kit, and `initialize` loads it once.
+    fn deactivate(&mut self) {
+        self.bridge.sample_rate.store(0, Ordering::Release);
     }
 
     fn process(
@@ -496,6 +504,12 @@ pub struct DrumsExtraState {
     /// Read-only here: the saver mirrors the articulation params into the
     /// legacy key on save, and migrates the legacy key into them on load.
     pub params: Arc<DrumParams>,
+    /// The plugin's bridge, when the saver belongs to a live plugin: a
+    /// load that changes the kit or its mic choices reloads the kit here,
+    /// once a sample rate is known (a preset load while active — before,
+    /// the new kit was only written into the state). `None` for a bare
+    /// saver (tests), which then only records.
+    pub reload: Option<KitBridge>,
 }
 
 impl ExtraStateSaver for DrumsExtraState {
@@ -551,15 +565,27 @@ impl ExtraStateSaver for DrumsExtraState {
         map
     }
 
+    /// The kit and its mic choices are the sound (the articulation
+    /// toggles are params already). Path-only until kits become a library
+    /// kind (plugin-preset-library.md §9.3).
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &["kit_path", "overhead_setup_key", "pad_mic_choices"]
+    }
+
     fn load(&self, state: &serde_json::Value) {
-        // Always reassign so a null/missing `kit_path` clears any
-        // previously remembered path on this instance. The actual loader
-        // is spawned from `initialize()` because the sample rate isn't
-        // known until the host activates the plugin.
-        *self.kit_path.lock() = state
-            .get("kit_path")
-            .and_then(|v| v.as_str())
-            .map(PathBuf::from);
+        let before = (
+            self.kit_path.lock().clone(),
+            self.overhead_setup_key.lock().clone(),
+            self.pad_choices.lock().clone(),
+        );
+        // An explicit `kit_path: null` clears the remembered kit (a project
+        // saved with none always writes it); a document without the key —
+        // a params-only preset — keeps the current kit, as the IR keeps
+        // its impulse. Before the plugin is active the loader is spawned
+        // from `initialize()`, where the sample rate is known.
+        if let Some(v) = state.get("kit_path") {
+            *self.kit_path.lock() = v.as_str().map(PathBuf::from);
+        }
 
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
             *self.overhead_setup_key.lock() = s.to_string();
@@ -600,6 +626,27 @@ impl ExtraStateSaver for DrumsExtraState {
                         articulation::ARTICULATION_PRIMARY
                     });
                 }
+            }
+        }
+
+        // The kit is the sound: a load that changed it (or its mics) while
+        // a sample rate is known reloads it now.
+        let after = (
+            self.kit_path.lock().clone(),
+            self.overhead_setup_key.lock().clone(),
+            self.pad_choices.lock().clone(),
+        );
+        if let (Some(bridge), Some(path)) = (&self.reload, after.0.clone()) {
+            let rate = f32::from_bits(bridge.sample_rate.load(Ordering::Acquire));
+            if rate > 0.0 && before != after {
+                kit_loader::spawn_loader(
+                    path,
+                    rate,
+                    bridge,
+                    after.1,
+                    after.2,
+                    bridge.articulations(),
+                );
             }
         }
     }

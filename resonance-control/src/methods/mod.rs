@@ -27,6 +27,7 @@ pub mod mixer;
 pub mod notes;
 pub mod plugin_preset;
 pub mod plugins;
+pub mod presets;
 pub mod pool;
 pub mod project;
 pub mod reference;
@@ -85,6 +86,7 @@ pub fn capabilities() -> Vec<&'static str> {
         meter::METHODS,
         automation::METHODS,
         amp_models::METHODS,
+        presets::METHODS,
         crate::job::METHODS,
     ] {
         methods.extend_from_slice(namespace);

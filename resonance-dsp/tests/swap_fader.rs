@@ -353,3 +353,23 @@ fn crossfade_sequence_is_unchanged_with_retirement_active() {
         ]
     );
 }
+
+/// `begin_clear` fades the active payload out and lands on nothing.
+#[test]
+fn begin_clear_fades_out_to_nothing() {
+    let mut fader: SwapFader<f32> = SwapFader::new(4);
+    fader.install(1.0);
+    fader.begin_clear();
+    let mut gains = Vec::new();
+    for _ in 0..4 {
+        let (g, p) = fader.next();
+        gains.push((g, p.is_some()));
+    }
+    assert_eq!(gains.last(), Some(&(0.0, false)), "{gains:?}");
+    assert!(gains[0].0 < 1.0 && gains[0].1, "fading, still active first");
+    assert!(fader.active().is_none());
+    // Clearing nothing is a no-op; a swap afterwards fades in again.
+    fader.begin_clear();
+    fader.begin_swap(2.0);
+    assert_eq!(fader.active(), Some(&2.0));
+}

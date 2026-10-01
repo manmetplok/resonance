@@ -16,6 +16,15 @@ pub enum PresetEvent {
     Saved(PresetRef),
     Renamed(PresetRef),
     Deleted(PresetRef),
+    /// Loaded provisionally from the browser (up/down): every parameter
+    /// may have moved; the audition is still open.
+    Auditioned(PresetRef),
+    /// The browser put the pre-audition sound back.
+    Reverted,
+    /// A preset's metadata was edited.
+    MetaChanged(PresetRef),
+    /// A preset file was imported.
+    Imported(PresetRef),
 }
 
 /// Which name is being typed, when one is.
@@ -33,6 +42,11 @@ pub enum NamingKind {
 pub struct PresetEditor {
     naming: Option<Naming>,
     error: Option<String>,
+    /// The browser overlay the bar's Browse opens (section 6.3).
+    pub browser: super::browser::PresetBrowser,
+    /// Set on the frame Browse was clicked, so that click does not count
+    /// as a click outside the overlay (which commits and closes it).
+    pub browser_just_opened: bool,
 }
 
 #[derive(Clone)]
@@ -47,6 +61,11 @@ impl PresetEditor {
     /// The message to show under the bar, if the last action failed.
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    /// Show `message` under the bar.
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.error = Some(message.into());
     }
 
     /// Whether a name is being typed (editors suppress their own
@@ -140,7 +159,15 @@ impl PresetEditor {
     ) -> PresetEvent {
         if session.load_preset(bank, preset, params) {
             self.error = None;
-            PresetEvent::Loaded(session.current().unwrap_or_else(|| preset.clone()))
+            let loaded = session.current().unwrap_or_else(|| preset.clone());
+            // A bar pick (combo, ◀ / ▶) is a user pick: it lands in the
+            // recents like a browser keep does.
+            if loaded.is_resolved() {
+                if let Err(e) = bank.library().record_use(bank.plugin_id(), &loaded.id) {
+                    tracing::debug!("presets: recents not recorded: {e}");
+                }
+            }
+            PresetEvent::Loaded(loaded)
         } else {
             self.error = Some(format!("Preset '{}' could not be loaded", preset.name));
             PresetEvent::None

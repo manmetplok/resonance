@@ -1176,16 +1176,386 @@ round 2 reconciles it)
   `library_view::BrowserModel` replaces. `PresetLibrary::query` is the
   model's row source.
 
-**Deferred to round 2** (found in review, not fixed here)
+**Round-1 review items, resolved in round 2 (convergence)**
 
-- `MarksSource::generation()` is documented as feeding the freshness
-  fingerprint, but nothing calls it and there is no refresh hook; and
-  `PresetMarks::last_used` is an RFC 3339 string where `library_marks`
-  has its own type. Reconcile both when the trait is implemented for the
-  real store.
-- `presets::query` and `library_view::BrowserModel` both implement search,
-  with different token syntax. Choose one engine; the other becomes a
-  thin adapter.
-- `presets::vocab::normalize_facet` and `library_marks::normalize_tag`
-  slug differently (`r&b` → `r-b` here, `rb` there), so `vocab` cannot
-  simply become a re-export: pick one rule and migrate stored values.
+- *(9) Marks.* `MarksSource` is implemented for the shared
+  `library_marks::SharedMarks`, with `refresh()` (called before every
+  query) as the hook for another process's write, `generation()`
+  documented as what a cached view keys on, and write/tag-completion
+  methods. It returns the shared `Marks`; `last_used` crosses to presets
+  and the wire as RFC 3339 through `Marks::last_used_rfc3339` (`Hit::last_used`).
+  `PresetMarks` is gone. The process-wide default library opens the user's
+  store lazily on its first query or mark (honouring
+  `RESONANCE_LIBRARY_DIR`); a library over an explicit root reads
+  `NoMarks` until one is installed (the app installs its own).
+- *(10) One search engine.* `library_view::BrowserModel` is it.
+  `presets::query::run` is a thin typed wrapper that configures a model
+  (query text, facet selections, favourites-only/first, sort) over
+  `presets::rows::PresetRows` — the one `LibraryRows` adapter the editor
+  browser, the host browser and `presets.search` all read — and returns
+  the view plus facet counts. The syntax is `parse_search`'s. What changed
+  for presets: matching is substring (a superset of the old token-prefix
+  rule), and name hits are no longer ranked first (bank order within the
+  sort); facet counts list the seeded vocabulary first.
+- *(11) One slug rule and one atomic write.* `presets::vocab` is deleted:
+  metadata normalises with `library_marks::normalize_tag` and the seeded
+  lists are `library_marks::vocab`. `presets/fs.rs` became
+  `presets/files.rs`, which keeps only the preset library's own file
+  naming and calls `resonance_common::atomic_file` for the write and the
+  quarantine (`atomic_file` joined `PLUGIN_COMMON_ITEMS`). A fleet test
+  proves every round-1 factory file is still found by each of its own
+  metadata values, as facet filters and as typed tokens.
+
+## 19. Round 2 as built (`feat/plugin-presets`)
+
+Round 2 builds P2–P8 on the shared foundation. Each slice below records
+what landed and where the code differs from §§4–15.
+
+### P2 — whole-sound presets
+
+- `ExtraStateSaver::preset_keys()` and `save_for_preset()` (the latter
+  defaults to `save()` limited to the keys). Amp: the four model keys,
+  with `model_path` written **empty** so a preset names its model only by
+  content id (sha256), resolved through `nam_library` on load
+  (`resolve_model`: relink by id, else Missing with the name kept); a
+  model the library has no id for is left out. IR: `ir_path`. Wavetable:
+  `user_wavetables` (embedded frames). Drums: `kit_path`,
+  `overhead_setup_key`, `pad_mic_choices`. IR and drums stay path-only
+  until they become library kinds.
+- `Param::preset_excluded()` (`.excluded_from_presets()` on Float/Int
+  params): the amp's and the IR's `file_select` — a slot / directory
+  index is this machine's layout, not the sound. **Deviation from §9.3**,
+  which kept the amp's `file_select` in the preset: the coordinator's
+  rule for round 2 is ids, never paths or slots. A params-only (legacy)
+  amp preset therefore keeps the current model instead of falling back to
+  its slot.
+- Loading is `presets::overlay_preset`: the preset's params replace the
+  current ones (excluded params keep theirs), each preset key is taken
+  from the preset or removed, session/UI keys stay, the preset's identity
+  replaces the current one. Absence of a preset key means what it means
+  for a project: the wavetable clears its tables, the amp and the IR keep
+  their asset (a legacy params-only preset).
+- Editor and host run the same overlay. The editor's `PresetSession`
+  applies it to its chained saver; the bridge implements
+  `clap.state-context` (`save`/`load` `FOR_PRESET` = the preset form /
+  the overlay) and `clap.preset-load` (`from_location`: `PLUGIN` + a
+  factory id, or a `FILE`), both `[main-thread]`, through the same
+  `load_bytes` the state extension uses (so the active path is the
+  shared-atomics path). **Deviation from §6.7:** the host does not call
+  `from_location` for a load it already has the file for; it sets the
+  params through its own path (mirror, one undo entry) and then sends the
+  preset document with its identity as `AudioCommand::LoadPluginPresetState`
+  (`load_ex(FOR_PRESET)` with no reactivation cycle; a plugin without
+  state-context gets a full state load with the usual cycle). A save is
+  `SavePluginPresetState` (`save_ex(FOR_PRESET)`, falling back to the
+  full state). `from_location` is there for P5/P8 and other hosts.
+- The app now reads presets through one `PresetLibrary`
+  (`resonance-app/src/plugin_preset_library.rs`): the scan's factory
+  banks (`ScannedPlugin::factory_presets` is now
+  `Vec<FactoryPresetEntry {id, name, json, meta}>`, decoded by
+  `resonance_common::factory_presets::decode_entries`) are registered
+  with it, the shared marks store is installed, and a test app gets a
+  private preset root at construction. Undo of a host recall restores the
+  params; the extra state is not part of the snapshot (as before P2 for
+  any plugin-side change).
+
+### P3 — favourites and filters over MCP
+
+- `*.plugin_presets` (track, bus, master) take a flattened `PresetFilter`
+  (`query`, `favorites_only`, `source`, `category`, `instrument`,
+  `genres`, `character`, `tags`, `sort` = bank/name/category/recent/
+  modified, `limit` default 100, `offset`) and answer through the one
+  engine (`PresetLibrary::query`). `PluginPresetEntry` gains `id`,
+  `category`, `instrument`, `genres`, `character`, `tags` (content ∪
+  personal), `personal_tags`, `favorite`, `author`, `description`,
+  `plugin_version`, `modified_at`, `derived_from`, `last_used`; the view
+  gains `total` and `facets`. `current`/`modified` stay unknown until P5.
+- `*.load_plugin_preset` gains `preset_id` (wins over the name) and
+  `extra` (default true; false = params only). A control-API load records
+  the pick in the recents (`last_used`, `use_count`).
+- `*.save_plugin_preset` gains `meta` (`PresetMetaInput`), `favorite` and
+  `overwrite_id`; the reply is `SavePluginPresetResult {revision, id}`
+  (a superset of the old ack) with the id minted up front
+  (`SaveRequest::id`), which is the id the file gets when the capture
+  lands.
+- New namespace `presets.*`, answered above the mutation gate (library
+  state: no project needed, no undo entry, no revision bump):
+  `presets.set_marks` (favourite and personal tags, factory presets
+  included), `presets.update_meta` (a user preset's own metadata; refused
+  on factory presets with a pointer to `set_marks`), `presets.vocabulary`
+  (seeded values then values in use, tags in use). MCP tools
+  `presets_set_marks`, `presets_update_meta`, `presets_vocabulary`; the
+  nine per-surface tools describe the new fields. The mixing skill gained
+  one line (search by `instrument`/`character`/`genres`, load by id, save
+  with `meta`, star keepers).
+- The editor bar gained the ☆/★ toggle on the loaded preset (marks
+  re-read at most every `BAR_REFRESH`).
+
+### P4 — the preset browser
+
+- `presets::browser::PresetBrowser` (ungated): the shared `BrowserModel`
+  over `PresetRows` plus an `AuditionBracket<SoundSnapshot>`
+  (`PresetSession::capture` / `restore`: every param, the chained saver's
+  state, identity and modified flag), the metadata form (`MetaForm`:
+  Save as… / Edit info… / marks-only on a factory preset), rename,
+  duplicate ("<name> copy", `derived_from`), delete to the trash through
+  the model's confirm-in-place state, import (`PresetLibrary::import`:
+  another plugin's preset refused by id, a document naming none of the
+  plugin's params refused, a taken id re-minted and said so, a taken name
+  numbered) and export (`PresetLibrary::export`, one format-1 file,
+  factory presets included). Commit records the pick in the recents.
+- The egui skin (`preset_ui`): the bar is now ◀ ☆ picker • ▶ `Browse`
+  `Save` (in place, user presets only) `Save as…`; Rename and Delete moved
+  into the browser. The browser is an `egui::Area` over the whole editor
+  (drawn by `preset_bar` itself, so the 13 editors needed no change):
+  header, search + a facet menu per facet + ★ only + sort, list
+  (`library_ui::library_list`, ↑/↓ audition, Enter/double-click keep, Esc
+  revert, ☆ per row), detail pane (identity, saved-with, based-on,
+  description, facet pills, personal tags with completion, actions:
+  Edit info / Duplicate / Rename / Export / Reveal / Delete with the
+  confirm row), footer (hint, notice, Import…, Save as…). A click outside
+  keeps and closes, × and Esc revert and close. The form is its own Area.
+  **Deviations from §6.3:** the facets are menus in both layouts rather
+  than a checkbox column; the narrow layout (< 720 px) stacks the detail
+  under the list instead of a disclosure under the row; the detail's
+  actions sit under the name so the gate's 640×260 minimum reaches them
+  without scrolling; the category combo lists both class vocabularies
+  (the bank does not know its plugin's class). **Not built:** `.rpreset`
+  export bundles (§6.4 Export of a selection) — single-preset export only.
+- `rfd` joined `resonance-plugin`'s `editor-widgets` feature for the
+  Import/Export dialogs (sync on the UI thread, as the amp's model picker).
+- `presets.search` (across plugins or one; filters, facets,
+  `library_generation`), `presets.rename` (user presets; D11 clash
+  refused), `presets.delete` (user presets; refused without
+  `confirm: true`; trash, not unlink) with MCP tools.
+- Hermeticity: `presets::override_default_roots` is the test seam for the
+  process-wide default library (no env var); the amp's
+  `library::override_default_roots` sets it too, so the amp's headless
+  editor tests never read the user's presets or marks.
+
+### P5 — identity to the host
+
+- `resonance_common::preset_session` is the one ABI both ends read:
+  `EXTENSION_ID = "com.resonance.preset-session/1"`, a host half
+  (`report(host, json)`) and a plugin half (`set_ignored_params(plugin,
+  json)`), `c_void` pointers so neither end needs the other's CLAP
+  bindings. **Deviation from §7:** one `report` call carrying the whole
+  identity (`{source, id, name, modified}`, `{}` for nothing loaded)
+  instead of a `modified_changed(bool)` edge next to `loaded()` — the
+  host then never has to stitch two callbacks together, and a
+  deduplicated report is as cheap as an edge.
+- Plugin side: `PresetSession` keeps a `Baseline` (every param's plain
+  value plus a hash of the preset-form extra state) from a load, a save
+  and a state load that says "unmodified"; `compare_modified` sets the
+  flag from it (1e-6 of the param's span; ignored and preset-excluded
+  params left out) and `changed_params` names what moved for the bar's
+  hover. It runs from the editor frame (`refresh_modified`, at most every
+  100 ms) **and** on the main thread after host param events: the bridge's
+  `process` / `flush` arms set `ClapShared::preset_compare_due` and
+  request a callback (one atomic swap on the audio thread), and
+  `on_main_thread` compares against the shared atomics
+  (`TempParamOwned::all_from`). Every change of identity or flag runs the
+  notifier the bridge installed, which requests a callback; the report goes
+  out from `on_main_thread`, deduplicated, followed by CLAP's `loaded()`
+  when a factory identity changed (a file location is announced from
+  `from_location` itself, as CLAP asks).
+- Host side (`clap_host::preset_state`): `HostData` serves
+  `clap_host_preset_load` (`loaded`, `on_error`) and the session's host
+  half; the callbacks only queue `PresetHostReport`s, which
+  `poll_plugin_host_requests` drains after `run_requested_callback` into
+  `AudioEvent::PluginPresetIdentity { instance_id, identity }` /
+  `PluginPresetLoaded` / an engine error. `AudioCommand::
+  SetPluginPresetIgnoredParams` calls the plugin half on the engine
+  (main) thread.
+- App: `PresetState::plugin_preset_identity` (per instance
+  `SlotPresetIdentity { source, id, name, modified, reported }`) — a side
+  map rather than a `PluginSlotState` field. A host load sets it
+  optimistically (`LoadPluginPreset` gained `preset_id` /
+  `preset_source`); a report replaces it and is the truth from then on;
+  `loaded()` from a plugin that does not report names it by load key or
+  file. For a non-reporting plugin a host `SetPluginParam` sets
+  `modified`. The automation mirror sends the enabled lanes' param ids on
+  every plugin-param lane change and on plugin add.
+- Wire: `*.plugin_presets` fills `current` (the full entry, or a bare one
+  when the library lost it) and `modified`, and gains **`modified_known`**
+  (the plugin reported the flag). **Deviation from §7:** a bool beside
+  `modified` rather than `"modified": null`, so the field keeps its type
+  and no protocol bump is needed; `modified_known: false` means
+  `modified` only knows the host's own edits.
+
+### P6 — host UI
+
+- `update::plugin_preset_ui` + `view::preset_browser`, driven by
+  `PluginMessage::PresetUi(PresetUiMessage)` (all `UndoAction::Skip`; a
+  load that sticks is re-dispatched as the recorded `LoadPluginPreset`,
+  whose body is now `update::plugin::apply_preset_load`, reusable
+  unrecorded). Lists (`HostPresetList`) are recomputed in `update` on a
+  query change or a star, never in `view`.
+- **Bar** in the plugin panel header, for every plugin with an instance:
+  ◀ name • ▶ ★ Presets…; ◀/▶ are recorded loads in bank order (wrapping),
+  the name and Presets… open the browser. Tooltips come from the registry.
+- **Browser overlay** (`Overlay::PresetBrowser`, in `root_overlay()` after
+  Settings, so `canvas_keys_blocked` gates keys and Esc dismisses): search
+  (library syntax), ★ only, rows with category / "user" and a star. Click
+  auditions (unrecorded; the first remembers `AuditionOrigin` — values and
+  identity); Load, double-click or a backdrop click keeps: the origin goes
+  back into the mirror only and the pick is re-dispatched recorded, so the
+  one entry undoes to the origin. Esc / × / Revert revert (the origin
+  preset's state, when it was a library preset, then every origin value).
+  **Limit:** a revert from an origin that was no library preset restores
+  the params but not the extra state the audition loaded.
+- **Media browser Presets tab** (`BrowserTab::Presets`): every plugin's
+  presets, a plugin pick list (choices cached on a scan), ★ only;
+  double-click loads onto the selected plugin slot when it is the same
+  plugin (recorded), else says why in the banner.
+- **"▸ with preset…"** under the inspector's add pickers (track chain and
+  bus chain): the user's favourites of the same plugin kind, cached on a
+  scan and on a host star. **Deviation from §6.6:** a second pick list
+  rather than a submenu (iced's pick list has none); the strip pickers
+  are unchanged.
+- `preset` on `track.add_effect` / `add_instrument`, `bus.add_effect`,
+  `master.add_effect`: an id or name, checked before the add, parked by
+  instance id (`pending_plugin_presets`) and loaded unrecorded on the
+  `PluginAdded` echo, so the add and the load are one undo step; an
+  instrument swap parks on the replacement, re-setting the same one loads
+  at once.
+- Commands: `PreviousPluginPreset`, `NextPluginPreset`,
+  `BrowsePluginPresets` (Mixer, unbound by default, need a selected
+  available plugin).
+
+### P7 — third-party presets (tier T0)
+
+- `PresetState::clap_blob` / `blob_bytes` (base64, `resonance-plugin`
+  gained the `base64` dependency); `SaveRequest.blob`,
+  `PresetBank::write_user_blob_with` / `blob_for`,
+  `PresetLibrary::state_blob`; duplicate, export and import carry the blob
+  (import checks only the plugin id — the bytes are opaque).
+- Save: the existing `SavePluginPresetState` (state-context `FOR_PRESET`
+  when the plugin has it, else its full state). The app keeps a state that
+  is a JSON document with a `params` object as `resonance-json` and
+  anything else as `clap-state`. **Deviation:** the split is by content,
+  not by vendor; a third-party plugin whose state happens to be such a
+  JSON document is treated as first-party (and its params are recalled by
+  id, which then fail loudly rather than silently).
+- Load: a blob preset is a `LoadPluginPreset` with no values and the bytes
+  as `preset_state` (one undo entry; `extra: false` cannot split it and
+  loads it whole); the engine lays it over with state-context or reloads
+  the full state, then emits `AudioEvent::PluginParamsRefreshed` (every
+  param via `query_params`) and the app's mirror takes those values.
+- Identity is what the host loaded (`modified_known: false`; host edits
+  set `modified`). Marks, search, metadata and the host UI work unchanged.
+
+### P8 — discovered presets (tiers T1/T2) and drag-to-add
+
+- `clap_host::discovery`: a host indexer for `clap.preset-discovery-
+  factory` (`/2`, and `/draft-2`): every provider is created, `init`ed
+  (collecting declared file types and locations), asked for the metadata
+  of each `PLUGIN` location and of each file of each `FILE` location (a
+  directory is walked, depth-capped, for the declared extensions), and
+  destroyed. Presets carry name, location, load key, `clap` plugin ids,
+  creators, description, features and flags.
+- Threading: `engine::scan` spawns a `preset-discovery` worker after the
+  startup scan and every rescan for the bundles that expose the factory
+  (the pointer is valid for the process: bundles are never unloaded); the
+  engine and audio threads never call a provider. Each plugin's list
+  arrives as `AudioEvent::PluginPresetsDiscovered`.
+- Cache: `<library>/discovered/<clap-id>.json` (the library dir is
+  `library_marks::default_library_dir()`, so `RESONANCE_LIBRARY_DIR`
+  redirects it), valid while the binary's path, size and mtime match.
+- App: the list joins the library as **read-only factory presets** after
+  the compiled-in bank, id `plugin:<key>` / `file:<path>[#key]`; creators
+  → author, description, features → tags. A provider `IS_FAVORITE` stars
+  the preset once, when the user never marked it. A recall of one is the
+  new recorded `PluginMessage::LoadPluginPresetFromLocation` →
+  `AudioCommand::LoadPluginPresetFromLocation`, after which the engine
+  emits `PluginParamsRefreshed`; the plugin's `loaded()` (T2, from P5)
+  confirms the identity. **Not built:** soundpacks, timestamps and extra
+  info are received and dropped; `IS_USER_CONTENT` presets are listed as
+  factory (read-only) like the rest.
+- Drag-to-add: pressing a Presets-tab row arms a drag; while armed, the
+  arrange track headers report the pointer (`DragOver`) and a window-level
+  button-release listener ends it (`DragEnd`): over a header, the plugin
+  is added there with the preset (the "with preset…" path, one undo step);
+  an instrument only onto an instrument track with none yet. **Deviation
+  from §6.6:** the drop target is the arrange track header, not a mixer
+  strip — the media browser lives in the Arrange view, where no strip is
+  on screen.
+
+### Review round (after P8)
+
+What the three reviews changed, where it differs from the slices above:
+
+- **Rows and drag (P6/P8).** Preset rows are styled containers in a mouse
+  area (a button captured the press, so double-click never fired). A drag
+  is armed by the real press on a row, becomes one after 4 px of movement,
+  and drops on the release over a track header; a click disarms on its own
+  release. The root and every track header carry an always-present mouse
+  area that only listens while a drag is armed (so arming never changes
+  the tree's shape). An effect is refused on an instrument track with no
+  instrument, and nothing drops onto a multi-output sub-track.
+- **The whole sound on revert and undo (§6.7).** `LoadPluginPresetState` /
+  `LoadPluginPresetFromLocation` take a `capture` token: the engine saves
+  the full state under the plugin's lock first (`PluginStateCaptured`).
+  The first audition captures into its origin (Esc reloads it as a full
+  state, or when it lands if still in flight); a recorded load's undo
+  entry carries a late slot the capture fills (`UndoSnapshot::
+  late_plugin_states`), and a kept audition's entry takes the origin's.
+  ◀ / ▶ runs coalesce into one entry and send one debounced state load.
+- **Modified cost (§7).** The main-thread compare is throttled to
+  `MODIFIED_COMPARE_INTERVAL`; host-automated params never request one
+  (per-slot flags on the audio thread); the extra-state hash is cached
+  behind `ExtraStateSaver::revision` (user wavetables); a moved param
+  settles it first; the amp compares by `model_id` only.
+- **P7 by provenance.** First-party means the instance serves
+  `com.resonance.preset-session`; `PluginPresetStateSaved.first_party`
+  decides, never the content. A blob records its `form` (preset/full).
+- **Discovery (P8).** The cache moved to the cache dir
+  (`<cache>/preset-discovery/`, `RESONANCE_CACHE_DIR` in tests), per
+  bundle: each provider's declarations and PLUGIN presets by binary stamp,
+  each file's presets by (size, mtime ns); a start reads only new or
+  changed files, a rescan re-indexes. One worker, joined before the next
+  and on shutdown. Declarations are sealed after `init`; presets inherit
+  location flags, a file stem for a missing name, and a missing plugin id
+  means the bundle's only plugin. `loaded()` echoes of discovered presets
+  keep the library's id and name; a provider favourite is seeded once.
+- **Drums / IR.** A drums load that changes the kit or its mics reloads it
+  (once a sample rate is known); a document without `kit_path` keeps the
+  kit, as one without `ir_path` keeps the IR. `ir_path: ""` fades the IR
+  out (`SwapFader::begin_clear`) and a new path moves the excluded
+  `file_select` into the new folder. **Consequence, kept:** a legacy
+  params-only IR preset no longer names an IR, so it recalls the params
+  and keeps whatever IR is loaded — same as the amp's model.
+- **Search.** Scoped tokens match a value exactly (folded) or by slug
+  prefix (`genre:rock` does not find `post-rock`); facet selections and
+  counts fold case. Library rows re-read marks and preset directories at
+  most once per poll interval; the first open's trash sweep runs on a
+  thread.
+- **Host lists.** `presets.*` edits and saves call `library_changed`
+  (lists, add-picker favourites, loaded names); a visible browser or
+  Presets tab re-queries once a second, and a list whose rows did not
+  change keeps its `lazy` generation. The browser closes with its plugin,
+  keeps what was auditioned even once filtered out, takes ↑/↓/↵/Esc before
+  its focused search field, and a preset on the instrument already loaded
+  is a recorded recall.
+
+### Verification pass
+
+- A capture returns the full state **before** and **after** the load
+  (`PluginStateCaptured.after`). The after-state becomes the live cache;
+  a snapshot taken while it is still owed (the redo side an undo builds)
+  waits on it through a late slot, and a restore marks owed after-states
+  superseded — so undo and redo of a preset load are exact, repeatedly.
+  A restore also drops parked step state loads.
+- Captures save outside the instance lock (`StateSaveHandle`; CLAP lets
+  `state.save` run beside `process`). Worst case measured — the wavetable
+  with both user tables full (5.6 MB): 190 ns under the lock, 4.3 ms
+  (release) / 119 ms (debug) saving, on the engine thread only.
+- The discovery worker is never joined unbounded on the engine thread: a
+  rescan cancels and leaves the old one (its factory, still marked busy,
+  is skipped), shutdown waits 2 s and abandons it.
+- `ResonancePlugin::deactivate`: the drums clear their sample rate, so a
+  full-state reload loads its kit once (from `initialize`).
+- An armed drag ends on Esc, on any press (a window-level listener, which
+  also sees presses a widget captured), on the pointer leaving the window
+  and on focus loss. A new audition while a revert waits on its capture
+  takes that capture over as its origin.

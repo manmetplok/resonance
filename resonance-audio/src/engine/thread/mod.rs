@@ -530,7 +530,10 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
             default(std::time::Duration::from_millis(16)) => None,
         };
         match next {
-            Some(Ok(AudioCommand::ShutDown)) => break,
+            Some(Ok(AudioCommand::ShutDown)) => {
+                let _ = super::scan::shutdown_discovery();
+                break;
+            }
             Some(Ok(cmd)) => {
                 // Commands that change the track/bus/plugin topology can
                 // change per-chain latency; republish the plugin-delay-
@@ -542,7 +545,10 @@ pub(crate) fn engine_thread(params: EngineThreadParams) {
                     plugins::refresh_latency_comp(&ctx, &state.external_instruments);
                 }
             }
-            Some(Err(crossbeam_channel::RecvError)) => break,
+            Some(Err(crossbeam_channel::RecvError)) => {
+                let _ = super::scan::shutdown_discovery();
+                break;
+            }
             None => {}
         }
         // Everything else the workers posted since, so a burst (a project

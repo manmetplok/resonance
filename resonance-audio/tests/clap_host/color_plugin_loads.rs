@@ -103,7 +103,7 @@ fn the_color_bundle_publishes_the_spec_preset_names() {
         return;
     };
     let bundle = ClapBundle::load(&path).expect("the Color bundle should load");
-    let names: Vec<&str> = bundle.factory_presets().iter().map(|(n, _)| n.as_str()).collect();
+    let names: Vec<&str> = bundle.factory_presets().iter().map(|e| e.name.as_str()).collect();
     assert_eq!(
         names,
         [

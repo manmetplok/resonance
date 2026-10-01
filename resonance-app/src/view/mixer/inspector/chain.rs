@@ -5,7 +5,7 @@ use iced::widget::{button, column, container, pick_list, row, text, Space};
 use iced::{Element, Length};
 use resonance_audio::types::{ScannedPlugin, TrackType};
 
-use crate::message::{Message, PluginMessage};
+use crate::message::{Message, PluginMessage, PresetAddOwner, PresetUiMessage};
 use crate::state::TrackState;
 use crate::theme;
 use crate::view::mixer::picks::PluginOwner;
@@ -98,6 +98,30 @@ pub(super) fn chain_group(
         .padding([8, 10])
         .width(Length::Fill);
         col = col.push(picker);
+        // "▸ with preset…": the user's favourite presets of the same kind
+        // of plugin (§6.6), precomputed on a scan or a star.
+        let picks = if needs_instrument {
+            r.presets.instrument_favorite_picks.clone()
+        } else {
+            r.presets.fx_favorite_picks.clone()
+        };
+        if !picks.is_empty() {
+            let with_preset = pick_list(
+                picks,
+                None::<crate::state::presets::PresetAddPick>,
+                move |pick| {
+                    Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::AddWithPreset {
+                        owner: PresetAddOwner::Track(track_id),
+                        pick,
+                    }))
+                },
+            )
+            .placeholder("\u{25b8} with preset\u{2026}")
+            .text_size(12)
+            .padding([8, 10])
+            .width(Length::Fill);
+            col = col.push(with_preset);
+        }
     }
 
     col.into()

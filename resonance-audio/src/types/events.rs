@@ -538,6 +538,62 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
     },
+    /// The answer to `AudioCommand::SavePluginPresetState`. `preset_form`
+    /// is true when the plugin wrote its preset form (state-context);
+    /// false when `data` is its full state (no state-context).
+    /// `first_party` is provenance, not content: the instance serves
+    /// `com.resonance.preset-session`, so `data` is a Resonance state
+    /// document; anything else is opaque, whatever it looks like.
+    PluginPresetStateSaved {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
+        preset_form: bool,
+        first_party: bool,
+    },
+    /// The plugin loaded a preset and said so (`clap_host_preset_load.
+    /// loaded`): from its own browser, or for a `from_location` the host
+    /// asked for (plugin-preset-library.md §7, slice P5).
+    PluginPresetLoaded {
+        instance_id: PluginInstanceId,
+        location: crate::types::PluginPresetLocation,
+        load_key: Option<String>,
+    },
+    /// The full state a preset load saved before loading
+    /// (`LoadPluginPresetState` / `LoadPluginPresetFromLocation` with
+    /// `capture: Some(token)`).
+    ///
+    /// Sent twice per capture: `after: false` with the state before the
+    /// load (what undo / a revert restores), `after: true` with the state
+    /// the load left (what redo restores).
+    PluginStateCaptured {
+        instance_id: PluginInstanceId,
+        token: u64,
+        data: Vec<u8>,
+        after: bool,
+    },
+    /// What a plugin's `clap.preset-discovery-factory` lists for it
+    /// (plugin-preset-library.md §8 tier T1, slice P8), from the discovery
+    /// worker after a scan (or its cache).
+    PluginPresetsDiscovered {
+        plugin_id: String,
+        presets: Vec<crate::types::DiscoveredPreset>,
+    },
+    /// A preset state load finished (`AudioCommand::LoadPluginPresetState`):
+    /// every param as the plugin now reports it, so the app's mirror
+    /// follows a load it could not predict — a third-party plugin's opaque
+    /// preset (plugin-preset-library.md §8 tier T0, slice P7).
+    PluginParamsRefreshed {
+        instance_id: PluginInstanceId,
+        params: Vec<crate::types::ParamInfo>,
+    },
+    /// A Resonance plugin reported its loaded preset and modified flag
+    /// (`com.resonance.preset-session`, slice P5): from its own browser, a
+    /// host load, or an edit that made it differ from the preset (or stop
+    /// differing). `None` when nothing is loaded.
+    PluginPresetIdentity {
+        instance_id: PluginInstanceId,
+        identity: Option<resonance_common::preset_session::IdentityReport>,
+    },
     /// The answer to `AudioCommand::ResolvePluginParamText` with this
     /// `token`: the value the plugin says the text names, when it
     /// round-trips.

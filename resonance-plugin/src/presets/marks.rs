@@ -1,61 +1,93 @@
-//! Where per-user marks (favourite, personal tags, recents) plug into the
-//! preset index (plugin-preset-library.md §4.1, §4.5).
+//! Where per-user marks (favourite, personal tags, recents) reach the
+//! preset library (plugin-preset-library.md §4.1, §4.5).
 //!
-//! **Integration seam.** The marks store itself is
-//! `resonance_common::library_marks`, shared with the NAM model library
-//! and built on another branch. The preset library only needs to *read*
-//! it while building query results, so it depends on this trait rather
-//! than on the store: round 2 implements [`MarksSource`] for the shared
-//! store and installs it with
-//! [`PresetLibrary::set_marks`](super::PresetLibrary::set_marks). Until
-//! then every library reads [`NoMarks`], which is the truthful answer for
-//! a build with no marks store.
-//!
-//! Writes (star, personal tags, `last_used`) go through the store's own
-//! API, not through this trait: the preset library never mutates marks.
+//! The store is the shared `resonance_common::library_marks`: one
+//! `marks.json` for every library kind, keyed `plugin-preset:<clap id>:<preset
+//! id>` for presets. The library reads it through [`MarksSource`], which
+//! [`SharedMarks`] implements; a library with no store installed reads
+//! [`NoMarks`]. Marks are read at query time and never cached in the index,
+//! so they cannot go stale there; [`MarksSource::refresh`] is the hook that
+//! picks up another process's write (the library calls it before every
+//! query) and [`MarksSource::generation`] is what a browser keys its
+//! cached view on, next to the index revision.
 
-/// The marks on one asset. Every field at its default means "no mark".
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PresetMarks {
-    pub favorite: bool,
-    /// Personal tags. Merged with the preset's own content tags in query
-    /// results; on factory presets these are the only editable tags.
-    pub tags: Vec<String>,
-    /// RFC 3339; written only for user picks (§4.5), never restores.
-    pub last_used: Option<String>,
-    pub use_count: u32,
-}
+use resonance_common::library_marks::{self, kind, Marks, MarksError, SharedMarks};
 
-/// Read access to a marks store.
+/// Read (and, where the store allows, write) access to a marks store.
 pub trait MarksSource: Send + Sync {
-    /// The marks stored under `key` (see [`mark_key`]); default marks
-    /// when there are none.
-    fn marks(&self, key: &str) -> PresetMarks;
+    /// The marks stored under `key` (see [`mark_key`]); the defaults when
+    /// there are none.
+    fn marks(&self, key: &str) -> Marks;
 
-    /// A counter the store bumps on every write. Part of the index
-    /// freshness fingerprint, so a star set in another process is picked
-    /// up by the next poll. `0` for a store that never changes.
+    /// The store's write counter, as last read. It moves whenever any
+    /// process writes the store and a [`refresh`](Self::refresh) (or a
+    /// write through this source) has seen it; a view cached on it is
+    /// rebuilt when it moves. `0` for a store that never changes.
     fn generation(&self) -> u64 {
         0
     }
+
+    /// Re-read the store if another writer changed it. Cheap when nothing
+    /// changed (one `stat`). Returns whether anything changed.
+    fn refresh(&self) -> bool {
+        false
+    }
+
+    /// Apply `f` to the marks of `key` and persist it. Read-only sources
+    /// refuse.
+    fn update(&self, _key: &str, _f: &dyn Fn(&mut Marks)) -> Result<Marks, String> {
+        Err("this library has no marks store".to_string())
+    }
+
+    /// Tag completion across every library kind (used tags first, then the
+    /// seeded vocabulary).
+    fn complete_tag(&self, _prefix: &str, _exclude: &[String], _limit: usize) -> Vec<String> {
+        Vec::new()
+    }
 }
 
-/// The marks source of a build with no marks store: nothing is marked.
+/// The marks source of a library with no store: nothing is marked.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NoMarks;
 
 impl MarksSource for NoMarks {
-    fn marks(&self, _key: &str) -> PresetMarks {
-        PresetMarks::default()
+    fn marks(&self, _key: &str) -> Marks {
+        Marks::default()
+    }
+}
+
+impl MarksSource for SharedMarks {
+    fn marks(&self, key: &str) -> Marks {
+        SharedMarks::marks(self, key)
+    }
+
+    fn generation(&self) -> u64 {
+        SharedMarks::generation(self)
+    }
+
+    fn refresh(&self) -> bool {
+        SharedMarks::refresh(self)
+    }
+
+    fn update(&self, key: &str, f: &dyn Fn(&mut Marks)) -> Result<Marks, String> {
+        SharedMarks::update(self, key, f).map_err(|e: MarksError| e.to_string())
+    }
+
+    fn complete_tag(&self, prefix: &str, exclude: &[String], limit: usize) -> Vec<String> {
+        self.snapshot().complete_tag(prefix, exclude, limit)
     }
 }
 
 /// The mark kind for plugin presets.
-pub const PLUGIN_PRESET_KIND: &str = "plugin-preset";
+pub const PLUGIN_PRESET_KIND: &str = kind::PLUGIN_PRESET;
 
 /// The marks-store key of a plugin preset:
-/// `plugin-preset:<clap id>:<preset id>` (§4.2; the NAM spec's
-/// `<kind>:<id>` scheme).
+/// `plugin-preset:<clap id>:<preset id>` (§4.2).
 pub fn mark_key(plugin_id: &str, preset_id: &str) -> String {
-    format!("{PLUGIN_PRESET_KIND}:{plugin_id}:{preset_id}")
+    library_marks::mark_key(kind::PLUGIN_PRESET, &format!("{plugin_id}:{preset_id}"))
+}
+
+/// `last_used` in the RFC 3339 spelling presets and the wire carry.
+pub fn last_used_rfc3339(marks: &Marks) -> Option<String> {
+    marks.last_used_rfc3339()
 }

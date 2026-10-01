@@ -129,6 +129,7 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                                 // The landed value, not the wire value —
                                 // see the note in `clap_bridge/params.rs`.
                                 self.shared.set_value(slot, param.get_plain());
+                                self.shared.note_host_param_change(slot);
                             }
                         }
                     }
@@ -574,7 +575,9 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // plugin, and copying `shared` over it would snap the knob back.
         reconcile_params(&self.plugin, self.shared);
 
-        main_thread.plugin = Some(self.plugin);
+        let mut plugin = self.plugin;
+        plugin.deactivate();
+        main_thread.plugin = Some(plugin);
     }
 
     fn reset(&mut self) {

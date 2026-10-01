@@ -5,7 +5,8 @@ resolver = "2"
 [workspace.dependencies]
 clack-plugin = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18" }
 clack-extensions = { git = "https://github.com/prokopyl/clack.git", rev = "4541f03792635dfdc6be9441a01b786e9b4ccf18", features = [
-    "clack-plugin", "audio-ports", "params", "state", "note-ports", "latency", "gui"
+    "clack-plugin", "audio-ports", "params", "state", "note-ports", "latency", "gui",
+    "state-context", "preset-discovery"
 ] }
 # Host side of clack, used by resonance-plugin's tests to drive the CLAP
 # bridge through the real C ABI (instantiate → activate → latency query).

@@ -18,6 +18,8 @@ before every decision.
 This procedure works on any project. Nothing below assumes a track name, a track
 count, or a genre. Read the song, then decide.
 
+- **Find a sound before you dial one:** prefer `mcp__resonance__presets_search` (across every plugin, or one) with `query` scopes like `"for:vocal char:warm"` over guessing preset names, then pass the hit's `id` as `preset` to the add tool or as `preset_id` to `*_load_plugin_preset`.
+
 ## 0. Preflight
 
 Call `mcp__resonance__control_hello` first. It reports the running app's version
@@ -98,6 +100,7 @@ In this order, and only as far down as the problem requires:
 | A part that will not sit still | `com.resonance.compressor` on the track |
 | One part ducking under another | `mcp__resonance__track_set_sidechain` |
 | A fader move that has to happen over time (a fade, a level ride) | `mcp__resonance__automation_set_lane`, read back with `mcp__resonance__automation_lanes` |
+| A starting sound for any plugin (a vocal compressor, a warm plate) | `mcp__resonance__track_plugin_presets` (or `bus_`/`master_`) filtered by `instrument`, `character`, `genres` or a query like `"for:vocal char:warm"` rather than guessing names; load it by `preset_id`, or pass it as `preset` to `mcp__resonance__track_add_effect` / `track_add_instrument` / `bus_add_effect` / `master_add_effect` so the plugin arrives with that sound in one undo step; `current` and `modified` in the preset list say what is loaded and whether it was edited (`modified_known: false` means only host edits are counted). Save what you design with `meta` (category, instrument, character, genres, tags) so it is findable next session, and star keepers with `mcp__resonance__presets_set_marks`; `mcp__resonance__presets_vocabulary` has the seeded values |
 | The wrong guitar or bass amp tone on Resonance Amp | `mcp__resonance__amp_models_list` for the installed NAM models, then `mcp__resonance__track_set_plugin_param` on its Model Select with the model's slot (a name works only when unique); star the keeper with `mcp__resonance__amp_models_set_marks`. Model Select's `text` is only fresh after a set you made — a change in the amp's own editor is not echoed, so re-read `amp_models_list` and the slot number |
 
 Rules that hold regardless of the song:

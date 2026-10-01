@@ -19,6 +19,7 @@ fn extra_saver_roundtrip_active_path() {
         ir_path: src_path.clone(),
         file_list: Arc::new(Mutex::new(Vec::new())),
         load_request: Arc::new(AtomicI32::new(-1)),
+        adopt: Arc::new(AtomicI32::new(-1)),
     };
 
     let mut json = serde_json::json!({ "params": {} });
@@ -31,6 +32,7 @@ fn extra_saver_roundtrip_active_path() {
         ir_path: dst_path.clone(),
         file_list: Arc::new(Mutex::new(Vec::new())),
         load_request: Arc::new(AtomicI32::new(-1)),
+        adopt: Arc::new(AtomicI32::new(-1)),
     };
     restored_saver.load(&json);
 
@@ -74,6 +76,7 @@ fn extra_saver_load_populates_file_list_and_queues_loader() {
         ir_path: ir_path.clone(),
         file_list: file_list.clone(),
         load_request: load_request.clone(),
+        adopt: Arc::new(AtomicI32::new(-1)),
     };
 
     let state = serde_json::json!({
@@ -89,5 +92,38 @@ fn extra_saver_load_populates_file_list_and_queues_loader() {
     let expected_idx = files.iter().position(|f| f == &target).unwrap() as i32;
     assert_eq!(load_request.load(Ordering::Acquire), expected_idx);
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A preset with `ir_path: ""` means "no IR": the saver asks the audio
+/// thread to fade the current one out (it used to keep playing). A new
+/// path's directory index is handed over too, so the excluded
+/// `file_select` walks the new folder rather than keeping the old index.
+#[test]
+fn an_empty_ir_path_clears_and_a_new_one_moves_the_index() {
+    use resonance_ir::state::{ADOPT_CLEAR, ADOPT_NONE};
+    let dir = std::env::temp_dir().join(format!("resonance-ir-adopt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["a.wav", "b.wav", "c.wav"] {
+        std::fs::write(dir.join(name), b"").unwrap();
+    }
+    let adopt = Arc::new(AtomicI32::new(ADOPT_NONE));
+    let saver = IrExtraState {
+        ir_path: Arc::new(Mutex::new("/old/cab.wav".to_string())),
+        file_list: Arc::new(Mutex::new(Vec::new())),
+        load_request: Arc::new(AtomicI32::new(-1)),
+        adopt: adopt.clone(),
+    };
+    let c = dir.join("c.wav").to_string_lossy().into_owned();
+    saver.load(&serde_json::json!({"params": {}, "ir_path": c}));
+    assert_eq!(adopt.load(Ordering::Acquire), 2, "c.wav is the third file");
+
+    saver.load(&serde_json::json!({"params": {}, "ir_path": ""}));
+    assert_eq!(adopt.load(Ordering::Acquire), ADOPT_CLEAR);
+    assert!(saver.file_list.lock().is_empty());
+
+    adopt.store(ADOPT_NONE, Ordering::Release);
+    saver.load(&serde_json::json!({"params": {}}));
+    assert_eq!(adopt.load(Ordering::Acquire), ADOPT_NONE, "no key: keep");
     let _ = std::fs::remove_dir_all(&dir);
 }

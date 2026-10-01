@@ -151,6 +151,12 @@ pub struct AddEffectParams {
     /// Instrument plugins are refused — the master chain processes an
     /// already-summed mix and has no notes to play.
     pub plugin_id: String,
+    /// Load this preset onto the new plugin as soon as it exists: a
+    /// preset id or name, as `*.plugin_presets` / `presets.search` report
+    /// it. Checked before anything is added; the add and the load are one
+    /// undo step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 /// Params for `master.remove_effect`: address the plugin **either** by
@@ -322,6 +328,10 @@ pub struct PluginPresetsParams {
     /// more than once; 0-based, defaults to the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence: Option<u32>,
+    /// Search, facet filters, sort and paging (plugin-preset-library.md
+    /// §12.1). Omitted lists everything in bank order.
+    #[serde(flatten)]
+    pub filter: super::plugin_preset::PresetFilter,
 }
 
 /// Params for `master.load_plugin_preset`.
@@ -338,6 +348,14 @@ pub struct LoadPluginPresetParams {
     /// factory one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<crate::methods::plugin_preset::PluginPresetSource>,
+    /// The preset's stable id (from the list); wins over `preset` (the
+    /// name), which may then be empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset_id: Option<String>,
+    /// Load the preset's sound-bearing extra state too (a NAM model, an
+    /// IR, user wavetables). Default true; false recalls the params only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<bool>,
 }
 
 /// Params for `master.save_plugin_preset`.
@@ -354,6 +372,18 @@ pub struct SavePluginPresetParams {
     pub name: String,
     #[serde(default)]
     pub overwrite: bool,
+    /// Metadata for the preset (category, instrument, genres, character,
+    /// tags, author, description), so it is findable next session. A new
+    /// preset otherwise inherits the loaded preset's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta: Option<super::plugin_preset::PresetMetaInput>,
+    /// Star it for this user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
+    /// Update this user preset (by id) in place instead of addressing one
+    /// by `name`; it keeps its id and may be renamed to `name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overwrite_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

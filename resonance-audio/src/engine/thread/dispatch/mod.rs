@@ -136,6 +136,10 @@ pub(super) fn dispatch(ctx: &HandlerCtx, state: &mut HandlerState, cmd: AudioCom
         | AudioCommand::ClosePluginEditor { .. }
         | AudioCommand::SavePluginState { .. }
         | AudioCommand::LoadPluginState { .. }
+        | AudioCommand::SavePluginPresetState { .. }
+        | AudioCommand::LoadPluginPresetState { .. }
+        | AudioCommand::LoadPluginPresetFromLocation { .. }
+        | AudioCommand::SetPluginPresetIgnoredParams { .. }
         | AudioCommand::SaveAllPluginStates => plugins::dispatch_plugins(ctx, state, cmd),
 
         // Bounce / export / freeze

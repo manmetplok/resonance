@@ -170,6 +170,11 @@ AMP_MODEL_ROOT = os.path.join(
 LIBRARY_ROOT = os.path.join(
     tempfile.gettempdir(), f"resonance-test-library-{os.getpid()}"
 )
+# And the cache (the preset-discovery index), which lives under
+# $XDG_CACHE_HOME in the app.
+CACHE_ROOT = os.path.join(
+    tempfile.gettempdir(), f"resonance-test-cache-{os.getpid()}"
+)
 
 
 def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
@@ -177,6 +182,7 @@ def run_one(exe: str, cwd: str, extra: list[str]) -> tuple[str, int, str]:
     env.setdefault("RESONANCE_PLUGIN_PRESET_DIR", PRESET_ROOT)
     env.setdefault("RESONANCE_AMP_MODEL_DIR", AMP_MODEL_ROOT)
     env.setdefault("RESONANCE_LIBRARY_DIR", LIBRARY_ROOT)
+    env.setdefault("RESONANCE_CACHE_DIR", CACHE_ROOT)
     proc = subprocess.run(
         [exe, *extra],
         cwd=cwd,

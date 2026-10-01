@@ -59,7 +59,8 @@ mod notes;
 /// Per-slot and whole-chain bypass, shared by all three surfaces
 /// (ba todo #1305).
 mod bypass;
-mod plugin_presets;
+pub(crate) mod plugin_presets;
+mod presets;
 /// `plugins.rescan` — the installed-plugin catalog's one mutation
 /// (todo #1307). `plugins.catalog` is read-only and lives in `song`.
 mod plugins;
@@ -89,7 +90,7 @@ use reply::{failure, success};
 
 pub(crate) use clip::{import_result, place_result};
 pub(crate) use job::export_kind_to_rpc;
-pub(crate) use plugin_presets::write_saved_state as write_plugin_preset;
+pub(crate) use plugin_presets::{write_saved_state as write_plugin_preset, SavedStateKind};
 pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_measured};
 pub(crate) use render::mixdown_result;
 pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};
@@ -194,6 +195,12 @@ pub fn execute(
     // the machine, not the project — no project needed, no undo entry,
     // no revision bump.
     if let Some(response) = amp_models::try_handle(app, request) {
+        return (response, Task::none());
+    }
+
+    // The per-user plugin preset library (plugin-preset-library.md
+    // §12.2): library state, not the project — the same terms.
+    if let Some(response) = presets::try_handle(app, request) {
         return (response, Task::none());
     }
 
@@ -458,6 +465,8 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
         // `amp_models.*` is the user's model library, which no project
         // owns (nam-model-library.md §9.3).
         || methods::amp_models::METHODS.contains(&method)
+        // `presets.*` is the user's preset library (§12.2).
+        || methods::presets::METHODS.contains(&method)
         || resonance_control::job::METHODS.contains(&method)
 }
 

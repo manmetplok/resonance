@@ -15,7 +15,45 @@ use crate::Resonance;
 /// into app state keyed by target — one lane per target, whole-lane
 /// replace, matching the engine's storage.
 pub(super) fn lane_changed(r: &mut Resonance, lane: AutomationLane) {
+    let target = lane.target.clone();
     r.automation.lanes.insert(lane.target.clone(), lane);
+    if let AutomationTarget::PluginParam { instance, .. } = target {
+        sync_preset_ignored_params(r, instance, true);
+    }
+}
+
+/// Tell a plugin which of its params are automated (enabled lanes), so
+/// its preset-modified comparison leaves them out (plugin-preset-library
+/// D8, slice P5). `always` sends an empty list too — a lane change may
+/// have removed the last one; a plugin just added only needs it when it
+/// has lanes.
+pub(crate) fn sync_preset_ignored_params(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+    always: bool,
+) {
+    let mut clap_ids: Vec<u32> = r
+        .automation
+        .lanes
+        .values()
+        .filter(|l| l.enabled)
+        .filter_map(|l| match l.target {
+            AutomationTarget::PluginParam { instance, param_id } if instance == instance_id => {
+                Some(param_id)
+            }
+            _ => None,
+        })
+        .collect();
+    if clap_ids.is_empty() && !always {
+        return;
+    }
+    clap_ids.sort_unstable();
+    let _ = r
+        .engine
+        .send(resonance_audio::AudioCommand::SetPluginPresetIgnoredParams {
+            instance_id,
+            clap_ids,
+        });
 }
 
 /// The lane for `target` was removed from engine state. Drop the app
@@ -24,6 +62,9 @@ pub(super) fn lane_changed(r: &mut Resonance, lane: AutomationLane) {
 pub(super) fn lane_cleared(r: &mut Resonance, target: AutomationTarget) {
     r.automation.lanes.remove(&target);
     r.automation.live_values.remove(&target);
+    if let AutomationTarget::PluginParam { instance, .. } = target {
+        sync_preset_ignored_params(r, instance, true);
+    }
 }
 
 /// Record the latest throttled automated value for `target` in the

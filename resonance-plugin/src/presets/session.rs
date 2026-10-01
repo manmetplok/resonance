@@ -41,6 +41,35 @@ pub struct PresetSession {
     modified: AtomicBool,
     inner: Option<Arc<dyn ExtraStateSaver>>,
     bank: Option<BankFactory>,
+    /// What the loaded preset sounded like, for the comparison-based
+    /// modified flag (§7): every param value plus a hash of the
+    /// sound-bearing extra state. `None` when unknown (nothing loaded, or
+    /// a project saved as already modified).
+    baseline: Mutex<Option<Baseline>>,
+    /// CLAP ids of params the host automates: left out of the comparison.
+    ignored: Mutex<Vec<u32>>,
+    notifier: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    last_compare: Mutex<Option<std::time::Instant>>,
+    /// The extra-state hash and the inner saver's revision it was taken at.
+    extra_cache: Mutex<Option<(u64, Option<u64>)>>,
+}
+
+/// What the loaded preset sounded like.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Baseline {
+    values: std::collections::HashMap<String, f64>,
+    extra_hash: Option<u64>,
+}
+
+/// How often the editor's frame re-compares the live sound with the
+/// loaded preset.
+pub const MODIFIED_COMPARE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+fn hash_extra(map: &serde_json::Map<String, serde_json::Value>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_string(map).unwrap_or_default().hash(&mut h);
+    h.finish()
 }
 
 /// Builds the bank a session resolves name-only identities against.
@@ -54,6 +83,11 @@ impl Default for PresetSession {
             modified: AtomicBool::new(false),
             inner: None,
             bank: None,
+            baseline: Mutex::new(None),
+            ignored: Mutex::new(Vec::new()),
+            notifier: Mutex::new(None),
+            last_compare: Mutex::new(None),
+            extra_cache: Mutex::new(None),
         }
     }
 }
@@ -90,10 +124,9 @@ impl PresetSession {
         inner: Option<Arc<dyn ExtraStateSaver>>,
     ) -> Arc<Self> {
         Arc::new(Self {
-            current: Mutex::new(None),
-            modified: AtomicBool::new(false),
             inner,
             bank,
+            ..Self::default()
         })
     }
 
@@ -117,16 +150,150 @@ impl PresetSession {
         }
     }
 
-    /// Record that the sound has drifted from the loaded preset. Editors
-    /// call this from their param-write path.
+    /// Record that the sound has drifted from the loaded preset. The
+    /// comparison ([`refresh_modified`](Self::refresh_modified)) usually
+    /// decides this; an editor may still force it.
     pub fn mark_modified(&self) {
-        self.modified.store(true, Ordering::Relaxed);
+        self.set_modified(true);
     }
 
-    /// Set the identity directly (clearing the modified flag).
+    fn set_modified(&self, modified: bool) {
+        if self.modified.swap(modified, Ordering::Relaxed) != modified {
+            self.notify();
+        }
+    }
+
+    fn notify(&self) {
+        let notifier = self.notifier.lock().clone();
+        if let Some(f) = notifier {
+            f();
+        }
+    }
+
+    /// Set the identity directly (clearing the modified flag). The
+    /// baseline for the comparison is forgotten: use
+    /// [`set_current_with_baseline`](Self::set_current_with_baseline) when
+    /// the params are at hand.
     pub fn set_current(&self, preset: Option<PresetRef>) {
         *self.current.lock() = preset;
+        *self.baseline.lock() = None;
         self.modified.store(false, Ordering::Relaxed);
+        self.notify();
+    }
+
+    /// Set the identity and remember what the sound is now, so the
+    /// modified flag is a comparison from here on.
+    pub fn set_current_with_baseline(&self, preset: Option<PresetRef>, params: &[&dyn Param]) {
+        let baseline = preset.as_ref().map(|_| self.baseline_of(params));
+        *self.current.lock() = preset;
+        *self.baseline.lock() = baseline;
+        self.modified.store(false, Ordering::Relaxed);
+        self.notify();
+    }
+
+    fn baseline_of(&self, params: &[&dyn Param]) -> Baseline {
+        Baseline {
+            values: params
+                .iter()
+                .map(|p| (p.id().to_string(), p.get_plain()))
+                .collect(),
+            extra_hash: self.extra_hash(),
+        }
+    }
+
+    /// The hash of the inner saver's compare state, reused while its
+    /// revision stands still (a large user-wavetable state is serialised
+    /// once per change, not once per compare).
+    fn extra_hash(&self) -> Option<u64> {
+        let inner = self.inner.as_ref()?;
+        let revision = inner.revision();
+        if let (Some(rev), Some((cached_rev, hash))) = (revision, *self.extra_cache.lock()) {
+            if rev == cached_rev {
+                return hash;
+            }
+        }
+        let map = inner.preset_compare_state();
+        let hash = (!map.is_empty()).then(|| hash_extra(&map));
+        if let Some(rev) = revision {
+            *self.extra_cache.lock() = Some((rev, hash));
+        }
+        hash
+    }
+
+    fn param_differs(baseline: &Baseline, ignored: &[u32], p: &dyn Param) -> bool {
+        if p.preset_excluded() || ignored.contains(&p.clap_id()) {
+            return false;
+        }
+        let span = (p.max_plain() - p.min_plain()).abs().max(1e-12);
+        baseline
+            .values
+            .get(p.id())
+            .is_some_and(|b| (p.get_plain() - b).abs() / span > 1e-6)
+    }
+
+    /// The params (by display name) that differ from the loaded preset,
+    /// ignoring params the host automates and ones presets leave out;
+    /// `None` when there is no baseline to compare with.
+    pub fn changed_params(&self, params: &[&dyn Param]) -> Option<Vec<String>> {
+        let baseline = self.baseline.lock();
+        let baseline = baseline.as_ref()?;
+        let ignored = self.ignored.lock();
+        Some(
+            params
+                .iter()
+                .filter(|p| Self::param_differs(baseline, &ignored, **p))
+                .map(|p| p.name().to_string())
+                .collect(),
+        )
+    }
+
+    /// Re-compare the live sound with the loaded preset (params with a
+    /// 1e-6 tolerance in normalized units, and the extra state's hash), at
+    /// most once per [`MODIFIED_COMPARE_INTERVAL`]: turning a knob and back
+    /// is not a modification, and a change from the host (a
+    /// `set_plugin_param`, the generic panel) is. With no baseline the flag
+    /// keeps whatever it was. Returns the flag.
+    pub fn refresh_modified(&self, params: &[&dyn Param]) -> bool {
+        {
+            let mut at = self.last_compare.lock();
+            if at.is_some_and(|t| t.elapsed() < MODIFIED_COMPARE_INTERVAL) {
+                return self.is_modified();
+            }
+            *at = Some(std::time::Instant::now());
+        }
+        self.compare_modified(params)
+    }
+
+    /// The comparison [`refresh_modified`](Self::refresh_modified) runs,
+    /// unthrottled. Returns the flag.
+    pub fn compare_modified(&self, params: &[&dyn Param]) -> bool {
+        let modified = {
+            let baseline = self.baseline.lock();
+            let Some(baseline) = baseline.as_ref() else {
+                drop(baseline);
+                return self.is_modified();
+            };
+            let ignored = self.ignored.lock();
+            // A param that moved settles it: no need to touch the extra
+            // state at all.
+            params
+                .iter()
+                .any(|p| Self::param_differs(baseline, &ignored, *p))
+                || baseline.extra_hash != self.extra_hash()
+        };
+        self.set_modified(modified);
+        modified
+    }
+
+    /// The identity report the bridge sends the host
+    /// (`resonance_common::preset_session`).
+    pub fn report(&self) -> Option<resonance_common::preset_session::IdentityReport> {
+        self.current().map(|p| resonance_common::preset_session::IdentityReport {
+            source: p.source.as_str().to_string(),
+            id: p.id,
+            name: p.name,
+            modified: self.is_modified(),
+        })
     }
 
     /// Give an unresolved identity (a project from before preset ids)
@@ -176,12 +343,36 @@ impl PresetSession {
         preset: &PresetRef,
         params: &[&dyn Param],
     ) -> bool {
-        if !bank.apply(preset, params) {
+        let Some(json) = bank.json_for(preset) else {
+            return false;
+        };
+        if !super::apply(&json, params, bank.renames()) {
             return false;
         }
+        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&json) {
+            self.apply_extra(&doc);
+        }
         let resolved = bank.resolve(preset).unwrap_or_else(|| preset.clone());
-        self.set_current(Some(resolved));
+        self.set_current_with_baseline(Some(resolved), params);
         true
+    }
+
+    /// Load a preset's sound-bearing extra state into the chained saver:
+    /// its current state with the preset's keys laid over it
+    /// ([`super::overlay_preset`]), so session/UI keys stay and a key the
+    /// preset lacks is cleared. Call after the params are applied (a saver
+    /// may derive keys from them).
+    pub fn apply_extra(&self, preset_doc: &serde_json::Value) {
+        let Some(inner) = &self.inner else {
+            return;
+        };
+        let keys = inner.preset_keys();
+        if keys.is_empty() {
+            return;
+        }
+        let mut current = serde_json::Value::Object(inner.save());
+        super::overlay_preset(&mut current, preset_doc, keys, &|_| false);
+        inner.load(&current);
     }
 
     /// Save the current sound as a user preset and make it the loaded
@@ -204,11 +395,16 @@ impl PresetSession {
             Some(loaded) if !overwrites => SaveOptions {
                 meta: Some(loaded.meta.clone()),
                 derived_from: Some(loaded.preset.id.clone()),
+                ..SaveOptions::default()
             },
             _ => SaveOptions::default(),
         };
+        let options = SaveOptions {
+            extra: self.save_for_preset(),
+            ..options
+        };
         let saved = bank.save_with(name, params, options)?;
-        self.set_current(Some(saved.clone()));
+        self.set_current_with_baseline(Some(saved.clone()), params);
         Ok(saved)
     }
 
@@ -221,12 +417,19 @@ impl PresetSession {
         new_name: &str,
     ) -> Result<PresetRef, String> {
         let renamed = bank.rename(preset, new_name)?;
-        let mut current = self.current.lock();
-        if current
-            .as_ref()
-            .is_some_and(|c| c.matches(&renamed) || c.matches(preset))
-        {
-            *current = Some(renamed.clone());
+        let followed = {
+            let mut current = self.current.lock();
+            let hit = current
+                .as_ref()
+                .is_some_and(|c| c.matches(&renamed) || c.matches(preset));
+            if hit {
+                *current = Some(renamed.clone());
+            }
+            hit
+        };
+        if followed {
+            // The host shows the name: tell it.
+            self.notify();
         }
         Ok(renamed)
     }
@@ -237,19 +440,124 @@ impl PresetSession {
     pub fn delete(&self, bank: &PresetBank, preset: &PresetRef) -> Result<(), String> {
         let resolved = bank.resolve(preset);
         bank.delete(preset)?;
-        let mut current = self.current.lock();
-        let hit = current.as_ref().is_some_and(|c| {
-            c.matches(preset) || resolved.as_ref().is_some_and(|r| c.matches(r))
-        });
+        let hit = {
+            let mut current = self.current.lock();
+            let hit = current.as_ref().is_some_and(|c| {
+                c.matches(preset) || resolved.as_ref().is_some_and(|r| c.matches(r))
+            });
+            if hit {
+                *current = None;
+                *self.baseline.lock() = None;
+                self.modified.store(false, Ordering::Relaxed);
+            }
+            hit
+        };
         if hit {
-            *current = None;
-            self.modified.store(false, Ordering::Relaxed);
+            self.notify();
         }
         Ok(())
     }
 }
 
+/// Everything needed to put a plugin back exactly as it was before an
+/// audition: every parameter value, the chained saver's state, and the
+/// loaded identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SoundSnapshot {
+    pub values: Vec<(String, f64)>,
+    pub extra: Option<serde_json::Map<String, serde_json::Value>>,
+    pub current: Option<PresetRef>,
+    pub modified: bool,
+    pub baseline: Option<Baseline>,
+}
+
+impl PresetSession {
+    /// Capture the whole sound (params + extra state + identity).
+    pub fn capture(&self, params: &[&dyn Param]) -> SoundSnapshot {
+        SoundSnapshot {
+            values: params
+                .iter()
+                .map(|p| (p.id().to_string(), p.get_plain()))
+                .collect(),
+            extra: self.inner.as_ref().map(|i| i.save()),
+            current: self.current(),
+            modified: self.is_modified(),
+            baseline: self.baseline.lock().clone(),
+        }
+    }
+
+    /// Put back a [`capture`](Self::capture)d sound.
+    pub fn restore(&self, snapshot: SoundSnapshot, params: &[&dyn Param]) {
+        for (id, v) in &snapshot.values {
+            if let Some(p) = params.iter().find(|p| p.id() == id) {
+                p.set_plain(*v);
+            }
+        }
+        if let (Some(inner), Some(extra)) = (&self.inner, snapshot.extra) {
+            inner.load(&serde_json::Value::Object(extra));
+        }
+        *self.current.lock() = snapshot.current;
+        *self.baseline.lock() = snapshot.baseline;
+        self.modified.store(snapshot.modified, Ordering::Relaxed);
+        self.notify();
+    }
+
+    /// Save the current sound over the loaded **user** preset, in place
+    /// (same id, same metadata, `modified` bumped): the bar's Save.
+    pub fn save_in_place(
+        &self,
+        bank: &PresetBank,
+        params: &[&dyn Param],
+    ) -> Result<PresetRef, String> {
+        let current = self
+            .current()
+            .filter(|c| c.source == PresetSource::User && c.is_resolved())
+            .ok_or_else(|| "Only a loaded user preset can be saved in place".to_string())?;
+        let saved = bank.save_with(
+            &current.name,
+            params,
+            SaveOptions {
+                target: Some(current.id.clone()),
+                extra: self.save_for_preset(),
+                ..SaveOptions::default()
+            },
+        )?;
+        self.set_current_with_baseline(Some(saved.clone()), params);
+        Ok(saved)
+    }
+}
+
 impl ExtraStateSaver for PresetSession {
+    fn set_change_notifier(&self, notify: Arc<dyn Fn() + Send + Sync>) {
+        *self.notifier.lock() = Some(notify);
+    }
+
+    fn preset_report(&self) -> Option<String> {
+        Some(match self.report() {
+            Some(r) => r.to_json(),
+            None => "{}".to_string(),
+        })
+    }
+
+    fn set_ignored_params(&self, clap_ids: Vec<u32>) {
+        *self.ignored.lock() = clap_ids;
+    }
+
+    fn compare_preset_modified(&self, params: &[&dyn Param]) {
+        self.compare_modified(params);
+    }
+
+    fn preset_keys(&self) -> &'static [&'static str] {
+        self.inner.as_ref().map(|i| i.preset_keys()).unwrap_or(&[])
+    }
+
+    fn save_for_preset(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.inner
+            .as_ref()
+            .map(|i| i.save_for_preset())
+            .unwrap_or_default()
+    }
+
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = match &self.inner {
             Some(inner) => inner.save(),
@@ -277,7 +585,9 @@ impl ExtraStateSaver for PresetSession {
             .filter(|s| !s.is_empty())
         else {
             *self.current.lock() = None;
+            *self.baseline.lock() = None;
             self.modified.store(false, Ordering::Relaxed);
+            self.notify();
             return;
         };
         let source = entry
@@ -299,8 +609,23 @@ impl ExtraStateSaver for PresetSession {
             name: name.to_string(),
         });
         self.modified.store(modified, Ordering::Relaxed);
+        // A state that says "unmodified" is the preset's sound: remember it
+        // for the comparison. One saved as modified has no baseline left.
+        *self.baseline.lock() = (!modified).then(|| Baseline {
+            values: state
+                .get("params")
+                .and_then(|p| p.as_object())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_f64().map(|v| (k.clone(), v)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            extra_hash: self.extra_hash(),
+        });
         if let Some(make_bank) = &self.bank {
             self.resolve_on_load(&make_bank());
         }
+        self.notify();
     }
 }

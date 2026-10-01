@@ -94,6 +94,7 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     r.viewport.global_tracks_expanded.hash(&mut h);
+    r.presets.dragging.is_some().hash(&mut h);
     r.viewport.scroll_offset_y.to_bits().hash(&mut h);
     // The browser panel offsets the arrange-area x of the whole column;
     // the per-row context-menu anchor (todo #581) is baked into each row's
@@ -429,12 +430,21 @@ fn build_track_headers(r: &Resonance) -> Element<'static, Message> {
                             .min(r.viewport.viewport_height - TRACK_MENU_HEIGHT)
                             .max(chrome_h);
                     }
-                    lane_col = lane_col.push(track::view_track_header(
-                        r,
-                        track,
-                        is_selected,
-                        (menu_x, menu_y),
-                    ));
+                    let header = track::view_track_header(r, track, is_selected, (menu_x, menu_y));
+                    // While a preset is dragged from the media browser, a
+                    // release over a header drops it there (slice P8). The
+                    // wrapper is always present so arming a drag keeps the
+                    // tree's shape; it only listens while armed.
+                    let area = iced::widget::mouse_area(header);
+                    let header: Element<'static, Message> = if r.presets.dragging.is_some() {
+                        area.on_release(Message::Plugin(PluginMessage::PresetUi(
+                            PresetUiMessage::DropOnTrack(track.id),
+                        )))
+                        .into()
+                    } else {
+                        area.into()
+                    };
+                    lane_col = lane_col.push(header);
                 }
             }
             // Slim parameter-label cell mirroring the canvas's dedicated

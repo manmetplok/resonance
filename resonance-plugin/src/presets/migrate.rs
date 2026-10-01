@@ -26,7 +26,22 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use super::format::{self, PresetFile, PresetMeta, PresetPluginInfo};
-use super::{fs, vocab, PRESET_STATE_KEY};
+use super::{files, PRESET_STATE_KEY};
+
+/// The seeded category a legacy `"<X> — <Y>"` / `"<X> - <Y>"` /
+/// `"<X>___<Y>"` name starts with, if any (§13).
+pub fn category_from_name(name: &str) -> Option<&'static str> {
+    use resonance_common::library_marks::vocab;
+    let head = ["—", " - ", "___", "–"]
+        .iter()
+        .filter_map(|sep| name.split_once(sep).map(|(head, _)| head.trim()))
+        .min_by_key(|head| head.len())?;
+    vocab::CATEGORIES_INSTRUMENT
+        .iter()
+        .chain(vocab::CATEGORIES_EFFECT)
+        .find(|c| c.eq_ignore_ascii_case(head))
+        .copied()
+}
 
 /// What [`convert_legacy_dir`] did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -74,7 +89,7 @@ pub fn convert_legacy_dir(dir: &Path, plugin_id: &str, now: SystemTime) -> Conve
             if expired && std::fs::remove_file(&path).is_ok() {
                 report.backups_removed += 1;
             }
-        } else if fs::is_preset_path(&path) {
+        } else if files::is_preset_path(&path) {
             candidates.push(path);
         }
     }
@@ -85,7 +100,7 @@ pub fn convert_legacy_dir(dir: &Path, plugin_id: &str, now: SystemTime) -> Conve
         };
         match serde_json::from_str::<serde_json::Value>(&text) {
             Err(_) => {
-                if let Some(q) = fs::quarantine(&path) {
+                if let Some(q) = files::quarantine(&path) {
                     report.quarantined.push(q);
                 }
             }
@@ -126,8 +141,8 @@ pub fn convert_legacy_file(
     let dir = path
         .parent()
         .ok_or_else(|| "preset has no directory".to_string())?;
-    let to = dir.join(fs::preset_file_name(&file.meta.name, &file.id));
-    fs::atomic_write(&to, file.to_text()?.as_bytes())?;
+    let to = dir.join(files::preset_file_name(&file.meta.name, &file.id));
+    files::atomic_write(&to, file.to_text()?.as_bytes())?;
     let mut backup = path.as_os_str().to_os_string();
     backup.push(LEGACY_SUFFIX);
     match std::fs::rename(path, &backup) {
@@ -182,7 +197,7 @@ pub fn convert_legacy_document(
     }
     let when = format::rfc3339(stamped);
     let meta = PresetMeta {
-        category: vocab::category_from_name(&name).map(str::to_string),
+        category: category_from_name(&name).map(str::to_string),
         created: Some(when.clone()),
         modified: Some(when),
         ..PresetMeta::named(name)

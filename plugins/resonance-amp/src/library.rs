@@ -111,6 +111,13 @@ static ROOT_OVERRIDE: OnceLock<Key> = OnceLock::new();
 /// `setenv` race with the test harness's threads. First call wins.
 #[doc(hidden)]
 pub fn override_default_roots(root: PathBuf, marks_dir: PathBuf) {
+    // The editor's preset bar reads the preset library too: keep it in
+    // the same private place, next to the models.
+    let presets = root
+        .parent()
+        .map(|p| p.join("plugin-presets"))
+        .unwrap_or_else(|| root.join("plugin-presets"));
+    resonance_plugin::presets::override_default_roots(presets, Some(marks_dir.clone()));
     let _ = ROOT_OVERRIDE.set((Some(root), Some(marks_dir)));
 }
 

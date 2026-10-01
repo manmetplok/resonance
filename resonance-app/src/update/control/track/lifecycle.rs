@@ -140,6 +140,12 @@ pub(super) fn add_effect(app: &mut Resonance, request: &Request) -> (Response, T
     add_plugin(app, request, PluginRole::Effect)
 }
 
+fn bank_record_use(app: &Resonance, clap_id: &str, preset_id: &str) -> Result<(), String> {
+    crate::plugin_preset_library::library(app)
+        .record_use(clap_id, preset_id)
+        .map(|_| ())
+}
+
 enum PluginRole {
     Instrument,
     Effect,
@@ -216,6 +222,18 @@ fn add_plugin(
             )),
         );
     }
+    // A preset to load onto it, checked before anything is added.
+    let preset = match params.preset.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => match crate::update::control::plugin_presets::resolve_add_preset(
+            app,
+            &params.plugin_id,
+            p,
+        ) {
+            Ok(found) => Some(found),
+            Err(e) => return reject(request, e),
+        },
+        None => None,
+    };
     // `add_instrument` SETS the track's instrument (CTL-04). A track has
     // one sound source: appending a second instrument doubled the CPU,
     // let the new one overwrite the old one's output, and left every
@@ -245,6 +263,51 @@ fn add_plugin(
                     }),
                 ),
             };
+            if let Some(found) = &preset {
+                // The instrument now in the slot: the same one (load now,
+                // its params are known) or its replacement (load on the
+                // echo, like a fresh add).
+                let now = find_track(app, params.track_id.0)
+                    .and_then(|t| t.plugins.get(slot as usize))
+                    .map(|p| p.instance_id);
+                match (kind, now) {
+                    (Some(ReplaceKind::AlreadyLoaded), Some(id)) => {
+                        // Nothing to add: the preset is a plain recall on
+                        // the instrument that is there — one recorded
+                        // edit, one revision, like `load_plugin_preset`.
+                        let message = crate::update::control::plugin_presets::host_load_message(
+                            app,
+                            id,
+                            &params.plugin_id,
+                            &found.id,
+                            crate::update::control::plugin_presets::wire_source(found.source),
+                        );
+                        match message {
+                            Ok(message) => {
+                                let _ = bank_record_use(app, &params.plugin_id, &found.id);
+                                let recall = run_via_update(app, message);
+                                let result = track::AddPluginResult {
+                                    plugin_id: params.plugin_id,
+                                    occurrence: 0,
+                                    slot,
+                                    revision: app.revision(),
+                                };
+                                return (success(request, &result), Task::batch([task, recall]));
+                            }
+                            Err(e) => return reject(request, e),
+                        }
+                    }
+                    (Some(_), Some(id)) => {
+                        crate::update::control::plugin_presets::park_add_preset(
+                            app,
+                            id,
+                            &params.plugin_id,
+                            found,
+                        );
+                    }
+                    _ => {}
+                }
+            }
             let result = track::AddPluginResult {
                 plugin_id: params.plugin_id,
                 occurrence: 0,
@@ -282,6 +345,14 @@ fn add_plugin(
     // is untouched: it still waits, via `AddPluginToTrack` rather than
     // this `...WithId` variant.
     let instance_id = app.allocate_plugin_id();
+    if let Some(found) = &preset {
+        crate::update::control::plugin_presets::park_add_preset(
+            app,
+            instance_id,
+            &params.plugin_id,
+            found,
+        );
+    }
     let task = run_via_update(
         app,
         Message::Plugin(PluginMessage::AddPluginToTrackWithId {

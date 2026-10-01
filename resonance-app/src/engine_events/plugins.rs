@@ -104,6 +104,7 @@ pub(super) fn track_added(
     }
 
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
 
     // Seed the undo plugin-state cache with the plugin's initial CLAP
     // state. Snapshots taken before the user interacts with the plugin
@@ -342,6 +343,7 @@ pub(crate) fn track_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     // The engine's `RemovePlugin` arm already dropped this instance's key
     // route, so only the mirror needs pruning here — but prune it we must,
@@ -436,6 +438,8 @@ pub(crate) fn mirror_track_plugin_move(
 pub(super) fn scanned(r: &mut Resonance, plugins: Vec<ScannedPlugin>) {
     r.plugin_catalog.available_plugins = plugins;
     r.ui.view_caches.rebuild_plugins(&r.plugin_catalog.available_plugins);
+    crate::plugin_preset_library::register_scanned(r);
+    crate::update::plugin_preset_ui::rebuild_caches(r);
     // A scan answers exactly one `PluginsScanned`, whether it was the
     // startup scan or a live rescan, so this is where a rescan ends
     // (ba todo #1307).
@@ -668,32 +672,257 @@ pub(super) fn state_saved(
     instance_id: PluginInstanceId,
     data: Vec<u8>,
 ) {
-    // Also feeds the undo system's plugin-state cache so snapshots can
-    // replay internal CLAP state on restore. The project-save path
-    // drains the cache via `SaveAllPluginStates` separately.
-    // A `*.save_plugin_preset` armed this capture: the blob that just
-    // arrived IS the sound, including whatever the plugin keeps outside
-    // its parameters (an amp's model path, an IR's file). Write it before
-    // the cache insert so a failure is reported against the request that
-    // asked for it.
-    if r
-        .presets.pending_plugin_preset_save
+    // Feeds the undo system's plugin-state cache so snapshots can replay
+    // internal CLAP state on restore. The project-save path drains the
+    // cache via `SaveAllPluginStates` separately.
+    r.plugin_mirror.state_cache.insert(instance_id, data.into());
+}
+
+/// A `*.save_plugin_preset` (or a host bar's Save) armed this capture:
+/// the preset form of the plugin's state — its sound, including what it
+/// keeps outside its parameters (an amp's model by content id, an IR's
+/// file), and none of its session state.
+pub(super) fn preset_state_saved(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    data: Vec<u8>,
+    preset_form: bool,
+    first_party: bool,
+) {
+    if !r
+        .presets
+        .pending_plugin_preset_save
         .as_ref()
         .is_some_and(|p| p.instance_id == instance_id)
     {
-        let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
-        if let Err(e) = crate::update::control::write_plugin_preset(
-            r,
-            &pending.clap_id,
-            &pending.name,
-            &data,
-        ) {
-            r.banners.error_message =
-                Some(format!("Could not save preset {:?}: {e}", pending.name));
+        return;
+    }
+    let pending = r.presets.pending_plugin_preset_save.take().expect("just checked");
+    let saved = crate::update::control::write_plugin_preset(
+        r,
+        &pending,
+        &data,
+        crate::update::control::SavedStateKind {
+            first_party,
+            preset_form,
+        },
+    );
+    crate::update::plugin_preset_ui::library_changed(r);
+    if let Err(e) = saved {
+        r.banners.error_message = Some(format!("Could not save preset {:?}: {e}", pending.name));
+    }
+}
+
+/// The plugin says it loaded a preset (`clap_host_preset_load.loaded`).
+/// For a plugin that reports its identity itself this adds nothing; for
+/// any other it is the identity: a factory preset by its load key, a file
+/// by its path (slice P5; P8 names discovered presets properly).
+pub(super) fn preset_loaded(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    location: resonance_audio::types::PluginPresetLocation,
+    load_key: Option<String>,
+) {
+    use resonance_audio::types::PluginPresetLocation as L;
+    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    if r
+        .presets
+        .plugin_preset_identity
+        .get(&instance_id)
+        .is_some_and(|i| i.reported)
+    {
+        return;
+    }
+    // A preset the plugin's discovery listed is named the way the library
+    // lists it (its stable id and discovered name), so a `loaded()` echo of
+    // a host load confirms that identity instead of replacing it.
+    let clap_id = r.with_plugin_mut(instance_id, |slot| slot.clap_plugin_id.clone());
+    let as_discovered = match &location {
+        L::Plugin => resonance_audio::types::DiscoveredLocation::Plugin,
+        L::File(p) => resonance_audio::types::DiscoveredLocation::File(p.clone()),
+    };
+    let discovered = clap_id
+        .and_then(|id| r.presets.discovered.get(&id))
+        .and_then(|list| list.iter().find(|p| p.is_at(&as_discovered, load_key.as_deref())))
+        .map(|p| (p.stable_id(), p.name.clone()));
+    let (source, id, name) = match (discovered, location) {
+        (Some((id, name)), _) => (PluginPresetSource::Factory, id, name),
+        (None, L::Plugin) => {
+            let key = load_key.unwrap_or_default();
+            (PluginPresetSource::Factory, key.clone(), key)
+        }
+        (None, L::File(path)) => {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let id = match load_key {
+                Some(k) => format!("{}#{k}", path.display()),
+                None => path.display().to_string(),
+            };
+            (PluginPresetSource::User, id, stem)
+        }
+    };
+    r.presets.plugin_preset_identity.insert(
+        instance_id,
+        crate::state::presets::SlotPresetIdentity {
+            source,
+            id,
+            name,
+            modified: false,
+            reported: false,
+        },
+    );
+}
+
+/// The full state a preset load saved before loading: it fills the undo
+/// entries and audition origins waiting on `token`, and completes a revert
+/// that happened before it arrived.
+pub(super) fn state_captured(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    token: u64,
+    data: Vec<u8>,
+    after: bool,
+) {
+    let blob: std::sync::Arc<[u8]> = data.into();
+    if after {
+        // The state the load left: the live cache (a fresh `Arc`, so an
+        // undo pushes its own blob over it) and the redo snapshots taken
+        // while it was owed.
+        let mut superseded = false;
+        if let Some(owed) = r.presets.pending_after.remove(&token) {
+            // An undo / redo since the load: the live state is no longer
+            // this one; it only fills the snapshots waiting on it.
+            superseded = owed.superseded;
+            let slots = owed.slots.lock().map(|s| s.clone()).unwrap_or_default();
+            for late in slots {
+                if let Ok(mut slot) = late.lock() {
+                    *slot = Some(blob.clone());
+                }
+            }
+        }
+        if !superseded && r.plugin_slot(instance_id).is_some() {
+            r.plugin_mirror.state_cache.insert(instance_id, blob);
+        }
+        return;
+    }
+    for late in r.presets.pending_captures.remove(&token).unwrap_or_default() {
+        if let Ok(mut slot) = late.lock() {
+            *slot = Some(blob.clone());
         }
     }
+    if r.presets.revert_on_capture.remove(&token) == Some(instance_id) {
+        let _ = r.engine.send(AudioCommand::LoadPluginState {
+            instance_id,
+            data: blob.to_vec(),
+        });
+        r.plugin_mirror.state_cache.insert(instance_id, blob);
+    }
+}
 
-    r.plugin_mirror.state_cache.insert(instance_id, data.into());
+/// A plugin's preset-discovery factory listed its presets (slice P8): they
+/// join the library as read-only factory presets (after any compiled-in
+/// bank), loadable through `clap.preset-load`. A preset the provider flags
+/// as a favourite is starred once, when the user has never marked it.
+pub(super) fn presets_discovered(
+    r: &mut Resonance,
+    plugin_id: String,
+    presets: Vec<resonance_audio::types::DiscoveredPreset>,
+) {
+    use resonance_plugin::presets::FactoryEntry;
+    let lib = crate::plugin_preset_library::library(r);
+    let mut entries: Vec<FactoryEntry> = r
+        .plugin_catalog
+        .available_plugins
+        .iter()
+        .find(|p| p.clap_plugin_id == plugin_id)
+        .map(|p| {
+            p.factory_presets
+                .iter()
+                .map(|e| FactoryEntry::from_parts(&e.id, &e.name, &e.json, e.meta.as_deref()))
+                .collect()
+        })
+        .unwrap_or_default();
+    for p in &presets {
+        let meta = serde_json::json!({
+            "author": (!p.creators.is_empty()).then(|| p.creators.join(", ")),
+            "description": p.description,
+            "tags": p.features,
+        });
+        entries.push(FactoryEntry::from_parts(
+            &p.stable_id(),
+            &p.name,
+            r#"{"version":1,"params":{}}"#,
+            Some(&meta.to_string()),
+        ));
+    }
+    lib.register_factory_entries(&plugin_id, entries);
+    // A provider's favourite is starred the first time it is seen, and
+    // only then: the mark records that, so un-starring it sticks.
+    const SEEDED: &str = "discovery_favorite_seeded";
+    for p in presets.iter().filter(|p| p.is_favorite()) {
+        let key = resonance_plugin::presets::mark_key(&plugin_id, &p.stable_id());
+        let seeded = lib.marks().marks(&key).extra.contains_key(SEEDED);
+        if !seeded {
+            let _ = lib.marks().update(&key, &|m| {
+                m.favorite = true;
+                m.extra.insert(SEEDED.to_string(), serde_json::Value::Bool(true));
+            });
+        }
+    }
+    r.presets.discovered.insert(plugin_id, presets);
+    crate::update::plugin_preset_ui::rebuild_caches(r);
+}
+
+/// The plugin's params after a preset state load: the mirror takes every
+/// value and its text (a third-party preset's values are only known to the
+/// plugin, slice P7). Ids the mirror does not have are ignored.
+pub(super) fn params_refreshed(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    params: Vec<ParamInfo>,
+) {
+    r.with_plugin_mut(instance_id, |slot| {
+        for fresh in &params {
+            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                p.current_value = fresh.current_value;
+                p.text = fresh.text.clone();
+            }
+        }
+    });
+}
+
+/// A Resonance plugin reported its loaded preset and modified flag
+/// (`com.resonance.preset-session`). The report is the truth from now on.
+pub(super) fn preset_identity(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    identity: Option<resonance_common::preset_session::IdentityReport>,
+) {
+    use resonance_control::methods::plugin_preset::PluginPresetSource;
+    match identity {
+        Some(report) => {
+            let source = if report.source == "factory" {
+                PluginPresetSource::Factory
+            } else {
+                PluginPresetSource::User
+            };
+            r.presets.plugin_preset_identity.insert(
+                instance_id,
+                crate::state::presets::SlotPresetIdentity {
+                    source,
+                    id: report.id,
+                    name: report.name,
+                    modified: report.modified,
+                    reported: true,
+                },
+            );
+        }
+        None => {
+            r.presets.plugin_preset_identity.remove(&instance_id);
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -761,6 +990,7 @@ pub(super) fn bus_added(
         );
     }
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
@@ -839,6 +1069,7 @@ pub(crate) fn bus_removed(
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);
@@ -893,6 +1124,7 @@ pub(super) fn master_added(
         );
     }
     apply_pending_param_overrides(r, instance_id);
+    crate::update::control::plugin_presets::apply_pending_preset(r, instance_id);
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 }
@@ -955,6 +1187,7 @@ pub(crate) fn master_removed(r: &mut Resonance, instance_id: PluginInstanceId) {
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
     r.presets.pending_plugin_param_overrides.remove(&instance_id);
+    crate::update::plugin_preset_ui::forget_instance(r, instance_id);
     r.remove_plugin_index(instance_id);
     drop_route_onto_removed_chain_plugin(r, instance_id);
     drop_plugin_lanes(r, instance_id);

@@ -98,6 +98,14 @@ pub trait Param: Send + Sync {
     fn is_hidden(&self) -> bool {
         false
     }
+    /// Whether presets leave this parameter out (plugin-preset-library.md
+    /// §9.2): a preset neither writes nor recalls it, so loading one keeps
+    /// the current value. For controls that are session/instance state
+    /// rather than sound (the amp's `file_select`, a slot into this
+    /// machine's library — the model travels by content id instead).
+    fn preset_excluded(&self) -> bool {
+        false
+    }
     /// Whether this parameter is stepped (integer/bool).
     fn is_stepped(&self) -> bool {
         false
@@ -131,6 +139,7 @@ pub struct FloatParam {
     value_to_string: Option<Arc<dyn Fn(f32) -> String + Send + Sync>>,
     string_to_value: Option<Arc<dyn Fn(&str) -> Option<f32> + Send + Sync>>,
     hidden: bool,
+    preset_excluded: bool,
 }
 
 impl FloatParam {
@@ -146,6 +155,7 @@ impl FloatParam {
             value_to_string: None,
             string_to_value: None,
             hidden: false,
+            preset_excluded: false,
         }
     }
 
@@ -176,6 +186,12 @@ impl FloatParam {
 
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    /// Leave this parameter out of presets — see [`Param::preset_excluded`].
+    pub fn excluded_from_presets(mut self) -> Self {
+        self.preset_excluded = true;
         self
     }
 
@@ -310,6 +326,9 @@ impl Param for FloatParam {
     fn is_hidden(&self) -> bool {
         self.hidden
     }
+    fn preset_excluded(&self) -> bool {
+        self.preset_excluded
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -332,6 +351,7 @@ pub struct IntParam {
     value_to_string: Option<Arc<dyn Fn(i32) -> String + Send + Sync>>,
     string_to_value: Option<Arc<dyn Fn(&str) -> Option<i32> + Send + Sync>>,
     hidden: bool,
+    preset_excluded: bool,
 }
 
 impl IntParam {
@@ -347,11 +367,18 @@ impl IntParam {
             value_to_string: None,
             string_to_value: None,
             hidden: false,
+            preset_excluded: false,
         }
     }
 
     pub fn hidden(mut self) -> Self {
         self.hidden = true;
+        self
+    }
+
+    /// Leave this parameter out of presets — see [`Param::preset_excluded`].
+    pub fn excluded_from_presets(mut self) -> Self {
+        self.preset_excluded = true;
         self
     }
 
@@ -488,6 +515,9 @@ impl Param for IntParam {
     }
     fn is_hidden(&self) -> bool {
         self.hidden
+    }
+    fn preset_excluded(&self) -> bool {
+        self.preset_excluded
     }
     fn is_stepped(&self) -> bool {
         true

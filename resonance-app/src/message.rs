@@ -117,8 +117,68 @@ pub enum Message {
     WindowCloseRequested(iced::window::Id),
 }
 
+/// The host's preset surfaces (plugin-preset-library.md §6.6, slice P6):
+/// the plugin panel's bar, the browser it opens, and the media browser's
+/// Presets tab. None records undo by itself; a load that sticks goes
+/// through [`PluginMessage::LoadPluginPreset`], which does.
+#[derive(Debug, Clone)]
+pub enum PresetUiMessage {
+    /// Load the next (`delta > 0`) or previous preset in bank order.
+    Step {
+        instance_id: PluginInstanceId,
+        delta: i32,
+    },
+    /// Star or unstar the slot's loaded preset.
+    ToggleFavorite(PluginInstanceId),
+    OpenBrowser(PluginInstanceId),
+    /// Close the browser, keeping the auditioned preset (one undo entry)
+    /// or reverting to the sound it opened on.
+    CloseBrowser {
+        keep: bool,
+    },
+    BrowserSearch(String),
+    /// ↑ / ↓ in the browser: audition the previous / next row.
+    BrowserMove(i32),
+    BrowserFavoritesOnly(bool),
+    /// Audition the row: load it unrecorded, remembering the origin.
+    BrowserAudition(usize),
+    BrowserToggleRowFavorite(usize),
+    MediaSearch(String),
+    MediaFavoritesOnly(bool),
+    MediaPlugin(crate::state::presets::PresetPluginChoice),
+    MediaSelect(usize),
+    /// Load the row onto the selected plugin slot (same plugin only).
+    MediaLoad(usize),
+    MediaToggleRowFavorite(usize),
+    /// A press on a Presets-tab row: selects it and arms a drag.
+    MediaPress(usize),
+    /// The pointer moved (window coordinates) while a drag is armed.
+    DragMoved(iced::Point),
+    /// Released over a track header while a drag is armed: add the plugin
+    /// there with the preset, if the pointer really moved.
+    DropOnTrack(TrackId),
+    /// Released anywhere while a drag is armed: disarm (after any drop).
+    DragEnd,
+    /// "with preset…" in an add picker: add the plugin, then load the
+    /// preset onto it once it exists.
+    AddWithPreset {
+        owner: PresetAddOwner,
+        pick: crate::state::presets::PresetAddPick,
+    },
+}
+
+/// Which chain a "with preset…" add appends to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetAddOwner {
+    Track(TrackId),
+    Bus(resonance_audio::types::BusId),
+    Master,
+}
+
 #[derive(Debug, Clone)]
 pub enum PluginMessage {
+    /// The host's preset surfaces (slice P6).
+    PresetUi(PresetUiMessage),
     /// Bypass (or re-engage) ONE slot, wherever it sits — track, bus or
     /// master (ba doc #275 finding X3, todo #1305).
     ///
@@ -209,6 +269,35 @@ pub enum PluginMessage {
         /// What to show as the loaded preset afterwards, for the reply
         /// and any future GUI readout.
         preset_name: String,
+        /// The preset's state document with its identity, handed to the
+        /// plugin after the params (`AudioCommand::LoadPluginPresetState`)
+        /// so the rest of the sound — a model, an IR, user wavetables —
+        /// comes along (plugin-preset-library.md §6.7). `None` recalls the
+        /// params only.
+        preset_state: Option<Vec<u8>>,
+        /// The preset's id and source: the slot's loaded-preset identity
+        /// until the plugin reports its own (slice P5).
+        preset_id: String,
+        preset_source: resonance_control::methods::plugin_preset::PluginPresetSource,
+    },
+    /// Recall a preset the plugin owns (one its preset-discovery factory
+    /// listed): the plugin loads it through `clap.preset-load`, and the
+    /// engine refreshes the mirror afterwards. One undo entry, like
+    /// `LoadPluginPreset` (slice P8).
+    LoadPluginPresetFromLocation {
+        instance_id: PluginInstanceId,
+        location: resonance_audio::types::PluginPresetLocation,
+        load_key: Option<String>,
+        preset_name: String,
+        preset_id: String,
+    },
+    /// A ◀ / ▶ preset step: the `LoadPluginPreset` (or location load) in
+    /// `load`, coalesced with the steps before it on the same plugin into
+    /// one undo entry, and with the rest of the sound's state load
+    /// debounced (an amp step reloads a model).
+    PresetStep {
+        instance_id: PluginInstanceId,
+        load: Box<PluginMessage>,
     },
     /// Open the plugin's editor window (CLAP_EXT_GUI).
     OpenPluginEditor(PluginInstanceId),
@@ -275,12 +364,20 @@ impl PluginMessage {
             // into a neighbouring knob edit would make the two undo
             // together (ba todo #1333).
             Self::LoadPluginPreset { .. } => UndoAction::Record,
+            Self::LoadPluginPresetFromLocation { .. } => UndoAction::Record,
+            Self::PresetStep { instance_id, .. } => {
+                UndoAction::RecordCoalesced(CoalesceKey::PluginPresetStep(*instance_id))
+            }
             Self::SetPluginParam(instance_id, param_id, _) => {
                 UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
                     instance_id: *instance_id,
                     param_id: *param_id,
                 })
             }
+            // Browsing, auditioning and starring record nothing: a load
+            // that sticks is re-dispatched as `LoadPluginPreset`, and a
+            // "with preset…" add as the add it is.
+            Self::PresetUi(_) => UndoAction::Skip,
             Self::TogglePluginPanel(_)
             | Self::OpenPluginEditor(_)
             // A rescan changes what the machine offers, not what the

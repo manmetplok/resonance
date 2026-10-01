@@ -6,6 +6,7 @@ use crate::Resonance;
 
 pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
     match m {
+        PluginMessage::PresetUi(m) => return crate::update::plugin_preset_ui::handle(r, m),
         PluginMessage::SetPluginBypass {
             instance_id,
             bypassed,
@@ -143,30 +144,20 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                     param.current_value = value;
                 }
             });
-        }
-        PluginMessage::LoadPluginPreset {
-            instance_id,
-            values,
-            preset_name: _,
-        } => {
-            // Same two steps as SetPluginParam, once per parameter: tell
-            // the engine, then move the app's mirror so every reader
-            // (generic panel, `track.plugin_params`, its MCP tool) agrees
-            // with the sound.
-            for (param_id, value) in &values {
-                let _ = r.engine.send(AudioCommand::SetPluginParam {
-                    instance_id,
-                    param_id: *param_id,
-                    value: *value,
-                });
-            }
-            r.with_plugin_mut(instance_id, |p| {
-                for (param_id, value) in &values {
-                    if let Some(param) = p.params.iter_mut().find(|pp| pp.id == *param_id) {
-                        param.current_value = *value;
-                    }
+            // A plugin that reports its own modified flag compares; for one
+            // that does not, a host edit is the one edit the host sees.
+            if let Some(identity) = r.presets.plugin_preset_identity.get_mut(&instance_id) {
+                if !identity.reported {
+                    identity.modified = true;
                 }
-            });
+            }
+        }
+        m @ PluginMessage::LoadPluginPreset { .. } => apply_preset_load(r, m),
+        m @ PluginMessage::LoadPluginPresetFromLocation { .. } => apply_preset_load(r, m),
+        PluginMessage::PresetStep { load, .. } => {
+            r.presets.debounce_state_load = true;
+            apply_preset_load(r, *load);
+            r.presets.debounce_state_load = false;
         }
         PluginMessage::SetPluginSidechain {
             instance_id,
@@ -231,4 +222,198 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         }
     }
     Task::none()
+}
+
+/// Apply a [`PluginMessage::LoadPluginPreset`]: the identity, every
+/// param (engine and mirror), then the rest of the sound. The message
+/// handler records it as one undo entry; an audition and a preset loaded
+/// onto a plugin that was just added call this directly, unrecorded
+/// (plugin-preset-library.md §6.7). Any other message is ignored.
+pub(crate) fn apply_preset_load(r: &mut Resonance, m: PluginMessage) {
+    if let PluginMessage::LoadPluginPresetFromLocation {
+        instance_id,
+        location,
+        load_key,
+        preset_name,
+        preset_id,
+    } = m
+    {
+        // The plugin loads it; its `loaded()` (or its own report) confirms
+        // the identity and the engine's refresh moves the mirror.
+        let reported = r
+            .presets
+            .plugin_preset_identity
+            .get(&instance_id)
+            .is_some_and(|i| i.reported);
+        r.presets.plugin_preset_identity.insert(
+            instance_id,
+            crate::state::presets::SlotPresetIdentity {
+                source: resonance_control::methods::plugin_preset::PluginPresetSource::Factory,
+                id: preset_id,
+                name: preset_name,
+                modified: false,
+                reported,
+            },
+        );
+        let capture = take_capture(r, instance_id);
+        owe_after(r, instance_id, capture);
+        let _ = r.engine.send(AudioCommand::LoadPluginPresetFromLocation {
+            instance_id,
+            location,
+            load_key,
+            capture,
+        });
+        return;
+    }
+    let PluginMessage::LoadPluginPreset {
+        instance_id,
+        values,
+        preset_name,
+        preset_state,
+        preset_id,
+        preset_source,
+    } = m
+    else {
+        return;
+    };
+    // The identity, optimistically: a reporting plugin confirms it
+    // (and keeps `reported`); for any other it is all there is.
+    let reported = r
+        .presets
+        .plugin_preset_identity
+        .get(&instance_id)
+        .is_some_and(|i| i.reported);
+    r.presets.plugin_preset_identity.insert(
+        instance_id,
+        crate::state::presets::SlotPresetIdentity {
+            source: preset_source,
+            id: preset_id,
+            name: preset_name,
+            modified: false,
+            reported,
+        },
+    );
+    // Same two steps as SetPluginParam, once per parameter: tell
+    // the engine, then move the app's mirror so every reader
+    // (generic panel, `track.plugin_params`, its MCP tool) agrees
+    // with the sound.
+    for (param_id, value) in &values {
+        let _ = r.engine.send(AudioCommand::SetPluginParam {
+            instance_id,
+            param_id: *param_id,
+            value: *value,
+        });
+    }
+    r.with_plugin_mut(instance_id, |p| {
+        for (param_id, value) in &values {
+            if let Some(param) = p.params.iter_mut().find(|pp| pp.id == *param_id) {
+                param.current_value = *value;
+            }
+        }
+    });
+    // Then the rest of the sound and the identity. After the
+    // params in the engine's queue, so a plugin that lays the
+    // preset over its state sees the new values.
+    if let Some(data) = preset_state {
+        let capture = take_capture(r, instance_id);
+        if r.presets.debounce_state_load {
+            // A run of steps loads only where it stops; the run's first
+            // capture is the one its undo entry waits on.
+            let entry = r
+                .presets
+                .pending_step_state
+                .entry(instance_id)
+                .or_insert_with(|| (Vec::new(), None, std::time::Instant::now()));
+            entry.0 = data;
+            entry.1 = entry.1.or(capture);
+            entry.2 = std::time::Instant::now();
+        } else {
+            r.presets.pending_step_state.remove(&instance_id);
+            owe_after(r, instance_id, capture);
+            let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
+        }
+    }
+}
+
+/// A load with a capture is owed its "after" state (see
+/// `PresetState::pending_after`).
+fn owe_after(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+    capture: Option<u64>,
+) {
+    if let Some(token) = capture {
+        r.presets.pending_after.insert(
+            token,
+            crate::state::presets::PendingAfter {
+                instance_id,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// How long a run of preset steps waits, after its last step, before the
+/// plugin's state load goes out.
+pub(crate) const STEP_STATE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Send the state load of every step run that has been quiet for
+/// [`STEP_STATE_DEBOUNCE`] (`force` sends them all). Tick.
+pub(crate) fn flush_step_state(r: &mut Resonance, force: bool) {
+    let due: Vec<_> = r
+        .presets
+        .pending_step_state
+        .iter()
+        .filter(|(_, (_, _, at))| force || at.elapsed() >= STEP_STATE_DEBOUNCE)
+        .map(|(id, _)| *id)
+        .collect();
+    for instance_id in due {
+        if let Some((data, capture, _)) = r.presets.pending_step_state.remove(&instance_id) {
+            owe_after(r, instance_id, capture);
+            let _ = r.engine.send(AudioCommand::LoadPluginPresetState {
+                instance_id,
+                data,
+                capture,
+            });
+        }
+    }
+}
+
+/// The capture token a preset load onto `instance_id` asks the engine
+/// for, if any: an audition's origin (forced), else the late slot of the
+/// undo entry this load just recorded. A kept audition's slot takes the
+/// origin's state instead, and asks for nothing.
+fn take_capture(
+    r: &mut Resonance,
+    instance_id: resonance_audio::types::PluginInstanceId,
+) -> Option<u64> {
+    if let Some(token) = r.presets.forced_capture.take() {
+        return Some(token);
+    }
+    let late = r
+        .presets
+        .next_capture
+        .take()
+        .filter(|(id, _)| *id == instance_id)
+        .map(|(_, late)| late)?;
+    if let Some((origin, token)) = r.presets.capture_from.take() {
+        let known = origin.lock().ok().and_then(|b| b.clone());
+        match known {
+            Some(blob) => {
+                if let Ok(mut slot) = late.lock() {
+                    *slot = Some(blob);
+                }
+            }
+            None => r.presets.pending_captures.entry(token).or_default().push(late),
+        }
+        return None;
+    }
+    r.presets.capture_seq += 1;
+    let token = r.presets.capture_seq;
+    r.presets.pending_captures.entry(token).or_default().push(late);
+    Some(token)
 }

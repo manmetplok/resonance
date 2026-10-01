@@ -99,7 +99,7 @@ pub(super) fn plugin_presets(app: &mut Resonance, request: &Request) -> (Respons
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    let (clap_id, _, _) = match resolve(
+    let (clap_id, _, instance_id) = match resolve(
         app,
         request,
         params.track_id.0,
@@ -110,16 +110,12 @@ pub(super) fn plugin_presets(app: &mut Resonance, request: &Request) -> (Respons
         Err(response) => return (response, Task::none()),
     };
     (
-        success(request, &plugin_presets_view(app, &clap_id)),
+        success(
+            request,
+            &plugin_presets::view(app, &clap_id, instance_id, &params.filter),
+        ),
         Task::none(),
     )
-}
-
-fn plugin_presets_view(
-    app: &Resonance,
-    clap_id: &str,
-) -> resonance_control::methods::plugin_preset::PluginPresetsView {
-    plugin_presets::view(app, clap_id)
 }
 
 /// `track.load_plugin_preset` — recall a preset, as one undoable edit.
@@ -147,14 +143,14 @@ pub(super) fn load_plugin_preset(
         return reject(request, e);
     }
 
-    let message = match plugin_presets::load_message(
-        app,
-        &clap_id,
-        instance_id,
-        &mirrored,
-        &params.preset,
-        params.source,
-    ) {
+    let args = plugin_presets::LoadArgs {
+        preset: &params.preset,
+        preset_id: params.preset_id.as_deref(),
+        source: params.source,
+        extra: params.extra.unwrap_or(true),
+    };
+    let message = match plugin_presets::load_request(app, &clap_id, instance_id, &mirrored, &args)
+    {
         Ok(message) => message,
         Err(e) => return reject(request, e),
     };
@@ -188,20 +184,17 @@ pub(super) fn save_plugin_preset(
         Err(response) => return (response, Task::none()),
     };
 
-    if let Err(e) = plugin_presets::check_save(app, &clap_id, &params.name, params.overwrite) {
-        return reject(request, e);
+    let args = plugin_presets::SaveArgs {
+        name: params.name,
+        overwrite: params.overwrite,
+        meta: params.meta,
+        favorite: params.favorite,
+        overwrite_id: params.overwrite_id,
+    };
+    match plugin_presets::arm_save(app, clap_id, instance_id, args) {
+        Ok(id) => (plugin_presets::saved_reply(app, request, id), Task::none()),
+        Err(e) => reject(request, e),
     }
-
-    app.presets.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
-        instance_id,
-        clap_id,
-        name: params.name.trim().to_string(),
-    });
-    let _ = app
-        .engine
-        .send(resonance_audio::types::AudioCommand::SavePluginState { instance_id });
-
-    (ack(app, request), Task::none())
 }
 
 /// `track.save_preset` — capture a track as a reusable preset.

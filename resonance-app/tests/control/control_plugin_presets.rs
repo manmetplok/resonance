@@ -88,14 +88,18 @@ fn scanned_with_factory_bank() -> ScannedPlugin {
         vendor: "Resonance".to_owned(),
         is_instrument: true,
         factory_presets: vec![
-            (
-                "Dark".to_owned(),
-                format!(r#"{{"version":1,"params":{{"{CUTOFF}":400.0,"{DRIVE}":0.1}}}}"#),
-            ),
-            (
-                "Bright".to_owned(),
-                format!(r#"{{"version":1,"params":{{"{CUTOFF}":12000.0,"{DRIVE}":0.8}}}}"#),
-            ),
+            resonance_common::factory_presets::FactoryPresetEntry {
+                id: "dark".to_owned(),
+                name: "Dark".to_owned(),
+                json: format!(r#"{{"version":1,"params":{{"{CUTOFF}":400.0,"{DRIVE}":0.1}}}}"#),
+                meta: None,
+            },
+            resonance_common::factory_presets::FactoryPresetEntry {
+                id: "bright".to_owned(),
+                name: "Bright".to_owned(),
+                json: format!(r#"{{"version":1,"params":{{"{CUTOFF}":12000.0,"{DRIVE}":0.8}}}}"#),
+                meta: None,
+            },
         ],
     }
 }
@@ -134,6 +138,7 @@ fn presets(app: &mut Resonance) -> PluginPresetsView {
             track_id: ProtoTrackId(TRACK),
             plugin_id: Some(PLUGIN_ID.to_owned()),
             occurrence: None,
+            filter: Default::default(),
         },
     );
     serde_json::from_value(response.result.expect("plugin_presets should succeed"))
@@ -181,6 +186,8 @@ fn loading_a_preset_moves_the_parameters_and_the_mirror() {
             occurrence: None,
             preset: "Bright".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -206,6 +213,8 @@ fn a_recall_is_a_single_undo_entry() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
 
@@ -232,6 +241,8 @@ fn an_unknown_preset_is_refused_with_the_names_that_exist() {
             occurrence: None,
             preset: "Nope".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     let error = response.error.expect("an unknown preset must be refused");
@@ -257,6 +268,9 @@ fn saving_adds_a_user_preset_the_list_then_reports() {
             occurrence: None,
             name: "My Sound".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -269,10 +283,12 @@ fn saving_adds_a_user_preset_the_list_then_reports() {
     );
 
     // The engine answers with the plugin's own state document.
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":1234.0,"{DRIVE}":0.25}}}}"#)
             .into_bytes(),
+        preset_form: true,
+        first_party: true,
     });
 
     let view = presets(&mut app);
@@ -301,12 +317,17 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             name: "Captured".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":1234.0,"{DRIVE}":0.25}}}}"#)
             .into_bytes(),
+        preset_form: true,
+        first_party: true,
     });
 
     // Move away from it, then recall.
@@ -319,6 +340,8 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             preset: "Bright".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 12000.0);
@@ -332,6 +355,8 @@ fn a_saved_preset_recalls_what_it_captured() {
             occurrence: None,
             preset: "Captured".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
@@ -356,14 +381,19 @@ fn overwriting_a_user_preset_needs_the_flag() {
                 occurrence: None,
                 name: "Mine".to_owned(),
                 overwrite,
+                meta: None,
+                favorite: None,
+                overwrite_id: None,
             },
         )
     };
 
     let _ = save(&mut app, false);
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":100.0}}}}"#).into_bytes(),
+        preset_form: true,
+        first_party: true,
     });
 
     let refused = save(&mut app, false);
@@ -400,12 +430,17 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             name: "Dark".to_owned(),
             overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
         },
     );
     assert!(response.error.is_none(), "{:?}", response.error);
-    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+    app.test_apply_engine_event(AudioEvent::PluginPresetStateSaved {
         instance_id: INSTANCE,
         data: format!(r#"{{"version":1,"params":{{"{CUTOFF}":777.0}}}}"#).into_bytes(),
+        preset_form: true,
+        first_party: true,
     });
 
     let view = presets(&mut app);
@@ -421,6 +456,8 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: None,
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 777.0);
@@ -435,7 +472,131 @@ fn saving_under_a_factory_name_shadows_rather_than_replaces() {
             occurrence: None,
             preset: "Dark".to_owned(),
             source: Some(PluginPresetSource::Factory),
+            preset_id: None,
+            extra: None,
         },
     );
     assert_eq!(param_value(&mut app, CUTOFF), 400.0);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-sound presets (plugin-preset-library.md P2)
+// ---------------------------------------------------------------------------
+
+/// `app_with_plugin` on an app whose engine commands are captured.
+fn captured_app_with_plugin(
+    root: &TempRoot,
+) -> (Resonance, crossbeam_channel::Receiver<resonance_audio::types::AudioCommand>) {
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_set_active_project(true);
+    app.test_set_plugin_preset_root(root.0.clone());
+    app.test_apply_engine_event(AudioEvent::PluginsScanned {
+        plugins: vec![scanned_with_factory_bank()],
+    });
+    app.test_add_track(TRACK, TrackType::Instrument);
+    app.test_push_track_plugin(
+        TRACK,
+        PluginSlotState::new(
+            INSTANCE,
+            "Test Synth".to_owned(),
+            PLUGIN_ID.to_owned(),
+            "/nonexistent/test-synth.clap".to_owned(),
+            params_at_defaults(),
+            false,
+        ),
+    );
+    (app, rx)
+}
+
+/// A recall hands the plugin the whole preset — its sound-bearing extra
+/// state and its identity — after the params, so a model, an IR or user
+/// wavetables come along and the plugin's own bar names what is loaded.
+#[test]
+fn a_recall_hands_the_plugin_the_whole_sound_and_its_identity() {
+    use resonance_audio::types::AudioCommand;
+    let root = TempRoot::new("whole-sound");
+    let (mut app, rx) = captured_app_with_plugin(&root);
+    // A user preset carrying extra state, as the plugin's own browser or
+    // a host save of its preset form writes it.
+    let bank = resonance_plugin::presets::PresetBank::new(PLUGIN_ID, &[]).with_root(root.0.clone());
+    let saved = bank
+        .write_user_preset(
+            "Tube Lead",
+            &serde_json::json!({
+                "version": 1,
+                "params": {CUTOFF: 900.0, DRIVE: 0.6},
+                "ir_path": "/irs/tube.wav",
+            }),
+        )
+        .unwrap();
+    while rx.try_recv().is_ok() {}
+
+    let response = call(
+        &mut app,
+        track_proto::LOAD_PLUGIN_PRESET,
+        &track_proto::LoadPluginPresetParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            preset: "tube lead".to_owned(),
+            source: None,
+            preset_id: None,
+            extra: None,
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+
+    let commands: Vec<AudioCommand> = rx.try_iter().collect();
+    let params_at = commands
+        .iter()
+        .rposition(|c| matches!(c, AudioCommand::SetPluginParam { instance_id, .. } if *instance_id == INSTANCE))
+        .expect("the params go through the app's own path");
+    let (state_at, data) = commands
+        .iter()
+        .enumerate()
+        .find_map(|(i, c)| match c {
+            AudioCommand::LoadPluginPresetState { instance_id, data, .. } if *instance_id == INSTANCE => {
+                Some((i, data.clone()))
+            }
+            _ => None,
+        })
+        .expect("then the preset state");
+    assert!(state_at > params_at, "the preset state follows the params");
+    let doc: serde_json::Value = serde_json::from_slice(&data).unwrap();
+    assert_eq!(doc["ir_path"], "/irs/tube.wav", "the extra state travels");
+    assert_eq!(doc["preset"]["id"], saved.id.as_str(), "with the identity");
+    assert_eq!(doc["preset"]["source"], "user");
+    assert_eq!(doc["preset"]["name"], "Tube Lead");
+    assert!((param_value(&mut app, CUTOFF) - 900.0).abs() < 1e-9);
+}
+
+/// A save captures the plugin's preset form, not its whole project state.
+#[test]
+fn a_save_asks_the_plugin_for_its_preset_form() {
+    use resonance_audio::types::AudioCommand;
+    let root = TempRoot::new("preset-form");
+    let (mut app, rx) = captured_app_with_plugin(&root);
+    while rx.try_recv().is_ok() {}
+    let response = call(
+        &mut app,
+        track_proto::SAVE_PLUGIN_PRESET,
+        &track_proto::SavePluginPresetParams {
+            track_id: ProtoTrackId(TRACK),
+            plugin_id: Some(PLUGIN_ID.to_owned()),
+            occurrence: None,
+            name: "Captured".to_owned(),
+            overwrite: false,
+            meta: None,
+            favorite: None,
+            overwrite_id: None,
+        },
+    );
+    assert!(response.error.is_none(), "{:?}", response.error);
+    let commands: Vec<AudioCommand> = rx.try_iter().collect();
+    assert!(commands.iter().any(
+        |c| matches!(c, AudioCommand::SavePluginPresetState { instance_id } if *instance_id == INSTANCE)
+    ));
+    assert!(!commands
+        .iter()
+        .any(|c| matches!(c, AudioCommand::SavePluginState { .. })));
 }

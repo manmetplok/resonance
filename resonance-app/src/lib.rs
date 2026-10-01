@@ -26,6 +26,7 @@ pub mod engine_events;
 pub mod focus;
 pub mod message;
 pub mod plugin_chain;
+pub mod plugin_preset_library;
 pub mod plugin_ui;
 pub mod presets;
 pub mod project;
@@ -71,6 +72,13 @@ pub(crate) struct PendingPluginPresetSave {
     pub(crate) clap_id: String,
     /// Display name to write.
     pub(crate) name: String,
+    /// The id the preset gets (minted when the save was armed, or the
+    /// existing preset's).
+    pub(crate) id: String,
+    pub(crate) meta: Option<resonance_control::methods::plugin_preset::PresetMetaInput>,
+    pub(crate) favorite: Option<bool>,
+    /// `overwrite_id`: update this user preset in place.
+    pub(crate) target: Option<String>,
 }
 
 pub struct Resonance {
@@ -695,6 +703,11 @@ impl Resonance {
                 user_presets: match host {
                     Host::Machine => presets::load_user_presets(),
                     Host::None => Vec::new(),
+                },
+                // A test app never reads or writes the user's presets.
+                plugin_preset_root: match host {
+                    Host::Machine => None,
+                    Host::None => crate::plugin_preset_library::hermetic_preset_root(),
                 },
                 ..state::PresetState::default()
             },

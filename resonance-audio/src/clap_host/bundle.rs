@@ -97,7 +97,7 @@ pub struct ClapBundle {
     /// Read once at load time from the first-party
     /// `resonance_factory_presets` symbol. Empty for any plugin that does
     /// not export it, which is every third-party one (ba todo #1333).
-    factory_presets: Vec<(String, String)>,
+    factory_presets: Vec<resonance_common::factory_presets::FactoryPresetEntry>,
     /// The `.clap` this bundle was loaded from. Held as a `CString`
     /// because the entry point's `init` borrows it, and read back by the
     /// scanner: a rescan has to know which files are ALREADY loaded so it
@@ -105,6 +105,16 @@ pub struct ClapBundle {
     /// it (ba todo #1307).
     path: CString,
 }
+
+/// A bundle's preset-discovery factory, handed to the discovery worker.
+#[derive(Debug, Clone, Copy)]
+pub struct DiscoveryFactory(
+    pub *const clap_sys::factory::preset_discovery::clap_preset_discovery_factory,
+);
+
+// SAFETY: the factory lives as long as its never-unloaded library, and the
+// worker is the only thread that calls into it (or into what it creates).
+unsafe impl Send for DiscoveryFactory {}
 
 impl ClapBundle {
     /// Load a .clap shared library file.
@@ -216,10 +226,30 @@ impl ClapBundle {
         &self.descriptors
     }
 
+    /// The bundle's `clap.preset-discovery-factory`, if it has one
+    /// (slice P8). `get_factory` is thread-safe, and the library is never
+    /// unloaded, so the pointer stays valid for the process and may be
+    /// used from the discovery worker.
+    pub fn preset_discovery_factory(&self) -> Option<DiscoveryFactory> {
+        use clap_sys::factory::preset_discovery::{
+            CLAP_PRESET_DISCOVERY_FACTORY_ID, CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT,
+        };
+        // SAFETY: `entry` is live (never deinit'ed) and `get_factory` is
+        // thread-safe per entry.h.
+        unsafe {
+            let get_factory = (*self.entry).get_factory?;
+            let mut ptr = get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID.as_ptr());
+            if ptr.is_null() {
+                ptr = get_factory(CLAP_PRESET_DISCOVERY_FACTORY_ID_COMPAT.as_ptr());
+            }
+            (!ptr.is_null()).then(|| DiscoveryFactory(ptr.cast()))
+        }
+    }
+
     /// Factory presets baked into this plugin, as `(name, state json)`.
     /// Empty for a plugin that ships none, and for every plugin that is
     /// not one of ours.
-    pub fn factory_presets(&self) -> &[(String, String)] {
+    pub fn factory_presets(&self) -> &[resonance_common::factory_presets::FactoryPresetEntry] {
         &self.factory_presets
     }
 
@@ -581,7 +611,9 @@ unsafe fn descriptor_strings(
 /// contracted to return either null or a pointer valid for the lifetime of
 /// the process (see `resonance_plugin::export_clap!`); the string is
 /// copied out here and never freed by us.
-unsafe fn read_factory_presets(library: &libloading::Library) -> Vec<(String, String)> {
+unsafe fn read_factory_presets(
+    library: &libloading::Library,
+) -> Vec<resonance_common::factory_presets::FactoryPresetEntry> {
     type Getter = unsafe extern "C" fn() -> *const std::os::raw::c_char;
     let symbol: libloading::Symbol<Getter> =
         match library.get(resonance_common::factory_presets::FACTORY_PRESETS_SYMBOL) {
@@ -594,7 +626,7 @@ unsafe fn read_factory_presets(library: &libloading::Library) -> Vec<(String, St
         return Vec::new();
     }
     match CStr::from_ptr(raw).to_str() {
-        Ok(text) => resonance_common::factory_presets::decode(text),
+        Ok(text) => resonance_common::factory_presets::decode_entries(text),
         Err(_) => Vec::new(),
     }
 }

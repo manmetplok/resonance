@@ -527,6 +527,8 @@ const KEY_SHAPED_WIRE_WORDS: &[&str] = &[
     "target_lufs",
     // `section_set_scale`'s `scale`.
     "scale",
+    // The `character` facet filter of `*_plugin_presets` (timbre words).
+    "character",
 ];
 
 /// The two halves of the outside-a-block check must excuse the same

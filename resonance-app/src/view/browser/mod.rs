@@ -140,6 +140,7 @@ fn tab_switcher<'a>(current: BrowserTab) -> Element<'a, Message> {
         row![
             browser_tab_button("Files", BrowserTab::Files, current),
             browser_tab_button("Pool", BrowserTab::Pool, current),
+            browser_tab_button("Presets", BrowserTab::Presets, current),
         ]
         .spacing(3)
         .padding(4),
@@ -183,5 +184,6 @@ fn tab_body<'a>(r: &'a Resonance, tab: BrowserTab) -> Element<'a, Message> {
     match tab {
         BrowserTab::Files => files_tab::files_body(r),
         BrowserTab::Pool => pool_tab::pool_body(r),
+        BrowserTab::Presets => crate::view::preset_browser::media_presets_body(r),
     }
 }

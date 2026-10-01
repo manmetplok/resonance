@@ -372,12 +372,33 @@ fn add_effect(app: &mut Resonance, request: &Request) -> (Response, Task<Message
         );
     }
 
+    // A preset to load onto it, checked before anything is added.
+    let preset = match params.preset.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => match crate::update::control::plugin_presets::resolve_add_preset(
+            app,
+            &params.plugin_id,
+            p,
+        ) {
+            Ok(found) => Some(found),
+            Err(e) => return reject(request, e),
+        },
+        None => None,
+    };
+
     // Same synchronous commit as `track.add_effect` (todo #1234): the id
     // is allocated app-side and the slot mirrored at dispatch, so
     // `bus.plugin_params` and `bus.set_plugin_param` can address the
     // plugin in the same cycle as this reply instead of racing the
     // engine's `BusPluginAdded` echo.
     let instance_id = app.allocate_plugin_id();
+    if let Some(found) = &preset {
+        crate::update::control::plugin_presets::park_add_preset(
+            app,
+            instance_id,
+            &params.plugin_id,
+            found,
+        );
+    }
     let task = super::run_via_update(
         app,
         Message::Bus(BusMessage::AddPluginToBusWithId {
@@ -643,6 +664,7 @@ fn plugin_presets(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
+        &params.filter,
     )
 }
 
@@ -657,8 +679,12 @@ fn load_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
-        &params.preset,
-        params.source,
+        super::plugin_presets::LoadArgs {
+            preset: &params.preset,
+            preset_id: params.preset_id.as_deref(),
+            source: params.source,
+            extra: params.extra.unwrap_or(true),
+        },
     )
 }
 
@@ -673,8 +699,13 @@ fn save_plugin_preset(app: &mut Resonance, request: &Request) -> (Response, Task
         Chain::Bus(params.bus_id.0),
         &params.plugin_id,
         params.occurrence,
-        &params.name,
-        params.overwrite,
+        super::plugin_presets::SaveArgs {
+            name: params.name,
+            overwrite: params.overwrite,
+            meta: params.meta,
+            favorite: params.favorite,
+            overwrite_id: params.overwrite_id,
+        },
     )
 }
 

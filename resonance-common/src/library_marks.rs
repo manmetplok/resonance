@@ -96,6 +96,20 @@ pub fn split_key(key: &str) -> Option<(&str, &str)> {
     (!kind.is_empty()).then_some((kind, id))
 }
 
+/// Environment variable that overrides Resonance's cache directory (the
+/// preset-discovery index). Tests point it at a private directory.
+pub const CACHE_DIR_ENV: &str = "RESONANCE_CACHE_DIR";
+
+/// The cache directory: [`CACHE_DIR_ENV`] if set and non-empty, else
+/// `<cache dir>/resonance` (`$XDG_CACHE_HOME/resonance` on Linux). What is
+/// here can always be rebuilt.
+pub fn default_cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os(CACHE_DIR_ENV).filter(|v| !v.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
+    dirs::cache_dir().map(|d| d.join("resonance"))
+}
+
 /// The library directory: [`LIBRARY_DIR_ENV`] if set and non-empty, else
 /// `<data dir>/resonance/library`. `None` only on a platform with no data
 /// dir at all.
@@ -309,21 +323,25 @@ impl SharedMarks {
         self.generation.load(Ordering::Acquire)
     }
 
-    /// The refresh hook: re-read the file if another writer changed it
-    /// (one `stat` when not). Returns whether anything changed. The read
-    /// happens outside every in-memory lock.
+    /// The refresh hook: re-read the file if another writer changed it.
+    /// When nothing changed this costs one `stat` and nothing else — the
+    /// document is copied only once the stamp says the file moved. Returns
+    /// whether anything changed. Callers drawing every frame throttle it
+    /// (`PresetLibrary::refresh_marks`).
     pub fn refresh(&self) -> bool {
         if self.dir.as_os_str().is_empty() {
             return false;
         }
         let _w = self.writer.lock().unwrap_or_else(|p| p.into_inner());
         let current = self.snapshot();
+        if stat(&current.path()) == current.stamp {
+            return false;
+        }
         let mut next = MarksStore {
             dir: current.dir.clone(),
-            doc: MarksDoc::default(),
+            doc: current.doc.clone(),
             stamp: current.stamp,
         };
-        next.doc = current.doc.clone();
         match next.reload_if_changed() {
             Ok(true) => {
                 self.install(next);

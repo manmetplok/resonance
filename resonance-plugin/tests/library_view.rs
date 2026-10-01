@@ -269,17 +269,22 @@ fn the_search_syntax_is_the_preset_librarys_superset() {
 
 #[test]
 fn one_slug_rule_for_marks_and_preset_metadata() {
-    // library_marks::normalize_tag and the preset library's
-    // normalize_facet must agree, or a tag typed in one browser would not
-    // match the same tag set in the other.
+    // The preset library has no slug rule of its own any more: its
+    // metadata normaliser is library_marks::normalize_tag, so a tag typed
+    // in one browser matches the same tag set in the other.
     use resonance_plugin::library_marks::normalize_tag;
-    use resonance_plugin::presets::vocab::normalize_facet;
+    use resonance_plugin::presets::PresetMeta;
     for raw in [
         "R&B", "Drum & Bass", "  Djent Rhythm ", "Café_Crème", "lo-fi", "--x--", "!!!", "a/b",
         "Shoegaze", "ÅÄÖ", "0123456789012345678901234567890123456789", "Dvořák", "Ďábel",
         "Şahin",
     ] {
-        assert_eq!(normalize_tag(raw), normalize_facet(raw), "{raw:?}");
+        let meta = PresetMeta {
+            tags: vec![raw.to_string()],
+            ..PresetMeta::default()
+        }
+        .normalized();
+        assert_eq!(meta.tags.first().cloned(), normalize_tag(raw), "{raw:?}");
     }
     assert_eq!(normalize_tag("R&B").as_deref(), Some("r-b"));
     assert_eq!(normalize_tag("Dvořák").as_deref(), Some("dvorak"));
@@ -431,7 +436,24 @@ fn a_pair_of_counters_is_compared_as_a_pair() {
 #[test]
 fn one_fold_for_search_slugs_and_preset_queries() {
     use resonance_plugin::library_marks::vocab::fold;
-    use resonance_plugin::presets::query;
+    use resonance_plugin::presets::{FactoryEntry, PresetLibrary, Query};
+    // A preset query searches through the same engine and fold.
+    let lib = PresetLibrary::new();
+    lib.register_factory_entries(
+        "com.test",
+        [FactoryEntry {
+            id: "d".into(),
+            name: "Dvořák Łódź".into(),
+            json: r#"{"params":{}}"#.into(),
+        }],
+    );
+    for text in ["dvorak", "LODZ", "Dvořák"] {
+        let q = Query {
+            text: text.into(),
+            ..Query::plugin("com.test")
+        };
+        assert_eq!(lib.query(&q).hits.len(), 1, "{text:?}");
+    }
     for (raw, want) in [
         ("Dvořák", "dvorak"),
         ("Ďábel", "dabel"),
@@ -440,7 +462,6 @@ fn one_fold_for_search_slugs_and_preset_queries() {
         ("Café Crème", "cafe creme"),
     ] {
         assert_eq!(fold(raw), want, "{raw:?}");
-        assert_eq!(query::fold(raw), want, "presets fold the same way: {raw:?}");
     }
 }
 
@@ -527,4 +548,39 @@ fn audition_then_commit_keeps_the_last_provisional_load() {
     assert!(bracket.is_open());
     assert_eq!(bracket.revert(&mut target), AuditionEvent::Reverted);
     assert_eq!(target.value, 1.0);
+}
+
+/// Scoped tokens match the value or a slug prefix, never a mid-word
+/// substring; facet values group and filter case-folded.
+#[test]
+fn scoped_tokens_are_exact_or_prefix_and_facets_fold_case() {
+    let mut rows = rows();
+    let mut model = BrowserModel::new();
+    model.set_query("genre:metal");
+    model.refresh(&rows, 1);
+    assert_eq!(
+        titles(&model, &rows),
+        vec!["5150 Block Letter", "Darkglass MT900"],
+        "metal, not post-metal's suffix (the 5150 has metal itself)"
+    );
+    model.set_query("genre:etal");
+    model.refresh(&rows, 1);
+    assert!(titles(&model, &rows).is_empty(), "no mid-word match");
+    model.set_query("by:tone");
+    model.refresh(&rows, 1);
+    assert_eq!(titles(&model, &rows), vec!["5150 Block Letter", "Old Marshall"], "prefix");
+
+    rows.items[4].gear_type = "AMP";
+    model.set_query("");
+    model.refresh(&rows, 2);
+    let amp: Vec<_> = model
+        .facet_counts(&rows, "gear_type")
+        .into_iter()
+        .filter(|c| c.value.eq_ignore_ascii_case("amp"))
+        .collect();
+    assert_eq!(amp.len(), 1, "one entry for amp and AMP: {amp:?}");
+    assert_eq!(amp[0].count, 3);
+    model.toggle_facet("gear_type", "Amp");
+    model.refresh(&rows, 3);
+    assert_eq!(titles(&model, &rows).len(), 3, "the selection matches every case");
 }

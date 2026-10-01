@@ -24,6 +24,7 @@ pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
 pub(crate) mod palette;
+pub(crate) mod preset_browser;
 pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
 pub(crate) mod remote_indicator;
@@ -55,9 +56,29 @@ use iced::{alignment, Element, Length};
 impl crate::Resonance {
     pub fn view(&self) -> Element<'_, Message> {
         let base = self.view_base();
-        match self.view_root_overlay() {
+        let root: Element<'_, Message> = match self.view_root_overlay() {
             Some(overlay) => stack![base, overlay].into(),
             None => base,
+        };
+        // A preset drag from the media browser (slice P8) follows the
+        // pointer and ends on any release. The wrapper is always there so
+        // arming a drag never changes the tree's shape (which would reset
+        // every scroll offset and focus); it only listens while armed.
+        let area = iced::widget::mouse_area(root);
+        if self.presets.dragging.is_some() {
+            let end = || Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd));
+            // Any release ends it (after a header's drop); so does a press
+            // no row took (the release happened outside the window) and
+            // the pointer leaving the window.
+            area.on_move(|at| {
+                Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragMoved(at)))
+            })
+            .on_release(end())
+            .on_press(end())
+            .on_exit(end())
+            .into()
+        } else {
+            area.into()
         }
     }
 
@@ -165,6 +186,7 @@ impl crate::Resonance {
             // Missing-files relink modal (doc #175, todo #607).
             Overlay::Relink => relink_dialog::view_relink_dialog_overlay(self),
             Overlay::Settings => settings::view_settings_overlay(self),
+            Overlay::PresetBrowser => preset_browser::view_preset_browser_overlay(self),
             Overlay::AddTrackMenu => menus::view_add_track_menu(self),
             Overlay::MarkersOverview => markers_overview::view_markers_overview_overlay(self),
             Overlay::DrumGroupsManager => compose::drum_groups_manager::view(self),

@@ -18,6 +18,14 @@ pub struct SaveOptions {
     pub meta: Option<PresetMeta>,
     /// The id of the preset this one is saved from.
     pub derived_from: Option<String>,
+    /// The sound-bearing extra state to store next to the params
+    /// (`ExtraStateSaver::save_for_preset`): a model reference, an IR, user
+    /// wavetables.
+    pub extra: serde_json::Map<String, serde_json::Value>,
+    /// The id for a new preset, minted up front (see `SaveRequest::id`).
+    pub id: Option<String>,
+    /// Update this user preset (by id) in place (see `SaveRequest::target`).
+    pub target: Option<String>,
 }
 
 /// The browsable preset set for one plugin: its factory bank plus the
@@ -86,6 +94,13 @@ impl PresetBank {
         bank
     }
 
+    /// Record the plugin's display name in saved presets (the host knows
+    /// the name from the descriptor, not the version).
+    pub fn with_plugin_name(mut self, name: &str) -> Self {
+        self.plugin.name = Some(name.to_string());
+        self
+    }
+
     /// Record the plugin's display name and version in saved presets.
     pub fn with_plugin_info(mut self, name: &str, version: &str) -> Self {
         self.plugin.name = Some(name.to_string());
@@ -99,6 +114,10 @@ impl PresetBank {
 
     pub fn factory(&self) -> &'static [FactoryPreset] {
         self.factory
+    }
+
+    pub fn renames(&self) -> &'static [ParamRename] {
+        self.renames
     }
 
     pub fn library(&self) -> &Arc<PresetLibrary> {
@@ -203,9 +222,12 @@ impl PresetBank {
     /// preset of the same name (case-insensitively) is overwritten in
     /// place, keeping its id; factory presets are never touched.
     ///
-    /// The snapshot is [`crate::state::params_to_json`], which writes
-    /// **every** declared parameter, so a preset can never be a partial
-    /// recall (audit finding P7).
+    /// The snapshot writes **every** declared parameter except the ones
+    /// marked [`Param::preset_excluded`], so a preset can never be a
+    /// partial recall (audit finding P7). [`PresetSession::save_as`]
+    /// (what editors call) adds the plugin's sound-bearing extra state.
+    ///
+    /// [`PresetSession::save_as`]: super::PresetSession::save_as
     pub fn save(&self, name: &str, params: &[&dyn Param]) -> Result<PresetRef, String> {
         self.save_with(name, params, SaveOptions::default())
     }
@@ -217,7 +239,13 @@ impl PresetBank {
         params: &[&dyn Param],
         options: SaveOptions,
     ) -> Result<PresetRef, String> {
-        self.write(name, crate::state::params_to_json(params), options)
+        let mut doc = super::preset_params_json(params);
+        if let Some(obj) = doc.as_object_mut() {
+            for (k, v) in &options.extra {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
+        self.write(name, doc, options)
     }
 
     /// Write an already-formed state document as a user preset — the blob
@@ -230,11 +258,22 @@ impl PresetBank {
         name: &str,
         document: &serde_json::Value,
     ) -> Result<PresetRef, String> {
+        self.write_user_preset_with(name, document, SaveOptions::default())
+    }
+
+    /// [`write_user_preset`](Self::write_user_preset) with metadata, a
+    /// pre-minted id or an in-place target.
+    pub fn write_user_preset_with(
+        &self,
+        name: &str,
+        document: &serde_json::Value,
+        options: SaveOptions,
+    ) -> Result<PresetRef, String> {
         let mut doc = document.clone();
         if let Some(obj) = doc.as_object_mut() {
             obj.remove("name");
         }
-        self.write(name, doc, SaveOptions::default())
+        self.write(name, doc, options)
     }
 
     fn write(
@@ -252,9 +291,75 @@ impl PresetBank {
                     meta: options.meta,
                     derived_from: options.derived_from,
                     plugin: self.plugin.clone(),
+                    id: options.id,
+                    target: options.target,
+                    blob: None,
+                    blob_preset_form: None,
                 },
             )
             .map(|r| r.preset)
+    }
+
+    /// Write a third-party plugin's opaque state as a user preset
+    /// (`state.encoding = "clap-state"`, §8 tier T0). Same naming and
+    /// overwrite rules as [`write_user_preset_with`](Self::write_user_preset_with).
+    pub fn write_user_blob_with(
+        &self,
+        name: &str,
+        blob: &[u8],
+        preset_form: bool,
+        options: SaveOptions,
+    ) -> Result<PresetRef, String> {
+        self.library
+            .save(
+                &self.plugin_id,
+                SaveRequest {
+                    name: name.to_string(),
+                    doc: serde_json::Value::Null,
+                    meta: options.meta,
+                    derived_from: options.derived_from,
+                    plugin: self.plugin.clone(),
+                    id: options.id,
+                    target: options.target,
+                    blob: Some(blob.to_vec()),
+                    blob_preset_form: Some(preset_form),
+                },
+            )
+            .map(|r| r.preset)
+    }
+
+    /// The opaque state of a blob-encoded preset (`None` for a document).
+    pub fn blob_for(&self, preset: &PresetRef) -> Option<Vec<u8>> {
+        self.library.state_blob(&self.plugin_id, preset)
+    }
+
+    /// Duplicate a preset as "<name> copy" (a new user preset).
+    pub fn duplicate(&self, preset: &PresetRef) -> Result<PresetRef, String> {
+        self.library
+            .duplicate(&self.plugin_id, preset, self.plugin.clone())
+            .map(|r| r.preset)
+    }
+
+    /// Import a preset file (see [`PresetLibrary::import`]).
+    pub fn import(
+        &self,
+        path: &std::path::Path,
+        param_ids: &[&str],
+    ) -> Result<(PresetRef, bool), String> {
+        self.library
+            .import(&self.plugin_id, path, param_ids)
+            .map(|(r, reminted)| (r.preset, reminted))
+    }
+
+    /// Export a preset as one file (see [`PresetLibrary::export`]).
+    pub fn export(&self, preset: &PresetRef, path: &std::path::Path) -> Result<(), String> {
+        self.library
+            .export(&self.plugin_id, preset, self.plugin.clone(), path)
+    }
+
+    /// The plugin info saved presets record.
+    pub fn plugin_info(&self) -> &PresetPluginInfo {
+        &self.plugin
     }
 
     /// Rename a user preset. Its id does not change.

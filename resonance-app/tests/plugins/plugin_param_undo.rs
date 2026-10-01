@@ -146,6 +146,9 @@ fn undoing_a_preset_recall_restores_the_previous_values() {
         instance_id: EQ,
         values: vec![(A, 7.0), (B, 9.0)],
         preset_name: "Bright".to_owned(),
+        preset_state: None,
+        preset_id: "bright".to_owned(),
+        preset_source: resonance_control::methods::plugin_preset::PluginPresetSource::User,
     }));
     drain(&rx);
 

@@ -135,6 +135,9 @@ pub fn handle(app: &mut Resonance, message: BrowserMessage) -> Task<Message> {
 
         BrowserMessage::SelectTab(tab) => {
             app.media.browser.tab = tab;
+            if tab == crate::state::BrowserTab::Presets {
+                crate::update::plugin_preset_ui::media_tab_shown(app);
+            }
         }
 
         BrowserMessage::OpenFolder(path) => return open_folder(app, path),

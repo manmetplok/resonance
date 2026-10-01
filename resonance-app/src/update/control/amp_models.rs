@@ -261,11 +261,7 @@ pub(crate) fn roots_for(hermetic: bool) -> AmpLibraryRoots {
             marks: resonance_common::library_marks::default_library_dir(),
         };
     }
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let base = crate::user_dirs::data_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join(format!("amp-library-{n}"));
+    let base = crate::user_dirs::hermetic_subdir("amp-library");
     AmpLibraryRoots {
         models: Some(base.join("models")),
         marks: Some(base.join("marks")),

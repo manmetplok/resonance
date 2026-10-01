@@ -177,6 +177,9 @@ fn file_select_param(library: Arc<SharedLibrary>, status: Arc<Mutex<ModelStatus>
     )
     .with_value_to_string(Arc::new(move |v| slot_text(&lib_for_text, &status, v)))
     .with_string_to_value(Arc::new(move |text| slot_from_text(&library, text)))
+    // A slot is this machine's library layout, not the sound: presets
+    // carry the model by content id (`save_for_preset`) instead.
+    .excluded_from_presets()
 }
 
 impl Default for AmpParams {

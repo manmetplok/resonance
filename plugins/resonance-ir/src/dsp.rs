@@ -214,6 +214,11 @@ impl IrEngine {
         self.fader.begin_swap(conv);
     }
 
+    /// Fade the IR out and run dry (a preset with `ir_path: ""`).
+    pub fn begin_clear(&mut self) {
+        self.fader.begin_clear();
+    }
+
     /// Reset the active convolver's internal state (FDL, overlap, buffers)
     /// and clear the dry path's latency-compensation delay, so no
     /// pre-reset audio is replayed.

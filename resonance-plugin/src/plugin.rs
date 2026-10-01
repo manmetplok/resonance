@@ -25,6 +25,70 @@ pub trait ExtraStateSaver: Send + Sync {
     /// Implementations typically `state.get("my_key")` into their own
     /// shared storage.
     fn load(&self, state: &serde_json::Value);
+
+    /// Keys of [`save`](Self::save) that are part of the **sound** and
+    /// belong in a preset (plugin-preset-library.md §9.2): amp
+    /// `model_path`/`model_id`/`model_name`/`model_source`, ir `ir_path`,
+    /// wavetable `user_wavetables`, drums `kit_path` and its mic choices.
+    /// Keys not listed are session/UI state and stay out. Loading a
+    /// preset that lacks a listed key hands [`load`](Self::load) a state
+    /// without it, so absence means what it means for a project.
+    fn preset_keys(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// What a preset stores of this state: [`save`](Self::save) limited
+    /// to [`preset_keys`](Self::preset_keys). Override to write a
+    /// different form for presets (the amp drops the machine-local path
+    /// and keeps the content id).
+    fn save_for_preset(&self) -> serde_json::Map<String, serde_json::Value> {
+        let keys = self.preset_keys();
+        self.save()
+            .into_iter()
+            .filter(|(k, _)| keys.contains(&k.as_str()))
+            .collect()
+    }
+
+    /// The bridge hands the saver a callback to run whenever the loaded
+    /// preset identity or its modified flag changes (from any thread): it
+    /// asks the host for a main-thread callback, where the change is
+    /// reported (`com.resonance.preset-session`, CLAP `preset-load`
+    /// `loaded`). Only `PresetSession` uses it.
+    fn set_change_notifier(&self, _notify: Arc<dyn Fn() + Send + Sync>) {}
+
+    /// The identity to report to the host, as
+    /// `resonance_common::preset_session` JSON; `None` for a saver that
+    /// tracks no identity.
+    fn preset_report(&self) -> Option<String> {
+        None
+    }
+
+    /// The CLAP ids of the params the host automates, which a modified
+    /// comparison leaves out (plugin-preset-library.md D8).
+    fn set_ignored_params(&self, _clap_ids: Vec<u32>) {}
+
+    /// Compare the live params with the loaded preset now (unthrottled)
+    /// and update the modified flag: the bridge calls it on the main
+    /// thread after host param changes, when no editor frame is running
+    /// the comparison.
+    fn compare_preset_modified(&self, _params: &[&dyn crate::param::Param]) {}
+
+    /// A counter that changes whenever the sound-bearing extra state does
+    /// (a load, an edit), so the modified comparison can reuse its hash of
+    /// [`preset_compare_state`](Self::preset_compare_state) instead of
+    /// re-serialising it. `None` (the default) re-hashes on every compare,
+    /// which is fine for a few small keys; a saver with a large state (user
+    /// wavetables) implements it.
+    fn revision(&self) -> Option<u64> {
+        None
+    }
+
+    /// What the modified comparison hashes: by default the preset form of
+    /// the extra state. A saver whose preset form carries display-only
+    /// fields (a model's name next to its id) narrows it to the identity.
+    fn preset_compare_state(&self) -> serde_json::Map<String, serde_json::Value> {
+        self.save_for_preset()
+    }
 }
 
 /// Parameter text conversion that works while the plugin object is inside
@@ -405,6 +469,12 @@ pub trait ResonancePlugin: Send + 'static {
 
     /// Reset all internal state (e.g. delay lines, filters).
     fn reset(&mut self);
+
+    /// The host deactivated the plugin (`clap_plugin.deactivate`); the next
+    /// [`initialize`](Self::initialize) comes with the next activation.
+    /// A plugin that starts work from a state load while active (the drums'
+    /// kit loader) uses it to leave that work to `initialize` instead.
+    fn deactivate(&mut self) {}
 
     /// Process a buffer of audio.
     ///

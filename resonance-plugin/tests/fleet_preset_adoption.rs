@@ -154,7 +154,8 @@ fn no_editor_tracks_the_loaded_preset_itself() {
 // Factory preset files (plugin-preset-library.md P1)
 // ---------------------------------------------------------------------------
 
-use resonance_plugin::presets::{vocab, PresetFile, PresetMeta};
+use resonance_plugin::library_marks::vocab;
+use resonance_plugin::presets::{FactoryEntry, PresetFile, PresetLibrary, PresetMeta, Query};
 
 /// Every plugin crate (the audit's eleven plus color and stereo), with its
 /// `lib.rs` for the CLAP id.
@@ -282,9 +283,9 @@ fn every_factory_preset_is_a_complete_format_1_file() {
         let clap_id = clap_id_of(lib_rs);
         let entries = factory_entries(crate_name);
         let categories = if INSTRUMENT_PLUGINS.contains(crate_name) {
-            vocab::INSTRUMENT_CATEGORIES
+            vocab::CATEGORIES_INSTRUMENT
         } else {
-            vocab::EFFECT_CATEGORIES
+            vocab::CATEGORIES_EFFECT
         };
         let mut seen = std::collections::HashSet::new();
         for (id, name, file_name) in &entries {
@@ -374,4 +375,104 @@ fn every_factory_preset_is_a_complete_format_1_file() {
         total += entries.len();
     }
     assert_eq!(total, 95, "the audit counted 95 factory presets in 9 plugins");
+}
+
+/// Convergence (10)/(11): the preset library now searches with the shared
+/// engine (`library_view::BrowserModel`) and slugs with the shared
+/// `library_marks` rules. Every factory preset of the fleet must still be
+/// found by each of its own metadata values, through the facet filters
+/// and through the text syntax an agent or a browser types.
+#[test]
+fn every_factory_preset_matches_its_own_filters_after_the_swap() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../plugins");
+    let library = PresetLibrary::new();
+    let read = |crate_name: &str, file: &str| {
+        std::fs::read_to_string(root.join(crate_name).join("presets").join(file)).unwrap()
+    };
+    let mut checked = 0;
+    for (crate_name, lib_rs) in ALL_PLUGINS {
+        let clap_id = clap_id_of(lib_rs);
+        let entries = factory_entries(crate_name);
+        library.register_factory_entries(
+            clap_id,
+            entries.iter().map(|(id, name, file)| FactoryEntry {
+                id: id.clone(),
+                name: name.clone(),
+                json: read(crate_name, file),
+            }),
+        );
+        for (id, _, file) in &entries {
+            let at = format!("{crate_name}: {file}");
+            let meta = PresetFile::parse(&read(crate_name, file)).unwrap().meta;
+            let found = |q: Query| -> bool {
+                library
+                    .query(&q)
+                    .hits
+                    .iter()
+                    .any(|h| h.record.preset.id == *id)
+            };
+            let base = || Query::plugin(clap_id);
+            let text = |t: String| Query {
+                text: t,
+                ..base()
+            };
+            let category = meta.category.clone().unwrap();
+            let q = Query {
+                category: vec![category.to_lowercase()],
+                ..base()
+            };
+            assert!(found(q), "{at}: category");
+            assert!(found(text(format!("cat:{}", category.to_lowercase()))), "{at}: cat:");
+            // Scoped tokens match the value or a slug prefix, not any
+            // substring, and fold case.
+            assert!(found(text(format!("cat:{}", category.to_uppercase()))), "{at}: CAT:");
+            let inner: String = category.to_lowercase().chars().skip(1).collect();
+            if inner.len() >= 2 {
+                assert!(!found(text(format!("cat:{inner}"))), "{at}: cat:{inner} is no prefix");
+            }
+            for g in &meta.genres {
+                let q = Query {
+                    genres: vec![g.clone()],
+                    ..base()
+                };
+                assert!(found(q), "{at}: genre {g}");
+                assert!(found(text(format!("genre:{g}"))), "{at}: genre:{g}");
+                // `genre:rock` must not find `post-rock`.
+                if let Some((_, tail)) = g.rsplit_once('-') {
+                    let other = meta.genres.iter().any(|o| o.starts_with(tail));
+                    if !other {
+                        assert!(!found(text(format!("genre:{tail}"))), "{at}: genre:{tail}");
+                    }
+                }
+            }
+            for c in &meta.character {
+                let q = Query {
+                    character: vec![c.clone()],
+                    ..base()
+                };
+                assert!(found(q), "{at}: character {c}");
+                assert!(found(text(format!("char:{c}"))), "{at}: char:{c}");
+            }
+            for i in &meta.instrument {
+                let q = Query {
+                    instrument: vec![i.clone()],
+                    ..base()
+                };
+                assert!(found(q), "{at}: instrument {i}");
+                assert!(found(text(format!("for:{i}"))), "{at}: for:{i}");
+            }
+            for t in &meta.tags {
+                let q = Query {
+                    tags: vec![t.clone()],
+                    ..base()
+                };
+                assert!(found(q), "{at}: tag {t}");
+                assert!(found(text(format!("tag:{t}"))), "{at}: tag:{t}");
+            }
+            assert!(found(text(meta.name.clone())), "{at}: by name");
+            assert!(found(text("is:factory".into())), "{at}: is:factory");
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, 95);
 }

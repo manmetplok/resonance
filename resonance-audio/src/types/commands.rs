@@ -15,6 +15,15 @@ use super::{
 };
 use crate::quantize::{Division, GrooveTemplate, QuantizeMode};
 
+/// Where a preset lives, as `clap.preset-load` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginPresetLocation {
+    /// Inside the plugin: the load key names it (a factory preset id).
+    Plugin,
+    /// A file (a user preset, or a third-party plugin's preset file).
+    File(std::path::PathBuf),
+}
+
 /// Commands sent from the GUI to the audio engine.
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
@@ -576,6 +585,45 @@ pub enum AudioCommand {
     LoadPluginState {
         instance_id: PluginInstanceId,
         data: Vec<u8>,
+    },
+    /// Capture the state to store as a preset: the plugin's preset form
+    /// (`clap.state-context` `FOR_PRESET`) when it has one, else its full
+    /// state. Answered by `AudioEvent::PluginPresetStateSaved`
+    /// (plugin-preset-library.md §6.7, slice P2).
+    SavePluginPresetState {
+        instance_id: PluginInstanceId,
+    },
+    /// Recall a preset's state: laid over the current state by a plugin
+    /// with `clap.state-context` (`FOR_PRESET`, no reactivation), else a
+    /// full state load. The app has already set the params through
+    /// `SetPluginParam` so its mirror agrees; this carries the rest of
+    /// the sound (a model, an IR, user wavetables) and the identity.
+    ///
+    /// With `capture`, the plugin's full state is saved first, under the
+    /// same lock, and returned as `AudioEvent::PluginStateCaptured` with
+    /// that token: what an undo of the load (or an audition's revert)
+    /// puts back — the model, IR or user tables the preset replaced.
+    LoadPluginPresetState {
+        instance_id: PluginInstanceId,
+        data: Vec<u8>,
+        capture: Option<u64>,
+    },
+    /// Ask the plugin to load a preset it owns (`clap.preset-load`
+    /// `from_location`). The plugin reports it with `loaded()`, which
+    /// arrives as `AudioEvent::PluginPresetLoaded`.
+    /// `capture` as for `LoadPluginPresetState`.
+    LoadPluginPresetFromLocation {
+        instance_id: PluginInstanceId,
+        location: PluginPresetLocation,
+        load_key: Option<String>,
+        capture: Option<u64>,
+    },
+    /// The CLAP ids of the params the host automates on this instance: a
+    /// Resonance plugin leaves them out of its preset-modified comparison
+    /// (`com.resonance.preset-session`, D8). Ignored by other plugins.
+    SetPluginPresetIgnoredParams {
+        instance_id: PluginInstanceId,
+        clap_ids: Vec<u32>,
     },
     /// Open the plugin's editor window (requires CLAP_EXT_GUI).
     OpenPluginEditor {
