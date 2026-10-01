@@ -709,3 +709,40 @@ fn an_articulation_reload_waits_for_acting() {
     assert_eq!(generation(&plugin), before + 1);
     settle(&plugin);
 }
+
+/// A kit none of whose pieces lands on a pad (no `_meta.pads`, no Drummica
+/// names) fails its load with a reason, rather than "loading" as 30 silent
+/// pads.
+#[test]
+fn a_kit_with_no_mappable_piece_fails_to_load() {
+    let dir = std::env::temp_dir().join(format!("drums-unmappable-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = dir.join("drum_samples.json");
+    let wav = fixture("it_techno")
+        .parent()
+        .unwrap()
+        .join("../wavs/kick.wav");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "Mystery Drum": { "01_KickIn_T": {
+                "brand": "Test", "channel": "1", "mic": "M1", "position": "KickIn",
+                "rounds": { "RR01": { "Vel01": wav } }
+            } }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let err = match load_kit_from_manifest(
+        &manifest,
+        RATE,
+        DEFAULT_OVERHEAD_SETUP,
+        &no_choices(),
+        &[false; NUM_PADS],
+    ) {
+        Ok(_) => panic!("a kit with no mappable piece loaded"),
+        Err(e) => e,
+    };
+    assert_eq!(err, resonance_drums::kit_loader::NO_MAPPABLE_PADS);
+    let _ = std::fs::remove_dir_all(&dir);
+}

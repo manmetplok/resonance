@@ -396,6 +396,10 @@ pub fn load_kit_from_manifest(
     )
 }
 
+/// The error a [`load_kit`] of a kit with no piece on any pad returns.
+pub const NO_MAPPABLE_PADS: &str =
+    "no pads this plugin can map — the kit needs _meta.pads or Drummica piece names";
+
 /// The error a [`load_kit`] that was cancelled mid-decode returns.
 pub const LOAD_CANCELLED: &str = "load cancelled";
 
@@ -452,6 +456,11 @@ pub fn load_kit(
     let manifest: KitManifest =
         serde_json::from_value(raw).map_err(|e| format!("parse manifest pieces: {e}"))?;
     let kit_pads = KitPads::resolve(|piece| manifest.contains_key(piece), &meta);
+    // A kit none of whose pieces lands on a pad would "load" as 30 silent
+    // pads, replacing whatever played with nothing.
+    if !kit_pads.pads.iter().any(|pad| pad.present) {
+        return Err(NO_MAPPABLE_PADS.to_string());
+    }
 
     let kit_dir = manifest_path
         .parent()
