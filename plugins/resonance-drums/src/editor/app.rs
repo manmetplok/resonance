@@ -1,16 +1,15 @@
 //! The actual egui app: state and update/view orchestration for the drums editor.
 //!
 //! `DrumsEditorApp` is the `EditorApp` the runtime drives each frame. It
-//! paints the chrome (brand + tab bar + status bar) on the outside and the
-//! Pads body in the middle: the canonical two-column layout (pad list +
-//! per-pad detail) plus a bottom row of KIT and GLOBAL cards.
+//! paints the chrome (header, KIT pill bar, status bar) on the outside and
+//! the Pads body in the middle: the canonical two-column layout (pad list
+//! + per-pad detail) plus a bottom row of KIT and GLOBAL cards.
 //!
 //! Pads is the only view. The editor used to offer four more tabs, each
 //! rendering a placeholder that said the feature was not built yet —
 //! including Mics and Articulations, whose pickers already ship inside the
 //! pad inspector, so those two tabs denied features the plugin has. They
-//! were removed rather than left lying (ba todo #1327);
-//! `chrome::draw_tab_bar` points at where the pickers live.
+//! were removed rather than left lying (ba todo #1327).
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -37,6 +36,10 @@ pub(crate) struct DrumsEditorApp {
     /// Cached list of installed drum kits from the shared registry.
     pub(crate) installed_kits: Vec<InstalledItem>,
     installed_kits_refresh: u32,
+    /// The last kit load this editor started, so the kit pill can step
+    /// ◀/▶ from the kit on its way rather than the one it replaces
+    /// (`kit_browser::kit_path_for_stepping`).
+    pub(crate) requested_kit: Option<kit_browser::RequestedKit>,
     /// Displayed OUT meter level per channel. Rises instantly to the peak
     /// the audio thread published and falls back with a fixed decay, so
     /// the bar tracks real output instead of sitting dead.
@@ -68,6 +71,7 @@ impl DrumsEditorApp {
             download_panel: download_panel::DownloadPanelState::default(),
             installed_kits,
             installed_kits_refresh: 0,
+            requested_kit: None,
             out_meter: [0.0; 2],
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,

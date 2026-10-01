@@ -1,10 +1,12 @@
-//! Source-level guards for the editor's honesty rules.
+//! Guards for the editor's honesty rules: nothing drawn that does
+//! nothing, claims a feature that does not exist, or denies one that does.
 //!
-//! The plugin editors have no snapshot coverage (they need a live Wayland
-//! surface), so these tests assert over the editor sources themselves.
-//! That is coarse, but it does catch the exact regressions the audit found
-//! — a placeholder tab denying a feature that ships (ba todo #1327), a
-//! routing control claiming a mode the DSP has no notion of (#1270).
+//! Most of these assert over the editor sources. That is coarse, but it
+//! catches the exact regressions the audit found — a placeholder tab
+//! denying a feature that ships (ba todo #1327), a control whose click is
+//! thrown away (#1326). Where a headless frame can answer the question
+//! instead (`test_render_editor_frame`), it does: what is on screen is
+//! less brittle to check than what a comment says.
 
 const APP: &str = include_str!("../src/editor/app.rs");
 const CHROME: &str = include_str!("../src/editor/chrome.rs");
@@ -29,46 +31,108 @@ fn no_tab_says_coming_soon() {
     }
 }
 
-/// The editor has exactly one view (Pads), so there is nothing to switch
-/// it with: K0 removed the single-option `Pads` segmented control along
-/// with the rest of the chrome that looked interactive and did nothing
-/// (ba drums-plugin-rework.md §10). What's left to guard is that chrome
-/// never claims a view that does not exist.
+/// Mics and Articulations are pickers inside the pad inspector, and Mod
+/// and FX do not exist; chrome must never offer any of them as a view.
+///
+/// `"Pads"` is deliberately not on this list. The single-option `Pads`
+/// segmented control K0 removed was wrong because its click was thrown
+/// away, not because of its label — K5's `[Pads | Mix | Setup]` strip is
+/// a real view switch. That defect is what
+/// `no_control_discards_its_interaction` below catches, in any file.
 #[test]
 fn chrome_claims_no_view_that_does_not_exist() {
-    for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\"", "\"Pads\""] {
+    for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\""] {
         assert!(
             !CHROME.contains(absent),
-            "chrome still offers a {absent} tab — there is only one view, and it is not switched"
+            "chrome still offers a {absent} tab — that view does not exist"
         );
     }
 }
 
-/// No control in the body may throw its interaction away (ba todo
-/// #1326). `let _ = widgets::slider…` / `widgets::segmented…` is the
-/// exact shape the audit found four times in this file: a control that
-/// looks live, moves under the pointer, and changes nothing. Either it
-/// writes a parameter or it should not be drawn.
-///
-/// `chrome.rs` used to be exempt — its tab strip had a single tab, so its
-/// click had nowhere to go — but that discarded control is gone (K0), so
-/// every editor file is covered now.
+/// Every `widgets::…(…)` call in `src` whose result is thrown away:
+/// either `let _ = widgets::…` or a bare `widgets::…(…);` statement.
+/// A call that is the tail expression of a closure (`|ui| { widgets::…(…) }`)
+/// hands its result on, and is not flagged.
+fn discarded_widget_calls(src: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let bytes = src.as_bytes();
+    let mut from = 0;
+    while let Some(off) = src[from..].find("widgets::") {
+        let at = from + off;
+        from = at + "widgets::".len();
+        let line_start = src[..at].rfind('\n').map_or(0, |i| i + 1);
+        let line = &src[line_start..];
+        let line = &line[..line.find('\n').unwrap_or(line.len())];
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || trimmed.starts_with("use ") {
+            continue;
+        }
+        let before = src[..at].trim_end();
+        let let_discard = before.ends_with("let _ =");
+        let statement_start =
+            before.ends_with(';') || before.ends_with('{') || before.ends_with('}');
+        if !(let_discard || statement_start) {
+            continue;
+        }
+        // Find the call's closing paren and look at what follows it.
+        let Some(open) = src[at..].find('(').map(|i| at + i) else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let mut close = None;
+        for (i, &b) in bytes.iter().enumerate().skip(open) {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { continue };
+        if let_discard || src[close + 1..].trim_start().starts_with(';') {
+            found.push(line.trim().to_string());
+        }
+    }
+    found
+}
+
+/// No control in the editor may throw its interaction away (ba todo
+/// #1326). `let _ = widgets::slider…` / a bare `widgets::segmented(…);`
+/// is the exact shape the audit found four times in `app.rs` — a control
+/// that looks live, moves under the pointer, and changes nothing — and
+/// the single-option `Pads` tab in `chrome.rs` was the same thing.
+/// Either it writes something or it should not be drawn.
 #[test]
-fn no_control_in_the_body_discards_its_interaction() {
+fn no_control_discards_its_interaction() {
     for (name, src) in [
         ("app.rs", APP),
         ("chrome.rs", CHROME),
         ("pad_grid.rs", PAD_GRID),
+        ("pad_inspector.rs", PAD_INSPECTOR),
         ("download_panel.rs", DOWNLOAD_PANEL),
     ] {
-        for line in src.lines() {
-            let trimmed = line.trim_start();
-            assert!(
-                !trimmed.starts_with("let _ = widgets::"),
-                "{name}: a drawn control discards its interaction: {trimmed}"
-            );
-        }
+        let discarded = discarded_widget_calls(src);
+        assert!(
+            discarded.is_empty(),
+            "{name}: a drawn control discards its interaction: {discarded:?}"
+        );
     }
+}
+
+/// The checker above has to be able to fail.
+#[test]
+fn the_discarded_control_check_catches_both_shapes() {
+    let src = "fn f(ui: &mut Ui) {\n    let _ = widgets::slider_unipolar(ui, 1.0, 0.5);\n    \
+               widgets::segmented(\n        ui,\n        &[\"Pads\"],\n        0,\n    );\n}\n";
+    assert_eq!(discarded_widget_calls(src).len(), 2, "{src}");
+    let kept = "fn f(ui: &mut Ui) {\n    if let Some(v) = widgets::slider_unipolar(ui, 1.0, 0.5) {}\n    \
+                probed(ui, \"x\", |ui| {\n        widgets::segmented(ui, &[\"A\"], 0)\n    });\n}\n";
+    assert!(discarded_widget_calls(kept).is_empty(), "{kept}");
 }
 
 /// "preview" was the badge the GLOBAL card wore to admit its controls
@@ -141,14 +205,92 @@ fn the_download_overlay_backdrop_cannot_be_drawn_above_the_panel() {
     );
 }
 
-/// The doc comment used to describe a `Download Kits` button that did not
-/// exist — the real entry point was a ghost `Browse` button elsewhere
-/// (§1.2). Now that the real button is back, the doc comment has to name
-/// it correctly.
+/// The Download Kits overlay has a real, visible entry point: the
+/// header's "Download kits…" button. It used to be a ghost `Browse`
+/// button elsewhere whose overlay you then could not see (§1.2).
+#[cfg(feature = "editor")]
 #[test]
-fn the_module_doc_names_the_real_entry_point() {
-    assert!(
-        DOWNLOAD_PANEL.contains("Download kits…"),
-        "the doc comment should point at the real header button, not a stale name"
+fn the_download_overlay_has_a_visible_entry_point() {
+    use resonance_plugin::ResonancePlugin;
+    let plugin = resonance_drums::ResonanceDrums::new();
+    for size in [(960.0, 640.0), (780.0, 520.0)] {
+        let frame = resonance_drums::test_render_editor_frame(&plugin, size);
+        let button = frame
+            .texts
+            .iter()
+            .find(|t| t.text == "Download kits…")
+            .unwrap_or_else(|| panic!("no Download kits… button at {size:?}"));
+        assert!(
+            button.clip.contains_rect(button.rect) && frame.screen.contains_rect(button.rect),
+            "the Download kits… button is not fully visible at {size:?}: {:?} in {:?}",
+            button.rect,
+            button.clip
+        );
+    }
+}
+
+/// §6.1: the `DRUMS` label and the "N lit" PADS badge are decoration,
+/// and are gone.
+#[cfg(feature = "editor")]
+#[test]
+fn the_tab_bar_carries_no_decoration() {
+    use resonance_plugin::ResonancePlugin;
+    let plugin = resonance_drums::ResonanceDrums::new();
+    let frame = resonance_drums::test_render_editor_frame(&plugin, (960.0, 640.0));
+    for t in &frame.texts {
+        assert_ne!(t.text, "DRUMS", "the DRUMS label is back");
+        assert!(!t.text.ends_with(" lit"), "the lit badge is back: {:?}", t.text);
+    }
+}
+
+/// The KIT pill's ◀/▶ step from the kit on its way, not the one it
+/// replaces. `kit_path` is written only when a load succeeds, so stepping
+/// from it while a load ran made two quick ▶ clicks land on the same kit.
+#[cfg(feature = "editor")]
+#[test]
+fn kit_stepping_follows_the_load_in_flight() {
+    use std::path::PathBuf;
+    use std::sync::atomic::Ordering;
+
+    use resonance_drums::kit_loader::KitStatus;
+    use resonance_plugin::ResonancePlugin;
+
+    let plugin = resonance_drums::ResonanceDrums::new();
+    let bridge = &plugin.bridge;
+    let a = PathBuf::from("/kits/A/drum_samples.json");
+    let b = PathBuf::from("/kits/B/drum_samples.json");
+    let step =
+        |req: Option<(PathBuf, u64)>| resonance_drums::test_kit_path_for_stepping(bridge, req);
+
+    *bridge.kit_path.lock() = Some(a.clone());
+    *bridge.kit_status.lock() = KitStatus::Loaded {
+        name: "A".to_string(),
+        num_pads: 30,
+    };
+    assert_eq!(step(None), Some(a.clone()), "settled: the loaded kit");
+
+    // The editor asked for B; the loader has not published anything yet.
+    let generation = bridge.load_generation.load(Ordering::Acquire);
+    assert_eq!(
+        step(Some((b.clone(), generation))),
+        Some(b.clone()),
+        "B was just requested"
     );
+
+    // A newer load (not this editor's) superseded the request.
+    assert_eq!(
+        step(Some((b.clone(), generation + 1))),
+        Some(a.clone()),
+        "stale request"
+    );
+
+    // The loader says what it is loading, whoever asked.
+    *bridge.kit_status.lock() = KitStatus::Loading { path: b.clone() };
+    assert_eq!(step(None), Some(b.clone()), "B is loading");
+
+    // B failed: A is still the kit in place.
+    *bridge.kit_status.lock() = KitStatus::Error {
+        message: "boom".to_string(),
+    };
+    assert_eq!(step(Some((b, generation))), Some(a), "B failed to load");
 }

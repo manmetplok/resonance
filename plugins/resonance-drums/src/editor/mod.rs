@@ -2,8 +2,8 @@
 //!
 //! Layout: a chrome bar (Resonance / Drums brand, the preset bar, and the
 //! "Open kit file…" / "Download kits…" buttons) sits above a second bar
-//! carrying the PADS badge and the KIT preset pill (◀ name ▶). Pads is
-//! the editor's only view, so there is no tab strip to switch it with.
+//! carrying the KIT pill (◀ name ▶). Pads is the editor's only view, so
+//! there is no tab strip to switch it with.
 //! The central body is a fixed-height KIT + GLOBAL card row at the
 //! bottom and, above it, the two-column pad list + pad detail, each
 //! scrolling independently so the window can be resized down to its
@@ -342,4 +342,17 @@ pub fn test_run_download_panel_frame(
     let _settle = session.frame(Vec::new());
     let shapes = session.frame(events);
     (session.is_open(), shapes)
+}
+
+/// Test-only: which kit the KIT pill's ◀/▶ step from, given `bridge` and
+/// the editor's last load request (`(manifest, load generation)`) —
+/// `kit_browser` is private outside this crate.
+#[doc(hidden)]
+pub fn test_kit_path_for_stepping(
+    bridge: &crate::KitBridge,
+    requested: Option<(std::path::PathBuf, u64)>,
+) -> Option<std::path::PathBuf> {
+    let requested =
+        requested.map(|(path, generation)| kit_browser::RequestedKit { path, generation });
+    kit_browser::kit_path_for_stepping(bridge, requested.as_ref())
 }
