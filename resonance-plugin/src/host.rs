@@ -72,6 +72,11 @@ pub struct HostHandle {
     /// host has not been told. Set from any thread (the session's
     /// notifier), consumed on the main thread.
     preset_dirty: AtomicBool,
+    /// The plugin changed parameter values (or their text) itself and the
+    /// host has not been asked to re-read them yet. Set from any thread,
+    /// consumed on the main thread (`clap_host_params.rescan` is
+    /// `[main-thread]`).
+    params_rescan: AtomicBool,
 }
 
 impl HostHandle {
@@ -90,6 +95,7 @@ impl HostHandle {
             latency_dirty: AtomicBool::new(false),
             gui_closed: AtomicU64::new(0),
             preset_dirty: AtomicBool::new(false),
+            params_rescan: AtomicBool::new(false),
         })
     }
 
@@ -143,6 +149,22 @@ impl HostHandle {
     /// Ask the host to activate the plugin and start processing.
     pub fn request_process(&self) {
         self.with_host(|host| host.request_process());
+    }
+
+    /// Tell the host that parameter values — or the text they display —
+    /// changed without it writing them: a read-only output moved (a load
+    /// progress), or the plugin set a parameter from its own state. The
+    /// bridge calls `clap_host_params.rescan(VALUES | TEXT)` on its next
+    /// main-thread callback, which is when a host re-reads its mirror.
+    ///
+    /// Realtime-safe, like [`Self::set_latency_samples`]: one atomic swap,
+    /// and the host's `[thread-safe]` callback request only when no
+    /// rescan is pending already. Callers that change a value often
+    /// should still throttle (a progress per percent, not per file).
+    pub fn request_params_rescan(&self) {
+        if !self.params_rescan.swap(true, Ordering::AcqRel) {
+            self.request_callback();
+        }
     }
 
     /// Ask the host to call the plugin back on the main thread.
@@ -202,6 +224,11 @@ impl HostHandle {
         if !self.preset_dirty.swap(true, Ordering::AcqRel) {
             self.request_callback();
         }
+    }
+
+    /// Take the "parameter values changed under the host" flag.
+    pub(crate) fn take_params_rescan(&self) -> bool {
+        self.params_rescan.swap(false, Ordering::AcqRel)
     }
 
     /// Take the "preset identity changed" flag.

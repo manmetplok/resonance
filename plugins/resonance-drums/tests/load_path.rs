@@ -1060,19 +1060,23 @@ fn saving_mid_decode_persists_the_kit_being_loaded() {
         reload: Some(plugin.bridge.clone()),
     };
     let saved = saver.save();
-    assert_eq!(
-        saved.get("kit_path").and_then(|v| v.as_str()),
-        Some(b.manifest.to_string_lossy().as_ref())
-    );
+    let abs = |key: &str| {
+        saved
+            .get(key)
+            .and_then(|r| r.get("abs_path"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    };
+    assert_eq!(abs("kit_ref"), Some(b.manifest.to_string_lossy().into_owned()));
     // …and, while the pick may still fail, the kit that loaded last.
     assert_eq!(
-        saved.get("kit_path_fallback").and_then(|v| v.as_str()),
-        Some(a.manifest.to_string_lossy().as_ref())
+        abs("kit_ref_fallback"),
+        Some(a.manifest.to_string_lossy().into_owned())
     );
     go.send(()).unwrap();
     settle(&plugin);
     // Settled: nothing to fall back to.
-    assert!(saver.save().get("kit_path_fallback").is_none());
+    assert!(saver.save().get("kit_ref_fallback").is_none());
 }
 
 fn saver_for(plugin: &ResonanceDrums) -> DrumsExtraState {

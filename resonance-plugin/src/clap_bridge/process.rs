@@ -117,7 +117,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
                     CoreEventSpace::ParamValue(e) => {
                         if let Some(clap_id) = e.param_id() {
                             let value = e.value();
-                            if let Some(slot) = self.shared.find_slot(clap_id.get()) {
+                            if let Some(slot) = self
+                                .shared
+                                .find_slot(clap_id.get())
+                                .filter(|&s| !self.shared.param_metas[s].is_read_only)
+                            {
                                 // Applied instantly, block-quantized — the
                                 // bridge does not smooth automation. Plugins
                                 // de-zipper by feeding their `Smoother`s from
@@ -211,7 +215,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         let publish_gen = self.shared.param_publish_gen();
         if publish_gen & 1 == 0 && self.shared.params_dirty.swap(false, Ordering::Acquire) {
             for i in 0..self.plugin.param_count() {
-                if i < self.shared.param_values.len() {
+                // A state-excluded param was not loaded: its atomic holds
+                // the plugin's last value, which the plugin may since have
+                // moved itself (from the very state being loaded).
+                if i < self.shared.param_values.len() && !self.shared.param_metas[i].state_excluded
+                {
                     self.plugin.param(i).set_plain(self.shared.get_value(i));
                 }
             }
@@ -601,7 +609,12 @@ fn reconcile_params<P: ResonancePlugin>(plugin: &P, shared: &ClapShared<'_>) {
     let count = plugin.param_count().min(shared.param_values.len());
     if shared.params_dirty.swap(false, Ordering::AcqRel) {
         for i in 0..count {
-            plugin.param(i).set_plain(shared.get_value(i));
+            if shared.param_metas[i].state_excluded {
+                // Not part of any load: the plugin's value is the newer.
+                shared.set_value(i, plugin.param(i).get_plain());
+            } else {
+                plugin.param(i).set_plain(shared.get_value(i));
+            }
         }
     } else {
         for i in 0..count {

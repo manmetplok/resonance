@@ -38,6 +38,7 @@ use crate::KitBridge;
 use super::jobs::{JobDone, JobKind, Jobs, Picker};
 use super::kit_browser::{self, LoadKind};
 use super::library_panel::{self, LibraryPanelState};
+use super::missing_kit::{self, MissingKitState};
 use super::{chrome, pad_grid, pad_inspector, theme};
 
 pub(crate) struct DrumsEditorApp {
@@ -98,6 +99,8 @@ pub(crate) struct DrumsEditorApp {
     pub(crate) presets: Arc<resonance_plugin::presets::PresetSession>,
     /// Transient bar state (open combo, in-progress rename), editor-only.
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
+    /// The missing-kit banner's state (§5.3).
+    pub(crate) missing_kit: MissingKitState,
 }
 
 impl DrumsEditorApp {
@@ -133,6 +136,7 @@ impl DrumsEditorApp {
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
+            missing_kit: MissingKitState::default(),
         };
         // Opening an editor is when the library is brought up to date: on
         // the job thread, so the first frame is not held up by hashing.
@@ -284,8 +288,15 @@ impl DrumsEditorApp {
     /// Apply a finished background job, and a closed import dialog; then
     /// start what was queued behind it.
     pub(crate) fn poll_jobs(&mut self) {
-        if let Some(Some(src)) = self.picker.poll() {
-            self.run_or_queue(Queued::Import(src));
+        if let Some(answer) = self.picker.poll() {
+            // One picker serves the Library's import and the missing-kit
+            // banner's Locate; the banner said which it opened it for.
+            let locating = std::mem::take(&mut self.missing_kit.locating);
+            match (answer, locating) {
+                (Some(dir), true) => missing_kit::picked(self, dir),
+                (Some(src), false) => self.run_or_queue(Queued::Import(src)),
+                (None, _) => {}
+            }
         }
         if let Some(done) = self.jobs.poll() {
             self.apply_job(done);
@@ -305,7 +316,10 @@ impl DrumsEditorApp {
     }
 
     pub(crate) fn apply_job(&mut self, done: JobDone) {
-        let wrote = !matches!(done, JobDone::CheckedFiles { .. });
+        let wrote = !matches!(done, JobDone::CheckedFiles { .. } | JobDone::Located { .. });
+        // An import started by the missing-kit banner's Locate.
+        let relinking = matches!(done, JobDone::Imported(_))
+            && std::mem::take(&mut self.missing_kit.relinking);
         match done {
             JobDone::Rescanned {
                 result,
@@ -358,11 +372,23 @@ impl DrumsEditorApp {
                                 )),
                             }
                         }
+                        // Relinking a missing kit: the folder is (now) in
+                        // the library either way, and is what to play.
+                        ImportOutcome::AlreadyPresent(e) if relinking => {
+                            let entry = self
+                                .library
+                                .read()
+                                .entry(&e.id)
+                                .cloned()
+                                .unwrap_or_else(|| e.clone());
+                            self.load_entry(&entry, LoadKind::Pick);
+                        }
                         ImportOutcome::AlreadyPresent(e) => self
                             .browser
                             .set_info(format!("\"{}\" is already in the library", e.name)),
                     }
                 }
+                Err(e) if relinking => self.missing_kit.error = Some(e),
                 Err(e) => self.browser.set_error(e),
             },
             JobDone::Deleted {
@@ -397,6 +423,7 @@ impl DrumsEditorApp {
                 }
                 Err(e) => tracing::warn!("missing-files check of {id}: {e}"),
             },
+            JobDone::Located { dir, id } => missing_kit::located(self, dir, id),
         }
         if wrote {
             self.rebaseline_library_poll();
@@ -489,6 +516,10 @@ impl DrumsEditorApp {
         self.rebaseline_library_poll();
         for installed in new {
             if !self.my_downloads.remove(&installed.name) {
+                continue;
+            }
+            // The missing-kit banner's download: play it.
+            if missing_kit::installed(self, &installed.name, &installed.id) {
                 continue;
             }
             self.refresh_rows();
@@ -688,6 +719,12 @@ fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 });
             });
         });
+
+    // A missing kit says so over the pad area, with what to do about it
+    // (§5.3), before the pad list and inspector share the rest.
+    if missing_kit::draw(ui, app) {
+        ui.add_space(gap);
+    }
 
     // Top row shares whatever height is left after the bottom row above.
     // `right_w` is floored at zero, not at some comfortable minimum: a

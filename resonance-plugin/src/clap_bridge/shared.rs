@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::gui::HostGui;
 use clack_extensions::latency::HostLatency;
+use clack_extensions::params::{HostParams, ParamRescanFlags};
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
@@ -38,6 +39,13 @@ pub(crate) struct ParamMeta {
     /// [`crate::param::Param::preset_excluded`], for the preset form of
     /// the state while the plugin is in the audio processor.
     pub preset_excluded: bool,
+    /// [`crate::param::Param::is_automatable`]: CLAP `IS_AUTOMATABLE`.
+    pub is_automatable: bool,
+    /// [`crate::param::Param::is_read_only`]: CLAP `IS_READONLY`.
+    pub is_read_only: bool,
+    /// [`crate::param::Param::state_excluded`], for the state written and
+    /// read while the plugin is in the audio processor.
+    pub state_excluded: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +319,11 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
     ///   host stops showing the editor as open and destroys it (PLG-01). A
     ///   report from an editor that is no longer the current one — the host
     ///   destroyed it, and perhaps created another, before this ran — is
-    ///   dropped.
+    ///   dropped;
+    /// * the params one: a plugin that moved parameter values itself (a
+    ///   read-only progress output, a selection it derived from its state)
+    ///   asks through `HostHandle::request_params_rescan`, and here the
+    ///   host is told to re-read them (`clap_host_params.rescan`).
     fn on_main_thread(&mut self) {
         if self.host_handle.take_latency_dirty() {
             if let Some(latency) = self.host.shared().get_extension::<HostLatency>() {
@@ -331,6 +343,14 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
         }
         if self.host_handle.take_preset_dirty() {
             self.report_preset_identity();
+        }
+        if self.host_handle.take_params_rescan() {
+            if let Some(params) = self.host.shared().get_extension::<HostParams>() {
+                params.rescan(
+                    &mut self.host,
+                    ParamRescanFlags::VALUES | ParamRescanFlags::TEXT,
+                );
+            }
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {
             if serial == self.editor_serial && self.editor.is_some() {

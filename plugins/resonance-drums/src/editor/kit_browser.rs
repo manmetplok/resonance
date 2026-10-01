@@ -2,10 +2,10 @@
 //!
 //! [`load_library_kit`] is **the** entry point every kit pick in the editor
 //! goes through — the header's kit dropdown and ◀/▶, the Library overlay's
-//! Load and double-click. Today it starts the loader thread on the entry's
-//! manifest; K4 (drums-plugin-rework.md §5.1) swaps its body for a write of
-//! the `kit_select` slot parameter, and nothing else in the editor has to
-//! change.
+//! Load and double-click, the missing-kit banner's relink. It writes the
+//! `kit_select` slot parameter (drums-plugin-rework.md §5.1) and acts on it
+//! at once ([`selection::select_now`]): the same path a host or the control
+//! API takes, so the pick is the parameter's value and a host can undo it.
 //!
 //! Also here: which kit the editor treats as current while a load is in
 //! flight, and the kit-status formatter.
@@ -13,10 +13,11 @@
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use resonance_common::drumkit_library::{Entry, EntryStatus};
+use resonance_common::drumkit_library::Entry;
 
-use crate::kit_loader::{self, KitStatus};
+use crate::kit_loader::KitStatus;
 use crate::library::SharedKitLibrary;
+use crate::selection::{self, StartedLoad};
 use crate::KitBridge;
 
 /// Whether a load is a user **pick** (a dropdown row, a Library Load) —
@@ -81,20 +82,19 @@ pub(crate) fn load_library_kit(
     entry: &Entry,
     kind: LoadKind,
 ) -> Result<RequestedKit, String> {
-    match &entry.status {
-        EntryStatus::ManifestError(reason) => {
-            return Err(format!("\"{}\" cannot be loaded: {reason}", entry.name))
-        }
-        EntryStatus::DuplicateOf(dir) => {
-            return Err(format!(
-                "\"{}\" is a copy of the kit in {}; load that one",
-                entry.name,
-                dir.display()
-            ))
-        }
-        EntryStatus::Ok | EntryStatus::MissingFiles(_) => {}
-    }
-    let requested = spawn(bridge, entry.manifest_path.clone())?;
+    selection::loadable(entry)?;
+    let requested = match entry.slot {
+        Some(slot) => match selection::select_now(bridge, slot as i32) {
+            Ok(Some(started)) => requested(started),
+            // The shared library has no kit in that slot any more (the
+            // row is from a snapshot the index has moved on from): load
+            // the entry by its manifest.
+            _ => spawn(bridge, entry.manifest_path.clone())?,
+        },
+        // No slot to write (the library holds every kit it lists in one;
+        // this is a row the index has not slotted yet): by manifest.
+        None => spawn(bridge, entry.manifest_path.clone())?,
+    };
     if kind == LoadKind::Pick {
         if let Err(e) = library.record_use(&entry.id) {
             tracing::warn!("could not record the kit pick: {e}");
@@ -103,34 +103,19 @@ pub(crate) fn load_library_kit(
     Ok(requested)
 }
 
-/// Start the loader on `manifest_path` and say what was asked for.
-fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
-    // Refuse to spawn a loader before the host has activated the
-    // plugin — without a sample rate we'd decode at the wrong pitch.
-    let sr_bits = bridge.sample_rate.load(Ordering::Acquire);
-    if sr_bits == 0 {
-        let message = "plugin not yet activated by host".to_string();
-        *bridge.kit_status.lock() = KitStatus::Error {
-            message: message.clone(),
-        };
-        return Err(message);
+fn requested(started: StartedLoad) -> RequestedKit {
+    RequestedKit {
+        path: started.path,
+        generation: started.generation,
     }
-    let target_sr = f32::from_bits(sr_bits);
-    let overhead_key = bridge.overhead_setup_key.lock().clone();
-    let choices = bridge.pad_choices.lock().clone();
-    let articulations = bridge.articulations();
-    kit_loader::spawn_loader(
-        manifest_path.clone(),
-        target_sr,
-        bridge,
-        overhead_key,
-        choices,
-        articulations,
-    );
-    Ok(RequestedKit {
-        path: manifest_path,
-        generation: bridge.load_generation.load(Ordering::Acquire),
-    })
+}
+
+/// Load `manifest_path` with no slot to name it by: `kit_select` parks at
+/// "none", and the kit is loaded now — or, before the host activated the
+/// plugin, at activation.
+fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
+    selection::park_unslotted(bridge, &manifest_path);
+    Ok(requested(selection::start_kit(bridge, manifest_path)))
 }
 
 pub(super) fn format_kit_status(status: &KitStatus) -> String {

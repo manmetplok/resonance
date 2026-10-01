@@ -194,6 +194,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 is_stepped: p.is_stepped(),
                 is_hidden: p.is_hidden(),
                 preset_excluded: p.preset_excluded(),
+                is_automatable: p.is_automatable() && !p.is_read_only(),
+                is_read_only: p.is_read_only(),
+                state_excluded: p.state_excluded(),
             });
             param_values.push(AtomicU64::new(p.default_plain().to_bits()));
             clap_id_to_slot.insert(clap_id, i);

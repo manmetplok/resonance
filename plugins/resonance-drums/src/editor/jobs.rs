@@ -48,6 +48,12 @@ pub(crate) enum JobDone {
         id: String,
         result: Result<usize, String>,
     },
+    /// A folder picked to relink a missing kit, with its manifest's id
+    /// (or why it holds no kit) — `missing_kit.rs` decides what next.
+    Located {
+        dir: PathBuf,
+        id: Result<String, String>,
+    },
 }
 
 /// What kind of job is running. A [`JobKind::Check`] is a quick `stat`
@@ -196,6 +202,8 @@ impl Drop for Jobs {
 pub(crate) enum PickKind {
     Folder,
     Zip,
+    /// The missing-kit banner's `Locate folder…`.
+    MissingKitFolder,
 }
 
 /// The import's file dialog, on its own thread. Dropped (the editor
@@ -226,6 +234,9 @@ impl Picker {
                     .set_title("Import a drum kit .zip")
                     .add_filter("Drum kit archive", &["zip"])
                     .pick_file(),
+                PickKind::MissingKitFolder => rfd::FileDialog::new()
+                    .set_title("Locate the missing drum kit's folder")
+                    .pick_folder(),
             });
         match spawned {
             Ok(h) => {

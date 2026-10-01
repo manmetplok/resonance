@@ -9,20 +9,39 @@ use resonance_drums::{drum_map, DrumsExtraState, ResonanceDrums};
 use resonance_plugin::plugin::ExtraStateSaver;
 use resonance_plugin::ResonancePlugin;
 
+/// A manifest file that exists, in a directory of its own: a state's kit
+/// reference resolves only to a file that is there (a reference to
+/// nothing is a missing kit — `kit_library.rs`). Its content does not
+/// matter to these tests, which never decode it.
+fn manifest(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-state-{}-{}-{tag}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("drum_samples.json");
+    std::fs::write(&path, b"{}").unwrap();
+    path
+}
+
 /// save_state -> load_state round-trip preserves a kit path.
 /// Exercises the main-thread path where the host calls save_state /
 /// load_state on the owned plugin instance.
 #[test]
 fn state_roundtrip_preserves_kit_path() {
+    let kit = manifest("roundtrip");
     let src = ResonanceDrums::new();
-    *src.bridge.kit_path.lock() = Some(PathBuf::from("/some/kit/drum_samples.json"));
+    *src.bridge.kit_path.lock() = Some(kit.clone());
 
     let bytes = src.save_state();
 
     let mut dst = ResonanceDrums::new();
     assert!(dst.load_state(&bytes));
     let restored = dst.bridge.kit_path.lock().clone();
-    assert_eq!(restored, Some(PathBuf::from("/some/kit/drum_samples.json")));
+    assert_eq!(restored, Some(kit));
 }
 
 /// save_state with no kit followed by load_state clears any prior path.
@@ -77,8 +96,8 @@ fn make_saver_bundle(initial_path: Option<PathBuf>) -> SaverBundle {
 fn extra_saver_roundtrip_active_path() {
     // Construct the saver the same way editor_factory / new() would,
     // holding shared arcs for each persisted field.
-    let (_kp, _oh, _pc, _art, saver) =
-        make_saver_bundle(Some(PathBuf::from("/active/path/drum_samples.json")));
+    let kit = manifest("active");
+    let (_kp, _oh, _pc, _art, saver) = make_saver_bundle(Some(kit.clone()));
 
     // Serialize — this is what clap_bridge::save() would do on the
     // plugin-is-None branch.
@@ -95,8 +114,8 @@ fn extra_saver_roundtrip_active_path() {
 
     assert_eq!(
         *restored_path.lock(),
-        Some(PathBuf::from("/active/path/drum_samples.json")),
-        "kit_path should round-trip through the saver"
+        Some(kit),
+        "the kit should round-trip through the saver"
     );
 }
 
@@ -106,7 +125,7 @@ fn extra_saver_null_clears_active_path() {
     let (kit_path, _, _, _, saver) = make_saver_bundle(Some(PathBuf::from("/stale.json")));
 
     // State without a kit_path (simulating a save with no kit loaded).
-    let state = serde_json::json!({ "params": {}, "kit_path": serde_json::Value::Null });
+    let state = serde_json::json!({ "params": {}, "kit_ref": serde_json::Value::Null });
     saver.load(&state);
     assert_eq!(*kit_path.lock(), None);
 }
@@ -223,10 +242,11 @@ fn a_preset_load_reloads_the_kit_it_names_and_keeps_it_when_it_names_none() {
     let generation = move || stamps.load(std::sync::atomic::Ordering::Acquire);
     let g0 = generation();
 
+    let other = manifest("other-kit");
     let with_kit = serde_json::json!({
         "version": 1,
         "params": {},
-        "kit_path": "/nonexistent/other-kit/drum_samples.json",
+        "kit_ref": { "abs_path": other.to_string_lossy() },
     });
     assert!(drums.load_state(&serde_json::to_vec(&with_kit).unwrap()));
     let g1 = generation();
@@ -235,8 +255,8 @@ fn a_preset_load_reloads_the_kit_it_names_and_keeps_it_when_it_names_none() {
     let params_only = serde_json::json!({"version": 1, "params": {}});
     assert!(drums.load_state(&serde_json::to_vec(&params_only).unwrap()));
     assert_eq!(
-        drums.bridge.kit_path.lock().clone(),
-        Some(PathBuf::from("/nonexistent/other-kit/drum_samples.json")),
+        drums.bridge.wanted_kit_path(),
+        Some(other.clone()),
         "a preset without a kit keeps the kit"
     );
     let g2 = generation();
@@ -273,7 +293,7 @@ fn a_full_state_reload_loads_the_kit_once() {
     let state = serde_json::json!({
         "version": 1,
         "params": {},
-        "kit_path": "/nonexistent/reload-kit/drum_samples.json",
+        "kit_ref": { "abs_path": manifest("reload-kit").to_string_lossy() },
     });
     assert!(drums.load_state(&serde_json::to_vec(&state).unwrap()));
     assert_eq!(generation(), g0, "inactive: the load only records the kit");

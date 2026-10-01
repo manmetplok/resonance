@@ -188,6 +188,11 @@ static ROOT_OVERRIDE: OnceLock<Roots> = OnceLock::new();
 /// else the platform's. The process-wide library's downloads outlive the
 /// editor that started them while the process has drum instances.
 fn default_roots() -> Roots {
+    // A build with the test hooks is a test build: every drums instance
+    // opens the library lazily (its `kit_select` text, a state's kit
+    // reference), and no test may read or write the user's data dir.
+    #[cfg(feature = "test-hooks")]
+    test_hooks::isolate_for_tests();
     if let Some(roots) = ROOT_OVERRIDE.get() {
         return roots.clone();
     }
@@ -413,6 +418,12 @@ impl SharedKitLibrary {
     /// Read access. Never call from the audio thread.
     pub fn read(&self) -> RwLockReadGuard<'_, Library> {
         self.lib.read()
+    }
+
+    /// [`read`](Self::read), or `None` at once while a writer swaps the
+    /// index in — for callers that must not wait (a parameter's text).
+    pub fn try_read(&self) -> Option<RwLockReadGuard<'_, Library>> {
+        self.lib.try_read()
     }
 
     /// Changes whenever the entries change in this process.
