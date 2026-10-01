@@ -24,7 +24,7 @@
 use std::collections::BTreeMap;
 
 use crate::drum_map::NUM_PADS;
-use crate::kit_loader::banks::{is_bleed_position, is_overhead_position, is_room_position};
+use crate::kit_loader::banks::MicKinds;
 use crate::kit_loader::KitManifest;
 use crate::pad_map::KitPads;
 
@@ -60,6 +60,9 @@ pub struct ManifestMicCatalog {
     /// The kit's bleed positions (see [`BleedSource`]); filled by
     /// [`with_bleed`](Self::with_bleed), which knows the pads.
     pub bleed: Vec<BleedSource>,
+    /// What each position is (the kit's `_meta.mic_kinds`, else a guess
+    /// from the name).
+    pub kinds: MicKinds,
 }
 
 impl ManifestMicCatalog {
@@ -87,13 +90,16 @@ impl ManifestMicCatalog {
             positions,
             setups,
             bleed: Vec::new(),
+            kinds: MicKinds::default(),
         }
     }
 
     /// [`from_manifest`](Self::from_manifest) plus the kit's bleed sources,
-    /// given which piece each pad plays (`pads`).
-    pub fn with_bleed(manifest: &KitManifest, pads: &KitPads) -> Self {
+    /// given which piece each pad plays (`pads`) and what each mic
+    /// position is (`kinds`).
+    pub fn with_bleed(manifest: &KitManifest, pads: &KitPads, kinds: &MicKinds) -> Self {
         let mut catalog = Self::from_manifest(manifest);
+        catalog.kinds = kinds.clone();
         let mut bleed: BTreeMap<String, BleedSource> = BTreeMap::new();
         for pad in 0..NUM_PADS {
             for alt in [false, true] {
@@ -101,7 +107,7 @@ impl ManifestMicCatalog {
                     continue;
                 };
                 for (key, setup) in piece {
-                    if !is_bleed_position(pad, &setup.position) {
+                    if !kinds.is_bleed(pad, &setup.position) {
                         continue;
                     }
                     let source =
@@ -127,13 +133,13 @@ impl ManifestMicCatalog {
     /// All overhead setup keys, in position then manifest order: what an
     /// overhead slot (E15: up to three at once) can play.
     pub fn overhead_setups(&self) -> Vec<String> {
-        self.setups_where(is_overhead_position)
+        self.setups_where(|position| self.kinds.is_overhead(position))
     }
 
-    /// All room setup keys (positions `Room*`): what the room bank can
+    /// All room setup keys (see [`MicKinds::is_room`]): what the room bank can
     /// play. Empty for a kit without room mics.
     pub fn room_setups(&self) -> Vec<String> {
-        self.setups_where(is_room_position)
+        self.setups_where(|position| self.kinds.is_room(position))
     }
 
     /// All setup keys for a specific close-mic position (e.g. `"KickIn"`).

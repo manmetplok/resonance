@@ -107,8 +107,9 @@ pub struct PadRequest {
 pub fn piece_uses_overhead_key(
     piece: &std::collections::BTreeMap<String, MicSetup>,
     key: &str,
+    kinds: &banks::MicKinds,
 ) -> bool {
-    piece.contains_key(key) || piece.values().any(|setup| setup.position.starts_with("OH"))
+    piece.contains_key(key) || piece.values().any(|setup| kinds.is_overhead(&setup.position))
 }
 
 /// The manifest file as it was when a kit was built from it, so a reload
@@ -477,7 +478,10 @@ pub fn load_kit(
         .parent()
         .ok_or_else(|| "manifest path has no parent directory".to_string())?;
 
-    let catalog = ManifestMicCatalog::with_bleed(&manifest, &kit_pads);
+    // What each mic position is: the kit's `_meta.mic_kinds`, else a
+    // guess from its name (E15).
+    let kinds = banks::MicKinds::from_meta(&meta);
+    let catalog = ManifestMicCatalog::with_bleed(&manifest, &kit_pads, &kinds);
 
     // 1. Plan: reuse, absent (D7: silent, never the built-in sample), or
     // the piece's banks per pad.
@@ -496,7 +500,9 @@ pub fn load_kit(
                 .piece_for(i, request.articulations[i])
                 .and_then(|piece| manifest.get(piece));
             let has_overhead = piece
-                .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
+                .is_some_and(|piece| {
+                    piece_uses_overhead_key(piece, &request.overhead_setup_key, &kinds)
+                });
             let mut pad = request.pad_request(i, has_overhead);
             if let Some(piece) = piece {
                 pad.extra_banks = banks::resolve_extra_banks(
@@ -505,6 +511,7 @@ pub fn load_kit(
                     &request.overhead_setup_key,
                     &request.pad_choices,
                     &request.banks,
+                    &kinds,
                 );
             }
             // The parameter only means something on a pad the kit pairs:
@@ -556,12 +563,13 @@ pub fn load_kit(
         }
         // Overhead bank: look up the global overhead setup key directly. If
         // the piece doesn't have that specific setup, fall back to any
-        // OH-prefixed setup the piece does have so the pad still makes sound.
+        // overhead setup the piece does have so the pad still makes sound.
         let overhead = plan_overhead_bank(
             piece_name,
             piece,
             kit_dir,
             &request.overhead_setup_key,
+            &kinds,
             &mut jobs,
         )?;
         // The E15 banks, as the pad's request resolved them.

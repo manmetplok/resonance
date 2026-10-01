@@ -91,12 +91,14 @@ pub(super) fn plan_bank_for_position(
 }
 
 /// Plan the overhead bank for a piece using the globally selected OH
-/// setup key, falling back to any OH-prefixed setup the piece supplies.
+/// setup key, falling back to any overhead setup the piece supplies
+/// (`kinds` says which those are).
 pub(super) fn plan_overhead_bank(
     piece_name: &str,
     piece: &BTreeMap<String, MicSetup>,
     kit_dir: &Path,
     overhead_setup_key: &str,
+    kinds: &super::banks::MicKinds,
     jobs: &mut Jobs,
 ) -> Result<Option<BankPlan>, String> {
     let chosen = piece
@@ -105,7 +107,7 @@ pub(super) fn plan_overhead_bank(
         .or_else(|| {
             piece
                 .iter()
-                .find(|(_, setup)| setup.position.starts_with("OH"))
+                .find(|(_, setup)| kinds.is_overhead(&setup.position))
                 .map(|(k, v)| (k.clone(), v))
         });
     let Some((setup_key, setup)) = chosen else {

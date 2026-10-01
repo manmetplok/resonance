@@ -19,7 +19,9 @@ use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::kit::{
     BankKind, LoadedPad, MAIN_PORT_INDEX, NUM_OUTPUT_PORTS, OVERHEAD_PORT_INDEX,
 };
-use resonance_drums::kit_loader::banks::{resolve_extra_banks, BankRequest, MicBankSetups};
+use resonance_drums::kit_loader::banks::{
+    resolve_extra_banks, BankRequest, MicBankSetups, MicKinds,
+};
 use resonance_drums::kit_loader::{
     spawn_loader, KitStatus, LoadStats, MicSetup, PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
@@ -451,6 +453,7 @@ fn bleed_follows_the_owning_pads_mic_pick() {
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let mut choices: Vec<PadMicChoices> = (0..NUM_PADS).map(|_| PadMicChoices::default()).collect();
+    let kinds = MicKinds::default();
     let banks = BankRequest {
         setups: MicBankSetups {
             extra_overheads: ["25_OHsXY".to_string(), "23_OHsAB_e914".to_string()],
@@ -460,7 +463,7 @@ fn bleed_follows_the_owning_pads_mic_pick() {
         room: true,
     };
     let resolve = |choices: &[PadMicChoices]| {
-        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, choices, &banks)
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, choices, &banks, &kinds)
     };
     // Slot 3 names slot 1's setup: not played twice. No room setup in
     // the piece: no room bank.
@@ -483,10 +486,14 @@ fn bleed_follows_the_owning_pads_mic_pick() {
         setups: banks.setups.clone(),
         ..BankRequest::default()
     };
-    let only_oh = resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &off);
+    let only_oh =
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &off, &kinds);
     assert_eq!(only_oh.len(), 1, "the overhead slots are on by their setup");
     let none = BankRequest::default();
-    assert!(resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &none).is_empty());
+    assert!(
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &none, &kinds)
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -855,4 +862,84 @@ fn polling_the_overhead_slots_never_deadlocks_a_state_load() {
             .recv_timeout(left)
             .expect("overhead_slots() and a state load deadlocked");
     }
+}
+
+/// What a mic position is, by name: any case and spacing; overheads by
+/// `OH…` or "overhead", rooms by "room" or `Amb…` (a bare "Far" or "Mid"
+/// is left alone); bleed only for a close position another pad lists —
+/// a spot mic under a name no pad lists (`SnareTop`, a cymbal's own) is
+/// never bleed. A kit's `_meta.mic_kinds` beats every guess.
+#[test]
+fn mic_positions_classify_by_name_and_by_the_kits_word() {
+    let k = MicKinds::default();
+    for p in ["OHsAB", "oh_xy", "OH", "Overhead L", "overheads", "Mono Overhead"] {
+        assert!(k.is_overhead(p), "{p} is an overhead");
+        assert!(!k.is_room(p) && !k.is_bleed(KICK, p), "{p}");
+    }
+    for p in ["Room", "RoomFar", "room", "Mono Room", "FarRoom", "AMB", "Ambient", "ambience_l"] {
+        assert!(k.is_room(p), "{p} is a room");
+        assert!(!k.is_overhead(p) && !k.is_bleed(KICK, p), "{p}");
+    }
+    for p in ["Far", "Mid", "Hall"] {
+        assert!(!k.is_room(p) && !k.is_bleed(KICK, p), "{p} is a guess too far");
+    }
+    assert!(k.is_bleed(KICK, "SNBtm") && k.is_bleed(KICK, "snbtm"));
+    assert!(k.is_bleed(TOM, "SN Btm"));
+    assert!(!k.is_bleed(SNARE, "SNBtm") && !k.is_bleed(SNARE, "sntop"), "its own");
+    for (pad, p) in [(SNARE, "SnareTop"), (CRASH, "Crash"), (CRASH, "CrashSpot")] {
+        assert!(!k.is_bleed(pad, p), "{p} on pad {pad} is a close mic, not bleed");
+    }
+
+    let meta = resonance_common::drumkit_library::KitMeta::from_value(&serde_json::json!({
+        "mic_kinds": {
+            "Hall": "room",
+            "Far": "room",
+            "Top": "overhead",
+            "Crash Spot": "bleed",
+            "OH Kick": "close",
+            "SNBtm": "close",
+        }
+    }));
+    let k = MicKinds::from_meta(&meta);
+    assert!(k.is_room("Hall") && k.is_room("far") && !k.is_bleed(KICK, "Hall"));
+    assert!(k.is_overhead("Top") && !k.is_room("Top"));
+    assert!(k.is_bleed(KICK, "CrashSpot"));
+    assert!(!k.is_overhead("OH Kick") && !k.is_bleed(KICK, "OH Kick"));
+    assert!(k.is_bleed(KICK, "SNBtm") && !k.is_bleed(SNARE, "SNBtm"));
+
+    // Resolved on a piece: the room and a layered overhead by their
+    // names, and the snare's own spot mic under another name is no bleed.
+    let setup = |position: &str| MicSetup {
+        brand: String::new(),
+        channel: String::new(),
+        mic: String::new(),
+        position: position.to_string(),
+        rounds: BTreeMap::new(),
+    };
+    let piece: BTreeMap<String, MicSetup> = [
+        ("01_SnareTop", setup("SnareTop")),
+        ("02_OH", setup("Overhead")),
+        ("03_OH_XY", setup("oh xy")),
+        ("04_Room", setup("Mono Room")),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let choices: Vec<PadMicChoices> = (0..NUM_PADS).map(|_| PadMicChoices::default()).collect();
+    let banks = BankRequest {
+        setups: MicBankSetups {
+            extra_overheads: ["03_OH_XY".to_string(), String::new()],
+            room: String::new(),
+        },
+        bleed: true,
+        room: true,
+    };
+    let kinds = MicKinds::default();
+    assert_eq!(
+        resolve_extra_banks(SNARE, &piece, "02_OH", &choices, &banks, &kinds),
+        [
+            (BankKind::Overhead { slot: 1 }, "03_OH_XY".to_string()),
+            (BankKind::Room, "04_Room".to_string()),
+        ]
+    );
 }

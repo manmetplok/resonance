@@ -11,17 +11,28 @@
 //! that gain a bank, and decodes only that bank's files (E4; the pad's
 //! other banks come back from the shared cache).
 //!
-//! What counts as what, from the manifest's `position` field:
+//! What counts as what, from the manifest's `position` field ([`MicKinds`];
+//! case, spaces, `_` and `-` do not count):
 //!
-//! - **overhead**: a position starting `OH` (`OHsAB`, `OHsXY`);
-//! - **room**: a position starting `Room`;
-//! - **bleed**: any other position the pad does not list as its own close
-//!   mic (`PAD_MAPPINGS[pad].close_mic_positions`) — a close mic that
+//! - **overhead**: a position starting `OH` (`OHsAB`, `OHsXY`) or naming
+//!   an `Overhead`;
+//! - **room**: a position naming a `Room` (`Room`, `RoomFar`, `Mono Room`)
+//!   or starting `Amb` (`Ambient`, `Ambience`);
+//! - **bleed**: a close position of **another** pad
+//!   (`PAD_MAPPINGS[other].close_mic_positions`) — a close mic that
 //!   belongs to another piece but was recording when this one was hit.
 //!   In Drummica that is SN Btm on the kick and the toms (the snare wires'
-//!   buzz), recorded on the "mit Teppich" pieces only.
+//!   buzz), recorded on the "mit Teppich" pieces only. A position no pad
+//!   lists (`SnareTop` for `SNTop`, a cymbal's own spot mic) is never
+//!   bleed: guessing wrong would play a piece's own close mic as bleed.
+//!
+//! A kit can say what a position is outright, which beats every guess:
+//! `_meta.mic_kinds: {"<position>": "close"|"overhead"|"room"|"bleed"}`.
 
 use std::collections::BTreeMap;
+
+pub use resonance_common::drumkit_library::MicKind;
+use resonance_common::drumkit_library::KitMeta;
 
 use crate::drum_map::PAD_MAPPINGS;
 use crate::kit::{BankKind, MAX_BLEED_BANKS, MAX_OVERHEAD_SLOTS};
@@ -83,24 +94,116 @@ pub struct BankRequest {
     pub room: bool,
 }
 
-/// A position that names an overhead setup.
+/// How one kit's mic positions classify (see the module docs): the
+/// kit's own word (`_meta.mic_kinds`) where it gives one, else a guess
+/// from the name. The default is the guess alone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MicKinds {
+    /// `_meta.mic_kinds`, keyed by [`normalize`]d position.
+    overrides: BTreeMap<String, MicKind>,
+}
+
+/// A position as compared: lowercase letters and digits only, so
+/// `"Mono Room"`, `"mono_room"` and `"MonoRoom"` are one position.
+fn normalize(position: &str) -> String {
+    position
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// Whether pad `pad`'s mapping lists `position` as one of its close mics.
+fn is_own_close(pad: usize, normalized: &str) -> bool {
+    PAD_MAPPINGS.get(pad).is_some_and(|m| {
+        m.close_mic_positions
+            .iter()
+            .any(|own| normalize(own) == normalized)
+    })
+}
+
+/// The canonical spelling of `position` if some pad lists it as a close
+/// mic (`"snbtm"` → `"SNBtm"`), and the first pad that does.
+fn close_owner(position: &str) -> Option<(usize, &'static str)> {
+    let normalized = normalize(position);
+    PAD_MAPPINGS.iter().enumerate().find_map(|(pad, m)| {
+        m.close_mic_positions
+            .iter()
+            .find(|own| normalize(own) == normalized)
+            .map(|own| (pad, *own))
+    })
+}
+
+impl MicKinds {
+    /// The kit's `_meta.mic_kinds`.
+    pub fn from_meta(meta: &KitMeta) -> Self {
+        Self {
+            overrides: meta
+                .mic_kinds
+                .iter()
+                .map(|(position, kind)| (normalize(position), *kind))
+                .collect(),
+        }
+    }
+
+    fn stated(&self, normalized: &str) -> Option<MicKind> {
+        self.overrides.get(normalized).copied()
+    }
+
+    /// A position that names an overhead setup.
+    pub fn is_overhead(&self, position: &str) -> bool {
+        let n = normalize(position);
+        match self.stated(&n) {
+            Some(kind) => kind == MicKind::Overhead,
+            None => n.starts_with("oh") || n.contains("overhead"),
+        }
+    }
+
+    /// A position that names a room setup. Conservative: a far or mid
+    /// mic that does not say "room" (or "amb…") is left alone — the kit
+    /// can name it in `_meta.mic_kinds`.
+    pub fn is_room(&self, position: &str) -> bool {
+        let n = normalize(position);
+        match self.stated(&n) {
+            Some(kind) => kind == MicKind::Room,
+            None => !self.is_overhead(position) && (n.contains("room") || n.starts_with("amb")),
+        }
+    }
+
+    /// Whether `position` is a bleed position on pad `pad`: never one of
+    /// the pad's own close mics; else one the kit calls bleed, or the
+    /// close position of another pad.
+    pub fn is_bleed(&self, pad: usize, position: &str) -> bool {
+        let n = normalize(position);
+        if is_own_close(pad, &n) {
+            return false;
+        }
+        match self.stated(&n) {
+            Some(MicKind::Bleed) => true,
+            Some(MicKind::Overhead | MicKind::Room) => false,
+            Some(MicKind::Close) | None => {
+                !self.is_overhead(position)
+                    && !self.is_room(position)
+                    && close_owner(position).is_some()
+            }
+        }
+    }
+}
+
+/// A position that names an overhead setup, by name alone
+/// ([`MicKinds::is_overhead`] for a kit with no `_meta.mic_kinds`).
 pub fn is_overhead_position(position: &str) -> bool {
-    position.starts_with("OH")
+    MicKinds::default().is_overhead(position)
 }
 
-/// A position that names a room setup.
+/// A position that names a room setup, by name alone.
 pub fn is_room_position(position: &str) -> bool {
-    position.starts_with("Room")
+    MicKinds::default().is_room(position)
 }
 
-/// Whether `position` is a bleed position on pad `pad`: a close mic that
-/// is not one of the pad's own.
+/// Whether `position` is a bleed position on pad `pad`, by name alone.
 pub fn is_bleed_position(pad: usize, position: &str) -> bool {
-    !is_overhead_position(position)
-        && !is_room_position(position)
-        && !PAD_MAPPINGS
-            .get(pad)
-            .is_some_and(|m| m.close_mic_positions.contains(&position))
+    MicKinds::default().is_bleed(pad, position)
 }
 
 /// The setup overhead slot 1 plays on `piece`: `key` if the piece has it,
@@ -108,6 +211,7 @@ pub fn is_bleed_position(pad: usize, position: &str) -> bool {
 pub fn resolve_overhead_slot1<'a>(
     piece: &'a BTreeMap<String, MicSetup>,
     key: &str,
+    kinds: &MicKinds,
 ) -> Option<&'a str> {
     piece
         .get_key_value(key)
@@ -115,7 +219,7 @@ pub fn resolve_overhead_slot1<'a>(
         .or_else(|| {
             piece
                 .iter()
-                .find(|(_, setup)| is_overhead_position(&setup.position))
+                .find(|(_, setup)| kinds.is_overhead(&setup.position))
                 .map(|(k, _)| k.as_str())
         })
 }
@@ -139,15 +243,16 @@ pub fn resolve_extra_banks(
     overhead_setup_key: &str,
     pad_choices: &[PadMicChoices],
     banks: &BankRequest,
+    kinds: &MicKinds,
 ) -> Vec<(BankKind, String)> {
     let mut out = Vec::new();
-    let slot1 = resolve_overhead_slot1(piece, overhead_setup_key);
+    let slot1 = resolve_overhead_slot1(piece, overhead_setup_key, kinds);
     for (i, key) in banks.setups.extra_overheads.iter().enumerate() {
         let usable = !key.is_empty()
             && Some(key.as_str()) != slot1
             && piece
                 .get(key)
-                .is_some_and(|setup| is_overhead_position(&setup.position))
+                .is_some_and(|setup| kinds.is_overhead(&setup.position))
             && !out.iter().any(|(_, k): &(BankKind, String)| k == key);
         if usable {
             out.push((BankKind::Overhead { slot: i as u8 + 1 }, key.clone()));
@@ -157,16 +262,16 @@ pub fn resolve_extra_banks(
         let mut positions: Vec<&str> = piece
             .values()
             .map(|setup| setup.position.as_str())
-            .filter(|position| is_bleed_position(pad, position))
+            .filter(|position| kinds.is_bleed(pad, position))
             .collect();
         positions.sort_unstable();
         positions.dedup();
         for position in positions.into_iter().take(MAX_BLEED_BANKS) {
-            let owner_pick = PAD_MAPPINGS
-                .iter()
-                .position(|m| m.close_mic_positions.contains(&position))
-                .and_then(|owner| pad_choices.get(owner))
-                .and_then(|choices| choices.close_setups.get(position))
+            // The owner's picks are keyed by the canonical spelling.
+            let owner_pick = close_owner(position)
+                .and_then(|(owner, canonical)| {
+                    pad_choices.get(owner)?.close_setups.get(canonical)
+                })
                 .filter(|key| piece.get(*key).is_some_and(|s| s.position == position));
             let key = owner_pick.cloned().or_else(|| {
                 piece
@@ -183,12 +288,12 @@ pub fn resolve_extra_banks(
         let chosen = Some(banks.setups.room.as_str())
             .filter(|key| !key.is_empty())
             .and_then(|key| piece.get_key_value(key))
-            .filter(|(_, setup)| is_room_position(&setup.position))
+            .filter(|(_, setup)| kinds.is_room(&setup.position))
             .map(|(k, _)| k.clone());
         let key = chosen.or_else(|| {
             piece
                 .iter()
-                .find(|(_, setup)| is_room_position(&setup.position))
+                .find(|(_, setup)| kinds.is_room(&setup.position))
                 .map(|(k, _)| k.clone())
         });
         if let Some(key) = key {
