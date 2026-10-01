@@ -126,6 +126,11 @@ pub struct DrumParams {
     /// before the param existed played multi-out, and loads as Multi
     /// ([`upgrade_output_mode`]), so a project's sub-tracks keep their
     /// sound.
+    ///
+    /// Not in presets (nor is `pad_N_output`): routing is how the
+    /// instance is wired into its track — its sub-tracks — not part of
+    /// the sound, so recalling a kit preset never re-routes the track.
+    /// The instance's own state keeps both.
     pub output_mode: ChoiceParam,
     /// Velocity humanize (E7): every hit's velocity moves at random by up
     /// to ± this many MIDI steps, 0 … 20, default 0 (off). Applied before
@@ -211,7 +216,8 @@ impl Default for DrumParams {
                 OUTPUT_MODE_STEREO,
                 OUTPUT_MODE_LABELS,
             )
-            .not_automatable(),
+            .not_automatable()
+            .excluded_from_presets(),
             velocity_humanize: FloatParam::new(
                 "velocity_humanize",
                 "Velocity Humanize",
@@ -323,7 +329,8 @@ pub struct PadParams {
     /// mode (E11), one of [`OUTPUT_PORT_NAMES`]. Defaults to the
     /// Drummica table (kick → Kick, …, Count Stick → Main). Its overhead
     /// take always goes to the Overhead port in Multi, and everything to
-    /// Main in Stereo. Not automatable: routing, not playing.
+    /// Main in Stereo. Not automatable: routing, not playing. Not in
+    /// presets either (see `output_mode`).
     pub output: ChoiceParam,
     /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the
     /// cent (0.01 st): one param carries both the coarse and the fine
@@ -562,7 +569,8 @@ impl PadParams {
                 mapping.output_group.index() as i32,
                 &OUTPUT_PORT_NAMES,
             )
-            .not_automatable(),
+            .not_automatable()
+            .excluded_from_presets(),
             tune: FloatParam::new(
                 id("tune"),
                 name("Tune"),

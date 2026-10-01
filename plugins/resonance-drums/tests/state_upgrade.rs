@@ -284,6 +284,57 @@ fn a_pre_k7_state_without_an_output_mode_loads_as_multi() {
     assert_eq!(value(&mut instance, "output_mode"), MULTI);
 }
 
+fn load_preset(instance: &mut PluginInstance<TestHost>, doc: &Value) {
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginStateContext>()
+        .expect("state-context extension");
+    let bytes = serde_json::to_vec(doc).unwrap();
+    ext.load(
+        &mut instance.plugin_handle(),
+        &mut &bytes[..],
+        StateContextType::ForPreset,
+    )
+    .expect("preset load");
+}
+
+/// Routing is how the instance is wired into its track, not the sound:
+/// a preset neither carries nor recalls `output_mode` / `pad_N_output`.
+#[test]
+fn a_preset_never_reroutes_the_instance() {
+    let mut instance = hosted();
+    let state = serde_json::json!({ "version": 1, "params": {
+        "output_mode": MULTI, "pad_0_output": 3.0,
+    } });
+    assert!(load(&mut instance, &state));
+    load_preset(
+        &mut instance,
+        &serde_json::json!({ "version": 1, "params": {
+            "output_mode": STEREO, "pad_0_output": 0.0, "pad_0_level": -6.0,
+        } }),
+    );
+    assert_eq!(value(&mut instance, "pad_0_level"), -6.0, "the sound is recalled");
+    assert_eq!(value(&mut instance, "output_mode"), MULTI);
+    assert_eq!(value(&mut instance, "pad_0_output"), 3.0);
+
+    // A v1 preset (no mode: the upgrade gives it Multi) on a Stereo
+    // instance leaves it Stereo.
+    let mut stereo = hosted();
+    load_preset(&mut stereo, &v1_state());
+    assert_converted(&mut stereo, "v1 preset");
+    assert_eq!(value(&mut stereo, "output_mode"), STEREO);
+
+    // And a preset saved from an instance does not carry them.
+    let plugin = ResonanceDrums::new();
+    let params: Vec<&dyn resonance_plugin::Param> =
+        (0..plugin.param_count()).map(|i| plugin.param(i)).collect();
+    let doc = resonance_plugin::presets::preset_params_json(&params);
+    let saved = doc["params"].as_object().unwrap();
+    assert!(!saved.contains_key("output_mode"));
+    assert!((0..NUM_PADS).all(|i| !saved.contains_key(&format!("pad_{i}_output"))));
+    assert!(saved.contains_key("pad_0_level"));
+}
+
 #[test]
 fn a_state_that_names_its_mode_keeps_it() {
     for mode in [STEREO, MULTI] {
