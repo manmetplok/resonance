@@ -346,3 +346,48 @@ fn a_state_that_names_its_mode_keeps_it() {
         assert_eq!(value(&mut instance, "output_mode"), mode);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Polyphony (E15): 64 was the maximum before a hit could take 8 voices.
+// ---------------------------------------------------------------------------
+
+/// A state from before E15 (no bank param, no `mic_banks`) with
+/// `polyphony` at 64 — that build's "every voice" — loads at today's 128;
+/// one with E15's keys, or below 64, loads as saved. Idempotent.
+#[test]
+fn a_pre_e15_polyphony_at_its_maximum_loads_at_todays() {
+    let state = |polyphony: f64, extra: &[(&str, Value)]| {
+        let mut params = serde_json::Map::new();
+        params.insert("master_level".into(), 0.0.into());
+        params.insert("output_mode".into(), STEREO.into());
+        params.insert("polyphony".into(), polyphony.into());
+        let mut doc = serde_json::json!({ "version": 2 });
+        for (key, value) in extra {
+            if key.starts_with("mic_banks") {
+                doc[*key] = value.clone();
+            } else {
+                params.insert(key.to_string(), value.clone());
+            }
+        }
+        doc["params"] = Value::Object(params);
+        doc
+    };
+
+    let mut instance = hosted();
+    assert!(load(&mut instance, &state(64.0, &[])));
+    assert_eq!(value(&mut instance, "polyphony"), 128.0, "the old maximum");
+    assert!(load(&mut instance, &state(32.0, &[])));
+    assert_eq!(value(&mut instance, "polyphony"), 32.0, "a chosen limit");
+    assert!(load(&mut instance, &state(64.0, &[("bleed_on", 0.0.into())])));
+    assert_eq!(value(&mut instance, "polyphony"), 64.0, "an E15 state's 64");
+    let banks = serde_json::json!({"overheads": ["", ""], "room": ""});
+    assert!(load(&mut instance, &state(64.0, &[("mic_banks", banks)])));
+    assert_eq!(value(&mut instance, "polyphony"), 64.0, "an E15 state's 64");
+
+    let mut once = state(64.0, &[]);
+    resonance_drums::upgrade_state(&mut once);
+    assert_eq!(once["params"]["polyphony"], 128);
+    let mut twice = once.clone();
+    resonance_drums::upgrade_state(&mut twice);
+    assert_eq!(once, twice);
+}

@@ -41,6 +41,9 @@ pub const OUTPUT_MODE_MULTI: i32 = 1;
 /// The id of the output mode param.
 pub const OUTPUT_MODE_ID: &str = "output_mode";
 
+/// `polyphony`'s id.
+pub const POLYPHONY_ID: &str = "polyphony";
+
 /// How the velocity humanize reads: `Off`, or `±5` (MIDI steps).
 pub fn humanize_label(steps: f32) -> String {
     let rounded = (steps * 10.0).round() / 10.0;
@@ -186,7 +189,7 @@ impl Default for DrumParams {
         Self {
             master_volume: level_param(MASTER_LEVEL_ID, "Master Volume", MAX_VOLUME_DB),
             polyphony: IntParam::new(
-                "polyphony",
+                POLYPHONY_ID,
                 "Polyphony",
                 MAX_VOICES as i32,
                 IntRange::Linear {
@@ -908,6 +911,36 @@ pub fn upgrade_output_mode(state: &mut serde_json::Value) -> bool {
         return false;
     }
     params.insert(OUTPUT_MODE_ID.to_string(), OUTPUT_MODE_MULTI.into());
+    true
+}
+
+/// `polyphony`'s maximum (and default) before E15 doubled it.
+pub const PRE_E15_MAX_VOICES: i32 = 64;
+
+/// A state saved before E15 (no bank param, no `mic_banks`) with
+/// `polyphony` at 64 had it at that build's maximum — "every voice" —
+/// and gets today's maximum, [`MAX_VOICES`]: a hit can take up to eight
+/// voices now, and 64 would steal at eight hits. Returns whether it
+/// changed the state. Idempotent: the result names 128, and a state
+/// with E15's keys says what it meant.
+pub fn upgrade_polyphony(state: &mut serde_json::Value) -> bool {
+    let has_banks = state.get(crate::kit_loader::MIC_BANKS_STATE_KEY).is_some();
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    let e15 = has_banks
+        || OH_LEVEL_IDS
+            .iter()
+            .chain(&[BLEED_ON_ID, BLEED_LEVEL_ID, ROOM_ON_ID, ROOM_LEVEL_ID])
+            .any(|id| params.contains_key(*id));
+    let at_old_max = params
+        .get(POLYPHONY_ID)
+        .and_then(|v| v.as_f64())
+        .is_some_and(|v| v == PRE_E15_MAX_VOICES as f64);
+    if e15 || !at_old_max {
+        return false;
+    }
+    params.insert(POLYPHONY_ID.to_string(), (MAX_VOICES as i64).into());
     true
 }
 

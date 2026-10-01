@@ -498,10 +498,13 @@ pub struct ResonanceDrums {
 ///   ([`params::upgrade_v1_levels`], E9);
 /// - a state from before `output_mode` existed plays Multi, as it did
 ///   ([`params::upgrade_output_mode`], E11/D5: Stereo is a fresh
-///   instance's default only).
+///   instance's default only);
+/// - a state from before E15 with `polyphony` at that build's maximum
+///   (64) gets today's (128, [`params::upgrade_polyphony`]).
 pub fn upgrade_state(state: &mut serde_json::Value) {
     params::upgrade_v1_levels(state);
     params::upgrade_output_mode(state);
+    params::upgrade_polyphony(state);
 }
 
 /// `kit_select`'s and `kit_load_progress`'s host-order indices in
