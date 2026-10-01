@@ -263,7 +263,9 @@ pub struct ResonanceDrums {
     /// the sole consumer; drained at the top of every `process()`.
     audition_receiver: Receiver<AuditionHit>,
     /// Download worker for fetching drumkits from the server. Only present
-    /// in editor builds.
+    /// in editor builds, and its thread only starts on the first command
+    /// (the editor's Download Kits panel) — an instance whose editor is
+    /// never opened never starts one.
     #[cfg(feature = "editor")]
     download_worker: Arc<WorkerHandle>,
 }
@@ -553,6 +555,13 @@ impl ResonancePlugin for ResonanceDrums {
 }
 
 impl ResonanceDrums {
+    /// Whether this instance has started its download thread. Test hook.
+    #[cfg(feature = "editor")]
+    #[doc(hidden)]
+    pub fn download_worker_running(&self) -> bool {
+        self.download_worker.is_running()
+    }
+
     /// Apply one host note event to the sampler, at the frame the caller
     /// has rendered up to.
     fn apply_event(&mut self, event: NoteEvent) {

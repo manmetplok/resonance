@@ -178,3 +178,36 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
 
     let _ = std::fs::remove_dir_all(&data_home);
 }
+
+/// No thread until the first command: every plugin instance owns a
+/// download handle, and most never download anything.
+#[test]
+fn the_worker_thread_starts_on_the_first_command() {
+    use resonance_drums::ResonanceDrums;
+    use resonance_plugin::ResonancePlugin;
+
+    let plugin = ResonanceDrums::new();
+    assert!(
+        !plugin.download_worker_running(),
+        "a fresh plugin instance started a download thread"
+    );
+    drop(plugin);
+
+    // Nothing listens on port 1: the fetch fails at once.
+    let worker = download::spawn_with_index("http://127.0.0.1:1/index.json".to_string());
+    assert!(!worker.is_running());
+    worker.send(Command::FetchIndex);
+    assert!(worker.is_running(), "the first command must start the thread");
+    wait_for(
+        "the refused fetch to fail",
+        Duration::from_secs(10),
+        || matches!(worker.state.lock().status, Status::Error(_)),
+    );
+    drop(worker);
+
+    // A handle that never started drops at once, and a lone Shutdown
+    // does not start a thread just to stop it.
+    let idle = download::spawn();
+    idle.send(Command::Shutdown);
+    assert!(!idle.is_running());
+}

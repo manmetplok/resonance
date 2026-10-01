@@ -10,6 +10,10 @@
 //! cancel flag the transfer checks between chunks, and detaches the
 //! thread if a transfer is in flight (it then stops at the next chunk or
 //! the read timeout, and removes its `.part` file on the way out).
+//!
+//! The thread is started by the first [`WorkerHandle::send`], not by
+//! [`spawn`]: every plugin instance owns a handle, and most — headless
+//! renders, instances whose editor is never opened — never download.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -129,10 +133,28 @@ impl Default for State {
 // Worker handle
 // ---------------------------------------------------------------------------
 
+/// Where and how a worker downloads. [`spawn`] uses the defaults; tests
+/// point it at a local server.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct WorkerConfig {
+    /// The server index. Kit files resolve relative to it.
+    pub index_url: String,
+}
+
+impl Default for WorkerConfig {
+    fn default() -> Self {
+        Self {
+            index_url: INDEX_URL.to_string(),
+        }
+    }
+}
+
 pub struct WorkerHandle {
-    tx: Sender<Command>,
     pub state: Arc<Mutex<State>>,
-    join: Option<JoinHandle<()>>,
+    config: WorkerConfig,
+    /// The worker thread, once the first command has started it.
+    running: Mutex<Option<Running>>,
     /// Raised by `drop`; the worker checks it before each command and
     /// between body chunks, and abandons what it is doing.
     cancel: Arc<AtomicBool>,
@@ -140,9 +162,53 @@ pub struct WorkerHandle {
     busy: Arc<AtomicBool>,
 }
 
+/// A started worker thread and its command channel.
+struct Running {
+    tx: Sender<Command>,
+    join: Option<JoinHandle<()>>,
+}
+
 impl WorkerHandle {
+    /// Queue `cmd`, starting the worker thread if this is the first one.
     pub fn send(&self, cmd: Command) {
-        let _ = self.tx.send(cmd);
+        let mut running = self.running.lock();
+        if running.is_none() {
+            if matches!(cmd, Command::Shutdown) {
+                return;
+            }
+            *running = self.start();
+        }
+        if let Some(r) = running.as_ref() {
+            let _ = r.tx.send(cmd);
+        }
+    }
+
+    /// Whether the worker thread has been started.
+    pub fn is_running(&self) -> bool {
+        self.running.lock().is_some()
+    }
+
+    fn start(&self) -> Option<Running> {
+        let (tx, rx) = mpsc::channel();
+        let worker = Worker {
+            index_url: self.config.index_url.clone(),
+            state: self.state.clone(),
+            cancel: self.cancel.clone(),
+            busy: self.busy.clone(),
+        };
+        match std::thread::Builder::new()
+            .name("drums-download".into())
+            .spawn(move || worker_loop(rx, worker))
+        {
+            Ok(join) => Some(Running {
+                tx,
+                join: Some(join),
+            }),
+            Err(e) => {
+                set_error(&self.state, &format!("start download worker: {e}"));
+                None
+            }
+        }
     }
 }
 
@@ -156,8 +222,12 @@ impl Drop for WorkerHandle {
     /// short — or we see it busy and detach.
     fn drop(&mut self) {
         self.cancel.store(true, Ordering::SeqCst);
-        let _ = self.tx.send(Command::Shutdown);
-        if let Some(j) = self.join.take() {
+        let Some(mut running) = self.running.get_mut().take() else {
+            // Never started: no thread to stop.
+            return;
+        };
+        let _ = running.tx.send(Command::Shutdown);
+        if let Some(j) = running.join.take() {
             if self.busy.load(Ordering::SeqCst) {
                 // Detached: it notices the cancel at its next chunk (or
                 // the read timeout), deletes its `.part` and exits.
@@ -169,36 +239,31 @@ impl Drop for WorkerHandle {
     }
 }
 
+/// A handle for the default server. No thread is started until the
+/// first command is sent.
 pub fn spawn() -> WorkerHandle {
-    spawn_with_index(INDEX_URL.to_string())
+    spawn_with(WorkerConfig::default())
 }
 
 /// [`spawn`] against another index URL; kit files resolve relative to
 /// it. Test hook: the download tests serve both from a local listener.
 #[doc(hidden)]
 pub fn spawn_with_index(index_url: String) -> WorkerHandle {
-    let (tx, rx) = mpsc::channel();
-    let state = Arc::new(Mutex::new(State::default()));
-    let cancel = Arc::new(AtomicBool::new(false));
-    let busy = Arc::new(AtomicBool::new(false));
-    let worker = Worker {
+    spawn_with(WorkerConfig {
         index_url,
-        state: state.clone(),
-        cancel: cancel.clone(),
-        busy: busy.clone(),
-    };
+        ..WorkerConfig::default()
+    })
+}
 
-    let join = std::thread::Builder::new()
-        .name("drums-download".into())
-        .spawn(move || worker_loop(rx, worker))
-        .expect("spawn drums-download worker");
-
+/// [`spawn`] with every knob exposed. Test hook.
+#[doc(hidden)]
+pub fn spawn_with(config: WorkerConfig) -> WorkerHandle {
     WorkerHandle {
-        tx,
-        state,
-        join: Some(join),
-        cancel,
-        busy,
+        state: Arc::new(Mutex::new(State::default())),
+        config,
+        running: Mutex::new(None),
+        cancel: Arc::new(AtomicBool::new(false)),
+        busy: Arc::new(AtomicBool::new(false)),
     }
 }
 
