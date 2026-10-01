@@ -246,8 +246,6 @@ pub struct DrumSampler {
     offline_wait_left: Duration,
     /// Frames left to render without waiting, after a long wait ran out.
     offline_holdoff: u64,
-    /// Times a block waited for a tail frame.
-    offline_waits: u64,
     /// [`RenderMode::Auto`]'s measurement, on `clock`: the window's
     /// start, the audio frames rendered in it, the time it spent waiting
     /// for the reader (not rendering), the offline windows in a row, and
@@ -336,7 +334,6 @@ impl DrumSampler {
             block_wait: Duration::ZERO,
             offline_wait_left: Duration::ZERO,
             offline_holdoff: 0,
-            offline_waits: 0,
             clock: RenderClock::Wall(Instant::now()),
             timing_start: None,
             timing_frames: 0,
@@ -437,7 +434,7 @@ impl DrumSampler {
 
     /// Times a block has waited for a tail frame (offline only).
     pub fn stream_offline_waits(&self) -> u64 {
-        self.offline_waits
+        self.streams.set.offline_waits()
     }
 
     /// Set the host sample rate the fades are timed against, so a choke
@@ -1150,7 +1147,6 @@ impl DrumSampler {
         let offline = self.offline;
         let offline_wait_left = &mut self.offline_wait_left;
         let offline_holdoff = &mut self.offline_holdoff;
-        let offline_waits = &mut self.offline_waits;
         // Only a long wait running dry means a dead reader; a short Auto
         // budget runs dry as a matter of course.
         let long_waits = self.block_wait >= AUTO_SUSTAINED_WAIT_PER_BLOCK;
@@ -1322,7 +1318,7 @@ impl DrumSampler {
                         && *offline_holdoff == 0
                         && !offline_wait_left.is_zero()
                     {
-                        *offline_waits += 1;
+                        streams.set.waits.fetch_add(1, Ordering::Relaxed);
                         let failed;
                         (written, failed) = wait_for_frame(ring, at, offline_wait_left);
                         if failed {

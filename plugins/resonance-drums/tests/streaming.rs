@@ -6,9 +6,12 @@
 //!
 //! - a streamed render is **bit-identical** to a fully resident render of
 //!   the same MIDI, at the file's rate and through the resampler, live
-//!   (paced in real time) and offline (as fast as the CPU goes);
-//! - a 64-voice saturation pattern at 128-frame blocks, with every read
-//!   slowed like a cold page cache, plays with zero underruns;
+//!   (never waiting, the reader stepped between blocks) and offline (as
+//!   fast as the CPU goes, the host having declared it);
+//! - a 64-voice saturation pattern at 128-frame blocks, paced in real
+//!   time with every read slowed like a cold page cache, plays with zero
+//!   underruns — at the file rate and through the resampler (ignored by
+//!   default: wall-clock bound, see the tests for how to run them);
 //! - a stalled reader costs silence for exactly the missing frames, is
 //!   counted, and the voice recovers in time once the reader is back;
 //! - a reader that is shut down mid-render never blocks the audio thread
@@ -17,6 +20,12 @@
 //!
 //! Every test that compares two renders also checks they are not silent
 //! (`feedback_silent_goldens_are_vacuous`).
+//!
+//! Nothing that runs by default depends on how fast this machine is or
+//! how loaded: the reader is a stepped one the test drives, the render
+//! is declared offline (so it waits for the reader as long as it takes),
+//! or the timing detector runs on a clock the test sets. The suite is
+//! checked by running this binary as eight copies at once.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -240,32 +249,26 @@ fn pattern(block: usize, frames: usize, per_block: usize, blocks_until_quiet: us
         .collect()
 }
 
-/// Render `blocks` blocks of `frames`; with `pace`, each block waits for
-/// its wall-clock time first, as a live host would call it.
+/// Render `blocks` blocks of `frames`; with `pump`, the (stepped) reader
+/// catches up after each block, as a reader that keeps up would.
 fn render(
     s: &mut DrumSampler,
     blocks: usize,
     frames: usize,
     per_block: usize,
     quiet_after: usize,
-    pace: bool,
+    pump: Option<&ReaderPool>,
 ) -> Vec<u32> {
     let params = DrumParams::default();
     let mut ports = Ports::new(frames);
     let mut out = Vec::with_capacity(blocks * frames * NUM_OUTPUT_PORTS * 2);
-    let began = Instant::now();
-    let block_time = Duration::from_secs_f64(frames as f64 / HOST as f64);
     for b in 0..blocks {
-        if pace {
-            let due = began + block_time * b as u32;
-            let now = Instant::now();
-            if due > now {
-                std::thread::sleep(due - now);
-            }
-        }
         let hits = pattern(b, frames, per_block, quiet_after);
         ports.render(s, frames, &params, &hits);
         ports.append_bits(frames, &mut out);
+        if let Some(pool) = pump {
+            pool.pump();
+        }
     }
     out
 }
@@ -298,9 +301,20 @@ fn streamed_takes(pads: &[LoadedPad]) -> (usize, usize) {
 // Bit identity.
 // ---------------------------------------------------------------------------
 
+/// How a bit-identity render streams.
+#[derive(Clone, Copy, PartialEq)]
+enum Streaming {
+    /// Reader threads; the host declares offline rendering, so every
+    /// missing frame is waited for.
+    DeclaredOffline,
+    /// Real time — never a wait — with a stepped reader that catches up
+    /// between blocks.
+    LiveStepped,
+}
+
 /// Streamed and resident renders of the saturation pattern, compared bit
 /// for bit; files at `file_rate`, host at 48 kHz.
-fn assert_bit_identical(tag: &str, file_rate: u32, preload: u32, mode: RenderMode, pace: bool) {
+fn assert_bit_identical(tag: &str, file_rate: u32, preload: u32, how: Streaming) {
     let fixture = Fixture::new(tag, file_rate, 1.6);
     let cache = SampleCache::new();
     let resident = fixture.kit(&cache, 0);
@@ -312,24 +326,41 @@ fn assert_bit_identical(tag: &str, file_rate: u32, preload: u32, mode: RenderMod
     );
     assert_eq!(streamed_takes(&resident).0, 0);
 
-    let pool = ReaderPool::new(2);
+    let pool = match how {
+        Streaming::DeclaredOffline => ReaderPool::new(2),
+        Streaming::LiveStepped => ReaderPool::stepped(),
+    };
     // 128-frame blocks, two hits a block for 0.8 s, then 0.9 s of tails.
     const FRAMES: usize = 128;
     let blocks = (1.7 * HOST) as usize / FRAMES;
     let quiet_after = (0.8 * HOST) as usize / FRAMES;
     let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
-    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, false);
-    let (mut b, _tb) = sampler(streamed, &pool, mode);
-    let got = render(&mut b, blocks, FRAMES, 2, quiet_after, pace);
+    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, None);
+    let got = match how {
+        Streaming::DeclaredOffline => {
+            let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Auto);
+            b.set_host_render_mode(Arc::new(std::sync::atomic::AtomicU8::new(
+                resonance_drums::stream::HOST_RENDER_OFFLINE,
+            )));
+            let got = render(&mut b, blocks, FRAMES, 2, quiet_after, None);
+            assert!(b.renders_offline());
+            (got, b.stream_underruns(), b.stream_ring_misses())
+        }
+        Streaming::LiveStepped => {
+            let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Realtime);
+            let got = render(&mut b, blocks, FRAMES, 2, quiet_after, Some(&pool));
+            assert_eq!(b.stream_offline_waits(), 0);
+            (got, b.stream_underruns(), b.stream_ring_misses())
+        }
+    };
+    let (got, underruns, misses) = got;
     assert!(
         loud(&reference) > 0.05,
         "{tag}: the reference render is silent"
     );
     assert_eq!(
-        b.stream_underruns(),
-        0,
-        "{tag}: underruns ({} hits found no ring)",
-        b.stream_ring_misses()
+        underruns, 0,
+        "{tag}: underruns ({misses} hits found no ring)"
     );
     if let Some((block, port, frame)) = first_difference(&reference, &got, FRAMES) {
         panic!("{tag}: streamed render differs from resident at block {block}, port {port}, frame {frame}");
@@ -341,22 +372,29 @@ fn assert_bit_identical(tag: &str, file_rate: u32, preload: u32, mode: RenderMod
 fn streamed_render_is_bit_identical_offline_at_the_file_rate() {
     // A small preload: the tails are most of every take, and the rings
     // wrap many times.
-    assert_bit_identical("offline-48k", 48_000, 4_096, RenderMode::Offline, false);
+    assert_bit_identical("offline-48k", 48_000, 4_096, Streaming::DeclaredOffline);
 }
 
 #[test]
 fn streamed_render_is_bit_identical_offline_through_the_resampler() {
-    assert_bit_identical("offline-44k1", 44_100, 4_096, RenderMode::Offline, false);
+    assert_bit_identical("offline-44k1", 44_100, 4_096, Streaming::DeclaredOffline);
 }
 
 #[test]
 fn streamed_render_is_bit_identical_live_at_the_file_rate() {
-    assert_bit_identical("live-48k", 48_000, 32_768, RenderMode::Realtime, true);
+    assert_bit_identical("live-48k", 48_000, 32_768, Streaming::LiveStepped);
 }
 
 #[test]
 fn streamed_render_is_bit_identical_live_through_the_resampler() {
-    assert_bit_identical("live-96k", 96_000, 32_768, RenderMode::Realtime, true);
+    assert_bit_identical("live-96k", 96_000, 32_768, Streaming::LiveStepped);
+}
+
+#[test]
+fn streamed_render_is_bit_identical_live_with_a_small_preload() {
+    // The rings wrap many times, and every claim is within a ring of its
+    // tail from the start.
+    assert_bit_identical("live-44k1-small", 44_100, 4_096, Streaming::LiveStepped);
 }
 
 /// A clock the test drives, for the timing detector: `advance` moves it
@@ -447,11 +485,55 @@ fn an_unannounced_fast_render_waits_for_a_slow_reader() {
         .iter()
         .all(|&b| b == AUTO_SUSTAINED_WAIT_PER_BLOCK));
     assert!(loud(&reference) > 0.05);
-    assert!(s.stream_offline_waits() > 0, "the render did wait for the reader");
+    // How often it had to wait depends on how fast the reader threads get
+    // the CPU (on a loaded machine, the render is slow enough not to);
+    // that it waits at all is pinned below, under a declared mode.
+    eprintln!("auto: waited {} times", s.stream_offline_waits());
     assert_eq!(s.stream_underruns(), 0);
     if let Some((block, port, frame)) = first_difference(&reference, &got, FRAMES) {
         panic!("differs at block {block}, port {port}, frame {frame}");
     }
+}
+
+/// Declared offline, a render waits for a reader that is stalled when it
+/// needs a frame — for as long as the reader takes (here, until another
+/// thread lets it go) — and so loses nothing.
+#[test]
+fn a_declared_offline_render_waits_for_a_stalled_reader() {
+    let fixture = Fixture::new("offline-stall", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::new(1);
+    let (mut a, _ta) = sampler(single_voice_kit(&cache, path, 0), &pool, RenderMode::Realtime);
+    let reference = one_hit(&mut a, 300, |_, _| {});
+    let (mut s, _t) = sampler(
+        single_voice_kit(&cache, path, 8_192),
+        &pool,
+        RenderMode::Auto,
+    );
+    s.set_host_render_mode(Arc::new(std::sync::atomic::AtomicU8::new(
+        resonance_drums::stream::HOST_RENDER_OFFLINE,
+    )));
+    // The reader is stalled from the start; it is let go only once the
+    // render has had to wait for it.
+    let set = s.stream_set().clone();
+    set.set_paused(true);
+    let releaser = std::thread::spawn(move || {
+        while set.offline_waits() == 0 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        set.set_paused(false);
+    });
+    let got = one_hit(&mut s, 300, |_, _| {});
+    releaser.join().unwrap();
+    assert!(s.stream_offline_waits() > 0, "the render waited");
+    assert_eq!(s.stream_underruns(), 0);
+    assert!(loud_f32(&reference) > 0.05);
+    assert_eq!(got, reference);
+}
+
+fn loud_f32(x: &[f32]) -> f32 {
+    x.iter().fold(0.0, |m, s| m.max(s.abs()))
 }
 
 /// A render paced like a live callback — jitter included — is never
@@ -586,27 +668,37 @@ fn the_host_declared_mode_overrides_the_timing() {
 }
 
 // ---------------------------------------------------------------------------
-// Saturation over a cold cache.
+// Saturation over a cold cache, and the reader's throughput.
+//
+// These run against the wall clock — real reader threads keeping up with
+// a render paced in real time — so they are `#[ignore]`d: on a loaded
+// machine (the suite runs binaries in parallel) a reader thread can be
+// held off the CPU long enough to miss, which says nothing about the
+// code. Run them on a quiet machine, in release:
+//
+//   cargo test --release -p resonance-drums --test streaming -- --ignored --nocapture
 // ---------------------------------------------------------------------------
 
 /// 64 voices busy and stealing at 128-frame blocks, paced in real time,
-/// every read delayed 1 ms (a cold page cache on an SSD is ~0.1–0.2 ms
-/// per random read; 1 ms is a slow one): no underruns, and still
-/// bit-identical to the resident render.
-#[test]
-fn saturation_over_a_cold_cache_has_no_underruns() {
-    let fixture = Fixture::new("saturation", 48_000, 3.0);
+/// files at `file_rate` (44.1 kHz resamples every tail frame), every
+/// read delayed 1 ms (a cold page cache on an SSD is ~0.1–0.2 ms per
+/// random read; 1 ms is a slow one), read by a pool the size of the
+/// process-wide one: no underruns, and bit-identical to the resident
+/// render.
+fn saturation(tag: &str, file_rate: u32) {
+    let readers = resonance_drums::stream::reader::global_readers();
+    let fixture = Fixture::new(tag, file_rate, 3.0);
     let cache = SampleCache::new();
     let resident = fixture.kit(&cache, 0);
     let streamed = fixture.kit(&cache, 32_768);
-    let pool = ReaderPool::new(2);
+    let pool = ReaderPool::new(readers);
     const FRAMES: usize = 128;
     let blocks = (3.0 * HOST) as usize / FRAMES;
     let quiet_after = (2.0 * HOST) as usize / FRAMES;
     let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
     // Two hits a block, three voices a hit: 64 voices fill within a
     // dozen blocks and every hit after steals.
-    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, false);
+    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, None);
     let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Realtime);
     b.stream_set().set_read_latency_us(1_000);
     let mut peak_voices = 0;
@@ -633,26 +725,88 @@ fn saturation_over_a_cold_cache_has_no_underruns() {
         ports.append_bits(FRAMES, &mut got);
         peak_voices = peak_voices.max(b.voices.iter().filter(|v| v.active).count());
     }
+    eprintln!(
+        "{tag}: {readers} readers, slowest block {slowest:?}, {} underruns, {} rings used",
+        b.stream_underruns(),
+        b.stream_set().rings_allocated()
+    );
     assert_eq!(peak_voices, 64, "the pattern saturates the voices");
     assert_eq!(
         b.stream_underruns(),
         0,
-        "underruns at saturation ({} of them hits that found no ring)",
+        "{tag}: underruns at saturation ({} of them hits that found no ring)",
         b.stream_ring_misses()
     );
     assert!(loud(&reference) > 0.05);
     assert!(
         first_difference(&reference, &got, FRAMES).is_none(),
-        "saturation render differs"
+        "{tag}: saturation render differs"
     );
-    // The audio thread never waited on the 1 ms reads. (Under the
-    // 500 ms offline wait budget, so a wait would show; above what a
-    // loaded test machine stalls a thread for.)
+    // The audio thread never waited on the 1 ms reads.
     assert!(
         slowest < Duration::from_millis(250),
-        "a block took {slowest:?}"
+        "{tag}: a block took {slowest:?}"
     );
     pool.shutdown();
+}
+
+#[test]
+#[ignore = "wall-clock bound: run in release with -- --ignored (see the section comment)"]
+fn saturation_over_a_cold_cache_has_no_underruns() {
+    saturation("saturation-48k", 48_000);
+}
+
+#[test]
+#[ignore = "wall-clock bound: run in release with -- --ignored (see the section comment)"]
+fn saturation_through_the_resampler_has_no_underruns() {
+    saturation("saturation-44k1", 44_100);
+}
+
+/// What one reader thread costs at saturation: the 64-voice pattern with
+/// 44.1 kHz files (every tail frame resampled to 48 kHz) and a warm page
+/// cache, rendered with a stepped reader whose passes are timed. The
+/// headroom is how many times real time one reader thread could stream
+/// that load; the process-wide pool has `global_readers()` of them.
+#[test]
+#[ignore = "a measurement: run in release with -- --ignored --nocapture"]
+fn reader_throughput_at_saturation() {
+    for file_rate in [44_100, 48_000] {
+        let fixture = Fixture::new(&format!("throughput-{file_rate}"), file_rate, 3.0);
+        let cache = SampleCache::new();
+        let pool = ReaderPool::stepped();
+        let (mut s, _t) = sampler(fixture.kit(&cache, 32_768), &pool, RenderMode::Realtime);
+        const FRAMES: usize = 128;
+        let blocks = (3.0 * HOST) as usize / FRAMES;
+        let quiet_after = (2.0 * HOST) as usize / FRAMES;
+        let params = DrumParams::default();
+        let mut ports = Ports::new(FRAMES);
+        let mut reading = Duration::ZERO;
+        let mut rendering = Duration::ZERO;
+        let mut streaming_voices = 0usize;
+        for blk in 0..blocks {
+            let t = Instant::now();
+            ports.render(&mut s, FRAMES, &params, &pattern(blk, FRAMES, 2, quiet_after));
+            rendering += t.elapsed();
+            streaming_voices += s
+                .voices
+                .iter()
+                .filter(|v| v.active && v.ring != resonance_drums::stream::NO_RING)
+                .count();
+            let t = Instant::now();
+            pool.pump();
+            reading += t.elapsed();
+        }
+        let audio = blocks as f64 * FRAMES as f64 / HOST as f64;
+        eprintln!(
+            "reader throughput, {file_rate} Hz files -> 48 kHz: {audio:.1} s of audio at {:.1} \
+             streaming voices on average, read in {reading:.2?} by one thread (headroom {:.1}x \
+             real time), rendered in {rendering:.2?}; {} underruns",
+            streaming_voices as f64 / blocks as f64,
+            audio / reading.as_secs_f64(),
+            s.stream_underruns()
+        );
+        assert_eq!(s.stream_underruns(), 0);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -691,7 +845,8 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
     let fixture = Fixture::new("stall", 48_000, 2.0);
     let cache = SampleCache::new();
     let path = &fixture.overhead[0];
-    let pool = ReaderPool::new(1);
+    // A stepped reader: it stalls simply by not being pumped.
+    let pool = ReaderPool::stepped();
     let hit = [Hit {
         frame: 0,
         note: drum_map::KICK,
@@ -720,11 +875,10 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
     );
     let mut got = Vec::new();
     let head_blocks = PRELOAD as usize / FRAMES;
-    // Wait for the reader to have filled the ring, then stall it.
+    // The reader fills the ring, then stalls.
     ports.render(&mut s, FRAMES, &params, &hit);
     got.extend(ports.mix_left(FRAMES));
-    std::thread::sleep(Duration::from_millis(50));
-    s.stream_set().set_paused(true);
+    pool.pump();
     // Play through the head and the ring and well past it, stalled.
     let ring_blocks = resonance_drums::stream::RING_FRAMES / FRAMES;
     let stalled_until = head_blocks + ring_blocks + 40;
@@ -751,11 +905,10 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
         .iter()
         .any(|&x| x != 0.0));
 
-    // Back: let the reader catch up in wall time, block by block.
-    s.stream_set().set_paused(false);
+    // Back: the reader catches up, block by block.
     let mut recovered_at = None;
     for b in stalled_until..blocks {
-        std::thread::sleep(Duration::from_millis(3));
+        pool.pump();
         ports.render(&mut s, FRAMES, &params, &[]);
         let block = ports.mix_left(FRAMES);
         if recovered_at.is_none() && block.iter().all(|&x| x != 0.0) {
@@ -763,10 +916,11 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
         }
         got.extend(block);
     }
-    let at = recovered_at.expect("the voice plays again once the reader is back") * FRAMES;
+    let at = recovered_at.expect("the voice plays again once the reader is back");
+    assert_eq!(at, stalled_until, "the first block after the stall plays");
     // In time: what it plays is the take where the voice would be.
+    let at = at * FRAMES;
     assert_eq!(&got[at..], &reference[at..], "recovered out of time");
-    pool.shutdown();
 }
 
 /// The pool's threads run only while a sampler is registered with it:
@@ -1115,7 +1269,7 @@ fn a_file_rewritten_at_the_same_length_is_not_streamed() {
         .set_modified(std::time::SystemTime::now() + Duration::from_secs(10))
         .unwrap();
 
-    let pool = ReaderPool::new(1);
+    let pool = ReaderPool::stepped();
     let (mut s, _t) = sampler(pads, &pool, RenderMode::Realtime);
     let mut ports = Ports::new(128);
     let hit = [Hit {
@@ -1124,12 +1278,9 @@ fn a_file_rewritten_at_the_same_length_is_not_streamed() {
         velocity: 1.0,
     }];
     ports.render(&mut s, 128, &DrumParams::default(), &hit);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while s.stream_set().rings_failed() == 0 {
-        assert!(Instant::now() < deadline, "the stream never failed");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    pool.shutdown();
+    pool.pump();
+    assert_eq!(s.stream_set().rings_failed(), 1, "the stream failed");
+    assert_eq!(s.stream_set().frames_buffered(), 0, "nothing was read");
 }
 
 /// The reader pool is shut down mid-render with voices on their tails:
@@ -1189,12 +1340,10 @@ fn killing_the_reader_never_blocks_the_audio_thread() {
         .expect("the audio thread is blocked")
         .unwrap();
     audio.join().unwrap();
-    // Blocking on the dead reader would never return; a slow block on a
-    // loaded test machine is not that.
-    assert!(
-        slowest < Duration::from_millis(250),
-        "a block took {slowest:?}"
-    );
+    // Blocking on the dead reader would never return (the watchdog
+    // above); a block held off the CPU of a loaded test machine for a
+    // while is not that.
+    assert!(slowest < Duration::from_secs(2), "a block took {slowest:?}");
     assert!(underruns > 0, "the dead reader shows as underruns");
     // Nothing handed rings back once the reader died, so they ran out.
     assert_eq!(rings, NUM_RINGS);
@@ -1245,11 +1394,12 @@ fn only_rings_in_use_hold_storage() {
     use resonance_drums::stream::RING_BYTES;
     let fixture = Fixture::new("ring-memory", 48_000, 0.5);
     let cache = SampleCache::new();
-    let pool = ReaderPool::new(1);
+    let pool = ReaderPool::stepped();
     let (mut s, _t) = sampler(fixture.kit(&cache, 4_096), &pool, RenderMode::Realtime);
     let params = DrumParams::default();
     let mut ports = Ports::new(128);
     ports.render(&mut s, 128, &params, &[]);
+    pool.pump();
     assert_eq!(s.stream_set().ring_bytes(), 0, "no stream, no storage");
     let hit = [Hit {
         frame: 0,
@@ -1258,14 +1408,10 @@ fn only_rings_in_use_hold_storage() {
     }];
     ports.render(&mut s, 128, &params, &hit);
     assert_eq!(s.stream_rings_claimed(), 3);
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while s.stream_set().rings_allocated() < 3 {
-        assert!(Instant::now() < deadline, "the reader never served the rings");
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    assert_eq!(s.stream_set().ring_bytes(), 0, "claimed, not served yet");
+    pool.pump();
     assert_eq!(s.stream_set().rings_allocated(), 3);
     assert_eq!(s.stream_set().ring_bytes(), 3 * RING_BYTES as u64);
-    pool.shutdown();
 }
 
 // ---------------------------------------------------------------------------

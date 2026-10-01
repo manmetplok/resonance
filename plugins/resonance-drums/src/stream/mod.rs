@@ -410,6 +410,8 @@ pub struct StreamSet {
     pub(crate) read_latency_us: AtomicU32,
     /// Test hook: this many of the next reads panic.
     pub(crate) panic_reads: AtomicU32,
+    /// Times the audio thread waited for a tail frame (offline only).
+    pub(crate) waits: AtomicU64,
 }
 
 impl StreamSet {
@@ -421,6 +423,7 @@ impl StreamSet {
             paused: AtomicBool::new(false),
             read_latency_us: AtomicU32::new(0),
             panic_reads: AtomicU32::new(0),
+            waits: AtomicU64::new(0),
         })
     }
 
@@ -440,6 +443,11 @@ impl StreamSet {
     #[doc(hidden)]
     pub fn panic_next_reads(&self, n: u32) {
         self.panic_reads.store(n, Ordering::Release);
+    }
+
+    /// Times the sampler has waited for a tail frame (offline only).
+    pub fn offline_waits(&self) -> u64 {
+        self.waits.load(Ordering::Relaxed)
     }
 
     /// Rings in use: claimed, holding a request the reader has not
