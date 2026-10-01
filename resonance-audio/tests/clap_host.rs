@@ -58,5 +58,7 @@ mod plugin_rescan;
 mod probe_chain;
 #[path = "clap_host/depth_reverb.rs"]
 mod depth_reverb;
+#[path = "clap_host/drums_kit_info.rs"]
+mod drums_kit_info;
 #[path = "clap_host/sub_track_plugin_removal.rs"]
 mod sub_track_plugin_removal;

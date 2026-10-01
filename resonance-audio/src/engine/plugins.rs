@@ -254,7 +254,9 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
             // when that is all it said: this runs under the lock the audio
             // thread drops a block rather than wait for, and a plugin
             // reporting a load progress asks every few percent.
-            match inst.0.take_params_refresh() {
+            let refresh = inst.0.take_params_refresh();
+            let rescanned = !matches!(refresh, ParamsRefresh::None);
+            match refresh {
                 ParamsRefresh::None => {}
                 ParamsRefresh::Values { all_text } => {
                     let values = inst.0.refresh_param_values(all_text);
@@ -269,6 +271,18 @@ pub(crate) fn poll_plugin_host_requests(ctx: &HandlerCtx, external: &ExternalIns
                         instance_id,
                         params: inst.0.query_params(),
                     });
+                }
+            }
+            // A drum plugin's pads (`com.resonance.kit-info`): read once
+            // after creation, then after each rescan it asked for — the
+            // extension's contract for when they may change. Sent after
+            // the values, so the app sees the kit name and the pads of
+            // one kit together.
+            if rescanned || inst.0.kit_info_unread() {
+                if let Some(info) = inst.0.poll_kit_info() {
+                    let _ = ctx
+                        .event_tx
+                        .send(AudioEvent::PluginKitInfo { instance_id, info });
                 }
             }
             // What the plugin said about its preset, from that callback or

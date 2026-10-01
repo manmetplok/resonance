@@ -605,6 +605,14 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         edit: crate::types::PluginParamEdit,
     },
+    /// A Resonance drum plugin's pads changed (`com.resonance.kit-info`):
+    /// each pad's note, its name in the kit it now plays and whether that
+    /// kit has a piece for it. Sent once after the instance is created and
+    /// whenever a params rescan finds them changed.
+    PluginKitInfo {
+        instance_id: PluginInstanceId,
+        info: resonance_common::kit_info::KitInfo,
+    },
     /// A Resonance plugin reported its loaded preset and modified flag
     /// (`com.resonance.preset-session`, slice P5): from its own browser, a
     /// host load, or an edit that made it differ from the preset (or stop

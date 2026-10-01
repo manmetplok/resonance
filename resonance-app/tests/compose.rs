@@ -71,6 +71,8 @@ mod compose_workspace_collapse;
 mod drum_grid_tuplet_drift;
 #[path = "compose/drum_kit_pads.rs"]
 mod drum_kit_pads;
+#[path = "compose/drum_kit_picker.rs"]
+mod drum_kit_picker;
 #[path = "compose/drum_pattern_library.rs"]
 mod drum_pattern_library;
 #[path = "compose/drum_cell_click_phase.rs"]

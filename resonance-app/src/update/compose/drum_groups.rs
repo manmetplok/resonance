@@ -45,6 +45,7 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
                 .or_else(|| active.first().map(|g| g.id));
             r.compose.drumroll.manager_open = true;
             r.compose.drumroll.managing_group_id = focus;
+            refresh_kit_pads(r);
             r.compose.drumroll.manager_filter.clear();
         }
         DrumGroupsMessage::CloseManager => {
@@ -120,8 +121,9 @@ pub(super) fn handle(r: &mut crate::Resonance, msg: DrumGroupsMessage) -> Task<M
             });
         }
         DrumGroupsMessage::TogglePadAssignment { group_id, note } => {
+            let name = kit_pad_name(r, note).unwrap_or_else(|| format!("Note {}", note));
             let _ = with_managing_pattern(r, |pattern| {
-                toggle_pad(&mut pattern.groups, group_id, note);
+                toggle_pad(&mut pattern.groups, group_id, note, name);
             });
         }
         DrumGroupsMessage::ClearGroupPads { group_id } => {
@@ -606,7 +608,7 @@ fn mutate_group(r: &mut crate::Resonance, group_id: u64, f: impl FnOnce(&mut Dru
 /// Toggle whether a pad (identified by MIDI note) belongs to a group.
 /// Adding a pad to one group removes it from any other so a single pad
 /// only ever lives in one place.
-fn toggle_pad(groups: &mut [DrumGroup], target_group: u64, note: u8) {
+fn toggle_pad(groups: &mut [DrumGroup], target_group: u64, note: u8, name: String) {
     // First find whether the pad already lives in any group.
     let mut already_here = false;
     let mut existing_pad: Option<DrumGroupPad> = None;
@@ -633,7 +635,6 @@ fn toggle_pad(groups: &mut [DrumGroup], target_group: u64, note: u8) {
         return;
     }
 
-    let name = kit_pad_name(note).unwrap_or_else(|| format!("Note {}", note));
     let mut pad = if let Some(mut prev) = existing_pad {
         // Reuse the moved pad's weight; resize its pattern so it matches
         // the new group's cycle. Don't carry the old pattern forward —
@@ -661,14 +662,70 @@ fn toggle_pad(groups: &mut [DrumGroup], target_group: u64, note: u8) {
     target.pads.push(pad);
 }
 
-/// Look up a kit pad name by note number using the built-in kit pad
-/// library. Falls back to `None` for unmapped notes so the caller can
-/// generate a generic label.
-fn kit_pad_name(note: u8) -> Option<String> {
-    groups::default_kit_pads()
-        .into_iter()
+/// The kit pad name of `note`: the picker's (the drum track's kit, or
+/// the General MIDI table), else the General MIDI table's — a note the
+/// kit does not name still gets its usual name. `None` for an unmapped
+/// note so the caller can generate a generic label.
+fn kit_pad_name(r: &crate::Resonance, note: u8) -> Option<String> {
+    r.compose
+        .kit_pads
+        .iter()
         .find(|p| p.note == note)
-        .map(|p| p.name)
+        .map(|p| p.name.clone())
+        .or_else(|| {
+            groups::default_kit_pads()
+                .into_iter()
+                .find(|p| p.note == note)
+                .map(|p| p.name)
+        })
+}
+
+/// The track whose Resonance Drums the kit picker describes: the track
+/// the Compose details panel shows when it is a drum track with one, else
+/// the first such drum track in track order.
+fn kit_source_track(r: &crate::Resonance) -> Option<&crate::state::TrackState> {
+    let has_drums = |t: &&crate::state::TrackState| {
+        t.sub_track.is_none() && crate::drums_mirror::drums_slot(t).is_some()
+    };
+    let details = r.compose.details_track_id();
+    details
+        .and_then(|id| r.registry.tracks.iter().find(|t| t.id == id))
+        .filter(has_drums)
+        .or_else(|| {
+            let mut drums: Vec<_> = r.registry.tracks.iter().filter(has_drums).collect();
+            drums.sort_by_key(|t| t.order);
+            drums.into_iter().next()
+        })
+}
+
+/// Re-derive the Drum Groups Manager's pad list and kit name from the
+/// drum track's Resonance Drums (drums-plugin-rework.md §8): its kit name
+/// from `kit_select`'s text, its pads from the instance's kit-info report.
+/// Falls back to the General MIDI table when no drum track has a drums
+/// instance (an external GM synth) or the instance has not reported yet.
+/// Cheap; called when the manager opens and whenever a drums instance
+/// reports a new kit.
+pub(crate) fn refresh_kit_pads(r: &mut crate::Resonance) {
+    let source = kit_source_track(r).and_then(crate::drums_mirror::drums_slot);
+    let (name, pads) = match source {
+        Some(slot) => {
+            let pads = r
+                .plugin_mirror
+                .kit_info
+                .get(&slot.instance_id)
+                .filter(|info| !info.pads.is_empty())
+                .map(groups::kit_pads_from_info)
+                .unwrap_or_else(groups::default_kit_pads);
+            (crate::drums_mirror::kit_name(slot).map(str::to_string), pads)
+        }
+        None => (None, groups::default_kit_pads()),
+    };
+    if r.compose.kit_name != name {
+        r.compose.kit_name = name;
+    }
+    if r.compose.kit_pads != pads {
+        r.compose.kit_pads = pads;
+    }
 }
 
 /// Lightweight pattern generator: fills every pad's `pattern` with a

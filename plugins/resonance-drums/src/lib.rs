@@ -47,6 +47,7 @@ pub use editor::test_kit_path_for_stepping;
 pub use editor::{test_render_editor_frame, EditorFrameProbe, ProbedRect, ProbedText, TestEditor};
 pub mod kit;
 pub mod kit_loader;
+pub mod kit_info_ext;
 /// The process-wide kit library and its download worker.
 #[cfg(feature = "editor")]
 #[doc(hidden)]
@@ -812,6 +813,10 @@ impl ResonancePlugin for ResonanceDrums {
     fn set_host(&mut self, host: Arc<HostHandle>) {
         *self.bridge.host.lock() = Some(host.clone());
         self.host = Some(host);
+    }
+
+    fn kit_info_source(&self) -> Option<Arc<dyn resonance_plugin::KitInfoSource>> {
+        kit_info_ext::source(&self.bridge)
     }
 
     fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {

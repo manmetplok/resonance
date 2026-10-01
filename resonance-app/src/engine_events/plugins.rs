@@ -349,6 +349,7 @@ pub(crate) fn track_removed(
         track.plugins.retain(|p| p.instance_id != instance_id);
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
+    r.plugin_mirror.kit_info.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -911,14 +912,32 @@ pub(super) fn param_values_changed(
     instance_id: PluginInstanceId,
     values: Vec<resonance_audio::types::ParamValueUpdate>,
 ) {
-    r.with_plugin_mut(instance_id, |slot| {
-        for fresh in values {
-            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
-                p.current_value = fresh.value;
-                p.text = fresh.text;
+    let drums = r
+        .with_plugin_mut(instance_id, |slot| {
+            for fresh in values {
+                if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                    p.current_value = fresh.value;
+                    p.text = fresh.text;
+                }
             }
-        }
-    });
+            crate::drums_mirror::is_drums(slot)
+        })
+        .unwrap_or(false);
+    if drums {
+        // `kit_select`'s text names the kit the picker shows.
+        crate::update::compose::refresh_kit_pads(r);
+    }
+}
+
+/// A Resonance Drums instance reported the pads of the kit it now plays
+/// (`com.resonance.kit-info`): mirror it, and re-derive the kit picker.
+pub(super) fn kit_info(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    info: resonance_common::kit_info::KitInfo,
+) {
+    r.plugin_mirror.kit_info.insert(instance_id, info);
+    crate::update::compose::refresh_kit_pads(r);
 }
 
 /// The plugin changed a param itself and reported it (CLAP output

@@ -306,6 +306,9 @@ pub struct ClapMainThread<'a, P: ResonancePlugin> {
     /// Parameter text conversion harvested at construction, for
     /// `value_to_text` / `text_to_value` while the plugin is active.
     pub(crate) param_text_source: Option<std::sync::Arc<dyn crate::plugin::ParamTextSource>>,
+    /// The kit-pads report harvested at construction
+    /// (`com.resonance.kit-info`); `None` for every non-drum plugin.
+    pub(crate) kit_info_source: Option<std::sync::Arc<dyn crate::plugin::KitInfoSource>>,
     /// The last identity report sent to the host
     /// (`com.resonance.preset-session`), for deduplication.
     pub(crate) last_preset_report: Option<String>,

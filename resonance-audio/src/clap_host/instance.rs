@@ -56,6 +56,16 @@ pub struct ClapInstance {
     /// of ours: which params its state leaves out. Read by
     /// [`ClapInstance::query_params`]; `None` for third-party plugins.
     pub(super) param_flags_ext: Option<*const resonance_common::param_flags::PluginParamFlags>,
+    /// The plugin's `com.resonance.kit-info` extension, when it is one of
+    /// our drum plugins: the pads of the kit it plays. Read by
+    /// [`ClapInstance::poll_kit_info`]; `None` for every other plugin.
+    pub(super) kit_info_ext: Option<*const resonance_common::kit_info::PluginKitInfo>,
+    /// The kit info last returned by [`ClapInstance::poll_kit_info`], to
+    /// report only a change; `None` until the first read.
+    last_kit_info: Option<resonance_common::kit_info::KitInfo>,
+    /// Whether [`ClapInstance::poll_kit_info`] has yet to run: the engine
+    /// reads the kit info once after creating the instance.
+    kit_info_unread: bool,
     /// The plugin's `clap.render` extension: told OFFLINE for the length
     /// of an offline render and REALTIME after
     /// ([`ClapInstance::set_render_mode`]). `None` when the plugin does
@@ -172,6 +182,9 @@ impl ClapInstance {
             gui_ext,
             latency_ext,
             param_flags_ext: None,
+            kit_info_ext: None,
+            last_kit_info: None,
+            kit_info_unread: true,
             render_ext: None,
             render_offline: false,
             gui_open: false,
@@ -577,6 +590,45 @@ impl ClapInstance {
     /// Whether the plugin was last told to render offline.
     pub fn render_offline(&self) -> bool {
         self.render_offline
+    }
+
+    /// The pads of the kit a drum plugin plays (`com.resonance.kit-info`),
+    /// when they changed since the last call — the first call reports
+    /// whatever is there. `None` when nothing changed, and always for a
+    /// plugin without the extension. `[main-thread]`: the engine calls it
+    /// once after creating the instance and after every params rescan the
+    /// plugin asks for, which is when the extension's contract says the
+    /// pads may have moved.
+    pub fn poll_kit_info(&mut self) -> Option<resonance_common::kit_info::KitInfo> {
+        self.kit_info_unread = false;
+        let ext = self.kit_info_ext?;
+        // SAFETY: the vtable is the plugin's, live for the instance's
+        // lifetime; this is the main thread.
+        let get = unsafe { (*ext).get }?;
+        let plugin = self.plugin as *const std::ffi::c_void;
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: `buf` holds `buf.len()` writable bytes.
+        let mut len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
+        if len > buf.len() {
+            buf.resize(len, 0);
+            // SAFETY: as above, with the size the plugin asked for.
+            len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
+            if len > buf.len() {
+                return None;
+            }
+        }
+        let info = resonance_common::kit_info::KitInfo::parse(&buf[..len])?;
+        if self.last_kit_info.as_ref() == Some(&info) {
+            return None;
+        }
+        self.last_kit_info = Some(info.clone());
+        Some(info)
+    }
+
+    /// Whether the engine should read the kit info now even without a
+    /// params rescan: the instance has the extension and was never read.
+    pub fn kit_info_unread(&self) -> bool {
+        self.kit_info_ext.is_some() && self.kit_info_unread
     }
 
     /// Whether the plugin's state leaves `param_id` out

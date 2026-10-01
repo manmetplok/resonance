@@ -55,4 +55,9 @@ pub struct PluginMirror {
     /// Starts at 1: there is no engine-side counter left to stay above,
     /// so no base. See `Resonance::allocate_plugin_id`.
     pub next_id: PluginInstanceId,
+
+    /// What each Resonance Drums instance last reported about the pads of
+    /// the kit it plays (`com.resonance.kit-info`,
+    /// `AudioEvent::PluginKitInfo`). Runtime only; the kit picker reads it.
+    pub kit_info: std::collections::HashMap<PluginInstanceId, resonance_common::kit_info::KitInfo>,
 }

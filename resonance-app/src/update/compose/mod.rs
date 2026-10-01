@@ -41,6 +41,7 @@ pub mod vocal_render_plan;
 /// assert the materialized `MidiNote` sequence for an arrangement's
 /// resolved spans without booting a whole `Resonance`.
 pub use drum_groups::build_drum_notes;
+pub(crate) use drum_groups::refresh_kit_pads;
 
 pub(crate) use section::next_default_color;
 

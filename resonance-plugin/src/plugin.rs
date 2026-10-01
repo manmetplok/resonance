@@ -142,6 +142,18 @@ pub trait ParamTextSource: Send + Sync {
     }
 }
 
+/// What a drum plugin says about the pads of the kit it plays, served to
+/// the host as `com.resonance.kit-info` (`resonance_common::kit_info`).
+/// A plugin returns one from [`ResonancePlugin::kit_info_source`]; it is
+/// harvested once at plugin creation, like [`ParamTextSource`].
+pub trait KitInfoSource: Send + Sync {
+    /// The pads as `resonance_common::kit_info::KitInfo` JSON, or `None`
+    /// for nothing to report. Called on the host's main thread, while the
+    /// plugin may be processing: read shared state, never lock what the
+    /// audio thread holds.
+    fn kit_info_json(&self) -> Option<String>;
+}
+
 /// A note event for sample-accurate MIDI processing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NoteEvent {
@@ -633,6 +645,13 @@ pub trait ResonancePlugin: Send + 'static {
     /// [`Self::extra_state_saver`]. Default: `None`, and an active plugin's
     /// text reads as its number.
     fn param_text_source(&self) -> Option<Arc<dyn ParamTextSource>> {
+        None
+    }
+
+    /// The pads of the kit a drum plugin plays, for the host
+    /// (`com.resonance.kit-info`, see [`KitInfoSource`]). Harvested once
+    /// at plugin creation. Default: `None`, and the host hears nothing.
+    fn kit_info_source(&self) -> Option<Arc<dyn KitInfoSource>> {
         None
     }
 

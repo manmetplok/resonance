@@ -31,6 +31,7 @@ use crate::plugin::ResonancePlugin;
 
 mod gui;
 mod midi;
+mod kit_info;
 mod param_flags;
 mod param_output;
 mod params;
@@ -79,6 +80,9 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         // CLAP has no flag for it, and a host persisting them beside the
         // state would override what the state recalls.
         builder.register::<param_flags::PluginParamFlagsExt>();
+        // The pads of the kit a drum plugin plays (com.resonance.kit-info);
+        // answers 0 (nothing) for a plugin with no `kit_info_source`.
+        builder.register::<kit_info::PluginKitInfoExt>();
 
         if let Some(shared) = shared {
             if shared.midi_input {
@@ -269,6 +273,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         let editor_factory = plugin.editor_factory();
         let extra_state_saver = plugin.extra_state_saver();
         let param_text_source = plugin.param_text_source();
+        let kit_info_source = plugin.kit_info_source();
         // The loaded-preset identity reaches the host from `on_main_thread`
         // (com.resonance.preset-session): the session flags a change from
         // whatever thread it happens on.
@@ -287,6 +292,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             editor_serial: 0,
             extra_state_saver,
             param_text_source,
+            kit_info_source,
             last_preset_report: None,
             last_preset_compare: None,
         })

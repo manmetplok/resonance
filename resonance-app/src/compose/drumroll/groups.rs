@@ -373,6 +373,56 @@ pub struct KitPadInfo {
     pub name: String,
     /// Category — "Kick", "Snare", "Hi-Hat", "Toms", "Cymbals", "Perc".
     pub category: String,
+    /// Whether the kit the drum track plays has a piece for this pad.
+    /// `false` only for a pad a real kit leaves out (it plays nothing);
+    /// the built-in table marks every pad present.
+    #[serde(default = "pad_present_default")]
+    pub present: bool,
+}
+
+fn pad_present_default() -> bool {
+    true
+}
+
+/// The picker category of a pad's note: "Kick", "Snare", "Hi-Hat",
+/// "Toms", "Cymbals" or "Perc".
+pub fn pad_category(note: u8) -> &'static str {
+    match note {
+        gm::KICK => "Kick",
+        gm::SNARE
+        | gm::RIMSHOT
+        | gm::SNARE_SIDESTICK
+        | gm::SNARE_FLAM
+        | gm::SNARE_ROLL
+        | gm::SNARE_HANDTUCH => "Snare",
+        gm::HIHAT_CLOSED
+        | gm::HIHAT_OPEN
+        | gm::HIHAT_HALF_OPEN
+        | gm::HIHAT_LOOSE
+        | gm::HIHAT_PEDAL
+        | gm::HIHAT_PRESSED
+        | gm::HIHAT_TRASH_OPEN => "Hi-Hat",
+        gm::TOM_HIGH | gm::TOM_MID | gm::TOM_LOW => "Toms",
+        gm::COUNT_STICK | gm::COWBELL | GM_SHAKER | GM_CONGA | GM_TAMBOURINE => "Perc",
+        _ => "Cymbals",
+    }
+}
+
+/// The picker's pads for a Resonance Drums instance, from what it reports
+/// about the kit it plays (`com.resonance.kit-info`): one per plugin pad,
+/// under the kit's name for it, absent pads kept (dimmed in the picker) so
+/// a group can still hold them for another kit. No external-GM extras:
+/// the drums play none of them.
+pub fn kit_pads_from_info(info: &resonance_common::kit_info::KitInfo) -> Vec<KitPadInfo> {
+    info.pads
+        .iter()
+        .map(|p| KitPadInfo {
+            note: p.note,
+            name: p.name.clone(),
+            category: pad_category(p.note).to_string(),
+            present: p.present,
+        })
+        .collect()
 }
 
 /// GM percussion notes for instruments the `resonance-drums` plugin has
@@ -393,28 +443,6 @@ pub const GM_TAMBOURINE: u8 = 54; // GM: Tambourine
 /// for external GM synths; their notes are GM-standard and never collide
 /// with `GM_PADS`.
 pub fn default_kit_pads() -> Vec<KitPadInfo> {
-    fn category(note: u8) -> &'static str {
-        match note {
-            gm::KICK => "Kick",
-            gm::SNARE
-            | gm::RIMSHOT
-            | gm::SNARE_SIDESTICK
-            | gm::SNARE_FLAM
-            | gm::SNARE_ROLL
-            | gm::SNARE_HANDTUCH => "Snare",
-            gm::HIHAT_CLOSED
-            | gm::HIHAT_OPEN
-            | gm::HIHAT_HALF_OPEN
-            | gm::HIHAT_LOOSE
-            | gm::HIHAT_PEDAL
-            | gm::HIHAT_PRESSED
-            | gm::HIHAT_TRASH_OPEN => "Hi-Hat",
-            gm::TOM_HIGH | gm::TOM_MID | gm::TOM_LOW => "Toms",
-            gm::COUNT_STICK | gm::COWBELL | GM_SHAKER | GM_CONGA | GM_TAMBOURINE => "Perc",
-            _ => "Cymbals",
-        }
-    }
-
     GM_PADS
         .iter()
         .map(|p| (p.name, p.note))
@@ -427,7 +455,8 @@ pub fn default_kit_pads() -> Vec<KitPadInfo> {
         .map(|(name, note)| KitPadInfo {
             note,
             name: name.to_string(),
-            category: category(note).to_string(),
+            category: pad_category(note).to_string(),
+            present: true,
         })
         .collect()
 }

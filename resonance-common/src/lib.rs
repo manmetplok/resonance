@@ -18,6 +18,7 @@ pub mod device_registry;
 #[cfg(feature = "model")]
 pub mod external_instrument;
 pub mod factory_presets;
+pub mod kit_info;
 pub mod param_flags;
 pub mod preset_session;
 pub mod drum_map;

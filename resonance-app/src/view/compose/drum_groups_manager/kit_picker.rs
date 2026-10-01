@@ -15,10 +15,7 @@ use crate::Resonance;
 use super::{col_head, column_panel, separator_below, u8_color};
 
 pub(super) fn kit_picker_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
-    let head = col_head(
-        "KIT",
-        format!("Drummica · {} pads", r.compose.kit_pads.len()),
-    );
+    let head = col_head("KIT", kit_head_label(r));
 
     let filter = &r.compose.drumroll.manager_filter;
     let search = container(
@@ -119,6 +116,23 @@ pub(super) fn kit_picker_column<'a>(r: &'a Resonance) -> Element<'a, Message> {
     )
 }
 
+/// The column head: the drum track's kit and how many of its pads sound
+/// ("Drummica · 30 pads", "Garage · 12 of 30 pads"), or the General MIDI
+/// table's count when no drum track has a Resonance Drums.
+pub(crate) fn kit_head_label(r: &Resonance) -> String {
+    let pads = &r.compose.kit_pads;
+    let present = pads.iter().filter(|p| p.present).count();
+    let count = if present == pads.len() {
+        format!("{} pads", pads.len())
+    } else {
+        format!("{present} of {} pads", pads.len())
+    };
+    match r.compose.kit_name.as_deref() {
+        Some(name) => format!("{name} · {count}"),
+        None => format!("General MIDI · {count}"),
+    }
+}
+
 fn pad_row<'a>(
     pad: &'a KitPadInfo,
     active: Option<u64>,
@@ -131,9 +145,17 @@ fn pad_row<'a>(
     let active_group = active.and_then(|id| groups.iter().find(|g| g.id == id));
     let active_color = active_group.map(|g| u8_color(g.color)).unwrap_or(theme::TEXT_3);
 
+    // A pad the kit has no piece for plays nothing: dimmed, and said so.
+    let name_color = if !pad.present {
+        theme::TEXT_4
+    } else if owner_id.is_some() {
+        theme::TEXT_1
+    } else {
+        theme::TEXT_2
+    };
     let name = text(pad.name.clone())
         .size(12)
-        .color(if owner_id.is_some() { theme::TEXT_1 } else { theme::TEXT_2 })
+        .color(name_color)
         .width(Length::Fill);
     let note = text(format!("{}", pad.note))
         .size(9.5)
@@ -143,8 +165,11 @@ fn pad_row<'a>(
     let mut row_widget = iced::widget::Row::new()
         .spacing(8)
         .align_y(alignment::Vertical::Center)
-        .push(name)
-        .push(note);
+        .push(name);
+    if !pad.present {
+        row_widget = row_widget.push(text("not in kit").size(9.5).color(theme::TEXT_4));
+    }
+    row_widget = row_widget.push(note);
 
     if let Some(g) = owner_group {
         if !in_active {
