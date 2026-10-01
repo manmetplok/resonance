@@ -242,6 +242,17 @@ pub const AUTO_SUSTAINED_WAIT_PER_BLOCK: Duration = Duration::from_millis(50);
 /// a dead reader must not slow a bounce to a crawl.
 const OFFLINE_WAIT_HOLDOFF_SECS: f32 = 1.0;
 
+/// A streaming voice publishes how far it has read (`Ring::read`) and
+/// re-reads what the reader has delivered every this many output frames
+/// **inside** a block, not only at its end: a voice pitched up two
+/// octaves reads four ring frames per output frame, so a 4096-frame block
+/// takes a whole ring ([`crate::stream::RING_FRAMES`]) — with the read
+/// position published only at the block's end, the reader could not
+/// refill behind it while the block rendered, and the voice underran
+/// every block. Two atomic operations per streaming voice per 512
+/// frames.
+pub const MID_BLOCK_PUBLISH_FRAMES: usize = 512;
+
 /// What [`RenderMode::Auto`] reads the time from.
 enum RenderClock {
     /// The wall clock, since the sampler was built.
@@ -386,6 +397,10 @@ pub struct DrumSampler {
     offline_wait_left: Duration,
     /// Frames left to render without waiting, after a long wait ran out.
     offline_holdoff: u64,
+    /// [`AUTO_WAIT_PER_BLOCK`] and [`AUTO_SUSTAINED_WAIT_PER_BLOCK`], or
+    /// what a test set instead ([`DrumSampler::set_auto_wait_budgets`]).
+    auto_wait: Duration,
+    auto_sustained_wait: Duration,
     /// [`RenderMode::Auto`]'s measurement, on `clock`: the window's
     /// start, the audio frames rendered in it, the time it spent waiting
     /// for the reader (not rendering), the offline windows in a row, and
@@ -474,6 +489,8 @@ impl DrumSampler {
             block_wait: Duration::ZERO,
             offline_wait_left: Duration::ZERO,
             offline_holdoff: 0,
+            auto_wait: AUTO_WAIT_PER_BLOCK,
+            auto_sustained_wait: AUTO_SUSTAINED_WAIT_PER_BLOCK,
             clock: RenderClock::Wall(Instant::now()),
             timing_start: None,
             timing_frames: 0,
@@ -541,6 +558,19 @@ impl DrumSampler {
     pub fn set_manual_clock(&mut self, nanos: Arc<AtomicU64>) {
         self.clock = RenderClock::Manual(nanos);
         self.restart_auto();
+    }
+
+    /// Wait at most `short` a block once [`RenderMode::Auto`]'s timing
+    /// says offline, and `sustained` once it has said so for
+    /// [`SUSTAINED_WINDOWS`] windows, instead of [`AUTO_WAIT_PER_BLOCK`]
+    /// and [`AUTO_SUSTAINED_WAIT_PER_BLOCK`] (test hook). A test that
+    /// checks the verdicts with real reader threads sets a budget wall-
+    /// clock contention cannot exhaust, so the render it compares bit for
+    /// bit never depends on how loaded the machine is.
+    #[doc(hidden)]
+    pub fn set_auto_wait_budgets(&mut self, short: Duration, sustained: Duration) {
+        self.auto_wait = short;
+        self.auto_sustained_wait = sustained;
     }
 
     /// Start the timing detector over, as live: a render after this
@@ -1174,9 +1204,9 @@ impl DrumSampler {
                 }
                 self.offline = self.fast_windows > 0;
                 if self.fast_windows >= SUSTAINED_WINDOWS {
-                    AUTO_SUSTAINED_WAIT_PER_BLOCK
+                    self.auto_sustained_wait
                 } else if self.offline {
-                    AUTO_WAIT_PER_BLOCK
+                    self.auto_wait
                 } else {
                     Duration::ZERO
                 }
@@ -1348,7 +1378,7 @@ impl DrumSampler {
         let offline_holdoff = &mut self.offline_holdoff;
         // Only a long wait running dry means a dead reader; a short Auto
         // budget runs dry as a matter of course.
-        let long_waits = self.block_wait >= AUTO_SUSTAINED_WAIT_PER_BLOCK;
+        let long_waits = self.block_wait >= self.auto_sustained_wait.min(OFFLINE_WAIT_PER_BLOCK);
         let holdoff_frames = (OFFLINE_WAIT_HOLDOFF_SECS * self.sample_rate) as u64;
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
@@ -1485,6 +1515,8 @@ impl DrumSampler {
             let unity = voice.rate == 1.0;
             let rate = voice.rate;
             let ahd = voice.decay_frames > 0;
+            // Output frames since the voice last published its progress.
+            let mut since_publish = 0usize;
 
             for frame in start..end {
                 if voice.position >= end_at {
@@ -1643,6 +1675,41 @@ impl DrumSampler {
                 voice.env_pos = voice.env_pos.saturating_add(1);
                 if voice.state == VoiceState::Releasing {
                     voice.release_pos += 1;
+                }
+
+                since_publish += 1;
+                if since_publish >= MID_BLOCK_PUBLISH_FRAMES {
+                    since_publish = 0;
+                    if let Some(ring) = ring {
+                        // Room for the reader behind the voice, and what
+                        // it delivered since (see MID_BLOCK_PUBLISH_FRAMES).
+                        let done = if unity {
+                            voice.position
+                        } else {
+                            voice.position.saturating_sub(1)
+                        };
+                        if done > resident {
+                            ring.read.store((done - resident) as u64, Ordering::Release);
+                        }
+                        if let Some(hook) = streams.set.mid_block_hook() {
+                            hook();
+                        }
+                        let (now_written, now_failed) = ring.published();
+                        written = written.max(now_written);
+                        if now_failed && end_at == total {
+                            // Its tail will not come: fade out where its
+                            // frames end, as a span that starts failed does.
+                            end_at = resident + written as usize;
+                            if !voice.stream_lost {
+                                voice.stream_lost = true;
+                                streams.underruns.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if voice.position >= end_at {
+                                voice.active = false;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             if let Some(ring) = ring {
