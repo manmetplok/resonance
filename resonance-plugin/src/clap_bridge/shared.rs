@@ -78,6 +78,9 @@ pub struct ClapShared<'a> {
     /// audio processor all consult this instead of re-calling the plugin hook.
     pub(crate) output_ports: Vec<OutputPortSpec>,
     pub(crate) midi_input: bool,
+    /// Whether the plugin has a `ResonancePlugin::kit_info_source`, i.e.
+    /// exposes `com.resonance.kit-info`. Harvested once at construction.
+    pub(crate) kit_info: bool,
     /// The plugin's parameter-id rename table, harvested once at
     /// construction from `ResonancePlugin::param_renames`.
     ///

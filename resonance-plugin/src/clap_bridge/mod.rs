@@ -80,17 +80,23 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         // CLAP has no flag for it, and a host persisting them beside the
         // state would override what the state recalls.
         builder.register::<param_flags::PluginParamFlagsExt>();
-        // The pads of the kit a drum plugin plays (com.resonance.kit-info);
-        // answers 0 (nothing) for a plugin with no `kit_info_source`.
-        builder.register::<kit_info::PluginKitInfoExt>();
-
         if let Some(shared) = shared {
             if shared.midi_input {
                 builder.register::<PluginNotePorts>();
             }
+            // The pads of the kit a drum plugin plays
+            // (com.resonance.kit-info): only a plugin with a
+            // `kit_info_source` exposes it, so a host asking any other
+            // plugin for it gets no vtable at all.
+            if shared.kit_info {
+                builder.register::<kit_info::PluginKitInfoExt>();
+            }
         } else {
-            // First call (no shared yet) — register conservatively
+            // First call (no shared yet) — register conservatively. The
+            // kit-info `get` answers 0 (nothing) for a plugin without a
+            // source, so the conservative answer is harmless.
             builder.register::<PluginNotePorts>();
+            builder.register::<kit_info::PluginKitInfoExt>();
         }
 
         builder.register::<PluginLatency>();
@@ -234,6 +240,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             sidechain_channels: P::SIDECHAIN_INPUT,
             output_ports,
             midi_input: P::MIDI_INPUT,
+            // Whether to expose com.resonance.kit-info: the plugin opts in
+            // with a source (only drum plugins do).
+            kit_info: temp.kit_info_source().is_some(),
             // Harvested from the same throwaway instance the param metadata
             // came from: the state extension needs it while the real plugin
             // lives in the audio processor (ba todo #1360).
