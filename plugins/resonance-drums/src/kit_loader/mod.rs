@@ -778,9 +778,11 @@ pub fn spawn_loader(
                     let num_pads = kit.pads.len();
                     let name = kit_display_name(&request.path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
-                    bridge
-                        .kit_pads
-                        .set(request.path.clone(), Arc::new(kit.kit_pads));
+                    // The pads go with the hand-off, under `kit_handoff`:
+                    // the editor and the articulation text describe the
+                    // kit the sampler takes, never one still decoding. A
+                    // label change asks the host for a text rescan.
+                    crate::pad_map::publish(&bridge, Arc::new(kit.kit_pads));
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
@@ -810,9 +812,6 @@ pub fn spawn_loader(
                         unreadable_paths: kit.stats.unreadable_paths.clone(),
                     };
                     *bridge.load_stats.lock() = kit.stats;
-                    // The articulation parameters read as this kit's
-                    // labels now (`pad_map::KitPadsHandle`).
-                    bridge.request_params_rescan();
                 }
                 Ok(Err(message)) => {
                     bridge.load_progress.failed(stamp);

@@ -833,6 +833,11 @@ pub fn play_builtin(bridge: &KitBridge) {
     };
     if sr_bits == 0 || on_builtin {
         bridge.load_progress.idle(generation);
+        // Inactive, the sampler takes the built-in kit at `initialize`
+        // (which publishes its pads too); on it already, they may still
+        // be another kit's only if a hand-off raced this — either way,
+        // the built-in pads are what plays.
+        crate::pad_map::publish_builtin(bridge);
         return;
     }
     bridge.load_progress.begin(generation);
@@ -876,6 +881,7 @@ pub fn play_builtin(bridge: &KitBridge) {
             // A newer pick (or another rate) may have taken over; then
             // the pads are simply dropped here.
             kit_loader::hand_off_kit_if_current(&bridge, pads, generation, rate, || {
+                crate::pad_map::publish_builtin(&bridge);
                 *bridge.builtin_kit.lock() = Some(builtin);
                 bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                 bridge

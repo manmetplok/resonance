@@ -91,6 +91,17 @@ fn load(plugin: &ResonanceDrums, kit: &str) {
     settle(plugin);
 }
 
+/// Wait for the built-in kit's pads to be published: `play_builtin` on an
+/// active plugin builds the built-in kit off-thread and publishes its pads
+/// with the hand-off.
+fn wait_for_builtin_pads(plugin: &ResonanceDrums) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while plugin.bridge.kit_pads.current().from_kit {
+        assert!(Instant::now() < deadline, "the built-in pads never came back");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn settle(plugin: &ResonanceDrums) {
     let bridge = &plugin.bridge;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -221,6 +232,7 @@ fn the_articulation_param_reads_the_kits_labels() {
 
     // Back on the built-in kit, the kit's words go.
     resonance_drums::selection::play_builtin(&plugin.bridge);
+    wait_for_builtin_pads(&plugin);
     assert_eq!(kick.display(ARTICULATION_ALT as f64), "Alternate");
 }
 
@@ -303,7 +315,65 @@ fn the_bridge_reports_the_loaded_kits_pads_and_the_built_in_ones_without_a_kit()
     assert!(!pads.is_present(TOM_HIGH_PAD));
 
     resonance_drums::selection::play_builtin(&plugin.bridge);
-    assert!(!plugin.bridge.kit_pads.current().from_kit);
+    wait_for_builtin_pads(&plugin);
+}
+
+/// The pads are published with the hand-off, not looked up by `kit_path`:
+/// a state load points `kit_path` at kit B before B decodes, and the
+/// editor must keep showing the kit that plays — and keep showing it when
+/// B fails.
+#[test]
+fn the_pads_stay_the_playing_kits_while_another_loads_and_when_it_fails() {
+    let plugin = booted();
+    load(&plugin, "it_techno");
+    let bridge = &plugin.bridge;
+    let missing = fixture("it_techno").with_file_name("no_such_manifest.json");
+    // What a preset switch does first.
+    *bridge.kit_path.lock() = Some(missing.clone());
+    let pads = bridge.kit_pads.current();
+    assert!(pads.from_kit, "the editor flipped to the built-in view");
+    assert_eq!(pads.pads[COUNT_STICK_PAD].name, "Perc Conga");
+
+    spawn_loader(
+        missing,
+        RATE,
+        bridge,
+        DEFAULT_OVERHEAD_SETUP.to_string(),
+        no_choices(),
+        bridge.articulations(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !matches!(*bridge.kit_status.lock(), KitStatus::Error { .. })
+        || bridge.pending_kit.lock().is_some()
+    {
+        assert!(Instant::now() < deadline, "the load never failed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let pads = bridge.kit_pads.current();
+    assert!(pads.from_kit, "a failed load left the built-in view");
+    assert_eq!(pads.pads[COUNT_STICK_PAD].name, "Perc Conga");
+}
+
+/// A load whose articulation labels differ from the kit before it asks the
+/// host for a **text** rescan (the values did not move); one whose labels
+/// match does not.
+#[test]
+fn a_load_that_changes_the_articulation_labels_asks_for_a_text_rescan() {
+    let plugin = booted();
+    let asks = &plugin.bridge.host_asks;
+    let texts = || asks.text_rescans.load(std::sync::atomic::Ordering::Relaxed);
+    let before = texts();
+    load(&plugin, "it_techno");
+    let after_first = texts();
+    assert!(after_first > before, "punch/deep came in without a text rescan");
+
+    // The same kit again: the same labels.
+    load(&plugin, "it_techno");
+    assert_eq!(texts(), after_first, "an unchanged label set asked again");
+
+    // Another kit pairs other pads under other words.
+    load(&plugin, "drummica_like");
+    assert!(texts() > after_first);
 }
 
 // ---------------------------------------------------------------------------
