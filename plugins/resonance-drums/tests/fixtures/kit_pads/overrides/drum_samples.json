@@ -1,0 +1,110 @@
+{
+  "SD Count Stick": {
+    "19_OHsAB_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "OHsAB",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/conga.wav"
+        }
+      }
+    }
+  },
+  "SD Hat Closed": {
+    "06_Hat_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "Hat",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/hat.wav"
+        }
+      }
+    }
+  },
+  "SD Kick mit Teppich": {
+    "01_KickIn_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "KickIn",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/kick.wav"
+        }
+      }
+    }
+  },
+  "SD Kick ohne Teppich": {
+    "01_KickIn_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "KickIn",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/kick_alt.wav"
+        }
+      }
+    }
+  },
+  "SD Snare Handtuch": {
+    "04_SNTop_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "SNTop",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/clap.wav"
+        }
+      }
+    }
+  },
+  "SD Snare Normal": {
+    "04_SNTop_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "SNTop",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/snare.wav"
+        }
+      }
+    }
+  },
+  "SD Snare ohne Teppich": {
+    "04_SNTop_T": {
+      "brand": "Test",
+      "channel": "1",
+      "mic": "M1",
+      "position": "SNTop",
+      "rounds": {
+        "RR01": {
+          "Vel01": "../wavs/snare_alt.wav"
+        }
+      }
+    }
+  },
+  "_meta": {
+    "pads": {
+      "SD Count Stick": {
+        "choke": 3,
+        "note": 50,
+        "port": "Toms"
+      },
+      "SD Hat Closed": {
+        "port": 0
+      }
+    },
+    "pieces": {
+      "SD Count Stick": {
+        "name": "Perc Conga"
+      }
+    }
+  }
+}

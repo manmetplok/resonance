@@ -2,7 +2,8 @@
 //!
 //! Per-row layout (left to right):
 //!   • Status LED (purple/green/dim)
-//!   • Pad name
+//!   • Pad name — the kit's (`_meta.pieces`, [`crate::pad_map`]); a pad
+//!     whose piece the kit lacks is dimmed (D7), and it is silent
 //!   • Round-robin readout ("2/3" — take that last fired, of how many)
 //!   • MIDI note badge
 //!   • Mute "M" button
@@ -192,6 +193,7 @@ fn draw_pad_list(
     selected_pad: &mut usize,
 ) {
     let filter = pad_filter.trim().to_lowercase();
+    let kit = bridge.kit_pads.current();
     let matches = |name: &str| -> bool {
         if filter.is_empty() {
             return true;
@@ -212,9 +214,7 @@ fn draw_pad_list(
     let mut shown_in_group = 0usize;
     for group in groups.iter() {
         let group_idx: Vec<usize> = (0..NUM_PADS)
-            .filter(|&i| {
-                PAD_MAPPINGS[i].output_group == *group && matches(PAD_MAPPINGS[i].name)
-            })
+            .filter(|&i| PAD_MAPPINGS[i].output_group == *group && matches(&kit.pads[i].name))
             .collect();
         if group_idx.is_empty() {
             continue;
@@ -232,7 +232,14 @@ fn draw_pad_list(
             let mapping = &PAD_MAPPINGS[i];
             let selected = *selected_pad == i;
             let rr = rr_display::unpack(bridge.last_rr[i].load(Ordering::Relaxed));
-            draw_pad_row(ui, params, mapping, i, selected, rr, |idx| {
+            let kit_pad = &kit.pads[i];
+            let row = PadRow {
+                name: &kit_pad.name,
+                present: kit_pad.present,
+                selected,
+                rr,
+            };
+            draw_pad_row(ui, params, mapping, i, row, |idx| {
                 *selected_pad = idx;
             });
             shown_in_group += 1;
@@ -245,19 +252,35 @@ fn draw_pad_list(
     }
 }
 
-/// One pad row. `rr` is the round-robin state the audio thread last
-/// published for this pad: `None` until the pad fires, then which take of
-/// how many, shown as a compact `2/3` before the note badge (ba todo
-/// #1329 — the row used to reduce it to "has fired at all").
+/// What one pad row shows besides its slot.
+struct PadRow<'a> {
+    /// The kit's name for the pad.
+    name: &'a str,
+    /// False when the kit lacks the pad's piece: the row is dimmed.
+    present: bool,
+    selected: bool,
+    /// The round-robin state the audio thread last published for this
+    /// pad: `None` until the pad fires, then which take of how many,
+    /// shown as a compact `2/3` before the note badge (ba todo #1329 —
+    /// the row used to reduce it to "has fired at all").
+    rr: Option<rr_display::RoundRobin>,
+}
+
+/// One pad row.
 fn draw_pad_row(
     ui: &mut egui::Ui,
     params: &DrumParams,
     mapping: &crate::drum_map::PadMapping,
     pad_idx: usize,
-    selected: bool,
-    rr: Option<rr_display::RoundRobin>,
+    row: PadRow<'_>,
     mut on_select: impl FnMut(usize),
 ) {
+    let PadRow {
+        name,
+        present,
+        selected,
+        rr,
+    } = row;
     let row_h = 22.0;
     let avail_w = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(
@@ -265,6 +288,10 @@ fn draw_pad_row(
         egui::Sense::click(),
     );
     super::probe(ui, format!("pad_row.{pad_idx}"), rect);
+    if !present {
+        // Dimmed: the kit has no recording for this pad (D7).
+        super::probe(ui, format!("pad_row.{pad_idx}.absent"), rect);
+    }
 
     // Background pill.
     let p = ui.painter_at(rect);
@@ -279,6 +306,8 @@ fn draw_pad_row(
     let led_y = rect.center().y;
     let led_color = if selected {
         theme::ACCENT
+    } else if !present {
+        theme::BG_3
     } else if rr.is_some() {
         theme::GOOD
     } else {
@@ -288,11 +317,15 @@ fn draw_pad_row(
 
     // Name.
     let name_x = led_x + 12.0;
-    let name_color = if selected { theme::TEXT_1 } else { theme::TEXT_2 };
+    let name_color = match (present, selected) {
+        (false, _) => theme::TEXT_4,
+        (true, true) => theme::TEXT_1,
+        (true, false) => theme::TEXT_2,
+    };
     p.text(
         egui::pos2(name_x, led_y),
         egui::Align2::LEFT_CENTER,
-        mapping.name,
+        name,
         egui::FontId::proportional(11.5),
         name_color,
     );
@@ -411,9 +444,19 @@ fn current_kit_name(bridge: &KitBridge) -> String {
 }
 
 fn format_kit_meta(bridge: &KitBridge) -> String {
-    let status = bridge.kit_status.lock();
-    match &*status {
-        KitStatus::Loaded { num_pads, .. } => format!("{} pads", num_pads),
+    let status = bridge.kit_status.lock().clone();
+    match status {
+        // The pads the kit fills, not the slots: a kit without toms
+        // plays fewer (D7).
+        KitStatus::Loaded { num_pads, .. } => {
+            let kit = bridge.kit_pads.current();
+            let present = if kit.from_kit {
+                kit.pads.iter().filter(|pad| pad.present).count()
+            } else {
+                num_pads
+            };
+            format!("{present} of {num_pads} pads")
+        }
         KitStatus::Loading { .. } => "loading…".to_string(),
         KitStatus::Error { .. } => "error".to_string(),
         KitStatus::Empty => "defaults".to_string(),

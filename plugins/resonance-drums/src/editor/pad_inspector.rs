@@ -4,7 +4,8 @@
 //!   • Pad title (Instrument Serif italic) + meta + Audition + Enabled chip
 //!   • Sample stage (waveform of the take this pad plays at full velocity)
 //!   • 4-knob row: Volume / Pan / OH Blend / Balance
-//!   • Articulations chips (only when the pad supports articulation)
+//!   • Articulations chips, labelled by the kit (only when the kit pairs
+//!     the pad's piece with an alternate one, [`crate::pad_map`])
 //!   • Close mics card (mic pickers + balance slider) + Overhead Blend card
 //!
 //! Wiring follows the existing param surface — no new params are introduced.
@@ -46,6 +47,10 @@ pub fn draw(
 
         let mapping = &PAD_MAPPINGS[selected_pad];
         let pad = &params.pads[selected_pad];
+        // What the current kit plays on this pad: its name, whether it
+        // has the piece at all, its articulation pair.
+        let kit = bridge.kit_pads.current();
+        let kit_pad = &kit.pads[selected_pad];
 
         // Sample identity is published by whoever built the live kit; the
         // clone keeps the bridge lock off the whole inspector frame.
@@ -60,12 +65,12 @@ pub fn draw(
         // audio thread on every note-on.
         let rr = rr_display::unpack(bridge.last_rr[selected_pad].load(Ordering::Relaxed));
 
-        draw_pad_head(ui, bridge, mapping, pad, rr);
-        draw_sample_stage(ui, sample_info.as_ref());
+        draw_pad_head(ui, bridge, mapping, kit_pad, pad, rr);
+        draw_sample_stage(ui, sample_info.as_ref(), kit_pad.present);
         draw_knob_grid(ui, pad, mapping);
 
-        if mapping.has_articulation {
-            draw_articulations(ui, bridge, pad);
+        if let Some(articulation) = &kit_pad.articulation {
+            draw_articulations(ui, bridge, pad, articulation);
         }
 
         draw_mic_and_oh_row(ui, bridge, catalog, pad, mapping, selected_pad);
@@ -77,14 +82,19 @@ fn draw_pad_head(
     ui: &mut egui::Ui,
     bridge: &KitBridge,
     mapping: &crate::drum_map::PadMapping,
+    kit_pad: &crate::pad_map::KitPad,
     pad: &crate::params::PadParams,
     rr: Option<rr_display::RoundRobin>,
 ) {
     ui.horizontal(|ui| {
         ui.label(
-            egui::RichText::new(mapping.name)
+            egui::RichText::new(kit_pad.name.as_str())
                 .italics()
-                .color(theme::TEXT_1)
+                .color(if kit_pad.present {
+                    theme::TEXT_1
+                } else {
+                    theme::TEXT_4
+                })
                 .size(20.0),
         );
         ui.add_space(10.0);
@@ -99,6 +109,20 @@ fn draw_pad_head(
             .monospace(),
         );
         ui.add_space(10.0);
+        if !kit_pad.present {
+            let shown = ui
+                .label(
+                    egui::RichText::new(NOT_IN_KIT)
+                        .color(theme::WARM)
+                        .size(11.0),
+                )
+                .on_hover_text(
+                    "The selected kit has no recording for this pad, so it is \
+                     silent. The built-in samples play only when no kit is \
+                     selected.",
+                );
+            super::probe(ui, "inspector.not_in_kit", shown.rect);
+        }
         // Round robin: which take of how many the last hit used. Updates
         // as takes cycle — the editor repaints ~10× a second (ba #1329).
         match rr {
@@ -143,7 +167,8 @@ fn draw_pad_head(
             // sounds like playing the pad — and it works with the
             // transport stopped, because the plugin renders regardless.
             let clicked = ui
-                .add(
+                .add_enabled(
+                    kit_pad.present,
                     egui::Button::new(
                         egui::RichText::new("▶ Audition")
                             .color(theme::TEXT_2)
@@ -155,6 +180,7 @@ fn draw_pad_head(
                     .min_size(egui::vec2(0.0, 24.0)),
                 )
                 .on_hover_text("Play this pad once, at a firm velocity.")
+                .on_disabled_hover_text(NOT_IN_KIT)
                 .clicked();
             if clicked {
                 bridge.audition(mapping.note);
@@ -201,13 +227,16 @@ fn draw_enabled_chip(ui: &mut egui::Ui, pad: &crate::params::PadParams, enabled:
     }
 }
 
+/// What the inspector says about a pad whose piece the kit lacks (D7).
+pub(crate) const NOT_IN_KIT: &str = "Not in this kit";
+
 /// SAMPLE stage: the waveform of the take this pad plays at full velocity.
 ///
 /// Everything drawn here comes from [`PadSampleInfo`], measured from the
 /// decoded take by whoever built the kit. When no info has been published
 /// for this pad — no kit loaded yet, or the pad has no bank in this kit —
 /// the stage says so instead of drawing an invented shape (ba todo #1276).
-fn draw_sample_stage(ui: &mut egui::Ui, info: Option<&PadSampleInfo>) {
+fn draw_sample_stage(ui: &mut egui::Ui, info: Option<&PadSampleInfo>, present: bool) {
     let frame = egui::Frame::default()
         .fill(theme::BG_1)
         .stroke(egui::Stroke::new(1.0, theme::LINE_2))
@@ -253,7 +282,11 @@ fn draw_sample_stage(ui: &mut egui::Ui, info: Option<&PadSampleInfo>) {
             p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "no sample detail available — load a kit",
+                if present {
+                    "no sample detail available — load a kit"
+                } else {
+                    "Not in this kit — this pad is silent"
+                },
                 egui::FontId::proportional(11.0),
                 theme::TEXT_4,
             );
@@ -402,7 +435,15 @@ fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
 /// because the parameter moved, not because a chip was clicked. That is
 /// the same path host automation and `set_plugin_param` take (ba todo
 /// #1325), so the three cannot drift apart.
-fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params::PadParams) {
+///
+/// The parameter's values are generic (0 = primary piece, 1 = alternate);
+/// the chips carry the kit's labels for them ("punch" / "deep").
+fn draw_articulations(
+    ui: &mut egui::Ui,
+    bridge: &KitBridge,
+    pad: &crate::params::PadParams,
+    articulation: &crate::pad_map::PadArticulation,
+) {
     let frame = inline_group_frame();
     frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -413,10 +454,9 @@ fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params
                     .size(10.5)
                     .strong(),
             );
-            let options = pad.articulation.labels().len();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(format!("{options} options"))
+                    egui::RichText::new(articulation.label.as_str())
                         .color(theme::TEXT_3)
                         .size(10.5)
                         .monospace(),
@@ -426,9 +466,15 @@ fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params
         ui.add_space(2.0);
         let current = pad.articulation.value();
         ui.horizontal(|ui| {
-            for (index, label) in pad.articulation.labels().iter().enumerate() {
-                let index = index as i32;
-                if widgets::chip_button(ui, label, index == current) && index != current {
+            let chips = [
+                (crate::articulation::ARTICULATION_PRIMARY, &articulation.primary_label),
+                (crate::articulation::ARTICULATION_ALT, &articulation.alt_label),
+            ];
+            for (index, label) in chips {
+                let clicked = super::probed(ui, &format!("articulation.{index}"), |ui| {
+                    widgets::chip_button(ui, label, index == current)
+                });
+                if clicked && index != current {
                     pad.articulation.set_value(index);
                     // The parameter is the source of truth; the reload is
                     // the watcher's job. Ping it so the click lands now

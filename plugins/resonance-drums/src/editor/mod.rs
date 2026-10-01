@@ -337,6 +337,16 @@ impl TestEditor {
         self.frame(events(false))
     }
 
+    /// Select pad `pad`, as clicking its row does.
+    pub fn select_pad(&mut self, pad: usize) {
+        self.app.selected_pad = pad;
+    }
+
+    /// Type `text` into the pad list's filter.
+    pub fn filter_pads(&mut self, text: &str) {
+        self.app.pad_filter = text.to_string();
+    }
+
     /// What the header's `Library…` button does.
     pub fn open_library(&mut self) {
         self.app.open_library();

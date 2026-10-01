@@ -136,8 +136,7 @@ pub struct VelocityLayer {
 #[derive(Clone)]
 pub struct LoadedMicBank {
     /// Canonical position key from the manifest (e.g. `"KickIn"`, `"OHsAB"`).
-    /// Empty for the embedded-fallback bank used by pads with no manifest
-    /// match (Clap, Cowbell). Consumed by the Phase 6 editor for display.
+    /// `"fallback"` for the one bank of a built-in-kit pad.
     #[allow(dead_code)]
     pub position: String,
     /// The manifest setup key that produced this bank (e.g.
@@ -202,12 +201,14 @@ pub fn routing_port_list() -> String {
 /// close banks (in/out and top/btm); toms and hats get one; cymbals get
 /// none. Every pad (except the embedded fallback path) also gets an
 /// overhead bank that accumulates into the shared Overhead port.
+/// A pad whose piece the kit lacks has no banks at all and is silent.
 ///
 /// `Clone` copies the bank structure and bumps every take's `Arc`; no
 /// sample memory is copied.
 #[derive(Clone)]
 pub struct LoadedPad {
-    /// Display name, sourced from `PAD_MAPPINGS`.
+    /// Display name: the kit's (`_meta.pieces`, see [`crate::pad_map`]), or
+    /// the GM pad name for the built-in kit.
     #[allow(dead_code)]
     pub name: String,
     pub choke_group: Option<u8>,
@@ -216,13 +217,13 @@ pub struct LoadedPad {
     pub output_group: OutputGroup,
     /// Close-mic banks, one per position the library supplies for this
     /// pad. Empty for cymbal-class pads on Drummica (the library has no
-    /// cymbal close mics) and for Clap / Cowbell (no manifest match).
-    /// For Clap / Cowbell this vec holds a single pseudo-bank built
-    /// from the embedded fallback sample so the pad still makes sound.
+    /// cymbal close mics) and for a pad whose piece the kit lacks (D7:
+    /// silent). A built-in-kit pad holds one pseudo-bank of its embedded
+    /// sample.
     pub close_mics: Vec<LoadedMicBank>,
     /// Overhead mic bank. `None` when the library ships no overhead
-    /// recording for this pad, or when the pad uses the embedded
-    /// fallback path (Clap / Cowbell).
+    /// recording for this pad, when the kit lacks the pad's piece, and on
+    /// the built-in kit.
     pub overhead: Option<LoadedMicBank>,
 }
 

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use crossbeam_channel::TrySendError;
 
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::pad_map::KitPads;
 use crate::kit::{LoadedPad, SampleData};
 use crate::mic_catalog::ManifestMicCatalog;
 use crate::KitBridge;
@@ -37,85 +38,9 @@ pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
 use decode::{assemble_pad, plan_bank_for_position, plan_overhead_bank, Jobs, Tally};
 
-// ---------------------------------------------------------------------------
-// Drum-piece -> pad slot mapping.
-//
-// Fixed mapping from the 30 hardcoded pad slots to drummica drum-piece names.
-// Kits that don't ship every name (or use different names) fall back to the
-// embedded default sample for that slot.
-//
-// Pads with `has_articulation == true` in PAD_MAPPINGS have an alternate
-// piece name in DRUMMICA_ARTICULATION_ALT. When the user toggles the
-// articulation, the loader uses the alt name instead of the primary.
-// ---------------------------------------------------------------------------
-
-const DRUMMICA_MAPPING: [&str; NUM_PADS] = [
-    "SD Kick mit Teppich",      // 0  Kick
-    "SD Snare Normal",          // 1  Snare
-    "SD Hat Closed",            // 2  Hi-Hat Closed
-    "SD Hat Open",              // 3  Hi-Hat Open
-    "SD Hat Half Open",         // 4  Hi-Hat Half Open
-    "SD Hat Loose",             // 5  Hi-Hat Loose
-    "SD Hat Pedal",             // 6  Hi-Hat Pedal
-    "SD Hat Pressed",           // 7  Hi-Hat Pressed
-    "SD Hat Trash Open",        // 8  Hi-Hat Trash Open
-    "SD Tom01 mit Teppich",     // 9  Tom High
-    "SD Tom02 mit Teppich",     // 10 Tom Mid
-    "SD Tom Floor mit Teppich", // 11 Tom Low
-    "SD Crash 16 Edge",         // 12 Crash 16 Edge
-    "SD Crash 16 Bell",         // 13 Crash 16 Bell
-    "SD Crash 16 Tip",          // 14 Crash 16 Tip
-    "SD Crash 18 Edge",         // 15 Crash 18 Edge
-    "SD Crash 18 Bell",         // 16 Crash 18 Bell
-    "SD Crash 18 Tip",          // 17 Crash 18 Tip
-    "SD Ride Edge",             // 18 Ride Edge
-    "SD Ride Bell",             // 19 Ride Bell
-    "SD Ride Tip",              // 20 Ride Tip
-    "SD China 16 Edge",         // 21 China Edge
-    "SD China 16 Bell",         // 22 China Bell
-    "SD China 16 Tip",          // 23 China Tip
-    "SD Snare Sidestick",       // 24 Sidestick
-    "SD Snare Rimshots",        // 25 Rimshot
-    "SD Snare Flam",            // 26 Snare Flam
-    "SD Snare Roll",            // 27 Snare Roll
-    "SD Snare Handtuch",        // 28 Snare Handtuch
-    "SD Count Stick",           // 29 Count Stick
-];
-
-/// Alternate drummica piece names for the articulation toggle (ohne Teppich).
-/// Empty string means the pad has no articulation variant.
-const DRUMMICA_ARTICULATION_ALT: [&str; NUM_PADS] = [
-    "SD Kick ohne Teppich",      // 0  Kick
-    "SD Snare ohne Teppich",     // 1  Snare
-    "",                          // 2  Hi-Hat Closed
-    "",                          // 3  Hi-Hat Open
-    "",                          // 4  Hi-Hat Half Open
-    "",                          // 5  Hi-Hat Loose
-    "",                          // 6  Hi-Hat Pedal
-    "",                          // 7  Hi-Hat Pressed
-    "",                          // 8  Hi-Hat Trash Open
-    "SD Tom01 ohne Teppich",     // 9  Tom High
-    "SD Tom02 ohne Teppich",     // 10 Tom Mid
-    "SD Tom Floor ohne Teppich", // 11 Tom Low
-    "",                          // 12 Crash 16 Edge
-    "",                          // 13 Crash 16 Bell
-    "",                          // 14 Crash 16 Tip
-    "",                          // 15 Crash 18 Edge
-    "",                          // 16 Crash 18 Bell
-    "",                          // 17 Crash 18 Tip
-    "",                          // 18 Ride Edge
-    "",                          // 19 Ride Bell
-    "",                          // 20 Ride Tip
-    "",                          // 21 China Edge
-    "",                          // 22 China Bell
-    "",                          // 23 China Tip
-    "",                          // 24 Sidestick
-    "",                          // 25 Rimshot
-    "",                          // 26 Snare Flam
-    "",                          // 27 Snare Roll
-    "",                          // 28 Snare Handtuch
-    "",                          // 29 Count Stick
-];
+// The pad -> piece mapping (the Drummica table, `_meta.pads` overrides,
+// articulation pairs, display names) is `crate::pad_map`'s.
+pub use crate::pad_map::{DRUMMICA_ARTICULATION_ALT, DRUMMICA_MAPPING};
 
 /// Default overhead setup key. Matches the pre-multi-output loader so
 /// existing projects load with no audible change.
@@ -423,6 +348,10 @@ pub struct LoadStats {
 /// manifest's mic catalog for the GUI, and what the load did.
 pub struct LoadedKit {
     pub pads: Vec<LoadedPad>,
+    /// Which piece each pad plays, its name, articulation pair and the
+    /// kit's port / choke hints (E10). Absent pads are in `pads` with no
+    /// banks.
+    pub kit_pads: KitPads,
     pub catalog: ManifestMicCatalog,
     pub stats: LoadStats,
     /// The build, for the next load to reuse pads from.
@@ -439,7 +368,8 @@ pub struct LoadedKit {
 /// build (the shared cache still serves takes another kit holds).
 ///
 /// `articulations` is a per-pad boolean: when true, the loader uses the
-/// alternate (ohne Teppich) piece name for that pad instead of the primary.
+/// pad's alternate piece instead of its primary one, if the kit pairs it
+/// with one ([`crate::pad_map`]).
 pub fn load_kit_from_manifest(
     manifest_path: &Path,
     target_sr: f32,
@@ -508,17 +438,20 @@ pub fn load_kit(
     let manifest_stamp = ManifestStamp::of(manifest_path);
     let bytes = std::fs::read(manifest_path).map_err(|e| format!("read manifest: {e}"))?;
 
-    // Two-phase parse: first as raw JSON so we can strip the optional
-    // `_meta` key (which has a different shape than a drum piece), then
-    // deserialize the remaining entries as the usual KitManifest.
+    // Two-phase parse: first as raw JSON so we can take out the optional
+    // `_meta` key (which has a different shape than a drum piece, and is
+    // read by the kit library's parser), then deserialize the remaining
+    // entries as the usual KitManifest.
     let mut raw: serde_json::Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("parse manifest JSON: {e}"))?;
-    // Remove _meta if present so it doesn't trip up the KitManifest deserializer.
-    if let Some(obj) = raw.as_object_mut() {
-        obj.remove("_meta");
-    }
+    let meta = raw
+        .as_object_mut()
+        .and_then(|obj| obj.remove(resonance_common::drumkit_library::META_KEY))
+        .map(|meta| resonance_common::drumkit_library::KitMeta::from_value(&meta))
+        .unwrap_or_default();
     let manifest: KitManifest =
         serde_json::from_value(raw).map_err(|e| format!("parse manifest pieces: {e}"))?;
+    let kit_pads = KitPads::resolve(|piece| manifest.contains_key(piece), &meta);
 
     let kit_dir = manifest_path
         .parent()
@@ -526,10 +459,11 @@ pub fn load_kit(
 
     let catalog = ManifestMicCatalog::from_manifest(&manifest);
 
-    // 1. Plan: reuse, built-in fallback, or the piece's banks per pad.
+    // 1. Plan: reuse, absent (D7: silent, never the built-in sample), or
+    // the piece's banks per pad.
     enum PadPlan {
         Reuse(LoadedPad, PadBuild),
-        Fallback,
+        Absent,
         Piece {
             close: Vec<decode::BankPlan>,
             overhead: Option<decode::BankPlan>,
@@ -537,10 +471,16 @@ pub fn load_kit(
     }
     let pad_requests: Vec<PadRequest> = (0..NUM_PADS)
         .map(|i| {
-            let has_overhead = manifest
-                .get(piece_name_for(i, request.articulations[i]))
+            let has_overhead = kit_pads
+                .piece_for(i, request.articulations[i])
+                .and_then(|piece| manifest.get(piece))
                 .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
-            request.pad_request(i, has_overhead)
+            let mut pad = request.pad_request(i, has_overhead);
+            // The parameter only means something on a pad the kit pairs:
+            // elsewhere both values play the same piece, and moving it
+            // must not rebuild the pad.
+            pad.articulation &= kit_pads.pads[i].articulation.is_some();
+            pad
         })
         .collect();
     let mut jobs = Jobs::default();
@@ -559,9 +499,12 @@ pub fn load_kit(
             plans.push(PadPlan::Reuse(pad.clone(), build.clone()));
             continue;
         }
-        let piece_name = piece_name_for(pad_idx, request.articulations[pad_idx]);
-        let Some(piece) = manifest.get(piece_name) else {
-            plans.push(PadPlan::Fallback);
+        let Some((piece_name, piece)) = kit_pads
+            .piece_for(pad_idx, request.articulations[pad_idx])
+            .and_then(|name| manifest.get_key_value(name))
+            .map(|(name, piece)| (name.as_str(), piece))
+        else {
+            plans.push(PadPlan::Absent);
             continue;
         };
         let mut close = Vec::with_capacity(mapping.close_mic_positions.len());
@@ -625,30 +568,24 @@ pub fn load_kit(
     };
     let mut pads = Vec::with_capacity(NUM_PADS);
     let mut pad_builds = Vec::with_capacity(NUM_PADS);
-    for (plan, mapping) in plans.into_iter().zip(PAD_MAPPINGS.iter()) {
+    for (pad_idx, (plan, mapping)) in plans.into_iter().zip(PAD_MAPPINGS.iter()).enumerate() {
         let (pad, build) = match plan {
             PadPlan::Reuse(pad, build) => {
                 stats.reused_pads += 1;
                 (pad, build)
             }
-            PadPlan::Fallback => {
+            PadPlan::Absent => {
                 stats.rebuilt_pads += 1;
-                let (pad, source) = fallback::build_fallback_pad_sourced(mapping, target_sr)?;
-                let mut pad_tally = Tally::default();
-                for take in pad
-                    .close_mics
-                    .iter()
-                    .flat_map(|bank| bank.layers.iter())
-                    .flat_map(|layer| layer.round_robins.iter())
-                {
-                    pad_tally.note_kept(take.shared(), source, &held);
-                }
-                let build = PadBuild {
-                    shared_bytes: pad_tally.shared_bytes,
-                    shared_takes: pad_tally.shared_takes,
-                    ..PadBuild::default()
-                };
-                (pad, build)
+                (
+                    LoadedPad {
+                        name: kit_pads.pads[pad_idx].name.clone(),
+                        choke_group: mapping.choke_group,
+                        output_group: mapping.output_group,
+                        close_mics: Vec::new(),
+                        overhead: None,
+                    },
+                    PadBuild::default(),
+                )
             }
             PadPlan::Piece { close, overhead } => {
                 stats.rebuilt_pads += 1;
@@ -663,10 +600,11 @@ pub fn load_kit(
                 );
                 tally.decoded += pad_tally.decoded;
                 tally.cached += pad_tally.cached;
+                let kit_pad = &kit_pads.pads[pad_idx];
                 let pad = LoadedPad {
-                    name: mapping.name.to_string(),
-                    choke_group: mapping.choke_group,
-                    output_group: mapping.output_group,
+                    name: kit_pad.name.clone(),
+                    choke_group: kit_pad.choke_group(pad_idx),
+                    output_group: kit_pad.output_group(pad_idx),
                     close_mics,
                     overhead,
                 };
@@ -722,20 +660,11 @@ pub fn load_kit(
     };
     Ok(LoadedKit {
         pads,
+        kit_pads,
         catalog,
         stats,
         built,
     })
-}
-
-/// The manifest piece pad `pad_idx` plays: its alternate (ohne Teppich)
-/// piece when `articulation` is set and it has one.
-fn piece_name_for(pad_idx: usize, articulation: bool) -> &'static str {
-    if articulation && !DRUMMICA_ARTICULATION_ALT[pad_idx].is_empty() {
-        DRUMMICA_ARTICULATION_ALT[pad_idx]
-    } else {
-        DRUMMICA_MAPPING[pad_idx]
-    }
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -849,6 +778,9 @@ pub fn spawn_loader(
                     let num_pads = kit.pads.len();
                     let name = kit_display_name(&request.path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
+                    bridge
+                        .kit_pads
+                        .set(request.path.clone(), Arc::new(kit.kit_pads));
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
@@ -878,6 +810,9 @@ pub fn spawn_loader(
                         unreadable_paths: kit.stats.unreadable_paths.clone(),
                     };
                     *bridge.load_stats.lock() = kit.stats;
+                    // The articulation parameters read as this kit's
+                    // labels now (`pad_map::KitPadsHandle`).
+                    bridge.request_params_rescan();
                 }
                 Ok(Err(message)) => {
                     bridge.load_progress.failed(stamp);
