@@ -7,8 +7,13 @@
 //! { "<piece>": { "<setup key>": { "brand", "channel", "mic", "position",
 //!                                 "rounds": { "RRnn": { "VelNN": "<file>" } } } },
 //!   "_meta": { "name"?, "pieces": { "<piece>": { "name" } },
-//!              "articulations": [ { "primary", "alt", "label" } ] } }
+//!              "articulations": [ { "primary", "alt", "label" } ],
+//!              "pads": { "<piece>": { "note"?, "port"?, "choke"? } } } }
 //! ```
+//!
+//! Every part of `_meta` is optional and read on its own ([`KitMeta`]): a
+//! malformed `pads` block costs the kit its pad hints, not its piece
+//! names.
 //!
 //! Sample paths are relative to the manifest's directory. A manifest the
 //! loader would refuse (a piece that is not that shape) is a
@@ -108,23 +113,101 @@ struct RawSetup {
 
 type RawPieces = BTreeMap<String, BTreeMap<String, RawSetup>>;
 
-#[derive(Deserialize, Default)]
-struct RawMeta {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    pieces: BTreeMap<String, RawPieceMeta>,
-    #[serde(default)]
-    articulations: Vec<Articulation>,
+/// Which output port a kit suggests for a piece (`_meta.pads.<piece>.port`):
+/// a port index (0 = Main … 6 = Overhead) or a port's name ("Kick").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PortHint {
+    Index(u8),
+    Name(String),
 }
 
-#[derive(Deserialize, Default)]
-struct RawPieceMeta {
-    #[serde(default)]
-    name: Option<String>,
+/// `_meta.pads.<piece>`: where a kit wants one of its pieces played. Every
+/// field is optional.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PadHint {
+    /// The MIDI note (so the pad slot) that plays the piece.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<u8>,
+    /// The output port the piece's pad defaults to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<PortHint>,
+    /// The choke group the piece's pad defaults to; 0 = none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choke: Option<u8>,
 }
 
-fn split_meta(bytes: &[u8]) -> Result<(RawPieces, RawMeta), ManifestError> {
+/// Everything a manifest's `_meta` block says, each part read on its own
+/// and leniently: an entry of the wrong shape is skipped, never the block.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KitMeta {
+    /// `_meta.name`, when it is not blank.
+    pub name: Option<String>,
+    /// `_meta.pieces.<piece>.name`, piece key → display name (blank names
+    /// left out).
+    pub piece_names: BTreeMap<String, String>,
+    /// `_meta.articulations`, in the file's order.
+    pub articulations: Vec<Articulation>,
+    /// `_meta.pads`, piece key → hint.
+    pub pads: BTreeMap<String, PadHint>,
+}
+
+impl KitMeta {
+    /// Read a `_meta` value. Anything that is not an object reads as no
+    /// metadata at all.
+    pub fn from_value(meta: &serde_json::Value) -> Self {
+        let mut out = KitMeta::default();
+        let Some(obj) = meta.as_object() else {
+            return out;
+        };
+        out.name = obj
+            .get("name")
+            .and_then(|n| n.as_str())
+            .filter(|n| !n.trim().is_empty())
+            .map(str::to_string);
+        if let Some(pieces) = obj.get("pieces").and_then(|p| p.as_object()) {
+            for (key, piece) in pieces {
+                if let Some(name) = piece
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .filter(|n| !n.trim().is_empty())
+                {
+                    out.piece_names.insert(key.clone(), name.to_string());
+                }
+            }
+        }
+        if let Some(list) = obj.get("articulations").and_then(|a| a.as_array()) {
+            out.articulations = list
+                .iter()
+                .filter_map(|a| serde_json::from_value::<Articulation>(a.clone()).ok())
+                .collect();
+        }
+        if let Some(pads) = obj.get("pads").and_then(|p| p.as_object()) {
+            for (key, hint) in pads {
+                if let Ok(hint) = serde_json::from_value::<PadHint>(hint.clone()) {
+                    out.pads.insert(key.clone(), hint);
+                }
+            }
+        }
+        out
+    }
+
+    /// The `_meta` of a manifest's bytes; no metadata when the bytes are
+    /// not a JSON object or have no `_meta`.
+    pub fn from_manifest_bytes(bytes: &[u8]) -> Self {
+        serde_json::from_slice::<serde_json::Value>(bytes)
+            .ok()
+            .and_then(|v| v.get(META_KEY).map(Self::from_value))
+            .unwrap_or_default()
+    }
+
+    /// The display name of piece `key`, if the kit names it.
+    pub fn piece_name(&self, key: &str) -> Option<&str> {
+        self.piece_names.get(key).map(String::as_str)
+    }
+}
+
+fn split_meta(bytes: &[u8]) -> Result<(RawPieces, KitMeta), ManifestError> {
     let mut value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|e| ManifestError(format!("not JSON: {e}")))?;
     let obj = value
@@ -132,7 +215,7 @@ fn split_meta(bytes: &[u8]) -> Result<(RawPieces, RawMeta), ManifestError> {
         .ok_or_else(|| ManifestError("not a JSON object".into()))?;
     let meta = obj
         .remove(META_KEY)
-        .and_then(|m| serde_json::from_value::<RawMeta>(m).ok())
+        .map(|m| KitMeta::from_value(&m))
         .unwrap_or_default();
     let pieces: RawPieces =
         serde_json::from_value(value).map_err(|e| ManifestError(format!("bad piece: {e}")))?;
@@ -146,16 +229,14 @@ pub fn summarize(bytes: &[u8]) -> Result<ManifestSummary, ManifestError> {
         return Err(ManifestError("no drum pieces".into()));
     }
     let mut out = ManifestSummary {
-        meta_name: meta.name.filter(|n| !n.trim().is_empty()),
-        articulations: meta.articulations,
+        meta_name: meta.name.clone(),
+        articulations: meta.articulations.clone(),
         ..ManifestSummary::default()
     };
     for (key, setups) in &pieces {
         let name = meta
-            .pieces
-            .get(key)
-            .and_then(|p| p.name.clone())
-            .filter(|n| !n.trim().is_empty())
+            .piece_name(key)
+            .map(str::to_string)
             .unwrap_or_else(|| key.clone());
         out.pieces.push(Piece {
             key: key.clone(),

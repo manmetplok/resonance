@@ -1277,3 +1277,52 @@ fn two_processes_never_share_or_move_a_slot() {
         assert_eq!(seen.get(&e.id), e.slot.as_ref());
     }
 }
+
+/// `_meta` is read part by part (drums-plugin-rework.md E10): a malformed
+/// `pads` entry or articulation costs only that entry, never the piece
+/// names, and a `pads` hint takes a port index or a port name.
+#[test]
+fn kit_meta_reads_each_part_on_its_own() {
+    use drumkit_library::{KitMeta, PadHint, PortHint};
+
+    let meta = KitMeta::from_manifest_bytes(
+        br#"{
+  "SD Count Stick": {},
+  "_meta": {
+    "name": "  ",
+    "pieces": {"SD Count Stick": {"name": "Perc Conga"}, "SD Snare Handtuch": {"name": ""}},
+    "articulations": [
+      {"primary": "SD Kick mit Teppich", "alt": "SD Kick ohne Teppich", "label": "punch/deep"},
+      {"primary": 3}
+    ],
+    "pads": {
+      "SD Count Stick": {"note": 50, "port": "Toms", "choke": 3},
+      "SD Hat Closed": {"port": 0},
+      "SD Broken": {"note": "high"}
+    }
+  }
+}"#,
+    );
+    assert_eq!(meta.name, None, "a blank name is no name");
+    assert_eq!(meta.piece_name("SD Count Stick"), Some("Perc Conga"));
+    assert_eq!(meta.piece_name("SD Snare Handtuch"), None);
+    assert_eq!(meta.articulations.len(), 1);
+    assert_eq!(meta.articulations[0].label, "punch/deep");
+    assert_eq!(
+        meta.pads.get("SD Count Stick"),
+        Some(&PadHint {
+            note: Some(50),
+            port: Some(PortHint::Name("Toms".into())),
+            choke: Some(3),
+        })
+    );
+    assert_eq!(
+        meta.pads.get("SD Hat Closed").and_then(|h| h.port.clone()),
+        Some(PortHint::Index(0))
+    );
+    assert!(!meta.pads.contains_key("SD Broken"));
+
+    // No `_meta`, or not JSON at all: no metadata, not an error.
+    assert_eq!(KitMeta::from_manifest_bytes(b"{}"), KitMeta::default());
+    assert_eq!(KitMeta::from_manifest_bytes(b"nope"), KitMeta::default());
+}
