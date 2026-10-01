@@ -22,7 +22,9 @@
 #![cfg(feature = "editor")]
 
 use plugin_gui_core::egui;
-use resonance_drums::{EditorFrameProbe, ResonanceDrums};
+use resonance_drums::download::WorkerConfig;
+use resonance_drums::library::{self, Roots, SharedKitLibrary};
+use resonance_drums::{EditorFrameProbe, ResonanceDrums, TestEditor};
 use resonance_plugin::ResonancePlugin;
 
 /// §6.1: 960×640 default, 780×520 minimum — the exact pair `factory.rs`
@@ -254,4 +256,96 @@ fn the_editor_renders_something_at_the_minimum_size() {
 fn the_editor_does_not_panic_below_its_minimum_size() {
     let plugin = ResonanceDrums::new();
     let _ = resonance_drums::test_render_editor_frame(&plugin, (400.0, 300.0));
+}
+
+/// The header's controls fit at both declared sizes (§6.1): `Library…`
+/// (which replaced "Download kits…" and "Open kit file…"), the kit
+/// dropdown and, with a library kit loaded, its ☆/★.
+#[test]
+fn the_header_controls_fit_at_both_window_sizes() {
+    for (size, frame) in frames() {
+        for name in ["header.library", "kit.combo"] {
+            let w = frame
+                .widget(name)
+                .unwrap_or_else(|| panic!("{name} was not laid out at {size:?}"));
+            if let Err(e) = fully_visible(w.rect, w.clip, frame.screen) {
+                panic!("{name} is not visible at {size:?}: {e}");
+            }
+        }
+        assert_text_visible(&frame, size, "Library…");
+    }
+
+    // With a library kit loaded, the star joins the kit bar.
+    let base = std::env::temp_dir().join(format!(
+        "resonance-drums-layout-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&base);
+    let kit_dir = base.join("drumkits/Layout Kit/layoutkit");
+    std::fs::create_dir_all(&kit_dir).unwrap();
+    let manifest = kit_dir.join("drum_samples.json");
+    std::fs::write(
+        &manifest,
+        r#"{"Kick": {"01_KickIn": {"brand": "AKG", "channel": "01", "mic": "D112",
+            "position": "KickIn", "rounds": {"RR01": {"Vel01": "k.wav"}}}},
+            "_meta": {"name": "A Kit With A Rather Long Library Name"}}"#,
+    )
+    .unwrap();
+    let library = SharedKitLibrary::open(Roots {
+        root: Some(base.join("drumkits")),
+        marks_dir: Some(base.join("library")),
+        installed_json: None,
+        worker: WorkerConfig {
+            index_url: "http://127.0.0.1:9/index.json".into(),
+            ..WorkerConfig::default()
+        },
+    });
+    library.rescan().unwrap().unwrap();
+    let plugin = ResonanceDrums::new();
+    *plugin.bridge.kit_path.lock() = Some(manifest);
+    for size in SIZES {
+        let mut editor = TestEditor::new(&plugin, library.clone(), size);
+        editor.frame(Vec::new());
+        let frame = editor.frame(Vec::new());
+        for name in ["header.library", "kit.combo", "kit.star"] {
+            let w = frame
+                .widget(name)
+                .unwrap_or_else(|| panic!("{name} was not laid out at {size:?}"));
+            if let Err(e) = fully_visible(w.rect, w.clip, frame.screen) {
+                panic!("{name} is not visible at {size:?} with a kit loaded: {e}");
+            }
+        }
+        let star = frame.widget("kit.star").unwrap().rect;
+        let combo = frame.widget("kit.combo").unwrap().rect;
+        assert!(
+            star.right() <= combo.left() + TOLERANCE,
+            "the star overlaps the kit dropdown at {size:?}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The Library overlay fits the minimum window: its panel inside the
+/// window and Close reachable, on either tab.
+#[test]
+fn the_library_overlay_fits_both_window_sizes() {
+    let plugin = ResonanceDrums::new();
+    for size in SIZES {
+        library::isolate_for_tests();
+        let mut editor = TestEditor::new(&plugin, library::shared(), size);
+        editor.open_library();
+        for plok in [true, false] {
+            editor.show_tab(plok);
+            editor.frame(Vec::new());
+            let frame = editor.frame(Vec::new());
+            let panel = frame.widget("library.panel").expect("the panel was laid out");
+            assert!(
+                frame.screen.expand(TOLERANCE).contains_rect(panel.rect),
+                "the Library panel overflows the {size:?} window: {:?}",
+                panel.rect
+            );
+            assert_text_visible(&frame, size, "Close");
+            assert_text_visible(&frame, size, "KIT LIBRARY");
+        }
+    }
 }

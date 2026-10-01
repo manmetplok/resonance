@@ -1,0 +1,207 @@
+//! The Library overlay's work that must not run on the editor thread:
+//! rescans (hashing manifests, measuring sizes), imports (copying a kit,
+//! gigabytes) and deletes (`remove_dir_all` of a kit). Modelled on the
+//! amp's `editor/jobs.rs`.
+//!
+//! One job at a time on one helper thread, joined when the editor goes
+//! away — after raising the job's cancel flag, so closing the editor
+//! mid-import stops the copy at its next chunk instead of waiting for it.
+//! The frame polls [`Jobs::poll`] and applies the outcome.
+//!
+//! The import's file dialog is not a job: it runs on its own thread
+//! ([`Picker`]) so the editor thread never blocks in a modal dialog, and
+//! an editor closed while it is up is not held open by it.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread::JoinHandle;
+
+use parking_lot::Mutex;
+use resonance_common::drumkit_library::{ImportOutcome, ImportProgress};
+
+/// What a finished job reports back to the frame.
+pub(crate) enum JobDone {
+    Rescanned(Result<(), String>),
+    Imported(Box<Result<ImportOutcome, String>>),
+    Deleted {
+        name: String,
+        result: Result<(), String>,
+    },
+}
+
+/// What a running job can see: its cancel flag and a progress slot the
+/// footer draws.
+#[derive(Clone)]
+pub(crate) struct JobCtx {
+    pub(crate) cancel: Arc<AtomicBool>,
+    pub(crate) progress: Arc<Mutex<Option<ImportProgress>>>,
+}
+
+#[derive(Default)]
+pub(crate) struct Jobs {
+    handle: Option<JoinHandle<()>>,
+    done: Arc<Mutex<Option<JobDone>>>,
+    /// What the running job is, for the footer.
+    label: Option<String>,
+    /// Whether the running job offers Cancel.
+    cancellable: bool,
+    ctx: Option<JobCtx>,
+}
+
+impl Jobs {
+    pub(crate) fn busy(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    pub(crate) fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
+    pub(crate) fn cancellable(&self) -> bool {
+        self.busy() && self.cancellable
+    }
+
+    /// The running job's progress, if it reports any.
+    pub(crate) fn progress(&self) -> Option<ImportProgress> {
+        self.ctx.as_ref().and_then(|c| *c.progress.lock())
+    }
+
+    /// Ask the running job to stop at its next chunk.
+    pub(crate) fn cancel(&self) {
+        if let Some(c) = &self.ctx {
+            c.cancel.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Start `work` unless a job is running (then `false`).
+    pub(crate) fn start(
+        &mut self,
+        label: impl Into<String>,
+        cancellable: bool,
+        work: impl FnOnce(&JobCtx) -> JobDone + Send + 'static,
+    ) -> bool {
+        if self.busy() {
+            return false;
+        }
+        let ctx = JobCtx {
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress: Arc::new(Mutex::new(None)),
+        };
+        let done = self.done.clone();
+        let thread_ctx = ctx.clone();
+        match std::thread::Builder::new()
+            .name("drums-library-job".into())
+            .spawn(move || {
+                let out = work(&thread_ctx);
+                *done.lock() = Some(out);
+            }) {
+            Ok(h) => {
+                self.handle = Some(h);
+                self.label = Some(label.into());
+                self.cancellable = cancellable;
+                self.ctx = Some(ctx);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("could not start a library job: {e}");
+                false
+            }
+        }
+    }
+
+    /// The outcome of a finished job, once.
+    pub(crate) fn poll(&mut self) -> Option<JobDone> {
+        if self.handle.as_ref().is_some_and(|h| h.is_finished()) {
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+            self.label = None;
+            self.ctx = None;
+        }
+        if self.handle.is_none() {
+            self.done.lock().take()
+        } else {
+            None
+        }
+    }
+
+    /// Block until the running job (if any) is done, and return its
+    /// outcome. For tests.
+    pub(crate) fn wait(&mut self) -> Option<JobDone> {
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        self.label = None;
+        self.ctx = None;
+        self.done.lock().take()
+    }
+}
+
+impl Drop for Jobs {
+    fn drop(&mut self) {
+        self.cancel();
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// What the import dialog asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PickKind {
+    Folder,
+    Zip,
+}
+
+/// The import's file dialog, on its own thread. Dropped (the editor
+/// closing) while the dialog is up, the thread is left to finish when the
+/// user dismisses it; nothing reads its answer.
+#[derive(Default)]
+pub(crate) struct Picker {
+    handle: Option<JoinHandle<Option<PathBuf>>>,
+}
+
+impl Picker {
+    pub(crate) fn busy(&self) -> bool {
+        self.handle.is_some()
+    }
+
+    /// Open the dialog unless one is already up.
+    pub(crate) fn start(&mut self, kind: PickKind) -> bool {
+        if self.busy() {
+            return false;
+        }
+        let spawned = std::thread::Builder::new()
+            .name("drums-import-dialog".into())
+            .spawn(move || match kind {
+                PickKind::Folder => rfd::FileDialog::new()
+                    .set_title("Import a drum kit folder")
+                    .pick_folder(),
+                PickKind::Zip => rfd::FileDialog::new()
+                    .set_title("Import a drum kit .zip")
+                    .add_filter("Drum kit archive", &["zip"])
+                    .pick_file(),
+            });
+        match spawned {
+            Ok(h) => {
+                self.handle = Some(h);
+                true
+            }
+            Err(e) => {
+                tracing::warn!("could not open the import dialog: {e}");
+                false
+            }
+        }
+    }
+
+    /// `Some(answer)` once the dialog closed (`answer` is `None` when it
+    /// was dismissed).
+    pub(crate) fn poll(&mut self) -> Option<Option<PathBuf>> {
+        if !self.handle.as_ref().is_some_and(|h| h.is_finished()) {
+            return None;
+        }
+        let h = self.handle.take()?;
+        Some(h.join().ok().flatten())
+    }
+}

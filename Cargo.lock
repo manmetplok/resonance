@@ -5062,7 +5062,6 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "crossbeam-channel",
- "dirs",
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
@@ -5072,6 +5071,8 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "sha2",
+ "tracing",
  "ureq",
  "zip",
 ]

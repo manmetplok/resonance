@@ -1,16 +1,17 @@
 //! Drums plugin editor: an egui UI hosted by the platform GUI runtime.
 //!
 //! Layout: a chrome bar (Resonance / Drums brand, the preset bar, and the
-//! "Open kit file…" / "Download kits…" buttons) sits above a second bar
-//! carrying the KIT pill (◀ name ▶). Pads is the editor's only view, so
-//! there is no tab strip to switch it with.
+//! `Library…` button) sits above a second bar carrying ☆/★ and the KIT
+//! pill (◀ name ▶), whose name is a dropdown of the kit library. Pads is
+//! the editor's only view, so there is no tab strip to switch it with.
 //! The central body is a fixed-height KIT + GLOBAL card row at the
 //! bottom and, above it, the two-column pad list + pad detail, each
 //! scrolling independently so the window can be resized down to its
 //! declared minimum without losing either (`factory.rs`,
 //! drums-plugin-rework.md §6.1). A status bar (sample rate, buffer size,
-//! OUT meter) sits along the bottom edge, and the Download Kits overlay
-//! (`download_panel.rs`) draws over everything else when open.
+//! OUT meter) sits along the bottom edge, and the Library overlay
+//! (`library_panel.rs`, with its `plok.org` tab in `plok_panel.rs`) draws
+//! over everything else when open.
 //!
 //! Every control comes from `plugin_gui_core::widgets` — the knobs
 //! always did, and ba todo #1335 retired the local `editor/widgets/`
@@ -21,11 +22,13 @@
 
 mod app;
 mod chrome;
-mod download_panel;
 mod factory;
+mod jobs;
 mod kit_browser;
+mod library_panel;
 mod pad_grid;
 mod pad_inspector;
+mod plok_panel;
 mod theme;
 
 pub use factory::DrumsEditorFactory;
@@ -113,12 +116,31 @@ pub struct EditorFrameProbe {
     pub screen: egui::Rect,
     pub texts: Vec<ProbedText>,
     pub widgets: Vec<ProbedRect>,
+    /// Every shape the frame painted, in paint order.
+    pub shapes: Vec<egui::epaint::ClippedShape>,
 }
 
 impl EditorFrameProbe {
     /// Just the strings, for "is it drawn at all" checks.
     pub fn strings(&self) -> Vec<String> {
         self.texts.iter().map(|t| t.text.clone()).collect()
+    }
+
+    /// Whether `needle` was painted with at least part of it visible
+    /// (inside its clip and the window).
+    pub fn shows(&self, needle: &str) -> bool {
+        self.texts.iter().any(|t| {
+            let v = t.rect.intersect(t.clip).intersect(self.screen);
+            t.text == needle && v.width() > 0.0 && v.height() > 0.0
+        })
+    }
+
+    /// The centre of the first visible text equal to `needle`.
+    pub fn text_center(&self, needle: &str) -> Option<egui::Pos2> {
+        self.texts
+            .iter()
+            .find(|t| t.text == needle && t.clip.intersects(t.rect))
+            .map(|t| t.rect.center())
     }
 
     /// The probed widget called `name`, if the frame reported one.
@@ -194,157 +216,200 @@ fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<ProbedText> {
 /// outside this crate, which is why this hook exists rather than a test
 /// constructing the app directly (drums-plugin-rework.md §9, K0).
 ///
+/// The editor reads the process's shared kit library, so this first
+/// isolates the process from the user's data dir
+/// ([`crate::library::isolate_for_tests`]): a test frame never scans,
+/// migrates or downloads into the real library.
+///
 /// Runs two passes on the same `egui::Context` before reading back the
 /// shapes — the preset bar's combo boxes are popups, which (like
-/// `egui::Modal`; see `test_run_download_panel_frame`) only report their
-/// final layout from the second pass onward. The real runtime repaints
-/// continuously, so this is what it would actually show once settled.
+/// `egui::Modal`) only report their final layout from the second pass
+/// onward. The real runtime repaints continuously, so this is what it
+/// would actually show once settled.
 #[doc(hidden)]
 pub fn test_render_editor_frame(
     plugin: &crate::ResonanceDrums,
     size: (f32, f32),
 ) -> EditorFrameProbe {
-    use plugin_gui_core::EditorApp as _;
-
-    let mut app = app::DrumsEditorApp::new(
-        plugin.params.clone(),
-        plugin.bridge.clone(),
-        plugin.download_worker.clone(),
-        plugin.presets.clone(),
-    );
-    let ctx = egui::Context::default();
-    let sink = ProbeSink::default();
-    ctx.data_mut(|d| d.insert_temp(probe_id(), sink.clone()));
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
-    let run = |ctx: &egui::Context, app: &mut app::DrumsEditorApp| {
-        let input = egui::RawInput {
-            screen_rect: Some(screen),
-            ..Default::default()
-        };
-        ctx.run_ui(input, |ui| app.ui(ui))
-    };
-    let _settle = run(&ctx, &mut app);
-    sink.0.lock().clear();
-    let output = run(&ctx, &mut app);
-    let widgets = std::mem::take(&mut *sink.0.lock());
-    EditorFrameProbe {
-        screen,
-        texts: collect_texts(&output.shapes),
-        widgets,
-    }
+    crate::library::isolate_for_tests();
+    let mut editor = TestEditor::new(plugin, crate::library::shared(), size);
+    editor.frame(Vec::new());
+    editor.frame(Vec::new())
 }
 
-/// Test-only: the Download Kits overlay in isolation, driven frame by
-/// frame on one `egui::Context` — open it, feed it input, close it, open
-/// it again — so a test can check what survives a close and what Esc,
-/// the Close button and a backdrop click each do, without a live window.
-/// `download_panel` is a private module outside this crate
-/// (drums-plugin-rework.md §9, K0).
-///
-/// It drives whatever worker it is handed. Opening the panel can send
-/// that worker a `FetchIndex`, so a test that calls [`Self::open`] should
-/// hand it a worker pointed at a local index
-/// (`download::spawn_with_index`), never the plugin's own, which fetches
-/// from the real server.
+/// Test-only: a whole editor driven frame by frame on one
+/// `egui::Context`, over a library the test chose — open the Library,
+/// click, type, wait for its jobs — so a test can check the overlay's
+/// behaviour without a live window.
 #[doc(hidden)]
-pub struct TestDownloadPanel {
-    panel: download_panel::DownloadPanelState,
-    worker: Arc<crate::download::WorkerHandle>,
+pub struct TestEditor {
+    app: app::DrumsEditorApp,
     ctx: egui::Context,
+    sink: ProbeSink,
     screen: egui::Rect,
 }
 
-impl TestDownloadPanel {
-    pub fn new(worker: Arc<crate::download::WorkerHandle>, size: (f32, f32)) -> Self {
+impl TestEditor {
+    /// An editor for `plugin` over `library` (build one at a temp root with
+    /// `SharedKitLibrary::open`, or use [`crate::library::shared`] after
+    /// [`crate::library::isolate_for_tests`]). Its start-up rescan is
+    /// finished before this returns.
+    pub fn new(
+        plugin: &crate::ResonanceDrums,
+        library: Arc<crate::library::SharedKitLibrary>,
+        size: (f32, f32),
+    ) -> Self {
+        crate::library::isolate_for_tests();
+        let mut app = app::DrumsEditorApp::new(
+            plugin.params.clone(),
+            plugin.bridge.clone(),
+            library,
+            plugin.presets.clone(),
+        );
+        app.finish_jobs();
+        let ctx = egui::Context::default();
+        let sink = ProbeSink::default();
+        ctx.data_mut(|d| d.insert_temp(probe_id(), sink.clone()));
         Self {
-            panel: download_panel::DownloadPanelState::default(),
-            worker,
-            ctx: egui::Context::default(),
+            app,
+            ctx,
+            sink,
             screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1)),
         }
     }
 
-    /// What the header's "Download kits…" button does.
-    pub fn open(&mut self) {
-        download_panel::open(&mut self.panel, &self.worker);
-    }
-
-    /// Open the panel without the open-time index fetch — for tests that
-    /// only care about the modal's mechanics and must not touch a worker.
-    pub fn open_without_fetch(&mut self) {
-        self.panel.open = true;
-        self.panel.did_initial_fetch = true;
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.panel.open
-    }
-
-    /// Whether opening left the index fetch still to do (`false`) or
-    /// skipped it (`true`).
-    pub fn did_initial_fetch(&self) -> bool {
-        self.panel.did_initial_fetch
-    }
-
-    /// Arm a kit's delete, as the first click on its "Delete" does.
-    pub fn arm_delete(&mut self, name: &str) {
-        self.panel.pending_delete = Some(name.to_string());
-    }
-
-    pub fn pending_delete(&self) -> Option<&str> {
-        self.panel.pending_delete.as_deref()
-    }
-
-    /// Run one frame with `events` as its input, drawing the panel if it
-    /// is open, as `DrumsEditorApp::ui` does. Returns what it painted.
+    /// Run one frame with `events` as its input and return what it
+    /// painted.
     ///
     /// `egui::Modal` only knows it is the topmost modal from its second
-    /// frame onward (the first is what registers it in `ctx`'s memory at
-    /// all), so input meant for a settled panel belongs in the second
-    /// frame after opening — the same as the live runtime's first repaint
-    /// after the click that opened it.
-    pub fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+    /// frame onward, so input meant for a freshly opened overlay belongs
+    /// in the second frame after opening — the same as the live runtime's
+    /// first repaint after the click that opened it.
+    pub fn frame(&mut self, events: Vec<egui::Event>) -> EditorFrameProbe {
+        use plugin_gui_core::EditorApp as _;
         let input = egui::RawInput {
             screen_rect: Some(self.screen),
             events,
             ..Default::default()
         };
-        let (panel, worker) = (&mut self.panel, &self.worker);
-        let output = self.ctx.run_ui(input, |ui| {
-            if panel.open {
-                download_panel::draw(ui, panel, worker);
+        self.sink.0.lock().clear();
+        let app = &mut self.app;
+        let output = self.ctx.run_ui(input, |ui| app.ui(ui));
+        let widgets = std::mem::take(&mut *self.sink.0.lock());
+        EditorFrameProbe {
+            screen: self.screen,
+            texts: collect_texts(&output.shapes),
+            widgets,
+            shapes: output.shapes,
+        }
+    }
+
+    /// Press and release the primary button at `pos`, over two frames.
+    pub fn click(&mut self, pos: egui::Pos2) -> EditorFrameProbe {
+        let events = |pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        self.frame(events(true));
+        self.frame(events(false))
+    }
+
+    /// What the header's `Library…` button does.
+    pub fn open_library(&mut self) {
+        self.app.open_library();
+    }
+
+    pub fn library_open(&self) -> bool {
+        self.app.library_panel.open
+    }
+
+    /// The overlay's tab: `"Installed"` or `"plok.org"`.
+    pub fn library_tab(&self) -> &'static str {
+        self.app.library_panel.tab.label()
+    }
+
+    /// Switch the overlay's tab, as its segmented control does.
+    pub fn show_tab(&mut self, plok: bool) {
+        let tab = if plok {
+            library_panel::Tab::Plok
+        } else {
+            library_panel::Tab::Installed
+        };
+        library_panel::set_tab(&mut self.app, tab);
+    }
+
+    /// Wait for the running library job (rescan, import, delete) and
+    /// apply its outcome.
+    pub fn finish_jobs(&mut self) {
+        self.app.finish_jobs();
+    }
+
+    /// Type into the Installed tab's search field.
+    pub fn search(&mut self, query: &str) {
+        self.app.browser.set_query(query);
+    }
+
+    /// Toggle the `★ only` chip.
+    pub fn set_favorites_only(&mut self, on: bool) {
+        self.app.browser.set_favorites_only(on);
+    }
+
+    /// The names of the kits in the Installed tab's current view, in order.
+    pub fn view_names(&mut self) -> Vec<String> {
+        self.app.refresh_rows();
+        self.app
+            .browser
+            .view()
+            .iter()
+            .map(|&r| self.app.rows.rows[r].entry.name.clone())
+            .collect()
+    }
+
+    /// Select the kit called `name` in the Installed tab.
+    pub fn select(&mut self, name: &str) -> bool {
+        self.app.refresh_rows();
+        let key = self
+            .app
+            .rows
+            .rows
+            .iter()
+            .find(|r| r.entry.name == name)
+            .map(|r| r.key.clone());
+        match key {
+            Some(k) => {
+                self.app.browser.select(k);
+                true
             }
-        });
-        output.shapes
+            None => false,
+        }
+    }
+
+    /// The row key of a delete armed and awaiting confirmation.
+    pub fn pending_delete(&self) -> Option<String> {
+        self.app.browser.pending_delete().map(str::to_string)
+    }
+
+    /// The overlay's last notice, if any.
+    pub fn notice(&self) -> Option<String> {
+        self.app.browser.notice().map(|n| n.text().to_string())
+    }
+
+    /// The kits this editor asked the download worker for.
+    pub fn my_downloads(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.app.my_downloads.iter().cloned().collect();
+        v.sort();
+        v
     }
 }
 
-/// Test-only: render the Download Kits overlay in isolation at `size`,
-/// starting `open`, with `events` injected as the settled frame's input.
-/// Returns whether the panel is still open afterwards and every shape
-/// that frame painted. A two-frame [`TestDownloadPanel`] session (see its
-/// `frame` for why two).
-///
-/// Hermetic: the panel opens with its index fetch already marked done, so
-/// nothing is sent to `plugin`'s download worker — which would otherwise
-/// go to the real server on every run of these tests.
-#[doc(hidden)]
-pub fn test_run_download_panel_frame(
-    plugin: &crate::ResonanceDrums,
-    size: (f32, f32),
-    events: Vec<egui::Event>,
-    open: bool,
-) -> (bool, Vec<egui::epaint::ClippedShape>) {
-    let mut session = TestDownloadPanel::new(plugin.download_worker.clone(), size);
-    if open {
-        session.open_without_fetch();
-    }
-    let _settle = session.frame(Vec::new());
-    let shapes = session.frame(events);
-    (session.is_open(), shapes)
-}
-
-/// Test-only: which kit the KIT pill's ◀/▶ step from, given `bridge` and
+/// Test-only: which kit the header's ◀/▶ step from, given `bridge` and
 /// the editor's last load request (`(manifest, load generation)`) —
 /// `kit_browser` is private outside this crate.
 #[doc(hidden)]
