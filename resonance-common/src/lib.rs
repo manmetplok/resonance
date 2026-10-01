@@ -91,8 +91,9 @@ pub use take::{
 pub use track_group::{MACRO_LEVEL_UNITY, TrackGroup};
 #[cfg(feature = "decode")]
 pub use wav::{
-    decode_file, decode_wav_channels, decode_wav_native, decode_wav_stereo, linear_resample_mono,
-    linear_resample_stereo, DecodedAudio, StreamingLinearResampler, WavChannels, WavDecodeError,
+    decode_file, decode_wav_channels, decode_wav_native, decode_wav_split, decode_wav_stereo,
+    linear_resample_mono, linear_resample_stereo, DecodedAudio, PcmEncoding, SplitAudio,
+    StreamingLinearResampler, TailScratch, WavChannels, WavDecodeError, WavPcmLayout, WavTail,
 };
 #[cfg(feature = "model")]
 pub use freeze::{
