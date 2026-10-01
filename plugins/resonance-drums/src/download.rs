@@ -479,7 +479,9 @@ mod read_timeout {
 
     impl fmt::Debug for ReadTimeout {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("ReadTimeout").field("limit", &self.limit).finish()
+            f.debug_struct("ReadTimeout")
+                .field("limit", &self.limit)
+                .finish()
         }
     }
 
@@ -505,7 +507,9 @@ mod read_timeout {
 
     impl fmt::Debug for Capped {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.debug_struct("Capped").field("inner", &self.inner).finish()
+            f.debug_struct("Capped")
+                .field("inner", &self.inner)
+                .finish()
         }
     }
 

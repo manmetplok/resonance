@@ -51,7 +51,9 @@ fn read_request(stream: &TcpStream) -> Option<String> {
 }
 
 fn serve(mut stream: TcpStream) {
-    let Some(path) = read_request(&stream) else { return };
+    let Some(path) = read_request(&stream) else {
+        return;
+    };
     match path.as_str() {
         // Trickles a huge body until the client goes away.
         "/slow.zip" => {
@@ -108,10 +110,8 @@ fn part_file(dir: &Path, sanitized: &str) -> PathBuf {
 
 #[test]
 fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
-    let data_home = std::env::temp_dir().join(format!(
-        "resonance-drums-download-{}",
-        std::process::id()
-    ));
+    let data_home =
+        std::env::temp_dir().join(format!("resonance-drums-download-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&data_home);
     std::fs::create_dir_all(&data_home).unwrap();
     // Before anything resolves a data dir, so the real one is never
@@ -129,9 +129,11 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
     // --- A transfer the server cuts short fails and leaves no .part ---
     let worker = download::spawn_with_index(index_url.clone());
     worker.send(Command::Download(kit("Broken Kit", "broken.zip")));
-    wait_for("the broken download to fail", Duration::from_secs(10), || {
-        matches!(worker.state.lock().status, Status::Error(_))
-    });
+    wait_for(
+        "the broken download to fail",
+        Duration::from_secs(10),
+        || matches!(worker.state.lock().status, Status::Error(_)),
+    );
     assert!(
         !part_file(&kits_dir, "Broken_Kit").exists(),
         "a failed download left its .part file behind"
@@ -141,14 +143,22 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
     // --- Dropping the handle mid-transfer returns at once ---
     let worker = download::spawn_with_index(index_url);
     worker.send(Command::Download(kit("Slow Kit", "slow.zip")));
-    wait_for("the slow download to start", Duration::from_secs(10), || {
-        matches!(
-            worker.state.lock().status,
-            Status::Downloading { downloaded_bytes, .. } if downloaded_bytes > 0
-        )
-    });
+    wait_for(
+        "the slow download to start",
+        Duration::from_secs(10),
+        || {
+            matches!(
+                worker.state.lock().status,
+                Status::Downloading { downloaded_bytes, .. } if downloaded_bytes > 0
+            )
+        },
+    );
     let part = part_file(&kits_dir, "Slow_Kit");
-    assert!(part.exists(), "the transfer should be streaming into {}", part.display());
+    assert!(
+        part.exists(),
+        "the transfer should be streaming into {}",
+        part.display()
+    );
 
     let started = Instant::now();
     drop(worker);
@@ -160,9 +170,11 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
 
     // The detached worker sees the cancel at its next chunk and removes
     // the partial file.
-    wait_for("the cancelled .part to be removed", Duration::from_secs(5), || {
-        !part.exists()
-    });
+    wait_for(
+        "the cancelled .part to be removed",
+        Duration::from_secs(5),
+        || !part.exists(),
+    );
 
     let _ = std::fs::remove_dir_all(&data_home);
 }

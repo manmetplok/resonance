@@ -126,10 +126,7 @@ fn kit_swap_fades_ringing_voices_without_click() {
         }
     }
     // The fade must have reached silence by the end of the swap fade.
-    assert!(
-        prev.abs() <= tol,
-        "fade should end at silence, got {prev}"
-    );
+    assert!(prev.abs() <= tol, "fade should end at silence, got {prev}");
 
     // The block after the fade is fully silent.
     let after = render_block(&mut sampler, &params);
@@ -207,11 +204,17 @@ fn second_swap_mid_fade_fades_both_kits() {
     let tol = fade_step(1.5, swap_frames());
     let mut prev = 1.5f32;
     for (i, &v) in out[port].0.iter().enumerate() {
-        assert!((v - prev).abs() <= tol, "click at sample {i}: {prev} -> {v}");
+        assert!(
+            (v - prev).abs() <= tol,
+            "click at sample {i}: {prev} -> {v}"
+        );
         prev = v;
     }
     assert!(swap_frames() < FRAMES);
-    assert!(prev.abs() < 1e-6, "both fades should have ended, got {prev}");
+    assert!(
+        prev.abs() < 1e-6,
+        "both fades should have ended, got {prev}"
+    );
 
     // A fresh hit plays kit 3.
     sampler.note_on(drum_map::TOM_LOW, 1.0);

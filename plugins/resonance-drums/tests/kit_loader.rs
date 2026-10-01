@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use resonance_drums::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use resonance_drums::kit_loader::{
-    build_fallback_pad, kit_display_name, load_kit_from_manifest, parse_vel_index,
-    PadMicChoices, DEFAULT_OVERHEAD_SETUP,
+    build_fallback_pad, kit_display_name, load_kit_from_manifest, parse_vel_index, PadMicChoices,
+    DEFAULT_OVERHEAD_SETUP,
 };
 
 /// Resolve the drummica manifest, or `None` when this run is not opted in.

@@ -109,7 +109,10 @@ fn second_of_two_queued_kits_is_the_one_that_plays() {
     // And the stale kit is gone, not merely queued behind it: had it
     // been swapped in now, the ringing kick would start fading.
     let again = render(&mut plugin, &[])[KICK_PORT][BLOCK - 1] / CHAIN_GAIN;
-    assert!((again - 0.5).abs() < 1e-3, "a stale kit swapped in later: {again}");
+    assert!(
+        (again - 0.5).abs() < 1e-3,
+        "a stale kit swapped in later: {again}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +197,10 @@ fn load(plugin: &ResonanceDrums, kit: &TempKit) {
     // kit the kit is in the slot.
     let deadline = Instant::now() + Duration::from_secs(30);
     while plugin.bridge.kit_path.lock().as_deref() != Some(kit.manifest.as_path()) {
-        assert!(Instant::now() < deadline, "the loader never handed the kit over");
+        assert!(
+            Instant::now() < deadline,
+            "the loader never handed the kit over"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
 }

@@ -13,7 +13,9 @@ use std::f32::consts::FRAC_PI_4;
 
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, Hit, PortBuffers};
-use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS};
+use resonance_drums::kit::{
+    LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
+};
 use resonance_drums::params::DrumParams;
 use resonance_drums::voice::{RELEASE_FADE_MS, SWAP_FADE_MS};
 
@@ -92,7 +94,9 @@ impl Rig {
             self.sampler
                 .render_block(&mut ports, BLOCK, &self.params, hits);
         }
-        (0..BLOCK).map(|i| bufs.iter().map(|(l, _)| l[i]).sum()).collect()
+        (0..BLOCK)
+            .map(|i| bufs.iter().map(|(l, _)| l[i]).sum())
+            .collect()
     }
 
     /// Render until silent, starting with `first` (the block that holds
@@ -121,13 +125,22 @@ fn hit(note: u8) -> Hit {
 /// in frames (the first frame at which the voice is gone) and its gain
 /// halfway through.
 fn measure(env: &[f32]) -> (usize, f32) {
-    assert!((env[0] - 1.0).abs() < 1e-6, "the fade should start at unity, got {}", env[0]);
+    assert!(
+        (env[0] - 1.0).abs() < 1e-6,
+        "the fade should start at unity, got {}",
+        env[0]
+    );
     let len = env
         .iter()
         .position(|s| *s == 0.0)
         .expect("the fade never reached silence");
     for w in env[..len].windows(2) {
-        assert!(w[1] <= w[0], "a fade-out must never rise: {} -> {}", w[0], w[1]);
+        assert!(
+            w[1] <= w[0],
+            "a fade-out must never rise: {} -> {}",
+            w[0],
+            w[1]
+        );
     }
     (len, env[len / 2])
 }

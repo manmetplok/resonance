@@ -159,10 +159,8 @@ fn a_choke_takes_effect_at_its_offset() {
     );
     // The release fade ends a fade-length after the choke.
     let tail = 512
-        + resonance_drums::voice::fade_frames(
-            resonance_drums::voice::RELEASE_FADE_MS,
-            SAMPLE_RATE,
-        ) as usize;
+        + resonance_drums::voice::fade_frames(resonance_drums::voice::RELEASE_FADE_MS, SAMPLE_RATE)
+            as usize;
     assert!(
         choked[tail..].iter().all(|s| *s == 0.0),
         "choked voice still sounds after its fade"

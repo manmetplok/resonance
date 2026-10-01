@@ -615,8 +615,7 @@ impl DrumSampler {
             port.right[..frames].fill(0.0);
         }
 
-        self.block_idle =
-            self.pads.is_empty() && self.retired_pads.iter().all(Option::is_none);
+        self.block_idle = self.pads.is_empty() && self.retired_pads.iter().all(Option::is_none);
         if self.block_idle {
             return;
         }

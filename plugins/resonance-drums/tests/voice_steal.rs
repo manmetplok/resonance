@@ -16,7 +16,9 @@ use std::f32::consts::FRAC_PI_2;
 
 use resonance_drums::drum_map::{NUM_PADS, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, Hit, PortBuffers};
-use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS};
+use resonance_drums::kit::{
+    LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
+};
 use resonance_drums::params::DrumParams;
 use resonance_drums::voice::{fade_frames, MAX_VOICES, STEAL_FADE_MS};
 
@@ -160,7 +162,10 @@ fn stealing_a_sounding_voice_does_not_click() {
     let onsets = (ATTACK / SPACING) as f32 * LEVEL / ATTACK as f32;
     let fades = (n / SPACING as f32).ceil() * LEVEL * FRAC_PI_2 / n;
     let bound = 1.25 * (onsets + fades);
-    assert!(bound < 0.5 * LEVEL, "bound {bound} would not tell a click apart");
+    assert!(
+        bound < 0.5 * LEVEL,
+        "bound {bound} would not tell a click apart"
+    );
 
     let (step, at) = max_step(&mix);
     assert!(
@@ -191,7 +196,11 @@ fn a_stolen_voice_fades_out_in_a_tail_slot() {
         sampler.voices.iter().filter(|v| v.active).count(),
         MAX_VOICES
     );
-    assert_eq!(sampler.tail_voices_active(), 1, "the victim must keep sounding");
+    assert_eq!(
+        sampler.tail_voices_active(),
+        1,
+        "the victim must keep sounding"
+    );
 
     let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
         .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
