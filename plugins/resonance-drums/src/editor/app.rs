@@ -951,7 +951,8 @@ fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
         ui.add_space(4.0);
 
         // Weighted by what each heading has to show: VELOCITY CURVE is
-        // the longest label, POLYPHONY's value is two digits.
+        // the longest label, POLYPHONY's value at most three digits (128,
+        // its default: `editor_layout.rs` checks it is never elided).
         let [poly_w, curve_w, rr_w] = card_columns(ui, [0.28, 0.38, 0.34]);
         ui.horizontal(|ui| {
             // Polyphony — voice ceiling, 1..MAX_VOICES.
