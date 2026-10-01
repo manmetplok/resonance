@@ -432,6 +432,95 @@ fn a_state_load_supersedes_a_pick_still_decoding() {
 }
 
 // ---------------------------------------------------------------------------
+// The last build is not kept for a kit nobody wants
+// ---------------------------------------------------------------------------
+
+/// A weak handle on the take the kit's kick plays, from the last build.
+fn built_kick_take(
+    plugin: &ResonanceDrums,
+) -> std::sync::Weak<resonance_drums::kit::SampleData> {
+    let built = plugin.bridge.built_kit.lock();
+    let pad = &built.as_ref().expect("a built kit").pads[0];
+    std::sync::Arc::downgrade(pad.close_mics[0].layers[0].round_robins[0].shared())
+}
+
+/// Re-activating with another kit wanted puts the sampler on the built-in
+/// kit while that kit decodes. The old kit's build must go with it: it
+/// would otherwise stay resident through the decode — and for good, if
+/// the new kit fails to load.
+#[test]
+fn reactivating_for_another_kit_frees_the_old_kit_before_the_decode() {
+    use resonance_plugin::plugin::ExtraStateSaver;
+
+    let w = temp_kit(0.25);
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &w, FILE_RATE);
+    render(&mut plugin, &[]);
+    let w_take = built_kick_take(&plugin);
+    assert!(w_take.upgrade().is_some());
+
+    // A project load while inactive names X; the re-activation loads it.
+    plugin.deactivate();
+    let saver = resonance_drums::DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    };
+    saver.load(&serde_json::json!({ "kit_path": x.manifest.to_string_lossy() }));
+    let go = gate(&plugin);
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    assert!(plugin.bridge.built_kit.lock().is_none());
+    assert!(
+        w_take.upgrade().is_none(),
+        "kit W is still resident while X decodes"
+    );
+    go.send(()).unwrap();
+    wait_settled(&plugin, &x);
+}
+
+/// The same with no kit wanted at all: the built-in kit plays, and the
+/// last build is dropped.
+#[test]
+fn reactivating_with_no_kit_wanted_frees_the_old_kit() {
+    use resonance_plugin::plugin::ExtraStateSaver;
+
+    let w = temp_kit(0.25);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &w, FILE_RATE);
+    render(&mut plugin, &[]);
+    let w_take = built_kick_take(&plugin);
+
+    plugin.deactivate();
+    let saver = resonance_drums::DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    };
+    saver.load(&serde_json::json!({ "kit_path": null }));
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    assert!(plugin.bridge.built_kit.lock().is_none());
+    assert!(w_take.upgrade().is_none(), "kit W is still resident");
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// A re-activation at the same rate for the same kit keeps the build:
+/// it is what makes the reload cheap.
+#[test]
+fn reactivating_for_the_same_kit_keeps_the_build() {
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &x, FILE_RATE);
+    render(&mut plugin, &[]);
+    reactivate(&mut plugin, FILE_RATE);
+    assert!(plugin.bridge.built_kit.lock().is_some());
+}
+
+// ---------------------------------------------------------------------------
 // Progress across a re-activation
 // ---------------------------------------------------------------------------
 

@@ -179,8 +179,9 @@ impl ManifestStamp {
 /// A finished kit build, kept on the bridge ([`KitBridge::built_kit`]) so
 /// the next load of the same kit at the same rate rebuilds only the pads
 /// whose [`PadRequest`] changed (E4) and clones the rest. Its pads share
-/// their sample memory with the kit the sampler plays, so keeping it
-/// costs no audio memory of its own.
+/// their sample memory with the kit the sampler plays while the sampler
+/// plays it; once it does not, the build alone keeps that memory alive,
+/// which is why `initialize` drops a build that cannot donate.
 #[derive(Clone)]
 pub struct BuiltKit {
     pub path: PathBuf,

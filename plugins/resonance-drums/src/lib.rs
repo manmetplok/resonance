@@ -162,8 +162,14 @@ pub struct KitBridge {
     /// `kit_loader::cache::global().stats().resident_bytes`.
     pub kit_shared_bytes: Arc<AtomicU64>,
     /// The last kit a loader built, kept so the next load of the same kit
-    /// at the same rate rebuilds only the pads that changed (E4). Shares
-    /// its sample memory with the kit the sampler plays.
+    /// at the same rate rebuilds only the pads that changed (E4).
+    ///
+    /// It holds its takes alive by itself: while the sampler plays this
+    /// build the two share the memory, but once the sampler moves on
+    /// (to the built-in kit, at a re-activation) the build alone keeps
+    /// that kit resident. So `initialize` drops it whenever it cannot
+    /// donate to the next load — another rate, another kit, or none —
+    /// and a direct [`kit_loader::hand_off_kit`] drops it too.
     pub built_kit: Arc<Mutex<Option<BuiltKit>>>,
     /// What the last successful load did: files decoded vs found in the
     /// cache, pads reused, unreadable files. Read by tests as the decode
@@ -460,11 +466,17 @@ impl ResonancePlugin for ResonanceDrums {
                     }
                 }
             }
-            // A build at another rate cannot donate a single pad to the
-            // next load; letting it go now frees its memory before that
-            // load decodes, instead of after.
+            // A build at another rate, or of a kit that is no longer
+            // wanted (none: the built-in kit; or another kit), cannot
+            // donate a single pad to the next load. The sampler is about
+            // to drop it too, so letting it go now frees its memory
+            // before that load decodes, instead of after — and at all,
+            // should that load fail.
             let mut built = self.bridge.built_kit.lock();
-            if built.as_ref().is_some_and(|b| b.sample_rate != sample_rate) {
+            let donates = built.as_ref().is_some_and(|b| {
+                b.sample_rate == sample_rate && wanted.as_ref().is_some_and(|w| w.path == b.path)
+            });
+            if !donates {
                 *built = None;
             }
             drop(built);
