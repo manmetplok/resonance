@@ -42,7 +42,7 @@ fn ramp_sample(frames: usize) -> LoadedSample {
         data.push(v);
         data.push(v);
     }
-    LoadedSample { data, frames }
+    LoadedSample::from_data(data)
 }
 
 /// Every pad: one close mic, one layer, one take, no overhead and no

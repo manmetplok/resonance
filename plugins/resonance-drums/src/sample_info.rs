@@ -89,9 +89,9 @@ pub fn info_for_bank(bank: &LoadedMicBank, sample_rate: f32) -> Option<PadSample
         layer_index,
         take_count: layer.round_robins.len(),
         take_index: 0,
-        frames: take.frames,
+        frames: take.frames(),
         sample_rate,
-        envelope: envelope(&take.data, take.frames),
+        envelope: envelope_channels(take.samples(), take.resident_frames(), take.channels()),
     })
 }
 
@@ -121,7 +121,7 @@ pub fn total_sample_bytes(pads: &[LoadedPad]) -> usize {
         bank.layers
             .iter()
             .flat_map(|layer| layer.round_robins.iter())
-            .map(|take| take.data.len() * std::mem::size_of::<f32>())
+            .map(|take| take.bytes())
             .sum()
     };
     pads.iter()
@@ -153,6 +153,12 @@ pub fn format_bytes(bytes: u64) -> String {
 /// over both channels. Takes shorter than the bucket count yield one
 /// bucket per frame rather than padding with invented zeroes.
 pub fn envelope(data: &[f32], frames: usize) -> Vec<(f32, f32)> {
+    envelope_channels(data, frames, 2)
+}
+
+/// [`envelope`] of a take interleaved `channels` (1 or 2) per frame.
+pub fn envelope_channels(data: &[f32], frames: usize, channels: usize) -> Vec<(f32, f32)> {
+    let channels = channels.max(1);
     if frames == 0 || data.is_empty() {
         return Vec::new();
     }
@@ -164,8 +170,8 @@ pub fn envelope(data: &[f32], frames: usize) -> Vec<(f32, f32)> {
         let mut lo = f32::MAX;
         let mut hi = f32::MIN;
         for frame in start..end {
-            let idx = frame * 2;
-            for s in [data.get(idx), data.get(idx + 1)].into_iter().flatten() {
+            let idx = frame * channels;
+            for s in data.iter().skip(idx).take(channels) {
                 lo = lo.min(*s);
                 hi = hi.max(*s);
             }

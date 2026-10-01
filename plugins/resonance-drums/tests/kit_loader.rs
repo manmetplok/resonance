@@ -205,7 +205,7 @@ fn fallback_pads_all_decode() {
         assert_eq!(pad.close_mics[0].layers.len(), 1);
         assert_eq!(pad.close_mics[0].layers[0].round_robins.len(), 1);
         assert!(
-            pad.close_mics[0].layers[0].round_robins[0].frames > 0,
+            pad.close_mics[0].layers[0].round_robins[0].frames() > 0,
             "{} sample is empty",
             mapping.name
         );

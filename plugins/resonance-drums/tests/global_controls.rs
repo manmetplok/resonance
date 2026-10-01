@@ -33,12 +33,9 @@ fn make_sampler() -> DrumSampler {
 fn layer(takes: usize) -> VelocityLayer {
     VelocityLayer {
         round_robins: (0..takes)
-            .map(|_| LoadedSample {
-                // Long enough that a hit is still sounding when the next
-                // one lands, so the voice count is what is under test.
-                data: vec![0.5; 8192],
-                frames: 4096,
-            })
+            // Long enough that a hit is still sounding when the next
+            // one lands, so the voice count is what is under test.
+            .map(|_| LoadedSample::from_data(vec![0.5; 8192]))
             .collect(),
     }
 }

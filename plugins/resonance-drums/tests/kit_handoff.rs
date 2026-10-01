@@ -80,10 +80,7 @@ fn dc_kit(level: f32) -> Vec<LoadedPad> {
                     position: "test".to_string(),
                     setup_key: String::new(),
                     layers: vec![VelocityLayer {
-                        round_robins: vec![LoadedSample {
-                            data: vec![level; BLOCK * 64],
-                            frames: BLOCK * 32,
-                        }],
+                        round_robins: vec![LoadedSample::from_data(vec![level; BLOCK * 64])],
                     }],
                 }]
             } else {

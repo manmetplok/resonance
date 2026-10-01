@@ -17,10 +17,7 @@ const NUM_PORTS: usize = 7;
 fn layer(value: f32, takes: usize) -> VelocityLayer {
     VelocityLayer {
         round_robins: (0..takes)
-            .map(|_| LoadedSample {
-                data: vec![value; 64],
-                frames: 32,
-            })
+            .map(|_| LoadedSample::from_data(vec![value; 64]))
             .collect(),
     }
 }

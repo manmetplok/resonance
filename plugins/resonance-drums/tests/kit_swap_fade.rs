@@ -29,10 +29,7 @@ fn fade_step(level: f32, n: usize) -> f32 {
 /// effective gain trajectory.
 fn dc_layer(level: f32, frames: usize) -> VelocityLayer {
     VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![level; frames * 2],
-            frames,
-        }],
+        round_robins: vec![LoadedSample::from_data(vec![level; frames * 2])],
     }
 }
 

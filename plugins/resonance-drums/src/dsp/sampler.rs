@@ -7,7 +7,7 @@ use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{
-    self, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, OVERHEAD_PORT_INDEX,
+    self, LoadedMicBank, LoadedPad, LoadedSample, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX,
 };
 use crate::params::DrumParams;
 use crate::voice::{
@@ -295,8 +295,9 @@ impl DrumSampler {
         self.pads.clear();
 
         for mapping in &PAD_MAPPINGS {
-            let sample = match kit::decode_wav(mapping.default_sample, sample_rate) {
-                Ok(data) => LoadedSample::from_data(data),
+            // The embedded WAVs are mono, and stay mono (E5).
+            let sample = match kit::decode_sample(mapping.default_sample.to_vec(), sample_rate) {
+                Ok(data) => LoadedSample::from_shared(Arc::new(data)),
                 Err(e) => {
                     eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     self.pads.push(LoadedPad {
@@ -805,7 +806,14 @@ impl DrumSampler {
                 voice.active = false;
                 continue;
             }
-            let sample = &layer.round_robins[voice.rr_index];
+            let sample: &SampleData = &layer.round_robins[voice.rr_index];
+            // Mono takes are read onto both sides: the right channel's
+            // index is the left's for a mono take (E5), which plays the
+            // very floats a duplicated-stereo take held.
+            let data = sample.samples();
+            let stride = sample.channels();
+            let right_offset = stride - 1;
+            let resident = sample.resident_frames();
 
             // Which port does this voice sum into, and what's the
             // destination-specific gain multiplier? Computed at both
@@ -869,7 +877,7 @@ impl DrumSampler {
             let port_r = &mut port.right[..end];
 
             for frame in start..end {
-                if voice.position >= sample.frames {
+                if voice.position >= resident {
                     voice.active = false;
                     break;
                 }
@@ -878,9 +886,9 @@ impl DrumSampler {
                     break;
                 }
 
-                let idx = voice.position * 2;
-                let sample_l = sample.data[idx];
-                let sample_r = sample.data[idx + 1];
+                let idx = voice.position * stride;
+                let sample_l = data[idx];
+                let sample_r = data[idx + right_offset];
                 let env = voice.current_gain();
                 let gain = env * vol * dest_gain;
 
