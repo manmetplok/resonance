@@ -140,12 +140,46 @@ impl Default for State {
 pub struct WorkerConfig {
     /// The server index. Kit files resolve relative to it.
     pub index_url: String,
+    /// Resonance's per-user data directory: kits are extracted into its
+    /// `drumkits/` and recorded in its `installed.json`. `None` = the
+    /// platform's (see [`drumkits_dir`]). Set by tests so they never
+    /// touch the real one — through this rather than `$XDG_DATA_HOME`,
+    /// which `dirs::data_dir` ignores on macOS.
+    pub data_dir: Option<PathBuf>,
 }
 
 impl Default for WorkerConfig {
     fn default() -> Self {
         Self {
             index_url: INDEX_URL.to_string(),
+            data_dir: None,
+        }
+    }
+}
+
+impl WorkerConfig {
+    /// Where kits are extracted.
+    pub fn drumkits_dir(&self) -> Option<PathBuf> {
+        match &self.data_dir {
+            Some(dir) => Some(dir.join("drumkits")),
+            None => drumkits_dir(),
+        }
+    }
+
+    /// Record `item` in the installed-content registry.
+    fn mark_installed(&self, item: InstalledItem) -> Result<(), String> {
+        match &self.data_dir {
+            None => registry::mark_installed(item).map_err(|e| e.to_string()),
+            Some(dir) => {
+                // `registry::mark_installed`, against this directory's file.
+                let path = dir.join("installed.json");
+                let mut reg = registry::load_registry_from(&path);
+                reg.items.retain(|existing| {
+                    !(existing.name == item.name && existing.content_type == item.content_type)
+                });
+                reg.items.push(item);
+                registry::save_registry_to(&reg, &path).map_err(|e| e.to_string())
+            }
         }
     }
 }
@@ -191,7 +225,7 @@ impl WorkerHandle {
     fn start(&self) -> Option<Running> {
         let (tx, rx) = mpsc::channel();
         let worker = Worker {
-            index_url: self.config.index_url.clone(),
+            config: self.config.clone(),
             state: self.state.clone(),
             cancel: self.cancel.clone(),
             busy: self.busy.clone(),
@@ -269,7 +303,7 @@ pub fn spawn_with(config: WorkerConfig) -> WorkerHandle {
 
 /// What the worker thread owns.
 struct Worker {
-    index_url: String,
+    config: WorkerConfig,
     state: Arc<Mutex<State>>,
     cancel: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
@@ -313,7 +347,7 @@ fn worker_loop(rx: Receiver<Command>, worker: Worker) {
             Command::Shutdown => {}
             Command::FetchIndex => {
                 state.lock().status = Status::FetchingIndex;
-                match fetch_index(&agent, &worker.index_url) {
+                match fetch_index(&agent, &worker.config.index_url) {
                     Ok(index) => {
                         let mut s = state.lock();
                         s.index = Some(index);
@@ -332,7 +366,7 @@ fn worker_loop(rx: Receiver<Command>, worker: Worker) {
                 match download_and_extract(&agent, &kit, &worker) {
                     Ok(dest) => {
                         // Mark in the shared registry.
-                        let _ = registry::mark_installed(InstalledItem {
+                        let _ = worker.config.mark_installed(InstalledItem {
                             name: kit.name.clone(),
                             content_type: ContentType::Drumkit,
                             path: dest.to_string_lossy().into_owned(),
@@ -379,7 +413,7 @@ fn download_and_extract(
     worker: &Worker,
 ) -> Result<PathBuf, String> {
     // Build the download URL relative to the index URL base.
-    let index_url = worker.index_url.as_str();
+    let index_url = worker.config.index_url.as_str();
     let base = index_url
         .rsplit_once('/')
         .map(|(base, _)| base)
@@ -399,7 +433,10 @@ fn download_and_extract(
         .unwrap_or(0);
 
     // Stream to a temporary file so we don't hold GiBs in RAM.
-    let dir = drumkits_dir().ok_or_else(|| "no data dir".to_string())?;
+    let dir = worker
+        .config
+        .drumkits_dir()
+        .ok_or_else(|| "no data dir".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
     let tmp_path = dir.join(format!(".{}.zip.part", sanitize(&kit.name)));

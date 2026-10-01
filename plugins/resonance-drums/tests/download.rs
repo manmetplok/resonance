@@ -6,9 +6,10 @@
 //! 5 GiB download blocked until the download finished. A failed or
 //! abandoned download also left its `.part` file behind.
 //!
-//! One `#[test]` on purpose: the download directory comes from
-//! `$XDG_DATA_HOME`, which is process-global, so this binary points it
-//! at a temp dir once and runs every phase in sequence.
+//! Every worker here gets its own data directory through
+//! `WorkerConfig::data_dir` — not `$XDG_DATA_HOME`, which is
+//! process-global and which `dirs::data_dir` ignores on macOS — so the
+//! real one is never touched and the tests can run side by side.
 
 #![cfg(feature = "editor")]
 
@@ -17,7 +18,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use resonance_drums::download::{self, Command, ServerKit, Status};
+use resonance_drums::download::{self, Command, ServerKit, Status, WorkerConfig, WorkerHandle};
 
 /// Body length the slow kit announces — far more than the test ever
 /// lets it send.
@@ -79,10 +80,44 @@ fn serve(mut stream: TcpStream) {
             let _ = stream.write_all(head.as_bytes());
             let _ = stream.write_all(&vec![0u8; 104_857]);
         }
+        // A small, valid kit.
+        "/good.zip" => send_body(&mut stream, &zip_of(&good_kit_entries())),
         _ => {
             let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
         }
     }
+}
+
+fn send_body(stream: &mut TcpStream, body: &[u8]) {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/zip\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+}
+
+fn good_kit_entries() -> Vec<(String, Vec<u8>)> {
+    vec![
+        ("good/drum_samples.json".to_string(), b"{}".to_vec()),
+        ("good/kick.wav".to_string(), vec![7u8; 1000]),
+    ]
+}
+
+/// An in-memory zip of `entries`, stored uncompressed.
+fn zip_of(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = zip::ZipWriter::new(&mut out);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in entries {
+            zip.start_file(name.as_str(), opts).unwrap();
+            zip.write_all(data).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+    out.into_inner()
 }
 
 fn start_server() -> String {
@@ -108,18 +143,49 @@ fn part_file(dir: &Path, sanitized: &str) -> PathBuf {
     dir.join(format!(".{sanitized}.zip.part"))
 }
 
+/// A fresh data directory for one test, removed on drop.
+struct DataHome(PathBuf);
+
+impl DataHome {
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!(
+            "resonance-drums-download-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+
+    fn config(&self, index_url: &str) -> WorkerConfig {
+        WorkerConfig {
+            index_url: index_url.to_string(),
+            data_dir: Some(self.0.clone()),
+            ..WorkerConfig::default()
+        }
+    }
+
+    fn worker(&self, index_url: &str) -> WorkerHandle {
+        download::spawn_with(self.config(index_url))
+    }
+
+    fn kits_dir(&self) -> PathBuf {
+        self.config("").drumkits_dir().expect("drumkits dir")
+    }
+}
+
+impl Drop for DataHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
-    let data_home =
-        std::env::temp_dir().join(format!("resonance-drums-download-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&data_home);
-    std::fs::create_dir_all(&data_home).unwrap();
-    // Before anything resolves a data dir, so the real one is never
-    // touched. Process-global — hence the single test in this binary.
-    std::env::set_var("XDG_DATA_HOME", &data_home);
-    let kits_dir = download::drumkits_dir().expect("drumkits dir");
+    let home = DataHome::new("cancel");
+    let kits_dir = home.kits_dir();
     assert!(
-        kits_dir.starts_with(&data_home),
+        kits_dir.starts_with(&home.0),
         "download dir {} escaped the test's data home",
         kits_dir.display()
     );
@@ -127,7 +193,7 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
     let index_url = start_server();
 
     // --- A transfer the server cuts short fails and leaves no .part ---
-    let worker = download::spawn_with_index(index_url.clone());
+    let worker = home.worker(&index_url);
     worker.send(Command::Download(kit("Broken Kit", "broken.zip")));
     wait_for(
         "the broken download to fail",
@@ -141,7 +207,7 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
     drop(worker);
 
     // --- Dropping the handle mid-transfer returns at once ---
-    let worker = download::spawn_with_index(index_url);
+    let worker = home.worker(&index_url);
     worker.send(Command::Download(kit("Slow Kit", "slow.zip")));
     wait_for(
         "the slow download to start",
@@ -175,8 +241,31 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
         Duration::from_secs(5),
         || !part.exists(),
     );
+}
 
-    let _ = std::fs::remove_dir_all(&data_home);
+/// A completed download lands in the injected data directory — kit and
+/// registry entry both — on every platform.
+#[test]
+fn a_download_installs_into_the_injected_data_dir() {
+    let home = DataHome::new("install");
+    let worker = home.worker(&start_server());
+    worker.send(Command::Download(kit("Good Kit", "good.zip")));
+    wait_for("the download to finish", Duration::from_secs(10), || {
+        let status = worker.state.lock().status.clone();
+        assert!(!matches!(status, Status::Error(_)), "download failed: {status:?}");
+        matches!(status, Status::Done(_))
+    });
+    let dest = home.kits_dir().join("Good_Kit");
+    assert_eq!(
+        std::fs::read(dest.join("good/kick.wav")).unwrap(),
+        vec![7u8; 1000]
+    );
+    let registry = std::fs::read_to_string(home.0.join("installed.json")).unwrap();
+    assert!(
+        registry.contains("Good Kit") && registry.contains(&*dest.to_string_lossy()),
+        "registry entry missing: {registry}"
+    );
+    assert!(!part_file(&home.kits_dir(), "Good_Kit").exists());
 }
 
 /// No thread until the first command: every plugin instance owns a
