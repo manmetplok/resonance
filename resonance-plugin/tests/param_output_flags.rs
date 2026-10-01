@@ -10,6 +10,7 @@
 //!   a host write is ignored: only the plugin moves it.
 
 use std::ffi::CStr;
+use std::sync::Arc;
 
 use clack_extensions::params::{ParamInfoBuffer, ParamInfoFlags, PluginParams};
 use clack_extensions::state::PluginState;
@@ -19,20 +20,38 @@ use clack_host::utils::Cookie;
 use clack_plugin::entry::SinglePluginEntry;
 
 use resonance_plugin::{
-    stable_hash, ClapBridge, EventIterator, FloatParam, FloatRange, IntParam, IntRange,
-    OutputBuffer, Param, ResonancePlugin, TempoInfo,
+    stable_hash, ClapBridge, EventIterator, ExtraStateSaver, FloatParam, FloatRange, IntParam,
+    IntRange, OutputBuffer, Param, ResonancePlugin, TempoInfo,
 };
 use serde_json::{json, Value};
 
 struct FlagsPlugin {
     gain: FloatParam,
-    selector: IntParam,
+    /// Shared with the extra-state saver, which derives it from the
+    /// state's own `pick` key — the shape of the drums' `kit_select`,
+    /// which follows the state's kit reference.
+    selector: Arc<IntParam>,
     progress: FloatParam,
 }
 
 impl FlagsPlugin {
     fn params(&self) -> [&dyn Param; 3] {
-        [&self.gain, &self.selector, &self.progress]
+        [&self.gain, &*self.selector, &self.progress]
+    }
+}
+
+struct PickSaver(Arc<IntParam>);
+
+impl ExtraStateSaver for PickSaver {
+    fn save(&self) -> serde_json::Map<String, Value> {
+        let mut map = serde_json::Map::new();
+        map.insert("pick".into(), json!(self.0.value()));
+        map
+    }
+    fn load(&self, state: &Value) {
+        if let Some(pick) = state.get("pick").and_then(Value::as_i64) {
+            self.0.set_value(pick as i32);
+        }
     }
 }
 
@@ -49,9 +68,11 @@ impl ResonancePlugin for FlagsPlugin {
     fn new() -> Self {
         Self {
             gain: FloatParam::new("gain", "Gain", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }),
-            selector: IntParam::new("selector", "Selector", -1, IntRange::Linear { min: -1, max: 9 })
-                .not_automatable()
-                .excluded_from_state(),
+            selector: Arc::new(
+                IntParam::new("selector", "Selector", -1, IntRange::Linear { min: -1, max: 9 })
+                    .not_automatable()
+                    .excluded_from_state(),
+            ),
             progress: FloatParam::new(
                 "progress",
                 "Progress",
@@ -73,6 +94,9 @@ impl ResonancePlugin for FlagsPlugin {
         true
     }
     fn reset(&mut self) {}
+    fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
+        Some(Arc::new(PickSaver(self.selector.clone())))
+    }
     fn process(
         &mut self,
         _outputs: &mut [OutputBuffer<'_>],
@@ -246,4 +270,21 @@ fn a_host_write_to_a_read_only_param_is_ignored() {
     ext.flush(&mut handle, &input.as_input(), &mut output.as_output());
     assert_eq!(get_value(&mut instance, "progress"), 0.0);
     assert_eq!(get_value(&mut instance, "selector"), 3.0);
+}
+
+/// A param the plugin derives from the state it is loading (the drums'
+/// `kit_select` from its kit reference) is not reverted by the load's
+/// own shared → plugin re-sync: it was not part of the params the load
+/// stored, so the stale atomic must not win over what the plugin set.
+#[test]
+fn a_load_while_active_keeps_the_value_the_plugin_derived_from_it() {
+    let mut instance = instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activate");
+    load_state(&mut instance, &json!({ "version": 1, "params": {}, "pick": 5 }));
+    // The deactivation reconciles the two sides with the load still
+    // unapplied (no block ran): the derived value stands.
+    instance.deactivate(processor);
+    assert_eq!(get_value(&mut instance, "selector"), 5.0);
 }
