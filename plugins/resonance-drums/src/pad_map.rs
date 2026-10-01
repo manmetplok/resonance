@@ -42,7 +42,9 @@
 //!
 //! Either way the alternate piece must be in the kit, or the pad has no
 //! articulation and the parameter selects the primary piece whatever its
-//! value. The label is split into the two chip labels at its `/`
+//! value. The parameter still exists on such a pad (every pad has one,
+//! whatever the kit), reads [`NO_ALTERNATE_TEXT`], and moving it reloads
+//! nothing. The label is split into the two chip labels at its `/`
 //! ([`split_label`]): "punch/deep" → "punch" / "deep", and "mit/ohne
 //! Teppich" → "mit Teppich" / "ohne Teppich".
 //!
@@ -453,18 +455,26 @@ impl KitPadsHandle {
         self.pads.lock().clone()
     }
 
-    /// The chip label of articulation value `value` on pad `slot`, when the
-    /// current kit has an articulation for the pad.
+    /// The text of articulation value `value` on pad `slot`: the current
+    /// kit's chip label when it pairs the pad, else
+    /// [`NO_ALTERNATE_TEXT`] — both values play the same piece then.
     pub fn articulation_text(&self, slot: usize, value: i32) -> Option<String> {
-        self.current()
-            .pads
-            .get(slot)?
-            .articulation
-            .as_ref()?
-            .label_of(value)
-            .map(str::to_string)
+        let pads = self.current();
+        let pad = pads.pads.get(slot)?;
+        match &pad.articulation {
+            Some(articulation) => articulation.label_of(value).map(str::to_string),
+            None => (0..=1)
+                .contains(&value)
+                .then(|| NO_ALTERNATE_TEXT.to_string()),
+        }
     }
 }
+
+/// What a pad's articulation parameter reads when the kit has no
+/// alternate for it: the parameter exists on every pad (a host's list of
+/// parameters cannot change with the kit), and on this one it moves
+/// nothing.
+pub const NO_ALTERNATE_TEXT: &str = "— (no alternate in this kit)";
 
 /// Whether any pad's articulation parameter reads differently in `a` and
 /// `b`: paired in one and not the other, or paired under other labels.

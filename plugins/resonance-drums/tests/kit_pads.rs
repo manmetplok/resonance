@@ -206,7 +206,12 @@ fn the_articulation_param_reads_the_kits_labels() {
     let plugin = booted();
     let params = plugin.bridge.params.clone();
     let kick = &params.pads[KICK_PAD].articulation;
-    assert_eq!(kick.display(ARTICULATION_ALT as f64), "Alternate", "no kit yet");
+    // The built-in kit pairs nothing: the parameter says so.
+    assert_eq!(
+        kick.display(ARTICULATION_ALT as f64),
+        pad_map::NO_ALTERNATE_TEXT,
+        "no kit yet"
+    );
 
     load(&plugin, "it_techno");
     assert_eq!(kick.display(ARTICULATION_PRIMARY as f64), "punch");
@@ -224,16 +229,19 @@ fn the_articulation_param_reads_the_kits_labels() {
         .expect("pad_0_articulation");
     assert_eq!(text.display(index, 1.0).as_deref(), Some("deep"));
 
-    // A pad the kit does not pair reads generically.
-    assert_eq!(
-        params.pads[TOM_HIGH_PAD].articulation.display(0.0),
-        "Primary"
-    );
+    // A pad the kit does not pair says it has no alternate, on both
+    // values — and the text still parses back.
+    let tom = &params.pads[TOM_HIGH_PAD].articulation;
+    for value in [0.0, 1.0] {
+        assert_eq!(tom.display(value), pad_map::NO_ALTERNATE_TEXT);
+    }
+    assert_eq!(tom.parse(pad_map::NO_ALTERNATE_TEXT), Some(0.0));
+    assert_eq!(tom.parse("Alternate"), Some(1.0));
 
     // Back on the built-in kit, the kit's words go.
     resonance_drums::selection::play_builtin(&plugin.bridge);
     wait_for_builtin_pads(&plugin);
-    assert_eq!(kick.display(ARTICULATION_ALT as f64), "Alternate");
+    assert_eq!(kick.display(ARTICULATION_ALT as f64), pad_map::NO_ALTERNATE_TEXT);
 }
 
 #[test]

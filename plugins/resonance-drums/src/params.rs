@@ -276,10 +276,13 @@ pub struct PadParams {
     /// over the control API — reloads the pad's samples through the same
     /// path (see [`crate::articulation`]).
     ///
-    /// Hidden for pads the kit has no alternate recording of: they would
-    /// be a control that cannot move anything, so the host is not offered
-    /// one. The id still exists and still persists, so nothing that was
-    /// saved against it breaks.
+    /// Offered on every pad, whatever the kit: which pads the kit pairs
+    /// changes with the kit, and a host's parameter list cannot (a hidden
+    /// parameter does not exist for the host — no lane, no
+    /// `set_plugin_param`). On a pad the current kit has no alternate for
+    /// it reads `"— (no alternate in this kit)"`
+    /// ([`crate::pad_map::NO_ALTERNATE_TEXT`]) and moving it reloads
+    /// nothing ([`crate::articulation`] masks it).
     pub articulation: ChoiceParam,
     /// Per-mic trims in dB, −∞ … +12, default 0 dB, indexed by
     /// [`MicSlot`]: `pad_N_mic1_trim`, `pad_N_mic2_trim`, `pad_N_oh_trim`.
@@ -508,19 +511,14 @@ impl PadParams {
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
             mute: BoolParam::new(id("mute"), name("Mute"), false),
-            articulation: {
-                let param = ChoiceParam::new(
-                    id("articulation"),
-                    name("Articulation"),
-                    ARTICULATION_PRIMARY,
-                    ARTICULATION_LABELS,
-                );
-                if mapping.has_articulation {
-                    param
-                } else {
-                    param.hidden()
-                }
-            },
+            // Never hidden: which pads have an alternate is the kit's, and
+            // a host's parameter list cannot change with the kit.
+            articulation: ChoiceParam::new(
+                id("articulation"),
+                name("Articulation"),
+                ARTICULATION_PRIMARY,
+                ARTICULATION_LABELS,
+            ),
             trims,
             choke: IntParam::new(
                 id("choke"),

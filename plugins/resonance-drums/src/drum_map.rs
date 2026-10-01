@@ -34,9 +34,11 @@ pub struct PadMapping {
     /// (trimmed by `pad_N_mic1_trim`), the second becomes bank 1
     /// (`pad_N_mic2_trim`).
     pub close_mic_positions: &'static [&'static str],
-    /// Whether this pad supports an articulation toggle (e.g. mit/ohne
-    /// Teppich). When true, the params system exposes a toggle and the
-    /// kit loader consults the articulation flag to pick the alt piece.
+    /// Whether the Drummica table pairs this slot with an alternate piece
+    /// (mit/ohne Teppich, [`crate::pad_map::DRUMMICA_ARTICULATION_ALT`]).
+    /// Informational only: every pad has an articulation parameter, and
+    /// whether it does anything is the loaded kit's
+    /// ([`crate::pad_map::KitPads`]).
     pub has_articulation: bool,
 }
 

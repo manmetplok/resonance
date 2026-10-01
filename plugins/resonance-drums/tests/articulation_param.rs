@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use resonance_drums::articulation::{
     ARTICULATION_ALT, ARTICULATION_LABELS, ARTICULATION_PRIMARY,
 };
-use resonance_drums::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
+use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::kit_loader::KitStatus;
 use resonance_drums::params::{DrumParams, OUTPUT_MODE_MULTI};
 use resonance_drums::reload::reload_kit;
@@ -338,18 +338,17 @@ fn articulation_params_display_and_parse_their_labels() {
     }
 }
 
-/// Every pad that offers the control is a pad the kit has a second
-/// recording of; the rest keep the id (so nothing saved breaks) but are
-/// not advertised as a control that does something.
+/// Every pad offers the control, whatever the kit: which pads a kit pairs
+/// is the kit's (an IT Techno kit pairs its kick and snare, a Drummica kit
+/// its kick, snare and toms), and a hidden parameter does not exist for
+/// the host at all — no lane, no `set_plugin_param` — so hiding it by a
+/// static table would take the control away from kits that have it.
 #[test]
-fn only_pads_with_an_alternate_recording_expose_the_choice() {
+fn every_pad_exposes_the_choice() {
     let params = DrumParams::default();
     for (index, pad) in params.pads.iter().enumerate() {
-        assert_eq!(
-            pad.articulation.is_hidden(),
-            !PAD_MAPPINGS[index].has_articulation,
-            "pad {index}: exposure must match whether it has an articulation"
-        );
+        assert!(!pad.articulation.is_hidden(), "pad {index} is hidden");
+        assert!(pad.articulation.is_automatable(), "pad {index}");
         assert_eq!(pad.articulation.id(), format!("pad_{index}_articulation"));
     }
 }
