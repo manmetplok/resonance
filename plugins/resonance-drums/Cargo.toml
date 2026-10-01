@@ -62,6 +62,12 @@ resonance-drums = { path = ".", features = ["test-hooks"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 criterion.workspace = true
 resonance-dsp-test-support = { path = "../../resonance-dsp-test-support" }
+# `tests/state_upgrade.rs` drives the plugin through a real (in-process)
+# CLAP host: a v1 state loaded while the plugin is active takes the
+# bridge's own load path, which the plugin object never sees.
+clack-host = { workspace = true }
+clack-plugin = { workspace = true }
+clack-extensions = { workspace = true, features = ["clack-host"] }
 
 # Per-block DSP benchmark. `harness = false` hands main() to criterion.
 [[bench]]

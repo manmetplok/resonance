@@ -9,6 +9,9 @@
 //!   sample itself, bit for bit.
 //! - `pad_N_decay` (with `pad_N_hold`) ends the tail; Off plays it all.
 //! - `pad_N_start` skips into the sample.
+//! - A voice two octaves up in 4096-frame live blocks — a whole ring a
+//!   block — is served by the reader *inside* the block, so it does not
+//!   underrun every block.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -88,9 +91,7 @@ fn kick_kit(take: LoadedSample) -> Vec<LoadedPad> {
                 vec![LoadedMicBank {
                     position: "KickIn".to_string(),
                     setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![take.clone()],
-                    }],
+                    layers: vec![VelocityLayer::new(vec![take.clone()])],
                 }]
             } else {
                 Vec::new()
@@ -118,11 +119,22 @@ fn render_kick(
     frames: usize,
     pump: Option<&ReaderPool>,
 ) -> Vec<f32> {
+    render_kick_in(sampler, params, frames, BLOCK, pump)
+}
+
+/// [`render_kick`] in blocks of `block` frames.
+fn render_kick_in(
+    sampler: &mut DrumSampler,
+    params: &DrumParams,
+    frames: usize,
+    block: usize,
+    pump: Option<&ReaderPool>,
+) -> Vec<f32> {
     sampler.update_global_settings(params);
     sampler.note_on(drum_map::KICK, 1.0);
     let mut out = Vec::with_capacity(frames);
     let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
-        .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))
+        .map(|_| (vec![0.0; block], vec![0.0; block]))
         .collect();
     while out.len() < frames {
         {
@@ -133,7 +145,7 @@ fn render_kick(
                     right: r.as_mut_slice(),
                 })
                 .collect();
-            sampler.render_block(&mut ports, BLOCK, params, &[]);
+            sampler.render_block(&mut ports, block, params, &[]);
         }
         out.extend_from_slice(&bufs[0].0);
         if let Some(pool) = pump {
@@ -297,6 +309,88 @@ fn tune_on_a_streamed_take_matches_the_resident_take_bit_for_bit() {
     let out = render_kick(&mut s, &params_tuned(12.0), 30_000, None);
     let got = frequency(&out, 9_000, 29_000);
     assert!((got - 600.0).abs() < 1.2, "{got} Hz on the tail");
+}
+
+/// +24 st reads four take frames per output frame, so a 4096-frame live
+/// block consumes a whole ring (16384 frames) and an 8192-frame one (the
+/// largest the host asks for) two. Served only between blocks (the
+/// reader cannot refill behind a voice whose progress is published at
+/// the block's end), the voice has at most a ring a block: exactly enough
+/// at 4096, nothing to spare, and an underrun every block past it. It publishes inside the block
+/// (`MID_BLOCK_PUBLISH_FRAMES`), so a reader that runs meanwhile — here a
+/// stepped one, pumped where the voice publishes — keeps it whole: no
+/// underruns, bit-identical to the resident take.
+#[test]
+fn a_tuned_voice_in_big_live_blocks_is_served_inside_the_block() {
+    let dir = Dir::new("big-blocks");
+    let path = dir.0.join("tone.wav");
+    write_tone(&path, 400_000);
+    let cache = SampleCache::new();
+    let (whole, _) = cache.get_or_decode_preload(&path, SR, 0).unwrap();
+    let (split, _) = cache.get_or_decode_preload(&path, SR, 4_096).unwrap();
+    assert!(split.tail().is_some(), "the take streams");
+    let params = params_tuned(24.0);
+    // 320k take frames: some 10 to 20 big blocks on the tail.
+    let frames = 80_000;
+    for big in [4_096usize, 8_192] {
+        let want = render_kick_in(
+            &mut resident_sampler(LoadedSample::from_shared(whole.clone())),
+            &params,
+            frames,
+            big,
+            None,
+        );
+        assert!(rms(&want[60_000..]) > 0.1, "the tail sounds");
+
+        let live = |served_inside: bool| -> (Vec<f32>, u64) {
+            let pool = ReaderPool::stepped();
+            let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+            let mut s = DrumSampler::with_reader_pool(rx, &pool);
+            s.set_sample_rate(SR);
+            s.set_render_mode(RenderMode::Realtime);
+            s.pads = kick_kit(LoadedSample::from_shared(split.clone()));
+            if served_inside {
+                let reader = pool.clone();
+                s.stream_set().set_mid_block_hook(Box::new(move || {
+                    reader.pump();
+                }));
+            }
+            let got = render_kick_in(&mut s, &params, frames, big, Some(&pool));
+            (got, s.stream_underruns())
+        };
+
+        if big > 4_096 {
+            // The control: past a ring a block, a reader that runs only
+            // between blocks cannot keep up — every block underruns. (At
+            // 4096 the ring is exactly enough, with nothing to spare.)
+            let (_, underruns) = live(false);
+            assert!(
+                underruns >= 5,
+                "{big}: served between blocks only, the voice underruns every block \
+                 ({underruns})"
+            );
+        }
+
+        let (got, underruns) = live(true);
+        assert_eq!(underruns, 0, "{big}: served inside the block, it never underruns");
+        let diff = got
+            .iter()
+            .zip(&want)
+            .position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(diff, None, "{big}: the streamed render differs from the resident one");
+    }
+}
+
+/// The tune resolves to the cent, as it reads: a value between two
+/// cents plays the cent its label shows.
+#[test]
+fn tune_plays_the_cent_it_shows() {
+    use resonance_drums::dsp::PadSettings;
+    let p = DrumParams::default();
+    p.pads[0].tune.set_value(1.004_9);
+    assert_eq!(tune_label(p.pads[0].tune.value()), "+1.00 st");
+    let rate = PadSettings::from_params(&p.pads[0], SR).rate;
+    assert_eq!(rate, (1.0f32 / 12.0).exp2());
 }
 
 #[test]

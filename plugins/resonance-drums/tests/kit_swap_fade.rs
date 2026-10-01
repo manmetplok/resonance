@@ -28,9 +28,7 @@ fn fade_step(level: f32, n: usize) -> f32 {
 /// A long constant-DC stereo sample, so the rendered output *is* the
 /// effective gain trajectory.
 fn dc_layer(level: f32, frames: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample::from_data(vec![level; frames * 2])],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![level; frames * 2])])
 }
 
 /// Build a kit where every pad has exactly one close mic playing DC at

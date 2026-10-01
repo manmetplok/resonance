@@ -583,15 +583,29 @@ pub trait ResonancePlugin: Send + 'static {
         &[]
     }
 
+    /// The plugin's own state upgrade, beside
+    /// [`param_renames`](ResonancePlugin::param_renames): for what a
+    /// rename cannot say — a value whose unit changed, a default that
+    /// differs for states written before a param existed. See
+    /// [`crate::state::StateUpgrade`] for when it runs (every load path,
+    /// after the renames) and what it must be (idempotent).
+    ///
+    /// A constant rather than a method so the paths that have no plugin
+    /// object to ask can still run it: the CLAP bridge while the plugin
+    /// is active (its object is in the audio processor), and the preset
+    /// bank (`PresetBank::for_plugin`). Default: none.
+    const STATE_UPGRADE: Option<crate::state::StateUpgrade> = None;
+
     /// Load plugin state from bytes. Default: JSON deserialization of
     /// params plus any `extra_state_saver()` contribution, after bringing
     /// an older state version up to date (see
-    /// [`param_renames`](ResonancePlugin::param_renames)).
+    /// [`param_renames`](ResonancePlugin::param_renames) and
+    /// [`STATE_UPGRADE`](ResonancePlugin::STATE_UPGRADE)).
     fn load_state(&mut self, data: &[u8]) -> bool {
         let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
             return false;
         };
-        crate::state::migrate(&mut state, self.param_renames());
+        crate::state::migrate_and_upgrade(&mut state, self.param_renames(), Self::STATE_UPGRADE);
         let ok = crate::state::load_params_from_json(&self.params(), &state);
         if let Some(saver) = self.extra_state_saver() {
             saver.load(&state);

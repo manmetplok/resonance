@@ -463,6 +463,11 @@ pub struct StreamSet {
     pub(crate) panic_reads: AtomicU32,
     /// Times the audio thread waited for a tail frame (offline only).
     pub(crate) waits: AtomicU64,
+    /// Test hook: run by the audio thread each time a voice publishes its
+    /// progress inside a block ([`crate::dsp::sampler::MID_BLOCK_PUBLISH_FRAMES`])
+    /// — a stepped reader pumped there stands in for a reader thread that
+    /// runs while the block renders. Unset (one atomic load) otherwise.
+    mid_block_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl StreamSet {
@@ -475,7 +480,23 @@ impl StreamSet {
             read_latency_us: AtomicU32::new(0),
             panic_reads: AtomicU32::new(0),
             waits: AtomicU64::new(0),
+            mid_block_hook: OnceLock::new(),
         })
+    }
+
+    /// Test hook: run `hook` on the audio thread each time a voice
+    /// publishes its progress inside a block (see
+    /// [`crate::dsp::sampler::MID_BLOCK_PUBLISH_FRAMES`]). Set once; a
+    /// second call is ignored.
+    #[doc(hidden)]
+    pub fn set_mid_block_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.mid_block_hook.set(hook);
+    }
+
+    /// The mid-block test hook, if one is set: one atomic load.
+    #[inline]
+    pub(crate) fn mid_block_hook(&self) -> Option<&(dyn Fn() + Send + Sync)> {
+        self.mid_block_hook.get().map(|h| &**h)
     }
 
     /// Test hook: stall (true) or resume the reader for this set.

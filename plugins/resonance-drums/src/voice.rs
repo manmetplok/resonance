@@ -73,9 +73,10 @@ pub enum VoiceDestination {
     /// Overhead mic bank, scaled by the per-pad `pad_N_oh_trim` param.
     ///
     /// `output_port` is the shared Overhead port
-    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode — for every pad,
-    /// the overhead-only cymbals included (E11) — and Main in Stereo.
-    /// See `DrumSampler::note_on`.
+    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode for a pad with
+    /// close mics; a pad with none (the overhead-only cymbals) keeps its
+    /// overhead take on its own port, since it is the pad's sound (E11).
+    /// Main in Stereo. See `DrumSampler::note_on`.
     Overhead { output_port: u8 },
 }
 
@@ -260,6 +261,21 @@ impl Voice {
                     self.release_gain * fade_out_gain(t)
                 }
             }
+        }
+    }
+
+    /// What the voice plays at now, envelope and all: [`current_gain`]
+    /// times the AHD envelope when a decay is set (E8). What "quietest"
+    /// means when a voice must be cut.
+    ///
+    /// [`current_gain`]: Voice::current_gain
+    #[inline]
+    pub fn audible_gain(&self) -> f32 {
+        let gain = self.current_gain();
+        if self.decay_frames > 0 {
+            gain * self.ahd_gain()
+        } else {
+            gain
         }
     }
 }

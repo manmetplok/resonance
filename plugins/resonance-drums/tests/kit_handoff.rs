@@ -82,9 +82,7 @@ fn dc_kit(level: f32) -> Vec<LoadedPad> {
                 vec![LoadedMicBank {
                     position: "test".to_string(),
                     setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![LoadedSample::from_data(vec![level; BLOCK * 64])],
-                    }],
+                    layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![level; BLOCK * 64])])],
                 }]
             } else {
                 Vec::new()

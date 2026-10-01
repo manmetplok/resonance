@@ -193,16 +193,15 @@ fn drummica_hat_routes_to_hats_and_overhead_ports() {
 }
 
 /// Cymbal pads in Drummica have **no close mic** — they're recorded from
-/// the overheads only. In Multi (the headless sampler's routing) every
-/// pad's overhead take plays on the Overhead port (E11), these included;
-/// the Cymbals port carries only close-miked cymbals. (Until E11 they
-/// played on the Cymbals port, ba todo #1232; a single port with the
-/// whole kit is now Stereo output mode.)
+/// the overheads only, so the overhead take is the cymbal's whole sound.
+/// In Multi (the headless sampler's routing) it plays on the pad's own
+/// port, Cymbals (E11), so the Cymbals sub-track is not silent (ba todo
+/// #1232); a close-miked pad's overhead take goes to Overhead.
 ///
 /// The point first protected here is unchanged — a cymbal hit must make
 /// sound — so a `close_mic_count == 0` short-circuit still fails it.
 #[test]
-fn drummica_cymbal_routes_to_the_overhead_port() {
+fn drummica_cymbal_routes_to_the_cymbals_port() {
     let Some(pads) = load_drummica_pads() else {
         return;
     };
@@ -212,13 +211,13 @@ fn drummica_cymbal_routes_to_the_overhead_port() {
     sampler.note_on(drum_map::CRASH_16_EDGE, 0.9);
     let ports = render_one_block(&mut sampler, 256);
     assert!(
-        port_energy(&ports[OVERHEAD_PORT_INDEX]) > 0.0,
-        "Overhead port silent on a Drummica cymbal hit"
+        port_energy(&ports[5]) > 0.0,
+        "Cymbals port (5) silent on a Drummica cymbal hit"
     );
     assert_eq!(
-        port_energy(&ports[5]),
+        port_energy(&ports[OVERHEAD_PORT_INDEX]),
         0.0,
-        "an overhead take does not double into the Cymbals port"
+        "an overhead-only cymbal does not double into the Overhead port"
     );
 }
 

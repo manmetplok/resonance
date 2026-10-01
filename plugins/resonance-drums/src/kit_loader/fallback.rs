@@ -55,9 +55,7 @@ fn build_pad(mapping: &PadMapping, sample: LoadedSample) -> LoadedPad {
         close_mics: vec![LoadedMicBank {
             position: "fallback".to_string(),
             setup_key: String::new(),
-            layers: vec![VelocityLayer {
-                round_robins: vec![sample],
-            }],
+            layers: vec![VelocityLayer::new(vec![sample])],
         }],
         overhead: None,
     }

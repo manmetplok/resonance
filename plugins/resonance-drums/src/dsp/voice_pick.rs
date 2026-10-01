@@ -20,9 +20,22 @@ pub fn pick_velocity_layer(velocity: f32, n_layers: usize) -> usize {
 }
 
 /// Levels closer together than this (dB, loudest minus softest usable
-/// layer) say nothing about loudness: the layers are picked by
-/// [`pick_velocity_layer`]'s equal buckets at unity, as before E7.
+/// layer) say nothing about which layer is which: the layers are told
+/// apart by [`pick_velocity_layer`]'s equal buckets instead (over the
+/// usable layers), and the loudness still follows the velocity line.
 pub const MIN_LAYER_SPREAD_DB: f32 = 1.0;
+
+/// The least the velocity line spans, in dB, from the softest hit
+/// (velocity 0) to the loudest (velocity 1, the loudest layer at unity).
+///
+/// A recording whose layers span less — a normalized library, where every
+/// layer is equally loud, or a pad with a single usable layer — would
+/// otherwise give no dynamics at all: a soft hit as loud as a hard one.
+/// With the span widened to this, the soft hit plays its (soft-sounding)
+/// layer turned down, so velocity always means loudness. 24 dB: about
+/// what a real kick or snare recording spans from ghost note to
+/// rimshot. A recording that spans more keeps its own span.
+pub const MIN_VELOCITY_SPAN_DB: f32 = 24.0;
 
 /// A layer measured quieter than this (dB) is no strike — a silent or
 /// broken take — and is never picked by loudness.
@@ -32,20 +45,30 @@ pub const UNUSABLE_LAYER_DB: f32 = -100.0;
 /// that puts the hit exactly where the velocity asks for.
 ///
 /// `level(i)` is layer `i`'s measured level in dB (see
-/// `VelocityLayer::level_db`); `n_layers >= 1`. The velocity (0..1,
-/// after the global curve) asks for a target level on a straight dB line
-/// from the softest usable layer (velocity 0) to the loudest (velocity
-/// 1). The layer whose level is nearest the target plays, at the gain
-/// that makes up the difference — so the output level follows the
-/// velocity continuously: crossing from one layer to the next swaps the
-/// recording, not the loudness. The softest and loudest hits play their
-/// layers at unity, and no layer is ever moved by more than half the gap
-/// to its neighbour. Layers out of order (a soft layer recorded louder
-/// than the next) are simply picked where their level says.
+/// `VelocityLayer::level_db`, cached per layer); `n_layers >= 1`.
 ///
-/// When the levels are too close to tell apart ([`MIN_LAYER_SPREAD_DB`],
-/// or no layer is usable) the layers are picked as before E7: equal
-/// velocity buckets, at unity.
+/// - **Loudness.** The velocity (0..1, after the global curve) asks for
+///   a target level on a straight dB line ending at the loudest usable
+///   layer (velocity 1, unity) and spanning the layers' own spread, or
+///   [`MIN_VELOCITY_SPAN_DB`] when they spread less. The chosen layer is
+///   played at the gain that makes up the difference, so the output
+///   level *is* the target: it follows the velocity continuously, and
+///   crossing from one layer to the next swaps the recording, not the
+///   loudness.
+/// - **Which layer.** The one whose level is nearest the velocity's
+///   point on the layers' own line (softest usable layer at 0, loudest
+///   at 1), so every layer gets its part of the velocity range. Layers
+///   out of order (a soft layer recorded louder than the next) are
+///   simply picked where their level says. Layers too close to tell
+///   apart ([`MIN_LAYER_SPREAD_DB`]) are picked by equal velocity
+///   buckets over the usable layers.
+///
+/// With the layers spanning at least [`MIN_VELOCITY_SPAN_DB`] the two
+/// lines are one: the softest and loudest hits play their layers at
+/// unity, and no layer is moved by more than half the gap to its
+/// neighbour. With less, soft hits are turned down below the softest
+/// layer's own level. With no usable layer at all, the layers are picked
+/// by buckets at unity (they are silent anyway).
 ///
 /// No allocation, no lock: runs in `note_on` on the audio thread.
 pub fn pick_layer_by_level(
@@ -53,34 +76,51 @@ pub fn pick_layer_by_level(
     n_layers: usize,
     level: impl Fn(usize) -> f32,
 ) -> (usize, f32) {
+    let v = velocity.clamp(0.0, 1.0);
     let mut lo = f32::INFINITY;
     let mut hi = f32::NEG_INFINITY;
+    let mut usable = 0usize;
     for i in 0..n_layers {
         let l = level(i);
         if l > UNUSABLE_LAYER_DB {
             lo = lo.min(l);
             hi = hi.max(l);
+            usable += 1;
         }
+    }
+    if usable == 0 {
+        return (pick_velocity_layer(v, n_layers), 1.0);
     }
     let spread = hi - lo;
-    if !spread.is_finite() || spread < MIN_LAYER_SPREAD_DB {
-        return (pick_velocity_layer(velocity, n_layers), 1.0);
-    }
-    let target = lo + (hi - lo) * velocity.clamp(0.0, 1.0);
-    let mut best = 0;
-    let mut best_dist = f32::INFINITY;
-    for i in 0..n_layers {
-        let l = level(i);
-        if l <= UNUSABLE_LAYER_DB {
-            continue;
+    let best = if spread < MIN_LAYER_SPREAD_DB {
+        // The k-th usable layer, by equal buckets.
+        let k = pick_velocity_layer(v, usable);
+        (0..n_layers)
+            .filter(|&i| level(i) > UNUSABLE_LAYER_DB)
+            .nth(k)
+            .unwrap_or(0)
+    } else {
+        let pick_at = lo + spread * v;
+        let mut best = 0;
+        let mut best_dist = f32::INFINITY;
+        for i in 0..n_layers {
+            let l = level(i);
+            if l <= UNUSABLE_LAYER_DB {
+                continue;
+            }
+            let dist = (l - pick_at).abs();
+            if dist < best_dist {
+                best = i;
+                best_dist = dist;
+            }
         }
-        let dist = (l - target).abs();
-        if dist < best_dist {
-            best = i;
-            best_dist = dist;
-        }
-    }
+        best
+    };
+    let target = hi - spread.max(MIN_VELOCITY_SPAN_DB) * (1.0 - v);
     let gain_db = target - level(best);
+    if gain_db == 0.0 {
+        return (best, 1.0);
+    }
     (best, (gain_db * (std::f32::consts::LN_10 / 20.0)).exp())
 }
 

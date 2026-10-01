@@ -211,7 +211,14 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
             // chained renames apply oldest-first, and two copies of those
             // rules is exactly how this path came to ignore renames in the
             // first place (ba todo #1360).
-            crate::state::migrate(&mut state, self.shared.param_renames);
+            // The plugin's own upgrade too (`STATE_UPGRADE`): a v1 state
+            // loaded while active must arrive as converted as one loaded
+            // inactive.
+            crate::state::migrate_and_upgrade(
+                &mut state,
+                self.shared.param_renames,
+                self.shared.state_upgrade,
+            );
 
             // Everything from here to `end_param_publish` is one
             // transition as far as the audio thread is concerned: it will

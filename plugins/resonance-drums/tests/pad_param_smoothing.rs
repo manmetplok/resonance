@@ -19,9 +19,7 @@ fn make_sampler() -> DrumSampler {
 /// A long constant-1.0 stereo sample, so the rendered output *is* the
 /// effective gain trajectory.
 fn dc_layer(frames: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample::from_data(vec![1.0; frames * 2])],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![1.0; frames * 2])])
 }
 
 /// Build a kit where every pad has exactly one close mic playing DC 1.0

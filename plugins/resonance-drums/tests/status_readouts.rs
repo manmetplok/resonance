@@ -15,11 +15,9 @@ use resonance_drums::sample_info::{self, ENVELOPE_BUCKETS};
 const NUM_PORTS: usize = 7;
 
 fn layer(value: f32, takes: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: (0..takes)
+    VelocityLayer::new((0..takes)
             .map(|_| LoadedSample::from_data(vec![value; 64]))
-            .collect(),
-    }
+            .collect())
 }
 
 fn tom_pad(mapping_index: usize) -> LoadedPad {

@@ -91,6 +91,9 @@ pub const MAX_HUMANIZE: f32 = 20.0;
 /// The velocity humanize generator's seed (any nonzero word).
 const VEL_RNG_SEED: u32 = 0x2545_F491;
 
+/// The Random round-robin generator's seed (any nonzero word).
+const RR_RNG_SEED: u32 = 0x9E37_79B9;
+
 /// A [`PadSettings`] field that defers to what the kit itself says
 /// ([`LoadedPad`]): what a headless sampler that is never handed params
 /// does, as the sampler always did.
@@ -99,12 +102,17 @@ pub const FROM_KIT: u8 = u8::MAX;
 /// One pad's trigger settings, snapshotted once per block from its
 /// params with the [`GlobalSettings`]: they decide how a hit on the pad
 /// is *started*, so block rate is the right granularity.
+///
+/// A choke group or port left at "Kit" (`pad_N_choke` −1, `pad_N_output`
+/// 0, the defaults) is [`FROM_KIT`] here, and resolves at the hit against
+/// the pad the kit loaded (its `_meta.pads` hint, else the Drummica
+/// table); an explicit value overrides the kit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PadSettings {
-    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`].
+    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`] ("Kit").
     pub choke: u8,
     /// The port the pad's close mics play on in Multi (E11): a port
-    /// index, or [`FROM_KIT`] for the pad's own group.
+    /// index, or [`FROM_KIT`] ("Kit") for the port the kit gives it.
     pub port: u8,
     /// Playback rate from `pad_N_tune` (E8): `2^(st/12)`, exactly 1.0 at
     /// 0 st (the integer path).
@@ -134,14 +142,19 @@ impl PadSettings {
     pub fn from_params(pad: &crate::params::PadParams, sample_rate: f32) -> Self {
         use crate::params::{DECAY_OFF_MS, MAX_TUNE_ST};
         let frames = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
-        let tune = pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST);
+        // Resolved to the cent, as the param reads (`tune_label`): an
+        // automation value between two cents plays the cent it shows.
+        let tune = ((pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST)) * 100.0).round() / 100.0;
         let decay_ms = pad.decay.value();
+        let choke = pad.choke.value();
         Self {
-            choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
-            port: pad
-                .output
-                .value()
-                .clamp(0, crate::kit::NUM_OUTPUT_PORTS as i32 - 1) as u8,
+            choke: if choke < 0 {
+                FROM_KIT
+            } else {
+                choke.min(crate::params::MAX_CHOKE_GROUP) as u8
+            },
+            port: crate::params::port_of_output_choice(pad.output.value())
+                .map_or(FROM_KIT, |port| port as u8),
             // Exactly 1.0 at 0 st: not `exp2(0.0)`'s word for it.
             rate: if tune == 0.0 {
                 1.0
@@ -234,6 +247,17 @@ pub const AUTO_SUSTAINED_WAIT_PER_BLOCK: Duration = Duration::from_millis(50);
 /// a dead reader must not slow a bounce to a crawl.
 const OFFLINE_WAIT_HOLDOFF_SECS: f32 = 1.0;
 
+/// A streaming voice publishes how far it has read (`Ring::read`) and
+/// re-reads what the reader has delivered every this many output frames
+/// **inside** a block, not only at its end: a voice pitched up two
+/// octaves reads four ring frames per output frame, so a 4096-frame block
+/// takes a whole ring ([`crate::stream::RING_FRAMES`]) — with the read
+/// position published only at the block's end, the reader could not
+/// refill behind it while the block rendered, and the voice underran
+/// every block. Two atomic operations per streaming voice per 512
+/// frames.
+pub const MID_BLOCK_PUBLISH_FRAMES: usize = 512;
+
 /// What [`RenderMode::Auto`] reads the time from.
 enum RenderClock {
     /// The wall clock, since the sampler was built.
@@ -272,8 +296,9 @@ pub struct DrumSampler {
     /// repeats whatever Cycle just played.
     rr_last: [[u16; MAX_LAYERS]; NUM_PADS],
     /// Xorshift state for the Random round-robin mode. Seeded to a fixed
-    /// constant so a render is reproducible: bouncing the same project
-    /// twice gives the same takes.
+    /// constant, and re-seeded by `reset` (a bounce resets first) with
+    /// the cycle counters, so a render is reproducible: bouncing the same
+    /// project twice gives the same takes.
     rr_rng: u32,
     /// Xorshift state for velocity humanize (E7), apart from `rr_rng` so
     /// turning humanize on does not move which takes Random picks. Fixed
@@ -378,6 +403,10 @@ pub struct DrumSampler {
     offline_wait_left: Duration,
     /// Frames left to render without waiting, after a long wait ran out.
     offline_holdoff: u64,
+    /// [`AUTO_WAIT_PER_BLOCK`] and [`AUTO_SUSTAINED_WAIT_PER_BLOCK`], or
+    /// what a test set instead ([`DrumSampler::set_auto_wait_budgets`]).
+    auto_wait: Duration,
+    auto_sustained_wait: Duration,
     /// [`RenderMode::Auto`]'s measurement, on `clock`: the window's
     /// start, the audio frames rendered in it, the time it spent waiting
     /// for the reader (not rendering), the offline windows in a row, and
@@ -432,7 +461,7 @@ impl DrumSampler {
             voice_counter: 0,
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
-            rr_rng: 0x9E37_79B9,
+            rr_rng: RR_RNG_SEED,
             vel_rng: VEL_RNG_SEED,
             globals: GlobalSettings::default(),
             pad_settings: [PadSettings::default(); NUM_PADS],
@@ -466,6 +495,8 @@ impl DrumSampler {
             block_wait: Duration::ZERO,
             offline_wait_left: Duration::ZERO,
             offline_holdoff: 0,
+            auto_wait: AUTO_WAIT_PER_BLOCK,
+            auto_sustained_wait: AUTO_SUSTAINED_WAIT_PER_BLOCK,
             clock: RenderClock::Wall(Instant::now()),
             timing_start: None,
             timing_frames: 0,
@@ -533,6 +564,19 @@ impl DrumSampler {
     pub fn set_manual_clock(&mut self, nanos: Arc<AtomicU64>) {
         self.clock = RenderClock::Manual(nanos);
         self.restart_auto();
+    }
+
+    /// Wait at most `short` a block once [`RenderMode::Auto`]'s timing
+    /// says offline, and `sustained` once it has said so for
+    /// [`SUSTAINED_WINDOWS`] windows, instead of [`AUTO_WAIT_PER_BLOCK`]
+    /// and [`AUTO_SUSTAINED_WAIT_PER_BLOCK`] (test hook). A test that
+    /// checks the verdicts with real reader threads sets a budget wall-
+    /// clock contention cannot exhaust, so the render it compares bit for
+    /// bit never depends on how loaded the machine is.
+    #[doc(hidden)]
+    pub fn set_auto_wait_budgets(&mut self, short: Duration, sustained: Duration) {
+        self.auto_wait = short;
+        self.auto_sustained_wait = sustained;
     }
 
     /// Start the timing detector over, as live: a render after this
@@ -833,7 +877,9 @@ impl DrumSampler {
     /// old one dead (E1). A struct copy — nothing allocates.
     ///
     /// With every tail busy the quietest one is reused — the one whose cut
-    /// is least audible. Equally quiet tails (every victim of a burst on
+    /// is least audible, by what it plays now ([`Voice::audible_gain`]:
+    /// its fade *and* its AHD envelope, so a tail whose decay has all but
+    /// ended goes before one still ringing). Equally quiet tails (every victim of a burst on
     /// one frame starts its fade at the same gain) go by fewest fade
     /// frames left, then by least heard: a victim that had not rendered a
     /// frame before it was stolen goes before one that was sounding.
@@ -850,8 +896,8 @@ impl DrumSampler {
                 .enumerate()
                 .min_by(|(_, a), (_, b)| {
                     let left = |t: &Voice| t.release_len.saturating_sub(t.release_pos);
-                    a.current_gain()
-                        .total_cmp(&b.current_gain())
+                    a.audible_gain()
+                        .total_cmp(&b.audible_gain())
                         .then_with(|| left(a).cmp(&left(b)))
                         .then_with(|| a.position.cmp(&b.position))
                 })
@@ -879,8 +925,10 @@ impl DrumSampler {
     ///
     /// Routing (E11): in [`OutputMode::Stereo`] every voice sums to Main;
     /// in [`OutputMode::Multi`] the close banks play on the pad's output
-    /// port and the overhead bank on the Overhead port — for every pad,
-    /// so a cymbal recorded on the overheads only plays on Overhead.
+    /// port and the overhead bank on the Overhead port. A pad with no
+    /// close mic — a cymbal recorded on the overheads only, whose
+    /// overhead take *is* its sound — keeps that take on its own port
+    /// (Cymbals), so the Cymbals sub-track is not silent (ba #1232).
     ///
     /// The incoming velocity is humanized first (E7: ± up to
     /// `velocity_humanize` MIDI steps, from a fixed-seed generator, so a
@@ -895,6 +943,13 @@ impl DrumSampler {
     /// one layer hands over to the next. A single-layer pad (the built-in
     /// kit) keeps the velocity as its gain.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        // An unmapped note plays nothing, and draws nothing from the
+        // humanize generator: a stray note must not shift every humanized
+        // velocity after it.
+        let pad_index = match drum_map::pad_index_for_note(note) {
+            Some(i) => i,
+            None => return,
+        };
         let humanize = self.globals.velocity_humanize;
         let velocity = if humanize > 0.0 {
             // Uniform in -1..1, in MIDI velocity steps; never below the
@@ -905,10 +960,6 @@ impl DrumSampler {
             velocity
         };
         let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
-        let pad_index = match drum_map::pad_index_for_note(note) {
-            Some(i) => i,
-            None => return,
-        };
 
         if pad_index >= self.pads.len() {
             return;
@@ -972,10 +1023,20 @@ impl DrumSampler {
         let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
         // E11: in Stereo every bank sums to Main; in Multi the close mics
-        // play on the pad's output port and the overhead on Overhead.
+        // play on the pad's output port and the overhead on Overhead —
+        // unless the pad has no close mic, when the overhead take is the
+        // pad's sound and stays on the pad's own port.
         let (output_port, oh_port) = match self.globals.output_mode {
             OutputMode::Stereo => (MAIN_PORT_INDEX as u8, MAIN_PORT_INDEX as u8),
-            OutputMode::Multi => (settings.close_port(pad), OVERHEAD_PORT_INDEX as u8),
+            OutputMode::Multi => {
+                let close = settings.close_port(pad);
+                let oh = if pad.close_mics.is_empty() {
+                    close
+                } else {
+                    OVERHEAD_PORT_INDEX as u8
+                };
+                (close, oh)
+            }
         };
         let has_overhead = pad.overhead.is_some();
 
@@ -1040,11 +1101,11 @@ impl DrumSampler {
             dest_count += 1;
         }
         if has_overhead && dest_count < destinations.len() {
-            // Every pad's overhead take goes to the Overhead port in
-            // Multi — the pads the library records with overheads only
-            // (every cymbal, ride and china piece in Drummica) included,
-            // which until E11 played on their own group port (Cymbals).
-            // Stereo has a stereo kit on Main for whoever wants one port.
+            // In Multi a close-miked pad's overhead take goes to the
+            // Overhead port; a pad the library records with overheads
+            // only (every cymbal, ride and china piece in Drummica) plays
+            // it on its own port (Cymbals), since that take is the pad's
+            // whole sound. Stereo puts it on Main with everything else.
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
                 (rings[dest_count], starts[dest_count]) = ring_for(oh, cells[dest_count]);
@@ -1154,9 +1215,9 @@ impl DrumSampler {
                 }
                 self.offline = self.fast_windows > 0;
                 if self.fast_windows >= SUSTAINED_WINDOWS {
-                    AUTO_SUSTAINED_WAIT_PER_BLOCK
+                    self.auto_sustained_wait
                 } else if self.offline {
-                    AUTO_WAIT_PER_BLOCK
+                    self.auto_wait
                 } else {
                     Duration::ZERO
                 }
@@ -1328,7 +1389,7 @@ impl DrumSampler {
         let offline_holdoff = &mut self.offline_holdoff;
         // Only a long wait running dry means a dead reader; a short Auto
         // budget runs dry as a matter of course.
-        let long_waits = self.block_wait >= AUTO_SUSTAINED_WAIT_PER_BLOCK;
+        let long_waits = self.block_wait >= self.auto_sustained_wait.min(OFFLINE_WAIT_PER_BLOCK);
         let holdoff_frames = (OFFLINE_WAIT_HOLDOFF_SECS * self.sample_rate) as u64;
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
@@ -1465,6 +1526,8 @@ impl DrumSampler {
             let unity = voice.rate == 1.0;
             let rate = voice.rate;
             let ahd = voice.decay_frames > 0;
+            // Output frames since the voice last published its progress.
+            let mut since_publish = 0usize;
 
             for frame in start..end {
                 if voice.position >= end_at {
@@ -1624,6 +1687,41 @@ impl DrumSampler {
                 if voice.state == VoiceState::Releasing {
                     voice.release_pos += 1;
                 }
+
+                since_publish += 1;
+                if since_publish >= MID_BLOCK_PUBLISH_FRAMES {
+                    since_publish = 0;
+                    if let Some(ring) = ring {
+                        // Room for the reader behind the voice, and what
+                        // it delivered since (see MID_BLOCK_PUBLISH_FRAMES).
+                        let done = if unity {
+                            voice.position
+                        } else {
+                            voice.position.saturating_sub(1)
+                        };
+                        if done > resident {
+                            ring.read.store((done - resident) as u64, Ordering::Release);
+                        }
+                        if let Some(hook) = streams.set.mid_block_hook() {
+                            hook();
+                        }
+                        let (now_written, now_failed) = ring.published();
+                        written = written.max(now_written);
+                        if now_failed && end_at == total {
+                            // Its tail will not come: fade out where its
+                            // frames end, as a span that starts failed does.
+                            end_at = resident + written as usize;
+                            if !voice.stream_lost {
+                                voice.stream_lost = true;
+                                streams.underruns.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if voice.position >= end_at {
+                                voice.active = false;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
             if let Some(ring) = ring {
                 // Room for the reader: every ring frame before the
@@ -1750,14 +1848,29 @@ impl DrumSampler {
     /// exactly the leftover `reset` exists to remove. Nothing is audible
     /// between the cut and the next block, so there is no click to fade.
     pub fn reset(&mut self) {
-        janitor::reset_all(&mut self.voices);
-        janitor::reset_all(&mut self.tails);
-        // A render after a reset (a bounce) humanizes as the last did.
+        self.silence();
+        // A render after a reset (a bounce) humanizes, and walks the
+        // round robins, as the last did: the same project bounces to the
+        // same takes every time.
         self.vel_rng = VEL_RNG_SEED;
-        self.streams
-            .sweep(self.voices.iter().chain(self.tails.iter()));
+        self.rr_rng = RR_RNG_SEED;
+        self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
+        self.rr_last = [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS];
         // A render after a reset (a bounce) is measured afresh.
         self.restart_render_timing();
+    }
+
+    /// Kill every voice and tail at once and let their rings go, keeping
+    /// the round-robin walk, the humanize generator and the render timing
+    /// where they are: [`reset`](Self::reset) without its restart. A test
+    /// hook — a test that inspects only the voices of the next hit while
+    /// the takes walk on.
+    #[doc(hidden)]
+    pub fn silence(&mut self) {
+        janitor::reset_all(&mut self.voices);
+        janitor::reset_all(&mut self.tails);
+        self.streams
+            .sweep(self.voices.iter().chain(self.tails.iter()));
     }
 }
 

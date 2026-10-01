@@ -94,6 +94,10 @@ pub struct ClapShared<'a> {
     /// Keeping the table intact lets both load paths run the one
     /// [`crate::state::migrate`] instead of two rules that must agree.
     pub(crate) param_renames: &'static [crate::state::ParamRename],
+    /// `ResonancePlugin::STATE_UPGRADE`, for the same reason: both of the
+    /// bridge's load paths run it after the renames
+    /// ([`crate::state::migrate_and_upgrade`]).
+    pub(crate) state_upgrade: Option<crate::state::StateUpgrade>,
     /// Flag: shared param values have been updated (e.g. state load while active).
     /// The audio processor should re-sync plugin params from shared atomics.
     pub(crate) params_dirty: AtomicBool,

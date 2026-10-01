@@ -1,11 +1,13 @@
 //! Levels in dB (drums-plugin-rework.md §7 E9, D6): the master, pad
 //! volume and per-mic trim params read, parse and range in dB, −∞ at
 //! the floor, and a v1 state's linear levels (`balance`, `oh_blend`
-//! included) convert once on load, keeping the sound.
+//! included) convert once on load, keeping the sound — under new ids
+//! (`master_level`, `pad_N_level`), so a value the host re-sends by a v1
+//! id after the state names no param and cannot undo the conversion.
 
 use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::level::{self, db_to_gain, gain_to_db, MIN_DB};
-use resonance_drums::params::{upgrade_v1_levels, DrumParams, MicSlot};
+use resonance_drums::params::{upgrade_v1_levels, DrumParams, MicSlot, MASTER_LEVEL_ID};
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::{Param, ResonancePlugin};
 
@@ -126,12 +128,15 @@ fn a_v1_state_converts_linear_levels_to_db_once() {
     let hat = drum_map::pad_index_for_note(drum_map::HIHAT_CLOSED).unwrap();
     assert_eq!(p.pads[hat].trim(MicSlot::Close1).value(), 0.0);
 
-    // Saved again, it is v2 (no balance, no oh_blend) and loads unchanged.
+    // Saved again, it is v2 (no balance, no oh_blend, no v1 volume ids)
+    // and loads unchanged.
     let saved: serde_json::Value = serde_json::from_slice(&drums.save_state()).unwrap();
     let saved_params = saved["params"].as_object().unwrap();
-    assert!(saved_params
-        .keys()
-        .all(|k| !k.ends_with("_balance") && !k.ends_with("_oh_blend")));
+    assert!(saved_params.keys().all(|k| !k.ends_with("_balance")
+        && !k.ends_with("_oh_blend")
+        && !k.ends_with("_volume")));
+    assert!(saved_params.contains_key(MASTER_LEVEL_ID));
+    assert!(saved_params.contains_key("pad_0_level"));
     let mut again = saved.clone();
     assert!(
         !upgrade_v1_levels(&mut again),
@@ -151,10 +156,66 @@ fn a_v1_state_converts_linear_levels_to_db_once() {
 }
 
 #[test]
+fn a_typographic_minus_parses() {
+    assert_eq!(level::db_from_label("\u{2212}6 dB"), Some(-6.0));
+    assert_eq!(level::db_from_label(" \u{2212}12.5dB "), Some(-12.5));
+    assert_eq!(level::db_from_label("\u{2212}inf dB"), Some(MIN_DB));
+    assert_eq!(level::db_from_label("-3"), Some(-3.0));
+}
+
+#[test]
 fn a_state_without_params_is_left_alone() {
     let mut no_params = serde_json::json!({ "kit_ref": null });
     assert!(!upgrade_v1_levels(&mut no_params));
-    let mut v2 = serde_json::json!({ "params": { "master_volume": -3.0 } });
+    let mut v2 = serde_json::json!({ "params": { "master_level": -3.0, "pad_0_level": -1.0 } });
+    let before = v2.clone();
     assert!(!upgrade_v1_levels(&mut v2));
-    assert_eq!(v2["params"]["master_volume"], -3.0);
+    assert_eq!(v2, before);
+}
+
+/// A state from a build that had dB levels under the v1 ids (K7
+/// development builds: no `balance`, so not v1) moves its values to the
+/// new ids as they are — they are dB already.
+#[test]
+fn a_db_state_under_the_old_ids_moves_without_converting() {
+    let mut k7 = serde_json::json!({ "params": {
+        "master_volume": -3.0, "pad_2_volume": -12.0, "pad_2_pan": 0.5,
+    } });
+    assert!(upgrade_v1_levels(&mut k7));
+    assert_eq!(
+        k7,
+        serde_json::json!({ "params": {
+            "master_level": -3.0, "pad_2_level": -12.0, "pad_2_pan": 0.5,
+        } })
+    );
+}
+
+/// What reopening a v1 project does (ferrous.rproj, post-metal-1.rproj):
+/// the app loads the plugin state, then re-sends the project's saved
+/// param values by id (`apply_pending_param_overrides`: a value whose id
+/// the plugin no longer declares is skipped). Those values are v1's
+/// linear gains under `master_volume` / `pad_N_volume`; they used to land
+/// on the dB params after the conversion — 0.8 "dB" for a 0.8 gain.
+#[test]
+fn a_v1_projects_stale_overrides_cannot_undo_the_conversion() {
+    let mut drums = ResonanceDrums::new();
+    assert!(drums.load_state(&serde_json::to_vec(&v1_state()).unwrap()));
+    // The app's override pass: by id, skipping what the plugin lacks.
+    let overrides = [("master_volume", 0.8), ("pad_0_volume", 0.5), ("pad_5_volume", 0.8)];
+    let mut applied = 0;
+    for (id, value) in overrides {
+        if let Some(param) = (0..drums.param_count())
+            .map(|i| drums.param(i))
+            .find(|p| p.id() == id)
+        {
+            param.set_plain(value);
+            applied += 1;
+        }
+    }
+    assert_eq!(applied, 0, "no v1 level id names a param any more");
+    let p = &drums.bridge.params;
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+    assert!(near(db_to_gain(p.master_volume.value()), 0.8));
+    assert!(near(db_to_gain(p.pads[0].volume.value()), 0.5));
+    assert!(near(db_to_gain(p.pads[5].volume.value()), 0.8));
 }

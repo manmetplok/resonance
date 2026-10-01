@@ -234,6 +234,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             // came from: the state extension needs it while the real plugin
             // lives in the audio processor (ba todo #1360).
             param_renames: temp.param_renames(),
+            state_upgrade: P::STATE_UPGRADE,
             params_dirty: AtomicBool::new(false),
             params_gen: AtomicU64::new(0),
             preset_compare_due: AtomicBool::new(false),

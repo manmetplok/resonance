@@ -564,16 +564,12 @@ fn one_take_kit(mono: &[f32], as_mono: bool) -> Vec<LoadedPad> {
             close_mics: vec![LoadedMicBank {
                 position: "x".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![take()],
-                }],
+                layers: vec![VelocityLayer::new(vec![take()])],
             }],
             overhead: Some(LoadedMicBank {
                 position: "OH".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![take()],
-                }],
+                layers: vec![VelocityLayer::new(vec![take()])],
             }),
         })
         .collect()
@@ -766,7 +762,7 @@ fn strike_takes(sampler: &mut DrumSampler, note: u8, velocity: f32) -> Vec<*cons
             right: r.as_mut_slice(),
         })
         .collect();
-    sampler.reset();
+    sampler.silence();
     sampler.render_block(
         &mut ports,
         BLOCK,

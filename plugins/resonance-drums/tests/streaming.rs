@@ -145,9 +145,7 @@ impl Fixture {
         let bank = |name: &str, path: &Path| LoadedMicBank {
             position: name.to_string(),
             setup_key: String::new(),
-            layers: vec![VelocityLayer {
-                round_robins: vec![take(path)],
-            }],
+            layers: vec![VelocityLayer::new(vec![take(path)])],
         };
         PAD_MAPPINGS
             .iter()
@@ -427,9 +425,16 @@ fn window_blocks(frames: usize) -> usize {
 /// verdict does not depend on the machine's load — and waits for a slow
 /// reader instead of dropping frames. Only a short wait at first; the
 /// long one once offline rendering is sustained.
+///
+/// The long budget is the declared-offline one here
+/// (`set_auto_wait_budgets`): the reader is real threads and the budget
+/// is wall-clock, and 50 ms a block ran out on a loaded machine (the
+/// suite runs binaries side by side), which made the bit-identity and
+/// zero-underrun claims below flaky. The verdicts are what this test is
+/// about; the shipped 50 ms is a constant.
 #[test]
 fn an_unannounced_fast_render_waits_for_a_slow_reader() {
-    use resonance_drums::dsp::sampler::{AUTO_SUSTAINED_WAIT_PER_BLOCK, AUTO_WAIT_PER_BLOCK};
+    use resonance_drums::dsp::sampler::{AUTO_WAIT_PER_BLOCK, OFFLINE_WAIT_PER_BLOCK};
     let fixture = Fixture::new("auto", 48_000, 2.0);
     let cache = SampleCache::new();
     let resident = fixture.kit(&cache, 0);
@@ -456,6 +461,7 @@ fn an_unannounced_fast_render_waits_for_a_slow_reader() {
         ports.append_bits(FRAMES, &mut reference);
     }
     let (mut s, _ts) = sampler(streamed, &pool, RenderMode::Auto);
+    s.set_auto_wait_budgets(AUTO_WAIT_PER_BLOCK, OFFLINE_WAIT_PER_BLOCK);
     let clock = TestClock::on(&mut s);
     // Every read takes 1 ms: far slower than an unthrottled render.
     s.stream_set().set_read_latency_us(1_000);
@@ -478,12 +484,12 @@ fn an_unannounced_fast_render_waits_for_a_slow_reader() {
     assert_eq!(verdicts[3 * w - 1], AUTO_WAIT_PER_BLOCK);
     assert_eq!(
         verdicts[3 * w],
-        AUTO_SUSTAINED_WAIT_PER_BLOCK,
+        OFFLINE_WAIT_PER_BLOCK,
         "sustained after three"
     );
     assert!(verdicts[3 * w..]
         .iter()
-        .all(|&b| b == AUTO_SUSTAINED_WAIT_PER_BLOCK));
+        .all(|&b| b == OFFLINE_WAIT_PER_BLOCK));
     assert!(loud(&reference) > 0.05);
     // How often it had to wait depends on how fast the reader threads get
     // the CPU (on a loaded machine, the render is slow enough not to);
@@ -825,9 +831,7 @@ fn single_voice_kit(cache: &SampleCache, path: &Path, preload: u32) -> Vec<Loade
             close_mics: vec![LoadedMicBank {
                 position: "A".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![LoadedSample::from_shared(data.clone())],
-                }],
+                layers: vec![VelocityLayer::new(vec![LoadedSample::from_shared(data.clone())])],
             }],
             overhead: None,
         })

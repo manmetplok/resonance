@@ -36,6 +36,9 @@ pub struct PresetBank {
     plugin_id: String,
     factory: &'static [FactoryPreset],
     renames: &'static [ParamRename],
+    /// The plugin's own state upgrade (`ResonancePlugin::STATE_UPGRADE`),
+    /// run on a preset after the renames.
+    upgrade: Option<crate::state::StateUpgrade>,
     plugin: PresetPluginInfo,
 }
 
@@ -49,7 +52,9 @@ impl PresetBank {
     /// The bank for plugin `P`: its CLAP id, factory bank, name and
     /// version (recorded as `plugin.version` in every preset it saves).
     pub fn for_plugin<P: crate::ResonancePlugin>() -> Self {
-        Self::new(P::CLAP_ID, P::FACTORY_PRESETS).with_plugin_info(P::NAME, P::VERSION)
+        Self::new(P::CLAP_ID, P::FACTORY_PRESETS)
+            .with_plugin_info(P::NAME, P::VERSION)
+            .with_state_upgrade(P::STATE_UPGRADE)
     }
 
     fn on_library(
@@ -69,6 +74,7 @@ impl PresetBank {
             plugin_id,
             factory,
             renames: &[],
+            upgrade: None,
         }
     }
 
@@ -76,6 +82,15 @@ impl PresetBank {
     /// before a rename still recall the renamed parameter.
     pub fn with_renames(mut self, renames: &'static [ParamRename]) -> Self {
         self.renames = renames;
+        self
+    }
+
+    /// Declare the plugin's own state upgrade
+    /// ([`crate::state::StateUpgrade`]) so a preset written by an older
+    /// build recalls what it meant. [`for_plugin`](Self::for_plugin)
+    /// takes it from the plugin.
+    pub fn with_state_upgrade(mut self, upgrade: Option<crate::state::StateUpgrade>) -> Self {
+        self.upgrade = upgrade;
         self
     }
 
@@ -90,6 +105,7 @@ impl PresetBank {
     pub fn with_library(self, library: Arc<PresetLibrary>) -> Self {
         let mut bank = Self::on_library(library, self.plugin_id, self.factory);
         bank.renames = self.renames;
+        bank.upgrade = self.upgrade;
         bank.plugin = self.plugin;
         bank
     }
@@ -118,6 +134,11 @@ impl PresetBank {
 
     pub fn renames(&self) -> &'static [ParamRename] {
         self.renames
+    }
+
+    /// The plugin's own state upgrade, if it declared one.
+    pub fn state_upgrade(&self) -> Option<crate::state::StateUpgrade> {
+        self.upgrade
     }
 
     pub fn library(&self) -> &Arc<PresetLibrary> {
@@ -209,7 +230,7 @@ impl PresetBank {
     /// gone or unreadable — the params are left untouched.
     pub fn apply(&self, preset: &PresetRef, params: &[&dyn Param]) -> bool {
         match self.json_for(preset) {
-            Some(json) => super::apply(&json, params, self.renames),
+            Some(json) => super::apply_with(&json, params, self.renames, self.upgrade),
             None => false,
         }
     }

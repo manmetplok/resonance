@@ -137,11 +137,9 @@ fn make_test_pad(
     choke_group: Option<u8>,
 ) -> LoadedPad {
     let layers: Vec<VelocityLayer> = (0..n_layers)
-        .map(|_| VelocityLayer {
-            round_robins: (0..rr_per_layer)
+        .map(|_| VelocityLayer::new((0..rr_per_layer)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2])) // 1 stereo frame
-                .collect(),
-        })
+                .collect()))
         .collect();
     LoadedPad {
         name: "test".to_string(),
@@ -188,7 +186,7 @@ fn note_on_cycles_rr_through_voices() {
     for _ in 0..8 {
         // Reset all voices so we can inspect only the freshly spawned
         // ones after each note_on.
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, 0.8);
         let indices = active_rr_indices(&sampler, 0);
         // With one close-mic bank and no overhead, exactly 1 voice.
@@ -212,7 +210,7 @@ fn note_on_rr_single_take_always_zero() {
 
     let note = drum_map::SNARE; // pad index 1
     for _ in 0..5 {
-        sampler.reset();
+        sampler.silence();
         sampler.note_on(note, 0.5);
         let indices = active_rr_indices(&sampler, 1);
         assert_eq!(indices, vec![0]);
@@ -252,19 +250,19 @@ fn different_pads_have_independent_rr_counters() {
         .collect();
 
     // Hit Kick twice (should advance to rr 0, then 1).
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     let kick_rr_0 = active_rr_indices(&sampler, 0);
     assert_eq!(kick_rr_0, vec![0]);
 
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::KICK, 0.8);
     let kick_rr_1 = active_rr_indices(&sampler, 0);
     assert_eq!(kick_rr_1, vec![1]);
 
     // Hit Snare for the first time — its counter should still be at 0,
     // independent of the Kick counter.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(drum_map::SNARE, 0.8);
     let snare_rr_0 = active_rr_indices(&sampler, 1);
     assert_eq!(
@@ -286,16 +284,16 @@ fn different_velocity_layers_have_independent_rr_counters() {
     let note = drum_map::KICK;
 
     // Soft hit (velocity 0.1 -> layer 0). Hit twice.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.1);
     assert_eq!(active_rr_indices(&sampler, 0), vec![0]);
 
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.1);
     assert_eq!(active_rr_indices(&sampler, 0), vec![1]);
 
     // Hard hit (velocity 0.9 -> layer 1). Its RR counter is independent.
-    sampler.reset();
+    sampler.silence();
     sampler.note_on(note, 0.9);
     assert_eq!(
         active_rr_indices(&sampler, 0),
@@ -341,11 +339,9 @@ fn all_voices_from_single_hit_share_rr_index() {
     // Build a kick pad with 2 close-mic banks (KickIn + KickOut) and
     // an overhead, each with 4 round-robin takes.
     let layers = || -> Vec<VelocityLayer> {
-        vec![VelocityLayer {
-            round_robins: (0..4)
+        vec![VelocityLayer::new((0..4)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2]))
-                .collect(),
-        }]
+                .collect())]
     };
     let kick_pad = LoadedPad {
         name: "Kick".to_string(),

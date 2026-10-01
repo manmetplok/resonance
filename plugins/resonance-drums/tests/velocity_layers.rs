@@ -11,6 +11,7 @@
 //! fixed seed: the same hits render the same.
 
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
+use resonance_drums::dsp::voice_pick::MIN_VELOCITY_SPAN_DB;
 use resonance_drums::dsp::{pick_layer_by_level, DrumSampler, PortBuffers};
 use resonance_drums::kit::{
     LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, LOUDNESS_FRAMES, NUM_OUTPUT_PORTS,
@@ -44,9 +45,7 @@ fn bank(position: &str, levels_db: &[f32]) -> LoadedMicBank {
         setup_key: String::new(),
         layers: levels_db
             .iter()
-            .map(|&l| VelocityLayer {
-                round_robins: vec![strike(10f32.powf(l / 20.0), LOUDNESS_FRAMES * 2)],
-            })
+            .map(|&l| VelocityLayer::new(vec![strike(10f32.powf(l / 20.0), LOUDNESS_FRAMES * 2)]))
             .collect(),
     }
 }
@@ -120,15 +119,69 @@ fn sampler() -> DrumSampler {
 
 #[test]
 fn a_take_measures_the_level_of_its_strike() {
-    let layer = VelocityLayer {
-        round_robins: vec![strike(0.5, LOUDNESS_FRAMES), strike(0.25, LOUDNESS_FRAMES)],
-    };
+    let layer = VelocityLayer::new(vec![strike(0.5, LOUDNESS_FRAMES), strike(0.25, LOUDNESS_FRAMES)]);
     // A sine's RMS is its peak / √2: -9.03 dB and -15.05 dB; the layer is
-    // their mean.
+    // their mean *power* (-11.07 dB), not the mean of the dB (-12.04).
     let a = layer.round_robins[0].level_db();
     assert!((a - db(0.5 / 2f32.sqrt())).abs() < 0.03, "{a}");
-    let want = (db(0.5 / 2f32.sqrt()) + db(0.25 / 2f32.sqrt())) / 2.0;
-    assert!((layer.level_db() - want).abs() < 0.03);
+    let power = (0.5f32.powi(2) / 2.0 + 0.25f32.powi(2) / 2.0) / 2.0;
+    let want = 10.0 * power.log10();
+    assert!((layer.level_db() - want).abs() < 0.03, "{}", layer.level_db());
+}
+
+/// A layer whose takes are all silent (or broken) measures as silent —
+/// never picked by loudness; a silent take beside sounding ones does not
+/// drag the layer down: it is left out.
+#[test]
+fn silent_takes_are_left_out_of_a_layers_level() {
+    use resonance_drums::kit::SILENT_DB;
+    let silent = || LoadedSample::mono(vec![0.0; LOUDNESS_FRAMES]);
+    assert_eq!(VelocityLayer::new(vec![silent(), silent()]).level_db(), SILENT_DB);
+    assert_eq!(VelocityLayer::new(Vec::new()).level_db(), SILENT_DB);
+    let with = VelocityLayer::new(vec![strike(0.5, LOUDNESS_FRAMES), silent()]);
+    let alone = VelocityLayer::new(vec![strike(0.5, LOUDNESS_FRAMES)]);
+    assert_eq!(with.level_db(), alone.level_db());
+}
+
+/// Layers of equal loudness (a normalized library) still play softer at
+/// a softer velocity, every layer gets its share of the velocity range,
+/// and the loudest hit plays at unity.
+#[test]
+fn equal_loudness_layers_still_have_dynamics() {
+    let level = |_: usize| -12.0;
+    let (top, g) = pick_layer_by_level(1.0, 4, level);
+    assert_eq!((top, g), (3, 1.0));
+    let mut layers_seen = [false; 4];
+    let mut last = f32::NEG_INFINITY;
+    for step in 1..=100 {
+        let v = step as f32 / 100.0;
+        let (layer, gain) = pick_layer_by_level(v, 4, level);
+        layers_seen[layer] = true;
+        let out = -12.0 + db(gain);
+        assert!(out >= last - 1e-3, "louder at {v}: {out} after {last}");
+        last = out;
+    }
+    assert!(layers_seen.iter().all(|&s| s), "every layer plays: {layers_seen:?}");
+    let soft = -12.0 + db(pick_layer_by_level(0.0, 4, level).1);
+    assert!(
+        (soft - (-12.0 - MIN_VELOCITY_SPAN_DB)).abs() < 0.01,
+        "the softest hit is {MIN_VELOCITY_SPAN_DB} dB down: {soft}"
+    );
+}
+
+/// Exactly one usable layer (the rest silent): it plays every hit, its
+/// level following the velocity over the minimum span.
+#[test]
+fn one_usable_layer_plays_every_hit() {
+    let levels = [-150.0, -9.0, -150.0];
+    let level = |i: usize| levels[i];
+    for step in 0..=20 {
+        let v = step as f32 / 20.0;
+        let (layer, gain) = pick_layer_by_level(v, 3, level);
+        assert_eq!(layer, 1, "at {v}");
+        let want = -MIN_VELOCITY_SPAN_DB * (1.0 - v);
+        assert!((db(gain) - want).abs() < 0.01, "at {v}: {} dB", db(gain));
+    }
 }
 
 #[test]
@@ -154,9 +207,12 @@ fn the_pick_puts_the_hit_on_a_straight_db_line() {
             .fold(f32::INFINITY, f32::min);
         assert!(((levels[layer] - target).abs() - nearest).abs() < 1e-4);
     }
-    // Levels that say nothing (all within 1 dB): equal buckets, unity.
-    assert_eq!(pick_layer_by_level(0.9, 4, |_| -12.0), (3, 1.0));
-    assert_eq!(pick_layer_by_level(0.1, 4, |_| -12.0), (0, 1.0));
+    // Levels that say nothing (all within 1 dB): equal buckets — and the
+    // loudness still on a MIN_VELOCITY_SPAN_DB line (item 8, below).
+    assert_eq!(pick_layer_by_level(0.9, 4, |_| -12.0).0, 3);
+    assert_eq!(pick_layer_by_level(0.1, 4, |_| -12.0).0, 0);
+    let (_, gain) = pick_layer_by_level(0.5, 4, |_| -12.0);
+    assert!((db(gain) + MIN_VELOCITY_SPAN_DB / 2.0).abs() < 1e-3);
     // A silent layer is never picked by loudness.
     let with_silent = [-150.0, -20.0, -10.0];
     assert_eq!(pick_layer_by_level(0.0, 3, |i| with_silent[i]).0, 1);
@@ -261,6 +317,19 @@ fn humanize_is_deterministic_and_moves_the_velocity() {
     let _ = kick_level_no_reset(&mut s, &params, 0.5);
     let again = kick_level(&mut s, &params, 0.5).0;
     assert_eq!(first, again);
+
+    // A note no pad plays draws nothing from the generator: the next
+    // kick is humanized as if it had not come.
+    let mut s = sampler();
+    s.update_global_settings(&params);
+    let _ = kick_level(&mut s, &params, 0.5);
+    let want = kick_level_no_reset(&mut s, &params, 0.5);
+    let mut s = sampler();
+    s.update_global_settings(&params);
+    let _ = kick_level(&mut s, &params, 0.5);
+    s.note_on(0, 0.5); // unmapped
+    let got = kick_level_no_reset(&mut s, &params, 0.5);
+    assert_eq!(got, want, "an unmapped note moved the humanize sequence");
 }
 
 /// [`kick_level`] without the reset (voices of earlier hits are long

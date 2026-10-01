@@ -13,7 +13,7 @@ use resonance_plugin::*;
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
-use crate::kit::OUTPUT_PORT_NAMES;
+use crate::kit::NUM_OUTPUT_PORTS;
 use crate::level::{self, MAX_TRIM_DB, MAX_VOLUME_DB, MIN_DB};
 use crate::selection::{KitSelection, MAX_KIT_SLOT, NO_KIT};
 use crate::velocity;
@@ -38,6 +38,8 @@ pub const OUTPUT_MODE_LABELS: &[&str] = &["Stereo", "Multi"];
 pub const OUTPUT_MODE_STEREO: i32 = 0;
 /// `output_mode`: per-pad ports plus the Overhead port.
 pub const OUTPUT_MODE_MULTI: i32 = 1;
+/// The id of the output mode param.
+pub const OUTPUT_MODE_ID: &str = "output_mode";
 
 /// How the velocity humanize reads: `Off`, or `±5` (MIDI steps).
 pub fn humanize_label(steps: f32) -> String {
@@ -65,8 +67,23 @@ pub fn humanize_from_label(text: &str) -> Option<f32> {
 /// of [`PARAMS_PER_PAD`] per pad.
 pub const PARAM_COUNT: usize = GLOBAL_PARAMS + crate::drum_map::NUM_PADS * PARAMS_PER_PAD;
 
+/// The master level's id. Not v1's `master_volume`: that id held a
+/// linear gain, and a host that re-sends a project's saved values by id
+/// after the state (the app's param overrides, an automation lane) would
+/// land those linear values on the dB param, after the state's one-shot
+/// conversion. Under a new id they name no param and are dropped.
+pub const MASTER_LEVEL_ID: &str = "master_level";
+/// v1's id for the master, as a linear gain ([`upgrade_v1_levels`]).
+pub const V1_MASTER_VOLUME_ID: &str = "master_volume";
+/// A pad level's id is `pad_N_<this>` — not v1's `pad_N_volume`, for the
+/// reason [`MASTER_LEVEL_ID`] gives.
+pub const PAD_LEVEL_FIELD: &str = "level";
+/// v1's `pad_N_<this>`, a linear gain ([`upgrade_v1_levels`]).
+pub const V1_PAD_VOLUME_FIELD: &str = "volume";
+
 pub struct DrumParams {
-    /// Master level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
+    /// Master level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB. Its id is
+    /// [`MASTER_LEVEL_ID`] (`master_level`).
     pub master_volume: FloatParam,
     /// Ceiling on simultaneously sounding voices. A hit uses one voice
     /// per loaded mic bank (a kick with in/out mics plus overheads uses
@@ -100,10 +117,22 @@ pub struct DrumParams {
     /// [`OUTPUT_MODE_LABELS`]. **Stereo** (the default for a fresh
     /// instance) sums every pad and mic to Main, so a host that only
     /// reads port 0 hears the whole kit. **Multi** routes each pad's
-    /// close mics to its `pad_N_output` port and every overhead take to
-    /// the Overhead port. The plugin declares all seven ports either way
+    /// close mics to its `pad_N_output` port and its overhead take to the
+    /// Overhead port — except on a pad with no close mic (the cymbals,
+    /// recorded on the overheads only), whose overhead take is its sound
+    /// and stays on its `pad_N_output` port. The plugin declares all seven ports either way
     /// (a port list cannot change while a host holds it); in Stereo the
     /// six beside Main are silent. Not automatable: routing, not playing.
+    ///
+    /// Stereo is the default for a *fresh* instance only: a state saved
+    /// before the param existed played multi-out, and loads as Multi
+    /// ([`upgrade_output_mode`]), so a project's sub-tracks keep their
+    /// sound.
+    ///
+    /// Not in presets (nor is `pad_N_output`): routing is how the
+    /// instance is wired into its track — its sub-tracks — not part of
+    /// the sound, so recalling a kit preset never re-routes the track.
+    /// The instance's own state keeps both.
     pub output_mode: ChoiceParam,
     /// Velocity humanize (E7): every hit's velocity moves at random by up
     /// to ± this many MIDI steps, 0 … 20, default 0 (off). Applied before
@@ -133,7 +162,7 @@ impl Default for DrumParams {
         let text_sel = selection.clone();
         let parse_sel = selection.clone();
         Self {
-            master_volume: level_param("master_volume", "Master Volume", MAX_VOLUME_DB),
+            master_volume: level_param(MASTER_LEVEL_ID, "Master Volume", MAX_VOLUME_DB),
             polyphony: IntParam::new(
                 "polyphony",
                 "Polyphony",
@@ -184,12 +213,13 @@ impl Default for DrumParams {
             .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
             .read_only(),
             output_mode: ChoiceParam::new(
-                "output_mode",
+                OUTPUT_MODE_ID,
                 "Output Mode",
                 OUTPUT_MODE_STEREO,
                 OUTPUT_MODE_LABELS,
             )
-            .not_automatable(),
+            .not_automatable()
+            .excluded_from_presets(),
             velocity_humanize: FloatParam::new(
                 "velocity_humanize",
                 "Velocity Humanize",
@@ -262,7 +292,8 @@ impl MicSlot {
 }
 
 pub struct PadParams {
-    /// Pad level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
+    /// Pad level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB. Its id is
+    /// `pad_N_level` ([`PAD_LEVEL_FIELD`]).
     pub volume: FloatParam,
     pub pan: FloatParam,
     pub mute: BoolParam,
@@ -293,17 +324,44 @@ pub struct PadParams {
     /// The overhead trim scales the pad's overhead take wherever it is
     /// routed. The second close mic's trim is hidden on pads that are
     /// never recorded with two.
+    ///
+    /// **Defaults: 0 dB on every slot, deliberately.** v1's default
+    /// balance of 0.5 played each of a pad's two close mics at ×0.5
+    /// (−6 dB), so a fresh v2 instance plays the kick's and snare's close
+    /// mics 6 dB hotter than a fresh v1 instance did. Not matched by a
+    /// −6 dB default, because v1 applied the balance only when the
+    /// *loaded* pad had two close banks, while a trim is per bank slot:
+    /// a −6 dB `mic1_trim` default would also turn down the built-in
+    /// kit's one-bank kick and snare (and every one-close-mic kit's),
+    /// which v1 played at full. A trim's natural rest is unity, the mix
+    /// between two mics is the user's (and E15's per-mic catalogue), and
+    /// a v1 *state* keeps its sound exactly: [`upgrade_v1_levels`]
+    /// writes the −6 dB its balance meant.
     pub trims: [FloatParam; MIC_SLOTS],
-    /// Choke group (E12): 0 = none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a
-    /// pad fades out every sounding voice of the same group — the open
-    /// hat cut by the closed or pedal hat. Defaults to the Drummica table
-    /// ([`PAD_MAPPINGS`]): every hi-hat in group 1, nothing else choked.
+    /// Choke group (E12): [`CHOKE_KIT`] (−1, "Kit", the default), 0 =
+    /// none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a pad fades out every
+    /// sounding voice of the same group — the open hat cut by the closed
+    /// or pedal hat.
+    ///
+    /// **Kit** plays the group the loaded kit gives the pad
+    /// (`LoadedPad::choke_group`: its `_meta.pads` choke hint, else the
+    /// Drummica table — every hi-hat in group 1, nothing else choked). An
+    /// explicit value overrides the kit. The hint is never written into
+    /// the param: it changes with the kit, and the param is the user's.
     pub choke: IntParam,
     /// Which output port the pad's close mics play on in Multi output
-    /// mode (E11), one of [`OUTPUT_PORT_NAMES`]. Defaults to the
-    /// Drummica table (kick → Kick, …, Count Stick → Main). Its overhead
-    /// take always goes to the Overhead port in Multi, and everything to
-    /// Main in Stereo. Not automatable: routing, not playing.
+    /// mode (E11): [`OUTPUT_KIT`] (0, "Kit", the default), else a port of
+    /// [`OUTPUT_CHOICE_LABELS`] (value = port + 1, see
+    /// [`output_choice_for_port`]).
+    ///
+    /// **Kit** plays the port the loaded kit gives the pad
+    /// (`LoadedPad::output_group`: its `_meta.pads` port hint, else the
+    /// Drummica table — kick → Kick, …, Count Stick → Main); an explicit
+    /// port overrides it, and the hint is never written into the param.
+    /// A close-miked pad's overhead take goes to the Overhead port in
+    /// Multi — or to this port, on a pad with no close mic — and
+    /// everything to Main in Stereo. Not automatable: routing, not
+    /// playing. Not in presets either (see `output_mode`).
     pub output: ChoiceParam,
     /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the
     /// cent (0.01 st): one param carries both the coarse and the fine
@@ -430,9 +488,52 @@ fn ms_param(
 /// The highest choke group a pad can be put in.
 pub const MAX_CHOKE_GROUP: i32 = 8;
 
-/// How a choke group reads: `None`, `Group 1` … `Group 8`.
+/// `pad_N_choke`: the group the loaded kit gives the pad (the default).
+pub const CHOKE_KIT: i32 = -1;
+
+/// `pad_N_output`: the port the loaded kit gives the pad (the default).
+pub const OUTPUT_KIT: i32 = 0;
+
+/// `pad_N_output`'s choices: [`OUTPUT_KIT`], then the output ports in
+/// port order (`kit::OUTPUT_PORT_NAMES`).
+pub const OUTPUT_CHOICE_LABELS: [&str; NUM_OUTPUT_PORTS + 1] = [
+    "Kit", "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
+];
+
+const _: () = {
+    // The port names, one along: checked here so the two lists cannot
+    // drift apart.
+    let mut i = 0;
+    while i < NUM_OUTPUT_PORTS {
+        let (a, b) = (
+            OUTPUT_CHOICE_LABELS[i + 1].as_bytes(),
+            crate::kit::OUTPUT_PORT_NAMES[i].as_bytes(),
+        );
+        assert!(a.len() == b.len());
+        let mut j = 0;
+        while j < a.len() {
+            assert!(a[j] == b[j]);
+            j += 1;
+        }
+        i += 1;
+    }
+};
+
+/// The `pad_N_output` value that names output port `port` explicitly.
+pub const fn output_choice_for_port(port: usize) -> i32 {
+    port as i32 + 1
+}
+
+/// The port a `pad_N_output` value names, or `None` for [`OUTPUT_KIT`].
+pub fn port_of_output_choice(value: i32) -> Option<usize> {
+    (value > OUTPUT_KIT).then(|| (value - 1).min(NUM_OUTPUT_PORTS as i32 - 1) as usize)
+}
+
+/// How a choke group reads: `Kit`, `None`, `Group 1` … `Group 8`.
 pub fn choke_label(group: i32) -> String {
-    if group <= 0 {
+    if group < 0 {
+        "Kit".to_string()
+    } else if group == 0 {
         "None".to_string()
     } else {
         format!("Group {group}")
@@ -442,6 +543,9 @@ pub fn choke_label(group: i32) -> String {
 /// Parse [`choke_label`] (or a bare number) back to a group.
 pub fn choke_from_label(text: &str) -> Option<i32> {
     let t = text.trim();
+    if t.eq_ignore_ascii_case("kit") {
+        return Some(CHOKE_KIT);
+    }
     if t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("off") {
         return Some(0);
     }
@@ -453,7 +557,7 @@ pub fn choke_from_label(text: &str) -> Option<i32> {
     digits
         .parse::<i32>()
         .ok()
-        .map(|g| g.clamp(0, MAX_CHOKE_GROUP))
+        .map(|g| g.clamp(CHOKE_KIT, MAX_CHOKE_GROUP))
 }
 
 /// A static id or name for a per-pad parameter.
@@ -499,7 +603,7 @@ impl PadParams {
         });
 
         Self {
-            volume: level_param(id("volume"), name("Volume"), MAX_VOLUME_DB),
+            volume: level_param(id(PAD_LEVEL_FIELD), name("Volume"), MAX_VOLUME_DB),
             pan: FloatParam::new(
                 id("pan"),
                 name("Pan"),
@@ -523,9 +627,9 @@ impl PadParams {
             choke: IntParam::new(
                 id("choke"),
                 name("Choke Group"),
-                mapping.choke_group.map_or(0, i32::from),
+                CHOKE_KIT,
                 IntRange::Linear {
-                    min: 0,
+                    min: CHOKE_KIT,
                     max: MAX_CHOKE_GROUP,
                 },
             )
@@ -534,10 +638,11 @@ impl PadParams {
             output: ChoiceParam::new(
                 id("output"),
                 name("Output"),
-                mapping.output_group.index() as i32,
-                &OUTPUT_PORT_NAMES,
+                OUTPUT_KIT,
+                &OUTPUT_CHOICE_LABELS,
             )
-            .not_automatable(),
+            .not_automatable()
+            .excluded_from_presets(),
             tune: FloatParam::new(
                 id("tune"),
                 name("Tune"),
@@ -618,55 +723,120 @@ impl DrumParams {
     }
 }
 
-/// Bring a v1 state's levels up to v2, in place: returns whether it did.
+/// Bring a v1 state's levels up to v2, in place: returns whether it
+/// changed anything.
 ///
 /// v1 stored `master_volume` and `pad_N_volume` as linear gains (0..1,
 /// default 0.8), a pad's two close mics as one `pad_N_balance` (0..1:
 /// the first mic at `1 − b`, the second at `b`, and only on pads that
 /// had two), and its overhead level as `pad_N_oh_blend` (0..1). v2 has
-/// them all in dB and the mics as separate trims (E9). A state is v1 when
-/// its params carry any `balance` or `oh_blend` — every v1 save wrote
-/// every one, and v2 writes none — so a v2 state is never converted twice.
+/// them all in dB under **new ids** — `master_level`, `pad_N_level` and
+/// the per-mic trims (E9) — so nothing that addresses a param by its v1
+/// id (a project's re-sent param overrides, an automation lane) can put
+/// a linear value on a dB param after this conversion: it names no param
+/// and is dropped. A state is v1 when its params carry any `balance` or
+/// `oh_blend` — every v1 save wrote every one, and v2 writes none.
 ///
 /// The conversion keeps the sound: each gain becomes the dB that plays
 /// it ([`level::gain_to_db`], so a silent 0 becomes −∞), and a pad's two
 /// mics keep the gains the balance gave them. A pad with one close mic
 /// ignored the balance in v1, so its trim stays at 0 dB.
 ///
-/// Run on the state before its params are read
-/// (`ResonanceDrums::load_state`). A state loaded into an *active*
-/// plugin through the CLAP bridge's shared-atomics path is not seen
-/// here first, so it is not converted; the app always loads plugin state
-/// inactive (`ClapInstance::reload_with_state` cycles the activation).
+/// The balance is converted against the **static** pad table
+/// ([`PAD_MAPPINGS`]`[i].close_mic_positions`): whether pad `i` has two
+/// close mics is what the Drummica table says, not what the kit the
+/// state names loads — a state is upgraded before (and without) any kit
+/// being loaded, so there is nothing else to go by. A kit whose pad has
+/// two close mics where the table says one (or the other way round)
+/// therefore gets 0 dB trims where v1 split the balance; its levels are
+/// still the v1 ones, only that pad's mic balance is reset.
+///
+/// A state saved by a build between the dB switch and the id change (K7
+/// development builds: dB values under the old ids, no `balance`) has
+/// its values moved to the new ids as they are, not converted again.
+/// Either way a value already under a new id is never overwritten, so
+/// the upgrade is idempotent.
+///
+/// Run on every load path before the params are read, as part of the
+/// plugin's state upgrade ([`crate::upgrade_state`]).
 pub fn upgrade_v1_levels(state: &mut serde_json::Value) -> bool {
     let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
         return false;
     };
-    let is_v1 = (0..NUM_PADS).any(|i| {
-        params.contains_key(&format!("pad_{i}_balance"))
-            || params.contains_key(&format!("pad_{i}_oh_blend"))
-    });
-    if !is_v1 {
-        return false;
-    }
+    let is_v1 = is_v1_params(params);
     let to_db = |gain: f64| serde_json::Value::from(level::gain_to_db(gain as f32) as f64);
-    if let Some(v) = params.get("master_volume").and_then(|v| v.as_f64()) {
-        params.insert("master_volume".to_string(), to_db(v));
+    let mut changed = false;
+    // Move `from` to `to`, converting a v1 gain; a value already under
+    // `to` wins.
+    let mut carry = |params: &mut serde_json::Map<String, serde_json::Value>,
+                     from: &str,
+                     to: &str| {
+        let Some(old) = params.remove(from) else {
+            return;
+        };
+        changed = true;
+        if params.contains_key(to) {
+            return;
+        }
+        let value = match old.as_f64() {
+            Some(v) if is_v1 => to_db(v),
+            _ => old,
+        };
+        params.insert(to.to_string(), value);
+    };
+    carry(params, V1_MASTER_VOLUME_ID, MASTER_LEVEL_ID);
+    for i in 0..NUM_PADS {
+        carry(
+            params,
+            &format!("pad_{i}_{V1_PAD_VOLUME_FIELD}"),
+            &format!("pad_{i}_{PAD_LEVEL_FIELD}"),
+        );
+    }
+    if !is_v1 {
+        return changed;
     }
     for (i, mapping) in PAD_MAPPINGS.iter().enumerate() {
         let key = |field: &str| format!("pad_{i}_{field}");
-        if let Some(v) = params.get(&key("volume")).and_then(|v| v.as_f64()) {
-            params.insert(key("volume"), to_db(v));
-        }
         if let Some(b) = params.remove(&key("balance")).and_then(|v| v.as_f64()) {
             if mapping.close_mic_positions.len() == 2 {
-                params.insert(key("mic1_trim"), to_db(1.0 - b));
-                params.insert(key("mic2_trim"), to_db(b));
+                params.entry(key("mic1_trim")).or_insert(to_db(1.0 - b));
+                params.entry(key("mic2_trim")).or_insert(to_db(b));
             }
         }
         if let Some(o) = params.remove(&key("oh_blend")).and_then(|v| v.as_f64()) {
-            params.insert(key("oh_trim"), to_db(o));
+            params.entry(key("oh_trim")).or_insert(to_db(o));
         }
     }
     true
+}
+
+/// A state saved before `output_mode` existed (v1, and every v2 build
+/// before K7) played multi-out: each pad on its group's port, the
+/// overheads on Overhead. The param defaults to Stereo for a fresh
+/// instance (D5), so such a state — params present, `output_mode` not —
+/// is given Multi, once, in place: the sub-tracks a project built on the
+/// old routing keep sounding. Returns whether it did. Idempotent: a state
+/// that names a mode keeps it.
+///
+/// A preset never carries the mode (it is routing, not sound: excluded
+/// from presets), so a preset document gets it here too, and it is
+/// dropped again where the preset is applied — the instance keeps its
+/// own mode.
+pub fn upgrade_output_mode(state: &mut serde_json::Value) -> bool {
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    if params.is_empty() || params.contains_key(OUTPUT_MODE_ID) {
+        return false;
+    }
+    params.insert(OUTPUT_MODE_ID.to_string(), OUTPUT_MODE_MULTI.into());
+    true
+}
+
+/// Whether a state's params are v1's: any `balance` or `oh_blend`.
+pub fn is_v1_params(params: &serde_json::Map<String, serde_json::Value>) -> bool {
+    (0..NUM_PADS).any(|i| {
+        params.contains_key(&format!("pad_{i}_balance"))
+            || params.contains_key(&format!("pad_{i}_oh_blend"))
+    })
 }

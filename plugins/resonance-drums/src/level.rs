@@ -59,14 +59,22 @@ pub fn db_label(db: f32) -> String {
 /// Parse what [`db_label`] wrote (or a bare number, with or without
 /// `dB`; `-inf`/`inf` for silence) back to a level.
 pub fn db_from_label(text: &str) -> Option<f32> {
-    let t = text.trim();
+    // A typographic minus (U+2212, what `−6 dB` is often typed or pasted
+    // as) reads as an ASCII one.
+    let normalized;
+    let t = if text.contains('\u{2212}') {
+        normalized = text.replace('\u{2212}', "-");
+        normalized.trim()
+    } else {
+        text.trim()
+    };
     let t = t
         .strip_suffix("dB")
         .or_else(|| t.strip_suffix("db"))
         .or_else(|| t.strip_suffix("DB"))
         .unwrap_or(t)
         .trim();
-    if t.eq_ignore_ascii_case("-inf") || t.eq_ignore_ascii_case("inf") || t == "-∞" {
+    if t.eq_ignore_ascii_case("-inf") || t.eq_ignore_ascii_case("inf") || t == "-∞" || t == "∞" {
         return Some(MIN_DB);
     }
     let v: f32 = t.trim_start_matches('+').parse().ok()?;

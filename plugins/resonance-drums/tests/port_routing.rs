@@ -18,9 +18,7 @@ fn make_sampler() -> DrumSampler {
 }
 
 fn impulse_layer(value: f32) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample::from_data(vec![value; 64])],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![value; 64])])
 }
 
 fn make_pad_with_oh(mapping_index: usize) -> LoadedPad {

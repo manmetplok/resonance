@@ -83,6 +83,14 @@ impl ChoiceParam {
         self
     }
 
+    /// Leave it out of presets (it stays in the plugin state): an
+    /// instance setting rather than part of the sound — see
+    /// [`Param::preset_excluded`].
+    pub fn excluded_from_presets(mut self) -> Self {
+        self.inner = self.inner.excluded_from_presets();
+        self
+    }
+
     /// Leave it out of plugin state and presets: the state carries it in
     /// a form of its own — see [`Param::state_excluded`].
     pub fn excluded_from_state(mut self) -> Self {

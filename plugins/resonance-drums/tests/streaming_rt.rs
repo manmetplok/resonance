@@ -111,9 +111,7 @@ fn kit(cache: &SampleCache, dir: &Path, tag: &str) -> Vec<LoadedPad> {
     let bank = |name: &str| LoadedMicBank {
         position: name.to_string(),
         setup_key: String::new(),
-        layers: vec![VelocityLayer {
-            round_robins: vec![take(name)],
-        }],
+        layers: vec![VelocityLayer::new(vec![take(name)])],
     };
     PAD_MAPPINGS
         .iter()
@@ -251,12 +249,8 @@ fn layered_kit(cache: &SampleCache, dir: &Path) -> Vec<LoadedPad> {
         position: name.to_string(),
         setup_key: String::new(),
         layers: vec![
-            VelocityLayer {
-                round_robins: vec![quiet.clone()],
-            },
-            VelocityLayer {
-                round_robins: vec![streamed(name)],
-            },
+            VelocityLayer::new(vec![quiet.clone()]),
+            VelocityLayer::new(vec![streamed(name)]),
         ],
     };
     PAD_MAPPINGS
