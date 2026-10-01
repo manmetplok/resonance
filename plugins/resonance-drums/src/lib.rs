@@ -24,6 +24,13 @@ mod editor;
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub use editor::test_draw_pad_inspector;
+/// Test-only: run one full `EditorApp::ui` frame of the editor, and one
+/// of the Download Kits overlay in isolation. `DrumsEditorApp` and
+/// `download_panel` are otherwise private (drums-plugin-rework.md §9,
+/// K0) — same shape as `test_draw_pad_inspector` above.
+#[cfg(feature = "editor")]
+#[doc(hidden)]
+pub use editor::{test_render_editor_frame, test_run_download_panel_frame};
 pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;
