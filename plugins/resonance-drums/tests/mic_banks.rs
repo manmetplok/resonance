@@ -795,3 +795,52 @@ fn the_bank_params_are_where_hosts_find_them() {
     assert_eq!((oh2.default_plain(), oh2.max_plain()), (0.0, 6.0));
     assert!(oh2.is_automatable());
 }
+
+/// The Setup tab polls `overhead_slots()` on the UI thread while a host
+/// loads state on another. Both read `overhead_setup_key` and
+/// `mic_banks`; `overhead_slots` used to hold `mic_banks` while taking
+/// `overhead_setup_key`, the state load the other way round — an ABBA
+/// deadlock. Hammered from two threads, both finish.
+#[test]
+fn polling_the_overhead_slots_never_deadlocks_a_state_load() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let src = ResonanceDrums::new();
+    src.bridge.set_overhead_slot(1, OH_XY);
+    src.bridge.set_room_setup(ROOM_FAR);
+    let bytes = src.save_state();
+
+    let mut loader = ResonanceDrums::new();
+    let bridge = loader.bridge.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = crossbeam_channel::bounded::<&str>(2);
+
+    let poll_stop = stop.clone();
+    let poll_done = done_tx.clone();
+    std::thread::spawn(move || {
+        let mut polls = 0u64;
+        while !poll_stop.load(Ordering::Relaxed) || polls < 1_000 {
+            std::hint::black_box(bridge.overhead_slots());
+            std::hint::black_box(bridge.wanted_request());
+            polls += 1;
+        }
+        let _ = poll_done.send("poller");
+    });
+    let load_stop = stop.clone();
+    std::thread::spawn(move || {
+        for _ in 0..2_000 {
+            assert!(loader.load_state(&bytes));
+        }
+        load_stop.store(true, Ordering::Relaxed);
+        let _ = done_tx.send("loader");
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    for _ in 0..2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        done_rx
+            .recv_timeout(left)
+            .expect("overhead_slots() and a state load deadlocked");
+    }
+}
