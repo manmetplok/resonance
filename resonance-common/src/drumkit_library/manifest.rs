@@ -82,7 +82,8 @@ pub struct ManifestSummary {
     /// `_meta.name`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta_name: Option<String>,
-    /// In manifest key order.
+    /// Sorted by piece key: the manifest is read into a `BTreeMap`, so the
+    /// file's own key order is not kept.
     pub pieces: Vec<Piece>,
     /// Setup key → what it is, over every piece.
     pub mic_setups: BTreeMap<String, MicSetupInfo>,
@@ -180,7 +181,8 @@ pub fn summarize(bytes: &[u8]) -> Result<ManifestSummary, ManifestError> {
 }
 
 /// Every sample path the manifest names, resolved against `kit_dir` (the
-/// manifest's directory), deduplicated, in manifest order.
+/// manifest's directory), deduplicated, in key order (piece, setup, round,
+/// velocity — not the file's order).
 pub fn sample_paths(bytes: &[u8], kit_dir: &Path) -> Result<Vec<PathBuf>, ManifestError> {
     let (pieces, _) = split_meta(bytes)?;
     let mut seen = std::collections::HashSet::new();

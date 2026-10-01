@@ -28,7 +28,10 @@ pub fn sidecar_path(kit_dir: &Path) -> PathBuf {
 /// Provenance of one kit.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sidecar {
-    /// [`SOURCE_PLOK`], [`SOURCE_IMPORTED`] or [`SOURCE_LOCAL`].
+    /// [`SOURCE_PLOK`], [`SOURCE_IMPORTED`] or [`SOURCE_LOCAL`]. Optional
+    /// in the file: a sidecar without it (or with it empty) reads as
+    /// `local` and still contributes its other fields.
+    #[serde(default)]
     pub source: String,
     /// The kit's name in the plok.org index; the display name when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
