@@ -360,6 +360,16 @@ pub struct DrumSampler {
     /// output port as `f32::to_bits`, `[left, right]`. Written at the end
     /// of `render_block`; `None` when running headless / in tests.
     out_peak: Option<Arc<[AtomicU32; 2]>>,
+    /// Shared per-port meters for the editor's Mix tab: this block's peak
+    /// of each output port (the louder channel) as `f32::to_bits`, in
+    /// port order. Written beside `out_peak`; `None` headless / in tests.
+    port_peak: Option<Arc<[AtomicU32; crate::kit::NUM_OUTPUT_PORTS]>>,
+    /// The hits the editor shows (cell lights, last played take, the
+    /// status bar's last hit): two atomic stores per hit
+    /// ([`crate::last_hit`]). `None` headless / in tests.
+    last_hits: Option<Arc<crate::last_hit::LastHits>>,
+    /// The next hit's sequence number for `last_hits` (wraps, skips 0).
+    hit_seq: u16,
     /// Kit load progress, told each time a kit is taken from the mailbox
     /// (one atomic add) so `kit_load_progress` reaches 1.0 only once the
     /// kit is really in place. `None` headless / in tests.
@@ -515,6 +525,9 @@ impl DrumSampler {
             pad_settings: [PadSettings::default(); NUM_PADS],
             last_rr: None,
             out_peak: None,
+            port_peak: None,
+            last_hits: None,
+            hit_seq: 0,
             load_progress: None,
             kit_receiver,
             janitor_sender,
@@ -730,6 +743,16 @@ impl DrumSampler {
     /// plugin's real output level instead of a dead bar.
     pub fn set_out_peak(&mut self, out_peak: Arc<[AtomicU32; 2]>) {
         self.out_peak = Some(out_peak);
+    }
+
+    /// Attach the shared per-port meters the editor's Mix tab reads.
+    pub fn set_port_peak(&mut self, port_peak: Arc<[AtomicU32; crate::kit::NUM_OUTPUT_PORTS]>) {
+        self.port_peak = Some(port_peak);
+    }
+
+    /// Attach the shared last-hit slots the editor reads.
+    pub fn set_last_hits(&mut self, last_hits: Arc<crate::last_hit::LastHits>) {
+        self.last_hits = Some(last_hits);
     }
 
     /// Attach the kit load progress the bridge publishes, so taking a kit
@@ -1012,6 +1035,9 @@ impl DrumSampler {
         } else {
             velocity
         };
+        // The hit's strength as it struck — humanized, before the curve —
+        // for the editor's last-hit readout.
+        let struck = velocity;
         let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
 
         if pad_index >= self.pads.len() {
@@ -1078,6 +1104,20 @@ impl DrumSampler {
                 crate::rr_display::pack(rr_index, n_rrs),
                 Ordering::Relaxed,
             );
+        }
+        // And the whole hit — pad, velocity, layer, take — for the cell
+        // lights, the inspector's last played take and the status bar.
+        if let Some(ref last_hits) = self.last_hits {
+            self.hit_seq = self.hit_seq.wrapping_add(1).max(1);
+            last_hits.publish(&crate::last_hit::LastHit {
+                pad: pad_index,
+                velocity: crate::last_hit::midi_velocity(struck),
+                layer: layer_index,
+                layers: n_layers,
+                take: rr_index,
+                takes: n_rrs,
+                seq: self.hit_seq,
+            });
         }
 
         let settings = self.pad_settings[pad_index];
@@ -1947,22 +1987,33 @@ impl DrumSampler {
     /// Publish this block's peak level across every output port for the
     /// editor's OUT meter. Written every block (including silent ones) so
     /// the meter falls back to −∞ instead of freezing at the last hit.
+    ///
+    /// The per-port peaks (the Mix tab's strips) come out of the same walk.
     fn publish_out_peak(&self, outputs: &[PortBuffers<'_>], frames: usize) {
-        let Some(ref out_peak) = self.out_peak else {
+        if self.out_peak.is_none() && self.port_peak.is_none() {
             return;
-        };
+        }
         let mut peak_l = 0.0f32;
         let mut peak_r = 0.0f32;
-        for port in outputs.iter() {
+        for (index, port) in outputs.iter().enumerate() {
+            let mut port_l = 0.0f32;
+            let mut port_r = 0.0f32;
             for s in port.left[..frames].iter() {
-                peak_l = peak_l.max(s.abs());
+                port_l = port_l.max(s.abs());
             }
             for s in port.right[..frames].iter() {
-                peak_r = peak_r.max(s.abs());
+                port_r = port_r.max(s.abs());
+            }
+            peak_l = peak_l.max(port_l);
+            peak_r = peak_r.max(port_r);
+            if let Some(slot) = self.port_peak.as_ref().and_then(|p| p.get(index)) {
+                slot.store(port_l.max(port_r).to_bits(), Ordering::Relaxed);
             }
         }
-        out_peak[0].store(peak_l.to_bits(), Ordering::Relaxed);
-        out_peak[1].store(peak_r.to_bits(), Ordering::Relaxed);
+        if let Some(ref out_peak) = self.out_peak {
+            out_peak[0].store(peak_l.to_bits(), Ordering::Relaxed);
+            out_peak[1].store(peak_r.to_bits(), Ordering::Relaxed);
+        }
     }
 
     /// Kill all active voices immediately — CLAP `reset()`.

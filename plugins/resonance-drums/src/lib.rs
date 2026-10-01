@@ -48,6 +48,7 @@ pub use editor::{test_render_editor_frame, EditorFrameProbe, ProbedRect, ProbedT
 pub mod kit;
 pub mod kit_loader;
 pub mod kit_info_ext;
+pub mod last_hit;
 /// The process-wide kit library and its download worker.
 #[cfg(feature = "editor")]
 #[doc(hidden)]
@@ -184,6 +185,15 @@ pub struct KitBridge {
     /// `f32::to_bits`: `[left, right]`. Written by the sampler at the end
     /// of every render, read (and decayed) by the editor's OUT meter.
     pub out_peak: Arc<[AtomicU32; 2]>,
+    /// Block peak of each output port (the louder channel), in port
+    /// order, as `f32::to_bits`. Written by the sampler beside `out_peak`;
+    /// read (and decayed) by the editor's Mix-tab strips.
+    pub port_peak: Arc<[AtomicU32; kit::NUM_OUTPUT_PORTS]>,
+    /// Every pad's last hit and the latest hit on any pad — pad,
+    /// velocity, layer, take — written by the sampler with one atomic
+    /// store per slot ([`last_hit`]). The editor's cell lights, its
+    /// "last played take" and the status bar's last hit read it.
+    pub last_hits: Arc<last_hit::LastHits>,
     /// Bytes of decoded sample data currently held in memory. Published by
     /// whoever built the live kit — the loader thread on a successful load,
     /// `initialize` for the embedded fallback. Sentinel `0` = nothing loaded.
@@ -266,6 +276,10 @@ pub struct HostAsks {
     pub value_rescans: AtomicU64,
     /// `request_params_text_rescan` (values and text).
     pub text_rescans: AtomicU64,
+    /// `announce_param_change` for an editor edit of any param other than
+    /// `kit_select` ([`KitBridge::announce_param_edit`]), by id, in order:
+    /// one entry per undoable edit the host is told about.
+    pub param_edits: Mutex<Vec<String>>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -353,6 +367,18 @@ impl KitBridge {
             .fetch_add(1, Ordering::Relaxed);
         if let Some(host) = self.host.lock().as_ref() {
             host.announce_param_change("kit_select");
+        }
+    }
+
+    /// The user changed param `id` from the editor (a knob drag that just
+    /// ended, a click, a pick): the host records it as one undoable edit
+    /// (`HostHandle::announce_param_change`). Call it after the value is
+    /// set, once per gesture. Counted in [`HostAsks::param_edits`] whether
+    /// or not a host is attached.
+    pub fn announce_param_edit(&self, id: &str) {
+        self.host_asks.param_edits.lock().push(id.to_string());
+        if let Some(host) = self.host.lock().as_ref() {
+            host.announce_param_change(id);
         }
     }
 
@@ -581,6 +607,8 @@ impl ResonancePlugin for ResonanceDrums {
             last_rr: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
             block_frames: Arc::new(AtomicU32::new(0)),
             out_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            port_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
+            last_hits: Arc::new(last_hit::LastHits::default()),
             kit_bytes: Arc::new(AtomicU64::new(0)),
             pad_samples: Arc::new(Mutex::new(Vec::new())),
             kit_shared_bytes: Arc::new(AtomicU64::new(0)),
@@ -604,6 +632,8 @@ impl ResonancePlugin for ResonanceDrums {
         sampler.set_load_progress(bridge.load_progress.clone());
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
+        sampler.set_port_peak(bridge.port_peak.clone());
+        sampler.set_last_hits(bridge.last_hits.clone());
         sampler.set_underrun_counter(bridge.stream_underruns.clone());
         sampler.set_ring_bytes_counter(bridge.stream_ring_bytes.clone());
         sampler.set_host_render_mode(bridge.host_render_mode.clone());
