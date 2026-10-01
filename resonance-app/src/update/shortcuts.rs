@@ -92,6 +92,11 @@ pub(crate) fn handle_key(
             return task;
         }
     }
+    // Esc drops an armed preset drag, whatever else is open.
+    if r.presets.dragging.is_some() && is_plain_escape(chord) {
+        r.presets.dragging = None;
+        return Task::none();
+    }
     // The preset browser takes Esc (revert), ↑/↓ (audition) and ↵ (keep)
     // first, its search field focused or not.
     if r.presets.host_browser.is_some() {

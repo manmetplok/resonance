@@ -66,10 +66,16 @@ impl crate::Resonance {
         // every scroll offset and focus); it only listens while armed.
         let area = iced::widget::mouse_area(root);
         if self.presets.dragging.is_some() {
+            let end = || Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd));
+            // Any release ends it (after a header's drop); so does a press
+            // no row took (the release happened outside the window) and
+            // the pointer leaving the window.
             area.on_move(|at| {
                 Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragMoved(at)))
             })
-            .on_release(Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd)))
+            .on_release(end())
+            .on_press(end())
+            .on_exit(end())
             .into()
         } else {
             area.into()

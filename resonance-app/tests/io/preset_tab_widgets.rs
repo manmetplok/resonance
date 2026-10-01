@@ -106,6 +106,36 @@ fn centre_of(app: &Resonance, label: &str) -> Point {
         .center()
 }
 
+/// The centre of the right-most visible text `label` (all matches walked).
+fn rightmost(app: &Resonance, label: &str) -> Point {
+    use iced_test::selector::Candidate;
+    use std::sync::{Arc, Mutex};
+    let found: Arc<Mutex<Vec<iced::Rectangle>>> = Arc::default();
+    {
+        let found = Arc::clone(&found);
+        let label = label.to_string();
+        let collect = move |candidate: Candidate<'_>| -> Option<()> {
+            if let Candidate::Text {
+                content,
+                visible_bounds: Some(bounds),
+                ..
+            } = candidate
+            {
+                if content == label {
+                    found.lock().unwrap().push(bounds);
+                }
+            }
+            None
+        };
+        let _ = simulator(app).find(collect);
+    }
+    let all = found.lock().unwrap().clone();
+    all.into_iter()
+        .max_by(|a, b| a.center_x().total_cmp(&b.center_x()))
+        .unwrap_or_else(|| panic!("{label:?} should be on screen"))
+        .center()
+}
+
 /// Run `events` at `at` against the current view and apply every message
 /// the widgets raised, in order.
 fn at(app: &mut Resonance, point: Point, events: Vec<Event>) {
@@ -187,8 +217,10 @@ fn a_double_click_in_the_overlay_keeps_the_preset() {
     let _ = app.update(Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::OpenBrowser(
         INSTANCE,
     ))));
-    // The overlay row sits over the tab's; the overlay is on top.
-    let row = centre_of(&app, "Warm");
+    // "Warm" is drawn twice: in the tab (under the backdrop, on the left)
+    // and in the overlay's list (centred). Aim at the overlay's.
+    let row = rightmost(&app, "Warm");
+    assert!(row.x > 460.0, "the overlay's row: {row:?}");
     let messages: Vec<Message> = {
         let mut ui = simulator(&app);
         ui.point_at(row);
@@ -196,10 +228,22 @@ fn a_double_click_in_the_overlay_keeps_the_preset() {
         let _ = ui.simulate(iced_test::simulator::click());
         ui.into_messages().collect()
     };
+    assert!(
+        messages.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::BrowserAudition(_)))
+        )),
+        "the click reached the row, not the backdrop: {messages:?}"
+    );
     assert!(messages.iter().any(|m| matches!(
         m,
         Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::CloseBrowser { keep: true }))
     )));
+    for m in messages {
+        let _ = app.update(m);
+    }
+    assert!(app.test_presets().host_browser.is_none(), "kept and closed");
+    assert_eq!(gain(&mut app, INSTANCE), Some(3.0), "Warm is what was kept");
 }
 
 /// B2: press on a row, move to a track header, release: the plugin is
@@ -281,4 +325,57 @@ fn an_effect_is_not_dropped_into_an_empty_instrument_slot() {
         .map_or(0, |t| t.plugins.len());
     assert_eq!(count, 0, "refused");
     assert!(app.test_presets().dragging.is_none());
+}
+
+/// An armed drag ends on Esc, on a press no row took (its release was
+/// lost outside the window), and when the pointer leaves the window — so a
+/// later click on a header never drops it.
+#[test]
+fn a_lost_drag_is_disarmed_and_never_drops_later() {
+    use resonance_app::commands::{KeyChord, Mods, NamedKey};
+    let mut app = app();
+    let row = centre_of(&app, "Bright");
+    let header = centre_of(&app, &track_name(&app));
+    let arm = |app: &mut Resonance| {
+        at(app, row, vec![press()]);
+        at(app, row, vec![moved(row)]);
+        at(app, header, vec![moved(header)]);
+        assert!(app.test_presets().dragging.as_ref().is_some_and(|d| d.moved));
+    };
+
+    arm(&mut app);
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
+        repeat: false,
+        captured: false,
+    }));
+    assert!(app.test_presets().dragging.is_none(), "Esc");
+
+    arm(&mut app);
+    let outside = Point::new(-20.0, -20.0);
+    let messages: Vec<Message> = {
+        let mut ui = simulator(&app);
+        ui.point_at(header);
+        let _ = ui.simulate(vec![moved(header)]);
+        ui.point_at(outside);
+        let _ = ui.simulate(vec![moved(outside), Event::Mouse(mouse::Event::CursorLeft)]);
+        ui.into_messages().collect()
+    };
+    for m in messages {
+        let _ = app.update(m);
+    }
+    assert!(app.test_presets().dragging.is_none(), "the pointer left the window");
+
+    arm(&mut app);
+    // The release happened outside; the next thing is a click on a header.
+    // The press goes through the app's window-level listener first (it
+    // sees presses a header's buttons capture), then the widgets.
+    for event in [press(), Event::Window(iced::window::Event::Unfocused)] {
+        let end = resonance_app::update::plugin_preset_ui::drag_end_event(&event);
+        assert!(end.is_some(), "{event:?} ends a drag");
+    }
+    let _ = app.update(resonance_app::update::plugin_preset_ui::drag_end_event(&press()).unwrap());
+    at(&mut app, header, vec![press(), release()]);
+    assert!(app.test_presets().dragging.is_none());
+    assert_eq!(plugins_on_track(&app), 1, "and nothing was dropped");
 }

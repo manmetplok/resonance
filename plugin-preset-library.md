@@ -1537,3 +1537,25 @@ What the three reviews changed, where it differs from the slices above:
   keeps what was auditioned even once filtered out, takes ↑/↓/↵/Esc before
   its focused search field, and a preset on the instrument already loaded
   is a recorded recall.
+
+### Verification pass
+
+- A capture returns the full state **before** and **after** the load
+  (`PluginStateCaptured.after`). The after-state becomes the live cache;
+  a snapshot taken while it is still owed (the redo side an undo builds)
+  waits on it through a late slot, and a restore marks owed after-states
+  superseded — so undo and redo of a preset load are exact, repeatedly.
+  A restore also drops parked step state loads.
+- Captures save outside the instance lock (`StateSaveHandle`; CLAP lets
+  `state.save` run beside `process`). Worst case measured — the wavetable
+  with both user tables full (5.6 MB): 190 ns under the lock, 4.3 ms
+  (release) / 119 ms (debug) saving, on the engine thread only.
+- The discovery worker is never joined unbounded on the engine thread: a
+  rescan cancels and leaves the old one (its factory, still marked busy,
+  is skipped), shutdown waits 2 s and abandons it.
+- `ResonancePlugin::deactivate`: the drums clear their sample rate, so a
+  full-state reload loads its kit once (from `initialize`).
+- An armed drag ends on Esc, on any press (a window-level listener, which
+  also sees presses a widget captured), on the pointer leaving the window
+  and on focus loss. A new audition while a revert waits on its capture
+  takes that capture over as its origin.

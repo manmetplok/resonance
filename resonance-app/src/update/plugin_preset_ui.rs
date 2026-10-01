@@ -54,6 +54,19 @@ impl Resonance {
     }
 }
 
+/// While a preset drag is armed: the window-level events that end it — a
+/// press anywhere (whatever widget took it: the release that should have
+/// ended the drag was lost outside the window) and the window losing
+/// focus. A header's own release still drops first: it is its own event.
+pub fn drag_end_event(event: &iced::Event) -> Option<Message> {
+    let ends = matches!(
+        event,
+        iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
+            | iced::Event::Window(iced::window::Event::Unfocused)
+    );
+    ends.then(|| Message::Plugin(PluginMessage::PresetUi(PresetUiMessage::DragEnd)))
+}
+
 /// The preset browser's search field.
 pub(crate) fn search_input_id() -> iced::widget::Id {
     iced::widget::Id::new("preset-browser-search")

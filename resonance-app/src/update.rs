@@ -262,6 +262,15 @@ impl crate::Resonance {
 
         let mut subs = vec![tick, keys, close_requests, file_drops];
 
+        // An armed preset drag also ends on any press (captured or not: a
+        // header's own buttons take theirs) and on the window losing focus
+        // — both mean its release was lost.
+        if self.presets.dragging.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::plugin_preset_ui::drag_end_event(&event)
+            }));
+        }
+
         // Control-endpoint bridge (doc #265, todo #1147): stream every
         // socket-thread event (connects, disconnects, parsed requests)
         // into `update()` as `Message::Control`. Only attached when the
