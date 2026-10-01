@@ -30,14 +30,19 @@
 //!
 //! **Import** (D2) copies into the root through `.staging/` and renames,
 //! so a scan never lists a half-copied kit; it takes a cancel flag, a
-//! progress callback and a disk check ([`ImportJob`]).
+//! progress callback and a disk check ([`ImportJob`]). Every staged file
+//! is fsynced before the rename. A staging directory left by a process
+//! that died (or older than [`STAGING_MAX_AGE`]) is swept by the next
+//! rescan. Importing from a `.zip` needs the `drumkit-zip` feature.
 //!
 //! **`installed.json`** (D3): on the first scan of a library given an
 //! `installed.json` path ([`Library::with_installed_json`]), each drumkit
 //! item whose directory is a kit with no sidecar gets one, carrying its
-//! `installed_at`. Its source is `plok` when the supplied predicate says
-//! the name is in the plok.org index, else `local`. It runs once per
-//! index (a flag in `library.json`) and never changes `installed.json`.
+//! `installed_at`. Its source is `plok` when the supplied lookup finds the
+//! name in the plok.org index (and the sidecar then carries the index
+//! entry's `file`, the re-download key), else `local`. It runs once per
+//! index (a flag in `library.json`) and only reads `installed.json`: an
+//! unreadable one is skipped, never quarantined or rewritten.
 //!
 //! **Concurrency**: every write of `library.json` runs under an exclusive
 //! `File::lock` on `library.lock`, re-reading the index under the lock
@@ -79,6 +84,10 @@ pub const KIT_SUBDIR: &str = "resonance/drumkits";
 
 /// In-flight imports and extractions, under the root. Never scanned.
 pub const STAGING_DIR: &str = ".staging";
+
+/// A staging directory older than this is swept even when the process
+/// that made it still runs (its pid may have been reused).
+pub const STAGING_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
 pub const LIBRARY_FILE: &str = "library.json";
 pub const LOCK_FILE: &str = "library.lock";
@@ -124,8 +133,16 @@ pub fn find_manifest(kit_dir: &Path) -> Option<PathBuf> {
     if direct.is_file() {
         return Some(direct);
     }
-    let mut subs: Vec<PathBuf> = std::fs::read_dir(kit_dir)
-        .ok()?
+    depth1_manifests(kit_dir).into_iter().next()
+}
+
+/// The manifests one level down in `dir`: `dir/<sub>/drum_samples.json`
+/// for each non-hidden subdirectory, by name.
+fn depth1_manifests(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut subs: Vec<PathBuf> = rd
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && !is_hidden(&e.file_name()))
         .map(|e| e.path())
@@ -133,7 +150,8 @@ pub fn find_manifest(kit_dir: &Path) -> Option<PathBuf> {
     subs.sort();
     subs.into_iter()
         .map(|s| s.join(MANIFEST_FILE))
-        .find(|m| m.is_file())
+        .filter(|m| m.is_file())
+        .collect()
 }
 
 /// The sample files `manifest` names that do not exist (paths resolved
@@ -376,6 +394,17 @@ pub enum LibraryError {
     Cancelled,
     #[error("zip: {0}")]
     Zip(String),
+    /// A folder (or zip) with no manifest of its own and several kits one
+    /// level down: each is imported on its own.
+    #[error("{} holds {count} kits — import each one", path.display())]
+    MultipleKits { path: PathBuf, count: usize },
+    /// A symlinked folder inside an imported kit that points outside it or
+    /// loops.
+    #[error("{} {reason}", path.display())]
+    UnsafeLink { path: PathBuf, reason: &'static str },
+    /// A `.zip` was given to a build without the `drumkit-zip` feature.
+    #[error("{}: importing a .zip is not supported by this build", path.display())]
+    ZipUnsupported { path: PathBuf },
 }
 
 fn io_err<'a>(
@@ -422,9 +451,24 @@ impl ImportOutcome {
     }
 }
 
-/// Says whether a kit name is in the plok.org index, for the
-/// `installed.json` migration's `source`.
-pub type InIndexFn = dyn Fn(&str) -> bool + Send + Sync;
+/// What the plok.org index says about a kit name, for the `installed.json`
+/// migration: a hit makes the kit `source = plok` and carries the entry's
+/// fields into its sidecar.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexMatch {
+    /// The index's name for the kit; the `installed.json` name when `None`.
+    pub index_name: Option<String>,
+    /// The entry's `file` (the zip's name): the re-download key.
+    pub index_file: Option<String>,
+    /// sha256 of the zip, when the index gives one.
+    pub sha256: Option<String>,
+    pub description: Option<String>,
+    pub index_tags: Vec<String>,
+}
+
+/// Looks a kit name up in the plok.org index, for the `installed.json`
+/// migration; `None` when the name is not in it.
+pub type InIndexFn = dyn Fn(&str) -> Option<IndexMatch> + Send + Sync;
 
 #[derive(Clone)]
 struct Migration {
@@ -538,9 +582,10 @@ impl Library {
     }
 
     /// Migrate the drumkit items of `installed_json` into sidecars on the
-    /// next scan, once per index (see the module docs). `in_index` says
-    /// whether a kit name is in the plok.org index (→ `source = plok`);
-    /// without one every migrated kit is `local`.
+    /// next scan, once per index (see the module docs). `in_index` looks a
+    /// kit name up in the plok.org index (a hit → `source = plok`, with
+    /// the entry's `file`, sha256, description and tags); without one
+    /// every migrated kit is `local`.
     pub fn with_installed_json(
         mut self,
         installed_json: impl Into<PathBuf>,
@@ -670,8 +715,13 @@ impl Library {
             .or_else(|| unique(&|e: &Entry| fold(&e.name).contains(&lower)))
     }
 
-    /// Re-read `library.json` if another writer changed it. Returns
-    /// whether the entries changed. One `stat` when nothing moved.
+    /// Re-read `library.json` if its stamp (size, mtime) moved, and rebuild
+    /// the entries from it. Returns whether it was re-read. One `stat` when
+    /// nothing moved.
+    ///
+    /// The generation is not a reliable "unchanged" signal: an index that
+    /// was deleted and rebuilt, or rewritten by another tool, can carry the
+    /// generation this reader already has with different contents.
     pub fn reload_if_changed(&mut self) -> bool {
         let Some(root) = &self.root else {
             return false;
@@ -681,14 +731,10 @@ impl Library {
         if now == self.stamp {
             return false;
         }
-        let doc = read_index(&path, false);
-        let changed = doc.generation != self.doc.generation;
-        self.doc = doc;
+        self.doc = read_index(&path, false);
         self.stamp = now;
-        if changed {
-            self.rebuild_entries();
-        }
-        changed
+        self.rebuild_entries();
+        true
     }
 
     /// Run `f` on the index re-read under the `library.lock` file lock;
@@ -698,16 +744,7 @@ impl Library {
         root: &Path,
         f: impl FnOnce(&mut IndexDoc) -> Result<(R, bool), LibraryError>,
     ) -> Result<R, LibraryError> {
-        let lock_path = root.join(LOCK_FILE);
-        let lock = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&lock_path)
-            .map_err(io_err("open", &lock_path))?;
-        let locked = crate::library_marks::lock_or_best_effort(&lock, &lock_path)
-            .map_err(io_err("lock", &lock_path))?;
-        let result = (|| {
+        with_lock(root, || {
             let index_path = root.join(LIBRARY_FILE);
             let mut doc = read_index(&index_path, true);
             let (out, changed) = f(&mut doc)?;
@@ -721,11 +758,7 @@ impl Library {
             self.stamp = stat_stamp(&index_path);
             self.rebuild_entries();
             Ok(out)
-        })();
-        if locked {
-            let _ = lock.unlock();
-        }
-        result
+        })
     }
 
     /// Find the kits, re-hash only new or changed manifests, run the
@@ -740,6 +773,12 @@ impl Library {
             self.stamp = None;
             self.rebuild_entries();
             return Ok(ScanReport::default());
+        }
+        if root.join(STAGING_DIR).exists() {
+            with_lock(&root, || {
+                sweep_staging(&root);
+                Ok(())
+            })?;
         }
         self.reload_if_changed();
         if !self.migration_due() && self.scan_is_current(&root) {
@@ -796,11 +835,15 @@ impl Library {
     /// Import a kit folder, or a `.zip` of one, by copying it into the
     /// root through `.staging/` (D2); a kit whose manifest is already in
     /// the library is not copied. Refused when the disk lacks
-    /// [`IMPORT_SPACE_FACTOR`] × the kit's size. Cancel leaves nothing
+    /// [`IMPORT_SPACE_FACTOR`] × the kit's size, and when the folder has
+    /// no manifest of its own but several kits one level down
+    /// ([`LibraryError::MultipleKits`]). Symlinked files are copied as
+    /// their targets; a symlinked folder that escapes the kit or loops is
+    /// refused ([`LibraryError::UnsafeLink`]). Cancel leaves nothing
     /// behind. Rescans.
     ///
     /// Blocks for the whole copy: run it on a background job. Only the
-    /// final rescan touches the index.
+    /// rescans touch the index.
     pub fn import(
         &mut self,
         src: &Path,
@@ -821,23 +864,30 @@ impl Library {
         if !src.is_dir() {
             return Err(not_a_kit("not a folder or a .zip"));
         }
+        if !src.join(MANIFEST_FILE).is_file() {
+            let count = depth1_manifests(src).len();
+            if count > 1 {
+                return Err(LibraryError::MultipleKits {
+                    path: src.to_path_buf(),
+                    count,
+                });
+            }
+        }
         let manifest =
             find_manifest(src).ok_or_else(|| not_a_kit("no drum_samples.json at depth 0 or 1"))?;
         let bytes = std::fs::read(&manifest).map_err(io_err("read", &manifest))?;
         summarize(&bytes).map_err(|e| not_a_kit(&e.0))?;
         let id = crate::nam_library::hash_bytes(&bytes);
-        if root.is_dir() {
-            self.rescan()?;
-            if let Some(e) = self.entry(&id) {
-                return Ok(ImportOutcome::AlreadyPresent(e.clone()));
-            }
+        self.rescan()?;
+        if let Some(e) = self.entry(&id) {
+            return Ok(ImportOutcome::AlreadyPresent(e.clone()));
         }
-        let files = install::walk_files(src).map_err(io_err("read", src))?;
+        let files = install::walk_files(src)?;
         let total: u64 = files.iter().map(|(_, n)| n).sum();
         std::fs::create_dir_all(&root).map_err(io_err("mkdir", &root))?;
         job.check_space(&root, space_needed(total))?;
         let name = kit_dir_name(src.file_name().map(|n| n.to_string_lossy().into_owned()));
-        let stage = staging_path(&root, &name);
+        let stage = fresh_stage(&root, &name)?;
         let result = (|| {
             install::copy_tree(src, &files, &stage, &mut job)?;
             let mut sc = read_sidecar(src).unwrap_or_else(|| Sidecar {
@@ -874,92 +924,172 @@ impl Library {
         self.install_zip(zip, &name, sidecar, job)
     }
 
-    /// Extract the kit in `zip` into `.staging/`, write `sidecar` (its
-    /// `size_bytes` measured, `downloaded_at` defaulted to now), and
-    /// rename it into the root as `name` (made unique). A zip whose kit
-    /// sits one directory deeper than depth 1 (`Kit/kit/drum_samples.json`)
-    /// is hoisted. A kit already in the library is discarded, not
-    /// installed twice. The download worker (K3) installs through this.
+    /// Install the kit in `zip` as `name` (made unique): its manifest is
+    /// read straight from the archive first, and a kit already in the
+    /// library returns [`ImportOutcome::AlreadyPresent`] before any disk
+    /// check or extraction. Otherwise the zip is extracted into
+    /// `.staging/`, `sidecar` written (its `size_bytes` measured,
+    /// `downloaded_at` defaulted to now), and the result renamed into the
+    /// root.
+    ///
+    /// The manifest may sit at depth 0 or 1, or at depth 1 inside a single
+    /// wrapper directory (`Kit/kit/drum_samples.json`), which is stripped.
+    /// macOS litter (`__MACOSX/`, `.DS_Store`, any dotfile) is not
+    /// extracted, and an entry that inflates past its declared size fails
+    /// the install. The download worker (K3) installs through this.
+    ///
+    /// Without the `drumkit-zip` feature it fails with
+    /// [`LibraryError::ZipUnsupported`].
     pub fn install_zip(
         &mut self,
         zip: &Path,
         name: &str,
-        mut sidecar: Sidecar,
-        mut job: ImportJob<'_>,
+        sidecar: Sidecar,
+        job: ImportJob<'_>,
     ) -> Result<ImportOutcome, LibraryError> {
-        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
-        let file = File::open(zip).map_err(io_err("open", zip))?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|e| LibraryError::Zip(format!("{}: {e}", zip.display())))?;
-        let plan = install::zip_plan(&mut archive)?;
-        let total: u64 = plan.iter().map(|(_, _, n)| n).sum();
-        std::fs::create_dir_all(&root).map_err(io_err("mkdir", &root))?;
-        job.check_space(&root, space_needed(total))?;
-        let name = kit_dir_name(Some(name.to_string()));
-        let stage = staging_path(&root, &name);
-        let mut id = String::new();
-        let mut duplicate = None;
-        let result = (|| {
-            let written = install::extract(&mut archive, &plan, &stage, &mut job)?;
-            let manifest = match find_manifest(&stage) {
-                Some(m) => m,
-                None => {
-                    hoist_single_subdir(&stage)?;
-                    find_manifest(&stage).ok_or_else(|| LibraryError::NotAKit {
-                        path: zip.to_path_buf(),
-                        reason: "no drum_samples.json in the archive".into(),
-                    })?
-                }
-            };
-            let bytes = std::fs::read(&manifest).map_err(io_err("read", &manifest))?;
-            summarize(&bytes).map_err(|e| LibraryError::NotAKit {
+        #[cfg(feature = "drumkit-zip")]
+        {
+            self.install_zip_impl(zip, name, sidecar, job)
+        }
+        #[cfg(not(feature = "drumkit-zip"))]
+        {
+            let _ = (name, sidecar, job);
+            Err(LibraryError::ZipUnsupported {
                 path: zip.to_path_buf(),
-                reason: e.0,
-            })?;
-            id = crate::nam_library::hash_bytes(&bytes);
-            self.rescan()?;
-            if let Some(e) = self.entry(&id) {
-                duplicate = Some(e.clone());
-                return Err(LibraryError::Cancelled);
-            }
-            if sidecar.downloaded_at.is_none() {
-                sidecar.downloaded_at =
-                    crate::library_marks::format_timestamp(crate::library_marks::now_unix());
-            }
-            sidecar.size_bytes = Some(written);
-            write_sidecar(&stage, &sidecar)?;
-            promote(&root, &stage, &name)
-        })();
-        match finish_staging(&root, &stage, result) {
-            Ok(dest) => self.added_entry(&dest, &id),
-            Err(_) if duplicate.is_some() => Ok(ImportOutcome::AlreadyPresent(duplicate.unwrap())),
-            Err(e) => Err(e),
+            })
         }
     }
 
-    fn added_entry(&mut self, dest: &Path, id: &str) -> Result<ImportOutcome, LibraryError> {
+    #[cfg(feature = "drumkit-zip")]
+    fn install_zip_impl(
+        &mut self,
+        zip: &Path,
+        name: &str,
+        sidecar: Sidecar,
+        mut job: ImportJob<'_>,
+    ) -> Result<ImportOutcome, LibraryError> {
+        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let mut opened = OpenedZip::open(zip)?;
         self.rescan()?;
-        let entry = self
-            .by_dir(dest)
-            .or_else(|| self.entry(id))
-            .cloned()
-            .ok_or_else(|| LibraryError::NotAKit {
-                path: dest.to_path_buf(),
-                reason: "copied kit did not index".into(),
-            })?;
-        Ok(ImportOutcome::Added(entry))
+        if let Some(e) = self.entry(&opened.id) {
+            return Ok(ImportOutcome::AlreadyPresent(e.clone()));
+        }
+        std::fs::create_dir_all(&root).map_err(io_err("mkdir", &root))?;
+        job.check_space(&root, space_needed(opened.plan.total()))?;
+        let name = kit_dir_name(Some(name.to_string()));
+        let stage = fresh_stage(&root, &name)?;
+        let result = opened
+            .stage(&stage, sidecar, &mut job)
+            .and_then(|()| promote(&root, &stage, &name));
+        let dest = finish_staging(&root, &stage, result)?;
+        let id = opened.id;
+        self.added_entry(&dest, &id)
     }
 
-    /// Delete the kit whose top directory is `dir` (`remove_dir_all`),
-    /// then rescan, which frees its slot. Marks are not touched: they are
-    /// kept for the orphan window. Returns the removed entry. Blocks for
-    /// as long as the delete takes (a large kit: run it on a job).
+    /// Re-download (K3): replace the kit whose top directory is
+    /// `existing_dir` with the kit in `zip`, in place. The zip is extracted
+    /// and `sidecar` written in `.staging/` first; then the old directory
+    /// is renamed aside (into `.staging/`, hidden), the new one renamed to
+    /// its name, and only then the old one deleted. A failure at any step
+    /// puts the old kit back. The directory keeps its name, so when the
+    /// manifest is unchanged (a repair of a kit with missing files) the id,
+    /// slot and marks all stay; a changed manifest is a new id and slot.
+    /// Refused like [`delete`](Self::delete) unless `existing_dir` is a
+    /// kit the index knows, directly inside the root.
     ///
-    /// Refused — before anything is removed — unless `dir` is the top
-    /// directory of a kit the index knows, directly inside the root after
-    /// resolving symlinks and `..`.
-    pub fn delete(&mut self, dir: &Path) -> Result<Entry, LibraryError> {
+    /// Without the `drumkit-zip` feature it fails with
+    /// [`LibraryError::ZipUnsupported`].
+    pub fn install_zip_replacing(
+        &mut self,
+        zip: &Path,
+        existing_dir: &Path,
+        sidecar: Sidecar,
+        job: ImportJob<'_>,
+    ) -> Result<Entry, LibraryError> {
+        #[cfg(feature = "drumkit-zip")]
+        {
+            self.install_zip_replacing_impl(zip, existing_dir, sidecar, job)
+        }
+        #[cfg(not(feature = "drumkit-zip"))]
+        {
+            let _ = (existing_dir, sidecar, job);
+            Err(LibraryError::ZipUnsupported {
+                path: zip.to_path_buf(),
+            })
+        }
+    }
+
+    #[cfg(feature = "drumkit-zip")]
+    fn install_zip_replacing_impl(
+        &mut self,
+        zip: &Path,
+        existing_dir: &Path,
+        sidecar: Sidecar,
+        mut job: ImportJob<'_>,
+    ) -> Result<Entry, LibraryError> {
         let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let (old, canon) = self.kit_dir_in_root(&root, existing_dir)?;
+        let mut opened = OpenedZip::open(zip)?;
+        job.check_space(&root, space_needed(opened.plan.total()))?;
+        let stage = fresh_stage(&root, &old.dir_name)?;
+        let result = opened.stage(&stage, sidecar, &mut job).and_then(|()| {
+            let aside = staging_path(&root, &format!("{ASIDE_PREFIX}{}", old.dir_name));
+            std::fs::rename(&canon, &aside).map_err(io_err("rename", &canon))?;
+            if let Err(e) = std::fs::rename(&stage, &canon) {
+                if let Err(back) = std::fs::rename(&aside, &canon) {
+                    tracing::error!(
+                        "re-download: could not restore {} from {}: {back}",
+                        canon.display(),
+                        aside.display()
+                    );
+                }
+                return Err(io_err("rename", &stage)(e));
+            }
+            if let Err(e) = std::fs::remove_dir_all(&aside) {
+                // The next rescan's sweep removes it.
+                tracing::warn!("re-download: remove {}: {e}", aside.display());
+            }
+            Ok(canon.clone())
+        });
+        finish_staging(&root, &stage, result)?;
+        self.missing.remove(&old.id);
+        self.rescan()?;
+        self.by_dir(existing_dir)
+            .cloned()
+            .ok_or_else(|| LibraryError::NotAKit {
+                path: existing_dir.to_path_buf(),
+                reason: "re-downloaded kit did not index".into(),
+            })
+    }
+
+    /// The entry of a promoted kit, after a rescan. When it does not index
+    /// the promoted directory is removed again: an import either lands in
+    /// the library or leaves nothing.
+    fn added_entry(&mut self, dest: &Path, id: &str) -> Result<ImportOutcome, LibraryError> {
+        let found = self.rescan().and_then(|_| {
+            self.by_dir(dest)
+                .or_else(|| self.entry(id))
+                .cloned()
+                .ok_or_else(|| LibraryError::NotAKit {
+                    path: dest.to_path_buf(),
+                    reason: "copied kit did not index".into(),
+                })
+        });
+        match found {
+            Ok(entry) => Ok(ImportOutcome::Added(entry)),
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(dest);
+                let _ = self.rescan();
+                Err(e)
+            }
+        }
+    }
+
+    /// The entry of the kit whose top directory is `dir`, and `dir`
+    /// resolved — refused unless `dir` is the top directory of a kit the
+    /// index knows, a real directory (not a symlink) directly inside the
+    /// root after resolving symlinks and `..`.
+    fn kit_dir_in_root(&self, root: &Path, dir: &Path) -> Result<(Entry, PathBuf), LibraryError> {
         let outside = || LibraryError::OutsideLibrary {
             path: dir.to_path_buf(),
         };
@@ -970,7 +1100,7 @@ impl Library {
             return Err(outside());
         }
         let entry = self.by_dir(dir).cloned().ok_or_else(outside)?;
-        let canon_root = std::fs::canonicalize(&root).map_err(io_err("resolve", &root))?;
+        let canon_root = std::fs::canonicalize(root).map_err(io_err("resolve", root))?;
         let meta = std::fs::symlink_metadata(dir).map_err(io_err("stat", dir))?;
         if !meta.is_dir() {
             return Err(outside());
@@ -980,6 +1110,20 @@ impl Library {
         {
             return Err(outside());
         }
+        Ok((entry, canon))
+    }
+
+    /// Delete the kit whose top directory is `dir` (`remove_dir_all`),
+    /// then rescan, which frees its slot. Marks are not touched: they are
+    /// kept for the orphan window. Returns the removed entry. Blocks for
+    /// as long as the delete takes (a large kit: run it on a job).
+    ///
+    /// Refused — before anything is removed — unless `dir` is the top
+    /// directory of a kit the index knows, a real directory directly
+    /// inside the root after resolving symlinks and `..`.
+    pub fn delete(&mut self, dir: &Path) -> Result<Entry, LibraryError> {
+        let root = self.root.clone().ok_or(LibraryError::NoRoot)?;
+        let (entry, canon) = self.kit_dir_in_root(&root, dir)?;
         std::fs::remove_dir_all(&canon).map_err(io_err("delete", dir))?;
         self.missing.remove(&entry.id);
         self.rescan()?;
@@ -1074,11 +1218,14 @@ fn space_needed(bytes: u64) -> u64 {
     (bytes as f64 * IMPORT_SPACE_FACTOR).ceil() as u64
 }
 
-/// A safe directory name for a kit: path separators and leading dots
-/// removed; `kit` when nothing is left.
+/// A safe directory name for a kit: path separators and control
+/// characters replaced, then surrounding whitespace and leading dots
+/// stripped until nothing changes (`". ."` → `""`); `kit` when nothing is
+/// left. Never hidden, so the scan always sees it, and neither is any
+/// `"{name} {n}"` built from it.
 fn kit_dir_name(raw: Option<String>) -> String {
     let raw = raw.unwrap_or_default();
-    let cleaned: String = raw
+    let mut name: String = raw
         .chars()
         .map(|c| {
             if c == '/' || c == '\\' || c.is_control() {
@@ -1088,13 +1235,24 @@ fn kit_dir_name(raw: Option<String>) -> String {
             }
         })
         .collect();
-    let trimmed = cleaned.trim().trim_start_matches('.').trim().to_string();
-    if trimmed.is_empty() {
+    loop {
+        let next = name.trim().trim_start_matches('.');
+        if next.len() == name.len() {
+            break;
+        }
+        name = next.to_string();
+    }
+    if name.is_empty() || name.starts_with('.') {
         "kit".into()
     } else {
-        trimmed
+        name
     }
 }
+
+/// The prefix of a kit directory renamed aside by a re-download
+/// (`.staging/.old-<name>.<pid>-<n>`). Staged imports never start with a
+/// dot ([`kit_dir_name`]), so the two cannot be confused.
+const ASIDE_PREFIX: &str = ".old-";
 
 /// `.staging/<name>.<pid>-<n>`: unique per process and import, so two
 /// imports of one name never share a staging directory.
@@ -1106,26 +1264,74 @@ fn staging_path(root: &Path, name: &str) -> PathBuf {
         .join(format!("{name}.{}-{n}", std::process::id()))
 }
 
+/// A [`staging_path`] that is empty: whatever a previous process with
+/// this pid left there (pid reuse) is removed first, so it can never be
+/// promoted along with this import.
+fn fresh_stage(root: &Path, name: &str) -> Result<PathBuf, LibraryError> {
+    let stage = staging_path(root, name);
+    if std::fs::symlink_metadata(&stage).is_ok() {
+        std::fs::remove_dir_all(&stage)
+            .or_else(|_| std::fs::remove_file(&stage))
+            .map_err(io_err("clear", &stage))?;
+    }
+    Ok(stage)
+}
+
+/// Rename `from` to `to`, failing if `to` exists. On Linux this is
+/// `renameat2(RENAME_NOREPLACE)`, so the check and the rename are one
+/// step; elsewhere (and on filesystems without it) a check, then
+/// `rename` — which replaces an *empty* directory at `to` and fails on a
+/// non-empty one.
+fn rename_noreplace(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let f = std::ffi::CString::new(from.as_os_str().as_bytes())?;
+        let t = std::ffi::CString::new(to.as_os_str().as_bytes())?;
+        // SAFETY: both are NUL-terminated paths; AT_FDCWD resolves them
+        // against the working directory, as `rename` does.
+        let rc = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                f.as_ptr(),
+                libc::AT_FDCWD,
+                t.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+        if rc == 0 {
+            return Ok(());
+        }
+        let e = std::io::Error::last_os_error();
+        if !matches!(e.raw_os_error(), Some(libc::EINVAL) | Some(libc::ENOSYS)) {
+            return Err(e);
+        }
+    }
+    if std::fs::symlink_metadata(to).is_ok() {
+        return Err(std::io::ErrorKind::AlreadyExists.into());
+    }
+    std::fs::rename(from, to)
+}
+
 /// Rename the staged kit into the root as `name`, or `name 2`, `name 3`, …
-/// when taken. A rename onto an existing directory fails rather than
-/// replacing it, so a racing writer never loses its kit.
+/// when taken. The rename never replaces an existing entry
+/// ([`rename_noreplace`]), so a racing writer never loses its kit.
 fn promote(root: &Path, stage: &Path, name: &str) -> Result<PathBuf, LibraryError> {
-    let mut n = 1;
-    loop {
+    for n in 1..=100 {
         let dest = if n == 1 {
             root.join(name)
         } else {
             root.join(format!("{name} {n}"))
         };
-        if !dest.exists() {
-            match std::fs::rename(stage, &dest) {
-                Ok(()) => return Ok(dest),
-                Err(e) if n > 100 => return Err(io_err("rename", &dest)(e)),
-                Err(_) => {}
-            }
+        match rename_noreplace(stage, &dest) {
+            Ok(()) => return Ok(dest),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists || dest.exists() => {}
+            Err(e) => return Err(io_err("rename", &dest)(e)),
         }
-        n += 1;
     }
+    Err(io_err("rename", &root.join(name))(
+        std::io::ErrorKind::AlreadyExists.into(),
+    ))
 }
 
 /// On failure (or cancel) remove the staged copy; either way remove
@@ -1142,26 +1348,162 @@ fn finish_staging(
     result
 }
 
-/// `stage/<only>/…` → `stage/…`, for a zip that wraps its kit one level
-/// deeper than depth 1.
-fn hoist_single_subdir(stage: &Path) -> Result<(), LibraryError> {
-    let entries: Vec<_> = std::fs::read_dir(stage)
-        .map_err(io_err("read", stage))?
-        .flatten()
-        .collect();
-    let [only] = entries.as_slice() else {
-        return Ok(());
-    };
-    if !only.file_type().is_ok_and(|t| t.is_dir()) {
-        return Ok(());
+/// Run `f` under the exclusive `library.lock` file lock.
+fn with_lock<R>(
+    root: &Path,
+    f: impl FnOnce() -> Result<R, LibraryError>,
+) -> Result<R, LibraryError> {
+    let lock_path = root.join(LOCK_FILE);
+    let lock = File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(io_err("open", &lock_path))?;
+    let locked = crate::library_marks::lock_or_best_effort(&lock, &lock_path)
+        .map_err(io_err("lock", &lock_path))?;
+    let result = f();
+    if locked {
+        let _ = lock.unlock();
     }
-    let mut tmp = stage.as_os_str().to_os_string();
-    tmp.push(".hoist");
-    let tmp = PathBuf::from(tmp);
-    std::fs::rename(only.path(), &tmp).map_err(io_err("rename", &tmp))?;
-    std::fs::remove_dir(stage).map_err(io_err("rmdir", stage))?;
-    std::fs::rename(&tmp, stage).map_err(io_err("rename", stage))?;
-    Ok(())
+    result
+}
+
+/// Whether process `pid` is running (unix: `kill(pid, 0)`; `EPERM` means
+/// it exists under another user).
+#[cfg(unix)]
+fn pid_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the process exists.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Unknown on this platform: assume alive, so only the age rule sweeps.
+#[cfg(not(unix))]
+fn pid_alive(_pid: u32) -> bool {
+    true
+}
+
+/// Remove what dead imports left in `.staging/`: every
+/// `<name>.<pid>-<n>` whose process is gone or that is older than
+/// [`STAGING_MAX_AGE`]. A re-download's aside copy
+/// (`.old-<name>.<pid>-<n>`) whose replacement never landed — no
+/// `<root>/<name>` — is renamed back instead of removed. Entries not in
+/// that shape are left alone. Run under the lock.
+fn sweep_staging(root: &Path) {
+    let staging = root.join(STAGING_DIR);
+    let Ok(rd) = std::fs::read_dir(&staging) else {
+        return;
+    };
+    let own = std::process::id();
+    for e in rd.flatten() {
+        let file_name = e.file_name();
+        let name = file_name.to_string_lossy();
+        let Some((base, tag)) = name.rsplit_once('.') else {
+            continue;
+        };
+        let Some(pid) = tag
+            .split_once('-')
+            .and_then(|(pid, n)| n.parse::<u64>().ok().and(pid.parse::<u32>().ok()))
+        else {
+            continue;
+        };
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STAGING_MAX_AGE);
+        let alive = pid == own || pid_alive(pid);
+        if alive && !old {
+            continue;
+        }
+        let path = e.path();
+        if let Some(kit) = base.strip_prefix(ASIDE_PREFIX) {
+            let home = root.join(kit);
+            if !kit.is_empty() && std::fs::symlink_metadata(&home).is_err() {
+                match std::fs::rename(&path, &home) {
+                    Ok(()) => {
+                        tracing::warn!(
+                            "restored {} from an interrupted re-download",
+                            home.display()
+                        );
+                        continue;
+                    }
+                    Err(err) => tracing::warn!("restore {}: {err}", home.display()),
+                }
+            }
+        }
+        let removed = std::fs::remove_dir_all(&path).or_else(|_| std::fs::remove_file(&path));
+        match removed {
+            Ok(()) => tracing::info!("swept stale staging {}", path.display()),
+            Err(err) => tracing::warn!("sweep {}: {err}", path.display()),
+        }
+    }
+    let _ = std::fs::remove_dir(&staging);
+}
+
+/// A kit zip opened for install: the archive, its plan, and the id of the
+/// manifest inside it (read without extracting anything).
+#[cfg(feature = "drumkit-zip")]
+struct OpenedZip {
+    path: PathBuf,
+    archive: zip::ZipArchive<File>,
+    plan: install::ZipPlan,
+    id: String,
+}
+
+#[cfg(feature = "drumkit-zip")]
+impl OpenedZip {
+    fn open(zip: &Path) -> Result<Self, LibraryError> {
+        let file = File::open(zip).map_err(io_err("open", zip))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| LibraryError::Zip(format!("{}: {e}", zip.display())))?;
+        let plan = install::zip_plan(&mut archive, zip)?;
+        let bytes = install::read_entry(&mut archive, plan.manifest, plan.manifest_size)?;
+        summarize(&bytes).map_err(|e| LibraryError::NotAKit {
+            path: zip.to_path_buf(),
+            reason: e.0,
+        })?;
+        Ok(Self {
+            path: zip.to_path_buf(),
+            id: crate::nam_library::hash_bytes(&bytes),
+            archive,
+            plan,
+        })
+    }
+
+    /// Extract into `stage` and write `sidecar` there (its size measured,
+    /// `downloaded_at` defaulted to now).
+    fn stage(
+        &mut self,
+        stage: &Path,
+        mut sidecar: Sidecar,
+        job: &mut ImportJob<'_>,
+    ) -> Result<(), LibraryError> {
+        let written = install::extract(&mut self.archive, &self.plan, stage, job)?;
+        if find_manifest(stage).is_none() {
+            return Err(LibraryError::NotAKit {
+                path: self.path.clone(),
+                reason: "no drum_samples.json after extraction".into(),
+            });
+        }
+        if sidecar.downloaded_at.is_none() {
+            sidecar.downloaded_at =
+                crate::library_marks::format_timestamp(crate::library_marks::now_unix());
+        }
+        sidecar.size_bytes = Some(written);
+        write_sidecar(stage, &sidecar)?;
+        Ok(())
+    }
 }
 
 /// The scan proper, on the index re-read under the lock.
@@ -1299,11 +1641,22 @@ fn date_to_rfc3339(date: &str) -> Option<String> {
 /// is a kit under `root` without one. Matches by path, then by the item's
 /// directory name (the root may have moved). Returns how many it wrote.
 fn migrate_installed(root: &Path, m: &Migration) -> usize {
-    use crate::registry::{load_registry_from, ContentType};
-    if !m.installed_json.is_file() {
+    use crate::registry::{ContentType, InstalledRegistry};
+    // Read it directly: `registry::load_registry_from` quarantines a
+    // corrupt file, and the migration only ever reads.
+    let Ok(bytes) = std::fs::read(&m.installed_json) else {
         return 0;
-    }
-    let reg = load_registry_from(&m.installed_json);
+    };
+    let reg: InstalledRegistry = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                "installed.json migration: {} unreadable ({e}); skipped",
+                m.installed_json.display()
+            );
+            return 0;
+        }
+    };
     let kits = scan_kits(root);
     let mut written = 0;
     for item in reg.items_of(&ContentType::Drumkit) {
@@ -1325,12 +1678,28 @@ fn migrate_installed(root: &Path, m: &Migration) -> usize {
         if sidecar_path(dir).exists() {
             continue;
         }
-        let plok = m.in_index.as_ref().is_some_and(|f| f(&item.name));
-        let sc = Sidecar {
-            source: if plok { SOURCE_PLOK } else { SOURCE_LOCAL }.into(),
-            index_name: plok.then(|| item.name.clone()),
-            downloaded_at: date_to_rfc3339(&item.installed_at),
-            ..Sidecar::default()
+        let hit = m.in_index.as_ref().and_then(|f| f(&item.name));
+        let downloaded_at = date_to_rfc3339(&item.installed_at);
+        let sc = match hit {
+            Some(h) => Sidecar {
+                source: SOURCE_PLOK.into(),
+                index_name: Some(
+                    h.index_name
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| item.name.clone()),
+                ),
+                index_file: h.index_file,
+                sha256: h.sha256,
+                description: h.description,
+                index_tags: h.index_tags,
+                downloaded_at,
+                size_bytes: None,
+            },
+            None => Sidecar {
+                source: SOURCE_LOCAL.into(),
+                downloaded_at,
+                ..Sidecar::default()
+            },
         };
         match write_sidecar(dir, &sc) {
             Ok(()) => written += 1,

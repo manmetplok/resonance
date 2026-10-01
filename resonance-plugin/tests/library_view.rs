@@ -5,8 +5,8 @@
 use std::collections::HashMap;
 
 use resonance_plugin::library_view::{
-    Audition, AuditionBracket, AuditionEvent, BrowserModel, LibraryRows, Marks, Sort, SortKey,
-    SortValue,
+    step_loadable, view_counter, Audition, AuditionBracket, AuditionEvent, BrowserModel,
+    LibraryRows, Marks, Sort, SortKey, SortValue,
 };
 
 struct Item {
@@ -363,6 +363,52 @@ fn stepping_walks_the_view_and_clamps() {
     empty.set_query("zzz");
     empty.refresh(&rows, 1);
     assert_eq!(empty.step_from(None, 1), None);
+}
+
+#[test]
+fn step_loadable_skips_unloadable_rows_and_a_zero_step_goes_nowhere() {
+    let rows = rows();
+    let mut model = BrowserModel::new();
+    model.set_sort(Sort::by(SortKey::Title));
+    model.set_favorites_first(false);
+    model.refresh(&rows, 1);
+    // Title order: 5150 (c), Café (d), Darkglass (b), Friedman (a), Old (e).
+    // Only a, b and e load; the slot is the row index.
+    let loadable = |row: usize| {
+        let k = rows.items[row].key;
+        (k != "amp-model:c" && k != "amp-model:d").then_some(row as u32)
+    };
+    assert_eq!(
+        step_loadable(&model, &rows, None, 1, loadable),
+        Some(1),
+        "skips c, d"
+    );
+    assert_eq!(
+        step_loadable(&model, &rows, Some("amp-model:b"), -1, loadable),
+        None,
+        "nothing loadable before b"
+    );
+    assert_eq!(
+        step_loadable(&model, &rows, Some("amp-model:c"), 2, loadable),
+        Some(1),
+        "a long step that lands on b"
+    );
+    // A zero step returns at once, even from an unloadable row (this
+    // looped forever).
+    assert_eq!(
+        step_loadable(&model, &rows, Some("amp-model:c"), 0, loadable),
+        None
+    );
+    assert_eq!(step_loadable(&model, &rows, None, 0, loadable), None);
+    assert_eq!(step_loadable(&model, &rows, None, 1, |_| None), None);
+
+    assert_eq!(view_counter(&model, Some("amp-model:b")), "3 / 5 in view");
+    assert_eq!(view_counter(&model, Some("nope")), "– / 5 in view");
+    assert_eq!(view_counter(&model, None), "– / 5 in view");
+    let mut empty = BrowserModel::new();
+    empty.set_query("zzz");
+    empty.refresh(&rows, 1);
+    assert_eq!(view_counter(&empty, None), "");
 }
 
 #[test]

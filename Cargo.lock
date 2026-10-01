@@ -5005,6 +5005,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "libc",
+ "resonance-common",
  "serde",
  "serde_json",
  "sha2",
