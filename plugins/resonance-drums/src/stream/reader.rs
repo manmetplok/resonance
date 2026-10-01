@@ -60,8 +60,22 @@ pub const ACTIVE_POLL: Duration = Duration::from_micros(500);
 /// Park between passes with no stream open in any registered set.
 pub const IDLE_POLL: Duration = Duration::from_millis(10);
 
-/// Reader threads in the process-wide pool.
-pub const GLOBAL_READERS: usize = 2;
+/// Reader threads in the process-wide pool: a quarter of the cores,
+/// from 2 to 4.
+///
+/// Resampled tails are what costs. Measured in release (2026-10-01,
+/// `tests/streaming.rs`, `reader_throughput_at_saturation`): the 64-voice
+/// saturation pattern with 44.1 kHz files read for a 48 kHz host takes
+/// one reader thread 1.0–1.3 s per 3 s of audio — only 2.3–3x real time
+/// — where 48 kHz files (no resampling) take 65–70 ms (≈ 45x); measured
+/// on a 16-core machine under load. Two threads left 5–6x headroom at 64
+/// voices, and E15's 128 voices would halve that; four give 9–12x (5–6x
+/// at 128). Reads of one ring never run on two threads at
+/// once, so more threads only help with more voices — which is the case
+/// that needs them.
+pub fn global_readers() -> usize {
+    std::thread::available_parallelism().map_or(2, |n| (n.get() / 4).clamp(2, 4))
+}
 
 /// A reader's view of one ring: the stream it is filling.
 #[derive(Default)]
@@ -151,7 +165,7 @@ impl ReaderPool {
     /// The pool every sampler uses unless told otherwise.
     pub fn global() -> &'static Arc<ReaderPool> {
         static POOL: OnceLock<Arc<ReaderPool>> = OnceLock::new();
-        POOL.get_or_init(|| ReaderPool::new(GLOBAL_READERS))
+        POOL.get_or_init(|| ReaderPool::new(global_readers()))
     }
 
     /// Serve `set` for as long as the returned registration lives,
