@@ -58,6 +58,26 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
 
     fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
+        let meta = &self.shared.param_metas[slot];
+        // A value the plugin moves itself — an output, or one derived from
+        // its state — is read where it lives, not from the mirror: only
+        // the audio thread's push-back refreshes the mirror, so with no
+        // block running (transport stopped) it would read stale forever.
+        if meta.is_read_only || meta.state_excluded {
+            if let Some(plugin) = &self.plugin {
+                if slot < plugin.param_count() {
+                    return Some(plugin.param(slot).get_plain());
+                }
+            }
+            if let Some(live) = self
+                .param_text_source
+                .as_ref()
+                .and_then(|s| s.live_value(slot))
+                .filter(|v| v.is_finite())
+            {
+                return Some(live);
+            }
+        }
         Some(self.shared.get_value(slot))
     }
 

@@ -31,12 +31,43 @@ struct FlagsPlugin {
     /// state's own `pick` key — the shape of the drums' `kit_select`,
     /// which follows the state's kit reference.
     selector: Arc<IntParam>,
-    progress: FloatParam,
+    /// Shared with the text source (and, in a real plugin, a loader
+    /// thread that moves it while no block runs).
+    progress: Arc<FloatParam>,
 }
 
 impl FlagsPlugin {
     fn params(&self) -> [&dyn Param; 3] {
-        [&self.gain, &*self.selector, &self.progress]
+        [&self.gain, &*self.selector, &*self.progress]
+    }
+}
+
+/// The live side of the plugin's shared params, for an active instance:
+/// the shape `ParamTextSource::live_value` documents.
+struct LiveSource {
+    selector: Arc<IntParam>,
+    progress: Arc<FloatParam>,
+}
+
+impl LiveSource {
+    fn param(&self, index: usize) -> Option<&dyn Param> {
+        match index {
+            1 => Some(&*self.selector),
+            2 => Some(&*self.progress),
+            _ => None,
+        }
+    }
+}
+
+impl resonance_plugin::ParamTextSource for LiveSource {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        self.param(index).map(|p| p.display(value))
+    }
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        self.param(index).and_then(|p| p.parse(text))
+    }
+    fn live_value(&self, index: usize) -> Option<f64> {
+        self.param(index).map(|p| p.get_plain())
     }
 }
 
@@ -83,13 +114,15 @@ impl ResonancePlugin for FlagsPlugin {
                 .not_automatable()
                 .excluded_from_state(),
             ),
-            progress: FloatParam::new(
-                "progress",
-                "Progress",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .read_only(),
+            progress: Arc::new(
+                FloatParam::new(
+                    "progress",
+                    "Progress",
+                    0.0,
+                    FloatRange::Linear { min: 0.0, max: 1.0 },
+                )
+                .read_only(),
+            ),
         }
     }
     fn param_count(&self) -> usize {
@@ -107,6 +140,19 @@ impl ResonancePlugin for FlagsPlugin {
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
         Some(Arc::new(PickSaver(self.selector.clone())))
     }
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        Some(Arc::new(LiveSource {
+            selector: self.selector.clone(),
+            progress: self.progress.clone(),
+        }))
+    }
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        // Hand the test the plugin's own storage, the way a plugin hands
+        // it to a loader thread.
+        LIVE.with(|live| {
+            *live.borrow_mut() = Some((self.selector.clone(), self.progress.clone(), host));
+        });
+    }
     fn process(
         &mut self,
         _outputs: &mut [OutputBuffer<'_>],
@@ -115,6 +161,19 @@ impl ResonancePlugin for FlagsPlugin {
         _tempo: Option<TempoInfo>,
     ) {
     }
+}
+
+thread_local! {
+    /// The plugin's shared params and host handle, as `set_host` saw them
+    /// (the instance is created on the test's own thread).
+    static LIVE: std::cell::RefCell<
+        Option<(Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>)>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+/// The plugin's shared storage, as a thread of its own would hold it.
+fn live() -> (Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>) {
+    LIVE.with(|live| live.borrow().clone()).expect("set_host ran")
 }
 
 struct TestHostShared;
@@ -403,4 +462,28 @@ fn the_bridge_publishes_state_excluded_params() {
     assert!(ask("selector"), "excluded_from_state()");
     assert!(ask("progress"), "read_only() implies it");
     assert!(!ask("no-such-param"));
+}
+
+/// A value the plugin moves itself — a load progress written by its
+/// loader thread — reads live through `get_value` while the plugin is
+/// active and NO block runs (transport stopped): the bridge asks the
+/// plugin's `live_value` instead of the mirror only `process()` refreshes.
+#[test]
+fn an_active_output_reads_live_without_a_process_block() {
+    let mut instance = instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activate");
+    let (selector, progress, _host) = live();
+    progress.set_value(0.6);
+    selector.set_value(8);
+    assert_eq!(get_value(&mut instance, "progress"), 0.6f32 as f64);
+    assert_eq!(get_value(&mut instance, "selector"), 8.0);
+    // An ordinary param still reads the mirror.
+    assert_eq!(get_value(&mut instance, "gain"), 0.5);
+    instance.deactivate(processor);
+
+    // Inactive, the plugin object answers directly.
+    progress.set_value(0.9);
+    assert_eq!(get_value(&mut instance, "progress"), 0.9f32 as f64);
 }
