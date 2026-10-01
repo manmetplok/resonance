@@ -13,7 +13,6 @@ use plugin_gui_core::egui;
 
 use resonance_plugin::param::Param;
 
-use crate::download::WorkerHandle;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
 use crate::kit::OutputGroup;
 use crate::kit_loader::KitStatus;
@@ -21,8 +20,7 @@ use crate::params::DrumParams;
 use crate::rr_display;
 use crate::KitBridge;
 
-use super::download_panel::DownloadPanelState;
-use super::{kit_browser, theme};
+use super::theme;
 
 /// Group label used in the pad list. Derived from `OutputGroup` so adding
 /// a new pad type to the map automatically falls into the right section.
@@ -43,10 +41,8 @@ pub fn draw(
     ui: &mut egui::Ui,
     params: &DrumParams,
     bridge: &KitBridge,
-    download_panel: &mut DownloadPanelState,
     pad_filter: &mut String,
     selected_pad: &mut usize,
-    _download_worker: &WorkerHandle,
 ) {
     let panel = egui::Frame::default()
         .fill(theme::BG_2)
@@ -55,8 +51,11 @@ pub fn draw(
         .inner_margin(egui::Margin::same(12));
 
     panel.show(ui, |ui| {
-        ui.set_min_width(296.0);
-        ui.set_max_width(296.0);
+        // No forced width here: the column is already sized by the
+        // `ui.allocate_ui` the caller wraps this panel in (`app.rs`). A
+        // fixed 296px used to be asked for regardless, which overflowed
+        // the column at narrower window widths (ba drums-plugin-rework.md
+        // §1.3).
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 10.0);
 
         // PADS header.
@@ -70,7 +69,7 @@ pub fn draw(
         });
 
         // Kit card.
-        draw_kit_card(ui, bridge, download_panel);
+        draw_kit_card(ui, bridge);
 
         // Search input.
         draw_search(ui, pad_filter);
@@ -86,11 +85,7 @@ pub fn draw(
     });
 }
 
-fn draw_kit_card(
-    ui: &mut egui::Ui,
-    bridge: &KitBridge,
-    download_panel: &mut DownloadPanelState,
-) {
+fn draw_kit_card(ui: &mut egui::Ui, bridge: &KitBridge) {
     let frame = egui::Frame::default()
         .fill(theme::BG_1)
         .stroke(egui::Stroke::new(1.0, theme::LINE_2))
@@ -151,30 +146,11 @@ fn draw_kit_card(
                         .monospace(),
                 );
             });
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 4.0);
-                    let ghost = |ui: &mut egui::Ui, label: &str| -> egui::Response {
-                        let btn = egui::Button::new(
-                            egui::RichText::new(label)
-                                .color(theme::TEXT_2)
-                                .size(10.5),
-                        )
-                        .fill(egui::Color32::TRANSPARENT)
-                        .stroke(egui::Stroke::new(1.0, theme::LINE))
-                        .corner_radius(6.0)
-                        .min_size(egui::vec2(64.0, 22.0));
-                        ui.add(btn)
-                    };
-                    if ghost(ui, "Browse").clicked() {
-                        download_panel.open = true;
-                    }
-                    if ghost(ui, "Load kit").clicked() {
-                        kit_browser::load_kit_clicked(bridge);
-                    }
-                });
-            });
+            // The ghost Browse button (opened the download overlay) and
+            // the Load kit button next to it used to live here, doing
+            // nothing visible until found. Both moved to the header,
+            // labelled for what they do (chrome.rs: Download kits… /
+            // Open kit file…).
         });
     });
 }

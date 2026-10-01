@@ -17,8 +17,13 @@ use crate::KitBridge;
 
 use super::app::DrumsEditorApp;
 
-const INITIAL_SIZE: (u32, u32) = (720, 440);
-const MIN_SIZE: (u32, u32) = (560, 360);
+// Matches the amp (drums-plugin-rework.md §6.1): at the old 720×440 the
+// body needed about 640px of height and got 302, so the GLOBAL card was
+// permanently off-screen. 960×640 gives the two-column pad body room to
+// breathe; 780×520 is the floor the layout (`app.rs`) is built to survive
+// without losing the KIT/GLOBAL row.
+const INITIAL_SIZE: (u32, u32) = (960, 640);
+const MIN_SIZE: (u32, u32) = (780, 520);
 
 // ---------------------------------------------------------------------------
 // Factory — produced by ResonanceDrums::editor_factory().

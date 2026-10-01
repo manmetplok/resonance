@@ -9,12 +9,19 @@
 const APP: &str = include_str!("../src/editor/app.rs");
 const CHROME: &str = include_str!("../src/editor/chrome.rs");
 const PAD_INSPECTOR: &str = include_str!("../src/editor/pad_inspector.rs");
+const PAD_GRID: &str = include_str!("../src/editor/pad_grid.rs");
+const DOWNLOAD_PANEL: &str = include_str!("../src/editor/download_panel.rs");
 
 /// Mics and Articulations ship inside the pad inspector, and Mod / FX do
 /// not exist at all. No tab may claim otherwise.
 #[test]
 fn no_tab_says_coming_soon() {
-    for (name, src) in [("app.rs", APP), ("chrome.rs", CHROME)] {
+    for (name, src) in [
+        ("app.rs", APP),
+        ("chrome.rs", CHROME),
+        ("pad_grid.rs", PAD_GRID),
+        ("download_panel.rs", DOWNLOAD_PANEL),
+    ] {
         assert!(
             !src.to_lowercase().contains("coming soon"),
             "{name} still advertises a 'coming soon' tab"
@@ -22,20 +29,19 @@ fn no_tab_says_coming_soon() {
     }
 }
 
-/// The tab strip lists only views that exist. `Pads` is the only body the
-/// app draws, so it is the only label the strip may carry.
+/// The editor has exactly one view (Pads), so there is nothing to switch
+/// it with: K0 removed the single-option `Pads` segmented control along
+/// with the rest of the chrome that looked interactive and did nothing
+/// (ba drums-plugin-rework.md §10). What's left to guard is that chrome
+/// never claims a view that does not exist.
 #[test]
-fn tab_strip_lists_only_the_pads_view() {
-    for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\""] {
+fn chrome_claims_no_view_that_does_not_exist() {
+    for absent in ["\"Mics\"", "\"Articulations\"", "\"Mod\"", "\"FX\"", "\"Pads\""] {
         assert!(
             !CHROME.contains(absent),
-            "tab strip still offers a {absent} tab with no view behind it"
+            "chrome still offers a {absent} tab — there is only one view, and it is not switched"
         );
     }
-    assert!(
-        CHROME.contains("&[\"Pads\"]"),
-        "the tab strip should list exactly the Pads view"
-    );
 }
 
 /// No control in the body may throw its interaction away (ba todo
@@ -44,17 +50,24 @@ fn tab_strip_lists_only_the_pads_view() {
 /// looks live, moves under the pointer, and changes nothing. Either it
 /// writes a parameter or it should not be drawn.
 ///
-/// The one legitimate discard is in `chrome.rs` — the tab strip has a
-/// single tab, so its click has nowhere to go — and this test does not
-/// cover that file.
+/// `chrome.rs` used to be exempt — its tab strip had a single tab, so its
+/// click had nowhere to go — but that discarded control is gone (K0), so
+/// every editor file is covered now.
 #[test]
 fn no_control_in_the_body_discards_its_interaction() {
-    for line in APP.lines() {
-        let trimmed = line.trim_start();
-        assert!(
-            !trimmed.starts_with("let _ = widgets::"),
-            "a drawn control discards its interaction: {trimmed}"
-        );
+    for (name, src) in [
+        ("app.rs", APP),
+        ("chrome.rs", CHROME),
+        ("pad_grid.rs", PAD_GRID),
+        ("download_panel.rs", DOWNLOAD_PANEL),
+    ] {
+        for line in src.lines() {
+            let trimmed = line.trim_start();
+            assert!(
+                !trimmed.starts_with("let _ = widgets::"),
+                "{name}: a drawn control discards its interaction: {trimmed}"
+            );
+        }
     }
 }
 
@@ -85,15 +98,57 @@ fn audition_is_live_and_no_longer_apologises() {
     );
 }
 
-/// A user who wants mic selection must be told where it lives, since the
-/// tab that used to (falsely) promise it is gone.
+/// The tab bar's "Mic and articulation pickers live in each pad's
+/// inspector →" hint is gone (K0 — one more piece of chrome that pointed
+/// at a problem the removed Mics/Articulations tabs created, rather than
+/// doing anything itself). What has to stay true is the thing it used to
+/// point at: the pickers really are in the inspector.
 #[test]
-fn tab_bar_points_at_the_pad_inspector() {
-    assert!(
-        CHROME.contains("Mic and articulation pickers live in each pad's inspector"),
-        "removing the Mics/Articulations tabs must leave a pointer behind"
-    );
-    // …and the pickers really are there.
+fn the_mic_and_articulation_pickers_still_live_in_the_inspector() {
     assert!(PAD_INSPECTOR.contains("CLOSE MICS"));
     assert!(PAD_INSPECTOR.contains("ARTICULATIONS"));
+}
+
+/// The ghost `Browse` button and the `Load kit` button next to it used to
+/// live in the pad-list kit card — `Browse` opened an overlay you then
+/// couldn't see (§1.2), and neither label said what it did. Both moved to
+/// the header (`chrome.rs`), clearly labelled, and neither the buttons
+/// nor the code that opened them belongs in `pad_grid.rs` any more.
+#[test]
+fn pad_grid_no_longer_hides_the_kit_actions() {
+    for gone in ["\"Browse\"", "\"Load kit\"", "download_panel", "kit_browser"] {
+        assert!(
+            !PAD_GRID.contains(gone),
+            "pad_grid.rs still references {gone} — the kit actions should live in chrome.rs now"
+        );
+    }
+}
+
+/// The overlay's backdrop must be painted on the same layer as the panel
+/// it dims, not above it (ba drums-plugin-rework.md §1.2) — the exact
+/// defect that made opening "Download Kits" show a near-black screen.
+/// `egui::Modal` keeps both on `Order::Foreground`; `Order::Tooltip`,
+/// which drew above it, must not come back.
+#[test]
+fn the_download_overlay_backdrop_cannot_be_drawn_above_the_panel() {
+    assert!(
+        !DOWNLOAD_PANEL.contains("Order::Tooltip"),
+        "the backdrop must not go back to painting on a layer above the panel"
+    );
+    assert!(
+        DOWNLOAD_PANEL.contains("egui::Modal"),
+        "the overlay should be a Modal — it is also how it stays click-blocking and Esc-closing"
+    );
+}
+
+/// The doc comment used to describe a `Download Kits` button that did not
+/// exist — the real entry point was a ghost `Browse` button elsewhere
+/// (§1.2). Now that the real button is back, the doc comment has to name
+/// it correctly.
+#[test]
+fn the_module_doc_names_the_real_entry_point() {
+    assert!(
+        DOWNLOAD_PANEL.contains("Download kits…"),
+        "the doc comment should point at the real header button, not a stale name"
+    );
 }

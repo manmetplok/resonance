@@ -167,66 +167,79 @@ impl EditorApp for DrumsEditorApp {
     }
 }
 
-/// Pads tab body: 320 px left column (pad list) + right column (detail) +
-/// bottom row of KIT + GLOBAL cards.
+/// Height of the fixed bottom row (KIT + GLOBAL cards): the 12px gap from
+/// the region above plus the cards' own 110px.
+const KIT_GLOBAL_ROW_HEIGHT: f32 = 122.0;
+
+/// Pads tab body: a fixed-height bottom row for the KIT + GLOBAL cards,
+/// and above it the pad list (320 px column) + pad detail, each scrolling
+/// on its own so nothing in either one — or the row below — can be pushed
+/// out of reach (ba drums-plugin-rework.md §1.3, §6.1).
+///
+/// This replaces an `available_height() - 200.0` guess that gave the top
+/// row 102px at the window's old default size and 22px at its minimum,
+/// with nothing below it able to scroll into view.
 fn draw_pads_body(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     // Snapshot the catalog once per frame; cheap clone avoids re-locking
     // inside the inspector's nested combo callbacks.
     let catalog = app.bridge.catalog.lock().clone();
+    let gap = 12.0;
 
+    // Bottom row first, so it reserves its own space regardless of how
+    // tall the pad list or inspector end up — drawn via a nested Panel,
+    // which (like the chrome's top-level ones in `ui()`) claims its slice
+    // of whatever `ui` it is shown inside before anything else sees it.
+    egui::Panel::bottom("drums_kit_global_row")
+        .exact_size(KIT_GLOBAL_ROW_HEIGHT)
+        .frame(egui::Frame::NONE)
+        .show_inside(ui, |ui| {
+            ui.add_space(gap);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
+                let half = super::body_width(ui, gap) * 0.5;
+                ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
+                    draw_kit_row_card(ui, app);
+                });
+                ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
+                    draw_global_row_card(ui, &app.params);
+                });
+            });
+        });
+
+    // Top row shares whatever height is left after the bottom row above.
     let avail_w = ui.available_width();
     let left_w = 320.0_f32.min(avail_w * 0.42);
-    let gap = 12.0;
     let right_w = (avail_w - left_w - gap).max(200.0);
+    let body_h = ui.available_height();
 
-    // Top row: split into 2 columns of fixed/proportional width.
     let mut clicked_pad: Option<usize> = None;
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
 
-        ui.allocate_ui(egui::vec2(left_w, ui.available_height() - 200.0), |ui| {
+        // The pad list scrolls internally (`pad_grid.rs`), so it degrades
+        // by scrolling rather than clipping when `body_h` is tight.
+        ui.allocate_ui(egui::vec2(left_w, body_h), |ui| {
             let mut selected = app.selected_pad;
-            pad_grid::draw(
-                ui,
-                &app.params,
-                &app.bridge,
-                &mut app.download_panel,
-                &mut app.pad_filter,
-                &mut selected,
-                &app.download_worker,
-            );
+            pad_grid::draw(ui, &app.params, &app.bridge, &mut app.pad_filter, &mut selected);
             if selected != app.selected_pad {
                 clicked_pad = Some(selected);
             }
         });
 
-        ui.allocate_ui(egui::vec2(right_w, ui.available_height() - 200.0), |ui| {
-            pad_inspector::draw(
-                ui,
-                &app.params,
-                &app.bridge,
-                &catalog,
-                app.selected_pad,
-            );
+        // The inspector has no internal scroll area of its own, so one is
+        // wrapped around it here.
+        ui.allocate_ui(egui::vec2(right_w, body_h), |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("pad_inspector_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    pad_inspector::draw(ui, &app.params, &app.bridge, &catalog, app.selected_pad);
+                });
         });
     });
     if let Some(p) = clicked_pad {
         app.selected_pad = p;
     }
-
-    ui.add_space(12.0);
-
-    // Bottom row: KIT card + GLOBAL card.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(gap, 0.0);
-        let half = super::body_width(ui, gap) * 0.5;
-        ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
-            draw_kit_row_card(ui, app);
-        });
-        ui.allocate_ui(egui::vec2(half, 110.0), |ui| {
-            draw_global_row_card(ui, &app.params);
-        });
-    });
 }
 
 fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
@@ -237,54 +250,39 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         .inner_margin(egui::Margin::symmetric(14, 12));
     frame.show(ui, |ui| {
         ui.set_min_width(super::body_width(ui, 28.0));
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("KIT")
-                    .color(theme::TEXT_3)
-                    .size(10.5)
-                    .strong(),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let status = kit_browser::format_kit_status(&app.bridge.kit_status.lock().clone());
-                ui.label(
-                    egui::RichText::new(status)
-                        .color(theme::TEXT_3)
-                        .size(10.5)
-                        .monospace(),
-                );
-            });
-        });
+        let col = super::body_width(ui, 18.0) / 2.0;
+
+        let status = kit_browser::format_kit_status(&app.bridge.kit_status.lock().clone());
+        label_value_row(
+            ui,
+            "KIT",
+            theme::TEXT_3,
+            10.5,
+            &status,
+            theme::TEXT_3,
+            10.5,
+            true,
+        );
         ui.add_space(4.0);
 
         // Two-column field row: master volume and the routing readout,
         // separated by one 18 px gap.
-        let avail = ui.available_width();
-        let col = (avail - 18.0) / 2.0;
-
         ui.horizontal(|ui| {
             // Master.
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
                 let v = app.params.master_volume.value();
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("MASTER")
-                            .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new(format!("{:.2}", v))
-                                    .color(theme::TEXT_1)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
+                label_value_row(
+                    ui,
+                    "MASTER",
+                    theme::TEXT_3,
+                    10.0,
+                    &format!("{v:.2}"),
+                    theme::TEXT_1,
+                    11.0,
+                    true,
+                );
                 if let Some(nv) = widgets::slider_unipolar(ui, col, v) {
                     app.params.master_volume.set_value(nv);
                 }
@@ -305,29 +303,27 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             ui.vertical(|ui| {
                 ui.set_min_width(col);
                 ui.set_max_width(col);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("ROUTING")
+                label_value_row(
+                    ui,
+                    "ROUTING",
+                    theme::TEXT_3,
+                    10.0,
+                    &kit::routing_summary(),
+                    theme::TEXT_1,
+                    11.0,
+                    true,
+                );
+                // Truncated rather than left to wrap or overflow: at the
+                // card's narrow half-width this monospace line is wider
+                // than its column. The full list is still one hover away.
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(kit::routing_port_list())
                             .color(theme::TEXT_3)
-                            .size(10.0),
-                    );
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            ui.label(
-                                egui::RichText::new(kit::routing_summary())
-                                    .color(theme::TEXT_1)
-                                    .size(11.0)
-                                    .monospace(),
-                            );
-                        },
-                    );
-                });
-                ui.label(
-                    egui::RichText::new(kit::routing_port_list())
-                        .color(theme::TEXT_3)
-                        .size(9.5)
-                        .monospace(),
+                            .size(9.5)
+                            .monospace(),
+                    )
+                    .truncate(),
                 )
                 .on_hover_text(
                     "Every drum group has its own stereo output port. Route them \
@@ -336,6 +332,56 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             });
         });
     });
+}
+
+/// A "LABEL … value" row, painted directly with the painter instead of
+/// through `ui.with_layout`'s right-to-left sub-container.
+///
+/// That idiom — `ui.horizontal(|ui| { label; with_layout(right_to_left,
+/// value) })` — is used throughout this editor for exactly this shape,
+/// and is fine as the *last* thing in its row. Nested as one of several
+/// sibling columns (as the KIT card's header, MASTER and ROUTING rows
+/// are) it left every column after it reporting 0 available width —
+/// `draw_kit_row_card`'s header row is what first surfaced it, and it
+/// compounded through the GLOBAL card's three columns too
+/// (`global_control_head`), pushing ROUND ROBIN off-screen. That is
+/// exactly the bug `editor_layout.rs` exists to catch, and manual
+/// placement — which is what `pad_grid.rs`'s rows already do, for the
+/// same reason — sidesteps the whole class of it rather than working
+/// around one instance at a time.
+fn label_value_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    label_color: egui::Color32,
+    label_size: f32,
+    value: &str,
+    value_color: egui::Color32,
+    value_size: f32,
+    value_monospace: bool,
+) {
+    let height = label_size.max(value_size) + 6.0;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(label_size),
+        label_color,
+    );
+    let value_font = if value_monospace {
+        egui::FontId::monospace(value_size)
+    } else {
+        egui::FontId::proportional(value_size)
+    };
+    p.text(
+        rect.right_center(),
+        egui::Align2::RIGHT_CENTER,
+        value,
+        value_font,
+        value_color,
+    );
 }
 
 /// The GLOBAL card: polyphony, velocity curve and round-robin mode.
@@ -362,8 +408,9 @@ fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
         });
         ui.add_space(4.0);
 
-        let avail = ui.available_width();
-        let col = (avail - 36.0) / 3.0;
+        // Floored for the same reason as the KIT card above: a narrower-
+        // than-minimum rect must degrade, not panic on a negative width.
+        let col = super::body_width(ui, 36.0) / 3.0;
         ui.horizontal(|ui| {
             // Polyphony — voice ceiling, 1..MAX_VOICES.
             ui.vertical(|ui| {
@@ -411,15 +458,14 @@ fn draw_global_row_card(ui: &mut egui::Ui, params: &DrumParams) {
 /// shares. The readout is the parameter's own text, so the card and the
 /// host's automation lane can never disagree about what is set.
 fn global_control_head(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(label).color(theme::TEXT_3).size(10.0));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(
-                egui::RichText::new(value.to_lowercase())
-                    .color(theme::TEXT_3)
-                    .size(11.0)
-                    .monospace(),
-            );
-        });
-    });
+    label_value_row(
+        ui,
+        label,
+        theme::TEXT_3,
+        10.0,
+        &value.to_lowercase(),
+        theme::TEXT_3,
+        11.0,
+        true,
+    );
 }

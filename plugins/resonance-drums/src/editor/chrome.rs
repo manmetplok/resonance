@@ -5,29 +5,19 @@
 
 use std::sync::atomic::Ordering;
 
-use plugin_gui_core::{egui, widgets};
+use plugin_gui_core::egui;
+
+use resonance_common::registry::InstalledItem;
 
 use crate::kit_loader::KitStatus;
 use crate::rr_display;
 use crate::sample_info;
 
 use super::app::DrumsEditorApp;
-use super::{kit_browser, theme};
+use super::{download_panel, kit_browser, theme};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
-        let dot = |ui: &mut egui::Ui, color: egui::Color32| {
-            let (rect, _) =
-                ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-            ui.painter().circle_filled(rect.center(), 5.0, color);
-        };
-        dot(ui, egui::Color32::from_rgb(0xed, 0x6b, 0x5e));
-        ui.add_space(4.0);
-        dot(ui, egui::Color32::from_rgb(0xf4, 0xbe, 0x4f));
-        ui.add_space(4.0);
-        dot(ui, egui::Color32::from_rgb(0x61, 0xc4, 0x54));
-
-        ui.add_space(14.0);
         ui.label(egui::RichText::new("●").color(theme::ACCENT).size(11.0));
         ui.add_space(2.0);
         ui.label(egui::RichText::new("Resonance").color(theme::TEXT_2).size(12.0));
@@ -56,22 +46,32 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             "— preset —",
         );
 
+        // Entry points for getting a kit onto disk. These used to be a
+        // ghost `Browse` button buried in the pad-list kit card (whose
+        // overlay you then couldn't see — §1.2) and a `Load kit` next to
+        // it; both are real, clearly labelled actions, so they live in
+        // the chrome where the rest of the editor's actions are (ba
+        // drums-plugin-rework.md §10, K0).
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("⚙").color(theme::TEXT_3).size(13.0));
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("A").color(theme::TEXT_3).size(12.0));
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new("?").color(theme::TEXT_3).size(13.0));
+            if ui.button("Open kit file…").clicked() {
+                kit_browser::load_kit_clicked(&app.bridge);
+            }
+            ui.add_space(6.0);
+            if ui.button("Download kits…").clicked() {
+                download_panel::open(&mut app.download_panel);
+            }
         });
     });
 }
 
-/// Tab bar. The editor has exactly one view, so it advertises exactly one
-/// tab. It used to carry five, four of which rendered a "not built yet"
-/// placeholder — and two of those (Mics, Articulations) hid pickers that
-/// ship inside the Pads inspector, so a user went looking and was told the
-/// feature did not exist (ba todo #1327). The hint next to the tab points
-/// at where those pickers actually live.
+/// Tab bar. The editor has exactly one view (Pads), so there is no tab
+/// strip here to switch it with — the "DRUMS" label plus the PADS badge
+/// and KIT pill are what remains. It used to carry five tabs, four of
+/// which rendered a "not built yet" placeholder, plus a single-option
+/// `Pads` segmented control whose click was discarded because it was the
+/// only option: a control the audit found drawn and interactive while
+/// doing nothing, the exact defect `editor_honesty.rs` guards against
+/// elsewhere (ba todo #1327).
 pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
         ui.label(
@@ -79,15 +79,6 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 .color(theme::TEXT_3)
                 .size(10.5)
                 .strong(),
-        );
-        ui.add_space(8.0);
-
-        let _ = widgets::segmented(ui, &["Pads"], 0);
-        ui.add_space(10.0);
-        ui.label(
-            egui::RichText::new("Mic and articulation pickers live in each pad's inspector →")
-                .color(theme::TEXT_4)
-                .size(10.0),
         );
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -125,12 +116,7 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let installed = app.installed_kits.clone();
-                        let current_name = current_kit_name(app);
-
-                        // Resolve currently selected installed-kit index, if any.
-                        let current_idx = installed
-                            .iter()
-                            .position(|i| i.name == current_name);
+                        let current_idx = current_installed_index(&app.bridge, &installed);
 
                         // Prev arrow.
                         if ui
@@ -154,10 +140,23 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                             }
                         }
 
-                        let display = if current_name.is_empty() {
-                            "— no kit —".to_string()
-                        } else {
-                            current_name.clone()
+                        // When the loaded kit is one of the installed
+                        // ones, show the registry's own name for it
+                        // (§1.4: the loader's status name is the
+                        // manifest's parent directory — "drummica" — not
+                        // the registry's "Drummica"). Otherwise fall back
+                        // to whatever the loader reported, e.g. a kit
+                        // opened straight from a file outside the library.
+                        let display = match current_idx {
+                            Some(i) => installed[i].name.clone(),
+                            None => {
+                                let name = current_kit_name(app);
+                                if name.is_empty() {
+                                    "— no kit —".to_string()
+                                } else {
+                                    name
+                                }
+                            }
                         };
                         egui::ComboBox::from_id_salt("drums_kit_combo")
                             .width(170.0)
@@ -170,10 +169,10 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                                 if installed.is_empty() {
                                     ui.label(theme::hint_text("(no kits installed)"));
                                 }
-                                for item in &installed {
+                                for (idx, item) in installed.iter().enumerate() {
                                     if ui
                                         .selectable_label(
-                                            item.name == current_name,
+                                            Some(idx) == current_idx,
                                             &item.name,
                                         )
                                         .clicked()
@@ -367,6 +366,27 @@ fn current_kit_name(app: &DrumsEditorApp) -> String {
             .unwrap_or_default(),
         _ => String::new(),
     }
+}
+
+/// Which installed kit, if any, is the one loaded in `bridge`.
+///
+/// Matching by name does not work: the loaded name is the manifest's
+/// *parent* directory (`kit_loader/mod.rs` — "drummica"), while the
+/// registry's name is the kit's top directory ("Drummica"), so the combo
+/// never highlighted the loaded kit and ◀/▶ always reloaded the first one
+/// (ba drums-plugin-rework.md §1.4). The registry's `path` is always an
+/// ancestor of the loaded manifest path, though — downloaded or imported,
+/// the manifest lives one or two levels under the top directory — so
+/// matching that way is stable regardless of what either side names
+/// things.
+fn current_installed_index(
+    bridge: &crate::KitBridge,
+    installed: &[InstalledItem],
+) -> Option<usize> {
+    let kit_path = bridge.kit_path.lock().clone()?;
+    installed
+        .iter()
+        .position(|item| kit_path.starts_with(&item.path))
 }
 
 /// Draw the lavender PADS badge: `PADS  30 · 6 lit`.
