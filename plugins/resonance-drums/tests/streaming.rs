@@ -359,62 +359,230 @@ fn streamed_render_is_bit_identical_live_through_the_resampler() {
     assert_bit_identical("live-96k", 96_000, 32_768, RenderMode::Realtime, true);
 }
 
-/// A bounce renders as fast as it can and says nothing: the sampler
-/// tells from the timing, and waits for a slow reader instead of
-/// dropping frames.
+/// A clock the test drives, for the timing detector: `advance` moves it
+/// on by a fraction of a block's audio length.
+struct TestClock(Arc<std::sync::atomic::AtomicU64>);
+
+impl TestClock {
+    fn on(s: &mut DrumSampler) -> Self {
+        let nanos = Arc::new(std::sync::atomic::AtomicU64::new(1_000_000_000));
+        s.set_manual_clock(nanos.clone());
+        Self(nanos)
+    }
+
+    /// Move on by `speed`-times-faster-than-real-time's worth of a block
+    /// of `frames`.
+    fn advance(&self, frames: usize, speed: f64) {
+        let nanos = (frames as f64 / HOST as f64 / speed * 1e9) as u64;
+        self.0
+            .fetch_add(nanos, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Blocks of `frames` in one detector window (0.25 s of audio).
+fn window_blocks(frames: usize) -> usize {
+    (0.25 * HOST as f64 / frames as f64).ceil() as usize
+}
+
+/// A bounce renders as fast as it can and the host says nothing: the
+/// sampler tells from the timing — on a clock the test drives, so the
+/// verdict does not depend on the machine's load — and waits for a slow
+/// reader instead of dropping frames. Only a short wait at first; the
+/// long one once offline rendering is sustained.
 #[test]
 fn an_unannounced_fast_render_waits_for_a_slow_reader() {
+    use resonance_drums::dsp::sampler::{AUTO_SUSTAINED_WAIT_PER_BLOCK, AUTO_WAIT_PER_BLOCK};
     let fixture = Fixture::new("auto", 48_000, 2.0);
     let cache = SampleCache::new();
     let resident = fixture.kit(&cache, 0);
     let streamed = fixture.kit(&cache, 32_768);
     let pool = ReaderPool::new(2);
     const FRAMES: usize = 1_024;
-    let blocks = (2.1 * HOST) as usize / FRAMES;
-    let quiet_after = (1.0 * HOST) as usize / FRAMES;
-    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
-    let reference = render(&mut a, blocks, FRAMES, 1, quiet_after, false);
-    let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Auto);
-    // Every read takes 3 ms: far slower than an unthrottled render.
-    b.stream_set().set_read_latency_us(3_000);
+    let blocks = (3.0 * HOST) as usize / FRAMES;
+    // The hits start once the verdict is sustained (three windows), so
+    // every tail frame is waited for with the long budget.
+    let first_hit = 4 * window_blocks(FRAMES);
+    let hits = |b: usize| -> Vec<Hit> {
+        if (first_hit..first_hit + 40).contains(&b) {
+            pattern(b, FRAMES, 1, usize::MAX)
+        } else {
+            Vec::new()
+        }
+    };
     let params = DrumParams::default();
+    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
     let mut ports = Ports::new(FRAMES);
-    let mut got = Vec::new();
-    let mut offline_blocks = 0;
-    for blk in 0..blocks {
-        ports.render(
-            &mut b,
-            FRAMES,
-            &params,
-            &pattern(blk, FRAMES, 1, quiet_after),
-        );
-        ports.append_bits(FRAMES, &mut got);
-        offline_blocks += b.renders_offline() as usize;
+    let mut reference = Vec::new();
+    for b in 0..blocks {
+        ports.render(&mut a, FRAMES, &params, &hits(b));
+        ports.append_bits(FRAMES, &mut reference);
     }
-    // Live for the first window, offline from there on (give or take a
-    // scheduling hiccup on a loaded test machine).
+    let (mut s, _ts) = sampler(streamed, &pool, RenderMode::Auto);
+    let clock = TestClock::on(&mut s);
+    // Every read takes 1 ms: far slower than an unthrottled render.
+    s.stream_set().set_read_latency_us(1_000);
+    let mut got = Vec::new();
+    let mut verdicts = Vec::new();
+    for b in 0..blocks {
+        clock.advance(FRAMES, 20.0);
+        ports.render(&mut s, FRAMES, &params, &hits(b));
+        ports.append_bits(FRAMES, &mut got);
+        verdicts.push(s.block_wait_budget());
+    }
+    let w = window_blocks(FRAMES);
+    // The first block starts a window; a window is judged at the start
+    // of the block after its last, `w` blocks on.
     assert!(
-        offline_blocks > blocks / 2,
-        "a free-running render reads as offline: {offline_blocks} of {blocks} blocks"
+        verdicts[..w].iter().all(|b| b.is_zero()),
+        "live until a window proves otherwise"
     );
+    assert_eq!(verdicts[w], AUTO_WAIT_PER_BLOCK, "offline after one window");
+    assert_eq!(verdicts[3 * w - 1], AUTO_WAIT_PER_BLOCK);
+    assert_eq!(
+        verdicts[3 * w],
+        AUTO_SUSTAINED_WAIT_PER_BLOCK,
+        "sustained after three"
+    );
+    assert!(verdicts[3 * w..]
+        .iter()
+        .all(|&b| b == AUTO_SUSTAINED_WAIT_PER_BLOCK));
     assert!(loud(&reference) > 0.05);
-    assert_eq!(b.stream_underruns(), 0);
-    assert!(first_difference(&reference, &got, FRAMES).is_none());
-    pool.shutdown();
+    assert!(s.stream_offline_waits() > 0, "the render did wait for the reader");
+    assert_eq!(s.stream_underruns(), 0);
+    if let Some((block, port, frame)) = first_difference(&reference, &got, FRAMES) {
+        panic!("differs at block {block}, port {port}, frame {frame}");
+    }
 }
 
-/// Live, the same sampler never waits — and does not take a paced render
-/// for offline.
+/// A render paced like a live callback — jitter included — is never
+/// taken for offline, and never waits.
 #[test]
 fn a_paced_render_is_not_taken_for_offline() {
     let fixture = Fixture::new("paced", 48_000, 0.5);
     let cache = SampleCache::new();
-    let pool = ReaderPool::new(1);
+    let pool = ReaderPool::stepped();
     let (mut s, _t) = sampler(fixture.kit(&cache, 4_096), &pool, RenderMode::Auto);
-    let blocks = (0.6 * HOST) as usize / 128;
-    render(&mut s, blocks, 128, 1, blocks, true);
+    let clock = TestClock::on(&mut s);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    for b in 0..(2.0 * HOST) as usize / 128 {
+        // Early and late blocks in turn, real time on average.
+        clock.advance(128, if b % 2 == 0 { 1.6 } else { 0.73 });
+        ports.render(&mut s, 128, &params, &pattern(b, 128, 1, usize::MAX));
+        assert!(!s.renders_offline(), "block {b} taken for offline");
+        assert!(s.block_wait_budget().is_zero());
+    }
+    assert_eq!(s.stream_offline_waits(), 0);
+}
+
+/// An offline verdict ends on the first block that comes at a live pace
+/// (live playback resuming after a bounce), after a gap, and after a
+/// reset — before that block renders — and has to be earned afresh.
+#[test]
+fn an_offline_verdict_ends_on_the_first_live_block() {
+    use resonance_drums::dsp::sampler::AUTO_WAIT_PER_BLOCK;
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(Vec::new(), &pool, RenderMode::Auto);
+    let clock = TestClock::on(&mut s);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(256);
+    let w = window_blocks(256);
+    let mut block = |s: &mut DrumSampler, speed: f64| {
+        clock.advance(256, speed);
+        ports.render(s, 256, &params, &[]);
+        s.block_wait_budget()
+    };
+    let fast_until_offline = |s: &mut DrumSampler, block: &mut dyn FnMut(&mut DrumSampler, f64) -> Duration| {
+        for _ in 0..=w {
+            block(s, 50.0);
+        }
+        assert!(s.renders_offline());
+    };
+    fast_until_offline(&mut s, &mut block);
+    // One block at real pace: live at once.
+    assert!(block(&mut s, 1.0).is_zero());
     assert!(!s.renders_offline());
-    pool.shutdown();
+    // Fast again: not offline until a whole new window says so (the live
+    // block started it).
+    for _ in 1..w {
+        assert!(block(&mut s, 50.0).is_zero());
+    }
+    assert_eq!(block(&mut s, 50.0), AUTO_WAIT_PER_BLOCK);
+    // A gap (the transport stopped for a second).
+    clock.advance(HOST as usize, 1.0);
+    assert!(block(&mut s, 50.0).is_zero());
+    assert!(!s.renders_offline());
+    fast_until_offline(&mut s, &mut block);
+    // A slowish window (1.8x real time) ends the verdict too.
+    for _ in 0..w {
+        block(&mut s, 1.8);
+    }
+    assert!(block(&mut s, 1.8).is_zero());
+    fast_until_offline(&mut s, &mut block);
+    // A reset.
+    s.reset();
+    assert!(!s.renders_offline());
+    assert!(block(&mut s, 50.0).is_zero());
+}
+
+/// What the host declares overrides the timing: offline waits (long),
+/// real time never waits — not even for a reader that is stalled while
+/// the blocks come faster than real time.
+#[test]
+fn the_host_declared_mode_overrides_the_timing() {
+    use resonance_drums::dsp::sampler::OFFLINE_WAIT_PER_BLOCK;
+    use resonance_drums::stream::{HOST_RENDER_OFFLINE, HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN};
+    use std::sync::atomic::{AtomicU8, Ordering};
+    let fixture = Fixture::new("host-mode", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(
+        single_voice_kit(&cache, &fixture.overhead[0], 8_192),
+        &pool,
+        RenderMode::Auto,
+    );
+    let host = Arc::new(AtomicU8::new(HOST_RENDER_REALTIME));
+    s.set_host_render_mode(host.clone());
+    let clock = TestClock::on(&mut s);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    // Real time, blocks 50x faster than real time, the reader stalled
+    // (a stepped pool nobody pumps): never a wait, and the missing frames
+    // are underruns.
+    for b in 0..200 {
+        clock.advance(128, 50.0);
+        let t = Instant::now();
+        ports.render(&mut s, 128, &params, if b == 0 { &hit } else { &[] });
+        assert!(t.elapsed() < Duration::from_millis(250));
+        assert!(!s.renders_offline());
+        assert!(s.block_wait_budget().is_zero());
+    }
+    assert_eq!(s.stream_offline_waits(), 0);
+    assert!(s.stream_underruns() > 0);
+    // Offline, paced at real time: offline anyway, with the long budget.
+    // (The reader catches up first: a stalled one would now be waited
+    // for, for seconds.)
+    pool.pump();
+    host.store(HOST_RENDER_OFFLINE, Ordering::Relaxed);
+    clock.advance(128, 1.0);
+    ports.render(&mut s, 128, &params, &[]);
+    assert!(s.renders_offline());
+    assert_eq!(s.block_wait_budget(), OFFLINE_WAIT_PER_BLOCK);
+    // Nothing declared again: the timing decides, from scratch.
+    host.store(HOST_RENDER_UNKNOWN, Ordering::Relaxed);
+    clock.advance(128, 50.0);
+    ports.render(&mut s, 128, &params, &[]);
+    assert!(!s.renders_offline());
+    // A mode fixed on the sampler beats the host's.
+    host.store(HOST_RENDER_OFFLINE, Ordering::Relaxed);
+    s.set_render_mode(RenderMode::Realtime);
+    ports.render(&mut s, 128, &params, &[]);
+    assert!(!s.renders_offline());
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,6 +1259,13 @@ fn the_plugin_streams_its_kit_and_keeps_the_preload_in_its_state() {
 
     let mut streamed = ResonanceDrums::new();
     saver_for(&streamed).load(&serde_json::json!({ "kit_path": manifest }));
+    // The render below runs as fast as it can: the host says so, as a
+    // bounce would (CLAP `render`), so the comparison does not hang on
+    // how fast the reader threads get the CPU.
+    streamed.bridge.host_render_mode.store(
+        resonance_drums::stream::HOST_RENDER_OFFLINE,
+        std::sync::atomic::Ordering::Relaxed,
+    );
     assert!(whole.initialize(HOST, 256));
     assert!(streamed.initialize(HOST, 256));
     settle(&mut whole);
@@ -1153,6 +1328,44 @@ fn the_plugin_streams_its_kit_and_keeps_the_preload_in_its_state() {
     settle(&mut streamed);
     let built = streamed.bridge.built_kit.lock().clone().unwrap();
     assert_eq!(built.preload, 65_536);
+}
+
+/// A host that hands `process` fewer ports than the plugin declared gets
+/// silence, not a panic — and the block still runs in full: the hit in
+/// it starts at its frame and plays on in time, so the next full block
+/// is exactly what it would have been.
+#[test]
+fn a_block_with_too_few_ports_still_runs_in_time() {
+    use resonance_drums::ResonanceDrums;
+    use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
+    let mut a = ResonanceDrums::new();
+    let mut b = ResonanceDrums::new();
+    assert!(a.initialize(HOST, 256));
+    assert!(b.initialize(HOST, 256));
+    let hit = [NoteEvent::NoteOn {
+        note: drum_map::SNARE,
+        velocity: 1.0,
+        timing: 40,
+    }];
+    // `a` gets one port for the first block, `b` all of them.
+    let (mut l, mut r) = (vec![0.0f32; 256], vec![0.0f32; 256]);
+    {
+        let mut one = [OutputBuffer {
+            left: l.as_mut_slice(),
+            right: r.as_mut_slice(),
+        }];
+        a.process(&mut one, 256, &mut EventIterator::new(&hit), None);
+    }
+    assert!(l.iter().chain(&r).all(|&s| s == 0.0));
+    plugin_block(&mut b, &hit);
+    let mut heard = 0.0f32;
+    for _ in 0..8 {
+        let got = plugin_block(&mut a, &[]);
+        let want = plugin_block(&mut b, &[]);
+        heard = heard.max(loud(&want));
+        assert!(got == want, "the hit is out of time after the short block");
+    }
+    assert!(heard > 0.01, "the snare is heard");
 }
 
 // ---------------------------------------------------------------------------

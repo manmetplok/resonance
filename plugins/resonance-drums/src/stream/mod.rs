@@ -77,17 +77,30 @@
 //! A bounce renders as fast as the CPU allows, far faster than a reader
 //! can stream at a guaranteed pace, and an underrun there would be a gap
 //! in the export. So the sampler tells offline from live rendering
-//! ([`RenderMode`]): told outright, or — since the host has no CLAP
-//! `render` extension yet — by measuring that audio advances much faster
-//! than the wall clock. Offline, a missing frame is waited for (bounded),
+//! ([`RenderMode`]), and offline a missing frame is waited for (bounded),
 //! which CLAP permits for offline processing; live, never.
+//!
+//! What it goes by, first match wins:
+//!
+//! 1. a mode set on the sampler itself
+//!    ([`crate::dsp::DrumSampler::set_render_mode`]: tests and headless
+//!    callers);
+//! 2. the mode the **host** declared, through
+//!    [`crate::KitBridge::host_render_mode`] (one of the `HOST_RENDER_*`
+//!    values below, read once per block): offline waits for as long as a
+//!    read can take, real time never waits;
+//! 3. while the host has declared nothing, a timing heuristic (see
+//!    `DrumSampler::update_render_timing`), which waits a couple of
+//!    milliseconds a block at most until it has seen offline rendering
+//!    sustained, and drops back to live on the first block that arrives
+//!    at a live pace.
 
 pub mod reader;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use parking_lot::Mutex;
 use resonance_common::WavTail;
@@ -112,6 +125,17 @@ pub const DEFAULT_PRELOAD: u32 = 32_768;
 
 /// The plugin-state key the preload is saved under (frames).
 pub const PRELOAD_STATE_KEY: &str = "stream_preload";
+
+/// [`crate::KitBridge::host_render_mode`]: the host has not said how it
+/// renders (no CLAP `render` extension, or not called yet). The sampler
+/// tells from the block timing.
+pub const HOST_RENDER_UNKNOWN: u8 = 0;
+/// The host renders in real time (`CLAP_RENDER_REALTIME`): a missing
+/// tail frame is never waited for, whatever the timing looks like.
+pub const HOST_RENDER_REALTIME: u8 = 1;
+/// The host renders offline (a bounce, `CLAP_RENDER_OFFLINE`): a missing
+/// tail frame is waited for, up to seconds a block.
+pub const HOST_RENDER_OFFLINE: u8 = 2;
 
 /// The preload a state value names: one of [`PRELOAD_CHOICES`], or 0
 /// (streaming off). `None` for a missing or unknown value.
@@ -520,12 +544,39 @@ impl RingBits {
 /// frame does (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
-    /// Tell from the block timing (the default).
+    /// Go by what the host declared ([`crate::KitBridge::host_render_mode`]),
+    /// or by the block timing while it has declared nothing (the
+    /// default).
     Auto,
     /// Live: never wait; a missing frame is an underrun.
     Realtime,
-    /// Offline: wait (bounded) for a missing frame.
+    /// Offline: wait (bounded, generously) for a missing frame.
     Offline,
+}
+
+/// Spin briefly, then sleep in short steps, until `ready()` holds or
+/// `budget` runs out; the time spent is charged to `budget` (zero once it
+/// ran out). Returns whether `ready()` held. Offline only: sleeping is a
+/// syscall.
+pub(crate) fn wait_until(budget: &mut Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let began = Instant::now();
+    let mut spins = 0u32;
+    loop {
+        if ready() {
+            *budget = budget.saturating_sub(began.elapsed());
+            return true;
+        }
+        if began.elapsed() >= *budget {
+            *budget = Duration::ZERO;
+            return false;
+        }
+        if spins < 64 {
+            spins += 1;
+            std::hint::spin_loop();
+        } else {
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    }
 }
 
 /// The audio thread's handle on its [`StreamSet`]: which rings it has
@@ -575,27 +626,20 @@ impl AudioStreams {
         &mut self,
         source: &Arc<TailSource>,
         start: usize,
-        offline_wait: Option<&mut std::time::Duration>,
+        offline_wait: Option<&mut Duration>,
     ) -> u8 {
         if let Some(ring) = self.try_claim(source, start) {
             return ring;
         }
-        if let Some(budget) = offline_wait {
-            let began = std::time::Instant::now();
-            let mut spins = 0u32;
-            while began.elapsed() < *budget {
-                if spins < 64 {
-                    spins += 1;
-                    std::hint::spin_loop();
-                } else {
-                    std::thread::sleep(std::time::Duration::from_micros(50));
-                }
-                if let Some(ring) = self.try_claim(source, start) {
-                    *budget = budget.saturating_sub(began.elapsed());
-                    return ring;
-                }
+        if let Some(budget) = offline_wait.filter(|b| !b.is_zero()) {
+            let mut got = None;
+            wait_until(budget, || {
+                got = self.try_claim(source, start);
+                got.is_some()
+            });
+            if let Some(ring) = got {
+                return ring;
             }
-            *budget = std::time::Duration::ZERO;
         }
         self.underruns.fetch_add(1, Ordering::Relaxed);
         self.ring_misses += 1;

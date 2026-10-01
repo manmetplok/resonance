@@ -1,7 +1,7 @@
 //! Resonance Drums - A drum sampler instrument CLAP plugin.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -223,6 +223,14 @@ pub struct KitBridge {
     /// kit's heads in `kit_bytes`. Written by the audio thread once a
     /// block.
     pub stream_ring_bytes: Arc<AtomicU64>,
+    /// How the host renders, as it declared it (CLAP `render`):
+    /// [`stream::HOST_RENDER_UNKNOWN`] (0, the default: the sampler tells
+    /// from the block timing), [`stream::HOST_RENDER_REALTIME`] (1: never
+    /// wait for the disk reader) or [`stream::HOST_RENDER_OFFLINE`] (2: a
+    /// bounce — wait for it, up to seconds a block). Store it from the
+    /// main thread whenever the host sets the mode; the audio thread
+    /// reads it once a block, so it applies from the next block on.
+    pub host_render_mode: Arc<AtomicU8>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -426,6 +434,7 @@ impl ResonancePlugin for ResonanceDrums {
             stream_preload: Arc::new(AtomicU32::new(stream::DEFAULT_PRELOAD)),
             stream_underruns: Arc::new(AtomicU64::new(0)),
             stream_ring_bytes: Arc::new(AtomicU64::new(0)),
+            host_render_mode: Arc::new(AtomicU8::new(stream::HOST_RENDER_UNKNOWN)),
         };
         // Counted in the kit library's "used in N open drum instances".
         // The download worker is not per instance any more: the editor
@@ -438,6 +447,7 @@ impl ResonancePlugin for ResonanceDrums {
         sampler.set_out_peak(bridge.out_peak.clone());
         sampler.set_underrun_counter(bridge.stream_underruns.clone());
         sampler.set_ring_bytes_counter(bridge.stream_ring_bytes.clone());
+        sampler.set_host_render_mode(bridge.host_render_mode.clone());
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
         // The preset identity wraps the kit saver rather than replacing
         // it: chaining is why `with_extra` exists.
@@ -510,6 +520,8 @@ impl ResonancePlugin for ResonanceDrums {
     /// nothing, and it clears `pending_kit` and finishes the progress —
     /// which a load that gave up never would.
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
+        // A render after activation proves itself offline afresh.
+        self.sampler.restart_render_timing();
         let wanted = self.bridge.wanted_request();
         let (reuse, pending) = {
             let _handoff = self.bridge.kit_handoff.lock();
@@ -670,14 +682,13 @@ impl ResonancePlugin for ResonanceDrums {
         // Project the CLAP bridge's `OutputBuffer` slice into the sampler's
         // `PortBuffers` shape on the stack. The plugin declares exactly
         // `NUM_OUTPUT_PORTS` output ports in its layout so the bridge is
-        // guaranteed to hand us at least that many; bail if it doesn't
-        // rather than panic on the audio thread (still applying the
-        // events, so no hit or choke is lost).
+        // guaranteed to hand us at least that many. If it doesn't, render
+        // into no ports rather than panic on the audio thread: the block
+        // still runs in full — events applied at their frames, voices
+        // moving on in time, rings swept, the render timing kept — only
+        // unheard.
         if outputs.len() < kit::NUM_OUTPUT_PORTS {
-            while let Some(event) = events.next_event() {
-                self.apply_event(event);
-            }
-            self.drain_auditions();
+            self.render_events(&mut [], frames, events);
             return;
         }
         let mut out_iter = outputs.iter_mut();
@@ -690,40 +701,7 @@ impl ResonancePlugin for ResonanceDrums {
                 }
             });
         drop(out_iter);
-
-        // Render the block in spans split at event times (DSP-01): every
-        // event is applied at its own frame, so a hit starts where the
-        // host put it, two hits on one pad in one block are two onsets,
-        // and a choke cuts at its offset rather than at frame 0.
-        //
-        // Offsets are clamped into the block, and never move backwards:
-        // an out-of-order event is applied at the frame already reached.
-        // Editor auditions carry no time; they are applied just before
-        // the first span, after any frame-0 host events, which is where
-        // they have always landed.
-        self.sampler
-            .begin_block(&mut port_views, frames, &self.params);
-        let last_frame = frames.saturating_sub(1);
-        let mut cursor = 0usize;
-        let mut auditions_drained = false;
-        while let Some(event) = events.next_event() {
-            let at = (event.timing() as usize).min(last_frame).max(cursor);
-            if at > cursor {
-                if !auditions_drained {
-                    self.drain_auditions();
-                    auditions_drained = true;
-                }
-                self.sampler.render_span(&mut port_views, cursor, at);
-                cursor = at;
-            }
-            self.apply_event(event);
-        }
-        if !auditions_drained {
-            self.drain_auditions();
-        }
-        self.sampler.render_span(&mut port_views, cursor, frames);
-        self.sampler
-            .end_block(&mut port_views, frames, &self.params);
+        self.render_events(&mut port_views, frames, events);
     }
 
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
@@ -770,6 +748,45 @@ impl resonance_plugin::ParamTextSource for DrumParamText {
 }
 
 impl ResonanceDrums {
+    /// Render the block in spans split at event times (DSP-01): every
+    /// event is applied at its own frame, so a hit starts where the
+    /// host put it, two hits on one pad in one block are two onsets,
+    /// and a choke cuts at its offset rather than at frame 0.
+    ///
+    /// Offsets are clamped into the block, and never move backwards:
+    /// an out-of-order event is applied at the frame already reached.
+    /// Editor auditions carry no time; they are applied just before
+    /// the first span, after any frame-0 host events, which is where
+    /// they have always landed.
+    fn render_events(
+        &mut self,
+        ports: &mut [dsp::PortBuffers<'_>],
+        frames: usize,
+        events: &mut EventIterator<'_>,
+    ) {
+        self.sampler.begin_block(ports, frames, &self.params);
+        let last_frame = frames.saturating_sub(1);
+        let mut cursor = 0usize;
+        let mut auditions_drained = false;
+        while let Some(event) = events.next_event() {
+            let at = (event.timing() as usize).min(last_frame).max(cursor);
+            if at > cursor {
+                if !auditions_drained {
+                    self.drain_auditions();
+                    auditions_drained = true;
+                }
+                self.sampler.render_span(ports, cursor, at);
+                cursor = at;
+            }
+            self.apply_event(event);
+        }
+        if !auditions_drained {
+            self.drain_auditions();
+        }
+        self.sampler.render_span(ports, cursor, frames);
+        self.sampler.end_block(ports, frames, &self.params);
+    }
+
     /// Apply one host note event to the sampler, at the frame the caller
     /// has rendered up to.
     fn apply_event(&mut self, event: NoteEvent) {
