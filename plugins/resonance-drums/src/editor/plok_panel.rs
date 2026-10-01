@@ -3,8 +3,8 @@
 //! added — and on its right what can be done with it:
 //!
 //! - `Download`, then a progress bar (bytes, rate, time left) with `Cancel`;
-//! - `Installed`, when the kit's manifest hash (or, without one, its name)
-//!   is in the library;
+//! - `Installed` and `Load`, when the kit's manifest hash (or, without one,
+//!   its name) is in the library;
 //! - `Update`, when a kit of that name is installed but the index's
 //!   manifest hash differs: it replaces the installed kit in place.
 //!
@@ -17,6 +17,7 @@ use plugin_gui_core::egui;
 use resonance_common::drumkit_library::format_bytes;
 
 use super::app::DrumsEditorApp;
+use super::kit_browser::LoadKind;
 use super::{probe, theme};
 use crate::download::{Command, ServerKit, Status};
 use crate::library::{plok_row_state, PlokRowState};
@@ -34,6 +35,8 @@ enum RowAction {
     Download(ServerKit),
     Update(ServerKit, std::path::PathBuf),
     Cancel(String),
+    /// Load the installed kit with this library id.
+    Load(String),
 }
 
 pub(crate) fn draw_tab(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
@@ -131,6 +134,15 @@ pub(crate) fn draw_tab(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         Some(RowAction::Cancel(name)) => {
             app.my_downloads.remove(&name);
             app.library.download().send(Command::Cancel(name));
+        }
+        Some(RowAction::Load(id)) => {
+            let entry = app.library.read().entry(&id).cloned();
+            match entry {
+                Some(entry) => app.load_entry(&entry, LoadKind::Pick),
+                None => app
+                    .browser
+                    .set_error("that kit is no longer in the library"),
+            }
         }
         None => {}
     }
@@ -242,7 +254,15 @@ fn draw_row_action(
         return action;
     }
     match state {
-        PlokRowState::Installed { .. } => {
+        PlokRowState::Installed { id } => {
+            // Right to left: Load sits at the row's edge.
+            let b = ui
+                .button("Load")
+                .on_hover_text("Load this kit in this instance");
+            probe(ui, format!("plok.{name}.load"), b.rect);
+            if b.clicked() {
+                action = Some(RowAction::Load(id.clone()));
+            }
             let l = ui.label(
                 egui::RichText::new("Installed")
                     .color(theme::ACCENT)

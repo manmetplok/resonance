@@ -3,10 +3,13 @@
 //! gigabytes) and deletes (`remove_dir_all` of a kit). Modelled on the
 //! amp's `editor/jobs.rs`.
 //!
-//! One job at a time on one helper thread, joined when the editor goes
-//! away — after raising the job's cancel flag, so closing the editor
-//! mid-import stops the copy at its next chunk instead of waiting for it.
-//! The frame polls [`Jobs::poll`] and applies the outcome.
+//! One job at a time, each on a thread of its own. The frame polls
+//! [`Jobs::poll`] and applies the outcome. When the editor goes away the
+//! running job's cancel flag is raised — an import stops at its next
+//! chunk, a size measurement between kits — and its thread is *detached*,
+//! not joined: everything it touches is behind an `Arc`, and joining on
+//! the UI thread would hold the host's editor-close for as long as a
+//! multi-gigabyte copy or a `remove_dir_all` takes.
 //!
 //! The import's file dialog is not a job: it runs on its own thread
 //! ([`Picker`]) so the editor thread never blocks in a modal dialog, and
@@ -22,12 +25,40 @@ use resonance_common::drumkit_library::{ImportOutcome, ImportProgress};
 
 /// What a finished job reports back to the frame.
 pub(crate) enum JobDone {
-    Rescanned(Result<(), String>),
+    Rescanned {
+        result: Result<(), String>,
+        /// Another writer (a download installing, another editor's job)
+        /// held the library, so nothing was scanned.
+        skipped: bool,
+        /// The user clicked Rescan (report the outcome), rather than the
+        /// editor opening or the freshness poll.
+        user: bool,
+    },
     Imported(Box<Result<ImportOutcome, String>>),
     Deleted {
         name: String,
         result: Result<(), String>,
+        /// Where the deleted row sat in the view, so the selection moves
+        /// to its neighbour instead of to nothing.
+        view_pos: Option<usize>,
     },
+    /// The lazy missing-files check of one kit
+    /// (`Library::check_missing_files`).
+    CheckedFiles {
+        id: String,
+        result: Result<usize, String>,
+    },
+}
+
+/// What kind of job is running. A [`JobKind::Check`] is a quick `stat`
+/// pass the editor starts on its own; it does not block the Delete
+/// confirm or the Import / Rescan buttons (what they start waits for it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JobKind {
+    Scan,
+    Import,
+    Delete,
+    Check,
 }
 
 /// What a running job can see: its cancel flag and a progress slot the
@@ -46,12 +77,19 @@ pub(crate) struct Jobs {
     label: Option<String>,
     /// Whether the running job offers Cancel.
     cancellable: bool,
+    kind: Option<JobKind>,
     ctx: Option<JobCtx>,
 }
 
 impl Jobs {
     pub(crate) fn busy(&self) -> bool {
         self.handle.is_some()
+    }
+
+    /// Whether a job that writes the library (scan, import, delete) is
+    /// running — not just the editor's own quick missing-files check.
+    pub(crate) fn writing(&self) -> bool {
+        self.busy() && self.kind != Some(JobKind::Check)
     }
 
     pub(crate) fn label(&self) -> Option<&str> {
@@ -77,6 +115,7 @@ impl Jobs {
     /// Start `work` unless a job is running (then `false`).
     pub(crate) fn start(
         &mut self,
+        kind: JobKind,
         label: impl Into<String>,
         cancellable: bool,
         work: impl FnOnce(&JobCtx) -> JobDone + Send + 'static,
@@ -100,6 +139,7 @@ impl Jobs {
                 self.handle = Some(h);
                 self.label = Some(label.into());
                 self.cancellable = cancellable;
+                self.kind = Some(kind);
                 self.ctx = Some(ctx);
                 true
             }
@@ -117,6 +157,7 @@ impl Jobs {
                 let _ = h.join();
             }
             self.label = None;
+            self.kind = None;
             self.ctx = None;
         }
         if self.handle.is_none() {
@@ -133,17 +174,18 @@ impl Jobs {
             let _ = h.join();
         }
         self.label = None;
+        self.kind = None;
         self.ctx = None;
         self.done.lock().take()
     }
 }
 
 impl Drop for Jobs {
+    /// Raise the cancel flag and detach the thread (see the module docs):
+    /// dropping a `JoinHandle` does not wait for it.
     fn drop(&mut self) {
         self.cancel();
-        if let Some(h) = self.handle.take() {
-            let _ = h.join();
-        }
+        self.handle.take();
     }
 }
 
