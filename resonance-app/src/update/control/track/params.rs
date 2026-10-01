@@ -196,6 +196,16 @@ pub(crate) fn resolve_param_value_on(
     param: &track::PluginParamView,
     requested: &track::ParamValue,
 ) -> Result<ParamValueOutcome, RpcError> {
+    // An output only the plugin writes: the plugin would drop the value,
+    // so acking it (and recording an undo step and mirroring a number
+    // that never lands) would be a lie.
+    if param.read_only {
+        return Err(RpcError::invalid_params(format!(
+            "{} is read-only: the plugin reports it (read it from plugin_params) and \
+             ignores writes",
+            param.name
+        )));
+    }
     let first = resolve_param_value(param, requested);
     let track::ParamValue::Label(text) = requested else {
         return first.map(ParamValueOutcome::Value);

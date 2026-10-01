@@ -687,6 +687,22 @@ pub struct PluginParamView {
     /// panels do, rather than present it as an ordinary control.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// True when only the plugin writes this parameter (CLAP
+    /// `IS_READONLY`): an output such as a load progress or a meter. Read
+    /// it; `set_plugin_param` refuses to write it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
+    /// False when the plugin offers no automation lane for this parameter
+    /// (CLAP `IS_AUTOMATABLE` unset) — a control whose every change is
+    /// heavy work, like a drum kit selector, or a read-only output. It can
+    /// still be set; `automation.*` refuses to put a lane on it. Omitted
+    /// from the wire when true.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub automatable: bool,
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// The new value for `set_plugin_param`: a number, or the NAME of a

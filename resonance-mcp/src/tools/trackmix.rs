@@ -301,7 +301,10 @@ impl ResonanceMcp {
                        directly). Read text before trusting a number: value 2.0 on a 0..=4 \
                        range is meaningless on its own. hidden marks a parameter the plugin \
                        asks not be shown — still readable and writable, but leave it out of a \
-                       listing. Omit plugin_id for all of them. \
+                       listing. read_only marks an output the plugin alone writes (a load \
+                       progress, a meter): poll it, never set it. automatable: false marks one \
+                       that takes no automation lane (set it with track_set_plugin_param \
+                       instead). Omit plugin_id for all of them. \
                        Plugins are named by the CLAP id song_tracks already shows (its \
                        instrument field or an entry of its effects array); occurrence \
                        disambiguates a track carrying the same plugin twice. Each entry also \

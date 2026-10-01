@@ -49,6 +49,7 @@ fn hash_slot(h: &mut DefaultHasher, slot: &PluginSlotState, selected: bool) {
     for p in &slot.params {
         p.id.hash(h);
         p.hidden.hash(h);
+        p.automatable.hash(h);
         p.name.hash(h);
     }
 }

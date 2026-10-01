@@ -33,6 +33,9 @@ pub struct UiParam {
     /// steps by one instead of sliding through values the plugin will
     /// only round away.
     pub stepped: bool,
+    /// CLAP `IS_READONLY`: an output only the plugin writes (a load
+    /// progress, a meter). Drawn as its value alone, with no slider.
+    pub read_only: bool,
 }
 
 /// Events emitted by plugin UIs, mapped to host messages by the app.
@@ -114,16 +117,19 @@ pub fn view_generic_params<'a>(params: &[UiParam]) -> Element<'a, PluginUiEvent>
             .font(Font::MONOSPACE)
             .color(TEXT_DIM);
 
-        let param_row = column![
-            row![
-                param_label,
-                iced::widget::Space::new().width(Length::Fill),
-                param_value_text
-            ]
-            .spacing(2),
-            param_slider,
+        let header = row![
+            param_label,
+            iced::widget::Space::new().width(Length::Fill),
+            param_value_text
         ]
-        .spacing(1);
+        .spacing(2);
+        // An output has nothing to drag: a slider would only send writes
+        // the plugin ignores.
+        let param_row = if param.read_only {
+            column![header].spacing(1)
+        } else {
+            column![header, param_slider].spacing(1)
+        };
         controls = controls.push(param_row);
     }
     controls.into()

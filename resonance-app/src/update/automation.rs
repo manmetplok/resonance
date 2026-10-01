@@ -166,6 +166,21 @@ impl AutomationMessage {
 }
 
 pub fn handle(r: &mut Resonance, m: AutomationMessage) -> Task<Message> {
+    // No new lane on a parameter the plugin does not let a host automate
+    // (CLAP `IS_AUTOMATABLE` unset). The picker never offers one; this
+    // holds the line for every other way a lane gets created. An existing
+    // lane (one that predates the opt-out) stays editable and removable.
+    let creates = match &m {
+        AutomationMessage::AddLane(target)
+        | AutomationMessage::AddBreakpoint { target, .. }
+        | AutomationMessage::SetLane { target, .. } => Some(target),
+        _ => None,
+    };
+    if let Some(target) = creates {
+        if !r.automation.lanes.contains_key(target) && !lane_allowed(r, target) {
+            return Task::none();
+        }
+    }
     match m {
         AutomationMessage::AddLane(target) => add_lane(r, target),
         AutomationMessage::RemoveLane(target) => remove_lane(r, target),
@@ -375,6 +390,18 @@ fn drag_breakpoint(
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
+
+/// Whether a new lane may be put on `target`: anything but a plugin
+/// parameter its plugin declares not automatable (a param the mirror does
+/// not know yet is allowed, as before).
+pub(crate) fn lane_allowed(r: &Resonance, target: &AutomationTarget) -> bool {
+    let AutomationTarget::PluginParam { instance, param_id } = target else {
+        return true;
+    };
+    r.plugin_slot(*instance)
+        .and_then(|slot| slot.params.iter().find(|p| p.id == *param_id))
+        .is_none_or(|p| p.automatable)
+}
 
 /// Insert an empty lane for `target` when none exists yet (the caller
 /// immediately adds a breakpoint, so the transient empty state never

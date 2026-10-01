@@ -134,6 +134,16 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {
+            // An output only the plugin writes: it would drop the value,
+            // so neither send it nor mirror a number that never lands.
+            let read_only = r
+                .with_plugin_mut(instance_id, |p| {
+                    p.params.iter().any(|pp| pp.id == param_id && pp.read_only)
+                })
+                .unwrap_or(false);
+            if read_only {
+                return Task::none();
+            }
             let _ = r.engine.send(AudioCommand::SetPluginParam {
                 instance_id,
                 param_id,
