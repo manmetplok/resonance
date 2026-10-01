@@ -78,8 +78,7 @@ use std::path::PathBuf;
 use resonance_dsp_test_support as golden;
 use resonance_drums::drum_map::{
     CRASH_16_EDGE, HIHAT_CLOSED, HIHAT_OPEN, HIHAT_PEDAL, KICK, PAD_MAPPINGS, RIDE_TIP, RIMSHOT,
-    SNARE,
-    TOM_HIGH, TOM_LOW, TOM_MID,
+    SNARE, TOM_HIGH, TOM_LOW, TOM_MID,
 };
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedPad, NUM_OUTPUT_PORTS};
