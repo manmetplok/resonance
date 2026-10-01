@@ -456,8 +456,10 @@ fn draw_mic_and_oh_row(
     mapping: &crate::drum_map::PadMapping,
     pad_idx: usize,
 ) {
-    let avail = ui.available_width();
-    let half = (avail - 12.0) * 0.5;
+    // Floored (`body_width`): a compositor can hand the editor a rect
+    // narrower than its declared minimum (ba todo #1377), and
+    // `set_min_width`/`set_max_width` below panic on a negative size.
+    let half = super::body_width(ui, 12.0) * 0.5;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(12.0, 0.0);
         ui.vertical(|ui| {

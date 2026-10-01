@@ -1,12 +1,16 @@
 //! Drums plugin editor: an egui UI hosted by the platform GUI runtime.
 //!
-//! Layout: a top chrome bar (traffic-light dots + Resonance / Drums brand)
-//! sits above a tab bar with the module nav (Pads · Mics · Articulations ·
-//! Mod · FX), the KIT preset pill, and the PADS badge. The central body
-//! dispatches per tab — the Pads tab renders the two-column pad list +
-//! pad detail surface with the KIT and GLOBAL cards on a bottom row. A
-//! status bar (sample rate, buffer size, OUT meter) sits along the
-//! bottom edge.
+//! Layout: a chrome bar (Resonance / Drums brand, the preset bar, and the
+//! "Open kit file…" / "Download kits…" buttons) sits above a second bar
+//! carrying the PADS badge and the KIT preset pill (◀ name ▶). Pads is
+//! the editor's only view, so there is no tab strip to switch it with.
+//! The central body is a fixed-height KIT + GLOBAL card row at the
+//! bottom and, above it, the two-column pad list + pad detail, each
+//! scrolling independently so the window can be resized down to its
+//! declared minimum without losing either (`factory.rs`,
+//! drums-plugin-rework.md §6.1). A status bar (sample rate, buffer size,
+//! OUT meter) sits along the bottom edge, and the Download Kits overlay
+//! (`download_panel.rs`) draws over everything else when open.
 //!
 //! Every control comes from `plugin_gui_core::widgets` — the knobs
 //! always did, and ba todo #1335 retired the local `editor/widgets/`
