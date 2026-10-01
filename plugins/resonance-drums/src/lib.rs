@@ -84,9 +84,10 @@ pub struct KitBridge {
     /// ([`selection::KitRef`]).
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
     /// Which piece each pad of the current kit plays, its name and
-    /// articulation labels, and the kit's port / choke hints (E10). Set by
-    /// the loader with the kit; reads as the built-in kit's once
-    /// `kit_path` names another kit or none ([`pad_map::KitPadsHandle`]).
+    /// articulation labels, and the kit's port / choke hints (E10).
+    /// Published with the hand-off of the kit it describes (loader,
+    /// `play_builtin`, the built-in install in `initialize`), so it always
+    /// describes the kit playing ([`pad_map::KitPadsHandle`]).
     pub kit_pads: pad_map::KitPadsHandle,
     /// The kit a load is in flight for, with that load's generation stamp.
     /// Recorded by [`kit_loader::spawn_loader`] when it starts, cleared
@@ -470,7 +471,7 @@ impl ResonancePlugin for ResonanceDrums {
             bounded(AUDITION_QUEUE_DEPTH);
         let params = Arc::new(DrumParams::default());
         let kit_path = Arc::new(Mutex::new(None));
-        let kit_pads = pad_map::KitPadsHandle::new(kit_path.clone());
+        let kit_pads = pad_map::KitPadsHandle::default();
         // The articulation parameters read as the current kit's labels.
         articulation::attach_kit_labels(&params, &kit_pads);
         let bridge = KitBridge {
@@ -694,6 +695,8 @@ impl ResonancePlugin for ResonanceDrums {
             built.held_takes(&mut held);
         }
         let sources = self.sampler.load_defaults_sourced(sample_rate);
+        // The editor's pad view follows the kit now in the sampler.
+        crate::pad_map::publish_builtin(&self.bridge);
         let (shared_bytes, builtin) =
             kit_loader::measure_builtin_kit(&self.sampler.pads, &sources, &held);
         *self.bridge.builtin_kit.lock() = Some(builtin);

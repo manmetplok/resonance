@@ -57,7 +57,6 @@
 //! ([`KitPad::output_group`], [`KitPad::choke_group`]). The pad's `choke`
 //! and `output` *parameters* are not moved by a kit load.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -426,16 +425,6 @@ impl Default for KitPadsHandle {
 }
 
 impl KitPadsHandle {
-    /// A handle on the built-in kit's pads.
-    ///
-    /// `_kit_path` is no longer read (the pads are published with the
-    /// hand-off, not matched against the current path); the parameter is
-    /// kept so `ResonanceDrums::new` builds unchanged. Prefer
-    /// [`KitPadsHandle::default`].
-    pub fn new(_kit_path: Arc<Mutex<Option<PathBuf>>>) -> Self {
-        Self::default()
-    }
-
     /// Publish `pads` as the pads of the kit the sampler now holds.
     /// Returns whether any pad's articulation text changed with them —
     /// a pad gained or lost its pair, or the pair's chip labels differ —

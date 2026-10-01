@@ -64,7 +64,7 @@ fn reset_restarts_the_round_robins() {
             s.global_settings().round_robin,
             if mode == 0 { RoundRobinMode::Cycle } else { RoundRobinMode::Random }
         );
-        let mut walk = |s: &mut DrumSampler| -> Vec<usize> {
+        let walk = |s: &mut DrumSampler| -> Vec<usize> {
             (0..6)
                 .map(|_| {
                     s.silence();
