@@ -230,6 +230,8 @@ pub fn to_freeze_cache(
     let mut writer =
         hound::WavWriter::create(output.temp(), spec).map_err(FreezeError::CreateWav)?;
 
+    // Offline until this render returns, whichever way it does.
+    let _render_mode = super::render::OfflineRenderMode::enter(shared);
     reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();

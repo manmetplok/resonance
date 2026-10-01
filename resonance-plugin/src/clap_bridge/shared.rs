@@ -129,6 +129,14 @@ pub struct ClapShared<'a> {
     /// its events never trigger a compare — a playing lane would otherwise
     /// ask for one every block.
     pub(crate) param_preset_ignored: Vec<AtomicBool>,
+    /// The render mode the host last set (CLAP `render.set`): true for
+    /// offline. Handed to the plugin directly while it is inactive; while
+    /// active, `render_mode_dirty` makes the audio processor hand it over
+    /// at the top of its next block.
+    pub(crate) render_offline: AtomicBool,
+    /// `render_offline` changed while the plugin was in the audio
+    /// processor and it has not been told yet.
+    pub(crate) render_mode_dirty: AtomicBool,
 }
 
 impl<'a> ClapShared<'a> {

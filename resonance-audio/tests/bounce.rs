@@ -44,6 +44,8 @@ mod measure_depth;
 mod midi_export_project;
 #[path = "bounce/offline_render_fidelity.rs"]
 mod offline_render_fidelity;
+#[path = "bounce/offline_render_mode.rs"]
+mod offline_render_mode;
 #[path = "bounce/reference_export_exclusion.rs"]
 mod reference_export_exclusion;
 #[path = "bounce/stem_export.rs"]

@@ -506,6 +506,13 @@ pub(super) fn build_instance(
             resonance_common::param_flags::EXTENSION_ID,
         )
     };
+    // `clap.render`: told OFFLINE for an offline render's duration.
+    instance.render_ext = unsafe {
+        query_extension::<clap_sys::ext::render::clap_plugin_render>(
+            plugin,
+            clap_sys::ext::render::CLAP_EXT_RENDER,
+        )
+    };
     Ok(instance)
 }
 

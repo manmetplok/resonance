@@ -109,6 +109,14 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
             return Ok(ProcessStatus::ContinueIfNotQuiet);
         }
 
+        // A render mode the host set while the plugin was in here
+        // (`render.set` is main-thread; the plugin is not): it applies
+        // from this block on.
+        if self.shared.render_mode_dirty.swap(false, Ordering::AcqRel) {
+            self.plugin
+                .set_render_mode(self.shared.render_offline.load(Ordering::Acquire));
+        }
+
         // Handle input events: param changes, note events, MIDI controllers.
         self.input_events.clear();
         for event in events.input {
@@ -555,6 +563,11 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         reconcile_params(&self.plugin, self.shared);
 
         let mut plugin = self.plugin;
+        // A mode the host set after the last block never reached the
+        // plugin: hand it over with the plugin itself.
+        if self.shared.render_mode_dirty.swap(false, Ordering::AcqRel) {
+            plugin.set_render_mode(self.shared.render_offline.load(Ordering::Acquire));
+        }
         plugin.deactivate();
         main_thread.plugin = Some(plugin);
     }

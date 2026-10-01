@@ -56,6 +56,13 @@ pub struct ClapInstance {
     /// of ours: which params its state leaves out. Read by
     /// [`ClapInstance::query_params`]; `None` for third-party plugins.
     pub(super) param_flags_ext: Option<*const resonance_common::param_flags::PluginParamFlags>,
+    /// The plugin's `clap.render` extension: told OFFLINE for the length
+    /// of an offline render and REALTIME after
+    /// ([`ClapInstance::set_render_mode`]). `None` when the plugin does
+    /// not implement it.
+    pub(super) render_ext: Option<*const clap_sys::ext::render::clap_plugin_render>,
+    /// Whether the plugin was last told to render offline.
+    pub(super) render_offline: bool,
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     pub(super) gui_open: bool,
     /// Number of output audio ports as reported by the plugin's audio-ports
@@ -165,6 +172,8 @@ impl ClapInstance {
             gui_ext,
             latency_ext,
             param_flags_ext: None,
+            render_ext: None,
+            render_offline: false,
             gui_open: false,
             output_port_count,
             input_port_count,
@@ -531,6 +540,43 @@ impl ClapInstance {
                     .then(|| unsafe { info.assume_init() }.id)
             })
             .collect()
+    }
+
+    /// Tell the plugin whether it is rendering offline (CLAP `render.set`):
+    /// `true` for a bounce, an export, a freeze — no realtime deadline, so
+    /// a plugin that cuts corners for time (a streaming sampler dropping a
+    /// late disk read) must not — and `false` once the render is over.
+    /// Returns whether the plugin took the mode; `false` without the
+    /// extension, or when it is already in that mode (nothing sent).
+    ///
+    /// `[main-thread]` in CLAP: call it outside any audio-thread role,
+    /// holding the instance lock (the offline renderers do, before their
+    /// first block and after their last).
+    pub fn set_render_mode(&mut self, offline: bool) -> bool {
+        use clap_sys::ext::render::{CLAP_RENDER_OFFLINE, CLAP_RENDER_REALTIME};
+        if self.render_offline == offline {
+            return false;
+        }
+        let Some(set) = self.render_ext.and_then(|ext| unsafe { (*ext).set }) else {
+            return false;
+        };
+        let mode = if offline {
+            CLAP_RENDER_OFFLINE
+        } else {
+            CLAP_RENDER_REALTIME
+        };
+        // SAFETY: the vtable is the live plugin's; the caller holds the
+        // instance exclusively.
+        let accepted = unsafe { set(self.plugin, mode) };
+        if accepted {
+            self.render_offline = offline;
+        }
+        accepted
+    }
+
+    /// Whether the plugin was last told to render offline.
+    pub fn render_offline(&self) -> bool {
+        self.render_offline
     }
 
     /// Whether the plugin's state leaves `param_id` out

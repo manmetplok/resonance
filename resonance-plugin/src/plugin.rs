@@ -622,6 +622,28 @@ pub trait ResonancePlugin: Send + 'static {
         None
     }
 
+    /// The host switched between realtime and offline rendering (CLAP
+    /// `render.set`): `offline` is true for a bounce, an export, a freeze
+    /// — a render that runs as fast as the CPU allows and must never
+    /// cut corners for time — and false when it is back to realtime.
+    /// Default: ignored.
+    ///
+    /// A plugin that trades quality for time in realtime does the opposite
+    /// offline: a streaming sampler (the drums) waits for a disk read it
+    /// would otherwise drop, a convolver renders its full tail. The bridge
+    /// tells the bridged plugin `has_hard_realtime_requirement() = false`,
+    /// so a host may always ask.
+    ///
+    /// When it is called: on the main thread, right away, while the plugin
+    /// is inactive; while it is active (it lives in the audio processor,
+    /// out of the main thread's reach), on the audio thread at the start
+    /// of the next `process()` block, before that block's events — so the
+    /// first offline block already renders offline. Realtime-safe there
+    /// like the rest of `process()`: flip a flag, don't allocate.
+    fn set_render_mode(&mut self, offline: bool) {
+        let _ = offline;
+    }
+
     /// Report latency in samples. Default: 0.
     ///
     /// The bridge reads this at every activation, and on any host query made

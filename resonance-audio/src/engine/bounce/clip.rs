@@ -127,6 +127,8 @@ pub fn to_audio_clip(
     // which reads the same caches through `mix_track_clips` (todo #358).
     let tuning = super::super::vocal_render::ensure_tuning_caches(shared, sample_rate);
 
+    // Offline until this render returns, whichever way it does.
+    let _render_mode = super::render::OfflineRenderMode::enter(shared);
     reset_plugins(shared);
 
     let bounce_tm = (**tempo_map.load()).clone();

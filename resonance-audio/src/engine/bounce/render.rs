@@ -290,6 +290,49 @@ pub(super) fn reset_plugins(shared: &SharedState) {
     }
 }
 
+/// Every plugin instance told it is rendering OFFLINE (CLAP `render.set`)
+/// for as long as this lives, and told REALTIME again when it drops — on
+/// every exit path of the render that holds it: completion, cancel, a
+/// write error, an early return, a panic unwinding through the worker.
+///
+/// Held next to the renderer's [`super::OfflineRenderGuard`], which keeps
+/// the live callback off the plugins meanwhile. Only the instances that
+/// took the mode are switched back, and only those still present.
+#[must_use = "the plugins render offline only while the guard lives"]
+pub(crate) struct OfflineRenderMode<'a> {
+    shared: &'a SharedState,
+    switched: Vec<crate::types::PluginInstanceId>,
+}
+
+impl<'a> OfflineRenderMode<'a> {
+    /// Tell every plugin it renders offline. Not on an audio-thread role:
+    /// `render.set` is `[main-thread]`, and an offline render's worker is
+    /// the main-thread role whenever it is not inside a block.
+    pub(crate) fn enter(shared: &'a SharedState) -> Self {
+        let mut switched = Vec::new();
+        let plugins = shared.plugins();
+        for (&id, mutex) in plugins.iter() {
+            let mut inst = lock_plugin_for_bounce(mutex);
+            if inst.0.set_render_mode(true) {
+                switched.push(id);
+            }
+        }
+        Self { shared, switched }
+    }
+}
+
+impl Drop for OfflineRenderMode<'_> {
+    fn drop(&mut self) {
+        let plugins = self.shared.plugins();
+        for id in &self.switched {
+            if let Some(mutex) = plugins.get(id) {
+                let mut inst = lock_plugin_for_bounce(mutex);
+                inst.0.set_render_mode(false);
+            }
+        }
+    }
+}
+
 /// Render one chunk into `scratch.mix_buf`. The output is interleaved
 /// stereo of length `frames * 2`. When `include_master_fx` is true,
 /// master FX, master volume and (per [`ChunkCtx::hard_clip`]) hard-clip
