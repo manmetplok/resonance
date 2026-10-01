@@ -43,20 +43,20 @@ pub(crate) fn draw_tab(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let snapshot = app.library.download().state.lock().clone();
 
     ui.horizontal(|ui| {
-        let fetching = matches!(snapshot.status, Status::FetchingIndex);
+        let fetching = snapshot.fetching_index;
         if ui
             .add_enabled(!fetching, egui::Button::new("Refresh"))
             .clicked()
         {
             app.library.download().send(Command::FetchIndex);
         }
-        let line = match (&snapshot.status, &snapshot.index) {
-            (Status::FetchingIndex, _) => "Fetching the kit index from plok.org…".to_string(),
-            (_, Some(index)) => {
-                let n = index.drumkits.len();
-                format!("{n} kit{} on plok.org", if n == 1 { "" } else { "s" })
-            }
-            (_, None) => String::new(),
+        let line = if fetching {
+            "Fetching the kit index from plok.org…".to_string()
+        } else if let Some(index) = &snapshot.index {
+            let n = index.drumkits.len();
+            format!("{n} kit{} on plok.org", if n == 1 { "" } else { "s" })
+        } else {
+            String::new()
         };
         ui.label(egui::RichText::new(line).size(11.0).color(theme::TEXT_DIM));
     });
@@ -82,7 +82,10 @@ pub(crate) fn draw_tab(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.add_space(6.0);
 
     let Some(index) = snapshot.index.clone() else {
-        let text = if matches!(snapshot.status, Status::Error(_)) {
+        // Index failures live in `index_error`, not `status`: a download
+        // can be running (and own `status`) while the index fetch fails
+        // beside it.
+        let text = if snapshot.index_error.is_some() {
             "Could not reach plok.org. Refresh to try again."
         } else {
             "(loading…)"

@@ -91,6 +91,7 @@ pub fn test_draw_pad_inspector(ui: &mut egui::Ui, bridge: &crate::KitBridge, sel
 /// squeezed out of view is still in the shape list — `Painter::text`
 /// emits it whatever the clip — so "the text was drawn" proves nothing;
 /// `rect ∩ clip` is what the user actually sees.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct ProbedText {
@@ -101,8 +102,13 @@ pub struct ProbedText {
 
 /// One widget rect the editor reported through [`probe`], with the clip
 /// rect of the `Ui` it was laid out in.
+///
+/// `probe()` (production code, always compiled under `editor`) only ever
+/// *writes* these; only [`EditorFrameProbe::widget`] (`test-hooks`) reads
+/// the fields back, so a build without `test-hooks` never reads one.
 #[doc(hidden)]
 #[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 pub struct ProbedRect {
     pub name: String,
     pub rect: egui::Rect,
@@ -110,6 +116,7 @@ pub struct ProbedRect {
 }
 
 /// Everything `test_render_editor_frame` read back from a settled frame.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 #[derive(Clone, Debug)]
 pub struct EditorFrameProbe {
@@ -120,6 +127,7 @@ pub struct EditorFrameProbe {
     pub shapes: Vec<egui::epaint::ClippedShape>,
 }
 
+#[cfg(feature = "test-hooks")]
 impl EditorFrameProbe {
     /// Just the strings, for "is it drawn at all" checks.
     pub fn strings(&self) -> Vec<String> {
@@ -187,6 +195,7 @@ pub(crate) fn probed<R>(
 
 /// Test-only: every text shape a frame painted, walked out of egui's own
 /// shape tree, with the clip rect each one was painted under.
+#[cfg(feature = "test-hooks")]
 fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<ProbedText> {
     fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<ProbedText>) {
         match shape {
@@ -226,6 +235,7 @@ fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<ProbedText> {
 /// `egui::Modal`) only report their final layout from the second pass
 /// onward. The real runtime repaints continuously, so this is what it
 /// would actually show once settled.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub fn test_render_editor_frame(
     plugin: &crate::ResonanceDrums,
@@ -241,6 +251,7 @@ pub fn test_render_editor_frame(
 /// `egui::Context`, over a library the test chose — open the Library,
 /// click, type, wait for its jobs — so a test can check the overlay's
 /// behaviour without a live window.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 pub struct TestEditor {
     app: app::DrumsEditorApp,
@@ -249,6 +260,7 @@ pub struct TestEditor {
     screen: egui::Rect,
 }
 
+#[cfg(feature = "test-hooks")]
 impl TestEditor {
     /// An editor for `plugin` over `library` (build one at a temp root with
     /// `SharedKitLibrary::open`, or use [`crate::library::shared`] after

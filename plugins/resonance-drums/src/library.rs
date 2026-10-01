@@ -202,14 +202,13 @@ fn default_roots() -> Roots {
     }
 }
 
+// The editor's own test entry points (`TestEditor`, `test_render_editor_frame`)
+// are the only callers, and they are themselves gated behind `test-hooks`
+// (`editor/mod.rs`) — so a build without it carries none of this module.
 #[cfg(feature = "test-hooks")]
 pub use test_hooks::{isolate_for_tests, override_default_roots};
-// The editor's own test entry points (`TestEditor`) isolate the process
-// too; outside the `test-hooks` feature the hooks are crate-private.
-#[cfg(not(feature = "test-hooks"))]
-#[allow(unused_imports)]
-pub(crate) use test_hooks::{isolate_for_tests, override_default_roots};
 
+#[cfg(feature = "test-hooks")]
 mod test_hooks {
     use std::fs::File;
     use std::path::{Path, PathBuf};

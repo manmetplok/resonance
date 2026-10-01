@@ -179,7 +179,10 @@ impl DrumsEditorApp {
         let library = self.library.clone();
         self.jobs
             .start(JobKind::Scan, "scanning…", false, move |ctx| {
-                let (result, skipped) = match library.rescan() {
+                // `rescan_with` — not `rescan` — so closing the editor mid-job
+                // never waits on the `installed.json` migration's index
+                // fetch: the job's own cancel flag bounds it.
+                let (result, skipped) = match library.rescan_with(&ctx.cancel) {
                     // Another writer (a download installing) rescans when done.
                     None => (Ok(()), true),
                     Some(Ok(_)) => (Ok(()), false),
@@ -401,7 +404,9 @@ impl DrumsEditorApp {
     }
 
     /// Block until the running job and everything queued behind it are
-    /// done, applying each. For tests.
+    /// done, applying each. For tests — only `TestEditor` (`test-hooks`)
+    /// calls it.
+    #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
     pub(crate) fn finish_jobs(&mut self) {
         // Bounded: a check that keeps losing the library to a download
         // would otherwise retry for ever.
@@ -469,30 +474,32 @@ impl DrumsEditorApp {
     }
 
     fn poll_installs(&mut self) {
-        let installed = {
+        let new = {
             let s = self.library.download().state.lock();
             if s.installs == self.seen_installs {
                 return;
             }
+            // Two installs can finish between two frames (ba review): walk
+            // every one this editor has not seen yet, not just the latest.
+            let new = s.installs_since(self.seen_installs);
             self.seen_installs = s.installs;
-            s.last_installed.clone()
+            new
         };
         // The worker rescanned the library itself.
         self.rebaseline_library_poll();
-        let Some(installed) = installed else {
-            return;
-        };
-        if !self.my_downloads.remove(&installed.name) {
-            return;
+        for installed in new {
+            if !self.my_downloads.remove(&installed.name) {
+                continue;
+            }
+            self.refresh_rows();
+            self.browser
+                .select(drumkit_library::mark_key(&installed.id));
+            self.library_panel.tab = library_panel::Tab::Installed;
+            self.browser.set_info(format!(
+                "downloaded \"{}\" — Load plays it in this instance",
+                installed.name
+            ));
         }
-        self.refresh_rows();
-        self.browser
-            .select(drumkit_library::mark_key(&installed.id));
-        self.library_panel.tab = library_panel::Tab::Installed;
-        self.browser.set_info(format!(
-            "downloaded \"{}\" — Load plays it in this instance",
-            installed.name
-        ));
     }
 
     /// Poll for other processes' changes: every 500 ms while the Library is

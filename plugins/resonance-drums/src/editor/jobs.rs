@@ -168,7 +168,9 @@ impl Jobs {
     }
 
     /// Block until the running job (if any) is done, and return its
-    /// outcome. For tests.
+    /// outcome. For tests — only `DrumsEditorApp::finish_jobs` (in turn
+    /// only `TestEditor`, `test-hooks`) calls it.
+    #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
     pub(crate) fn wait(&mut self) -> Option<JobDone> {
         if let Some(h) = self.handle.take() {
             let _ = h.join();

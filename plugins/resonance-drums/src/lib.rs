@@ -25,16 +25,26 @@ mod editor;
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub use editor::test_draw_pad_inspector;
+/// Test-only: which kit the header's ◀/▶ step from. `kit_browser` is
+/// private outside this crate — same shape as `test_draw_pad_inspector`
+/// above. Does not touch the shared library, so it needs no isolation
+/// from the user's data dir and is not gated by `test-hooks`.
+#[cfg(feature = "editor")]
+#[doc(hidden)]
+pub use editor::test_kit_path_for_stepping;
 /// Test-only: run one full `EditorApp::ui` frame of the editor, or drive
 /// a whole editor (Library overlay included) frame by frame.
 /// `DrumsEditorApp` is otherwise private (drums-plugin-rework.md §9) —
 /// same shape as `test_draw_pad_inspector` above.
-#[cfg(feature = "editor")]
+///
+/// Both of these isolate the process from the user's data dir
+/// ([`library::isolate_for_tests`]) before touching the shared library, so
+/// they are gated by `test-hooks` like that hook is: a release build of
+/// the cdylib (`--release`, no `test-hooks`) and a headless one
+/// (`--no-default-features`, no `editor` either) both carry none of this.
+#[cfg(all(feature = "editor", feature = "test-hooks"))]
 #[doc(hidden)]
-pub use editor::{
-    test_kit_path_for_stepping, test_render_editor_frame, EditorFrameProbe, ProbedRect,
-    ProbedText, TestEditor,
-};
+pub use editor::{test_render_editor_frame, EditorFrameProbe, ProbedRect, ProbedText, TestEditor};
 pub mod kit;
 pub mod kit_loader;
 /// The process-wide kit library and its download worker.
@@ -378,7 +388,7 @@ impl ResonancePlugin for ResonanceDrums {
         // The download worker is not per instance any more: the editor
         // factory opens the process-wide library (`library::shared`).
         #[cfg(feature = "editor")]
-        library::register_instance(&bridge.kit_path);
+        library::register_bridge(&bridge);
         let mut sampler = DrumSampler::new(kit_receiver);
         sampler.set_load_progress(bridge.load_progress.clone());
         sampler.set_last_rr(bridge.last_rr.clone());
