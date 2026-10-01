@@ -25,6 +25,7 @@ editor = [
 resonance-plugin = { path = "../../resonance-plugin" }
 resonance-common = { path = "../../resonance-common", default-features = false, features = [
     "decode",
+    "drumkit-zip",
 ] }
 resonance-dsp = { path = "../../resonance-dsp" }
 

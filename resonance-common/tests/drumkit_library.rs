@@ -15,14 +15,32 @@ use std::sync::Arc;
 
 use resonance_common::drumkit_library::{
     self, find_manifest, measure_size, read_sidecar, write_sidecar, EntryStatus, ImportJob,
-    ImportOutcome, Library, LibraryError, Sidecar, Source, LIBRARY_FILE, MANIFEST_FILE,
+    ImportOutcome, IndexMatch, Library, LibraryError, Sidecar, Source, LIBRARY_FILE, MANIFEST_FILE,
     SIDECAR_FILE, SOURCE_IMPORTED, SOURCE_PLOK, STAGING_DIR,
 };
+
+/// The temporary dirs this test thread made; removed when the thread (the
+/// test) ends, pass or fail.
+struct TempDirs(Vec<PathBuf>);
+
+impl Drop for TempDirs {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+thread_local! {
+    static TEMP_DIRS: std::cell::RefCell<TempDirs> =
+        const { std::cell::RefCell::new(TempDirs(Vec::new())) };
+}
 
 fn temp_root(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("resonance-kitlib-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    TEMP_DIRS.with(|t| t.borrow_mut().0.push(dir.clone()));
     dir
 }
 
@@ -273,7 +291,14 @@ fn installed_json_items_become_sidecars_once() {
     );
     std::fs::write(&reg, &text).unwrap();
 
-    let in_index: Arc<drumkit_library::InIndexFn> = Arc::new(|name: &str| name == "Drummica");
+    let in_index: Arc<drumkit_library::InIndexFn> = Arc::new(|name: &str| {
+        (name == "Drummica").then(|| IndexMatch {
+            index_file: Some("drummica.zip".into()),
+            description: Some("Acoustic studio kit".into()),
+            index_tags: vec!["rock".into()],
+            ..IndexMatch::default()
+        })
+    });
     let mut lib = Library::open(&root).with_installed_json(&reg, Some(in_index.clone()));
     let report = lib.rescan().unwrap();
     assert_eq!(report.migrated, 2);
@@ -281,6 +306,12 @@ fn installed_json_items_become_sidecars_once() {
     let drummica = by(&lib, "Drummica");
     assert_eq!(drummica.source, Source::Plok);
     assert_eq!(drummica.name, "Drummica");
+    // The index entry's file is the re-download key: a migrated plok kit
+    // must carry it.
+    let sc = drummica.sidecar.as_ref().unwrap();
+    assert_eq!(sc.index_file.as_deref(), Some("drummica.zip"));
+    assert_eq!(drummica.description(), Some("Acoustic studio kit"));
+    assert_eq!(drummica.index_tags(), ["rock"]);
     assert_eq!(
         drummica.added_at,
         resonance_common::library_marks::parse_timestamp("2026-04-12T00:00:00Z").unwrap()
@@ -498,6 +529,544 @@ fn import_zip_extracts_through_staging_and_hoists_a_wrapper_dir() {
         c.entry().manifest_path,
         root.join("Plok Kit").join(MANIFEST_FILE)
     );
+}
+
+/// A zip of exactly `entries` (name → bytes), stored.
+fn zip_entries(zip_path: &Path, entries: &[(&str, Vec<u8>)]) {
+    let file = std::fs::File::create(zip_path).unwrap();
+    let mut zw = zip::ZipWriter::new(file);
+    let opts =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in entries {
+        zw.start_file(*name, opts).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap();
+}
+
+/// The files of the kit in `dir` (from [`write_kit`]), as zip entries
+/// under `prefix`.
+fn kit_entries(dir: &Path, prefix: &str) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir(dir).unwrap().flatten() {
+        if e.file_type().unwrap().is_file() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            out.push((format!("{prefix}{name}"), std::fs::read(e.path()).unwrap()));
+        }
+    }
+    out.sort();
+    out
+}
+
+fn zip_of(zip_path: &Path, entries: &[(String, Vec<u8>)]) {
+    let borrowed: Vec<(&str, Vec<u8>)> = entries
+        .iter()
+        .map(|(n, b)| (n.as_str(), b.clone()))
+        .collect();
+    zip_entries(zip_path, &borrowed);
+}
+
+/// Every path under `dir`, relative, sorted (directories included).
+fn tree(dir: &Path) -> Vec<String> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) {
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            out.push(
+                e.path()
+                    .strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            if e.file_type().unwrap().is_dir() {
+                walk(base, &e.path(), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn a_macos_zip_with_resource_forks_installs_without_them() {
+    let root = temp_root("macos");
+    let src_root = temp_root("macos-src");
+    write_kit(&src_root.join("a"), 1, 1, None, 16);
+    write_kit(&src_root.join("b"), 2, 1, None, 16);
+    let litter = |prefix: &str| {
+        vec![
+            (
+                format!("__MACOSX/{prefix}._drum_samples.json"),
+                b"fork".to_vec(),
+            ),
+            (format!("{prefix}.DS_Store"), b"ds".to_vec()),
+            (".DS_Store".to_string(), b"ds".to_vec()),
+        ]
+    };
+    // Depth 2 behind a wrapper, with `__MACOSX/` and `.DS_Store` beside it:
+    // the wrapper is still the only real top-level entry.
+    let mut deep = kit_entries(&src_root.join("a"), "Wrapper/kit/");
+    deep.extend(litter("Wrapper/kit/"));
+    zip_of(&src_root.join("Deep.zip"), &deep);
+    // Depth 1: the litter must not be copied into the kit.
+    let mut shallow = kit_entries(&src_root.join("b"), "kit/");
+    shallow.extend(litter("kit/"));
+    zip_of(&src_root.join("Shallow.zip"), &shallow);
+
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let deep = lib
+        .import(&src_root.join("Deep.zip"), ImportJob::new())
+        .unwrap();
+    assert_eq!(
+        deep.entry().manifest_path,
+        root.join("Deep/kit").join(MANIFEST_FILE)
+    );
+    let shallow = lib
+        .import(&src_root.join("Shallow.zip"), ImportJob::new())
+        .unwrap();
+    assert_eq!(
+        shallow.entry().manifest_path,
+        root.join("Shallow/kit").join(MANIFEST_FILE)
+    );
+    for kit in ["Deep", "Shallow"] {
+        let files = tree(&root.join(kit));
+        assert!(
+            files
+                .iter()
+                .all(|f| !f.contains("__MACOSX") && !f.contains(".DS_Store")),
+            "{kit}: {files:?}"
+        );
+    }
+}
+
+#[test]
+fn a_zip_already_in_the_library_is_known_before_any_disk_check_or_extraction() {
+    let root = temp_root("zip-dup-early");
+    let src_root = temp_root("zip-dup-early-src");
+    write_kit(&src_root.join("a"), 1, 1, None, 16);
+    zip_of(
+        &src_root.join("A.zip"),
+        &kit_entries(&src_root.join("a"), "kit/"),
+    );
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    lib.import(&src_root.join("A.zip"), ImportJob::new())
+        .unwrap();
+
+    // A full disk and a progress callback that must never fire: the
+    // duplicate is recognised from the archive's manifest alone.
+    let again = lib
+        .import(
+            &src_root.join("A.zip"),
+            ImportJob::new()
+                .free_space(|_| Some(0))
+                .progress(|p| panic!("extracted for a duplicate: {p:?}")),
+        )
+        .unwrap();
+    assert!(matches!(again, ImportOutcome::AlreadyPresent(_)));
+    assert!(!root.join(STAGING_DIR).exists());
+}
+
+#[test]
+fn zip_entries_that_escape_are_skipped_and_inflating_past_the_declared_size_fails() {
+    let root = temp_root("zip-slip");
+    let src_root = temp_root("zip-slip-src");
+    write_kit(&src_root.join("a"), 1, 1, None, 16);
+    let mut entries = kit_entries(&src_root.join("a"), "kit/");
+    entries.push(("../evil.txt".into(), b"evil".to_vec()));
+    entries.push(("kit/../../evil2.txt".into(), b"evil".to_vec()));
+    entries.push(("/abs-evil.txt".into(), b"evil".to_vec()));
+    zip_of(&src_root.join("Slip.zip"), &entries);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let e = lib
+        .import(&src_root.join("Slip.zip"), ImportJob::new())
+        .unwrap();
+    assert!(e.entry().is_ok());
+    let parent = root.parent().unwrap();
+    for f in ["evil.txt", "evil2.txt", "abs-evil.txt"] {
+        assert!(!parent.join(f).exists(), "{f} escaped");
+        assert!(!root.join(f).exists(), "{f} landed in the root");
+        assert!(!tree(&root).iter().any(|p| p.ends_with(f)), "{f} extracted");
+    }
+
+    // A sample whose header declares 4 bytes but holds 4096: the cap
+    // stops it and nothing is installed.
+    write_kit(&src_root.join("b"), 2, 1, None, 4096);
+    let zip_path = src_root.join("Bomb.zip");
+    zip_of(&zip_path, &kit_entries(&src_root.join("b"), "kit/"));
+    let mut bytes = std::fs::read(&zip_path).unwrap();
+    let mut patched = 0;
+    // Local headers (PK\3\4, uncompressed size at +22) and central
+    // directory headers (PK\1\2, at +24) of the .wav entries.
+    let mut i = 0;
+    while i + 46 < bytes.len() {
+        let sig = &bytes[i..i + 4];
+        let (size_at, name_len_at, name_at) = if sig == b"PK\x03\x04" {
+            (22, 26, 30)
+        } else if sig == b"PK\x01\x02" {
+            (24, 28, 46)
+        } else {
+            i += 1;
+            continue;
+        };
+        let name_len = u16::from_le_bytes([bytes[i + name_len_at], bytes[i + name_len_at + 1]]);
+        let name = &bytes[i + name_at..i + name_at + name_len as usize];
+        if name.ends_with(b".wav") {
+            bytes[i + size_at..i + size_at + 4].copy_from_slice(&4u32.to_le_bytes());
+            patched += 1;
+        }
+        i += 4;
+    }
+    assert!(patched >= 2);
+    std::fs::write(&zip_path, &bytes).unwrap();
+    let err = lib.import(&zip_path, ImportJob::new()).unwrap_err();
+    assert!(matches!(err, LibraryError::Zip(_)), "{err}");
+    assert!(!root.join("Bomb").exists());
+    assert!(!root.join(STAGING_DIR).exists());
+}
+
+/// A pid with no process behind it: a child that has exited and been
+/// reaped.
+#[cfg(unix)]
+fn dead_pid() -> u32 {
+    let mut child = Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+#[cfg(unix)]
+#[test]
+fn rescan_sweeps_staging_left_by_dead_processes_and_restores_an_interrupted_replace() {
+    let root = temp_root("sweep");
+    write_kit(&root.join("Kit"), 1, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let staging = root.join(STAGING_DIR);
+    let dead = dead_pid();
+    let own = std::process::id();
+    // A dead import, a live one, a re-download that died between moving
+    // the old kit aside and promoting the new one, and something that is
+    // not ours.
+    let dead_stage = staging.join(format!("Gone.{dead}-0"));
+    write_kit(&dead_stage, 2, 1, None, 4);
+    let live_stage = staging.join(format!("Busy.{own}-999999"));
+    std::fs::create_dir_all(&live_stage).unwrap();
+    let aside = staging.join(format!(".old-Moved.{dead}-1"));
+    write_kit(&aside, 3, 1, None, 4);
+    let foreign = staging.join("manual");
+    write_kit(&foreign, 4, 1, None, 4);
+
+    lib.rescan().unwrap();
+    assert!(!dead_stage.exists(), "a dead import is swept");
+    assert!(live_stage.exists(), "a live import is left alone");
+    assert!(foreign.exists(), "not ours: left alone");
+    assert!(!aside.exists());
+    assert!(
+        root.join("Moved").join(MANIFEST_FILE).is_file(),
+        "the old kit is put back"
+    );
+    // `.staging/` is never scanned, even with a kit in it.
+    let dirs: Vec<_> = lib.entries().iter().map(|e| e.dir.clone()).collect();
+    assert_eq!(dirs, [root.join("Kit"), root.join("Moved")]);
+}
+
+#[test]
+fn a_reused_staging_path_never_promotes_stale_files() {
+    let root = temp_root("stale-stage");
+    let src_root = temp_root("stale-stage-src");
+    write_kit(&src_root.join("Kit"), 1, 1, None, 4);
+    // What a previous process with this pid could have left at every
+    // staging path this import might pick.
+    let own = std::process::id();
+    for n in 0..512 {
+        let stage = root.join(STAGING_DIR).join(format!("Kit.{own}-{n}"));
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("stale.wav"), b"stale").unwrap();
+    }
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let e = lib.import(&src_root.join("Kit"), ImportJob::new()).unwrap();
+    assert!(!e.entry().dir.join("stale.wav").exists());
+}
+
+#[test]
+fn a_folder_of_several_kits_is_refused_and_nothing_is_copied() {
+    let root = temp_root("multi");
+    let src_root = temp_root("multi-src");
+    let src = src_root.join("My Kits");
+    write_kit(&src.join("One"), 1, 1, None, 4);
+    write_kit(&src.join("Two"), 2, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let err = lib.import(&src, ImportJob::new()).unwrap_err();
+    assert!(
+        matches!(err, LibraryError::MultipleKits { count: 2, .. }),
+        "{err}"
+    );
+    assert!(err.to_string().contains("holds 2 kits"), "{err}");
+    assert!(lib.is_empty());
+    let left = listing(&root);
+    assert!(left.iter().all(|n| n.starts_with("library.")), "{left:?}");
+
+    // The same as a zip.
+    let mut entries = kit_entries(&src.join("One"), "One/");
+    entries.extend(kit_entries(&src.join("Two"), "Two/"));
+    zip_of(&src_root.join("Kits.zip"), &entries);
+    let err = lib
+        .import(&src_root.join("Kits.zip"), ImportJob::new())
+        .unwrap_err();
+    assert!(
+        matches!(err, LibraryError::MultipleKits { count: 2, .. }),
+        "{err}"
+    );
+    assert!(lib.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_files_are_copied_and_escaping_or_looping_folders_refused() {
+    use std::os::unix::fs::symlink;
+    let root = temp_root("symlink");
+    let src_root = temp_root("symlink-src");
+    let store = src_root.join("store");
+    write_kit(&store, 1, 1, None, 8);
+    // A kit whose manifest and samples are all symlinks into `store`.
+    let src = src_root.join("Linked");
+    std::fs::create_dir_all(&src).unwrap();
+    for e in std::fs::read_dir(&store).unwrap().flatten() {
+        symlink(e.path(), src.join(e.file_name())).unwrap();
+    }
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let ImportOutcome::Added(e) = lib.import(&src, ImportJob::new()).unwrap() else {
+        panic!("expected Added");
+    };
+    let dest = root.join("Linked");
+    assert_eq!(e.dir, dest);
+    assert!(std::fs::symlink_metadata(dest.join(MANIFEST_FILE))
+        .unwrap()
+        .is_file());
+    assert_eq!(
+        tree(&dest).len(),
+        tree(&store).len() + 1,
+        "every file, plus the sidecar"
+    );
+    assert_eq!(
+        drumkit_library::missing_files(&e.manifest_path).unwrap(),
+        Vec::<PathBuf>::new()
+    );
+
+    // A symlinked folder pointing outside the kit: refused, nothing left.
+    let escaping = src_root.join("Escaping");
+    write_kit(&escaping, 2, 1, None, 4);
+    symlink(&store, escaping.join("outside")).unwrap();
+    let err = lib.import(&escaping, ImportJob::new()).unwrap_err();
+    assert!(matches!(err, LibraryError::UnsafeLink { .. }), "{err}");
+    assert!(!root.join("Escaping").exists());
+
+    // A symlinked folder looping back to its parent: refused.
+    let looping = src_root.join("Looping");
+    write_kit(&looping, 3, 1, None, 4);
+    std::fs::create_dir_all(looping.join("sub")).unwrap();
+    symlink(&looping, looping.join("sub").join("up")).unwrap();
+    let err = lib.import(&looping, ImportJob::new()).unwrap_err();
+    assert!(matches!(err, LibraryError::UnsafeLink { .. }), "{err}");
+    assert!(!root.join("Looping").exists());
+    assert!(!root.join(STAGING_DIR).exists());
+    // measure_size skips rather than fails.
+    assert!(measure_size(&looping).unwrap() > 0);
+}
+
+#[test]
+fn a_dotted_source_name_imports_as_a_visible_kit() {
+    let root = temp_root("dotname");
+    let src_root = temp_root("dotname-src");
+    let src = src_root.join(". .");
+    write_kit(&src, 1, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let ImportOutcome::Added(e) = lib.import(&src, ImportJob::new()).unwrap() else {
+        panic!("expected Added");
+    };
+    assert_eq!(e.dir, root.join("kit"));
+    // And again with another kit under the same name: `kit 2`.
+    let src2 = src_root.join(".x").join(". .");
+    write_kit(&src2, 2, 1, None, 4);
+    let e2 = lib.import(&src2, ImportJob::new()).unwrap();
+    assert_eq!(e2.entry().dir, root.join("kit 2"));
+}
+
+#[test]
+fn a_name_collision_promotes_as_name_2() {
+    let root = temp_root("collide");
+    let src_root = temp_root("collide-src");
+    write_kit(&root.join("Kit"), 1, 1, None, 4);
+    write_kit(&src_root.join("Kit"), 2, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let e = lib.import(&src_root.join("Kit"), ImportJob::new()).unwrap();
+    assert_eq!(e.entry().dir, root.join("Kit 2"));
+    assert_eq!(lib.len(), 2);
+}
+
+#[test]
+fn re_download_replaces_a_kit_in_place_and_repairs_missing_files() {
+    let root = temp_root("replace");
+    let src_root = temp_root("replace-src");
+    write_kit(&src_root.join("a"), 1, 2, None, 16);
+    let zip_path = src_root.join("a.zip");
+    zip_of(&zip_path, &kit_entries(&src_root.join("a"), "kit/"));
+    let sc = Sidecar {
+        source: SOURCE_PLOK.into(),
+        index_name: Some("Plok Kit".into()),
+        index_file: Some("a.zip".into()),
+        ..Sidecar::default()
+    };
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    write_kit(&root.join("Other"), 9, 1, None, 4);
+    let before = lib
+        .install_zip(&zip_path, "Plok Kit", sc.clone(), ImportJob::new())
+        .unwrap()
+        .entry()
+        .clone();
+
+    // Lose two samples.
+    let wavs: Vec<_> = tree(&before.dir)
+        .into_iter()
+        .filter(|p| p.ends_with(".wav"))
+        .take(2)
+        .collect();
+    for w in &wavs {
+        std::fs::remove_file(before.dir.join(w)).unwrap();
+    }
+    assert_eq!(lib.check_missing_files(&before.id).unwrap(), 2);
+    assert_eq!(
+        lib.entry(&before.id).unwrap().status,
+        EntryStatus::MissingFiles(2)
+    );
+
+    let after = lib
+        .install_zip_replacing(&zip_path, &before.dir, sc.clone(), ImportJob::new())
+        .unwrap();
+    assert_eq!(after.id, before.id, "same manifest: same id, so same marks");
+    assert_eq!(after.slot, before.slot);
+    assert_eq!(after.dir, before.dir);
+    assert_eq!(after.status, EntryStatus::Ok);
+    assert_eq!(lib.check_missing_files(&after.id).unwrap(), 0);
+    assert!(!root.join(STAGING_DIR).exists(), "the old copy is gone");
+    assert_eq!(lib.len(), 2);
+
+    // A replacement that fails puts the old kit back untouched.
+    let junk = src_root.join("junk.zip");
+    zip_entries(&junk, &[("readme.txt", b"no kit".to_vec())]);
+    let err = lib
+        .install_zip_replacing(&junk, &before.dir, sc.clone(), ImportJob::new())
+        .unwrap_err();
+    assert!(matches!(err, LibraryError::NotAKit { .. }), "{err}");
+    assert!(before.manifest_path.is_file());
+    assert_eq!(lib.entry(&before.id).unwrap().slot, before.slot);
+
+    // Only a kit of this library can be replaced.
+    assert!(lib
+        .install_zip_replacing(&zip_path, &src_root.join("a"), sc, ImportJob::new())
+        .is_err());
+}
+
+#[test]
+fn a_sidecar_without_a_source_still_counts() {
+    let root = temp_root("nosource");
+    write_kit(&root.join("Kit"), 1, 1, None, 4);
+    std::fs::write(
+        root.join("Kit").join(SIDECAR_FILE),
+        br#"{"index_name":"Named","description":"kept"}"#,
+    )
+    .unwrap();
+    let lib = Library::open_and_scan(&root).unwrap();
+    let e = &lib.entries()[0];
+    assert_eq!(e.name, "Named");
+    assert_eq!(e.description(), Some("kept"));
+    assert_eq!(e.source, Source::Local, "no source → local");
+}
+
+#[test]
+fn reload_if_changed_rebuilds_when_the_generation_did_not_move() {
+    let root = temp_root("reload-same-gen");
+    write_kit(&root.join("Kit"), 1, 1, None, 4);
+    let lib = Library::open_and_scan(&root).unwrap();
+    let mut reader = Library::open(&root);
+    assert_eq!(reader.entries()[0].slot, Some(0));
+    let id = lib.entries()[0].id.clone();
+
+    // Another tool rewrites the index keeping the generation.
+    let path = root.join(LIBRARY_FILE);
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    doc["slots"] = serde_json::json!({ "5": id });
+    doc["next_slot"] = serde_json::json!(6);
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    assert!(reader.reload_if_changed());
+    assert_eq!(reader.entries()[0].slot, Some(5));
+}
+
+#[test]
+fn duplicates_point_at_the_canonical_kit_and_the_slot_follows_the_id() {
+    let root = temp_root("dupes");
+    write_kit(&root.join("A"), 1, 1, None, 4);
+    write_kit(&root.join("B"), 1, 1, None, 4);
+    write_kit(&root.join("C"), 2, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    let a = lib.by_dir(&root.join("A")).unwrap().clone();
+    let b = lib.by_dir(&root.join("B")).unwrap().clone();
+    assert_eq!(a.id, b.id);
+    assert_eq!(b.status, EntryStatus::DuplicateOf(root.join("A")));
+    assert_eq!(b.slot, None);
+    assert!(!b.is_loadable());
+    assert_eq!(
+        lib.entry(&a.id).unwrap().dir,
+        root.join("A"),
+        "by id: canonical"
+    );
+    assert_eq!(
+        lib.entries().last().unwrap().dir,
+        root.join("B"),
+        "unslotted last"
+    );
+
+    // Deleting the canonical copy: the duplicate takes over, and the slot
+    // stays with the id.
+    lib.delete(&root.join("A")).unwrap();
+    let b = lib.by_dir(&root.join("B")).unwrap();
+    assert_eq!(b.status, EntryStatus::Ok);
+    assert_eq!(b.slot, a.slot);
+    assert_eq!(lib.by_slot(a.slot.unwrap()).unwrap().dir, root.join("B"));
+}
+
+#[test]
+fn installed_json_that_does_not_parse_is_left_alone() {
+    let root = temp_root("migrate-corrupt");
+    write_kit(&root.join("Kit"), 1, 1, None, 4);
+    let reg_dir = temp_root("migrate-corrupt-reg");
+    let reg = reg_dir.join("installed.json");
+    std::fs::write(&reg, b"{ not json").unwrap();
+    let mut lib = Library::open(&root).with_installed_json(&reg, None);
+    assert_eq!(lib.rescan().unwrap().migrated, 0);
+    assert_eq!(std::fs::read(&reg).unwrap(), b"{ not json");
+    assert_eq!(listing(&reg_dir), ["installed.json"], "never quarantined");
+}
+
+#[cfg(unix)]
+#[test]
+fn delete_refuses_a_symlinked_kit_dir() {
+    let root = temp_root("delete-link");
+    let outside = temp_root("delete-link-target");
+    write_kit(&outside.join("Real"), 1, 1, None, 4);
+    std::os::unix::fs::symlink(outside.join("Real"), root.join("Link")).unwrap();
+    write_kit(&root.join("Kit"), 2, 1, None, 4);
+    let mut lib = Library::open_and_scan(&root).unwrap();
+    assert!(
+        lib.by_dir(&root.join("Link")).is_none(),
+        "a symlink is not scanned"
+    );
+    assert!(matches!(
+        lib.delete(&root.join("Link")),
+        Err(LibraryError::OutsideLibrary { .. })
+    ));
+    assert!(outside.join("Real").join(MANIFEST_FILE).is_file());
 }
 
 #[test]
