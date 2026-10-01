@@ -11,7 +11,7 @@
 //!     memory figures, the last build for incremental reloads),
 //!   * the one-slot mailbox (for publishing the new pad set).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -31,7 +31,7 @@ pub mod manifest;
 pub mod progress;
 
 pub use cache::{SampleCache, SampleKey};
-pub use fallback::build_fallback_pad;
+pub use fallback::{build_fallback_pad, build_fallback_pad_sourced};
 pub use manifest::{parse_vel_index, KitManifest, MicSetup, PadMicChoices};
 pub use progress::{KitLoadProgress, LoadPhase, ProgressSnapshot};
 
@@ -201,6 +201,114 @@ pub struct PadBuild {
     pub unreadable: usize,
     /// The first few of them.
     pub unreadable_paths: Vec<PathBuf>,
+    /// Bytes of the pad's takes that another instance held when this one
+    /// got them (see [`is_shared`]).
+    pub shared_bytes: u64,
+    /// Those takes, by [`take_addr`].
+    pub shared_takes: HashSet<usize>,
+}
+
+/// A kit this instance holds outside its last build — the built-in kit
+/// `initialize` installed — and which of its takes it found shared.
+/// Kept on the bridge ([`KitBridge::builtin_kit`]) while the sampler
+/// plays it, so a load can tell those takes from another instance's.
+#[derive(Clone, Default)]
+pub struct HeldKit {
+    pub pads: Vec<LoadedPad>,
+    pub shared_takes: HashSet<usize>,
+}
+
+/// Takes an instance already holds, by [`take_addr`], each with whether
+/// it was shared with another instance when this instance got it.
+pub type HeldTakes = HashMap<usize, bool>;
+
+/// A take's identity in [`HeldTakes`]: its address. Only compared while
+/// the take is held, so the address cannot have been reused.
+pub fn take_addr(sample: &Arc<SampleData>) -> usize {
+    Arc::as_ptr(sample) as usize
+}
+
+/// Whether a take fetched from `source` is memory shared with another
+/// instance. A decode is this instance's alone. A cache hit is shared —
+/// unless this instance already held the take, in which case it is
+/// whatever it was when this instance first got it: a reload must
+/// neither count the instance's own takes as shared nor forget that a
+/// take it reuses is shared.
+pub fn is_shared(sample: &Arc<SampleData>, source: cache::Source, held: &HeldTakes) -> bool {
+    match source {
+        cache::Source::Decoded => false,
+        cache::Source::Cached => held.get(&take_addr(sample)).copied().unwrap_or(true),
+    }
+}
+
+/// Add every take of `pads` to `held`, marked shared when its address
+/// is in `shared`.
+fn hold_takes<'a>(
+    held: &mut HeldTakes,
+    pads: impl IntoIterator<Item = (&'a LoadedPad, &'a HashSet<usize>)>,
+) {
+    for (pad, shared) in pads {
+        for take in pad
+            .close_mics
+            .iter()
+            .chain(pad.overhead.iter())
+            .flat_map(|bank| bank.layers.iter())
+            .flat_map(|layer| layer.round_robins.iter())
+        {
+            let addr = take_addr(take.shared());
+            held.insert(addr, shared.contains(&addr));
+        }
+    }
+}
+
+/// The built-in kit `pads`, measured: the bytes of it another instance
+/// already held, and the kit to keep as [`KitBridge::builtin_kit`].
+/// `sources` says where each pad's take came from (`None`: the pad has
+/// none), as [`fallback::build_fallback_pad_sourced`] reported it; `held`
+/// is what this instance held before.
+pub fn measure_builtin_kit(
+    pads: &[LoadedPad],
+    sources: &[Option<cache::Source>],
+    held: &HeldTakes,
+) -> (u64, HeldKit) {
+    let mut shared_bytes = 0;
+    let mut kit = HeldKit::default();
+    for (pad, source) in pads.iter().zip(sources) {
+        if let Some(source) = source {
+            for take in pad
+                .close_mics
+                .iter()
+                .flat_map(|bank| bank.layers.iter())
+                .flat_map(|layer| layer.round_robins.iter())
+            {
+                if is_shared(take.shared(), *source, held) {
+                    shared_bytes += take.bytes() as u64;
+                    kit.shared_takes.insert(take_addr(take.shared()));
+                }
+            }
+        }
+        kit.pads.push(pad.clone());
+    }
+    (shared_bytes, kit)
+}
+
+impl HeldKit {
+    /// This kit's takes as [`HeldTakes`].
+    pub fn held_takes(&self, held: &mut HeldTakes) {
+        hold_takes(held, self.pads.iter().map(|pad| (pad, &self.shared_takes)));
+    }
+}
+
+impl BuiltKit {
+    /// This build's takes as [`HeldTakes`].
+    pub fn held_takes(&self, held: &mut HeldTakes) {
+        hold_takes(
+            held,
+            self.pads
+                .iter()
+                .zip(self.pad_builds.iter().map(|b| &b.shared_takes)),
+        );
+    }
 }
 
 impl BuiltKit {
@@ -282,8 +390,10 @@ pub struct LoadStats {
     pub unreadable_paths: Vec<PathBuf>,
     /// Bytes of decoded audio the kit holds.
     pub kit_bytes: u64,
-    /// Of `kit_bytes`, what this load found already decoded by someone
-    /// other than this instance — memory shared with another instance.
+    /// Of `kit_bytes`, what was already decoded by another instance when
+    /// this instance got it — memory shared with another instance. Over
+    /// the whole kit: a reused pad carries its figure from the load that
+    /// built it.
     pub shared_bytes: u64,
 }
 
@@ -321,7 +431,7 @@ pub fn load_kit_from_manifest(
         pad_choices: pad_choices.clone(),
         articulations: *articulations,
     };
-    load_kit(&request, target_sr, None, cache::global(), &|| {}, &|_| {})
+    load_kit(&request, target_sr, None, None, cache::global(), &|| {}, &|_| {})
 }
 
 /// Load `request` at `target_sr`.
@@ -340,12 +450,17 @@ pub fn load_kit_from_manifest(
 ///   silent: it keeps its slot with no banks, and plays nothing. Only a
 ///   kit in which *no* file could be read fails.
 ///
+/// `builtin` is the built-in kit this instance plays, if it does: with
+/// `previous`, what tells this instance's own takes from another's when
+/// the cache serves them ([`LoadStats::shared_bytes`]).
+///
 /// `set_total` is told how many files the load reads once it knows, and
 /// `file_done` runs once per file finished (on a decode worker).
 pub fn load_kit(
     request: &KitRequest,
     target_sr: f32,
     previous: Option<&BuiltKit>,
+    builtin: Option<&HeldKit>,
     cache: &SampleCache,
     file_done: &(dyn Fn() + Sync),
     set_total: &dyn Fn(usize),
@@ -435,11 +550,17 @@ pub fn load_kit(
     set_total(jobs.paths.len());
     let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done);
 
-    // 3. Assemble. Takes this instance already held (its previous build)
-    // are not "shared" with anyone else just because the cache served them.
-    let own: HashSet<*const SampleData> = previous
-        .map(|prev| sample_ptrs(&prev.pads))
-        .unwrap_or_default();
+    // 3. Assemble. Takes this instance already held (its previous build,
+    // the built-in kit it plays) are not "shared" with anyone else just
+    // because the cache served them — nor stop being shared because a
+    // reload served them again (see `is_shared`).
+    let mut held = HeldTakes::new();
+    if let Some(prev) = previous {
+        prev.held_takes(&mut held);
+    }
+    if let Some(builtin) = builtin {
+        builtin.held_takes(&mut held);
+    }
     let mut tally = Tally::default();
     let mut stats = LoadStats {
         files: jobs.paths.len(),
@@ -455,7 +576,22 @@ pub fn load_kit(
             }
             PadPlan::Fallback => {
                 stats.rebuilt_pads += 1;
-                (build_fallback_pad(mapping, target_sr)?, PadBuild::default())
+                let (pad, source) = fallback::build_fallback_pad_sourced(mapping, target_sr)?;
+                let mut pad_tally = Tally::default();
+                for take in pad
+                    .close_mics
+                    .iter()
+                    .flat_map(|bank| bank.layers.iter())
+                    .flat_map(|layer| layer.round_robins.iter())
+                {
+                    pad_tally.note_kept(take.shared(), source, &held);
+                }
+                let build = PadBuild {
+                    shared_bytes: pad_tally.shared_bytes,
+                    shared_takes: pad_tally.shared_takes,
+                    ..PadBuild::default()
+                };
+                (pad, build)
             }
             PadPlan::Piece { close, overhead } => {
                 stats.rebuilt_pads += 1;
@@ -465,12 +601,11 @@ pub fn load_kit(
                     overhead.as_ref(),
                     &results,
                     &jobs.paths,
-                    &own,
+                    &held,
                     &mut pad_tally,
                 );
                 tally.decoded += pad_tally.decoded;
                 tally.cached += pad_tally.cached;
-                tally.shared_bytes += pad_tally.shared_bytes;
                 let pad = LoadedPad {
                     name: mapping.name.to_string(),
                     choke_group: mapping.choke_group,
@@ -481,13 +616,16 @@ pub fn load_kit(
                 let build = PadBuild {
                     unreadable: pad_tally.unreadable,
                     unreadable_paths: pad_tally.unreadable_paths,
+                    shared_bytes: pad_tally.shared_bytes,
+                    shared_takes: pad_tally.shared_takes,
                 };
                 (pad, build)
             }
         };
-        // Every pad's unreadable files count, reused or rebuilt: the
-        // kit's figure is the kit's, not this load's.
+        // Every pad's unreadable files and shared bytes count, reused or
+        // rebuilt: the kit's figures are the kit's, not this load's.
         tally.unreadable += build.unreadable;
+        tally.shared_bytes += build.shared_bytes;
         for path in &build.unreadable_paths {
             if tally.unreadable_paths.len() < decode::UNREADABLE_PATHS_KEPT {
                 tally.unreadable_paths.push(path.clone());
@@ -540,16 +678,6 @@ fn piece_name_for(pad_idx: usize, articulation: bool) -> &'static str {
     } else {
         DRUMMICA_MAPPING[pad_idx]
     }
-}
-
-/// Every take a kit references, by address.
-fn sample_ptrs(pads: &[LoadedPad]) -> HashSet<*const SampleData> {
-    pads.iter()
-        .flat_map(|pad| pad.close_mics.iter().chain(pad.overhead.iter()))
-        .flat_map(|bank| bank.layers.iter())
-        .flat_map(|layer| layer.round_robins.iter())
-        .map(|take| Arc::as_ptr(take.shared()))
-        .collect()
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -623,18 +751,21 @@ pub fn spawn_loader(
             }
 
             let previous = bridge.built_kit.lock().clone();
+            let builtin = bridge.builtin_kit.lock().clone();
             let progress = &bridge.load_progress;
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 load_kit(
                     &request,
                     target_sr,
                     previous.as_ref(),
+                    builtin.as_ref(),
                     cache::global(),
                     &|| progress.file_done(stamp),
                     &|total| progress.set_total(stamp, total.min(u32::MAX as usize) as u32),
                 )
             }));
             drop(previous);
+            drop(builtin);
 
             // Only the newest load is allowed to write final state. The
             // check and the hand-off happen under one lock, so an older
@@ -666,6 +797,9 @@ pub fn spawn_loader(
                         sample_rate: target_sr,
                     });
                     *bridge.built_kit.lock() = Some(kit.built);
+                    // The sampler moves off the built-in kit (if it was
+                    // on it); its takes are no longer this instance's.
+                    *bridge.builtin_kit.lock() = None;
                     bridge
                         .kit_bytes
                         .store(kit.stats.kit_bytes, Ordering::Relaxed);
@@ -773,6 +907,7 @@ pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     // Not a loader's kit: what the sampler will hold is no longer known.
     *bridge.handed_off.lock() = None;
     *bridge.built_kit.lock() = None;
+    *bridge.builtin_kit.lock() = None;
 }
 
 /// [`hand_off_kit`] for a caller already holding

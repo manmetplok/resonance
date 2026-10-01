@@ -52,8 +52,8 @@ pub mod voice;
 use articulation::ArticulationWatcher;
 use kit::LoadedPad;
 use kit_loader::{
-    BuiltKit, HandedOffKit, KitLoadProgress, KitRequest, KitStatus, LoadStats, PadMicChoices,
-    DEFAULT_OVERHEAD_SETUP,
+    BuiltKit, HandedOffKit, HeldKit, KitLoadProgress, KitRequest, KitStatus, LoadStats,
+    PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
@@ -156,9 +156,10 @@ pub struct KitBridge {
     /// from the decoded takes. Published alongside every kit build; read by
     /// the inspector's SAMPLE stage. Empty until the first kit is built.
     pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
-    /// Of `kit_bytes`, the bytes the last load found already decoded by
-    /// another instance (through the shared sample cache, E5) — memory
-    /// this kit costs nothing extra for. The process-wide total is
+    /// Of `kit_bytes`, the bytes another instance already held when this
+    /// one got them (through the shared sample cache, E5) — memory this
+    /// kit costs nothing extra for. Over the whole kit, the built-in one
+    /// included; see [`kit_loader::is_shared`]. The process-wide total is
     /// `kit_loader::cache::global().stats().resident_bytes`.
     pub kit_shared_bytes: Arc<AtomicU64>,
     /// The last kit a loader built, kept so the next load of the same kit
@@ -171,6 +172,12 @@ pub struct KitBridge {
     /// donate to the next load — another rate, another kit, or none —
     /// and a direct [`kit_loader::hand_off_kit`] drops it too.
     pub built_kit: Arc<Mutex<Option<BuiltKit>>>,
+    /// The built-in kit `initialize` installed, while the sampler plays
+    /// it (cleared once a loaded kit is handed off), with which of its
+    /// takes another instance already held. Lets a load — and the next
+    /// `initialize` — tell this instance's own takes from shared ones
+    /// ([`Self::kit_shared_bytes`]).
+    pub builtin_kit: Arc<Mutex<Option<HeldKit>>>,
     /// What the last successful load did: files decoded vs found in the
     /// cache, pads reused, unreadable files. Read by tests as the decode
     /// counter.
@@ -357,6 +364,7 @@ impl ResonancePlugin for ResonanceDrums {
             pad_samples: Arc::new(Mutex::new(Vec::new())),
             kit_shared_bytes: Arc::new(AtomicU64::new(0)),
             built_kit: Arc::new(Mutex::new(None)),
+            builtin_kit: Arc::new(Mutex::new(None)),
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
         };
@@ -507,11 +515,24 @@ impl ResonancePlugin for ResonanceDrums {
             return true;
         }
 
-        self.sampler.load_defaults(sample_rate);
+        // What this instance holds already, so the built-in kit's takes
+        // it held before (a re-activation on it) are not taken for
+        // another instance's. Both stay alive until replaced below.
+        let mut held = kit_loader::HeldTakes::new();
+        if let Some(builtin) = self.bridge.builtin_kit.lock().as_ref() {
+            builtin.held_takes(&mut held);
+        }
+        if let Some(built) = self.bridge.built_kit.lock().as_ref() {
+            built.held_takes(&mut held);
+        }
+        let sources = self.sampler.load_defaults_sourced(sample_rate);
+        let (shared_bytes, builtin) =
+            kit_loader::measure_builtin_kit(&self.sampler.pads, &sources, &held);
+        *self.bridge.builtin_kit.lock() = Some(builtin);
         // Publish what the fallback kit actually costs and what it holds,
         // so the status bar and the inspector's SAMPLE stage describe the
         // kit that is really loaded rather than a placeholder.
-        self.publish_kit_facts(sample_rate);
+        self.publish_kit_facts(sample_rate, shared_bytes);
 
         if wanted.is_none() {
             // The built-in kit is the wanted kit, and it is in place.
@@ -670,19 +691,22 @@ impl ResonanceDrums {
         }
     }
 
-    /// Measure the kit the sampler currently holds and publish the two
-    /// facts the editor displays about it: how much decoded audio is in
-    /// memory, and what sample each pad plays at full velocity.
+    /// Measure the kit the sampler currently holds and publish the facts
+    /// the editor displays about it: how much decoded audio is in memory,
+    /// how much of that another instance holds too (`shared_bytes`), and
+    /// what sample each pad plays at full velocity.
     ///
     /// Called from `initialize` for the embedded fallback kit; the loader
-    /// thread publishes the same two facts for kits it loads from disk
-    /// (see `kit_loader::spawn_loader`). Both callers are off the audio
+    /// thread publishes the same facts for kits it loads from disk (see
+    /// `kit_loader::spawn_loader`). Both callers are off the audio
     /// thread — nothing here runs in `process`.
-    fn publish_kit_facts(&self, sample_rate: f32) {
+    fn publish_kit_facts(&self, sample_rate: f32, shared_bytes: u64) {
         self.bridge
             .kit_bytes
             .store(self.sampler.total_sample_bytes() as u64, Ordering::Relaxed);
-        self.bridge.kit_shared_bytes.store(0, Ordering::Relaxed);
+        self.bridge
+            .kit_shared_bytes
+            .store(shared_bytes, Ordering::Relaxed);
         *self.bridge.pad_samples.lock() =
             sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
     }

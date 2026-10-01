@@ -302,15 +302,30 @@ impl DrumSampler {
     /// into the pad's assigned close-mic output port (or Main for Clap /
     /// Cowbell) with nothing on the Overhead port.
     pub fn load_defaults(&mut self, sample_rate: f32) {
+        self.load_defaults_sourced(sample_rate);
+    }
+
+    /// [`load_defaults`](Self::load_defaults), returning per pad where
+    /// its take came from: the shared cache (someone held it) or a fresh
+    /// decode; `None` for a pad that got no take.
+    pub fn load_defaults_sourced(
+        &mut self,
+        sample_rate: f32,
+    ) -> Vec<Option<crate::kit_loader::cache::Source>> {
         self.set_sample_rate(sample_rate);
         self.pads.clear();
+        let mut sources = Vec::with_capacity(PAD_MAPPINGS.len());
 
         for mapping in &PAD_MAPPINGS {
             // The embedded WAVs are mono, and stay mono (E5); the shared
             // cache gives every instance the same copy.
-            match crate::kit_loader::build_fallback_pad(mapping, sample_rate) {
-                Ok(pad) => self.pads.push(pad),
+            match crate::kit_loader::build_fallback_pad_sourced(mapping, sample_rate) {
+                Ok((pad, source)) => {
+                    self.pads.push(pad);
+                    sources.push(Some(source));
+                }
                 Err(e) => {
+                    sources.push(None);
                     eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     self.pads.push(LoadedPad {
                         name: mapping.name.to_string(),
@@ -322,6 +337,7 @@ impl DrumSampler {
                 }
             }
         }
+        sources
     }
 
     /// Install `pads` as the live kit at once, with every voice silenced.

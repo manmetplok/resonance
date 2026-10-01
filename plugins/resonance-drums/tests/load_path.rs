@@ -334,8 +334,11 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
     assert_eq!(second.files, 6, "{second:?}");
     assert_eq!(second.decoded, 2, "{second:?}");
     assert_eq!(second.cached, 4, "{second:?}");
+    // (The kit-wide figure also counts built-in pads other tests may
+    // hold; the kick's own is what this load decided.)
+    let kick_build = plugin.bridge.built_kit.lock().as_ref().unwrap().pad_builds[0].clone();
     assert_eq!(
-        second.shared_bytes, 0,
+        kick_build.shared_bytes, 0,
         "the instance's own takes are not 'shared'"
     );
 
@@ -430,23 +433,19 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
     let second = settle(&b);
     assert_eq!(second.decoded, 0, "the second instance decoded: {second:?}");
     assert_eq!(second.cached, 14);
-    // Every byte of the kit's own files is shared. (The built-in pads
-    // filling the pieces the fixture lacks are shared too, but they are
-    // not files of the kit and are not counted.)
-    let file_bytes = resonance_drums::sample_info::total_sample_bytes(&[
-        built_pad(&b, 0),
-        built_pad(&b, 1),
-        built_pad(&b, 2),
-    ]) as u64;
-    assert_eq!(second.shared_bytes, file_bytes, "{second:?}");
+    // Every byte of the kit is shared: its files, and the built-in pads
+    // filling the pieces the fixture lacks, which A holds too.
+    assert_eq!(second.shared_bytes, second.kit_bytes, "{second:?}");
     assert_eq!(
         b.bridge.kit_shared_bytes.load(Ordering::Relaxed),
-        file_bytes
+        second.kit_bytes
     );
-    assert_eq!(
-        first.shared_bytes, 0,
-        "the first instance shares with no one"
-    );
+    // The first instance shares none of the kit's files. (Its built-in
+    // pads may be shared with whatever other test holds them.)
+    let a_builds = a.bridge.built_kit.lock().as_ref().unwrap().pad_builds.clone();
+    for (pad, build) in a_builds.iter().enumerate().take(3) {
+        assert_eq!(build.shared_bytes, 0, "pad {pad} of the first instance");
+    }
 
     for pad in [0, 1, 2] {
         let (pa, pb) = (built_pad(&a, pad), built_pad(&b, pad));
@@ -461,6 +460,43 @@ fn a_second_instance_on_the_same_kit_decodes_nothing_and_shares_the_takes() {
             }
         }
     }
+
+    // A reload in B rebuilds the kick only, but the figure is still the
+    // whole kit's: the reused snare and hat keep theirs, and the kick's
+    // KickOut / OH takes B already held stay shared. Only the new KickIn
+    // files, which A does not hold, are B's alone.
+    b.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "02_KickIn_alt".to_string());
+    assert!(reload_kit(&b.bridge));
+    let third = settle(&b);
+    assert_eq!(third.reused_pads, NUM_PADS - 1);
+    let kick_in_alt = resonance_drums::sample_info::total_sample_bytes(&[LoadedPad {
+        overhead: None,
+        close_mics: vec![built_pad(&b, 0).close_mics[0].clone()],
+        ..built_pad(&b, 0)
+    }]) as u64;
+    assert_eq!(
+        third.shared_bytes,
+        third.kit_bytes - kick_in_alt,
+        "{third:?}"
+    );
+    assert_eq!(
+        b.bridge.kit_shared_bytes.load(Ordering::Relaxed),
+        third.shared_bytes
+    );
+}
+
+/// The built-in kit is shared memory too: a second instance booting
+/// while another holds it reports all of it shared, not 0.
+#[test]
+fn a_second_instance_on_the_built_in_kit_reports_it_shared() {
+    let a = booted();
+    let b = booted();
+    let kit_bytes = b.bridge.kit_bytes.load(Ordering::Relaxed);
+    assert!(kit_bytes > 0);
+    assert_eq!(b.bridge.kit_shared_bytes.load(Ordering::Relaxed), kit_bytes);
+    drop(a);
 }
 
 #[test]

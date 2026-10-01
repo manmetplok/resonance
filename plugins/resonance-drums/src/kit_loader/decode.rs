@@ -6,8 +6,9 @@
 //!    shared [`SampleCache`] on a small worker pool. Results come back
 //!    indexed by job, so the kit is the same whatever order the workers
 //!    finish in.
-//! 3. **Assemble** ([`assemble_bank`]): build the banks from the results,
-//!    dropping (and counting) every take that could not be read (E6).
+//! 3. **Assemble** ([`assemble_pad`]): build a pad's banks from the
+//!    results, dropping (and counting) every take that could not be read,
+//!    with the banks kept aligned (E6).
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -18,6 +19,7 @@ use crate::kit::{LoadedMicBank, LoadedSample, SampleData, VelocityLayer};
 
 use super::cache::{SampleCache, Source};
 use super::manifest::{parse_vel_index, MicSetup};
+use super::{is_shared, take_addr, HeldTakes};
 
 /// How many unreadable paths a load keeps for display; the count is exact
 /// beyond that.
@@ -220,9 +222,22 @@ pub(super) struct Tally {
     pub cached: usize,
     pub unreadable: usize,
     pub unreadable_paths: Vec<PathBuf>,
-    /// Bytes of cache hits this instance did not already hold: memory
-    /// shared with another instance.
+    /// Bytes of the kept takes shared with another instance (see
+    /// [`super::is_shared`]).
     pub shared_bytes: u64,
+    /// Those takes, by address.
+    pub shared_takes: HashSet<usize>,
+}
+
+impl Tally {
+    /// A take fetched from `source` goes into the kit. Counted per use,
+    /// as [`crate::sample_info::total_sample_bytes`] counts the kit.
+    pub fn note_kept(&mut self, sample: &Arc<SampleData>, source: Source, held: &HeldTakes) {
+        if is_shared(sample, source, held) {
+            self.shared_bytes += sample.bytes() as u64;
+            self.shared_takes.insert(take_addr(sample));
+        }
+    }
 }
 
 /// The banks of one pad, built from their plans and the decode results.
@@ -251,7 +266,7 @@ pub(super) fn assemble_pad(
     overhead: Option<&BankPlan>,
     results: &[Fetched],
     paths: &[PathBuf],
-    own: &HashSet<*const SampleData>,
+    held: &HeldTakes,
     tally: &mut Tally,
 ) -> (Vec<LoadedMicBank>, Option<LoadedMicBank>) {
     let banks = || close.iter().chain(overhead);
@@ -286,9 +301,7 @@ pub(super) fn assemble_pad(
                         if lost.contains(&(layer.vel, rr.as_str())) {
                             continue;
                         }
-                        if *source == Source::Cached && !own.contains(&Arc::as_ptr(sample)) {
-                            tally.shared_bytes += sample.bytes() as u64;
-                        }
+                        tally.note_kept(sample, *source, held);
                         round_robins.push(LoadedSample::from_shared(sample.clone()));
                     }
                     Err(_) => {
