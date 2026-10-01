@@ -19,9 +19,12 @@
 //! when they let go (an install, an import, a delete), so changes made
 //! outside the process meanwhile are still picked up.
 //!
-//! **Opening is lazy.** A plugin instance never opens the library; the
-//! editor factory does, on the first editor open. Headless renders never
-//! read the library at all.
+//! **Opening is lazy.** The library is opened on first use — an editor,
+//! or an instance's `kit_select` (its text, a name to parse, a state's
+//! kit reference). The first open reads the index as the last scan left
+//! it and scans once on a thread of its own, since with no editor open
+//! nothing else would; a name lookup that misses re-reads the index in
+//! case another process rewrote it. Headless builds have no library.
 //!
 //! **Usage.** Which kit each live instance is playing — or is loading,
 //! and so will reload — is read straight from the instances' kit bridges
@@ -347,7 +350,32 @@ pub fn shared_for(roots: Roots) -> Arc<SharedKitLibrary> {
     }
     let lib = SharedKitLibrary::open(roots);
     reg.push((key, Arc::downgrade(&lib)));
+    drop(reg);
+    rescan_in_background(&lib);
     lib
+}
+
+/// The library just opened reads the index from disk as the last scan
+/// left it — kits added, removed or renamed by hand since are not in it,
+/// and with no editor open nothing would scan. So the first open scans
+/// once, on a thread of its own (never the caller's: the caller may be a
+/// host thread asking for `kit_select`'s text, and a scan hashes
+/// manifests). It never fetches the plok.org index.
+fn rescan_in_background(lib: &Arc<SharedKitLibrary>) {
+    if lib.root().is_none() {
+        return;
+    }
+    let lib = lib.clone();
+    let spawned = std::thread::Builder::new()
+        .name("resonance-drums-library-scan".to_string())
+        .spawn(move || {
+            if let Some(Err(e)) = lib.rescan_offline() {
+                tracing::warn!("drum kit library scan: {e}");
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!("could not start the drum kit library scan: {e}");
+    }
 }
 
 /// How many times a process fetches the index for the migration: the
@@ -490,6 +518,38 @@ impl SharedKitLibrary {
         }
         let attach = self.migration_to_attach(Some(cancel));
         self.scan(attach)
+    }
+
+    /// [`rescan`](Self::rescan) without ever fetching the plok.org index
+    /// (the `installed.json` migration attaches only when it needs none).
+    /// `None` when another writer holds the library: it rescans when it
+    /// finishes.
+    pub fn rescan_offline(&self) -> Option<Result<ScanReport, LibraryError>> {
+        if self.root.is_none() {
+            return Some(Ok(ScanReport::default()));
+        }
+        let attach = self.migration_to_attach(None);
+        self.scan(attach)
+    }
+
+    /// Re-read the index if another process (another instance's editor,
+    /// a scan) rewrote it since: a copy of the entries and one `stat` when
+    /// nothing moved. For a
+    /// lookup that missed — the name a host or agent asked for may be a
+    /// kit this process has not seen yet. `false` when nothing changed,
+    /// or a writer here holds the library (it publishes its own result).
+    pub fn reload_if_changed(&self) -> bool {
+        if self.root.is_none() {
+            return false;
+        }
+        let Some(guard) = self.writer.try_lock() else {
+            return false;
+        };
+        // A copy of the entries (a few dozen) and one `stat`; the swap
+        // bumps the revision only when the entries changed.
+        let reloaded = self.mutate_locked(guard, |lib| lib.reload_if_changed());
+        self.run_wanted_rescan();
+        reloaded
     }
 
     /// Whether a skipped rescan is waiting for the current writer.

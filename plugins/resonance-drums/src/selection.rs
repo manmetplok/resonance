@@ -3,13 +3,23 @@
 //!
 //! # `kit_select`
 //!
-//! A stepped parameter whose value is a **slot** in the shared kit
-//! library's slot table (`drumkit_library::Library::by_slot`), or
-//! [`NO_KIT`] for the built-in kit. Slots are never reused while others
-//! are free, so a value recalls the same kit after kits are added or
-//! deleted. Its text is the kit's name, and a name parses back to the slot
-//! ([`Library::find`]) — which is what makes the control API's
-//! `ParamValue::Label` pick a kit by name.
+//! A stepped parameter. Its values:
+//!
+//! | value | meaning | text |
+//! |---|---|---|
+//! | `0..=`[`MAX_KIT_SLOT`] | a **slot** in the shared kit library's slot table (`drumkit_library::Library::by_slot`) | the kit's name; `"(empty slot N)"` |
+//! | [`NO_KIT`] (-1) | the built-in kit — writing it always switches to the built-in kit | `"None (built-in kit)"` |
+//! | [`PARKED_KIT`] (-2) | **parked**: a kit with no slot — one from outside the library (or one the index has not slotted yet), or a kit the project named that is not on this machine | `"<name> (external)"`, `"<name> (missing)"`; `"(no external kit)"` with none remembered |
+//!
+//! Slots are never reused while others are free, so a value recalls the
+//! same kit after kits are added or deleted. Every text parses back to
+//! its value ([`KitSelection::parse`]) — which is what makes the control
+//! API's `ParamValue::Label` pick a kit by name.
+//!
+//! The parked kit is **remembered** when the selection moves on: writing
+//! [`PARKED_KIT`] again returns to it (re-loads the external kit, or goes
+//! back to "missing"), so a host's undo of a pick made from an external
+//! or missing kit restores that kit. Only a newer parked kit replaces it.
 //!
 //! The parameter is **not automatable** (a kit swap is a multi-gigabyte
 //! decode) and **not in the state**: a slot is this machine's library
@@ -35,19 +45,23 @@
 //! `kit_select`'s text, and the editor shows a banner (§5.3).
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 #[cfg(feature = "editor")]
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use parking_lot::Mutex;
 use resonance_common::drumkit_library::{self, Entry, EntryStatus, Library};
 use serde_json::{Map, Value};
 
-use crate::kit_loader::{self, KitStatus};
+use crate::kit_loader::{self, KitLoadProgress, KitStatus, LoadPhase};
 use crate::KitBridge;
 
 /// `kit_select`'s value for "no kit chosen": the built-in kit plays.
 pub const NO_KIT: i32 = -1;
+/// `kit_select`'s value for a kit with no library slot: an external kit,
+/// or a missing one (see the module docs). Its lowest value.
+pub const PARKED_KIT: i32 = -2;
 /// The highest `kit_select` value: the library's last slot.
 pub const MAX_KIT_SLOT: i32 = drumkit_library::MAX_SLOT as i32;
 
@@ -278,6 +292,33 @@ impl LibraryHandle {
 
     /// Use `library` rather than the process default (an editor test's
     /// own root). `false` once one is in use already.
+    /// Re-read the library's index if another process rewrote it since
+    /// ([`crate::library::SharedKitLibrary::reload_if_changed`]): for a
+    /// lookup that missed. Whether anything changed; `false` headless.
+    pub fn reload_if_changed(&self) -> bool {
+        #[cfg(feature = "editor")]
+        {
+            self.shared().reload_if_changed()
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            false
+        }
+    }
+
+    /// The library's revision, if this instance has opened it — never
+    /// opens it.
+    pub fn revision_if_open(&self) -> Option<u64> {
+        #[cfg(feature = "editor")]
+        {
+            self.cell.get().map(|lib| lib.revision())
+        }
+        #[cfg(not(feature = "editor"))]
+        {
+            None
+        }
+    }
+
     #[cfg(feature = "editor")]
     pub fn set(&self, library: Arc<crate::library::SharedKitLibrary>) -> bool {
         self.cell.set(library).is_ok()
@@ -338,33 +379,100 @@ impl LibraryHandle {
 #[derive(Default)]
 pub struct KitSelection {
     pub library: LibraryHandle,
+    /// Held across every "read `kit_select`, act on it, record `acted`"
+    /// — the watcher's [`apply_pending`], the editor's [`select_now`],
+    /// and a state load's [`adopt_state_kit`] with the load it starts —
+    /// so no two of them interleave: a watcher that read a host write
+    /// cannot act on it after a state load moved past it (and clear the
+    /// state's fallback kit, or start a second load).
+    act: Mutex<()>,
     /// The `kit_select` value this instance last acted on, so the watcher
-    /// sees a write as a change exactly once.
+    /// sees a write as a change exactly once. Written under `act`; read
+    /// lock-free (text, progress).
     acted: AtomicI32,
-    /// The reference a state asked for that resolved to nothing: kept
-    /// verbatim (a save writes it back), shown as missing.
-    missing: Mutex<Option<KitRef>>,
-    /// A kit playing that holds no slot (loaded by path, from outside the
-    /// library or before the library indexed it): `kit_select` parks at
-    /// [`NO_KIT`] and reads as this name.
-    unslotted: Mutex<Option<String>>,
+    /// Why acting on `acted` loaded nothing: [`ACT_OK`], or an empty slot
+    /// or a kit that cannot load. Written under `act`, before `acted`.
+    act_error: AtomicU8,
+    /// The `kit_load_progress` stage the host was last told of
+    /// ([`note_progress`]).
+    reported_stage: AtomicU8,
+    /// The load generation the host was last asked to process for
+    /// ([`watch`]).
+    process_asked: AtomicU64,
+    /// The library revision the watcher last saw ([`watch`]): a change
+    /// may rename the kit in a slot, which is `kit_select`'s text.
+    seen_revision: AtomicU64,
+    /// The kit [`PARKED_KIT`] stands for: the last kit with no slot this
+    /// instance played or was asked for. Kept when the selection moves on,
+    /// so writing [`PARKED_KIT`] returns to it.
+    parked: Mutex<Option<Parked>>,
     /// The reference the wanted kit was resolved from, so a save keeps
     /// its id and name even when the library does not know the kit.
     resolved_from: Mutex<Option<(PathBuf, KitRef)>>,
 }
 
+/// What [`PARKED_KIT`] stands for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Parked {
+    /// The reference a state asked for that resolved to nothing: kept
+    /// verbatim (a save writes it back), shown as missing; the built-in
+    /// kit plays.
+    Missing(KitRef),
+    /// A kit played by its manifest, which holds no slot (from outside the
+    /// library, or one the index has not slotted yet).
+    External {
+        manifest: PathBuf,
+        /// The reference it was resolved from (or made for it), so a save
+        /// keeps its id and name.
+        from: KitRef,
+    },
+}
+
+impl Parked {
+    /// `kit_select`'s text for [`PARKED_KIT`] standing for this.
+    pub fn text(&self) -> String {
+        match self {
+            Parked::Missing(r) => format!("{}{MISSING_SUFFIX}", r.display_name()),
+            Parked::External { from, .. } => format!("{}{EXTERNAL_SUFFIX}", from.display_name()),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Parked::Missing(r) | Parked::External { from: r, .. } => r.display_name(),
+        }
+    }
+}
+
+const MISSING_SUFFIX: &str = " (missing)";
+const EXTERNAL_SUFFIX: &str = " (external)";
+/// [`PARKED_KIT`]'s text with no parked kit remembered.
+pub const NO_PARKED_TEXT: &str = "(no external kit)";
+
 impl KitSelection {
     pub fn new() -> Self {
         Self {
             acted: AtomicI32::new(NO_KIT),
+            reported_stage: AtomicU8::new(STAGE_DONE),
             ..Self::default()
         }
     }
 
-    /// The missing kit's reference, if the state asked for one that
-    /// resolved to nothing.
+    /// The missing kit's reference, while `kit_select` is parked on a kit
+    /// the state asked for that resolved to nothing.
     pub fn missing(&self) -> Option<KitRef> {
-        self.missing.lock().clone()
+        if self.acted() != PARKED_KIT {
+            return None;
+        }
+        match self.parked.lock().as_ref()? {
+            Parked::Missing(r) => Some(r.clone()),
+            Parked::External { .. } => None,
+        }
+    }
+
+    /// What [`PARKED_KIT`] stands for, whether or not it is selected.
+    pub fn parked(&self) -> Option<Parked> {
+        self.parked.lock().clone()
     }
 
     /// The value `kit_select` was last acted on at.
@@ -372,20 +480,24 @@ impl KitSelection {
         self.acted.load(Ordering::Acquire)
     }
 
-    /// `kit_select`'s text for `value`: the slot's kit name, `"<name>
-    /// (missing)"` for a missing kit, the playing kit's name where it holds
-    /// no slot, `"None (built-in kit)"`, `"(empty slot N)"`. Never blocks:
-    /// a library mid-swap reads as `"slot N"`.
+    /// Hold off every other act on `kit_select` (see the `act` field):
+    /// a state load takes it around resolving, adopting and loading its
+    /// kit. Never from the audio thread.
+    pub fn acting(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.act.lock()
+    }
+
+    /// `kit_select`'s text for `value` (the table in the module docs).
+    /// Never blocks: a library mid-swap reads as `"slot N"`, a parked kit
+    /// being replaced as `"external kit"`.
     pub fn text(&self, value: i32) -> String {
-        if value == self.acted() {
-            if let Some(m) = self.missing.try_lock().and_then(|m| m.clone()) {
-                return format!("{} (missing)", m.display_name());
-            }
-            if let Some(name) = self.unslotted.try_lock().and_then(|n| n.clone()) {
-                return name;
-            }
+        if value <= PARKED_KIT {
+            return match self.parked.try_lock() {
+                Some(p) => p.as_ref().map_or(NO_PARKED_TEXT.to_string(), Parked::text),
+                None => "external kit".to_string(),
+            };
         }
-        if value <= NO_KIT {
+        if value == NO_KIT {
             return "None (built-in kit)".to_string();
         }
         match self
@@ -398,10 +510,21 @@ impl KitSelection {
         }
     }
 
-    /// The `kit_select` value `text` names: `"none"` / `"built-in"` is
-    /// [`NO_KIT`]; a number (`"12"`, `"slot 12"`) is that slot; else a kit
-    /// name or id prefix (`Library::find`). `None` when nothing (or more
-    /// than one kit) matches.
+    /// The `kit_select` value `text` names. Every [`text`](Self::text)
+    /// parses back to its value. In order:
+    ///
+    /// 1. `"none"` / `"built-in"` / `"None (built-in kit)"`: [`NO_KIT`].
+    /// 2. The parked kit's text, or its name with `" (missing)"` /
+    ///    `" (external)"`: [`PARKED_KIT`]. (`"(no external kit)"` too.)
+    /// 3. `"slot N"` and `"(empty slot N)"`: slot N, always.
+    /// 4. A kit's **exact** name (case and diacritics folded): its slot —
+    ///    before a bare number, so a kit named `"12"` is picked by its
+    ///    name, the way its text reads.
+    /// 5. A bare number: that value (-2, -1 or a slot).
+    /// 6. [`Library::find`]'s looser matches: an id prefix (6+ hex
+    ///    digits), a unique name prefix, a unique substring.
+    ///
+    /// `None` when nothing (or more than one kit) matches.
     pub fn parse(&self, text: &str) -> Option<i32> {
         let t = text.trim();
         let lower = t.to_ascii_lowercase();
@@ -411,16 +534,56 @@ impl KitSelection {
         ) {
             return Some(NO_KIT);
         }
-        let digits = lower.strip_prefix("slot ").unwrap_or(&lower);
-        if let Ok(n) = digits.trim().parse::<i32>() {
-            return (NO_KIT..=MAX_KIT_SLOT).contains(&n).then_some(n);
+        if lower == NO_PARKED_TEXT {
+            return Some(PARKED_KIT);
         }
-        // `"<name> (missing)"`, as the text reads, still names the kit.
-        let name = t.strip_suffix(" (missing)").unwrap_or(t);
-        self.library
-            .with(|lib| lib.find(name).and_then(|e| e.slot))
-            .flatten()
-            .map(|s| s as i32)
+        let suffixed = [MISSING_SUFFIX, EXTERNAL_SUFFIX]
+            .iter()
+            .find_map(|suffix| t.strip_suffix(suffix));
+        if let Some(name) = suffixed {
+            let parked = self.parked.lock().as_ref().map(Parked::name);
+            if parked.is_some_and(|p| fold(&p) == fold(name)) {
+                return Some(PARKED_KIT);
+            }
+        }
+        let in_range = |n: i32| (PARKED_KIT..=MAX_KIT_SLOT).contains(&n).then_some(n);
+        let slot_number = lower
+            .strip_prefix("slot ")
+            .or_else(|| {
+                lower
+                    .strip_prefix("(empty slot ")
+                    .and_then(|r| r.strip_suffix(')'))
+            })
+            .and_then(|d| d.trim().parse::<i32>().ok());
+        if let Some(n) = slot_number {
+            return (n >= 0).then_some(n).and_then(in_range);
+        }
+        // `"<name> (missing)"`, as the text reads, still names the kit
+        // when it is in the library now.
+        let name = suffixed.unwrap_or(t);
+        let exact = self
+            .library
+            .with(|lib| {
+                lib.find(name)
+                    .filter(|e| fold(&e.name) == fold(name))
+                    .and_then(|e| e.slot)
+            })
+            .flatten();
+        if let Some(slot) = exact {
+            return Some(slot as i32);
+        }
+        if let Ok(n) = t.parse::<i32>() {
+            return in_range(n);
+        }
+        let find = || {
+            self.library
+                .with(|lib| lib.find(name).and_then(|e| e.slot))
+                .flatten()
+                .map(|s| s as i32)
+        };
+        // A miss may be a kit another process indexed since this one read
+        // the index: look once more after re-reading it.
+        find().or_else(|| self.library.reload_if_changed().then(find).flatten())
     }
 
     /// The reference a save writes for the kit at `manifest`: the library
@@ -451,11 +614,10 @@ impl KitSelection {
         }
         KitRef::from_manifest_path(manifest, self.library.root().as_deref())
     }
+}
 
-    fn clear_notes(&self) {
-        *self.missing.lock() = None;
-        *self.unslotted.lock() = None;
-    }
+fn fold(text: &str) -> String {
+    resonance_common::library_marks::vocab::fold(text.trim())
 }
 
 /// What a selection started: the manifest a load is on its way for, and
@@ -478,33 +640,69 @@ pub struct StartedLoad {
 ///
 /// `Ok(None)`: nothing to do, or nothing to load.
 pub fn apply_pending(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
-    let value = bridge.params.kit_select.value();
     let sel = &bridge.params.selection;
-    if sel.acted.swap(value, Ordering::AcqRel) == value {
+    let _acting = sel.act.lock();
+    let value = bridge.params.kit_select.value();
+    if sel.acted.load(Ordering::Acquire) == value {
         return Ok(None);
     }
-    select(bridge, value)
+    act(bridge, value)
 }
+
+/// Act on `value` and record it as acted on — after the act, so a
+/// reader that sees `acted` caught up also sees the load it started.
+/// Under `act`.
+fn act(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
+    let sel = &bridge.params.selection;
+    sel.act_error.store(ACT_OK, Ordering::Release);
+    let out = select(bridge, value);
+    if out.is_err() && sel.act_error.load(Ordering::Acquire) == ACT_OK {
+        sel.act_error.store(ACT_FAILED, Ordering::Release);
+    }
+    sel.acted.store(value, Ordering::Release);
+    out
+}
+
+/// [`KitSelection::act_error`]: the act loaded what it was asked to.
+const ACT_OK: u8 = 0;
+/// The act named an empty slot.
+const ACT_EMPTY_SLOT: u8 = 1;
+/// The act named a kit that cannot load.
+const ACT_FAILED: u8 = 2;
 
 /// Set `kit_select` to `value` and act on it even if it already holds it —
 /// the editor's pick (a pick of the playing kit reloads it, which retries
-/// a kit that failed).
+/// a kit that failed). A user's edit: the host records it as one undoable
+/// change ([`KitBridge::announce_kit_select`]), never only a rescan — a
+/// rescan landing before the edit would move the host's copy first, and
+/// the edit would record no change.
 pub fn select_now(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
+    let _acting = bridge.params.selection.act.lock();
     bridge.params.kit_select.set_value(value);
-    bridge
-        .params
-        .selection
-        .acted
-        .store(value, Ordering::Release);
-    let out = select(bridge, value);
-    bridge.request_params_rescan();
+    let out = act(bridge, value);
+    bridge.announce_kit_select();
     out
 }
 
 fn select(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
     let sel = &bridge.params.selection;
-    if value <= NO_KIT {
-        sel.clear_notes();
+    if value <= PARKED_KIT {
+        return match sel.parked() {
+            None => Err("no external or missing kit to return to".to_string()),
+            // Back to "missing": the built-in kit plays, the banner and a
+            // save name the reference again.
+            Some(Parked::Missing(_)) => {
+                play_builtin(bridge);
+                Ok(None)
+            }
+            Some(Parked::External { manifest, from }) => {
+                let started = start_kit(bridge, manifest.clone());
+                *sel.resolved_from.lock() = Some((manifest, from));
+                Ok(Some(started))
+            }
+        };
+    }
+    if value == NO_KIT {
         play_builtin(bridge);
         return Ok(None);
     }
@@ -516,13 +714,13 @@ fn select(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String>
         // An empty slot loads nothing and unloads nothing: whatever plays
         // keeps playing (nam-model-library.md §5.1).
         let message = format!("no kit in slot {value}");
+        sel.act_error.store(ACT_EMPTY_SLOT, Ordering::Release);
         *bridge.kit_status.lock() = KitStatus::Error {
             message: message.clone(),
         };
         return Err(message);
     };
     loadable(&entry)?;
-    sel.clear_notes();
     *sel.resolved_from.lock() = None;
     Ok(Some(start_kit(bridge, entry.manifest_path.clone())))
 }
@@ -573,18 +771,39 @@ pub fn start_kit(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
     }
 }
 
-/// A kit about to load by its manifest, with no library slot to name it
-/// (an import the index has not slotted, a relinked folder): `kit_select`
-/// parks at [`NO_KIT`] and reads as the kit's name.
-pub fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
+/// Load the kit at `manifest`, which has no library slot to name it (an
+/// import the index has not slotted, a relinked folder): `kit_select`
+/// parks at [`PARKED_KIT`] and reads as `"<name> (external)"`.
+///
+/// A user's edit, like [`select_now`].
+pub fn load_unslotted_now(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
+    let _acting = bridge.params.selection.act.lock();
+    let renamed = park_unslotted(bridge, &manifest);
+    let started = start_kit(bridge, manifest);
+    bridge.announce_kit_select();
+    if renamed {
+        // Parked before as well: the value did not move, its text did.
+        bridge.request_params_text_rescan();
+    }
+    started
+}
+
+/// Under `act`. Whether `kit_select` was parked on another kit already
+/// (its value stays, its text changes).
+fn park_unslotted(bridge: &KitBridge, manifest: &Path) -> bool {
     let sel = &bridge.params.selection;
-    sel.clear_notes();
     *sel.resolved_from.lock() = None;
-    let name = sel.ref_for_manifest(manifest).display_name();
-    *sel.unslotted.lock() = Some(name);
-    bridge.params.kit_select.set_value(NO_KIT);
-    sel.acted.store(NO_KIT, Ordering::Release);
-    bridge.request_params_rescan();
+    let from = sel.ref_for_manifest(manifest);
+    let parked = Parked::External {
+        manifest: manifest.to_path_buf(),
+        from,
+    };
+    let was_parked = bridge.params.kit_select.value() == PARKED_KIT;
+    let changed = sel.parked.lock().replace(parked.clone()) != Some(parked);
+    bridge.params.kit_select.set_value(PARKED_KIT);
+    sel.act_error.store(ACT_OK, Ordering::Release);
+    sel.acted.store(PARKED_KIT, Ordering::Release);
+    was_parked && changed
 }
 
 /// Play the built-in kit: no kit is wanted any more. A load in flight is
@@ -711,7 +930,15 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
         by_library.unwrap_or_else(|| r.resolve(None, root.as_deref()))
     };
     let fallback_path = fallback.as_ref().and_then(|f| resolve(f).map(|(p, _)| p));
-    Some(match resolve(&wanted) {
+    // A kit another process indexed since this one read the index (a
+    // rename found by id): look once more after re-reading it.
+    let found = resolve(&wanted).or_else(|| {
+        sel.library
+            .reload_if_changed()
+            .then(|| resolve(&wanted))
+            .flatten()
+    });
+    Some(match found {
         Some((path, _)) => StateKit {
             fallback: fallback_path.filter(|f| *f != path),
             path: Some(path),
@@ -737,14 +964,19 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
     })
 }
 
-/// Record what a state load resolved: the missing reference, the slot
-/// `kit_select` now reads (the kit's library slot, else [`NO_KIT`]), and
-/// the name it shows when the kit holds no slot. The kit itself is loaded
-/// by the caller.
-pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) {
+/// Record what a state load resolved: the value `kit_select` now reads
+/// (the kit's library slot; else [`PARKED_KIT`] for a kit with no slot or
+/// a missing one, which becomes the parked kit; else [`NO_KIT`]). The kit
+/// itself is loaded by the caller — all of it, from resolving the state to
+/// starting the load, under [`KitSelection::acting`].
+///
+/// Returns whether `kit_select` kept its value but not its text (parked
+/// before and after, on another kit): the host must re-read the text.
+/// Either way the host is told with a rescan, never an edit — a state load
+/// is no user's pick.
+pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) -> bool {
     let sel = &bridge_params.selection;
-    sel.clear_notes();
-    *sel.missing.lock() = kit.missing.clone();
+    let before = (bridge_params.kit_select.value(), sel.parked());
     *sel.resolved_from.lock() = match (&kit.path, &kit.from) {
         (Some(p), Some(r)) => Some((p.clone(), r.clone())),
         _ => None,
@@ -759,42 +991,283 @@ pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit
             })
             .flatten()
     });
-    let value = slot.map_or(NO_KIT, |s| s as i32);
-    if let (Some(path), None) = (&kit.path, slot) {
-        let r = sel.ref_for_manifest(path);
-        let root = sel.library.root();
-        let inside = root.as_deref().is_some_and(|r| path.starts_with(r));
-        let name = r.display_name();
-        *sel.unslotted.lock() = Some(if inside {
-            name
-        } else {
-            format!("{name} (external)")
-        });
-    }
+    let value = match (&kit.path, slot, &kit.missing) {
+        (Some(_), Some(slot), _) => slot as i32,
+        (Some(path), None, _) => {
+            let from = sel.ref_for_manifest(path);
+            *sel.parked.lock() = Some(Parked::External {
+                manifest: path.clone(),
+                from,
+            });
+            PARKED_KIT
+        }
+        (None, _, Some(missing)) => {
+            *sel.parked.lock() = Some(Parked::Missing(missing.clone()));
+            PARKED_KIT
+        }
+        (None, _, None) => NO_KIT,
+    };
     bridge_params.kit_select.set_value(value);
+    sel.act_error.store(ACT_OK, Ordering::Release);
     sel.acted.store(value, Ordering::Release);
+    value == PARKED_KIT && before.0 == PARKED_KIT && before.1 != sel.parked()
 }
 
-/// Throttle for asking the host to re-read `kit_load_progress`: report a
-/// change of a twentieth or more, and every arrival at 0 or 1.
-pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
-    if last == now {
-        return false;
+// ---------------------------------------------------------------------------
+// kit_load_progress
+// ---------------------------------------------------------------------------
+
+/// What `kit_load_progress` reports (§5.4): 0 while `kit_select` holds a
+/// value the instance has not acted on yet (a host write the watcher has
+/// not picked up — the load it starts has not begun, and the progress
+/// still describes the kit before it), and while the value it acted on
+/// loads nothing (an empty slot, a kit that cannot load); else the load's
+/// own fraction, 1.0 only once the audio thread took the kit.
+///
+/// Atomics only — the audio thread calls it every block, and a host's
+/// `get_value` on the main thread concurrently with it.
+pub fn reported_progress(params: &crate::params::DrumParams, progress: &KitLoadProgress) -> f32 {
+    let sel = &params.selection;
+    if params.kit_select.value() != sel.acted() || sel.act_error.load(Ordering::Acquire) != ACT_OK {
+        return 0.0;
     }
-    (now - last).abs() >= 0.05 || now == 1.0 || now == 0.0
+    progress.fraction()
+}
+
+/// Why `kit_load_progress` reads 0 without a load under way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressFailure {
+    /// `kit_select` names a slot with no kit in it: nothing loads, the
+    /// kit that played keeps playing.
+    EmptySlot,
+    /// The kit cannot load (a manifest error, a duplicate, no parked kit
+    /// to return to), or its load failed.
+    Failed,
+}
+
+/// Why `kit_load_progress` reads 0, when it is not "starting". Atomics only.
+pub fn progress_failure(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+) -> Option<ProgressFailure> {
+    let sel = &params.selection;
+    if params.kit_select.value() != sel.acted() {
+        return None;
+    }
+    match sel.act_error.load(Ordering::Acquire) {
+        ACT_EMPTY_SLOT => Some(ProgressFailure::EmptySlot),
+        ACT_FAILED => Some(ProgressFailure::Failed),
+        _ => (progress.snapshot().phase == LoadPhase::Failed).then_some(ProgressFailure::Failed),
+    }
+}
+
+/// `kit_load_progress`'s text for `value`: a percentage, or — at 0 — why,
+/// when nothing is loading: `"empty slot"`, `"failed"`.
+pub fn progress_text(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+    value: f64,
+) -> String {
+    if value <= 0.0 {
+        match progress_failure(params, progress) {
+            Some(ProgressFailure::EmptySlot) => return "empty slot".to_string(),
+            Some(ProgressFailure::Failed) => return "failed".to_string(),
+            None => {}
+        }
+    }
+    format!("{:.0}%", value * 100.0)
+}
+
+/// The stage a progress report is about: a load starting (below half), past
+/// half, done, or failed. The host is asked to re-read
+/// `kit_load_progress` when the stage changes — at the start of a load, at
+/// 50 %, when it is done (review finding 8) — not per file.
+fn progress_stage(now: f32, failed: bool) -> u8 {
+    if failed {
+        STAGE_FAILED
+    } else if now >= 1.0 {
+        STAGE_DONE
+    } else if now >= 0.5 {
+        STAGE_HALF
+    } else {
+        STAGE_START
+    }
+}
+
+const STAGE_START: u8 = 0;
+const STAGE_HALF: u8 = 1;
+const STAGE_DONE: u8 = 2;
+const STAGE_FAILED: u8 = 3;
+
+/// Whether the move from `last` to `now` is one the host is told about:
+/// the start of a load, its half-way mark, its end.
+pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
+    progress_stage(last, false) != progress_stage(now, false)
+}
+
+/// What the host must re-read after a progress change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressReport {
+    /// The value moved (`rescan(VALUES)`).
+    Values,
+    /// The text of a value that may not have moved changed — into or out
+    /// of `"failed"` / `"empty slot"` (`rescan(VALUES | TEXT)`).
+    Text,
+}
+
+/// Record `now` (and whether it is a failure) as what `kit_load_progress`
+/// reads, and say whether — and how — the host should be asked to re-read
+/// it. Shared by `process` and the watcher thread, which each report a
+/// stage change at most once between them. Atomics only.
+pub fn note_progress(sel: &KitSelection, now: f32, failed: bool) -> Option<ProgressReport> {
+    let stage = progress_stage(now, failed);
+    let last = sel.reported_stage.swap(stage, Ordering::AcqRel);
+    if last == stage {
+        return None;
+    }
+    Some(if last == STAGE_FAILED || stage == STAGE_FAILED {
+        ProgressReport::Text
+    } else {
+        ProgressReport::Values
+    })
+}
+
+/// Ask `host` for what `report` needs.
+pub fn send_progress_report(host: &resonance_plugin::HostHandle, report: ProgressReport) {
+    match report {
+        ProgressReport::Values => host.request_params_rescan(),
+        ProgressReport::Text => host.request_params_text_rescan(),
+    }
+}
+
+/// Mirror the reported progress into `kit_load_progress` and tell `host`
+/// when its stage changed. Atomics only (the audio thread's per-block
+/// call, and the watcher's).
+pub fn publish_progress(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+    host: Option<&resonance_plugin::HostHandle>,
+) -> f32 {
+    let now = reported_progress(params, progress);
+    params.kit_load_progress.set_value(now);
+    let failed = now <= 0.0 && progress_failure(params, progress).is_some();
+    if let (Some(report), Some(host)) = (note_progress(&params.selection, now, failed), host) {
+        send_progress_report(host, report);
+    }
+    now
+}
+
+/// `kit_load_progress` as the host and the editor see it: the parameter,
+/// whose value is [`reported_progress`] (so a host reading it with no
+/// block running reads it right) and whose text says `"failed"` / `"empty
+/// slot"` ([`progress_text`]). Returned by the plugin in the parameter's
+/// place.
+#[derive(Clone)]
+pub struct ProgressParam {
+    params: Arc<crate::params::DrumParams>,
+    progress: Arc<KitLoadProgress>,
+}
+
+impl ProgressParam {
+    pub fn new(params: Arc<crate::params::DrumParams>, progress: Arc<KitLoadProgress>) -> Self {
+        Self { params, progress }
+    }
+
+    /// [`reported_progress`]. Atomics only.
+    pub fn value(&self) -> f32 {
+        reported_progress(&self.params, &self.progress)
+    }
+
+    fn inner(&self) -> &resonance_plugin::FloatParam {
+        &self.params.kit_load_progress
+    }
+}
+
+impl resonance_plugin::Param for ProgressParam {
+    fn id(&self) -> &str {
+        self.inner().id()
+    }
+    fn name(&self) -> &str {
+        self.inner().name()
+    }
+    fn get_plain(&self) -> f64 {
+        self.value() as f64
+    }
+    fn set_plain(&self, v: f64) {
+        self.inner().set_plain(v)
+    }
+    fn default_plain(&self) -> f64 {
+        self.inner().default_plain()
+    }
+    fn min_plain(&self) -> f64 {
+        self.inner().min_plain()
+    }
+    fn max_plain(&self) -> f64 {
+        self.inner().max_plain()
+    }
+    fn display(&self, value: f64) -> String {
+        progress_text(&self.params, &self.progress, value)
+    }
+    fn parse(&self, text: &str) -> Option<f64> {
+        self.inner().parse(text)
+    }
+    fn module(&self) -> &str {
+        self.inner().module()
+    }
+    fn is_hidden(&self) -> bool {
+        self.inner().is_hidden()
+    }
+    fn preset_excluded(&self) -> bool {
+        self.inner().preset_excluded()
+    }
+    fn is_automatable(&self) -> bool {
+        self.inner().is_automatable()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner().is_read_only()
+    }
+    fn state_excluded(&self) -> bool {
+        self.inner().state_excluded()
+    }
+    fn is_stepped(&self) -> bool {
+        self.inner().is_stepped()
+    }
 }
 
 /// One look by the instance's watcher thread: act on a `kit_select` the
-/// host or the control API moved, and mirror the load progress into
-/// `kit_load_progress` (which `process` also does, every block; this
-/// covers an inactive plugin).
+/// host or the control API moved, and publish the load progress (which
+/// `process` also does, every block; this covers an inactive plugin, and
+/// an active one the host does not process — a stopped transport).
+///
+/// A kit handed off to an active plugin is taken by the audio thread's
+/// next block. While the host runs none, the watcher asks for one
+/// (`clap_host.request_process`), once per load. A host that ignores
+/// that (Resonance's does today) takes the kit — and `kit_load_progress`
+/// reaches 1.0 — at its next block: Play, a monitored track, a note.
 pub fn watch(bridge: &KitBridge) {
     match apply_pending(bridge) {
         Ok(_) => {}
         Err(e) => tracing::warn!("kit_select: {e}"),
     }
-    bridge
-        .params
-        .kit_load_progress
-        .set_value(bridge.load_progress.fraction());
+    // The library changed (a rename, a delete, a kit added in a slot):
+    // what a value names may have changed with it.
+    let sel = &bridge.params.selection;
+    if let Some(revision) = sel.library.revision_if_open() {
+        let seen = sel.seen_revision.swap(revision, Ordering::AcqRel);
+        if seen != 0 && seen != revision {
+            bridge.request_params_text_rescan();
+        }
+    }
+    let host = bridge.host.lock().clone();
+    publish_progress(&bridge.params, &bridge.load_progress, host.as_deref());
+    let snap = bridge.load_progress.snapshot();
+    let active = bridge.sample_rate.load(Ordering::Acquire) != 0;
+    if snap.phase == LoadPhase::HandedOff && !snap.complete && active {
+        let generation = bridge.load_generation.load(Ordering::Acquire);
+        if sel.process_asked.swap(generation, Ordering::AcqRel) != generation {
+            if let Some(host) = &host {
+                host.request_process();
+            }
+        }
+    }
 }

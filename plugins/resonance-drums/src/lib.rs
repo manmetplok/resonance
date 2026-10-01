@@ -212,6 +212,11 @@ pub struct KitBridge {
     /// The host, once the CLAP bridge hands it over (`set_host`): told to
     /// re-read the params when the plugin moves `kit_select` itself.
     pub host: Arc<Mutex<Option<Arc<HostHandle>>>>,
+    /// What this instance asked the host for, counted whether or not a
+    /// host is attached — so a test can tell a user's kit pick (one
+    /// undoable edit) from a state load (a rescan, never an edit).
+    #[doc(hidden)]
+    pub host_asks: Arc<HostAsks>,
 
     // --- Disk streaming (E14, slice K6b) -------------------------------
     /// Frames of each take kept in memory; the rest of a longer take
@@ -237,6 +242,18 @@ pub struct KitBridge {
     /// main thread whenever the host sets the mode; the audio thread
     /// reads it once a block, so it applies from the next block on.
     pub host_render_mode: Arc<AtomicU8>,
+}
+
+/// Counts of [`KitBridge`]'s requests to the host. Test surface.
+#[doc(hidden)]
+#[derive(Debug, Default)]
+pub struct HostAsks {
+    /// `announce_param_change("kit_select")`: user edits of the kit.
+    pub kit_select_edits: AtomicU64,
+    /// `request_params_rescan` (values).
+    pub value_rescans: AtomicU64,
+    /// `request_params_text_rescan` (values and text).
+    pub text_rescans: AtomicU64,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -292,12 +309,38 @@ impl KitBridge {
         let _ = self.articulation_wake.try_send(());
     }
 
-    /// Have the host re-read the params (values and text): the plugin
-    /// moved `kit_select` itself, or what its value names changed. A no-op
-    /// before the bridge handed the host over (and in tests).
+    /// Have the host re-read the params' values: the plugin moved
+    /// `kit_select` itself without the user asking (a state load), or
+    /// `kit_load_progress` moved. Never an undoable edit. A no-op before
+    /// the bridge handed the host over (and in tests).
     pub fn request_params_rescan(&self) {
+        self.host_asks.value_rescans.fetch_add(1, Ordering::Relaxed);
         if let Some(host) = self.host.lock().as_ref() {
             host.request_params_rescan();
+        }
+    }
+
+    /// Have the host re-read the params' values **and text**: what an
+    /// unchanged `kit_select` value names changed (a kit renamed in its
+    /// slot, another parked kit).
+    pub fn request_params_text_rescan(&self) {
+        self.host_asks.text_rescans.fetch_add(1, Ordering::Relaxed);
+        if let Some(host) = self.host.lock().as_ref() {
+            host.request_params_text_rescan();
+        }
+    }
+
+    /// The user changed `kit_select` from the plugin's own UI (a Library
+    /// Load, the kit dropdown, ◀/▶, a relink): the host records it as one
+    /// undoable edit. Call it after the value is set — and only for a
+    /// user's pick: a value derived from a state load is
+    /// [`Self::request_params_rescan`], or an undo would record an edit.
+    pub fn announce_kit_select(&self) {
+        self.host_asks
+            .kit_select_edits
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(host) = self.host.lock().as_ref() {
+            host.announce_param_change("kit_select");
         }
     }
 
@@ -368,9 +411,15 @@ pub struct ResonanceDrums {
     /// The host, for the audio thread's `kit_load_progress` reports
     /// (a clone of the bridge's, so `process` takes no lock).
     host: Option<Arc<HostHandle>>,
-    /// The `kit_load_progress` the host was last asked to re-read.
-    reported_progress: f32,
+    /// `kit_load_progress` as the host sees it: served in the
+    /// parameter's place ([`selection::ProgressParam`]).
+    progress_param: selection::ProgressParam,
 }
+
+/// `kit_select`'s and `kit_load_progress`'s host-order indices: they close
+/// the globals, ahead of the pad block.
+const KIT_SELECT_INDEX: usize = GLOBAL_PARAMS - 2;
+const KIT_LOAD_PROGRESS_INDEX: usize = GLOBAL_PARAMS - 1;
 
 impl ResonancePlugin for ResonanceDrums {
     const CLAP_ID: &'static str = "com.resonance.drums";
@@ -442,6 +491,7 @@ impl ResonancePlugin for ResonanceDrums {
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
             host: Arc::new(Mutex::new(None)),
+            host_asks: Arc::new(HostAsks::default()),
             stream_preload: Arc::new(AtomicU32::new(stream::DEFAULT_PRELOAD)),
             stream_underruns: Arc::new(AtomicU64::new(0)),
             stream_ring_bytes: Arc::new(AtomicU64::new(0)),
@@ -471,6 +521,13 @@ impl ResonancePlugin for ResonanceDrums {
                 reload: Some(bridge.clone()),
             },
         ));
+        debug_assert_eq!(params.param_at(KIT_SELECT_INDEX).id(), "kit_select");
+        debug_assert_eq!(
+            params.param_at(KIT_LOAD_PROGRESS_INDEX).id(),
+            "kit_load_progress"
+        );
+        let progress_param =
+            selection::ProgressParam::new(params.clone(), bridge.load_progress.clone());
         Self {
             params,
             presets,
@@ -479,7 +536,7 @@ impl ResonancePlugin for ResonanceDrums {
             _articulation_watcher: watcher,
             audition_receiver,
             host: None,
-            reported_progress: 1.0,
+            progress_param,
         }
     }
 
@@ -491,6 +548,9 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param(&self, index: usize) -> &dyn Param {
+        if index == KIT_LOAD_PROGRESS_INDEX {
+            return &self.progress_param;
+        }
         self.params.param_at(index)
     }
 
@@ -599,6 +659,8 @@ impl ResonancePlugin for ResonanceDrums {
                     );
                 }
             }
+            // The progress moved (an install above, a restarted load).
+            self.publish_progress();
             return true;
         }
 
@@ -637,9 +699,7 @@ impl ResonancePlugin for ResonanceDrums {
                 request.articulations,
             );
         }
-        self.params
-            .kit_load_progress
-            .set_value(self.bridge.load_progress.fraction());
+        self.publish_progress();
 
         true
     }
@@ -674,15 +734,9 @@ impl ResonancePlugin for ResonanceDrums {
 
         // `kit_load_progress` mirrors the load (atomics only: no lock, no
         // allocation), and reaches 1.0 in the block that took the kit. The
-        // host is asked to re-read it per twentieth, not per file.
-        let progress = self.bridge.load_progress.fraction();
-        self.params.kit_load_progress.set_value(progress);
-        if selection::progress_worth_reporting(self.reported_progress, progress) {
-            self.reported_progress = progress;
-            if let Some(host) = &self.host {
-                host.request_params_rescan();
-            }
-        }
+        // host is asked to re-read it at the start, half-way and end of a
+        // load, not per file.
+        self.publish_progress();
 
         // Snapshot the global trigger settings once per block, before any
         // note lands. Block-rate is the right granularity: they only
@@ -719,6 +773,20 @@ impl ResonancePlugin for ResonanceDrums {
         Some(self.presets.clone())
     }
 
+    /// A bounce waits for the disk reader; realtime never does (E14).
+    /// Called on the audio thread at the top of a block while active: one
+    /// atomic store.
+    fn set_render_mode(&mut self, offline: bool) {
+        self.bridge.host_render_mode.store(
+            if offline {
+                stream::HOST_RENDER_OFFLINE
+            } else {
+                stream::HOST_RENDER_REALTIME
+            },
+            Ordering::Relaxed,
+        );
+    }
+
     fn set_host(&mut self, host: Arc<HostHandle>) {
         *self.bridge.host.lock() = Some(host.clone());
         self.host = Some(host);
@@ -728,7 +796,10 @@ impl ResonancePlugin for ResonanceDrums {
         // The params are shared, so a live instance's `kit_select` still
         // reads as the kit's name — and a name still picks a kit — while
         // the plugin is in the audio processor (§5.1, §8).
-        Some(Arc::new(DrumParamText(self.params.clone())))
+        Some(Arc::new(DrumParamText {
+            params: self.params.clone(),
+            progress: self.progress_param.clone(),
+        }))
     }
 
     #[cfg(feature = "editor")]
@@ -742,19 +813,41 @@ impl ResonancePlugin for ResonanceDrums {
 }
 
 /// Parameter text over the shared `DrumParams`, for the CLAP bridge while
-/// the plugin is active.
-struct DrumParamText(Arc<DrumParams>);
+/// the plugin is active — and the live values of the two the plugin moves
+/// itself, which the bridge's mirror only catches up with per block.
+struct DrumParamText {
+    params: Arc<DrumParams>,
+    progress: selection::ProgressParam,
+}
+
+impl DrumParamText {
+    fn param(&self, index: usize) -> Option<&dyn Param> {
+        match index {
+            KIT_LOAD_PROGRESS_INDEX => Some(&self.progress),
+            i if i < params::PARAM_COUNT => Some(self.params.param_at(i)),
+            _ => None,
+        }
+    }
+}
 
 impl resonance_plugin::ParamTextSource for DrumParamText {
     fn display(&self, index: usize, value: f64) -> Option<String> {
-        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+        self.param(index).map(|p| p.display(value))
     }
 
     fn parse(&self, index: usize, text: &str) -> Option<f64> {
-        if index >= params::PARAM_COUNT {
-            return None;
+        self.param(index)?.parse(text)
+    }
+
+    /// `kit_select` (moved by a state load, the editor, a park) and
+    /// `kit_load_progress` (moved by the loader and the audio thread).
+    /// Atomics only: the main thread calls this while `process` runs.
+    fn live_value(&self, index: usize) -> Option<f64> {
+        match index {
+            KIT_SELECT_INDEX => Some(self.params.kit_select.value() as f64),
+            KIT_LOAD_PROGRESS_INDEX => Some(self.progress.value() as f64),
+            _ => None,
         }
-        self.0.param_at(index).parse(text)
     }
 }
 
@@ -825,6 +918,16 @@ impl ResonanceDrums {
         while let Ok(hit) = self.audition_receiver.try_recv() {
             self.sampler.note_on(hit.note, hit.velocity);
         }
+    }
+
+    /// Publish `kit_load_progress` and tell the host of a stage change.
+    /// Atomics only.
+    fn publish_progress(&self) {
+        selection::publish_progress(
+            &self.params,
+            &self.bridge.load_progress,
+            self.host.as_deref(),
+        );
     }
 
     /// Measure the kit the sampler currently holds and publish the facts
@@ -994,6 +1097,11 @@ impl ExtraStateSaver for DrumsExtraState {
                 .as_ref()
                 .map(|b| b.stream_preload.load(Ordering::Relaxed))
         };
+        // No act on `kit_select` interleaves with this load's: from here
+        // to the load it starts, the watcher waits (it would otherwise act
+        // on a host write the state supersedes, clearing the state's
+        // fallback kit and starting a second load).
+        let _acting = selection.acting();
         let before = (
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
@@ -1023,10 +1131,16 @@ impl ExtraStateSaver for DrumsExtraState {
                 *bridge.kit_fallback.lock() = kit.fallback.clone();
             }
             *self.kit_path.lock() = kit.path.clone();
-            // `kit_select` follows the reference: the kit's slot here.
-            selection::adopt_state_kit(&self.params, &kit);
+            // `kit_select` follows the reference: the kit's slot here. The
+            // host re-reads it — a rescan, never an edit: a state load
+            // (an undo's included) is no user's pick.
+            let text_changed = selection::adopt_state_kit(&self.params, &kit);
             if let Some(bridge) = &self.reload {
-                bridge.request_params_rescan();
+                if text_changed {
+                    bridge.request_params_text_rescan();
+                } else {
+                    bridge.request_params_rescan();
+                }
             }
         }
 

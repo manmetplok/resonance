@@ -20,7 +20,7 @@ use resonance_drums::kit::NUM_OUTPUT_PORTS;
 use resonance_drums::kit_loader::KitStatus;
 use resonance_drums::library::{Roots, SharedKitLibrary};
 use resonance_drums::params::GLOBAL_PARAMS;
-use resonance_drums::selection::{self, KitRef, ResolvedBy, NO_KIT};
+use resonance_drums::selection::{self, KitRef, ResolvedBy, NO_KIT, PARKED_KIT};
 use resonance_drums::{DrumsExtraState, ResonanceDrums, TestEditor};
 use resonance_plugin::plugin::ExtraStateSaver;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
@@ -254,7 +254,11 @@ fn the_selection_params_are_declared_as_specified() {
     let plugin = ResonanceDrums::new();
     let select = plugin.param(KIT_SELECT);
     assert_eq!(select.id(), "kit_select");
-    assert_eq!(select.min_plain(), NO_KIT as f64);
+    assert_eq!(
+        select.min_plain(),
+        PARKED_KIT as f64,
+        "-2: parked (external or missing)"
+    );
     assert_eq!(select.max_plain(), selection::MAX_KIT_SLOT as f64);
     assert!(select.is_stepped());
     assert!(!select.is_automatable(), "a kit swap is no automation lane");
@@ -650,9 +654,14 @@ fn a_missing_kit_plays_the_built_in_kit_says_so_and_is_kept() {
     assert!(plugin.load_state(&serde_json::to_vec(&state).unwrap()));
     assert!(plugin.bridge.wanted_kit_path().is_none());
     assert_eq!(kit_select_text(&plugin), "Gone Kit (missing)");
+    assert_eq!(
+        plugin.param(KIT_SELECT).get_plain(),
+        PARKED_KIT as f64,
+        "parked, not \"built-in\""
+    );
     let source = plugin.param_text_source().unwrap();
     assert_eq!(
-        source.display(KIT_SELECT, NO_KIT as f64).as_deref(),
+        source.display(KIT_SELECT, PARKED_KIT as f64).as_deref(),
         Some("Gone Kit (missing)"),
         "the same while the plugin is active"
     );
@@ -828,4 +837,620 @@ fn locate_relinks_a_folder_whose_manifest_matches_and_asks_otherwise() {
         frame.widget("missing.banner").is_none(),
         "the banner is gone"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Acting on kit_select: one at a time
+// ---------------------------------------------------------------------------
+
+/// A host write the watcher has not acted on yet, then a state load that
+/// names another kit, with the watcher racing the load (review finding
+/// 7): the state wins every time. Its kit is the one wanted, its fallback
+/// is kept (a watcher acting on the stale write in between used to clear
+/// it), `kit_select` reads the state's slot, and the write is not acted
+/// on afterwards either.
+#[test]
+fn a_state_load_racing_the_watcher_is_never_undone_by_a_stale_host_write() {
+    let home = Home::new("race");
+    let alpha = home.kit("Alpha", "Alpha Kit", 0.1);
+    home.kit("Bravo", "Bravo Kit", 0.2);
+    let charlie = home.kit("Charlie", "Charlie Kit", 0.3);
+    let lib = home.library();
+    let (a, b) = (slot_of(&lib, "Alpha Kit"), slot_of(&lib, "Bravo Kit"));
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&alpha, Some(&home.root())).to_json(),
+        "kit_ref_fallback": KitRef::from_manifest_path(&charlie, Some(&home.root())).to_json(),
+    });
+
+    for round in 0..200 {
+        // Inactive, so nothing decodes: what each side records is all
+        // there is to race on.
+        let plugin = plugin_on(&lib);
+        let bridge = plugin.bridge.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (bridge, stop) = (bridge.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = selection::apply_pending(&bridge);
+                }
+            })
+        };
+        plugin.param(KIT_SELECT).set_plain(b as f64);
+        saver_for(&plugin).load(&state);
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        let _ = selection::apply_pending(&bridge);
+
+        assert_eq!(
+            bridge.wanted_kit_path(),
+            Some(alpha.clone()),
+            "round {round}"
+        );
+        assert_eq!(
+            *bridge.kit_fallback.lock(),
+            Some(charlie.clone()),
+            "round {round}: the state's fallback was cleared"
+        );
+        assert_eq!(bridge.params.kit_select.value(), a, "round {round}");
+        assert_eq!(bridge.params.selection.acted(), a, "round {round}");
+    }
+}
+
+/// The editor's pick and the watcher on one value: one load, not two.
+#[test]
+fn an_editor_pick_racing_the_watcher_starts_one_load() {
+    let home = Home::new("race-pick");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let a = slot_of(&lib, "Alpha Kit");
+    for round in 0..200 {
+        let plugin = plugin_on(&lib);
+        let bridge = plugin.bridge.clone();
+        let before = bridge.load_generation.load(Ordering::Acquire);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (bridge, stop) = (bridge.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = selection::apply_pending(&bridge);
+                }
+            })
+        };
+        selection::select_now(&bridge, a).unwrap();
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        assert_eq!(
+            bridge.load_generation.load(Ordering::Acquire),
+            before + 1,
+            "round {round}: the pick was acted on twice"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Parked: -2 is an external or missing kit, -1 is always built-in
+// ---------------------------------------------------------------------------
+
+/// Write `value` the way a host does, and let the instance act on it.
+fn host_writes(plugin: &ResonanceDrums, value: i32) -> Result<(), String> {
+    plugin.param(KIT_SELECT).set_plain(value as f64);
+    selection::apply_pending(&plugin.bridge).map(|_| ())
+}
+
+/// An external kit (no slot) reads -2 "<name> (external)", which parses
+/// back to -2. -1 then really is the built-in kit, a slot is that kit, and
+/// writing -2 again — a host's undo of the pick — brings the external kit
+/// back.
+#[test]
+fn an_external_kit_parks_at_minus_two_and_minus_two_brings_it_back() {
+    let home = Home::new("parked-external");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let outside = home.outside_kit("Yankee", "Yankee Kit", 0.2);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&outside, Some(&home.root())).to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    let select = plugin.param(KIT_SELECT);
+    assert_eq!(select.get_plain(), PARKED_KIT as f64);
+    assert_eq!(kit_select_text(&plugin), "Yankee (external)");
+    assert_eq!(select.parse("Yankee (external)"), Some(PARKED_KIT as f64));
+    assert_eq!(select.display(NO_KIT as f64), "None (built-in kit)");
+    assert!(plugin.bridge.params.selection.missing().is_none());
+
+    host_writes(&plugin, NO_KIT).unwrap();
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        None,
+        "-1 is the built-in kit"
+    );
+    assert_eq!(
+        select.display(PARKED_KIT as f64),
+        "Yankee (external)",
+        "still remembered"
+    );
+
+    let a = slot_of(&lib, "Alpha Kit");
+    host_writes(&plugin, a).unwrap();
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        Some(home.root().join("Alpha/kit/drum_samples.json"))
+    );
+
+    // Undo of the pick: the host writes the value from before it.
+    host_writes(&plugin, PARKED_KIT).unwrap();
+    assert_eq!(plugin.bridge.wanted_kit_path(), Some(outside.clone()));
+    assert_eq!(kit_select_text(&plugin), "Yankee (external)");
+    // And a save names it.
+    let saved = saver_for(&plugin).save();
+    let r = KitRef::from_json(&saved["kit_ref"]).unwrap();
+    assert_eq!(r.abs_path.as_deref(), Some(outside.as_path()));
+}
+
+/// A missing kit is parked too: -2 "<name> (missing)". -1 leaves it for
+/// the built-in kit (no banner, a save names no kit); a pick plays the
+/// pick; writing -2 goes back to "missing" — banner, saved reference and
+/// all.
+#[test]
+fn a_missing_kit_parks_at_minus_two_and_minus_two_restores_it() {
+    let home = Home::new("parked-missing");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let state = serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) });
+    saver_for(&plugin).load(&state);
+    let sel = &plugin.bridge.params.selection;
+    assert_eq!(plugin.param(KIT_SELECT).get_plain(), PARKED_KIT as f64);
+    assert!(sel.missing().is_some());
+    assert_eq!(
+        plugin.param(KIT_SELECT).parse("Gone Kit (missing)"),
+        Some(PARKED_KIT as f64)
+    );
+
+    host_writes(&plugin, NO_KIT).unwrap();
+    assert!(
+        sel.missing().is_none(),
+        "the built-in kit, chosen: no banner"
+    );
+    assert_eq!(
+        saver_for(&plugin).save()["kit_ref"],
+        serde_json::Value::Null
+    );
+
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    assert!(sel.missing().is_none());
+    assert!(plugin.bridge.wanted_kit_path().is_some());
+
+    host_writes(&plugin, PARKED_KIT).unwrap();
+    assert!(sel.missing().is_some(), "missing again");
+    assert_eq!(
+        plugin.bridge.wanted_kit_path(),
+        None,
+        "the built-in kit plays"
+    );
+    assert_eq!(kit_select_text(&plugin), "Gone Kit (missing)");
+    assert_eq!(saver_for(&plugin).save()["kit_ref"], missing_ref(&home));
+}
+
+/// -2 with no parked kit remembered names nothing to go back to: the
+/// write is refused and what plays keeps playing.
+#[test]
+fn minus_two_with_nothing_parked_changes_nothing() {
+    let home = Home::new("parked-none");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    let wanted = plugin.bridge.wanted_kit_path();
+    assert_eq!(
+        plugin.param(KIT_SELECT).display(PARKED_KIT as f64),
+        "(no external kit)"
+    );
+    assert_eq!(
+        plugin.param(KIT_SELECT).parse("(no external kit)"),
+        Some(PARKED_KIT as f64)
+    );
+    assert!(host_writes(&plugin, PARKED_KIT).is_err());
+    assert_eq!(plugin.bridge.wanted_kit_path(), wanted);
+}
+
+/// Numbers and names that look like numbers: `"slot N"` and `"(empty slot
+/// N)"` are always slot N; a kit's exact name beats a bare number (a kit
+/// called "12" is picked by name, as its text reads); otherwise a bare
+/// number is that value.
+#[test]
+fn kit_select_parses_numbers_and_numeric_names_sanely() {
+    let home = Home::new("numeric");
+    home.kit("Twelve", "12", 0.1);
+    home.kit("Alpha", "Alpha Kit", 0.2);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let select = plugin.param(KIT_SELECT);
+    let twelve = slot_of(&lib, "12");
+    assert_ne!(
+        twelve, 12,
+        "the fixture needs the name and the slot to differ"
+    );
+    assert_eq!(select.display(twelve as f64), "12");
+    assert_eq!(
+        select.parse("12"),
+        Some(twelve as f64),
+        "the name, as it reads"
+    );
+    assert_eq!(select.parse("slot 12"), Some(12.0));
+    assert_eq!(select.parse("(empty slot 40)"), Some(40.0));
+    assert_eq!(select.display(40.0), "(empty slot 40)");
+    let alpha = slot_of(&lib, "Alpha Kit");
+    assert_eq!(select.parse(&alpha.to_string()), Some(alpha as f64));
+    assert_eq!(select.parse("-1"), Some(NO_KIT as f64));
+    assert_eq!(select.parse("-2"), Some(PARKED_KIT as f64));
+    assert_eq!(select.parse("-3"), None);
+    assert_eq!(select.parse("slot -1"), None);
+    // Every text a value reads as parses back to it.
+    for v in [NO_KIT, PARKED_KIT, alpha, twelve, 40] {
+        assert_eq!(
+            select.parse(&select.display(v as f64)),
+            Some(v as f64),
+            "{v}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// kit_load_progress as the host reads it
+// ---------------------------------------------------------------------------
+
+/// Right after a pick — before the watcher acts on it, while the progress
+/// still describes the kit before it — `kit_load_progress` reads 0, not
+/// the previous kit's 1.0 (review finding 2). The same through every
+/// path a host reads it: the parameter (inactive `get_value`) and the
+/// text source's `live_value` (active). And `live_value` reads
+/// `kit_select` as written, not the bridge's stale mirror.
+#[test]
+fn kit_load_progress_reads_zero_from_the_pick_until_the_audio_thread_takes_the_kit() {
+    let home = Home::new("progress-pick");
+    let manifest = home.kit("Alpha", "Alpha Kit", 0.25);
+    let lib = home.library();
+    let mut plugin = booted_on(&lib);
+    render(&mut plugin, &[]);
+    let source = plugin.param_text_source().unwrap();
+    let live = |i: usize| source.live_value(i).expect("a live value");
+    assert_eq!(live(KIT_LOAD_PROGRESS), 1.0);
+    assert_eq!(live(KIT_SELECT), NO_KIT as f64);
+
+    let a = slot_of(&lib, "Alpha Kit");
+    {
+        // Hold the watcher off: the write is not acted on yet.
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.param(KIT_SELECT).set_plain(a as f64);
+        assert_eq!(plugin.param(KIT_LOAD_PROGRESS).get_plain(), 0.0);
+        assert_eq!(live(KIT_LOAD_PROGRESS), 0.0);
+        assert_eq!(live(KIT_SELECT), a as f64);
+        assert_eq!(plugin.param(KIT_LOAD_PROGRESS).display(0.0), "0%");
+    }
+    wait_handed_off(&plugin, &manifest);
+    assert!(live(KIT_LOAD_PROGRESS) < 1.0, "handed off, not taken");
+    assert!(plugin.param(KIT_LOAD_PROGRESS).get_plain() < 1.0);
+    render(&mut plugin, &[]);
+    assert_eq!(live(KIT_LOAD_PROGRESS), 1.0);
+    assert_eq!(plugin.param(KIT_LOAD_PROGRESS).get_plain(), 1.0);
+    assert_eq!(plugin.param(KIT_LOAD_PROGRESS).display(1.0), "100%");
+}
+
+/// An empty slot loads nothing (what played keeps playing): the progress
+/// reads 0 and says why, rather than the 1.0 of the kit still playing.
+/// A kit that cannot load reads "failed".
+#[test]
+fn kit_load_progress_says_empty_slot_and_failed() {
+    let home = Home::new("progress-fail");
+    home.kit("Alpha", "Alpha Kit", 0.25);
+    let broken = home.root().join("Broken/kit");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("drum_samples.json"), "{ not json").unwrap();
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let source = plugin.param_text_source().unwrap();
+    let progress = plugin.param(KIT_LOAD_PROGRESS);
+
+    let empty = (0..=selection::MAX_KIT_SLOT)
+        .find(|s| lib.read().by_slot(*s as u32).is_none())
+        .unwrap();
+    assert!(host_writes(&plugin, empty).is_err());
+    assert_eq!(progress.get_plain(), 0.0);
+    assert_eq!(progress.display(0.0), "empty slot");
+    assert_eq!(
+        source.display(KIT_LOAD_PROGRESS, 0.0).as_deref(),
+        Some("empty slot")
+    );
+
+    let broken_slot =
+        lib.read()
+            .entries()
+            .iter()
+            .find(|e| e.manifest_path.starts_with(&broken))
+            .and_then(|e| e.slot)
+            .expect("a kit whose manifest does not parse still holds a slot") as i32;
+    assert!(host_writes(&plugin, broken_slot).is_err());
+    assert_eq!(progress.get_plain(), 0.0);
+    assert_eq!(progress.display(0.0), "failed");
+
+    // A kit that loads clears it.
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    assert_eq!(progress.display(0.0), "0%");
+}
+
+/// `kit_select` as the host reads it while active (`live_value`) follows
+/// a state load (the kit's slot, or -2 for a missing kit) — the bridge's
+/// mirror would not until a block ran (review finding 3).
+#[test]
+fn live_kit_select_follows_a_state_load() {
+    let home = Home::new("live-state");
+    let alpha = home.kit("Alpha", "Alpha Kit", 0.25);
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let source = plugin.param_text_source().unwrap();
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&alpha, Some(&home.root())).to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    assert_eq!(
+        source.live_value(KIT_SELECT),
+        Some(slot_of(&lib, "Alpha Kit") as f64)
+    );
+    assert!(
+        source.live_value(KIT_LOAD_PROGRESS).unwrap() < 1.0,
+        "loading"
+    );
+    let missing = serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) });
+    saver_for(&plugin).load(&missing);
+    assert_eq!(source.live_value(KIT_SELECT), Some(PARKED_KIT as f64));
+}
+
+/// The host is asked to re-read the progress at the start of a load, at
+/// half-way and at the end — not per file (review finding 8) — and with
+/// its text when it turns to (or from) "failed".
+#[test]
+fn progress_is_reported_at_start_half_and_done_only() {
+    use selection::{note_progress, progress_worth_reporting, KitSelection, ProgressReport};
+    assert!(progress_worth_reporting(1.0, 0.0), "a load starts");
+    assert!(!progress_worth_reporting(0.0, 0.3));
+    assert!(progress_worth_reporting(0.3, 0.55), "half-way");
+    assert!(!progress_worth_reporting(0.55, 0.999));
+    assert!(progress_worth_reporting(0.999, 1.0), "done");
+    assert!(!progress_worth_reporting(1.0, 1.0));
+
+    let sel = KitSelection::new();
+    let reports: Vec<_> = [0.0, 0.1, 0.2, 0.5, 0.7, 0.999, 1.0, 1.0]
+        .iter()
+        .filter_map(|&v| note_progress(&sel, v, false))
+        .collect();
+    assert_eq!(reports, vec![ProgressReport::Values; 3]);
+    assert_eq!(note_progress(&sel, 0.0, true), Some(ProgressReport::Text));
+    assert_eq!(note_progress(&sel, 0.0, true), None);
+    assert_eq!(note_progress(&sel, 0.0, false), Some(ProgressReport::Text));
+}
+
+/// The host's render mode reaches the streaming sampler: offline (a
+/// bounce) waits for the disk reader, realtime never does.
+#[test]
+fn the_host_render_mode_reaches_the_sampler() {
+    use resonance_drums::stream::{HOST_RENDER_OFFLINE, HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN};
+    let mut plugin = ResonanceDrums::new();
+    let mode = plugin.bridge.host_render_mode.clone();
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_UNKNOWN);
+    plugin.set_render_mode(true);
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_OFFLINE);
+    plugin.set_render_mode(false);
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_REALTIME);
+}
+
+// ---------------------------------------------------------------------------
+// Host undo: a user's pick is one edit, a state load is none
+// ---------------------------------------------------------------------------
+
+fn edits(plugin: &ResonanceDrums) -> u64 {
+    plugin
+        .bridge
+        .host_asks
+        .kit_select_edits
+        .load(Ordering::Relaxed)
+}
+
+/// The editor's Library Load (here: an import, which loads the kit it
+/// added through the same entry point as Load) is announced to the host
+/// as one undoable `kit_select` edit. A state load moving `kit_select` —
+/// which is what a host's undo of that edit is, in Resonance — and a host
+/// write are not: a rescan at most.
+#[test]
+fn a_library_load_is_one_host_edit_and_a_state_load_is_none() {
+    let home = Home::new("announce");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let outside = home.outside_kit("Gamma", "Gamma Kit", 0.3);
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
+    editor.picked_for_import(outside.parent().unwrap().to_path_buf());
+    editor.finish_jobs();
+    let gamma = slot_of(&lib, "Gamma Kit");
+    assert_eq!(plugin.bridge.params.kit_select.value(), gamma, "loaded");
+    assert_eq!(edits(&plugin), 1, "one undoable edit");
+
+    let rescans = plugin
+        .bridge
+        .host_asks
+        .value_rescans
+        .load(Ordering::Relaxed);
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(
+            &home.root().join("Alpha/kit/drum_samples.json"),
+            Some(&home.root())
+        )
+        .to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    assert_eq!(
+        plugin.bridge.params.kit_select.value(),
+        slot_of(&lib, "Alpha Kit")
+    );
+    assert_eq!(edits(&plugin), 1, "a state load is no edit");
+    assert!(
+        plugin
+            .bridge
+            .host_asks
+            .value_rescans
+            .load(Ordering::Relaxed)
+            > rescans,
+        "but the host re-reads the value"
+    );
+
+    host_writes(&plugin, gamma).unwrap();
+    assert_eq!(edits(&plugin), 1, "the host's own write is no new edit");
+}
+
+/// The kit in a slot changed (removed here): `kit_select`'s value is
+/// unchanged and its text is not, so the watcher asks the host to re-read
+/// the text.
+#[test]
+fn a_library_change_asks_the_host_to_re_read_kit_select_text() {
+    let home = Home::new("rename-text");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let a = slot_of(&lib, "Alpha Kit");
+    // Let the watcher see the library once.
+    std::thread::sleep(Duration::from_millis(250));
+    let before = plugin.bridge.host_asks.text_rescans.load(Ordering::Relaxed);
+    lib.delete(&home.root().join("Alpha")).unwrap().unwrap();
+    assert_eq!(
+        plugin.param(KIT_SELECT).display(a as f64),
+        format!("(empty slot {a})")
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while plugin.bridge.host_asks.text_rescans.load(Ordering::Relaxed) == before {
+        assert!(Instant::now() < deadline, "no text rescan");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// The banner's Download offer from the index cached on disk is looked up
+/// once, not every frame (review finding 9): with the cache gone from
+/// disk the offer stays — it was not read again.
+#[test]
+fn the_banner_reads_the_cached_index_once() {
+    let home = Home::new("banner-cache");
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    saver_for(&plugin).load(&serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) }));
+    assert!(lib.download().state.lock().index.is_none());
+    let index = serde_json::json!({ "drumkits": [{
+        "name": "Gone Kit", "file": "gone.zip", "manifest_sha256": "d".repeat(64),
+    }] });
+    let cache = home
+        .root()
+        .join(resonance_drums::download::INDEX_CACHE_FILE);
+    std::fs::write(&cache, serde_json::to_vec(&index).unwrap()).unwrap();
+
+    let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
+    editor.frame(Vec::new());
+    assert!(editor
+        .frame(Vec::new())
+        .widget("missing.download")
+        .is_some());
+    std::fs::remove_file(&cache).unwrap();
+    for _ in 0..3 {
+        assert!(
+            editor
+                .frame(Vec::new())
+                .widget("missing.download")
+                .is_some(),
+            "the index was read from disk again"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The library behind kit_select, with no editor open (review finding 10)
+// ---------------------------------------------------------------------------
+
+/// A name this process's index does not know may be a kit another process
+/// (another drums instance's editor, in another host) indexed since: the
+/// lookup re-reads the index once before it gives up.
+#[test]
+fn a_name_lookup_miss_re_reads_an_index_another_process_rewrote() {
+    let home = Home::new("reload-miss");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    assert_eq!(plugin.param(KIT_SELECT).parse("Bravo Kit"), None);
+
+    // "Another process": its own library over the same root scans a kit
+    // in and writes the index.
+    home.kit("Bravo", "Bravo Kit", 0.2);
+    let other = home.library();
+    let b = slot_of(&other, "Bravo Kit");
+    assert!(lib.read().find("Bravo Kit").is_none(), "not re-read yet");
+
+    assert_eq!(plugin.param(KIT_SELECT).parse("Bravo Kit"), Some(b as f64));
+    assert_eq!(plugin.param(KIT_SELECT).display(b as f64), "Bravo Kit");
+}
+
+/// The process-wide library, opened by an instance with no editor, scans
+/// once in the background: a kit dropped into the root by hand (never
+/// indexed) is found without an editor ever opening.
+#[test]
+fn the_shared_library_scans_once_when_first_opened() {
+    let home = Home::new("first-open");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = resonance_drums::library::shared_for(Roots {
+        root: Some(home.root()),
+        marks_dir: Some(home.0.join("library")),
+        installed_json: None,
+        worker: WorkerConfig {
+            index_url: "http://127.0.0.1:9/index.json".into(),
+            ..WorkerConfig::default()
+        },
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while lib.read().find("Alpha Kit").is_none() {
+        assert!(Instant::now() < deadline, "the library was never scanned");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Status bar: disk streaming
+// ---------------------------------------------------------------------------
+
+/// The status bar shows the streams' ring memory beside the samples', and
+/// the underrun count once there is one.
+#[test]
+fn the_status_bar_shows_stream_memory_and_underruns() {
+    let home = Home::new("status-stream");
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    let mut editor = TestEditor::new(&plugin, lib, (960.0, 640.0));
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(!frame.shows("STREAM"), "no rings in use, no readout");
+    assert!(!frame.strings().iter().any(|s| s.contains("underrun")));
+
+    plugin
+        .bridge
+        .stream_ring_bytes
+        .store(3 * 1024 * 1024, Ordering::Relaxed);
+    plugin.bridge.stream_underruns.store(3, Ordering::Relaxed);
+    let frame = editor.frame(Vec::new());
+    assert!(frame.shows("STREAM"), "{:?}", frame.strings());
+    assert!(
+        frame.strings().iter().any(|s| s.contains("MB")),
+        "{:?}",
+        frame.strings()
+    );
+    assert!(frame.shows("3 underruns"), "{:?}", frame.strings());
 }
