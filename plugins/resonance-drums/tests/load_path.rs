@@ -727,3 +727,31 @@ fn unused_cache_entries_are_swept_once_no_kit_holds_them() {
     assert_eq!(src, resonance_drums::kit_loader::cache::Source::Decoded);
     assert_eq!(cache.decode_count(), 3);
 }
+
+/// A file rewritten between the stat that keys it and the read is not
+/// cached under the old key: the next load would otherwise be served a
+/// decode of whichever version the read happened to see.
+#[test]
+fn a_file_rewritten_during_its_read_is_not_cached() {
+    use resonance_drums::kit_loader::cache::{SampleCache, SampleKey, Source};
+    let kit = fixture_kit(Damage::None);
+    let cache = SampleCache::new();
+    let path = kit.dir.join("kin_1_1.wav");
+    let before = SampleKey::for_file(&path, RATE).unwrap();
+    let (first, src) = cache
+        .get_or_decode_with_hook(&path, RATE, || write_wav(&path, 2, 0.3))
+        .unwrap();
+    assert_eq!(src, Source::Decoded);
+    assert_eq!(first.channels(), 1, "the read saw the mono version");
+    assert!(
+        cache.lookup(&before).is_none(),
+        "a take read from a file that changed under the read was cached"
+    );
+    // The next fetch reads the file as it is now.
+    let (second, src) = cache.get_or_decode(&path, RATE).unwrap();
+    assert_eq!(src, Source::Decoded);
+    assert_eq!(second.channels(), 2);
+    let (third, src) = cache.get_or_decode(&path, RATE).unwrap();
+    assert_eq!(src, Source::Cached, "an unchanged file is cached as before");
+    assert!(Arc::ptr_eq(&second, &third));
+}

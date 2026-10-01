@@ -104,16 +104,42 @@ impl SampleCache {
     /// held if any instance holds it, else read and decoded now (mono
     /// stays mono). An unreadable or undecodable file is an error and is
     /// not cached — the next load tries it again.
+    ///
+    /// The key is the file as it was stat'ed *before* the read. A file
+    /// rewritten while it is being read (a kit still extracting, a sync
+    /// client) would otherwise be cached under the key of a version it
+    /// was not read from, and served for that version until the next
+    /// rewrite. So the file is stat'ed again after the read; if it
+    /// changed, the take goes to this caller but is not cached.
     pub fn get_or_decode(
         &self,
         path: &Path,
         sample_rate: f32,
     ) -> Result<(Arc<SampleData>, Source), String> {
+        self.get_or_decode_with_hook(path, sample_rate, || {})
+    }
+
+    /// [`get_or_decode`](Self::get_or_decode) with `after_read` run
+    /// between the read and the second stat. Test hook: lets a test
+    /// rewrite the file exactly there.
+    #[doc(hidden)]
+    pub fn get_or_decode_with_hook(
+        &self,
+        path: &Path,
+        sample_rate: f32,
+        after_read: impl FnOnce(),
+    ) -> Result<(Arc<SampleData>, Source), String> {
         let key = SampleKey::for_file(path, sample_rate)
             .map_err(|e| format!("read {}: {e}", path.display()))?;
-        self.get_or_insert_with(key, || {
+        let read_key = key.clone();
+        self.get_or_insert_checked(key, || {
             let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            decode_sample(bytes, sample_rate).map_err(|e| format!("decode {}: {e}", path.display()))
+            after_read();
+            let unchanged =
+                SampleKey::for_file(path, sample_rate).is_ok_and(|after| after == read_key);
+            let sample = decode_sample(bytes, sample_rate)
+                .map_err(|e| format!("decode {}: {e}", path.display()))?;
+            Ok((sample, unchanged))
         })
     }
 
@@ -124,14 +150,29 @@ impl SampleCache {
         key: SampleKey,
         decode: impl FnOnce() -> Result<SampleData, String>,
     ) -> Result<(Arc<SampleData>, Source), String> {
+        self.get_or_insert_checked(key, || decode().map(|sample| (sample, true)))
+    }
+
+    /// [`get_or_insert_with`](Self::get_or_insert_with) for a `decode`
+    /// that also says whether its take may be cached under `key` (false:
+    /// the file changed under the read — see
+    /// [`get_or_decode`](Self::get_or_decode)).
+    fn get_or_insert_checked(
+        &self,
+        key: SampleKey,
+        decode: impl FnOnce() -> Result<(SampleData, bool), String>,
+    ) -> Result<(Arc<SampleData>, Source), String> {
         let slot = self.slots.lock().entry(key).or_default().clone();
         let mut held = slot.sample.lock();
         if let Some(sample) = held.upgrade() {
             return Ok((sample, Source::Cached));
         }
-        let sample = Arc::new(decode()?);
+        let (sample, cacheable) = decode()?;
+        let sample = Arc::new(sample);
         self.decodes.fetch_add(1, Ordering::Relaxed);
-        *held = Arc::downgrade(&sample);
+        if cacheable {
+            *held = Arc::downgrade(&sample);
+        }
         Ok((sample, Source::Decoded))
     }
 
