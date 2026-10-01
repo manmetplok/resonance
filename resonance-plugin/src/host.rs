@@ -18,6 +18,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
+use clack_extensions::params::ParamRescanFlags;
 use clack_plugin::prelude::HostSharedHandle;
 
 /// Top bit of `HostHandle::calls`: the handle has been retired.
@@ -76,14 +77,18 @@ pub struct HostHandle {
     /// host has not been asked to re-read them yet. Set from any thread,
     /// consumed on the main thread (`clap_host_params.rescan` is
     /// `[main-thread]`).
-    params_rescan: AtomicBool,
+    ///
+    /// The CLAP rescan flags to send (`RESCAN_VALUES`, `RESCAN_TEXT`), OR-ed;
+    /// 0 when nothing is pending.
+    params_rescan: AtomicU32,
     /// True while the bridge is inside the plugin's `process()` call. A
     /// rescan requested then is held back ([`Self::request_params_rescan`])
     /// until the bridge has published the block's values.
     in_process: AtomicBool,
-    /// A rescan requested while `in_process`: the bridge posts it after
-    /// the block, once the values it would re-read are in its mirror.
-    rescan_deferred: AtomicBool,
+    /// The flags of a rescan requested while `in_process`: the bridge posts
+    /// it after the block, once the values it would re-read are in its
+    /// mirror. 0 when none.
+    rescan_deferred: AtomicU32,
 }
 
 impl HostHandle {
@@ -102,9 +107,9 @@ impl HostHandle {
             latency_dirty: AtomicBool::new(false),
             gui_closed: AtomicU64::new(0),
             preset_dirty: AtomicBool::new(false),
-            params_rescan: AtomicBool::new(false),
+            params_rescan: AtomicU32::new(0),
             in_process: AtomicBool::new(false),
-            rescan_deferred: AtomicBool::new(false),
+            rescan_deferred: AtomicU32::new(0),
         })
     }
 
@@ -160,11 +165,14 @@ impl HostHandle {
         self.with_host(|host| host.request_process());
     }
 
-    /// Tell the host that parameter values — or the text they display —
-    /// changed without it writing them: a read-only output moved (a load
-    /// progress), or the plugin set a parameter from its own state. The
-    /// bridge calls `clap_host_params.rescan(VALUES | TEXT)` on its next
-    /// main-thread callback, which is when a host re-reads its mirror.
+    /// Tell the host that parameter values changed without it writing
+    /// them: a read-only output moved (a load progress), or the plugin set
+    /// a parameter from its own state. The bridge calls
+    /// `clap_host_params.rescan(VALUES)` on its next main-thread callback,
+    /// which is when a host re-reads its mirror — the values, and the text
+    /// of each one that moved. That is all a moving value needs; Resonance's
+    /// host makes it cheap (no `get_info` walk, one `value_to_text` per
+    /// moved param), so a progress may report every few percent.
     ///
     /// Realtime-safe, like [`Self::set_latency_samples`]: a few atomics,
     /// and the host's `[thread-safe]` callback request only when no
@@ -186,24 +194,42 @@ impl HostHandle {
     /// plugin is inactive the bridge publishes its values before telling
     /// the host.
     pub fn request_params_rescan(&self) {
+        self.request_rescan(ParamRescanFlags::VALUES.bits());
+    }
+
+    /// Tell the host that the TEXT a parameter displays changed for an
+    /// unchanged value — a slot whose kit or model was renamed, a unit
+    /// that switched — along with any values that moved. The bridge sends
+    /// `rescan(VALUES | TEXT)`, and the host re-formats every parameter,
+    /// so prefer [`Self::request_params_rescan`] for a value that merely
+    /// moved. Same ordering and realtime guarantees.
+    pub fn request_params_text_rescan(&self) {
+        self.request_rescan((ParamRescanFlags::VALUES | ParamRescanFlags::TEXT).bits());
+    }
+
+    fn request_rescan(&self, flags: u32) {
         if self.in_process.load(Ordering::SeqCst) {
-            self.rescan_deferred.store(true, Ordering::SeqCst);
+            self.rescan_deferred.fetch_or(flags, Ordering::SeqCst);
             // Still inside the block: the bridge's `end_process` takes it.
             // Otherwise the block ended in between and may have missed the
-            // flag — whoever swaps it out posts it, exactly once.
-            if self.in_process.load(Ordering::SeqCst)
-                || !self.rescan_deferred.swap(false, Ordering::SeqCst)
-            {
+            // flags — whoever swaps them out posts them, exactly once.
+            if self.in_process.load(Ordering::SeqCst) {
                 return;
             }
+            let flags = self.rescan_deferred.swap(0, Ordering::SeqCst);
+            if flags == 0 {
+                return;
+            }
+            self.post_params_rescan(flags);
+            return;
         }
-        self.post_params_rescan();
+        self.post_params_rescan(flags);
     }
 
     /// Latch the rescan for the main thread and ask for the callback that
     /// delivers it.
-    fn post_params_rescan(&self) {
-        if !self.params_rescan.swap(true, Ordering::AcqRel) {
+    fn post_params_rescan(&self, flags: u32) {
+        if self.params_rescan.fetch_or(flags, Ordering::AcqRel) == 0 {
             self.request_callback();
         }
     }
@@ -272,23 +298,23 @@ impl HostHandle {
         self.in_process.store(true, Ordering::SeqCst);
     }
 
-    /// Audio thread: the plugin's `process()` returned. True when a rescan
-    /// was requested during it; the caller publishes the block's values
-    /// and then calls [`Self::post_deferred_rescan`].
-    pub(crate) fn end_process(&self) -> bool {
+    /// Audio thread: the plugin's `process()` returned. The flags of a
+    /// rescan requested during it (0: none); the caller publishes the
+    /// block's values and then hands them to [`Self::post_deferred_rescan`].
+    pub(crate) fn end_process(&self) -> u32 {
         self.in_process.store(false, Ordering::SeqCst);
-        self.rescan_deferred.swap(false, Ordering::SeqCst)
+        self.rescan_deferred.swap(0, Ordering::SeqCst)
     }
 
     /// Audio thread: post a rescan [`Self::end_process`] handed over, now
     /// that the values it announces are published.
-    pub(crate) fn post_deferred_rescan(&self) {
-        self.post_params_rescan();
+    pub(crate) fn post_deferred_rescan(&self, flags: u32) {
+        self.post_params_rescan(flags);
     }
 
-    /// Take the "parameter values changed under the host" flag.
-    pub(crate) fn take_params_rescan(&self) -> bool {
-        self.params_rescan.swap(false, Ordering::AcqRel)
+    /// Take the pending rescan: its CLAP flags, empty when none.
+    pub(crate) fn take_params_rescan(&self) -> ParamRescanFlags {
+        ParamRescanFlags::from_bits_truncate(self.params_rescan.swap(0, Ordering::AcqRel))
     }
 
     /// Take the "preset identity changed" flag.

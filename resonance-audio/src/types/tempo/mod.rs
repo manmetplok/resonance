@@ -115,6 +115,19 @@ impl ParamInfo {
     }
 }
 
+/// One parameter's new value and the plugin's text for it: what a values
+/// rescan (`clap_host_params.rescan(VALUES | TEXT)`) reports, without the
+/// rest of a [`ParamInfo`] — whose choice labels and unit cost a
+/// `value_to_text` walk per parameter that a moving progress output must
+/// not pay.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamValueUpdate {
+    pub id: u32,
+    pub value: f64,
+    /// The plugin's `value_to_text` of `value`; empty when it has none.
+    pub text: String,
+}
+
 /// Every field empty or zero, except `automatable`: an ordinary parameter
 /// is automatable, and a hand-built one (a test fixture, a placeholder)
 /// should not lose its lane by omission.

@@ -10,12 +10,14 @@ use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 
 use clap_sys::ext::params::{
-    clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS, CLAP_PARAM_IS_AUTOMATABLE,
-    CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
+    clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
+    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
+    CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES,
 };
+use clap_sys::host::clap_host;
 use clap_sys::plugin::clap_plugin;
 
-use resonance_audio::test_support::{ClapInstance, __instance_from_raw_for_test};
+use resonance_audio::test_support::{ClapInstance, ParamsRefresh, __instance_from_raw_for_test};
 use resonance_common::param_flags::{PluginParamFlags, EXTENSION_ID as PARAM_FLAGS};
 
 pub(crate) const P_GAIN: u32 = 1;
@@ -32,6 +34,16 @@ pub(crate) struct FakeState {
     /// Whether the fake serves `com.resonance.param-flags` (a first-party
     /// plugin does; a third-party one does not).
     pub first_party: bool,
+    /// The host vtable the instance was created with, for calling back.
+    pub host: *const clap_host,
+}
+
+/// Call the host's `clap_host_params.rescan(flags)`, as the plugin would.
+pub(crate) unsafe fn plugin_rescans(state: *mut FakeState, flags: u32) {
+    let host = (*state).host;
+    let ext = ((*host).get_extension.expect("get_extension"))(host, CLAP_EXT_PARAMS.as_ptr())
+        as *const clap_host_params;
+    ((*ext).rescan.expect("rescan"))(host, flags);
 }
 
 unsafe fn fake_state<'a>(plugin: *const clap_plugin) -> &'a mut FakeState {
@@ -153,8 +165,9 @@ unsafe extern "C" fn fake_get_extension(
 pub(crate) fn make_instance(first_party: bool) -> (ClapInstance, *mut FakeState) {
     let mut state_ptr: *mut FakeState = ptr::null_mut();
     let instance = __instance_from_raw_for_test(
-        |_host| {
+        |host| {
             let state = Box::into_raw(Box::new(FakeState {
+                host,
                 kit: -1.0,
                 progress: 0.0,
                 text_calls: 0,
@@ -214,4 +227,60 @@ fn a_third_party_plugin_excludes_only_its_outputs() {
     assert!(!kit.state_excluded && kit.host_persisted());
     let progress = params.iter().find(|p| p.id == P_PROGRESS).unwrap();
     assert!(progress.state_excluded && !progress.host_persisted());
+}
+
+/// A values rescan re-reads values, and formats only the params that
+/// moved: a plugin reporting a load progress every few percent must not
+/// cost a full `query_params` (a `get_info` walk plus a `value_to_text`
+/// per choice step) under the instance lock each time (review finding 7).
+#[test]
+fn a_values_rescan_rereads_only_values_and_formats_only_what_moved() {
+    let (mut instance, state) = make_instance(true);
+    // What the host learnt at instantiation.
+    let _ = instance.query_params();
+    let (info_before, text_before) = unsafe { ((*state).info_calls, (*state).text_calls) };
+
+    unsafe {
+        (*state).progress = 0.35;
+        plugin_rescans(state, CLAP_PARAM_RESCAN_VALUES);
+    }
+    assert_eq!(
+        instance.take_params_refresh(),
+        ParamsRefresh::Values { all_text: false }
+    );
+    let values = instance.refresh_param_values(false);
+    assert_eq!(values.len(), 1, "only the moved param: {values:?}");
+    assert_eq!(values[0].id, P_PROGRESS);
+    assert_eq!(values[0].value, 0.35);
+    assert_eq!(values[0].text, "35 %");
+    unsafe {
+        assert_eq!((*state).info_calls, info_before, "no get_info walk");
+        assert_eq!((*state).text_calls, text_before + 1, "one value formatted");
+    }
+
+    // Nothing moved: nothing reported.
+    unsafe { plugin_rescans(state, CLAP_PARAM_RESCAN_VALUES) };
+    let _ = instance.take_params_refresh();
+    assert!(instance.refresh_param_values(false).is_empty());
+    assert_eq!(instance.take_params_refresh(), ParamsRefresh::None, "consumed");
+}
+
+#[test]
+fn the_rescan_flags_decide_how_much_is_reread() {
+    let (mut instance, state) = make_instance(true);
+    unsafe { plugin_rescans(state, CLAP_PARAM_RESCAN_TEXT) };
+    assert_eq!(
+        instance.take_params_refresh(),
+        ParamsRefresh::Values { all_text: true }
+    );
+    // Before any query the host has no baseline: a text rescan reports
+    // every param, each with its text.
+    assert_eq!(instance.refresh_param_values(true).len(), 3);
+
+    unsafe { plugin_rescans(state, CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_ALL) };
+    assert_eq!(instance.take_params_refresh(), ParamsRefresh::Full);
+
+    // A load's second look is a full re-read.
+    instance.request_params_refresh();
+    assert_eq!(instance.take_params_refresh(), ParamsRefresh::Full);
 }

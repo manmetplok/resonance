@@ -586,6 +586,15 @@ pub enum AudioEvent {
         instance_id: PluginInstanceId,
         params: Vec<crate::types::ParamInfo>,
     },
+    /// A plugin's values rescan (`clap_host_params.rescan` with `VALUES`
+    /// and/or `TEXT`): the params whose value moved since the host last
+    /// read them — every param when the text changed — with their new
+    /// text. The cheap counterpart of [`Self::PluginParamsRefreshed`] for
+    /// a plugin that moves a value often (the drums' `kit_load_progress`).
+    PluginParamValuesChanged {
+        instance_id: PluginInstanceId,
+        values: Vec<crate::types::ParamValueUpdate>,
+    },
     /// A Resonance plugin reported its loaded preset and modified flag
     /// (`com.resonance.preset-session`, slice P5): from its own browser, a
     /// host load, or an edit that made it differ from the preset (or stop

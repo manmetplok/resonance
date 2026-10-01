@@ -473,9 +473,10 @@ impl<'a, P: ResonancePlugin> PluginAudioProcessor<'a, ClapShared<'a>, ClapMainTh
         // it may have just moved: publish them first, so the host's
         // re-read cannot overtake them (the push-back above ran before
         // the plugin did).
-        if self.host_handle.end_process() {
+        let rescan = self.host_handle.end_process();
+        if rescan != 0 {
             self.push_back_params();
-            self.host_handle.post_deferred_rescan();
+            self.host_handle.post_deferred_rescan(rescan);
         }
 
         // port_views borrows end here (OutputBuffer has no Drop impl).

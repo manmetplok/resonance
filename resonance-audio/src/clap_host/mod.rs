@@ -42,6 +42,22 @@ pub use bundle::ClapBundleError;
 pub use instance::{ClapInstance, StereoBufMut};
 pub use bundle::DiscoveryFactory;
 pub use preset_state::PresetHostReport;
+
+/// What a plugin's params rescan asks the host to re-read
+/// ([`ClapInstance::take_params_refresh`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamsRefresh {
+    /// Nothing pending.
+    None,
+    /// Values moved (CLAP `RESCAN_VALUES`): re-read every value and the
+    /// text of each that moved — or of every one, when `all_text` (CLAP
+    /// `RESCAN_TEXT`: the plugin's formatting itself changed). See
+    /// [`ClapInstance::refresh_param_values`].
+    Values { all_text: bool },
+    /// Anything may have changed (`RESCAN_INFO` / `ALL`, or a load's
+    /// second look): the full [`ClapInstance::query_params`].
+    Full,
+}
 pub use param_meta::{choice_labels, label_round_trips, unit_from_text, MAX_CHOICE_STEPS};
 
 use std::ffi::{c_char, c_void, CStr};
@@ -142,10 +158,12 @@ pub(super) struct HostData {
     pub(super) preset_reports: Mutex<Vec<preset_state::PresetHostReport>>,
     /// `clap_host_params` vtable (rescan / clear / request_flush).
     pub(super) params_ext: clap_sys::ext::params::clap_host_params,
-    /// The app's param mirror should be re-read: the plugin asked for a
-    /// values rescan, or a preset load wants a second look after the next
-    /// block. Consumed by `ClapInstance::take_params_refresh`.
-    pub(super) params_refresh: AtomicBool,
+    /// The app's param mirror should be re-read: the CLAP rescan flags the
+    /// plugin asked for (`VALUES`, `TEXT`, `INFO`, `ALL`), OR-ed, or `ALL`
+    /// from a preset load that wants a second look after the next block.
+    /// Consumed by `ClapInstance::take_params_refresh`, which decides how
+    /// much to re-read.
+    pub(super) params_refresh: std::sync::atomic::AtomicU32,
 }
 
 impl HostData {
@@ -273,16 +291,25 @@ unsafe extern "C" fn host_gui_request_hide(_host: *const clap_host) -> bool {
 
 /// `clap_host_params.rescan` — `[main-thread]`. A values (or text)
 /// rescan is what a plugin sends after changing params itself (a preset it
-/// loaded); the mirror re-reads them on the next host-request poll. An
-/// info rescan (params added/removed) needs a re-instantiation the host
-/// does not do live.
+/// loaded, a progress it moved); the mirror re-reads them on the next
+/// host-request poll — the values only, unless the plugin says more
+/// changed (`ClapInstance::take_params_refresh`). Adding or removing
+/// params (`ALL`) needs a re-instantiation the host does not do live; what
+/// it can re-read, it does.
 unsafe extern "C" fn host_params_rescan(host: *const clap_host, flags: u32) {
-    use clap_sys::ext::params::{CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES};
-    if flags & (CLAP_PARAM_RESCAN_VALUES | CLAP_PARAM_RESCAN_TEXT) == 0 {
+    use clap_sys::ext::params::{
+        CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_INFO, CLAP_PARAM_RESCAN_TEXT,
+        CLAP_PARAM_RESCAN_VALUES,
+    };
+    let known = CLAP_PARAM_RESCAN_VALUES
+        | CLAP_PARAM_RESCAN_TEXT
+        | CLAP_PARAM_RESCAN_INFO
+        | CLAP_PARAM_RESCAN_ALL;
+    if flags & known == 0 {
         return;
     }
     if let Some(data) = host_data_from(host) {
-        data.params_refresh.store(true, Ordering::Release);
+        data.params_refresh.fetch_or(flags & known, Ordering::AcqRel);
     }
 }
 
@@ -337,7 +364,7 @@ pub(super) fn create_host_data() -> Pin<Box<HostData>> {
             clear: Some(host_params_clear),
             request_flush: Some(host_params_request_flush),
         },
-        params_refresh: AtomicBool::new(false),
+        params_refresh: std::sync::atomic::AtomicU32::new(0),
     });
     let ptr = &*host_data as *const HostData as *mut c_void;
     unsafe {

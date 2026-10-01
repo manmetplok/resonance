@@ -78,6 +78,11 @@ pub struct ClapInstance {
     /// and the built-in bridge serves an activation-time cached value
     /// while active (todo #1125).
     pub(super) latency: u32,
+    /// Every param id with the value the host last read for it — by
+    /// [`ClapInstance::query_params`] or [`ClapInstance::refresh_param_values`]
+    /// — so a values rescan re-reads values only and formats only the ones
+    /// that moved. Engine thread; the lock is never contended.
+    pub(super) param_value_cache: parking_lot::Mutex<Vec<(u32, f64)>>,
     /// Pending parameter changes to send during next process() call.
     pub(super) pending_params: Vec<(u32, f64)>,
     /// Pre-allocated buffer for CLAP parameter events (reused across process() calls).
@@ -158,6 +163,7 @@ impl ClapInstance {
             // Pre-size every event buffer at activation so the first
             // process() call after a fresh plugin add doesn't allocate
             // on the audio thread.
+            param_value_cache: parking_lot::Mutex::new(Vec::new()),
             pending_params: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             param_event_buf: Vec::with_capacity(crate::limits::MAX_PENDING_PARAMS),
             pending_notes: Vec::with_capacity(crate::limits::MAX_PENDING_NOTES),
@@ -442,7 +448,78 @@ impl ClapInstance {
             });
         }
 
+        // What the host now knows: the baseline a values rescan diffs
+        // against.
+        *self.param_value_cache.lock() = result.iter().map(|p| (p.id, p.current_value)).collect();
         result
+    }
+
+    /// The cheap re-read a values rescan asks for (CLAP
+    /// `RESCAN_VALUES` / `RESCAN_TEXT`; review finding 7): every param's
+    /// value through `get_value`, and the plugin's text only for those
+    /// whose value moved since the host last read it — or for all, with
+    /// `all_text`. Returns just those params.
+    ///
+    /// [`Self::query_params`] answers this too, but it walks `get_info`
+    /// and, per stepped param, a `value_to_text` per step for its choice
+    /// labels — under the instance lock the audio thread abandons a block
+    /// rather than wait for. A plugin that reports a load progress every
+    /// few percent asks for a rescan each time; a full query for each was
+    /// an audible dropout. This walks `get_info` once per instance (the
+    /// ids, if no query has listed them yet), and otherwise only
+    /// `get_value`, which a CLAP plugin answers from an atomic.
+    pub fn refresh_param_values(&self, all_text: bool) -> Vec<crate::types::ParamValueUpdate> {
+        let Some(params) = self.params_ext else {
+            return Vec::new();
+        };
+        let Some(get_value) = (unsafe { (*params).get_value }) else {
+            return Vec::new();
+        };
+        let mut cache = self.param_value_cache.lock();
+        if cache.is_empty() {
+            *cache = self.param_ids().into_iter().map(|id| (id, f64::NAN)).collect();
+        }
+        let mut changed = Vec::new();
+        for (id, seen) in cache.iter_mut() {
+            let mut value = 0.0f64;
+            // SAFETY: the vtable is the live plugin's; engine thread.
+            if !unsafe { get_value(self.plugin, *id, &mut value) } || !value.is_finite() {
+                continue;
+            }
+            if !all_text && value.to_bits() == seen.to_bits() {
+                continue;
+            }
+            *seen = value;
+            changed.push(crate::types::ParamValueUpdate {
+                id: *id,
+                value,
+                text: self.param_text(*id, value).unwrap_or_default(),
+            });
+        }
+        changed
+    }
+
+    /// Every param id, in the plugin's order: a `get_info` walk, nothing
+    /// formatted.
+    fn param_ids(&self) -> Vec<u32> {
+        let Some(params) = self.params_ext else {
+            return Vec::new();
+        };
+        let (Some(count_fn), Some(get_info)) = (unsafe { (*params).count }, unsafe {
+            (*params).get_info
+        }) else {
+            return Vec::new();
+        };
+        let count = unsafe { count_fn(self.plugin) };
+        (0..count)
+            .filter_map(|i| {
+                let mut info =
+                    std::mem::MaybeUninit::<clap_sys::ext::params::clap_param_info>::uninit();
+                // SAFETY: as in `query_params`.
+                unsafe { get_info(self.plugin, i, info.as_mut_ptr()) }
+                    .then(|| unsafe { info.assume_init() }.id)
+            })
+            .collect()
     }
 
     /// Whether the plugin's state leaves `param_id` out

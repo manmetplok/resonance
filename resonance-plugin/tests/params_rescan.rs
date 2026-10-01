@@ -244,3 +244,29 @@ fn an_inactive_plugins_rescan_publishes_its_values_first() {
     let flags = ParamRescanFlags::from_bits_truncate(rescans.load(Ordering::SeqCst));
     assert!(flags.is_empty(), "consumed");
 }
+
+/// The flags say how much moved: a value rescan asks the host to re-read
+/// values (and the text of each that moved) — not to re-format every
+/// param, which `RESCAN_TEXT` would.
+#[test]
+fn a_value_rescan_sends_values_and_a_text_rescan_adds_text() {
+    let rescans = Arc::new(AtomicU32::new(0));
+    let mut instance = instance(rescans.clone());
+    let (handle, _gain) = handle();
+    let posted = |instance: &mut PluginInstance<Host>| {
+        let requested = instance
+            .access_shared_handler(|s| s.callback_requested.swap(false, Ordering::SeqCst));
+        assert!(requested, "a callback was requested");
+        instance.call_on_main_thread_callback();
+        ParamRescanFlags::from_bits_truncate(rescans.swap(0, Ordering::SeqCst))
+    };
+
+    handle.request_params_rescan();
+    assert_eq!(posted(&mut instance), ParamRescanFlags::VALUES);
+
+    handle.request_params_text_rescan();
+    assert_eq!(
+        posted(&mut instance),
+        ParamRescanFlags::VALUES | ParamRescanFlags::TEXT
+    );
+}

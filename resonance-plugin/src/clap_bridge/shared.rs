@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::gui::HostGui;
 use clack_extensions::latency::HostLatency;
-use clack_extensions::params::{HostParams, ParamRescanFlags};
+use clack_extensions::params::HostParams;
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
@@ -344,7 +344,8 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
         if self.host_handle.take_preset_dirty() {
             self.report_preset_identity();
         }
-        if self.host_handle.take_params_rescan() {
+        let rescan = self.host_handle.take_params_rescan();
+        if !rescan.is_empty() {
             // Inactive, the plugin object is here and is the newer side
             // (it moved the values itself; nothing has copied them into the
             // mirror `get_value` serves ordinary params from): publish it
@@ -357,10 +358,7 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
                 }
             }
             if let Some(params) = self.host.shared().get_extension::<HostParams>() {
-                params.rescan(
-                    &mut self.host,
-                    ParamRescanFlags::VALUES | ParamRescanFlags::TEXT,
-                );
+                params.rescan(&mut self.host, rescan);
             }
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {

@@ -277,19 +277,34 @@ impl ClapInstance {
         (!messages.is_empty()).then(|| messages.join("; "))
     }
 
-    /// Ask for the params to be re-read at the next host-request poll.
+    /// Ask for the params to be re-read in full at the next host-request
+    /// poll (a load's second look: anything may have moved).
     pub fn request_params_refresh(&mut self) {
-        self.host_data
-            .params_refresh
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.host_data.params_refresh.fetch_or(
+            clap_sys::ext::params::CLAP_PARAM_RESCAN_ALL,
+            std::sync::atomic::Ordering::AcqRel,
+        );
     }
 
-    /// Whether the params should be re-read (a values rescan, or a load's
-    /// second look), clearing the flag.
-    pub fn take_params_refresh(&mut self) -> bool {
-        self.host_data
+    /// How much of the params to re-read — the plugin's rescan flags, or a
+    /// load's second look — clearing the request.
+    pub fn take_params_refresh(&mut self) -> super::ParamsRefresh {
+        use clap_sys::ext::params::{
+            CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_INFO, CLAP_PARAM_RESCAN_TEXT,
+        };
+        let flags = self
+            .host_data
             .params_refresh
-            .swap(false, std::sync::atomic::Ordering::AcqRel)
+            .swap(0, std::sync::atomic::Ordering::AcqRel);
+        if flags == 0 {
+            super::ParamsRefresh::None
+        } else if flags & (CLAP_PARAM_RESCAN_INFO | CLAP_PARAM_RESCAN_ALL) != 0 {
+            super::ParamsRefresh::Full
+        } else {
+            super::ParamsRefresh::Values {
+                all_text: flags & CLAP_PARAM_RESCAN_TEXT != 0,
+            }
+        }
     }
 
     /// Whether this is one of Resonance's own plugins: it serves

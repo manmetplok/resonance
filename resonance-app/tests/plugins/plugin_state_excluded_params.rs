@@ -13,7 +13,9 @@ use resonance_app::message::{Message, PluginMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_app::Resonance;
 use resonance_audio::test_support::Receiver;
-use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, PluginInstanceId, TrackType};
+use resonance_audio::types::{
+    AudioCommand, AudioEvent, ParamInfo, ParamValueUpdate, PluginInstanceId, TrackType,
+};
 
 const TRACK: u64 = 7;
 const DRUMS: PluginInstanceId = 77;
@@ -100,15 +102,23 @@ fn set(app: &mut Resonance, param_id: u32, value: f64) {
     )));
 }
 
-/// The plugin moved its own selection and progress (what a `rescan`
-/// refresh reports): the mirror shows them, as any reader expects.
+/// The plugin moved its own selection and progress, and its values rescan
+/// reported them: the mirror shows them, as any reader expects.
 fn plugin_reports(app: &mut Resonance, kit: f64, progress: f64) {
-    let mut fresh = params().split_off(1);
-    fresh[0].current_value = kit;
-    fresh[1].current_value = progress;
-    app.test_apply_engine_event(AudioEvent::PluginParamsRefreshed {
+    app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
         instance_id: DRUMS,
-        params: fresh,
+        values: vec![
+            ParamValueUpdate {
+                id: KIT_SELECT,
+                value: kit,
+                text: format!("Kit {kit}"),
+            },
+            ParamValueUpdate {
+                id: PROGRESS,
+                value: progress,
+                text: format!("{:.0} %", progress * 100.0),
+            },
+        ],
     });
 }
 
@@ -120,6 +130,8 @@ fn the_project_file_carries_neither_the_kit_slot_nor_the_progress() {
     plugin_reports(&mut app, 4.0, 0.5);
     assert_eq!(app.test_plugin_param(DRUMS, KIT_SELECT), Some(4.0));
     assert_eq!(app.test_plugin_param(DRUMS, PROGRESS), Some(0.5));
+    // The values rescan carried the plugin's text, too.
+    assert_eq!(app.test_plugin_param_text(DRUMS, PROGRESS).as_deref(), Some("50 %"));
 
     let file = app.test_build_project_file();
     let saved: Vec<u32> = file.tracks[0].plugins[0]

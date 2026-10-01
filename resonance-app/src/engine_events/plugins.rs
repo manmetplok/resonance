@@ -903,6 +903,24 @@ pub(super) fn params_refreshed(
     });
 }
 
+/// A plugin's values rescan: the params that moved, with their text (a
+/// load progress, a selection the plugin derived itself). The mirror takes
+/// them; ids it does not have are ignored.
+pub(super) fn param_values_changed(
+    r: &mut Resonance,
+    instance_id: PluginInstanceId,
+    values: Vec<resonance_audio::types::ParamValueUpdate>,
+) {
+    r.with_plugin_mut(instance_id, |slot| {
+        for fresh in values {
+            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                p.current_value = fresh.value;
+                p.text = fresh.text;
+            }
+        }
+    });
+}
+
 /// A Resonance plugin reported its loaded preset and modified flag
 /// (`com.resonance.preset-session`). The report is the truth from now on.
 pub(super) fn preset_identity(
