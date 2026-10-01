@@ -64,6 +64,7 @@ fn project_track(id: u64, freeze: TrackFreezeState) -> ProjectTrack {
         midi_output_channel: None,
         external_instrument: None,
         freeze,
+        color: None,
     }
 }
 

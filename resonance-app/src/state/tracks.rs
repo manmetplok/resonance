@@ -178,6 +178,11 @@ pub struct TrackState {
     pub midi_output_device: Option<String>,
     /// Channel that hardware MIDI output uses (`None` = channel 1).
     pub midi_output_channel: Option<u8>,
+    /// Identity colour (mixer-cleanup.md §6): the band on the Arrange
+    /// header and the mixer strip head. Project-persisted. New tracks take
+    /// [`crate::theme::track_palette_color`] of their order; sub-tracks
+    /// inherit their parent's.
+    pub color: [u8; 3],
 }
 
 impl TrackState {
@@ -215,6 +220,7 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 
@@ -248,6 +254,7 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 
@@ -284,6 +291,7 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 

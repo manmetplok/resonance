@@ -121,3 +121,5 @@ mod files_listing_fingerprint;
 mod hermetic_user_state;
 #[path = "io/preset_name_collisions.rs"]
 mod preset_name_collisions;
+#[path = "io/track_color_persist.rs"]
+mod track_color_persist;

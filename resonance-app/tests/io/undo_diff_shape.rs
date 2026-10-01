@@ -562,6 +562,39 @@ fn creating_a_track_group_undoes_through_the_diff_path() {
 }
 
 // ---------------------------------------------------------------------------
+// Track colour (mixer-cleanup.md §6)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recolouring_a_track_undoes_through_the_diff_path() {
+    let mut f = fixture("track-colour");
+    let track = f
+        .app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| t.sub_track.is_none())
+        .map(|t| (t.id, t.color))
+        .expect("the demo has a track");
+    let (id, old) = track;
+    let new = [0x12, 0x34, 0x56];
+    assert_ne!(old, new);
+    let colour = |s: &UndoSnapshot| {
+        s.project
+            .file
+            .tracks
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.color)
+    };
+    let before = f.app.test_snapshot_for_undo();
+    let after = edit(&mut f, Message::Track(TrackMessage::SetTrackColor(id, new)));
+    assert_eq!(colour(&before), Some(old));
+    assert_eq!(colour(&after), Some(new));
+    undo_redo_over(&mut f, &before, &after, "track colour");
+}
+
+// ---------------------------------------------------------------------------
 // Drum patterns
 // ---------------------------------------------------------------------------
 
@@ -1011,6 +1044,7 @@ fn loading_a_saved_group_macro_mute_sends_effective_member_mute() {
             midi_output_device: None,
             midi_output_channel: None,
             freeze: resonance_common::TrackFreezeState::unfrozen(),
+            color: None,
             external_instrument: None,
         }
     }

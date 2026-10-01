@@ -153,6 +153,67 @@ fn rename_is_undoable_and_validates() {
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
 }
 
+// ---------------- track.set_color ----------------
+
+#[test]
+fn set_color_is_reported_undoable_and_validates() {
+    let mut app = app();
+    let id = add_track(&mut app, "instrument", Some("Keys"));
+    // A new track already carries a palette colour on the wire.
+    let initial = tracks_view(&mut app).tracks[0].summary.color.clone();
+    let initial = initial.expect("a track reports its colour");
+    assert!(
+        initial.len() == 7 && initial.starts_with('#'),
+        "\"#rrggbb\": {initial}"
+    );
+
+    let before = app.revision();
+    let ack: MutationAck = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": id, "color": "#1A2B3C" }),
+    )
+    .result()
+    .expect("set_color succeeds");
+    assert_eq!(ack.revision, before + 1);
+    // Normalised to lowercase on the way back out.
+    assert_eq!(
+        tracks_view(&mut app).tracks[0].summary.color.as_deref(),
+        Some("#1a2b3c")
+    );
+
+    // One undo step, labelled, back to the palette colour.
+    let undone: resonance_control::methods::edit::UndoResult =
+        roundtrip(&mut app, Request::without_params(98, "edit.undo"))
+            .result()
+            .expect("edit.undo succeeds");
+    assert_eq!(undone.undone.as_deref(), Some("track colour"));
+    assert_eq!(
+        tracks_view(&mut app).tracks[0].summary.color.as_deref(),
+        Some(initial.as_str())
+    );
+
+    // Malformed colours and unknown ids are rejected precisely.
+    for bad in ["red", "#12345", "#1234567", "#12345g", ""] {
+        let response = call(
+            &mut app,
+            "track.set_color",
+            serde_json::json!({ "track_id": id, "color": bad }),
+        );
+        assert_eq!(
+            response.error.expect("rejected").kind(),
+            ErrorKind::InvalidParams,
+            "{bad:?}"
+        );
+    }
+    let response = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": 9999, "color": "#000000" }),
+    );
+    assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
+}
+
 // ---------------- track.delete ----------------
 
 #[test]

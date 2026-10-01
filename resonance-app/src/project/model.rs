@@ -513,6 +513,12 @@ pub struct ProjectTrack {
     /// stale (offer refreeze) rather than failing the project.
     #[serde(default)]
     pub freeze: resonance_common::TrackFreezeState,
+    /// Track identity colour (mixer-cleanup.md §6). `None` on projects
+    /// saved before the field existed: the load gives such a track the
+    /// palette colour of its order (a sub-track its parent's), so an old
+    /// project opens coloured, and the same way every time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
 }
 
 /// On-disk external-instrument config (doc #169). Mirrors the persistable

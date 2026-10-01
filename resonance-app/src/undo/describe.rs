@@ -27,6 +27,7 @@ pub fn describe(message: &Message) -> String {
             TrackMessage::ToggleMute(_) => "track mute",
             TrackMessage::ToggleSolo(_) => "track solo",
             TrackMessage::SetTrackName(..) => "rename track",
+            TrackMessage::SetTrackColor(..) => "track colour",
             TrackMessage::SetTrackOutput(..) => "track routing",
             TrackMessage::BounceInPlaceOffline(_)
             | TrackMessage::Bounce(BounceMessage::Confirm) => "bounce in place",
