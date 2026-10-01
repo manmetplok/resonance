@@ -469,3 +469,20 @@ fn a_piece_that_loses_a_note_collision_still_plays_on_its_table_slot() {
     // The winner plays only where it was placed.
     assert!(!pads.is_present(COUNT_STICK_PAD));
 }
+
+#[test]
+fn a_drummica_piece_moved_by_meta_pads_keeps_its_alternate() {
+    // A kit without `_meta.articulations` that moves Tom01 onto the Tom
+    // Low note: the Drummica pair is the piece's, wherever it plays.
+    let pieces = ["SD Tom01 mit Teppich", "SD Tom01 ohne Teppich"];
+    let meta = meta(serde_json::json!({
+        "pads": { "SD Tom01 mit Teppich": { "note": drum_map::TOM_LOW } }
+    }));
+    let pads = KitPads::resolve(|p| pieces.contains(&p), &meta);
+    let tom_low = &pads.pads[TOM_PADS[2]];
+    assert_eq!(tom_low.piece.as_deref(), Some("SD Tom01 mit Teppich"));
+    let articulation = tom_low.articulation.as_ref().expect("Tom01's alternate");
+    assert_eq!(articulation.alt, "SD Tom01 ohne Teppich");
+    assert_eq!(pads.piece_for(TOM_PADS[2], true), Some("SD Tom01 ohne Teppich"));
+    assert!(!pads.is_present(TOM_HIGH_PAD));
+}

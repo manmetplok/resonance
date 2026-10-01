@@ -37,7 +37,8 @@
 //! - A kit with `_meta.articulations` pairs exactly the pieces it lists
 //!   (`{primary, alt, label}`), and only those.
 //! - A kit without it gets the Drummica pairs ([`DRUMMICA_ARTICULATION_ALT`])
-//!   labelled [`DRUMMICA_ARTICULATION_LABEL`].
+//!   labelled [`DRUMMICA_ARTICULATION_LABEL`], by piece: a Drummica piece
+//!   `_meta.pads` moves to another note takes its alternate with it.
 //!
 //! Either way the alternate piece must be in the kit, or the pad has no
 //! articulation and the parameter selects the primary piece whatever its
@@ -300,9 +301,15 @@ impl KitPads {
                     None => fallback_name(&piece),
                 };
                 let articulation = if meta.articulations.is_empty() {
-                    let alt = DRUMMICA_ARTICULATION_ALT[slot];
-                    (piece == DRUMMICA_MAPPING[slot] && !alt.is_empty() && has_piece(alt))
-                        .then(|| PadArticulation::new(&piece, alt, DRUMMICA_ARTICULATION_LABEL))
+                    // Keyed by the piece, not the slot: a Drummica piece
+                    // `_meta.pads` moved to another note keeps its
+                    // alternate there.
+                    DRUMMICA_MAPPING
+                        .iter()
+                        .position(|p| *p == piece)
+                        .map(|table_slot| DRUMMICA_ARTICULATION_ALT[table_slot])
+                        .filter(|alt| !alt.is_empty() && has_piece(alt))
+                        .map(|alt| PadArticulation::new(&piece, alt, DRUMMICA_ARTICULATION_LABEL))
                 } else {
                     meta.articulations
                         .iter()
