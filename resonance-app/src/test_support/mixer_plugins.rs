@@ -728,21 +728,8 @@ impl Resonance {
         track_id: resonance_audio::types::TrackId,
     ) -> Option<u64> {
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
-        let routing_collapsed = self
-            .ui
-            .mixer
-            .collapsed_inspector_groups
-            .contains(&state::MixerInspectorGroup::Routing);
-        let chain_collapsed = self
-            .ui
-            .mixer
-            .collapsed_inspector_groups
-            .contains(&state::MixerInspectorGroup::Chain);
         Some(crate::view::mixer::inspector::inspector_fingerprint(
-            self,
-            track,
-            routing_collapsed,
-            chain_collapsed,
+            self, track,
         ))
     }
 
@@ -755,13 +742,14 @@ impl Resonance {
         bus_id: resonance_audio::types::BusId,
     ) -> Option<u64> {
         let bus = self.registry.busses.iter().find(|b| b.id == bus_id)?;
-        let groups = &self.ui.mixer.collapsed_inspector_groups;
-        Some(crate::view::mixer::inspector::bus_fingerprint(
-            self,
-            bus,
-            groups.contains(&state::MixerInspectorGroup::Routing),
-            groups.contains(&state::MixerInspectorGroup::Chain),
-        ))
+        Some(crate::view::mixer::inspector::bus_fingerprint(self, bus))
+    }
+
+    /// Test-only: the master twin of [`Self::test_inspector_fingerprint`]
+    /// — the lazy-region key of the master inspector.
+    #[doc(hidden)]
+    pub fn test_master_inspector_fingerprint(&self) -> u64 {
+        crate::view::mixer::inspector::master_fingerprint(self)
     }
 
     /// Test-only: drive the GUI external-instrument map (and engine) back to
@@ -801,6 +789,28 @@ impl Resonance {
             .map(|t| t.plugins.as_slice())
             .unwrap_or(&[]);
         crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+    }
+
+    /// Test-only: the message the inspector AUTOMATION group's `+ Add lane`
+    /// picker raises when the option labelled `label` is picked — on track
+    /// `track_id`, or on the master when `None`. A closed `pick_list`
+    /// renders only its placeholder, so a test can't click an option; this
+    /// resolves it through the picker's own option list and `on_select`.
+    /// `None` when no option carries that label.
+    #[doc(hidden)]
+    pub fn test_inspector_add_lane_message(
+        &self,
+        track_id: Option<resonance_audio::types::TrackId>,
+        label: &str,
+    ) -> Option<crate::message::Message> {
+        use crate::view::mixer::automation::{add_lane_message_for_label, AutoChan};
+        match track_id {
+            Some(id) => {
+                let track = self.registry.tracks.iter().find(|t| t.id == id)?;
+                add_lane_message_for_label(AutoChan::Track(id), &track.plugins, &[], label)
+            }
+            None => add_lane_message_for_label(AutoChan::Master, &self.master.plugins, &[], label),
+        }
     }
 
     /// Test-only: return the `id`s of every definition currently in the

@@ -88,6 +88,7 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // describes one channel.
             if id.is_some() {
                 r.ui.mixer.selected_bus = None;
+                r.ui.mixer.selected_master = false;
             }
             match id {
                 // An additive (Cmd/Shift) click on a track toggles it in the
@@ -110,10 +111,20 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // it, so the mixer never shows two selected strips while the
             // inspector describes one of them.
             if id.is_some() {
+                r.ui.mixer.selected_master = false;
                 r.ui.interaction.select_single_track(None);
                 r.ui.interaction.selected_clip = None;
                 r.ui.interaction.selected_midi_clip = None;
             }
+        }
+        UiMessage::SelectMaster => {
+            // The master counterpart of `SelectBus`: one channel at a
+            // time, so the track and bus highlights go.
+            r.ui.mixer.selected_master = true;
+            r.ui.mixer.selected_bus = None;
+            r.ui.interaction.select_single_track(None);
+            r.ui.interaction.selected_clip = None;
+            r.ui.interaction.selected_midi_clip = None;
         }
         UiMessage::OpenTrackMenu { id, x, y } => {
             // Right-click selects the track (so the menu's "Freeze selected

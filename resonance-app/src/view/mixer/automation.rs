@@ -33,7 +33,7 @@ use resonance_common::{AutomationLane, AutomationTarget, DeviceParam};
 /// The channel a strip's automation header belongs to. Resolves an
 /// [`AutoChoice`] kind into the concrete [`AutomationTarget`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AutoChan {
+pub(crate) enum AutoChan {
     Track(u64),
     Bus(u64),
     Master,
@@ -351,4 +351,104 @@ pub(super) fn automation_header<'a>(
     }
 
     container(col).width(Length::Fill).into()
+}
+
+// ---------------------------------------------------------------------------
+// Inspector AUTOMATION group support (mixer-cleanup.md §3.4).
+//
+// The inspector lists *every* lane on a channel (the strip header shows
+// only the primary one) and offers the same `+ Add lane` options as the
+// strip header. These helpers keep the two on one option source and one
+// target resolution, so a lane added from either surface is the same
+// `AutomationMessage::AddLane`.
+// ---------------------------------------------------------------------------
+
+/// The message picking `choice` on `chan` raises.
+fn add_lane_message(chan: AutoChan, choice: &AutoChoice) -> Message {
+    match target_of(chan, &choice.kind) {
+        Some(target) => Message::Automation(AutomationMessage::AddLane(target)),
+        // Unreachable for built choices (see `automation_header`).
+        None => Message::Automation(AutomationMessage::AddLane(AutomationTarget::MasterGain)),
+    }
+}
+
+/// The inspector's `+ Add lane` picker for `chan`: the options the strip
+/// header offers (gain / pan / mute, plugin params, device params).
+pub(super) fn add_lane_picker(
+    chan: AutoChan,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+) -> Element<'static, Message> {
+    let options = choices_for(chan, plugins, device_params);
+    pick_list(options, None::<AutoChoice>, move |choice: AutoChoice| {
+        add_lane_message(chan, &choice)
+    })
+    .placeholder("+ Add lane")
+    .text_size(12)
+    .padding([8, 10])
+    .width(Length::Fill)
+    .into()
+}
+
+/// Test-only: the `AddLane` message the inspector picker raises for the
+/// option labelled `label` on `chan`, or `None` when no option carries
+/// that label. A closed `pick_list` renders only its placeholder, so a
+/// test can't click an option; this resolves one exactly as the picker's
+/// `on_select` does.
+#[doc(hidden)]
+pub(crate) fn add_lane_message_for_label(
+    chan: AutoChan,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+    label: &str,
+) -> Option<Message> {
+    choices_for(chan, plugins, device_params)
+        .into_iter()
+        .find(|c| &*c.label == label)
+        .map(|c| add_lane_message(chan, &c))
+}
+
+/// Every lane whose target belongs to `chan`, with its label, in the
+/// strip header's priority order (gain, pan, mute, device, plugin
+/// params). Ties break by label then lane id so the list never
+/// reshuffles between frames — `lanes` is a `HashMap`.
+pub(super) fn lanes_for<'a>(
+    automation: &'a AutomationState,
+    chan: AutoChan,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+) -> Vec<(&'a AutomationLane, String)> {
+    let mut lanes: Vec<(&AutomationLane, String)> = automation
+        .lanes
+        .values()
+        .filter(|lane| belongs(&lane.target, chan, plugins))
+        .map(|lane| (lane, lane_label(&lane.target, plugins, device_params)))
+        .collect();
+    lanes.sort_by(|(a, la), (b, lb)| {
+        priority(&a.target)
+            .cmp(&priority(&b.target))
+            .then_with(|| la.cmp(lb))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    lanes
+}
+
+/// The full human label of a lane target: [`target_label`], except that
+/// a plugin-param lane names its plugin and parameter (the picker's
+/// `"<plugin>: <param>"` label) rather than a bare "Param" — the
+/// inspector lists several lanes, and "Param" twice says nothing.
+pub(super) fn lane_label(
+    target: &AutomationTarget,
+    plugins: &[PluginSlotState],
+    device_params: &[DeviceParam],
+) -> String {
+    if let AutomationTarget::PluginParam { instance, param_id } = target {
+        if let Some(slot) = plugins.iter().find(|p| p.instance_id == *instance) {
+            return match slot.params.iter().find(|p| p.id == *param_id) {
+                Some(param) => format!("{}: {}", slot.plugin_name, param.name),
+                None => format!("{}: #{}", slot.plugin_name, param_id),
+            };
+        }
+    }
+    target_label(target, device_params)
 }

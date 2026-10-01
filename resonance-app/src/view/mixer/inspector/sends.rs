@@ -1,6 +1,6 @@
-//! The **SENDS** block of the mixer inspector's ROUTING group — the
-//! aux-send controls (ba todo #1310, design doc #172, finding P3 of the
-//! capability-vs-exposure audit in doc #275).
+//! The mixer inspector's **SENDS** group — the aux-send controls (ba
+//! todo #1310, design doc #172, finding P3 of the capability-vs-exposure
+//! audit in doc #275).
 //!
 //! Everything behind aux sends already shipped: the engine's route model
 //! and cyclic validation (#475), the tap-and-sum (#476), the app-side
@@ -38,16 +38,6 @@ use crate::view::mixer::picks::{
 /// readout while the handle parks at the nearest end.
 const SEND_DB_MIN: f32 = -60.0;
 const SEND_DB_MAX: f32 = 6.0;
-
-/// Right inset for the whole block, in px.
-///
-/// The inspector body is a `scrollable`, and its scrollbar is drawn
-/// *over* the last few pixels of the content rather than beside it. The
-/// pickers above only lose a sliver of their dropdown caret to it, but a
-/// send slot ends in a dB readout and a trash button — a clipped "dB"
-/// and a half-drawn button border are not the same kind of harmless. So
-/// the block keeps clear of the gutter.
-const SCROLLBAR_GUTTER: f32 = 10.0;
 
 /// Every send tapped off `track`, in mirror order.
 pub(crate) fn sends_for_track(
@@ -142,28 +132,42 @@ pub(crate) fn tap_label(send: &AuxSend) -> &'static str {
     }
 }
 
-/// The SENDS block: one slot per live send, the "+ Add send" picker, and
-/// the engine's most recent rejection note when it concerns this track.
-pub(super) fn sends_block(
+/// The SENDS group: its collapsible header over [`sends_block`]. Lifted
+/// out of ROUTING into a group of its own (mixer-cleanup.md §3.1).
+pub(super) fn sends_group(
     r: &crate::Resonance,
     track: &TrackState,
+    collapsed: bool,
 ) -> Element<'static, Message> {
+    let header = super::widgets::group_header(
+        "SENDS",
+        crate::state::MixerInspectorGroup::Sends,
+        collapsed,
+    );
+    if collapsed {
+        return header;
+    }
+    column![header, Space::new().height(10), sends_block(r, track)]
+        .spacing(0)
+        .into()
+}
+
+/// The SENDS body: one slot per live send, the "+ Add send" picker, and
+/// the engine's most recent rejection note when it concerns this track.
+fn sends_block(r: &crate::Resonance, track: &TrackState) -> Element<'static, Message> {
     let source = SendSource::Track(track.id);
     let sends: Vec<AuxSend> = sends_for_track(r, track.id).copied().collect();
 
-    let mut col = column![text("SENDS")
-        .size(9)
-        .font(theme::UI_FONT_SEMIBOLD)
-        .color(theme::TEXT_3)]
-    .spacing(0);
+    let mut col = column![].spacing(0);
 
     if sends.is_empty() {
-        col = col
-            .push(Space::new().height(4))
-            .push(empty_sends_row());
+        col = col.push(empty_sends_row());
     } else {
-        for send in &sends {
-            col = col.push(Space::new().height(6)).push(send_slot(r, send));
+        for (i, send) in sends.iter().enumerate() {
+            if i > 0 {
+                col = col.push(Space::new().height(6));
+            }
+            col = col.push(send_slot(r, send));
         }
     }
 
@@ -193,10 +197,6 @@ pub(super) fn sends_block(
 
     container(col)
         .width(Length::Fill)
-        .padding(iced::Padding {
-            right: SCROLLBAR_GUTTER,
-            ..iced::Padding::ZERO
-        })
         .into()
 }
 

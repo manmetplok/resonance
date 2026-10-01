@@ -61,6 +61,8 @@ mod mixer_inspector_bus_snapshot;
 mod mixer_inspector_collapse;
 #[path = "mixer/mixer_inspector_empty_project.rs"]
 mod mixer_inspector_empty_project;
+#[path = "mixer/mixer_inspector_groups.rs"]
+mod mixer_inspector_groups;
 #[path = "mixer/mixer_inspector_external_instrument.rs"]
 mod mixer_inspector_external_instrument;
 #[path = "mixer/mixer_inspector_external_status.rs"]

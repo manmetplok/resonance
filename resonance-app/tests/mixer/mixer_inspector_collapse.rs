@@ -1,16 +1,16 @@
 //! Golden-image snapshots for the **mixer inspector's collapsible
-//! groups** (SIGNAL / ROUTING / CHAIN).
+//! groups** (CHAIN / SENDS / ROUTING / AUTOMATION / TRACK,
+//! mixer-cleanup.md §3.1).
 //!
-//! The whitespace pass made the three inspector groups collapsible via
-//! `UiMessage::ToggleMixerInspectorGroup` — runtime UI state held in
-//! `MixerUiState::collapsed_inspector_groups`, defaulting to all-open.
-//! Three states are locked in:
+//! The groups are collapsible via `UiMessage::ToggleMixerInspectorGroup`
+//! — runtime UI state held in `MixerUiState::collapsed_inspector_groups`,
+//! defaulting to all-open. Three states are locked in:
 //!
-//! 1. **all open** — the post-redesign baseline with a track selected.
+//! 1. **all open** — the baseline with a track selected.
 //! 2. **ROUTING + CHAIN collapsed** — only their header rows (caret
-//!    flipped to ▸) remain; the SIGNAL tiles stay visible.
-//! 3. **SIGNAL collapsed** — the live PEAK/RMS/PAN/OUT tiles fold away
-//!    while ROUTING + CHAIN stay open.
+//!    flipped to ▸) remain; the other groups stay open.
+//! 3. **SENDS + AUTOMATION + TRACK collapsed** — the lower groups fold
+//!    while CHAIN and ROUTING stay open.
 
 use crate::common;
 
@@ -41,8 +41,8 @@ fn sim_settings() -> iced::Settings {
 }
 
 /// Build the demo app on the Mixer tab. `seed_demo_content` selects a
-/// track (Synth Bass), so the inspector renders the full SIGNAL /
-/// ROUTING / CHAIN stack rather than the empty placeholder.
+/// track (Synth Bass), so the inspector renders the full group stack
+/// rather than the empty placeholder.
 fn build_app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
     demo::seed_demo_content(&mut app);
@@ -75,8 +75,8 @@ fn mixer_inspector_all_groups_open() {
     snapshot_to(&app, "tests/snapshots/mixer_inspector_all_open.png");
 }
 
-/// ROUTING and CHAIN folded — only their header rows remain, SIGNAL
-/// tiles still visible above.
+/// ROUTING and CHAIN folded — only their header rows remain, the other
+/// groups still open around them.
 #[test]
 fn mixer_inspector_routing_and_chain_collapsed() {
     let mut app = build_app();
@@ -88,11 +88,16 @@ fn mixer_inspector_routing_and_chain_collapsed() {
     );
 }
 
-/// SIGNAL folded — the PEAK/RMS/PAN/OUT tiles disappear while ROUTING
-/// and CHAIN stay open underneath.
+/// SENDS, AUTOMATION and TRACK folded — CHAIN and ROUTING stay open
+/// above three header rows.
 #[test]
-fn mixer_inspector_signal_collapsed() {
+fn mixer_inspector_lower_groups_collapsed() {
     let mut app = build_app();
-    toggle(&mut app, MixerInspectorGroup::Signal);
-    snapshot_to(&app, "tests/snapshots/mixer_inspector_signal_collapsed.png");
+    toggle(&mut app, MixerInspectorGroup::Sends);
+    toggle(&mut app, MixerInspectorGroup::Automation);
+    toggle(&mut app, MixerInspectorGroup::Track);
+    snapshot_to(
+        &app,
+        "tests/snapshots/mixer_inspector_lower_groups_collapsed.png",
+    );
 }

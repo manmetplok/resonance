@@ -1,56 +1,71 @@
-//! Mixer Inspector panel — the right-side detail pane that shows the
-//! currently selected track's signal, routing, and plugin chain. Hosts
-//! the functional pickers that used to live on the strip itself: input
-//! device + channel (audio) or MIDI in / channel and MIDI out / channel
-//! (instruments), output destination (Master / Bus N), and an "+ FX"
-//! picker for the chain.
+//! Mixer Inspector panel — the right-side pane that edits the selected
+//! channel: a track, a bus, or the master (mixer-cleanup.md §3).
+//!
+//! A track shows, in order: CHAIN → SENDS → ROUTING → AUTOMATION →
+//! TRACK. A bus shows CHAIN → ROUTING → AUTOMATION → BUS, the master
+//! CHAIN → AUTOMATION → MASTER. Each group folds independently
+//! (`MixerInspectorGroup`); BUS and MASTER share TRACK's key, since they
+//! sit in its slot and only one owner is ever shown.
 //!
 //! The implementation is split into focused submodules to keep each
 //! section's reason-to-change isolated:
-//! - `widgets`           — shared low-level helpers (field, toggle, tiles)
+//! - `widgets`           — shared low-level helpers (field, toggle, header)
 //! - `onboarding`        — status badge + onboarding card (doc #169)
 //! - `io`                — audio/MIDI input/output picker blocks
-//! - `routing`           — ROUTING group orchestration
-//! - `sends`             — the SENDS block inside ROUTING (doc #172)
-//! - `external_instrument` — EXTERNAL INSTRUMENT group (todo #454)
 //! - `chain`             — CHAIN group (plugin rows + add picker)
+//! - `sends`             — SENDS group (doc #172)
+//! - `routing`           — ROUTING group
+//! - `automation`        — AUTOMATION group (lane rows + add-lane picker)
+//! - `track_group`       — TRACK group (mono, bounce, external hardware)
+//! - `external_instrument` — the external-hardware section of TRACK (todo #454)
 //! - `bus`               — the whole pane for a selected BUS strip
+//! - `master`            — the whole pane for the selected MASTER strip
 //!
 //! A bus is not a `TrackState`, so it gets its own module rather than a
-//! set of `if is_bus` branches through the track path: no input device,
-//! no MIDI, no output picker (a bus always sums to master), and ROUTING
-//! answers what feeds it instead.
+//! set of `if is_bus` branches through the track path; the master
+//! likewise.
+//!
+//! Nothing the inspector draws is live per-tick state (the SIGNAL tiles
+//! that read the meters were dropped — the strip already shows them), so
+//! every body below its title sits in one `lazy` region keyed on a
+//! fingerprint of everything it reads (ui-work.md §11).
 
+mod automation;
 mod bus;
 mod chain;
 mod external_instrument;
 mod io;
+mod master;
 mod onboarding;
 mod routing;
 pub(crate) mod sends;
+mod track_group;
 mod widgets;
 
 pub(crate) use bus::fingerprint as bus_fingerprint;
+pub(crate) use master::fingerprint as master_fingerprint;
 
 use iced::widget::{column, container, row, text, Space};
 use iced::{alignment, Element, Length};
-use resonance_audio::types::TrackOutput;
+use resonance_audio::types::TrackType;
+use resonance_common::DeviceParam;
 
 use crate::message::*;
-use crate::state::{ExternalInstrumentStatus, MixerInspectorGroup, TrackState};
+use crate::state::{MixerInspectorGroup, TrackState};
 use crate::theme;
-use crate::util::format_pan;
+use crate::view::mixer::automation::AutoChan;
 // The cached-list-plus-stale-override combinator the io /
 // external-instrument pickers use lives in `ui_caches` now, shared with
 // the Settings overlay's MIDI-clock pickers.
 use crate::view::ui_caches::midi_choices_with_override;
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
-    // A selected bus takes the pane. The two selections are mutually
-    // exclusive (see `MixerUiState::selected_bus`), so this is a
+    // A selected bus takes the pane, then the master, then a track. The
+    // three selections are mutually exclusive (see
+    // `MixerUiState::selected_bus` / `selected_master`), so this is a
     // precedence rule only for the window where a bus was deleted while
-    // selected — in which case the lookup misses and the track path
-    // takes over.
+    // selected — in which case the lookup misses and the next path takes
+    // over.
     let selected_bus = r
         .ui
         .mixer
@@ -59,115 +74,131 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     if let Some(b) = selected_bus {
         return chrome(bus::view(r, b));
     }
+    if r.ui.mixer.selected_master {
+        return chrome(master::view(r));
+    }
 
     let selected_id = r.ui.interaction.selected_track;
     let selected = selected_id.and_then(|id| r.registry.tracks.iter().find(|t| t.id == id));
 
     let body: Element<'a, Message> = match selected {
-        Some(track) => {
-            let signal_collapsed = r
-                .ui
-                .mixer
-                .collapsed_inspector_groups
-                .contains(&MixerInspectorGroup::Signal);
-            let routing_collapsed = r
-                .ui
-                .mixer
-                .collapsed_inspector_groups
-                .contains(&MixerInspectorGroup::Routing);
-            let chain_collapsed = r
-                .ui
-                .mixer
-                .collapsed_inspector_groups
-                .contains(&MixerInspectorGroup::Chain);
-
-            // An external-instrument track is identified purely by its
-            // presence in the `external_instruments` map (todo #454) —
-            // there's no track-type discriminant. When present, the
-            // SIGNAL group reads "Signal · Return" (the metered signal is
-            // the hardware return) and ROUTING becomes the External
-            // Instrument group.
-            let is_external = r.devices.external_instruments.contains_key(&track.id);
-            // Derived lifecycle status drives the inspector header badge,
-            // the onboarding card, and the device-offline alert (todo
-            // #459). Computed from the config + live device flags so it can
-            // never drift out of sync with the state it renders.
-            let ext_status = r
-                .devices
-                .external_instruments
-                .get(&track.id)
-                .map(|ext| ext.status(track));
-
-            // Title row: the track name, followed by the status badge on
-            // external-instrument tracks (Unconfigured / Configuring /
-            // Live / Offline), mirroring the prototype's inspector badge.
-            let mut title_row = row![text(track.name.clone())
-                .size(17)
-                .font(theme::UI_FONT_MEDIUM)
-                .color(theme::TEXT_1)]
-            .spacing(0)
-            .align_y(alignment::Vertical::Center);
-            if let Some(status) = ext_status {
-                title_row = title_row
-                    .push(Space::new().width(8))
-                    .push(onboarding::status_badge(status));
-            }
-            let header = column![
-                text("INSPECTOR")
-                    .size(10)
-                    .font(theme::UI_FONT_SEMIBOLD)
-                    .color(theme::TEXT_3),
-                Space::new().height(2),
-                title_row,
-            ]
-            .spacing(0);
-
-            // SIGNAL stays outside the lazy region: its PEAK tile reads
-            // the per-tick track levels, which the fingerprint below
-            // deliberately omits (see ui-work.md §11.2 — never key a
-            // lazy region without the live data it renders).
-            let signal = signal_group(track, signal_collapsed, is_external);
-
-            // ROUTING + CHAIN only change on slow events (device lists,
-            // routing edits, chain edits, collapse toggles) — all hashed
-            // into the fingerprint, so the cached tree is reused across
-            // audio ticks.
-            let fp = inspector_fingerprint(r, track, routing_collapsed, chain_collapsed);
-            let lazy_groups =
-                iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
-                    let mut col = column![].spacing(0);
-                    // Fresh external-instrument track (nothing paired yet):
-                    // a dashed onboarding card walks the user through the
-                    // four setup steps before the routing pickers (#459).
-                    if ext_status == Some(ExternalInstrumentStatus::Unconfigured) {
-                        col = col
-                            .push(onboarding::onboarding_card())
-                            .push(Space::new().height(18));
-                    }
-                    col = col.push(routing::routing_group(r, track, routing_collapsed));
-                    col = col
-                        .push(Space::new().height(18))
-                        .push(chain::chain_group(r, track, chain_collapsed));
-                    col.into()
-                });
-
-            iced::widget::scrollable(
-                column![
-                    header,
-                    Space::new().height(18),
-                    signal,
-                    Space::new().height(18),
-                    lazy_groups,
-                ]
-                .spacing(0),
-            )
-            .height(Length::Fill)
-            .into()
-        }
+        Some(track) => track_view(r, track),
         None => render_empty(),
     };
 
     chrome(body)
+}
+
+fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a, Message> {
+    // Derived lifecycle status drives the header badge on an
+    // external-instrument track (todo #459). Computed from the config +
+    // live device flags so it can never drift out of sync with the state
+    // it renders.
+    let ext_status = r
+        .devices
+        .external_instruments
+        .get(&track.id)
+        .map(|ext| ext.status(track));
+
+    // Title row: the track name, its type tag, and the status badge on
+    // external-instrument tracks (Unconfigured / Configuring / Live /
+    // Offline), mirroring the prototype's inspector badge.
+    let mut title_row = row![
+        text(track.name.clone())
+            .size(17)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::TEXT_1),
+        Space::new().width(8),
+        widgets::type_tag(type_label(track)),
+    ]
+    .spacing(0)
+    .align_y(alignment::Vertical::Center);
+    if let Some(status) = ext_status {
+        title_row = title_row
+            .push(Space::new().width(6))
+            .push(onboarding::status_badge(status));
+    }
+
+    let fp = inspector_fingerprint(r, track);
+    let lazy_groups = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
+        let device_params = device_params_for(r, track);
+        column![
+            chain::chain_group(r, track, collapsed(r, MixerInspectorGroup::Chain)),
+            Space::new().height(18),
+            sends::sends_group(r, track, collapsed(r, MixerInspectorGroup::Sends)),
+            Space::new().height(18),
+            routing::routing_group(r, track, collapsed(r, MixerInspectorGroup::Routing)),
+            Space::new().height(18),
+            automation::automation_group(
+                r,
+                AutoChan::Track(track.id),
+                &track.plugins,
+                device_params,
+                collapsed(r, MixerInspectorGroup::Automation),
+            ),
+            Space::new().height(18),
+            track_group::track_group(r, track, collapsed(r, MixerInspectorGroup::Track)),
+        ]
+        .spacing(0)
+        .width(Length::Fill)
+        .into()
+    });
+
+    iced::widget::scrollable(
+        column![
+            widgets::header(title_row),
+            Space::new().height(18),
+            lazy_groups,
+        ]
+        .spacing(0)
+        .width(Length::Fill),
+    )
+    .height(Length::Fill)
+    // Embedded, not floating: the scrollbar takes its own column beside
+    // the groups instead of drawing over their right edge (pickers'
+    // carets, the sends' dB readouts and trash buttons).
+    .spacing(6)
+    .into()
+}
+
+/// The header's type tag for a track.
+fn type_label(track: &TrackState) -> &'static str {
+    match (track.track_type, track.sub_track.is_some()) {
+        (_, true) => "Sub",
+        (TrackType::Instrument, false) => "Inst",
+        (TrackType::Audio, false) => "Audio",
+        (TrackType::Vocal, false) => "Vocal",
+    }
+}
+
+/// Whether the user folded `group` shut.
+fn collapsed(r: &crate::Resonance, group: MixerInspectorGroup) -> bool {
+    r.ui.mixer.collapsed_inspector_groups.contains(&group)
+}
+
+/// Hash the fold state of every group, in a fixed order (the set itself
+/// is a `HashSet`, whose iteration order is not a function of its
+/// contents).
+fn hash_collapse_state<H: std::hash::Hasher>(h: &mut H, r: &crate::Resonance) {
+    use std::hash::Hash;
+    for group in MixerInspectorGroup::ALL {
+        collapsed(r, group).hash(h);
+    }
+}
+
+/// The named parameters of the track's selected external-instrument
+/// device preset (epic #40, doc #201 §5) — the AUTOMATION picker's device
+/// options. Empty unless the track is external with a preset selected
+/// whose id resolves in the registry; the strip's lane header resolves
+/// it the same way.
+fn device_params_for<'a>(r: &'a crate::Resonance, track: &TrackState) -> &'a [DeviceParam] {
+    r.devices
+        .external_instruments
+        .get(&track.id)
+        .and_then(|ext| ext.device_id.as_deref())
+        .and_then(|id| r.devices.registry.get(id))
+        .map(|def| def.params.as_slice())
+        .unwrap_or(&[])
 }
 
 /// The pane itself — fixed width, padding and background. Shared by the
@@ -189,22 +220,14 @@ fn chrome<'a>(body: Element<'a, Message>) -> Element<'a, Message> {
         .into()
 }
 
-/// Hash every field the lazy ROUTING + CHAIN groups read. The lazy
-/// widget compares this across frames — when nothing has changed, the
-/// cached widget tree is reused (which is the resize hot path). The
-/// live level fields are intentionally absent: the SIGNAL group renders
-/// them per-frame *outside* the lazy region.
-pub(crate) fn inspector_fingerprint(
-    r: &crate::Resonance,
-    t: &TrackState,
-    routing_collapsed: bool,
-    chain_collapsed: bool,
-) -> u64 {
+/// Hash every field the lazy track body reads. The lazy widget compares
+/// this across frames — when nothing has changed, the cached widget tree
+/// is reused (which is the resize hot path).
+pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64 {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    routing_collapsed.hash(&mut h);
-    chain_collapsed.hash(&mut h);
+    hash_collapse_state(&mut h, r);
     t.id.hash(&mut h);
     t.name.hash(&mut h);
     t.track_type.hash(&mut h);
@@ -217,7 +240,19 @@ pub(crate) fn inspector_fingerprint(
     t.midi_output_device.hash(&mut h);
     t.midi_output_channel.hash(&mut h);
     t.output.hash(&mut h);
-    t.pan.to_bits().hash(&mut h);
+    // TRACK's Bounce: `classify_bounce` reads the type, sub-track flag,
+    // MIDI out and chain (all hashed here) plus whether the track owns a
+    // MIDI clip.
+    r.midi_clips.iter().any(|c| c.track_id == t.id).hash(&mut h);
+    // AUTOMATION: lanes, labels, Read state, and the picker's option
+    // source (plugin params, device params).
+    automation::hash_into(
+        &mut h,
+        r,
+        AutoChan::Track(t.id),
+        &t.plugins,
+        device_params_for(r, t),
+    );
     // External-instrument fields the routing group reads: the monitor /
     // arm toggles, the patch + latency config, and the runtime offline
     // flags. Without these the lazy region wouldn't redraw when a patch
@@ -318,68 +353,9 @@ fn render_empty() -> Element<'static, Message> {
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
         Space::new().height(8),
-        text("Select a track or bus to view its routing and signal.")
+        text("Select a track, bus or the master to edit its chain, routing and automation.")
             .size(12)
             .color(theme::TEXT_3),
-    ]
-    .spacing(0)
-    .into()
-}
-
-// ---------------------------------------------------------------------------
-// SIGNAL group — 2×2 stat tiles.
-// ---------------------------------------------------------------------------
-
-fn signal_group(
-    track: &TrackState,
-    collapsed: bool,
-    is_external: bool,
-) -> Element<'static, Message> {
-    // External-instrument tracks meter the hardware *return*, so the
-    // group reads "Signal · Return" per design doc #169.
-    let title = if is_external {
-        "SIGNAL · RETURN"
-    } else {
-        "SIGNAL"
-    };
-    if collapsed {
-        return widgets::group_header(title, MixerInspectorGroup::Signal, true);
-    }
-
-    let peak = track.level_l.max(track.level_r);
-    let peak_db = if peak < 1e-4 {
-        "−∞ dB".to_string()
-    } else {
-        format!("{:+.1} dB", 20.0 * peak.log10())
-    };
-
-    let rms = "—".to_string();
-
-    let pan = format_pan(track.pan).into_owned();
-    let out = match track.output {
-        TrackOutput::Master => "Master".to_string(),
-        TrackOutput::Bus(_) => "Bus".to_string(),
-    };
-
-    let row1 = row![
-        widgets::stat_tile("PEAK", peak_db),
-        Space::new().width(10),
-        widgets::stat_tile("RMS", rms),
-    ]
-    .align_y(alignment::Vertical::Center);
-    let row2 = row![
-        widgets::stat_tile("PAN", pan),
-        Space::new().width(10),
-        widgets::stat_tile("OUT", out),
-    ]
-    .align_y(alignment::Vertical::Center);
-
-    column![
-        widgets::group_header(title, MixerInspectorGroup::Signal, false),
-        Space::new().height(10),
-        row1,
-        Space::new().height(10),
-        row2,
     ]
     .spacing(0)
     .into()

@@ -113,6 +113,13 @@ impl Resonance {
         self.ui.mixer.selected_bus
     }
 
+    /// Test-only: whether the MASTER strip is selected (the master
+    /// counterpart of `test_selected_bus`).
+    #[doc(hidden)]
+    pub fn test_selected_master(&self) -> bool {
+        self.ui.mixer.selected_master
+    }
+
     /// Test-only: push a bus straight into the registry, bypassing the
     /// engine round-trip, and refresh the output-choice cache the engine
     /// handlers would normally keep fresh.

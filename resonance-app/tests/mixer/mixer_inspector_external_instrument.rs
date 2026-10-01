@@ -60,7 +60,8 @@ fn simulator(app: &Resonance) -> Simulator<'_, Message> {
 }
 
 /// A fully-configured external-instrument track renders every section of
-/// the External Instrument group, and the SIGNAL group is retitled.
+/// the External Instrument section, inside the TRACK group
+/// (mixer-cleanup.md §3.1).
 #[test]
 fn external_instrument_group_renders_all_sections() {
     let mut app = app_with_external_track();
@@ -75,12 +76,13 @@ fn external_instrument_group_renders_all_sections() {
 
     let mut ui = simulator(&app);
 
-    // The ROUTING group becomes the External Instrument group, and the
-    // SIGNAL group reads "Signal · Return".
+    // The pairing renders as the TRACK group's external section; ROUTING
+    // stays (output picker only) and SIGNAL is gone.
+    ui.find("TRACK").expect("TRACK group");
     ui.find("EXTERNAL INSTRUMENT")
-        .expect("External Instrument group header");
-    ui.find("SIGNAL · RETURN")
-        .expect("SIGNAL group retitled to Signal · Return");
+        .expect("External Instrument section label");
+    ui.find("ROUTING").expect("ROUTING keeps the output picker");
+    assert!(ui.find("SIGNAL · RETURN").is_err(), "SIGNAL was dropped");
 
     // All six sub-sections of the group are present.
     ui.find("MIDI OUTPUT").expect("MIDI Output field");
@@ -118,7 +120,7 @@ fn selecting_device_activates_preset_affordance() {
 }
 
 /// A non-external track keeps the generic ROUTING group — the External
-/// Instrument header must not appear and SIGNAL keeps its plain title.
+/// Instrument section must not appear.
 #[test]
 fn non_external_track_keeps_generic_routing() {
     let app = app_with_external_track();
@@ -130,10 +132,7 @@ fn non_external_track_keeps_generic_routing() {
         ui.find("EXTERNAL INSTRUMENT").is_err(),
         "plain track must not render the External Instrument group"
     );
-    assert!(
-        ui.find("SIGNAL · RETURN").is_err(),
-        "plain track keeps the plain SIGNAL title"
-    );
+    ui.find("MIDI INPUT").expect("generic MIDI-in picker");
 }
 
 /// An offline MIDI output keeps the device route (stale-override) and
