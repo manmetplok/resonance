@@ -614,7 +614,7 @@ pub fn spawn_loader(
                     // both describe the takes this load actually decoded.
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
                     let ordinal = hand_off_kit_locked(&bridge, kit.pads);
-                    bridge.load_progress.handed_off(ordinal);
+                    bridge.load_progress.handed_off(stamp, ordinal);
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),
                         sample_rate: target_sr,
@@ -637,11 +637,11 @@ pub fn spawn_loader(
                     *bridge.load_stats.lock() = kit.stats;
                 }
                 Ok(Err(message)) => {
-                    bridge.load_progress.failed();
+                    bridge.load_progress.failed(stamp);
                     *bridge.kit_status.lock() = KitStatus::Error { message };
                 }
                 Err(_) => {
-                    bridge.load_progress.failed();
+                    bridge.load_progress.failed(stamp);
                     *bridge.kit_status.lock() = KitStatus::Error {
                         message: "loader panicked".to_string(),
                     };
@@ -723,7 +723,7 @@ pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> S
 pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     let _handoff = bridge.kit_handoff.lock();
     let ordinal = hand_off_kit_locked(bridge, pads);
-    bridge.load_progress.handed_off(ordinal);
+    bridge.load_progress.handed_off_directly(ordinal);
     // Not a loader's kit: what the sampler will hold is no longer known.
     *bridge.handed_off.lock() = None;
     *bridge.built_kit.lock() = None;

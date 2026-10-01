@@ -670,6 +670,50 @@ fn a_newer_load_restarts_progress_and_the_stale_kit_never_completes_it() {
     );
 }
 
+/// A loader checks its stamp under `kit_handoff`, but a newer pick can
+/// begin between that check and the old loader's `handed_off` / `failed`.
+/// Those late writes must land nowhere: the newer load is still decoding.
+#[test]
+fn progress_writes_of_a_superseded_load_land_nowhere() {
+    use resonance_drums::kit_loader::KitLoadProgress;
+    let progress = KitLoadProgress::new();
+    progress.begin(1);
+    progress.set_total(1, 10);
+    progress.begin(2);
+
+    progress.handed_off(1, progress.note_sent());
+    progress.note_taken();
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::Decoding, "{snap:?}");
+    assert!(!snap.complete, "a superseded hand-off completed the newer load");
+
+    progress.failed(1);
+    progress.set_total(1, 10);
+    progress.file_done(1);
+    progress.idle(1);
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::Decoding, "{snap:?}");
+    assert_eq!((snap.files_done, snap.files_total), (0, 0), "{snap:?}");
+
+    // An older `begin` cannot take the progress back either.
+    progress.begin(1);
+    assert_eq!(progress.snapshot().phase, LoadPhase::Decoding);
+    progress.set_total(2, 3);
+    progress.file_done(2);
+    assert_eq!(progress.snapshot().files_total, 3);
+
+    // The current load's own writes land.
+    let ordinal = progress.note_sent();
+    progress.handed_off(2, ordinal);
+    let snap = progress.snapshot();
+    assert_eq!(snap.phase, LoadPhase::HandedOff);
+    assert!(!snap.complete);
+    progress.note_taken();
+    assert!(progress.is_complete());
+    progress.failed(2);
+    assert_eq!(progress.snapshot().phase, LoadPhase::Failed);
+}
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------

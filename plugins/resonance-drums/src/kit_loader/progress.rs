@@ -18,8 +18,18 @@
 //! ordinal. A reclaim only ever removes a kit a newer load replaced, and
 //! the newer load has already restarted the progress by then — so for
 //! the load being reported, out of the mailbox means taken.
+//!
+//! # Whose progress it is
+//!
+//! Every write names the load (its generation stamp) it is for. `begin`
+//! and `idle` move the progress to their load unless a newer one already
+//! has it; `handed_off` and `failed` land only if their load is still the
+//! one being reported. A loader checks its stamp under `kit_handoff`, but
+//! a newer pick can begin after that check and before the old loader's
+//! `handed_off` — without the tag the superseded kit would then mark the
+//! newer, still decoding, load complete.
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const IDLE: u64 = 0;
 const DECODING: u64 = 1;
@@ -72,16 +82,41 @@ impl ProgressSnapshot {
 /// and the sampler.
 #[derive(Debug, Default)]
 pub struct KitLoadProgress {
-    /// `phase | awaited_ordinal << 2`, one word so a reader sees the two
-    /// together.
+    /// `phase | generation_tag << 2 | awaited_ordinal << 32`, one word so
+    /// a reader sees them together and a writer can compare-and-swap on
+    /// the generation: a superseded load's late `handed_off` / `failed`
+    /// finds a newer tag and lands nowhere (see [`Self::handed_off`]).
     state: AtomicU64,
     /// `generation << 32 | files_done`, so a superseded loader's late
     /// increments land nowhere.
     done: AtomicU64,
-    total: AtomicU32,
+    /// `generation << 32 | files_total`, for the same reason.
+    total: AtomicU64,
     sent: AtomicU64,
     reclaimed: AtomicU64,
     taken: AtomicU64,
+}
+
+/// Bits of the generation kept in the `state` word's tag.
+const TAG_BITS: u32 = 30;
+const TAG_MASK: u64 = (1 << TAG_BITS) - 1;
+
+fn tag(generation: u64) -> u64 {
+    generation & TAG_MASK
+}
+
+fn tag_of(state: u64) -> u64 {
+    (state >> 2) & TAG_MASK
+}
+
+fn state_word(phase: u64, generation: u64, ordinal: u64) -> u64 {
+    phase | (tag(generation) << 2) | ((ordinal & 0xFFFF_FFFF) << 32)
+}
+
+/// `generation` is the load tagged in `state`, or a newer one (tags wrap,
+/// so "newer" is "less than half the tag space ahead").
+fn is_current_or_newer(generation: u64, state: u64) -> bool {
+    tag(generation).wrapping_sub(tag_of(state)) & TAG_MASK < (1 << (TAG_BITS - 1))
 }
 
 impl KitLoadProgress {
@@ -90,18 +125,30 @@ impl KitLoadProgress {
     }
 
     /// A load with stamp `generation` starts: nothing done, total unknown.
+    /// Ignored if a newer load has already begun.
     pub fn begin(&self, generation: u64) {
-        self.total.store(0, Ordering::Release);
-        self.done
-            .store((generation & 0xFFFF_FFFF) << 32, Ordering::Release);
-        self.state.store(DECODING, Ordering::Release);
+        let applied = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                is_current_or_newer(generation, state)
+                    .then_some(state_word(DECODING, generation, 0))
+            })
+            .is_ok();
+        if applied {
+            let word = (generation & 0xFFFF_FFFF) << 32;
+            self.total.store(word, Ordering::Release);
+            self.done.store(word, Ordering::Release);
+        }
     }
 
     /// The load `generation` reads `total` files.
     pub fn set_total(&self, generation: u64, total: u32) {
-        if self.done.load(Ordering::Acquire) >> 32 == generation & 0xFFFF_FFFF {
-            self.total.store(total, Ordering::Release);
-        }
+        let tag = generation & 0xFFFF_FFFF;
+        let _ = self
+            .total
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |word| {
+                (word >> 32 == tag).then_some((tag << 32) | total as u64)
+            });
     }
 
     /// One more file of load `generation` is done. A no-op once another
@@ -127,19 +174,47 @@ impl KitLoadProgress {
         self.reclaimed.fetch_add(1, Ordering::AcqRel);
     }
 
-    /// The current load handed off the kit sent as `ordinal`.
-    pub fn handed_off(&self, ordinal: u64) {
-        self.state.store(HANDED | (ordinal << 2), Ordering::Release);
+    /// Load `generation` handed off the kit sent as `ordinal`. A no-op
+    /// unless `generation` is the load the progress is reporting: a
+    /// superseded load that got as far as its hand-off must not mark
+    /// complete while a newer one decodes.
+    pub fn handed_off(&self, generation: u64, ordinal: u64) {
+        self.finish(generation, state_word(HANDED, generation, ordinal));
     }
 
-    /// The current load failed.
-    pub fn failed(&self) {
-        self.state.store(FAILED, Ordering::Release);
+    /// Load `generation` failed. A no-op once another load has begun.
+    pub fn failed(&self, generation: u64) {
+        self.finish(generation, state_word(FAILED, generation, 0));
+    }
+
+    /// A kit that is no loader's (a direct `hand_off_kit`) was sent as
+    /// `ordinal`: whatever load the progress was reporting, the sampler
+    /// now gets this kit.
+    pub fn handed_off_directly(&self, ordinal: u64) {
+        let _ = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                Some(state_word(HANDED, tag_of(state), ordinal))
+            });
+    }
+
+    fn finish(&self, generation: u64, word: u64) {
+        let _ = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                (tag_of(state) == tag(generation)).then_some(word)
+            });
     }
 
     /// Nothing is loading: what the sampler holds is what is wanted.
-    pub fn idle(&self) {
-        self.state.store(IDLE, Ordering::Release);
+    /// `generation` is the newest load stamp the caller knows of; a load
+    /// begun after it keeps its progress.
+    pub fn idle(&self, generation: u64) {
+        let _ = self
+            .state
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |state| {
+                is_current_or_newer(generation, state).then_some(state_word(IDLE, generation, 0))
+            });
     }
 
     /// Audio thread (and `initialize`'s install): a kit was taken from the
@@ -160,16 +235,19 @@ impl KitLoadProgress {
         loop {
             let state = self.state.load(Ordering::Acquire);
             let done = self.done.load(Ordering::Acquire) as u32;
-            let total = self.total.load(Ordering::Acquire);
+            let total = self.total.load(Ordering::Acquire) as u32;
             let out = self.taken.load(Ordering::Acquire) + self.reclaimed.load(Ordering::Acquire);
             if self.state.load(Ordering::Acquire) != state {
                 continue;
             }
-            let awaited = state >> 2;
+            // Ordinals are kept to 32 bits in the state word; compare
+            // modulo that.
+            let awaited = (state >> 32) as u32;
+            let reached = (out as u32).wrapping_sub(awaited) < (1 << 31);
             let (phase, complete) = match state & 3 {
                 IDLE => (LoadPhase::Idle, true),
                 DECODING => (LoadPhase::Decoding, false),
-                HANDED => (LoadPhase::HandedOff, out >= awaited),
+                HANDED => (LoadPhase::HandedOff, reached),
                 _ => (LoadPhase::Failed, false),
             };
             return ProgressSnapshot {

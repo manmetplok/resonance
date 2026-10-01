@@ -258,11 +258,11 @@ impl KitBridge {
         if Some(path.as_path()) == keep {
             return;
         }
-        self.load_generation.fetch_add(1, Ordering::AcqRel);
+        let generation = self.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
         *pending = None;
         // No load is outstanding any more; one the state names is
         // started by the caller (and restarts the progress).
-        self.load_progress.idle();
+        self.load_progress.idle(generation);
         let mut status = self.kit_status.lock();
         if matches!(*status, KitStatus::Loading { .. }) {
             *status = KitStatus::Empty;
@@ -475,7 +475,9 @@ impl ResonancePlugin for ResonanceDrums {
 
         if wanted.is_none() {
             // The built-in kit is the wanted kit, and it is in place.
-            self.bridge.load_progress.idle();
+            self.bridge
+                .load_progress
+                .idle(self.bridge.load_generation.load(Ordering::Acquire));
         }
         if let Some(request) = wanted {
             kit_loader::spawn_loader(
