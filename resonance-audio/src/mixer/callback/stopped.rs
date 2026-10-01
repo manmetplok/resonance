@@ -51,9 +51,10 @@ pub(super) fn render_stopped_block(
             timing.transport,
             inputs.sample_rate,
         );
-    // Instruments with live notes pending or releasing, independent of
-    // monitoring and of whether an input device exists (code review
-    // MIX-08).
+    // Instruments with live notes pending or releasing, and chains with a
+    // plugin that asked for `process()` (`clap_host.request_process`),
+    // independent of monitoring and of whether an input device exists
+    // (code review MIX-08).
     let any_instrument = mix_idle_instruments(
         scratch.data,
         inputs.channels,

@@ -218,6 +218,17 @@ impl ClapInstance {
             return;
         }
 
+        // Any `process()` satisfies a pending `clap_host.request_process()`
+        // (`ClapInstance::take_process_request`). Cleared BEFORE the
+        // plugin runs, and with an acquiring swap rather than a plain
+        // store: the plugin's own reads in this `process()` cannot move
+        // ahead of the clear, so a request raised after it is either
+        // already visible to this call or left set for the next one —
+        // never wiped unseen.
+        self.host_data
+            .process_requested
+            .swap(false, std::sync::atomic::Ordering::AcqRel);
+
         let frames = frames.min(8192);
         // The stopped-transport window counts down in rendered frames
         // (`ClapInstance::wants_idle_process`, code review MIX-08).
