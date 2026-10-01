@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::Sender;
 use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::kit_loader::{spawn_loader, KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
+use resonance_drums::params::OUTPUT_MODE_MULTI;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
@@ -43,6 +44,8 @@ const KICK_FRAMES: usize = BLOCK * 32;
 
 fn booted_plugin(rate: f32) -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read a pad's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(rate, BLOCK as u32));
     render(&mut plugin, &[]);
     plugin

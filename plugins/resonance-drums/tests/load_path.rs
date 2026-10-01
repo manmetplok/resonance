@@ -214,6 +214,12 @@ fn fixture_kit(damage: Damage) -> Kit {
 
 fn booted() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read the Overhead port.
+    plugin
+        .bridge
+        .params
+        .output_mode
+        .set_value(resonance_drums::params::OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(RATE, BLOCK as u32));
     plugin
 }

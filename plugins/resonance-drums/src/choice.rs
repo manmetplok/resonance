@@ -50,6 +50,21 @@ impl ChoiceParam {
         self
     }
 
+    /// Offer the host no automation lane for it (a routing or instance
+    /// setting rather than something played) — see
+    /// [`Param::is_automatable`].
+    pub fn not_automatable(mut self) -> Self {
+        self.inner = self.inner.not_automatable();
+        self
+    }
+
+    /// Leave it out of plugin state and presets: the state carries it in
+    /// a form of its own — see [`Param::state_excluded`].
+    pub fn excluded_from_state(mut self) -> Self {
+        self.inner = self.inner.excluded_from_state();
+        self
+    }
+
     pub fn value(&self) -> i32 {
         self.inner.value()
     }
@@ -120,6 +135,15 @@ impl Param for ChoiceParam {
     }
     fn is_hidden(&self) -> bool {
         self.inner.is_hidden()
+    }
+    fn is_automatable(&self) -> bool {
+        self.inner.is_automatable()
+    }
+    fn state_excluded(&self) -> bool {
+        self.inner.state_excluded()
+    }
+    fn preset_excluded(&self) -> bool {
+        self.inner.preset_excluded()
     }
     fn is_stepped(&self) -> bool {
         true

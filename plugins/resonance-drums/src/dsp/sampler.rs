@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
+use crate::kit::{
+    LoadedMicBank, LoadedPad, SampleData, VelocityLayer, MAIN_PORT_INDEX, OVERHEAD_PORT_INDEX,
+};
 use crate::kit_loader::KitLoadProgress;
 use crate::level::db_to_gain;
 use crate::params::{DrumParams, MicSlot, MIC_SLOTS};
@@ -41,6 +43,10 @@ pub struct GlobalSettings {
     pub velocity_curve: f32,
     /// How a layer's takes are walked.
     pub round_robin: RoundRobinMode,
+    /// Where hits sound (E11). A headless sampler never handed params
+    /// routes [`OutputMode::Multi`], as the sampler always did; the
+    /// plugin's own default (`output_mode`) is Stereo.
+    pub output_mode: OutputMode,
 }
 
 impl Default for GlobalSettings {
@@ -49,6 +55,28 @@ impl Default for GlobalSettings {
             max_voices: MAX_VOICES,
             velocity_curve: 0.0,
             round_robin: RoundRobinMode::Cycle,
+            output_mode: OutputMode::Multi,
+        }
+    }
+}
+
+/// How the sampler spreads a kit over its output ports (E11, D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Every pad and mic sums to Main (port 0).
+    Stereo,
+    /// Each pad's close mics play on its output port; every overhead
+    /// take on the Overhead port.
+    Multi,
+}
+
+impl OutputMode {
+    /// Read the mode off its parameter value.
+    pub fn from_param(value: i32) -> Self {
+        if value == crate::params::OUTPUT_MODE_MULTI {
+            Self::Multi
+        } else {
+            Self::Stereo
         }
     }
 }
@@ -65,11 +93,17 @@ pub const FROM_KIT: u8 = u8::MAX;
 pub struct PadSettings {
     /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`].
     pub choke: u8,
+    /// The port the pad's close mics play on in Multi (E11): a port
+    /// index, or [`FROM_KIT`] for the pad's own group.
+    pub port: u8,
 }
 
 impl Default for PadSettings {
     fn default() -> Self {
-        Self { choke: FROM_KIT }
+        Self {
+            choke: FROM_KIT,
+            port: FROM_KIT,
+        }
     }
 }
 
@@ -78,6 +112,19 @@ impl PadSettings {
     pub fn from_params(pad: &crate::params::PadParams) -> Self {
         Self {
             choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
+            port: pad
+                .output
+                .value()
+                .clamp(0, crate::kit::NUM_OUTPUT_PORTS as i32 - 1) as u8,
+        }
+    }
+
+    /// The port a hit on `pad` plays its close mics on in Multi.
+    #[inline]
+    fn close_port(&self, pad: &LoadedPad) -> u8 {
+        match self.port {
+            FROM_KIT => pad.output_group.index() as u8,
+            port => port,
         }
     }
 
@@ -513,6 +560,7 @@ impl DrumSampler {
             max_voices: (params.polyphony.value().max(1) as usize).min(MAX_VOICES),
             velocity_curve: params.velocity_curve.value(),
             round_robin: RoundRobinMode::from_param(params.round_robin_mode.value()),
+            output_mode: OutputMode::from_param(params.output_mode.value()),
         };
         for (settings, pad) in self.pad_settings.iter_mut().zip(params.pads.iter()) {
             *settings = PadSettings::from_params(pad);
@@ -783,10 +831,10 @@ impl DrumSampler {
     /// same relative position ([`map_relative`], E7) rather than going
     /// silent.
     ///
-    /// The cymbal case is special: with no close bank the overhead take is
-    /// the pad's whole sound, so it is summed into the pad's own group
-    /// port (Cymbals) rather than the shared Overhead port — otherwise the
-    /// Cymbals port never carries a sample.
+    /// Routing (E11): in [`OutputMode::Stereo`] every voice sums to Main;
+    /// in [`OutputMode::Multi`] the close banks play on the pad's output
+    /// port and the overhead bank on the Overhead port — for every pad,
+    /// so a cymbal recorded on the overheads only plays on Overhead.
     ///
     /// The incoming velocity is shaped by the global velocity curve
     /// first, so the curve moves both which layer fires and how hard it
@@ -857,7 +905,12 @@ impl DrumSampler {
         let settings = self.pad_settings[pad_index];
         let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
-        let output_port = pad.output_group.index() as u8;
+        // E11: in Stereo every bank sums to Main; in Multi the close mics
+        // play on the pad's output port and the overhead on Overhead.
+        let (output_port, oh_port) = match self.globals.output_mode {
+            OutputMode::Stereo => (MAIN_PORT_INDEX as u8, MAIN_PORT_INDEX as u8),
+            OutputMode::Multi => (settings.close_port(pad), OVERHEAD_PORT_INDEX as u8),
+        };
         let has_overhead = pad.overhead.is_some();
 
         // Handle choke groups: release any active voices in the same choke group
@@ -908,18 +961,11 @@ impl DrumSampler {
             dest_count += 1;
         }
         if has_overhead && dest_count < destinations.len() {
-            // Pads the library records with overheads only (every cymbal,
-            // ride and china piece in Drummica) have no close bank, so the
-            // overhead take is the pad's entire signal. Sending it to the
-            // shared Overhead port would leave the pad's own group port —
-            // and the sub-track the host derives from it — permanently
-            // silent, which is what made the Cymbals sub-track read as
-            // "the kit has no cymbals". Route those to the group port.
-            let oh_port = if close_mic_count == 0 {
-                output_port
-            } else {
-                OVERHEAD_PORT_INDEX as u8
-            };
+            // Every pad's overhead take goes to the Overhead port in
+            // Multi — the pads the library records with overheads only
+            // (every cymbal, ride and china piece in Drummica) included,
+            // which until E11 played on their own group port (Cymbals).
+            // Stereo has a stereo kit on Main for whoever wants one port.
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
                 rings[dest_count] = ring_for(oh, cells[dest_count]);

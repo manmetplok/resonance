@@ -13,23 +13,31 @@ use resonance_plugin::*;
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::kit::OUTPUT_PORT_NAMES;
 use crate::level::{self, MAX_TRIM_DB, MAX_VOLUME_DB, MIN_DB};
 use crate::selection::{KitSelection, MAX_KIT_SLOT, NO_KIT};
 use crate::velocity;
 use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
-pub const PARAMS_PER_PAD: usize = 8;
+pub const PARAMS_PER_PAD: usize = 9;
 
 /// Number of global params ahead of the per-pad block, used for param
 /// indexing. The flat index is an enumeration order, not an identity:
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 6;
+pub const GLOBAL_PARAMS: usize = 7;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
+
+/// Labels for the output mode choice, indexed by parameter value.
+pub const OUTPUT_MODE_LABELS: &[&str] = &["Stereo", "Multi"];
+/// `output_mode`: everything to Main (the default, D5).
+pub const OUTPUT_MODE_STEREO: i32 = 0;
+/// `output_mode`: per-pad ports plus the Overhead port.
+pub const OUTPUT_MODE_MULTI: i32 = 1;
 
 /// How many parameters this plugin exposes: the globals, then one block
 /// of [`PARAMS_PER_PAD`] per pad.
@@ -66,6 +74,15 @@ pub struct DrumParams {
     /// place on the audio thread — 1.0 only once the audio thread took it
     /// (§5.4). Written by the plugin every block; hosts and agents poll it.
     pub kit_load_progress: FloatParam,
+    /// Stereo or Multi output (E11, D5), labelled by
+    /// [`OUTPUT_MODE_LABELS`]. **Stereo** (the default for a fresh
+    /// instance) sums every pad and mic to Main, so a host that only
+    /// reads port 0 hears the whole kit. **Multi** routes each pad's
+    /// close mics to its `pad_N_output` port and every overhead take to
+    /// the Overhead port. The plugin declares all seven ports either way
+    /// (a port list cannot change while a host holds it); in Stereo the
+    /// six beside Main are silent. Not automatable: routing, not playing.
+    pub output_mode: ChoiceParam,
     /// What `kit_select` means beyond a slot (a missing kit, a kit with no
     /// slot), and the library handle its text and the loader resolve
     /// against. Shared with the bridge, the saver and the editor.
@@ -129,6 +146,13 @@ impl Default for DrumParams {
             )
             .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
             .read_only(),
+            output_mode: ChoiceParam::new(
+                "output_mode",
+                "Output Mode",
+                OUTPUT_MODE_STEREO,
+                OUTPUT_MODE_LABELS,
+            )
+            .not_automatable(),
             selection,
             pads: std::array::from_fn(PadParams::new),
         }
@@ -216,6 +240,12 @@ pub struct PadParams {
     /// hat cut by the closed or pedal hat. Defaults to the Drummica table
     /// ([`PAD_MAPPINGS`]): every hi-hat in group 1, nothing else choked.
     pub choke: IntParam,
+    /// Which output port the pad's close mics play on in Multi output
+    /// mode (E11), one of [`OUTPUT_PORT_NAMES`]. Defaults to the
+    /// Drummica table (kick → Kick, …, Count Stick → Main). Its overhead
+    /// take always goes to the Overhead port in Multi, and everything to
+    /// Main in Stereo. Not automatable: routing, not playing.
+    pub output: ChoiceParam,
 }
 
 /// The highest choke group a pad can be put in.
@@ -327,6 +357,13 @@ impl PadParams {
             )
             .with_value_to_string(Arc::new(choke_label))
             .with_string_to_value(Arc::new(choke_from_label)),
+            output: ChoiceParam::new(
+                id("output"),
+                name("Output"),
+                mapping.output_group.index() as i32,
+                &OUTPUT_PORT_NAMES,
+            )
+            .not_automatable(),
         }
     }
 
@@ -357,6 +394,7 @@ impl DrumParams {
             3 => return &self.round_robin_mode,
             4 => return &self.kit_select,
             5 => return &self.kit_load_progress,
+            6 => return &self.output_mode,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
@@ -371,6 +409,7 @@ impl DrumParams {
             5 => &pad.trims[1],
             6 => &pad.trims[2],
             7 => &pad.choke,
+            8 => &pad.output,
             _ => &pad.volume,
         }
     }

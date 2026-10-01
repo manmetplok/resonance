@@ -173,6 +173,8 @@ impl OutputGroup {
 /// Ports 0..5 correspond to `OutputGroup` variants; port 6 is Overhead.
 pub const NUM_OUTPUT_PORTS: usize = 7;
 pub const OVERHEAD_PORT_INDEX: usize = 6;
+/// Main: where Stereo output mode (E11) sums the whole kit.
+pub const MAIN_PORT_INDEX: usize = 0;
 
 /// Names of the stereo output ports, in port order. Index 0..=5 match the
 /// `OutputGroup` discriminants; index 6 is the shared Overhead bus.
@@ -184,13 +186,17 @@ pub const OUTPUT_PORT_NAMES: [&str; NUM_OUTPUT_PORTS] = [
     "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
 ];
 
-/// Truthful one-line summary of the plugin's output routing.
+/// Truthful one-line summary of the plugin's output routing in the
+/// `output_mode` the params hold (`multi`: Multi, else Stereo — E11).
 ///
-/// The plugin declares every port in [`OUTPUT_PORT_NAMES`] unconditionally —
-/// there is no stereo-only mode and no parameter that switches one — so the
-/// editor renders this as a static readout rather than a toggle.
-pub fn routing_summary() -> String {
-    format!("Multi-out · {NUM_OUTPUT_PORTS} ports")
+/// The plugin declares every port in [`OUTPUT_PORT_NAMES`] in both modes
+/// (a host holds the port list); Stereo leaves all but Main silent.
+pub fn routing_summary(multi: bool) -> String {
+    if multi {
+        format!("Multi-out · {NUM_OUTPUT_PORTS} ports")
+    } else {
+        "Stereo · all on Main".to_string()
+    }
 }
 
 /// The port list as a single comma-separated line, for the KIT card readout.

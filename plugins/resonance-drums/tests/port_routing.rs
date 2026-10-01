@@ -158,16 +158,18 @@ fn plugin_declares_every_output_port_unconditionally() {
     }
 }
 
-/// The readout strings the editor paints are derived from the same port
-/// list, so the card can never claim a mode the DSP does not implement.
+/// The readout strings the editor paints follow `output_mode` (E11) and
+/// the same port list, so the card can never claim a mode the DSP does
+/// not implement.
 #[test]
-fn routing_readout_reports_multi_out() {
-    let summary = kit::routing_summary();
+fn routing_readout_reports_the_output_mode() {
+    let summary = kit::routing_summary(true);
     assert_eq!(summary, format!("Multi-out · {NUM_OUTPUT_PORTS} ports"));
     assert!(
         !summary.to_lowercase().contains("stereo"),
-        "the routing readout must not describe a stereo-only mode: {summary}"
+        "the Multi readout must not describe a stereo mode: {summary}"
     );
+    assert_eq!(kit::routing_summary(false), "Stereo · all on Main");
 
     let ports = kit::routing_port_list();
     for name in OUTPUT_PORT_NAMES {

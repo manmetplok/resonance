@@ -16,6 +16,7 @@ use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer
 use resonance_drums::kit_loader::{
     hand_off_kit, spawn_loader, PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
+use resonance_drums::params::OUTPUT_MODE_MULTI;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
@@ -28,6 +29,8 @@ const CHAIN_GAIN: f32 = 1.0;
 
 fn booted_plugin() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read a pad's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(SAMPLE_RATE, BLOCK as u32));
     // One block so the master/pad ramps start from the real values.
     render(&mut plugin, &[]);
