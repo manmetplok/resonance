@@ -6,6 +6,7 @@ pub mod features;
 pub mod formatters;
 pub mod gui;
 pub mod host;
+pub mod kit_rows;
 pub mod library_view;
 pub mod loader;
 mod logging;
