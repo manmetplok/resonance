@@ -33,9 +33,14 @@ impl ResonanceMcp {
                        \
                        To load one, set the drums' kit_select parameter with \
                        track_set_plugin_param to the kit's name (or its slot), then poll \
-                       track_plugin_params until kit_load_progress reads 1.0 — it completes \
-                       with the transport stopped too; its text says \"failed\" if the load \
-                       did. kit_select -1 is the small built-in kit. Installing, importing \
+                       track_plugin_params until kit_load_progress reads 1.0 — it reads 0 \
+                       right after the set and completes with the transport stopped too. It \
+                       stays at 0 for good, so stop polling, when its text reads \"empty slot\" \
+                       (no kit in that slot; the previous kit keeps playing) or \"failed\". \
+                       kit_select -1 is the small built-in kit; -2 is a parked kit with no \
+                       library slot, its text \"<name> (missing)\" (the project's kit is not on \
+                       this machine) or \"<name> (external)\" (a kit from outside the \
+                       library) — it is in no kit's loaded_in. Installing, importing \
                        and deleting kits happen in the drums editor only. Read-only.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<drum_kits::DrumKitList>()

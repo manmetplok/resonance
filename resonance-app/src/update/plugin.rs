@@ -149,12 +149,18 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
                 param_id,
                 value,
             });
+            let kit_select = resonance_plugin::stable_hash(crate::drums_mirror::KIT_SELECT);
             let drums = r
                 .with_plugin_mut(instance_id, |p| {
-                    if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
+                    let drums = crate::drums_mirror::is_drums(p);
+                    if drums && param_id == kit_select {
+                        // Another kit: its progress starts from 0 in the
+                        // mirror too, not at the old kit's 1.0.
+                        crate::drums_mirror::mirror_kit_select(p, value);
+                    } else if let Some(param) = p.params.iter_mut().find(|pp| pp.id == param_id) {
                         param.current_value = value;
                     }
-                    crate::drums_mirror::is_drums(p)
+                    drums
                 })
                 .unwrap_or(false);
             // The drums' output mode decides their sub-tracks; in this
@@ -180,6 +186,15 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             let (state_excluded, drums) = r
                 .with_plugin_mut(instance_id, |p| {
                     let drums = crate::drums_mirror::is_drums(p);
+                    if drums
+                        && param_id == resonance_plugin::stable_hash(crate::drums_mirror::KIT_SELECT)
+                    {
+                        // The editor picked another kit: as for a host set,
+                        // its progress starts from 0 in the mirror. (A
+                        // rescan that already carried this value — and the
+                        // progress with it — leaves nothing changed here.)
+                        crate::drums_mirror::mirror_kit_select(p, value);
+                    }
                     let param = p.params.iter_mut().find(|pp| pp.id == param_id);
                     let excluded = param.map(|param| {
                         param.current_value = value;

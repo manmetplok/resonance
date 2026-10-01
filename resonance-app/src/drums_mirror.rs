@@ -17,6 +17,9 @@ pub const DRUMS_PLUGIN_ID: &str = "com.resonance.drums";
 /// The kit selector: `-2` parked (external/missing kit), `-1` the built-in
 /// kit, `0..=999` a library slot. Its text is the kit's name.
 pub const KIT_SELECT: &str = "kit_select";
+/// The selected kit's load progress, 0..1 (read-only): 1.0 once the kit
+/// plays; 0 with text "empty slot" or "failed" when nothing loads.
+pub const KIT_LOAD_PROGRESS: &str = "kit_load_progress";
 /// `0` Stereo (everything sums to the main output), `1` Multi (per-pad
 /// ports plus the Overhead port, each a sub-track).
 pub const OUTPUT_MODE: &str = "output_mode";
@@ -27,6 +30,30 @@ pub const OUTPUT_MODE_MULTI: f64 = 1.0;
 pub fn param<'a>(slot: &'a PluginSlotState, key: &str) -> Option<&'a ParamInfo> {
     let id = resonance_plugin::stable_hash(key);
     slot.params.iter().find(|p| p.id == id)
+}
+
+/// Mirror a write of `value` to `slot`'s `kit_select`. When it names
+/// another kit, the mirrored `kit_load_progress` drops to 0 at once: the
+/// plugin reports 0 until its watcher acts on the write, but that reaches
+/// the mirror only with its next rescan, and a read in between would see
+/// the previous kit's 1.0 and take the new kit for loaded. Returns
+/// whether the value changed. The caller has checked `param_id` is
+/// `kit_select` on a drums slot.
+pub fn mirror_kit_select(slot: &mut PluginSlotState, value: f64) -> bool {
+    let id = resonance_plugin::stable_hash(KIT_SELECT);
+    let Some(param) = slot.params.iter_mut().find(|p| p.id == id) else {
+        return false;
+    };
+    let changed = param.current_value.round() != value.round();
+    param.current_value = value;
+    if changed {
+        let progress = resonance_plugin::stable_hash(KIT_LOAD_PROGRESS);
+        if let Some(p) = slot.params.iter_mut().find(|p| p.id == progress) {
+            p.current_value = 0.0;
+            p.text = "0%".to_owned();
+        }
+    }
+    changed
 }
 
 /// Whether `slot` is a Resonance Drums instance.

@@ -61,11 +61,14 @@ fn write_kit(manifest_dir: &Path, piece_names: &[&str], meta: Option<serde_json:
 
 /// A fresh root with two kits — "Drummica" (a plok.org download with its
 /// sidecar) and "Garage" (copied in by hand) — and an app pointed at it.
-/// No project is open: the library is the user's, not the project's.
-fn app(tag: &str) -> (Resonance, PathBuf) {
-    let base =
-        std::env::temp_dir().join(format!("resonance-drum-kits-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&base);
+/// No project is open: the library is the user's, not the project's. The
+/// returned guard removes the root when the test ends; hold it.
+fn app(tag: &str) -> (Resonance, PathBuf, tempfile::TempDir) {
+    let root = tempfile::Builder::new()
+        .prefix(&format!("resonance-drum-kits-{tag}-"))
+        .tempdir()
+        .unwrap();
+    let base = root.path().to_path_buf();
     let kits = base.join("kits");
     write_kit(
         &kits.join("Drummica/drummica"),
@@ -90,7 +93,7 @@ fn app(tag: &str) -> (Resonance, PathBuf) {
     );
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_drum_kit_library_roots(kits, base.join("marks"));
-    (app, base.join("marks"))
+    (app, base.join("marks"), root)
 }
 
 fn list(app: &mut Resonance, params: serde_json::Value) -> DrumKitList {
@@ -122,7 +125,7 @@ fn a_test_app_never_points_at_the_users_kit_library() {
 
 #[test]
 fn drum_kits_list_reports_filters_and_limits() {
-    let (mut app, marks_dir) = app("list");
+    let (mut app, marks_dir, _root) = app("list");
     let revision = app.revision();
 
     let all = list(&mut app, serde_json::json!({}));
@@ -184,12 +187,15 @@ fn drum_kits_list_answers_with_no_project_and_an_empty_library() {
 #[test]
 fn drum_kits_list_names_the_tracks_that_play_a_kit() {
     use resonance_audio::types::{AudioEvent, ParamInfo, TrackType};
-    let (mut app, _) = app("users");
+    let (mut app, _, _root) = app("users");
     app.test_set_active_project(true);
     app.test_set_project_path(PathBuf::from("/tmp/control-drum-kits.rprj"));
     app.test_add_track(1, TrackType::Instrument);
     app.test_add_track(2, TrackType::Instrument);
-    for (track_id, instance_id, slot) in [(1, 40, 1.0), (2, 41, -1.0)] {
+    app.test_add_track(3, TrackType::Instrument);
+    // Track 3 plays a parked kit (-2: "(missing)" / "(external)"), which
+    // has no slot and so is no library kit's user.
+    for (track_id, instance_id, slot) in [(1, 40, 1.0), (2, 41, -1.0), (3, 42, -2.0)] {
         app.test_apply_engine_event(AudioEvent::PluginAdded {
             track_id,
             instance_id,
@@ -220,11 +226,18 @@ fn drum_kits_list_names_the_tracks_that_play_a_kit() {
         drummica.loaded_in.is_empty(),
         "track 2 plays the built-in kit (-1)"
     );
+    assert!(
+        all.kits
+            .iter()
+            .all(|k| k.loaded_in.iter().all(|u| u.track_id.0 != 3)),
+        "a parked kit (-2) is no slot's user: {:?}",
+        all.kits
+    );
 }
 
 #[test]
 fn drum_kits_set_marks_writes_the_shared_store_only() {
-    let (mut app, marks_dir) = app("marks");
+    let (mut app, marks_dir, _root) = app("marks");
     let revision = app.revision();
     let all = list(&mut app, serde_json::json!({}));
     let id = all.kits[0].id.clone();
@@ -281,4 +294,202 @@ fn drum_kits_set_marks_writes_the_shared_store_only() {
         revision,
         "the library and its marks are the user's, not the project's: no revision bump"
     );
+}
+
+/// A minimal one-piece manifest named `name`, with `nonce` in its `_meta`
+/// so its bytes — and with them its content id — can be steered.
+fn write_nonce_kit(dir: &Path, name: &str, nonce: u32) {
+    std::fs::create_dir_all(dir).unwrap();
+    let manifest = format!(
+        "{{\"Kick\":{{\"01_KickIn_e901\":{{\"brand\":\"B\",\"channel\":\"01\",\"mic\":\"m\",\
+         \"position\":\"KickIn\",\"rounds\":{{\"RR01\":{{\"Vel01\":\"k.wav\"}}}}}}}},\
+         \"_meta\":{{\"name\":\"{name}\",\"nonce\":{nonce}}}}}"
+    );
+    std::fs::write(dir.join(MANIFEST_FILE), manifest).unwrap();
+}
+
+#[test]
+fn drum_kits_set_marks_refuses_an_id_prefix_two_kits_share() {
+    // Two kits whose content ids share their first 8 hex digits (the
+    // nonces were searched for that): the shortest prefix the API takes
+    // names neither of them.
+    let root = tempfile::Builder::new()
+        .prefix("resonance-drum-kits-prefix-")
+        .tempdir()
+        .unwrap();
+    let kits = root.path().join("kits");
+    write_nonce_kit(&kits.join("Alpha"), "Alpha", 20524);
+    write_nonce_kit(&kits.join("Beta"), "Beta", 12155);
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_drum_kit_library_roots(kits, root.path().join("marks"));
+
+    let all = list(&mut app, serde_json::json!({}));
+    assert_eq!(all.total, 2, "{:?}", names(&all));
+    let (a, b) = (&all.kits[0].id, &all.kits[1].id);
+    assert_eq!(a[..8], b[..8], "the fixture's ids must share a prefix: {a} {b}");
+    let shared = &a[..8];
+
+    let error = call(
+        &mut app,
+        "drum_kits.set_marks",
+        serde_json::json!({ "id": shared, "favorite": true }),
+    )
+    .error
+    .expect("an ambiguous prefix is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("more than one kit"), "{}", error.message);
+
+    // One more digit than they share tells them apart.
+    let longer = a
+        .char_indices()
+        .find(|&(i, c)| b.as_bytes()[i] != c as u8)
+        .map(|(i, _)| &a[..=i])
+        .unwrap();
+    let marked: DrumKitEntry = call(
+        &mut app,
+        "drum_kits.set_marks",
+        serde_json::json!({ "id": longer, "favorite": true }),
+    )
+    .result()
+    .expect("a prefix only one kit has addresses it");
+    assert_eq!(&marked.id, a);
+}
+
+/// The drums' `kit_select` set over the control API: the mirrored
+/// `kit_load_progress` drops to 0 at once, so a `track.plugin_params`
+/// read right after the set never sees the previous kit's 1.0 and takes
+/// the new kit for loaded. Setting the kit it already has leaves the
+/// progress alone (nothing loads), and so does a plugin-side pick a rescan
+/// already reported.
+#[test]
+fn setting_kit_select_resets_the_mirrored_load_progress() {
+    use resonance_audio::types::{
+        AudioEvent, ParamInfo, ParamValueUpdate, PluginParamEdit, TrackType,
+    };
+    use resonance_control::methods::track::PluginParamsView;
+
+    const DRUMS: u64 = 60;
+    let kit_id = resonance_plugin::stable_hash("kit_select");
+    let progress_id = resonance_plugin::stable_hash("kit_load_progress");
+    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(PathBuf::from("/tmp/control-drum-kits-progress.rprj"));
+    app.test_add_track(1, TrackType::Instrument);
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: 1,
+        instance_id: DRUMS,
+        plugin_name: "Resonance Drums".to_owned(),
+        clap_plugin_id: "com.resonance.drums".to_owned(),
+        clap_file_path: "/plugins/drums.clap".to_owned(),
+        params: vec![
+            ParamInfo {
+                id: kit_id,
+                name: "kit_select".to_owned(),
+                min_value: -2.0,
+                max_value: 999.0,
+                current_value: 0.0,
+                stepped: true,
+                automatable: false,
+                state_excluded: true,
+                text: "Drummica".to_owned(),
+                ..Default::default()
+            },
+            ParamInfo {
+                id: progress_id,
+                name: "kit_load_progress".to_owned(),
+                max_value: 1.0,
+                current_value: 1.0,
+                automatable: false,
+                read_only: true,
+                state_excluded: true,
+                text: "100%".to_owned(),
+                ..Default::default()
+            },
+        ],
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+    let progress = |app: &mut Resonance| -> (f64, String) {
+        let view: PluginParamsView =
+            call(app, "track.plugin_params", serde_json::json!({ "track_id": 1 }))
+                .result()
+                .expect("track.plugin_params succeeds");
+        let p = view.plugins[0]
+            .params
+            .iter()
+            .find(|p| p.id == progress_id)
+            .expect("kit_load_progress")
+            .clone();
+        (p.value, p.text)
+    };
+    let set_kit = |app: &mut Resonance, value: f64| {
+        call(
+            app,
+            "track.set_plugin_param",
+            serde_json::json!({ "track_id": 1, "param": "kit_select", "value": value }),
+        )
+        .result::<serde_json::Value>()
+        .expect("kit_select is settable");
+    };
+    assert_eq!(progress(&mut app).0, 1.0);
+
+    // The same kit: nothing loads, the progress stays.
+    set_kit(&mut app, 0.0);
+    assert_eq!(progress(&mut app).0, 1.0, "re-selecting the kit it plays");
+
+    // Another kit: 0 at once, before any rescan.
+    set_kit(&mut app, 1.0);
+    assert_eq!(progress(&mut app), (0.0, "0%".to_owned()));
+
+    // The plugin's rescan brings the real progress.
+    app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
+        instance_id: DRUMS,
+        values: vec![ParamValueUpdate {
+            id: progress_id,
+            value: 1.0,
+            text: "100%".to_owned(),
+        }],
+    });
+    assert_eq!(progress(&mut app).0, 1.0);
+
+    // A pick in the drums' editor: the same reset…
+    app.test_apply_engine_event(AudioEvent::PluginParamEdited {
+        instance_id: DRUMS,
+        edit: PluginParamEdit {
+            param_id: kit_id,
+            value: 2.0,
+            text: "Garage".to_owned(),
+            gesture: false,
+        },
+    });
+    assert_eq!(progress(&mut app).0, 0.0, "an editor pick resets it too");
+
+    // …but not when a rescan already carried that kit and its progress.
+    app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
+        instance_id: DRUMS,
+        values: vec![
+            ParamValueUpdate {
+                id: kit_id,
+                value: 3.0,
+                text: "Studio".to_owned(),
+            },
+            ParamValueUpdate {
+                id: progress_id,
+                value: 1.0,
+                text: "100%".to_owned(),
+            },
+        ],
+    });
+    app.test_apply_engine_event(AudioEvent::PluginParamEdited {
+        instance_id: DRUMS,
+        edit: PluginParamEdit {
+            param_id: kit_id,
+            value: 3.0,
+            text: "Studio".to_owned(),
+            gesture: false,
+        },
+    });
+    assert_eq!(progress(&mut app).0, 1.0, "a late edit echo keeps the loaded kit's 1.0");
 }
