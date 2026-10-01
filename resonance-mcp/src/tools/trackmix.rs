@@ -57,7 +57,11 @@ impl ResonanceMcp {
                        CLAP id, which always has the form \"com.resonance.<name>\" — the two \
                        built-in instruments are \"com.resonance.wavetable\" (the polyphonic \
                        synth, what an instrument track's generated/authored MIDI plays through) \
-                       and \"com.resonance.drums\" (the kit, for a drums track). plugins_catalog \
+                       and \"com.resonance.drums\" (the kit, for a drums track: pick its kit with \
+                       drum_kits_list, then track_set_plugin_param kit_select = the kit's name \
+                       and poll track_plugin_params until kit_load_progress reads 1.0 — it \
+                       loads with the transport stopped too; it starts in Stereo output, set \
+                       output_mode to \"Multi\" for per-drum sub-tracks). plugins_catalog \
                        lists the catalog and a wrong id is rejected with the valid ids. An empty \
                        instrument list means the first-party CLAP bundles were never built \
                        (scripts/bundle.sh), not that the app ships no instruments. Then shape \
@@ -337,7 +341,10 @@ impl ResonanceMcp {
                        with choices — one of those labels as a string, matched \
                        case-insensitively: send \"Low-pass\" instead of working out that it is \
                        3. A label that matches none of them is rejected with the ones that \
-                       would have worked. \
+                       would have worked. Two library selectors with no choice list take a name \
+                       as well: Resonance Amp's Model Select (a model from amp_models_list) and \
+                       Resonance Drums' kit_select (a kit from drum_kits_list; then poll \
+                       kit_load_progress in track_plugin_params until it reads 1.0). \
                        \
                        The min/max track_plugin_params reports are f64 renderings of f32 plugin \
                        declarations, so a bound often reads with a long tail of digits (a \
@@ -592,8 +599,8 @@ impl ResonanceMcp {
                        nothing else on the track has a key port — name it with plugin_id \
                        otherwise. Name the key source with EITHER source_track_id OR \
                        source_bus_id; any track, bus or SUB-TRACK works, and a sub-track (one tap \
-                       of a multi-output drum kit) is usually the only address a single kit piece \
-                       has. Sources are tapped post-FX and PRE-fader, so a key source can sit at \
+                       of a multi-output drum kit — drums in Multi output mode) is usually the \
+                       only address a single kit piece has. Sources are tapped post-FX and PRE-fader, so a key source can sit at \
                        -inf on the mixer and still key. enabled defaults to true; false keeps the \
                        routing configured but stops delivering the key, so the plugin falls back \
                        to keying off its own input. \
