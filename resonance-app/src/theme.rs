@@ -510,14 +510,20 @@ pub const TRACK_HEADER_WIDTH: f32 = 280.0;
 /// Vertical inset of a clip card inside its arrange track lane. The clip
 /// body spans `TRACK_HEIGHT - 2 * CLIP_LANE_INSET`.
 pub const CLIP_LANE_INSET: f32 = 10.0;
-/// Standard channel strip width on the Mixer.
-pub const MIXER_STRIP_WIDTH: f32 = 140.0;
+/// Standard channel strip width on the Mixer — track and bus strips
+/// alike (mixer-cleanup.md §2, Q2). Sized so a slot line's plugin name
+/// fits about [`MIXER_SLOT_LINE_CHARS`] characters on one line.
+pub const MIXER_STRIP_WIDTH: f32 = 160.0;
+/// How many characters of a plugin name a strip's slot line shows
+/// before it ellipsises (size-10 text in a 160 px strip). The line never
+/// wraps: it is `Wrapping::None` in a clipped container as well.
+pub const MIXER_SLOT_LINE_CHARS: usize = 18;
 /// Sub-track strip width on the Mixer. Sub-tracks are fed from one
 /// non-main output of their parent's instrument plugin — they have no
 /// FX chain, no input, and no record arm, so the strip is narrower than
 /// a normal channel strip. The narrower width also creates a visual
 /// rhythm that telegraphs "this is a child of the strip on its left".
-pub const MIXER_SUB_STRIP_WIDTH: f32 = 92.0;
+pub const MIXER_SUB_STRIP_WIDTH: f32 = 104.0;
 /// Width of the lavender-tinted left-edge accent rail on a sub-track
 /// strip. Sits flush against the left edge of the strip card so the eye
 /// reads a parent → child relationship even before reading the strip's
@@ -529,8 +535,9 @@ pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
 /// it hosts controls, not a signal path. See the track-grouping design
 /// (doc #200) — "Mixer reflection".
 pub const MIXER_GROUP_HEADER_WIDTH: f32 = 116.0;
-/// Master strip width.
-pub const MASTER_STRIP_WIDTH: f32 = 156.0;
+/// Master strip width — the same as a channel strip since the master
+/// shares their anatomy (mixer-cleanup.md §5).
+pub const MASTER_STRIP_WIDTH: f32 = 160.0;
 /// Inspector column width on the Mixer.
 pub const INSPECTOR_WIDTH: f32 = 320.0;
 /// Reference & A/B right-rail width on the Mixer (design doc #184/#198).

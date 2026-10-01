@@ -93,8 +93,8 @@ A legacy alias `GLOBAL_TRACK_ROW_HEIGHT` resolves to the tempo-lane height for o
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `MIXER_STRIP_WIDTH` | 140px | Track channel strip |
-| `MASTER_STRIP_WIDTH` | 156px | Master bus strip |
+| `MIXER_STRIP_WIDTH` | 160px | Track and bus channel strip |
+| `MASTER_STRIP_WIDTH` | 160px | Master bus strip |
 | `INSPECTOR_WIDTH` | 320px | Right-side inspector column |
 | `MIXER_STRIP_HEIGHT` | 440px | Fixed track-strip height — pins the fader, scrolls FX list inside |
 | `BUS_STRIP_HEIGHT` | 320px | Fixed bus-strip height (no instrument slot); sized with `MIXER_STRIP_HEIGHT` so both lanes fit the 1440×900 minimum window |

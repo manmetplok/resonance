@@ -1,6 +1,7 @@
 //! Chain reorder from the GUI — the ▲/▼ pair on the mixer inspector's
-//! CHAIN rows and on every channel strip's plugin slot (ba todo #1302,
-//! doc #276 item 2.1).
+//! CHAIN rows (ba todo #1302, doc #276 item 2.1). The strips' own carets
+//! left with mixer-cleanup.md §2.2: a strip shows its chain, the
+//! inspector edits it.
 //!
 //! Reordering has been complete in the backend since ba doc #273 and
 //! reachable over MCP as `track/bus/master.move_effect` — but the view

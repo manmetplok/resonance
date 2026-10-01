@@ -267,7 +267,7 @@ impl Resonance {
     /// nothing to build an app for.
     #[doc(hidden)]
     pub fn test_strip_plugin_label(plugin_name: &str, missing: bool) -> String {
-        crate::view::mixer::slot_pill_label(plugin_name, missing)
+        crate::view::mixer::slot_line_label(plugin_name, missing)
     }
 
     /// Test-only: the lazy key of the plugin parameter panel for `slot`

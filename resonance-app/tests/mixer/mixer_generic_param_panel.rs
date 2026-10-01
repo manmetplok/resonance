@@ -2,7 +2,9 @@
 //! (mixer-cleanup.md §4), retargeted from the former bottom panel's tests
 //! (ba todo #1306, plugin-audit finding X4, doc #276 item 2.4).
 //!
-//! A slot's name button sends `OpenPluginWindow`. A plugin with its own
+//! A strip's slot line focuses the slot on a click (`FocusSlot`) and
+//! sends `OpenPluginWindow` on a double-click (mixer-cleanup.md §2.1).
+//! A plugin with its own
 //! GUI opens that editor; one without opens the host-drawn generic
 //! window. A GUI plugin's generic parameters stay reachable as the
 //! fallback when its editor refuses to open (ba todo #1347) — the only
@@ -27,7 +29,7 @@ use resonance_audio::types::{AudioCommand, ParamInfo, TrackType};
 
 const TRACK: u64 = 1;
 const INSTANCE: u64 = 77;
-/// Short enough to survive the strip's 14-character name truncation, so
+/// Short enough to survive the slot line's name truncation, so
 /// the selector matches the label the user actually sees.
 const PLUGIN: &str = "Resonance EQ";
 const PARAM: &str = "Low Gain";
@@ -109,7 +111,7 @@ fn click(app: &Resonance, label: &str) -> Vec<Message> {
 /// Everything on the row after the plugin's name is a bare icon glyph
 /// with no label, so the only honest way to address one is the way the
 /// row lays it out — by position. A widget belongs to the slot when it
-/// shares the name's vertical band and sits inside the strip's 140 px.
+/// shares the name's vertical band and sits inside the strip's width.
 ///
 /// (`Simulator` exposes `find`, which stops at the first match, but no
 /// `find_all`; a selector closure that records every candidate and
@@ -161,41 +163,57 @@ fn slot_row_glyphs(app: &Resonance) -> Vec<String> {
         .collect()
 }
 
-/// Press the slot-row control at `index` (see [`slot_row_controls`]) and
-/// return the messages the view raised. Positional rather than by label
-/// because these controls have no labels.
-fn press_slot_control(app: &Resonance, index: usize) -> Vec<Message> {
-    let controls = slot_row_controls(app);
-    let (_, bounds) = controls
-        .get(index)
-        .unwrap_or_else(|| panic!("slot row has no control #{index}: {controls:?}"))
-        .clone();
+/// Press the slot line's name `clicks` times in a row and return the
+/// messages the view raised. Two presses inside the double-click window
+/// are a double-click.
+fn press_slot_line(app: &Resonance, clicks: usize) -> Vec<Message> {
+    let (_, bounds) = slot_row_controls(app)
+        .into_iter()
+        .find(|(content, _)| content == PLUGIN)
+        .expect("the strip draws the slot line");
     let mut ui = simulator(app);
     ui.point_at(Point::new(
         bounds.x + bounds.width / 2.0,
         bounds.y + bounds.height / 2.0,
     ));
-    let _ = ui.simulate(iced_test::simulator::click());
+    for _ in 0..clicks {
+        let _ = ui.simulate(iced_test::simulator::click());
+    }
     ui.into_messages().collect()
 }
 
-/// The strip slot's editor toggle: index 1, straight after the name.
-const EDITOR_TOGGLE: usize = 1;
-
 // ---------------------------------------------------------------------------
 
-/// The slot's name button opens the plugin's window, for every plugin —
-/// which window that is is the update's decision, not the strip's.
+/// A click on a slot line focuses the slot (and selects its owner) for
+/// the inspector — it opens nothing.
 #[test]
-fn clicking_a_slot_sends_open_plugin_window_gui_or_not() {
+fn clicking_a_slot_line_focuses_the_slot() {
     for has_gui in [true, false] {
         let app = app_with_plugin(has_gui);
         assert!(
             matches!(
-                click(&app, PLUGIN).as_slice(),
-                [Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE))]
+                press_slot_line(&app, 1).as_slice(),
+                [Message::Plugin(PluginMessage::FocusSlot(INSTANCE))]
             ),
-            "has_gui = {has_gui}: the slot must send OpenPluginWindow"
+            "has_gui = {has_gui}: a click must send FocusSlot only"
+        );
+    }
+}
+
+/// A double-click on the slot line opens the plugin's window, for every
+/// plugin — which window that is is the update's decision, not the
+/// strip's.
+#[test]
+fn double_clicking_a_slot_line_sends_open_plugin_window_gui_or_not() {
+    for has_gui in [true, false] {
+        let app = app_with_plugin(has_gui);
+        let messages = press_slot_line(&app, 2);
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE))
+            )),
+            "has_gui = {has_gui}: the double-click must send OpenPluginWindow: {messages:?}"
         );
     }
 }
@@ -328,99 +346,66 @@ fn a_non_gui_plugin_is_offered_no_editor_button() {
     );
 }
 
-// --- the strip's own editor toggle ------------------------------------
+// --- the slot line carries no controls ---------------------------------
 //
-// The strip's dedicated editor glyph. The tests above press the generic
-// WINDOW's "Open Editor" text button, which is a different widget in a
-// different module — nothing there touches the sliders glyph on the strip.
+// The strip used to draw an editor toggle (the sliders glyph), ▲▼, ⏻ and
+// × beside every slot's name. They moved to the inspector's CHAIN row
+// (mixer-cleanup.md §2.2); the strip's route to a GUI plugin's floating
+// editor is now the slot line's double-click.
 
-/// The glyph appears exactly where a plugin has a window to open.
+/// Nothing but the plugin's name shares the slot line's band — for a GUI
+/// plugin as for one without.
 #[test]
-fn the_strip_offers_an_editor_toggle_only_for_a_gui_plugin() {
-    let sliders = theme::fa::SLIDERS.to_string();
-
-    let with_gui = slot_row_glyphs(&app_with_plugin(true));
-    assert_eq!(
-        with_gui.get(EDITOR_TOGGLE),
-        Some(&sliders),
-        "a GUI plugin's slot draws the editor toggle right after the \
-         name, before the reorder carets: {with_gui:?}"
-    );
-
-    let without = slot_row_glyphs(&app_with_plugin(false));
-    assert!(
-        !without.contains(&sliders),
-        "a plugin with no GUI has no window to open, so the slot must \
-         not draw the toggle at all: {without:?}"
-    );
-    assert_eq!(
-        without.len() + 1,
-        with_gui.len(),
-        "and the toggle is the ONLY difference — the name, the two \
-         reorder carets and the delete × are drawn either way: \
-         {without:?} vs {with_gui:?}"
-    );
+fn the_slot_line_draws_only_the_plugin_name() {
+    for has_gui in [true, false] {
+        let glyphs = slot_row_glyphs(&app_with_plugin(has_gui));
+        assert_eq!(
+            glyphs,
+            vec![PLUGIN.to_string()],
+            "has_gui = {has_gui}: the slot line shows state, not controls"
+        );
+    }
 }
 
-/// The mapping the control exists for: pressing it opens the floating
-/// editor. Pressed by position — it carries no label to select by.
+/// The strip's route to a GUI plugin's own window: a double-click on its
+/// slot line, dispatched as the view raised it, opens the floating editor
+/// on the engine.
 #[test]
-fn pressing_the_strip_editor_toggle_opens_the_floating_editor() {
-    let app = app_with_plugin(true);
+fn double_clicking_a_gui_slot_line_opens_the_floating_editor() {
+    let (mut app, rx) = app_with_plugin_capture(true);
+    for m in press_slot_line(&app, 2) {
+        app.test_dispatch(m);
+    }
+    let sent: Vec<AudioCommand> = rx.try_iter().collect();
     assert!(
-        matches!(
-            press_slot_control(&app, EDITOR_TOGGLE).as_slice(),
-            [Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE))]
-        ),
-        "the sliders glyph must open the plugin's own window — the name \
-         button next to it opens the parameter panel instead"
+        sent.iter().any(|c| matches!(
+            c,
+            AudioCommand::OpenPluginEditor { instance_id } if *instance_id == INSTANCE
+        )),
+        "the double-click must open the plugin's own editor: {sent:?}"
     );
+    assert_eq!(app.test_focused_slot(), Some(INSTANCE));
 }
 
-/// And it is a toggle, not a one-way open: with the editor already up,
-/// the same control closes it.
-#[test]
-fn pressing_the_strip_editor_toggle_again_closes_the_floating_editor() {
-    let mut app = app_with_plugin(true);
-    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
-    // The engine's confirmation is what makes the editor "open" now
-    // (ba todo #1347); the press on its own no longer moves the flag.
-    app.test_apply_engine_event(AudioEvent::PluginEditorState {
-        instance_id: INSTANCE,
-        open: true,
-        failure: None,
-    });
-
-    assert!(
-        matches!(
-            press_slot_control(&app, EDITOR_TOGGLE).as_slice(),
-            [Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE))]
-        ),
-        "with the editor open the toggle must close it, not open a second"
-    );
-}
-
-/// The glyph lights up while the editor is open. That tint is the only
-/// feedback a press gives, so it has to track the state — and since ba
-/// todo #1347 it tracks the ENGINE's report rather than the press, so a
-/// window that refused to open leaves the glyph down instead of lit over
-/// nothing.
+/// The editor toggle's tint decision (`editor_toggle_spec`, shared by the
+/// surfaces that draw the toggle) tracks the ENGINE's report rather than
+/// the press (ba todo #1347), so a window that refused to open leaves the
+/// glyph down instead of lit over nothing.
 ///
 /// Asserted through the view's own decision rather than the widget
 /// tree: `iced_test` can read a text candidate's content but never its
 /// colour.
 #[test]
-fn the_strip_editor_toggle_is_tinted_while_the_editor_is_open() {
+fn the_editor_toggle_is_tinted_while_the_editor_is_open() {
     let mut app = app_with_plugin(true);
     assert_eq!(
         app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
         Some(theme::TEXT_DIM),
-        "closed: the glyph sits back in the strip's dim icon ramp"
+        "closed: the glyph sits back in the dim icon ramp"
     );
 
-    // The press alone no longer tints it: since ba todo #1347 the flag
-    // moves only on the engine's report, so a window that failed to open
-    // cannot leave the glyph lit over nothing.
+    // The press alone does not tint it: the flag moves only on the
+    // engine's report.
     app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
     assert_eq!(
         app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
@@ -434,10 +419,11 @@ fn the_strip_editor_toggle_is_tinted_while_the_editor_is_open() {
         failure: None,
     });
     assert_eq!(
-        app.test_strip_editor_toggle(INSTANCE).map(|(_, tint)| tint),
-        Some(theme::ACCENT),
-        "open: the glyph is accented, which is the only sign the window \
-         is up when it is behind the main window"
+        app.test_strip_editor_toggle(INSTANCE).map(|(m, t)| {
+            (matches!(m, Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE))), t)
+        }),
+        Some((true, theme::ACCENT)),
+        "open: accented, and the same control closes it"
     );
 
     app.test_dispatch(Message::Plugin(PluginMessage::ClosePluginEditor(INSTANCE)));

@@ -82,4 +82,11 @@ pub struct MixerUiState {
     /// clears both, and `SelectTrack(Some(_))` / `SelectBus(Some(_))`
     /// clear this.
     pub selected_master: bool,
+    /// The inline rename open on a track strip's head (mixer-cleanup.md
+    /// §2.3): the track and the edit buffer. Set by a double-click on the
+    /// strip's name (`UiMessage::BeginStripRename`); Enter or a click
+    /// elsewhere commits it through `TrackMessage::SetTrackName` (so undo
+    /// and the control API's rename share one path), Esc drops it.
+    /// Runtime UI state, never persisted.
+    pub renaming: Option<(TrackId, String)>,
 }

@@ -1,7 +1,7 @@
 //! Lazy-cache fingerprints for the mixer channel strips.
 //!
-//! Every strip's non-live body (head, buttons, plugin chain, automation
-//! header, pan) is wrapped in `iced::widget::lazy` keyed on one of these
+//! Every strip's non-live body (head, buttons, FX switch, slot lines,
+//! pan) is wrapped in `iced::widget::lazy` keyed on one of these
 //! hashes, so the widget subtree only rebuilds when something it renders
 //! actually changed — not on every 16 ms redraw tick (MEMORY ui-work
 //! §11, same discipline as `view_track_headers` and the mixer
@@ -17,68 +17,36 @@
 //! **Rule:** every piece of state a strip *body* renders must enter its
 //! fingerprint — a missed field is a stale-UI bug (the cached tree
 //! survives the state change and the strip keeps drawing the old
-//! value). The tests in `tests/mixer/mixer_automation_controls.rs`
-//! walk the rendered facets table-driven and assert each one moves the
-//! hash.
+//! value). The tests in `tests/mixer/mixer_automation_controls.rs` and
+//! `tests/mixer/mixer_strip_anatomy.rs` walk the rendered facets
+//! table-driven and assert each one moves the hash.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use resonance_audio::types::ScannedPlugin;
+use resonance_audio::types::PluginInstanceId;
 
 use crate::state::{BusState, ExternalInstrumentStatus, PluginSlotState, TrackState};
 
-use super::automation::{primary_lane, AutoChan};
-
-/// Hash everything `view_plugin_slot_row` draws for one chain slot, plus
-/// the slot's params (they are the automation picker's option labels).
-fn hash_slot(h: &mut DefaultHasher, slot: &PluginSlotState, selected: bool) {
+/// Hash everything a slot line draws (`strip_parts::slot_line`): the
+/// name, the state dot (missing / bypassed / active) and whether it is
+/// the focused slot. Hashing `focused` per slot means focusing a slot
+/// moves only the hash of the strip that owns it (and the one that owned
+/// the previous focus), never every strip's.
+fn hash_slot(h: &mut DefaultHasher, slot: &PluginSlotState, focused: Option<PluginInstanceId>) {
     slot.instance_id.hash(h);
     slot.plugin_name.hash(h);
-    // The pill's error treatment keys off missing-vs-available only; the
-    // reason string renders in the parameter panel, not on the strip.
-    slot.availability.is_missing().hash(h);
-    slot.has_gui.hash(h);
-    slot.editor_open.hash(h);
+    // The dot's BAD treatment keys off missing-vs-available only; the
+    // reason string renders in the inspector, not on the strip.
+    slot.availability.reason().is_some().hash(h);
     slot.bypassed.hash(h);
-    selected.hash(h);
-    // The automation header's picker builds one option per non-hidden
-    // param, labelled "<plugin>: <param>" — so id/name/hidden are all
-    // rendered state (in the dropdown overlay).
-    slot.params.len().hash(h);
-    for p in &slot.params {
-        p.id.hash(h);
-        p.hidden.hash(h);
-        p.name.hash(h);
-    }
+    (focused == Some(slot.instance_id)).hash(h);
 }
 
-/// Hash the automation lane header's rendered state for one channel: the
-/// surfaced primary lane (its target picks the label, `enabled` tints the
-/// READ toggle), or the lane-less "picker only" state.
-fn hash_auto_header(
-    h: &mut DefaultHasher,
-    r: &crate::Resonance,
-    chan: AutoChan,
-    plugins: &[PluginSlotState],
-) {
-    match primary_lane(&r.automation, chan, plugins) {
-        Some(lane) => {
-            1u8.hash(h);
-            lane.target.hash(h);
-            lane.enabled.hash(h);
-        }
-        None => 0u8.hash(h),
-    }
-}
-
-/// Hash a cached `ScannedPlugin` option list (the `+ FX` /
-/// `+ Instrument` picker options). Rebuilt only on a plugin scan, so
-/// this is cheap and rarely moves.
-fn hash_scanned(h: &mut DefaultHasher, plugins: &[ScannedPlugin]) {
+fn hash_chain(h: &mut DefaultHasher, plugins: &[PluginSlotState], focused: Option<PluginInstanceId>) {
     plugins.len().hash(h);
     for p in plugins {
-        p.name.hash(h);
+        hash_slot(h, p, focused);
     }
 }
 
@@ -87,11 +55,19 @@ fn hash_scanned(h: &mut DefaultHasher, plugins: &[ScannedPlugin]) {
 /// fader/meter block is built outside the lazy region every frame.
 pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) -> u64 {
     let mut h = DefaultHasher::new();
-    // Head: glyph, name, caret, indent.
+    // Head: colour band, glyph, name (or the rename field), caret,
+    // indent.
     track.id.hash(&mut h);
     track.name.hash(&mut h);
+    track.color.hash(&mut h);
     track.track_type.hash(&mut h);
     track.instrument_icon.hash(&mut h);
+    r.ui.mixer
+        .renaming
+        .as_ref()
+        .filter(|(id, _)| *id == track.id)
+        .map(|(_, buffer)| buffer)
+        .hash(&mut h);
     let has_sub_tracks = r
         .registry
         .tracks
@@ -103,22 +79,16 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         .contains(&track.id)
         .hash(&mut h);
     r.track_groups.indent_depth(track.id).hash(&mut h);
-    // Button rows (M/S/●/🎧 + mono/FX-bypass/bounce).
+    // Button row (M / S / ● / 🎧) and the FX header switch, whose state
+    // also dims every slot line.
     track.muted.hash(&mut h);
     track.soloed.hash(&mut h);
     track.record_armed.hash(&mut h);
     track.monitor_enabled.hash(&mut h);
-    track.mono.hash(&mut h);
     track.fx_bypassed.hash(&mut h);
-    crate::update::track::classify_bounce(track, r.midi_clips.iter().map(|c| c.track_id))
-        .is_ok()
-        .hash(&mut h);
-    // Instrument pill + FX chain rows (and the reorder carets, whose
-    // enabled directions are a pure function of the chain hashed here).
-    track.plugins.len().hash(&mut h);
-    for p in &track.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
-    }
+    // Slot lines (the instrument/effects split is a function of the
+    // track type, hashed above, and the external flag, hashed below).
+    hash_chain(&mut h, &track.plugins, r.ui.mixer.focused_slot);
     // External-instrument head pill, offline flag and summary chips.
     let ext = r.devices.external_instruments.get(&track.id);
     ext.is_some().hash(&mut h);
@@ -127,7 +97,6 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         ext.return_input_offline.hash(&mut h);
         ext.bank.hash(&mut h);
         ext.program.hash(&mut h);
-        ext.device_id.hash(&mut h);
         (match ext.status(track) {
             ExternalInstrumentStatus::Unconfigured => 0u8,
             ExternalInstrumentStatus::Configuring => 1u8,
@@ -139,20 +108,13 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
         track.midi_output_channel.hash(&mut h);
         track.input_device_name.hash(&mut h);
         track.input_port_index.hash(&mut h);
-        // Named device params feed the automation picker's option list.
-        if let Some(def) = ext.device_id.as_deref().and_then(|id| r.devices.registry.get(id)) {
-            for p in &def.params {
-                p.id.hash(&mut h);
-                p.name.hash(&mut h);
-                p.group.hash(&mut h);
-            }
-        }
+        // The Return chip formats its port through `PortChoice`, which
+        // reads the mono flag.
+        track.mono.hash(&mut h);
     }
-    // Automation lane header + the live pan tint. The tint is a real
-    // rendered value inside the body, so it enters the key — it only
-    // moves while a Read-enabled pan lane plays back, in which case the
-    // rebuild is exactly the repaint we want.
-    hash_auto_header(&mut h, r, AutoChan::Track(track.id), &track.plugins);
+    // Pan knob + its value, and the live automated-pan tint. The tint
+    // only moves while a Read-enabled pan lane plays back, in which case
+    // the rebuild is exactly the repaint we want.
     track.pan.to_bits().hash(&mut h);
     super::automation::live_value(
         &r.automation,
@@ -160,15 +122,12 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     )
     .map(f32::to_bits)
     .hash(&mut h);
-    // "+ Instrument" picker options / "No instruments" fallback.
-    hash_scanned(&mut h, &r.ui.view_caches.instrument_plugins);
-    r.plugin_catalog.available_plugins.is_empty().hash(&mut h);
     h.finish()
 }
 
-/// Fingerprint for a sub-track strip's lazy body (head + M/S/FX-bypass +
-/// pan). The rail/border selection tint and the fader/meter block are
-/// built outside the lazy region.
+/// Fingerprint for a sub-track strip's lazy body (name, M / S, FX
+/// switch, pan). The rail/border selection tint and the fader/meter
+/// block are built outside the lazy region.
 pub(super) fn sub_strip_fingerprint(track: &TrackState) -> u64 {
     let mut h = DefaultHasher::new();
     track.id.hash(&mut h);
@@ -181,21 +140,15 @@ pub(super) fn sub_strip_fingerprint(track: &TrackState) -> u64 {
 }
 
 /// Fingerprint for a bus strip's lazy body — everything
-/// `bus_strip_body` renders (name, buttons, chain, `+ FX` picker,
-/// automation header, pan). Selection tints the outer border only, so
-/// it stays out of the key.
+/// `bus_strip_body` renders (name, mute, FX switch, slot lines, pan).
+/// Selection tints the outer border only, so it stays out of the key.
 pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
     let mut h = DefaultHasher::new();
     bus.id.hash(&mut h);
     bus.name.hash(&mut h);
     bus.muted.hash(&mut h);
     bus.fx_bypassed.hash(&mut h);
-    bus.plugins.len().hash(&mut h);
-    for p in &bus.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
-    }
-    hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
-    hash_auto_header(&mut h, r, AutoChan::Bus(bus.id), &bus.plugins);
+    hash_chain(&mut h, &bus.plugins, r.ui.mixer.focused_slot);
     bus.pan.to_bits().hash(&mut h);
     super::automation::live_value(
         &r.automation,
@@ -206,18 +159,13 @@ pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64
     h.finish()
 }
 
-/// Fingerprint for the master strip's lazy body (FX-bypass toggle,
-/// chain, `+ FX` picker, automation header). The fader/meter and the
-/// transient Bounce button stay outside the lazy region.
+/// Fingerprint for the master strip's lazy body (FX switch, slot lines).
+/// The fader/meter and the selection border stay outside the lazy
+/// region.
 pub(super) fn master_strip_fingerprint(r: &crate::Resonance) -> u64 {
     let mut h = DefaultHasher::new();
     r.master.fx_bypassed.hash(&mut h);
-    r.master.plugins.len().hash(&mut h);
-    for p in &r.master.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
-    }
-    hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
-    hash_auto_header(&mut h, r, AutoChan::Master, &r.master.plugins);
+    hash_chain(&mut h, &r.master.plugins, r.ui.mixer.focused_slot);
     h.finish()
 }
 
@@ -255,6 +203,59 @@ impl crate::Resonance {
     #[doc(hidden)]
     pub fn test_master_strip_fingerprint(&self) -> u64 {
         master_strip_fingerprint(self)
+    }
+
+    /// Test-only: what a strip's slot line for `instance_id` shows, as
+    /// `(label, dot, dimmed, focused, instrument)` — `dot` is `"active"`,
+    /// `"bypassed"` or `"missing"`. The colours that carry the bypass and
+    /// focus feedback are not observable through `iced_test` (it reads a
+    /// text's content, never its colour), so this reads the view's own
+    /// decision. `None` when no chain holds the slot.
+    #[doc(hidden)]
+    pub fn test_strip_slot_line(
+        &self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+    ) -> Option<(String, &'static str, bool, bool, bool)> {
+        let focused = self.ui.mixer.focused_slot == Some(instance_id);
+        let mut found = None;
+        for track in &self.registry.tracks {
+            if let Some(i) = track.plugins.iter().position(|p| p.instance_id == instance_id) {
+                let instrument = i == 0
+                    && track.track_type == resonance_audio::types::TrackType::Instrument
+                    && !self.devices.external_instruments.contains_key(&track.id);
+                found = Some((&track.plugins[i], instrument, track.fx_bypassed));
+            }
+        }
+        for bus in &self.registry.busses {
+            if let Some(p) = bus.plugins.iter().find(|p| p.instance_id == instance_id) {
+                found = Some((p, false, bus.fx_bypassed));
+            }
+        }
+        if let Some(p) = self.master.plugins.iter().find(|p| p.instance_id == instance_id) {
+            found = Some((p, false, self.master.fx_bypassed));
+        }
+        let (plugin, instrument, chain_bypassed) = found?;
+        let look = super::strip_parts::slot_line_look(plugin, instrument, chain_bypassed, focused);
+        let dot = match look.dot {
+            super::strip_parts::SlotDot::Active => "active",
+            super::strip_parts::SlotDot::Bypassed => "bypassed",
+            super::strip_parts::SlotDot::Missing => "missing",
+        };
+        Some((look.label, dot, look.dimmed, look.focused, look.instrument))
+    }
+
+    /// Test-only: the open strip rename, if any (track and edit buffer).
+    #[doc(hidden)]
+    pub fn test_strip_renaming(&self) -> Option<(resonance_audio::types::TrackId, String)> {
+        self.ui.mixer.renaming.clone()
+    }
+
+    /// Test-only: the master strip card's border (colour, width) as the
+    /// mixer draws it now — the selected highlight is in a style closure
+    /// `iced_test` cannot read.
+    #[doc(hidden)]
+    pub fn test_master_strip_border(&self) -> (iced::Color, f32) {
+        super::master_strip::master_strip_border(self.ui.mixer.selected_master)
     }
 
     /// Test-only: poke a track's live meter levels directly, so a test
