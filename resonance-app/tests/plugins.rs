@@ -35,6 +35,8 @@ mod external_instrument_patch_picker_snapshot;
 mod external_instrument_persistence;
 #[path = "plugins/external_instrument_state.rs"]
 mod external_instrument_state;
+#[path = "plugins/drums_output_mode_subtracks.rs"]
+mod drums_output_mode_subtracks;
 #[path = "plugins/freeze_banner_render.rs"]
 mod freeze_banner_render;
 #[path = "plugins/freeze_event_mirror.rs"]

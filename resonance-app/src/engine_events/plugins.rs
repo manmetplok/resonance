@@ -113,7 +113,44 @@ pub(super) fn track_added(
     let _ = r.engine
         .send(AudioCommand::SavePluginState { instance_id });
 
-    ensure_subtracks(r, track_id, output_port_count, &output_port_names);
+    let mut port_names = output_port_names;
+    port_names.resize_with(output_port_count.max(port_names.len()), String::new);
+    port_names.truncate(output_port_count);
+    r.plugin_mirror.output_ports.insert(instance_id, port_names);
+    ensure_instance_subtracks(r, instance_id);
+}
+
+/// Run the sub-track policy ([`ensure_subtracks`]) for one track plugin,
+/// from its stored port layout — when it is added, and again when the
+/// drums' `output_mode` moves (drums-plugin-rework.md §8, E11).
+///
+/// A Resonance Drums instance gets its per-pad sub-tracks only in **Multi**
+/// output mode: in Stereo (the default for a new instance) every pad sums
+/// to the main output and the other ports are silent, so sub-tracks would
+/// be dead faders. Switching to Multi creates the missing ones. Switching
+/// back to Stereo **keeps** the ones that exist: they are the user's
+/// tracks (fader, routing, names) and go quiet rather than vanish; delete
+/// them by hand, or undo the switch, which takes back the sub-tracks it
+/// created with it. Every other multi-output plugin gets its sub-tracks as
+/// soon as it is added, as before.
+pub(crate) fn ensure_instance_subtracks(r: &mut Resonance, instance_id: PluginInstanceId) {
+    let Some(PluginLocator::Track(track_id)) = r.plugin_mirror.index.get(&instance_id).copied()
+    else {
+        return;
+    };
+    let Some(ports) = r.plugin_mirror.output_ports.get(&instance_id).cloned() else {
+        return;
+    };
+    let routes = r
+        .registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .and_then(|t| t.plugins.iter().find(|s| s.instance_id == instance_id))
+        .is_some_and(crate::drums_mirror::routes_to_ports);
+    if routes {
+        ensure_subtracks(r, track_id, ports.len(), &ports);
+    }
 }
 
 /// Write a live instance's report onto the slot that was waiting for it,
@@ -350,6 +387,7 @@ pub(crate) fn track_removed(
     }
     r.plugin_mirror.state_cache.remove(&instance_id);
     r.plugin_mirror.kit_info.remove(&instance_id);
+    r.plugin_mirror.output_ports.remove(&instance_id);
     // Drop the load-time copies too, so a removed slot can neither
     // resurrect a `plugin_*.bin` nothing references nor lend its parked
     // parameter list to a later instance that reuses the id.
@@ -894,14 +932,22 @@ pub(super) fn params_refreshed(
     instance_id: PluginInstanceId,
     params: Vec<ParamInfo>,
 ) {
-    r.with_plugin_mut(instance_id, |slot| {
-        for fresh in &params {
-            if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
-                p.current_value = fresh.current_value;
-                p.text = fresh.text.clone();
+    let drums = r
+        .with_plugin_mut(instance_id, |slot| {
+            for fresh in &params {
+                if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
+                    p.current_value = fresh.current_value;
+                    p.text = fresh.text.clone();
+                }
             }
-        }
-    });
+            crate::drums_mirror::is_drums(slot)
+        })
+        .unwrap_or(false);
+    if drums {
+        // A preset may set the kit and the output mode.
+        crate::update::compose::refresh_kit_pads(r);
+        ensure_instance_subtracks(r, instance_id);
+    }
 }
 
 /// A plugin's values rescan: the params that moved, with their text (a
@@ -924,8 +970,10 @@ pub(super) fn param_values_changed(
         })
         .unwrap_or(false);
     if drums {
-        // `kit_select`'s text names the kit the picker shows.
+        // `kit_select`'s text names the kit the picker shows, and a state
+        // load may have moved `output_mode` (a v1 state loads as Multi).
         crate::update::compose::refresh_kit_pads(r);
+        ensure_instance_subtracks(r, instance_id);
     }
 }
 
