@@ -82,6 +82,8 @@ pub mod kind {
     pub const AMP_MODEL: &str = "amp-model";
     /// A plugin preset; the id is `"<clap id>:<preset id>"`.
     pub const PLUGIN_PRESET: &str = "plugin-preset";
+    /// A drum kit; the id is the sha256 of its `drum_samples.json` bytes.
+    pub const DRUMKIT: &str = "drumkit";
 }
 
 /// Build the store key `"<kind>:<id>"`.

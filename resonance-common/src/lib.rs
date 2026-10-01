@@ -20,6 +20,7 @@ pub mod external_instrument;
 pub mod factory_presets;
 pub mod preset_session;
 pub mod drum_map;
+pub mod drumkit_library;
 #[cfg(feature = "model")]
 pub mod group_identity;
 pub mod library_marks;
