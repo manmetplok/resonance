@@ -163,16 +163,17 @@ impl ResonancePlugin for FlagsPlugin {
     }
 }
 
+/// The plugin's selector, its progress output and its host handle.
+type Live = (Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>);
+
 thread_local! {
     /// The plugin's shared params and host handle, as `set_host` saw them
     /// (the instance is created on the test's own thread).
-    static LIVE: std::cell::RefCell<
-        Option<(Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>)>,
-    > = const { std::cell::RefCell::new(None) };
+    static LIVE: std::cell::RefCell<Option<Live>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The plugin's shared storage, as a thread of its own would hold it.
-fn live() -> (Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>) {
+fn live() -> Live {
     LIVE.with(|live| live.borrow().clone()).expect("set_host ran")
 }
 

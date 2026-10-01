@@ -18,8 +18,8 @@ use clack_plugin::entry::SinglePluginEntry;
 
 use common::{ProcessHarness, TestHost, TestHostShared};
 use resonance_plugin::{
-    stable_hash, ClapBridge, EventIterator, FloatParam, FloatRange, HostHandle, IntParam,
-    IntRange, OutputBuffer, Param, ResonancePlugin, TempoInfo,
+    stable_hash, ClapBridge, EventIterator, FloatParam, FloatRange, HostHandle, IntParam, IntRange,
+    OutputBuffer, Param, ResonancePlugin, TempoInfo,
 };
 
 thread_local! {
@@ -51,10 +51,20 @@ impl ResonancePlugin for AnnouncingPlugin {
 
     fn new() -> Self {
         Self {
-            gain: FloatParam::new("gain", "Gain", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }),
+            gain: FloatParam::new(
+                "gain",
+                "Gain",
+                0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
             selector: Arc::new(
-                IntParam::new("selector", "Selector", -1, IntRange::Linear { min: -1, max: 9 })
-                    .not_automatable(),
+                IntParam::new(
+                    "selector",
+                    "Selector",
+                    -1,
+                    IntRange::Linear { min: -1, max: 9 },
+                )
+                .not_automatable(),
             ),
         }
     }
@@ -110,7 +120,10 @@ fn selector_edit(value: f64) -> Vec<(char, u32, f64)> {
 #[test]
 fn an_announced_change_goes_out_of_the_next_block_as_one_gesture() {
     let mut harness = ProcessHarness::new::<AnnouncingPlugin>(BUNDLE, PLUGIN_ID);
-    assert!(decode(&harness.run_empty()).is_empty(), "nothing announced yet");
+    assert!(
+        decode(&harness.run_empty()).is_empty(),
+        "nothing announced yet"
+    );
 
     let (host, selector) = live();
     selector.set_value(4);
@@ -146,15 +159,17 @@ fn an_active_flush_carries_the_edit_when_no_block_runs() {
     let (host, selector) = live();
     selector.set_value(2);
     host.announce_param_change("selector");
-    assert_eq!(decode(&harness.flush_active(&EventBuffer::new())), selector_edit(2.0));
+    assert_eq!(
+        decode(&harness.flush_active(&EventBuffer::new())),
+        selector_edit(2.0)
+    );
 }
 
 #[test]
 fn an_inactive_flush_carries_the_edit() {
-    let entry = PluginEntry::load_from_clack::<SinglePluginEntry<ClapBridge<AnnouncingPlugin>>>(
-        BUNDLE,
-    )
-    .expect("bundle entry init");
+    let entry =
+        PluginEntry::load_from_clack::<SinglePluginEntry<ClapBridge<AnnouncingPlugin>>>(BUNDLE)
+            .expect("bundle entry init");
     let host_info = HostInfo::new("test-host", "test", "https://example.com", "0.0.0").unwrap();
     let mut instance =
         PluginInstance::<TestHost>::new(|_| TestHostShared, |_| (), &entry, PLUGIN_ID, &host_info)

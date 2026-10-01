@@ -18,8 +18,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use clack_extensions::params::{
-    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags,
-    ParamRescanFlags, PluginParams,
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
+    PluginParams,
 };
 use clack_host::prelude::*;
 use clack_plugin::entry::SinglePluginEntry;
@@ -166,15 +166,18 @@ fn gain(instance: &mut PluginInstance<Host>) -> f64 {
         .plugin_shared_handle()
         .get_extension::<PluginParams>()
         .expect("params");
-    ext.get_value(&mut instance.plugin_handle(), ClapId::new(stable_hash("gain")))
-        .expect("gain")
+    ext.get_value(
+        &mut instance.plugin_handle(),
+        ClapId::new(stable_hash("gain")),
+    )
+    .expect("gain")
 }
 
 /// The engine's poll: run a requested callback, and if it carried a
 /// rescan, re-read the value — what the host's mirror would take.
 fn service(instance: &mut PluginInstance<Host>, rescans: &AtomicU32) -> Option<f64> {
-    let requested = instance
-        .access_shared_handler(|s| s.callback_requested.swap(false, Ordering::SeqCst));
+    let requested =
+        instance.access_shared_handler(|s| s.callback_requested.swap(false, Ordering::SeqCst));
     if requested {
         instance.call_on_main_thread_callback();
     }
@@ -254,8 +257,8 @@ fn a_value_rescan_sends_values_and_a_text_rescan_adds_text() {
     let mut instance = instance(rescans.clone());
     let (handle, _gain) = handle();
     let posted = |instance: &mut PluginInstance<Host>| {
-        let requested = instance
-            .access_shared_handler(|s| s.callback_requested.swap(false, Ordering::SeqCst));
+        let requested =
+            instance.access_shared_handler(|s| s.callback_requested.swap(false, Ordering::SeqCst));
         assert!(requested, "a callback was requested");
         instance.call_on_main_thread_callback();
         ParamRescanFlags::from_bits_truncate(rescans.swap(0, Ordering::SeqCst))

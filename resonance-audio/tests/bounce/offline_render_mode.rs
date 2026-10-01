@@ -19,8 +19,8 @@ use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, clap_process_status, CLAP_PROCESS_CONTINUE};
 
 use resonance_audio::test_support::{
-    __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache, AutomationSnapshot,
-    PluginSlot, SharedState, StemBitDepth, StemSource, StemTarget,
+    __instance_from_raw_for_test, export_for_test, export_stems, to_freeze_cache,
+    AutomationSnapshot, PluginSlot, SharedState, StemBitDepth, StemSource, StemTarget,
 };
 use resonance_audio::types::*;
 
@@ -54,7 +54,10 @@ unsafe extern "C" fn fx_start(_p: *const clap_plugin) -> bool {
 }
 unsafe extern "C" fn fx_stop(_p: *const clap_plugin) {}
 unsafe extern "C" fn fx_reset(_p: *const clap_plugin) {}
-unsafe extern "C" fn fx_process(p: *const clap_plugin, _process: *const clap_process) -> clap_process_status {
+unsafe extern "C" fn fx_process(
+    p: *const clap_plugin,
+    _process: *const clap_process,
+) -> clap_process_status {
     let s = unsafe { fx(p) };
     s.blocks += 1;
     if s.offline {
@@ -128,7 +131,10 @@ impl Engine {
     fn new() -> Self {
         let shared = Arc::new(SharedState::default());
         shared.edit_tracks(|m| {
-            m.insert(1, Arc::new(Track::with_type(1, "t".into(), TrackType::Audio)));
+            m.insert(
+                1,
+                Arc::new(Track::with_type(1, "t".into(), TrackType::Audio)),
+            );
         });
         let data: Vec<f32> = (0..SR as usize / 10).flat_map(|_| [0.1, 0.1]).collect();
         shared.edit_clips(|c| c.push(Arc::new(audio_clip(data))));
@@ -198,12 +204,22 @@ fn an_export_renders_every_block_offline_and_ends_realtime() {
     let path = tmp("export");
     let events = e.export(&path, false);
     assert!(
-        events.iter().any(|ev| matches!(ev, AudioEvent::ExportComplete { .. })),
+        events
+            .iter()
+            .any(|ev| matches!(ev, AudioEvent::ExportComplete { .. })),
         "{events:?}"
     );
-    assert_eq!(e.fx().sets, vec![true, false], "offline for the render, then realtime");
+    assert_eq!(
+        e.fx().sets,
+        vec![true, false],
+        "offline for the render, then realtime"
+    );
     assert!(e.fx().blocks > 0);
-    assert_eq!(e.fx().offline_blocks, e.fx().blocks, "every block rendered offline");
+    assert_eq!(
+        e.fx().offline_blocks,
+        e.fx().blocks,
+        "every block rendered offline"
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -222,7 +238,12 @@ fn a_cancelled_export_still_ends_realtime() {
         )),
         "{events:?}"
     );
-    assert_eq!(e.fx().sets.last(), Some(&false), "back to realtime: {:?}", e.fx().sets);
+    assert_eq!(
+        e.fx().sets.last(),
+        Some(&false),
+        "back to realtime: {:?}",
+        e.fx().sets
+    );
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -235,7 +256,9 @@ fn an_export_that_cannot_write_leaves_the_plugin_realtime() {
         .join("out.wav");
     let events = e.export(&path, false);
     assert!(
-        events.iter().any(|ev| matches!(ev, AudioEvent::ExportError { .. })),
+        events
+            .iter()
+            .any(|ev| matches!(ev, AudioEvent::ExportError { .. })),
         "{events:?}"
     );
     assert!(!e.fx().offline, "never left offline: {:?}", e.fx().sets);

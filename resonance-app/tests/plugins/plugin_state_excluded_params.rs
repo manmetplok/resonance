@@ -131,7 +131,10 @@ fn the_project_file_carries_neither_the_kit_slot_nor_the_progress() {
     assert_eq!(app.test_plugin_param(DRUMS, KIT_SELECT), Some(4.0));
     assert_eq!(app.test_plugin_param(DRUMS, PROGRESS), Some(0.5));
     // The values rescan carried the plugin's text, too.
-    assert_eq!(app.test_plugin_param_text(DRUMS, PROGRESS).as_deref(), Some("50 %"));
+    assert_eq!(
+        app.test_plugin_param_text(DRUMS, PROGRESS).as_deref(),
+        Some("50 %")
+    );
 
     let file = app.test_build_project_file();
     let saved: Vec<u32> = file.tracks[0].plugins[0]
@@ -139,7 +142,11 @@ fn the_project_file_carries_neither_the_kit_slot_nor_the_progress() {
         .iter()
         .map(|p| p.id)
         .collect();
-    assert_eq!(saved, vec![GAIN], "only the host-persisted param is written");
+    assert_eq!(
+        saved,
+        vec![GAIN],
+        "only the host-persisted param is written"
+    );
 }
 
 /// A project written before the plugin declared the slot state-excluded

@@ -55,7 +55,12 @@ impl ResonancePlugin for ModePlugin {
         // the last one built on this thread is the live one.
         MODE.with(|m| *m.borrow_mut() = Some(mode.clone()));
         Self {
-            gain: FloatParam::new("gain", "Gain", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }),
+            gain: FloatParam::new(
+                "gain",
+                "Gain",
+                0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
             mode,
         }
     }
@@ -123,8 +128,11 @@ fn an_active_plugin_is_told_at_the_top_of_the_next_block() {
     harness.run_empty();
     assert_eq!(told(), OFFLINE);
 
-    ext.set(&mut harness.instance().plugin_handle(), RenderMode::Realtime)
-        .expect("accepted");
+    ext.set(
+        &mut harness.instance().plugin_handle(),
+        RenderMode::Realtime,
+    )
+    .expect("accepted");
     harness.run_empty();
     assert_eq!(told(), REALTIME);
 }

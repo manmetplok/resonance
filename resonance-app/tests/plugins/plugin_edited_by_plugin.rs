@@ -22,7 +22,9 @@ fn app() -> (Resonance, Receiver<AudioCommand>) {
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
     app.test_set_view_mode(ViewMode::Arrange);
     app.test_set_active_project(true);
-    app.test_set_project_path(std::path::PathBuf::from("/tmp/plugin-edited-by-plugin.rprj"));
+    app.test_set_project_path(std::path::PathBuf::from(
+        "/tmp/plugin-edited-by-plugin.rprj",
+    ));
     app.test_add_track(TRACK, TrackType::Instrument);
     app.test_push_track_plugin(
         TRACK,
@@ -119,9 +121,9 @@ fn undoing_a_plugin_side_kit_change_restores_the_previous_state_blob() {
     plugin_edits(&mut app, KIT, 5.0);
     assert_eq!(app.test_plugin_param(DRUMS, KIT), Some(5.0));
     assert!(
-        drain(&rx)
-            .iter()
-            .any(|c| matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == DRUMS)),
+        drain(&rx).iter().any(
+            |c| matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == DRUMS)
+        ),
         "the cached blob is refreshed after a state-excluded edit"
     );
     // The engine's echo: the state with the new kit in it.

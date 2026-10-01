@@ -42,7 +42,9 @@ pub(crate) fn report_announced<'p>(
             continue;
         };
         let publishing = shared.param_publish_gen() & 1 == 1
-            || shared.params_dirty.load(std::sync::atomic::Ordering::Acquire);
+            || shared
+                .params_dirty
+                .load(std::sync::atomic::Ordering::Acquire);
         if publishing {
             host.rearm_announced(slot);
             return;

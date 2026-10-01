@@ -166,7 +166,10 @@ fn the_gui_message_does_not_write_a_read_only_output() {
         DRUMS, PROGRESS, 1.0,
     )));
     while let Ok(cmd) = rx.try_recv() {
-        assert!(!matches!(cmd, AudioCommand::SetPluginParam { .. }), "{cmd:?}");
+        assert!(
+            !matches!(cmd, AudioCommand::SetPluginParam { .. }),
+            "{cmd:?}"
+        );
     }
     assert_eq!(app.test_plugin_param(DRUMS, PROGRESS), Some(0.4));
 }
@@ -191,7 +194,9 @@ fn the_gui_adds_no_lane_and_offers_none_for_a_not_automatable_param() {
         param_id,
     };
     let _ = app.update(Message::Automation(AutomationMessage::AddLane(target(KIT))));
-    let _ = app.update(Message::Automation(AutomationMessage::AddLane(target(GAIN))));
+    let _ = app.update(Message::Automation(AutomationMessage::AddLane(target(
+        GAIN,
+    ))));
     assert!(!app.test_automation().lanes.contains_key(&target(KIT)));
     assert!(app.test_automation().lanes.contains_key(&target(GAIN)));
 

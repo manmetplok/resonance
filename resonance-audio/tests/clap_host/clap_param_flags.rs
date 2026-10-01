@@ -9,22 +9,22 @@
 use std::ffi::{c_char, c_void, CStr};
 use std::ptr;
 
-use clap_sys::ext::params::{
-    clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
-    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
-    CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES,
-};
 use clap_sys::events::{
     clap_event_header, clap_event_param_gesture, clap_event_param_value, clap_input_events,
     clap_output_events, CLAP_CORE_EVENT_SPACE_ID, CLAP_EVENT_PARAM_GESTURE_BEGIN,
     CLAP_EVENT_PARAM_GESTURE_END, CLAP_EVENT_PARAM_VALUE,
 };
+use clap_sys::ext::params::{
+    clap_host_params, clap_param_info, clap_plugin_params, CLAP_EXT_PARAMS,
+    CLAP_PARAM_IS_AUTOMATABLE, CLAP_PARAM_IS_READONLY, CLAP_PARAM_IS_STEPPED,
+    CLAP_PARAM_RESCAN_ALL, CLAP_PARAM_RESCAN_TEXT, CLAP_PARAM_RESCAN_VALUES,
+};
 use clap_sys::host::clap_host;
+use clap_sys::plugin::clap_plugin;
 use clap_sys::process::{clap_process, CLAP_PROCESS_CONTINUE};
 use std::mem::size_of;
-use clap_sys::plugin::clap_plugin;
 
-use resonance_audio::test_support::{ClapInstance, ParamsRefresh, __instance_from_raw_for_test};
+use resonance_audio::test_support::{__instance_from_raw_for_test, ClapInstance, ParamsRefresh};
 use resonance_common::param_flags::{PluginParamFlags, EXTENSION_ID as PARAM_FLAGS};
 
 pub(crate) const P_GAIN: u32 = 1;
@@ -165,7 +165,14 @@ unsafe extern "C" fn fake_get_info(
         // A selector: settable, not automatable.
         1 => (P_KIT, "Kit", CLAP_PARAM_IS_STEPPED, -1.0, 999.0, -1.0),
         // An output.
-        2 => (P_PROGRESS, "Kit Load Progress", CLAP_PARAM_IS_READONLY, 0.0, 1.0, 0.0),
+        2 => (
+            P_PROGRESS,
+            "Kit Load Progress",
+            CLAP_PARAM_IS_READONLY,
+            0.0,
+            1.0,
+            0.0,
+        ),
         _ => return false,
     };
     info.id = id;
@@ -289,7 +296,10 @@ fn the_host_reads_automatable_read_only_and_state_excluded() {
     let kit = by_id(P_KIT);
     assert!(!kit.automatable, "no lane for the kit selector");
     assert!(!kit.read_only, "the selector is settable");
-    assert!(kit.state_excluded, "the state carries the kit as a reference");
+    assert!(
+        kit.state_excluded,
+        "the state carries the kit as a reference"
+    );
     assert!(!kit.host_persisted());
 
     let progress = by_id(P_PROGRESS);
@@ -341,7 +351,11 @@ fn a_values_rescan_rereads_only_values_and_formats_only_what_moved() {
     unsafe { plugin_rescans(state, CLAP_PARAM_RESCAN_VALUES) };
     let _ = instance.take_params_refresh();
     assert!(instance.refresh_param_values(false).is_empty());
-    assert_eq!(instance.take_params_refresh(), ParamsRefresh::None, "consumed");
+    assert_eq!(
+        instance.take_params_refresh(),
+        ParamsRefresh::None,
+        "consumed"
+    );
 }
 
 #[test]
@@ -375,7 +389,10 @@ fn output_param_events_fold_into_one_edit_per_gesture() {
 
     unsafe { (*state).emit = vec![('b', P_KIT, 0.0), ('v', P_KIT, 3.0)] };
     instance.process(&mut l, &mut r, 64);
-    assert!(instance.take_param_edits().is_empty(), "the gesture is still open");
+    assert!(
+        instance.take_param_edits().is_empty(),
+        "the gesture is still open"
+    );
 
     unsafe { (*state).emit = vec![('v', P_KIT, 4.0), ('e', P_KIT, 0.0)] };
     instance.process(&mut l, &mut r, 64);
