@@ -10,7 +10,6 @@
 
 use iced::widget::{column, container, row, text};
 use iced::{alignment, Element, Length};
-use resonance_audio::types::*;
 
 use crate::message::*;
 use crate::state::*;
@@ -24,12 +23,7 @@ use super::strip_parts::InstrumentSlot;
 const BUS_NAME_CHARS: usize = 16;
 
 impl crate::Resonance {
-    pub(super) fn view_bus_strip<'a>(
-        &'a self,
-        bus: &'a BusState,
-        available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
-        let _ = available_plugins;
+    pub(super) fn view_bus_strip<'a>(&'a self, bus: &'a BusState) -> Element<'a, Message> {
         let bus_id = bus.id;
 
         // Live fader + meter block — the per-tick levels (and the live
@@ -169,6 +163,7 @@ impl crate::Resonance {
             &bus.plugins,
             bus.fx_bypassed,
             self.ui.mixer.focused_slot,
+            theme::MIXER_SLOT_LINE_CHARS,
         );
 
         // Pan knob — vertical drag to change, double-click to reset. The

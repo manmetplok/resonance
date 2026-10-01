@@ -45,10 +45,13 @@ pub struct MixerUiState {
     /// set when its window opens (`OpenPluginWindow`, `OpenPluginEditor`,
     /// `OpenGenericParams`) or it is focused (`FocusSlot`), and cleared
     /// when the slot goes away or a project loads. It outlives the
-    /// window: closing the window leaves the slot focused. The preset
-    /// commands (◀ / ▶ / browse) and the media tab's double-click load
-    /// act on it — through `Resonance::preset_target`, which also
-    /// refuses a slot that is gone or hidden (Performance mode).
+    /// window: closing the window leaves the slot focused, but not the
+    /// inspector's owner: it always sits on the channel the inspector
+    /// describes, and the post-update settle (`update::chain_ui::settle`)
+    /// drops it once the selection moves elsewhere or the slot goes. The
+    /// preset commands (◀ / ▶ / browse) and the media tab's double-click
+    /// load act on it — through `update::plugin_window::preset_target`,
+    /// which also refuses a slot that is hidden (Performance mode).
     pub focused_slot: Option<PluginInstanceId>,
     /// Bus whose strip is selected, if any — the bus counterpart of
     /// [`ClipInteractionState::selected_track`](crate::state::ClipInteractionState::selected_track),
@@ -151,6 +154,11 @@ pub struct RenameState {
     pub surface: RenameSurface,
     /// Live edit buffer, seeded with the current name.
     pub buffer: String,
+    /// The name the buffer was seeded with. A commit renames only when
+    /// the user changed the buffer from it, so an untouched field never
+    /// writes back a name that a remote rename (the control API) has
+    /// replaced since; such a rename re-seeds an untouched field.
+    pub seed: String,
 }
 
 /// An in-progress "Save preset…" prompt on a CHAIN row.
@@ -207,14 +215,32 @@ impl MixerUiState {
 
     /// Drop every transient CHAIN / strip affordance: a drag, the preset
     /// prompt, replace mode, the popovers and the instrument-picker cue.
-    /// Run when the view switches or the inspector changes owner, so none
-    /// of them survives off-screen to act on a later release or key.
+    /// Run when the view switches, so none of them survives off-screen
+    /// to act on a later release or key. (An inspector owner change
+    /// prunes the same fields, by owner, in `update::chain_ui::settle`.)
     pub fn reset_chain_ui(&mut self) {
         self.chain_drag = None;
         self.slot_preset_save = None;
         self.replacing_slot = None;
         self.instrument_picker_cue = None;
         self.dismiss_inspector_popovers();
+    }
+
+    /// Drop every piece of transient mixer state that names the old
+    /// project: the generic window and focused slot, the CHAIN rows'
+    /// affordances, the master selection and an open inline rename. Run
+    /// by a project load / new project (`TransientUi::reconcile`); the
+    /// one list of what a project switch resets on the mixer.
+    pub fn reset_for_project(&mut self) {
+        self.plugin_window = None;
+        self.focused_slot = None;
+        self.reset_chain_ui();
+        // The master outlives a load, but its selection must not: the new
+        // project opens with no channel in the inspector, as it does with
+        // no track or bus selected.
+        self.selected_master = false;
+        self.renaming = None;
+        self.rename_hovered = false;
     }
 
     /// Drop every CHAIN-row affordance that names `instance_id` (its

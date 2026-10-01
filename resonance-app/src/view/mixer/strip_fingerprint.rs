@@ -9,10 +9,9 @@
 //!
 //! The live meter block (`fader_section`, which embeds the per-tick
 //! `StereoMeterCanvas` levels) and the collapsed-parent sub-track meter
-//! column stay OUTSIDE the lazy region, exactly like the inspector's
-//! SIGNAL group — never key a lazy region without the live data it
-//! renders. The level fields are therefore deliberately absent from
-//! every hash below.
+//! column stay OUTSIDE the lazy region: a lazy region must never
+//! render live data, which its key would not track. The level fields
+//! are therefore deliberately absent from every hash below.
 //!
 //! **Rule:** every piece of state a strip *body* renders must enter its
 //! fingerprint — a missed field is a stale-UI bug (the cached tree
@@ -128,7 +127,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
 }
 
 /// Fingerprint for a sub-track strip's lazy body (colour band, name,
-/// M / S, FX switch, pan). The rail/border selection tint and the
+/// M / S, FX switch, slot lines, pan). The rail/border selection tint and the
 /// fader/meter block are built outside the lazy region.
 pub(super) fn sub_strip_fingerprint(r: &crate::Resonance, track: &TrackState) -> u64 {
     let mut h = DefaultHasher::new();
@@ -139,6 +138,7 @@ pub(super) fn sub_strip_fingerprint(r: &crate::Resonance, track: &TrackState) ->
     track.muted.hash(&mut h);
     track.soloed.hash(&mut h);
     track.fx_bypassed.hash(&mut h);
+    hash_chain(&mut h, &track.plugins, r.ui.mixer.focused_slot);
     track.pan.to_bits().hash(&mut h);
     h.finish()
 }
@@ -230,19 +230,27 @@ impl crate::Resonance {
             if let Some(i) = track.plugins.iter().position(|p| p.instance_id == instance_id) {
                 let instrument = super::strip_parts::InstrumentSlot::of_track(self, track)
                     == super::strip_parts::InstrumentSlot::At(i);
-                found = Some((&track.plugins[i], instrument, track.fx_bypassed));
+                let chars = if track.sub_track.is_some() {
+                    crate::theme::MIXER_SUB_SLOT_LINE_CHARS
+                } else {
+                    crate::theme::MIXER_SLOT_LINE_CHARS
+                };
+                found = Some((&track.plugins[i], instrument, track.fx_bypassed, chars));
             }
         }
         for bus in &self.registry.busses {
             if let Some(p) = bus.plugins.iter().find(|p| p.instance_id == instance_id) {
-                found = Some((p, false, bus.fx_bypassed));
+                let chars = crate::theme::MIXER_SLOT_LINE_CHARS;
+                found = Some((p, false, bus.fx_bypassed, chars));
             }
         }
         if let Some(p) = self.master.plugins.iter().find(|p| p.instance_id == instance_id) {
-            found = Some((p, false, self.master.fx_bypassed));
+            let chars = crate::theme::MIXER_SLOT_LINE_CHARS;
+            found = Some((p, false, self.master.fx_bypassed, chars));
         }
-        let (plugin, instrument, chain_bypassed) = found?;
-        let look = super::strip_parts::slot_line_look(plugin, instrument, chain_bypassed, focused);
+        let (plugin, instrument, chain_bypassed, chars) = found?;
+        let look =
+            super::strip_parts::slot_line_look(plugin, instrument, chain_bypassed, focused, chars);
         let dot = match look.dot {
             super::strip_parts::SlotDot::Active => "active",
             super::strip_parts::SlotDot::Bypassed => "bypassed",
@@ -261,6 +269,7 @@ impl crate::Resonance {
                 target: RenameTarget::Track(id),
                 surface: RenameSurface::Strip,
                 buffer,
+                ..
             } => Some((*id, buffer.clone())),
             _ => None,
         })

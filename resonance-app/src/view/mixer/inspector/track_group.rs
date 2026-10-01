@@ -1,6 +1,6 @@
 //! TRACK group — the track's own options (mixer-cleanup.md §3.5): the
 //! mono toggle, Bounce in place (instrument tracks), and the external
-//! hardware section — the "External hardware instrument" enable action
+//! hardware section — the "External hardware…" enable action
 //! on a plain instrument track, or the whole external-instrument pairing
 //! (`external_instrument`) on a track that already is one.
 
@@ -23,7 +23,7 @@ pub(super) fn track_group(
     }
 
     let mono = super::widgets::toggle_button(
-        "MONO",
+        "Mono",
         track.mono,
         theme::ACCENT_SOFT,
         theme::ACCENT_DIM,
@@ -41,7 +41,7 @@ pub(super) fn track_group(
             r.midi_clips.iter().map(|c| c.track_id),
         );
         let bounce_btn = super::widgets::action_button(
-            "BOUNCE",
+            "Bounce",
             bounce
                 .is_ok()
                 .then_some(Message::Track(TrackMessage::BounceInPlace(track.id))),
@@ -77,7 +77,7 @@ pub(super) fn track_group(
         // its parent plugin's output ports, with no MIDI of its own to
         // send out to hardware.
         col = col.push(Space::new().height(8)).push(super::widgets::action_button(
-            "External hardware instrument",
+            "External hardware\u{2026}",
             Some(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(
                 track.id,
             ))),

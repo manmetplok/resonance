@@ -55,7 +55,7 @@ fn scanned() -> ScannedPlugin {
 }
 
 /// Arrange view, media browser open on Presets, one audio track with the
-/// EQ selected in the plugin panel.
+/// EQ as the focused slot.
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);

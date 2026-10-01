@@ -34,19 +34,22 @@ const SLOT_DOT: f32 = 6.0;
 
 /// The text on a strip's slot line: the plugin name, ellipsised to
 /// [`theme::MIXER_SLOT_LINE_CHARS`] so it never needs a second line.
+/// [`slot_line_label_in`] takes another budget (the sub-track strip's).
 ///
 /// A missing plugin is prefixed with a warning glyph and gets two fewer
 /// characters of name to pay for it, so the line's width budget holds.
 /// The glyph is in the *text* (not only the BAD-pink dot) so the state is
 /// legible without relying on hue, and so a widget-tree test can read it.
 pub(crate) fn slot_line_label(plugin_name: &str, missing: bool) -> String {
+    slot_line_label_in(plugin_name, missing, theme::MIXER_SLOT_LINE_CHARS)
+}
+
+/// [`slot_line_label`] within a budget of `chars` characters.
+pub(crate) fn slot_line_label_in(plugin_name: &str, missing: bool, chars: usize) -> String {
     if missing {
-        format!(
-            "\u{26a0} {}",
-            crate::util::short(plugin_name, theme::MIXER_SLOT_LINE_CHARS - 2)
-        )
+        format!("\u{26a0} {}", crate::util::short(plugin_name, chars - 2))
     } else {
-        crate::util::short(plugin_name, theme::MIXER_SLOT_LINE_CHARS)
+        crate::util::short(plugin_name, chars)
     }
 }
 
@@ -81,6 +84,7 @@ pub(crate) fn slot_line_look(
     is_instrument_slot: bool,
     chain_bypassed: bool,
     focused: bool,
+    chars: usize,
 ) -> SlotLineLook {
     let missing = plugin.availability.reason().is_some();
     let dot = if missing {
@@ -91,7 +95,7 @@ pub(crate) fn slot_line_look(
         SlotDot::Active
     };
     SlotLineLook {
-        label: slot_line_label(&plugin.plugin_name, missing),
+        label: slot_line_label_in(&plugin.plugin_name, missing, chars),
         dot,
         dimmed: chain_bypassed || plugin.bypassed,
         focused,
@@ -106,8 +110,9 @@ pub(super) fn slot_line(
     is_instrument_slot: bool,
     chain_bypassed: bool,
     focused: bool,
+    chars: usize,
 ) -> Element<'static, Message> {
-    let look = slot_line_look(plugin, is_instrument_slot, chain_bypassed, focused);
+    let look = slot_line_look(plugin, is_instrument_slot, chain_bypassed, focused, chars);
     let pid = plugin.instance_id;
 
     let name_color = match (look.dot, look.dimmed, look.instrument, look.focused) {
@@ -264,11 +269,13 @@ impl InstrumentSlot {
 /// never moves. An instrument further down the chain (an effect was put
 /// ahead of it) is drawn in its place among the effect lines, still with
 /// its accent and hairline, so the strip shows the order the engine runs.
+/// `chars` is the name budget of one line (the strip's width).
 pub(super) fn slot_list(
     instrument: InstrumentSlot,
     plugins: &[PluginSlotState],
     chain_bypassed: bool,
     focused: Option<resonance_audio::types::PluginInstanceId>,
+    chars: usize,
 ) -> Element<'static, Message> {
     let line = |index: usize, plugin: &PluginSlotState| {
         slot_line(
@@ -276,6 +283,7 @@ pub(super) fn slot_list(
             instrument == InstrumentSlot::At(index),
             chain_bypassed,
             focused == Some(plugin.instance_id),
+            chars,
         )
     };
 

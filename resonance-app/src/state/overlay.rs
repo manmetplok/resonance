@@ -33,7 +33,7 @@ pub enum Overlay {
     MissingPlugins,
     Relink,
     Settings,
-    /// The preset browser a plugin panel's bar opens (slice P6).
+    /// The preset browser a preset bar or CHAIN ☰ menu opens (slice P6).
     PresetBrowser,
     AddTrackMenu,
     MarkersOverview,

@@ -118,7 +118,7 @@ pub enum Message {
 }
 
 /// The host's preset surfaces (plugin-preset-library.md §6.6, slice P6):
-/// the plugin panel's bar, the browser it opens, and the media browser's
+/// the generic plugin window's bar, the browser it opens, and the media browser's
 /// Presets tab. None records undo by itself; a load that sticks goes
 /// through [`PluginMessage::LoadPluginPreset`], which does.
 #[derive(Debug, Clone)]

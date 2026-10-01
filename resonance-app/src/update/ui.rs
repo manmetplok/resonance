@@ -6,36 +6,10 @@ use crate::state::ViewMode;
 use crate::update::project_io;
 use crate::Resonance;
 
+/// Handle a [`UiMessage`]. An inspector owner change (a selection) drops
+/// the old owner's transient CHAIN state in the post-update settle
+/// (`chain_ui::settle`), whichever message caused it.
 pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
-    // The channel the mixer inspector describes, before this message:
-    // a change of owner drops the CHAIN rows' transient state (a drag,
-    // the preset prompt, replace mode, popovers), which would otherwise
-    // live on unseen and act on a later release or key.
-    let owner_before = inspector_owner(r);
-    let task = handle_inner(r, m);
-    if inspector_owner(r) != owner_before {
-        r.ui.mixer.reset_chain_ui();
-    }
-    task
-}
-
-/// Which channel the mixer inspector describes: the selected track, bus
-/// or the master.
-fn inspector_owner(
-    r: &Resonance,
-) -> (
-    Option<resonance_audio::types::TrackId>,
-    Option<resonance_audio::types::BusId>,
-    bool,
-) {
-    (
-        r.ui.interaction.selected_track,
-        r.ui.mixer.selected_bus,
-        r.ui.mixer.selected_master,
-    )
-}
-
-fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
     match m {
         UiMessage::SwitchView(mode) => {
             // Track the view to return to when leaving Performance mode.
@@ -47,24 +21,16 @@ fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 (from, ViewMode::Performance) => r.ui.pre_performance_view = Some(from),
                 _ => r.ui.pre_performance_view = None,
             }
-            let leaving = r.ui.view_mode != mode;
-            r.ui.view_mode = mode;
-            if leaving {
-                // Nothing of the mixer's transient editing state survives
-                // a tab switch: an inline rename commits (leaving the field
-                // is a blur), and the CHAIN rows' drag, prompt, replace
-                // mode and popovers close.
-                r.ui.mixer.reset_chain_ui();
-                return crate::update::inline_rename::commit(r);
-            }
+            return set_view(r, mode);
         }
         UiMessage::TogglePerformanceMode => {
-            toggle_performance_mode(r);
+            return toggle_performance_mode(r);
         }
         UiMessage::ExitPerformanceMode => {
             // Leaves Performance mode only; a no-op elsewhere.
             if r.ui.view_mode == ViewMode::Performance {
-                r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+                let back = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+                return set_view(r, back);
             }
         }
         UiMessage::OpenSettings => {
@@ -347,11 +313,33 @@ fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
 /// auto-opens on record-arm and never disturbs transport. If already in
 /// Performance, return to the remembered view; otherwise enter Performance
 /// from the current view (remembering it for the return trip).
-fn toggle_performance_mode(r: &mut Resonance) {
+fn toggle_performance_mode(r: &mut Resonance) -> Task<Message> {
     if r.ui.view_mode == ViewMode::Performance {
-        r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+        let back = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+        set_view(r, back)
     } else {
         r.ui.pre_performance_view = Some(r.ui.view_mode);
-        r.ui.view_mode = ViewMode::Performance;
+        set_view(r, ViewMode::Performance)
     }
+}
+
+/// Show `mode`. Every view change goes through here, so leaving a view
+/// always runs [`leave_view`].
+fn set_view(r: &mut Resonance, mode: ViewMode) -> Task<Message> {
+    let leaving = r.ui.view_mode != mode;
+    r.ui.view_mode = mode;
+    if leaving {
+        leave_view(r)
+    } else {
+        Task::none()
+    }
+}
+
+/// The view just changed. Nothing of the mixer's transient editing state
+/// survives that: an inline rename commits (leaving the field is a blur),
+/// and the CHAIN rows' drag, prompt, replace mode, popovers and picker
+/// cue close.
+fn leave_view(r: &mut Resonance) -> Task<Message> {
+    r.ui.mixer.reset_chain_ui();
+    crate::update::inline_rename::commit(r)
 }

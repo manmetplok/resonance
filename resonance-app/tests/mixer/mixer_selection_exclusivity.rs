@@ -79,7 +79,7 @@ fn inspector_owner(app: &Resonance) -> &'static str {
         "bus"
     } else if sim.find("BOUNCE TO WAV").is_ok() {
         "master"
-    } else if sim.find("MONO").is_ok() {
+    } else if sim.find("Mono").is_ok() {
         "track"
     } else {
         "none"

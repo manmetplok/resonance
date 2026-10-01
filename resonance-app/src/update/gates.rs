@@ -568,7 +568,30 @@ impl crate::Resonance {
         if self.import_confirm_is_refused(message) {
             return true;
         }
+        if self.bus_rename_is_noop(message) {
+            return true;
+        }
         false
+    }
+
+    /// A `RenameBus` that would change nothing: the trimmed name is empty
+    /// or the bus already has it (or the bus is gone). Gated rather than
+    /// ignored in the handler because the message records its undo entry
+    /// (and marks the project dirty) before dispatch.
+    fn bus_rename_is_noop(&self, message: &crate::message::Message) -> bool {
+        let crate::message::Message::Bus(crate::message::BusMessage::RenameBus(id, name)) =
+            message
+        else {
+            return false;
+        };
+        let name = name.trim();
+        name.is_empty()
+            || self
+                .registry
+                .busses
+                .iter()
+                .find(|b| b.id == *id)
+                .is_none_or(|b| b.name == name)
     }
 
     /// A MIDI Import Confirm that cannot import (code review FU-V2a): no

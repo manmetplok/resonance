@@ -112,7 +112,16 @@ fn snapshot_to(app: &Resonance, path: &str) {
 ///   - 2 px lavender left-edge rail (`MIXER_SUB_STRIP_RAIL`).
 #[test]
 fn mixer_sub_tracks_expanded() {
-    let app = build_app(true);
+    let mut app = build_app(true);
+    // A sub-track can hold effects of its own; its strip lists them as
+    // slot lines (AC3), the second one bypassed. The first sub-track
+    // carries them, so the cluster shows one strip with lines beside
+    // three without.
+    let sub = first_sub_track(&app);
+    app.test_push_track_plugin(sub, sub_slot(SUB_FX, "Transient Shaper"));
+    let mut gate = sub_slot(SUB_FX + 1, "Gate");
+    gate.bypassed = true;
+    app.test_push_track_plugin(sub, gate);
     snapshot_to(
         &app,
         "tests/snapshots/mixer_sub_tracks_expanded.png",
@@ -209,5 +218,65 @@ fn mixer_sub_track_render_order_groups_with_parent() {
         displayed_collapsed,
         vec![1, 2, 3, 4],
         "collapsed parent must emit only top-level tracks: got {displayed_collapsed:?}"
+    );
+}
+
+/// A plugin id clear of the demo's.
+const SUB_FX: u64 = 9_000;
+
+fn sub_slot(id: u64, name: &str) -> resonance_app::state::PluginSlotState {
+    resonance_app::state::PluginSlotState::new(
+        id,
+        name.to_owned(),
+        format!("com.example.p{id}"),
+        "/plugins/x.clap".to_owned(),
+        Vec::new(),
+        false,
+    )
+}
+
+/// The drum parent's first sub-track (by output port).
+fn first_sub_track(app: &Resonance) -> u64 {
+    app.test_registry()
+        .tracks
+        .iter()
+        .filter(|t| matches!(t.sub_track, Some(link) if link.parent_track_id == 1))
+        .min_by_key(|t| t.sub_track.map(|l| l.output_port_index))
+        .expect("the demo seeds drum sub-tracks")
+        .id
+}
+
+/// AC3 on sub-tracks: a sub-track strip draws its chain as slot lines
+/// (a click focuses, a double-click opens, like any strip), and its lazy
+/// body's fingerprint moves with the chain and with the focus, or the
+/// cached strip would keep showing the old lines.
+#[test]
+fn a_sub_track_strip_lists_its_plugins() {
+    let mut app = build_app(true);
+    let sub = first_sub_track(&app);
+    let empty = app.test_track_strip_fingerprint(sub).unwrap();
+    app.test_push_track_plugin(sub, sub_slot(SUB_FX, "Transient Shaper"));
+    let with_fx = app.test_track_strip_fingerprint(sub).unwrap();
+    assert_ne!(with_fx, empty, "the chain is hashed");
+
+    let (label, dot, dimmed, focused, instrument) =
+        app.test_strip_slot_line(SUB_FX).expect("the slot line is drawn");
+    assert_eq!(dot, "active");
+    assert!(!dimmed && !focused && !instrument, "a plain effect line");
+    {
+        let mut ui =
+            Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view());
+        ui.find(label.as_str()).expect("the sub-strip draws the line");
+    }
+
+    let _ = app.update(Message::Plugin(
+        resonance_app::message::PluginMessage::FocusSlot(SUB_FX),
+    ));
+    assert_eq!(app.test_selected_track(), Some(sub), "focus selects the sub-track");
+    assert!(app.test_strip_slot_line(SUB_FX).unwrap().3, "the line is focused");
+    assert_ne!(
+        app.test_track_strip_fingerprint(sub).unwrap(),
+        with_fx,
+        "the focus is hashed"
     );
 }

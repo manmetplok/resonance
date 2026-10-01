@@ -396,3 +396,29 @@ Recorded in the commits on `feat/mixer-cleanup` (`5cbb6e9c..`) and
   channel. Busses gained `BusMessage::RenameBus` (undoable) and the
   control method `bus.rename` / MCP tool `bus_rename` — a control-API
   addition beyond §7's colour-only slice.
+- **Sub-track strips show slot lines** (§2.4 listed none): a sub-track
+  can hold effects of its own, and AC3 asks every strip to show its
+  chain. They sit between the FX switch and the pan, in the same
+  Fill-height slot as on the parent, so a cluster's faders still line
+  up.
+- **The focused slot belongs to the inspector's owner.** It is dropped
+  once the inspector describes another channel (or none), together with
+  the ☰ menu, replace mode, preset prompt, drag, colour palette and
+  picker cue — one post-update pass (`update::chain_ui::settle`) after
+  every outermost update, whatever moved the selection (a click,
+  `FocusSlot`, a removal, a control call). Opening any plugin window
+  (`OpenPluginWindow`, `OpenPluginEditor`, `OpenGenericParams`) focuses
+  the slot through `FocusSlot`'s path, so it selects the slot's channel.
+  The preset commands act on the focused slot only while its generic
+  window is open or its channel is in the inspector, and never in
+  Performance mode.
+- **Every view change** (tabs and Performance mode alike) commits an
+  open rename and closes the CHAIN's transient state. Esc reaches the
+  CHAIN only in the Mixer, and only when no widget captured it — except
+  the preset prompt, whose own field captures it.
+- **Renames**: an inline-rename commit is its own undo step (the
+  coalescing run of `SetTrackName` is broken around it). An untouched
+  open field follows a rename made elsewhere instead of writing the old
+  name back. `track.rename` / `bus.rename` trim, and a rename to the
+  current name is acknowledged without an edit (no undo step, no dirty).
+- **Master inspector** has no type tag beside its "Master" title.

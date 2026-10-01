@@ -47,7 +47,7 @@ impl crate::Resonance {
         // body becomes the recovery surface instead (ba doc #275 P5,
         // todo #1309).
         let mapped: Element<'_, Message> = match plugin.availability.reason() {
-            Some(reason) => self.missing_plugin_body(plugin, reason),
+            Some(_) => self.missing_plugin_body(plugin),
             None => {
                 // The parameter list sits in a `lazy` region keyed on every
                 // field it draws, so the Mixer's fast meter tick reuses the
@@ -102,7 +102,7 @@ impl crate::Resonance {
                 Message::Plugin(PluginMessage::OpenPluginEditor(selected_id))
             };
             title = title.push(
-                button(text(label).size(9).color(theme::TEXT))
+                button(text(label).size(11).color(theme::TEXT))
                     .on_press(msg)
                     .style(|_theme, status| theme::small_button_style(status))
                     .padding([2, 8]),
@@ -199,7 +199,7 @@ impl crate::Resonance {
     /// under the slot's row in the inspector CHAIN (mixer-cleanup.md
     /// §3.2, Q16) — the one surface that serves track, bus and master
     /// chains alike.
-    fn missing_plugin_body(&self, plugin: &PluginSlotState, _reason: &str) -> Element<'_, Message> {
+    fn missing_plugin_body(&self, plugin: &PluginSlotState) -> Element<'_, Message> {
         text(format!(
             "\u{26a0} {} is missing \u{2014} see the inspector to replace or remove it",
             plugin.plugin_name

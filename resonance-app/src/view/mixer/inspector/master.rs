@@ -24,8 +24,8 @@ pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
             .size(17)
             .font(theme::UI_FONT_MEDIUM)
             .color(theme::TEXT_1),
-        Space::new().width(8),
-        super::widgets::type_tag("Master"),
+        // No type tag: the title already says "Master", and there is
+        // only one.
     ]
     .spacing(0)
     .align_y(alignment::Vertical::Center);

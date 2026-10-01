@@ -1,5 +1,5 @@
 //! The host's preset surfaces (plugin-preset-library.md §6.6, §6.7; slice
-//! P6): the plugin panel's bar (◀ name ▶ ☆ Presets…), the browser overlay
+//! P6): the generic window's preset bar (◀ name ▶ ☆ Presets…), the browser overlay
 //! it opens over one plugin instance, the media browser's Presets tab, and
 //! "with preset…" in the add pickers.
 //!

@@ -72,7 +72,7 @@ fn app() -> Resonance {
 fn eq_slot() -> PluginSlotState {
     PluginSlotState::new(
         PLUGIN,
-        "com.resonance.eq".into(),
+        "Resonance EQ".into(),
         "com.resonance.eq".into(),
         "/plugins/eq.clap".into(),
         Vec::new(),
@@ -168,7 +168,7 @@ fn sends_is_its_own_group() {
 fn track_group_mono_dispatches_toggle_mono() {
     let mut app = app();
     ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
-    let messages = click(&app, "MONO");
+    let messages = click(&app, "Mono");
     assert!(
         messages
             .iter()
@@ -176,7 +176,7 @@ fn track_group_mono_dispatches_toggle_mono() {
         "MONO raises ToggleTrackMono: {messages:?}"
     );
     // An audio track has nothing to bounce in place.
-    assert!(simulator(&app).find("BOUNCE").is_err());
+    assert!(simulator(&app).find("Bounce").is_err());
 }
 
 /// Bounce follows `classify_bounce`: disabled (with its reason shown)
@@ -187,7 +187,7 @@ fn track_group_bounce_follows_classify_bounce() {
     let mut app = app();
     ui(&mut app, UiMessage::SelectTrack(Some(INST)));
     {
-        let messages = click(&app, "BOUNCE");
+        let messages = click(&app, "Bounce");
         assert!(
             !messages
                 .iter()
@@ -210,7 +210,7 @@ fn track_group_bounce_follows_classify_bounce() {
         trim_start_ticks: 0,
         trim_end_ticks: 0,
     });
-    let messages = click(&app, "BOUNCE");
+    let messages = click(&app, "Bounce");
     assert!(
         messages
             .iter()
@@ -431,7 +431,7 @@ fn master_inspector_shows_chain_automation_and_bounce() {
             y_of(&mut sim, "BOUNCE TO WAV"),
         );
         assert!(c < a && a < m, "CHAIN, AUTOMATION, MASTER");
-        sim.find("com.resonance.eq").expect("master insert row");
+        sim.find("Resonance EQ").expect("master insert row");
     }
     let messages = click(&app, "BOUNCE TO WAV");
     assert!(
@@ -515,7 +515,7 @@ fn owner_groups_fold_on_their_own_keys() {
     // Fold TRACK on a track.
     ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
     ui(&mut app, UiMessage::ToggleMixerInspectorGroup(MixerInspectorGroup::Track));
-    assert!(simulator(&app).find("MONO").is_err(), "TRACK folded");
+    assert!(simulator(&app).find("Mono").is_err(), "TRACK folded");
 
     // BUS and MASTER stay open.
     ui(&mut app, UiMessage::SelectBus(Some(BUS)));
@@ -531,7 +531,7 @@ fn owner_groups_fold_on_their_own_keys() {
     ui(&mut app, UiMessage::SelectBus(Some(BUS)));
     simulator(&app).find("DELETE BUS").expect("BUS still open");
     ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
-    assert!(simulator(&app).find("MONO").is_err(), "TRACK still folded");
+    assert!(simulator(&app).find("Mono").is_err(), "TRACK still folded");
 }
 
 /// Enabling external hardware unfolds TRACK, where its pairing lives.
@@ -541,7 +541,7 @@ fn enabling_external_hardware_unfolds_track() {
     ui(&mut app, UiMessage::SelectTrack(Some(INST)));
     ui(&mut app, UiMessage::ToggleMixerInspectorGroup(MixerInspectorGroup::Track));
     let _ = app.update(Message::ExternalInstrument(ExternalInstrumentMessage::Enable(INST)));
-    simulator(&app).find("MONO").expect("TRACK unfolded");
+    simulator(&app).find("Mono").expect("TRACK unfolded");
 }
 
 /// A sub-track is one output of its parent's plugin: it has no MIDI of
@@ -551,7 +551,7 @@ fn sub_tracks_do_not_offer_external_hardware() {
     let mut app = app();
     ui(&mut app, UiMessage::SelectTrack(Some(INST)));
     simulator(&app)
-        .find("External hardware instrument")
+        .find("External hardware\u{2026}")
         .expect("a plain instrument track offers it");
 
     const SUB: u64 = 9;
@@ -563,8 +563,8 @@ fn sub_tracks_do_not_offer_external_hardware() {
     app.test_push_track(sub);
     ui(&mut app, UiMessage::SelectTrack(Some(SUB)));
     let mut sim = simulator(&app);
-    sim.find("MONO").expect("TRACK is open on the sub-track");
-    assert!(sim.find("External hardware instrument").is_err());
+    sim.find("Mono").expect("TRACK is open on the sub-track");
+    assert!(sim.find("External hardware\u{2026}").is_err());
 }
 
 // ---------------------------------------------------------------------------

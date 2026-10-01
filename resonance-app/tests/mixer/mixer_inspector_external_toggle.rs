@@ -6,7 +6,7 @@
 //! external-instrument UI surface (onboarding card, routing group, pickers)
 //! was unreachable through the UI. These tests drive the inspector purely
 //! via UI-dispatched messages:
-//!  - a plain instrument track renders the "External hardware instrument"
+//!  - a plain instrument track renders the "External hardware\u{2026}"
 //!    enable affordance in the TRACK group;
 //!  - pressing it lands the user on the onboarding ("Unassigned") card;
 //!  - the external group offers a "Use built-in instrument" disable action
@@ -65,7 +65,7 @@ fn plain_instrument_shows_enable_affordance() {
     let mut ui = simulator(&app);
 
     ui.find("ROUTING").expect("generic ROUTING group");
-    ui.find("External hardware instrument")
+    ui.find("External hardware\u{2026}")
         .expect("enable affordance in the TRACK group");
     assert!(
         ui.find("EXTERNAL INSTRUMENT").is_err(),
@@ -92,7 +92,7 @@ fn enable_reaches_onboarding_card() {
         .expect("External Instrument section in TRACK");
     // The enable affordance is gone once the track is external.
     assert!(
-        ui.find("External hardware instrument").is_err(),
+        ui.find("External hardware\u{2026}").is_err(),
         "enable affordance must not persist on an external track"
     );
 }
@@ -115,7 +115,7 @@ fn disable_returns_plain_routing() {
 
     let mut ui = simulator(&app);
     ui.find("ROUTING").expect("generic ROUTING group restored");
-    ui.find("External hardware instrument")
+    ui.find("External hardware\u{2026}")
         .expect("enable affordance back after disable");
     assert!(
         ui.find("EXTERNAL INSTRUMENT").is_err(),
@@ -192,7 +192,7 @@ fn audio_and_vocal_tracks_have_no_toggle() {
 
         let mut ui = simulator(&app);
         assert!(
-            ui.find("External hardware instrument").is_err(),
+            ui.find("External hardware\u{2026}").is_err(),
             "non-instrument tracks must not render the enable toggle"
         );
     }

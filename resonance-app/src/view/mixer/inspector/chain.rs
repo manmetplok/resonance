@@ -513,10 +513,28 @@ fn slot_menu(
             (true, true) => theme::BAD,
             (true, false) => theme::TEXT_1,
         };
+        // A flat menu list: no per-entry border, the row under the
+        // pointer lit by a hover wash; a disabled entry never lights.
         let mut b = button(text(label).size(11).color(color))
             .width(Length::Fill)
             .padding([4, 10])
-            .style(|_theme, status| theme::transport_button_style(status));
+            .style(move |_theme, status| {
+                let lit = enabled
+                    && matches!(status, button::Status::Hovered | button::Status::Pressed);
+                button::Style {
+                    background: lit.then_some(iced::Background::Color(if danger {
+                        theme::BAD_DIM
+                    } else {
+                        theme::ACCENT_DIM
+                    })),
+                    text_color: color,
+                    border: iced::Border {
+                        radius: theme::RADIUS_XS.into(),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            });
         if let Some(m) = message {
             b = b.on_press(m);
         }
@@ -524,7 +542,7 @@ fn slot_menu(
     }
     let card = container(items)
         .width(Length::Fixed(170.0))
-        .padding([4, 0])
+        .padding(4)
         .style(|_theme| container::Style {
             background: Some(iced::Background::Color(theme::BG_3)),
             border: iced::Border {
@@ -592,12 +610,12 @@ fn missing_recovery(
         ))
         .size(11)
         .color(theme::BAD),
-        text(reason.to_owned()).size(10).color(theme::TEXT_2),
+        text(reason.to_owned()).size(11).color(theme::TEXT_2),
         text(
             "Its settings are kept with this slot: reinstall the plugin and rescan, \
              or pick a replacement. Removing the slot discards them."
         )
-        .size(10)
+        .size(11)
         .color(theme::TEXT_3),
     ]
     .spacing(4);
@@ -606,7 +624,7 @@ fn missing_recovery(
     if candidates.is_empty() {
         actions = actions.push(
             text("No plugins scanned")
-                .size(10)
+                .size(11)
                 .color(theme::TEXT_3)
                 .width(Length::Fill),
         );

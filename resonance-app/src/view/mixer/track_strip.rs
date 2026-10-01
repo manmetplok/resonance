@@ -37,11 +37,7 @@ pub(super) const STRIP_BUTTON_ROW_HEIGHT: f32 = 26.0;
 const SUB_STRIP_NAME_CHARS: usize = 12;
 
 impl crate::Resonance {
-    pub(super) fn view_channel_strip<'a>(
-        &'a self,
-        track: &'a TrackState,
-        available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
+    pub(super) fn view_channel_strip<'a>(&'a self, track: &'a TrackState) -> Element<'a, Message> {
         // Sub-tracks never reach this function — view_mixer skips them
         // in its outer loop and renders them via view_sub_channel_strip
         // (the slimmer variant) inside their parent's cluster instead.
@@ -54,8 +50,8 @@ impl crate::Resonance {
         // `StereoMeterCanvas` levels (and the live automated-gain tint),
         // so it is built fresh every frame, OUTSIDE the lazy body below:
         // a lazy subtree captures the levels it was built with and would
-        // freeze the meter — the same live/lazy split as the inspector's
-        // SIGNAL group (ui-work §11.2).
+        // freeze the meter (ui-work §11.2). The bus and master strips
+        // split the same way.
         let track_id_for_fader = track.id;
         let gain_live = super::automation::live_value(
             &self.automation,
@@ -76,7 +72,6 @@ impl crate::Resonance {
         // rebuilding every strip every frame. The fingerprint must hash
         // everything the body renders (and nothing live) — see
         // `strip_fingerprint.rs`.
-        let _ = available_plugins;
         let fp = super::strip_fingerprint::track_strip_fingerprint(self, track);
         let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
             self.channel_strip_body(track)
@@ -316,6 +311,7 @@ impl crate::Resonance {
             &track.plugins,
             track.fx_bypassed,
             self.ui.mixer.focused_slot,
+            theme::MIXER_SLOT_LINE_CHARS,
         );
 
         // ---- Centred pan: knob, value under it ----
@@ -398,14 +394,11 @@ impl crate::Resonance {
     ///   selected track) — the at-a-glance parent → child cue.
     /// - Slimmer control set (mixer-cleanup.md §2.4): the parent's colour
     ///   band and a one-line name,
-    ///   M / S, the FX switch, centred pan, fader. No record-arm or
+    ///   M / S, the FX switch, the slot lines (a sub-track can hold
+    ///   effects of its own), centred pan, fader. No record-arm or
     ///   monitor (sub-tracks are fed from the parent plugin's fan-out,
-    ///   never from a hardware input) and no slot lines.
-    pub(super) fn view_sub_channel_strip<'a>(
-        &'a self,
-        track: &'a TrackState,
-        _available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
+    ///   never from a hardware input).
+    pub(super) fn view_sub_channel_strip<'a>(&'a self, track: &'a TrackState) -> Element<'a, Message> {
         debug_assert!(
             track.sub_track.is_some(),
             "view_sub_channel_strip called with a non-sub-track"
@@ -434,7 +427,11 @@ impl crate::Resonance {
         // them behind `lazy` keyed on the slim sub-strip fingerprint.
         let fp = super::strip_fingerprint::sub_strip_fingerprint(self, track);
         let body_top = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
-            sub_channel_strip_body(track, sub_track_color(self, track))
+            sub_channel_strip_body(
+                track,
+                sub_track_color(self, track),
+                self.ui.mixer.focused_slot,
+            )
         });
 
         let is_selected = self.ui.interaction.selected_track == Some(track.id);
@@ -574,11 +571,16 @@ pub(super) fn sub_track_color(r: &crate::Resonance, track: &TrackState) -> [u8; 
 }
 
 /// The non-live upper region of a sub-track strip (mixer-cleanup.md
-/// §2.4): one-line name, M / S, the FX switch, the centred pan. Built
+/// §2.4): one-line name, M / S, the FX switch, the slot lines, the
+/// centred pan. Built
 /// inside the sub-strip's `lazy` region, so it returns an owned
 /// (`'static`) tree and must only read state that
 /// [`super::strip_fingerprint::sub_strip_fingerprint`] hashes.
-fn sub_channel_strip_body(track: &TrackState, color: [u8; 3]) -> Element<'static, Message> {
+fn sub_channel_strip_body(
+    track: &TrackState,
+    color: [u8; 3],
+    focused: Option<PluginInstanceId>,
+) -> Element<'static, Message> {
     // Show the port label (after "→") rather than the full name —
     // "Drums → Kick" becomes "Kick", which fits the narrower strip.
     let short_name = track.name.split(" \u{2192} ").nth(1).unwrap_or(&track.name);
@@ -644,15 +646,20 @@ fn sub_channel_strip_body(track: &TrackState, color: [u8; 3]) -> Element<'static
     });
     let pan = super::strip_parts::pan_block(pan_ctrl, track.pan);
 
-    // The Fill spacer lives INSIDE this lazy body so the body column is
-    // Fill-height and the pan knob sits on the fader, as on the parent.
-    column![
-        head,
-        button_row,
-        fx_header,
-        Space::new().height(Length::Fill),
-        pan,
-    ]
+    // The slot lines: a sub-track is never an instrument chain, so every
+    // slot is an effect line. The list is Fill-height and lives INSIDE
+    // this lazy body, so the pan knob sits on the fader, as on the parent.
+    let slots = container(super::strip_parts::slot_list(
+        InstrumentSlot::None,
+        &track.plugins,
+        track.fx_bypassed,
+        focused,
+        theme::MIXER_SUB_SLOT_LINE_CHARS,
+    ))
+    .height(Length::Fill)
+    .padding([0, 8]);
+
+    column![head, button_row, fx_header, slots, pan]
     .spacing(6)
     .width(Length::Fill)
     .height(Length::Fill)

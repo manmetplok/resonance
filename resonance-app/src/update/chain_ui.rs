@@ -196,9 +196,25 @@ pub fn popover_press_event(event: &iced::Event) -> Option<Message> {
 /// Esc closes the CHAIN rows' transient state, one layer per press and
 /// the most recent kind first: a drag, then the preset-name prompt, then
 /// replace mode, then an open slot menu / colour palette / picker cue.
-/// Returns whether Esc closed something.
-pub(crate) fn escape(r: &mut Resonance) -> bool {
+/// Returns whether Esc closed something. Only in the Mixer view, where
+/// the inspector draws them.
+///
+/// `captured`: a widget took the key. Then the only thing Esc closes here
+/// is the preset-name prompt, whose own focused field is what captures
+/// it. Any other capturer — a pick_list closing its open dropdown (the
+/// replace picker's included) — has spent the key on itself, and the
+/// state behind it stays.
+pub(crate) fn escape(r: &mut Resonance, captured: bool) -> bool {
+    if r.ui.view_mode != crate::state::ViewMode::Mixer {
+        return false;
+    }
+    // A cue whose track has an instrument now is spent (settle drops it
+    // after every update; this keeps Esc honest regardless).
+    let cue_live = r.ui.mixer.instrument_picker_cue.is_some_and(|id| cue_holds(r, id));
     let mixer = &mut r.ui.mixer;
+    if captured {
+        return mixer.slot_preset_save.take().is_some();
+    }
     if mixer.chain_drag.take().is_some() {
         return true;
     }
@@ -208,12 +224,92 @@ pub(crate) fn escape(r: &mut Resonance) -> bool {
     if mixer.replacing_slot.take().is_some() {
         return true;
     }
-    if mixer.popover_open() || mixer.instrument_picker_cue.is_some() {
+    mixer.instrument_picker_cue = None;
+    if mixer.popover_open() || cue_live {
         mixer.dismiss_inspector_popovers();
-        mixer.instrument_picker_cue = None;
         return true;
     }
     false
+}
+
+/// Whether the instrument-picker cue on `track_id` still means something:
+/// the track exists and still has no instrument.
+fn cue_holds(r: &Resonance, track_id: resonance_audio::types::TrackId) -> bool {
+    r.registry
+        .tracks
+        .iter()
+        .find(|t| t.id == track_id)
+        .is_some_and(|t| crate::plugin_chain::lacks_instrument(r, t))
+}
+
+/// Run after every outermost update (`Resonance::update`, beside
+/// `inline_rename::settle`): every transient CHAIN / strip affordance —
+/// the focused slot, a slot menu, replace mode, the preset prompt, a
+/// drag, the colour palette, the instrument-picker cue — belongs to the
+/// channel the inspector describes, and is dropped once it does not.
+///
+/// One rule covers both ways that happens, whichever path caused it (a
+/// click, a key, `FocusSlot`, a track or bus removal, an undo, a control
+/// call): the inspector changed owner, or the thing it names is gone (a
+/// removed slot or track, a cued track that has its instrument now).
+/// Cheap: nothing is looked up unless one of them is set.
+pub(crate) fn settle(r: &mut Resonance) {
+    let m = &r.ui.mixer;
+    if m.focused_slot.is_none()
+        && m.slot_menu.is_none()
+        && m.replacing_slot.is_none()
+        && m.slot_preset_save.is_none()
+        && m.chain_drag.is_none()
+        && m.color_palette.is_none()
+        && m.instrument_picker_cue.is_none()
+    {
+        return;
+    }
+    use crate::update::plugin_window::on_inspector_owner as owned;
+    let owner_track = match crate::update::plugin_window::inspector_owner(r) {
+        Some(crate::state::PluginLocator::Track(id)) => Some(id),
+        _ => None,
+    };
+    let keep = |id: Option<PluginInstanceId>| id.filter(|id| owned(r, *id));
+    let focused_slot = keep(m.focused_slot);
+    let slot_menu = keep(m.slot_menu);
+    let replacing_slot = keep(m.replacing_slot);
+    let preset_save_kept = m
+        .slot_preset_save
+        .as_ref()
+        .is_some_and(|p| owned(r, p.instance_id));
+    let chain_drag = m
+        .chain_drag
+        .filter(|d| owned(r, d.instance_id))
+        .map(|d| ChainDragState {
+            over: keep(d.over),
+            ..d
+        });
+    // The palette edits a track's own colour: a sub-track has none.
+    let color_palette = m.color_palette.filter(|id| {
+        Some(*id) == owner_track
+            && r.registry
+                .tracks
+                .iter()
+                .any(|t| t.id == *id && t.sub_track.is_none())
+    });
+    let cue = m
+        .instrument_picker_cue
+        .filter(|id| Some(*id) == owner_track && cue_holds(r, *id));
+
+    let m = &mut r.ui.mixer;
+    m.focused_slot = focused_slot;
+    m.slot_menu = slot_menu;
+    m.replacing_slot = replacing_slot;
+    if !preset_save_kept {
+        m.slot_preset_save = None;
+    }
+    m.chain_drag = chain_drag;
+    m.color_palette = color_palette;
+    m.instrument_picker_cue = cue;
+    if !m.popover_open() {
+        m.popover_switched = false;
+    }
 }
 
 /// Open the "Save preset…" prompt for a loaded slot, seeded with the

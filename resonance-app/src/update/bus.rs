@@ -228,6 +228,9 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
             crate::engine_events::plugins::bus_removed(r, bus_id, instance_id);
         }
         BusMessage::RenameBus(bus_id, name) => {
+            // Trimmed; an empty or unchanged name never gets here (gated
+            // in `gates_message`, before it can record an undo step).
+            let name = name.trim().to_owned();
             let renamed = r.with_bus_mut(bus_id, |b| {
                 if b.name == name {
                     return false;

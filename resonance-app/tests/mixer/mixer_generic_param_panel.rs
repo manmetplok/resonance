@@ -267,6 +267,9 @@ fn opening_a_non_gui_plugin_shows_the_generic_window() {
 #[test]
 fn the_window_title_names_the_owner() {
     let mut app = app_with_plugin(false);
+    // Opening the window selects its track; select it up front so the
+    // inspector header's copy of the name is in both counts.
+    app.test_dispatch(Message::Ui(resonance_app::message::UiMessage::SelectTrack(Some(TRACK))));
     let owner = app
         .test_registry()
         .tracks

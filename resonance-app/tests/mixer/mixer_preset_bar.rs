@@ -1,5 +1,5 @@
 //! The host's preset surfaces (plugin-preset-library.md §6.6, §6.7; slice
-//! P6): the plugin panel's bar, the browser overlay it opens, the media
+//! P6): the generic window's preset bar, the browser overlay it opens, the media
 //! browser's Presets tab and "with preset…" adds, driven through their
 //! messages, plus goldens of the bar and the overlay.
 //!
@@ -293,7 +293,7 @@ fn adding_with_a_preset_loads_it_when_the_plugin_arrives() {
     assert_eq!(app.test_plugin_param(next, clap_id("gain")), Some(7.0));
 }
 
-/// The commands follow the plugin panel's selection.
+/// The commands follow the focused slot.
 #[test]
 fn the_preset_commands_need_a_selected_plugin() {
     let (mut bare, _task) = Resonance::new_for_test_on(ViewMode::Mixer);

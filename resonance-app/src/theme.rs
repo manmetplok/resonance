@@ -521,6 +521,10 @@ pub const MIXER_STRIP_WIDTH: f32 = 160.0;
 /// MAXXBASS M…" is 116 px); 18 clip it. The line never wraps: it is
 /// `Wrapping::None` in a clipped container as well.
 pub const MIXER_SLOT_LINE_CHARS: usize = 17;
+/// Characters of a plugin name on a sub-track strip's slot line
+/// ([`MIXER_SUB_STRIP_WIDTH`] leaves ~62 px of text): ellipsised there
+/// rather than clipped mid-letter.
+pub const MIXER_SUB_SLOT_LINE_CHARS: usize = 10;
 /// Sub-track strip width on the Mixer. Sub-tracks are fed from one
 /// non-main output of their parent's instrument plugin — they have no
 /// FX chain, no input, and no record arm, so the strip is narrower than

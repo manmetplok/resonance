@@ -80,7 +80,7 @@ pub struct AuditionOrigin {
     pub token: u64,
 }
 
-/// The preset browser opened from a plugin panel's bar, over one plugin
+/// The preset browser opened from a preset bar or CHAIN ☰ menu, over one plugin
 /// instance. Clicking a row auditions it (unrecorded); keeping records one
 /// undo entry from the origin; Esc reverts.
 #[derive(Debug, Clone)]

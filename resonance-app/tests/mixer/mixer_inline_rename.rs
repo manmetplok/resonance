@@ -99,11 +99,13 @@ fn bus_name(app: &Resonance, id: u64) -> String {
         .clone()
 }
 
+/// An open rename of a name as it was opened (its seed is the buffer).
 fn open(target: RenameTarget, surface: RenameSurface, buffer: &str) -> Option<RenameState> {
     Some(RenameState {
         target,
         surface,
         buffer: buffer.to_owned(),
+        seed: buffer.to_owned(),
     })
 }
 
@@ -326,18 +328,17 @@ fn a_sub_track_header_offers_no_rename() {
 /// The open header field is hashed into the inspector's lazy key, for
 /// its own channel only.
 #[test]
-fn the_inspector_fingerprint_hashes_its_rename() {
+fn the_inspector_fingerprint_ignores_its_header_rename() {
+    // The header's title row is built outside the inspector's lazy body,
+    // so opening the field and typing in it must not rebuild the body.
     let mut app = app();
     let _ = app.update(select_track(AUDIO));
     let closed = app.test_inspector_fingerprint(AUDIO).unwrap();
-    let synth = app.test_inspector_fingerprint(SYNTH).unwrap();
     let strip = app.test_track_strip_fingerprint(AUDIO).unwrap();
     let _ = app.update(begin(RenameTarget::Track(AUDIO), RenameSurface::Inspector));
-    let opened = app.test_inspector_fingerprint(AUDIO).unwrap();
-    assert_ne!(opened, closed);
+    assert_eq!(app.test_inspector_fingerprint(AUDIO).unwrap(), closed);
     let _ = app.update(input("x"));
-    assert_ne!(app.test_inspector_fingerprint(AUDIO).unwrap(), opened);
-    assert_eq!(app.test_inspector_fingerprint(SYNTH).unwrap(), synth);
+    assert_eq!(app.test_inspector_fingerprint(AUDIO).unwrap(), closed);
     assert_eq!(
         app.test_track_strip_fingerprint(AUDIO).unwrap(),
         strip,
@@ -347,7 +348,8 @@ fn the_inspector_fingerprint_hashes_its_rename() {
     let _ = app.update(select_bus(BUS));
     let bus_closed = app.test_bus_inspector_fingerprint(BUS).unwrap();
     let _ = app.update(begin(RenameTarget::Bus(BUS), RenameSurface::Inspector));
-    assert_ne!(app.test_bus_inspector_fingerprint(BUS).unwrap(), bus_closed);
+    let _ = app.update(input("y"));
+    assert_eq!(app.test_bus_inspector_fingerprint(BUS).unwrap(), bus_closed);
 }
 
 // ---------------------------------------------------------------------------
@@ -572,4 +574,122 @@ fn mixer_rename_bus_strip_golden() {
     let _ = app.update(begin(RenameTarget::Bus(bus), RenameSurface::Strip));
     let _ = app.update(input("Kit Glue"));
     snapshot_to(&app, "tests/snapshots/mixer_rename_bus_strip.png");
+}
+
+// ---------------------------------------------------------------------------
+// Undo granularity, concurrent renames, no-op renames
+// ---------------------------------------------------------------------------
+
+fn undo_depth(app: &Resonance) -> usize {
+    app.test_undo_history().test_undo_entries().len()
+}
+
+/// `SetTrackName` coalesces per track (the Compose lane inspector renames
+/// per keystroke), but two separate inline-rename commits are two undo
+/// steps: one Undo lands on the intermediate name.
+#[test]
+fn two_rename_commits_on_one_track_are_two_undo_steps() {
+    let mut app = undoable_app("two-commits");
+    let original = track_name(&app, AUDIO);
+    for name in ["First", "Second"] {
+        let _ = app.update(begin(RenameTarget::Track(AUDIO), RenameSurface::Strip));
+        let _ = app.update(input(name));
+        let _ = app.update(commit());
+    }
+    assert_eq!(track_name(&app, AUDIO), "Second");
+    let _ = app.update(Message::Undo);
+    assert_eq!(track_name(&app, AUDIO), "First", "one Undo, one commit");
+    let _ = app.update(Message::Undo);
+    assert_eq!(track_name(&app, AUDIO), original);
+}
+
+/// A control-API rename landing while a field sits open and untouched
+/// re-seeds the field; committing it (Enter, a click away) keeps the
+/// remote name instead of writing the stale one back.
+#[test]
+fn an_untouched_open_rename_does_not_revert_a_remote_rename() {
+    let mut app = undoable_app("remote-track");
+    let _ = app.update(begin(RenameTarget::Track(AUDIO), RenameSurface::Strip));
+    let r = crate::common::call(
+        &mut app,
+        "track.rename",
+        serde_json::json!({ "track_id": AUDIO, "name": "Remote" }),
+    );
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert_eq!(
+        app.test_renaming(),
+        open(RenameTarget::Track(AUDIO), RenameSurface::Strip, "Remote"),
+        "the field follows the new name"
+    );
+    let depth = undo_depth(&app);
+    let _ = app.update(commit());
+    assert_eq!(track_name(&app, AUDIO), "Remote");
+    assert_eq!(undo_depth(&app), depth, "the commit changed nothing");
+
+    // The bus twin.
+    let _ = app.update(select_bus(BUS));
+    let _ = app.update(begin(RenameTarget::Bus(BUS), RenameSurface::Inspector));
+    let r = crate::common::call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({ "bus_id": BUS, "name": "Hall" }),
+    );
+    assert!(r.error.is_none(), "{:?}", r.error);
+    let _ = app.update(commit());
+    assert_eq!(bus_name(&app, BUS), "Hall");
+}
+
+/// A field the user typed in keeps the user's text: their edit is the
+/// newer intent, and commits over the remote name.
+#[test]
+fn a_typed_open_rename_wins_over_a_remote_rename() {
+    let mut app = undoable_app("remote-typed");
+    let _ = app.update(begin(RenameTarget::Track(AUDIO), RenameSurface::Strip));
+    let _ = app.update(input("Mine"));
+    let _ = crate::common::call(
+        &mut app,
+        "track.rename",
+        serde_json::json!({ "track_id": AUDIO, "name": "Remote" }),
+    );
+    let _ = app.update(commit());
+    assert_eq!(track_name(&app, AUDIO), "Mine");
+}
+
+/// Renaming to the current name (after trimming) is acknowledged and
+/// records nothing: no undo step, no dirty, no revision.
+#[test]
+fn a_no_op_rename_records_nothing() {
+    let mut app = undoable_app("no-op");
+    let current = track_name(&app, AUDIO);
+    let calls = [
+        ("bus.rename", serde_json::json!({ "bus_id": BUS, "name": "  Verb " })),
+        (
+            "track.rename",
+            serde_json::json!({ "track_id": AUDIO, "name": format!(" {current} ") }),
+        ),
+    ];
+    for (method, params) in calls {
+        app.test_set_dirty(false);
+        let (depth, revision) = (undo_depth(&app), app.revision());
+        let r = crate::common::call(&mut app, method, params);
+        assert!(r.error.is_none(), "{method} acks: {:?}", r.error);
+        assert_eq!(undo_depth(&app), depth, "{method}: no undo step");
+        assert_eq!(app.revision(), revision, "{method}: no revision");
+        assert!(!app.test_dirty(), "{method}: not dirty");
+    }
+    // The GUI message itself, sent straight: gated before it records.
+    let depth = undo_depth(&app);
+    let _ = app.update(Message::Bus(BusMessage::RenameBus(BUS, "Verb ".into())));
+    assert_eq!(undo_depth(&app), depth);
+    assert!(!app.test_dirty());
+
+    // A real rename is trimmed.
+    let r = crate::common::call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({ "bus_id": BUS, "name": "  Plate  " }),
+    );
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert_eq!(bus_name(&app, BUS), "Plate");
+    assert_eq!(undo_depth(&app), depth + 1);
 }

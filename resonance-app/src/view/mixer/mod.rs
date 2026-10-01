@@ -19,12 +19,10 @@ mod track_strip;
 use iced::widget::{button, column, container, row, scrollable, text, Space};
 use iced::{Color, Element, Length};
 
-use resonance_audio::types::ScannedPlugin;
 
 use crate::message::*;
 use crate::state::*;
 use crate::theme;
-
 
 pub(crate) use group_strip::MixerTopItem;
 pub(crate) use strip_parts::slot_line_label;
@@ -33,7 +31,6 @@ impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
         let sorted_busses = self.sorted_busses();
-        let available_plugins = &self.plugin_catalog.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
         // The lane is built in two clustering layers so related strips
@@ -57,20 +54,14 @@ impl crate::Resonance {
             match item {
                 group_strip::MixerTopItem::Track(track_id) => {
                     if let Some(track) = sorted_tracks.iter().find(|t| t.id == track_id) {
-                        track_strip_row = track_strip_row.push(self.view_track_cluster(
-                            track,
-                            sorted_tracks,
-                            available_plugins,
-                        ));
+                        track_strip_row =
+                            track_strip_row.push(self.view_track_cluster(track, sorted_tracks));
                     }
                 }
                 group_strip::MixerTopItem::Group(group_id) => {
                     if let Some(group) = self.track_groups.get_group(group_id) {
-                        track_strip_row = track_strip_row.push(self.view_mixer_group_cluster(
-                            group,
-                            sorted_tracks,
-                            available_plugins,
-                        ));
+                        track_strip_row = track_strip_row
+                            .push(self.view_mixer_group_cluster(group, sorted_tracks));
                     }
                 }
             }
@@ -86,7 +77,7 @@ impl crate::Resonance {
             scrollable::Direction::Horizontal(scrollable::Scrollbar::default()),
         )
         .width(Length::Fill);
-        let master_strip = self.view_master_strip(available_plugins);
+        let master_strip = self.view_master_strip();
         let v_separator_tracks = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
             .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32));
@@ -96,7 +87,7 @@ impl crate::Resonance {
             .spacing(theme::MIXER_STRIP_GAP)
             .padding([0.0, theme::MIXER_LANE_HPAD]);
         for bus in sorted_busses {
-            bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, available_plugins));
+            bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus));
         }
         let scrollable_busses = iced::widget::Scrollable::with_direction(
             bus_strip_row,
@@ -157,9 +148,8 @@ impl crate::Resonance {
         &'a self,
         track: &'a TrackState,
         sorted_tracks: &'a [TrackState],
-        available_plugins: &'a [ScannedPlugin],
     ) -> Element<'a, Message> {
-        let parent_strip = self.view_channel_strip(track, available_plugins);
+        let parent_strip = self.view_channel_strip(track);
 
         let parent_expanded = self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
         if !parent_expanded {
@@ -178,7 +168,7 @@ impl crate::Resonance {
         // sub-strip backgrounds visually butt up against the parent strip.
         let mut cluster = row![parent_strip].spacing(0);
         for sub in subs {
-            cluster = cluster.push(self.view_sub_channel_strip(sub, available_plugins));
+            cluster = cluster.push(self.view_sub_channel_strip(sub));
         }
         cluster.into()
     }

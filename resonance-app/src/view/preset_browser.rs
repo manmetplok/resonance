@@ -1,5 +1,5 @@
 //! The host's preset surfaces (plugin-preset-library.md §6.6, slice P6):
-//! the compact bar in the plugin panel's header, the browser overlay it
+//! the compact bar in the generic plugin window, the browser overlay it
 //! opens over one plugin, and the media browser's Presets tab body.
 //!
 //! Everything drawn here is precomputed in `update::plugin_preset_ui`
@@ -40,7 +40,7 @@ fn ui(m: PresetUiMessage) -> Message {
 // Bar
 // ---------------------------------------------------------------------------
 
-/// The plugin panel's preset bar: ◀ name • ▶ ☆ Presets…, for any plugin
+/// The generic plugin window's preset bar: ◀ name • ▶ ☆ Presets…, for any plugin
 /// (third-party and GUI-less ones included).
 pub(crate) fn preset_bar<'a>(
     r: &'a Resonance,
@@ -323,7 +323,7 @@ pub(crate) fn view_preset_browser_overlay(r: &Resonance) -> Element<'_, Message>
 // ---------------------------------------------------------------------------
 
 /// The Presets tab: the library across every plugin, a plugin filter, ★
-/// only. Double-click loads onto the selected plugin slot.
+/// only. Double-click loads onto the focused plugin slot.
 pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
     let list = &r.presets.media_presets;
     let current = r
@@ -367,7 +367,7 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
         .and_then(|id| r.plugin_slot(id))
         .map(|slot| format!("Double-click loads onto {}", slot.plugin_name))
         .unwrap_or_else(|| {
-            "Open a plugin's window in the mixer, then double-click a preset".to_string()
+            "Click a plugin slot in the mixer, then double-click a preset".to_string()
         });
 
     column![

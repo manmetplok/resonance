@@ -187,10 +187,9 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         }
         PluginMessage::OpenPluginEditor(instance_id) => {
             // Opening a slot's window focuses it, whichever window it is
-            // (mixer-cleanup.md §2.1): the preset commands follow.
-            if r.plugin_slot(instance_id).is_some() {
-                r.ui.mixer.focused_slot = Some(instance_id);
-            }
+            // (mixer-cleanup.md §2.1), and selects its channel: the
+            // inspector and the preset commands follow.
+            crate::update::plugin_window::focus(r, instance_id);
             // NOT set optimistically (ba todo #1347). The engine reports
             // both outcomes as `AudioEvent::PluginEditorState`, so the
             // mirror is moved by the echo alone. Setting it here made a

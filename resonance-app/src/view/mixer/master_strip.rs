@@ -11,7 +11,6 @@
 
 use iced::widget::{column, container, row, text};
 use iced::{alignment, Element, Length};
-use resonance_audio::types::*;
 
 use crate::message::*;
 use crate::theme;
@@ -20,12 +19,7 @@ use crate::view::controls::fader_section;
 use super::strip_parts::InstrumentSlot;
 
 impl crate::Resonance {
-    pub(super) fn view_master_strip<'a>(
-        &'a self,
-        available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
-        let _ = available_plugins;
-
+    pub(super) fn view_master_strip(&self) -> Element<'_, Message> {
         // Master automation live gain tint + the fader/meter block. The
         // per-tick levels render outside the lazy body, like every strip.
         let gain_live = super::automation::live_value(
@@ -114,6 +108,7 @@ impl crate::Resonance {
             &self.master.plugins,
             self.master.fx_bypassed,
             self.ui.mixer.focused_slot,
+            theme::MIXER_SLOT_LINE_CHARS,
         );
 
         column![head, fx_header, slots]

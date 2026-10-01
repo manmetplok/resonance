@@ -68,6 +68,9 @@ fn app() -> Resonance {
     app.test_push_bus_plugin(BUS, slot(BUS_FX, "Bus Glue"));
     app.test_push_master_plugin(slot(MASTER_FX, "Limiter"));
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
+    // The CHAIN rows are the inspector's: their transient state lives on
+    // the channel it describes (`chain_ui::settle`).
+    ui(&mut app, UiMessage::SelectTrack(Some(TRACK)));
     app
 }
 

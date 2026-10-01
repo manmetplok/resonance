@@ -201,16 +201,6 @@ fn renameable_title<'a>(
     }
 }
 
-/// Hash the inspector-header rename field's state for `target` (its
-/// buffer while open there), so a body cached on the fingerprint can
-/// never keep a stale header (ui-work.md §11).
-fn hash_rename<H: std::hash::Hasher>(h: &mut H, r: &crate::Resonance, target: RenameTarget) {
-    use std::hash::Hash;
-    r.ui.mixer
-        .rename_buffer(target, RenameSurface::Inspector)
-        .hash(h);
-}
-
 /// Widget id of the header's colour swatch (tests click it by id: it
 /// draws no text).
 pub(crate) fn color_swatch_id() -> iced::widget::Id {
@@ -357,7 +347,8 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
     hash_collapse_state(&mut h, r);
     t.id.hash(&mut h);
     t.name.hash(&mut h);
-    hash_rename(&mut h, r, RenameTarget::Track(t.id));
+    // The header's rename field is not hashed: the title row is built
+    // outside the lazy body, so a keystroke there must not rebuild it.
     // The header swatch sits outside the lazy body, but the colour is
     // the track's identity everywhere else; hashed so nothing that
     // shows it can go stale (mixer-cleanup.md §6).
@@ -482,7 +473,7 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
 fn render_empty() -> Element<'static, Message> {
     column![
         text("INSPECTOR")
-            .size(10)
+            .size(11)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
         Space::new().height(8),

@@ -9,7 +9,7 @@ use iced::widget::{
     button, canvas as canvas_widget, column, container, row, text, vertical_slider,
 };
 use iced::{alignment, mouse, Element, Font, Length, Point, Rectangle, Renderer, Size, Theme};
-use resonance_audio::types::{BusId, TrackId};
+use resonance_audio::types::TrackId;
 
 use crate::message::*;
 use crate::theme::{self, fa};
@@ -213,11 +213,6 @@ pub fn delete_button<'a>(on_press: Message, size: u16) -> iced::widget::Button<'
         .on_press(on_press)
         .style(|_theme, status| theme::small_button_style(status))
         .padding(0)
-}
-
-/// Bus remove button — same style as delete, used on bus strips.
-pub fn bus_remove_button<'a>(bus_id: BusId, size: u16) -> iced::widget::Button<'a, Message> {
-    delete_button(Message::Bus(BusMessage::RemoveBus(bus_id)), size)
 }
 
 /// Shared collapse caret — the same 12×12 caret tile the Arrange

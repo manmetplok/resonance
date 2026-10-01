@@ -72,15 +72,21 @@ pub(super) fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if find_track(app, params.track_id.0).is_none() {
+    let Some(current) = find_track(app, params.track_id.0).map(|t| t.name.clone()) else {
         return not_found_track(request, params.track_id.0);
-    }
-    if params.name.trim().is_empty() {
+    };
+    // Trimmed, and a rename to the current name is acknowledged without
+    // an edit (no undo step, no dirty) — as `bus.rename`.
+    let name = params.name.trim();
+    if name.is_empty() {
         return reject(request, RpcError::invalid_params("track name must not be empty"));
+    }
+    if name == current {
+        return (ack(app, request), Task::none());
     }
     let task = run_via_update(
         app,
-        Message::Track(TrackMessage::SetTrackName(params.track_id.0, params.name)),
+        Message::Track(TrackMessage::SetTrackName(params.track_id.0, name.to_owned())),
     );
     (ack(app, request), task)
 }

@@ -117,11 +117,13 @@ pub(crate) fn handle_key(
     // Esc closes the inspector CHAIN's transient state, one layer per
     // press: a drag, the preset-name prompt (whose field captured the
     // key), replace mode, then a slot menu / colour palette. Not under a
-    // modal overlay, which Esc closes first.
+    // modal overlay, which Esc closes first, and — the prompt aside —
+    // not when a widget captured the key (a pick_list closing its
+    // dropdown spent it).
     if is_plain_escape(chord)
         && !repeat
         && r.modal_overlay().is_none()
-        && crate::update::chain_ui::escape(r)
+        && crate::update::chain_ui::escape(r, captured)
     {
         return Task::none();
     }

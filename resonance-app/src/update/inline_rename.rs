@@ -93,6 +93,7 @@ pub(crate) fn begin(
         target,
         surface,
         buffer: name.to_string(),
+        seed: name.to_string(),
     });
     // The double-click that opened the field landed on the name the
     // field replaces, so the pointer starts out over it. Its mouse area
@@ -112,20 +113,34 @@ pub(crate) fn input(r: &mut Resonance, text: String) {
 }
 
 /// Close the field and rename the channel when the trimmed buffer is a
-/// real change. An empty name is refused (the field just closes).
+/// real change: different from the name the field was seeded with (an
+/// untouched field never writes back over a rename made elsewhere since)
+/// and from the current name. An empty name is refused (the field just
+/// closes).
+///
+/// The rename is its own undo step. `SetTrackName` coalesces per track
+/// (the Compose lane inspector renames per keystroke), so the history's
+/// coalescing run is broken on both sides: two commits on one track are
+/// two steps, and a later keystroke rename does not fold into this one.
 pub(crate) fn commit(r: &mut Resonance) -> Task<Message> {
     let Some(open) = r.ui.mixer.renaming.take() else {
         return Task::none();
     };
     r.ui.mixer.rename_hovered = false;
     let name = open.buffer.trim();
+    if name.is_empty() || name == open.seed.trim() {
+        return Task::none();
+    }
     match current_name(r, open.target) {
-        Some(current) if !name.is_empty() && name != current => {
+        Some(current) if name != current => {
             let name = name.to_string();
-            r.update(match open.target {
+            r.session.undo.break_coalesce();
+            let task = r.update(match open.target {
                 RenameTarget::Track(id) => Message::Track(TrackMessage::SetTrackName(id, name)),
                 RenameTarget::Bus(id) => Message::Bus(BusMessage::RenameBus(id, name)),
-            })
+            });
+            r.session.undo.break_coalesce();
+            task
         }
         _ => Task::none(),
     }
@@ -168,16 +183,25 @@ pub(crate) fn escape(r: &mut Resonance, captured: bool) -> bool {
 /// (removed, or undone away), and commits an inspector-header rename
 /// whose channel the inspector no longer shows (the selection moved by a
 /// key or a control call, which no press reported): its field is drawn
-/// nowhere, so it has been left — a blur. Cheap: only while a rename is
-/// open.
+/// nowhere, so it has been left — a blur. A channel renamed elsewhere
+/// (the control API) under a field the user has not typed in re-seeds
+/// the field with the new name, so it shows — and an Enter keeps — what
+/// the channel is now called. Cheap: only while a rename is open.
 pub(crate) fn settle(r: &mut Resonance) -> Task<Message> {
     let Some(open) = r.ui.mixer.renaming.as_ref() else {
         return Task::none();
     };
     let (target, surface) = (open.target, open.surface);
-    if current_name(r, target).is_none() {
+    let Some(current) = current_name(r, target) else {
         cancel(r);
         return Task::none();
+    };
+    if current != open.seed && open.buffer == open.seed {
+        let current = current.to_string();
+        if let Some(open) = r.ui.mixer.renaming.as_mut() {
+            open.buffer = current.clone();
+            open.seed = current;
+        }
     }
     if surface == RenameSurface::Inspector && inspector_target(r) != Some(target) {
         return commit(r);

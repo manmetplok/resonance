@@ -104,7 +104,8 @@ pub(crate) fn fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
     super::hash_collapse_state(&mut h, r);
     bus.id.hash(&mut h);
     bus.name.hash(&mut h);
-    super::hash_rename(&mut h, r, RenameTarget::Bus(bus.id));
+    // The header's rename field sits outside the lazy body (see
+    // `inspector_fingerprint`), so it is not hashed.
     bus.is_return.hash(&mut h);
     for p in &bus.plugins {
         p.instance_id.hash(&mut h);

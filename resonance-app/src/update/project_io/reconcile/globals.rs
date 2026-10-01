@@ -127,17 +127,9 @@ impl Reconcile for TransientUi {
             return;
         }
         r.ui.interaction.selected_clip = None;
-        r.ui.mixer.plugin_window = None;
-        r.ui.mixer.focused_slot = None;
-        // The CHAIN rows' drag, prompt, replace mode, popovers and the
-        // instrument-picker cue all name the old project's slots.
-        r.ui.mixer.reset_chain_ui();
-        // The master outlives a load, but its selection must not: the new
-        // project opens with no channel in the inspector, as it does with
-        // no track or bus selected.
-        r.ui.mixer.selected_master = false;
-        // An inline rename names a channel of the old project.
-        crate::update::inline_rename::cancel(r);
+        // The plugin window, focused slot, CHAIN affordances, master
+        // selection and inline rename all name the old project.
+        r.ui.mixer.reset_for_project();
         r.ui.interaction.clip_drag = None;
         r.ui.interaction.clip_trim = None;
         r.modals.confirm_delete_track = None;

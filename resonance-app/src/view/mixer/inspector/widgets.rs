@@ -60,7 +60,7 @@ pub(super) fn toggle_button(
 }
 
 /// Full-width hairline action button — the inspector's shape for a
-/// one-shot command (Bounce, Delete bus, External hardware instrument).
+/// one-shot command (Bounce, Delete bus, External hardware…).
 /// `None` renders it disabled (dim text, no hover). `danger` tints the
 /// hover toward BAD for destructive actions.
 pub(super) fn action_button(
@@ -103,7 +103,7 @@ pub(super) fn action_button(
 }
 
 /// Small neutral pill beside the header name naming the channel type
-/// ("Inst", "Audio", "Bus", "Master").
+/// ("Inst", "Audio", "Bus"). The master has none: its title says it.
 pub(super) fn type_tag(label: &'static str) -> Element<'static, Message> {
     container(
         text(label)
@@ -159,7 +159,7 @@ pub(super) fn header<'a>(
 ) -> Element<'a, Message> {
     column![
         text("INSPECTOR")
-            .size(10)
+            .size(11)
             .font(theme::UI_FONT_SEMIBOLD)
             .color(theme::TEXT_3),
         Space::new().height(2),

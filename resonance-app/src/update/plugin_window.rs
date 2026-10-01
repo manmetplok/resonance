@@ -30,16 +30,18 @@ pub(crate) fn open(r: &mut Resonance, instance_id: PluginInstanceId) -> Task<Mes
     Task::none()
 }
 
-/// Show the generic window for `instance_id` and focus the slot. An open
-/// window keeps its place and takes the new plugin; a fresh one lands at
-/// the default spot, as does one whose stored place is no longer on
-/// screen. A slot that does not exist (an editor-failure echo that
-/// raced the slot's removal) opens nothing.
+/// Show the generic window for `instance_id` and focus the slot — which
+/// selects the channel it sits on ([`focus`]), so the inspector, the strip
+/// highlight and the preset commands all name the plugin the window
+/// shows. An open window keeps its place and takes the new plugin; a
+/// fresh one lands at the default spot, as does one whose stored place is
+/// no longer on screen. A slot that does not exist (an editor-failure
+/// echo that raced the slot's removal) opens nothing.
 pub(crate) fn open_generic(r: &mut Resonance, instance_id: PluginInstanceId) {
     if r.plugin_slot(instance_id).is_none() {
         return;
     }
-    r.ui.mixer.focused_slot = Some(instance_id);
+    focus(r, instance_id);
     let viewport = r.ui.window_size;
     let position = r
         .ui
@@ -69,12 +71,8 @@ pub(crate) fn focus(r: &mut Resonance, instance_id: PluginInstanceId) {
         PluginLocator::Track(track_id) => {
             let selected = r.ui.interaction.selected_tracks.contains(&track_id);
             if selected || r.ui.interaction.select_additive {
-                if r.ui.interaction.selected_track != Some(track_id) {
-                    // The inspector changes owner: drop the old owner's
-                    // transient CHAIN state, as `UiMessage::SelectTrack`
-                    // does.
-                    r.ui.mixer.reset_chain_ui();
-                }
+                // An owner change drops the old owner's transient CHAIN
+                // state in the post-update settle (`chain_ui::settle`).
                 r.ui.clear_channel_selection();
                 r.ui.interaction.make_primary_track(track_id);
             } else {
@@ -163,15 +161,49 @@ pub(crate) fn escape(r: &mut Resonance) -> bool {
 
 /// The slot the preset commands (◀ / ▶ / browse) and the media tab's
 /// double-click load act on: the focused slot, while it still resolves
-/// to a plugin. `None` in Performance mode, where neither the window nor
-/// the inspector is on screen — a step there would change a sound the
-/// user cannot see is targeted.
+/// to a plugin that is on screen somewhere — the generic window is open
+/// for it, or it sits on the channel the inspector describes. `None` in
+/// Performance mode, where neither the window nor the inspector is on
+/// screen — a step there would change a sound the user cannot see is
+/// targeted.
 pub(crate) fn preset_target(r: &Resonance) -> Option<PluginInstanceId> {
     if matches!(r.ui.view_mode, ViewMode::Performance) {
         return None;
     }
-    r.ui
+    let id = r.ui.mixer.focused_slot?;
+    r.plugin_slot(id)?;
+    let windowed = visible(r) && r.ui.mixer.plugin_window_id() == Some(id);
+    (windowed || on_inspector_owner(r, id)).then_some(id)
+}
+
+/// The channel the mixer inspector describes: the selected bus, else the
+/// master when it is selected, else the selected track — the precedence
+/// `view::mixer::inspector::view` draws with. A selection naming a
+/// channel that is gone describes nothing.
+pub(crate) fn inspector_owner(r: &Resonance) -> Option<PluginLocator> {
+    if let Some(bus) = r
+        .ui
         .mixer
-        .focused_slot
-        .filter(|id| r.plugin_slot(*id).is_some())
+        .selected_bus
+        .filter(|id| r.registry.busses.iter().any(|b| b.id == *id))
+    {
+        return Some(PluginLocator::Bus(bus));
+    }
+    if r.ui.mixer.selected_master {
+        return Some(PluginLocator::Master);
+    }
+    r.ui
+        .interaction
+        .selected_track
+        .filter(|id| r.registry.tracks.iter().any(|t| t.id == *id))
+        .map(PluginLocator::Track)
+}
+
+/// Whether `instance_id` sits in the chain of the channel the inspector
+/// describes.
+pub(crate) fn on_inspector_owner(r: &Resonance, instance_id: PluginInstanceId) -> bool {
+    let Some(owner) = inspector_owner(r) else {
+        return false;
+    };
+    crate::update::plugin_replace::locate_slot(r, instance_id).is_some_and(|(o, _)| o == owner)
 }

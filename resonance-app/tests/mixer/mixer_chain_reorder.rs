@@ -16,7 +16,7 @@
 //! that pressing the affordance the GUI hands out lands the same
 //! reorder — one undo step — that the control API reads back.
 
-use resonance_app::message::{ChainUiMessage, Message, PluginMessage};
+use resonance_app::message::{ChainUiMessage, Message, PluginMessage, UiMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, TestChain};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
@@ -37,7 +37,13 @@ fn app() -> Resonance {
             scanned("reverb", "Resonance Reverb", false),
         ],
     });
+    // The CHAIN rows are the selected channel's inspector rows.
+    select(&mut app, UiMessage::SelectTrack(Some(TRACK)));
     app
+}
+
+fn select(app: &mut Resonance, m: UiMessage) {
+    let _ = app.update(Message::Ui(m));
 }
 
 fn scanned(short: &str, name: &str, is_instrument: bool) -> ScannedPlugin {
@@ -479,13 +485,16 @@ fn bus_and_master_chains_reorder_by_drag_but_never_across_owners() {
     let bus = ids(&app, TestChain::Bus(bus_id));
     let master = ids(&app, TestChain::Master);
 
+    select(&mut app, UiMessage::SelectBus(Some(bus_id)));
     drag(&mut app, bus[1], bus[0]);
     assert_eq!(bus_order(&mut app, bus_id), vec!["compressor", "eq"]);
+    select(&mut app, UiMessage::SelectMaster);
     drag(&mut app, master[0], master[1]);
     assert_eq!(master_order(&mut app), vec!["reverb", "eq"]);
 
     // A drag only reorders its own owner's chain.
     let revision = app.revision();
+    select(&mut app, UiMessage::SelectBus(Some(bus_id)));
     drag(&mut app, bus[0], master[0]);
     assert_eq!(bus_order(&mut app, bus_id), vec!["compressor", "eq"]);
     assert_eq!(master_order(&mut app), vec!["reverb", "eq"]);

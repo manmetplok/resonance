@@ -85,7 +85,13 @@ impl crate::Resonance {
         // removed it (a remove, an undo-restore, a project load, the
         // control API), and an inspector-header rename commits once the
         // inspector moves off its channel.
+        //
+        // Likewise every transient CHAIN / strip affordance (the focused
+        // slot, slot menu, replace mode, preset prompt, drag, colour
+        // palette, instrument-picker cue) is pruned to the channel the
+        // inspector now describes and to what still exists.
         let task = if outermost {
+            crate::update::chain_ui::settle(self);
             let settled = crate::update::inline_rename::settle(self);
             Task::batch([task, settled])
         } else {
