@@ -9,7 +9,7 @@
 //! at ~60 Hz; without the split every strip re-ran its `format!`s,
 //! button builds and pick_lists on every frame.
 
-use iced::widget::{button, column, container, mouse_area, row, text, text_input, Space};
+use iced::widget::{button, column, container, mouse_area, row, text, Space};
 use iced::{alignment, Element, Length};
 use resonance_audio::types::*;
 
@@ -354,31 +354,12 @@ impl crate::Resonance {
 
     /// The strip head's name: one line, ellipsised and clipped (never
     /// wraps). A double-click swaps it for the inline rename field
-    /// (mixer-cleanup.md §2.3); while that is open for this track, the
-    /// field is drawn instead.
+    /// (mixer-cleanup.md §2.3); while that is open for this track on its
+    /// strip, the field is drawn instead.
     fn strip_name(&self, track: &TrackState) -> Element<'static, Message> {
-        if let Some((_, buffer)) = self
-            .ui
-            .mixer
-            .renaming
-            .as_ref()
-            .filter(|(id, _)| *id == track.id)
-        {
-            // The mouse area reports whether the pointer is over the
-            // field: a press while it is not commits the rename
-            // (`update::strip_rename`).
-            return mouse_area(
-                text_input("Track name", buffer)
-                    .id(crate::update::strip_rename::input_id())
-                    .on_input(|s| Message::Ui(UiMessage::StripRenameInput(s)))
-                    .on_submit(Message::Ui(UiMessage::CommitStripRename))
-                    .size(12)
-                    .padding([2, 4])
-                    .width(Length::Fill),
-            )
-            .on_enter(Message::Ui(UiMessage::StripRenameHovered(true)))
-            .on_exit(Message::Ui(UiMessage::StripRenameHovered(false)))
-            .into();
+        let target = RenameTarget::Track(track.id);
+        if let Some(buffer) = self.ui.mixer.rename_buffer(target, RenameSurface::Strip) {
+            return super::strip_parts::rename_field("Track name", buffer, 12.0);
         }
         // Truncate first, then clip in a width-Fill container:
         // `Wrapping::None` alone isn't enough when the parent has a
@@ -397,7 +378,7 @@ impl crate::Resonance {
         // around it would.
         mouse_area(name)
             .on_press(Message::Ui(UiMessage::SelectTrack(Some(track.id))))
-            .on_double_click(Message::Ui(UiMessage::BeginStripRename(track.id)))
+            .on_double_click(Message::Ui(UiMessage::BeginRename(target, RenameSurface::Strip)))
             .into()
     }
 
@@ -585,13 +566,11 @@ impl crate::Resonance {
 }
 
 /// The colour a sub-track strip's band wears: its parent's, looked up
-/// rather than trusted from the copy `SetTrackColor` makes, so the
-/// cluster reads as one instrument however the sub-track came to be.
+/// (`TrackRegistry::display_color`) rather than trusted from the copy the
+/// sub-track stores, so the cluster reads as one instrument however the
+/// sub-track came to be. The control read model reports the same.
 pub(super) fn sub_track_color(r: &crate::Resonance, track: &TrackState) -> [u8; 3] {
-    track
-        .sub_track
-        .and_then(|link| r.registry.tracks.iter().find(|t| t.id == link.parent_track_id))
-        .map_or(track.color, |parent| parent.color)
+    r.registry.display_color(track)
 }
 
 /// The non-live upper region of a sub-track strip (mixer-cleanup.md

@@ -658,26 +658,28 @@ pub enum UiMessage {
     /// `Resized`). Kept as `UiTransientState::window_size`, which the
     /// floating generic plugin window clamps its position to.
     WindowResized(iced::Size),
-    /// Open the inline rename on a track strip's head — a double-click on
-    /// its name (mixer-cleanup.md §2.3). Seeds the edit buffer with the
-    /// current name and focuses the field.
-    BeginStripRename(TrackId),
-    /// The strip rename field's text changed.
-    StripRenameInput(String),
-    /// Commit the strip rename (Enter, or the field losing focus): sends
-    /// `TrackMessage::SetTrackName` when the trimmed name is non-empty
-    /// and different, then closes the field.
-    CommitStripRename,
-    /// Drop the strip rename without renaming (Esc).
-    CancelStripRename,
-    /// A mouse press landed while a strip rename is open. Unless the
-    /// pointer is over the field, the press was elsewhere and the rename
-    /// commits (iced's `text_input` has no blur callback, and a press on
-    /// a layer above the strips never reaches the field at all).
-    StripRenamePointer,
+    /// Open the inline rename of a track or bus name on a strip head or
+    /// the inspector header — a double-click on the name
+    /// (mixer-cleanup.md §2.3, §3.1). Seeds the edit buffer with the
+    /// current name and focuses the field; an open rename elsewhere
+    /// commits first (`update::inline_rename`).
+    BeginRename(crate::state::RenameTarget, crate::state::RenameSurface),
+    /// The rename field's text changed.
+    RenameInput(String),
+    /// Commit the rename (Enter, or the field losing focus): sends
+    /// `TrackMessage::SetTrackName` / `BusMessage::RenameBus` when the
+    /// trimmed name is non-empty and different, then closes the field.
+    CommitRename,
+    /// Drop the rename without renaming (Esc).
+    CancelRename,
+    /// A mouse press landed while a rename is open. Unless the pointer
+    /// is over the field, the press was elsewhere and the rename commits
+    /// (iced's `text_input` has no blur callback, and a press on a layer
+    /// above the strips never reaches the field at all).
+    RenamePointer,
     /// The pointer entered (`true`) or left (`false`) the open rename
     /// field.
-    StripRenameHovered(bool),
+    RenameHovered(bool),
 }
 
 impl UiMessage {
@@ -742,15 +744,15 @@ impl UiMessage {
             // Keymap edits are user settings, not project state.
             | Self::Keymap(..)
             | Self::SelectMaster => UndoAction::Skip,
-            // The strip rename's edit buffer is UI state; the commit
-            // re-enters `update()` as `TrackMessage::SetTrackName`, which
+            // The inline rename's edit buffer is UI state; the commit
+            // re-enters `update()` as `SetTrackName` / `RenameBus`, which
             // records the one undo step.
-            Self::BeginStripRename(..)
-            | Self::StripRenameInput(..)
-            | Self::CommitStripRename
-            | Self::CancelStripRename
-            | Self::StripRenamePointer
-            | Self::StripRenameHovered(..) => UndoAction::Skip,
+            Self::BeginRename(..)
+            | Self::RenameInput(..)
+            | Self::CommitRename
+            | Self::CancelRename
+            | Self::RenamePointer
+            | Self::RenameHovered(..) => UndoAction::Skip,
         }
     }
 }

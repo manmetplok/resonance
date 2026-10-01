@@ -26,7 +26,10 @@ use std::hash::{Hash, Hasher};
 
 use resonance_audio::types::PluginInstanceId;
 
-use crate::state::{BusState, ExternalInstrumentStatus, PluginSlotState, TrackState};
+use crate::state::{
+    BusState, ExternalInstrumentStatus, PluginSlotState, RenameState, RenameSurface, RenameTarget,
+    TrackState,
+};
 
 /// Hash everything a slot line draws (`strip_parts::slot_line`): the
 /// name, the state dot (missing / bypassed / active) and whether it is
@@ -63,10 +66,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     track.track_type.hash(&mut h);
     track.instrument_icon.hash(&mut h);
     r.ui.mixer
-        .renaming
-        .as_ref()
-        .filter(|(id, _)| *id == track.id)
-        .map(|(_, buffer)| buffer)
+        .rename_buffer(RenameTarget::Track(track.id), RenameSurface::Strip)
         .hash(&mut h);
     let has_sub_tracks = r
         .registry
@@ -150,6 +150,10 @@ pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64
     let mut h = DefaultHasher::new();
     bus.id.hash(&mut h);
     bus.name.hash(&mut h);
+    // The head's name, or the rename field while it is open here.
+    r.ui.mixer
+        .rename_buffer(RenameTarget::Bus(bus.id), RenameSurface::Strip)
+        .hash(&mut h);
     bus.muted.hash(&mut h);
     bus.fx_bypassed.hash(&mut h);
     hash_chain(&mut h, &bus.plugins, r.ui.mixer.focused_slot);
@@ -247,9 +251,25 @@ impl crate::Resonance {
         Some((look.label, dot, look.dimmed, look.focused, look.instrument))
     }
 
-    /// Test-only: the open strip rename, if any (track and edit buffer).
+    /// Test-only: the open rename when it is a track's on its strip head
+    /// (track and edit buffer); `None` when no rename is open or the open
+    /// one is elsewhere (see [`Self::test_renaming`]).
     #[doc(hidden)]
     pub fn test_strip_renaming(&self) -> Option<(resonance_audio::types::TrackId, String)> {
+        self.ui.mixer.renaming.as_ref().and_then(|open| match open {
+            RenameState {
+                target: RenameTarget::Track(id),
+                surface: RenameSurface::Strip,
+                buffer,
+            } => Some((*id, buffer.clone())),
+            _ => None,
+        })
+    }
+
+    /// Test-only: the open inline rename, if any — target, surface and
+    /// edit buffer.
+    #[doc(hidden)]
+    pub fn test_renaming(&self) -> Option<RenameState> {
         self.ui.mixer.renaming.clone()
     }
 

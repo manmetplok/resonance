@@ -7,7 +7,7 @@
 //!
 //! 1. a key a widget already consumed (a focused text field, a canvas that
 //!    owns the keys) is dropped — except Esc, which first cancels an open
-//!    mixer strip rename, then closes one layer of the inspector CHAIN's
+//!    mixer inline rename, then closes one layer of the inspector CHAIN's
 //!    transient state (drag, preset prompt, replace mode, popovers),
 //!    whose fields may have captured it;
 //! 2. Esc resolves to closing the topmost root overlay (or, with none up,
@@ -107,11 +107,11 @@ pub(crate) fn handle_key(
             return task;
         }
     }
-    // Esc cancels an open strip rename. Its field captured the key (a
+    // Esc cancels an open inline rename. Its field captured the key (a
     // focused `text_input` takes Esc and unfocuses itself), so this sits
     // before the drop below. An Esc the field did not capture closes a
     // rename left open too, but goes on to mean what Esc means.
-    if is_plain_escape(chord) && !repeat && crate::update::strip_rename::escape(r, captured) {
+    if is_plain_escape(chord) && !repeat && crate::update::inline_rename::escape(r, captured) {
         return Task::none();
     }
     // Esc closes the inspector CHAIN's transient state, one layer per

@@ -211,3 +211,88 @@ fn a_legacy_project_opens_with_deterministic_colours() {
         assert_eq!(color_of(app, 4), track_palette_color(1));
     }
 }
+
+/// A sub-track's saved colour is redundant with its parent's: a file
+/// where the two disagree (hand-edited), or that lists the sub-track
+/// before its parent, still opens with the cluster in the parent's
+/// colour — the load does not depend on the file being consistent or
+/// ordered.
+#[test]
+fn a_sub_track_opens_in_its_parents_colour_whatever_the_file_says() {
+    let tmp = tempfile::tempdir().unwrap();
+    let parent = [0x10, 0x80, 0x40];
+    let mut sub = project_track(7, 0, Some([0xff, 0, 0]));
+    sub.sub_track = Some(SubTrackLink {
+        parent_track_id: 2,
+        output_port_index: 1,
+    });
+    let mut legacy_sub = project_track(8, 1, None);
+    legacy_sub.sub_track = Some(SubTrackLink {
+        parent_track_id: 2,
+        output_port_index: 2,
+    });
+    let file = ProjectFile {
+        tracks: vec![sub, legacy_sub, project_track(2, 2, Some(parent))],
+        ..ProjectFile::default()
+    };
+    let app = open(file, tmp.path());
+    assert_eq!(color_of(&app, 2), parent);
+    assert_eq!(color_of(&app, 7), parent, "a disagreeing saved colour");
+    assert_eq!(color_of(&app, 8), parent, "a legacy sub-track listed first");
+}
+
+/// The read model reports a sub-track in its parent's colour too — what
+/// its strip draws — even for a sub-track whose own stored colour was
+/// never synced (built outside every creation path).
+#[test]
+fn song_tracks_reports_a_sub_track_in_its_parents_colour() {
+    use resonance_app::state::{SubTrackLink, TrackState};
+    let (mut app, rx) = fresh_app();
+    let _ = add_track(&mut app, &rx);
+    let parent = add_track(&mut app, &rx);
+    let custom = [0x0a, 0x0b, 0x0c];
+    let _ = app.update(Message::Track(TrackMessage::SetTrackColor(parent, custom)));
+    let mut stray = TrackState::new_instrument(900, 5);
+    stray.sub_track = Some(SubTrackLink {
+        parent_track_id: parent,
+        output_port_index: 1,
+    });
+    stray.color = [1, 1, 1];
+    app.test_registry_mut().tracks.push(stray);
+
+    let summary: resonance_control::methods::song::SongSummary =
+        crate::common::call(&mut app, "song.summary", serde_json::json!({}))
+            .result()
+            .expect("song.summary succeeds");
+    let color_of_wire = |id: u64| {
+        summary
+            .tracks
+            .iter()
+            .find(|t| t.id.0 == id)
+            .unwrap_or_else(|| panic!("track {id} in the summary"))
+            .color
+            .clone()
+    };
+    assert_eq!(color_of_wire(parent).as_deref(), Some("#0a0b0c"));
+    assert_eq!(color_of_wire(900).as_deref(), Some("#0a0b0c"));
+}
+
+/// A bus rename persists: saved, reopened, the bus has its new name.
+#[test]
+fn a_bus_rename_survives_save_and_load() {
+    use resonance_app::message::BusMessage;
+    let tmp = tempfile::tempdir().unwrap();
+    let (mut app, _rx) = fresh_app();
+    app.test_add_bus(1, "Verb");
+    let _ = app.update(Message::Bus(BusMessage::RenameBus(1, "Plate".into())));
+
+    let dir = tmp.path().join("saved.rproj");
+    save_project(&dir, &app.test_build_project_file(), &[], &[]).expect("save");
+    let loaded = load_project(&dir).expect("load");
+    assert_eq!(loaded.file.busses.first().map(|b| b.name.as_str()), Some("Plate"));
+    let reopened = open(loaded.file, tmp.path());
+    assert_eq!(
+        reopened.test_registry().busses.first().map(|b| b.name.as_str()),
+        Some("Plate")
+    );
+}

@@ -20,7 +20,7 @@ use resonance_audio::types::{ScannedPlugin, SendSource, TrackOutput};
 use crate::message::{
     BusMessage, Message, MixerMessage, PluginMessage, PresetAddOwner, PresetUiMessage,
 };
-use crate::state::{BusState, MixerInspectorGroup};
+use crate::state::{BusState, MixerInspectorGroup, RenameTarget};
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
 use crate::view::mixer::picks::PluginOwner;
@@ -32,11 +32,18 @@ pub(super) fn view<'a>(r: &'a crate::Resonance, bus: &'a BusState) -> Element<'a
     // Title row: the bus name in the warm accent that identifies busses
     // everywhere else in the mixer, the type tag, and a RETURN badge when
     // the bus is flagged as an aux return.
-    let mut title_row = row![
+    // A double-click on the name renames the bus in place (§3.1).
+    let title = super::renameable_title(
+        r,
+        RenameTarget::Bus(bus.id),
+        "Bus name",
         text(bus.name.clone())
             .size(17)
             .font(theme::UI_FONT_MEDIUM)
             .color(theme::WARM),
+    );
+    let mut title_row = row![
+        title,
         Space::new().width(8),
         super::widgets::type_tag("Bus"),
     ]
@@ -97,6 +104,7 @@ pub(crate) fn fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
     super::hash_collapse_state(&mut h, r);
     bus.id.hash(&mut h);
     bus.name.hash(&mut h);
+    super::hash_rename(&mut h, r, RenameTarget::Bus(bus.id));
     bus.is_return.hash(&mut h);
     for p in &bus.plugins {
         p.instance_id.hash(&mut h);

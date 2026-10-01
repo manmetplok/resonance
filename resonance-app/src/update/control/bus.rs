@@ -42,6 +42,7 @@ pub(super) fn try_handle(
     let out = match request.method.as_str() {
         bus::CREATE => create(app, request),
         bus::DELETE => delete(app, request),
+        bus::RENAME => rename(app, request),
         bus::SET_VOLUME => set_volume(app, request),
         bus::ADD_EFFECT => add_effect(app, request),
         bus::REMOVE_EFFECT => remove_effect(app, request),
@@ -172,6 +173,28 @@ fn create(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
         revision: app.revision(),
     };
     (super::success(request, &result), task)
+}
+
+/// `bus.rename` — the bus twin of `track.rename`: same refusals (an
+/// unknown id is `not_found`, an empty name `invalid_params`), and the
+/// same message the strip / inspector inline rename sends, so it is one
+/// undo step.
+fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: bus::RenameParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    if find_bus(app, params.bus_id.0).is_none() {
+        return not_found_bus(request, params.bus_id.0);
+    }
+    if params.name.trim().is_empty() {
+        return reject(request, RpcError::invalid_params("bus name must not be empty"));
+    }
+    let task = super::run_via_update(
+        app,
+        Message::Bus(BusMessage::RenameBus(params.bus_id.0, params.name)),
+    );
+    (ack(app, request), task)
 }
 
 fn delete(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {

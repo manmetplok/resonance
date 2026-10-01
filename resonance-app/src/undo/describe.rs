@@ -51,6 +51,7 @@ pub fn describe(message: &Message) -> String {
             BusMessage::RemoveBus(_) => "delete bus",
             BusMessage::SetBusVolume(..) => "bus volume",
             BusMessage::SetBusPan(..) => "bus pan",
+            BusMessage::RenameBus(..) => "rename bus",
             _ => "bus edit",
         },
         Message::Mixer(m) => match m {

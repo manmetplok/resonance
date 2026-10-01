@@ -57,6 +57,8 @@ mod mixer_group_clustering;
 mod inspector_chain_row;
 #[path = "mixer/inspector_lazy_fingerprint.rs"]
 mod inspector_lazy_fingerprint;
+#[path = "mixer/mixer_inline_rename.rs"]
+mod mixer_inline_rename;
 #[path = "mixer/mixer_inspector_bus.rs"]
 mod mixer_inspector_bus;
 #[path = "mixer/mixer_inspector_bus_snapshot.rs"]

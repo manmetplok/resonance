@@ -484,6 +484,10 @@ pub fn seed_demo_with_drum_subtracks(app: &mut Resonance) {
     tom.level_r = 0.26;
 
     app.registry.tracks = vec![drums, bass, pad, lead, kick, snare, hh, tom];
+    // `new_sub_track` colours a sub-track by its own order; the real
+    // creation path (`ensure_subtracks`) gives it the parent's, so the
+    // fixture does the same.
+    app.registry.sync_sub_track_colors();
     app.registry.next_track_order = 8;
     app.registry.next_track_id = 14;
     app.ui.select_track(Some(1));

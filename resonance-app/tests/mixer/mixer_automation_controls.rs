@@ -164,7 +164,10 @@ fn track_strip_fingerprint_moves_with_every_rendered_facet() {
         // The inline rename swaps the name for a field, and every
         // keystroke redraws it.
         ("strip rename opened", |app| {
-            let _ = app.update(Message::Ui(UiMessage::BeginStripRename(BASS)));
+            let _ = app.update(Message::Ui(UiMessage::BeginRename(
+                resonance_app::state::RenameTarget::Track(BASS),
+                resonance_app::state::RenameSurface::Strip,
+            )));
         }),
         ("chain FX bypass", |app| {
             let _ = app.update(Message::Track(TrackMessage::ToggleTrackFxBypass(BASS)));

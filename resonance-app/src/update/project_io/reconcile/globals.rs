@@ -136,8 +136,8 @@ impl Reconcile for TransientUi {
         // project opens with no channel in the inspector, as it does with
         // no track or bus selected.
         r.ui.mixer.selected_master = false;
-        // A strip rename names a track of the old project.
-        crate::update::strip_rename::cancel(r);
+        // An inline rename names a channel of the old project.
+        crate::update::inline_rename::cancel(r);
         r.ui.interaction.clip_drag = None;
         r.ui.interaction.clip_trim = None;
         r.modals.confirm_delete_track = None;

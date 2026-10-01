@@ -88,6 +88,9 @@ impl Reconcile for Tracks {
                 replay_track(r, pt, order);
                 r.registry.next_track_order += 1;
             }
+            // Sub-tracks wear their parent's colour, whatever the file
+            // says (mixer-cleanup.md §6).
+            r.registry.sync_sub_track_colors();
             // Migrate old generate_params + track roles to lane_generators
             // for projects predating the unified lane generator system.
             // Keyed by track id, so the registry's order (sorted later, by
@@ -136,6 +139,7 @@ impl Reconcile for Tracks {
             replay_track(r, pt, pt.order);
             r.registry.next_track_order = r.registry.next_track_order.max(pt.order + 1);
         }
+        r.registry.sync_sub_track_colors();
     }
 }
 

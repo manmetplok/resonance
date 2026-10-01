@@ -594,6 +594,89 @@ fn recolouring_a_track_undoes_through_the_diff_path() {
     undo_redo_over(&mut f, &before, &after, "track colour");
 }
 
+/// Every path that makes or restores sub-tracks leaves them in their
+/// parent's colour: `ensure_subtracks` on the plugin's echo, a parent
+/// recolour (and its undo), and the diff restore that re-adds a deleted
+/// parent with its sub-tracks.
+#[test]
+fn sub_tracks_keep_their_parents_colour_through_undo_and_redo() {
+    let mut f = fixture("sub-track-colour");
+    let (_, t) = add_track(&mut f, Message::Track(TrackMessage::AddInstrumentTrack));
+    let s_plugin = edit(&mut f, add_to(TestChain::Track(t), scanned("multi")));
+    let colours = |app: &Resonance| -> (Option<[u8; 3]>, Vec<[u8; 3]>) {
+        let file = app.test_build_project_file();
+        let parent = file.tracks.iter().find(|pt| pt.id == t).and_then(|pt| pt.color);
+        let subs = file
+            .tracks
+            .iter()
+            .filter(|pt| pt.sub_track.is_some_and(|l| l.parent_track_id == t))
+            .map(|pt| pt.color.expect("a saved track carries its colour"))
+            .collect();
+        (parent, subs)
+    };
+    let (parent, subs) = colours(&f.app);
+    let old = parent.expect("the parent is saved");
+    assert_eq!(subs, vec![old; 2], "the echo's sub-tracks wear the parent's colour");
+
+    let new = [0x21, 0x43, 0x65];
+    assert_ne!(old, new);
+    let s_recoloured = edit(&mut f, Message::Track(TrackMessage::SetTrackColor(t, new)));
+    assert_eq!(colours(&f.app), (Some(new), vec![new; 2]), "the recolour carries");
+    let s_deleted = delete_track(&mut f, t);
+    assert!(sub_tracks_of(&f.app, t).is_empty());
+
+    let cmds = step_lands_on(&mut f, Message::Undo, &s_recoloured, "undo delete");
+    settle(&mut f, cmds, &s_recoloured, "undo delete");
+    assert_eq!(
+        colours(&f.app),
+        (Some(new), vec![new; 2]),
+        "the restored sub-tracks wear the parent's colour"
+    );
+    let cmds = step_lands_on(&mut f, Message::Undo, &s_plugin, "undo recolour");
+    settle(&mut f, cmds, &s_plugin, "undo recolour");
+    assert_eq!(colours(&f.app), (Some(old), vec![old; 2]), "undoing the recolour");
+    for (target, what) in [(&s_recoloured, "redo recolour"), (&s_deleted, "redo delete")] {
+        let cmds = step_lands_on(&mut f, Message::Redo, target, what);
+        settle(&mut f, cmds, target, what);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bus rename (mixer-cleanup.md §2.3, §3.1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn renaming_a_bus_undoes_through_the_diff_path() {
+    let mut f = fixture("bus-rename");
+    let (id, old) = f
+        .app
+        .test_registry()
+        .busses
+        .first()
+        .map(|b| (b.id, b.name.clone()))
+        .expect("the demo has a bus");
+    let name = |s: &UndoSnapshot| {
+        s.project
+            .file
+            .busses
+            .iter()
+            .find(|b| b.id == id)
+            .map(|b| b.name.clone())
+    };
+    let before = f.app.test_snapshot_for_undo();
+    let after = edit(&mut f, Message::Bus(BusMessage::RenameBus(id, "Kit Glue".into())));
+    assert_eq!(name(&before), Some(old));
+    assert_eq!(name(&after), Some("Kit Glue".to_owned()));
+    let _ = drain(&f.rx);
+    let cmds = step_lands_on(&mut f, Message::Undo, &before, "undo bus rename");
+    assert!(
+        sent(&cmds).iter().any(|c| c.starts_with(&format!("SetBusName {{ bus_id: {id},"))),
+        "the engine's bus is renamed back: {:?}",
+        sent(&cmds)
+    );
+    step_lands_on(&mut f, Message::Redo, &after, "redo bus rename");
+}
+
 // ---------------------------------------------------------------------------
 // Drum patterns
 // ---------------------------------------------------------------------------

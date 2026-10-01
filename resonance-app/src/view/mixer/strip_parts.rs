@@ -383,3 +383,23 @@ pub(super) fn color_band(color: Color) -> Element<'static, Message> {
         })
         .into()
 }
+
+/// The inline rename field (mixer-cleanup.md §2.3, §3.1;
+/// `update::inline_rename`), drawn in place of a channel's name on the
+/// one surface its rename is open on — a strip head or the inspector
+/// header. The mouse area reports whether the pointer is over the field:
+/// a press while it is not commits the rename.
+pub(super) fn rename_field(placeholder: &str, buffer: &str, size: f32) -> Element<'static, Message> {
+    mouse_area(
+        iced::widget::text_input(placeholder, buffer)
+            .id(crate::update::inline_rename::input_id())
+            .on_input(|s| Message::Ui(UiMessage::RenameInput(s)))
+            .on_submit(Message::Ui(UiMessage::CommitRename))
+            .size(size)
+            .padding([2, 4])
+            .width(Length::Fill),
+    )
+    .on_enter(Message::Ui(UiMessage::RenameHovered(true)))
+    .on_exit(Message::Ui(UiMessage::RenameHovered(false)))
+    .into()
+}

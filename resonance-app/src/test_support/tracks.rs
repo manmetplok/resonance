@@ -66,8 +66,12 @@ impl Resonance {
     /// placeholder snapshot tests to add a `TrackType::Vocal` track that
     /// has no lane-generator config.
     #[doc(hidden)]
-    pub fn test_push_track(&mut self, track: state::TrackState) {
+    pub fn test_push_track(&mut self, mut track: state::TrackState) {
         self.registry.next_track_order = self.registry.next_track_order.max(track.order + 1);
+        // A sub-track takes its parent's colour, as `ensure_subtracks`
+        // gives it (`TrackState::new_sub_track` can only colour it by its
+        // own order).
+        track.color = self.registry.display_color(&track);
         self.registry.tracks.push(track);
         self.compose.refresh_track_count(&self.registry.tracks);
     }

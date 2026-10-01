@@ -51,7 +51,7 @@ use resonance_audio::types::TrackType;
 use resonance_common::DeviceParam;
 
 use crate::message::*;
-use crate::state::{MixerInspectorGroup, TrackState};
+use crate::state::{MixerInspectorGroup, RenameSurface, RenameTarget, TrackState};
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
 // The cached-list-plus-stale-override combinator the io /
@@ -103,15 +103,21 @@ fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a,
     // Title row: the track name, its type tag, and the status badge on
     // external-instrument tracks (Unconfigured / Configuring / Live /
     // Offline), mirroring the prototype's inspector badge.
-    let mut title_row = row![
-        text(track.name.clone())
-            .size(17)
-            .font(theme::UI_FONT_MEDIUM)
-            .color(theme::TEXT_1),
-        Space::new().width(8),
-    ]
-    .spacing(0)
-    .align_y(alignment::Vertical::Center);
+    let title = text(track.name.clone())
+        .size(17)
+        .font(theme::UI_FONT_MEDIUM)
+        .color(theme::TEXT_1);
+    // A double-click on the name renames the track in place (§3.1). A
+    // sub-track is named after its parent's output port, so its header
+    // offers no rename — as its strip does not.
+    let title: Element<'a, Message> = if track.sub_track.is_some() {
+        title.into()
+    } else {
+        renameable_title(r, RenameTarget::Track(track.id), "Track name", title)
+    };
+    let mut title_row = row![title, Space::new().width(8)]
+        .spacing(0)
+        .align_y(alignment::Vertical::Center);
     // The colour swatch (mixer-cleanup.md §3.1, §6). A sub-track has no
     // colour of its own — it follows its parent — so it gets none.
     let has_color = track.sub_track.is_none();
@@ -171,6 +177,38 @@ fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a,
     // carets, the sends' dB readouts and trash buttons).
     .spacing(6)
     .into()
+}
+
+/// The header's channel name, renameable in place (mixer-cleanup.md
+/// §3.1): the rename field while a rename of `target` is open in the
+/// inspector, else `name` under a double-click that opens one. It shares
+/// the strip heads' machinery (`update::inline_rename`), so only one
+/// rename is ever open and only its surface draws the field.
+fn renameable_title<'a>(
+    r: &crate::Resonance,
+    target: RenameTarget,
+    placeholder: &str,
+    name: iced::widget::Text<'a>,
+) -> Element<'a, Message> {
+    match r.ui.mixer.rename_buffer(target, RenameSurface::Inspector) {
+        Some(buffer) => super::strip_parts::rename_field(placeholder, buffer, 15.0),
+        None => iced::widget::mouse_area(name)
+            .on_double_click(Message::Ui(UiMessage::BeginRename(
+                target,
+                RenameSurface::Inspector,
+            )))
+            .into(),
+    }
+}
+
+/// Hash the inspector-header rename field's state for `target` (its
+/// buffer while open there), so a body cached on the fingerprint can
+/// never keep a stale header (ui-work.md §11).
+fn hash_rename<H: std::hash::Hasher>(h: &mut H, r: &crate::Resonance, target: RenameTarget) {
+    use std::hash::Hash;
+    r.ui.mixer
+        .rename_buffer(target, RenameSurface::Inspector)
+        .hash(h);
 }
 
 /// Widget id of the header's colour swatch (tests click it by id: it
@@ -319,6 +357,7 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
     hash_collapse_state(&mut h, r);
     t.id.hash(&mut h);
     t.name.hash(&mut h);
+    hash_rename(&mut h, r, RenameTarget::Track(t.id));
     // The header swatch sits outside the lazy body, but the colour is
     // the track's identity everywhere else; hashed so nothing that
     // shows it can go stale (mixer-cleanup.md §6).

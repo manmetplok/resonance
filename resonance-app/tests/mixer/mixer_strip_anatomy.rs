@@ -16,7 +16,9 @@ use resonance_app::commands::{KeyChord, Mods, NamedKey};
 use resonance_app::message::{
     BusMessage, ChainUiMessage, MasterMessage, Message, PluginMessage, TrackMessage, UiMessage,
 };
-use resonance_app::state::{MixerInspectorGroup, PluginSlotState, ViewMode};
+use resonance_app::state::{
+    MixerInspectorGroup, PluginSlotState, RenameSurface, RenameTarget, ViewMode,
+};
 use resonance_app::update::shortcuts::TypingProbe;
 use resonance_app::{theme, Resonance};
 use resonance_audio::types::{AudioEvent, ScannedPlugin, TrackType};
@@ -424,6 +426,15 @@ fn the_master_strip_highlights_only_while_selected() {
 // Inline rename
 // ---------------------------------------------------------------------------
 
+/// Open the inline rename on `track`'s strip head (what a double-click on
+/// its name sends).
+fn begin_strip_rename(track: u64) -> Message {
+    Message::Ui(UiMessage::BeginRename(
+        RenameTarget::Track(track),
+        RenameSurface::Strip,
+    ))
+}
+
 /// A double-click on a strip's name raises the rename (the first press
 /// selects the track, like the strip around it).
 #[test]
@@ -441,7 +452,13 @@ fn double_clicking_the_name_begins_a_rename() {
     assert!(
         messages
             .iter()
-            .any(|m| matches!(m, Message::Ui(UiMessage::BeginStripRename(AUDIO)))),
+            .any(|m| matches!(
+                m,
+                Message::Ui(UiMessage::BeginRename(
+                    RenameTarget::Track(AUDIO),
+                    RenameSurface::Strip
+                ))
+            )),
         "{messages:?}"
     );
 }
@@ -452,13 +469,13 @@ fn enter_commits_the_rename_as_one_undoable_step() {
     // Undo records only for a project with a saved path.
     app.test_set_project_path(std::path::PathBuf::from("/tmp/strip-rename.rprj"));
     let before = track_name(&app, AUDIO);
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(begin_strip_rename(AUDIO));
     assert_eq!(app.test_strip_renaming(), Some((AUDIO, before.clone())));
 
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput(
+    let _ = app.update(Message::Ui(UiMessage::RenameInput(
         "  Vox Double ".into(),
     )));
-    let _ = app.update(Message::Ui(UiMessage::CommitStripRename));
+    let _ = app.update(Message::Ui(UiMessage::CommitRename));
     assert_eq!(app.test_strip_renaming(), None);
     assert_eq!(track_name(&app, AUDIO), "Vox Double", "trimmed and applied");
     assert!(texts(&app).iter().any(|(c, _)| c == "Vox Double"));
@@ -471,8 +488,8 @@ fn enter_commits_the_rename_as_one_undoable_step() {
 fn escape_cancels_the_rename_even_though_the_field_captured_it() {
     let mut app = app();
     let before = track_name(&app, AUDIO);
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Nope".into())));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("Nope".into())));
     let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
         chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
         repeat: false,
@@ -488,7 +505,7 @@ fn escape_cancels_the_rename_even_though_the_field_captured_it() {
 fn typing_in_the_rename_field_fires_no_shortcut() {
     let mut app = app();
     app.test_set_typing_probe(TypingProbe::Assume { editing: false });
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(begin_strip_rename(AUDIO));
     let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
         chord: KeyChord::named(NamedKey::Space, Mods::NONE),
         repeat: false,
@@ -502,7 +519,7 @@ fn typing_in_the_rename_field_fires_no_shortcut() {
 
     // The same key uncaptured, with the field closed, does play — so the
     // assertion above is not vacuous.
-    let _ = app.update(Message::Ui(UiMessage::CancelStripRename));
+    let _ = app.update(Message::Ui(UiMessage::CancelRename));
     let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
         chord: KeyChord::named(NamedKey::Space, Mods::NONE),
         repeat: false,
@@ -517,12 +534,12 @@ fn typing_in_the_rename_field_fires_no_shortcut() {
 #[test]
 fn a_press_off_the_field_commits_the_rename() {
     let mut app = app();
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
-    let _ = app.update(Message::Ui(UiMessage::StripRenamePointer));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("Bass DI".into())));
+    let _ = app.update(Message::Ui(UiMessage::RenamePointer));
     assert!(app.test_strip_renaming().is_some(), "a press in the field");
-    let _ = app.update(Message::Ui(UiMessage::StripRenameHovered(false)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenamePointer));
+    let _ = app.update(Message::Ui(UiMessage::RenameHovered(false)));
+    let _ = app.update(Message::Ui(UiMessage::RenamePointer));
     assert_eq!(app.test_strip_renaming(), None);
     assert_eq!(track_name(&app, AUDIO), "Bass DI");
 }
@@ -536,16 +553,16 @@ fn a_press_off_the_field_commits_the_rename() {
 /// of typing a space into the name.
 #[test]
 fn a_press_on_the_plugin_window_commits_the_rename_and_frees_the_keys() {
-    use resonance_app::update::strip_rename::pointer_event;
+    use resonance_app::update::inline_rename::pointer_event;
     let mut app = app();
     app.test_set_typing_probe(TypingProbe::Assume { editing: false });
     let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(EQ)));
     app.test_place_plugin_window(Point::new(500.0, 300.0));
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("Bass DI".into())));
 
     let field = simulator(&app)
-        .find(iced::widget::Id::new("mixer-strip-rename"))
+        .find(iced::widget::Id::new("mixer-inline-rename"))
         .expect("the rename field is drawn")
         .bounds();
     let window = app.test_plugin_window_state().expect("open").position;
@@ -565,7 +582,7 @@ fn a_press_on_the_plugin_window_commits_the_rename_and_frees_the_keys() {
     assert!(
         moves
             .iter()
-            .any(|m| matches!(m, Message::Ui(UiMessage::StripRenameHovered(false)))),
+            .any(|m| matches!(m, Message::Ui(UiMessage::RenameHovered(false)))),
         "leaving the field for the window is reported: {moves:?}"
     );
     for m in moves {
@@ -596,7 +613,7 @@ fn a_press_on_the_plugin_window_commits_the_rename_and_frees_the_keys() {
 fn an_uncaptured_escape_drops_a_stale_rename_and_falls_through() {
     let mut app = app();
     let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(EQ)));
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(begin_strip_rename(AUDIO));
     let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
         chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
         repeat: false,
@@ -610,8 +627,8 @@ fn an_uncaptured_escape_drops_a_stale_rename_and_falls_through() {
 #[test]
 fn switching_tabs_commits_the_rename() {
     let mut app = app();
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Bass DI".into())));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("Bass DI".into())));
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Arrange)));
     assert_eq!(app.test_strip_renaming(), None);
     assert_eq!(track_name(&app, AUDIO), "Bass DI");
@@ -624,18 +641,18 @@ fn the_rename_is_dropped_with_its_track_and_by_undo() {
     let mut app = app();
     app.test_set_project_path(std::path::PathBuf::from("/tmp/strip-rename-undo.rprj"));
     let before = track_name(&app, AUDIO);
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("First".into())));
-    let _ = app.update(Message::Ui(UiMessage::CommitStripRename));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("First".into())));
+    let _ = app.update(Message::Ui(UiMessage::CommitRename));
     assert_eq!(track_name(&app, AUDIO), "First");
 
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("Second".into())));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("Second".into())));
     let _ = app.update(Message::Undo);
     assert_eq!(app.test_strip_renaming(), None, "undo dropped the open rename");
     assert_eq!(track_name(&app, AUDIO), before, "and nothing re-committed it");
 
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(SYNTH)));
+    let _ = app.update(begin_strip_rename(SYNTH));
     let _ = app.update(Message::Track(TrackMessage::RequestRemoveTrack(SYNTH)));
     // A track with content asks first.
     let _ = app.update(Message::Track(TrackMessage::ConfirmRemoveTrack));
@@ -650,9 +667,9 @@ fn the_rename_is_dropped_with_its_track_and_by_undo() {
 fn an_empty_or_unchanged_name_renames_nothing() {
     let mut app = app();
     let before = track_name(&app, AUDIO);
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("   ".into())));
-    let _ = app.update(Message::Ui(UiMessage::CommitStripRename));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("   ".into())));
+    let _ = app.update(Message::Ui(UiMessage::CommitRename));
     assert_eq!(track_name(&app, AUDIO), before);
     assert_eq!(app.test_strip_renaming(), None);
 }
@@ -661,9 +678,9 @@ fn an_empty_or_unchanged_name_renames_nothing() {
 #[test]
 fn a_second_rename_commits_the_first() {
     let mut app = app();
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("First".into())));
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(SYNTH)));
+    let _ = app.update(begin_strip_rename(AUDIO));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("First".into())));
+    let _ = app.update(begin_strip_rename(SYNTH));
     assert_eq!(track_name(&app, AUDIO), "First");
     assert_eq!(
         app.test_strip_renaming(),
@@ -708,9 +725,9 @@ fn slot_focus_only_moves_the_owning_strips_fingerprint() {
 fn the_rename_buffer_moves_only_its_strips_fingerprint() {
     let mut app = app();
     let synth = app.test_track_strip_fingerprint(SYNTH).unwrap();
-    let _ = app.update(Message::Ui(UiMessage::BeginStripRename(AUDIO)));
+    let _ = app.update(begin_strip_rename(AUDIO));
     let open = app.test_track_strip_fingerprint(AUDIO).unwrap();
-    let _ = app.update(Message::Ui(UiMessage::StripRenameInput("x".into())));
+    let _ = app.update(Message::Ui(UiMessage::RenameInput("x".into())));
     assert_ne!(app.test_track_strip_fingerprint(AUDIO).unwrap(), open);
     assert_eq!(app.test_track_strip_fingerprint(SYNTH).unwrap(), synth);
 }

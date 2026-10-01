@@ -101,21 +101,40 @@ impl crate::Resonance {
     ///
     /// The track anatomy (mixer-cleanup.md §5): head (with mute), the FX
     /// switch, slot lines, the centred pan. Adding effects and deleting
-    /// the bus live in the bus inspector.
+    /// the bus live in the bus inspector. A double-click on the name
+    /// renames the bus in place, as on a track strip.
     fn bus_strip_body(&self, bus: &BusState) -> Element<'static, Message> {
         let bus_id = bus.id;
 
         // Head: a warm band (busses carry the audio-domain amber, not a
-        // per-track colour) and the one-line name.
-        let name = container(
-            text(crate::util::short(&bus.name, BUS_NAME_CHARS))
-                .size(12)
-                .font(theme::UI_FONT_MEDIUM)
-                .color(theme::WARM)
-                .wrapping(iced::widget::text::Wrapping::None),
-        )
-        .width(Length::Fill)
-        .clip(true);
+        // per-track colour) and the one-line name — or, while a rename
+        // is open on this strip, the rename field (mixer-cleanup.md §2.3).
+        let target = RenameTarget::Bus(bus_id);
+        let name: Element<'static, Message> =
+            match self.ui.mixer.rename_buffer(target, RenameSurface::Strip) {
+                Some(buffer) => super::strip_parts::rename_field("Bus name", buffer, 12.0),
+                None => {
+                    let name = container(
+                        text(crate::util::short(&bus.name, BUS_NAME_CHARS))
+                            .size(12)
+                            .font(theme::UI_FONT_MEDIUM)
+                            .color(theme::WARM)
+                            .wrapping(iced::widget::text::Wrapping::None),
+                    )
+                    .width(Length::Fill)
+                    .clip(true);
+                    // The name's own mouse area takes the press (it has
+                    // to, to see a double-click), so it selects the bus
+                    // itself, as the strip around it would.
+                    iced::widget::mouse_area(name)
+                        .on_press(Message::Ui(UiMessage::SelectBus(Some(bus_id))))
+                        .on_double_click(Message::Ui(UiMessage::BeginRename(
+                            target,
+                            RenameSurface::Strip,
+                        )))
+                        .into()
+                }
+            };
         // A bus has one live button (mute: no solo, arm or monitor), so
         // it rides at the right of the head instead of taking a row of
         // its own — the bus lane is 120 px shorter than the track lane,

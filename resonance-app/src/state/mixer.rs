@@ -108,19 +108,49 @@ pub struct MixerUiState {
     /// cannot focus a `pick_list`, so this is the honest stand-in. Keyed
     /// by track; drawn only while that track still lacks an instrument.
     pub instrument_picker_cue: Option<TrackId>,
-    /// The inline rename open on a track strip's head (mixer-cleanup.md
-    /// §2.3): the track and the edit buffer. Set by a double-click on the
-    /// strip's name (`UiMessage::BeginStripRename`); Enter or a click
-    /// elsewhere commits it through `TrackMessage::SetTrackName` (so undo
-    /// and the control API's rename share one path), Esc drops it.
-    /// Runtime UI state, never persisted.
-    pub renaming: Option<(TrackId, String)>,
+    /// The inline rename open on a channel's name (mixer-cleanup.md
+    /// §2.3, §3.1): what is being renamed, on which surface (a strip head
+    /// or the inspector header), and the edit buffer. Set by a
+    /// double-click on the name (`UiMessage::BeginRename`); Enter or a
+    /// click elsewhere commits it through `TrackMessage::SetTrackName` /
+    /// `BusMessage::RenameBus` (so undo and the control API's renames
+    /// share one path), Esc drops it. One rename is open at a time, and
+    /// only its surface draws the field. Runtime UI state, never
+    /// persisted.
+    pub renaming: Option<RenameState>,
     /// Whether the pointer is over the open rename field. A press while
-    /// it is not commits the rename (`update::strip_rename`): a press on
+    /// it is not commits the rename (`update::inline_rename`): a press on
     /// a layer above the strips — the floating plugin window, a modal —
     /// never reaches the field, so its focus state cannot say the user
     /// clicked away. Not drawn, so not hashed.
     pub rename_hovered: bool,
+}
+
+/// What an inline rename renames: a track (never a sub-track — those are
+/// named after their parent's output port) or a bus. The master has no
+/// name to edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RenameTarget {
+    Track(TrackId),
+    Bus(BusId),
+}
+
+/// Where an inline rename's field is drawn. A channel's name shows on its
+/// strip head and in the inspector header; only the surface the
+/// double-click landed on swaps its name for the field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RenameSurface {
+    Strip,
+    Inspector,
+}
+
+/// An open inline rename (see [`MixerUiState::renaming`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RenameState {
+    pub target: RenameTarget,
+    pub surface: RenameSurface,
+    /// Live edit buffer, seeded with the current name.
+    pub buffer: String,
 }
 
 /// An in-progress "Save preset…" prompt on a CHAIN row.
@@ -152,6 +182,16 @@ pub struct ChainDragState {
 }
 
 impl MixerUiState {
+    /// The edit buffer when `target`'s name is being renamed on
+    /// `surface` — i.e. when that surface draws the field in place of the
+    /// name. `None` on every other surface, so only one field is drawn.
+    pub fn rename_buffer(&self, target: RenameTarget, surface: RenameSurface) -> Option<&str> {
+        self.renaming
+            .as_ref()
+            .filter(|r| r.target == target && r.surface == surface)
+            .map(|r| r.buffer.as_str())
+    }
+
     /// Close the inspector's transient popovers: the slot menu and the
     /// colour palette.
     pub fn dismiss_inspector_popovers(&mut self) {

@@ -86,15 +86,15 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::SelectBus(_))
         | Message::Ui(UiMessage::SelectMaster)
         | Message::Ui(UiMessage::WindowResized(_))
-        // The strip rename's buffer is UI state; its commit re-enters
-        // `update()` as `TrackMessage::SetTrackName` and meets the gate
+        // The inline rename's buffer is UI state; its commit re-enters
+        // `update()` as `SetTrackName` / `RenameBus` and meets the gate
         // then.
-        | Message::Ui(UiMessage::BeginStripRename(_))
-        | Message::Ui(UiMessage::StripRenameInput(_))
-        | Message::Ui(UiMessage::CommitStripRename)
-        | Message::Ui(UiMessage::CancelStripRename)
-        | Message::Ui(UiMessage::StripRenamePointer)
-        | Message::Ui(UiMessage::StripRenameHovered(_))
+        | Message::Ui(UiMessage::BeginRename(..))
+        | Message::Ui(UiMessage::RenameInput(_))
+        | Message::Ui(UiMessage::CommitRename)
+        | Message::Ui(UiMessage::CancelRename)
+        | Message::Ui(UiMessage::RenamePointer)
+        | Message::Ui(UiMessage::RenameHovered(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)

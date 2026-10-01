@@ -51,11 +51,11 @@ fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             r.ui.view_mode = mode;
             if leaving {
                 // Nothing of the mixer's transient editing state survives
-                // a tab switch: a strip rename commits (leaving the field
+                // a tab switch: an inline rename commits (leaving the field
                 // is a blur), and the CHAIN rows' drag, prompt, replace
                 // mode and popovers close.
                 r.ui.mixer.reset_chain_ui();
-                return crate::update::strip_rename::commit(r);
+                return crate::update::inline_rename::commit(r);
             }
         }
         UiMessage::TogglePerformanceMode => {
@@ -172,23 +172,23 @@ fn handle_inner(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 y,
             });
         }
-        UiMessage::BeginStripRename(track_id) => {
-            return crate::update::strip_rename::begin(r, track_id);
+        UiMessage::BeginRename(target, surface) => {
+            return crate::update::inline_rename::begin(r, target, surface);
         }
-        UiMessage::StripRenameInput(text) => {
-            crate::update::strip_rename::input(r, text);
+        UiMessage::RenameInput(text) => {
+            crate::update::inline_rename::input(r, text);
         }
-        UiMessage::CommitStripRename => {
-            return crate::update::strip_rename::commit(r);
+        UiMessage::CommitRename => {
+            return crate::update::inline_rename::commit(r);
         }
-        UiMessage::CancelStripRename => {
-            crate::update::strip_rename::cancel(r);
+        UiMessage::CancelRename => {
+            crate::update::inline_rename::cancel(r);
         }
-        UiMessage::StripRenamePointer => {
-            return crate::update::strip_rename::pointer(r);
+        UiMessage::RenamePointer => {
+            return crate::update::inline_rename::pointer(r);
         }
-        UiMessage::StripRenameHovered(hovered) => {
-            crate::update::strip_rename::hovered(r, hovered);
+        UiMessage::RenameHovered(hovered) => {
+            crate::update::inline_rename::hovered(r, hovered);
         }
         UiMessage::WindowResized(size) => {
             crate::update::plugin_window::viewport_resized(r, size);

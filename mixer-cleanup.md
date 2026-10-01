@@ -1,9 +1,11 @@
 # Mixer tab cleanup: slim strips, one editing surface in the inspector
 
-Status: **spec, decisions answered, not started** (2026-10-01, written
-against `feat/drums-rework` @ 789cf9a4, whose mixer code matches master).
-Q1–Q16 are decided (§9). Delivery is **one branch, one landing**
-(`feat/mixer-cleanup`, §8).
+Status: **implemented** on `feat/mixer-cleanup` (slices S1–S8 plus the
+inspector-header / bus rename, branch `mixer/b3-rename`; 2026-10-01).
+Written against `feat/drums-rework` @ 789cf9a4, whose mixer code matches
+master. Q1–Q16 are decided (§9). Delivery is **one branch, one landing**
+(`feat/mixer-cleanup`, §8). What was built differently from the text
+below is listed in §10.
 
 Touches `resonance-app/src/view/mixer/**` (strips, inspector, plugin
 panel), `resonance-app/src/state/{mixer,tracks}.rs`, `theme.rs` (strip
@@ -353,3 +355,44 @@ Acceptance (user-visible):
 | — | Phasing | One branch, one landing (slices are review checkpoints only) |
 
 Decided in S4: the generic window is an in-app floating panel (§4).
+
+## 10. As built / deviations
+
+Recorded in the commits on `feat/mixer-cleanup` (`5cbb6e9c..`) and
+`mixer/b3-rename`:
+
+- **☰ slot menu and colour palette** are inline cards under their row /
+  the header, not floating popovers. A press elsewhere or Esc closes
+  them.
+- **Missing-plugin recovery** reads Replace / **Rescan** / Remove; "Locate"
+  became "Rescan" (the catalog rescan is what finds a moved plugin).
+- **Generic window** is an in-app floating panel (§4, option (a)), not
+  an OS window. The ☰ menu also offers "Parameters…", which opens the
+  generic window for a GUI plugin too.
+- **AUTOMATION** rows have Read and remove; the "show in Arrange" jump
+  is not built.
+- **Empty-instrument click** cues the CHAIN `+ Add instrument` picker
+  (accent border, "Pick an instrument" line, CHAIN unfolds) rather than
+  focusing it — iced cannot focus a `pick_list`.
+- **Slot lines** use 11 px text (the type floor) and 17 characters.
+- **Bus strips** carry mute in the head row (a bus has one live button,
+  no own button row) and have **no solo**: busses have no solo state.
+- **Master and bus head bands** are neutral (master) and warm (busses);
+  only tracks have a per-track colour. Busses report no colour on the
+  wire.
+- **Sub-tracks** draw and report their parent's colour, looked up at
+  draw time (`TrackRegistry::display_color`). Every real creation path
+  already stored the parent's colour (`ensure_subtracks`, project load,
+  `SetTrackColor`, undo restore); the mismatch seen in testing came from
+  fixtures building sub-tracks with `TrackState::new_sub_track`, which
+  colours by its own order. The fixtures now take the parent's, and a
+  load normalises sub-track colours to the parent's whatever the file
+  says.
+- **Inline rename** spans surfaces: track and bus names rename in place
+  on the strip head and in the inspector header (`UiMessage::BeginRename
+  (RenameTarget, RenameSurface)`, `update/inline_rename.rs`); one rename
+  is open at a time, only its surface draws the field, and an
+  inspector-header rename commits when the inspector moves off its
+  channel. Busses gained `BusMessage::RenameBus` (undoable) and the
+  control method `bus.rename` / MCP tool `bus_rename` — a control-API
+  addition beyond §7's colour-only slice.
