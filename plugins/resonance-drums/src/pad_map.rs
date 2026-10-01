@@ -10,8 +10,9 @@
 //! 1. **`_meta.pads.<piece>.note`** places that piece on the pad whose
 //!    note it names. A piece placed this way plays only there, not also
 //!    on the slot the Drummica table gives it. When two pieces name one
-//!    note, the first in key order wins it. A note no pad plays is
-//!    ignored (the piece falls back to the table).
+//!    note, the first in key order wins it; the other is not placed, and
+//!    falls back to the table. A note no pad plays is ignored (the piece
+//!    falls back to the table).
 //! 2. **The Drummica table** ([`DRUMMICA_MAPPING`]) fills every slot no
 //!    override took, with the table's piece — if the kit has it.
 //! 3. Anything else is **absent** (D7): the pad is silent, the editor dims
@@ -263,9 +264,12 @@ impl KitPads {
             let Some(slot) = hint.note.and_then(pad_index_for_note) else {
                 continue;
             };
-            placed.insert(piece.as_str());
+            // Only the winner of a note is placed: a piece that loses the
+            // note to another stays free for its table slot, rather than
+            // playing nowhere.
             if slots[slot].is_none() {
                 slots[slot] = Some(piece.clone());
+                placed.insert(piece.as_str());
             }
         }
         // 2. The Drummica table for the rest.

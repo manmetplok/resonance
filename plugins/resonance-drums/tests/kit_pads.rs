@@ -438,3 +438,34 @@ fn the_editor_shows_the_kits_names_labels_and_absent_pads() {
     assert!(frame.widget("inspector.not_in_kit").is_some());
     assert!(frame.widget("articulation.0").is_none());
 }
+
+// ---------------------------------------------------------------------------
+// `KitPads::resolve` edge cases (pure: no files)
+// ---------------------------------------------------------------------------
+
+fn meta(json: serde_json::Value) -> KitMeta {
+    KitMeta::from_value(&json)
+}
+
+#[test]
+fn a_piece_that_loses_a_note_collision_still_plays_on_its_table_slot() {
+    // Both name the Tom High note; "SD Count Stick" sorts first and wins
+    // it. The kick loses — and must still play on the kick pad, not
+    // nowhere.
+    let pieces = ["SD Count Stick", "SD Kick mit Teppich"];
+    let meta = meta(serde_json::json!({
+        "pads": {
+            "SD Count Stick": { "note": drum_map::TOM_HIGH },
+            "SD Kick mit Teppich": { "note": drum_map::TOM_HIGH },
+        }
+    }));
+    let pads = KitPads::resolve(|p| pieces.contains(&p), &meta);
+    assert_eq!(pads.pads[TOM_HIGH_PAD].piece.as_deref(), Some("SD Count Stick"));
+    assert_eq!(
+        pads.pads[KICK_PAD].piece.as_deref(),
+        Some("SD Kick mit Teppich"),
+        "the losing piece plays nowhere"
+    );
+    // The winner plays only where it was placed.
+    assert!(!pads.is_present(COUNT_STICK_PAD));
+}
