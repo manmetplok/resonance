@@ -192,9 +192,13 @@ impl PcmEncoding {
                 let v = i32::from_le_bytes([0, b[0], b[1], b[2]]) >> 8;
                 v as f32 / 8_388_608.0
             }
-            Self::S32 => (i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64 / 2_147_483_648.0) as f32,
+            Self::S32 => {
+                (i32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64 / 2_147_483_648.0) as f32
+            }
             Self::F32 => f32::from_le_bytes([b[0], b[1], b[2], b[3]]),
-            Self::F64 => f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32,
+            Self::F64 => {
+                f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as f32
+            }
         }
     }
 }

@@ -361,7 +361,8 @@ impl StreamingResampler {
 fn shared_kernel(from: u64, to: u64) -> std::sync::Arc<Kernel> {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex, OnceLock};
-    static KERNELS: OnceLock<Mutex<HashMap<(u64, u64), Arc<Kernel>>>> = OnceLock::new();
+    type Kernels = Mutex<HashMap<(u64, u64), Arc<Kernel>>>;
+    static KERNELS: OnceLock<Kernels> = OnceLock::new();
     let mut kernels = KERNELS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()

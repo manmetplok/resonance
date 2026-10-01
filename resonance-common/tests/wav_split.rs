@@ -6,20 +6,29 @@
 
 use std::io::Write;
 
-use resonance_common::{decode_wav_native, decode_wav_split, PcmEncoding, TailScratch, WavPcmLayout};
+use resonance_common::{
+    decode_wav_native, decode_wav_split, PcmEncoding, TailScratch, WavPcmLayout,
+};
 
 /// A deterministic non-trivial signal: a few incommensurate sines plus a
 /// hash-noise component, in -0.9..0.9.
 fn signal(frame: usize, channel: usize) -> f64 {
     let t = frame as f64;
-    let noise = ((frame.wrapping_mul(2_654_435_761) ^ (channel * 977)) % 1000) as f64 / 1000.0 - 0.5;
+    let noise =
+        ((frame.wrapping_mul(2_654_435_761) ^ (channel * 977)) % 1000) as f64 / 1000.0 - 0.5;
     0.4 * (t * 0.031 + channel as f64).sin() + 0.3 * (t * 0.0071).sin() + 0.2 * noise
 }
 
 /// A WAV of `frames` frames in `encoding` (tag 1 or 3; `extensible`
 /// wraps it in WAVE_FORMAT_EXTENSIBLE), with an extra chunk before
 /// `data` so the parser has to walk.
-fn wav(encoding: PcmEncoding, channels: u16, rate: u32, frames: usize, extensible: bool) -> Vec<u8> {
+fn wav(
+    encoding: PcmEncoding,
+    channels: u16,
+    rate: u32,
+    frames: usize,
+    extensible: bool,
+) -> Vec<u8> {
     let width = encoding.bytes();
     let block_align = channels as usize * width;
     let mut data = Vec::with_capacity(frames * block_align);
@@ -33,7 +42,9 @@ fn wav(encoding: PcmEncoding, channels: u16, rate: u32, frames: usize, extensibl
                     let s = (v * 8_388_607.0) as i32;
                     data.extend_from_slice(&s.to_le_bytes()[..3]);
                 }
-                PcmEncoding::S32 => data.extend_from_slice(&((v * 2_147_483_000.0) as i32).to_le_bytes()),
+                PcmEncoding::S32 => {
+                    data.extend_from_slice(&((v * 2_147_483_000.0) as i32).to_le_bytes())
+                }
                 PcmEncoding::F32 => data.extend_from_slice(&(v as f32).to_le_bytes()),
                 PcmEncoding::F64 => data.extend_from_slice(&v.to_le_bytes()),
             }
@@ -54,7 +65,11 @@ fn wav(encoding: PcmEncoding, channels: u16, rate: u32, frames: usize, extensibl
     if extensible {
         fmt.extend_from_slice(&22u16.to_le_bytes());
         fmt.extend_from_slice(&bits.to_le_bytes());
-        let mask: u32 = if channels == 1 { 0x4 } else { (1 << channels) - 1 };
+        let mask: u32 = if channels == 1 {
+            0x4
+        } else {
+            (1 << channels) - 1
+        };
         fmt.extend_from_slice(&mask.to_le_bytes());
         // KSDATAFORMAT_SUBTYPE_PCM / _IEEE_FLOAT
         fmt.extend_from_slice(&tag.to_le_bytes());
@@ -96,13 +111,23 @@ fn check_round_trip(bytes: Vec<u8>, target: f32, label: &str) {
     let dir = std::env::temp_dir().join(format!("wav-split-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{}.wav", label.replace(' ', "_")));
-    std::fs::File::create(&path).unwrap().write_all(&bytes).unwrap();
+    std::fs::File::create(&path)
+        .unwrap()
+        .write_all(&bytes)
+        .unwrap();
 
     let split = decode_wav_split(bytes, target, HEAD, MIN_TAIL).expect("split decode");
     assert_eq!(split.channels, full.channels, "{label}: channels");
     assert_eq!(split.frames, full.frames(), "{label}: frames");
-    let tail = split.tail.as_ref().unwrap_or_else(|| panic!("{label}: not split"));
-    assert_eq!(split.samples.len(), HEAD * split.channels, "{label}: head length");
+    let tail = split
+        .tail
+        .as_ref()
+        .unwrap_or_else(|| panic!("{label}: not split"));
+    assert_eq!(
+        split.samples.len(),
+        HEAD * split.channels,
+        "{label}: head length"
+    );
     assert_eq!(tail.frames() as usize, full.frames());
 
     let file = std::fs::File::open(&path).unwrap();
@@ -115,7 +140,8 @@ fn check_round_trip(bytes: Vec<u8>, target: f32, label: &str) {
     while at < split.frames {
         let n = sizes[i % sizes.len()].min(split.frames - at);
         let mut chunk = vec![0.0f32; n * split.channels];
-        tail.read(&file, at as u64, &mut chunk, &mut scratch).expect("tail read");
+        tail.read(&file, at as u64, &mut chunk, &mut scratch)
+            .expect("tail read");
         rebuilt.extend_from_slice(&chunk);
         at += n;
         i += 1;
@@ -126,7 +152,9 @@ fn check_round_trip(bytes: Vec<u8>, target: f32, label: &str) {
     );
     // A read past the end is refused, not padded.
     let mut one = vec![0.0f32; split.channels];
-    assert!(tail.read(&file, split.frames as u64, &mut one, &mut scratch).is_err());
+    assert!(tail
+        .read(&file, split.frames as u64, &mut one, &mut scratch)
+        .is_err());
     let _ = std::fs::remove_file(&path);
 }
 
@@ -142,7 +170,11 @@ fn every_encoding_and_layout_round_trips_bit_identically() {
     ];
     for encoding in encodings {
         for channels in [1u16, 2, 3] {
-            for (rate, target) in [(48_000u32, 48_000.0f32), (44_100, 48_000.0), (96_000, 48_000.0)] {
+            for (rate, target) in [
+                (48_000u32, 48_000.0f32),
+                (44_100, 48_000.0),
+                (96_000, 48_000.0),
+            ] {
                 let frames = 20_011;
                 let label = format!("{encoding:?} {channels}ch {rate}->{target}");
                 check_round_trip(wav(encoding, channels, rate, frames, false), target, &label);
@@ -156,7 +188,11 @@ fn extensible_headers_round_trip() {
     for encoding in [PcmEncoding::S24, PcmEncoding::F32] {
         for channels in [1u16, 2] {
             let label = format!("ext {encoding:?} {channels}ch");
-            check_round_trip(wav(encoding, channels, 44_100, 15_000, true), 48_000.0, &label);
+            check_round_trip(
+                wav(encoding, channels, 44_100, 15_000, true),
+                48_000.0,
+                &label,
+            );
         }
     }
 }
@@ -187,7 +223,10 @@ fn layout_parse_finds_the_data_chunk() {
     assert_eq!(layout.encoding, PcmEncoding::S24);
     assert_eq!(layout.block_align, 6);
     assert_eq!(layout.frames, 1_000);
-    assert_eq!(&bytes[layout.data_offset as usize - 8..layout.data_offset as usize - 4], b"data");
+    assert_eq!(
+        &bytes[layout.data_offset as usize - 8..layout.data_offset as usize - 4],
+        b"data"
+    );
     // A truncated data chunk counts only the whole frames present.
     let cut = &bytes[..bytes.len() - 7];
     assert_eq!(WavPcmLayout::parse(cut).unwrap().frames, 998);
