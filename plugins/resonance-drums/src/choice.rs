@@ -16,12 +16,21 @@
 //! value or displayed string. `resonance-delay`'s `DivisionParam` is the
 //! same stand-in for the same reason.
 
+use std::sync::{Arc, OnceLock};
+
 use resonance_plugin::{IntParam, IntRange, Param};
+
+/// Text for a choice value that the static table cannot know when the
+/// parameter is built (the kit's articulation labels): `None` falls back
+/// to the table.
+pub type ChoiceText = Arc<dyn Fn(i32) -> Option<String> + Send + Sync>;
 
 /// An integer parameter whose value indexes a static table of labels.
 pub struct ChoiceParam {
     inner: IntParam,
     labels: &'static [&'static str],
+    /// Set once, after construction ([`ChoiceParam::set_text`]).
+    text: OnceLock<ChoiceText>,
 }
 
 impl ChoiceParam {
@@ -38,7 +47,23 @@ impl ChoiceParam {
         Self {
             inner: IntParam::new(id, name, default, IntRange::Linear { min: 0, max }),
             labels,
+            text: OnceLock::new(),
         }
+    }
+
+    /// Have the parameter's text (display and parse) come from `text`
+    /// where it gives one, the static labels elsewhere. The first call
+    /// wins; returns whether this one did.
+    pub fn set_text(&self, text: ChoiceText) -> bool {
+        self.text.set(text).is_ok()
+    }
+
+    /// The text of value `index`: the attached text's, else the label's.
+    pub fn text_at(&self, index: i32) -> String {
+        self.text
+            .get()
+            .and_then(|text| text(index))
+            .unwrap_or_else(|| self.label_at(index).to_string())
     }
 
     /// Hide the parameter from the host's parameter list. Used for
@@ -101,17 +126,25 @@ impl Param for ChoiceParam {
             return self.inner.display(value);
         }
         let index = value.clamp(self.min_plain(), self.max_plain()).round() as i32;
-        let label = self.label_at(index);
+        let label = self.text_at(index);
         if label.is_empty() {
             // A value outside the table shows the number rather than
             // silently reading as some other choice.
             self.inner.display(value)
         } else {
-            label.to_string()
+            label
         }
     }
     fn parse(&self, text: &str) -> Option<f64> {
         let trimmed = text.trim();
+        let dynamic = self.text.get().and_then(|dynamic| {
+            (0..self.labels.len() as i32).find(|&i| {
+                dynamic(i).is_some_and(|label| label.trim().eq_ignore_ascii_case(trimmed))
+            })
+        });
+        if let Some(index) = dynamic {
+            return Some(index as f64);
+        }
         self.labels
             .iter()
             .position(|l| l.eq_ignore_ascii_case(trimmed))

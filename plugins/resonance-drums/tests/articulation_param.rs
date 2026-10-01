@@ -99,9 +99,9 @@ fn build_temp_kit(tag: &str, primary: f32, alt: f32) -> TempKit {
     write_flat_wav(&dir.join("kick_primary.wav"), primary, SAMPLE_FRAMES);
     write_flat_wav(&dir.join("kick_alt.wav"), alt, SAMPLE_FRAMES);
 
-    // Only the kick is described; every other pad falls back to the
-    // plugin's embedded sample, which is what a partial kit does in
-    // production too.
+    // Only the kick is described; every other pad is silent, which is
+    // what a partial kit does in production too (D7). No `_meta`: the
+    // pair comes from the Drummica table.
     let manifest = format!(
         r#"{{
   "SD Kick mit Teppich": {{
@@ -315,15 +315,17 @@ fn articulation_params_display_and_parse_their_labels() {
     let params = DrumParams::default();
     let param = &params.pads[0].articulation;
 
-    assert_eq!(param.display(ARTICULATION_PRIMARY as f64), "mit Teppich");
-    assert_eq!(param.display(ARTICULATION_ALT as f64), "ohne Teppich");
+    // Without a kit the values read generically (the kit's own labels are
+    // `pad_map.rs`'s, tested in `tests/kit_pads.rs`).
+    assert_eq!(param.display(ARTICULATION_PRIMARY as f64), "Primary");
+    assert_eq!(param.display(ARTICULATION_ALT as f64), "Alternate");
     assert_eq!(param.labels(), ARTICULATION_LABELS);
 
     // Parsing takes the label (case-insensitively) or the raw index, so
     // automation written against the number keeps working.
-    assert_eq!(param.parse("ohne Teppich"), Some(1.0));
-    assert_eq!(param.parse("OHNE TEPPICH"), Some(1.0));
-    assert_eq!(param.parse("mit Teppich"), Some(0.0));
+    assert_eq!(param.parse("Alternate"), Some(1.0));
+    assert_eq!(param.parse("ALTERNATE"), Some(1.0));
+    assert_eq!(param.parse("primary"), Some(0.0));
     assert_eq!(param.parse("1"), Some(1.0));
     assert_eq!(param.parse("nonsense"), None);
 

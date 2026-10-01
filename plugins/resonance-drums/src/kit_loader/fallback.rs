@@ -1,8 +1,9 @@
-//! Fallback pad construction.
+//! The built-in kit's pads, from the samples embedded in the plugin.
 //!
-//! Used when a manifest piece can't be loaded (or doesn't exist) so the
-//! pad still produces sound from the embedded default sample. Also used
-//! by the embedded "no-manifest" path for Clap / Cowbell.
+//! The built-in kit plays only when no kit is selected, or the selected
+//! kit is missing altogether (drums-plugin-rework.md D7): a kit that lacks
+//! a piece leaves that pad silent rather than filling it from here
+//! ([`crate::pad_map`]).
 
 use std::path::PathBuf;
 

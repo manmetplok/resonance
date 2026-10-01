@@ -35,11 +35,27 @@ use crossbeam_channel::{Receiver, RecvTimeoutError};
 use crate::reload::reload_kit;
 use crate::KitBridge;
 
-/// Labels for the per-pad articulation choice, indexed by parameter
-/// value. Drummica records both variants of every articulating piece
-/// ("mit Teppich" = snares engaged, "ohne Teppich" = snares off); the
-/// alternate piece names live in `kit_loader::DRUMMICA_ARTICULATION_ALT`.
-pub const ARTICULATION_LABELS: &[&str] = &["mit Teppich", "ohne Teppich"];
+/// The generic labels of the per-pad articulation choice, indexed by
+/// parameter value: 0 plays the pad's primary piece, 1 its alternate.
+///
+/// A CLAP parameter declares its range once, so the values stay generic;
+/// the words come from the kit. Which piece is the alternate, and what
+/// the two are called ("punch" / "deep" in IT Techno, "mit Teppich" /
+/// "ohne Teppich" in Drummica), is [`crate::pad_map`]'s: the editor chips
+/// show the kit's labels, and so does the parameter's text once the
+/// plugin has attached the kit to it ([`attach_kit_labels`]). These two
+/// are what it reads when the kit has no articulation for the pad.
+pub const ARTICULATION_LABELS: &[&str] = &["Primary", "Alternate"];
+
+/// Have every pad's articulation parameter display (and parse) the
+/// current kit's chip labels, falling back to [`ARTICULATION_LABELS`].
+pub fn attach_kit_labels(params: &crate::params::DrumParams, kit_pads: &crate::pad_map::KitPadsHandle) {
+    for (slot, pad) in params.pads.iter().enumerate() {
+        let kit_pads = kit_pads.clone();
+        pad.articulation
+            .set_text(Arc::new(move |value| kit_pads.articulation_text(slot, value)));
+    }
+}
 
 /// Parameter value for the primary articulation (the default).
 pub const ARTICULATION_PRIMARY: i32 = 0;
