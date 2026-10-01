@@ -67,11 +67,21 @@ impl ResonancePlugin for FlagsPlugin {
 
     fn new() -> Self {
         Self {
-            gain: FloatParam::new("gain", "Gain", 0.5, FloatRange::Linear { min: 0.0, max: 1.0 }),
+            gain: FloatParam::new(
+                "gain",
+                "Gain",
+                0.5,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
             selector: Arc::new(
-                IntParam::new("selector", "Selector", -1, IntRange::Linear { min: -1, max: 9 })
-                    .not_automatable()
-                    .excluded_from_state(),
+                IntParam::new(
+                    "selector",
+                    "Selector",
+                    -1,
+                    IntRange::Linear { min: -1, max: 9 },
+                )
+                .not_automatable()
+                .excluded_from_state(),
             ),
             progress: FloatParam::new(
                 "progress",
@@ -201,7 +211,10 @@ fn the_host_sees_the_opt_outs_as_clap_flags() {
     assert!(!gain.contains(ParamInfoFlags::IS_READONLY));
 
     let selector = flags_of(&mut instance, 1);
-    assert!(!selector.contains(ParamInfoFlags::IS_AUTOMATABLE), "no lane for a selector");
+    assert!(
+        !selector.contains(ParamInfoFlags::IS_AUTOMATABLE),
+        "no lane for a selector"
+    );
     assert!(selector.contains(ParamInfoFlags::IS_STEPPED));
     assert!(!selector.contains(ParamInfoFlags::IS_READONLY));
 
@@ -282,7 +295,10 @@ fn a_load_while_active_keeps_the_value_the_plugin_derived_from_it() {
     let processor = instance
         .activate(|_, _| (), audio_config())
         .expect("activate");
-    load_state(&mut instance, &json!({ "version": 1, "params": {}, "pick": 5 }));
+    load_state(
+        &mut instance,
+        &json!({ "version": 1, "params": {}, "pick": 5 }),
+    );
     // The deactivation reconciles the two sides with the load still
     // unapplied (no block ran): the derived value stands.
     instance.deactivate(processor);
