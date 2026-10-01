@@ -17,7 +17,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -444,7 +444,7 @@ fn download_and_extract(
         .ok_or_else(|| "no data dir".to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
-    let tmp_path = dir.join(format!(".{}.zip.part", sanitize(&kit.name)));
+    let tmp_path = dir.join(part_file_name(&kit.name));
     // From here on every way out removes the partial file: a cancel, a
     // network or disk error, a bad zip, and success alike.
     let result = stream_and_extract(resp, kit, worker, &tmp_path, &dir, total);
@@ -532,6 +532,21 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// The temporary file a download of `kit_name` streams into:
+/// `.<Kit>.<pid>-<n>.zip.part`. Unique per process and per download, so
+/// two plugin instances (or two processes) fetching the same kit at once
+/// each write their own file instead of interleaving into one — and one
+/// finishing never deletes the other's.
+fn part_file_name(kit_name: &str) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    format!(
+        ".{}.{}-{n}.zip.part",
+        sanitize(kit_name),
+        std::process::id()
+    )
 }
 
 /// Conservative filename sanitizer: keep ASCII alphanumerics, `-`, `_`, `.`;

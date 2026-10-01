@@ -149,8 +149,23 @@ fn wait_for(what: &str, timeout: Duration, mut done: impl FnMut() -> bool) {
     }
 }
 
-fn part_file(dir: &Path, sanitized: &str) -> PathBuf {
-    dir.join(format!(".{sanitized}.zip.part"))
+/// The `.part` files downloads of a kit named `sanitized` are streaming
+/// into: `.<sanitized>.<pid>-<n>.zip.part`.
+fn part_files(dir: &Path, sanitized: &str) -> Vec<PathBuf> {
+    let prefix = format!(".{sanitized}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = entries
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.starts_with(&prefix) && name.ends_with(".zip.part")
+        })
+        .map(|e| e.path())
+        .collect();
+    out.sort();
+    out
 }
 
 /// A fresh data directory for one test, removed on drop.
@@ -211,7 +226,7 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
         || matches!(worker.state.lock().status, Status::Error(_)),
     );
     assert!(
-        !part_file(&kits_dir, "Broken_Kit").exists(),
+        part_files(&kits_dir, "Broken_Kit").is_empty(),
         "a failed download left its .part file behind"
     );
     drop(worker);
@@ -229,12 +244,9 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
             )
         },
     );
-    let part = part_file(&kits_dir, "Slow_Kit");
-    assert!(
-        part.exists(),
-        "the transfer should be streaming into {}",
-        part.display()
-    );
+    let parts = part_files(&kits_dir, "Slow_Kit");
+    assert_eq!(parts.len(), 1, "the transfer should be streaming into a .part");
+    let part = parts[0].clone();
 
     let started = Instant::now();
     drop(worker);
@@ -251,6 +263,41 @@ fn download_worker_cancels_cleans_up_and_never_blocks_drop() {
         Duration::from_secs(5),
         || !part.exists(),
     );
+}
+
+/// Two workers (two plugin instances) downloading the same kit into the
+/// same directory used to share `.<Kit>.zip.part`: both wrote into one
+/// file, and the first to finish or fail deleted it under the other.
+#[test]
+fn two_downloads_of_one_kit_stream_into_separate_part_files() {
+    let home = DataHome::new("twins");
+    let index_url = start_server();
+    let a = home.worker(&index_url);
+    let b = home.worker(&index_url);
+    a.send(Command::Download(kit("Slow Kit", "slow.zip")));
+    b.send(Command::Download(kit("Slow Kit", "slow.zip")));
+    let streaming = |w: &WorkerHandle| {
+        matches!(
+            w.state.lock().status,
+            Status::Downloading { downloaded_bytes, .. } if downloaded_bytes > 0
+        )
+    };
+    wait_for("both downloads to stream", Duration::from_secs(10), || {
+        streaming(&a) && streaming(&b)
+    });
+    let parts = part_files(&home.kits_dir(), "Slow_Kit");
+    assert_eq!(parts.len(), 2, "both downloads share one file: {parts:?}");
+
+    // Cancelling one leaves the other's file alone.
+    drop(a);
+    wait_for("a's .part to go", Duration::from_secs(5), || {
+        part_files(&home.kits_dir(), "Slow_Kit").len() == 1
+    });
+    assert!(streaming(&b), "b must still be downloading");
+    drop(b);
+    wait_for("b's .part to go", Duration::from_secs(5), || {
+        part_files(&home.kits_dir(), "Slow_Kit").is_empty()
+    });
 }
 
 /// A completed download lands in the injected data directory — kit and
@@ -275,7 +322,7 @@ fn a_download_installs_into_the_injected_data_dir() {
         registry.contains("Good Kit") && registry.contains(&*dest.to_string_lossy()),
         "registry entry missing: {registry}"
     );
-    assert!(!part_file(&home.kits_dir(), "Good_Kit").exists());
+    assert!(part_files(&home.kits_dir(), "Good_Kit").is_empty());
 }
 
 /// The per-read timeout: a server that sends headers and then stalls
