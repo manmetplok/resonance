@@ -19,6 +19,10 @@ editor = [
     # the shared preset bar (ba todo #1358) lives behind this feature
     "resonance-plugin/editor-widgets",
 ]
+# Makes the process-isolation hooks (`library::isolate_for_tests`,
+# `library::override_default_roots`) public. Only this crate's own tests
+# turn it on (the dev-dependency on itself below).
+test-hooks = []
 
 [dependencies]
 resonance-plugin = { path = "../../resonance-plugin" }
@@ -46,11 +50,14 @@ rfd = { workspace = true, optional = true }
 # Drumkit download — gated behind the `editor` feature so headless builds
 # stay lean.
 ureq = { version = "3", features = ["json"], optional = true }
-# Verifying a download against the index's sha256 while it streams in.
-# Extraction is the kit library's (`resonance-common`, `drumkit-zip`).
+# The sha256 of a download, hashed as it streams in (and seeded from the
+# kept bytes on a resume) — never by re-reading the zip. Extraction is the
+# kit library's (`resonance-common`, `drumkit-zip`).
 sha2 = { version = "0.10", optional = true }
 
 [dev-dependencies]
+# The tests reach the isolation hooks (feature `test-hooks`).
+resonance-drums = { path = ".", features = ["test-hooks"] }
 # The download and library tests build kit zips.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 criterion.workspace = true

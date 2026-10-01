@@ -342,13 +342,25 @@ fn delete_confirms_in_place_then_removes_the_kit() {
 }
 
 /// The plok.org tab, from a fixture index: `Installed` when the manifest
-/// hash is in the library, `Update` when only the name is, `Download`
+/// hash is in the library, `Update` when only the name of a kit from
+/// plok.org is, `Download`
 /// otherwise. A fresh index is not fetched again on opening the tab.
 #[test]
 fn the_plok_tab_shows_installed_update_and_download() {
     let home = Home::new("plok");
     home.kit("Alpha", "Alpha Kit", 2);
     home.kit("Beta", "Beta Kit", 2);
+    // Only a kit that came from plok.org is offered as an Update.
+    resonance_common::drumkit_library::write_sidecar(
+        &home.root().join("Beta"),
+        &resonance_common::drumkit_library::Sidecar {
+            source: resonance_common::drumkit_library::SOURCE_PLOK.into(),
+            index_name: Some("Beta Kit".into()),
+            index_file: Some("beta.zip".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let lib = home.library();
     lib.rescan().unwrap().unwrap();
     let alpha_id = lib.read().find("Alpha Kit").unwrap().id.clone();

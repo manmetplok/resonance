@@ -5065,6 +5065,7 @@ dependencies = [
  "parking_lot",
  "plugin-gui-core",
  "resonance-common",
+ "resonance-drums",
  "resonance-dsp",
  "resonance-dsp-test-support",
  "resonance-plugin",
