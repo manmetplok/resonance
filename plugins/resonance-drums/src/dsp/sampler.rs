@@ -325,6 +325,17 @@ impl DrumSampler {
         }
     }
 
+    /// Install `pads` as the live kit at once, with every voice silenced.
+    /// For `initialize` only — the plugin is inactive, so nothing is
+    /// sounding to fade, and the old kit is freed on the calling (main)
+    /// thread. Never call this from the audio thread.
+    pub fn install_kit(&mut self, pads: Vec<LoadedPad>) {
+        self.reset();
+        self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
+        self.rr_last = [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS];
+        self.pads = pads;
+    }
+
     /// Audio-thread: check for a freshly loaded kit and swap it in if one is
     /// waiting. Called once per `process()` call from `lib.rs`. Voices that
     /// are still sounding fade out over [`SWAP_FADE_MS`] instead of being
