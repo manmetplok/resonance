@@ -363,6 +363,74 @@ fn overflowing_the_tails_reuses_the_quietest() {
     assert_eq!(positions, want, "the quietest tail was not the one reused");
 }
 
+/// "Quietest" counts the AHD envelope (E8): a tail whose decay has all
+/// but ended is reused before one that is less far into its steal fade
+/// but still ringing at full level. Here the snare (decay 5 ms) is
+/// stolen into a tail when its envelope is nearly done; by fade alone it
+/// is the loudest tail, by what it plays the quietest.
+#[test]
+fn overflowing_the_tails_counts_the_decay_envelope() {
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR);
+    sampler.pads = ramp_pads();
+    let params = DrumParams::default();
+    params.polyphony.set_value(2);
+    let (kick, snare) = (PAD_MAPPINGS[0].note, PAD_MAPPINGS[1].note);
+    params.pads[1].hold.set_value(0.0);
+    params.pads[1].decay.set_value(5.0); // 240 frames
+    sampler.update_global_settings(&params);
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    let mut run = |s: &mut DrumSampler, frames: usize| {
+        render_frames(s, &mut bufs, &params, frames, &[]);
+    };
+
+    sampler.note_on(snare, 1.0);
+    run(&mut sampler, 180);
+    // Kick hits two frames apart, each stealing the last: 16 kick tails.
+    sampler.note_on(kick, 1.0);
+    for _ in 0..16 {
+        run(&mut sampler, 2);
+        sampler.note_on(kick, 1.0);
+    }
+    // The snare stolen by a snare: into a tail, its envelope nearly done.
+    sampler.note_on(snare, 1.0);
+    // Fill the other tails.
+    for _ in 0..TAIL_SLOTS - 17 {
+        run(&mut sampler, 1);
+        sampler.note_on(kick, 1.0);
+    }
+    run(&mut sampler, 1);
+    assert_eq!(sampler.tail_voices_active(), TAIL_SLOTS);
+    let snare_tail = |s: &DrumSampler| {
+        s.tail_voices()
+            .iter()
+            .find(|v| v.active && v.pad_index == 1)
+            .copied()
+    };
+    let tail = snare_tail(&sampler).expect("the snare is in a tail");
+    let fade_only = sampler
+        .tail_voices()
+        .iter()
+        .filter(|v| v.active)
+        .map(|v| v.current_gain())
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        tail.current_gain() > fade_only,
+        "by fade alone the snare tail is not the quietest"
+    );
+    assert!(tail.audible_gain() < 0.01, "its envelope is nearly done");
+
+    // One more steal: the snare's tail is the one reused.
+    sampler.note_on(kick, 1.0);
+    assert!(
+        snare_tail(&sampler).is_none(),
+        "the tail with its envelope all but done was not the one reused"
+    );
+}
+
 /// CLAP `reset` kills the tails too: nothing fades into the next render.
 #[test]
 fn reset_clears_the_tails() {

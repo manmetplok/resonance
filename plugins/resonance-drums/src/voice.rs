@@ -263,4 +263,19 @@ impl Voice {
             }
         }
     }
+
+    /// What the voice plays at now, envelope and all: [`current_gain`]
+    /// times the AHD envelope when a decay is set (E8). What "quietest"
+    /// means when a voice must be cut.
+    ///
+    /// [`current_gain`]: Voice::current_gain
+    #[inline]
+    pub fn audible_gain(&self) -> f32 {
+        let gain = self.current_gain();
+        if self.decay_frames > 0 {
+            gain * self.ahd_gain()
+        } else {
+            gain
+        }
+    }
 }

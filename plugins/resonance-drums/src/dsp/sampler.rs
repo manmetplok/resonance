@@ -871,7 +871,9 @@ impl DrumSampler {
     /// old one dead (E1). A struct copy — nothing allocates.
     ///
     /// With every tail busy the quietest one is reused — the one whose cut
-    /// is least audible. Equally quiet tails (every victim of a burst on
+    /// is least audible, by what it plays now ([`Voice::audible_gain`]:
+    /// its fade *and* its AHD envelope, so a tail whose decay has all but
+    /// ended goes before one still ringing). Equally quiet tails (every victim of a burst on
     /// one frame starts its fade at the same gain) go by fewest fade
     /// frames left, then by least heard: a victim that had not rendered a
     /// frame before it was stolen goes before one that was sounding.
@@ -888,8 +890,8 @@ impl DrumSampler {
                 .enumerate()
                 .min_by(|(_, a), (_, b)| {
                     let left = |t: &Voice| t.release_len.saturating_sub(t.release_pos);
-                    a.current_gain()
-                        .total_cmp(&b.current_gain())
+                    a.audible_gain()
+                        .total_cmp(&b.audible_gain())
                         .then_with(|| left(a).cmp(&left(b)))
                         .then_with(|| a.position.cmp(&b.position))
                 })
