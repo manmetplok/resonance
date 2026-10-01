@@ -304,6 +304,8 @@ impl BuiltKit {
 pub struct HandedOffKit {
     pub request: KitRequest,
     pub sample_rate: f32,
+    /// What each of its pads was built from ([`BuiltKit::pad_requests`]).
+    pub pad_requests: Vec<PadRequest>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -714,17 +716,27 @@ pub fn load_kit(
     })
 }
 
-/// Whether `a` and `b` build the same kit given its pads `pads`: equal but
-/// for the articulation of pads the kit does not pair
-/// ([`crate::articulation::masked`]).
-pub fn same_request_masked(a: &KitRequest, b: &KitRequest, pads: &KitPads) -> bool {
-    a.path == b.path
-        && a.overhead_setup_key == b.overhead_setup_key
-        && a.pad_choices == b.pad_choices
-        && a.preload == b.preload
-        && a.banks == b.banks
-        && crate::articulation::masked(a.articulations, pads)
-            == crate::articulation::masked(b.articulations, pads)
+/// Whether `built` — a build of `request` at `sample_rate` — is the kit
+/// `handed` already put in the mailbox: the same kit file at the same
+/// rate and preload, every pad built from the same resolved
+/// [`PadRequest`].
+///
+/// Per pad, not per [`KitRequest`]: a request differs in ways that build
+/// nothing — an articulation on a pad the kit does not pair, `room_on`
+/// on a kit with no room mics, bleed on a kit without bleed, a room
+/// setup while room is off, an overhead slot naming the setup slot 1
+/// already plays — and handing the same kit off again for those would
+/// fade every voice and restart the round robins.
+pub fn same_kit_built(
+    handed: &HandedOffKit,
+    request: &KitRequest,
+    sample_rate: f32,
+    built: &BuiltKit,
+) -> bool {
+    handed.sample_rate.to_bits() == sample_rate.to_bits()
+        && handed.request.path == request.path
+        && handed.request.preload == request.preload
+        && handed.pad_requests == built.pad_requests
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -861,8 +873,7 @@ pub fn spawn_loader(
                     // with the kit already sent.
                     let same_kit = kit.stats.rebuilt_pads == 0
                         && bridge.handed_off.lock().as_ref().is_some_and(|h| {
-                            h.sample_rate.to_bits() == target_sr.to_bits()
-                                && same_request_masked(&h.request, &request, &kit_pads)
+                            same_kit_built(h, &request, target_sr, &kit.built)
                         });
                     let ordinal = if same_kit {
                         bridge.load_progress.last_sent()
@@ -873,6 +884,7 @@ pub fn spawn_loader(
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),
                         sample_rate: target_sr,
+                        pad_requests: kit.built.pad_requests.clone(),
                     });
                     *bridge.built_kit.lock() = Some(kit.built);
                     // The sampler moves off the built-in kit (if it was

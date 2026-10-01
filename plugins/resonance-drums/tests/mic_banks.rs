@@ -571,10 +571,22 @@ fn each_overhead_slot_level_scales_only_its_bank() {
     );
     assert_eq!(crash[OVERHEAD_PORT_INDEX], (0.0, 0.0));
 
-    // Slot 3 on slot 1's setup adds nothing, and rebuilds nothing.
+    // Slot 3 on slot 1's setup adds nothing, rebuilds nothing, and hands
+    // nothing off: a swap would fade every voice and restart the round
+    // robins for the same kit. Nor does a room setup while room is off.
+    let taken = plugin.bridge.load_progress.kits_taken();
     assert!(plugin.bridge.set_overhead_slot(2, DEFAULT_OVERHEAD_SETUP));
     let dup = settle(&mut plugin);
     assert_eq!(dup.rebuilt_pads, 0, "{dup:?}");
+    assert!(plugin.bridge.set_room_setup(ROOM_FAR));
+    assert_eq!(settle(&mut plugin).rebuilt_pads, 0);
+    assert_eq!(
+        plugin.bridge.load_progress.kits_taken(),
+        taken,
+        "a bank change that built nothing swapped a kit in"
+    );
+    plugin.bridge.set_room_setup("");
+    settle(&mut plugin);
     // Emptying slot 2 drops the XY banks again, decoding nothing.
     assert!(plugin.bridge.set_overhead_slot(1, ""));
     let emptied = settle(&mut plugin);
