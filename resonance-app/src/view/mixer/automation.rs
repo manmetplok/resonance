@@ -1,14 +1,14 @@
-//! Per-channel automation controls on the mixer strips (architecture doc
-//! #162 §3, todo #383 / A5).
+//! Per-channel automation support for the mixer (architecture doc #162
+//! §3, todo #383 / A5).
 //!
-//! Each track / bus / master strip carries a compact "lane header": a
-//! parameter picker that points an automation lane at any supported
-//! target for that channel (its gain / pan / mute, or a CLAP param on one
-//! of its plugin instances) and — once a lane exists — a per-lane Read
-//! toggle plus a remove button. Selecting a target sends
-//! [`AutomationMessage::AddLane`]; the engine echoes the lane back through
-//! the one-way mirror, so the picker, toggle and the timeline canvas all
-//! reflect the same [`AutomationState`].
+//! The inspector's AUTOMATION group (mixer-cleanup.md §3.4) lists a
+//! channel's lanes and offers a parameter picker that points a lane at
+//! any supported target for that channel (its gain / pan / mute, a CLAP
+//! param on one of its plugin instances, or a named device param).
+//! Selecting a target sends [`AutomationMessage::AddLane`]; the engine
+//! echoes the lane back through the one-way mirror, so the picker, the
+//! Read toggles and the timeline canvas all reflect the same
+//! [`AutomationState`].
 //!
 //! When Read is on during playback the channel's fader / pan knob is
 //! tinted with the live automated value from
@@ -22,12 +22,11 @@
 
 use std::rc::Rc;
 
-use iced::widget::{button, column, container, pick_list, row, text, Space};
-use iced::{alignment, Element, Length};
+use iced::widget::pick_list;
+use iced::{Element, Length};
 
 use crate::message::{AutomationMessage, Message};
 use crate::state::{AutomationState, PluginSlotState};
-use crate::theme;
 use resonance_common::{AutomationLane, AutomationTarget, DeviceParam};
 
 /// The channel a strip's automation header belongs to. Resolves an
@@ -241,21 +240,6 @@ fn priority(target: &AutomationTarget) -> u32 {
     }
 }
 
-/// The lane a strip's header surfaces for `chan` — the highest-priority
-/// lane whose target belongs to the channel, or `None` when the channel
-/// has no automation.
-pub(super) fn primary_lane<'a>(
-    automation: &'a AutomationState,
-    chan: AutoChan,
-    plugins: &[PluginSlotState],
-) -> Option<&'a AutomationLane> {
-    automation
-        .lanes
-        .values()
-        .filter(|lane| belongs(&lane.target, chan, plugins))
-        .min_by_key(|lane| priority(&lane.target))
-}
-
 /// Live automated value (normalized `0.0..=1.0`) for `target`, or `None`
 /// when the lane is absent, Read-disabled, or no throttled value has
 /// arrived yet (i.e. playback isn't currently driving it). Thin wrapper
@@ -289,78 +273,13 @@ fn target_label(target: &AutomationTarget, device_params: &[DeviceParam]) -> Str
     }
 }
 
-/// Build the compact automation lane header for a channel strip: the
-/// parameter picker and, once a lane exists, its Read toggle + remove
-/// button. Placed just above the pan/fader block on each strip.
-pub(super) fn automation_header<'a>(
-    automation: &AutomationState,
-    chan: AutoChan,
-    plugins: &[PluginSlotState],
-    device_params: &[DeviceParam],
-) -> Element<'a, Message> {
-    let options = choices_for(chan, plugins, device_params);
-    let picker = pick_list(options, None::<AutoChoice>, move |choice: AutoChoice| {
-        match target_of(chan, &choice.kind) {
-            Some(target) => Message::Automation(AutomationMessage::AddLane(target)),
-            // Unreachable for built choices; route to a harmless no-op by
-            // re-adding nothing. AddLane on an existing lane is itself a
-            // no-op, so reuse the master-gain target as a safe sink.
-            None => Message::Automation(AutomationMessage::AddLane(AutomationTarget::MasterGain)),
-        }
-    })
-    .placeholder("+ Automation")
-    .text_size(10)
-    .width(Length::Fill);
-
-    let mut col = column![picker].spacing(3).width(Length::Fill);
-
-    if let Some(lane) = primary_lane(automation, chan, plugins) {
-        let target = lane.target.clone();
-        let enabled = lane.enabled;
-
-        let name = text(target_label(&target, device_params))
-            .size(9)
-            .color(theme::TEXT_2);
-
-        let read_btn = button(
-            text("READ")
-                .size(8)
-                .font(theme::UI_FONT_SEMIBOLD)
-                .color(if enabled { theme::WARM } else { theme::TEXT_3 }),
-        )
-        .on_press(Message::Automation(AutomationMessage::ToggleRead(
-            target.clone(),
-        )))
-        .padding([1, 5])
-        .style(move |_theme, status| theme::toggle_button_style(enabled, theme::WARM, true, status));
-
-        let remove_btn = button(text("\u{2715}").size(9).color(theme::TEXT_3))
-            .on_press(Message::Automation(AutomationMessage::RemoveLane(target)))
-            .padding([1, 4])
-            .style(|_theme, status| theme::small_button_style(status));
-
-        let lane_row = row![
-            name,
-            Space::new().width(Length::Fill),
-            read_btn,
-            remove_btn,
-        ]
-        .spacing(4)
-        .align_y(alignment::Vertical::Center);
-
-        col = col.push(lane_row);
-    }
-
-    container(col).width(Length::Fill).into()
-}
-
 // ---------------------------------------------------------------------------
 // Inspector AUTOMATION group support (mixer-cleanup.md §3.4).
 //
-// The inspector lists *every* lane on a channel (the strip header shows
-// only the primary one) and offers the same `+ Add lane` options as the
-// strip header. These helpers keep the two on one option source and one
-// target resolution, so a lane added from either surface is the same
+// The inspector lists *every* lane on a channel and offers the
+// `+ Add lane` options (the strips' own lane header left them in
+// mixer-cleanup.md §2.2). These helpers keep one option source and one
+// target resolution, so a lane added from any surface is the same
 // `AutomationMessage::AddLane`.
 // ---------------------------------------------------------------------------
 
@@ -368,7 +287,8 @@ pub(super) fn automation_header<'a>(
 fn add_lane_message(chan: AutoChan, choice: &AutoChoice) -> Message {
     match target_of(chan, &choice.kind) {
         Some(target) => Message::Automation(AutomationMessage::AddLane(target)),
-        // Unreachable for built choices (see `automation_header`).
+        // Unreachable for built choices; `AddLane` on an existing lane
+        // is a no-op, so the master-gain target is a safe sink.
         None => Message::Automation(AutomationMessage::AddLane(AutomationTarget::MasterGain)),
     }
 }

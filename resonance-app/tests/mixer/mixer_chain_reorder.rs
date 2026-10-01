@@ -1,8 +1,8 @@
 //! Chain reorder from the GUI (ba todo #1302, doc #276 item 2.1): the
-//! ▲/▼ moves — on the strips' plugin slots, and as the ☰ slot menu's
-//! Move up / Move down on the inspector CHAIN rows (mixer-cleanup.md
-//! §3.2) — and drag reorder by a CHAIN row's ⠿ handle (slice S7), which
-//! obeys the same rules.
+//! ☰ slot menu's Move up / Move down on the inspector CHAIN rows
+//! (mixer-cleanup.md §3.2) and drag reorder by a CHAIN row's ⠿ handle
+//! (slice S7), which obeys the same rules. The strips' own carets left
+//! with §2.2: a strip shows its chain, the inspector edits it.
 //!
 //! Reordering has been complete in the backend since ba doc #273 and
 //! reachable over MCP as `track/bus/master.move_effect` — but the view

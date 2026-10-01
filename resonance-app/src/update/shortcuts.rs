@@ -6,7 +6,8 @@
 //! rest, in this order:
 //!
 //! 1. a key a widget already consumed (a focused text field, a canvas that
-//!    owns the keys) is dropped;
+//!    owns the keys) is dropped — except Esc, which first cancels an open
+//!    mixer strip rename, whose field captured it;
 //! 2. Esc resolves to closing the topmost root overlay (or, with none up,
 //!    the generic plugin window) before it means anything else;
 //! 3. while a modal root overlay shows, only ⌘/Ctrl chords dispatch;
@@ -103,6 +104,12 @@ pub(crate) fn handle_key(
         if let Some(task) = crate::update::plugin_preset_ui::key(r, chord) {
             return task;
         }
+    }
+    // Esc cancels an open strip rename. Its field captured the key (a
+    // focused `text_input` takes Esc and unfocuses itself), so this sits
+    // before the drop below.
+    if is_plain_escape(chord) && !repeat && crate::update::strip_rename::escape(r) {
+        return Task::none();
     }
     // A focused text field or a key-owning canvas already acted on it.
     if captured {

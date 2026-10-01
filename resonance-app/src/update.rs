@@ -40,6 +40,7 @@ pub mod project_io;
 pub mod reference;
 pub mod relink;
 pub mod shortcuts;
+pub mod strip_rename;
 pub mod takes;
 pub mod tempo_reanchor;
 pub mod tick;
@@ -274,6 +275,15 @@ impl crate::Resonance {
         if self.presets.dragging.is_some() {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::plugin_preset_ui::drag_end_event(&event)
+            }));
+        }
+
+        // An open strip rename commits when its field loses focus; iced's
+        // `text_input` has no blur callback, so every press is followed
+        // by a focus probe (`update::strip_rename`).
+        if self.ui.mixer.renaming.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::strip_rename::pointer_event(&event)
             }));
         }
 

@@ -134,6 +134,24 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 y,
             });
         }
+        UiMessage::BeginStripRename(track_id) => {
+            return crate::update::strip_rename::begin(r, track_id);
+        }
+        UiMessage::StripRenameInput(text) => {
+            crate::update::strip_rename::input(r, text);
+        }
+        UiMessage::CommitStripRename => {
+            return crate::update::strip_rename::commit(r);
+        }
+        UiMessage::CancelStripRename => {
+            crate::update::strip_rename::cancel(r);
+        }
+        UiMessage::StripRenamePointer => {
+            return crate::update::strip_rename::pointer(r);
+        }
+        UiMessage::StripRenameFocusProbed(focused) => {
+            return crate::update::strip_rename::focus_probed(r, focused);
+        }
         UiMessage::WindowResized(size) => {
             crate::update::plugin_window::viewport_resized(r, size);
         }

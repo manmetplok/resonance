@@ -96,6 +96,13 @@ pub struct MixerUiState {
     /// The track whose inspector colour palette is open (§3.1). Keyed by
     /// track so selecting another track does not show it open there.
     pub color_palette: Option<TrackId>,
+    /// The inline rename open on a track strip's head (mixer-cleanup.md
+    /// §2.3): the track and the edit buffer. Set by a double-click on the
+    /// strip's name (`UiMessage::BeginStripRename`); Enter or a click
+    /// elsewhere commits it through `TrackMessage::SetTrackName` (so undo
+    /// and the control API's rename share one path), Esc drops it.
+    /// Runtime UI state, never persisted.
+    pub renaming: Option<(TrackId, String)>,
 }
 
 /// An in-progress "Save preset…" prompt on a CHAIN row.
