@@ -616,8 +616,13 @@ impl Library {
             .or_else(|| unique(&|e: &Entry| fold(&e.name).contains(&lower)))
     }
 
-    /// Re-read `library.json` if another writer changed it. Returns
-    /// whether the entries changed. One `stat` when nothing moved.
+    /// Re-read `library.json` if its stamp (size, mtime) moved, and rebuild
+    /// the entries from it. Returns whether it was re-read. One `stat` when
+    /// nothing moved.
+    ///
+    /// The generation is not a reliable "unchanged" signal: an index that
+    /// was deleted and rebuilt, or rewritten by another tool, can carry the
+    /// generation this reader already has with different contents.
     pub fn reload_if_changed(&mut self) -> bool {
         let Some(root) = &self.root else {
             return false;
@@ -627,14 +632,10 @@ impl Library {
         if now == self.stamp {
             return false;
         }
-        let doc = read_index(&path, false);
-        let changed = doc.generation != self.doc.generation;
-        self.doc = doc;
+        self.doc = read_index(&path, false);
         self.stamp = now;
-        if changed {
-            self.rebuild_entries();
-        }
-        changed
+        self.rebuild_entries();
+        true
     }
 
     /// Scan the files, re-hash only new or changed ones, assign and free

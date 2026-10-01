@@ -446,6 +446,31 @@ fn reload_if_changed_sees_another_writer() {
     assert_eq!(reader.len(), 2);
 }
 
+#[test]
+fn reload_if_changed_rebuilds_when_the_generation_did_not_move() {
+    let root = temp_root("reload-same-gen");
+    let a = root.join(TONE3000_DIR).join("a.nam");
+    write_model(&a, 1);
+    let mut reader = Library::open_and_scan(&root).unwrap();
+    assert_eq!(slot_of_path(&reader, &a), Some(0));
+
+    // Another tool rewrites the index with the same generation (a rebuilt
+    // index can land on the reader's generation too): the slot moved.
+    let path = root.join("library.json");
+    let mut doc: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let gen = doc["generation"].clone();
+    let id = reader.entries()[0].id.clone();
+    doc["slots"] = serde_json::json!({ "7": id });
+    doc["next_slot"] = serde_json::json!(8);
+    assert_eq!(doc["generation"], gen);
+    std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+
+    assert!(reader.reload_if_changed());
+    assert_eq!(slot_of_path(&reader, &a), Some(7));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // ---------------------------------------------------------------------------
 // Two processes allocating slots at once
 // ---------------------------------------------------------------------------
