@@ -46,6 +46,12 @@ pub struct Recorded {
     pub calls: usize,
     /// Keys currently held (note-on seen, no note-off since).
     pub held: [bool; 128],
+    /// The `clap_host` the plugin was created with, as an address (so the
+    /// record stays `Send`): [`request_process`] calls back through it.
+    pub host: usize,
+    /// While set, `activate()` refuses — to leave the instance
+    /// deactivated after a restart.
+    pub fail_activate: bool,
 }
 
 impl Default for Recorded {
@@ -54,6 +60,8 @@ impl Default for Recorded {
             events: Vec::new(),
             calls: 0,
             held: [false; 128],
+            host: 0,
+            fail_activate: false,
         }
     }
 }
@@ -84,8 +92,8 @@ unsafe extern "C" fn r_init(_plugin: *const clap_plugin) -> bool {
     true
 }
 unsafe extern "C" fn r_destroy(_plugin: *const clap_plugin) {}
-unsafe extern "C" fn r_activate(_p: *const clap_plugin, _sr: f64, _min: u32, _max: u32) -> bool {
-    true
+unsafe extern "C" fn r_activate(p: *const clap_plugin, _sr: f64, _min: u32, _max: u32) -> bool {
+    !recorder(p).lock().fail_activate
 }
 unsafe extern "C" fn r_deactivate(_plugin: *const clap_plugin) {}
 unsafe extern "C" fn r_start(_plugin: *const clap_plugin) -> bool {
@@ -156,7 +164,9 @@ pub fn note_recorder(sample_rate: u32) -> (PluginSlot, Recorder) {
     let rec: Recorder = Arc::new(Mutex::new(Recorded::default()));
     let data = Box::into_raw(Box::new(Arc::clone(&rec)));
     let inst = __instance_from_raw_for_test(
-        move |_host| {
+        move |host| {
+            // SAFETY: `data` is the live box handed to the plugin below.
+            unsafe { (*data).lock().host = host as usize };
             let plugin = Box::new(clap_plugin {
                 desc: ptr::null(),
                 plugin_data: data as *mut c_void,
@@ -177,4 +187,16 @@ pub fn note_recorder(sample_rate: u32) -> (PluginSlot, Recorder) {
     )
     .expect("note recorder builds");
     (PluginSlot::new(inst), rec)
+}
+
+/// Call `clap_host.request_process()` the way the plugin would — from
+/// whatever thread the caller is on (CLAP marks it `[thread-safe]`).
+pub fn request_process(rec: &Recorder) {
+    let host = rec.lock().host as *const clap_sys::host::clap_host;
+    assert!(!host.is_null(), "the recorder was built through the host");
+    // SAFETY: the host outlives the instance the test still holds.
+    unsafe {
+        let request = (*host).request_process.expect("host serves request_process");
+        request(host);
+    }
 }
