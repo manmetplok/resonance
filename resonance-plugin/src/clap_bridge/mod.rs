@@ -30,6 +30,7 @@ use crate::plugin::ResonancePlugin;
 
 mod gui;
 mod midi;
+mod param_flags;
 mod params;
 mod ports;
 mod process;
@@ -72,6 +73,10 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         builder.register::<PluginStateContext>();
         builder.register::<PluginPresetLoad>();
         builder.register::<preset_session::PluginPresetSessionExt>();
+        // Which params the state leaves out (com.resonance.param-flags):
+        // CLAP has no flag for it, and a host persisting them beside the
+        // state would override what the state recalls.
+        builder.register::<param_flags::PluginParamFlagsExt>();
 
         if let Some(shared) = shared {
             if shared.midi_input {

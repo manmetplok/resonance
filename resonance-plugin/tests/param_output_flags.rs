@@ -380,3 +380,27 @@ fn an_active_flush_mirrors_the_landed_value_not_the_wire_value() {
     assert_eq!(get_value(&mut instance, "selector"), 3.0, "rounded");
     instance.deactivate(processor);
 }
+
+/// The bridge publishes which params its state leaves out through
+/// `com.resonance.param-flags`, so the host leaves them out of what it
+/// persists: CLAP's own flags have no bit for it.
+#[test]
+fn the_bridge_publishes_state_excluded_params() {
+    use resonance_common::param_flags::{PluginParamFlags, EXTENSION_ID};
+    let instance = instance();
+    let raw = instance.raw_instance();
+    let ext = unsafe { (raw.get_extension.expect("get_extension"))(raw, EXTENSION_ID.as_ptr()) }
+        as *const PluginParamFlags;
+    assert!(!ext.is_null(), "a Resonance plugin serves the extension");
+    let is_excluded = unsafe { (*ext).is_state_excluded.expect("is_state_excluded") };
+    let ask = |id: &str| unsafe {
+        is_excluded(
+            raw as *const _ as *const std::ffi::c_void,
+            stable_hash(id),
+        )
+    };
+    assert!(!ask("gain"));
+    assert!(ask("selector"), "excluded_from_state()");
+    assert!(ask("progress"), "read_only() implies it");
+    assert!(!ask("no-such-param"));
+}

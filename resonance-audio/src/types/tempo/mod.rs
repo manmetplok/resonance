@@ -46,7 +46,7 @@ pub struct PluginDescInfo {
 /// fields carry what the CLAP params extension already exposes — its own
 /// formatting of the value, the group it belongs to, whether it steps —
 /// up to the app and out over the control API.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ParamInfo {
     pub id: u32,
     pub name: String,
@@ -86,6 +86,58 @@ pub struct ParamInfo {
     /// shown. It is still automatable and still saved, so it stays in
     /// this list — readers that draw a parameter list skip it.
     pub hidden: bool,
+    /// CLAP `IS_AUTOMATABLE`: the host may put this parameter under an
+    /// automation lane. A plugin clears it for a control whose every
+    /// change is heavy work (the drums' `kit_select`) and for every
+    /// read-only output; no lane picker or `automation.*` method offers
+    /// one then. It can still be set, saved and undone.
+    pub automatable: bool,
+    /// CLAP `IS_READONLY`: an output only the plugin writes (a load
+    /// progress, a meter). Readable, never settable — the plugin ignores
+    /// a host write — and never persisted.
+    pub read_only: bool,
+    /// The plugin's state leaves this parameter out
+    /// (`com.resonance.param-flags`; always true for a read-only one), so
+    /// the host must not persist or re-send it on the plugin's behalf: the
+    /// state carries it in its own form, and a value saved next to the
+    /// blob would override what the blob recalls (the drums' `kit_select`
+    /// slot vs. its kit reference). Live edits still reach it.
+    pub state_excluded: bool,
+}
+
+impl ParamInfo {
+    /// Whether the host keeps this parameter's value on the plugin's
+    /// behalf — in `project.json`, undo snapshots and the re-sends after a
+    /// state load. False for a read-only output and for a parameter the
+    /// plugin's own state carries in another form.
+    pub fn host_persisted(&self) -> bool {
+        !self.read_only && !self.state_excluded
+    }
+}
+
+/// Every field empty or zero, except `automatable`: an ordinary parameter
+/// is automatable, and a hand-built one (a test fixture, a placeholder)
+/// should not lose its lane by omission.
+impl Default for ParamInfo {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            name: String::new(),
+            min_value: 0.0,
+            max_value: 0.0,
+            default_value: 0.0,
+            current_value: 0.0,
+            text: String::new(),
+            unit: String::new(),
+            stepped: false,
+            choices: Vec::new(),
+            module: String::new(),
+            hidden: false,
+            automatable: true,
+            read_only: false,
+            state_excluded: false,
+        }
+    }
 }
 
 /// A `.clap` bundle a scan found but could not load (ba todo #1307).

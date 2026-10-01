@@ -32,6 +32,8 @@ mod color_plugin_loads;
 mod clap_thread_roles;
 #[path = "clap_host/clap_param_flush.rs"]
 mod clap_param_flush;
+#[path = "clap_host/clap_param_flags.rs"]
+mod clap_param_flags;
 #[path = "clap_host/clap_param_meta.rs"]
 mod clap_param_meta;
 #[path = "clap_host/param_from_text.rs"]

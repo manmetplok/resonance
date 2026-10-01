@@ -52,6 +52,10 @@ pub struct ClapInstance {
     /// re-query after a deactivate → reactivate cycle (doc #260
     /// finding #10). `None` when the plugin doesn't implement it.
     pub(super) latency_ext: Option<*const clap_plugin_latency>,
+    /// The plugin's `com.resonance.param-flags` extension, when it is one
+    /// of ours: which params its state leaves out. Read by
+    /// [`ClapInstance::query_params`]; `None` for third-party plugins.
+    pub(super) param_flags_ext: Option<*const resonance_common::param_flags::PluginParamFlags>,
     /// True when `gui_create` has been called and `gui_destroy` hasn't yet.
     pub(super) gui_open: bool,
     /// Number of output audio ports as reported by the plugin's audio-ports
@@ -146,6 +150,7 @@ impl ClapInstance {
             audio_ports_ext,
             gui_ext,
             latency_ext,
+            param_flags_ext: None,
             gui_open: false,
             output_port_count,
             input_port_count,
@@ -394,6 +399,11 @@ impl ClapInstance {
             // reach.
             let hidden = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_HIDDEN != 0;
             let stepped = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_STEPPED != 0;
+            let automatable =
+                info.flags & clap_sys::ext::params::CLAP_PARAM_IS_AUTOMATABLE != 0;
+            let read_only = info.flags & clap_sys::ext::params::CLAP_PARAM_IS_READONLY != 0;
+            // A read-only output is never the host's to persist either.
+            let state_excluded = read_only || self.param_state_excluded(info.id);
 
             // What the plugin calls this value, and the unit taken off
             // it. `value_to_text` is the only place a unit exists in
@@ -426,10 +436,31 @@ impl ClapInstance {
                 choices,
                 module,
                 hidden,
+                automatable,
+                read_only,
+                state_excluded,
             });
         }
 
         result
+    }
+
+    /// Whether the plugin's state leaves `param_id` out
+    /// (`com.resonance.param-flags`): `false` for a plugin without the
+    /// extension, i.e. every third-party one. Any thread; the answer is
+    /// fixed for the instance's lifetime.
+    pub fn param_state_excluded(&self, param_id: u32) -> bool {
+        let Some(ext) = self.param_flags_ext else {
+            return false;
+        };
+        // SAFETY: the vtable is the plugin's, live for the instance's
+        // lifetime; the call is `[thread-safe]`.
+        unsafe {
+            match (*ext).is_state_excluded {
+                Some(f) => f(self.plugin as *const std::ffi::c_void, param_id),
+                None => false,
+            }
+        }
     }
 
     /// One parameter's `min..=max`, without touching its formatting

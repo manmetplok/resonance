@@ -210,7 +210,13 @@ fn restore_after_recovery(
 ///
 /// Ids not present on the instantiated plugin are skipped: a plugin that
 /// dropped or renumbered a parameter between versions must not have a
-/// stale id pushed at it.
+/// stale id pushed at it. So are params the host does not persist
+/// ([`ParamInfo::host_persisted`]): a project written before the plugin
+/// declared one state-excluded (the drums' `kit_select`) still carries
+/// it, and re-sending it after the blob would override the kit the blob
+/// just recalled.
+///
+/// [`ParamInfo::host_persisted`]: resonance_audio::types::ParamInfo::host_persisted
 fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceId) {
     let Some(overrides) = r.presets.pending_plugin_param_overrides.remove(&instance_id) else {
         return;
@@ -219,7 +225,11 @@ fn apply_pending_param_overrides(r: &mut Resonance, instance_id: PluginInstanceI
         .with_plugin_mut(instance_id, |slot| {
             let mut applied = Vec::new();
             for saved in &overrides {
-                if let Some(param) = slot.params.iter_mut().find(|p| p.id == saved.id) {
+                if let Some(param) = slot
+                    .params
+                    .iter_mut()
+                    .find(|p| p.id == saved.id && p.host_persisted())
+                {
                     param.current_value = saved.value;
                     applied.push((saved.id, saved.value));
                 }
