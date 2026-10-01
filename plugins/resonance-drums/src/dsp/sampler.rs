@@ -6,9 +6,7 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{
-    self, LoadedMicBank, LoadedPad, LoadedSample, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX,
-};
+use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
 use crate::kit_loader::KitLoadProgress;
 use crate::params::DrumParams;
 use crate::voice::{
@@ -307,9 +305,10 @@ impl DrumSampler {
         self.pads.clear();
 
         for mapping in &PAD_MAPPINGS {
-            // The embedded WAVs are mono, and stay mono (E5).
-            let sample = match kit::decode_sample(mapping.default_sample.to_vec(), sample_rate) {
-                Ok(data) => LoadedSample::from_shared(Arc::new(data)),
+            // The embedded WAVs are mono, and stay mono (E5); the shared
+            // cache gives every instance the same copy.
+            match crate::kit_loader::build_fallback_pad(mapping, sample_rate) {
+                Ok(pad) => self.pads.push(pad),
                 Err(e) => {
                     eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     self.pads.push(LoadedPad {
@@ -319,22 +318,8 @@ impl DrumSampler {
                         close_mics: Vec::new(),
                         overhead: None,
                     });
-                    continue;
                 }
-            };
-            self.pads.push(LoadedPad {
-                name: mapping.name.to_string(),
-                choke_group: mapping.choke_group,
-                output_group: mapping.output_group,
-                close_mics: vec![LoadedMicBank {
-                    position: "fallback".to_string(),
-                    setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![sample],
-                    }],
-                }],
-                overhead: None,
-            });
+            }
         }
     }
 
