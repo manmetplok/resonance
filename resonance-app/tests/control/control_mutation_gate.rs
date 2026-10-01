@@ -111,6 +111,8 @@ fn allowlisted_methods() -> Vec<&'static str> {
         methods::plugins::METHODS,
         // The user's NAM model library: not project state (§9.3).
         methods::amp_models::METHODS,
+        // The user's drum-kit library, likewise (drums-plugin-rework §8).
+        methods::drum_kits::METHODS,
         methods::presets::METHODS,
         resonance_control::job::METHODS,
     ] {

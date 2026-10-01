@@ -27,6 +27,8 @@ mod control_automation_shape;
 mod control_automation_edit;
 #[path = "control/control_bus.rs"]
 mod control_bus;
+#[path = "control/control_drum_kits.rs"]
+mod control_drum_kits;
 #[path = "control/control_bus_create_commit.rs"]
 mod control_bus_create_commit;
 #[path = "control/control_bus_effects.rs"]

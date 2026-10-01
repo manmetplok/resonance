@@ -92,6 +92,24 @@ impl Resonance {
         );
     }
 
+    #[doc(hidden)]
+    /// Test-only: point this app's `drum_kits.*` handlers at `kits` /
+    /// `marks`, as [`Self::test_set_amp_library_roots`] does for the amp.
+    pub fn test_set_drum_kit_library_roots(&mut self, kits: std::path::PathBuf, marks: std::path::PathBuf) {
+        self.control.drum_kit_library = crate::update::control::DrumKitLibraryCache::new(
+            crate::update::control::DrumKitLibraryRoots {
+                kits: Some(kits),
+                marks: Some(marks),
+            },
+        );
+    }
+
+    /// Test-only: the `drum_kits.*` roots this app uses.
+    #[doc(hidden)]
+    pub fn test_drum_kit_library_roots(&self) -> crate::update::control::DrumKitLibraryRoots {
+        self.control.drum_kit_library.roots.clone()
+    }
+
     /// Test-only: the `amp_models.*` roots this app uses.
     #[doc(hidden)]
     pub fn test_amp_library_roots(&self) -> crate::update::control::AmpLibraryRoots {
