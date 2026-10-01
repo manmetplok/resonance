@@ -380,3 +380,61 @@ fn a_piece_without_a_meta_name_drops_the_sd_prefix() {
     assert!(pads.is_present(COUNT_STICK_PAD));
     assert_eq!((0..NUM_PADS).filter(|&p| pads.is_present(p)).count(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Editor
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "editor")]
+#[test]
+fn the_editor_shows_the_kits_names_labels_and_absent_pads() {
+    use resonance_drums::TestEditor;
+
+    let plugin = booted();
+    load(&plugin, "it_techno");
+    let mut editor = TestEditor::new(&plugin, resonance_drums::library::shared(), (960.0, 640.0));
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    let strings = frame.strings();
+    for name in ["Perc Conga", "Clap"] {
+        assert!(strings.iter().any(|s| s == name), "{name:?} is not drawn");
+    }
+    assert!(
+        !strings.iter().any(|s| s == "Count Stick" || s == "Snare Handtuch"),
+        "the GM name of a named piece is drawn"
+    );
+    // The kit's names are what the filter matches, and a match is on screen.
+    editor.filter_pads("conga");
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(frame.shows("Perc Conga"), "the filtered row is not visible");
+    editor.filter_pads("");
+
+    // Tom pads are dimmed, the kick is not.
+    let frame = editor.frame(Vec::new());
+    for pad in TOM_PADS {
+        assert!(
+            frame.widget(&format!("pad_row.{pad}.absent")).is_some(),
+            "tom pad {pad} is not dimmed"
+        );
+    }
+    assert!(frame.widget("pad_row.0.absent").is_none(), "the kick is dimmed");
+
+    // The kick's inspector: the kit's articulation labels.
+    editor.select_pad(KICK_PAD);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    for label in ["punch", "deep", "punch/deep"] {
+        assert!(frame.shows(label), "{label:?} is not visible");
+    }
+    assert!(frame.widget("articulation.1").is_some());
+    assert!(frame.widget("inspector.not_in_kit").is_none());
+
+    // A tom's inspector: not in this kit, no articulation chips.
+    editor.select_pad(TOM_HIGH_PAD);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(frame.shows("Not in this kit"), "the absent pad is not explained");
+    assert!(frame.widget("inspector.not_in_kit").is_some());
+    assert!(frame.widget("articulation.0").is_none());
+}
