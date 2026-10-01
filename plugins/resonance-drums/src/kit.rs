@@ -272,7 +272,8 @@ pub fn decode_sample(data: Vec<u8>, target_sample_rate: f32) -> Result<SampleDat
 }
 
 /// [`decode_sample`] of the file at `path` (whose bytes `data` are, and
-/// which is `file_len` long), keeping only the first `preload` frames
+/// which is `file_len` long and was last modified at `modified`, as it
+/// was stated before the read), keeping only the first `preload` frames
 /// resident when the take is longer than that by at least
 /// [`crate::stream::MIN_STREAMED_TAIL`] — the rest streams from the file
 /// (E14). `preload == 0` keeps every take whole. The frames are the same
@@ -283,6 +284,7 @@ pub fn decode_sample_streamed(
     preload: u32,
     path: &Path,
     file_len: u64,
+    modified: Option<std::time::SystemTime>,
 ) -> Result<SampleData, String> {
     if preload == 0 {
         return decode_sample(data, target_sample_rate);
@@ -303,6 +305,7 @@ pub fn decode_sample_streamed(
             Arc::new(TailSource {
                 path: path.to_path_buf(),
                 file_len,
+                modified,
                 tail,
             }),
         ),

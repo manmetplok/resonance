@@ -172,10 +172,18 @@ impl SampleCache {
             let unchanged = SampleKey::for_file_preload(path, sample_rate, preload)
                 .is_ok_and(|after| after == read_key);
             // A tail streams from the canonical path, with the length the
-            // bytes were read at: a file rewritten since is not read.
+            // bytes were read at and the modification time stated before
+            // the read: a file rewritten since is not read.
             let len = bytes.len() as u64;
-            let sample = decode_sample_streamed(bytes, sample_rate, preload, &read_key.path, len)
-                .map_err(|e| format!("decode {}: {e}", path.display()))?;
+            let sample = decode_sample_streamed(
+                bytes,
+                sample_rate,
+                preload,
+                &read_key.path,
+                len,
+                read_key.modified,
+            )
+            .map_err(|e| format!("decode {}: {e}", path.display()))?;
             Ok((sample, unchanged))
         })
     }

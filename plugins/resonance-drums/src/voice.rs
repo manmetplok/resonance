@@ -142,6 +142,10 @@ pub struct Voice {
     /// or a streamed one that found no free ring, which then ends with
     /// its head. Moves with the voice when it is stolen to a tail slot.
     pub ring: u8,
+    /// The voice's tail will not come — its hit found no ring, or its
+    /// stream failed — so it fades out where its frames end. Set (and
+    /// counted as one underrun) once.
+    pub stream_lost: bool,
 }
 
 impl Default for Voice {
@@ -174,6 +178,7 @@ impl Voice {
             release_len: 1,
             age: 0,
             ring: crate::stream::NO_RING,
+            stream_lost: false,
         }
     }
 
@@ -203,6 +208,18 @@ impl Voice {
         self.state = VoiceState::Releasing;
         self.release_pos = 0;
         self.release_len = len.max(1);
+    }
+
+    /// Make sure the voice has faded out `left` frames from now: one that
+    /// would still be sounding then starts (or shortens) its fade to end
+    /// there. For a voice whose frames run out early (E14).
+    #[inline]
+    pub fn end_within(&mut self, left: usize) {
+        let ends_in_time = self.state == VoiceState::Releasing
+            && self.release_len.saturating_sub(self.release_pos) <= left;
+        if !ends_in_time {
+            self.force_fade(left.min(u32::MAX as usize) as u32);
+        }
     }
 
     /// True once a releasing voice has run its fade to the end.

@@ -11,23 +11,29 @@
 //!
 //! # Threads and ownership
 //!
-//! - **Rings** are preallocated with the sampler ([`StreamSet`],
-//!   [`NUM_RINGS`] of them, [`RING_FRAMES`] stereo frames each). A voice
+//! - **Rings** are created with the sampler ([`StreamSet`], [`NUM_RINGS`]
+//!   of them, [`RING_FRAMES`] stereo frames each), but their sample
+//!   storage is allocated by a reader the first time the ring is served
+//!   (see `Ring::data`): an untouched ring costs a few hundred bytes, and
+//!   [`StreamSet::ring_bytes`] says what the used ones hold. A voice
 //!   holds a ring by index ([`crate::voice::Voice::ring`]); moving a
 //!   stolen voice to a tail slot moves the index with it.
 //! - **The audio thread** claims a ring at note-on and hands it the
 //!   take's [`TailSource`] (an `Arc` clone — an atomic increment, never an
 //!   allocation; the kit still holds the take, so nothing the audio
 //!   thread drops is ever a last reference). It reads ring frames the
-//!   reader has published, and lets a ring go once no voice reads it
-//!   ([`AudioStreams::sweep`]) — which makes it claimable again at once,
-//!   without waiting for the reader to notice. It never waits for the
+//!   reader has published, publishes how far its voice still is from the
+//!   tail (the reader's deadline), and lets a ring go once no voice reads
+//!   it ([`AudioStreams::sweep`]) — which makes it claimable again at
+//!   once, without waiting for the reader to notice. It never waits for the
 //!   reader, never locks, never allocates, and never makes a syscall that
 //!   can block.
-//! - **The reader** threads poll the rings (no wake-ups from the audio
-//!   thread: a futex wake is a syscall), take requests, open the file,
-//!   fill each ring as far as its voice has made room, and drop streams
+//! - **The reader** threads ([`reader::ReaderPool`]) poll the rings that
+//!   are open (no wake-ups from the audio thread: a futex wake is a
+//!   syscall), take requests, open the file, fill the rings in deadline
+//!   order (see [`reader`]) as far as each voice needs, and drop streams
 //!   the audio thread has let go.
+//!   They exist only while some sampler is registered.
 //!
 //! # The ring protocol
 //!
@@ -38,7 +44,8 @@
 //!   taken (its request slot is empty): it resets `read`, sets `wpos` to
 //!   (generation, 0 frames), makes the generation the ring's `active_gen`,
 //!   and posts the request — the source, its generation and its start —
-//!   with the source pointer last (release).
+//!   with the source pointer last (release). Then it marks the ring open
+//!   for the readers.
 //! - The reader takes the request (generation and pointer read
 //!   consistently, see [`Ring::take_request`]), and serves it while
 //!   `active_gen` still names it. It writes frames `write..` only where
@@ -70,16 +77,30 @@
 //! A bounce renders as fast as the CPU allows, far faster than a reader
 //! can stream at a guaranteed pace, and an underrun there would be a gap
 //! in the export. So the sampler tells offline from live rendering
-//! ([`RenderMode`]): told outright, or — since the host has no CLAP
-//! `render` extension yet — by measuring that audio advances much faster
-//! than the wall clock. Offline, a missing frame is waited for (bounded),
+//! ([`RenderMode`]), and offline a missing frame is waited for (bounded),
 //! which CLAP permits for offline processing; live, never.
+//!
+//! What it goes by, first match wins:
+//!
+//! 1. a mode set on the sampler itself
+//!    ([`crate::dsp::DrumSampler::set_render_mode`]: tests and headless
+//!    callers);
+//! 2. the mode the **host** declared, through
+//!    [`crate::KitBridge::host_render_mode`] (one of the `HOST_RENDER_*`
+//!    values below, read once per block): offline waits for as long as a
+//!    read can take, real time never waits;
+//! 3. while the host has declared nothing, a timing heuristic (see
+//!    `DrumSampler::update_render_timing`), which waits a couple of
+//!    milliseconds a block at most until it has seen offline rendering
+//!    sustained, and drops back to live on the first block that arrives
+//!    at a live pace.
 
 pub mod reader;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant, SystemTime};
 
 use parking_lot::Mutex;
 use resonance_common::WavTail;
@@ -104,6 +125,17 @@ pub const DEFAULT_PRELOAD: u32 = 32_768;
 
 /// The plugin-state key the preload is saved under (frames).
 pub const PRELOAD_STATE_KEY: &str = "stream_preload";
+
+/// [`crate::KitBridge::host_render_mode`]: the host has not said how it
+/// renders (no CLAP `render` extension, or not called yet). The sampler
+/// tells from the block timing.
+pub const HOST_RENDER_UNKNOWN: u8 = 0;
+/// The host renders in real time (`CLAP_RENDER_REALTIME`): a missing
+/// tail frame is never waited for, whatever the timing looks like.
+pub const HOST_RENDER_REALTIME: u8 = 1;
+/// The host renders offline (a bounce, `CLAP_RENDER_OFFLINE`): a missing
+/// tail frame is waited for, up to seconds a block.
+pub const HOST_RENDER_OFFLINE: u8 = 2;
 
 /// The preload a state value names: one of [`PRELOAD_CHOICES`], or 0
 /// (streaming off). `None` for a missing or unknown value.
@@ -133,27 +165,47 @@ pub const MIN_STREAMED_TAIL: usize = 8_192;
 /// Frames one ring holds (stereo; a mono take uses half of each frame's
 /// room). ≈ 0.34 s at 48 kHz, ≈ 128 host blocks of 128 frames — the
 /// reader's lead once a voice is on its tail. Before that, the voice's
-/// head (≥ 32 k frames) is the lead: a ring is requested at note-on and
-/// filled while the head plays.
+/// head (≥ 32 k frames) is the lead: a ring is requested at note-on, gets
+/// one chunk ([`READ_CHUNK`]) at once, and is filled the rest of the way
+/// once its voice is within a ring's length of its tail — so a voice
+/// choked or stolen on its head costs one read, not a ring's worth.
 pub const RING_FRAMES: usize = 16_384;
 
-/// Rings per sampler: one for every main voice and tail slot, plus room
-/// for rings whose voices have ended but which the reader has not handed
-/// back yet — 96 more, so even a reader held off the CPU for a while
-/// (they are not realtime threads) does not run a fast pattern out of
-/// rings. A claim takes the lowest free ring, so the spare ones are
-/// rarely touched, and an untouched ring costs no resident memory
-/// ([`zeroed_atomics`]).
-pub const NUM_RINGS: usize = MAX_VOICES + TAIL_SLOTS + 96;
+/// Bytes of sample storage a ring holds once it has been used.
+pub const RING_BYTES: usize = RING_FRAMES * 2 * std::mem::size_of::<f32>();
+
+/// Rings beyond one per main voice and tail slot: room for rings whose
+/// voices have ended but which the reader has not handed back yet, so
+/// even a reader held off the CPU for a while (they are not realtime
+/// threads) does not run a fast pattern out of rings. A claim takes the
+/// lowest free ring, so the spare ones are rarely touched — and a ring
+/// never served holds no sample storage.
+pub const SPARE_RINGS: usize = 96;
+
+/// The rings a sampler with `voices` main voices and `tails` tail slots
+/// has.
+pub const fn rings_for(voices: usize, tails: usize) -> usize {
+    voices + tails + SPARE_RINGS
+}
+
+/// Rings per sampler (see [`rings_for`]).
+pub const NUM_RINGS: usize = rings_for(MAX_VOICES, TAIL_SLOTS);
 
 /// [`Voice::ring`] of a voice that streams nothing.
 pub const NO_RING: u8 = u8::MAX;
 
+/// 64-bit words in a set of ring indices.
+const RING_WORDS: usize = NUM_RINGS.div_ceil(64);
+
 const _: () = assert!(NUM_RINGS < NO_RING as usize);
-const _: () = assert!(NUM_RINGS <= 64 * RING_WORDS);
+// E15 raises the cap to 128 voices + 16 tail slots: still indexable by a
+// `u8` below `NO_RING`, in four words.
+const _: () = assert!(rings_for(128, 16) < NO_RING as usize);
+const _: () = assert!(rings_for(128, 16).div_ceil(64) == 4);
 
 /// The most frames one reader pass fetches for one ring, so one long
-/// read never holds up the others.
+/// read never holds up the others. Also all a ring gets while its voice
+/// is still more than a ring's length from its tail.
 pub(crate) const READ_CHUNK: usize = 4_096;
 
 /// `wpos`: the generation is the high 32 bits; below it, this bit says
@@ -166,10 +218,18 @@ pub(crate) const WPOS_FRAMES: u64 = WPOS_FAILED - 1;
 /// how to read any of its frames at the decode rate.
 pub struct TailSource {
     pub path: PathBuf,
-    /// The file's length when it was decoded; a file of another length
-    /// is a different file, and is not read.
+    /// The file's length and modification time when it was decoded; a
+    /// file that differs in either is a different file, and is not read.
     pub file_len: u64,
+    pub modified: Option<SystemTime>,
     pub tail: WavTail,
+}
+
+impl TailSource {
+    /// Whether `meta` describes the file this tail was split from.
+    pub fn same_file(&self, meta: &std::fs::Metadata) -> bool {
+        meta.len() == self.file_len && meta.modified().ok() == self.modified
+    }
 }
 
 /// One voice's stream: see the module docs for the protocol.
@@ -186,12 +246,19 @@ pub struct Ring {
     pub(crate) wpos: AtomicU64,
     /// Ring frames the audio thread is done with.
     pub(crate) read: AtomicU64,
+    /// Published by the audio thread: frames its voice has left to play
+    /// of its head before it needs ring frame 0 (0 once on its tail).
+    /// Plus what is buffered, the reader's deadline for this ring.
+    pub(crate) head_left: AtomicU64,
     /// The generation a reader is serving (0: none), and its stream's
     /// length in ring frames: what the readers' lock-free scans go by.
     pub(crate) reader_gen: AtomicU32,
     pub(crate) reader_end: AtomicU64,
-    /// `RING_FRAMES * 2` sample slots, as `f32` bits.
-    pub(crate) data: Box<[AtomicU32]>,
+    /// `RING_FRAMES * 2` sample slots, as `f32` bits — allocated by the
+    /// reader that first serves the ring, before it publishes a frame.
+    /// The audio thread only ever `get`s it (one atomic load, never a
+    /// wait).
+    data: OnceLock<Box<[AtomicU32]>>,
     /// The reader's side of the ring. Only reader threads lock it (with
     /// `try_lock`, as the claim that one thread serves it at a time).
     pub(crate) reader: Mutex<reader::ReaderSide>,
@@ -206,9 +273,10 @@ impl Ring {
             req_start: AtomicU64::new(0),
             wpos: AtomicU64::new(0),
             read: AtomicU64::new(0),
+            head_left: AtomicU64::new(0),
             reader_gen: AtomicU32::new(0),
             reader_end: AtomicU64::new(0),
-            data: zeroed_atomics(RING_FRAMES * 2),
+            data: OnceLock::new(),
             reader: Mutex::new(reader::ReaderSide::default()),
         }
     }
@@ -226,11 +294,55 @@ impl Ring {
     }
 
     /// Sample `ch` (0 or 1) of ring frame `frame`, which must be below
-    /// what [`published`](Self::published) said.
+    /// what [`published`](Self::published) said (and so is stored).
     #[inline]
     pub(crate) fn sample(&self, frame: u64, stride: usize, ch: usize) -> f32 {
+        let Some(data) = self.data.get() else {
+            return 0.0;
+        };
         let slot = (frame as usize % RING_FRAMES) * stride + ch;
-        f32::from_bits(self.data[slot].load(Ordering::Relaxed))
+        f32::from_bits(data[slot].load(Ordering::Relaxed))
+    }
+
+    /// Reader: the ring's sample storage, allocated on first use, and
+    /// whether this call allocated it. Callers hold the `reader` lock.
+    pub(crate) fn data_or_alloc(&self) -> (&[AtomicU32], bool) {
+        let mut fresh = false;
+        let data = self.data.get_or_init(|| {
+            fresh = true;
+            (0..RING_FRAMES * 2).map(|_| AtomicU32::new(0)).collect()
+        });
+        (data, fresh)
+    }
+
+    /// Whether the ring holds sample storage (it has been served).
+    pub fn has_storage(&self) -> bool {
+        self.data.get().is_some()
+    }
+
+    /// Reader: mark generation `gen`'s stream failed, keeping the frames
+    /// it published. A no-op once the ring has moved on.
+    pub(crate) fn fail(&self, gen: u32) {
+        let mut cur = self.wpos.load(Ordering::Acquire);
+        while (cur >> 32) as u32 == gen && cur & WPOS_FAILED == 0 {
+            match self.wpos.compare_exchange_weak(
+                cur,
+                cur | WPOS_FAILED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(now) => cur = now,
+            }
+        }
+    }
+
+    /// Whether anyone still has business with the ring: claimed, holding
+    /// a request the reader has not taken, or still being served.
+    fn in_use(&self) -> bool {
+        self.active_gen.load(Ordering::Acquire) != 0
+            || !self.req.load(Ordering::Acquire).is_null()
+            || self.reader_gen.load(Ordering::Acquire) != 0
     }
 
     /// Reader: take the pending request, if any, as (source, generation,
@@ -279,35 +391,39 @@ impl Drop for Ring {
     }
 }
 
-/// `n` atomics, all zero, from a zeroed allocation: the pages are only
-/// committed when a reader first writes them, so a sampler that never
-/// streams costs no resident memory for its rings.
-fn zeroed_atomics(n: usize) -> Box<[AtomicU32]> {
-    let zeroed: Box<[u32]> = vec![0u32; n].into_boxed_slice();
-    let ptr = Box::into_raw(zeroed) as *mut [AtomicU32];
-    // SAFETY: `AtomicU32` has the same size, alignment and bit validity
-    // as `u32` (documented), so the boxed slice is reinterpreted as is.
-    unsafe { Box::from_raw(ptr) }
-}
-
 /// One sampler's rings, shared with the reader pool, plus the test hooks
-/// that slow or stop the reader for it.
+/// that slow, stop or break the reader for it.
 pub struct StreamSet {
     pub(crate) rings: Box<[Ring]>,
+    /// Rings the readers must look at: set by the audio thread when it
+    /// claims one (an atomic `or`, no syscall), cleared by a reader once
+    /// the ring is wholly idle again — so a scan skips every ring nobody
+    /// uses.
+    pub(crate) open: [AtomicU64; RING_WORDS],
+    /// Rings holding sample storage.
+    allocated: AtomicU32,
     /// Test hook: while set, the reader leaves this set alone entirely —
     /// a stalled disk, or a reader that never comes back.
     pub(crate) paused: AtomicBool,
     /// Test hook: extra latency before each read, in microseconds — a
     /// cold page cache.
     pub(crate) read_latency_us: AtomicU32,
+    /// Test hook: this many of the next reads panic.
+    pub(crate) panic_reads: AtomicU32,
+    /// Times the audio thread waited for a tail frame (offline only).
+    pub(crate) waits: AtomicU64,
 }
 
 impl StreamSet {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             rings: (0..NUM_RINGS).map(|_| Ring::new()).collect(),
+            open: std::array::from_fn(|_| AtomicU64::new(0)),
+            allocated: AtomicU32::new(0),
             paused: AtomicBool::new(false),
             read_latency_us: AtomicU32::new(0),
+            panic_reads: AtomicU32::new(0),
+            waits: AtomicU64::new(0),
         })
     }
 
@@ -323,21 +439,95 @@ impl StreamSet {
         self.read_latency_us.store(us, Ordering::Relaxed);
     }
 
+    /// Test hook: make the next `n` reads panic (a reader bug).
+    #[doc(hidden)]
+    pub fn panic_next_reads(&self, n: u32) {
+        self.panic_reads.store(n, Ordering::Release);
+    }
+
+    /// Times the sampler has waited for a tail frame (offline only).
+    pub fn offline_waits(&self) -> u64 {
+        self.waits.load(Ordering::Relaxed)
+    }
+
     /// Rings in use: claimed, holding a request the reader has not
     /// taken, or still being served by a reader.
     pub fn rings_in_use(&self) -> usize {
+        self.rings.iter().filter(|r| r.in_use()).count()
+    }
+
+    /// Rings marked open for the readers.
+    pub fn rings_open(&self) -> usize {
+        self.open
+            .iter()
+            .map(|w| w.load(Ordering::Acquire).count_ones() as usize)
+            .sum()
+    }
+
+    /// Frames published for ring `ring`'s current stream (0 for a ring
+    /// that is not claimed).
+    pub fn published_frames(&self, ring: u8) -> u64 {
+        self.rings.get(ring as usize).map_or(0, |r| r.published().0)
+    }
+
+    /// Frames published for the streams claimed now, across every ring.
+    pub fn frames_buffered(&self) -> u64 {
+        self.rings
+            .iter()
+            .filter(|r| r.active_gen.load(Ordering::Acquire) != 0)
+            .map(|r| r.published().0)
+            .sum()
+    }
+
+    /// Rings whose current stream failed (its file gone or changed).
+    pub fn rings_failed(&self) -> usize {
         self.rings
             .iter()
             .filter(|r| {
-                r.active_gen.load(Ordering::Acquire) != 0
-                    || !r.req.load(Ordering::Acquire).is_null()
-                    || r.reader_gen.load(Ordering::Acquire) != 0
+                let gen = r.active_gen.load(Ordering::Acquire);
+                let wpos = r.wpos.load(Ordering::Acquire);
+                gen != 0 && (wpos >> 32) as u32 == gen && wpos & WPOS_FAILED != 0
             })
             .count()
     }
-}
 
-const RING_WORDS: usize = 3;
+    /// Rings holding sample storage (ever served).
+    pub fn rings_allocated(&self) -> usize {
+        self.allocated.load(Ordering::Relaxed) as usize
+    }
+
+    /// Bytes of ring sample storage this set holds: only rings that have
+    /// been served hold any.
+    pub fn ring_bytes(&self) -> u64 {
+        self.rings_allocated() as u64 * RING_BYTES as u64
+    }
+
+    /// Audio thread: mark ring `i` open for the readers.
+    #[inline]
+    fn mark_open(&self, i: usize) {
+        self.open[i / 64].fetch_or(1 << (i % 64), Ordering::AcqRel);
+    }
+
+    /// Reader: unmark ring `i` if it is wholly idle. The ring is checked
+    /// again after the bit is cleared, so a claim racing the clear (which
+    /// sets the bit after posting its request) is never lost.
+    pub(crate) fn close_if_idle(&self, i: usize) {
+        let ring = &self.rings[i];
+        if ring.in_use() {
+            return;
+        }
+        let bit = 1u64 << (i % 64);
+        self.open[i / 64].fetch_and(!bit, Ordering::AcqRel);
+        if ring.in_use() {
+            self.open[i / 64].fetch_or(bit, Ordering::AcqRel);
+        }
+    }
+
+    /// Reader: count a ring that just got its storage.
+    pub(crate) fn note_allocated(&self) {
+        self.allocated.fetch_add(1, Ordering::Relaxed);
+    }
+}
 
 /// A set of ring indices.
 #[derive(Clone, Copy, Default)]
@@ -362,16 +552,45 @@ impl RingBits {
 /// frame does (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderMode {
-    /// Tell from the block timing (the default).
+    /// Go by what the host declared ([`crate::KitBridge::host_render_mode`]),
+    /// or by the block timing while it has declared nothing (the
+    /// default).
     Auto,
     /// Live: never wait; a missing frame is an underrun.
     Realtime,
-    /// Offline: wait (bounded) for a missing frame.
+    /// Offline: wait (bounded, generously) for a missing frame.
     Offline,
 }
 
+/// Spin briefly, then sleep in short steps, until `ready()` holds or
+/// `budget` runs out; the time spent is charged to `budget` (zero once it
+/// ran out). Returns whether `ready()` held. Offline only: sleeping is a
+/// syscall.
+pub(crate) fn wait_until(budget: &mut Duration, mut ready: impl FnMut() -> bool) -> bool {
+    let began = Instant::now();
+    let mut spins = 0u32;
+    loop {
+        if ready() {
+            *budget = budget.saturating_sub(began.elapsed());
+            return true;
+        }
+        if began.elapsed() >= *budget {
+            *budget = Duration::ZERO;
+            return false;
+        }
+        if spins < 64 {
+            spins += 1;
+            std::hint::spin_loop();
+        } else {
+            std::thread::sleep(Duration::from_micros(50));
+        }
+    }
+}
+
 /// The audio thread's handle on its [`StreamSet`]: which rings it has
-/// claimed, and the counters it publishes.
+/// claimed, and the counters it publishes. Holds the set's registration
+/// with its reader pool: dropping it (off the audio thread — it may join
+/// the pool's threads) unregisters the set.
 pub struct AudioStreams {
     pub(crate) set: Arc<StreamSet>,
     claimed: RingBits,
@@ -382,16 +601,25 @@ pub struct AudioStreams {
     pub(crate) underruns: Arc<AtomicU64>,
     /// Of those, the claims that found no free ring.
     pub(crate) ring_misses: u64,
+    _registration: Option<reader::Registration>,
 }
 
 impl AudioStreams {
+    /// Streams on `set`, which no pool serves (unless the caller
+    /// registered it).
     pub fn new(set: Arc<StreamSet>) -> Self {
+        Self::with_registration(set, None)
+    }
+
+    /// Streams on `set`, served for as long as `registration` lives.
+    pub fn with_registration(set: Arc<StreamSet>, registration: Option<reader::Registration>) -> Self {
         Self {
             set,
             claimed: RingBits::default(),
             gens: [0; NUM_RINGS],
             underruns: Arc::new(AtomicU64::new(0)),
             ring_misses: 0,
+            _registration: registration,
         }
     }
 
@@ -406,27 +634,20 @@ impl AudioStreams {
         &mut self,
         source: &Arc<TailSource>,
         start: usize,
-        offline_wait: Option<&mut std::time::Duration>,
+        offline_wait: Option<&mut Duration>,
     ) -> u8 {
         if let Some(ring) = self.try_claim(source, start) {
             return ring;
         }
-        if let Some(budget) = offline_wait {
-            let began = std::time::Instant::now();
-            let mut spins = 0u32;
-            while began.elapsed() < *budget {
-                if spins < 64 {
-                    spins += 1;
-                    std::hint::spin_loop();
-                } else {
-                    std::thread::sleep(std::time::Duration::from_micros(50));
-                }
-                if let Some(ring) = self.try_claim(source, start) {
-                    *budget = budget.saturating_sub(began.elapsed());
-                    return ring;
-                }
+        if let Some(budget) = offline_wait.filter(|b| !b.is_zero()) {
+            let mut got = None;
+            wait_until(budget, || {
+                got = self.try_claim(source, start);
+                got.is_some()
+            });
+            if let Some(ring) = got {
+                return ring;
             }
-            *budget = std::time::Duration::ZERO;
         }
         self.underruns.fetch_add(1, Ordering::Relaxed);
         self.ring_misses += 1;
@@ -447,6 +668,7 @@ impl AudioStreams {
             };
             self.gens[i] = gen;
             ring.read.store(0, Ordering::Relaxed);
+            ring.head_left.store(start as u64, Ordering::Relaxed);
             ring.wpos.store((gen as u64) << 32, Ordering::Relaxed);
             ring.active_gen.store(gen, Ordering::Release);
             ring.req_gen.store(gen, Ordering::Relaxed);
@@ -454,6 +676,7 @@ impl AudioStreams {
             let raw = Arc::into_raw(Arc::clone(source)) as *mut TailSource;
             // Publishes everything above to the reader that takes it.
             ring.req.store(raw, Ordering::Release);
+            self.set.mark_open(i);
             self.claimed.set(i);
             return Some(i as u8);
         }
