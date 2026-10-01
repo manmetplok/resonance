@@ -245,6 +245,20 @@ pub enum PluginMessage {
     },
     TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
+    /// The plugin changed a parameter itself — its own editor, its own
+    /// browser — and reported it (`AudioEvent::PluginParamEdited`): the
+    /// mirror follows, and the edit takes an undo entry like any other.
+    /// Nothing goes to the engine; the plugin already holds the value.
+    ParamEditedByPlugin {
+        instance_id: PluginInstanceId,
+        param_id: u32,
+        value: f64,
+        /// The plugin's text for `value`.
+        text: String,
+        /// One deliberate edit (a gesture) rather than a value the plugin
+        /// streams: recorded on its own instead of coalesced.
+        gesture: bool,
+    },
     /// Recall a preset onto a plugin: every parameter it names, applied
     /// as **one** edit (ba todo #1333).
     ///
@@ -374,6 +388,19 @@ impl PluginMessage {
                     param_id: *param_id,
                 })
             }
+            // A gesture is one decision (a kit picked in the plugin's own
+            // browser): its own entry. A bare streamed value coalesces like
+            // a host knob drag.
+            Self::ParamEditedByPlugin { gesture: true, .. } => UndoAction::Record,
+            Self::ParamEditedByPlugin {
+                instance_id,
+                param_id,
+                gesture: false,
+                ..
+            } => UndoAction::RecordCoalesced(CoalesceKey::PluginParam {
+                instance_id: *instance_id,
+                param_id: *param_id,
+            }),
             // Browsing, auditioning and starring record nothing: a load
             // that sticks is re-dispatched as `LoadPluginPreset`, and a
             // "with preset…" add as the add it is.

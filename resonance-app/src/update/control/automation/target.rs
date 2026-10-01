@@ -125,6 +125,34 @@ pub(in crate::update::control) fn resolve_write_target(
     app: &Resonance,
     spec: &AutomationTargetSpec,
 ) -> Result<ResolvedTarget, RpcError> {
+    let resolved = resolve_frozen_checked(app, spec)?;
+    // A lane on a parameter the plugin does not let a host automate (CLAP
+    // `IS_AUTOMATABLE` unset: the drums' kit selector, whose every change
+    // is a multi-gigabyte load, or a read-only output) would drive it
+    // every block it plays.
+    if let ValueDomain::Plugin(param) = &resolved.domain {
+        if !param.automatable {
+            return Err(RpcError::invalid_params(format!(
+                "{} cannot be automated: the plugin offers no automation lane for it{}",
+                param.name,
+                if param.read_only {
+                    " (it is a read-only output)"
+                } else {
+                    " — set it with set_plugin_param instead"
+                }
+            )));
+        }
+    }
+    Ok(resolved)
+}
+
+/// [`resolve_target`] plus the frozen-track rule, without the
+/// automatable check: what removing or clearing an existing lane needs —
+/// a lane that predates the plugin's opt-out must stay deletable.
+pub(in crate::update::control) fn resolve_frozen_checked(
+    app: &Resonance,
+    spec: &AutomationTargetSpec,
+) -> Result<ResolvedTarget, RpcError> {
     let resolved = resolve_target(app, spec)?;
     if let (Some(_), ChainOwner::Track(track_id)) = (&resolved.plugin, resolved.owner) {
         if let Some(e) = frozen_reject(app, track_id) {
@@ -168,7 +196,7 @@ pub(in crate::update::control) fn resolve_lane_or_target(
              master, plus control / param)",
         )),
         (Some(id), true) => target_by_lane_id(app, id),
-        (None, false) => Ok(resolve_write_target(app, spec)?.target),
+        (None, false) => Ok(resolve_frozen_checked(app, spec)?.target),
     }
 }
 

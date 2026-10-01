@@ -43,6 +43,13 @@ fn project_plugin(r: &Resonance, p: &crate::state::PluginSlotState) -> ProjectPl
         None => p
             .params
             .iter()
+            // A read-only output, or a param the plugin's state carries
+            // in its own form (the drums' `kit_select` slot, whose kit
+            // travels as a reference in the blob), is the plugin's to
+            // restore: written here, it would be re-sent after the blob
+            // and override it — another machine's library slot picking
+            // a different kit.
+            .filter(|param| param.host_persisted())
             .filter(|param| param.current_value != param.default_value)
             .map(|param| crate::project::ProjectPluginParam {
                 id: param.id,

@@ -102,11 +102,44 @@ pub trait ExtraStateSaver: Send + Sync {
 /// and the bridge falls back to it while active — so a host reads the real
 /// text of a live instance, and a label resolves on it
 /// (nam-model-library.md §9). Indices are host-order parameter indices.
+///
+/// It is also where the bridge reads a **live** value while active
+/// ([`Self::live_value`]): the values a host reads back
+/// (`clap_plugin_params.get_value`) otherwise come from the bridge's
+/// shared mirror, which only the audio thread's per-block push-back
+/// refreshes — so a value the plugin moves *off* the audio thread (a load
+/// progress written by a loader thread, a selection derived from a state
+/// load) reads stale for as long as no block runs, which is the whole
+/// time the transport is stopped.
 pub trait ParamTextSource: Send + Sync {
     /// The display text of `value` for parameter `index`.
     fn display(&self, index: usize, value: f64) -> Option<String>;
     /// The value `text` names for parameter `index`.
     fn parse(&self, index: usize, text: &str) -> Option<f64>;
+    /// The current value of parameter `index`, read from the plugin's own
+    /// (shared) parameter storage, for a host query made while the plugin
+    /// is active. `None` (the default) means "use the bridge's mirror".
+    ///
+    /// The bridge asks only for a parameter that is
+    /// [read-only](crate::param::Param::is_read_only) or
+    /// [state-excluded](crate::param::Param::state_excluded) — the two
+    /// kinds a plugin moves on its own — so a plugin answers for those and
+    /// may return `None` for the rest. Called on the host's main thread,
+    /// concurrently with `process()`: read an atomic, never lock what the
+    /// audio thread holds. A non-finite answer is ignored.
+    ///
+    /// Typical shape, for params shared behind an `Arc`:
+    ///
+    /// ```ignore
+    /// fn live_value(&self, index: usize) -> Option<f64> {
+    ///     let p = self.params.param(index);
+    ///     (p.is_read_only() || p.state_excluded()).then(|| p.get_plain())
+    /// }
+    /// ```
+    fn live_value(&self, index: usize) -> Option<f64> {
+        let _ = index;
+        None
+    }
 }
 
 /// A note event for sample-accurate MIDI processing.
@@ -587,6 +620,28 @@ pub trait ResonancePlugin: Send + 'static {
     /// text reads as its number.
     fn param_text_source(&self) -> Option<Arc<dyn ParamTextSource>> {
         None
+    }
+
+    /// The host switched between realtime and offline rendering (CLAP
+    /// `render.set`): `offline` is true for a bounce, an export, a freeze
+    /// — a render that runs as fast as the CPU allows and must never
+    /// cut corners for time — and false when it is back to realtime.
+    /// Default: ignored.
+    ///
+    /// A plugin that trades quality for time in realtime does the opposite
+    /// offline: a streaming sampler (the drums) waits for a disk read it
+    /// would otherwise drop, a convolver renders its full tail. The bridge
+    /// tells the bridged plugin `has_hard_realtime_requirement() = false`,
+    /// so a host may always ask.
+    ///
+    /// When it is called: on the main thread, right away, while the plugin
+    /// is inactive; while it is active (it lives in the audio processor,
+    /// out of the main thread's reach), on the audio thread at the start
+    /// of the next `process()` block, before that block's events — so the
+    /// first offline block already renders offline. Realtime-safe there
+    /// like the rest of `process()`: flip a flag, don't allocate.
+    fn set_render_mode(&mut self, offline: bool) {
+        let _ = offline;
     }
 
     /// Report latency in samples. Default: 0.

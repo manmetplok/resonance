@@ -31,12 +31,43 @@ struct FlagsPlugin {
     /// state's own `pick` key — the shape of the drums' `kit_select`,
     /// which follows the state's kit reference.
     selector: Arc<IntParam>,
-    progress: FloatParam,
+    /// Shared with the text source (and, in a real plugin, a loader
+    /// thread that moves it while no block runs).
+    progress: Arc<FloatParam>,
 }
 
 impl FlagsPlugin {
     fn params(&self) -> [&dyn Param; 3] {
-        [&self.gain, &*self.selector, &self.progress]
+        [&self.gain, &*self.selector, &*self.progress]
+    }
+}
+
+/// The live side of the plugin's shared params, for an active instance:
+/// the shape `ParamTextSource::live_value` documents.
+struct LiveSource {
+    selector: Arc<IntParam>,
+    progress: Arc<FloatParam>,
+}
+
+impl LiveSource {
+    fn param(&self, index: usize) -> Option<&dyn Param> {
+        match index {
+            1 => Some(&*self.selector),
+            2 => Some(&*self.progress),
+            _ => None,
+        }
+    }
+}
+
+impl resonance_plugin::ParamTextSource for LiveSource {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        self.param(index).map(|p| p.display(value))
+    }
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        self.param(index).and_then(|p| p.parse(text))
+    }
+    fn live_value(&self, index: usize) -> Option<f64> {
+        self.param(index).map(|p| p.get_plain())
     }
 }
 
@@ -83,13 +114,15 @@ impl ResonancePlugin for FlagsPlugin {
                 .not_automatable()
                 .excluded_from_state(),
             ),
-            progress: FloatParam::new(
-                "progress",
-                "Progress",
-                0.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .read_only(),
+            progress: Arc::new(
+                FloatParam::new(
+                    "progress",
+                    "Progress",
+                    0.0,
+                    FloatRange::Linear { min: 0.0, max: 1.0 },
+                )
+                .read_only(),
+            ),
         }
     }
     fn param_count(&self) -> usize {
@@ -107,6 +140,19 @@ impl ResonancePlugin for FlagsPlugin {
     fn extra_state_saver(&self) -> Option<Arc<dyn ExtraStateSaver>> {
         Some(Arc::new(PickSaver(self.selector.clone())))
     }
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        Some(Arc::new(LiveSource {
+            selector: self.selector.clone(),
+            progress: self.progress.clone(),
+        }))
+    }
+    fn set_host(&mut self, host: Arc<resonance_plugin::HostHandle>) {
+        // Hand the test the plugin's own storage, the way a plugin hands
+        // it to a loader thread.
+        LIVE.with(|live| {
+            *live.borrow_mut() = Some((self.selector.clone(), self.progress.clone(), host));
+        });
+    }
     fn process(
         &mut self,
         _outputs: &mut [OutputBuffer<'_>],
@@ -115,6 +161,20 @@ impl ResonancePlugin for FlagsPlugin {
         _tempo: Option<TempoInfo>,
     ) {
     }
+}
+
+/// The plugin's selector, its progress output and its host handle.
+type Live = (Arc<IntParam>, Arc<FloatParam>, Arc<resonance_plugin::HostHandle>);
+
+thread_local! {
+    /// The plugin's shared params and host handle, as `set_host` saw them
+    /// (the instance is created on the test's own thread).
+    static LIVE: std::cell::RefCell<Option<Live>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The plugin's shared storage, as a thread of its own would hold it.
+fn live() -> Live {
+    LIVE.with(|live| live.borrow().clone()).expect("set_host ran")
 }
 
 struct TestHostShared;
@@ -303,4 +363,128 @@ fn a_load_while_active_keeps_the_value_the_plugin_derived_from_it() {
     // unapplied (no block ran): the derived value stands.
     instance.deactivate(processor);
     assert_eq!(get_value(&mut instance, "selector"), 5.0);
+}
+
+/// A `Param` implementation that opts out of the state alone still stays
+/// out of presets: the trait's default `preset_excluded` follows
+/// `state_excluded`, so no implementor can leave a state-excluded value
+/// in a preset by forgetting the second override.
+#[test]
+fn state_excluded_implies_preset_excluded_for_any_implementor() {
+    struct OnlyStateExcluded;
+    impl Param for OnlyStateExcluded {
+        fn id(&self) -> &str {
+            "only"
+        }
+        fn name(&self) -> &str {
+            "Only"
+        }
+        fn get_plain(&self) -> f64 {
+            0.0
+        }
+        fn set_plain(&self, _v: f64) {}
+        fn default_plain(&self) -> f64 {
+            0.0
+        }
+        fn min_plain(&self) -> f64 {
+            0.0
+        }
+        fn max_plain(&self) -> f64 {
+            1.0
+        }
+        fn display(&self, value: f64) -> String {
+            value.to_string()
+        }
+        fn parse(&self, text: &str) -> Option<f64> {
+            text.parse().ok()
+        }
+        fn state_excluded(&self) -> bool {
+            true
+        }
+    }
+    assert!(OnlyStateExcluded.preset_excluded());
+
+    // The builders agree, whichever order they are called in.
+    let read_only = FloatParam::new("p", "P", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .read_only();
+    assert!(read_only.state_excluded() && read_only.preset_excluded());
+}
+
+/// An active-path `flush` stores the value the param LANDED on — clamped
+/// to its range, rounded for an int — not the raw wire value, so the
+/// host never reads back (or re-saves) a number the plugin did not take.
+#[test]
+fn an_active_flush_mirrors_the_landed_value_not_the_wire_value() {
+    let mut instance = instance();
+    let ext = params_ext(&instance);
+    let mut processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activate");
+    let mut input = EventBuffer::new();
+    for (id, value) in [("gain", 7.5), ("selector", 3.4)] {
+        input.push(&ParamValueEvent::new(
+            0,
+            clap_id(id),
+            Pckn::match_all(),
+            value,
+            Cookie::empty(),
+        ));
+    }
+    let mut output = EventBuffer::new();
+    ext.flush_active(
+        &mut processor.plugin_handle(),
+        &input.as_input(),
+        &mut output.as_output(),
+    );
+    assert_eq!(get_value(&mut instance, "gain"), 1.0, "clamped to max");
+    assert_eq!(get_value(&mut instance, "selector"), 3.0, "rounded");
+    instance.deactivate(processor);
+}
+
+/// The bridge publishes which params its state leaves out through
+/// `com.resonance.param-flags`, so the host leaves them out of what it
+/// persists: CLAP's own flags have no bit for it.
+#[test]
+fn the_bridge_publishes_state_excluded_params() {
+    use resonance_common::param_flags::{PluginParamFlags, EXTENSION_ID};
+    let instance = instance();
+    let raw = instance.raw_instance();
+    let ext = unsafe { (raw.get_extension.expect("get_extension"))(raw, EXTENSION_ID.as_ptr()) }
+        as *const PluginParamFlags;
+    assert!(!ext.is_null(), "a Resonance plugin serves the extension");
+    let is_excluded = unsafe { (*ext).is_state_excluded.expect("is_state_excluded") };
+    let ask = |id: &str| unsafe {
+        is_excluded(
+            raw as *const _ as *const std::ffi::c_void,
+            stable_hash(id),
+        )
+    };
+    assert!(!ask("gain"));
+    assert!(ask("selector"), "excluded_from_state()");
+    assert!(ask("progress"), "read_only() implies it");
+    assert!(!ask("no-such-param"));
+}
+
+/// A value the plugin moves itself — a load progress written by its
+/// loader thread — reads live through `get_value` while the plugin is
+/// active and NO block runs (transport stopped): the bridge asks the
+/// plugin's `live_value` instead of the mirror only `process()` refreshes.
+#[test]
+fn an_active_output_reads_live_without_a_process_block() {
+    let mut instance = instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activate");
+    let (selector, progress, _host) = live();
+    progress.set_value(0.6);
+    selector.set_value(8);
+    assert_eq!(get_value(&mut instance, "progress"), 0.6f32 as f64);
+    assert_eq!(get_value(&mut instance, "selector"), 8.0);
+    // An ordinary param still reads the mirror.
+    assert_eq!(get_value(&mut instance, "gain"), 0.5);
+    instance.deactivate(processor);
+
+    // Inactive, the plugin object answers directly.
+    progress.set_value(0.9);
+    assert_eq!(get_value(&mut instance, "progress"), 0.9f32 as f64);
 }

@@ -567,6 +567,23 @@ impl Resonance {
         .flatten()
     }
 
+    /// Test-only: read a plugin param's mirrored text (the plugin's own
+    /// rendering of its current value).
+    #[doc(hidden)]
+    pub fn test_plugin_param_text(
+        &mut self,
+        instance_id: resonance_audio::types::PluginInstanceId,
+        param_id: u32,
+    ) -> Option<String> {
+        self.with_plugin_mut(instance_id, |p| {
+            p.params
+                .iter()
+                .find(|pp| pp.id == param_id)
+                .map(|pp| pp.text.clone())
+        })
+        .flatten()
+    }
+
     /// Test-only: recompute the resonance-common freeze input fingerprint
     /// for a track (ba todo #576).
     #[doc(hidden)]

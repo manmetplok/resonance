@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use clack_extensions::gui::HostGui;
 use clack_extensions::latency::HostLatency;
-use clack_extensions::params::{HostParams, ParamRescanFlags};
+use clack_extensions::params::HostParams;
 use clack_plugin::prelude::*;
 
 use crate::gui::{EditorFactory, PluginEditor};
@@ -129,6 +129,14 @@ pub struct ClapShared<'a> {
     /// its events never trigger a compare — a playing lane would otherwise
     /// ask for one every block.
     pub(crate) param_preset_ignored: Vec<AtomicBool>,
+    /// The render mode the host last set (CLAP `render.set`): true for
+    /// offline. Handed to the plugin directly while it is inactive; while
+    /// active, `render_mode_dirty` makes the audio processor hand it over
+    /// at the top of its next block.
+    pub(crate) render_offline: AtomicBool,
+    /// `render_offline` changed while the plugin was in the audio
+    /// processor and it has not been told yet.
+    pub(crate) render_mode_dirty: AtomicBool,
 }
 
 impl<'a> ClapShared<'a> {
@@ -344,12 +352,21 @@ impl<'a, P: ResonancePlugin> PluginMainThread<'a, ClapShared<'a>> for ClapMainTh
         if self.host_handle.take_preset_dirty() {
             self.report_preset_identity();
         }
-        if self.host_handle.take_params_rescan() {
+        let rescan = self.host_handle.take_params_rescan();
+        if !rescan.is_empty() {
+            // Inactive, the plugin object is here and is the newer side
+            // (it moved the values itself; nothing has copied them into the
+            // mirror `get_value` serves ordinary params from): publish it
+            // before the host re-reads. Active, the audio thread published
+            // them (`HostHandle::request_params_rescan`'s ordering note).
+            if let Some(plugin) = &self.plugin {
+                let count = plugin.param_count().min(self.shared.param_values.len());
+                for i in 0..count {
+                    self.shared.set_value(i, plugin.param(i).get_plain());
+                }
+            }
             if let Some(params) = self.host.shared().get_extension::<HostParams>() {
-                params.rescan(
-                    &mut self.host,
-                    ParamRescanFlags::VALUES | ParamRescanFlags::TEXT,
-                );
+                params.rescan(&mut self.host, rescan);
             }
         }
         if let Some(serial) = self.host_handle.take_gui_closed() {
@@ -382,6 +399,10 @@ impl<P: ResonancePlugin> Drop for ClapMainThread<'_, P> {
 pub struct ClapAudioProcessor<'a, P: ResonancePlugin> {
     pub(crate) plugin: P,
     pub(crate) shared: &'a ClapShared<'a>,
+    /// The plugin-facing host handle (the main thread's clone): brackets
+    /// each `process()` so a rescan requested inside it is posted after
+    /// the block's values are published.
+    pub(crate) host_handle: std::sync::Arc<crate::host::HostHandle>,
     /// Pre-allocated scratch buffers for the effect/instrument input
     /// (read from host into these before the plugin call).
     pub(crate) input_left: Vec<f32>,

@@ -22,6 +22,7 @@ use clack_extensions::latency::{PluginLatency, PluginLatencyImpl};
 use clack_extensions::note_ports::PluginNotePorts;
 use clack_extensions::params::PluginParams;
 use clack_extensions::preset_discovery::PluginPresetLoad;
+use clack_extensions::render::{PluginRender, PluginRenderImpl, RenderMode};
 use clack_extensions::state::PluginState;
 use clack_extensions::state_context::PluginStateContext;
 use clack_plugin::prelude::*;
@@ -30,6 +31,8 @@ use crate::plugin::ResonancePlugin;
 
 mod gui;
 mod midi;
+mod param_flags;
+mod param_output;
 mod params;
 mod ports;
 mod process;
@@ -72,6 +75,10 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         builder.register::<PluginStateContext>();
         builder.register::<PluginPresetLoad>();
         builder.register::<preset_session::PluginPresetSessionExt>();
+        // Which params the state leaves out (com.resonance.param-flags):
+        // CLAP has no flag for it, and a host persisting them beside the
+        // state would override what the state recalls.
+        builder.register::<param_flags::PluginParamFlagsExt>();
 
         if let Some(shared) = shared {
             if shared.midi_input {
@@ -83,6 +90,8 @@ impl<P: ResonancePlugin> Plugin for ClapBridge<P> {
         }
 
         builder.register::<PluginLatency>();
+        // Realtime vs offline rendering (`ResonancePlugin::set_render_mode`).
+        builder.register::<PluginRender>();
         // GUI extension is registered unconditionally; plugins without an
         // editor factory return false from is_api_supported, which is the
         // CLAP-correct way to say "no editor".
@@ -193,7 +202,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 default: p.default_plain(),
                 is_stepped: p.is_stepped(),
                 is_hidden: p.is_hidden(),
-                preset_excluded: p.preset_excluded(),
+                preset_excluded: p.preset_excluded() || p.state_excluded(),
                 is_automatable: p.is_automatable() && !p.is_read_only(),
                 is_read_only: p.is_read_only(),
                 state_excluded: p.state_excluded(),
@@ -229,6 +238,8 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
             params_gen: AtomicU64::new(0),
             preset_compare_due: AtomicBool::new(false),
             param_preset_ignored: (0..count).map(|_| AtomicBool::new(false)).collect(),
+            render_offline: AtomicBool::new(false),
+            render_mode_dirty: AtomicBool::new(false),
         })
     }
 
@@ -246,7 +257,9 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
         // Hand the plugin its handle to the host, before it can be activated
         // and before anything else may query it. Plugins that never talk back
         // to the host use the default `set_host`, which drops it.
-        let host_handle = crate::host::HostHandle::new(shared.host, plugin.latency_samples());
+        let clap_ids: Vec<u32> = shared.param_metas.iter().map(|m| m.clap_id).collect();
+        let host_handle =
+            crate::host::HostHandle::new(shared.host, plugin.latency_samples(), &clap_ids);
         plugin.set_host(host_handle.clone());
 
         // Harvest the editor factory and any extra-state saver before the
@@ -304,5 +317,35 @@ impl<'a, P: ResonancePlugin> PluginLatencyImpl for ClapMainThread<'a, P> {
             // take.
             self.host_handle.latency_samples()
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Render extension
+// ---------------------------------------------------------------------------
+
+impl<'a, P: ResonancePlugin> PluginRenderImpl for ClapMainThread<'a, P> {
+    /// No bridged plugin is a proxy to hardware: a host may always render
+    /// it offline.
+    fn has_hard_realtime_requirement(&self) -> bool {
+        false
+    }
+
+    /// `[main-thread]`. Inactive: the plugin is here, tell it now. Active:
+    /// latch it for the audio processor, which tells the plugin at the top
+    /// of its next block (`ResonancePlugin::set_render_mode`).
+    fn set(&mut self, mode: RenderMode) -> Result<(), PluginError> {
+        let offline = matches!(mode, RenderMode::Offline);
+        self.shared
+            .render_offline
+            .store(offline, std::sync::atomic::Ordering::Release);
+        match &mut self.plugin {
+            Some(plugin) => plugin.set_render_mode(offline),
+            None => self
+                .shared
+                .render_mode_dirty
+                .store(true, std::sync::atomic::Ordering::Release),
+        }
+        Ok(())
     }
 }

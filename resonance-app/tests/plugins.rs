@@ -55,8 +55,12 @@ mod frozen_track_render;
 mod missing_plugin_slot;
 #[path = "plugins/missing_plugin_state_preserved.rs"]
 mod missing_plugin_state_preserved;
+#[path = "plugins/plugin_edited_by_plugin.rs"]
+mod plugin_edited_by_plugin;
 #[path = "plugins/plugin_param_undo.rs"]
 mod plugin_param_undo;
+#[path = "plugins/plugin_state_excluded_params.rs"]
+mod plugin_state_excluded_params;
 #[path = "plugins/settings_plugin_rescan_button.rs"]
 mod settings_plugin_rescan_button;
 #[path = "plugins/track_freeze_menu.rs"]

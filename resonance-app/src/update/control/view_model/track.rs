@@ -198,6 +198,8 @@ pub(in crate::update::control) fn param_view(
         stepped: param.stepped,
         choices: param.choices.clone(),
         hidden: param.hidden,
+        read_only: param.read_only,
+        automatable: param.automatable,
     }
 }
 

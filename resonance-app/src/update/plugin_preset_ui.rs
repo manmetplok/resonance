@@ -552,6 +552,9 @@ fn audition(r: &mut Resonance, index: usize) {
             .with_plugin_mut(instance_id, |slot| {
                 slot.params
                     .iter()
+                    // The revert's blob restores the rest; re-sending a
+                    // state-excluded value after it would override it.
+                    .filter(|p| p.host_persisted())
                     .map(|p| (p.id, p.current_value))
                     .collect::<Vec<_>>()
             })

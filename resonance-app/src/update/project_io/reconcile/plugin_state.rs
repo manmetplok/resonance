@@ -238,7 +238,11 @@ fn apply_plugin_params(
             continue;
         };
         let blob_pushed = pushed.contains(&slot.instance_id);
-        for param in slot.params.iter_mut() {
+        // A param the host does not persist is not in the snapshot, so
+        // "absent" does not mean "at its default" for it: driving it to
+        // the default would override what the blob recalls (the drums'
+        // `kit_select`, restored from the blob's kit reference).
+        for param in slot.params.iter_mut().filter(|p| p.host_persisted()) {
             let target = pp
                 .params
                 .iter()

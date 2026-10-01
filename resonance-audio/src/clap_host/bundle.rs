@@ -482,7 +482,7 @@ pub(super) fn build_instance(
         })
         .collect();
 
-    Ok(ClapInstance::from_parts(
+    let mut instance = ClapInstance::from_parts(
         plugin,
         host_data,
         sample_rate,
@@ -496,7 +496,39 @@ pub(super) fn build_instance(
         latency,
         audio_out_buffers,
         audio_out_ptrs,
-    ))
+    );
+    // First-party: which params the plugin's state leaves out
+    // (`com.resonance.param-flags`, drums-plugin-rework.md §5.1). Absent
+    // on every third-party plugin, which then has none.
+    instance.param_flags_ext = unsafe {
+        query_extension::<resonance_common::param_flags::PluginParamFlags>(
+            plugin,
+            resonance_common::param_flags::EXTENSION_ID,
+        )
+    };
+    // `clap.render`: told OFFLINE for an offline render's duration.
+    instance.render_ext = unsafe {
+        query_extension::<clap_sys::ext::render::clap_plugin_render>(
+            plugin,
+            clap_sys::ext::render::CLAP_EXT_RENDER,
+        )
+    };
+    Ok(instance)
+}
+
+/// The plugin's extension `id` as a `T` vtable, or `None` when it does not
+/// implement it.
+///
+/// # Safety
+/// `plugin` is a live, initialized plugin, and `T` is the layout `id`
+/// names.
+unsafe fn query_extension<T>(
+    plugin: *const clap_plugin,
+    id: &std::ffi::CStr,
+) -> Option<*const T> {
+    let get_ext = (*plugin).get_extension?;
+    let ext = get_ext(plugin, id.as_ptr());
+    (!ext.is_null()).then_some(ext as *const T)
 }
 
 impl Drop for ClapBundle {

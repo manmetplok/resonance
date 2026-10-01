@@ -97,6 +97,8 @@ mod control_notes_read_your_writes;
 mod control_plugin_bypass;
 #[path = "control/control_plugin_param_bounds.rs"]
 mod control_plugin_param_bounds;
+#[path = "control/control_plugin_param_flags.rs"]
+mod control_plugin_param_flags;
 #[path = "control/control_plugin_param_meta.rs"]
 mod control_plugin_param_meta;
 #[path = "control/control_amp_models.rs"]

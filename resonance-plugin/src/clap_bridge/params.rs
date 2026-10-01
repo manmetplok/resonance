@@ -58,6 +58,26 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
 
     fn get_value(&mut self, param_id: ClapId) -> Option<f64> {
         let slot = self.shared.find_slot(param_id.get())?;
+        let meta = &self.shared.param_metas[slot];
+        // A value the plugin moves itself — an output, or one derived from
+        // its state — is read where it lives, not from the mirror: only
+        // the audio thread's push-back refreshes the mirror, so with no
+        // block running (transport stopped) it would read stale forever.
+        if meta.is_read_only || meta.state_excluded {
+            if let Some(plugin) = &self.plugin {
+                if slot < plugin.param_count() {
+                    return Some(plugin.param(slot).get_plain());
+                }
+            }
+            if let Some(live) = self
+                .param_text_source
+                .as_ref()
+                .and_then(|s| s.live_value(slot))
+                .filter(|v| v.is_finite())
+            {
+                return Some(live);
+            }
+        }
         Some(self.shared.get_value(slot))
     }
 
@@ -103,8 +123,19 @@ impl<'a, P: ResonancePlugin> PluginMainThreadParams for ClapMainThread<'a, P> {
     fn flush(
         &mut self,
         input_parameter_changes: &InputEvents,
-        _output_parameter_changes: &mut OutputEvents,
+        output_parameter_changes: &mut OutputEvents,
     ) {
+        // Inactive: the plugin is here. Report what it announced
+        // (`HostHandle::announce_param_change`) — this is the flush it
+        // asked the host for — before applying the host's own writes.
+        if let Some(plugin) = &self.plugin {
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                output_parameter_changes,
+            );
+        }
         for event in input_parameter_changes {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -151,8 +182,20 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
     fn flush(
         &mut self,
         input_parameter_changes: &InputEvents,
-        _output_parameter_changes: &mut OutputEvents,
+        output_parameter_changes: &mut OutputEvents,
     ) {
+        // Active with no block running (a host with its transport
+        // stopped): report what the plugin announced, as `process()`
+        // would have.
+        {
+            let plugin = &self.plugin;
+            super::param_output::report_announced(
+                &self.host_handle,
+                self.shared,
+                |slot| (slot < plugin.param_count()).then(|| plugin.param(slot)),
+                output_parameter_changes,
+            );
+        }
         for event in input_parameter_changes {
             if let Some(core_event) = event.as_core_event() {
                 use clack_plugin::events::spaces::CoreEventSpace;
@@ -162,8 +205,14 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             if self.shared.param_metas[slot].is_read_only {
                                 continue;
                             }
+                            // Store what the param LANDED on (clamped,
+                            // rounded, through f32), not the wire value —
+                            // see the main-thread `flush` above.
+                            let mut landed = e.value();
                             if slot < self.plugin.param_count() {
-                                self.plugin.param(slot).set_plain(e.value());
+                                let param = self.plugin.param(slot);
+                                param.set_plain(e.value());
+                                landed = param.get_plain();
                             }
                             self.shared.note_host_param_change(slot);
                             // Mirror into the shared atomics, exactly as
@@ -176,7 +225,7 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             // delivers a change via `flush` instead of
                             // `process` would move the DSP but still
                             // report and persist the old value.
-                            self.shared.set_value(slot, e.value());
+                            self.shared.set_value(slot, landed);
                         }
                     }
                 }

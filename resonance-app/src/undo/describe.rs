@@ -61,7 +61,9 @@ pub fn describe(message: &Message) -> String {
         Message::Plugin(p) => match p {
             PluginMessage::AddPluginToTrack(..) => "add plugin",
             PluginMessage::RemovePluginFromTrack(..) => "remove plugin",
-            PluginMessage::SetPluginParam(..) => "plugin parameter",
+            PluginMessage::SetPluginParam(..) | PluginMessage::ParamEditedByPlugin { .. } => {
+                "plugin parameter"
+            }
             _ => "plugin edit",
         },
         Message::MidiEditor(_) => "note edit",
