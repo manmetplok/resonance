@@ -1288,3 +1288,31 @@ fn a_library_change_asks_the_host_to_re_read_kit_select_text() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// The banner's Download offer from the index cached on disk is looked up
+/// once, not every frame (review finding 9): with the cache gone from
+/// disk the offer stays — it was not read again.
+#[test]
+fn the_banner_reads_the_cached_index_once() {
+    let home = Home::new("banner-cache");
+    let lib = home.library();
+    let plugin = plugin_on(&lib);
+    saver_for(&plugin).load(&serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) }));
+    assert!(lib.download().state.lock().index.is_none());
+    let index = serde_json::json!({ "drumkits": [{
+        "name": "Gone Kit", "file": "gone.zip", "manifest_sha256": "d".repeat(64),
+    }] });
+    let cache = home.root().join(resonance_drums::download::INDEX_CACHE_FILE);
+    std::fs::write(&cache, serde_json::to_vec(&index).unwrap()).unwrap();
+
+    let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
+    editor.frame(Vec::new());
+    assert!(editor.frame(Vec::new()).widget("missing.download").is_some());
+    std::fs::remove_file(&cache).unwrap();
+    for _ in 0..3 {
+        assert!(
+            editor.frame(Vec::new()).widget("missing.download").is_some(),
+            "the index was read from disk again"
+        );
+    }
+}

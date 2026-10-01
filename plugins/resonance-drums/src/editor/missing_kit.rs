@@ -45,12 +45,48 @@ pub(crate) struct MissingKitState {
     pub(crate) downloading: Option<String>,
     /// The last thing Locate or Download could not do.
     pub(crate) error: Option<String>,
+    /// [`download_candidate`]'s last answer, and what it was for — the
+    /// banner draws every frame, and the index (cloned, or read from disk
+    /// and parsed) is looked up again only when the question changes.
+    candidate: Option<(CandidateKey, Option<ServerKit>)>,
+}
+
+/// What a download candidate depends on: the missing reference, and which
+/// index the worker holds (when it was fetched, and how many kits it
+/// lists — an index put in place without a fetch changes that). With no
+/// index in the worker, the copy cached on disk: written only by a fetch,
+/// which puts one in the worker too.
+#[derive(Clone, Debug, PartialEq)]
+struct CandidateKey {
+    missing: KitRef,
+    index: Option<(Option<std::time::Instant>, usize)>,
 }
 
 /// The plok.org index entry the missing kit can be downloaded as: its
 /// manifest hash, else its name, in the worker's index or the one cached
-/// on disk.
-pub(crate) fn download_candidate(app: &DrumsEditorApp, missing: &KitRef) -> Option<ServerKit> {
+/// on disk. Cached ([`MissingKitState::candidate`]).
+pub(crate) fn download_candidate(app: &mut DrumsEditorApp, missing: &KitRef) -> Option<ServerKit> {
+    let key = {
+        let state = app.library.download().state.lock();
+        CandidateKey {
+            missing: missing.clone(),
+            index: state
+                .index
+                .as_ref()
+                .map(|i| (state.index_fetched_at, i.drumkits.len())),
+        }
+    };
+    if let Some((cached, found)) = &app.missing_kit.candidate {
+        if *cached == key {
+            return found.clone();
+        }
+    }
+    let found = look_up_candidate(app, missing);
+    app.missing_kit.candidate = Some((key, found.clone()));
+    found
+}
+
+fn look_up_candidate(app: &DrumsEditorApp, missing: &KitRef) -> Option<ServerKit> {
     let index = app
         .library
         .download()
