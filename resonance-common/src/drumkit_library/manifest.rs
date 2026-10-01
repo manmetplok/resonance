@@ -115,11 +115,45 @@ type RawPieces = BTreeMap<String, BTreeMap<String, RawSetup>>;
 
 /// Which output port a kit suggests for a piece (`_meta.pads.<piece>.port`):
 /// a port index (0 = Main … 6 = Overhead) or a port's name ("Kick").
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// An index may be written as any whole JSON number — `1`, `1.0` — since
+/// a manifest written by a tool that only has floats is still the kit's
+/// intent. Anything else (a fraction, a negative number, a bool) is not a
+/// port hint; [`KitMeta`] then drops the port alone, not the pad's note
+/// and choke with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum PortHint {
     Index(u8),
     Name(String),
+}
+
+impl PortHint {
+    /// The hint a JSON value states, if it states one.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::String(name) => Some(PortHint::Name(name.clone())),
+            serde_json::Value::Number(_) => whole_u8(value).map(PortHint::Index),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PortHint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        PortHint::from_value(&value)
+            .ok_or_else(|| serde::de::Error::custom("a port index (0-255) or a port name"))
+    }
+}
+
+/// A JSON number that is a whole number in `0..=255` (`36`, `36.0`).
+fn whole_u8(value: &serde_json::Value) -> Option<u8> {
+    if let Some(n) = value.as_u64() {
+        return u8::try_from(n).ok();
+    }
+    let f = value.as_f64()?;
+    (f.fract() == 0.0 && (0.0..=255.0).contains(&f)).then_some(f as u8)
 }
 
 /// `_meta.pads.<piece>`: where a kit wants one of its pieces played. Every
@@ -135,6 +169,23 @@ pub struct PadHint {
     /// The choke group the piece's pad defaults to; 0 = none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choke: Option<u8>,
+}
+
+impl PadHint {
+    /// Read one `_meta.pads.<piece>` value field by field: a field of the
+    /// wrong shape is left out on its own (a port of `1.5` costs the pad
+    /// its port hint, never its note or choke group). Whole numbers may
+    /// be written as floats. `None` when the value is not an object, or
+    /// states no field this can read.
+    pub fn from_value(value: &serde_json::Value) -> Option<Self> {
+        let obj = value.as_object()?;
+        let hint = PadHint {
+            note: obj.get("note").and_then(whole_u8),
+            port: obj.get("port").and_then(PortHint::from_value),
+            choke: obj.get("choke").and_then(whole_u8),
+        };
+        (hint != PadHint::default()).then_some(hint)
+    }
 }
 
 /// Everything a manifest's `_meta` block says, each part read on its own
@@ -184,7 +235,7 @@ impl KitMeta {
         }
         if let Some(pads) = obj.get("pads").and_then(|p| p.as_object()) {
             for (key, hint) in pads {
-                if let Ok(hint) = serde_json::from_value::<PadHint>(hint.clone()) {
+                if let Some(hint) = PadHint::from_value(hint) {
                     out.pads.insert(key.clone(), hint);
                 }
             }
