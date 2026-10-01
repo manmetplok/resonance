@@ -92,6 +92,10 @@ fn serve(mut stream: TcpStream) {
         }
         // A small, valid kit.
         "/good.zip" => send_body(&mut stream, &zip_of(&good_kit_entries())),
+        // Several entries, so an extraction can be stopped half-way.
+        "/many.zip" => send_body(&mut stream, &zip_of(&many_entries())),
+        // Downloads fine; its second entry fails its CRC on extraction.
+        "/corrupt.zip" => send_body(&mut stream, &corrupt_zip()),
         _ => {
             let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
         }
@@ -112,6 +116,42 @@ fn good_kit_entries() -> Vec<(String, Vec<u8>)> {
         ("good/drum_samples.json".to_string(), b"{}".to_vec()),
         ("good/kick.wav".to_string(), vec![7u8; 1000]),
     ]
+}
+
+fn many_entries() -> Vec<(String, Vec<u8>)> {
+    (0..6)
+        .map(|i| (format!("many/file{i}.wav"), vec![i as u8; 2000]))
+        .collect()
+}
+
+/// A zip whose first entry is fine and whose second has one byte of its
+/// (stored) data flipped, so reading it fails the CRC check.
+fn corrupt_zip() -> Vec<u8> {
+    let marker = vec![0xABu8; 2000];
+    let mut bytes = zip_of(&[
+        ("bad/first.wav".to_string(), vec![1u8; 2000]),
+        ("bad/second.wav".to_string(), marker.clone()),
+        ("bad/third.wav".to_string(), vec![3u8; 2000]),
+    ]);
+    let at = bytes
+        .windows(marker.len())
+        .position(|w| w == marker.as_slice())
+        .expect("stored data is in the archive verbatim");
+    bytes[at + 1000] ^= 0xFF;
+    bytes
+}
+
+/// Every name directly in `dir`.
+fn listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
 }
 
 /// An in-memory zip of `entries`, stored uncompressed.
@@ -298,6 +338,124 @@ fn two_downloads_of_one_kit_stream_into_separate_part_files() {
     wait_for("b's .part to go", Duration::from_secs(5), || {
         part_files(&home.kits_dir(), "Slow_Kit").is_empty()
     });
+}
+
+/// Dropping the handle in the middle of an extraction stops it at the
+/// next entry and leaves neither a half-extracted kit nor the `.part`.
+/// The extraction used to run to the end whatever the cancel flag said —
+/// a detached worker then finished installing a kit the user had walked
+/// away from.
+#[test]
+fn a_cancel_mid_extraction_stops_and_leaves_nothing() {
+    use std::sync::Arc;
+
+    let home = DataHome::new("extract-cancel");
+    let (at_tx, at_rx) = crossbeam_channel::bounded::<()>(1);
+    let (go_tx, go_rx) = crossbeam_channel::bounded::<()>(1);
+    let hook = download::ExtractHook(Arc::new(move |i| {
+        if i == 2 {
+            let _ = at_tx.send(());
+            let _ = go_rx.recv_timeout(Duration::from_secs(10));
+        }
+    }));
+    let worker = download::spawn_with(WorkerConfig {
+        on_extract_entry: Some(hook),
+        ..home.config(&start_server())
+    });
+    let state = worker.state.clone();
+    worker.send(Command::Download(kit("Many Kit", "many.zip")));
+    at_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the extraction never reached entry 2");
+    // Two entries are out, in the staging directory.
+    let kits_dir = home.kits_dir();
+    assert!(
+        listing(&kits_dir).iter().any(|n| n.ends_with(".extracting")),
+        "extraction should be under way: {:?}",
+        listing(&kits_dir)
+    );
+
+    drop(worker);
+    let _ = go_tx.send(());
+    wait_for("the cancelled extraction to clean up", Duration::from_secs(10), || {
+        listing(&kits_dir).is_empty()
+    });
+    wait_for("the worker to report the cancel", Duration::from_secs(10), || {
+        matches!(state.lock().status, Status::Error(_))
+    });
+    assert!(
+        !home.0.join("installed.json").exists(),
+        "a cancelled kit was recorded as installed"
+    );
+}
+
+/// An extraction that fails part-way removes what it wrote, and a kit
+/// already installed under that name survives the failed re-download.
+#[test]
+fn a_failed_extraction_leaves_no_partial_kit_and_keeps_the_installed_one() {
+    let home = DataHome::new("extract-fail");
+    let kits_dir = home.kits_dir();
+    let installed = kits_dir.join("Bad_Kit");
+    std::fs::create_dir_all(&installed).unwrap();
+    std::fs::write(installed.join("old.wav"), b"the kit that was there").unwrap();
+
+    let worker = home.worker(&start_server());
+    worker.send(Command::Download(kit("Bad Kit", "corrupt.zip")));
+    wait_for("the extraction to fail", Duration::from_secs(10), || {
+        matches!(worker.state.lock().status, Status::Error(_))
+    });
+    drop(worker);
+    assert_eq!(
+        listing(&kits_dir),
+        vec!["Bad_Kit".to_string()],
+        "a failed extraction left something behind"
+    );
+    assert_eq!(listing(&installed), vec!["old.wav".to_string()]);
+}
+
+/// A worker starting up removes download leftovers nobody can own: those
+/// of a process that is gone (Linux can tell) and any untouched for an
+/// hour — never this process's own, nor a fresh one of unknown owner.
+#[test]
+fn a_starting_worker_sweeps_stale_download_leftovers() {
+    let home = DataHome::new("sweep");
+    let kits_dir = home.kits_dir();
+    std::fs::create_dir_all(&kits_dir).unwrap();
+    let me = std::process::id();
+    // No pid ever reaches 999999999 (Linux caps pid_max at 2^22).
+    let dead_part = kits_dir.join(".Dead.999999999-0.zip.part");
+    let dead_staging = kits_dir.join(".Dead.999999999-1.extracting");
+    let mine = kits_dir.join(format!(".Mine.{me}-77.zip.part"));
+    let old_legacy = kits_dir.join(".Old.zip.part");
+    let fresh_legacy = kits_dir.join(".Fresh.zip.part");
+    let unrelated = kits_dir.join("notes.txt");
+    for f in [&dead_part, &mine, &old_legacy, &fresh_legacy, &unrelated] {
+        std::fs::write(f, b"x").unwrap();
+    }
+    std::fs::create_dir_all(dead_staging.join("inner")).unwrap();
+    let two_hours_ago = std::time::SystemTime::now() - Duration::from_secs(2 * 3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&old_legacy)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+
+    // Any command starts the worker; the index fetch 404s.
+    let worker = home.worker(&start_server());
+    worker.send(Command::FetchIndex);
+    wait_for("the fetch to finish", Duration::from_secs(10), || {
+        matches!(worker.state.lock().status, Status::Error(_))
+    });
+
+    assert!(!old_legacy.exists(), "an hour-old leftover survived");
+    assert!(mine.exists(), "this process's own download was swept");
+    assert!(fresh_legacy.exists(), "a fresh leftover of unknown owner was swept");
+    assert!(unrelated.exists());
+    if cfg!(target_os = "linux") {
+        assert!(!dead_part.exists(), "a dead process's .part survived");
+        assert!(!dead_staging.exists(), "a dead process's staging dir survived");
+    }
 }
 
 /// A completed download lands in the injected data directory — kit and
