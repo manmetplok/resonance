@@ -975,6 +975,33 @@ pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     *bridge.builtin_kit.lock() = None;
 }
 
+/// Hand `pads` to the audio thread as load `generation`'s kit — unless a
+/// newer load has begun since, or the host now runs another rate — and run
+/// `publish` (the kit's facts for the editor) under the same lock, so a
+/// newer load's facts never land first. For a kit no loader builds: the
+/// built-in one `selection::play_builtin` swaps in. Returns whether it was
+/// sent; a kit that was not is dropped here, on the caller's thread.
+pub fn hand_off_kit_if_current(
+    bridge: &KitBridge,
+    pads: Vec<LoadedPad>,
+    generation: u64,
+    rate: f32,
+    publish: impl FnOnce(),
+) -> bool {
+    let _handoff = bridge.kit_handoff.lock();
+    if bridge.load_generation.load(Ordering::Acquire) != generation
+        || bridge.sample_rate.load(Ordering::Acquire) != rate.to_bits()
+    {
+        return false;
+    }
+    let ordinal = hand_off_kit_locked(bridge, pads);
+    bridge.load_progress.handed_off(generation, ordinal);
+    *bridge.handed_off.lock() = None;
+    *bridge.built_kit.lock() = None;
+    publish();
+    true
+}
+
 /// [`hand_off_kit`] for a caller already holding
 /// [`KitBridge::kit_handoff`]. Returns the kit's send ordinal (see
 /// [`progress`]).

@@ -86,6 +86,9 @@ pub fn spawn_watcher(bridge: &KitBridge, wake: Receiver<()>) -> ArticulationWatc
                 break;
             }
             apply_pending(&bridge);
+            // The same thread acts on `kit_select` (drums-plugin-rework.md
+            // §5.1): a host or control-API write loads the kit from here.
+            crate::selection::watch(&bridge);
         });
 
     if spawned.is_err() {

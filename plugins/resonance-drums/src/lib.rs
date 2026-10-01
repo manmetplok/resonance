@@ -56,6 +56,7 @@ pub mod params;
 pub mod reload;
 pub mod rr_display;
 pub mod sample_info;
+pub mod selection;
 pub mod velocity;
 pub mod voice;
 
@@ -76,7 +77,8 @@ use dsp::DrumSampler;
 #[derive(Clone)]
 pub struct KitBridge {
     /// Path to the currently loaded (or last-loaded) kit manifest. Set by
-    /// the loader on success; persisted in `save_state`.
+    /// the loader on success; persisted in `save_state` as a `kit_ref`
+    /// ([`selection::KitRef`]).
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
     /// The kit a load is in flight for, with that load's generation stamp.
     /// Recorded by [`kit_loader::spawn_loader`] when it starts, cleared
@@ -85,7 +87,7 @@ pub struct KitBridge {
     /// [`KitBridge::wanted_kit_path`].
     pub pending_kit: Arc<Mutex<Option<(u64, PathBuf)>>>,
     /// The last kit that loaded, as a project saved mid-pick recorded it
-    /// (`kit_path_fallback`): if the kit the project wants fails to load
+    /// (`kit_ref_fallback`): if the kit the project wants fails to load
     /// on reopen, the loader loads this one instead of leaving the
     /// built-in kit. Consumed by the first load that finishes.
     pub kit_fallback: Arc<Mutex<Option<PathBuf>>>,
@@ -200,6 +202,9 @@ pub struct KitBridge {
     /// Decode progress, complete only once the audio thread has taken the
     /// kit (§5.4). Lock-free on every side; the sampler marks the take.
     pub load_progress: Arc<KitLoadProgress>,
+    /// The host, once the CLAP bridge hands it over (`set_host`): told to
+    /// re-read the params when the plugin moves `kit_select` itself.
+    pub host: Arc<Mutex<Option<Arc<HostHandle>>>>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -249,9 +254,19 @@ impl KitBridge {
     }
 
     /// Ask the articulation watcher to look now rather than at its next
-    /// poll. Best-effort by design — see [`Self::articulation_wake`].
+    /// poll. Best-effort by design — see [`Self::articulation_wake`]. The
+    /// same thread acts on `kit_select`.
     pub fn wake_articulation_watcher(&self) {
         let _ = self.articulation_wake.try_send(());
+    }
+
+    /// Have the host re-read the params (values and text): the plugin
+    /// moved `kit_select` itself, or what its value names changed. A no-op
+    /// before the bridge handed the host over (and in tests).
+    pub fn request_params_rescan(&self) {
+        if let Some(host) = self.host.lock().as_ref() {
+            host.request_params_rescan();
+        }
     }
 
     /// The kit the user last asked for: the one a load is in flight for,
@@ -278,7 +293,7 @@ impl KitBridge {
     /// Abandon an in-flight load unless it is for `keep`: a state load
     /// that names another kit (or none) supersedes it. Bumping the
     /// generation turns the loader into a no-op when it lands.
-    fn supersede_pending(&self, keep: Option<&std::path::Path>) {
+    pub(crate) fn supersede_pending(&self, keep: Option<&std::path::Path>) {
         let mut pending = self.pending_kit.lock();
         let Some((_, path)) = pending.as_ref() else {
             return;
@@ -317,6 +332,11 @@ pub struct ResonanceDrums {
     /// Receiving end of the editor's audition queue. The audio thread is
     /// the sole consumer; drained at the top of every `process()`.
     audition_receiver: Receiver<AuditionHit>,
+    /// The host, for the audio thread's `kit_load_progress` reports
+    /// (a clone of the bridge's, so `process` takes no lock).
+    host: Option<Arc<HostHandle>>,
+    /// The `kit_load_progress` the host was last asked to re-read.
+    reported_progress: f32,
 }
 
 impl ResonancePlugin for ResonanceDrums {
@@ -383,6 +403,7 @@ impl ResonancePlugin for ResonanceDrums {
             builtin_kit: Arc::new(Mutex::new(None)),
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
+            host: Arc::new(Mutex::new(None)),
         };
         // Counted in the kit library's "used in N open drum instances".
         // The download worker is not per instance any more: the editor
@@ -412,12 +433,15 @@ impl ResonancePlugin for ResonanceDrums {
             bridge,
             _articulation_watcher: watcher,
             audition_receiver,
+            host: None,
+            reported_progress: 1.0,
         }
     }
 
     fn param_count(&self) -> usize {
-        // master_volume + polyphony + velocity_curve + round_robin_mode,
-        // then (volume, pan, mute, oh_blend, balance, articulation) per pad
+        // master_volume + polyphony + velocity_curve + round_robin_mode +
+        // kit_select + kit_load_progress, then (volume, pan, mute,
+        // oh_blend, balance, articulation) per pad
         GLOBAL_PARAMS + drum_map::NUM_PADS * PARAMS_PER_PAD
     }
 
@@ -566,6 +590,9 @@ impl ResonancePlugin for ResonanceDrums {
                 request.articulations,
             );
         }
+        self.params
+            .kit_load_progress
+            .set_value(self.bridge.load_progress.fraction());
 
         true
     }
@@ -597,6 +624,18 @@ impl ResonancePlugin for ResonanceDrums {
 
         // Swap in a freshly loaded kit if one is waiting.
         self.sampler.try_swap_kit();
+
+        // `kit_load_progress` mirrors the load (atomics only: no lock, no
+        // allocation), and reaches 1.0 in the block that took the kit. The
+        // host is asked to re-read it per twentieth, not per file.
+        let progress = self.bridge.load_progress.fraction();
+        self.params.kit_load_progress.set_value(progress);
+        if selection::progress_worth_reporting(self.reported_progress, progress) {
+            self.reported_progress = progress;
+            if let Some(host) = &self.host {
+                host.request_params_rescan();
+            }
+        }
 
         // Snapshot the global trigger settings once per block, before any
         // note lands. Block-rate is the right granularity: they only
@@ -667,6 +706,18 @@ impl ResonancePlugin for ResonanceDrums {
         Some(self.presets.clone())
     }
 
+    fn set_host(&mut self, host: Arc<HostHandle>) {
+        *self.bridge.host.lock() = Some(host.clone());
+        self.host = Some(host);
+    }
+
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        // The params are shared, so a live instance's `kit_select` still
+        // reads as the kit's name — and a name still picks a kit — while
+        // the plugin is in the audio processor (§5.1, §8).
+        Some(Arc::new(DrumParamText(self.params.clone())))
+    }
+
     #[cfg(feature = "editor")]
     fn editor_factory(&self) -> Option<Arc<dyn resonance_plugin::gui::EditorFactory>> {
         Some(Arc::new(editor::DrumsEditorFactory::new(
@@ -674,6 +725,23 @@ impl ResonancePlugin for ResonanceDrums {
             self.bridge.clone(),
             self.presets.clone(),
         )))
+    }
+}
+
+/// Parameter text over the shared `DrumParams`, for the CLAP bridge while
+/// the plugin is active.
+struct DrumParamText(Arc<DrumParams>);
+
+impl resonance_plugin::ParamTextSource for DrumParamText {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < params::PARAM_COUNT).then(|| self.0.param_at(index).display(value))
+    }
+
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        if index >= params::PARAM_COUNT {
+            return None;
+        }
+        self.0.param_at(index).parse(text)
     }
 }
 
@@ -728,7 +796,7 @@ impl ResonanceDrums {
     }
 }
 
-/// Persists the drum plugin's kit path, the globally selected overhead
+/// Persists the drum plugin's kit reference, the globally selected overhead
 /// setup, and per-pad close-mic picks alongside the plugin's params.
 /// The saver holds only shared Arcs so the CLAP bridge can call save/load
 /// from the main thread while the plugin is in the audio processor
@@ -770,23 +838,28 @@ impl ExtraStateSaver for DrumsExtraState {
         // kit that will not load reopens on the built-in kit. So while it
         // is pending, the kit that last loaded goes along as the fallback
         // the reopen tries next (a reopen whose fallback has not been
-        // used up yet passes its own on). Older builds ignore the key.
+        // used up yet passes its own on).
         let fallback = self.reload.as_ref().and_then(|bridge| {
             let other = |path: Option<PathBuf>| path.filter(|p| Some(p) != wanted.as_ref());
             other(self.kit_path.lock().clone()).or_else(|| other(bridge.kit_fallback.lock().clone()))
         });
-        let path = wanted.map(|p| p.to_string_lossy().into_owned());
+        // State v2: the kit as a reference (id, name, paths), so it is
+        // found again after a rename, a move or on another machine
+        // (§5.2). A kit the state asked for that is not here is written
+        // back verbatim, so opening and saving a project does not lose it.
+        let selection = &self.params.selection;
+        let kit_ref = match &wanted {
+            Some(path) => Some(selection.ref_for_manifest(path)),
+            None => selection.missing(),
+        };
         map.insert(
-            "kit_path".to_string(),
-            match path {
-                Some(s) => serde_json::Value::String(s),
-                None => serde_json::Value::Null,
-            },
+            selection::KIT_REF_KEY.to_string(),
+            kit_ref.map_or(serde_json::Value::Null, |r| r.to_json()),
         );
         if let Some(fallback) = fallback {
             map.insert(
-                "kit_path_fallback".to_string(),
-                serde_json::Value::String(fallback.to_string_lossy().into_owned()),
+                selection::KIT_REF_FALLBACK_KEY.to_string(),
+                selection.ref_for_manifest(&fallback).to_json(),
             );
         }
         map.insert(
@@ -828,13 +901,28 @@ impl ExtraStateSaver for DrumsExtraState {
     }
 
     /// The kit and its mic choices are the sound (the articulation
-    /// toggles are params already). Path-only until kits become a library
-    /// kind (plugin-preset-library.md §9.3).
+    /// toggles are params already). The kit goes by reference, so a
+    /// preset recalls it by content id after a rename or a move (§5.2).
     fn preset_keys(&self) -> &'static [&'static str] {
-        &["kit_path", "overhead_setup_key", "pad_mic_choices"]
+        &[selection::KIT_REF_KEY, "overhead_setup_key", "pad_mic_choices"]
     }
 
     fn load(&self, state: &serde_json::Value) {
+        // A v1 state names its kit by path (`kit_path`); read it as the
+        // v2 reference it converts to. The library root is only needed
+        // (and the library only opened) when there is one to convert.
+        let selection = &self.params.selection;
+        let upgraded;
+        let state = if state.get(selection::V1_KIT_PATH_KEY).is_some()
+            || state.get(selection::V1_KIT_PATH_FALLBACK_KEY).is_some()
+        {
+            let mut v2 = state.clone();
+            selection::upgrade_v1_state(&mut v2, selection.library.root().as_deref());
+            upgraded = v2;
+            &upgraded
+        } else {
+            state
+        };
         // The kit the user wants, not merely the last one that finished:
         // a pick still decoding counts.
         let wanted_path = |kit_path: &Arc<Mutex<Option<PathBuf>>>| match &self.reload {
@@ -846,24 +934,27 @@ impl ExtraStateSaver for DrumsExtraState {
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
         );
-        // An explicit `kit_path: null` clears the remembered kit (a project
+        // An explicit `kit_ref: null` clears the remembered kit (a project
         // saved with none always writes it); a document without the key —
         // a params-only preset — keeps the current kit, as the IR keeps
-        // its impulse. Before the plugin is active the loader is spawned
-        // from `initialize()`, where the sample rate is known.
-        if let Some(v) = state.get("kit_path") {
-            let path = v.as_str().map(PathBuf::from);
+        // its impulse. A reference that resolves to nothing is a missing
+        // kit: the built-in kit plays and the reference is kept. Before
+        // the plugin is active the loader is spawned from `initialize()`,
+        // where the sample rate is known.
+        if let Some(kit) = selection::resolve_state(state, selection) {
             // A load in flight for another kit is superseded by this one.
             if let Some(bridge) = &self.reload {
-                bridge.supersede_pending(path.as_deref());
-                // The kit to load should `kit_path` fail; absent in
-                // states saved with nothing pending, and in older ones.
-                *bridge.kit_fallback.lock() = state
-                    .get("kit_path_fallback")
-                    .and_then(|v| v.as_str())
-                    .map(PathBuf::from);
+                bridge.supersede_pending(kit.path.as_deref());
+                // The kit to load should this one fail; absent in states
+                // saved with nothing pending.
+                *bridge.kit_fallback.lock() = kit.fallback.clone();
             }
-            *self.kit_path.lock() = path;
+            *self.kit_path.lock() = kit.path.clone();
+            // `kit_select` follows the reference: the kit's slot here.
+            selection::adopt_state_kit(&self.params, &kit);
+            if let Some(bridge) = &self.reload {
+                bridge.request_params_rescan();
+            }
         }
 
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
@@ -915,17 +1006,22 @@ impl ExtraStateSaver for DrumsExtraState {
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
         );
-        if let (Some(bridge), Some(path)) = (&self.reload, after.0.clone()) {
+        if let Some(bridge) = &self.reload {
             let rate = f32::from_bits(bridge.sample_rate.load(Ordering::Acquire));
             if rate > 0.0 && before != after {
-                kit_loader::spawn_loader(
-                    path,
-                    rate,
-                    bridge,
-                    after.1,
-                    after.2,
-                    bridge.articulations(),
-                );
+                match after.0.clone() {
+                    Some(path) => kit_loader::spawn_loader(
+                        path,
+                        rate,
+                        bridge,
+                        after.1,
+                        after.2,
+                        bridge.articulations(),
+                    ),
+                    // No kit (or a missing one) while running: the
+                    // built-in kit replaces whatever played (D7).
+                    None => selection::play_builtin(bridge),
+                }
             }
         }
     }

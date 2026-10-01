@@ -1,6 +1,6 @@
 /// Plugin parameters: master volume, the global voice/velocity/round-robin
-/// controls, and per-pad volume, pan, mute, OH blend, balance and
-/// articulation choice.
+/// controls, the kit selector and its load progress, and per-pad volume,
+/// pan, mute, OH blend, balance and articulation choice.
 use std::sync::Arc;
 
 use resonance_plugin::*;
@@ -8,6 +8,7 @@ use resonance_plugin::*;
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::selection::{KitSelection, MAX_KIT_SLOT, NO_KIT};
 use crate::velocity;
 use crate::voice::MAX_VOICES;
 
@@ -19,7 +20,7 @@ pub const PARAMS_PER_PAD: usize = 6;
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 4;
+pub const GLOBAL_PARAMS: usize = 6;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
@@ -43,11 +44,33 @@ pub struct DrumParams {
     /// [`crate::dsp::voice_pick::RoundRobinMode`]. Defaults to Cycle,
     /// which is what the sampler always did.
     pub round_robin_mode: ChoiceParam,
+    /// The kit: a stable slot in the shared kit library, or
+    /// [`NO_KIT`] for the built-in kit (drums-plugin-rework.md §5.1, D4).
+    /// Its text is the kit's name — `"<name> (missing)"` when the state
+    /// named a kit that is not on this machine — and a name parses back to
+    /// the slot, so the control API picks a kit by name. Setting it loads
+    /// the kit ([`crate::selection::apply_pending`]).
+    ///
+    /// Not automatable: every change is a multi-gigabyte decode. Not in
+    /// the state either: a slot is this machine's library layout, so the
+    /// state carries the kit as a `kit_ref` and the slot is derived.
+    pub kit_select: IntParam,
+    /// Read-only 0..1: how far the kit `kit_select` names is from being in
+    /// place on the audio thread — 1.0 only once the audio thread took it
+    /// (§5.4). Written by the plugin every block; hosts and agents poll it.
+    pub kit_load_progress: FloatParam,
+    /// What `kit_select` means beyond a slot (a missing kit, a kit with no
+    /// slot), and the library handle its text and the loader resolve
+    /// against. Shared with the bridge, the saver and the editor.
+    pub selection: Arc<KitSelection>,
     pub pads: [PadParams; NUM_PADS],
 }
 
 impl Default for DrumParams {
     fn default() -> Self {
+        let selection = Arc::new(KitSelection::new());
+        let text_sel = selection.clone();
+        let parse_sel = selection.clone();
         Self {
             master_volume: FloatParam::new(
                 "master_volume",
@@ -82,6 +105,30 @@ impl Default for DrumParams {
                 0,
                 ROUND_ROBIN_LABELS,
             ),
+            // 1001 steps — past the engine's choice-label walk, so a
+            // parameter query never enumerates the library.
+            kit_select: IntParam::new(
+                "kit_select",
+                "Kit",
+                NO_KIT,
+                IntRange::Linear {
+                    min: NO_KIT,
+                    max: MAX_KIT_SLOT,
+                },
+            )
+            .with_value_to_string(Arc::new(move |v| text_sel.text(v)))
+            .with_string_to_value(Arc::new(move |t| parse_sel.parse(t)))
+            .not_automatable()
+            .excluded_from_state(),
+            kit_load_progress: FloatParam::new(
+                "kit_load_progress",
+                "Kit Load Progress",
+                1.0,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            )
+            .with_value_to_string(Arc::new(|v| format!("{:.0}%", v * 100.0)))
+            .read_only(),
+            selection,
             pads: std::array::from_fn(PadParams::new),
         }
     }
@@ -208,7 +255,7 @@ impl Default for PadParams {
 }
 
 impl DrumParams {
-    /// The exposed parameters in host order: the four globals, then each
+    /// The exposed parameters in host order: the six globals, then each
     /// pad's block of [`PARAMS_PER_PAD`].
     ///
     /// One ordered list, read by both `ResonancePlugin::param` and the
@@ -220,6 +267,8 @@ impl DrumParams {
             1 => return &self.polyphony,
             2 => return &self.velocity_curve,
             3 => return &self.round_robin_mode,
+            4 => return &self.kit_select,
+            5 => return &self.kit_load_progress,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
