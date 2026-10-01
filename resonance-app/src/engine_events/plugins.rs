@@ -121,8 +121,10 @@ pub(super) fn track_added(
 }
 
 /// Run the sub-track policy ([`ensure_subtracks`]) for one track plugin,
-/// from its stored port layout — when it is added, and again when the
-/// drums' `output_mode` moves (drums-plugin-rework.md §8, E11).
+/// from its stored port layout — when it is added, when the drums'
+/// `output_mode` is edited, and when a rescan reports it moved Stereo ->
+/// Multi (drums-plugin-rework.md §8, E11). Never on a rescan that finds it
+/// already in Multi: that would re-create a sub-track the user deleted.
 ///
 /// A Resonance Drums instance gets its per-pad sub-tracks only in **Multi**
 /// output mode: in Stereo (the default for a new instance) every pad sums
@@ -932,21 +934,28 @@ pub(super) fn params_refreshed(
     instance_id: PluginInstanceId,
     params: Vec<ParamInfo>,
 ) {
-    let drums = r
+    let (drums, to_multi) = r
         .with_plugin_mut(instance_id, |slot| {
+            let was = crate::drums_mirror::routes_to_ports(slot);
             for fresh in &params {
                 if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
                     p.current_value = fresh.current_value;
                     p.text = fresh.text.clone();
                 }
             }
-            crate::drums_mirror::is_drums(slot)
+            let now = crate::drums_mirror::routes_to_ports(slot);
+            (crate::drums_mirror::is_drums(slot), !was && now)
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false));
     if drums {
-        // A preset may set the kit and the output mode.
+        // A state load may set the kit, and a whole state blob (a
+        // project's, an undo's) the output mode too — a plugin preset
+        // leaves `output_mode` alone. The sub-track policy runs only on
+        // the Stereo -> Multi transition (see `param_values_changed`).
         crate::update::compose::refresh_kit_pads(r);
-        ensure_instance_subtracks(r, instance_id);
+        if to_multi {
+            ensure_instance_subtracks(r, instance_id);
+        }
     }
 }
 
@@ -958,22 +967,30 @@ pub(super) fn param_values_changed(
     instance_id: PluginInstanceId,
     values: Vec<resonance_audio::types::ParamValueUpdate>,
 ) {
-    let drums = r
+    let (drums, to_multi) = r
         .with_plugin_mut(instance_id, |slot| {
+            let was = crate::drums_mirror::routes_to_ports(slot);
             for fresh in values {
                 if let Some(p) = slot.params.iter_mut().find(|p| p.id == fresh.id) {
                     p.current_value = fresh.value;
                     p.text = fresh.text;
                 }
             }
-            crate::drums_mirror::is_drums(slot)
+            let now = crate::drums_mirror::routes_to_ports(slot);
+            (crate::drums_mirror::is_drums(slot), !was && now)
         })
-        .unwrap_or(false);
+        .unwrap_or((false, false));
     if drums {
         // `kit_select`'s text names the kit the picker shows, and a state
         // load may have moved `output_mode` (a v1 state loads as Multi).
         crate::update::compose::refresh_kit_pads(r);
-        ensure_instance_subtracks(r, instance_id);
+        // The sub-track policy runs on the Stereo -> Multi transition
+        // only. A rescan that finds the instance already in Multi (a kit
+        // load's stages, a selection the plugin derived) must not bring
+        // back a sub-track the user deleted — and it would, outside undo.
+        if to_multi {
+            ensure_instance_subtracks(r, instance_id);
+        }
     }
 }
 
