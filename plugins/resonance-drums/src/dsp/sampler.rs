@@ -1118,6 +1118,15 @@ impl DrumSampler {
         // close mic. Plus an Overhead voice if the pad has one loaded,
         // and one per E15 bank (more overheads, bleed, room): up to
         // `MAX_BANKS_PER_HIT`, on the stack.
+        //
+        // They are built in priority order — close mics, overhead slot
+        // 1, overhead slots 2 and 3, bleed, room (`extra_banks` order) —
+        // and only as many as the hit can get voices for without
+        // stealing its own (`hit_capacity`): with polyphony below the
+        // hit's bank count, the ambience goes, not the close mics, and
+        // no ring is claimed for a bank that will not play.
+        let hit_cap = janitor::hit_capacity(&self.voices, self.globals.max_voices)
+            .min(MAX_BANKS_PER_HIT);
         let mut destinations: [Option<VoiceDestination>; MAX_BANKS_PER_HIT] =
             [None; MAX_BANKS_PER_HIT];
         // The (layer, take) each destination's bank plays.
@@ -1159,7 +1168,7 @@ impl DrumSampler {
             (layer, map_relative(rr_index, n_rrs, takes))
         };
         let mut dest_count = 0;
-        for bank_index in 0..close_mic_count.min(2) {
+        for bank_index in 0..close_mic_count.min(2).min(hit_cap) {
             cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
             (rings[dest_count], starts[dest_count]) =
                 ring_for(&pad.close_mics[bank_index], cells[dest_count]);
@@ -1169,7 +1178,7 @@ impl DrumSampler {
             });
             dest_count += 1;
         }
-        if has_overhead && dest_count < destinations.len() {
+        if has_overhead && dest_count < hit_cap {
             // In Multi a close-miked pad's overhead take goes to the
             // Overhead port; a pad the library records with overheads
             // only (every cymbal, ride and china piece in Drummica) plays
@@ -1188,7 +1197,7 @@ impl DrumSampler {
         // relative position like every other bank. Overhead slots route
         // as slot 1 does; bleed and room to the ambience port.
         for (bank_index, extra) in pad.extra_banks.iter().enumerate() {
-            if dest_count >= destinations.len() {
+            if dest_count >= hit_cap {
                 break;
             }
             cells[dest_count] = cell_in(&extra.bank);
@@ -1221,8 +1230,16 @@ impl DrumSampler {
                 continue;
             };
             let dest = *dest;
-            let voice_idx =
-                janitor::find_free_voice(&self.voices, pad_index, self.globals.max_voices);
+            // `hit_cap` sized the list so this always finds a slot; were
+            // it not to, the rest are the hit's lowest-priority banks.
+            let Some(voice_idx) = janitor::find_free_voice(
+                &self.voices,
+                pad_index,
+                self.globals.max_voices,
+                shared_age,
+            ) else {
+                break;
+            };
             if self.voices[voice_idx].active {
                 self.steal_to_tail(voice_idx);
             }
