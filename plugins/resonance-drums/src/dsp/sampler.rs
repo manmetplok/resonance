@@ -232,7 +232,10 @@ impl DrumSampler {
     /// process-wide reader pool. Test hook: a test's own pool can be shut
     /// down mid-render.
     #[doc(hidden)]
-    pub fn with_reader_pool(kit_receiver: Receiver<Vec<LoadedPad>>, pool: &ReaderPool) -> Self {
+    pub fn with_reader_pool(
+        kit_receiver: Receiver<Vec<LoadedPad>>,
+        pool: &Arc<ReaderPool>,
+    ) -> Self {
         Self::with_janitor_and_pool(kit_receiver, janitor::spawn(), pool)
     }
 
@@ -250,10 +253,10 @@ impl DrumSampler {
     fn with_janitor_and_pool(
         kit_receiver: Receiver<Vec<LoadedPad>>,
         janitor_sender: Sender<Vec<LoadedPad>>,
-        pool: &ReaderPool,
+        pool: &Arc<ReaderPool>,
     ) -> Self {
         let set = StreamSet::new();
-        pool.register(&set);
+        let registration = pool.register(&set);
         Self {
             pads: Vec::new(),
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
@@ -287,7 +290,7 @@ impl DrumSampler {
             cur_pad_balance: [0.5; NUM_PADS],
             block_inv_frames: 0.0,
             block_idle: true,
-            streams: AudioStreams::new(set),
+            streams: AudioStreams::with_registration(set, Some(registration)),
             ring_bytes_out: None,
             render_mode: RenderMode::Auto,
             offline: false,

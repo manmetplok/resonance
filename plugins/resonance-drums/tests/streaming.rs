@@ -171,7 +171,7 @@ impl Drop for Fixture {
 /// mailbox open (and swaps kits in).
 fn sampler(
     pads: Vec<LoadedPad>,
-    pool: &ReaderPool,
+    pool: &Arc<ReaderPool>,
     mode: RenderMode,
 ) -> (DrumSampler, crossbeam_channel::Sender<Vec<LoadedPad>>) {
     let (tx, rx) = crossbeam_channel::bounded::<Vec<LoadedPad>>(1);
@@ -599,6 +599,91 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
     // In time: what it plays is the take where the voice would be.
     assert_eq!(&got[at..], &reference[at..], "recovered out of time");
     pool.shutdown();
+}
+
+/// The pool's threads run only while a sampler is registered with it:
+/// the last one to go joins them, and the next one spawns them again.
+#[test]
+fn reader_threads_live_only_while_a_sampler_does() {
+    let pool = ReaderPool::new(2);
+    assert_eq!(pool.running_threads(), 0, "no sampler, no threads");
+    let (a, _ta) = sampler(Vec::new(), &pool, RenderMode::Realtime);
+    assert_eq!(pool.running_threads(), 2);
+    let (b, _tb) = sampler(Vec::new(), &pool, RenderMode::Realtime);
+    drop(a);
+    assert_eq!(pool.running_threads(), 2, "the second sampler still needs them");
+    drop(b);
+    assert_eq!(pool.running_threads(), 0, "the last sampler joined them");
+    let (c, _tc) = sampler(Vec::new(), &pool, RenderMode::Realtime);
+    assert_eq!(pool.running_threads(), 2, "spawned again on demand");
+    drop(c);
+    assert_eq!(pool.running_threads(), 0);
+}
+
+/// A ring is open for the readers from its claim until its voice has
+/// ended and the reader has dropped the stream; a scan skips it after.
+#[test]
+fn rings_are_open_only_while_streamed() {
+    let fixture = Fixture::new("open", 48_000, 0.5);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(fixture.kit(&cache, 4_096), &pool, RenderMode::Realtime);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    ports.render(&mut s, 128, &params, &hit);
+    assert_eq!(s.stream_set().rings_open(), 3, "one hit, three streams");
+    pool.pump();
+    assert_eq!(s.stream_set().rings_open(), 3);
+    // Play the takes out, the reader keeping up between blocks.
+    for _ in 0..(0.6 * HOST) as usize / 128 {
+        ports.render(&mut s, 128, &params, &[]);
+        pool.pump();
+    }
+    assert_eq!(s.voices.iter().filter(|v| v.active).count(), 0);
+    assert_eq!(s.stream_underruns(), 0);
+    assert_eq!(s.stream_set().rings_open(), 0, "every ring closed again");
+    assert_eq!(s.stream_set().rings_in_use(), 0);
+}
+
+/// A panic in a read fails that one stream; the reader carries on with
+/// the others.
+#[test]
+fn a_reader_panic_fails_one_stream_and_the_reader_carries_on() {
+    let fixture = Fixture::new("panic", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(
+        single_voice_kit(&cache, path, 8_192),
+        &pool,
+        RenderMode::Realtime,
+    );
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = |note| {
+        [Hit {
+            frame: 0,
+            note,
+            velocity: 1.0,
+        }]
+    };
+    s.stream_set().panic_next_reads(1);
+    ports.render(&mut s, 128, &params, &hit(drum_map::KICK));
+    pool.pump();
+    assert_eq!(s.stream_set().rings_failed(), 1, "the panicking read failed its stream");
+    assert_eq!(s.stream_set().frames_buffered(), 0);
+    ports.render(&mut s, 128, &params, &hit(drum_map::SNARE));
+    pool.pump();
+    assert_eq!(s.stream_set().rings_failed(), 1);
+    assert!(
+        s.stream_set().frames_buffered() > 0,
+        "the next stream is read"
+    );
 }
 
 /// A file rewritten after the kit loaded — same length, other samples, a
