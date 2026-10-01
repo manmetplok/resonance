@@ -55,4 +55,15 @@ pub struct PluginMirror {
     /// Starts at 1: there is no engine-side counter left to stay above,
     /// so no base. See `Resonance::allocate_plugin_id`.
     pub next_id: PluginInstanceId,
+
+    /// What each Resonance Drums instance last reported about the pads of
+    /// the kit it plays (`com.resonance.kit-info`,
+    /// `AudioEvent::PluginKitInfo`). Runtime only; the kit picker reads it.
+    pub kit_info: std::collections::HashMap<PluginInstanceId, resonance_common::kit_info::KitInfo>,
+
+    /// Each track instrument's output-port names as its `PluginAdded`
+    /// reported them (index 0 is the main output), kept so the sub-track
+    /// policy can run again when a parameter — the drums' `output_mode` —
+    /// decides it later. Runtime only.
+    pub output_ports: std::collections::HashMap<PluginInstanceId, Vec<String>>,
 }

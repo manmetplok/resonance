@@ -40,6 +40,8 @@ mod automation;
 mod bus;
 mod chain_presets;
 mod clip;
+/// `drum_kits.*` — the user's drum-kit library (drums-plugin-rework.md §8).
+mod drum_kits;
 mod edit;
 /// The slot-or-(plugin_id, occurrence) effect-addressing state machine,
 /// shared by `track/bus/master.remove_effect` / `move_effect` /
@@ -95,6 +97,8 @@ pub(crate) use meter::{chain_probe_error, chain_probed, mix_measure_error, mix_m
 pub(crate) use render::mixdown_result;
 pub use amp_models::{AmpLibraryCache, AmpLibraryRoots};
 pub(crate) use amp_models::roots_for as amp_library_roots;
+pub use drum_kits::{DrumKitLibraryCache, DrumKitLibraryRoots};
+pub(crate) use drum_kits::roots_for as drum_kit_library_roots;
 pub(crate) use track::{expire_pending_labels, label_resolved};
 
 /// Entry point for `Message::Control`, dispatched from `update.rs`.
@@ -195,6 +199,12 @@ pub fn execute(
     // the machine, not the project — no project needed, no undo entry,
     // no revision bump.
     if let Some(response) = amp_models::try_handle(app, request) {
+        return (response, Task::none());
+    }
+
+    // The per-user drum-kit library (drums-plugin-rework.md §8): the
+    // same terms as the amp's.
+    if let Some(response) = drum_kits::try_handle(app, request) {
         return (response, Task::none());
     }
 
@@ -465,6 +475,8 @@ pub(crate) fn is_read_only_method(method: &str) -> bool {
         // `amp_models.*` is the user's model library, which no project
         // owns (nam-model-library.md §9.3).
         || methods::amp_models::METHODS.contains(&method)
+        // `drum_kits.*` is the user's kit library, likewise.
+        || methods::drum_kits::METHODS.contains(&method)
         // `presets.*` is the user's preset library (§12.2).
         || methods::presets::METHODS.contains(&method)
         || resonance_control::job::METHODS.contains(&method)

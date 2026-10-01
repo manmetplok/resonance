@@ -27,6 +27,12 @@ running app is older than this plugin — say so and stop.
 `mcp__resonance__song_tracks` for a drums track — `generate_drums` rejects any
 other kind, and `track_add {kind: "drums"}` makes one.
 
+The track plays whatever kit its Resonance Drums has loaded, and a pad the kit
+has no piece for is silent. `mcp__resonance__drum_kits_list` lists the
+installed kits with their piece names and which tracks use each: check it
+before writing for a china or a second crash. Picking and loading a kit is in
+the description of `mcp__resonance__track_set_plugin_param`.
+
 For odd-metre work (step 3) also check `global.list_events` and
 `global.add_signature_event`. They are newer than the rest of the surface; if
 they are missing, the running app predates them and the only meter changes you

@@ -506,6 +506,14 @@ pub(super) fn build_instance(
             resonance_common::param_flags::EXTENSION_ID,
         )
     };
+    // First-party: the pads of the kit a drum plugin plays
+    // (`com.resonance.kit-info`, drums-plugin-rework.md §8).
+    instance.kit_info_ext = unsafe {
+        query_extension::<resonance_common::kit_info::PluginKitInfo>(
+            plugin,
+            resonance_common::kit_info::EXTENSION_ID,
+        )
+    };
     // `clap.render`: told OFFLINE for an offline render's duration.
     instance.render_ext = unsafe {
         query_extension::<clap_sys::ext::render::clap_plugin_render>(

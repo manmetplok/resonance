@@ -88,6 +88,10 @@ pub struct ControlEndpointState {
     /// `amp_models.*` handlers (nam-model-library.md §9.3). Its roots are
     /// the machine's in the real app and private temp dirs in a test app.
     pub amp_library: crate::update::control::AmpLibraryCache,
+    /// The user's drum-kit library and marks, opened once for the
+    /// `drum_kits.*` handlers (drums-plugin-rework.md §8); roots as for
+    /// [`Self::amp_library`].
+    pub drum_kit_library: crate::update::control::DrumKitLibraryCache,
     /// `*.set_plugin_param` requests whose label the plugin is resolving
     /// (CLAP `text_to_value`, off the update loop), keyed by the token of
     /// their `ResolvePluginParamText`: replied to when the engine answers,

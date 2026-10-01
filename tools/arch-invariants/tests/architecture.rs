@@ -471,6 +471,7 @@ const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "atomic_file",         // resonance-plugin: atomic replace + quarantine for preset files
     "preset_session",      // resonance-plugin: the preset-identity CLAP extension ABI
     "param_flags",         // resonance-plugin: the state-excluded-params CLAP extension ABI
+    "kit_info",            // drums, resonance-plugin: the kit-pads CLAP extension ABI
 ];
 
 /// The plugins that declare a `resonance-common` dependency at all. The

@@ -16,6 +16,7 @@ pub mod automation;
 pub mod bus;
 pub mod clip;
 pub mod control;
+pub mod drum_kits;
 pub mod edit;
 pub mod external;
 pub mod generate;
@@ -86,6 +87,7 @@ pub fn capabilities() -> Vec<&'static str> {
         meter::METHODS,
         automation::METHODS,
         amp_models::METHODS,
+        drum_kits::METHODS,
         presets::METHODS,
         crate::job::METHODS,
     ] {

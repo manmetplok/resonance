@@ -47,8 +47,8 @@ pub use presets::{
 };
 pub use state::{ParamRename, StateUpgrade, STATE_VERSION};
 pub use plugin::{
-    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, NoteEvent, OutputBuffer,
-    OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
+    ControlEvent, EventIterator, ExtraStateSaver, KeyBuffer, KitInfoSource, NoteEvent,
+    OutputBuffer, OutputPortSpec, ParamTextSource, PluginEvent, ResonancePlugin, TempoInfo,
 };
 pub use range::{FloatRange, IntRange};
 /// The shared marks store and file-manager launcher, re-exported so a

@@ -280,9 +280,14 @@ pub struct ComposeState {
     /// `None`.
     pub default_drum_pattern_id: Option<u64>,
     /// Full kit pad library shown by the Drum Groups Manager modal as the
-    /// picker source. Loaded once on construction; mutations come via the
-    /// manager only.
+    /// picker source: the pads of the kit the project's drum track plays
+    /// (its Resonance Drums instance's report, `com.resonance.kit-info`),
+    /// or the General MIDI table when no drum track has one. Kept current
+    /// by `update::compose::drum_groups::refresh_kit_pads`.
     pub kit_pads: Vec<KitPadInfo>,
+    /// The name of the kit [`Self::kit_pads`] comes from (the drums'
+    /// `kit_select` text); `None` for the General MIDI fallback.
+    pub kit_name: Option<String>,
     /// Right-rail panel cards the user has folded shut. Runtime UI
     /// state — empty by default (every panel open), never persisted.
     pub collapsed_rail_panels: HashSet<RailPanelKey>,
@@ -342,6 +347,7 @@ impl Default for ComposeState {
             drum_patterns,
             default_drum_pattern_id: default_pattern_id,
             kit_pads: default_kit_pads(),
+            kit_name: None,
             collapsed_rail_panels: HashSet::new(),
             section_lanes_collapsed: false,
             track_lanes_collapsed: false,

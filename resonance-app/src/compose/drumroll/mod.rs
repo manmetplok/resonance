@@ -5,8 +5,8 @@ pub mod pattern;
 
 pub use drum_map::DrumPadMap;
 pub use groups::{
-    default_drum_groups, default_kit_pads, grid_label, DrumGroup, DrumGroupPad, KitPadInfo,
-    GROUP_PALETTE,
+    default_drum_groups, default_kit_pads, grid_label, kit_pads_from_info, pad_category,
+    DrumGroup, DrumGroupPad, KitPadInfo, GROUP_PALETTE,
 };
 pub use library::{
     apply_density, builtin_pattern_catalog, builtin_pattern_names, instantiate_builtin,

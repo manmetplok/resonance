@@ -36,9 +36,10 @@ impl ResonanceMcp {
                        same two lists on their own. \
                        \
                        SUB-TRACKS: a track carrying `parent_id` is a child of a multi-output \
-                       instrument, not an independent part — the drum kit routes Kick, Snare, \
-                       Toms, Hats, Cymbals and Overhead to separate tracks, each with its own \
-                       fader. Treat a parent and its sub-tracks as ONE indivisible group when \
+                       instrument, not an independent part — the drum kit in Multi output mode \
+                       routes Kick, Snare, Toms, Hats, Cymbals and Overhead to separate tracks, \
+                       each with its own fader (in Stereo, its default, the whole kit is on the \
+                       drums track). Treat a parent and its sub-tracks as ONE indivisible group when \
                        muting, soloing or measuring; measuring a parent alone under-reports the \
                        kit, and muting it alone does not silence the children. Always enumerate \
                        tracks from this view at runtime — never hardcode a track list for mute \
@@ -81,8 +82,8 @@ impl ResonanceMcp {
                        \
                        Carries the same per-track `parent_id`, `volume_db` and `output` fields \
                        as song_summary: a line with `parent_id` is a SUB-TRACK of a \
-                       multi-output instrument (the drum kit gives Kick/Snare/Toms/Hats/ \
-                       Cymbals/Overhead their own faders) and must be treated as part of its \
+                       multi-output instrument (the drum kit in Multi output mode gives \
+                       Kick/Snare/Toms/Hats/Cymbals/Overhead their own faders) and must be treated as part of its \
                        parent when muting, soloing or measuring; `volume_db` is the fader in \
                        decibels, the unit balance work is done in; `output` is \"master\" or \
                        {\"bus_id\": N}. Enumerate tracks from this view at runtime instead of \
