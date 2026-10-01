@@ -346,3 +346,92 @@ fn a_state_that_names_its_mode_keeps_it() {
         assert_eq!(value(&mut instance, "output_mode"), mode);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Polyphony (E15): 64 was the maximum before a hit could take 8 voices.
+// ---------------------------------------------------------------------------
+
+/// A state from before E15 (no bank param, no `mic_banks`) with
+/// `polyphony` at 64 — that build's "every voice" — loads at today's 128;
+/// one with E15's keys, or below 64, loads as saved. Idempotent.
+#[test]
+fn a_pre_e15_polyphony_at_its_maximum_loads_at_todays() {
+    let state = |polyphony: f64, extra: &[(&str, Value)]| {
+        let mut params = serde_json::Map::new();
+        params.insert("master_level".into(), 0.0.into());
+        params.insert("output_mode".into(), STEREO.into());
+        params.insert("polyphony".into(), polyphony.into());
+        let mut doc = serde_json::json!({ "version": 2 });
+        for (key, value) in extra {
+            if key.starts_with("mic_banks") {
+                doc[*key] = value.clone();
+            } else {
+                params.insert(key.to_string(), value.clone());
+            }
+        }
+        doc["params"] = Value::Object(params);
+        doc
+    };
+
+    let mut instance = hosted();
+    assert!(load(&mut instance, &state(64.0, &[])));
+    assert_eq!(value(&mut instance, "polyphony"), 128.0, "the old maximum");
+    assert!(load(&mut instance, &state(32.0, &[])));
+    assert_eq!(value(&mut instance, "polyphony"), 32.0, "a chosen limit");
+    assert!(load(&mut instance, &state(64.0, &[("bleed_on", 0.0.into())])));
+    assert_eq!(value(&mut instance, "polyphony"), 64.0, "an E15 state's 64");
+    let banks = serde_json::json!({"overheads": ["", ""], "room": ""});
+    assert!(load(&mut instance, &state(64.0, &[("mic_banks", banks)])));
+    assert_eq!(value(&mut instance, "polyphony"), 64.0, "an E15 state's 64");
+
+    let mut once = state(64.0, &[]);
+    resonance_drums::upgrade_state(&mut once);
+    assert_eq!(once["params"]["polyphony"], 128);
+    let mut twice = once.clone();
+    resonance_drums::upgrade_state(&mut twice);
+    assert_eq!(once, twice);
+}
+
+/// The instance's saved state.
+fn saved(instance: &mut PluginInstance<TestHost>) -> Value {
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginState>()
+        .expect("state extension");
+    let mut bytes = Vec::new();
+    ext.save(&mut instance.plugin_handle(), &mut bytes)
+        .expect("save");
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// A preset from before E15 names the mic choices but no `mic_banks`: it
+/// predates the banks, so recalling it over an instance with banks set
+/// empties them, as reopening such a project does. A preset with no mic
+/// choices at all (params only) leaves them alone.
+#[test]
+fn a_pre_e15_preset_recalls_no_extra_banks() {
+    let banks = serde_json::json!({"overheads": ["25_OHsXY", ""], "room": "31_RoomFar"});
+    let mut instance = hosted();
+    assert!(load(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": {}, "mic_banks": banks.clone() })
+    ));
+    assert_eq!(saved(&mut instance)["mic_banks"], banks);
+
+    load_preset(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": { "pad_0_level": -1.0 } }),
+    );
+    assert_eq!(saved(&mut instance)["mic_banks"], banks, "params only: kept");
+
+    load_preset(
+        &mut instance,
+        &serde_json::json!({ "version": 2, "params": { "pad_0_level": -2.0 },
+            "overhead_setup_key": "23_OHsAB_e914" }),
+    );
+    assert_eq!(
+        saved(&mut instance)["mic_banks"],
+        serde_json::json!({"overheads": ["", ""], "room": ""}),
+        "a pre-E15 preset meant no extra banks"
+    );
+}

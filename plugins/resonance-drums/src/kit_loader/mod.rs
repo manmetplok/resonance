@@ -102,13 +102,14 @@ pub struct PadRequest {
 }
 
 /// Whether the overhead setup key can change what `piece` loads as its
-/// overhead: it holds the key itself, or an OH setup the overhead falls
-/// back to (see `decode::plan_overhead_bank`).
+/// overhead: it has an overhead setup — the key's, or one the overhead
+/// falls back to ([`banks::resolve_overhead_slot1`]). A piece with none
+/// plays no overhead whatever the key names.
 pub fn piece_uses_overhead_key(
     piece: &std::collections::BTreeMap<String, MicSetup>,
-    key: &str,
+    kinds: &banks::MicKinds,
 ) -> bool {
-    piece.contains_key(key) || piece.values().any(|setup| setup.position.starts_with("OH"))
+    piece.values().any(|setup| kinds.is_overhead(&setup.position))
 }
 
 /// The manifest file as it was when a kit was built from it, so a reload
@@ -304,6 +305,8 @@ impl BuiltKit {
 pub struct HandedOffKit {
     pub request: KitRequest,
     pub sample_rate: f32,
+    /// What each of its pads was built from ([`BuiltKit::pad_requests`]).
+    pub pad_requests: Vec<PadRequest>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -475,7 +478,10 @@ pub fn load_kit(
         .parent()
         .ok_or_else(|| "manifest path has no parent directory".to_string())?;
 
-    let catalog = ManifestMicCatalog::with_bleed(&manifest, &kit_pads);
+    // What each mic position is: the kit's `_meta.mic_kinds`, else a
+    // guess from its name (E15).
+    let kinds = banks::MicKinds::from_meta(&meta);
+    let catalog = ManifestMicCatalog::with_bleed(&manifest, &kit_pads, &kinds);
 
     // 1. Plan: reuse, absent (D7: silent, never the built-in sample), or
     // the piece's banks per pad.
@@ -494,7 +500,9 @@ pub fn load_kit(
                 .piece_for(i, request.articulations[i])
                 .and_then(|piece| manifest.get(piece));
             let has_overhead = piece
-                .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
+                .is_some_and(|piece| {
+                    piece_uses_overhead_key(piece, &kinds)
+                });
             let mut pad = request.pad_request(i, has_overhead);
             if let Some(piece) = piece {
                 pad.extra_banks = banks::resolve_extra_banks(
@@ -503,6 +511,7 @@ pub fn load_kit(
                     &request.overhead_setup_key,
                     &request.pad_choices,
                     &request.banks,
+                    &kinds,
                 );
             }
             // The parameter only means something on a pad the kit pairs:
@@ -554,12 +563,13 @@ pub fn load_kit(
         }
         // Overhead bank: look up the global overhead setup key directly. If
         // the piece doesn't have that specific setup, fall back to any
-        // OH-prefixed setup the piece does have so the pad still makes sound.
+        // overhead setup the piece does have so the pad still makes sound.
         let overhead = plan_overhead_bank(
             piece_name,
             piece,
             kit_dir,
             &request.overhead_setup_key,
+            &kinds,
             &mut jobs,
         )?;
         // The E15 banks, as the pad's request resolved them.
@@ -714,17 +724,27 @@ pub fn load_kit(
     })
 }
 
-/// Whether `a` and `b` build the same kit given its pads `pads`: equal but
-/// for the articulation of pads the kit does not pair
-/// ([`crate::articulation::masked`]).
-pub fn same_request_masked(a: &KitRequest, b: &KitRequest, pads: &KitPads) -> bool {
-    a.path == b.path
-        && a.overhead_setup_key == b.overhead_setup_key
-        && a.pad_choices == b.pad_choices
-        && a.preload == b.preload
-        && a.banks == b.banks
-        && crate::articulation::masked(a.articulations, pads)
-            == crate::articulation::masked(b.articulations, pads)
+/// Whether `built` — a build of `request` at `sample_rate` — is the kit
+/// `handed` already put in the mailbox: the same kit file at the same
+/// rate and preload, every pad built from the same resolved
+/// [`PadRequest`].
+///
+/// Per pad, not per [`KitRequest`]: a request differs in ways that build
+/// nothing — an articulation on a pad the kit does not pair, `room_on`
+/// on a kit with no room mics, bleed on a kit without bleed, a room
+/// setup while room is off, an overhead slot naming the setup slot 1
+/// already plays — and handing the same kit off again for those would
+/// fade every voice and restart the round robins.
+pub fn same_kit_built(
+    handed: &HandedOffKit,
+    request: &KitRequest,
+    sample_rate: f32,
+    built: &BuiltKit,
+) -> bool {
+    handed.sample_rate.to_bits() == sample_rate.to_bits()
+        && handed.request.path == request.path
+        && handed.request.preload == request.preload
+        && handed.pad_requests == built.pad_requests
 }
 
 /// Spawn a background loader thread. Writes status updates and the kit path
@@ -861,8 +881,7 @@ pub fn spawn_loader(
                     // with the kit already sent.
                     let same_kit = kit.stats.rebuilt_pads == 0
                         && bridge.handed_off.lock().as_ref().is_some_and(|h| {
-                            h.sample_rate.to_bits() == target_sr.to_bits()
-                                && same_request_masked(&h.request, &request, &kit_pads)
+                            same_kit_built(h, &request, target_sr, &kit.built)
                         });
                     let ordinal = if same_kit {
                         bridge.load_progress.last_sent()
@@ -873,6 +892,7 @@ pub fn spawn_loader(
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),
                         sample_rate: target_sr,
+                        pad_requests: kit.built.pad_requests.clone(),
                     });
                     *bridge.built_kit.lock() = Some(kit.built);
                     // The sampler moves off the built-in kit (if it was

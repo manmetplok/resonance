@@ -552,6 +552,9 @@ fn saturating_128_voices_with_every_mic_bank_does_not_click() {
         mix.extend(render_frames(&mut sampler, &mut bufs, &params, BLOCK, &hits));
         peak_active = peak_active.max(sampler.voices.iter().filter(|v| v.active).count());
         peak_tails = peak_tails.max(sampler.tail_voices_active());
+        if !hits.is_empty() {
+            assert_latest_hit_kept_every_bank(&sampler, MAX_BANKS_PER_HIT, b);
+        }
     }
     assert_eq!(peak_active, MAX_VOICES, "the pattern must saturate every voice");
     assert!(peak_tails >= 2 * MAX_BANKS_PER_HIT, "steals were exercised: {peak_tails}");
@@ -570,4 +573,161 @@ fn saturating_128_voices_with_every_mic_bank_does_not_click() {
         step <= bound,
         "an 8-bank steal clicks: a {step} step at frame {at} (bound {bound}, a hard cut is {LEVEL})"
     );
+}
+
+/// The latest hit (the highest age among the main voices) holds
+/// `banks` voices, and none of its voices went to a tail: a hit never
+/// steals its own just-started voices. Before the fix the "oldest same
+/// pad" rule did exactly that at the cap — every destination after the
+/// first stole the one before, so only the last bank kept sounding and
+/// seven tails were spent on voices that had not played a frame.
+fn assert_latest_hit_kept_every_bank(sampler: &DrumSampler, banks: usize, when: usize) {
+    let latest = sampler
+        .voices
+        .iter()
+        .filter(|v| v.active)
+        .map(|v| v.age)
+        .max()
+        .expect("a hit sounds");
+    let own = sampler
+        .voices
+        .iter()
+        .filter(|v| v.active && v.age == latest)
+        .count();
+    let self_stolen = sampler
+        .tail_voices()
+        .iter()
+        .filter(|v| v.active && v.age == latest)
+        .count();
+    assert_eq!(
+        (own, self_stolen),
+        (banks, 0),
+        "block {when}: the latest hit keeps {own} of its {banks} voices and \
+         sent {self_stolen} of its own to the tails"
+    );
+}
+
+/// Every pad with all eight banks (two close mics, overhead slots 1-3,
+/// two bleed banks, the room), each a constant `LEVEL` from frame 0.
+fn eight_bank_pads(frames: usize) -> Vec<LoadedPad> {
+    use resonance_drums::kit::{BankKind, ExtraBank};
+    let bank = || LoadedMicBank {
+        position: "test".to_string(),
+        setup_key: String::new(),
+        layers: vec![VelocityLayer::new(vec![LoadedSample::from_data(vec![
+            LEVEL;
+            frames * 2
+        ])])],
+    };
+    let extra = |kind| ExtraBank { kind, bank: bank() };
+    PAD_MAPPINGS
+        .iter()
+        .map(|m| LoadedPad {
+            name: m.name.to_string(),
+            choke_group: None,
+            output_group: m.output_group,
+            close_mics: vec![bank(), bank()],
+            overhead: Some(bank()),
+            extra_banks: vec![
+                extra(BankKind::Overhead { slot: 1 }),
+                extra(BankKind::Overhead { slot: 2 }),
+                extra(BankKind::Bleed),
+                extra(BankKind::Bleed),
+                extra(BankKind::Room),
+            ],
+        })
+        .collect()
+}
+
+/// With polyphony below a hit's bank count, the hit keeps its
+/// highest-priority banks — close mics, then overhead slot 1, then the
+/// layered overheads — and drops bleed and room, rather than letting
+/// its own later banks steal the close mics (before, the room,
+/// allocated last, was the one voice left). With polyphony at least the
+/// bank count every hit keeps all eight, stealing from older hits only.
+#[test]
+fn a_hit_past_the_polyphony_ceiling_keeps_its_close_mics_not_its_room() {
+    use resonance_drums::params::BANK_ON;
+    use resonance_drums::voice::{VoiceDestination, MAX_BANKS_PER_HIT};
+
+    let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
+    let mut sampler = DrumSampler::new(rx);
+    sampler.set_sample_rate(SR);
+    sampler.pads = eight_bank_pads(16 * BLOCK);
+    let params = DrumParams::default();
+    params.bleed_on.set_value(BANK_ON);
+    params.room_on.set_value(BANK_ON);
+    for pad in &params.pads {
+        pad.choke.set_value(0);
+    }
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0f32; BLOCK], vec![0.0f32; BLOCK]))
+        .collect();
+    let mut strike = |sampler: &mut DrumSampler, params: &DrumParams, pad: usize| {
+        let hit = Hit {
+            frame: 0,
+            note: PAD_MAPPINGS[pad].note,
+            velocity: 1.0,
+        };
+        render_frames(sampler, &mut bufs, params, BLOCK, &[hit]);
+    };
+    // The banks pad `pad`'s latest hit is playing.
+    let sounding = |sampler: &DrumSampler, pad: usize| -> Vec<&'static str> {
+        let mine: Vec<(u64, VoiceDestination)> = sampler
+            .voices
+            .iter()
+            .filter(|v| v.active && v.pad_index == pad)
+            .map(|v| (v.age, v.destination))
+            .collect();
+        let latest = mine.iter().map(|(age, _)| *age).max();
+        let mut names: Vec<&'static str> = mine
+            .into_iter()
+            .filter(|(age, _)| Some(*age) == latest)
+            .map(|(_, d)| match d {
+                VoiceDestination::CloseMic { bank_index: 0, .. } => "close 1",
+                VoiceDestination::CloseMic { .. } => "close 2",
+                VoiceDestination::Overhead { .. } => "oh 1",
+                VoiceDestination::Extra { bank_index: 0, .. } => "oh 2",
+                VoiceDestination::Extra { bank_index: 1, .. } => "oh 3",
+                VoiceDestination::Extra { bank_index: 2 | 3, .. } => "bleed",
+                VoiceDestination::Extra { .. } => "room",
+            })
+            .collect();
+        names.sort_unstable();
+        names
+    };
+
+    // Polyphony 4: each hit is its close mics and two overheads.
+    params.polyphony.set_value(4);
+    sampler.update_global_settings(&params);
+    strike(&mut sampler, &params, 0);
+    assert_eq!(sounding(&sampler, 0), ["close 1", "close 2", "oh 1", "oh 2"]);
+    strike(&mut sampler, &params, 1);
+    assert_eq!(sounding(&sampler, 1), ["close 1", "close 2", "oh 1", "oh 2"]);
+    assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 4);
+    assert!(
+        sounding(&sampler, 0).is_empty(),
+        "the older hit gave up its voices to the new one"
+    );
+
+    // Polyphony 12, then two hits: the second has 4 free voices and
+    // steals 4 of the first's — never one of its own.
+    sampler.reset();
+    params.polyphony.set_value(12);
+    sampler.update_global_settings(&params);
+    strike(&mut sampler, &params, 2);
+    assert_latest_hit_kept_every_bank(&sampler, MAX_BANKS_PER_HIT, 0);
+    strike(&mut sampler, &params, 3);
+    assert_latest_hit_kept_every_bank(&sampler, MAX_BANKS_PER_HIT, 1);
+    assert_eq!(sounding(&sampler, 2).len(), 4);
+    assert_eq!(sampler.voices.iter().filter(|v| v.active).count(), 12);
+
+    // Repeated hits on one pad at the cap: each keeps all eight.
+    sampler.reset();
+    params.polyphony.set_value(MAX_BANKS_PER_HIT as i32);
+    sampler.update_global_settings(&params);
+    for i in 0..4 {
+        strike(&mut sampler, &params, 4);
+        assert_latest_hit_kept_every_bank(&sampler, MAX_BANKS_PER_HIT, i);
+    }
 }

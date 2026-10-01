@@ -64,8 +64,8 @@ mod sidecar;
 
 pub use install::{free_space, measure_size, ImportJob, ImportProgress};
 pub use manifest::{
-    sample_paths, summarize, Articulation, KitMeta, ManifestError, ManifestSummary, MicSetupInfo,
-    PadHint, Piece, PortHint, MANIFEST_FILE, META_KEY,
+    sample_paths, summarize, Articulation, KitMeta, ManifestError, ManifestSummary, MicKind,
+    MicSetupInfo, PadHint, Piece, PortHint, MANIFEST_FILE, META_KEY,
 };
 pub use sidecar::{
     read_sidecar, sidecar_path, write_sidecar, Sidecar, SIDECAR_FILE, SOURCE_IMPORTED,

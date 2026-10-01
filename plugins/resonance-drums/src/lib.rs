@@ -369,10 +369,14 @@ impl KitBridge {
     /// the current mic and articulation choices. `None` with no kit.
     pub fn wanted_request(&self) -> Option<KitRequest> {
         let path = self.wanted_kit_path()?;
+        // One lock at a time (see `overhead_slots`): a guard taken inside
+        // the struct literal would live until the whole request is built.
+        let overhead_setup_key = self.overhead_setup_key.lock().clone();
+        let pad_choices = self.pad_choices.lock().clone();
         Some(KitRequest {
             path,
-            overhead_setup_key: self.overhead_setup_key.lock().clone(),
-            pad_choices: self.pad_choices.lock().clone(),
+            overhead_setup_key,
+            pad_choices,
             articulations: self.articulations(),
             preload: self.stream_preload.load(Ordering::Relaxed),
             banks: self.bank_request(),
@@ -396,12 +400,19 @@ impl KitBridge {
     }
 
     /// The kit-wide overhead setups, slot 1 first (`""`: an empty slot).
+    ///
+    /// Lock order: this (like every reader of `overhead_setup_key`,
+    /// `mic_banks` and `pad_choices`) never holds two of them at once —
+    /// each is cloned in its own statement, so its guard is gone before
+    /// the next is taken. Holding `mic_banks` while taking
+    /// `overhead_setup_key` here, against the state load's opposite
+    /// order, was an ABBA deadlock with the editor polling this.
     pub fn overhead_slots(&self) -> [String; kit::MAX_OVERHEAD_SLOTS] {
-        let banks = self.mic_banks.lock();
         let first = self.overhead_setup_key.lock().clone();
+        let extra = self.mic_banks.lock().extra_overheads.clone();
         std::array::from_fn(|slot| match slot {
             0 => first.clone(),
-            n => banks.extra_overheads[n - 1].clone(),
+            n => extra[n - 1].clone(),
         })
     }
 
@@ -411,6 +422,11 @@ impl KitBridge {
     /// the newly chosen setup's files decoded (E4). Returns whether a
     /// load started (none without a kit or a sample rate; the choice is
     /// kept for the next load either way). For the editor's Setup tab.
+    ///
+    /// Every slot plays only an overhead setup: a key naming another
+    /// kind (a close mic, a room) leaves slot 1 on the piece's first
+    /// overhead setup and slots 2 and 3 silent
+    /// ([`kit_loader::banks::resolve_extra_banks`]).
     pub fn set_overhead_slot(&self, slot: usize, setup: &str) -> bool {
         match slot {
             0 => *self.overhead_setup_key.lock() = setup.to_string(),
@@ -487,10 +503,13 @@ pub struct ResonanceDrums {
 ///   ([`params::upgrade_v1_levels`], E9);
 /// - a state from before `output_mode` existed plays Multi, as it did
 ///   ([`params::upgrade_output_mode`], E11/D5: Stereo is a fresh
-///   instance's default only).
+///   instance's default only);
+/// - a state from before E15 with `polyphony` at that build's maximum
+///   (64) gets today's (128, [`params::upgrade_polyphony`]).
 pub fn upgrade_state(state: &mut serde_json::Value) {
     params::upgrade_v1_levels(state);
     params::upgrade_output_mode(state);
+    params::upgrade_polyphony(state);
 }
 
 /// `kit_select`'s and `kit_load_progress`'s host-order indices in
@@ -1070,6 +1089,21 @@ pub struct DrumsExtraState {
     pub reload: Option<KitBridge>,
 }
 
+/// The mic choices a state load compares before and after.
+type MicSnapshot = (String, MicBankSetups, [PadMicChoices; drum_map::NUM_PADS]);
+
+impl DrumsExtraState {
+    /// The mic choices as they stand, each lock taken and dropped on its
+    /// own (see [`KitBridge::overhead_slots`] for why none is held while
+    /// the next is taken).
+    fn mic_snapshot(&self) -> MicSnapshot {
+        let overhead = self.overhead_setup_key.lock().clone();
+        let banks = self.mic_banks.lock().clone();
+        let pads = self.pad_choices.lock().clone();
+        (overhead, banks, pads)
+    }
+}
+
 impl ExtraStateSaver for DrumsExtraState {
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
@@ -1207,9 +1241,7 @@ impl ExtraStateSaver for DrumsExtraState {
         let _acting = selection.acting();
         let before = (
             wanted_path(&self.kit_path),
-            self.overhead_setup_key.lock().clone(),
-            self.mic_banks.lock().clone(),
-            self.pad_choices.lock().clone(),
+            self.mic_snapshot(),
             preload(),
         );
         // Disk streaming (E14): the preload, when the state has one.
@@ -1256,11 +1288,18 @@ impl ExtraStateSaver for DrumsExtraState {
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
             *self.overhead_setup_key.lock() = s.to_string();
         }
-        // A state from before E15 has no `mic_banks`: what the instance
-        // has stays (a fresh one: every extra bank off), as for every
-        // other key a document leaves out.
+        // The bank setups travel with the mic choices: every state and
+        // preset that names `overhead_setup_key` has carried `mic_banks`
+        // since E15. One that names the mic choices without it predates
+        // the banks and meant none — slots 2 and 3 empty, the default
+        // room — whether it is a project reopened or a preset recalled
+        // over an instance that has banks set. A document with neither (a
+        // params-only preset) leaves the instance's as they are, like
+        // every other key it leaves out.
         if let Some(banks) = state.get(kit_loader::MIC_BANKS_STATE_KEY) {
             *self.mic_banks.lock() = MicBankSetups::from_json(banks);
+        } else if state.get("overhead_setup_key").is_some() {
+            *self.mic_banks.lock() = MicBankSetups::default();
         }
 
         if let Some(arr) = state.get("pad_mic_choices").and_then(|v| v.as_array()) {
@@ -1305,21 +1344,20 @@ impl ExtraStateSaver for DrumsExtraState {
         // a sample rate is known reloads it now.
         let after = (
             wanted_path(&self.kit_path),
-            self.overhead_setup_key.lock().clone(),
-            self.mic_banks.lock().clone(),
-            self.pad_choices.lock().clone(),
+            self.mic_snapshot(),
             preload(),
         );
         if let Some(bridge) = &self.reload {
             let rate = f32::from_bits(bridge.sample_rate.load(Ordering::Acquire));
             if rate > 0.0 && before != after {
-                match after.0.clone() {
+                let (path, (overhead_setup_key, _, pad_choices), _) = after;
+                match path {
                     Some(path) => kit_loader::spawn_loader(
                         path,
                         rate,
                         bridge,
-                        after.1,
-                        after.3,
+                        overhead_setup_key,
+                        pad_choices,
                         bridge.articulations(),
                     ),
                     // No kit (or a missing one) while running: the

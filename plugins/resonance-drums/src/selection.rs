@@ -771,12 +771,17 @@ pub fn start_kit(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
             generation,
         };
     }
+    // Cloned before the call: a guard taken in its argument list would be
+    // held through the whole of `spawn_loader`, which takes `mic_banks`
+    // (see `KitBridge::overhead_slots` on lock order).
+    let overhead_setup_key = bridge.overhead_setup_key.lock().clone();
+    let pad_choices = bridge.pad_choices.lock().clone();
     kit_loader::spawn_loader(
         manifest.clone(),
         f32::from_bits(sr_bits),
         bridge,
-        bridge.overhead_setup_key.lock().clone(),
-        bridge.pad_choices.lock().clone(),
+        overhead_setup_key,
+        pad_choices,
         bridge.articulations(),
     );
     StartedLoad {

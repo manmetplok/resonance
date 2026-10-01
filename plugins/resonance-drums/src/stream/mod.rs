@@ -223,6 +223,24 @@ pub const RING_BYTES: usize = RING_FRAMES * 2 * std::mem::size_of::<f32>();
 /// threads) does not run a fast pattern out of rings. A claim takes the
 /// lowest free ring, so the spare ones are rarely touched — and a ring
 /// never served holds no sample storage.
+///
+/// **The budget.** A ring is held while a main voice or a tail slot
+/// plays from it, and after that until the reader has taken the request
+/// it was last given (only the reader may drop that request). Every main
+/// voice and tail slot can stream at once — 128 + 32 — so the spares are
+/// all there is for rings let go but not yet handed back. With E15 a hit
+/// claims up to [`crate::voice::MAX_BANKS_PER_HIT`] (8) rings at once, so
+/// 80 spares is ten fully-miked hits whose rings the reader has not yet
+/// collected — at sixteenth notes at 200 BPM (75 ms apart), a reader held
+/// off the CPU for about three quarters of a second. The total, 240, is capped by the ring index being a
+/// `u8` below [`NO_RING`] (asserted below). Storage: a used ring holds
+/// [`RING_BYTES`] (128 KiB), so all 240 at most 30 MiB per instance.
+///
+/// **Past it** a hit's claim finds no ring ([`AudioStreams::claim`]
+/// returns [`NO_RING`], counted in `ring_misses` and the underruns): the
+/// voice plays its resident head and fades out before the head ends, as
+/// a failed stream does — never silence, never a cut
+/// (`tests/streaming.rs`, `a_hit_with_no_ring_fades_out_before_its_head_ends`).
 pub const SPARE_RINGS: usize = 80;
 
 /// The rings a sampler with `voices` main voices and `tails` tail slots

@@ -8,7 +8,8 @@
 //!                                 "rounds": { "RRnn": { "VelNN": "<file>" } } } },
 //!   "_meta": { "name"?, "pieces": { "<piece>": { "name" } },
 //!              "articulations": [ { "primary", "alt", "label" } ],
-//!              "pads": { "<piece>": { "note"?, "port"?, "choke"? } } } }
+//!              "pads": { "<piece>": { "note"?, "port"?, "choke"? } },
+//!              "mic_kinds": { "<position>": "close"|"overhead"|"room"|"bleed" } } }
 //! ```
 //!
 //! Every part of `_meta` is optional and read on its own ([`KitMeta`]): a
@@ -201,6 +202,36 @@ pub struct KitMeta {
     pub articulations: Vec<Articulation>,
     /// `_meta.pads`, piece key → hint.
     pub pads: BTreeMap<String, PadHint>,
+    /// `_meta.mic_kinds`, mic position → what it is, for a kit whose
+    /// position names the drums plugin would misread (it guesses from
+    /// the name otherwise). Entries of an unknown kind are left out.
+    pub mic_kinds: BTreeMap<String, MicKind>,
+}
+
+/// What a mic position records (`_meta.mic_kinds`): the drums plugin's
+/// bank kinds (drums-plugin-rework.md §7 E15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MicKind {
+    /// A close mic: the piece's own, or another piece's (then bleed,
+    /// unless it is one of the pad's own close mics).
+    Close,
+    Overhead,
+    Room,
+    /// A close mic that only ever plays as bleed.
+    Bleed,
+}
+
+impl MicKind {
+    /// `"close"`, `"overhead"`, `"room"` or `"bleed"`, any case.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "close" => Some(Self::Close),
+            "overhead" => Some(Self::Overhead),
+            "room" => Some(Self::Room),
+            "bleed" => Some(Self::Bleed),
+            _ => None,
+        }
+    }
 }
 
 impl KitMeta {
@@ -237,6 +268,13 @@ impl KitMeta {
             for (key, hint) in pads {
                 if let Some(hint) = PadHint::from_value(hint) {
                     out.pads.insert(key.clone(), hint);
+                }
+            }
+        }
+        if let Some(kinds) = obj.get("mic_kinds").and_then(|k| k.as_object()) {
+            for (position, kind) in kinds {
+                if let Some(kind) = kind.as_str().and_then(MicKind::parse) {
+                    out.mic_kinds.insert(position.clone(), kind);
                 }
             }
         }

@@ -91,23 +91,19 @@ pub(super) fn plan_bank_for_position(
 }
 
 /// Plan the overhead bank for a piece using the globally selected OH
-/// setup key, falling back to any OH-prefixed setup the piece supplies.
+/// setup key, falling back to any overhead setup the piece supplies
+/// (`kinds` says which those are).
 pub(super) fn plan_overhead_bank(
     piece_name: &str,
     piece: &BTreeMap<String, MicSetup>,
     kit_dir: &Path,
     overhead_setup_key: &str,
+    kinds: &super::banks::MicKinds,
     jobs: &mut Jobs,
 ) -> Result<Option<BankPlan>, String> {
-    let chosen = piece
-        .get(overhead_setup_key)
-        .map(|setup| (overhead_setup_key.to_string(), setup))
-        .or_else(|| {
-            piece
-                .iter()
-                .find(|(_, setup)| setup.position.starts_with("OH"))
-                .map(|(k, v)| (k.clone(), v))
-        });
+    let chosen = super::banks::resolve_overhead_slot1(piece, overhead_setup_key, kinds)
+        .and_then(|key| piece.get_key_value(key))
+        .map(|(key, setup)| (key.clone(), setup));
     let Some((setup_key, setup)) = chosen else {
         return Ok(None);
     };
@@ -391,32 +387,33 @@ impl Tally {
 /// two round robins where the overhead has one) keep their shapes; the
 /// sampler maps a hit onto each by relative position (E7).
 ///
-/// `extras` are the pad's E15 banks; they take part in the alignment like
-/// any other bank.
-pub(super) fn assemble_pad(
-    close: &[BankPlan],
-    overhead: Option<&BankPlan>,
-    extras: &[(BankKind, BankPlan)],
+/// `extras` are the pad's E15 banks (more overheads, bleed, room). They
+/// follow the alignment of the close mics and overhead slot 1 — a cell
+/// those lost is dropped from every extra bank too — but a cell an extra
+/// bank loses is dropped from that bank alone: one unreadable bleed or
+/// room take must not cost the close mics a strike. That bank's other
+/// takes then map onto the hit by relative position (E7), like any bank
+/// whose shape differs.
+pub(super) fn assemble_pad<'a>(
+    close: &'a [BankPlan],
+    overhead: Option<&'a BankPlan>,
+    extras: &'a [(BankKind, BankPlan)],
     results: &[Fetched],
     paths: &[PathBuf],
     held: &HeldTakes,
     tally: &mut Tally,
 ) -> (Vec<LoadedMicBank>, Option<LoadedMicBank>, Vec<ExtraBank>) {
-    let banks = || {
-        close
-            .iter()
-            .chain(overhead)
-            .chain(extras.iter().map(|(_, plan)| plan))
-    };
     let readable = |plan: &BankPlan| {
         plan.layers
             .iter()
             .flat_map(|l| &l.takes)
             .any(|&(_, job)| results[job].is_ok())
     };
-    // Cells lost in a bank that is otherwise readable.
-    let mut lost: HashSet<(u32, &str)> = HashSet::new();
-    for plan in banks().filter(|plan| readable(plan)) {
+    // Cells lost in `plan`, if it is otherwise readable.
+    let lost_in = |plan: &'a BankPlan, lost: &mut HashSet<(u32, &'a str)>| {
+        if !readable(plan) {
+            return;
+        }
         for layer in &plan.layers {
             for (rr, job) in &layer.takes {
                 if results[*job].is_err() {
@@ -424,8 +421,13 @@ pub(super) fn assemble_pad(
                 }
             }
         }
+    };
+    // Cells lost in the close mics or overhead slot 1: gone from every bank.
+    let mut lost: HashSet<(u32, &str)> = HashSet::new();
+    for plan in close.iter().chain(overhead) {
+        lost_in(plan, &mut lost);
     }
-    let mut build = |plan: &BankPlan| -> Option<LoadedMicBank> {
+    let mut build = |plan: &BankPlan, lost: &HashSet<(u32, &str)>| -> Option<LoadedMicBank> {
         let mut layers = Vec::with_capacity(plan.layers.len());
         for layer in &plan.layers {
             let mut round_robins = Vec::with_capacity(layer.takes.len());
@@ -463,11 +465,15 @@ pub(super) fn assemble_pad(
             layers,
         })
     };
-    let close_banks = close.iter().filter_map(&mut build).collect();
-    let overhead_bank = overhead.and_then(&mut build);
+    let close_banks = close.iter().filter_map(|plan| build(plan, &lost)).collect();
+    let overhead_bank = overhead.and_then(|plan| build(plan, &lost));
     let extra_banks = extras
         .iter()
-        .filter_map(|(kind, plan)| build(plan).map(|bank| ExtraBank { kind: *kind, bank }))
+        .filter_map(|(kind, plan)| {
+            let mut own = lost.clone();
+            lost_in(plan, &mut own);
+            build(plan, &own).map(|bank| ExtraBank { kind: *kind, bank })
+        })
         .collect();
     (close_banks, overhead_bank, extra_banks)
 }

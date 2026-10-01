@@ -19,7 +19,9 @@ use resonance_drums::drum_map::{self, NUM_PADS};
 use resonance_drums::kit::{
     BankKind, LoadedPad, MAIN_PORT_INDEX, NUM_OUTPUT_PORTS, OVERHEAD_PORT_INDEX,
 };
-use resonance_drums::kit_loader::banks::{resolve_extra_banks, BankRequest, MicBankSetups};
+use resonance_drums::kit_loader::banks::{
+    resolve_extra_banks, BankRequest, MicBankSetups, MicKinds,
+};
 use resonance_drums::kit_loader::{
     spawn_loader, KitStatus, LoadStats, MicSetup, PadMicChoices, DEFAULT_OVERHEAD_SETUP,
 };
@@ -451,6 +453,7 @@ fn bleed_follows_the_owning_pads_mic_pick() {
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     let mut choices: Vec<PadMicChoices> = (0..NUM_PADS).map(|_| PadMicChoices::default()).collect();
+    let kinds = MicKinds::default();
     let banks = BankRequest {
         setups: MicBankSetups {
             extra_overheads: ["25_OHsXY".to_string(), "23_OHsAB_e914".to_string()],
@@ -460,7 +463,7 @@ fn bleed_follows_the_owning_pads_mic_pick() {
         room: true,
     };
     let resolve = |choices: &[PadMicChoices]| {
-        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, choices, &banks)
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, choices, &banks, &kinds)
     };
     // Slot 3 names slot 1's setup: not played twice. No room setup in
     // the piece: no room bank.
@@ -483,10 +486,14 @@ fn bleed_follows_the_owning_pads_mic_pick() {
         setups: banks.setups.clone(),
         ..BankRequest::default()
     };
-    let only_oh = resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &off);
+    let only_oh =
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &off, &kinds);
     assert_eq!(only_oh.len(), 1, "the overhead slots are on by their setup");
     let none = BankRequest::default();
-    assert!(resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &none).is_empty());
+    assert!(
+        resolve_extra_banks(KICK, &piece, DEFAULT_OVERHEAD_SETUP, &choices, &none, &kinds)
+            .is_empty()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -571,10 +578,22 @@ fn each_overhead_slot_level_scales_only_its_bank() {
     );
     assert_eq!(crash[OVERHEAD_PORT_INDEX], (0.0, 0.0));
 
-    // Slot 3 on slot 1's setup adds nothing, and rebuilds nothing.
+    // Slot 3 on slot 1's setup adds nothing, rebuilds nothing, and hands
+    // nothing off: a swap would fade every voice and restart the round
+    // robins for the same kit. Nor does a room setup while room is off.
+    let taken = plugin.bridge.load_progress.kits_taken();
     assert!(plugin.bridge.set_overhead_slot(2, DEFAULT_OVERHEAD_SETUP));
     let dup = settle(&mut plugin);
     assert_eq!(dup.rebuilt_pads, 0, "{dup:?}");
+    assert!(plugin.bridge.set_room_setup(ROOM_FAR));
+    assert_eq!(settle(&mut plugin).rebuilt_pads, 0);
+    assert_eq!(
+        plugin.bridge.load_progress.kits_taken(),
+        taken,
+        "a bank change that built nothing swapped a kit in"
+    );
+    plugin.bridge.set_room_setup("");
+    settle(&mut plugin);
     // Emptying slot 2 drops the XY banks again, decoding nothing.
     assert!(plugin.bridge.set_overhead_slot(1, ""));
     let emptied = settle(&mut plugin);
@@ -754,6 +773,23 @@ fn bank_choices_round_trip_and_older_states_load_without_them() {
         "the rest loads as before"
     );
     assert_eq!(fresh.bridge.params.oh_levels[2].value(), 0.0);
+
+    // ... and so does one loaded over an instance that has banks set
+    // (a project reopened in place, a pre-E15 preset recalled): it
+    // predates the banks, so it meant none.
+    assert!(dst.load_state(&serde_json::to_vec(&old).unwrap()));
+    assert_eq!(*dst.bridge.mic_banks.lock(), MicBankSetups::default());
+    assert_eq!(
+        dst.bridge.overhead_slots(),
+        [DEFAULT_OVERHEAD_SETUP.to_string(), String::new(), String::new()]
+    );
+
+    // A params-only document (no mic choices at all) leaves them be.
+    assert!(dst.load_state(&bytes));
+    let params_only = serde_json::json!({ "params": { "pad_0_level": -1.0 } });
+    assert!(dst.load_state(&serde_json::to_vec(&params_only).unwrap()));
+    assert_eq!(dst.bridge.mic_banks.lock().room, ROOM_FAR);
+    assert_eq!(dst.bridge.overhead_slots()[1], OH_XY);
 }
 
 /// The new params sit where the plan says: globals after
@@ -794,4 +830,153 @@ fn the_bank_params_are_where_hosts_find_them() {
     let oh2 = plugin.param(10);
     assert_eq!((oh2.default_plain(), oh2.max_plain()), (0.0, 6.0));
     assert!(oh2.is_automatable());
+}
+
+/// The Setup tab polls `overhead_slots()` on the UI thread while a host
+/// loads state on another. Both read `overhead_setup_key` and
+/// `mic_banks`; `overhead_slots` used to hold `mic_banks` while taking
+/// `overhead_setup_key`, the state load the other way round — an ABBA
+/// deadlock. Hammered from two threads, both finish.
+#[test]
+fn polling_the_overhead_slots_never_deadlocks_a_state_load() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let src = ResonanceDrums::new();
+    src.bridge.set_overhead_slot(1, OH_XY);
+    src.bridge.set_room_setup(ROOM_FAR);
+    let bytes = src.save_state();
+
+    let mut loader = ResonanceDrums::new();
+    let bridge = loader.bridge.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = crossbeam_channel::bounded::<&str>(2);
+
+    let poll_stop = stop.clone();
+    let poll_done = done_tx.clone();
+    std::thread::spawn(move || {
+        let mut polls = 0u64;
+        while !poll_stop.load(Ordering::Relaxed) || polls < 1_000 {
+            std::hint::black_box(bridge.overhead_slots());
+            std::hint::black_box(bridge.wanted_request());
+            polls += 1;
+        }
+        let _ = poll_done.send("poller");
+    });
+    let load_stop = stop.clone();
+    std::thread::spawn(move || {
+        for _ in 0..2_000 {
+            assert!(loader.load_state(&bytes));
+        }
+        load_stop.store(true, Ordering::Relaxed);
+        let _ = done_tx.send("loader");
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    for _ in 0..2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        done_rx
+            .recv_timeout(left)
+            .expect("overhead_slots() and a state load deadlocked");
+    }
+}
+
+/// What a mic position is, by name: any case and spacing; overheads by
+/// `OH…` or "overhead", rooms by "room" or `Amb…` (a bare "Far" or "Mid"
+/// is left alone); bleed only for a close position another pad lists —
+/// a spot mic under a name no pad lists (`SnareTop`, a cymbal's own) is
+/// never bleed. A kit's `_meta.mic_kinds` beats every guess.
+#[test]
+fn mic_positions_classify_by_name_and_by_the_kits_word() {
+    let k = MicKinds::default();
+    for p in ["OHsAB", "oh_xy", "OH", "Overhead L", "overheads", "Mono Overhead"] {
+        assert!(k.is_overhead(p), "{p} is an overhead");
+        assert!(!k.is_room(p) && !k.is_bleed(KICK, p), "{p}");
+    }
+    for p in ["Room", "RoomFar", "room", "Mono Room", "FarRoom", "AMB", "Ambient", "ambience_l"] {
+        assert!(k.is_room(p), "{p} is a room");
+        assert!(!k.is_overhead(p) && !k.is_bleed(KICK, p), "{p}");
+    }
+    for p in ["Far", "Mid", "Hall"] {
+        assert!(!k.is_room(p) && !k.is_bleed(KICK, p), "{p} is a guess too far");
+    }
+    assert!(k.is_bleed(KICK, "SNBtm") && k.is_bleed(KICK, "snbtm"));
+    assert!(k.is_bleed(TOM, "SN Btm"));
+    assert!(!k.is_bleed(SNARE, "SNBtm") && !k.is_bleed(SNARE, "sntop"), "its own");
+    for (pad, p) in [(SNARE, "SnareTop"), (CRASH, "Crash"), (CRASH, "CrashSpot")] {
+        assert!(!k.is_bleed(pad, p), "{p} on pad {pad} is a close mic, not bleed");
+    }
+
+    let meta = resonance_common::drumkit_library::KitMeta::from_value(&serde_json::json!({
+        "mic_kinds": {
+            "Hall": "room",
+            "Far": "room",
+            "Top": "overhead",
+            "Crash Spot": "bleed",
+            "OH Kick": "close",
+            "SNBtm": "close",
+        }
+    }));
+    let k = MicKinds::from_meta(&meta);
+    assert!(k.is_room("Hall") && k.is_room("far") && !k.is_bleed(KICK, "Hall"));
+    assert!(k.is_overhead("Top") && !k.is_room("Top"));
+    assert!(k.is_bleed(KICK, "CrashSpot"));
+    assert!(!k.is_overhead("OH Kick") && !k.is_bleed(KICK, "OH Kick"));
+    assert!(k.is_bleed(KICK, "SNBtm") && !k.is_bleed(SNARE, "SNBtm"));
+
+    // Resolved on a piece: the room and a layered overhead by their
+    // names, and the snare's own spot mic under another name is no bleed.
+    let setup = |position: &str| MicSetup {
+        brand: String::new(),
+        channel: String::new(),
+        mic: String::new(),
+        position: position.to_string(),
+        rounds: BTreeMap::new(),
+    };
+    let piece: BTreeMap<String, MicSetup> = [
+        ("01_SnareTop", setup("SnareTop")),
+        ("02_OH", setup("Overhead")),
+        ("03_OH_XY", setup("oh xy")),
+        ("04_Room", setup("Mono Room")),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v))
+    .collect();
+    let choices: Vec<PadMicChoices> = (0..NUM_PADS).map(|_| PadMicChoices::default()).collect();
+    let banks = BankRequest {
+        setups: MicBankSetups {
+            extra_overheads: ["03_OH_XY".to_string(), String::new()],
+            room: String::new(),
+        },
+        bleed: true,
+        room: true,
+    };
+    let kinds = MicKinds::default();
+    assert_eq!(
+        resolve_extra_banks(SNARE, &piece, "02_OH", &choices, &banks, &kinds),
+        [
+            (BankKind::Overhead { slot: 1 }, "03_OH_XY".to_string()),
+            (BankKind::Room, "04_Room".to_string()),
+        ]
+    );
+}
+
+/// Overhead slot 1 plays only an overhead setup, as slots 2 and 3 do: a
+/// close-mic or room key put there falls back to the piece's first
+/// overhead setup instead of playing that mic as the overhead.
+#[test]
+fn overhead_slot_1_never_plays_a_close_mic_or_room() {
+    let kit = fixture_kit();
+    let mut plugin = booted(OUTPUT_MODE_MULTI);
+    pick(&plugin, &kit);
+    settle(&mut plugin);
+    for key in ["01_KickIn_e901", ROOM] {
+        plugin.bridge.set_overhead_slot(0, key);
+        settle(&mut plugin);
+        for pad in [KICK, SNARE, CRASH] {
+            let built = built_pad(&plugin, pad);
+            let oh = built.overhead.as_ref().expect("an overhead");
+            assert_eq!(oh.setup_key, "23_OHsAB_e914", "slot 1 = {key} on pad {pad}");
+        }
+    }
 }

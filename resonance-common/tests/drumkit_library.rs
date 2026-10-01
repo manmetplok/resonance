@@ -1366,3 +1366,38 @@ fn kit_meta_reads_each_part_on_its_own() {
     assert_eq!(KitMeta::from_manifest_bytes(b"{}"), KitMeta::default());
     assert_eq!(KitMeta::from_manifest_bytes(b"nope"), KitMeta::default());
 }
+
+/// `_meta.mic_kinds` names what a mic position records, for kits whose
+/// position names the drums plugin would misread; an unknown kind (or a
+/// non-string) costs that entry only.
+#[test]
+fn kit_meta_reads_mic_kinds() {
+    use drumkit_library::{KitMeta, MicKind};
+
+    let meta = KitMeta::from_manifest_bytes(
+        br#"{
+  "_meta": {
+    "name": "Kit",
+    "mic_kinds": {
+      "Hall": "room",
+      "Top": "Overhead",
+      "SnareTop": "close",
+      "Leak": "bleed",
+      "Odd": "sideways",
+      "Num": 3
+    }
+  }
+}"#,
+    );
+    assert_eq!(meta.name.as_deref(), Some("Kit"));
+    assert_eq!(
+        meta.mic_kinds.into_iter().collect::<Vec<_>>(),
+        [
+            ("Hall".to_string(), MicKind::Room),
+            ("Leak".to_string(), MicKind::Bleed),
+            ("SnareTop".to_string(), MicKind::Close),
+            ("Top".to_string(), MicKind::Overhead),
+        ]
+    );
+    assert!(KitMeta::from_manifest_bytes(b"{}").mic_kinds.is_empty());
+}

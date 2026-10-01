@@ -1328,3 +1328,59 @@ fn a_file_rewritten_during_its_read_is_not_cached() {
     assert_eq!(src, Source::Cached, "an unchanged file is cached as before");
     assert!(Arc::ptr_eq(&second, &third));
 }
+
+/// A snare with two round robins on its top mic, overhead and room; the
+/// room's second is unreadable. The room is an E15 bank: it loses that
+/// cell alone (its remaining take then plays every hit, by relative
+/// position), and the top mic and overhead keep both strikes — one bad
+/// ambience file must not halve the close mics' round robins.
+#[test]
+fn an_unreadable_room_take_costs_the_room_alone() {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-load-path-room-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    write_wav(&dir.join("top_1.wav"), 1, 0.1);
+    write_wav(&dir.join("top_2.wav"), 1, 0.2);
+    write_wav(&dir.join("oh_1.wav"), 2, 0.3);
+    write_wav(&dir.join("oh_2.wav"), 2, 0.4);
+    write_wav(&dir.join("room_1.wav"), 2, 0.05);
+    write_corrupt(&dir.join("room_2.wav"));
+    let manifest = r#"{
+  "SD Snare Normal": {
+    "04_SNTop": {"brand":"t","channel":"1","mic":"m","position":"SNTop",
+      "rounds":{"RR1":{"Vel01":"top_1.wav"},"RR2":{"Vel01":"top_2.wav"}}},
+    "23_OHsAB_e914": {"brand":"t","channel":"1","mic":"m","position":"OHsAB",
+      "rounds":{"RR1":{"Vel01":"oh_1.wav"},"RR2":{"Vel01":"oh_2.wav"}}},
+    "30_Room": {"brand":"t","channel":"1","mic":"m","position":"Room",
+      "rounds":{"RR1":{"Vel01":"room_1.wav"},"RR2":{"Vel01":"room_2.wav"}}}
+  }
+}"#;
+    let manifest_path = dir.join("drum_samples.json");
+    std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
+    let kit = Kit {
+        dir,
+        manifest: manifest_path,
+    };
+
+    let plugin = booted();
+    plugin
+        .bridge
+        .params
+        .room_on
+        .set_value(resonance_drums::params::BANK_ON);
+    pick(&plugin, &kit);
+    let stats = settle(&plugin);
+    assert_eq!(stats.unreadable, 1, "{stats:?}");
+    let snare = built_pad(&plugin, drum_map::pad_index_for_note(drum_map::SNARE).unwrap());
+    let takes = |bank: &resonance_drums::kit::LoadedMicBank| {
+        bank.layers.iter().map(|l| l.round_robins.len()).collect::<Vec<_>>()
+    };
+    assert_eq!(takes(&snare.close_mics[0]), [2], "the top mic keeps both strikes");
+    assert_eq!(takes(snare.overhead.as_ref().unwrap()), [2], "so does the overhead");
+    assert_eq!(snare.extra_banks.len(), 1);
+    assert_eq!(takes(&snare.extra_banks[0].bank), [1], "the room loses its own");
+}

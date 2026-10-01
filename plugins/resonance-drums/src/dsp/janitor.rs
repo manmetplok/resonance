@@ -41,7 +41,20 @@ pub fn spawn() -> Sender<Vec<LoadedPad>> {
     janitor_sender
 }
 
-/// Find the best voice slot to use: free voice > oldest same-pad > oldest overall.
+/// How many voices one hit can take: every voice under the polyphony
+/// ceiling, plus every voice already sounding (each can be stolen) —
+/// none of them the hit's own, since this is asked before the hit
+/// allocates anything. A hit with more banks than this drops its
+/// lowest-priority ones (`DrumSampler::note_on` orders them close →
+/// overhead → bleed → room) rather than stealing its own voices.
+pub(super) fn hit_capacity(voices: &[Voice], max_voices: usize) -> usize {
+    let active_count = voices.iter().filter(|v| v.active).count();
+    active_count.max(max_voices.min(voices.len()))
+}
+
+/// Find the best voice slot for a hit whose voices carry `hit_age`:
+/// free voice > oldest same-pad > oldest overall. `None` when only the
+/// hit's own voices are left to steal.
 ///
 /// `max_voices` is the polyphony ceiling (ba todo #1326). A free slot is
 /// only taken while fewer than that many voices are sounding; past the
@@ -49,13 +62,23 @@ pub fn spawn() -> Sender<Vec<LoadedPad>> {
 /// turning polyphony down thins the kit rather than dropping hits. At
 /// the default (`MAX_VOICES`) this is exactly the old behaviour: there
 /// is a free slot if and only if fewer than `MAX_VOICES` are active.
-pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize, max_voices: usize) -> usize {
+///
+/// A voice of age `hit_age` is never a steal candidate: one hit
+/// allocates up to `MAX_BANKS_PER_HIT` voices in a row, all of that age
+/// and pad, and "oldest same pad" would otherwise pick the hit's own
+/// just-started voices, leaving only its last bank sounding.
+pub(super) fn find_free_voice(
+    voices: &[Voice],
+    pad_index: usize,
+    max_voices: usize,
+    hit_age: u64,
+) -> Option<usize> {
     let active_count = voices.iter().filter(|v| v.active).count();
 
     // Prefer an inactive voice, as long as we're under the ceiling
     if active_count < max_voices {
         if let Some(idx) = voices.iter().position(|v| !v.active) {
-            return idx;
+            return Some(idx);
         }
     }
 
@@ -64,24 +87,24 @@ pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize, max_voices: us
     // on age and quietly lift the polyphony limit. When every slot is
     // busy — the only case before the limit existed — every voice is
     // active, so this filter changes nothing.
+    let stealable = |v: &Voice| v.active && v.age != hit_age;
     if let Some(idx) = voices
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.active && v.pad_index == pad_index)
+        .filter(|(_, v)| stealable(v) && v.pad_index == pad_index)
         .min_by_key(|(_, v)| v.age)
         .map(|(i, _)| i)
     {
-        return idx;
+        return Some(idx);
     }
 
     // Steal the oldest voice overall
     voices
         .iter()
         .enumerate()
-        .filter(|(_, v)| v.active)
+        .filter(|(_, v)| stealable(v))
         .min_by_key(|(_, v)| v.age)
         .map(|(i, _)| i)
-        .unwrap_or(0)
 }
 
 /// Release all voices in the given choke group, fading over `len` frames.
