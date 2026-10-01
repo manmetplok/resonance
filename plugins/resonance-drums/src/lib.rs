@@ -14,7 +14,8 @@ use resonance_plugin::*;
 pub mod articulation;
 pub mod choice;
 #[cfg(feature = "editor")]
-pub(crate) mod download;
+#[doc(hidden)]
+pub mod download;
 pub mod drum_map;
 pub mod dsp;
 #[cfg(feature = "editor")]
@@ -57,8 +58,19 @@ pub struct KitBridge {
     /// Host sample rate, captured in `initialize()`. Stored as `f32::to_bits`.
     /// Sentinel `0` means "not yet initialized — no audio rate is known".
     pub sample_rate: Arc<AtomicU32>,
-    /// Audio-thread kit handoff. Clones go to the editor and loader thread.
+    /// Audio-thread kit handoff: a one-slot, latest-wins mailbox. Clones
+    /// go to the editor and loader thread. Send through
+    /// [`kit_loader::hand_off_kit`], never directly — a plain `try_send`
+    /// into a full slot drops the *newer* kit.
     pub kit_sender: Sender<Vec<LoadedPad>>,
+    /// The mailbox's other end, held by the loaders so a newer kit can
+    /// take a stale one back out of the slot (E3). The stale kit is
+    /// dropped on the loader thread, never on the audio thread.
+    pub kit_reclaim: Receiver<Vec<LoadedPad>>,
+    /// Serialises the generation check and the hand-off, so an older
+    /// loader that passed its check can never send after a newer one and
+    /// evict it.
+    pub kit_handoff: Arc<Mutex<()>>,
     /// Monotonic load stamp. Incremented each time a new loader is spawned;
     /// in-flight loaders check this before writing status/kit_path so a
     /// stale load can't clobber a newer one.
@@ -215,8 +227,10 @@ impl ResonancePlugin for ResonanceDrums {
 
     fn new() -> Self {
         // SPSC-style handoff: audio thread is the sole consumer. Bound of 1
-        // coalesces in-flight swaps so if the user spams Load Kit only the
-        // newest loaded kit reaches the audio thread.
+        // coalesces in-flight swaps: a loader finding the slot full takes
+        // the stale kit back out (`kit_reclaim`) and puts its own in, so
+        // if the user spams Load Kit only the newest kit reaches the audio
+        // thread.
         let (kit_sender, kit_receiver): (Sender<Vec<LoadedPad>>, Receiver<Vec<LoadedPad>>) =
             bounded(1);
         // Articulation wake-ups carry no payload, so a depth of one is
@@ -230,6 +244,8 @@ impl ResonancePlugin for ResonanceDrums {
             kit_path: Arc::new(Mutex::new(None)),
             kit_status: Arc::new(Mutex::new(KitStatus::Empty)),
             sample_rate: Arc::new(AtomicU32::new(0)),
+            kit_reclaim: kit_receiver.clone(),
+            kit_handoff: Arc::new(Mutex::new(())),
             kit_sender,
             load_generation: Arc::new(AtomicU64::new(0)),
             catalog: Arc::new(Mutex::new(ManifestMicCatalog::default())),

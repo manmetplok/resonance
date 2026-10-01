@@ -74,16 +74,17 @@ pub(super) fn find_free_voice(voices: &[Voice], pad_index: usize, max_voices: us
         .unwrap_or(0)
 }
 
-/// Release all voices in the given choke group.
-pub(super) fn choke_group(voices: &mut [Voice], group: u8) {
+/// Release all voices in the given choke group, fading over `len` frames.
+pub(super) fn choke_group(voices: &mut [Voice], group: u8, len: u32) {
     for voice in voices.iter_mut() {
         if voice.active && voice.choke_group == Some(group) {
-            voice.trigger_release();
+            voice.trigger_release(len);
         }
     }
 }
 
-/// Kill all active voices immediately.
+/// Kill all active voices immediately (CLAP `reset`; see
+/// `DrumSampler::reset` for why this one does not fade).
 pub(super) fn reset_all(voices: &mut [Voice]) {
     for voice in voices.iter_mut() {
         voice.active = false;
@@ -92,11 +93,11 @@ pub(super) fn reset_all(voices: &mut [Voice]) {
 
 /// Host-level "silence this note now" — used by the CLAP host when
 /// playback stops or a track is muted mid-hit. Fades the matching
-/// voices out rather than clicking them off.
-pub(super) fn choke_note(voices: &mut [Voice], note: u8) {
+/// voices out over `len` frames rather than clicking them off.
+pub(super) fn choke_note(voices: &mut [Voice], note: u8, len: u32) {
     for voice in voices.iter_mut() {
         if voice.active && voice.note == note && voice.state == VoiceState::Playing {
-            voice.trigger_release();
+            voice.trigger_release(len);
         }
     }
 }

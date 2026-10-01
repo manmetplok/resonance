@@ -13,6 +13,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
+use crossbeam_channel::TrySendError;
+
 use crate::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::LoadedPad;
 use crate::mic_catalog::ManifestMicCatalog;
@@ -237,7 +239,10 @@ pub fn spawn_loader(
                 )
             }));
 
-            // Only the newest load is allowed to write final state.
+            // Only the newest load is allowed to write final state. The
+            // check and the hand-off happen under one lock, so an older
+            // load cannot pass the check and then send after a newer one.
+            let _handoff = bridge.kit_handoff.lock();
             if bridge.load_generation.load(Ordering::Acquire) != stamp {
                 return;
             }
@@ -245,20 +250,14 @@ pub fn spawn_loader(
             match outcome {
                 Ok(Ok(kit)) => {
                     let num_pads = kit.pads.len();
-                    let name = manifest_path
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "kit".to_string());
+                    let name = kit_display_name(&manifest_path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
                     let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    // Best-effort send; if the channel is full, coalesce
-                    // by dropping this load (the newer one wins anyway).
-                    let _ = bridge.kit_sender.try_send(kit.pads);
+                    hand_off_kit(&bridge, kit.pads);
                     bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                     *bridge.pad_samples.lock() = infos;
                     *bridge.kit_path.lock() = Some(manifest_path);
@@ -275,6 +274,77 @@ pub fn spawn_loader(
             }
         })
         .expect("spawn drums kit loader thread");
+}
+
+/// The per-user directory installed kits live in:
+/// `$XDG_DATA_HOME/resonance/drumkits`, next to the shared registry's
+/// `installed.json`. `None` when no data directory can be determined.
+pub fn drumkits_root() -> Option<PathBuf> {
+    resonance_common::registry::registry_path()
+        .and_then(|p| p.parent().map(|dir| dir.join("drumkits")))
+}
+
+/// The name a kit is shown under, from its manifest's location.
+///
+/// A kit inside `drumkits_root` is named after the directory directly
+/// under the root, however deep the manifest sits: a downloaded zip
+/// extracts to `drumkits/Drummica/drummica/drum_samples.json`, and the
+/// kit is "Drummica" — the name it was installed (and is listed) under —
+/// not the inner "drummica". Anywhere else the manifest's own directory
+/// names the kit.
+pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> String {
+    let under_root = |path: &Path, root: &Path| -> Option<String> {
+        let rel = path.strip_prefix(root).ok()?;
+        let mut parts = rel.components();
+        let top = parts.next()?;
+        // The manifest itself directly in the root has no kit directory.
+        parts.next()?;
+        Some(top.as_os_str().to_string_lossy().into_owned())
+    };
+    if let Some(root) = drumkits_root {
+        if let Some(name) = under_root(manifest_path, root) {
+            return name;
+        }
+        // The same check on resolved paths, for a root or manifest given
+        // through a symlink or with `..` in it.
+        if let (Ok(path), Ok(root)) = (manifest_path.canonicalize(), root.canonicalize()) {
+            if let Some(name) = under_root(&path, &root) {
+                return name;
+            }
+        }
+    }
+    manifest_path
+        .parent()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "kit".to_string())
+}
+
+/// Put `pads` in the audio thread's one-slot kit mailbox, latest wins.
+///
+/// If the slot still holds a kit the audio thread has not taken yet, that
+/// kit is stale: take it back out and drop it here, on the calling
+/// (loader) thread, then send the new one. The audio thread only ever
+/// `try_recv`s, so it sees either the stale kit (taken before we got to
+/// it — then our retry finds the slot empty) or the new one; never
+/// nothing in place of the newest. Callers serialise on
+/// [`KitBridge::kit_handoff`].
+pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
+    let mut pads = pads;
+    loop {
+        match bridge.kit_sender.try_send(pads) {
+            Ok(()) => return,
+            Err(TrySendError::Full(back)) => {
+                pads = back;
+                // Freed here, off the audio thread. Empty if the audio
+                // thread took it in the meantime; the retry then fits.
+                drop(bridge.kit_reclaim.try_recv());
+            }
+            // Unreachable while the bridge holds `kit_reclaim`: the
+            // channel cannot disconnect under it.
+            Err(TrySendError::Disconnected(_)) => return,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
