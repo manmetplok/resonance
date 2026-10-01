@@ -13,6 +13,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
+use crossbeam_channel::TrySendError;
+
 use crate::drum_map::{PadMapping, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::LoadedPad;
 use crate::mic_catalog::ManifestMicCatalog;
@@ -237,7 +239,10 @@ pub fn spawn_loader(
                 )
             }));
 
-            // Only the newest load is allowed to write final state.
+            // Only the newest load is allowed to write final state. The
+            // check and the hand-off happen under one lock, so an older
+            // load cannot pass the check and then send after a newer one.
+            let _handoff = bridge.kit_handoff.lock();
             if bridge.load_generation.load(Ordering::Acquire) != stamp {
                 return;
             }
@@ -256,9 +261,7 @@ pub fn spawn_loader(
                     // both describe the takes this load actually decoded.
                     let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    // Best-effort send; if the channel is full, coalesce
-                    // by dropping this load (the newer one wins anyway).
-                    let _ = bridge.kit_sender.try_send(kit.pads);
+                    hand_off_kit(&bridge, kit.pads);
                     bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                     *bridge.pad_samples.lock() = infos;
                     *bridge.kit_path.lock() = Some(manifest_path);
@@ -275,6 +278,33 @@ pub fn spawn_loader(
             }
         })
         .expect("spawn drums kit loader thread");
+}
+
+/// Put `pads` in the audio thread's one-slot kit mailbox, latest wins.
+///
+/// If the slot still holds a kit the audio thread has not taken yet, that
+/// kit is stale: take it back out and drop it here, on the calling
+/// (loader) thread, then send the new one. The audio thread only ever
+/// `try_recv`s, so it sees either the stale kit (taken before we got to
+/// it — then our retry finds the slot empty) or the new one; never
+/// nothing in place of the newest. Callers serialise on
+/// [`KitBridge::kit_handoff`].
+pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
+    let mut pads = pads;
+    loop {
+        match bridge.kit_sender.try_send(pads) {
+            Ok(()) => return,
+            Err(TrySendError::Full(back)) => {
+                pads = back;
+                // Freed here, off the audio thread. Empty if the audio
+                // thread took it in the meantime; the retry then fits.
+                drop(bridge.kit_reclaim.try_recv());
+            }
+            // Unreachable while the bridge holds `kit_reclaim`: the
+            // channel cannot disconnect under it.
+            Err(TrySendError::Disconnected(_)) => return,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
