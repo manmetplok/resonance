@@ -105,19 +105,28 @@ pub struct DrumSampler {
     /// output port as `f32::to_bits`, `[left, right]`. Written at the end
     /// of `render_block`; `None` when running headless / in tests.
     out_peak: Option<Arc<[AtomicU32; 2]>>,
-    /// Receives new kit versions from the loader thread. The audio thread is
-    /// the sole consumer; `try_recv` at the top of each process block swaps
-    /// in a freshly loaded kit without blocking.
+    /// Receives new kit versions from the loader thread; `try_recv` at the
+    /// top of each process block swaps in a freshly loaded kit without
+    /// blocking. The audio thread is not the only receiver: a loader
+    /// takes a stale kit back out of the slot (E3), and `initialize`
+    /// drains it while the plugin is inactive. Both do so under
+    /// `KitBridge::kit_handoff`, and either way the kit is freed off the
+    /// audio thread.
     kit_receiver: Receiver<Vec<LoadedPad>>,
     /// Ships old kits to the janitor thread on swap so the large heap free
-    /// happens off the audio thread. The sampler is the sole owner of this
-    /// sender; when the sampler drops, the janitor's channel disconnects
-    /// and the janitor thread exits cleanly.
+    /// happens off the audio thread. Bounded ([`janitor::JANITOR_DEPTH`]),
+    /// so a send never allocates; a full channel leaves the kit parked in
+    /// its retired slot until a later block. The sampler is the sole owner
+    /// of this sender; when the sampler drops, the janitor's channel
+    /// disconnects and the janitor thread exits cleanly.
     janitor_sender: Sender<Vec<LoadedPad>>,
     /// Previous kits' pads, kept alive while voices that were still
     /// sounding at swap time fade out against them (a voice's
     /// `retired_slot` says which). Each is shipped to the janitor once
-    /// the last voice reading it ends.
+    /// the last voice reading it ends — or later, if the janitor's
+    /// channel is full then. Every outgoing kit is parked here first,
+    /// even one no voice reads, so a kit is never dropped on the audio
+    /// thread for want of room in the janitor's channel.
     retired_pads: [Option<Vec<LoadedPad>>; RETIRED_KITS],
     /// Swap number each `retired_pads` slot was filled at, so a swap that
     /// finds every slot taken retires the oldest.
@@ -165,8 +174,17 @@ pub struct DrumSampler {
 
 impl DrumSampler {
     pub fn new(kit_receiver: Receiver<Vec<LoadedPad>>) -> Self {
-        let janitor_sender = janitor::spawn();
+        Self::with_janitor(kit_receiver, janitor::spawn())
+    }
 
+    /// [`new`](Self::new) with the caller's janitor channel instead of a
+    /// janitor thread. Test hook: a channel nobody drains is how a test
+    /// fills it up to see what the sampler does then.
+    #[doc(hidden)]
+    pub fn with_janitor(
+        kit_receiver: Receiver<Vec<LoadedPad>>,
+        janitor_sender: Sender<Vec<LoadedPad>>,
+    ) -> Self {
         Self {
             pads: Vec::new(),
             voices: (0..MAX_VOICES).map(|_| Voice::new()).collect(),
@@ -312,34 +330,22 @@ impl DrumSampler {
     ///
     /// A second swap while an earlier kit's voices are still fading parks
     /// its kit in another slot, so those voices fade too rather than
-    /// being cut (E2). Nothing here allocates: the slots are fixed, and
-    /// moving a `Vec` into one is a pointer copy.
+    /// being cut (E2). Nothing here allocates: the slots are fixed,
+    /// moving a `Vec` into one is a pointer copy, and the janitor's
+    /// channel is a preallocated ring.
+    ///
+    /// The outgoing kit always goes to a slot first. If every slot is
+    /// taken and the janitor's channel is full too, the new kit is left
+    /// in the mailbox for the next block rather than dropping either kit
+    /// here.
     pub fn try_swap_kit(&mut self) {
-        while let Ok(new_pads) = self.kit_receiver.try_recv() {
-            let slot = match self.retired_pads.iter().position(Option::is_none) {
-                Some(slot) => slot,
-                None => {
-                    // Every slot holds a kit that is still fading. Cut
-                    // the voices of the oldest and free it — reachable
-                    // only with RETIRED_KITS + 1 swaps inside one fade.
-                    let (oldest, _) = self
-                        .retired_stamp
-                        .iter()
-                        .enumerate()
-                        .min_by_key(|(_, stamp)| **stamp)
-                        .expect("RETIRED_KITS > 0");
-                    for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
-                        if voice.retired && voice.retired_slot as usize == oldest {
-                            voice.active = false;
-                        }
-                    }
-                    if let Some(kit) = self.retired_pads[oldest].take() {
-                        self.ship_to_janitor(kit);
-                    }
-                    oldest
-                }
+        loop {
+            let Some(slot) = self.free_retired_slot() else {
+                return;
             };
-            let mut any_fading = false;
+            let Ok(new_pads) = self.kit_receiver.try_recv() else {
+                return;
+            };
             for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
                 // Voices of an earlier retired kit keep their own fade
                 // against their own slot.
@@ -347,20 +353,88 @@ impl DrumSampler {
                     voice.retired = true;
                     voice.retired_slot = slot as u8;
                     voice.force_fade(self.swap_frames);
-                    any_fading = true;
                 }
             }
             self.rr_counters = [[0; MAX_LAYERS]; NUM_PADS];
             self.rr_last = [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS];
             let old_pads = std::mem::replace(&mut self.pads, new_pads);
-            if any_fading {
-                self.swap_count += 1;
-                self.retired_pads[slot] = Some(old_pads);
-                self.retired_stamp[slot] = self.swap_count;
-            } else {
-                self.ship_to_janitor(old_pads);
+            // Parked even when no voice reads it: `end_block` ships it to
+            // the janitor this block, or a later one if the channel is
+            // full.
+            self.swap_count += 1;
+            self.retired_pads[slot] = Some(old_pads);
+            self.retired_stamp[slot] = self.swap_count;
+        }
+    }
+
+    /// A retired-kit slot the next swap can park the outgoing kit in.
+    ///
+    /// With every slot taken, the oldest kit's voices are cut and the kit
+    /// goes to the janitor — reachable only with `RETIRED_KITS + 1` swaps
+    /// inside one fade. If the janitor's channel is full as well, the kit
+    /// stays where it is (its voices already silenced) and there is no
+    /// slot this block.
+    fn free_retired_slot(&mut self) -> Option<usize> {
+        if let Some(slot) = self.retired_pads.iter().position(Option::is_none) {
+            return Some(slot);
+        }
+        // A kit no voice reads any more can go first.
+        self.ship_idle_retired();
+        if let Some(slot) = self.retired_pads.iter().position(Option::is_none) {
+            return Some(slot);
+        }
+        let (oldest, _) = self
+            .retired_stamp
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, stamp)| **stamp)
+            .expect("RETIRED_KITS > 0");
+        for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
+            if voice.retired && voice.retired_slot as usize == oldest {
+                voice.active = false;
             }
         }
+        let kit = self.retired_pads[oldest].take()?;
+        match self.janitor_sender.try_send(kit) {
+            Ok(()) => Some(oldest),
+            Err(err) => {
+                // Full: keep it parked and try again next block. (The
+                // janitor cannot disconnect while the sampler holds the
+                // sender; keeping the kit is right then too.)
+                self.retired_pads[oldest] = Some(err.into_inner());
+                None
+            }
+        }
+    }
+
+    /// Hand every retired kit no voice reads any more to the janitor. One
+    /// that does not fit in the janitor's channel stays parked for a later
+    /// block — never dropped here, on the audio thread.
+    fn ship_idle_retired(&mut self) {
+        for slot in 0..RETIRED_KITS {
+            if self.retired_pads[slot].is_none() {
+                continue;
+            }
+            let in_use = self
+                .voices
+                .iter()
+                .chain(self.tails.iter())
+                .any(|v| v.active && v.retired && v.retired_slot as usize == slot);
+            if !in_use {
+                if let Some(retired) = self.retired_pads[slot].take() {
+                    if let Err(err) = self.janitor_sender.try_send(retired) {
+                        self.retired_pads[slot] = Some(err.into_inner());
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// How many retired kits are parked, waiting for their voices to fade
+    /// or for room in the janitor's channel.
+    pub fn retired_kits_parked(&self) -> usize {
+        self.retired_pads.iter().filter(|k| k.is_some()).count()
     }
 
     /// Move the sounding voice in main slot `idx` to a tail slot and fade
@@ -384,12 +458,6 @@ impl DrumSampler {
         victim.force_fade(self.steal_frames);
         self.tails[tail] = victim;
         self.voices[idx].active = false;
-    }
-
-    fn ship_to_janitor(&self, pads: Vec<LoadedPad>) {
-        if let Err(err) = self.janitor_sender.try_send(pads) {
-            drop(err.into_inner());
-        }
     }
 
     /// Trigger a note-on event. Allocates **one voice per loaded mic bank**
@@ -822,21 +890,7 @@ impl DrumSampler {
 
         // Once the last fading pre-swap voice of a retired kit has
         // ended, its samples are unreferenced: hand them to the janitor.
-        for slot in 0..RETIRED_KITS {
-            if self.retired_pads[slot].is_none() {
-                continue;
-            }
-            let in_use = self
-                .voices
-                .iter()
-                .chain(self.tails.iter())
-                .any(|v| v.active && v.retired && v.retired_slot as usize == slot);
-            if !in_use {
-                if let Some(retired) = self.retired_pads[slot].take() {
-                    self.ship_to_janitor(retired);
-                }
-            }
-        }
+        self.ship_idle_retired();
 
         // Next block ramps from this block's snapshots.
         self.prev_pad_volume = self.cur_pad_volume;
