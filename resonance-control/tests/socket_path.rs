@@ -24,17 +24,31 @@ fn empty_override_is_ignored() {
 }
 
 #[test]
-fn runtime_dir_beats_tmpdir() {
+fn runtime_dir_used_when_no_user_temp_dir() {
+    let path = resolve_socket_path(None, Some(PathBuf::from("/run/user/1000")), None, 1000);
+    assert_eq!(
+        path,
+        PathBuf::from("/run/user/1000/resonance/control.sock")
+    );
+}
+
+/// On macOS the OS-reported per-user temp dir beats `XDG_RUNTIME_DIR`:
+/// a shell-set `XDG_RUNTIME_DIR` reaches an app started from a terminal
+/// but not an MCP server spawned by Claude Desktop, and the two must
+/// still agree. Elsewhere the user temp dir is never consulted.
+#[test]
+fn user_temp_dir_beats_runtime_dir_on_macos_only() {
     let path = resolve_socket_path(
         None,
         Some(PathBuf::from("/run/user/1000")),
         Some(PathBuf::from("/var/folders/xx/T")),
         1000,
     );
-    assert_eq!(
-        path,
-        PathBuf::from("/run/user/1000/resonance/control.sock")
-    );
+    if cfg!(target_os = "macos") {
+        assert_eq!(path, PathBuf::from("/var/folders/xx/T/resonance/control.sock"));
+    } else {
+        assert_eq!(path, PathBuf::from("/run/user/1000/resonance/control.sock"));
+    }
 }
 
 #[test]
@@ -45,17 +59,26 @@ fn uid_fallback_uses_the_given_uid() {
     assert_eq!(path, PathBuf::from("/tmp/resonance-502/control.sock"));
 }
 
-/// `$TMPDIR` is per-user on macOS and stands in for the never-set
-/// `XDG_RUNTIME_DIR` there; other platforms skip straight to the uid
-/// fallback.
+/// The per-user temp dir stands in for `XDG_RUNTIME_DIR` on macOS;
+/// other platforms skip straight to the uid fallback.
 #[test]
-fn tmpdir_is_macos_only() {
+fn user_temp_dir_is_macos_only() {
     let path = resolve_socket_path(None, None, Some(PathBuf::from("/var/folders/xx/T")), 502);
     if cfg!(target_os = "macos") {
         assert_eq!(path, PathBuf::from("/var/folders/xx/T/resonance/control.sock"));
     } else {
         assert_eq!(path, PathBuf::from("/tmp/resonance-502/control.sock"));
     }
+}
+
+/// The live macOS temp dir comes from `confstr`, not `$TMPDIR`, so it is
+/// found even when Claude Desktop spawns the MCP server without one.
+#[cfg(target_os = "macos")]
+#[test]
+fn user_temp_dir_resolves_to_a_real_dir() {
+    let dir = resonance_control::socket::user_temp_dir().expect("confstr temp dir");
+    assert!(dir.is_absolute(), "{}", dir.display());
+    assert!(dir.is_dir(), "{}", dir.display());
 }
 
 // ---- socket directory trust (code review CTL-11 / UPD-12) -----------------

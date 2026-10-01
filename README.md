@@ -243,11 +243,14 @@ Both sides compute the same path, so normally there's nothing to configure:
 | Platform | Control socket |
 |---|---|
 | Linux | `$XDG_RUNTIME_DIR/resonance/control.sock` (usually `/run/user/<uid>/…`) |
-| macOS | `$TMPDIR/resonance/control.sock` (under `/var/folders/…`) |
+| macOS | `<per-user temp dir>/resonance/control.sock` (under `/var/folders/…`) |
 | Fallback | `/tmp/resonance-<uid>/control.sock` |
 
-If the app and the MCP server run with different environments (e.g. a
-sandboxed client with its own `$TMPDIR`), give both the same path:
+On macOS the per-user temp dir is asked of the OS
+(`confstr(_CS_DARWIN_USER_TEMP_DIR)`, what `$TMPDIR` normally points at), not
+read from the environment, so it holds even when Claude Desktop starts the MCP
+server without `$TMPDIR` set. If the two sides still can't agree (e.g. a
+sandboxed client with its own temp dir), give both the same path:
 
 ```sh
 export RESONANCE_CONTROL_SOCKET="$HOME/.resonance-run/control.sock"   # for the app

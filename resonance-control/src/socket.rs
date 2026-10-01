@@ -10,15 +10,15 @@ use std::path::{Path, PathBuf};
 pub const SOCKET_PATH_ENV: &str = "RESONANCE_CONTROL_SOCKET";
 
 /// Resolve the control-socket path (doc #265):
-/// `$RESONANCE_CONTROL_SOCKET` verbatim when set, else
-/// `$XDG_RUNTIME_DIR/resonance/control.sock`, else — on macOS, which
-/// sets no `XDG_RUNTIME_DIR` — `$TMPDIR/resonance/control.sock`, else
+/// `$RESONANCE_CONTROL_SOCKET` verbatim when set, else — on macOS — the
+/// per-user temp dir (`/var/folders/.../T/resonance/control.sock`), else
+/// `$XDG_RUNTIME_DIR/resonance/control.sock`, else
 /// `/tmp/resonance-<uid>/control.sock`.
 pub fn socket_path() -> PathBuf {
     resolve_socket_path(
         std::env::var(SOCKET_PATH_ENV).ok(),
         std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from),
-        std::env::var_os("TMPDIR").map(PathBuf::from),
+        user_temp_dir(),
         process_uid(),
     )
 }
@@ -26,14 +26,17 @@ pub fn socket_path() -> PathBuf {
 /// The resolution rule itself, pure over its inputs so tests can drive
 /// it without touching the process environment.
 ///
-/// `tmpdir` is consulted only on macOS, where `$TMPDIR` points at a
-/// per-user directory by construction (`/var/folders/.../T/`) — the
-/// closest equivalent of `XDG_RUNTIME_DIR`. Empty values are treated as
-/// unset, matching how the env-reading wrapper always behaved.
+/// `user_temp_dir` is consulted only on macOS, and there it wins over
+/// `runtime_dir`: the two ends are often started from different
+/// environments (a terminal vs. Claude Desktop, which spawns MCP servers
+/// with neither `$TMPDIR` nor any shell-set `XDG_RUNTIME_DIR`), so the
+/// macOS path must come from the OS, not the environment. Empty values
+/// are treated as unset, matching how the env-reading wrapper always
+/// behaved.
 pub fn resolve_socket_path(
     override_path: Option<String>,
     runtime_dir: Option<PathBuf>,
-    tmpdir: Option<PathBuf>,
+    user_temp_dir: Option<PathBuf>,
     uid: u32,
 ) -> PathBuf {
     if let Some(path) = override_path {
@@ -41,19 +44,50 @@ pub fn resolve_socket_path(
             return PathBuf::from(path);
         }
     }
-    if let Some(runtime) = runtime_dir {
-        if !runtime.as_os_str().is_empty() {
-            return runtime.join("resonance").join("control.sock");
-        }
-    }
     if cfg!(target_os = "macos") {
-        if let Some(tmp) = tmpdir {
+        if let Some(tmp) = user_temp_dir {
             if !tmp.as_os_str().is_empty() {
                 return tmp.join("resonance").join("control.sock");
             }
         }
     }
+    if let Some(runtime) = runtime_dir {
+        if !runtime.as_os_str().is_empty() {
+            return runtime.join("resonance").join("control.sock");
+        }
+    }
     PathBuf::from(format!("/tmp/resonance-{uid}")).join("control.sock")
+}
+
+/// macOS's per-user temp dir (`/var/folders/.../T/`), asked of the OS
+/// via `confstr(_CS_DARWIN_USER_TEMP_DIR)` — the directory `$TMPDIR`
+/// normally names, but available whether or not `$TMPDIR` is set or
+/// overridden in this process. Falls back to `$TMPDIR` only if the
+/// `confstr` call fails. `None` off macOS.
+#[cfg(target_os = "macos")]
+pub fn user_temp_dir() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    let mut buf = vec![0 as libc::c_char; 1024];
+    // SAFETY: `buf` is valid for `buf.len()` bytes; confstr writes at
+    // most that many, NUL-terminated, and returns the size it needed.
+    let needed = unsafe {
+        libc::confstr(libc::_CS_DARWIN_USER_TEMP_DIR, buf.as_mut_ptr(), buf.len())
+    };
+    if needed > 0 && needed <= buf.len() {
+        // SAFETY: confstr NUL-terminated the value within `buf`.
+        let bytes = unsafe { CStr::from_ptr(buf.as_ptr()) }.to_bytes();
+        if !bytes.is_empty() {
+            return Some(PathBuf::from(OsStr::from_bytes(bytes)));
+        }
+    }
+    std::env::var_os("TMPDIR").map(PathBuf::from)
+}
+
+/// `None` off macOS: the per-user temp dir is a macOS-only rung.
+#[cfg(not(target_os = "macos"))]
+pub fn user_temp_dir() -> Option<PathBuf> {
+    None
 }
 
 /// Create the socket's directory `dir` as a private (`0700`) directory,
