@@ -231,3 +231,158 @@ fn streaming_never_touches_the_heap_on_the_audio_thread() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A kit whose banks each have two velocity layers 30 dB apart: a quiet
+/// resident one and a loud streamed one — so the E7 level pick has
+/// levels to tell apart, and tuned voices read heads and rings both.
+fn layered_kit(cache: &SampleCache, dir: &Path) -> Vec<LoadedPad> {
+    let streamed = |name: &str| {
+        let (data, _) = cache
+            .get_or_decode_preload(&dir.join(name), HOST, PRELOAD)
+            .unwrap();
+        LoadedSample::from_shared(data)
+    };
+    let quiet = LoadedSample::mono(
+        (0..PRELOAD as usize * 2)
+            .map(|i| (i as f32 * 0.03).sin() * 0.012)
+            .collect(),
+    );
+    let bank = |name: &str| LoadedMicBank {
+        position: name.to_string(),
+        setup_key: String::new(),
+        layers: vec![
+            VelocityLayer {
+                round_robins: vec![quiet.clone()],
+            },
+            VelocityLayer {
+                round_robins: vec![streamed(name)],
+            },
+        ],
+    };
+    PAD_MAPPINGS
+        .iter()
+        .map(|m| LoadedPad {
+            name: m.name.to_string(),
+            choke_group: m.choke_group,
+            output_group: m.output_group,
+            close_mics: vec![bank("a.wav"), bank("b.wav")],
+            overhead: Some(bank("oh.wav")),
+        })
+        .collect()
+}
+
+/// The K7 playing features (drums-plugin-rework.md §7 E7, E8, E9, E11,
+/// E12) add nothing to the heap on the audio thread either: the per-block
+/// settings snapshot, the velocity level pick and humanize, tuned voices
+/// (Hermite reads over heads and rings, rate-scaled deadlines), hold /
+/// decay envelopes, sample starts, dB levels and trims, Stereo and Multi
+/// routing, param choke groups — live, through a stalled reader, and
+/// offline.
+#[test]
+fn the_playing_features_never_touch_the_heap_on_the_audio_thread() {
+    use resonance_drums::params::{OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO};
+
+    let dir = std::env::temp_dir().join(format!("drums-k7-rt-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    write_wav(&dir.join("a.wav"), 1, 44_100, 1);
+    write_wav(&dir.join("b.wav"), 2, 40_000, 2);
+    write_wav(&dir.join("oh.wav"), 2, 44_100, 3);
+    let cache = SampleCache::new();
+
+    let (_kit_tx, kit_rx) = bounded::<Vec<LoadedPad>>(1);
+    let mut sampler = DrumSampler::new(kit_rx);
+    sampler.set_sample_rate(HOST);
+    sampler.set_render_mode(RenderMode::Realtime);
+    sampler.pads = layered_kit(&cache, &dir);
+    let params = DrumParams::default();
+    params.velocity_humanize.set_value(10.0);
+    params.velocity_curve.set_value(0.3);
+    params.master_volume.set_value(-3.0);
+    for (i, pad) in params.pads.iter().enumerate() {
+        pad.tune.set_value([12.0, -7.0, 0.0, 24.0, 3.5][i % 5]);
+        pad.volume.set_value(-(i as f32) * 0.5);
+        pad.trims[1].set_value(-4.0);
+        pad.trims[2].set_value(2.0);
+        if i % 3 == 0 {
+            pad.hold.set_value(5.0);
+            pad.decay.set_value(60.0);
+        }
+        if i % 4 == 1 {
+            pad.start.set_value(8.0);
+        }
+        if (9..=11).contains(&i) {
+            pad.choke.set_value(2);
+        }
+        pad.output.set_value((i % NUM_OUTPUT_PORTS) as i32);
+    }
+    let mut bufs = Bufs(
+        (0..NUM_OUTPUT_PORTS)
+            .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))
+            .collect(),
+    );
+    sampler.update_global_settings(&params);
+    render(&mut sampler, &mut bufs, &params, &[]);
+
+    let mut events = 0;
+    let mut peak = 0.0f32;
+    for b in 0..1_200usize {
+        // The host's side, off the measured region: params move.
+        if b % 200 == 0 {
+            params.output_mode.set_value(if b % 400 == 0 {
+                OUTPUT_MODE_MULTI
+            } else {
+                OUTPUT_MODE_STEREO
+            });
+        }
+        params.pads[0].tune.set_value(((b % 49) as f32 - 24.0) * 0.5);
+        if b == 500 {
+            sampler.stream_set().set_paused(true);
+        }
+        if b == 560 {
+            sampler.stream_set().set_paused(false);
+        }
+        let hits: Vec<Hit> = (0..4)
+            .map(|k| {
+                let n = b * 4 + k;
+                Hit {
+                    frame: k * 31,
+                    note: PAD_MAPPINGS[(n * 7) % NUM_PADS].note,
+                    velocity: 0.1 + 0.9 * ((n * 13) % 10) as f32 / 10.0,
+                }
+            })
+            .collect();
+        events += heap_events(|| {
+            sampler.update_global_settings(&params);
+            render(&mut sampler, &mut bufs, &params, &hits);
+        });
+        peak = bufs
+            .0
+            .iter()
+            .flat_map(|(l, r)| l.iter().chain(r))
+            .fold(peak, |m, s| m.max(s.abs()));
+        std::thread::sleep(std::time::Duration::from_micros(300));
+    }
+    assert!(peak > 0.0, "silent: the test proves nothing");
+    assert!(sampler.stream_underruns() > 0, "the stall was exercised");
+
+    // Offline, waiting for a stalled reader with tuned voices.
+    sampler.set_render_mode(RenderMode::Offline);
+    sampler.stream_set().set_paused(true);
+    for mapping in PAD_MAPPINGS.iter().take(3) {
+        let hits = [Hit {
+            frame: 0,
+            note: mapping.note,
+            velocity: 1.0,
+        }];
+        events += heap_events(|| {
+            sampler.update_global_settings(&params);
+            render(&mut sampler, &mut bufs, &params, &hits);
+        });
+    }
+    sampler.stream_set().set_paused(false);
+    assert_eq!(
+        events, 0,
+        "the audio thread allocated or freed {events} times while playing"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
