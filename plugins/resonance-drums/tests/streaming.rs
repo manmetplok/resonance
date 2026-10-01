@@ -1,0 +1,1017 @@
+//! Disk streaming (drums-plugin-rework.md §7 E14, slice K6b).
+//!
+//! A long take keeps only its head in memory and streams its tail from
+//! the WAV file through a per-voice ring that a reader pool fills. These
+//! tests pin what that must never change and what it must survive:
+//!
+//! - a streamed render is **bit-identical** to a fully resident render of
+//!   the same MIDI, at the file's rate and through the resampler, live
+//!   (paced in real time) and offline (as fast as the CPU goes);
+//! - a 64-voice saturation pattern at 128-frame blocks, with every read
+//!   slowed like a cold page cache, plays with zero underruns;
+//! - a stalled reader costs silence for exactly the missing frames, is
+//!   counted, and the voice recovers in time once the reader is back;
+//! - a reader that is shut down mid-render never blocks the audio thread
+//!   (watchdog), through steals, chokes, kit swaps and resets;
+//! - only the heads are resident.
+//!
+//! Every test that compares two renders also checks they are not silent
+//! (`feedback_silent_goldens_are_vacuous`).
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use resonance_drums::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
+use resonance_drums::dsp::{DrumSampler, Hit, PortBuffers};
+use resonance_drums::kit::{
+    LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
+};
+use resonance_drums::kit_loader::cache::SampleCache;
+use resonance_drums::params::DrumParams;
+use resonance_drums::stream::reader::ReaderPool;
+use resonance_drums::stream::{RenderMode, NUM_RINGS};
+
+const HOST: f32 = 48_000.0;
+
+// ---------------------------------------------------------------------------
+// Fixture kit: long WAV files on disk.
+// ---------------------------------------------------------------------------
+
+/// A deterministic, never-silent signal: two detuned partials under a
+/// slow decay, plus a little hash noise, so every frame differs.
+fn signal(frame: usize, frames: usize, channel: usize, seed: usize) -> f64 {
+    let t = frame as f64;
+    let decay = 1.0 - 0.6 * (frame as f64 / frames as f64);
+    let noise = ((frame.wrapping_mul(2_654_435_761) ^ (seed * 7919 + channel * 31)) % 2048) as f64
+        / 2048.0
+        - 0.5;
+    decay
+        * (0.35 * (t * (0.013 + seed as f64 * 0.001) + channel as f64).sin()
+            + 0.2 * (t * 0.0027).sin()
+            + 0.08 * noise)
+}
+
+/// Write a 24-bit PCM WAV of `frames` frames.
+fn write_wav(path: &Path, channels: u16, rate: u32, frames: usize, seed: usize) {
+    let block_align = channels as usize * 3;
+    let mut data = Vec::with_capacity(frames * block_align);
+    for f in 0..frames {
+        for ch in 0..channels as usize {
+            let s = (signal(f, frames, ch, seed) * 8_388_607.0) as i32;
+            data.extend_from_slice(&s.to_le_bytes()[..3]);
+        }
+    }
+    let mut out = Vec::with_capacity(44 + data.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVEfmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&channels.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&(rate * block_align as u32).to_le_bytes());
+    out.extend_from_slice(&(block_align as u16).to_le_bytes());
+    out.extend_from_slice(&24u16.to_le_bytes());
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    std::fs::File::create(path)
+        .unwrap()
+        .write_all(&out)
+        .unwrap();
+}
+
+/// Six takes at `rate`: close mics alternate mono / stereo, overheads are
+/// stereo. `seconds` long each.
+struct Fixture {
+    dir: PathBuf,
+    close: Vec<PathBuf>,
+    overhead: Vec<PathBuf>,
+}
+
+impl Fixture {
+    fn new(tag: &str, rate: u32, seconds: f32) -> Self {
+        let dir =
+            std::env::temp_dir().join(format!("drums-streaming-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let frames = (rate as f32 * seconds) as usize;
+        let close = (0..4)
+            .map(|i| {
+                let p = dir.join(format!("close{i}.wav"));
+                // Lengths differ a little so takes end at different times.
+                write_wav(
+                    &p,
+                    if i % 2 == 0 { 1 } else { 2 },
+                    rate,
+                    frames - i * 997,
+                    i,
+                );
+                p
+            })
+            .collect();
+        let overhead = (0..2)
+            .map(|i| {
+                let p = dir.join(format!("oh{i}.wav"));
+                write_wav(&p, 2, rate, frames - i * 1_301, 10 + i);
+                p
+            })
+            .collect();
+        Self {
+            dir,
+            close,
+            overhead,
+        }
+    }
+
+    /// The kit: every pad has two close banks and an overhead, one layer,
+    /// one take each — three voices a hit. `preload` 0 keeps every take
+    /// whole; otherwise longer takes stream.
+    fn kit(&self, cache: &SampleCache, preload: u32) -> Vec<LoadedPad> {
+        let take = |path: &Path| -> LoadedSample {
+            let (data, _) = cache.get_or_decode_preload(path, HOST, preload).unwrap();
+            LoadedSample::from_shared(data)
+        };
+        let bank = |name: &str, path: &Path| LoadedMicBank {
+            position: name.to_string(),
+            setup_key: String::new(),
+            layers: vec![VelocityLayer {
+                round_robins: vec![take(path)],
+            }],
+        };
+        PAD_MAPPINGS
+            .iter()
+            .enumerate()
+            .map(|(i, m)| LoadedPad {
+                name: m.name.to_string(),
+                choke_group: m.choke_group,
+                output_group: m.output_group,
+                close_mics: vec![
+                    bank("A", &self.close[i % 4]),
+                    bank("B", &self.close[(i + 1) % 4]),
+                ],
+                overhead: Some(bank("OH", &self.overhead[i % 2])),
+            })
+            .collect()
+    }
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering.
+// ---------------------------------------------------------------------------
+
+/// A sampler on `pads`, read by `pool`, in `mode`. The sender keeps the
+/// mailbox open (and swaps kits in).
+fn sampler(
+    pads: Vec<LoadedPad>,
+    pool: &ReaderPool,
+    mode: RenderMode,
+) -> (DrumSampler, crossbeam_channel::Sender<Vec<LoadedPad>>) {
+    let (tx, rx) = crossbeam_channel::bounded::<Vec<LoadedPad>>(1);
+    let mut s = DrumSampler::with_reader_pool(rx, pool);
+    s.set_sample_rate(HOST);
+    s.set_render_mode(mode);
+    s.pads = pads;
+    (s, tx)
+}
+
+/// Per-port output buffers for one block.
+struct Ports {
+    bufs: Vec<(Vec<f32>, Vec<f32>)>,
+}
+
+impl Ports {
+    fn new(frames: usize) -> Self {
+        Self {
+            bufs: (0..NUM_OUTPUT_PORTS)
+                .map(|_| (vec![0.0; frames], vec![0.0; frames]))
+                .collect(),
+        }
+    }
+
+    fn render(&mut self, s: &mut DrumSampler, frames: usize, params: &DrumParams, hits: &[Hit]) {
+        let mut views: Vec<PortBuffers<'_>> = self
+            .bufs
+            .iter_mut()
+            .map(|(l, r)| PortBuffers { left: l, right: r })
+            .collect();
+        s.render_block(&mut views, frames, params, hits);
+    }
+
+    /// Append every port's block, as bits, to `out`.
+    fn append_bits(&self, frames: usize, out: &mut Vec<u32>) {
+        for (l, r) in &self.bufs {
+            out.extend(l[..frames].iter().map(|s| s.to_bits()));
+            out.extend(r[..frames].iter().map(|s| s.to_bits()));
+        }
+    }
+
+    /// The mix of every port, left channel.
+    fn mix_left(&self, frames: usize) -> Vec<f32> {
+        (0..frames)
+            .map(|i| self.bufs.iter().map(|(l, _)| l[i]).sum())
+            .collect()
+    }
+}
+
+/// The hits of `block` in a pattern: every pad struck in turn, `per_block`
+/// hits a block, at spread-out offsets — enough to keep 64 voices busy
+/// and steal constantly. Hats (a choke group) come round too.
+fn pattern(block: usize, frames: usize, per_block: usize, blocks_until_quiet: usize) -> Vec<Hit> {
+    if block >= blocks_until_quiet {
+        return Vec::new();
+    }
+    (0..per_block)
+        .map(|k| {
+            let n = block * per_block + k;
+            Hit {
+                frame: (k * frames / per_block + (n * 37) % 11).min(frames - 1),
+                note: PAD_MAPPINGS[(n * 7) % NUM_PADS].note,
+                velocity: 0.3 + 0.7 * ((n * 13) % 10) as f32 / 10.0,
+            }
+        })
+        .collect()
+}
+
+/// Render `blocks` blocks of `frames`; with `pace`, each block waits for
+/// its wall-clock time first, as a live host would call it.
+fn render(
+    s: &mut DrumSampler,
+    blocks: usize,
+    frames: usize,
+    per_block: usize,
+    quiet_after: usize,
+    pace: bool,
+) -> Vec<u32> {
+    let params = DrumParams::default();
+    let mut ports = Ports::new(frames);
+    let mut out = Vec::with_capacity(blocks * frames * NUM_OUTPUT_PORTS * 2);
+    let began = Instant::now();
+    let block_time = Duration::from_secs_f64(frames as f64 / HOST as f64);
+    for b in 0..blocks {
+        if pace {
+            let due = began + block_time * b as u32;
+            let now = Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+        }
+        let hits = pattern(b, frames, per_block, quiet_after);
+        ports.render(s, frames, &params, &hits);
+        ports.append_bits(frames, &mut out);
+    }
+    out
+}
+
+fn loud(bits: &[u32]) -> f32 {
+    bits.iter()
+        .map(|b| f32::from_bits(*b).abs())
+        .fold(0.0, f32::max)
+}
+
+/// The first index two renders differ at, as (block, port, frame).
+fn first_difference(a: &[u32], b: &[u32], frames: usize) -> Option<(usize, usize, usize)> {
+    let i = a.iter().zip(b).position(|(x, y)| x != y)?;
+    let per_block = frames * NUM_OUTPUT_PORTS * 2;
+    Some((i / per_block, (i % per_block) / (frames * 2), i % frames))
+}
+
+/// Takes in `pads` that stream, and every take.
+fn streamed_takes(pads: &[LoadedPad]) -> (usize, usize) {
+    let takes: Vec<&LoadedSample> = pads
+        .iter()
+        .flat_map(|p| p.close_mics.iter().chain(p.overhead.iter()))
+        .flat_map(|b| b.layers.iter().flat_map(|l| l.round_robins.iter()))
+        .collect();
+    let streamed = takes.iter().filter(|t| t.tail().is_some()).count();
+    (streamed, takes.len())
+}
+
+// ---------------------------------------------------------------------------
+// Bit identity.
+// ---------------------------------------------------------------------------
+
+/// Streamed and resident renders of the saturation pattern, compared bit
+/// for bit; files at `file_rate`, host at 48 kHz.
+fn assert_bit_identical(tag: &str, file_rate: u32, preload: u32, mode: RenderMode, pace: bool) {
+    let fixture = Fixture::new(tag, file_rate, 1.6);
+    let cache = SampleCache::new();
+    let resident = fixture.kit(&cache, 0);
+    let streamed = fixture.kit(&cache, preload);
+    let (n, all) = streamed_takes(&streamed);
+    assert_eq!(
+        n, all,
+        "{tag}: every take is longer than the preload and streams"
+    );
+    assert_eq!(streamed_takes(&resident).0, 0);
+
+    let pool = ReaderPool::new(2);
+    // 128-frame blocks, two hits a block for 0.8 s, then 0.9 s of tails.
+    const FRAMES: usize = 128;
+    let blocks = (1.7 * HOST) as usize / FRAMES;
+    let quiet_after = (0.8 * HOST) as usize / FRAMES;
+    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
+    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, false);
+    let (mut b, _tb) = sampler(streamed, &pool, mode);
+    let got = render(&mut b, blocks, FRAMES, 2, quiet_after, pace);
+    assert!(
+        loud(&reference) > 0.05,
+        "{tag}: the reference render is silent"
+    );
+    assert_eq!(
+        b.stream_underruns(),
+        0,
+        "{tag}: underruns ({} hits found no ring)",
+        b.stream_ring_misses()
+    );
+    if let Some((block, port, frame)) = first_difference(&reference, &got, FRAMES) {
+        panic!("{tag}: streamed render differs from resident at block {block}, port {port}, frame {frame}");
+    }
+    pool.shutdown();
+}
+
+#[test]
+fn streamed_render_is_bit_identical_offline_at_the_file_rate() {
+    // A small preload: the tails are most of every take, and the rings
+    // wrap many times.
+    assert_bit_identical("offline-48k", 48_000, 4_096, RenderMode::Offline, false);
+}
+
+#[test]
+fn streamed_render_is_bit_identical_offline_through_the_resampler() {
+    assert_bit_identical("offline-44k1", 44_100, 4_096, RenderMode::Offline, false);
+}
+
+#[test]
+fn streamed_render_is_bit_identical_live_at_the_file_rate() {
+    assert_bit_identical("live-48k", 48_000, 32_768, RenderMode::Realtime, true);
+}
+
+#[test]
+fn streamed_render_is_bit_identical_live_through_the_resampler() {
+    assert_bit_identical("live-96k", 96_000, 32_768, RenderMode::Realtime, true);
+}
+
+/// A bounce renders as fast as it can and says nothing: the sampler
+/// tells from the timing, and waits for a slow reader instead of
+/// dropping frames.
+#[test]
+fn an_unannounced_fast_render_waits_for_a_slow_reader() {
+    let fixture = Fixture::new("auto", 48_000, 2.0);
+    let cache = SampleCache::new();
+    let resident = fixture.kit(&cache, 0);
+    let streamed = fixture.kit(&cache, 32_768);
+    let pool = ReaderPool::new(2);
+    const FRAMES: usize = 1_024;
+    let blocks = (2.1 * HOST) as usize / FRAMES;
+    let quiet_after = (1.0 * HOST) as usize / FRAMES;
+    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
+    let reference = render(&mut a, blocks, FRAMES, 1, quiet_after, false);
+    let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Auto);
+    // Every read takes 3 ms: far slower than an unthrottled render.
+    b.stream_set().set_read_latency_us(3_000);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(FRAMES);
+    let mut got = Vec::new();
+    let mut offline_blocks = 0;
+    for blk in 0..blocks {
+        ports.render(
+            &mut b,
+            FRAMES,
+            &params,
+            &pattern(blk, FRAMES, 1, quiet_after),
+        );
+        ports.append_bits(FRAMES, &mut got);
+        offline_blocks += b.renders_offline() as usize;
+    }
+    // Live for the first window, offline from there on (give or take a
+    // scheduling hiccup on a loaded test machine).
+    assert!(
+        offline_blocks > blocks / 2,
+        "a free-running render reads as offline: {offline_blocks} of {blocks} blocks"
+    );
+    assert!(loud(&reference) > 0.05);
+    assert_eq!(b.stream_underruns(), 0);
+    assert!(first_difference(&reference, &got, FRAMES).is_none());
+    pool.shutdown();
+}
+
+/// Live, the same sampler never waits — and does not take a paced render
+/// for offline.
+#[test]
+fn a_paced_render_is_not_taken_for_offline() {
+    let fixture = Fixture::new("paced", 48_000, 0.5);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::new(1);
+    let (mut s, _t) = sampler(fixture.kit(&cache, 4_096), &pool, RenderMode::Auto);
+    let blocks = (0.6 * HOST) as usize / 128;
+    render(&mut s, blocks, 128, 1, blocks, true);
+    assert!(!s.renders_offline());
+    pool.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Saturation over a cold cache.
+// ---------------------------------------------------------------------------
+
+/// 64 voices busy and stealing at 128-frame blocks, paced in real time,
+/// every read delayed 1 ms (a cold page cache on an SSD is ~0.1–0.2 ms
+/// per random read; 1 ms is a slow one): no underruns, and still
+/// bit-identical to the resident render.
+#[test]
+fn saturation_over_a_cold_cache_has_no_underruns() {
+    let fixture = Fixture::new("saturation", 48_000, 3.0);
+    let cache = SampleCache::new();
+    let resident = fixture.kit(&cache, 0);
+    let streamed = fixture.kit(&cache, 32_768);
+    let pool = ReaderPool::new(2);
+    const FRAMES: usize = 128;
+    let blocks = (3.0 * HOST) as usize / FRAMES;
+    let quiet_after = (2.0 * HOST) as usize / FRAMES;
+    let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
+    // Two hits a block, three voices a hit: 64 voices fill within a
+    // dozen blocks and every hit after steals.
+    let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, false);
+    let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Realtime);
+    b.stream_set().set_read_latency_us(1_000);
+    let mut peak_voices = 0;
+    let params = DrumParams::default();
+    let mut ports = Ports::new(FRAMES);
+    let mut got = Vec::new();
+    let began = Instant::now();
+    let block_time = Duration::from_secs_f64(FRAMES as f64 / HOST as f64);
+    let mut slowest = Duration::ZERO;
+    for blk in 0..blocks {
+        let due = began + block_time * blk as u32;
+        let now = Instant::now();
+        if due > now {
+            std::thread::sleep(due - now);
+        }
+        let t = Instant::now();
+        ports.render(
+            &mut b,
+            FRAMES,
+            &params,
+            &pattern(blk, FRAMES, 2, quiet_after),
+        );
+        slowest = slowest.max(t.elapsed());
+        ports.append_bits(FRAMES, &mut got);
+        peak_voices = peak_voices.max(b.voices.iter().filter(|v| v.active).count());
+    }
+    assert_eq!(peak_voices, 64, "the pattern saturates the voices");
+    assert_eq!(
+        b.stream_underruns(),
+        0,
+        "underruns at saturation ({} of them hits that found no ring)",
+        b.stream_ring_misses()
+    );
+    assert!(loud(&reference) > 0.05);
+    assert!(
+        first_difference(&reference, &got, FRAMES).is_none(),
+        "saturation render differs"
+    );
+    // The audio thread never waited on the 1 ms reads. (Under the
+    // 500 ms offline wait budget, so a wait would show; above what a
+    // loaded test machine stalls a thread for.)
+    assert!(
+        slowest < Duration::from_millis(250),
+        "a block took {slowest:?}"
+    );
+    pool.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Stalls and a dead reader.
+// ---------------------------------------------------------------------------
+
+/// One voice, one take, played on its own.
+fn single_voice_kit(cache: &SampleCache, path: &Path, preload: u32) -> Vec<LoadedPad> {
+    let (data, _) = cache.get_or_decode_preload(path, HOST, preload).unwrap();
+    PAD_MAPPINGS
+        .iter()
+        .map(|m| LoadedPad {
+            name: m.name.to_string(),
+            choke_group: None,
+            output_group: m.output_group,
+            close_mics: vec![LoadedMicBank {
+                position: "A".to_string(),
+                setup_key: String::new(),
+                layers: vec![VelocityLayer {
+                    round_robins: vec![LoadedSample::from_shared(data.clone())],
+                }],
+            }],
+            overhead: None,
+        })
+        .collect()
+}
+
+/// A stalled reader: the voice plays silence for the frames it does not
+/// have, the underrun is counted, nothing panics or waits, and once the
+/// reader is back the voice picks up in time — the frames it plays
+/// again are the resident render's frames at the same positions.
+#[test]
+fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
+    const PRELOAD: u32 = 8_192;
+    const FRAMES: usize = 128;
+    let fixture = Fixture::new("stall", 48_000, 2.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::new(1);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    let params = DrumParams::default();
+
+    // The reference: the whole take, resident.
+    let (mut a, _ta) = sampler(
+        single_voice_kit(&cache, path, 0),
+        &pool,
+        RenderMode::Realtime,
+    );
+    let blocks = (1.5 * HOST) as usize / FRAMES;
+    let mut ports = Ports::new(FRAMES);
+    let mut reference = Vec::new();
+    for b in 0..blocks {
+        ports.render(&mut a, FRAMES, &params, if b == 0 { &hit } else { &[] });
+        reference.extend(ports.mix_left(FRAMES));
+    }
+
+    let (mut s, _ts) = sampler(
+        single_voice_kit(&cache, path, PRELOAD),
+        &pool,
+        RenderMode::Realtime,
+    );
+    let mut got = Vec::new();
+    let head_blocks = PRELOAD as usize / FRAMES;
+    // Wait for the reader to have filled the ring, then stall it.
+    ports.render(&mut s, FRAMES, &params, &hit);
+    got.extend(ports.mix_left(FRAMES));
+    std::thread::sleep(Duration::from_millis(50));
+    s.stream_set().set_paused(true);
+    // Play through the head and the ring and well past it, stalled.
+    let ring_blocks = resonance_drums::stream::RING_FRAMES / FRAMES;
+    let stalled_until = head_blocks + ring_blocks + 40;
+    let mut slowest = Duration::ZERO;
+    for _ in 1..stalled_until {
+        let t = Instant::now();
+        ports.render(&mut s, FRAMES, &params, &[]);
+        slowest = slowest.max(t.elapsed());
+        got.extend(ports.mix_left(FRAMES));
+    }
+    assert!(
+        slowest < Duration::from_millis(250),
+        "a stalled block took {slowest:?}"
+    );
+    assert!(s.stream_underruns() > 0, "the underrun is counted");
+    let missing_from = (head_blocks + ring_blocks) * FRAMES;
+    // Everything before the stall bit: the head and the ring's frames.
+    assert_eq!(&got[..missing_from], &reference[..missing_from]);
+    // The missing frames are silence, not stale ring contents.
+    assert!(got[missing_from..stalled_until * FRAMES]
+        .iter()
+        .all(|&x| x == 0.0));
+    assert!(reference[missing_from..stalled_until * FRAMES]
+        .iter()
+        .any(|&x| x != 0.0));
+
+    // Back: let the reader catch up in wall time, block by block.
+    s.stream_set().set_paused(false);
+    let mut recovered_at = None;
+    for b in stalled_until..blocks {
+        std::thread::sleep(Duration::from_millis(3));
+        ports.render(&mut s, FRAMES, &params, &[]);
+        let block = ports.mix_left(FRAMES);
+        if recovered_at.is_none() && block.iter().all(|&x| x != 0.0) {
+            recovered_at = Some(b);
+        }
+        got.extend(block);
+    }
+    let at = recovered_at.expect("the voice plays again once the reader is back") * FRAMES;
+    // In time: what it plays is the take where the voice would be.
+    assert_eq!(&got[at..], &reference[at..], "recovered out of time");
+    pool.shutdown();
+}
+
+/// The reader pool is shut down mid-render with voices on their tails:
+/// every block still returns at once, through new hits (whose rings are
+/// never handed back, until none is free), steals, chokes, a kit swap
+/// and a reset — and the sampler drops without hanging.
+#[test]
+fn killing_the_reader_never_blocks_the_audio_thread() {
+    const FRAMES: usize = 128;
+    let fixture = Fixture::new("kill", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let pads = fixture.kit(&cache, 4_096);
+    let other = fixture.kit(&cache, 4_096);
+    let pool = ReaderPool::new(2);
+    let (s, tx) = sampler(pads, &pool, RenderMode::Realtime);
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    // The audio thread: renders, and reports how long its slowest
+    // block took. The watchdog is the timeout on `recv` below.
+    let mut other = Some(other);
+    let audio = std::thread::spawn(move || {
+        let mut s = s;
+        let params = DrumParams::default();
+        let mut ports = Ports::new(FRAMES);
+        let mut slowest = Duration::ZERO;
+        for b in 0..1_200 {
+            if b == 300 {
+                // The reader is dead from block 200 (below); a kit swap
+                // now retires every voice onto the old kit's rings.
+                tx.send(other.take().unwrap()).unwrap();
+            }
+            if b == 600 {
+                s.reset();
+            }
+            s.try_swap_kit();
+            let t = Instant::now();
+            // Six hits a block: steals, the hat choke group, and more
+            // ring claims than there are rings.
+            ports.render(&mut s, FRAMES, &params, &pattern(b, FRAMES, 6, 1_200));
+            slowest = slowest.max(t.elapsed());
+            if b == 150 {
+                done_tx.send(None).unwrap();
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        let underruns = s.stream_underruns();
+        let rings = s.stream_set().rings_in_use();
+        drop(s);
+        done_tx.send(Some((slowest, underruns, rings))).unwrap();
+    });
+    // Let it start streaming, then kill the reader under it.
+    done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("audio thread started");
+    pool.shutdown();
+    let (slowest, underruns, rings) = done_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the audio thread is blocked")
+        .unwrap();
+    audio.join().unwrap();
+    // Blocking on the dead reader would never return; a slow block on a
+    // loaded test machine is not that.
+    assert!(
+        slowest < Duration::from_millis(250),
+        "a block took {slowest:?}"
+    );
+    assert!(underruns > 0, "the dead reader shows as underruns");
+    // Nothing handed rings back once the reader died, so they ran out.
+    assert_eq!(rings, NUM_RINGS);
+}
+
+// ---------------------------------------------------------------------------
+// Memory.
+// ---------------------------------------------------------------------------
+
+/// Only the heads are resident: a streamed take holds `preload` frames,
+/// and the cache's resident bytes are exactly the heads'.
+#[test]
+fn only_heads_are_resident() {
+    const PRELOAD: u32 = 32_768;
+    let fixture = Fixture::new("memory", 48_000, 3.0);
+    let whole = SampleCache::new();
+    let streamed = SampleCache::new();
+    let _keep_whole = fixture.kit(&whole, 0);
+    let keep_streamed = fixture.kit(&streamed, PRELOAD);
+    let mut heads = 0u64;
+    let mut seen = std::collections::HashSet::new();
+    for take in keep_streamed
+        .iter()
+        .flat_map(|p| p.close_mics.iter().chain(p.overhead.iter()))
+        .flat_map(|b| b.layers.iter().flat_map(|l| l.round_robins.iter()))
+    {
+        assert_eq!(take.resident_frames(), PRELOAD as usize);
+        assert!(take.frames() > take.resident_frames());
+        if seen.insert(Arc::as_ptr(take.shared())) {
+            heads += (PRELOAD as usize * take.channels() * 4) as u64;
+        }
+    }
+    let whole_bytes = whole.stats().resident_bytes;
+    let streamed_bytes = streamed.stats().resident_bytes;
+    assert_eq!(streamed_bytes, heads, "resident bytes are the heads'");
+    // 32 k of ~144 k frames: well under a quarter.
+    assert!(
+        streamed_bytes * 4 < whole_bytes,
+        "{streamed_bytes} vs {whole_bytes}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Through the plugin: loader, state, `process`.
+// ---------------------------------------------------------------------------
+
+/// A manifest kit over `fixture`'s files: kick (two close mics and an
+/// overhead) and snare (close and overhead).
+fn manifest_kit(fixture: &Fixture) -> PathBuf {
+    let name = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
+    let setup = |pos: &str, file: String| {
+        format!(
+            r#"{{"brand":"t","channel":"1","mic":"m","position":"{pos}","rounds":{{"RR1":{{"Vel01":"{file}"}}}}}}"#
+        )
+    };
+    let manifest = format!(
+        r#"{{
+  "SD Kick mit Teppich": {{
+    "01_KickIn_e901": {kin},
+    "03_KickOut": {kout},
+    "23_OHsAB_e914": {koh}
+  }},
+  "SD Snare Normal": {{
+    "04_SNTop": {sn},
+    "23_OHsAB_e914": {snoh}
+  }}
+}}"#,
+        kin = setup("KickIn", name(&fixture.close[0])),
+        kout = setup("KickOut", name(&fixture.close[1])),
+        koh = setup("OHsAB", name(&fixture.overhead[0])),
+        sn = setup("SNTop", name(&fixture.close[2])),
+        snoh = setup("OHsAB", name(&fixture.overhead[1])),
+    );
+    let path = fixture.dir.join("drum_samples.json");
+    std::fs::write(&path, manifest).unwrap();
+    path
+}
+
+fn saver_for(plugin: &resonance_drums::ResonanceDrums) -> resonance_drums::DrumsExtraState {
+    resonance_drums::DrumsExtraState {
+        kit_path: plugin.bridge.kit_path.clone(),
+        overhead_setup_key: plugin.bridge.overhead_setup_key.clone(),
+        pad_choices: plugin.bridge.pad_choices.clone(),
+        params: plugin.bridge.params.clone(),
+        reload: Some(plugin.bridge.clone()),
+    }
+}
+
+/// Wait for the plugin's load to land on the audio side.
+fn settle(plugin: &mut resonance_drums::ResonanceDrums) {
+    use resonance_drums::kit_loader::KitStatus;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let pending = plugin.bridge.pending_kit.lock().is_some();
+        match plugin.bridge.kit_status.lock().clone() {
+            KitStatus::Loaded { .. } if !pending => break,
+            KitStatus::Error { message } if !pending => panic!("kit failed: {message}"),
+            _ => {}
+        }
+        assert!(Instant::now() < deadline, "load never settled");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    // One block takes the kit from the mailbox.
+    plugin_block(plugin, &[]);
+}
+
+fn plugin_block(
+    plugin: &mut resonance_drums::ResonanceDrums,
+    events: &[resonance_plugin::NoteEvent],
+) -> Vec<u32> {
+    use resonance_plugin::{EventIterator, OutputBuffer, ResonancePlugin};
+    const FRAMES: usize = 256;
+    let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
+        .map(|_| (vec![0.0; FRAMES], vec![0.0; FRAMES]))
+        .collect();
+    {
+        let mut ports: Vec<OutputBuffer<'_>> = bufs
+            .iter_mut()
+            .map(|(l, r)| OutputBuffer {
+                left: l.as_mut_slice(),
+                right: r.as_mut_slice(),
+            })
+            .collect();
+        let mut iter = EventIterator::new(events);
+        plugin.process(&mut ports, FRAMES, &mut iter, None);
+    }
+    bufs.iter()
+        .flat_map(|(l, r)| l.iter().chain(r))
+        .map(|s| s.to_bits())
+        .collect()
+}
+
+/// The preload is plugin state: saved, restored, and what the loader
+/// splits takes at. A plugin streaming its kit plays it bit-identically
+/// to one holding it whole, with a fraction of the memory.
+#[test]
+fn the_plugin_streams_its_kit_and_keeps_the_preload_in_its_state() {
+    use resonance_drums::stream::{DEFAULT_PRELOAD, PRELOAD_STATE_KEY};
+    use resonance_drums::ResonanceDrums;
+    use resonance_plugin::plugin::ExtraStateSaver;
+    use resonance_plugin::{NoteEvent, ResonancePlugin};
+
+    let fixture = Fixture::new("plugin", 44_100, 2.0);
+    let manifest = manifest_kit(&fixture);
+
+    // State: the default is saved; a saved preload is restored; an
+    // unknown one is ignored.
+    let first = ResonanceDrums::new();
+    assert_eq!(
+        saver_for(&first).save().get(PRELOAD_STATE_KEY),
+        Some(&serde_json::json!(DEFAULT_PRELOAD))
+    );
+    let mut whole = ResonanceDrums::new();
+    saver_for(&whole).load(&serde_json::json!({ PRELOAD_STATE_KEY: 0, "kit_path": manifest }));
+    assert_eq!(
+        whole
+            .bridge
+            .stream_preload
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    saver_for(&whole).load(&serde_json::json!({ PRELOAD_STATE_KEY: 12_345 }));
+    assert_eq!(
+        whole
+            .bridge
+            .stream_preload
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(
+        saver_for(&whole).save().get(PRELOAD_STATE_KEY),
+        Some(&serde_json::json!(0))
+    );
+
+    let mut streamed = ResonanceDrums::new();
+    saver_for(&streamed).load(&serde_json::json!({ "kit_path": manifest }));
+    assert!(whole.initialize(HOST, 256));
+    assert!(streamed.initialize(HOST, 256));
+    settle(&mut whole);
+    settle(&mut streamed);
+    // The kick and snare takes stream; the rest of the pads are the
+    // built-in kit's short takes, whole either way.
+    let kick = |p: &ResonanceDrums| -> Arc<resonance_drums::kit::SampleData> {
+        let built = p.bridge.built_kit.lock().clone().unwrap();
+        built.pads[0].close_mics[0].layers[0].round_robins[0]
+            .shared()
+            .clone()
+    };
+    assert!(kick(&streamed).tail().is_some());
+    assert_eq!(kick(&streamed).resident_frames(), DEFAULT_PRELOAD as usize);
+    assert!(kick(&whole).tail().is_none());
+    let bytes = |p: &ResonanceDrums| {
+        p.bridge
+            .kit_bytes
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    assert!(bytes(&streamed) < bytes(&whole));
+
+    let mut a = Vec::new();
+    let mut b = Vec::new();
+    for blk in 0..(2.2 * HOST) as usize / 256 {
+        let events: Vec<NoteEvent> = match blk {
+            0 => vec![NoteEvent::NoteOn {
+                note: drum_map::KICK,
+                velocity: 1.0,
+                timing: 3,
+            }],
+            40 => vec![NoteEvent::NoteOn {
+                note: drum_map::SNARE,
+                velocity: 0.8,
+                timing: 100,
+            }],
+            _ => Vec::new(),
+        };
+        a.extend(plugin_block(&mut whole, &events));
+        b.extend(plugin_block(&mut streamed, &events));
+    }
+    assert!(loud(&a) > 0.05);
+    assert_eq!(
+        streamed
+            .bridge
+            .stream_underruns
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert!(
+        a == b,
+        "the streamed plugin's output differs from the whole one's"
+    );
+
+    // Changing the preload reloads the kit at the new size.
+    assert!(resonance_drums::stream::set_preload(
+        &streamed.bridge,
+        65_536
+    ));
+    settle(&mut streamed);
+    let built = streamed.bridge.built_kit.lock().clone().unwrap();
+    assert_eq!(built.preload, 65_536);
+}
+
+// ---------------------------------------------------------------------------
+// The real library (opt-in).
+// ---------------------------------------------------------------------------
+
+/// `RESONANCE_DRUMMICA_PATH`: the kit's `drum_samples.json`, or the
+/// folder holding it. Read only.
+fn drummica_manifest() -> Option<PathBuf> {
+    let path = PathBuf::from(std::env::var("RESONANCE_DRUMMICA_PATH").ok()?);
+    Some(if path.is_dir() {
+        path.join("drum_samples.json")
+    } else {
+        path
+    })
+}
+
+fn drummica_request(manifest: &Path, preload: u32) -> resonance_drums::kit_loader::KitRequest {
+    resonance_drums::kit_loader::KitRequest {
+        path: manifest.to_path_buf(),
+        overhead_setup_key: resonance_drums::kit_loader::DEFAULT_OVERHEAD_SETUP.to_string(),
+        pad_choices: std::array::from_fn(|_| Default::default()),
+        articulations: [false; NUM_PADS],
+        preload,
+    }
+}
+
+/// The default Drummica setup: resident memory at every preload (and
+/// whole, for comparison), under 1 GiB at the default; and a streamed
+/// render of long-ringing pads bit-identical to the whole kit's.
+/// Skipped without `RESONANCE_DRUMMICA_PATH`; run it in release with
+/// `--nocapture` to see the figures.
+#[test]
+fn drummica_default_setup_memory_and_bit_identity() {
+    let Some(manifest) = drummica_manifest() else {
+        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+        return;
+    };
+    let load = |preload: u32| {
+        let cache = SampleCache::new();
+        let began = Instant::now();
+        let kit = resonance_drums::kit_loader::load_kit(
+            &drummica_request(&manifest, preload),
+            HOST,
+            None,
+            None,
+            &cache,
+            &|| {},
+            &|_| {},
+            &|| false,
+        )
+        .expect("drummica loads");
+        let bytes = cache.stats().resident_bytes;
+        let (streamed, takes) = streamed_takes(&kit.pads);
+        eprintln!(
+            "drummica preload {preload:>6}: {:>7.1} MiB resident, {streamed}/{takes} takes streamed, loaded in {:.1?}",
+            bytes as f64 / (1024.0 * 1024.0),
+            began.elapsed()
+        );
+        (kit.pads, bytes)
+    };
+    let (whole, whole_bytes) = load(0);
+    let mut default_kit = None;
+    for preload in resonance_drums::stream::PRELOAD_CHOICES {
+        let (pads, bytes) = load(preload);
+        assert!(bytes < whole_bytes);
+        if preload == resonance_drums::stream::DEFAULT_PRELOAD {
+            assert!(bytes < 1 << 30, "the default setup holds {bytes} bytes");
+            default_kit = Some(pads);
+        }
+    }
+    let streamed = default_kit.unwrap();
+
+    // Long tails: crashes, ride, china, toms, kick, an open hat — every
+    // hit on its own, offline (the render runs far faster than real
+    // time), loud and then soft.
+    let pool = ReaderPool::new(2);
+    let notes: Vec<u8> = [0usize, 1, 9, 11, 12, 15, 18, 21, 3]
+        .iter()
+        .map(|&p| PAD_MAPPINGS[p].note)
+        .collect();
+    let hits_at = |block: usize| -> Vec<Hit> {
+        if block.is_multiple_of(40) && block / 40 < notes.len() * 2 {
+            let n = block / 40;
+            vec![Hit {
+                frame: 17,
+                note: notes[n % notes.len()],
+                velocity: if n < notes.len() { 1.0 } else { 0.55 },
+            }]
+        } else {
+            Vec::new()
+        }
+    };
+    let render_kit = |pads: Vec<LoadedPad>, mode: RenderMode| -> (Vec<u32>, u64) {
+        let (mut s, _t) = sampler(pads, &pool, mode);
+        let params = DrumParams::default();
+        let mut ports = Ports::new(512);
+        let mut out = Vec::new();
+        for b in 0..(12.0 * HOST) as usize / 512 {
+            ports.render(&mut s, 512, &params, &hits_at(b));
+            ports.append_bits(512, &mut out);
+        }
+        (out, s.stream_underruns())
+    };
+    let (reference, _) = render_kit(whole, RenderMode::Realtime);
+    let (got, underruns) = render_kit(streamed, RenderMode::Offline);
+    assert!(loud(&reference) > 0.05);
+    assert_eq!(underruns, 0);
+    if let Some((block, port, frame)) = first_difference(&reference, &got, 512) {
+        panic!("drummica: streamed render differs at block {block}, port {port}, frame {frame}");
+    }
+    pool.shutdown();
+}
