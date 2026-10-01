@@ -21,15 +21,18 @@ pub struct PadMapping {
     pub note: u8,
     pub name: &'static str,
     pub default_sample: &'static [u8],
+    /// The default of `pad_N_choke` (E12), and the choke group a headless
+    /// sampler never handed params uses.
     pub choke_group: Option<u8>,
-    /// Which plugin output port this pad's close signal routes to. The
-    /// overhead contribution always goes to the dedicated Overhead port
-    /// regardless of this field.
+    /// The default of `pad_N_output` (E11): the port this pad's close
+    /// signal plays on in Multi output mode, and where a headless sampler
+    /// never handed params routes it. The overhead take goes to the
+    /// Overhead port (Multi) or Main (Stereo) regardless of this field.
     pub output_group: OutputGroup,
     /// Mic positions the loader tries to load for this pad's close-mic
     /// bank. Order matters: the first position listed becomes bank 0
-    /// (the "left" side of a kick/snare balance slider), the second
-    /// becomes bank 1 (the "right" side).
+    /// (trimmed by `pad_N_mic1_trim`), the second becomes bank 1
+    /// (`pad_N_mic2_trim`).
     pub close_mic_positions: &'static [&'static str],
     /// Whether this pad supports an articulation toggle (e.g. mit/ohne
     /// Teppich). When true, the params system exposes a toggle and the

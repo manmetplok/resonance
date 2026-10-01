@@ -1437,7 +1437,7 @@ impl DrumSampler {
 
             // Per-sample ramp increments, mirroring the master volume
             // ramp below: start at the previous block's value and step
-            // toward the current one across the block. Pan and balance
+            // toward the current one across the block. Pan and the trims
             // ramp in gain space, which keeps the path continuous (and
             // linear in the pan position, since stereo_balance is
             // piecewise-linear). A span that starts mid-block picks the

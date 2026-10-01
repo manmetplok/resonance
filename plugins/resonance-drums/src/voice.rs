@@ -72,14 +72,10 @@ pub enum VoiceDestination {
     CloseMic { bank_index: usize, output_port: u8 },
     /// Overhead mic bank, scaled by the per-pad `pad_N_oh_trim` param.
     ///
-    /// `output_port` is normally the shared Overhead port
-    /// (`kit::OVERHEAD_PORT_INDEX`). The exception is a pad the library
-    /// ships **no close mic for** — every cymbal, ride and china piece in
-    /// Drummica is recorded on the overheads only. For those pads the
-    /// overhead bank is the pad's *only* signal, so it is routed to the
-    /// pad's own group port instead; otherwise that group's output port
-    /// (and the sub-track the host creates for it) would be permanently
-    /// silent. See `DrumSampler::note_on`.
+    /// `output_port` is the shared Overhead port
+    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode — for every pad,
+    /// the overhead-only cymbals included (E11) — and Main in Stereo.
+    /// See `DrumSampler::note_on`.
     Overhead { output_port: u8 },
 }
 
@@ -90,10 +86,12 @@ pub struct Voice {
     pub active: bool,
     pub pad_index: usize,
     pub note: u8,
-    /// Baseline gain applied throughout playback. For multi-layer pads this
-    /// is 1.0 because the chosen velocity layer already captures the
-    /// dynamics; for single-layer fallback pads it's the MIDI velocity so
-    /// the embedded defaults still scale with how hard the note was hit.
+    /// Baseline gain applied throughout playback. For multi-layer pads it
+    /// is what puts the chosen layer at the level the velocity asks for
+    /// (E7, `dsp::pick_layer_by_level`: 1.0 at the ends of the range, at
+    /// most half a layer gap either way between); for single-layer
+    /// fallback pads it's the MIDI velocity so the embedded defaults
+    /// still scale with how hard the note was hit.
     pub base_gain: f32,
     /// Where this voice's audio should be summed.
     pub destination: VoiceDestination,
@@ -241,8 +239,7 @@ impl Voice {
     /// True once the AHD envelope has decayed to silence.
     #[inline]
     pub fn ahd_done(&self) -> bool {
-        self.decay_frames > 0
-            && self.env_pos >= self.hold_frames.saturating_add(self.decay_frames)
+        self.decay_frames > 0 && self.env_pos >= self.hold_frames.saturating_add(self.decay_frames)
     }
 
     /// True once a releasing voice has run its fade to the end.
