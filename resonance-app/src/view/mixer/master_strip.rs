@@ -1,30 +1,25 @@
-//! Master channel strip rendering. No instrument, no input/arm, no
-//! per-channel routing — just the FX chain, the master fader, and the
-//! Bounce-to-WAV button.
+//! Master channel strip rendering, on the shared strip anatomy
+//! (mixer-cleanup.md §5): head, the FX switch, slot lines, the fader. No
+//! instrument, no input/arm, no per-channel routing, and no pan. Adding
+//! effects, automation and Bounce live in the master inspector; a click
+//! on the strip selects the master.
 //!
 //! Split like the other strips: the fader/meter block (live per-tick
-//! levels) and the transient Bounce button rebuild every frame, while
-//! the chain/automation body above the fader is cached behind
-//! `iced::widget::lazy`, keyed on
+//! levels) rebuilds every frame, while the body above the fader is
+//! cached behind `iced::widget::lazy`, keyed on
 //! [`super::strip_fingerprint::master_strip_fingerprint`].
 
-use iced::widget::{button, column, container, pick_list, scrollable, text};
-use iced::{Element, Length};
-use resonance_audio::types::*;
+use iced::widget::{column, container, row, text};
+use iced::{alignment, Element, Length};
 
 use crate::message::*;
 use crate::theme;
-use crate::view::controls::{fader_section, fx_bypass_button};
+use crate::view::controls::fader_section;
 
-use super::picks::PluginOwner;
+use super::strip_parts::InstrumentSlot;
 
 impl crate::Resonance {
-    pub(super) fn view_master_strip<'a>(
-        &'a self,
-        available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
-        let _ = available_plugins;
-
+    pub(super) fn view_master_strip(&self) -> Element<'_, Message> {
         // Master automation live gain tint + the fader/meter block. The
         // per-tick levels render outside the lazy body, like every strip.
         let gain_live = super::automation::live_value(
@@ -43,37 +38,43 @@ impl crate::Resonance {
             |v| Message::Track(TrackMessage::SetMasterVolume(v)),
         );
 
-        let bounce_btn: Element<'_, Message> = if self.io.bouncing {
-            text("Bouncing...").size(8).color(theme::ACCENT).into()
-        } else {
-            button(text("Bounce").size(8).color(theme::TEXT))
-                .on_press(Message::ProjectIo(ProjectIoMessage::BounceToWav))
-                .style(|_theme, status| theme::small_button_style(status))
-                .padding([2, 8])
-                .into()
-        };
-
-        let bounce_row = container(bounce_btn)
-            .width(Length::Fill)
-            .center_x(Length::Fill);
-
-        // Chain + automation header above the fader — non-live, cached
-        // across redraw ticks.
+        // Head, FX switch and slot lines — non-live, cached across
+        // redraw ticks.
         let fp = super::strip_fingerprint::master_strip_fingerprint(self);
         let body = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
             self.master_strip_body()
         });
 
-        let strip_content = column![body, fader_block, bounce_row]
+        let strip_content = column![body, fader_block]
             .spacing(6)
             .padding([12, 10])
             .width(theme::MASTER_STRIP_WIDTH)
             .height(Length::Fill);
 
-        container(strip_content)
-            .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
-            .style(theme::card_selected)
-            .into()
+        // Selected reads like a selected track strip: the lavender
+        // hairline saturates and thickens. Unselected, the master sits
+        // in the strips' resting card.
+        let (border_color, border_width) = master_strip_border(self.ui.mixer.selected_master);
+        let style = move |_theme: &iced::Theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_2)),
+            border: iced::Border {
+                color: border_color,
+                width: border_width,
+                radius: theme::RADIUS_XL.into(),
+            },
+            ..Default::default()
+        };
+
+        // Clicking the strip (anywhere a control doesn't take the press)
+        // selects the master, so the inspector describes it — the same
+        // outside-the-container `mouse_area` the track and bus strips use.
+        iced::widget::mouse_area(
+            container(strip_content)
+                .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32))
+                .style(style),
+        )
+        .on_press(Message::Ui(UiMessage::SelectMaster))
+        .into()
     }
 
     /// The non-live upper region of the master strip — everything above
@@ -82,95 +83,49 @@ impl crate::Resonance {
     /// that [`super::strip_fingerprint::master_strip_fingerprint`]
     /// hashes.
     fn master_strip_body(&self) -> Element<'static, Message> {
-        // The design centers an uppercase "MASTER" header.
-        let label = container(
-            text("MASTER")
-                .size(11)
-                .font(theme::UI_FONT_SEMIBOLD)
-                .color(theme::TEXT_1),
+        let head = container(
+            row![
+                super::strip_parts::color_band(theme::TEXT_2),
+                text("MASTER")
+                    .size(11)
+                    .font(theme::UI_FONT_SEMIBOLD)
+                    .color(theme::TEXT_1),
+            ]
+            .spacing(6)
+            .align_y(alignment::Vertical::Center)
+            .height(28),
         )
         .width(Length::Fill)
-        .center_x(Length::Fill)
-        .padding([6, 4]);
+        .height(super::track_strip::STRIP_HEAD_HEIGHT)
+        .padding([4, 0]);
 
-        // FX bypass button, centered in its own row so the master strip
-        // has a dedicated control spot (tracks and busses share a row
-        // with other toggles; the master strip only has this one).
-        let button_row = container(fx_bypass_button(
+        let fx_header = super::strip_parts::fx_header(
             self.master.fx_bypassed,
             Message::Master(MasterMessage::ToggleMasterFxBypass),
-            10,
-        ))
-        .width(Length::Fill)
-        .center_x(Length::Fill);
-
-        // Plugin chain — every plugin is an effect.
-        let mut plugin_section = column![].spacing(4).width(Length::Fill);
-        let chain_len = self.master.plugins.len();
-        for (index, plugin) in self.master.plugins.iter().enumerate() {
-            plugin_section = plugin_section.push(self.view_plugin_slot_row(
-                PluginOwner::Master,
-                plugin,
-                false,
-                index,
-                chain_len,
-            ));
-        }
-
-        // `+ FX` picker (filtered to effects). Only rendered when we
-        // have at least one non-instrument plugin available. Options
-        // come from `view_caches.fx_plugins` (Rc clone is a refcount
-        // bump, no per-frame Vec rebuild).
-        let fx_picker_element: Option<Element<'static, Message>> =
-            if self.ui.view_caches.fx_plugins.is_empty() {
-                None
-            } else {
-                Some(
-                    pick_list(
-                        self.ui.view_caches.fx_plugins.clone(),
-                        None::<ScannedPlugin>,
-                        |plugin: ScannedPlugin| {
-                            Message::Master(MasterMessage::AddPluginToMaster(plugin))
-                        },
-                    )
-                    .placeholder("+ FX")
-                    .text_size(10)
-                    .width(Length::Fill)
-                    .into(),
-                )
-            };
-
-        let plugin_fill = iced::widget::Scrollable::with_direction(
-            plugin_section,
-            scrollable::Direction::Vertical(
-                scrollable::Scrollbar::default().width(4).scroller_width(4),
-            ),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-        let fx_block = {
-            let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
-            if let Some(fx) = fx_picker_element {
-                col = col.push(fx);
-            }
-            col
-        };
-
-        // Master automation lane header (gain only) + live gain tint.
-        // The master bus has no external-instrument device preset, so no
-        // device params ever appear in its automation picker.
-        let auto_header = super::automation::automation_header(
-            &self.automation,
-            super::automation::AutoChan::Master,
+        );
+        let slots = super::strip_parts::slot_list(
+            InstrumentSlot::None,
             &self.master.plugins,
-            &[],
+            self.master.fx_bypassed,
+            self.ui.mixer.focused_slot,
+            theme::MIXER_SLOT_LINE_CHARS,
         );
 
-        column![label, button_row, plugin_fill, fx_block, auto_header]
+        column![head, fx_header, slots]
             .spacing(6)
             .width(Length::Fill)
             .height(Length::Fill)
             .into()
+    }
+}
+
+/// The master strip card's border: the selected-track treatment (a 1 px
+/// lavender hairline) while the master is selected, the strips' resting
+/// 0.5 px hairline otherwise.
+pub(crate) fn master_strip_border(selected: bool) -> (iced::Color, f32) {
+    if selected {
+        (theme::ACCENT_LINE, 1.0)
+    } else {
+        (theme::LINE_2, 0.5)
     }
 }

@@ -171,7 +171,7 @@ fn create_group_from_selection(r: &mut Resonance) {
     // (STATE-04, FU-A1c).
     let group_id = r.allocate_track_id();
     r.track_groups.create_group_from_selection(group_id, &members);
-    r.ui.interaction.select_single_track(None);
+    r.ui.select_track(None);
 }
 
 /// Set the group's macro level trim — a multiplicative gain that scales

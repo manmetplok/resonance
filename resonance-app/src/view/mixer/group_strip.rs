@@ -19,7 +19,7 @@
 
 use iced::widget::{column, container, mouse_area, row, text, vertical_slider, Space};
 use iced::{alignment, Element, Length, Padding};
-use resonance_audio::types::{ScannedPlugin, TrackId};
+use resonance_audio::types::TrackId;
 use resonance_common::track_group::TrackGroup;
 
 use crate::message::*;
@@ -91,7 +91,6 @@ impl crate::Resonance {
         &'a self,
         group: &'a TrackGroup,
         sorted_tracks: &'a [TrackState],
-        available_plugins: &'a [ScannedPlugin],
     ) -> Element<'a, Message> {
         let (base, wash, _line) = theme::group_identity_colors(group.identity_color);
         let member_count = self.track_groups.get_all_member_ids(group.id).len();
@@ -101,17 +100,12 @@ impl crate::Resonance {
             for &member_id in &group.ordered_members {
                 if let Some(nested) = self.track_groups.get_group(member_id) {
                     // A nested group: render its own sub-cluster inline.
-                    cluster = cluster.push(self.view_mixer_group_cluster(
-                        nested,
-                        sorted_tracks,
-                        available_plugins,
-                    ));
+                    cluster = cluster.push(self.view_mixer_group_cluster(nested, sorted_tracks));
                 } else if let Some(member) = sorted_tracks
                     .iter()
                     .find(|t| t.id == member_id && t.sub_track.is_none())
                 {
-                    cluster =
-                        cluster.push(self.view_track_cluster(member, sorted_tracks, available_plugins));
+                    cluster = cluster.push(self.view_track_cluster(member, sorted_tracks));
                 }
             }
         }

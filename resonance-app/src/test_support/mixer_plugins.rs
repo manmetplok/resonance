@@ -267,14 +267,14 @@ impl Resonance {
     /// nothing to build an app for.
     #[doc(hidden)]
     pub fn test_strip_plugin_label(plugin_name: &str, missing: bool) -> String {
-        crate::view::mixer::slot_pill_label(plugin_name, missing)
+        crate::view::mixer::slot_line_label(plugin_name, missing)
     }
 
     /// Test-only: the lazy key of the plugin parameter panel for `slot`
     /// (review VIEW-26). A pure function of the slot.
     #[doc(hidden)]
     pub fn test_plugin_params_fingerprint(slot: &state::PluginSlotState) -> u64 {
-        crate::view::mixer::plugin_params_fingerprint(slot)
+        crate::view::plugin_window::plugin_params_fingerprint(slot)
     }
 
     /// Test-only: the bus twin of [`Self::test_push_track_plugin`].
@@ -461,61 +461,40 @@ impl Resonance {
             .collect()
     }
 
-    /// Test-only: the channel-strip slot's floating-editor toggle for
-    /// `instance_id`, as the mixer would draw it — the message the glyph
-    /// carries and the colour it is tinted (ba todo #1306).
-    ///
-    /// `None` means the strip draws no editor control for that slot.
-    ///
-    /// The click routing is covered end-to-end by pressing the real
-    /// button in `tests/mixer_generic_param_panel.rs`; this hook exists
-    /// for the tint, which the widget tree does not expose — `iced_test`
-    /// can read a text candidate's content but never its colour.
+    /// Test-only: which plugin the generic plugin window currently shows,
+    /// if any — the surface a refused editor falls back to (ba todo #1347,
+    /// mixer-cleanup.md §4).
     #[doc(hidden)]
-/// Test-only: which plugin the generic parameter panel currently shows,
-    /// if any — the surface a refused editor falls back to (ba todo #1347).
-    #[doc(hidden)]
-    pub fn test_selected_plugin(&self) -> Option<resonance_audio::types::PluginInstanceId> {
-        self.ui.mixer.selected_plugin
+    pub fn test_plugin_window(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        self.ui.mixer.plugin_window_id()
     }
 
-    pub fn test_strip_editor_toggle(
-        &self,
-        instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> Option<(crate::message::Message, iced::Color)> {
-        let plugin = self
-            .registry
-            .tracks
-            .iter()
-            .flat_map(|t| t.plugins.iter())
-            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master.plugins.iter())
-            .find(|p| p.instance_id == instance_id)?;
-        crate::view::mixer::editor_toggle_spec(plugin)
+    /// Test-only: the focused plugin slot (`MixerUiState::focused_slot`).
+    #[doc(hidden)]
+    pub fn test_focused_slot(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        self.ui.mixer.focused_slot
     }
 
-    /// Test-only: what the mixer STRIP's per-slot bypass control carries
-    /// and how it is tinted, for a slot in any of the three chains
-    /// (ba todo #1305).
-    ///
-    /// The strip is the only surface that draws the MASTER chain — the
-    /// inspector handles a selected bus and a selected track and has no
-    /// master branch — so this is what a test uses to show a human can
-    /// reach a master plugin's bypass, not only an MCP client.
+    /// Test-only: the slot the preset commands would act on right now —
+    /// the focused slot while it resolves, never in Performance mode.
     #[doc(hidden)]
-    pub fn test_strip_bypass_toggle(
-        &self,
-        instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> Option<(crate::message::Message, iced::Color)> {
-        let plugin = self
-            .registry
-            .tracks
-            .iter()
-            .flat_map(|t| t.plugins.iter())
-            .chain(self.registry.busses.iter().flat_map(|b| b.plugins.iter()))
-            .chain(self.master.plugins.iter())
-            .find(|p| p.instance_id == instance_id)?;
-        Some(crate::view::mixer::bypass_toggle_spec(plugin))
+    pub fn test_preset_target(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        crate::update::plugin_window::preset_target(self)
+    }
+
+    /// Test-only: the generic plugin window's whole state (position, drag).
+    #[doc(hidden)]
+    pub fn test_plugin_window_state(&self) -> Option<crate::state::PluginWindowState> {
+        self.ui.mixer.plugin_window
+    }
+
+    /// Test-only: move the open generic plugin window to `position`, so a
+    /// widget test can get it off the controls it drives underneath.
+    #[doc(hidden)]
+    pub fn test_place_plugin_window(&mut self, position: iced::Point) {
+        if let Some(w) = self.ui.mixer.plugin_window.as_mut() {
+            w.position = position;
+        }
     }
 
     /// Test-only: declare that a seeded plugin has a GUI, as a real
@@ -523,9 +502,8 @@ impl Resonance {
     ///
     /// Every plugin the test seeds defaults to `has_gui: false`, which
     /// is the configuration NONE of the eleven bundled plugins actually
-    /// ship in — so without this the strip's editor toggle never
-    /// reaches a golden and the 140 px row is only ever pixel-checked
-    /// one control short.
+    /// ship in — so without this a CHAIN row's `↗` only ever toggles the
+    /// generic window, never the plugin's own editor.
     #[doc(hidden)]
     pub fn test_set_plugin_has_gui(
         &mut self,
@@ -712,21 +690,8 @@ impl Resonance {
         track_id: resonance_audio::types::TrackId,
     ) -> Option<u64> {
         let track = self.registry.tracks.iter().find(|t| t.id == track_id)?;
-        let routing_collapsed = self
-            .ui
-            .mixer
-            .collapsed_inspector_groups
-            .contains(&state::MixerInspectorGroup::Routing);
-        let chain_collapsed = self
-            .ui
-            .mixer
-            .collapsed_inspector_groups
-            .contains(&state::MixerInspectorGroup::Chain);
         Some(crate::view::mixer::inspector::inspector_fingerprint(
-            self,
-            track,
-            routing_collapsed,
-            chain_collapsed,
+            self, track,
         ))
     }
 
@@ -739,13 +704,14 @@ impl Resonance {
         bus_id: resonance_audio::types::BusId,
     ) -> Option<u64> {
         let bus = self.registry.busses.iter().find(|b| b.id == bus_id)?;
-        let groups = &self.ui.mixer.collapsed_inspector_groups;
-        Some(crate::view::mixer::inspector::bus_fingerprint(
-            self,
-            bus,
-            groups.contains(&state::MixerInspectorGroup::Routing),
-            groups.contains(&state::MixerInspectorGroup::Chain),
-        ))
+        Some(crate::view::mixer::inspector::bus_fingerprint(self, bus))
+    }
+
+    /// Test-only: the master twin of [`Self::test_inspector_fingerprint`]
+    /// — the lazy-region key of the master inspector.
+    #[doc(hidden)]
+    pub fn test_master_inspector_fingerprint(&self) -> u64 {
+        crate::view::mixer::inspector::master_fingerprint(self)
     }
 
     /// Test-only: drive the GUI external-instrument map (and engine) back to
@@ -785,6 +751,28 @@ impl Resonance {
             .map(|t| t.plugins.as_slice())
             .unwrap_or(&[]);
         crate::view::mixer::automation::track_choice_labels(track_id, plugins, device_params)
+    }
+
+    /// Test-only: the message the inspector AUTOMATION group's `+ Add lane`
+    /// picker raises when the option labelled `label` is picked — on track
+    /// `track_id`, or on the master when `None`. A closed `pick_list`
+    /// renders only its placeholder, so a test can't click an option; this
+    /// resolves it through the picker's own option list and `on_select`.
+    /// `None` when no option carries that label.
+    #[doc(hidden)]
+    pub fn test_inspector_add_lane_message(
+        &self,
+        track_id: Option<resonance_audio::types::TrackId>,
+        label: &str,
+    ) -> Option<crate::message::Message> {
+        use crate::view::mixer::automation::{add_lane_message_for_label, AutoChan};
+        match track_id {
+            Some(id) => {
+                let track = self.registry.tracks.iter().find(|t| t.id == id)?;
+                add_lane_message_for_label(AutoChan::Track(id), &track.plugins, &[], label)
+            }
+            None => add_lane_message_for_label(AutoChan::Master, &self.master.plugins, &[], label),
+        }
     }
 
     /// Test-only: return the `id`s of every definition currently in the

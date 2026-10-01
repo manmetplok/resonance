@@ -357,6 +357,43 @@ pub fn group_identity_colors(
         G::Guitar => (GRP_GTR, GRP_GTR_WASH, GRP_GTR_LINE),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Track colour palette (mixer-cleanup.md §6). Every track carries its own
+// persisted `TrackState::color`; new tracks take the next hue from this
+// palette by their order, and projects saved before the field existed get
+// the same deterministic pick on load. Mid-lightness, moderate-chroma hues
+// so each reads as a distinct band against `BG_1` / `BG_2` without
+// shouting louder than the selection accent. Identity only — never status.
+// ---------------------------------------------------------------------------
+
+/// The fixed per-track colour palette, cycled by track order.
+pub const TRACK_PALETTE: [[u8; 3]; 10] = [
+    [0xd0, 0x7a, 0x6a], // coral
+    [0xd4, 0x9a, 0x5a], // amber
+    [0xc9, 0xb8, 0x5f], // sand
+    [0x9c, 0xbf, 0x6a], // olive
+    [0x5f, 0xb8, 0x8a], // jade
+    [0x5f, 0xb3, 0xc4], // teal
+    [0x6f, 0x95, 0xd6], // cornflower
+    [0x8f, 0x82, 0xd6], // periwinkle
+    [0xb8, 0x7a, 0xc9], // orchid
+    [0xd0, 0x7a, 0xa8], // rose
+];
+
+/// The palette colour for the track at `order` (cycles past the end).
+pub fn track_palette_color(order: usize) -> [u8; 3] {
+    TRACK_PALETTE[order % TRACK_PALETTE.len()]
+}
+
+/// A persisted track colour as an iced [`Color`].
+pub fn track_color(c: [u8; 3]) -> Color {
+    rgb(c[0], c[1], c[2])
+}
+
+/// Width of the track-colour band on the left edge of an Arrange track
+/// header (inside any group identity rails).
+pub const TRACK_COLOR_BAND_WIDTH: f32 = 4.0;
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
@@ -473,14 +510,27 @@ pub const TRACK_HEADER_WIDTH: f32 = 280.0;
 /// Vertical inset of a clip card inside its arrange track lane. The clip
 /// body spans `TRACK_HEIGHT - 2 * CLIP_LANE_INSET`.
 pub const CLIP_LANE_INSET: f32 = 10.0;
-/// Standard channel strip width on the Mixer.
-pub const MIXER_STRIP_WIDTH: f32 = 140.0;
+/// Standard channel strip width on the Mixer — track and bus strips
+/// alike (mixer-cleanup.md §2, Q2). Sized so a slot line's plugin name
+/// fits about [`MIXER_SLOT_LINE_CHARS`] characters on one line.
+pub const MIXER_STRIP_WIDTH: f32 = 160.0;
+/// How many characters of a plugin name a strip's slot line shows
+/// before it ellipsises (size-11 text — the type floor — in a 160 px
+/// strip, which leaves 118 px beside the state dot). Measured: 17
+/// characters with the ellipsis fit even an all-caps name ("WAVES
+/// MAXXBASS M…" is 116 px); 18 clip it. The line never wraps: it is
+/// `Wrapping::None` in a clipped container as well.
+pub const MIXER_SLOT_LINE_CHARS: usize = 17;
+/// Characters of a plugin name on a sub-track strip's slot line
+/// ([`MIXER_SUB_STRIP_WIDTH`] leaves ~62 px of text): ellipsised there
+/// rather than clipped mid-letter.
+pub const MIXER_SUB_SLOT_LINE_CHARS: usize = 10;
 /// Sub-track strip width on the Mixer. Sub-tracks are fed from one
 /// non-main output of their parent's instrument plugin — they have no
 /// FX chain, no input, and no record arm, so the strip is narrower than
 /// a normal channel strip. The narrower width also creates a visual
 /// rhythm that telegraphs "this is a child of the strip on its left".
-pub const MIXER_SUB_STRIP_WIDTH: f32 = 92.0;
+pub const MIXER_SUB_STRIP_WIDTH: f32 = 104.0;
 /// Width of the lavender-tinted left-edge accent rail on a sub-track
 /// strip. Sits flush against the left edge of the strip card so the eye
 /// reads a parent → child relationship even before reading the strip's
@@ -492,8 +542,9 @@ pub const MIXER_SUB_STRIP_RAIL_WIDTH: f32 = 2.0;
 /// it hosts controls, not a signal path. See the track-grouping design
 /// (doc #200) — "Mixer reflection".
 pub const MIXER_GROUP_HEADER_WIDTH: f32 = 116.0;
-/// Master strip width.
-pub const MASTER_STRIP_WIDTH: f32 = 156.0;
+/// Master strip width — the same as a channel strip since the master
+/// shares their anatomy (mixer-cleanup.md §5).
+pub const MASTER_STRIP_WIDTH: f32 = 160.0;
 /// Inspector column width on the Mixer.
 pub const INSPECTOR_WIDTH: f32 = 320.0;
 /// Reference & A/B right-rail width on the Mixer (design doc #184/#198).

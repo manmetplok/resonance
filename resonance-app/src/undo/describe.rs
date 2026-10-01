@@ -27,6 +27,7 @@ pub fn describe(message: &Message) -> String {
             TrackMessage::ToggleMute(_) => "track mute",
             TrackMessage::ToggleSolo(_) => "track solo",
             TrackMessage::SetTrackName(..) => "rename track",
+            TrackMessage::SetTrackColor(..) => "track colour",
             TrackMessage::SetTrackOutput(..) => "track routing",
             TrackMessage::BounceInPlaceOffline(_)
             | TrackMessage::Bounce(BounceMessage::Confirm) => "bounce in place",
@@ -50,6 +51,7 @@ pub fn describe(message: &Message) -> String {
             BusMessage::RemoveBus(_) => "delete bus",
             BusMessage::SetBusVolume(..) => "bus volume",
             BusMessage::SetBusPan(..) => "bus pan",
+            BusMessage::RenameBus(..) => "rename bus",
             _ => "bus edit",
         },
         Message::Mixer(m) => match m {

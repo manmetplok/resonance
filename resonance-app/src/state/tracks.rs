@@ -178,6 +178,11 @@ pub struct TrackState {
     pub midi_output_device: Option<String>,
     /// Channel that hardware MIDI output uses (`None` = channel 1).
     pub midi_output_channel: Option<u8>,
+    /// Identity colour (mixer-cleanup.md §6): the band on the Arrange
+    /// header and the mixer strip head. Project-persisted. New tracks take
+    /// [`crate::theme::track_palette_color`] of their order; sub-tracks
+    /// inherit their parent's.
+    pub color: [u8; 3],
 }
 
 impl TrackState {
@@ -215,6 +220,7 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 
@@ -248,6 +254,7 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 
@@ -284,10 +291,16 @@ impl TrackState {
             midi_input_channel: None,
             midi_output_device: None,
             midi_output_channel: None,
+            color: crate::theme::track_palette_color(order),
         }
     }
 
     /// New sub-track driven by a parent instrument plugin's output port.
+    ///
+    /// Its `color` is the palette colour of its own `order`, a
+    /// placeholder: a sub-track wears its parent's colour, which the
+    /// caller sets (`ensure_subtracks`, the project load's
+    /// `sync_sub_track_colors`) — this constructor has no parent to read.
     pub fn new_sub_track(
         id: TrackId,
         order: usize,
@@ -534,6 +547,39 @@ impl TrackRegistry {
     /// liberally after any mutation that might break order.
     pub fn resort_tracks(&mut self) {
         self.tracks.sort_by_key(|t| t.order);
+    }
+
+    /// The colour `t` is drawn and reported in (mixer-cleanup.md §6): its
+    /// own, or for a sub-track its parent's — a sub-track is one tap of
+    /// its parent's instrument and reads as the same track. Every
+    /// creation path stores the parent's colour on the sub-track too
+    /// (`ensure_subtracks`, the project load, `SetTrackColor`), so this
+    /// only differs from `t.color` for a sub-track built some other way;
+    /// readers go through it so the parent stays the one source.
+    pub fn display_color(&self, t: &TrackState) -> [u8; 3] {
+        t.sub_track
+            .and_then(|link| self.tracks.iter().find(|p| p.id == link.parent_track_id))
+            .map_or(t.color, |parent| parent.color)
+    }
+
+    /// Give every sub-track its parent's colour. Run after a project
+    /// load / undo restore replays the tracks: a sub-track's saved colour
+    /// is redundant with its parent's, and a file where the two disagree
+    /// (hand-edited, or written before sub-tracks followed their parent)
+    /// must still open with the parent and its taps in one colour.
+    pub fn sync_sub_track_colors(&mut self) {
+        let parents: Vec<(TrackId, [u8; 3])> = self
+            .tracks
+            .iter()
+            .filter(|t| t.sub_track.is_none())
+            .map(|t| (t.id, t.color))
+            .collect();
+        for t in &mut self.tracks {
+            let Some(link) = t.sub_track else { continue };
+            if let Some((_, color)) = parents.iter().find(|(id, _)| *id == link.parent_track_id) {
+                t.color = *color;
+            }
+        }
     }
 
     /// Re-establishes the sorted-by-order invariant on `busses`.

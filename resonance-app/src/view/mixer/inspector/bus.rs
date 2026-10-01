@@ -10,8 +10,8 @@
 //! A bus is not a track and the groups say so. There is no input device,
 //! no MIDI, no output picker — a bus always sums to master — so ROUTING
 //! answers the questions a bus actually raises: what feeds it, what
-//! sends into it, and where it goes. SIGNAL and CHAIN are the track
-//! versions with the instrument slot removed.
+//! sends into it, and where it goes. Order (mixer-cleanup.md §3.3):
+//! CHAIN → ROUTING → AUTOMATION → BUS, where BUS holds **Delete bus**.
 
 use iced::widget::{column, container, pick_list, row, text, Space};
 use iced::{alignment, Element, Length};
@@ -20,99 +20,101 @@ use resonance_audio::types::{ScannedPlugin, SendSource, TrackOutput};
 use crate::message::{
     BusMessage, Message, MixerMessage, PluginMessage, PresetAddOwner, PresetUiMessage,
 };
-use crate::state::{BusState, MixerInspectorGroup};
+use crate::state::{BusState, MixerInspectorGroup, RenameTarget};
 use crate::theme;
-use crate::util::format_pan;
+use crate::view::mixer::automation::AutoChan;
 use crate::view::mixer::picks::PluginOwner;
-use crate::view::mixer::reorder;
 
-/// The inspector body for `bus`. Mirrors the track path's split: the
-/// live SIGNAL tiles render every frame, ROUTING + CHAIN sit inside a
-/// lazy region keyed on everything they read.
+/// The inspector body for `bus`. The whole body below the title sits in
+/// one lazy region keyed on everything it reads ([`fingerprint`]); none
+/// of it is live per-tick state.
 pub(super) fn view<'a>(r: &'a crate::Resonance, bus: &'a BusState) -> Element<'a, Message> {
-    let signal_collapsed = collapsed(r, MixerInspectorGroup::Signal);
-    let routing_collapsed = collapsed(r, MixerInspectorGroup::Routing);
-    let chain_collapsed = collapsed(r, MixerInspectorGroup::Chain);
-
     // Title row: the bus name in the warm accent that identifies busses
-    // everywhere else in the mixer, plus a RETURN badge when the bus is
-    // flagged as an aux return.
-    let mut title_row = row![text(bus.name.clone())
-        .size(17)
-        .font(theme::UI_FONT_MEDIUM)
-        .color(theme::WARM)]
+    // everywhere else in the mixer, the type tag, and a RETURN badge when
+    // the bus is flagged as an aux return.
+    // A double-click on the name renames the bus in place (§3.1).
+    let title = super::renameable_title(
+        r,
+        RenameTarget::Bus(bus.id),
+        "Bus name",
+        text(bus.name.clone())
+            .size(17)
+            .font(theme::UI_FONT_MEDIUM)
+            .color(theme::WARM),
+    );
+    let mut title_row = row![
+        title,
+        Space::new().width(8),
+        super::widgets::type_tag("Bus"),
+    ]
     .spacing(0)
     .align_y(alignment::Vertical::Center);
     if bus.is_return {
-        title_row = title_row.push(Space::new().width(8)).push(return_badge());
+        title_row = title_row.push(Space::new().width(6)).push(return_badge());
     }
-    let header = column![
-        text("INSPECTOR")
-            .size(10)
-            .font(theme::UI_FONT_SEMIBOLD)
-            .color(theme::TEXT_3),
-        Space::new().height(2),
-        title_row,
-    ]
-    .spacing(0);
 
-    // SIGNAL stays outside the lazy region: its PEAK tile reads the
-    // per-tick bus levels, which the fingerprint deliberately omits (see
-    // ui-work.md §11.2).
-    let signal = signal_group(bus, signal_collapsed);
-
-    let fp = fingerprint(r, bus, routing_collapsed, chain_collapsed);
+    let fp = fingerprint(r, bus);
     let lazy_groups = iced::widget::lazy(fp, move |_: &u64| -> Element<'static, Message> {
         column![
-            routing_group(r, bus, routing_collapsed),
+            chain_group(r, bus, collapsed(r, MixerInspectorGroup::Chain)),
             Space::new().height(18),
-            chain_group(r, bus, chain_collapsed),
+            routing_group(r, bus, collapsed(r, MixerInspectorGroup::Routing)),
+            Space::new().height(18),
+            super::automation::automation_group(
+                r,
+                AutoChan::Bus(bus.id),
+                &bus.plugins,
+                &[],
+                collapsed(r, MixerInspectorGroup::Automation),
+            ),
+            Space::new().height(18),
+            bus_group(bus, collapsed(r, MixerInspectorGroup::Bus)),
         ]
         .spacing(0)
+        .width(Length::Fill)
         .into()
     });
 
     iced::widget::scrollable(
         column![
-            header,
-            Space::new().height(18),
-            signal,
+            super::widgets::header(title_row),
             Space::new().height(18),
             lazy_groups,
         ]
-        .spacing(0),
+        .spacing(0)
+        .width(Length::Fill),
     )
     .height(Length::Fill)
+    // Embedded, not floating: the scrollbar takes its own column beside
+    // the groups instead of drawing over their right edge (pickers'
+    // carets, the sends' dB readouts and trash buttons).
+    .spacing(6)
     .into()
 }
 
 fn collapsed(r: &crate::Resonance, group: MixerInspectorGroup) -> bool {
-    r.ui.mixer.collapsed_inspector_groups.contains(&group)
+    super::collapsed(r, group)
 }
 
-/// Hash every field the lazy ROUTING + CHAIN groups read. The live level
-/// fields are intentionally absent — SIGNAL renders them per-frame
-/// outside the lazy region.
-pub(crate) fn fingerprint(
-    r: &crate::Resonance,
-    bus: &BusState,
-    routing_collapsed: bool,
-    chain_collapsed: bool,
-) -> u64 {
+/// Hash every field the lazy bus body reads.
+pub(crate) fn fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
     use std::hash::{Hash, Hasher};
     use std::rc::Rc;
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    routing_collapsed.hash(&mut h);
-    chain_collapsed.hash(&mut h);
+    super::hash_collapse_state(&mut h, r);
     bus.id.hash(&mut h);
     bus.name.hash(&mut h);
+    // The header's rename field sits outside the lazy body (see
+    // `inspector_fingerprint`), so it is not hashed.
     bus.is_return.hash(&mut h);
     for p in &bus.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
-        // Drives the BYP button and its press message (review VIEW-08).
+        // Drives the bypass dot and its press message (review VIEW-08).
         p.bypassed.hash(&mut h);
     }
+    super::chain::hash_chain_ui(&mut h, r, &bus.plugins);
+    super::automation::hash_into(&mut h, r, AutoChan::Bus(bus.id), &bus.plugins, &[]);
     // MEMBERS is derived from every track's routing, so it changes when
     // a track is re-routed, renamed, added or removed.
     for t in &r.registry.tracks {
@@ -170,47 +172,6 @@ fn return_badge() -> Element<'static, Message> {
         },
         ..Default::default()
     })
-    .into()
-}
-
-// ---------------------------------------------------------------------------
-// SIGNAL — the same 2×2 tiles a track gets. A bus always sums to master,
-// so OUT is a constant rather than a routing readout.
-// ---------------------------------------------------------------------------
-
-fn signal_group(bus: &BusState, collapsed: bool) -> Element<'static, Message> {
-    if collapsed {
-        return super::widgets::group_header("SIGNAL", MixerInspectorGroup::Signal, true);
-    }
-
-    let peak = bus.level_l.max(bus.level_r);
-    let peak_db = if peak < 1e-4 {
-        "−∞ dB".to_string()
-    } else {
-        format!("{:+.1} dB", 20.0 * peak.log10())
-    };
-
-    let row1 = row![
-        super::widgets::stat_tile("PEAK", peak_db),
-        Space::new().width(10),
-        super::widgets::stat_tile("RMS", "—".to_string()),
-    ]
-    .align_y(alignment::Vertical::Center);
-    let row2 = row![
-        super::widgets::stat_tile("PAN", format_pan(bus.pan).into_owned()),
-        Space::new().width(10),
-        super::widgets::stat_tile("OUT", "Master".to_string()),
-    ]
-    .align_y(alignment::Vertical::Center);
-
-    column![
-        super::widgets::group_header("SIGNAL", MixerInspectorGroup::Signal, false),
-        Space::new().height(10),
-        row1,
-        Space::new().height(10),
-        row2,
-    ]
-    .spacing(0)
     .into()
 }
 
@@ -333,28 +294,16 @@ fn chain_group(
     )]
     .spacing(10);
 
-    if bus.plugins.is_empty() {
-        col = col.push(super::chain::empty_chain_row());
-    } else {
-        let chain_len = bus.plugins.len();
-        for (index, plugin) in bus.plugins.iter().enumerate() {
-            // Every entry is an effect: a bus has no instrument slot, so
-            // the only limits on the reorder carets are the two ends.
-            let moves = reorder::chain_moves(
-                r,
-                PluginOwner::Bus(bus.id),
-                plugin.instance_id,
-                index,
-                chain_len,
-            );
-            col = col.push(super::chain::chain_row(
-                &plugin.plugin_name,
-                false,
-                &moves,
-                plugin.instance_id,
-                plugin.bypassed,
-            ));
-        }
+    // Every entry is an effect: a bus has no instrument slot, so the
+    // only limits on a move are the two ends.
+    col = col.push(super::chain::chain_rows(
+        r,
+        PluginOwner::Bus(bus.id),
+        &bus.plugins,
+        None,
+    ));
+    if let Some(replace) = super::chain::replace_picker(r, &bus.plugins) {
+        return col.push(replace).into();
     }
 
     if !r.ui.view_caches.fx_plugins.is_empty() {
@@ -389,4 +338,28 @@ fn chain_group(
     }
 
     col.into()
+}
+
+// ---------------------------------------------------------------------------
+// BUS — the bus's own actions.
+// ---------------------------------------------------------------------------
+
+/// BUS group: **Delete bus**, the same `RemoveBus` the strip's trash icon
+/// sends (mixer-cleanup.md §3.3 — the trash leaves the strip later).
+fn bus_group(bus: &BusState, collapsed: bool) -> Element<'static, Message> {
+    let header = super::widgets::group_header("BUS", MixerInspectorGroup::Bus, collapsed);
+    if collapsed {
+        return header;
+    }
+    column![
+        header,
+        Space::new().height(10),
+        super::widgets::action_button(
+            "DELETE BUS",
+            Some(Message::Bus(BusMessage::RemoveBus(bus.id))),
+            true,
+        ),
+    ]
+    .spacing(0)
+    .into()
 }

@@ -1,6 +1,6 @@
-//! VIEW-26: the plugin parameter panel sits in a `lazy` region keyed on
-//! `plugin_params_fingerprint`, so the Mixer's fast meter tick reuses the
-//! built rows. Every field the rows draw must move the key (or the panel
+//! VIEW-26: the generic plugin window's parameter list sits in a `lazy`
+//! region keyed on `plugin_params_fingerprint`, so the Mixer's fast meter
+//! tick reuses the built rows. Every field the rows draw must move the key (or the window
 //! freezes on screen); nothing else may (or the cache never hits).
 
 use resonance_app::state::PluginSlotState;

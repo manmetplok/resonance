@@ -66,8 +66,12 @@ impl Resonance {
     /// placeholder snapshot tests to add a `TrackType::Vocal` track that
     /// has no lane-generator config.
     #[doc(hidden)]
-    pub fn test_push_track(&mut self, track: state::TrackState) {
+    pub fn test_push_track(&mut self, mut track: state::TrackState) {
         self.registry.next_track_order = self.registry.next_track_order.max(track.order + 1);
+        // A sub-track takes its parent's colour, as `ensure_subtracks`
+        // gives it (`TrackState::new_sub_track` can only colour it by its
+        // own order).
+        track.color = self.registry.display_color(&track);
         self.registry.tracks.push(track);
         self.compose.refresh_track_count(&self.registry.tracks);
     }
@@ -75,6 +79,7 @@ impl Resonance {
     /// Test-only: select a track so `FreezeSelectedTracks` has a target.
     #[doc(hidden)]
     pub fn test_select_track(&mut self, track_id: resonance_audio::types::TrackId) {
+        self.ui.clear_channel_selection();
         self.ui.interaction.selected_track = Some(track_id);
     }
 
@@ -111,6 +116,13 @@ impl Resonance {
     #[doc(hidden)]
     pub fn test_selected_bus(&self) -> Option<resonance_audio::types::BusId> {
         self.ui.mixer.selected_bus
+    }
+
+    /// Test-only: whether the MASTER strip is selected (the master
+    /// counterpart of `test_selected_bus`).
+    #[doc(hidden)]
+    pub fn test_selected_master(&self) -> bool {
+        self.ui.mixer.selected_master
     }
 
     /// Test-only: push a bus straight into the registry, bypassing the
@@ -163,6 +175,9 @@ impl Resonance {
     /// the per-click `SelectTrack` plumbing.
     #[doc(hidden)]
     pub fn test_set_selected_tracks(&mut self, ids: Vec<resonance_audio::types::TrackId>) {
+        if !ids.is_empty() {
+            self.ui.clear_channel_selection();
+        }
         self.ui.interaction.selected_track = ids.last().copied();
         self.ui.interaction.selected_tracks = ids;
     }

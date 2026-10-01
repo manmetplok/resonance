@@ -3,8 +3,8 @@
 //!
 //! Two states are locked in:
 //!
-//! 1. **a plain bus** — SIGNAL tiles, ROUTING (members / sends in /
-//!    output), CHAIN with the bus's effects and the add picker.
+//! 1. **a plain bus** — CHAIN with the bus effects and the add picker,
+//!    ROUTING (members / sends in / output), AUTOMATION and BUS.
 //! 2. **a return bus with members** — the RETURN badge beside the name
 //!    and a non-empty members list, which is the state the group
 //!    actually exists to answer.

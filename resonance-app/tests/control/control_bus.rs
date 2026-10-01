@@ -304,12 +304,75 @@ fn busses_and_routing_are_persisted() {
     assert_eq!(kick.output_bus, Some(bus_id), "the route is serialized");
 }
 
+/// `bus.rename` mirrors `track.rename`: one undoable edit that
+/// `song.summary` reads back and the engine is told about, with an
+/// unknown id `not_found` and an empty name `invalid_params`.
+#[test]
+fn rename_is_undoable_and_validates() {
+    let mut app = app();
+    let bus_id = create_bus(&mut app, "Drum Bus");
+    let rx = app.test_capture_engine();
+    let before = app.revision();
+
+    let ack: MutationAck = call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({"bus_id": bus_id, "name": "Kit Bus"}),
+    )
+    .result()
+    .expect("bus.rename succeeds");
+    assert_eq!(ack.revision, before + 1);
+    let name_of = |app: &mut Resonance| {
+        summary(app)
+            .tracks
+            .into_iter()
+            .find(|t| t.id.0 == bus_id)
+            .expect("the bus")
+            .name
+    };
+    assert_eq!(name_of(&mut app), "Kit Bus");
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|c| matches!(
+            c,
+            AudioCommand::SetBusName { bus_id: id, ref name } if id == bus_id && name == "Kit Bus"
+        )),
+        "the engine's bus is renamed too"
+    );
+
+    let _ = app.update(resonance_app::message::Message::Undo);
+    assert_eq!(name_of(&mut app), "Drum Bus", "one undo step");
+    let _ = app.update(resonance_app::message::Message::Redo);
+    assert_eq!(name_of(&mut app), "Kit Bus");
+
+    let response = call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({"bus_id": bus_id, "name": "   "}),
+    );
+    assert_eq!(response.error.unwrap().kind(), ErrorKind::InvalidParams);
+    let response = call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({"bus_id": 987_654, "name": "x"}),
+    );
+    assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
+    // A track id is not a bus id.
+    let response = call(
+        &mut app,
+        "bus.rename",
+        serde_json::json!({"bus_id": KICK, "name": "x"}),
+    );
+    assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
+    assert_eq!(name_of(&mut app), "Kit Bus", "nothing changed");
+}
+
 #[test]
 fn every_bus_method_is_advertised_in_the_handshake() {
     let capabilities = resonance_control::methods::capabilities();
     for method in [
         "bus.create",
         "bus.delete",
+        "bus.rename",
         "bus.set_volume",
         "track.set_output",
     ] {

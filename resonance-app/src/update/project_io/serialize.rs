@@ -166,6 +166,7 @@ pub fn build_project_file(r: &Resonance) -> ProjectFile {
             // "not frozen"; Frozen / Stale persist their cache ref so the
             // load path can re-attach the cache (ba todo #577).
             freeze: r.freeze.status(t.id).to_persisted(),
+            color: Some(t.color),
             // External-instrument extras (bank/program/latency offset). The
             // *presence* of an entry in `external_instruments` marks the
             // track external; the route + monitor/arm already serialize via

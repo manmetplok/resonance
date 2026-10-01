@@ -24,15 +24,18 @@ pub mod group;
 pub mod marker;
 pub mod marker_ui;
 pub mod import;
+pub mod inline_rename;
 pub mod keymap;
 pub mod master;
 pub mod midi_clip;
 pub mod midi_editor;
 pub mod mixer;
 pub mod palette;
+pub mod chain_ui;
 pub mod plugin;
 pub mod plugin_preset_ui;
 pub mod plugin_replace;
+pub mod plugin_window;
 pub mod pool;
 pub mod project_io;
 pub mod reference;
@@ -78,6 +81,22 @@ impl crate::Resonance {
                     self.ui.interaction.timeline_key_grant.wrapping_add(1);
             }
         }
+        // An inline rename never outlives its channel, whichever path
+        // removed it (a remove, an undo-restore, a project load, the
+        // control API), and an inspector-header rename commits once the
+        // inspector moves off its channel.
+        //
+        // Likewise every transient CHAIN / strip affordance (the focused
+        // slot, slot menu, replace mode, preset prompt, drag, colour
+        // palette, instrument-picker cue) is pruned to the channel the
+        // inspector now describes and to what still exists.
+        let task = if outermost {
+            crate::update::chain_ui::settle(self);
+            let settled = crate::update::inline_rename::settle(self);
+            Task::batch([task, settled])
+        } else {
+            task
+        };
         // Iced repaints after each update, so refreshing here means the
         // labels are always exact at paint time (no one-frame staleness)
         // without the view layer ever writing state. No-op when the
@@ -257,6 +276,10 @@ impl crate::Resonance {
             iced::window::Event::FilesHoveredLeft => {
                 Some(Message::Import(ImportMessage::HoverLeft))
             }
+            // The window's size, for the floating plugin window's clamp.
+            iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size) => {
+                Some(Message::Ui(UiMessage::WindowResized(size)))
+            }
             _ => None,
         });
 
@@ -268,6 +291,42 @@ impl crate::Resonance {
         if self.presets.dragging.is_some() {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::plugin_preset_ui::drag_end_event(&event)
+            }));
+        }
+
+        // An open inline rename commits on a press off its field; iced's
+        // `text_input` has no blur callback, so every press is reported
+        // and checked against the pointer's hover over the field
+        // (`update::inline_rename`).
+        if self.ui.mixer.renaming.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::inline_rename::pointer_event(&event)
+            }));
+        }
+
+        // A generic plugin window's title-bar drag ends when the window
+        // loses focus: its release is then delivered elsewhere, and the
+        // window would otherwise stay stuck to the pointer.
+        if self.ui.mixer.plugin_window.is_some_and(|w| w.drag.is_some()) {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::plugin_window::drag_end_event(&event)
+            }));
+        }
+
+        // A CHAIN-row drag (mixer-cleanup.md S7) drops on a left release
+        // over a row, and is disarmed by a press (its release was lost)
+        // or the window losing focus.
+        if self.ui.mixer.chain_drag.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::chain_ui::drag_end_event(&event)
+            }));
+        }
+
+        // An open CHAIN slot menu or colour palette closes on a press
+        // anywhere else (click-away).
+        if self.ui.mixer.popover_open() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::chain_ui::popover_press_event(&event)
             }));
         }
 

@@ -41,6 +41,22 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Set a track's identity colour — the band on its Arrange header and \
+                       mixer strip. color is \"#rrggbb\" hex, the same form song_tracks \
+                       reports each track's colour in. New tracks get one automatically, so \
+                       use this only to recolour (e.g. one colour per instrument family). \
+                       Sub-tracks take their parent's colour: set the parent's (refused on a \
+                       sub-track). Busses have no colour.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn track_set_color(
+        &self,
+        Parameters(params): Parameters<track::SetColorParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(track::SET_COLOR, &params).await
+    }
+
+    #[tool(
         description = "Delete a track and everything on it. Destructive: refused with a \
                        summary of what would be lost until you pass confirm: true.",
         annotations(destructive_hint = true, open_world_hint = false)

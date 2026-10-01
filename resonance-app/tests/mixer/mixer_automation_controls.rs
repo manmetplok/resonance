@@ -1,9 +1,8 @@
 //! Render-level checks for the mixer's per-channel automation controls
-//! (todo #383, arch doc #162 §3). These drive the real `view()` tree
-//! through the iced simulator and assert the lane header (parameter
-//! picker + Read toggle) actually renders — a deterministic,
-//! GPU-independent companion to the golden snapshots (which diverge in
-//! this environment).
+//! (todo #383, arch doc #162 §3) and the strips' lazy-body fingerprints.
+//! The lane header (parameter picker + Read toggle) lives in the
+//! inspector's AUTOMATION group since mixer-cleanup.md §2.2; the strips
+//! keep only the live automated tints on fader and pan.
 
 use iced::Size;
 use iced_test::simulator::Simulator;
@@ -39,12 +38,12 @@ fn simulator(app: &Resonance) -> Simulator<'_, Message> {
     Simulator::with_size(sim_settings(), Size::new(WINDOW.0, WINDOW.1), app.view())
 }
 
-/// With no lanes, no strip shows a Read toggle. Once a lane exists for a
-/// channel, its strip surfaces the lane header's READ toggle — proving
-/// the header (parameter picker + Read toggle) is gated on lane presence:
-/// a lane can be "pointed at" a target and the control then appears.
+/// The lane header (parameter picker + Read toggle) left the strips for
+/// the inspector's AUTOMATION group (mixer-cleanup.md §2.2, §3.4): a
+/// lane on the master shows no Read toggle anywhere until the master is
+/// selected, and then the inspector draws it.
 #[test]
-fn read_toggle_appears_only_once_a_lane_exists() {
+fn read_toggle_lives_in_the_inspector_not_on_the_strips() {
     let mut app = build_app();
 
     // No automation yet → no Read toggle anywhere.
@@ -56,18 +55,25 @@ fn read_toggle_appears_only_once_a_lane_exists() {
         );
     }
 
-    // Point the master's lane at its gain — the master strip is always
-    // rendered, so this is a stable target.
     let lane = AutomationLane::new(
         1,
         AutomationTarget::MasterGain,
         vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
     );
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged { lane });
+    let _ = app.update(Message::Ui(UiMessage::SelectTrack(None)));
+    {
+        let mut ui = simulator(&app);
+        assert!(
+            ui.find("READ").is_err(),
+            "the master strip no longer draws a lane header"
+        );
+    }
 
+    let _ = app.update(Message::Ui(UiMessage::SelectMaster));
     let mut ui = simulator(&app);
     ui.find("READ")
-        .expect("the lane header's Read toggle should render once a lane exists");
+        .expect("the master inspector's AUTOMATION group draws the lane's Read toggle");
 }
 
 // ---------------------------------------------------------------------
@@ -78,8 +84,8 @@ fn read_toggle_appears_only_once_a_lane_exists() {
 // the fingerprints in `view/mixer/strip_fingerprint.rs`. The cached
 // subtree is reused until the hash moves, so every rendered facet MUST
 // move it — a missed field means the strip keeps drawing stale state —
-// while the live meter levels (rendered outside the lazy region, like
-// the inspector's SIGNAL group) must NOT.
+// while the live meter levels (rendered outside the lazy region) must
+// NOT.
 // ---------------------------------------------------------------------
 
 /// Demo track 2 — "Synth Bass", hosting plugin instance `2 * 100`.
@@ -149,8 +155,19 @@ fn track_strip_fingerprint_moves_with_every_rendered_facet() {
         ("input monitor", |app| {
             let _ = app.update(Message::Track(TrackMessage::ToggleMonitor(BASS)));
         }),
-        ("mono", |app| {
-            let _ = app.update(Message::Track(TrackMessage::ToggleTrackMono(BASS)));
+        ("track colour", |app| {
+            let _ = app.update(Message::Track(TrackMessage::SetTrackColor(
+                BASS,
+                [1, 2, 3],
+            )));
+        }),
+        // The inline rename swaps the name for a field, and every
+        // keystroke redraws it.
+        ("strip rename opened", |app| {
+            let _ = app.update(Message::Ui(UiMessage::BeginRename(
+                resonance_app::state::RenameTarget::Track(BASS),
+                resonance_app::state::RenameSurface::Strip,
+            )));
         }),
         ("chain FX bypass", |app| {
             let _ = app.update(Message::Track(TrackMessage::ToggleTrackFxBypass(BASS)));
@@ -158,37 +175,16 @@ fn track_strip_fingerprint_moves_with_every_rendered_facet() {
         ("pan", |app| {
             let _ = app.update(Message::Track(TrackMessage::SetTrackPan(BASS, 0.42)));
         }),
-        // The selected slot's pill takes the highlight treatment.
-        ("plugin-slot selection", |app| {
-            let _ = app.update(Message::Plugin(PluginMessage::TogglePluginPanel(
-                BASS_PLUGIN,
-            )));
+        // The focused slot's line takes the highlight treatment.
+        ("slot focus", |app| {
+            let _ = app.update(Message::Plugin(PluginMessage::FocusSlot(BASS_PLUGIN)));
         }),
-        // Per-slot bypass tints the slot row's power glyph.
+        // Per-slot bypass turns the line's dot into a ring and dims it.
         ("plugin-slot bypass", |app| {
             app.test_apply_engine_event(AudioEvent::PluginBypassChanged {
                 instance_id: BASS_PLUGIN,
                 bypassed: true,
                 own_bypass_param: false,
-            });
-        }),
-        // The editor toggle glyph lights up while the editor is open.
-        ("plugin editor open", |app| {
-            app.test_apply_engine_event(AudioEvent::PluginEditorState {
-                instance_id: BASS_PLUGIN,
-                open: true,
-                failure: None,
-            });
-        }),
-        // A lane surfacing in the strip's automation header (label +
-        // READ toggle appear).
-        ("automation lane added", |app| {
-            app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-                lane: AutomationLane::new(
-                    7,
-                    AutomationTarget::TrackGain(BASS),
-                    vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
-                ),
             });
         }),
     ];
@@ -210,7 +206,7 @@ fn track_strip_fingerprint_moves_with_every_rendered_facet() {
 fn read_toggle_and_live_pan_tint_move_the_track_fingerprint() {
     let mut app = build_app();
 
-    // A Read-enabled pan lane surfaces in the header.
+    // A Read-enabled pan lane on the track.
     app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
         lane: AutomationLane::new(
             9,
@@ -232,8 +228,7 @@ fn read_toggle_and_live_pan_tint_move_the_track_fingerprint() {
         "the live automated-pan tint renders in the lazy body and must move the hash"
     );
 
-    // Read off (engine echoes the lane disabled): the READ toggle dims
-    // and the tint clears.
+    // Read off (engine echoes the lane disabled): the tint clears.
     let mut lane = AutomationLane::new(
         9,
         AutomationTarget::TrackPan(BASS),
@@ -244,7 +239,7 @@ fn read_toggle_and_live_pan_tint_move_the_track_fingerprint() {
     let read_off = track_fp(&app);
     assert_ne!(
         with_tint, read_off,
-        "toggling a lane's Read flag re-tints the header and must move the hash"
+        "turning a lane's Read off clears the pan tint and must move the hash"
     );
 }
 
@@ -269,14 +264,10 @@ fn bus_and_master_strip_fingerprints_move_with_their_facets() {
                 own_bypass_param: false,
             });
         }),
-        ("bus automation lane", |app| {
-            app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-                lane: AutomationLane::new(
-                    11,
-                    AutomationTarget::BusGain(DRUM_BUS),
-                    vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
-                ),
-            });
+        ("bus slot focus", |app| {
+            let _ = app.update(Message::Plugin(
+                resonance_app::message::PluginMessage::FocusSlot(DRUM_BUS_PLUGIN),
+            ));
         }),
     ];
     for (facet, mutate) in bus_cases {
@@ -295,14 +286,15 @@ fn bus_and_master_strip_fingerprints_move_with_their_facets() {
         ("master FX bypass", |app| {
             let _ = app.update(Message::Master(MasterMessage::ToggleMasterFxBypass));
         }),
-        ("master automation lane", |app| {
-            app.test_apply_engine_event(AudioEvent::AutomationLaneChanged {
-                lane: AutomationLane::new(
-                    13,
-                    AutomationTarget::MasterGain,
-                    vec![Breakpoint::new(0, 0.5, CurveKind::Linear)],
-                ),
-            });
+        ("master chain", |app| {
+            app.test_push_master_plugin(resonance_app::state::PluginSlotState::new(
+                9_001,
+                "Limiter".to_owned(),
+                "com.resonance.limiter".to_owned(),
+                "/plugins/limiter.clap".to_owned(),
+                Vec::new(),
+                false,
+            ));
         }),
     ];
     for (facet, mutate) in master_cases {

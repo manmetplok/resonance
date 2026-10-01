@@ -126,13 +126,6 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         } => {
             crate::update::plugin_replace::replace_plugin_slot(r, instance_id, plugin);
         }
-        PluginMessage::TogglePluginPanel(instance_id) => {
-            if r.ui.mixer.selected_plugin == Some(instance_id) {
-                r.ui.mixer.selected_plugin = None;
-            } else {
-                r.ui.mixer.selected_plugin = Some(instance_id);
-            }
-        }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {
             let _ = r.engine.send(AudioCommand::SetPluginParam {
                 instance_id,
@@ -193,6 +186,10 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             }
         }
         PluginMessage::OpenPluginEditor(instance_id) => {
+            // Opening a slot's window focuses it, whichever window it is
+            // (mixer-cleanup.md §2.1), and selects its channel: the
+            // inspector and the preset commands follow.
+            crate::update::plugin_window::focus(r, instance_id);
             // NOT set optimistically (ba todo #1347). The engine reports
             // both outcomes as `AudioEvent::PluginEditorState`, so the
             // mirror is moved by the echo alone. Setting it here made a
@@ -220,6 +217,22 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             r.plugin_catalog.plugin_scan_in_progress = true;
             let _ = r.engine.send(AudioCommand::RescanPlugins);
         }
+        PluginMessage::OpenPluginWindow(instance_id) => {
+            return crate::update::plugin_window::open(r, instance_id);
+        }
+        PluginMessage::ClosePluginWindow(instance_id) => {
+            r.ui.mixer.close_plugin_window_for(instance_id);
+        }
+        PluginMessage::PluginWindowDrag(step) => {
+            crate::update::plugin_window::drag(r, step);
+        }
+        PluginMessage::OpenGenericParams(instance_id) => {
+            crate::update::plugin_window::open_generic(r, instance_id);
+        }
+        PluginMessage::FocusSlot(instance_id) => {
+            crate::update::plugin_window::focus(r, instance_id);
+        }
+        PluginMessage::ChainUi(m) => return crate::update::chain_ui::update(r, m),
     }
     Task::none()
 }

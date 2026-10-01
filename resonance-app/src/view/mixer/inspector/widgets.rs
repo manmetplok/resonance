@@ -1,6 +1,6 @@
 //! Low-level widget helpers shared across inspector sections: toggle
-//! buttons, labelled field wrappers, stat tiles, placeholder pickers,
-//! and the collapsible group header.
+//! and action buttons, labelled field wrappers, placeholder pickers and
+//! rows, the title block, and the collapsible group header.
 
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{alignment, Element, Length};
@@ -35,12 +35,15 @@ pub(super) fn toggle_button(
     .on_press(msg)
     .style(move |_theme, status| {
         let hovered = matches!(status, button::Status::Hovered);
+        // Off reads as an enabled control (normal text in an outline, the
+        // same as an enabled action button), never as the dim TEXT_4 of a
+        // disabled one beside it; on is the accent.
         let (bg, border, txt) = if on {
             (on_bg, on_color, on_color)
         } else if hovered {
-            (theme::BG_3, theme::LINE, theme::TEXT_1)
+            (theme::BG_3, theme::ACCENT_LINE, theme::TEXT_1)
         } else {
-            (theme::BG_2, theme::LINE, theme::TEXT_3)
+            (theme::BG_2, theme::LINE, theme::TEXT_2)
         };
         button::Style {
             background: Some(iced::Background::Color(bg)),
@@ -53,6 +56,116 @@ pub(super) fn toggle_button(
             ..Default::default()
         }
     })
+    .into()
+}
+
+/// Full-width hairline action button — the inspector's shape for a
+/// one-shot command (Bounce, Delete bus, External hardware…).
+/// `None` renders it disabled (dim text, no hover). `danger` tints the
+/// hover toward BAD for destructive actions.
+pub(super) fn action_button(
+    label: &'static str,
+    msg: Option<Message>,
+    danger: bool,
+) -> Element<'static, Message> {
+    let enabled = msg.is_some();
+    let mut b = button(
+        text(label)
+            .size(11)
+            .align_x(alignment::Horizontal::Center)
+            .width(Length::Fill),
+    )
+    .padding([7, 0])
+    .width(Length::Fill)
+    .style(move |_theme, status| {
+        let hovered = enabled && matches!(status, button::Status::Hovered);
+        let (bg, border, txt) = match (enabled, hovered, danger) {
+            (false, _, _) => (theme::BG_2, theme::LINE_2, theme::TEXT_4),
+            (true, true, true) => (theme::BAD_DIM, theme::BAD_LINE, theme::BAD),
+            (true, true, false) => (theme::BG_3, theme::ACCENT_LINE, theme::TEXT_1),
+            (true, false, _) => (theme::BG_2, theme::LINE, theme::TEXT_2),
+        };
+        button::Style {
+            background: Some(iced::Background::Color(bg)),
+            text_color: txt,
+            border: iced::Border {
+                color: border,
+                width: 1.0,
+                radius: theme::RADIUS_SM.into(),
+            },
+            ..Default::default()
+        }
+    });
+    if let Some(msg) = msg {
+        b = b.on_press(msg);
+    }
+    b.into()
+}
+
+/// Small neutral pill beside the header name naming the channel type
+/// ("Inst", "Audio", "Bus"). The master has none: its title says it.
+pub(super) fn type_tag(label: &'static str) -> Element<'static, Message> {
+    container(
+        text(label)
+            .size(9)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
+    )
+    .padding([1, 6])
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::BG_2)),
+        border: iced::Border {
+            color: theme::LINE_2,
+            width: 1.0,
+            radius: 999.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// A dim uppercase label heading a section *inside* a group (the
+/// external-hardware section of TRACK). Not collapsible on its own.
+pub(super) fn sub_label(title: &'static str) -> Element<'static, Message> {
+    text(title)
+        .size(9)
+        .font(theme::UI_FONT_SEMIBOLD)
+        .color(theme::TEXT_3)
+        .into()
+}
+
+/// The dashed-looking placeholder row a group shows when it has nothing
+/// to list ("Empty chain", "No automation lanes").
+pub(super) fn placeholder_row(label: &'static str) -> Element<'static, Message> {
+    container(text(label).size(11).color(theme::TEXT_3))
+        .padding([8, 10])
+        .width(Length::Fill)
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_2)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 1.0,
+                radius: theme::RADIUS_MD.into(),
+            },
+            ..Default::default()
+        })
+        .into()
+}
+
+/// The inspector title block: the dim "INSPECTOR" caption over the
+/// owner's title row.
+pub(super) fn header<'a>(
+    title_row: iced::widget::Row<'a, Message>,
+) -> Element<'a, Message> {
+    column![
+        text("INSPECTOR")
+            .size(11)
+            .font(theme::UI_FONT_SEMIBOLD)
+            .color(theme::TEXT_3),
+        Space::new().height(2),
+        title_row,
+    ]
+    .spacing(0)
     .into()
 }
 
@@ -162,36 +275,6 @@ pub(super) fn info_row(
             }),
     ]
     .spacing(0)
-    .into()
-}
-
-/// 2×2 stat tile used in the SIGNAL group.
-pub(super) fn stat_tile(label: &'static str, value: String) -> Element<'static, Message> {
-    container(
-        column![
-            text(label)
-                .size(9)
-                .font(theme::UI_FONT_SEMIBOLD)
-                .color(theme::TEXT_3),
-            Space::new().height(3),
-            text(value)
-                .size(13)
-                .font(theme::MONO_FONT)
-                .color(theme::TEXT_1),
-        ]
-        .spacing(0),
-    )
-    .width(Length::FillPortion(1))
-    .padding([8, 10])
-    .style(|_theme| container::Style {
-        background: Some(iced::Background::Color(theme::BG_2)),
-        border: iced::Border {
-            color: theme::LINE_2,
-            width: 1.0,
-            radius: theme::RADIUS_MD.into(),
-        },
-        ..Default::default()
-    })
     .into()
 }
 

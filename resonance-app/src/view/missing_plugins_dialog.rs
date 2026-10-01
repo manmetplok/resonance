@@ -13,8 +13,8 @@
 //! the user can go straight to it.
 //!
 //! It deliberately carries **no per-row action**. The recovery gestures —
-//! replace, relocate, remove — live on the slot itself (the mixer strip's
-//! warning pill opens the plugin panel, which holds the picker), because
+//! replace, rescan, remove — live on the slot itself (its row in the
+//! inspector's CHAIN group holds the inline recovery), because
 //! a plugin is a position in a chain and choosing its replacement is a
 //! decision made looking at that chain, not at a list. What the modal
 //! offers instead is the one action that can fix *every* row at once:
@@ -92,8 +92,8 @@ pub(crate) fn view_missing_plugins_overlay(r: &Resonance) -> Element<'_, Message
             .size(12)
             .color(theme::TEXT_3),
         text(
-            "To swap one out instead, click its slot in the mixer: the plugin \
-             panel offers a replacement and keeps the chain position.",
+            "To swap one out instead, click its slot in the mixer: the \
+             inspector offers a replacement and keeps the chain position.",
         )
         .size(11)
         .color(theme::TEXT_3),

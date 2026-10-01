@@ -17,6 +17,10 @@ pub const ADD: &str = "track.add";
 /// of the (section, placement, track) slot it belongs to, so cached ids
 /// stay valid (ba doc #275 P1.7).
 pub const RENAME: &str = "track.rename";
+/// `track.set_color` — set a track's identity colour ([`SetColorParams`]
+/// -> `MutationAck`). Undoable like any edit. A parent's colour carries
+/// to its sub-tracks; a sub-track id is refused with `invalid_params`.
+pub const SET_COLOR: &str = "track.set_color";
 /// `track.delete` — delete a track; destructive, requires
 /// `"confirm": true` ([`DeleteParams`] -> `MutationAck`).
 pub const DELETE: &str = "track.delete";
@@ -125,6 +129,7 @@ pub const METHODS: &[&str] = &[
     SAVE_PRESET,
     PRESETS,
     APPLY_PRESET,
+    SET_COLOR,
 ];
 
 /// Params for `track.set_sidechain`.
@@ -212,6 +217,32 @@ pub struct AddResult {
 pub struct RenameParams {
     pub track_id: TrackId,
     pub name: String,
+}
+
+/// Params for `track.set_color`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SetColorParams {
+    pub track_id: TrackId,
+    /// `"#rrggbb"` (the `#` is optional; hex digits in either case).
+    pub color: String,
+}
+
+/// Parse a `"#rrggbb"` (or `"rrggbb"`) colour into its RGB bytes, or
+/// `None` when it is not exactly six hex digits.
+pub fn parse_hex_color(s: &str) -> Option<[u8; 3]> {
+    let hex = s.trim();
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
+}
+
+/// Format RGB bytes as the wire's lowercase `"#rrggbb"`.
+pub fn format_hex_color(c: [u8; 3]) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
 /// Params for `track.delete`.

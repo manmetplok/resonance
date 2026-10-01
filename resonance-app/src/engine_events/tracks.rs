@@ -138,14 +138,10 @@ pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
             r.ui.interaction.selected_clip = None;
         }
     }
-    if let Some(sel_plugin_id) = r.ui.mixer.selected_plugin {
-        if r.registry
-            .tracks
-            .iter()
-            .filter(|t| t.id == track_id)
-            .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
-        {
-            r.ui.mixer.selected_plugin = None;
+    // Close the window on, and unfocus, any slot of the removed chain.
+    if let Some(track) = r.registry.tracks.iter().find(|t| t.id == track_id) {
+        for p in &track.plugins {
+            r.ui.mixer.forget_plugin(p.instance_id);
         }
     }
     // Drop side-index entries for every plugin on the removed track
@@ -416,7 +412,8 @@ pub(super) fn bus_removed_echo(r: &mut Resonance, bus_id: BusId) {
     bus_removed(r, bus_id);
 }
 
-/// Mirror a bus's removal: its plugin chain, sends and key routes,
+/// Mirror a bus's removal: its plugin chain, sends, key routes and
+/// automation lanes (its own and its plugins'),
 /// selection, and the tracks it fed falling back to master. Called by the
 /// live delete at once (STATE-10 shape, FU-A13c) and by [`bus_removed_echo`]
 /// for a removal nobody mirrored yet.
@@ -428,16 +425,6 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     // Same for key routes keyed off this bus — see `removed` above.
     r.sidechain
         .drop_routes_from_source(resonance_audio::types::SendSource::Bus(bus_id));
-    if let Some(sel) = r.ui.mixer.selected_plugin {
-        if r.registry
-            .busses
-            .iter()
-            .filter(|b| b.id == bus_id)
-            .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
-        {
-            r.ui.mixer.selected_plugin = None;
-        }
-    }
     let removed_plugin_ids: Vec<resonance_audio::types::PluginInstanceId> = r
         .registry
         .busses
@@ -445,7 +432,31 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
         .find(|b| b.id == bus_id)
         .map(|b| b.plugins.iter().map(|p| p.instance_id).collect())
         .unwrap_or_default();
+    // The bus's own lanes go with it, as a deleted track's do
+    // (`drop_track_references`): saved, they would reload onto the next
+    // bus handed this id. Its plugins' lanes go in the loop below.
+    {
+        use resonance_common::AutomationTarget as T;
+        let stale: Vec<T> = r
+            .automation
+            .lanes
+            .keys()
+            .filter(|t| matches!(t, T::BusGain(id) | T::BusPan(id) | T::BusMute(id) if *id == bus_id))
+            .cloned()
+            .collect();
+        for target in stale {
+            r.automation.lanes.remove(&target);
+            r.automation.live_values.remove(&target);
+            let _ = r.engine.send(AudioCommand::ClearAutomationLane { target });
+        }
+    }
     for id in removed_plugin_ids {
+        // Close the window on, and unfocus, any slot of the removed chain.
+        r.ui.mixer.forget_plugin(id);
+        // The chain's automation lanes (the per-plugin removal path does
+        // this in `engine_events::plugins::bus_removed`; a bus deletion
+        // takes the whole chain without one).
+        crate::engine_events::plugins::drop_plugin_lanes(r, id);
         crate::update::plugin_preset_ui::forget_instance(r, id);
         r.plugin_mirror.index.remove(&id);
         // A bus deletion takes the bus's whole insert chain with it
