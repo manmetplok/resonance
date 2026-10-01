@@ -423,9 +423,17 @@ impl ResonancePlugin for ResonanceDrums {
     /// If the sampler then already holds the wanted kit, at this rate and
     /// with these mic and articulation choices, nothing is decoded again
     /// (E4's "`initialize` at an unchanged rate reuses the loaded kit").
+    ///
+    /// A load still pending then is either decoding for this rate or one
+    /// that gave up on the rate check while the plugin was inactive (it
+    /// leaves no trace of which). When the sampler already holds the
+    /// wanted kit, that load is started again rather than trusted to
+    /// land: every pad comes from the last build (E4), so it decodes
+    /// nothing, and it clears `pending_kit` and finishes the progress —
+    /// which a load that gave up never would.
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
         let wanted = self.bridge.wanted_request();
-        let reuse = {
+        let (reuse, pending) = {
             let _handoff = self.bridge.kit_handoff.lock();
             self.bridge
                 .sample_rate
@@ -438,6 +446,14 @@ impl ResonancePlugin for ResonanceDrums {
                         self.bridge.load_progress.note_taken();
                     }
                     _ => {
+                        // The load that sent it is over, and its kit
+                        // never plays: it must not read as complete once
+                        // the reclaim count reaches its ordinal. Back to
+                        // "loading" — the reload below (or `idle`, with
+                        // no kit wanted) moves it on.
+                        self.bridge
+                            .load_progress
+                            .begin(self.bridge.load_generation.load(Ordering::Acquire));
                         drop(pads);
                         self.bridge.load_progress.note_reclaimed();
                         *handed = None;
@@ -460,10 +476,22 @@ impl ResonancePlugin for ResonanceDrums {
                 // The sampler goes back to the built-in kit below.
                 *handed = None;
             }
-            reuse
+            (reuse, self.bridge.pending_kit.lock().is_some())
         };
         if reuse {
             self.sampler.set_sample_rate(sample_rate);
+            if pending {
+                if let Some(request) = wanted {
+                    kit_loader::spawn_loader(
+                        request.path,
+                        sample_rate,
+                        &self.bridge,
+                        request.overhead_setup_key,
+                        request.pad_choices,
+                        request.articulations,
+                    );
+                }
+            }
             return true;
         }
 

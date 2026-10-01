@@ -430,3 +430,89 @@ fn a_state_load_supersedes_a_pick_still_decoding() {
     let level = kick_level(&mut plugin);
     assert!((level - w.level).abs() < 1e-3, "kick plays at {level}");
 }
+
+// ---------------------------------------------------------------------------
+// Progress across a re-activation
+// ---------------------------------------------------------------------------
+
+/// A kit left in the mailbox at the old rate is discarded by
+/// `initialize`. Its reclaim reaches the ordinal the progress awaits, so
+/// unless the progress is moved off that kit first it reads complete
+/// for a kit that never plays — until the reload begins. A reader
+/// polling all the while must never see it.
+#[test]
+fn a_kit_discarded_by_initialize_never_reads_as_complete() {
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    // Handed off at 48 kHz, never taken.
+    load_and_wait(&plugin, &x, FILE_RATE);
+    assert!(!plugin.bridge.load_progress.is_complete());
+
+    let go = gate(&plugin);
+    let stop = Arc::new(AtomicBool::new(false));
+    let progress = plugin.bridge.load_progress.clone();
+    let reader = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            let mut seen_complete = false;
+            while !stop.load(Ordering::Acquire) {
+                seen_complete |= progress.is_complete();
+            }
+            seen_complete
+        })
+    };
+    reactivate(&mut plugin, OTHER_RATE);
+    stop.store(true, Ordering::Release);
+    assert!(
+        !reader.join().unwrap(),
+        "the discarded 48 kHz kit read as complete during the re-activation"
+    );
+    assert!(!plugin.bridge.load_progress.is_complete());
+
+    go.send(()).unwrap();
+    wait_settled(&plugin, &x);
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// A reload of the kit the sampler already holds that gives up on the
+/// rate check while the plugin is inactive leaves its kit pending. The
+/// re-activation at the kit's rate keeps the installed kit — and must
+/// still finish the load, not leave it pending and "loading" forever.
+#[test]
+fn a_reload_that_gave_up_while_inactive_is_finished_by_the_reactivation() {
+    use resonance_drums::kit_loader::LoadPhase;
+
+    let x = temp_kit(0.5);
+    let mut plugin = booted_plugin(FILE_RATE);
+    load_and_wait(&plugin, &x, FILE_RATE);
+    render(&mut plugin, &[]);
+    assert!(plugin.bridge.load_progress.is_complete());
+
+    // The same request again: a reload with nothing changed.
+    let go = gate(&plugin);
+    assert!(resonance_drums::reload::reload_kit(&plugin.bridge));
+    plugin.deactivate();
+    go.send(()).unwrap();
+    // Give the loader time to reach its rate check and give up (rate 0).
+    std::thread::sleep(Duration::from_millis(200));
+    ungate(&plugin);
+    assert!(plugin.bridge.pending_kit.lock().is_some());
+
+    assert!(plugin.initialize(FILE_RATE, BLOCK as u32));
+    wait_settled(&plugin, &x);
+    render(&mut plugin, &[]);
+    let snap = plugin.bridge.load_progress.snapshot();
+    assert!(snap.complete, "{snap:?}");
+    assert_eq!(snap.phase, LoadPhase::HandedOff);
+    assert_eq!(
+        plugin.bridge.load_stats.lock().decoded,
+        0,
+        "finishing the reload decoded the kit again"
+    );
+    let level = kick_level(&mut plugin);
+    assert!((level - x.level).abs() < 1e-3, "kick plays at {level}");
+}
