@@ -66,37 +66,17 @@ pub enum VoiceState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VoiceDestination {
     /// One of the pad's close-mic banks. `bank_index` is the index into
-    /// `pad.close_mics`. `output_port` is the plugin output port this
-    /// bank routes to (from `pad.output_group`). `balance_side` determines
-    /// how the kick In/Out or snare Top/Btm balance slider scales this
-    /// voice.
-    CloseMic {
-        bank_index: usize,
-        output_port: u8,
-        balance_side: BalanceSide,
-    },
-    /// Overhead mic bank, scaled by the per-pad `oh_blend` param.
+    /// `pad.close_mics`, and picks the trim that scales the voice
+    /// (`pad_N_mic1_trim` for bank 0, `pad_N_mic2_trim` for bank 1).
+    /// `output_port` is the plugin output port this bank routes to.
+    CloseMic { bank_index: usize, output_port: u8 },
+    /// Overhead mic bank, scaled by the per-pad `pad_N_oh_trim` param.
     ///
-    /// `output_port` is normally the shared Overhead port
-    /// (`kit::OVERHEAD_PORT_INDEX`). The exception is a pad the library
-    /// ships **no close mic for** — every cymbal, ride and china piece in
-    /// Drummica is recorded on the overheads only. For those pads the
-    /// overhead bank is the pad's *only* signal, so it is routed to the
-    /// pad's own group port instead; otherwise that group's output port
-    /// (and the sub-track the host creates for it) would be permanently
-    /// silent. See `DrumSampler::note_on`.
+    /// `output_port` is the shared Overhead port
+    /// (`kit::OVERHEAD_PORT_INDEX`) in Multi output mode — for every pad,
+    /// the overhead-only cymbals included (E11) — and Main in Stereo.
+    /// See `DrumSampler::note_on`.
     Overhead { output_port: u8 },
-}
-
-/// Which "side" of a balance slider this close-mic voice represents.
-/// For kick: `Left` = KickIn, `Right` = KickOut. For snare: `Left` = SNTop,
-/// `Right` = SNBtm. `None` for pads with only one close mic position
-/// (toms, hats) — the balance slider doesn't apply.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum BalanceSide {
-    None,
-    Left,
-    Right,
 }
 
 /// `Copy`: a voice is plain data, so moving a stolen one into a tail slot
@@ -106,10 +86,12 @@ pub struct Voice {
     pub active: bool,
     pub pad_index: usize,
     pub note: u8,
-    /// Baseline gain applied throughout playback. For multi-layer pads this
-    /// is 1.0 because the chosen velocity layer already captures the
-    /// dynamics; for single-layer fallback pads it's the MIDI velocity so
-    /// the embedded defaults still scale with how hard the note was hit.
+    /// Baseline gain applied throughout playback. For multi-layer pads it
+    /// is what puts the chosen layer at the level the velocity asks for
+    /// (E7, `dsp::pick_layer_by_level`: 1.0 at the ends of the range, at
+    /// most half a layer gap either way between); for single-layer
+    /// fallback pads it's the MIDI velocity so the embedded defaults
+    /// still scale with how hard the note was hit.
     pub base_gain: f32,
     /// Where this voice's audio should be summed.
     pub destination: VoiceDestination,
@@ -117,8 +99,20 @@ pub struct Voice {
     pub layer_index: usize,
     /// Index into `layers[layer_index].round_robins`.
     pub rr_index: usize,
-    /// Current read position in the sample (in stereo frames).
+    /// Current read position in the sample (in stereo frames): the whole
+    /// part, for a pitched voice (E8).
     pub position: usize,
+    /// Take frames read per output frame (E8, from `pad_N_tune`). Exactly
+    /// `1.0` at pitch, which plays on the integer path, bit for bit.
+    pub rate: f32,
+    /// The fractional part of a pitched voice's position, `0..1`.
+    pub frac: f32,
+    /// Output frames since the hit — the AHD envelope's clock (E8).
+    pub env_pos: u32,
+    /// The AHD envelope (E8), in output frames: the hold, then the decay
+    /// to silence. `decay_frames == 0` is no envelope (the whole sample).
+    pub hold_frames: u32,
+    pub decay_frames: u32,
     pub choke_group: Option<u8>,
     /// True when this voice predates a kit swap and is fading out
     /// against the retired kit's sample data instead of the current
@@ -164,11 +158,15 @@ impl Voice {
             destination: VoiceDestination::CloseMic {
                 bank_index: 0,
                 output_port: 0,
-                balance_side: BalanceSide::None,
             },
             layer_index: 0,
             rr_index: 0,
             position: 0,
+            rate: 1.0,
+            frac: 0.0,
+            env_pos: 0,
+            hold_frames: 0,
+            decay_frames: 0,
             choke_group: None,
             retired: false,
             retired_slot: 0,
@@ -220,6 +218,28 @@ impl Voice {
         if !ends_in_time {
             self.force_fade(left.min(u32::MAX as usize) as u32);
         }
+    }
+
+    /// The AHD envelope's gain now (E8): 1 through the hold, then a
+    /// cubic fall, `(1 − t)³`, that reaches silence with a zero slope at
+    /// the end of the decay (−18 dB half way). Only called with a decay
+    /// set.
+    #[inline]
+    pub fn ahd_gain(&self) -> f32 {
+        let Some(into) = self.env_pos.checked_sub(self.hold_frames) else {
+            return 1.0;
+        };
+        if into >= self.decay_frames {
+            return 0.0;
+        }
+        let left = 1.0 - into as f32 / self.decay_frames as f32;
+        left * left * left
+    }
+
+    /// True once the AHD envelope has decayed to silence.
+    #[inline]
+    pub fn ahd_done(&self) -> bool {
+        self.decay_frames > 0 && self.env_pos >= self.hold_frames.saturating_add(self.decay_frames)
     }
 
     /// True once a releasing voice has run its fade to the end.

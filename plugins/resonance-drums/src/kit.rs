@@ -36,6 +36,35 @@ pub struct SampleData {
     frames: usize,
     /// Where frames `resident_frames..frames` are, for a streamed take.
     tail: Option<Arc<TailSource>>,
+    /// How loud the take's strike is, in dB: the RMS of its first
+    /// [`LOUDNESS_FRAMES`] (E7). Measured once, where the take is built
+    /// — off the audio thread, and shared with it through the cache.
+    level_db: f32,
+}
+
+/// Frames of a take's start its loudness is measured over (E7): the
+/// strike, ≈ 85 ms at 48 kHz. Every streamed head is longer (the
+/// shipped preloads are ≥ 32 k frames), so a take measures the same
+/// streamed or whole.
+pub const LOUDNESS_FRAMES: usize = 4_096;
+
+/// The level a silent take measures: below anything a recording holds.
+pub const SILENT_DB: f32 = -150.0;
+
+/// The RMS, in dB, of the first [`LOUDNESS_FRAMES`] of `samples`
+/// (interleaved, `channels` per frame), over both channels.
+fn measure_level_db(samples: &[f32], channels: usize) -> f32 {
+    let n = samples.len().min(LOUDNESS_FRAMES * channels);
+    if n == 0 {
+        return SILENT_DB;
+    }
+    let sum: f64 = samples[..n].iter().map(|&s| (s as f64) * (s as f64)).sum();
+    let rms = (sum / n as f64).sqrt();
+    if rms > 0.0 {
+        ((20.0 * rms.log10()) as f32).max(SILENT_DB)
+    } else {
+        SILENT_DB
+    }
 }
 
 impl SampleData {
@@ -45,12 +74,19 @@ impl SampleData {
         let channels = channels.clamp(1, 2);
         let frames = samples.len() / channels;
         samples.truncate(frames * channels);
+        let level_db = measure_level_db(&samples, channels);
         Self {
             samples: samples.into_boxed_slice(),
             channels,
             frames,
             tail: None,
+            level_db,
         }
+    }
+
+    /// How loud the take's strike is, in dB (E7; see [`LOUDNESS_FRAMES`]).
+    pub fn level_db(&self) -> f32 {
+        self.level_db
     }
 
     /// A streamed take: `head` resident (interleaved, `channels` per
@@ -128,6 +164,19 @@ pub struct VelocityLayer {
     pub round_robins: Vec<LoadedSample>,
 }
 
+impl VelocityLayer {
+    /// How loud the layer is, in dB: the mean of its takes' measured
+    /// levels ([`SampleData::level_db`], E7). [`SILENT_DB`] for a layer
+    /// with no takes. Allocation-free: the audio thread reads it at a hit.
+    pub fn level_db(&self) -> f32 {
+        if self.round_robins.is_empty() {
+            return SILENT_DB;
+        }
+        let sum: f32 = self.round_robins.iter().map(|t| t.level_db()).sum();
+        sum / self.round_robins.len() as f32
+    }
+}
+
 /// One mic position's sample bank for a single pad. The plugin loads a
 /// separate `LoadedMicBank` per position the library provides for that
 /// pad (e.g. `KickIn`, `KickOut`, `OHsAB`), so multiple voices can be
@@ -172,6 +221,8 @@ impl OutputGroup {
 /// Ports 0..5 correspond to `OutputGroup` variants; port 6 is Overhead.
 pub const NUM_OUTPUT_PORTS: usize = 7;
 pub const OVERHEAD_PORT_INDEX: usize = 6;
+/// Main: where Stereo output mode (E11) sums the whole kit.
+pub const MAIN_PORT_INDEX: usize = 0;
 
 /// Names of the stereo output ports, in port order. Index 0..=5 match the
 /// `OutputGroup` discriminants; index 6 is the shared Overhead bus.
@@ -183,13 +234,17 @@ pub const OUTPUT_PORT_NAMES: [&str; NUM_OUTPUT_PORTS] = [
     "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
 ];
 
-/// Truthful one-line summary of the plugin's output routing.
+/// Truthful one-line summary of the plugin's output routing in the
+/// `output_mode` the params hold (`multi`: Multi, else Stereo — E11).
 ///
-/// The plugin declares every port in [`OUTPUT_PORT_NAMES`] unconditionally —
-/// there is no stereo-only mode and no parameter that switches one — so the
-/// editor renders this as a static readout rather than a toggle.
-pub fn routing_summary() -> String {
-    format!("Multi-out · {NUM_OUTPUT_PORTS} ports")
+/// The plugin declares every port in [`OUTPUT_PORT_NAMES`] in both modes
+/// (a host holds the port list); Stereo leaves all but Main silent.
+pub fn routing_summary(multi: bool) -> String {
+    if multi {
+        format!("Multi-out · {NUM_OUTPUT_PORTS} ports")
+    } else {
+        "Stereo · all on Main".to_string()
+    }
 }
 
 /// The port list as a single comma-separated line, for the KIT card readout.

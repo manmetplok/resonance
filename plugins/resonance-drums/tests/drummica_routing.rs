@@ -193,25 +193,16 @@ fn drummica_hat_routes_to_hats_and_overhead_ports() {
 }
 
 /// Cymbal pads in Drummica have **no close mic** — they're recorded from
-/// the overheads only. The overhead take is therefore the pad's entire
-/// sound, so it is summed into the pad's own group port (Cymbals, 5),
-/// exactly like the built-in fallback kit does.
+/// the overheads only. In Multi (the headless sampler's routing) every
+/// pad's overhead take plays on the Overhead port (E11), these included;
+/// the Cymbals port carries only close-miked cymbals. (Until E11 they
+/// played on the Cymbals port, ba todo #1232; a single port with the
+/// whole kit is now Stereo output mode.)
 ///
-/// This assertion used to run the other way: the cymbal was sent to the
-/// shared Overhead port and the Cymbals port was asserted *silent*. That
-/// was incidental — the test was added alongside the multi-packet WAV
-/// decode fix to catch a `close_mic_count == 0` short-circuit dropping the
-/// cymbal voice entirely, and it pinned whatever port the voice happened to
-/// land on. The cost only showed up in the field (ba todo #1232): the host
-/// derives one sub-track per output port, so the "Cymbals" sub-track was
-/// digital silence for the flagship kit and a client reported "the kit has
-/// no cymbals". Writing more cymbal notes changed nothing on that track.
-///
-/// The point being protected is unchanged — a cymbal hit must make sound —
-/// so the `close_mic_count == 0` short-circuit this test was written for
-/// still fails it.
+/// The point first protected here is unchanged — a cymbal hit must make
+/// sound — so a `close_mic_count == 0` short-circuit still fails it.
 #[test]
-fn drummica_cymbal_routes_to_the_cymbals_port() {
+fn drummica_cymbal_routes_to_the_overhead_port() {
     let Some(pads) = load_drummica_pads() else {
         return;
     };
@@ -221,15 +212,13 @@ fn drummica_cymbal_routes_to_the_cymbals_port() {
     sampler.note_on(drum_map::CRASH_16_EDGE, 0.9);
     let ports = render_one_block(&mut sampler, 256);
     assert!(
-        port_energy(&ports[5]) > 0.0,
-        "Cymbals port (5) silent on Drummica cymbal hit — the Cymbals \
-         sub-track would carry nothing"
+        port_energy(&ports[OVERHEAD_PORT_INDEX]) > 0.0,
+        "Overhead port silent on a Drummica cymbal hit"
     );
-    // And it must not also double into the shared Overhead port.
     assert_eq!(
-        port_energy(&ports[OVERHEAD_PORT_INDEX]),
+        port_energy(&ports[5]),
         0.0,
-        "cymbal must not be summed into Overhead as well as Cymbals"
+        "an overhead take does not double into the Cymbals port"
     );
 }
 

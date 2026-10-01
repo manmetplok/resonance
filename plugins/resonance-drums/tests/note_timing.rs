@@ -8,6 +8,7 @@
 
 use resonance_drums::drum_map;
 use resonance_drums::kit::NUM_OUTPUT_PORTS;
+use resonance_drums::params::OUTPUT_MODE_MULTI;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
@@ -20,6 +21,8 @@ const HATS_PORT: usize = 4;
 
 fn booted_plugin() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read a pad's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(SAMPLE_RATE, BLOCK as u32));
     plugin
 }

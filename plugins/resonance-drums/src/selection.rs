@@ -1249,6 +1249,8 @@ pub fn watch(bridge: &KitBridge) {
         Ok(_) => {}
         Err(e) => tracing::warn!("kit_select: {e}"),
     }
+    // A `stream_preload` moved the same ways reloads the kit.
+    crate::stream::apply_preload_param(bridge);
     // The library changed (a rename, a delete, a kit added in a slot):
     // what a value names may have changed with it.
     let sel = &bridge.params.selection;

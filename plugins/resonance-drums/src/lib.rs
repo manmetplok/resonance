@@ -51,6 +51,7 @@ pub mod kit_loader;
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub mod library;
+pub mod level;
 mod mic_catalog;
 pub mod pad_map;
 pub mod params;
@@ -416,10 +417,10 @@ pub struct ResonanceDrums {
     progress_param: selection::ProgressParam,
 }
 
-/// `kit_select`'s and `kit_load_progress`'s host-order indices: they close
-/// the globals, ahead of the pad block.
-const KIT_SELECT_INDEX: usize = GLOBAL_PARAMS - 2;
-const KIT_LOAD_PROGRESS_INDEX: usize = GLOBAL_PARAMS - 1;
+/// `kit_select`'s and `kit_load_progress`'s host-order indices in
+/// `DrumParams::param_at` (the globals added after them follow).
+const KIT_SELECT_INDEX: usize = 4;
+const KIT_LOAD_PROGRESS_INDEX: usize = 5;
 
 impl ResonancePlugin for ResonanceDrums {
     const CLAP_ID: &'static str = "com.resonance.drums";
@@ -541,10 +542,24 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param_count(&self) -> usize {
-        // master_volume + polyphony + velocity_curve + round_robin_mode +
-        // kit_select + kit_load_progress, then (volume, pan, mute,
-        // oh_blend, balance, articulation) per pad
+        // The globals, then one block per pad — see `DrumParams::param_at`.
         GLOBAL_PARAMS + drum_map::NUM_PADS * PARAMS_PER_PAD
+    }
+
+    /// The default load, after converting a v1 state's linear levels to
+    /// dB (E9, [`params::upgrade_v1_levels`]) — before the params are
+    /// read, so they land converted.
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
+            return false;
+        };
+        resonance_plugin::state::migrate(&mut state, self.param_renames());
+        params::upgrade_v1_levels(&mut state);
+        let ok = resonance_plugin::state::load_params_from_json(&self.params(), &state);
+        if let Some(saver) = self.extra_state_saver() {
+            saver.load(&state);
+        }
+        ok
     }
 
     fn param(&self, index: usize) -> &dyn Param {
@@ -1114,6 +1129,11 @@ impl ExtraStateSaver for DrumsExtraState {
             stream::preload_from_state(state.get(stream::PRELOAD_STATE_KEY)),
         ) {
             bridge.stream_preload.store(frames, Ordering::Relaxed);
+            // The param follows (it is not in the params state: the
+            // preload travels under its own key, in frames).
+            self.params
+                .stream_preload
+                .set_value(stream::preload_param_value(frames));
         }
         // An explicit `kit_ref: null` clears the remembered kit (a project
         // saved with none always writes it); a document without the key —

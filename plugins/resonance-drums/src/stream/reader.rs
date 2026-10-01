@@ -36,6 +36,13 @@
 //! length — a fresh claim has its whole head as lead, and a voice choked
 //! or stolen on its head should not have cost a ring's worth of reads.
 //!
+//! The deadline is **time**, in output frames, not take frames: a voice
+//! tuned up (E8) reads its take faster than the clock, so its head and
+//! its buffered frames last it less — the audio thread publishes the
+//! head it has left divided by its rate, and the buffered frames are
+//! divided by the rate the ring was claimed at. At pitch both are the
+//! frame counts they always were.
+//!
 //! # Faults
 //!
 //! Every reader step on a ring runs under `catch_unwind`: a panic (a
@@ -53,7 +60,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use resonance_common::TailScratch;
 
-use super::{Ring, StreamSet, TailSource, READ_CHUNK, RING_FRAMES, WPOS_FAILED, WPOS_FRAMES};
+use super::{
+    Pace, Ring, StreamSet, TailSource, READ_CHUNK, RING_FRAMES, WPOS_FAILED, WPOS_FRAMES,
+};
 
 /// Sleep between passes that found nothing to do while streams are open.
 pub const ACTIVE_POLL: Duration = Duration::from_micros(500);
@@ -445,7 +454,10 @@ fn wants_fill(ring: &Ring) -> Option<u64> {
     if n == 0 || (n < READ_CHUNK as u64 / 4 && n < end - next) {
         return None;
     }
-    Some(ring.head_left.load(Ordering::Acquire) + (next - read))
+    // In output frames: what the ring buffers lasts a pitched voice
+    // (E8) its length over its rate.
+    let rate_q16 = ring.rate_q16.load(Ordering::Acquire);
+    Some(ring.head_left.load(Ordering::Acquire) + Pace::frames_to_time(next - read, rate_q16))
 }
 
 /// Drop a stream the audio thread has let go of, and take a pending

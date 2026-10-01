@@ -23,8 +23,8 @@
 //!
 //! - the multi-mic path. The fallback kit gives every pad a single
 //!   close-mic bank and **no overhead bank**, so the Overhead port is
-//!   silent here and the kick/snare in-vs-out balance control has only
-//!   one bank to balance. `tests/group_balance.rs` documents the same
+//!   silent here and the kick/snare second close-mic trim has no bank
+//!   to scale. `tests/group_balance.rs` documents the same
 //!   limitation.
 //! - multiple velocity layers and multiple round-robin takes. The
 //!   fallback has one layer with one take per pad, so `pick_rr` and
@@ -77,12 +77,16 @@ use std::path::PathBuf;
 
 use resonance_dsp_test_support as golden;
 use resonance_drums::drum_map::{
-    CRASH_16_EDGE, HIHAT_CLOSED, HIHAT_OPEN, HIHAT_PEDAL, KICK, RIDE_TIP, RIMSHOT, SNARE,
-    TOM_HIGH, TOM_LOW, TOM_MID,
+    CRASH_16_EDGE, HIHAT_CLOSED, HIHAT_OPEN, HIHAT_PEDAL, KICK, PAD_MAPPINGS, RIDE_TIP, RIMSHOT,
+    SNARE, TOM_HIGH, TOM_LOW, TOM_MID,
 };
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedPad, NUM_OUTPUT_PORTS};
-use resonance_drums::params::DrumParams;
+use resonance_drums::level::gain_to_db;
+use resonance_drums::params::{
+    DrumParams, MicSlot, DECAY_OFF_MS, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO,
+};
+use resonance_drums::voice::MAX_VOICES;
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -218,8 +222,19 @@ type MidRunEdit = fn(&DrumParams, usize);
 struct Scenario {
     name: &'static str,
     pattern: &'static [Hit],
+    /// Applied after [`pin`].
     setup: fn(&DrumParams),
     edit: Option<MidRunEdit>,
+    /// Where the scenario must be heard — its own guard against
+    /// rendering silence (or the wrong routing) into the golden.
+    ports: Ports,
+}
+
+enum Ports {
+    /// Sounds on at least this many ports.
+    AtLeast(usize),
+    /// Sounds on Main, and nowhere else.
+    MainOnly,
 }
 
 fn scenarios() -> Vec<Scenario> {
@@ -232,6 +247,7 @@ fn scenarios() -> Vec<Scenario> {
             pattern: GROOVE,
             setup: |_| {},
             edit: None,
+            ports: Ports::AtLeast(3),
         },
         // 2. Velocity curve pushed hard (soft end). The curve is an
         //    exact identity at 0, so it is the one global control that
@@ -242,6 +258,7 @@ fn scenarios() -> Vec<Scenario> {
             pattern: GROOVE,
             setup: |p| p.velocity_curve.set_value(1.0),
             edit: None,
+            ports: Ports::AtLeast(3),
         },
         // 3. …and the hard end, which bends the same hits the other
         //    way. Two scenarios rather than one because the curve is
@@ -251,6 +268,7 @@ fn scenarios() -> Vec<Scenario> {
             pattern: GROOVE,
             setup: |p| p.velocity_curve.set_value(-1.0),
             edit: None,
+            ports: Ports::AtLeast(3),
         },
         // 4. Hi-hat choke group. An open hat that is cut by a closed
         //    hat is a ramp applied mid-decay; get the ramp length or
@@ -260,6 +278,8 @@ fn scenarios() -> Vec<Scenario> {
             pattern: HIHAT_CHOKES,
             setup: |_| {},
             edit: None,
+            // Deliberately one group.
+            ports: Ports::AtLeast(1),
         },
         // 5. Ten simultaneous hits against a polyphony ceiling of three.
         //    Every stolen voice is a fade-out on a sounding sample,
@@ -270,6 +290,7 @@ fn scenarios() -> Vec<Scenario> {
             pattern: PILE_UP,
             setup: |p| p.polyphony.set_value(3),
             edit: None,
+            ports: Ports::AtLeast(3),
         },
         // 6. Random round robin. The mode is driven by a fixed-seed
         //    xorshift precisely so a render is reproducible — bouncing
@@ -283,6 +304,7 @@ fn scenarios() -> Vec<Scenario> {
             pattern: GROOVE,
             setup: |p| p.round_robin_mode.set_value(1),
             edit: None,
+            ports: Ports::AtLeast(3),
         },
         // 7. Master volume, per-pad volume, pan and mute all moving
         //    between blocks. Each is linearly interpolated across the
@@ -295,22 +317,65 @@ fn scenarios() -> Vec<Scenario> {
             setup: |_| {},
             edit: Some(|p, block| {
                 let t = block as f32 / BLOCKS as f32;
-                p.master_volume.set_value(0.2 + 0.7 * t);
+                // Levels are dB (E9): the same gain sweeps as before,
+                // given in dB, so the ramps still run between gains.
+                p.master_volume.set_value(gain_to_db(0.2 + 0.7 * t));
                 // Sweep the kick's and snare's pads in opposite
                 // directions so the pan law is exercised across its
                 // whole range in one run.
                 for (pad, dir) in [(0usize, 1.0f32), (1usize, -1.0f32)] {
                     let pp = &p.pads[pad];
-                    pp.volume.set_value(0.3 + 0.7 * t);
+                    pp.volume.set_value(gain_to_db(0.3 + 0.7 * t));
                     pp.pan.set_value(dir * (2.0 * t - 1.0));
-                    pp.balance.set_value(t);
+                    // The fallback kit's one close bank is mic 1.
+                    pp.trim(MicSlot::Close1).set_value(-6.0 + 6.0 * t);
                 }
                 // A pad muting and unmuting mid-run: mute folds into
                 // the volume snapshot, so it ramps rather than cutting.
                 p.pads[4].mute.set_value(block % 10 >= 5);
             }),
+            ports: Ports::AtLeast(3),
+        },
+        // 8. Stereo output mode (E11, the plugin's default): the whole
+        //    groove summed to Main, every other port silent. The seven
+        //    scenarios above run in Multi so they keep pinning the ports.
+        Scenario {
+            name: "groove_stereo_output",
+            pattern: GROOVE,
+            setup: |p| p.output_mode.set_value(OUTPUT_MODE_STEREO),
+            edit: None,
+            ports: Ports::MainOnly,
         },
     ]
+}
+
+/// Every param a scenario does not set itself, pinned to a stated value
+/// rather than left to whatever the defaults are next year (a default
+/// that moves must not silently re-shape a scenario): unity levels,
+/// linear velocity, Cycle, full polyphony, the Drummica choke groups and
+/// ports, and **Multi** output so the per-port digests see the routing.
+fn pin(p: &DrumParams) {
+    p.master_volume.set_value(0.0);
+    p.polyphony.set_value(MAX_VOICES as i32);
+    p.velocity_curve.set_value(0.0);
+    p.velocity_humanize.set_value(0.0);
+    p.round_robin_mode.set_value(0);
+    p.output_mode.set_value(OUTPUT_MODE_MULTI);
+    for (pad, mapping) in p.pads.iter().zip(PAD_MAPPINGS.iter()) {
+        pad.volume.set_value(0.0);
+        pad.pan.set_value(0.0);
+        pad.mute.set_value(false);
+        for trim in &pad.trims {
+            trim.set_value(0.0);
+        }
+        pad.choke.set_value(mapping.choke_group.map_or(0, i32::from));
+        pad.output.set_value(mapping.output_group.index() as i32);
+        // At pitch (the integer path), no envelope, from the top.
+        pad.tune.set_value(0.0);
+        pad.hold.set_value(0.0);
+        pad.decay.set_value(DECAY_OFF_MS);
+        pad.start.set_value(0.0);
+    }
 }
 
 /// Deterministic render of one scenario into the golden word stream:
@@ -318,6 +383,7 @@ fn scenarios() -> Vec<Scenario> {
 /// digest of every output port.
 fn render_scenario(s: &Scenario) -> Vec<u32> {
     let params = DrumParams::default();
+    pin(&params);
     (s.setup)(&params);
 
     // The kit receiver never receives anything: this scenario runs on
@@ -435,6 +501,7 @@ fn drums_output_is_bit_exact() {
 fn every_scenario_sounds_on_several_ports() {
     for s in scenarios() {
         let params = DrumParams::default();
+        pin(&params);
         (s.setup)(&params);
         let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
         let mut sampler = DrumSampler::new(rx);
@@ -477,19 +544,26 @@ fn every_scenario_sounds_on_several_ports() {
         }
 
         let sounding = port_peak.iter().filter(|p| **p > 1e-4).count();
-        // The hi-hat scenario is deliberately one-group; everything
-        // else spans the kit.
-        let want = if s.pattern.as_ptr() == HIHAT_CHOKES.as_ptr() {
-            1
-        } else {
-            3
-        };
-        assert!(
-            sounding >= want,
-            "scenario `{}` sounded on only {sounding} of {NUM_OUTPUT_PORTS} ports \
-             (peaks {port_peak:?}) — the fallback kit or the port routing is \
-             broken, and the golden would pin the broken version",
-            s.name
-        );
+        match s.ports {
+            Ports::AtLeast(want) => assert!(
+                sounding >= want,
+                "scenario `{}` sounded on only {sounding} of {NUM_OUTPUT_PORTS} ports \
+                 (peaks {port_peak:?}) — the fallback kit or the port routing is \
+                 broken, and the golden would pin the broken version",
+                s.name
+            ),
+            Ports::MainOnly => {
+                assert!(
+                    port_peak[0] > 1e-4,
+                    "scenario `{}` is silent on Main (peaks {port_peak:?})",
+                    s.name
+                );
+                assert_eq!(
+                    sounding, 1,
+                    "scenario `{}` must sound on Main only (peaks {port_peak:?})",
+                    s.name
+                );
+            }
+        }
     }
 }

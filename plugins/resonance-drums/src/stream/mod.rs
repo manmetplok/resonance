@@ -144,17 +144,60 @@ pub fn preload_from_state(value: Option<&serde_json::Value>) -> Option<u32> {
     (frames == 0 || PRELOAD_CHOICES.contains(&frames)).then_some(frames)
 }
 
+/// The `stream_preload` param's choices, in its value order: Off (every
+/// take whole), then [`PRELOAD_CHOICES`].
+pub const PRELOAD_LABELS: &[&str] = &["Off", "32k", "64k", "128k"];
+
+/// The frames each [`PRELOAD_LABELS`] entry keeps resident.
+pub const PRELOAD_PARAM_FRAMES: [u32; 4] = [0, 32_768, 65_536, 131_072];
+
+/// The `stream_preload` param value for `frames` (one of
+/// [`PRELOAD_PARAM_FRAMES`]; anything else reads as the default).
+pub fn preload_param_value(frames: u32) -> i32 {
+    PRELOAD_PARAM_FRAMES
+        .iter()
+        .position(|&f| f == frames)
+        .or_else(|| PRELOAD_PARAM_FRAMES.iter().position(|&f| f == DEFAULT_PRELOAD))
+        .unwrap_or(0) as i32
+}
+
+/// The frames a `stream_preload` param value keeps resident.
+pub fn preload_frames(value: i32) -> u32 {
+    PRELOAD_PARAM_FRAMES
+        .get(value.max(0) as usize)
+        .copied()
+        .unwrap_or(DEFAULT_PRELOAD)
+}
+
 /// Set the preload (one of [`PRELOAD_CHOICES`], or 0 for none) and, if
 /// it changed, reload the kit so its takes are split at the new size.
-/// Returns whether a reload started. Never call it from the audio thread.
+/// The `stream_preload` param follows, so the watcher does not move it
+/// back. Returns whether a reload started. Never call it from the audio
+/// thread.
 pub fn set_preload(bridge: &crate::KitBridge, frames: u32) -> bool {
     if frames != 0 && !PRELOAD_CHOICES.contains(&frames) {
         return false;
     }
+    bridge
+        .params
+        .stream_preload
+        .set_value(preload_param_value(frames));
     if bridge.stream_preload.swap(frames, Ordering::Relaxed) == frames {
         return false;
     }
     crate::reload::reload_kit(bridge)
+}
+
+/// Act on a `stream_preload` param the host, the control API or the
+/// editor moved: set the preload it names, reloading the kit. Run by the
+/// instance's watcher thread (`selection::watch`); returns whether a
+/// reload started.
+pub fn apply_preload_param(bridge: &crate::KitBridge) -> bool {
+    let frames = preload_frames(bridge.params.stream_preload.value());
+    if bridge.stream_preload.load(Ordering::Relaxed) == frames {
+        return false;
+    }
+    set_preload(bridge, frames)
 }
 
 /// A take is only split when its tail would be at least this long; a
@@ -246,10 +289,17 @@ pub struct Ring {
     pub(crate) wpos: AtomicU64,
     /// Ring frames the audio thread is done with.
     pub(crate) read: AtomicU64,
-    /// Published by the audio thread: frames its voice has left to play
-    /// of its head before it needs ring frame 0 (0 once on its tail).
-    /// Plus what is buffered, the reader's deadline for this ring.
+    /// Published by the audio thread: **output** frames its voice has
+    /// left to play of its head before it needs ring frame 0 (0 once on
+    /// its tail). Plus what is buffered (at `rate_q16`), the reader's
+    /// deadline for this ring.
     pub(crate) head_left: AtomicU64,
+    /// The voice's playback rate in 16.16 fixed point (E8): take frames
+    /// it reads per output frame, `1 << 16` at pitch. The reader turns
+    /// the frames a ring buffers into the time they last by it, so a
+    /// voice pitched up an octave is served as the one that runs out
+    /// twice as soon as it is. Set at the claim.
+    pub(crate) rate_q16: AtomicU32,
     /// The generation a reader is serving (0: none), and its stream's
     /// length in ring frames: what the readers' lock-free scans go by.
     pub(crate) reader_gen: AtomicU32,
@@ -274,6 +324,7 @@ impl Ring {
             wpos: AtomicU64::new(0),
             read: AtomicU64::new(0),
             head_left: AtomicU64::new(0),
+            rate_q16: AtomicU32::new(Pace::UNITY_Q16),
             reader_gen: AtomicU32::new(0),
             reader_end: AtomicU64::new(0),
             data: OnceLock::new(),
@@ -548,6 +599,52 @@ impl RingBits {
     }
 }
 
+/// How fast a claiming voice will need its ring (E8): see
+/// [`AudioStreams::claim`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pace {
+    /// Output frames until the voice reads ring frame 0.
+    pub head_left: usize,
+    /// Take frames read per output frame, 16.16 fixed point.
+    pub rate_q16: u32,
+}
+
+impl Pace {
+    /// `rate_q16` at pitch.
+    pub const UNITY_Q16: u32 = 1 << 16;
+
+    /// A voice at pitch, `head_left` frames from its tail.
+    pub fn unity(head_left: usize) -> Self {
+        Self {
+            head_left,
+            rate_q16: Self::UNITY_Q16,
+        }
+    }
+
+    /// A voice reading `rate` take frames per output frame, `head` take
+    /// frames from its tail.
+    pub fn at_rate(head: usize, rate: f32) -> Self {
+        if rate == 1.0 {
+            return Self::unity(head);
+        }
+        let rate = rate.max(1.0 / 64.0);
+        Self {
+            head_left: (head as f32 / rate) as usize,
+            rate_q16: ((rate * Self::UNITY_Q16 as f32) as u32).max(1),
+        }
+    }
+
+    /// The output frames `frames` take frames last at `rate_q16`.
+    #[inline]
+    pub(crate) fn frames_to_time(frames: u64, rate_q16: u32) -> u64 {
+        if rate_q16 == Self::UNITY_Q16 {
+            frames
+        } else {
+            frames.saturating_mul(Self::UNITY_Q16 as u64) / rate_q16.max(1) as u64
+        }
+    }
+}
+
 /// How the sampler is being rendered, which decides what a missing tail
 /// frame does (see the module docs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -627,6 +724,12 @@ impl AudioStreams {
     /// take frame `start` on. [`NO_RING`] when every ring is taken (the
     /// voice then plays its head only, and that counts as an underrun).
     ///
+    /// `pace` is how fast the voice will get there: its first deadline
+    /// (output frames until it needs ring frame 0) and its playback rate
+    /// (E8: a pitched voice reads more, or fewer, take frames per output
+    /// frame). [`Pace::unity`] for a voice that plays from frame 0 at
+    /// pitch.
+    ///
     /// `offline_wait`: offline only — wait, for at most this long (which
     /// is charged for it), for the reader to take a pending request and
     /// so free a ring, rather than give up at once.
@@ -634,15 +737,16 @@ impl AudioStreams {
         &mut self,
         source: &Arc<TailSource>,
         start: usize,
+        pace: Pace,
         offline_wait: Option<&mut Duration>,
     ) -> u8 {
-        if let Some(ring) = self.try_claim(source, start) {
+        if let Some(ring) = self.try_claim(source, start, pace) {
             return ring;
         }
         if let Some(budget) = offline_wait.filter(|b| !b.is_zero()) {
             let mut got = None;
             wait_until(budget, || {
-                got = self.try_claim(source, start);
+                got = self.try_claim(source, start, pace);
                 got.is_some()
             });
             if let Some(ring) = got {
@@ -654,7 +758,7 @@ impl AudioStreams {
         NO_RING
     }
 
-    fn try_claim(&mut self, source: &Arc<TailSource>, start: usize) -> Option<u8> {
+    fn try_claim(&mut self, source: &Arc<TailSource>, start: usize, pace: Pace) -> Option<u8> {
         for (i, ring) in self.set.rings.iter().enumerate() {
             // A ring no voice holds, whose last request the reader has
             // taken. (One it has not taken yet stays as it is: only the
@@ -668,7 +772,8 @@ impl AudioStreams {
             };
             self.gens[i] = gen;
             ring.read.store(0, Ordering::Relaxed);
-            ring.head_left.store(start as u64, Ordering::Relaxed);
+            ring.head_left.store(pace.head_left as u64, Ordering::Relaxed);
+            ring.rate_q16.store(pace.rate_q16, Ordering::Relaxed);
             ring.wpos.store((gen as u64) << 32, Ordering::Relaxed);
             ring.active_gen.store(gen, Ordering::Release);
             ring.req_gen.store(gen, Ordering::Relaxed);

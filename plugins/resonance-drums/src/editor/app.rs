@@ -819,20 +819,22 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             // Master.
             ui.vertical(|ui| {
                 ui.set_width(master_w);
-                let v = app.params.master_volume.value();
+                // dB, along the param's own travel.
+                let master = &app.params.master_volume;
                 label_value_row(
                     ui,
                     "MASTER",
                     theme::TEXT_3,
                     10.0,
-                    &format!("{v:.2}"),
+                    &crate::level::db_label(master.value()),
                     theme::TEXT_1,
                     11.0,
                 );
+                let v = master.normalized_value();
                 if let Some(nv) =
                     super::probed(ui, "kit.master", |ui| widgets::slider_unipolar(ui, master_w, v))
                 {
-                    app.params.master_volume.set_value(nv);
+                    master.set_normalized(nv);
                 }
             });
             ui.add_space(CARD_COLUMN_GAP);
@@ -844,10 +846,12 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             // unimplemented controls went — out, rather than left drawn
             // for a user to drag at.
 
-            // Routing — a readout, not a control. The plugin declares all
-            // `kit::NUM_OUTPUT_PORTS` ports unconditionally (see
-            // `ResonanceDrums::output_layout`); there is no stereo-only mode
-            // to switch to, so nothing here is clickable.
+            // Routing — a readout of `output_mode` (E11), not a control:
+            // the switch itself arrives with the K5 Mix tab. The plugin
+            // declares all `kit::NUM_OUTPUT_PORTS` ports in both modes
+            // (see `ResonanceDrums::output_layout`).
+            let multi =
+                app.params.output_mode.value() == crate::params::OUTPUT_MODE_MULTI;
             ui.vertical(|ui| {
                 ui.set_width(routing_w);
                 label_value_row(
@@ -855,7 +859,7 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                     "ROUTING",
                     theme::TEXT_3,
                     10.0,
-                    &kit::routing_summary(),
+                    &kit::routing_summary(multi),
                     theme::TEXT_1,
                     11.0,
                 );
@@ -872,8 +876,9 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                     .truncate(),
                 )
                 .on_hover_text(
-                    "Every drum group has its own stereo output port. Route them \
-                     in the host's mixer — the plugin always declares all of them.",
+                    "Output Mode (a plugin parameter): Stereo plays the whole kit \
+                     on Main; Multi gives every drum group its own stereo port and \
+                     the overheads theirs. The plugin always declares all of them.",
                 );
             });
         });

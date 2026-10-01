@@ -214,6 +214,12 @@ fn fixture_kit(damage: Damage) -> Kit {
 
 fn booted() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): these tests read the Overhead port.
+    plugin
+        .bridge
+        .params
+        .output_mode
+        .set_value(resonance_drums::params::OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(RATE, BLOCK as u32));
     plugin
 }
@@ -579,10 +585,11 @@ fn render_bits(pads: Vec<LoadedPad>) -> Vec<u32> {
     sampler.set_sample_rate(RATE);
     sampler.pads = pads;
     let params = DrumParams::default();
-    // Off-centre pans and an in/out balance, so left and right differ.
+    // Off-centre pans and unequal in/out trims, so left and right differ.
     params.pads[0].pan.set_value(-0.6);
     params.pads[1].pan.set_value(0.4);
-    params.pads[0].balance.set_value(0.3);
+    params.pads[0].trims[0].set_value(-3.0);
+    params.pads[0].trims[1].set_value(-10.5);
     let mut out = Vec::new();
     let mut bufs: Vec<(Vec<f32>, Vec<f32>)> = (0..NUM_OUTPUT_PORTS)
         .map(|_| (vec![0.0; BLOCK], vec![0.0; BLOCK]))

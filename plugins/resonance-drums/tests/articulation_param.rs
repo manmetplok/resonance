@@ -21,7 +21,7 @@ use resonance_drums::articulation::{
 };
 use resonance_drums::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use resonance_drums::kit_loader::KitStatus;
-use resonance_drums::params::DrumParams;
+use resonance_drums::params::{DrumParams, OUTPUT_MODE_MULTI};
 use resonance_drums::reload::reload_kit;
 use resonance_drums::ResonanceDrums;
 use resonance_plugin::param::Param;
@@ -34,8 +34,8 @@ const BLOCK: usize = 128;
 const SAMPLE_FRAMES: usize = 256;
 const KICK_PORT: usize = 1;
 const NUM_PORTS: usize = 7;
-/// Level the loaded piece is rendered at: pad volume (0.8) × master (0.8).
-const CHAIN_GAIN: f32 = 0.64;
+/// Level the loaded piece is rendered at: pad volume (0 dB) × master (0 dB).
+const CHAIN_GAIN: f32 = 1.0;
 
 // ---------------------------------------------------------------------------
 // Synthetic kit
@@ -231,6 +231,8 @@ fn a_param_write_changes_what_the_sampler_plays() {
     let kit = build_temp_kit("param-write", 0.5, 0.25);
 
     let mut plugin = ResonanceDrums::new();
+    // Multi output (E11): this test reads the kick's own port.
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
     assert!(plugin.initialize(SAMPLE_RATE, BLOCK as u32));
 
     // Load the kit at its default articulation, the way the editor's

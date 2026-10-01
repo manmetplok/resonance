@@ -7,23 +7,26 @@ use std::time::{Duration, Instant};
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
+use crate::kit::{
+    LoadedMicBank, LoadedPad, SampleData, VelocityLayer, MAIN_PORT_INDEX, OVERHEAD_PORT_INDEX,
+};
 use crate::kit_loader::KitLoadProgress;
-use crate::params::DrumParams;
+use crate::level::db_to_gain;
+use crate::params::{DrumParams, MicSlot, MIC_SLOTS};
 use crate::stream::reader::ReaderPool;
 use crate::stream::{
-    wait_until, AudioStreams, RenderMode, Ring, StreamSet, HOST_RENDER_OFFLINE,
+    wait_until, AudioStreams, Pace, RenderMode, Ring, StreamSet, HOST_RENDER_OFFLINE,
     HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN, NO_RING,
 };
 use crate::voice::{
-    fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
+    fade_frames, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
     STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
 };
 
 use super::janitor;
 use super::voice_pick::{
-    map_relative, pick_rr, pick_rr_random, pick_velocity_layer, RoundRobinMode, MAX_LAYERS,
-    NO_LAST_TAKE,
+    map_relative, next_random, pick_layer_by_level, pick_rr, pick_rr_random, RoundRobinMode,
+    MAX_LAYERS, NO_LAST_TAKE,
 };
 
 /// The global settings a hit is started with, snapshotted once per
@@ -38,8 +41,15 @@ pub struct GlobalSettings {
     pub max_voices: usize,
     /// Velocity curve, -1 (hard) … 0 (linear) … +1 (soft).
     pub velocity_curve: f32,
+    /// Velocity humanize (E7): each hit's velocity moves by up to ± this
+    /// many MIDI steps (0..20), from a fixed-seed generator. 0 is off.
+    pub velocity_humanize: f32,
     /// How a layer's takes are walked.
     pub round_robin: RoundRobinMode,
+    /// Where hits sound (E11). A headless sampler never handed params
+    /// routes [`OutputMode::Multi`], as the sampler always did; the
+    /// plugin's own default (`output_mode`) is Stereo.
+    pub output_mode: OutputMode,
 }
 
 impl Default for GlobalSettings {
@@ -47,7 +57,123 @@ impl Default for GlobalSettings {
         Self {
             max_voices: MAX_VOICES,
             velocity_curve: 0.0,
+            velocity_humanize: 0.0,
             round_robin: RoundRobinMode::Cycle,
+            output_mode: OutputMode::Multi,
+        }
+    }
+}
+
+/// How the sampler spreads a kit over its output ports (E11, D5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputMode {
+    /// Every pad and mic sums to Main (port 0).
+    Stereo,
+    /// Each pad's close mics play on its output port; every overhead
+    /// take on the Overhead port.
+    Multi,
+}
+
+impl OutputMode {
+    /// Read the mode off its parameter value.
+    pub fn from_param(value: i32) -> Self {
+        if value == crate::params::OUTPUT_MODE_MULTI {
+            Self::Multi
+        } else {
+            Self::Stereo
+        }
+    }
+}
+
+/// The most `velocity_humanize` moves a hit, in MIDI velocity steps.
+pub const MAX_HUMANIZE: f32 = 20.0;
+
+/// The velocity humanize generator's seed (any nonzero word).
+const VEL_RNG_SEED: u32 = 0x2545_F491;
+
+/// A [`PadSettings`] field that defers to what the kit itself says
+/// ([`LoadedPad`]): what a headless sampler that is never handed params
+/// does, as the sampler always did.
+pub const FROM_KIT: u8 = u8::MAX;
+
+/// One pad's trigger settings, snapshotted once per block from its
+/// params with the [`GlobalSettings`]: they decide how a hit on the pad
+/// is *started*, so block rate is the right granularity.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PadSettings {
+    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`].
+    pub choke: u8,
+    /// The port the pad's close mics play on in Multi (E11): a port
+    /// index, or [`FROM_KIT`] for the pad's own group.
+    pub port: u8,
+    /// Playback rate from `pad_N_tune` (E8): `2^(st/12)`, exactly 1.0 at
+    /// 0 st (the integer path).
+    pub rate: f32,
+    /// Sample start (E8), in take frames at the host rate.
+    pub start_frames: u32,
+    /// Hold and decay (E8), in output frames; `decay_frames == 0` is Off.
+    pub hold_frames: u32,
+    pub decay_frames: u32,
+}
+
+impl Default for PadSettings {
+    fn default() -> Self {
+        Self {
+            choke: FROM_KIT,
+            port: FROM_KIT,
+            rate: 1.0,
+            start_frames: 0,
+            hold_frames: 0,
+            decay_frames: 0,
+        }
+    }
+}
+
+impl PadSettings {
+    /// This pad's settings from its params, at `sample_rate`.
+    pub fn from_params(pad: &crate::params::PadParams, sample_rate: f32) -> Self {
+        use crate::params::{DECAY_OFF_MS, MAX_TUNE_ST};
+        let frames = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
+        let tune = pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST);
+        let decay_ms = pad.decay.value();
+        Self {
+            choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
+            port: pad
+                .output
+                .value()
+                .clamp(0, crate::kit::NUM_OUTPUT_PORTS as i32 - 1) as u8,
+            // Exactly 1.0 at 0 st: not `exp2(0.0)`'s word for it.
+            rate: if tune == 0.0 {
+                1.0
+            } else {
+                (tune / 12.0).exp2()
+            },
+            start_frames: frames(pad.start.value()),
+            hold_frames: frames(pad.hold.value()),
+            decay_frames: if decay_ms >= DECAY_OFF_MS {
+                0
+            } else {
+                frames(decay_ms).max(1)
+            },
+        }
+    }
+
+    /// The port a hit on `pad` plays its close mics on in Multi.
+    #[inline]
+    fn close_port(&self, pad: &LoadedPad) -> u8 {
+        match self.port {
+            FROM_KIT => pad.output_group.index() as u8,
+            port => port,
+        }
+    }
+
+    /// The choke group a hit on `pad` joins.
+    #[inline]
+    fn choke_group(&self, pad: &LoadedPad) -> Option<u8> {
+        match self.choke {
+            FROM_KIT => pad.choke_group,
+            0 => None,
+            group => Some(group),
         }
     }
 }
@@ -149,8 +275,15 @@ pub struct DrumSampler {
     /// constant so a render is reproducible: bouncing the same project
     /// twice gives the same takes.
     rr_rng: u32,
+    /// Xorshift state for velocity humanize (E7), apart from `rr_rng` so
+    /// turning humanize on does not move which takes Random picks. Fixed
+    /// seed, and re-seeded by `reset` (a bounce resets first), so a
+    /// humanized render is reproducible.
+    vel_rng: u32,
     /// Global trigger settings, refreshed once per block from the params.
     globals: GlobalSettings,
+    /// Per-pad trigger settings, refreshed with `globals`.
+    pad_settings: [PadSettings; NUM_PADS],
     /// Shared display state for the editor: packed `rr_index | (n_rrs << 16)`.
     /// Written after each `note_on`; `None` when running headless / in tests.
     last_rr: Option<Arc<[AtomicU32; NUM_PADS]>>,
@@ -198,30 +331,29 @@ pub struct DrumSampler {
     swap_frames: u32,
     /// [`STEAL_FADE_MS`] in frames at `sample_rate`: stolen voices.
     steal_frames: u32,
-    /// Last block's master volume snapshot. Used to interpolate from
-    /// the previous block's value to the current one across the block
-    /// so automation tweaks don't click. Initialized to 1.0 so the
-    /// first block starts at unity gain.
+    /// Last block's master gain snapshot (linear, from the dB param).
+    /// Used to interpolate from the previous block's value to the
+    /// current one across the block so automation tweaks don't click.
+    /// Initialized to 1.0 so the first block starts at unity gain.
     prev_master_volume: f32,
     /// Last block's per-pad parameter snapshots, mirroring the master
-    /// volume ramp: each pad's volume / pan / OH blend / balance is
-    /// linearly interpolated from the previous block's value to the
+    /// volume ramp: each pad's volume / pan / per-mic trims is linearly
+    /// interpolated (in gain) from the previous block's value to the
     /// current one across the block so automation jumps don't click.
     /// (`mute` folds into the volume snapshot, so mute toggles ramp
     /// too.) Seeded from the first block's snapshot (`pad_prev_valid`)
     /// so the plugin doesn't ramp from arbitrary defaults on startup.
     prev_pad_volume: [f32; NUM_PADS],
     prev_pad_pan: [f32; NUM_PADS],
-    prev_pad_oh: [f32; NUM_PADS],
-    prev_pad_balance: [f32; NUM_PADS],
+    /// Per-mic trim gains, indexed by [`MicSlot`].
+    prev_pad_trim: [[f32; MIC_SLOTS]; NUM_PADS],
     pad_prev_valid: bool,
     /// This block's per-pad parameter snapshots, taken by
     /// [`DrumSampler::begin_block`] and ramped toward from the `prev_*`
     /// ones by every [`DrumSampler::render_span`] of the block.
     cur_pad_volume: [f32; NUM_PADS],
     cur_pad_pan: [f32; NUM_PADS],
-    cur_pad_oh: [f32; NUM_PADS],
-    cur_pad_balance: [f32; NUM_PADS],
+    cur_pad_trim: [[f32; MIC_SLOTS]; NUM_PADS],
     /// `1 / frames` for the block in progress (0 for an empty block).
     block_inv_frames: f32,
     /// True when `begin_block` found nothing to render: spans are no-ops
@@ -301,7 +433,9 @@ impl DrumSampler {
             rr_counters: [[0; MAX_LAYERS]; NUM_PADS],
             rr_last: [[NO_LAST_TAKE; MAX_LAYERS]; NUM_PADS],
             rr_rng: 0x9E37_79B9,
+            vel_rng: VEL_RNG_SEED,
             globals: GlobalSettings::default(),
+            pad_settings: [PadSettings::default(); NUM_PADS],
             last_rr: None,
             out_peak: None,
             load_progress: None,
@@ -317,13 +451,11 @@ impl DrumSampler {
             prev_master_volume: 1.0,
             prev_pad_volume: [1.0; NUM_PADS],
             prev_pad_pan: [0.0; NUM_PADS],
-            prev_pad_oh: [1.0; NUM_PADS],
-            prev_pad_balance: [0.5; NUM_PADS],
+            prev_pad_trim: [[1.0; MIC_SLOTS]; NUM_PADS],
             pad_prev_valid: false,
             cur_pad_volume: [1.0; NUM_PADS],
             cur_pad_pan: [0.0; NUM_PADS],
-            cur_pad_oh: [1.0; NUM_PADS],
-            cur_pad_balance: [0.5; NUM_PADS],
+            cur_pad_trim: [[1.0; MIC_SLOTS]; NUM_PADS],
             block_inv_frames: 0.0,
             block_idle: true,
             streams: AudioStreams::with_registration(set, Some(registration)),
@@ -472,13 +604,26 @@ impl DrumSampler {
         self.globals = GlobalSettings {
             max_voices: (params.polyphony.value().max(1) as usize).min(MAX_VOICES),
             velocity_curve: params.velocity_curve.value(),
+            velocity_humanize: params.velocity_humanize.value().clamp(0.0, MAX_HUMANIZE),
             round_robin: RoundRobinMode::from_param(params.round_robin_mode.value()),
+            output_mode: OutputMode::from_param(params.output_mode.value()),
         };
+        for (settings, pad) in self.pad_settings.iter_mut().zip(params.pads.iter()) {
+            *settings = PadSettings::from_params(pad, self.sample_rate);
+        }
     }
 
     /// The settings hits are currently started with.
     pub fn global_settings(&self) -> GlobalSettings {
         self.globals
+    }
+
+    /// The settings a hit on pad `index` is currently started with.
+    pub fn pad_settings(&self, index: usize) -> PadSettings {
+        self.pad_settings
+            .get(index)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Attach the shared last-RR display array so the editor can show
@@ -732,16 +877,33 @@ impl DrumSampler {
     /// same relative position ([`map_relative`], E7) rather than going
     /// silent.
     ///
-    /// The cymbal case is special: with no close bank the overhead take is
-    /// the pad's whole sound, so it is summed into the pad's own group
-    /// port (Cymbals) rather than the shared Overhead port — otherwise the
-    /// Cymbals port never carries a sample.
+    /// Routing (E11): in [`OutputMode::Stereo`] every voice sums to Main;
+    /// in [`OutputMode::Multi`] the close banks play on the pad's output
+    /// port and the overhead bank on the Overhead port — for every pad,
+    /// so a cymbal recorded on the overheads only plays on Overhead.
     ///
-    /// The incoming velocity is shaped by the global velocity curve
-    /// first, so the curve moves both which layer fires and how hard it
-    /// is struck — the two things velocity means here. At the default
-    /// (linear) the shaping is an exact identity.
+    /// The incoming velocity is humanized first (E7: ± up to
+    /// `velocity_humanize` MIDI steps, from a fixed-seed generator, so a
+    /// render is reproducible; nothing at all at 0), then shaped by the
+    /// global velocity curve, so the curve moves both which layer fires
+    /// and how hard it is struck — the two things velocity means here. At
+    /// the default (linear) the shaping is an exact identity.
+    ///
+    /// The layer is picked by its **measured loudness** (E7,
+    /// [`pick_layer_by_level`]) and played at the gain that puts the hit
+    /// at the level the velocity asks for, so loudness has no step where
+    /// one layer hands over to the next. A single-layer pad (the built-in
+    /// kit) keeps the velocity as its gain.
     pub fn note_on(&mut self, note: u8, velocity: f32) {
+        let humanize = self.globals.velocity_humanize;
+        let velocity = if humanize > 0.0 {
+            // Uniform in -1..1, in MIDI velocity steps; never below the
+            // softest note-on a MIDI note can be.
+            let unit = next_random(&mut self.vel_rng) as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            (velocity + unit * humanize / 127.0).clamp(1.0 / 127.0, 1.0)
+        } else {
+            velocity
+        };
         let velocity = crate::velocity::shape(velocity, self.globals.velocity_curve);
         let pad_index = match drum_map::pad_index_for_note(note) {
             Some(i) => i,
@@ -768,7 +930,14 @@ impl DrumSampler {
             return;
         }
         let n_layers = reference_layers.len();
-        let layer_index = pick_velocity_layer(velocity, n_layers);
+        // Single-layer pads (the built-in kit) bake dynamics into the MIDI
+        // velocity; multi-layer kits pick the layer whose measured level
+        // is nearest the velocity's and make up the rest in gain (E7).
+        let (layer_index, trigger_gain) = if n_layers > 1 {
+            pick_layer_by_level(velocity, n_layers, |i| reference_layers[i].level_db())
+        } else {
+            (0, velocity)
+        };
         let layer = &reference_layers[layer_index];
         if layer.round_robins.is_empty() {
             return;
@@ -799,13 +968,15 @@ impl DrumSampler {
             );
         }
 
-        // Single-layer fallback pads bake dynamics into the MIDI velocity;
-        // multi-layer kits have the velocity layer already shaped so we
-        // use a flat trigger gain.
-        let trigger_gain = if n_layers > 1 { 1.0 } else { velocity };
-        let choke_group = pad.choke_group;
+        let settings = self.pad_settings[pad_index];
+        let choke_group = settings.choke_group(pad);
         let close_mic_count = pad.close_mics.len();
-        let output_port = pad.output_group.index() as u8;
+        // E11: in Stereo every bank sums to Main; in Multi the close mics
+        // play on the pad's output port and the overhead on Overhead.
+        let (output_port, oh_port) = match self.globals.output_mode {
+            OutputMode::Stereo => (MAIN_PORT_INDEX as u8, MAIN_PORT_INDEX as u8),
+            OutputMode::Multi => (settings.close_port(pad), OVERHEAD_PORT_INDEX as u8),
+        };
         let has_overhead = pad.overhead.is_some();
 
         // Handle choke groups: release any active voices in the same choke group
@@ -814,9 +985,9 @@ impl DrumSampler {
         }
 
         // Build the list of destinations we need to allocate a voice for.
-        // Kick + snare: one CloseMic voice per bank (two, with
-        // BalanceSide::Left/Right). Tom + hat: one CloseMic voice with
-        // BalanceSide::None. Cymbal: no close mic. Plus an Overhead
+        // Kick + snare: one CloseMic voice per bank (two, trimmed by
+        // mic1/mic2). Tom + hat: one CloseMic voice (mic1). Cymbal: no
+        // close mic. Plus an Overhead
         // voice if the pad has one loaded.
         let mut destinations: [Option<VoiceDestination>; 3] = [None, None, None];
         // The (layer, take) each destination's bank plays.
@@ -830,11 +1001,23 @@ impl DrumSampler {
         // request, which frees its ring.
         let mut wait = (self.offline && self.offline_holdoff == 0)
             .then_some(&mut self.offline_wait_left);
-        let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> u8 {
+        // Where each destination's voice starts in its take (E8's sample
+        // start). A streamed take starts inside its head: a start past
+        // the head is clamped to its last frame — out of reach of the
+        // shipped preloads (≥ 32 k frames) at any rate up to 192 kHz,
+        // whose 100 ms is 19.2 k frames.
+        let mut starts = [0usize; 3];
+        let start_frames = settings.start_frames as usize;
+        let rate = settings.rate;
+        let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> (u8, usize) {
             let take = bank.layers.get(layer).and_then(|l| l.round_robins.get(rr));
             match take.and_then(|t| t.tail().map(|tail| (tail, t.resident_frames()))) {
-                Some((tail, head)) => streams.claim(tail, head, wait.as_deref_mut()),
-                None => NO_RING,
+                Some((tail, head)) => {
+                    let start = start_frames.min(head.saturating_sub(1));
+                    let pace = Pace::at_rate(head - start, rate);
+                    (streams.claim(tail, head, pace, wait.as_deref_mut()), start)
+                }
+                None => (NO_RING, start_frames),
             }
         };
         let cell_in = |bank: &LoadedMicBank| -> (usize, usize) {
@@ -848,35 +1031,23 @@ impl DrumSampler {
         let mut dest_count = 0;
         for bank_index in 0..close_mic_count.min(2) {
             cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
-            rings[dest_count] = ring_for(&pad.close_mics[bank_index], cells[dest_count]);
-            let balance_side = match (close_mic_count, bank_index) {
-                (2, 0) => BalanceSide::Left,
-                (2, 1) => BalanceSide::Right,
-                _ => BalanceSide::None,
-            };
+            (rings[dest_count], starts[dest_count]) =
+                ring_for(&pad.close_mics[bank_index], cells[dest_count]);
             destinations[dest_count] = Some(VoiceDestination::CloseMic {
                 bank_index,
                 output_port,
-                balance_side,
             });
             dest_count += 1;
         }
         if has_overhead && dest_count < destinations.len() {
-            // Pads the library records with overheads only (every cymbal,
-            // ride and china piece in Drummica) have no close bank, so the
-            // overhead take is the pad's entire signal. Sending it to the
-            // shared Overhead port would leave the pad's own group port —
-            // and the sub-track the host derives from it — permanently
-            // silent, which is what made the Cymbals sub-track read as
-            // "the kit has no cymbals". Route those to the group port.
-            let oh_port = if close_mic_count == 0 {
-                output_port
-            } else {
-                OVERHEAD_PORT_INDEX as u8
-            };
+            // Every pad's overhead take goes to the Overhead port in
+            // Multi — the pads the library records with overheads only
+            // (every cymbal, ride and china piece in Drummica) included,
+            // which until E11 played on their own group port (Cymbals).
+            // Stereo has a stereo kit on Main for whoever wants one port.
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
-                rings[dest_count] = ring_for(oh, cells[dest_count]);
+                (rings[dest_count], starts[dest_count]) = ring_for(oh, cells[dest_count]);
             }
             destinations[dest_count] = Some(VoiceDestination::Overhead {
                 output_port: oh_port,
@@ -890,8 +1061,12 @@ impl DrumSampler {
         // single unit.
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
-        for ((dest_slot, &(bank_layer, bank_rr)), &ring) in
-            destinations.iter().zip(&cells).zip(&rings).take(dest_count)
+        for (((dest_slot, &(bank_layer, bank_rr)), &ring), &start) in destinations
+            .iter()
+            .zip(&cells)
+            .zip(&rings)
+            .zip(&starts)
+            .take(dest_count)
         {
             let Some(dest) = dest_slot else {
                 continue;
@@ -910,7 +1085,12 @@ impl DrumSampler {
             voice.destination = dest;
             voice.layer_index = bank_layer;
             voice.rr_index = bank_rr;
-            voice.position = 0;
+            voice.position = start;
+            voice.rate = settings.rate;
+            voice.frac = 0.0;
+            voice.env_pos = 0;
+            voice.hold_frames = settings.hold_frames;
+            voice.decay_frames = settings.decay_frames;
             voice.choke_group = choke_group;
             voice.retired = false;
             voice.state = VoiceState::Playing;
@@ -1100,33 +1280,32 @@ impl DrumSampler {
         // doesn't re-read atomics for every sample. Each param is then
         // linearly ramped from last block's snapshot across this block
         // (same declick scheme as the master volume in `end_block`).
+        // Levels are dB params; the ramps run in gain.
         let mut pad_volume = [0.0f32; NUM_PADS];
         let mut pad_pan = [0.0f32; NUM_PADS];
-        let mut pad_oh = [0.0f32; NUM_PADS];
-        let mut pad_balance = [0.5f32; NUM_PADS];
+        let mut pad_trim = [[1.0f32; MIC_SLOTS]; NUM_PADS];
         for (i, pad) in params.pads.iter().enumerate() {
             pad_volume[i] = if pad.mute.value() {
                 0.0
             } else {
-                pad.volume.value()
+                db_to_gain(pad.volume.value())
             };
             pad_pan[i] = pad.pan.value();
-            pad_oh[i] = pad.oh_blend.value();
-            pad_balance[i] = pad.balance.value();
+            for (slot, trim) in pad.trims.iter().enumerate() {
+                pad_trim[i][slot] = db_to_gain(trim.value());
+            }
         }
         if !self.pad_prev_valid {
             // First block ever: start the ramps at the current values
             // so we don't sweep in from arbitrary defaults.
             self.prev_pad_volume = pad_volume;
             self.prev_pad_pan = pad_pan;
-            self.prev_pad_oh = pad_oh;
-            self.prev_pad_balance = pad_balance;
+            self.prev_pad_trim = pad_trim;
             self.pad_prev_valid = true;
         }
         self.cur_pad_volume = pad_volume;
         self.cur_pad_pan = pad_pan;
-        self.cur_pad_oh = pad_oh;
-        self.cur_pad_balance = pad_balance;
+        self.cur_pad_trim = pad_trim;
         self.block_inv_frames = if frames > 0 {
             1.0 / frames as f32
         } else {
@@ -1153,8 +1332,7 @@ impl DrumSampler {
         let holdoff_frames = (OFFLINE_WAIT_HOLDOFF_SECS * self.sample_rate) as u64;
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
-        let pad_oh = &self.cur_pad_oh;
-        let pad_balance = &self.cur_pad_balance;
+        let pad_trim = &self.cur_pad_trim;
         // A voice whose tail will not come fades out over this, ending
         // where its frames end.
         let cut_fade = self.release_frames as usize;
@@ -1240,30 +1418,17 @@ impl DrumSampler {
             // destination-specific gain multiplier? Computed at both
             // the previous and current block's param snapshots so the
             // inner loop can ramp between them.
-            let (port_index, dest_gain0, dest_gain1) = match voice.destination {
+            let (port_index, slot) = match voice.destination {
                 VoiceDestination::CloseMic {
                     output_port,
-                    balance_side,
-                    ..
-                } => {
-                    let (g0, g1) = match balance_side {
-                        BalanceSide::None => (1.0, 1.0),
-                        BalanceSide::Left => (
-                            1.0 - self.prev_pad_balance[pad_index],
-                            1.0 - pad_balance[pad_index],
-                        ),
-                        BalanceSide::Right => {
-                            (self.prev_pad_balance[pad_index], pad_balance[pad_index])
-                        }
-                    };
-                    (output_port as usize, g0, g1)
+                    bank_index,
+                } => (output_port as usize, MicSlot::close(bank_index)),
+                VoiceDestination::Overhead { output_port } => {
+                    (output_port as usize, MicSlot::Overhead)
                 }
-                VoiceDestination::Overhead { output_port } => (
-                    output_port as usize,
-                    self.prev_pad_oh[pad_index],
-                    pad_oh[pad_index],
-                ),
             };
+            let dest_gain0 = self.prev_pad_trim[pad_index][slot as usize];
+            let dest_gain1 = pad_trim[pad_index][slot as usize];
             let vol0 = self.prev_pad_volume[pad_index];
             let vol1 = pad_volume[pad_index];
             let (pan_l0, pan_r0) =
@@ -1272,7 +1437,7 @@ impl DrumSampler {
 
             // Per-sample ramp increments, mirroring the master volume
             // ramp below: start at the previous block's value and step
-            // toward the current one across the block. Pan and balance
+            // toward the current one across the block. Pan and the trims
             // ramp in gain space, which keeps the path continuous (and
             // linear in the pan position, since stereo_balance is
             // piecewise-linear). A span that starts mid-block picks the
@@ -1295,20 +1460,100 @@ impl DrumSampler {
                 .get_mut(port_index)
                 .map(|p| (&mut p.left[..end], &mut p.right[..end]));
 
+            // E8: a voice at pitch plays on the integer path below, exactly
+            // as it always did; a tuned one reads between frames.
+            let unity = voice.rate == 1.0;
+            let rate = voice.rate;
+            let ahd = voice.decay_frames > 0;
+
             for frame in start..end {
                 if voice.position >= end_at {
                     voice.active = false;
                     break;
                 }
-                if voice.release_done() {
+                if voice.release_done() || voice.ahd_done() {
                     voice.active = false;
                     break;
                 }
-                if end_at < total && voice.position + cut_fade >= end_at {
-                    voice.end_within(end_at - voice.position);
+                if end_at < total {
+                    // Output frames until the voice's frames end.
+                    let left_src = end_at - voice.position;
+                    let left = if unity {
+                        left_src
+                    } else {
+                        ((left_src as f32 / rate) as usize).max(1)
+                    };
+                    if left <= cut_fade {
+                        voice.end_within(left);
+                    }
                 }
 
-                let (sample_l, sample_r) = if voice.position < resident {
+                let (sample_l, sample_r) = if !unity {
+                    // Fractional playback, 4-point Hermite over frames
+                    // p−1 … p+2, through the same head / ring path.
+                    let pos = voice.position;
+                    let need = (pos + 2).min(end_at - 1);
+                    if let (Some(ring), true) = (ring, need >= resident) {
+                        let at = (need - resident) as u64;
+                        if at >= written
+                            && offline
+                            && *offline_holdoff == 0
+                            && !offline_wait_left.is_zero()
+                        {
+                            streams.set.waits.fetch_add(1, Ordering::Relaxed);
+                            // Keep frame p−1 from being overwritten while
+                            // the reader catches up.
+                            let keep = (pos.saturating_sub(1).max(resident) - resident) as u64;
+                            let failed;
+                            (written, failed) =
+                                wait_for_frame(ring, at, keep, offline_wait_left);
+                            if failed {
+                                end_at = resident + written as usize;
+                                if !voice.stream_lost {
+                                    voice.stream_lost = true;
+                                    streams.underruns.fetch_add(1, Ordering::Relaxed);
+                                }
+                                if pos >= end_at {
+                                    voice.active = false;
+                                    break;
+                                }
+                            } else if at >= written && offline_wait_left.is_zero() && long_waits {
+                                *offline_holdoff = holdoff_frames;
+                            }
+                        }
+                    }
+                    let fetch = |i: usize| -> Option<(f32, f32)> {
+                        if i >= end_at {
+                            Some((0.0, 0.0))
+                        } else if i < resident {
+                            let idx = i * stride;
+                            Some((data[idx], data[idx + right_offset]))
+                        } else if let Some(ring) = ring {
+                            let at = (i - resident) as u64;
+                            (at < written).then(|| {
+                                (ring.sample(at, stride, 0), ring.sample(at, stride, right_offset))
+                            })
+                        } else {
+                            Some((0.0, 0.0))
+                        }
+                    };
+                    let before = if pos == 0 {
+                        Some((0.0, 0.0))
+                    } else {
+                        fetch(pos - 1)
+                    };
+                    match (before, fetch(pos), fetch(pos + 1), fetch(pos + 2)) {
+                        (Some(a), Some(b), Some(c), Some(d)) => {
+                            let t = voice.frac;
+                            (hermite(a.0, b.0, c.0, d.0, t), hermite(a.1, b.1, c.1, d.1, t))
+                        }
+                        _ => {
+                            // Not delivered yet: silence, and on in time.
+                            missing = true;
+                            (0.0, 0.0)
+                        }
+                    }
+                } else if voice.position < resident {
                     let idx = voice.position * stride;
                     (data[idx], data[idx + right_offset])
                 } else if let Some(ring) = ring {
@@ -1320,7 +1565,7 @@ impl DrumSampler {
                     {
                         streams.set.waits.fetch_add(1, Ordering::Relaxed);
                         let failed;
-                        (written, failed) = wait_for_frame(ring, at, offline_wait_left);
+                        (written, failed) = wait_for_frame(ring, at, at, offline_wait_left);
                         if failed {
                             // Found out at the very frame it is missing:
                             // nothing left to fade over.
@@ -1352,6 +1597,9 @@ impl DrumSampler {
                     break;
                 };
                 let env = voice.current_gain();
+                // The AHD envelope only multiplies in when a decay is set:
+                // Off leaves the gain bit-identical.
+                let env = if ahd { env * voice.ahd_gain() } else { env };
                 let gain = env * vol * dest_gain;
 
                 if let Some((port_l, port_r)) = port.as_mut() {
@@ -1364,23 +1612,39 @@ impl DrumSampler {
                 pan_l += pan_l_step;
                 pan_r += pan_r_step;
 
-                voice.position += 1;
+                if unity {
+                    voice.position += 1;
+                } else {
+                    let advance = voice.frac + rate;
+                    let whole = advance as usize;
+                    voice.frac = advance - whole as f32;
+                    voice.position += whole;
+                }
+                voice.env_pos = voice.env_pos.saturating_add(1);
                 if voice.state == VoiceState::Releasing {
                     voice.release_pos += 1;
                 }
             }
             if let Some(ring) = ring {
                 // Room for the reader: every ring frame before the
-                // voice's position is done with. And its deadline: what
-                // is left of the head.
-                if voice.position > resident {
-                    ring.read
-                        .store((voice.position - resident) as u64, Ordering::Release);
+                // voice's position is done with (a tuned voice still
+                // reads the frame before it). And its deadline: what is
+                // left of the head, in output frames.
+                let done = if unity {
+                    voice.position
+                } else {
+                    voice.position.saturating_sub(1)
+                };
+                if done > resident {
+                    ring.read.store((done - resident) as u64, Ordering::Release);
                 }
-                ring.head_left.store(
-                    resident.saturating_sub(voice.position) as u64,
-                    Ordering::Relaxed,
-                );
+                let head_left = resident.saturating_sub(voice.position);
+                let head_left = if unity {
+                    head_left
+                } else {
+                    (head_left as f32 / rate) as usize
+                };
+                ring.head_left.store(head_left as u64, Ordering::Relaxed);
             }
             if missing {
                 streams.underruns.fetch_add(1, Ordering::Relaxed);
@@ -1417,15 +1681,14 @@ impl DrumSampler {
         // Next block ramps from this block's snapshots.
         self.prev_pad_volume = self.cur_pad_volume;
         self.prev_pad_pan = self.cur_pad_pan;
-        self.prev_pad_oh = self.cur_pad_oh;
-        self.prev_pad_balance = self.cur_pad_balance;
+        self.prev_pad_trim = self.cur_pad_trim;
 
         // Apply master volume in-place over every port. Linearly
         // interpolate from the previous block's value to the current
         // one across the block so automation tweaks and user fader
         // moves don't click. With small block sizes (≤512 frames at
         // typical SR) per-sample lerp is essentially free.
-        let master_vol = params.master_volume.value();
+        let master_vol = db_to_gain(params.master_volume.value());
         let prev = self.prev_master_volume;
         if (prev - 1.0).abs() > f32::EPSILON
             || (master_vol - 1.0).abs() > f32::EPSILON
@@ -1489,6 +1752,8 @@ impl DrumSampler {
     pub fn reset(&mut self) {
         janitor::reset_all(&mut self.voices);
         janitor::reset_all(&mut self.tails);
+        // A render after a reset (a bounce) humanizes as the last did.
+        self.vel_rng = VEL_RNG_SEED;
         self.streams
             .sweep(self.voices.iter().chain(self.tails.iter()));
         // A render after a reset (a bounce) is measured afresh.
@@ -1496,14 +1761,26 @@ impl DrumSampler {
     }
 }
 
+/// 4-point, 3rd-order Hermite (Catmull-Rom) interpolation at `t` (0..1)
+/// between `x0` and `x1`, with `xm1` before and `x2` after (E8).
+#[inline]
+fn hermite(xm1: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
+    let c1 = 0.5 * (x1 - xm1);
+    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
+    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+    ((c3 * t + c2) * t + c1) * t + x0
+}
+
 /// Offline only: wait for the reader to deliver ring frame `at`, for at
 /// most what is left of `budget` (which is charged for the wait). Returns
 /// the ring's `write` — past `at` unless the wait ran out or the stream
-/// failed — and whether it failed.
-fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> (u64, bool) {
+/// failed — and whether it failed. Ring frames from `keep` (≤ `at`) on
+/// are still to be read: a tuned voice (E8) interpolates over the frame
+/// before its position as well.
+fn wait_for_frame(ring: &Ring, at: u64, keep: u64, budget: &mut Duration) -> (u64, bool) {
     // The reader only writes where the voice has made room, and serves
     // the neediest ring first: this one, on its tail.
-    ring.read.store(at, Ordering::Release);
+    ring.read.store(keep.min(at), Ordering::Release);
     ring.head_left.store(0, Ordering::Relaxed);
     let mut published = (0, false);
     wait_until(budget, || {

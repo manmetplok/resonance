@@ -19,7 +19,6 @@ use resonance_drums::drum_map;
 use resonance_drums::kit::NUM_OUTPUT_PORTS;
 use resonance_drums::kit_loader::KitStatus;
 use resonance_drums::library::{Roots, SharedKitLibrary};
-use resonance_drums::params::GLOBAL_PARAMS;
 use resonance_drums::selection::{self, KitRef, ResolvedBy, NO_KIT, PARKED_KIT};
 use resonance_drums::{DrumsExtraState, ResonanceDrums, TestEditor};
 use resonance_plugin::plugin::ExtraStateSaver;
@@ -27,10 +26,10 @@ use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
 const RATE: f32 = 48_000.0;
 const BLOCK: usize = 128;
-/// `kit_select` and `kit_load_progress` close the globals, ahead of the
-/// pad block.
-const KIT_SELECT: usize = GLOBAL_PARAMS - 2;
-const KIT_LOAD_PROGRESS: usize = GLOBAL_PARAMS - 1;
+/// `kit_select` and `kit_load_progress`: the fifth and sixth globals (the
+/// globals added since follow them, ahead of the pad block).
+const KIT_SELECT: usize = 4;
+const KIT_LOAD_PROGRESS: usize = 5;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -192,8 +191,8 @@ fn kick_peak(plugin: &mut ResonanceDrums) -> f32 {
     )
 }
 
-/// Default master and pad volume, between a take and the output.
-const CHAIN_GAIN: f32 = 0.8 * 0.8;
+/// Default master and pad volume (both 0 dB: unity), between a take and the output.
+const CHAIN_GAIN: f32 = 1.0;
 
 /// Whether the kick plays the fixture kit whose take holds `level`.
 fn plays_at(plugin: &mut ResonanceDrums, level: f32) -> bool {
