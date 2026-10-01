@@ -14,10 +14,28 @@ use resonance_plugin::kit_rows::{
 };
 use resonance_plugin::library_view::{BrowserModel, LibraryRows, Sort, SortKey, SOURCE_FACET};
 
+/// The temporary dirs this test thread made; removed when the thread (the
+/// test) ends, pass or fail.
+struct TempDirs(Vec<PathBuf>);
+
+impl Drop for TempDirs {
+    fn drop(&mut self) {
+        for d in &self.0 {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+}
+
+thread_local! {
+    static TEMP_DIRS: std::cell::RefCell<TempDirs> =
+        const { std::cell::RefCell::new(TempDirs(Vec::new())) };
+}
+
 fn temp_root(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("resonance-kitrows-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    TEMP_DIRS.with(|t| t.borrow_mut().0.push(dir.clone()));
     dir
 }
 
@@ -113,7 +131,8 @@ fn fixture(tag: &str) -> Fixture {
     )
     .unwrap();
     let lib = Library::open_and_scan(&root).unwrap();
-    let marks = MarksStore::open(root.join("marks")).unwrap();
+    // The marks store lives outside the kit root, as it does for real.
+    let marks = MarksStore::open(temp_root(&format!("{tag}-marks")).join("marks")).unwrap();
     Fixture { root, lib, marks }
 }
 
@@ -313,5 +332,11 @@ fn a_broken_kit_says_why_and_is_stepped_over() {
     assert_eq!(
         kit_rows::step_in_view(&model, &rows, None, 1),
         lib.find("Drummica").unwrap().slot
+    );
+    // A zero step from the unloadable row returns at once (it looped).
+    let broken_id = rows.rows[b].entry.id.clone();
+    assert_eq!(
+        kit_rows::step_in_view(&model, &rows, Some(&broken_id), 0),
+        None
     );
 }

@@ -14,7 +14,7 @@ use resonance_common::drumkit_library::{self, format_bytes, Entry, EntryStatus, 
 use resonance_common::library_marks::{Marks, MarksStore};
 
 use crate::library_view::{
-    BrowserModel, LibraryRows, SortKey, SortValue, SOURCE_FACET, TAGS_FACET,
+    self, BrowserModel, LibraryRows, SortKey, SortValue, SOURCE_FACET, TAGS_FACET,
 };
 
 /// The mic-count facet: how many mic setups a kit has, bucketed.
@@ -242,26 +242,16 @@ pub fn step_in_view(
     loaded_id: Option<&str>,
     delta: i32,
 ) -> Option<u32> {
-    let mut current = loaded_id.map(drumkit_library::mark_key);
-    loop {
-        let row = model.step_from(current.as_deref(), delta)?;
-        let r = &rows.rows[row];
-        if let (Some(slot), true) = (r.entry.slot, r.entry.is_loadable()) {
-            return Some(slot);
-        }
-        current = Some(r.key.clone());
-    }
+    let current = loaded_id.map(drumkit_library::mark_key);
+    library_view::step_loadable(model, rows, current.as_deref(), delta, |row| {
+        let e = &rows.rows[row].entry;
+        e.slot.filter(|_| e.is_loadable())
+    })
 }
 
 /// The header's counter: "3 / 41 in view", or "– / 41 in view" when the
 /// loaded kit is not in the view.
 pub fn view_counter(model: &BrowserModel, loaded_id: Option<&str>) -> String {
-    let n = model.view_len();
-    if n == 0 {
-        return String::new();
-    }
-    match loaded_id.and_then(|id| model.position_in_view(&drumkit_library::mark_key(id))) {
-        Some(p) => format!("{} / {n} in view", p + 1),
-        None => format!("– / {n} in view"),
-    }
+    let current = loaded_id.map(drumkit_library::mark_key);
+    library_view::view_counter(model, current.as_deref())
 }

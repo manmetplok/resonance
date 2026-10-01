@@ -815,6 +815,50 @@ impl BrowserModel {
     }
 }
 
+/// ◀/▶ over a browser's view (nam-model-library.md §5.1,
+/// drums-plugin-rework.md §6.5), shared by every library kind: from the
+/// row keyed `current_key`, step `delta` places, then on in the same
+/// direction one row at a time past rows `loadable` refuses (it returns
+/// the slot to load, or `None` for a row that cannot be loaded). Clamped
+/// at both ends; with no current row, or one outside the view, a step
+/// enters at the first (▶) or last (◀) loadable row. `None` for
+/// `delta == 0`: there is nowhere to go, and a zero step from an
+/// unloadable row would never move.
+pub fn step_loadable(
+    model: &BrowserModel,
+    rows: &dyn LibraryRows,
+    current_key: Option<&str>,
+    delta: i32,
+    loadable: impl Fn(usize) -> Option<u32>,
+) -> Option<u32> {
+    if delta == 0 {
+        return None;
+    }
+    let mut row = model.step_from(current_key, delta)?;
+    // Every further step moves one row, so the view bounds the walk.
+    for _ in 0..=model.view_len() {
+        if let Some(slot) = loadable(row) {
+            return Some(slot);
+        }
+        row = model.step_from(Some(rows.key(row)), delta.signum())?;
+    }
+    None
+}
+
+/// The ◀/▶ header's counter: "3 / 41 in view", "– / 41 in view" when the
+/// row keyed `current_key` is not in the view, or nothing for an empty
+/// view.
+pub fn view_counter(model: &BrowserModel, current_key: Option<&str>) -> String {
+    let n = model.view_len();
+    if n == 0 {
+        return String::new();
+    }
+    match current_key.and_then(|k| model.position_in_view(k)) {
+        Some(p) => format!("{} / {n} in view", p + 1),
+        None => format!("– / {n} in view"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Audition bracket
 // ---------------------------------------------------------------------------
