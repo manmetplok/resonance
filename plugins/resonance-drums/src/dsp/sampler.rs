@@ -1201,11 +1201,16 @@ impl DrumSampler {
             }
             if let Some(ring) = ring {
                 // Room for the reader: every ring frame before the
-                // voice's position is done with.
+                // voice's position is done with. And its deadline: what
+                // is left of the head.
                 if voice.position > resident {
                     ring.read
                         .store((voice.position - resident) as u64, Ordering::Release);
                 }
+                ring.head_left.store(
+                    resident.saturating_sub(voice.position) as u64,
+                    Ordering::Relaxed,
+                );
             }
             if missing {
                 streams.underruns.fetch_add(1, Ordering::Relaxed);
@@ -1332,8 +1337,10 @@ impl DrumSampler {
 /// `at` unless the wait ran out or the stream failed.
 fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> u64 {
     let began = Instant::now();
-    // The reader only writes where the voice has made room.
+    // The reader only writes where the voice has made room, and serves
+    // the neediest ring first: this one, on its tail.
     ring.read.store(at, Ordering::Release);
+    ring.head_left.store(0, Ordering::Relaxed);
     let mut spins = 0u32;
     loop {
         let (written, failed) = ring.published();

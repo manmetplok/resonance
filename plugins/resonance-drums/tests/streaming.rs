@@ -650,6 +650,105 @@ fn rings_are_open_only_while_streamed() {
     assert_eq!(s.stream_set().rings_in_use(), 0);
 }
 
+/// A fresh claim gets one chunk, and the rest of its ring only once its
+/// voice is within a ring's length of its tail: a voice choked on its
+/// head has cost one read.
+#[test]
+fn a_ring_fills_as_its_voice_nears_its_tail() {
+    use resonance_drums::stream::RING_FRAMES;
+    const PRELOAD: u32 = 32_768;
+    let fixture = Fixture::new("one-chunk", 48_000, 2.0);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(fixture.kit(&cache, PRELOAD), &pool, RenderMode::Realtime);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    ports.render(&mut s, 128, &params, &hit);
+    pool.pump();
+    assert_eq!(s.stream_set().frames_buffered(), 3 * 4_096, "one chunk each");
+    // Still more than a ring's length from the tail: nothing more.
+    let near = (PRELOAD as usize - RING_FRAMES) / 128;
+    for _ in 1..near - 1 {
+        ports.render(&mut s, 128, &params, &[]);
+        pool.pump();
+    }
+    assert_eq!(s.stream_set().frames_buffered(), 3 * 4_096);
+    for _ in 0..4 {
+        ports.render(&mut s, 128, &params, &[]);
+        pool.pump();
+    }
+    assert_eq!(
+        s.stream_set().frames_buffered(),
+        3 * RING_FRAMES as u64,
+        "within a ring of the tail: a full ring each"
+    );
+}
+
+/// The reader serves the voice that runs out first: one near its tail
+/// before a fresh claim, whatever their ring order.
+#[test]
+fn the_reader_serves_the_earliest_deadline_first() {
+    let fixture = Fixture::new("deadline", 48_000, 2.0);
+    let cache = SampleCache::new();
+    let pool = ReaderPool::stepped();
+    let (mut s, _t) = sampler(fixture.kit(&cache, 32_768), &pool, RenderMode::Realtime);
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = |note| {
+        [Hit {
+            frame: 0,
+            note,
+            velocity: 1.0,
+        }]
+    };
+    // An open hat on the lowest rings, a kick on the next ones.
+    ports.render(&mut s, 128, &params, &hit(drum_map::HIHAT_OPEN));
+    ports.render(&mut s, 128, &params, &hit(drum_map::KICK));
+    pool.pump();
+    let rings_of = |s: &DrumSampler, note: u8| -> Vec<u8> {
+        s.voices
+            .iter()
+            .filter(|v| v.active && v.note == note)
+            .map(|v| v.ring)
+            .collect()
+    };
+    let kick_rings = rings_of(&s, drum_map::KICK);
+    assert_eq!(kick_rings.len(), 3);
+    // The hat is choked and its rings handed back; the kick plays on,
+    // to within a ring of its tail, with the reader stalled.
+    s.choke_note(drum_map::HIHAT_OPEN);
+    for _ in 0..20 {
+        ports.render(&mut s, 128, &params, &[]);
+    }
+    pool.pump();
+    for _ in 20..200 {
+        ports.render(&mut s, 128, &params, &[]);
+    }
+    // A snare takes the lowest rings (the hat's): a fresh claim, nothing
+    // buffered — but its whole head ahead of it.
+    ports.render(&mut s, 128, &params, &hit(drum_map::SNARE));
+    let snare_rings = rings_of(&s, drum_map::SNARE);
+    assert!(snare_rings.iter().max() < kick_rings.iter().min());
+    let published = |s: &DrumSampler, rings: &[u8]| -> u64 {
+        rings
+            .iter()
+            .map(|&r| s.stream_set().published_frames(r))
+            .sum()
+    };
+    let kick_before = published(&s, &kick_rings);
+    assert!(pool.step(), "one read");
+    assert!(
+        published(&s, &kick_rings) > kick_before,
+        "the kick, near its tail, is read first"
+    );
+    assert_eq!(published(&s, &snare_rings), 0);
+}
+
 /// A panic in a read fails that one stream; the reader carries on with
 /// the others.
 #[test]

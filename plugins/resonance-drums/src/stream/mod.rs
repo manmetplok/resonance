@@ -22,15 +22,17 @@
 //!   take's [`TailSource`] (an `Arc` clone — an atomic increment, never an
 //!   allocation; the kit still holds the take, so nothing the audio
 //!   thread drops is ever a last reference). It reads ring frames the
-//!   reader has published, and lets a ring go once no voice reads it
-//!   ([`AudioStreams::sweep`]) — which makes it claimable again at once,
-//!   without waiting for the reader to notice. It never waits for the
+//!   reader has published, publishes how far its voice still is from the
+//!   tail (the reader's deadline), and lets a ring go once no voice reads
+//!   it ([`AudioStreams::sweep`]) — which makes it claimable again at
+//!   once, without waiting for the reader to notice. It never waits for the
 //!   reader, never locks, never allocates, and never makes a syscall that
 //!   can block.
 //! - **The reader** threads ([`reader::ReaderPool`]) poll the rings that
 //!   are open (no wake-ups from the audio thread: a futex wake is a
-//!   syscall), take requests, open the file, fill each ring as far as its
-//!   voice has made room, and drop streams the audio thread has let go.
+//!   syscall), take requests, open the file, fill the rings in deadline
+//!   order (see [`reader`]) as far as each voice needs, and drop streams
+//!   the audio thread has let go.
 //!   They exist only while some sampler is registered.
 //!
 //! # The ring protocol
@@ -139,8 +141,10 @@ pub const MIN_STREAMED_TAIL: usize = 8_192;
 /// Frames one ring holds (stereo; a mono take uses half of each frame's
 /// room). ≈ 0.34 s at 48 kHz, ≈ 128 host blocks of 128 frames — the
 /// reader's lead once a voice is on its tail. Before that, the voice's
-/// head (≥ 32 k frames) is the lead: a ring is requested at note-on and
-/// filled while the head plays.
+/// head (≥ 32 k frames) is the lead: a ring is requested at note-on, gets
+/// one chunk ([`READ_CHUNK`]) at once, and is filled the rest of the way
+/// once its voice is within a ring's length of its tail — so a voice
+/// choked or stolen on its head costs one read, not a ring's worth.
 pub const RING_FRAMES: usize = 16_384;
 
 /// Bytes of sample storage a ring holds once it has been used.
@@ -176,7 +180,8 @@ const _: () = assert!(rings_for(128, 16) < NO_RING as usize);
 const _: () = assert!(rings_for(128, 16).div_ceil(64) == 4);
 
 /// The most frames one reader pass fetches for one ring, so one long
-/// read never holds up the others.
+/// read never holds up the others. Also all a ring gets while its voice
+/// is still more than a ring's length from its tail.
 pub(crate) const READ_CHUNK: usize = 4_096;
 
 /// `wpos`: the generation is the high 32 bits; below it, this bit says
@@ -217,6 +222,10 @@ pub struct Ring {
     pub(crate) wpos: AtomicU64,
     /// Ring frames the audio thread is done with.
     pub(crate) read: AtomicU64,
+    /// Published by the audio thread: frames its voice has left to play
+    /// of its head before it needs ring frame 0 (0 once on its tail).
+    /// Plus what is buffered, the reader's deadline for this ring.
+    pub(crate) head_left: AtomicU64,
     /// The generation a reader is serving (0: none), and its stream's
     /// length in ring frames: what the readers' lock-free scans go by.
     pub(crate) reader_gen: AtomicU32,
@@ -240,6 +249,7 @@ impl Ring {
             req_start: AtomicU64::new(0),
             wpos: AtomicU64::new(0),
             read: AtomicU64::new(0),
+            head_left: AtomicU64::new(0),
             reader_gen: AtomicU32::new(0),
             reader_end: AtomicU64::new(0),
             data: OnceLock::new(),
@@ -422,6 +432,12 @@ impl StreamSet {
             .sum()
     }
 
+    /// Frames published for ring `ring`'s current stream (0 for a ring
+    /// that is not claimed).
+    pub fn published_frames(&self, ring: u8) -> u64 {
+        self.rings.get(ring as usize).map_or(0, |r| r.published().0)
+    }
+
     /// Frames published for the streams claimed now, across every ring.
     pub fn frames_buffered(&self) -> u64 {
         self.rings
@@ -600,6 +616,7 @@ impl AudioStreams {
             };
             self.gens[i] = gen;
             ring.read.store(0, Ordering::Relaxed);
+            ring.head_left.store(start as u64, Ordering::Relaxed);
             ring.wpos.store((gen as u64) << 32, Ordering::Relaxed);
             ring.active_gen.store(gen, Ordering::Release);
             ring.req_gen.store(gen, Ordering::Relaxed);

@@ -26,6 +26,16 @@
 //! stream waits at most that long to be noticed, which its voice's head
 //! (≥ 32 k frames, ≈ 0.68 s) covers many times over.
 //!
+//! # Scheduling
+//!
+//! A pass reads one chunk at a time, always for the ring whose voice
+//! runs out first: its **deadline** is the frames the voice has left of
+//! its head (published by the audio thread) plus what its ring already
+//! buffers. A ring whose voice is more than a ring's length from its tail
+//! gets one chunk ([`READ_CHUNK`]) and no more until it comes within that
+//! length — a fresh claim has its whole head as lead, and a voice choked
+//! or stolen on its head should not have cost a ring's worth of reads.
+//!
 //! # Faults
 //!
 //! Every reader step on a ring runs under `catch_unwind`: a panic (a
@@ -187,10 +197,17 @@ impl ReaderPool {
     pub fn pump(&self) -> bool {
         let mut pass = self.stepped.lock();
         let mut any = false;
-        while run_pass(&self.shared, &mut pass).0 {
+        while run_pass(&self.shared, &mut pass, usize::MAX).0 {
             any = true;
         }
         any
+    }
+
+    /// One pass on the calling thread that reads at most one chunk: the
+    /// most urgent. For a stepped pool. Test hook.
+    #[doc(hidden)]
+    pub fn step(&self) -> bool {
+        run_pass(&self.shared, &mut self.stepped.lock(), 1).0
     }
 
     /// Stop every reader thread and wait for them, for good. The rings
@@ -234,7 +251,7 @@ struct Pass {
     sets: Vec<Arc<StreamSet>>,
     scratch: TailScratch,
     buf: Vec<f32>,
-    /// (priority, set, ring) of the rings that want a read.
+    /// (deadline, set, ring) of the rings that want a read.
     wanting: Vec<(u64, usize, usize)>,
 }
 
@@ -243,7 +260,8 @@ fn run(shared: &PoolShared) {
     while !shared.stop.load(Ordering::Acquire) {
         // Each ring's steps are guarded on their own (see `guarded`); this
         // is the last line, for a fault outside them.
-        let (worked, open) = catch_unwind(AssertUnwindSafe(|| run_pass(shared, &mut pass)))
+        let (worked, open) =
+            catch_unwind(AssertUnwindSafe(|| run_pass(shared, &mut pass, usize::MAX)))
             .unwrap_or_else(|_| {
                 pass = Pass::default();
                 (false, true)
@@ -259,11 +277,11 @@ fn run(shared: &PoolShared) {
 }
 
 /// One pass over every registered set: take requests and drop let-go
-/// streams, then fill the rings that want it, most urgent first, taking
-/// care of requests and cancellations again after every read, so a slow
-/// disk never holds up a ring being handed back. Returns (did anything,
-/// is any stream open).
-fn run_pass(shared: &PoolShared, pass: &mut Pass) -> (bool, bool) {
+/// streams, then fill the rings that want it, earliest deadline first
+/// (at most `max_reads` chunks), taking care of requests and
+/// cancellations again after every read, so a slow disk never holds up a
+/// ring being handed back. Returns (did anything, is any stream open).
+fn run_pass(shared: &PoolShared, pass: &mut Pass, max_reads: usize) -> (bool, bool) {
     let Pass {
         sets,
         scratch,
@@ -276,15 +294,16 @@ fn run_pass(shared: &PoolShared, pass: &mut Pass) -> (bool, bool) {
         buf.resize(READ_CHUNK * 2, 0.0);
     }
     let (mut worked, open) = admin_all(sets);
-    while !shared.stop.load(Ordering::Acquire) {
+    let mut reads = 0;
+    while reads < max_reads && !shared.stop.load(Ordering::Acquire) {
         wanting.clear();
         for (si, set) in sets.iter().enumerate() {
             if set.paused.load(Ordering::Acquire) {
                 continue;
             }
             for_each_open(set, |ri| {
-                if let Some(priority) = wants_fill(&set.rings[ri]) {
-                    wanting.push((priority, si, ri));
+                if let Some(deadline) = wants_fill(&set.rings[ri]) {
+                    wanting.push((deadline, si, ri));
                 }
             });
         }
@@ -307,6 +326,7 @@ fn run_pass(shared: &PoolShared, pass: &mut Pass) -> (bool, bool) {
         if !filled {
             break;
         }
+        reads += 1;
         worked = true;
         admin_all(sets);
     }
@@ -377,8 +397,20 @@ fn admin_all(sets: &[Arc<StreamSet>]) -> (bool, bool) {
     (worked, open)
 }
 
-/// Frames buffered ahead of the voice, for a served ring that has room
-/// for a worthwhile read (or its last one); `None` otherwise. Lock-free.
+/// How far (in ring frames) a stream may be filled now, its voice having
+/// read up to `read`: one chunk while the voice is more than a ring's
+/// length from its tail, a whole ring ahead of the voice after.
+fn fill_limit(ring: &Ring, read: u64) -> u64 {
+    if ring.head_left.load(Ordering::Acquire) > RING_FRAMES as u64 {
+        READ_CHUNK as u64
+    } else {
+        read + RING_FRAMES as u64
+    }
+}
+
+/// The deadline of a served ring that has room for a worthwhile read (or
+/// its last one) — frames until its voice runs out: what is left of its
+/// head plus what the ring buffers; `None` when it wants no read. Lock-free.
 fn wants_fill(ring: &Ring) -> Option<u64> {
     let gen = ring.reader_gen.load(Ordering::Acquire);
     if gen == 0 || ring.active_gen.load(Ordering::Acquire) != gen {
@@ -394,12 +426,12 @@ fn wants_fill(ring: &Ring) -> Option<u64> {
     if next >= end {
         return None;
     }
-    let room = (read + RING_FRAMES as u64).saturating_sub(next);
+    let room = fill_limit(ring, read).saturating_sub(next);
     let n = room.min(end - next).min(READ_CHUNK as u64);
     if n == 0 || (n < READ_CHUNK as u64 / 4 && n < end - next) {
         return None;
     }
-    Some(next - read)
+    Some(ring.head_left.load(Ordering::Acquire) + (next - read))
 }
 
 /// Drop a stream the audio thread has let go of, and take a pending
@@ -476,7 +508,7 @@ fn fill(
         side.file = None;
         return false;
     }
-    let room = (read + RING_FRAMES as u64).saturating_sub(next);
+    let room = fill_limit(ring, read).saturating_sub(next);
     let n = room.min(total - next).min(READ_CHUNK as u64) as usize;
     if n == 0 {
         return false;
