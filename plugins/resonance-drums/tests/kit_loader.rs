@@ -48,6 +48,7 @@ fn drummica_smoke() {
         "RESONANCE_DRUMMICA_PATH points at {}, which does not exist",
         manifest.display()
     );
+    let started = std::time::Instant::now();
     let kit = load_kit_from_manifest(
         &manifest,
         48000.0,
@@ -56,7 +57,52 @@ fn drummica_smoke() {
         &default_articulations(),
     )
     .expect("drummica kit should load cleanly");
+    let took = started.elapsed();
     assert_eq!(kit.pads.len(), NUM_PADS);
+    assert_eq!(kit.stats.unreadable, 0, "{:?}", kit.stats.unreadable_paths);
+    // What the default setup costs (E5): decoded bytes, the mono share,
+    // and the decode time on this machine's worker pool.
+    let mut mono_bytes = 0usize;
+    let mut stereo_bytes = 0usize;
+    for pad in &kit.pads {
+        for bank in pad.close_mics.iter().chain(pad.overhead.iter()) {
+            for take in bank.layers.iter().flat_map(|l| l.round_robins.iter()) {
+                if take.channels() == 1 {
+                    mono_bytes += take.bytes();
+                } else {
+                    stereo_bytes += take.bytes();
+                }
+            }
+        }
+    }
+    eprintln!(
+        "drummica default setup: {} files, {} decoded in {took:.2?} on {} workers; \
+         {} MiB decoded ({} MiB mono, {} MiB stereo; duplicated to stereo the mono \
+         takes would cost {} MiB more)",
+        kit.stats.files,
+        kit.stats.decoded,
+        resonance_drums::kit_loader::decode::decode_workers(kit.stats.files),
+        kit.stats.kit_bytes >> 20,
+        mono_bytes >> 20,
+        stereo_bytes >> 20,
+        mono_bytes >> 20,
+    );
+    // A second load of the same kit at the same rate — another instance —
+    // decodes nothing while the first holds it.
+    let again = load_kit_from_manifest(
+        &manifest,
+        48000.0,
+        DEFAULT_OVERHEAD_SETUP,
+        &default_choices(),
+        &default_articulations(),
+    )
+    .expect("second load");
+    assert_eq!(again.stats.decoded, 0, "{:?}", again.stats);
+    eprintln!(
+        "second instance: {} decoded, {} MiB shared",
+        again.stats.decoded,
+        again.stats.shared_bytes >> 20
+    );
 
     // Kick and snare each have two close mic positions (In+Out and
     // Top+Btm respectively) so they must load two banks.
