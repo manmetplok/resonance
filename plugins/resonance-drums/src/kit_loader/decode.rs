@@ -421,7 +421,7 @@ pub(super) fn assemble_pad(
                 }
             }
             if !round_robins.is_empty() {
-                layers.push(VelocityLayer { round_robins });
+                layers.push(VelocityLayer::new(round_robins));
             }
         }
         if layers.is_empty() {

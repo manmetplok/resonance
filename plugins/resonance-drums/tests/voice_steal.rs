@@ -60,9 +60,7 @@ fn ramp_pads() -> Vec<LoadedPad> {
             close_mics: vec![LoadedMicBank {
                 position: "test".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![ramp_sample(frames)],
-                }],
+                layers: vec![VelocityLayer::new(vec![ramp_sample(frames)])],
             }],
             overhead: None,
         })

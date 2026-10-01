@@ -158,23 +158,56 @@ pub struct LoadedSample {
     data: Arc<SampleData>,
 }
 
-/// All round-robin takes recorded at a given velocity.
+/// All round-robin takes recorded at a given velocity, and how loud
+/// they are together (E7), measured once where the layer is built.
 #[derive(Clone)]
 pub struct VelocityLayer {
+    /// The takes. Read-only once built: the layer's level is measured
+    /// from them by [`VelocityLayer::new`].
     pub round_robins: Vec<LoadedSample>,
+    level_db: f32,
 }
 
 impl VelocityLayer {
-    /// How loud the layer is, in dB: the mean of its takes' measured
-    /// levels ([`SampleData::level_db`], E7). [`SILENT_DB`] for a layer
-    /// with no takes. Allocation-free: the audio thread reads it at a hit.
-    pub fn level_db(&self) -> f32 {
-        if self.round_robins.is_empty() {
-            return SILENT_DB;
+    /// A layer of `round_robins`, its level measured now — off the audio
+    /// thread, where kits are built.
+    pub fn new(round_robins: Vec<LoadedSample>) -> Self {
+        let level_db = layer_level_db(&round_robins);
+        Self {
+            round_robins,
+            level_db,
         }
-        let sum: f32 = self.round_robins.iter().map(|t| t.level_db()).sum();
-        sum / self.round_robins.len() as f32
     }
+
+    /// How loud the layer is, in dB: the **power** mean of its usable
+    /// takes' measured levels ([`SampleData::level_db`], E7) — the level
+    /// of the average energy a hit on the layer plays, not the mean of
+    /// the dB, which a quiet take drags down further than it sounds.
+    /// Takes at or below
+    /// [`UNUSABLE_LAYER_DB`](crate::dsp::voice_pick::UNUSABLE_LAYER_DB)
+    /// (silent or broken) are left out; [`SILENT_DB`] for a layer with no
+    /// usable take. Cached at build time: the audio thread reads it at a
+    /// hit.
+    #[inline]
+    pub fn level_db(&self) -> f32 {
+        self.level_db
+    }
+}
+
+/// [`VelocityLayer::level_db`] of `takes`.
+fn layer_level_db(takes: &[LoadedSample]) -> f32 {
+    use crate::dsp::voice_pick::UNUSABLE_LAYER_DB;
+    let (sum, n) = takes
+        .iter()
+        .map(|t| t.level_db())
+        .filter(|&db| db > UNUSABLE_LAYER_DB)
+        .fold((0.0f64, 0usize), |(sum, n), db| {
+            (sum + 10f64.powf(db as f64 / 10.0), n + 1)
+        });
+    if n == 0 {
+        return SILENT_DB;
+    }
+    ((10.0 * (sum / n as f64).log10()) as f32).max(SILENT_DB)
 }
 
 /// One mic position's sample bank for a single pad. The plugin loads a

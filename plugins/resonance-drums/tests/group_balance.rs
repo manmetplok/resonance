@@ -150,9 +150,7 @@ fn pad_param_defaults_are_uniform_across_all_pads() {
 // ---------------------------------------------------------------------------
 
 fn layer(value: f32) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: vec![LoadedSample::from_data(vec![value; 64])],
-    }
+    VelocityLayer::new(vec![LoadedSample::from_data(vec![value; 64])])
 }
 
 /// Build a pad shaped the way the Drummica loader builds it: one close bank

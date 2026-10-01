@@ -137,11 +137,9 @@ fn make_test_pad(
     choke_group: Option<u8>,
 ) -> LoadedPad {
     let layers: Vec<VelocityLayer> = (0..n_layers)
-        .map(|_| VelocityLayer {
-            round_robins: (0..rr_per_layer)
+        .map(|_| VelocityLayer::new((0..rr_per_layer)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2])) // 1 stereo frame
-                .collect(),
-        })
+                .collect()))
         .collect();
     LoadedPad {
         name: "test".to_string(),
@@ -341,11 +339,9 @@ fn all_voices_from_single_hit_share_rr_index() {
     // Build a kick pad with 2 close-mic banks (KickIn + KickOut) and
     // an overhead, each with 4 round-robin takes.
     let layers = || -> Vec<VelocityLayer> {
-        vec![VelocityLayer {
-            round_robins: (0..4)
+        vec![VelocityLayer::new((0..4)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2]))
-                .collect(),
-        }]
+                .collect())]
     };
     let kick_pad = LoadedPad {
         name: "Kick".to_string(),

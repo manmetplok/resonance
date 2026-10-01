@@ -564,16 +564,12 @@ fn one_take_kit(mono: &[f32], as_mono: bool) -> Vec<LoadedPad> {
             close_mics: vec![LoadedMicBank {
                 position: "x".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![take()],
-                }],
+                layers: vec![VelocityLayer::new(vec![take()])],
             }],
             overhead: Some(LoadedMicBank {
                 position: "OH".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![take()],
-                }],
+                layers: vec![VelocityLayer::new(vec![take()])],
             }),
         })
         .collect()

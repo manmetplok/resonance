@@ -16,11 +16,9 @@ fn make_pad(
     choke_group: Option<u8>,
 ) -> LoadedPad {
     let layers: Vec<VelocityLayer> = (0..n_layers)
-        .map(|_| VelocityLayer {
-            round_robins: (0..rr_per_layer)
+        .map(|_| VelocityLayer::new((0..rr_per_layer)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2]))
-                .collect(),
-        })
+                .collect()))
         .collect();
     LoadedPad {
         name: "test".to_string(),
@@ -277,11 +275,9 @@ fn all_voices_from_multi_bank_hit_share_rr() {
     let mut sampler = make_sampler();
 
     let layers = || -> Vec<VelocityLayer> {
-        vec![VelocityLayer {
-            round_robins: (0..4)
+        vec![VelocityLayer::new((0..4)
                 .map(|_| LoadedSample::from_data(vec![0.0; 2]))
-                .collect(),
-        }]
+                .collect())]
     };
     let kick_pad = LoadedPad {
         name: "Kick".to_string(),
@@ -420,11 +416,9 @@ fn overhead_only_pad_uses_rr() {
                     overhead: Some(LoadedMicBank {
                         position: "OH".to_string(),
                         setup_key: String::new(),
-                        layers: vec![VelocityLayer {
-                            round_robins: (0..3)
+                        layers: vec![VelocityLayer::new((0..3)
                                 .map(|_| LoadedSample::from_data(vec![0.0; 2]))
-                                .collect(),
-                        }],
+                                .collect())],
                     }),
                 }
             } else {

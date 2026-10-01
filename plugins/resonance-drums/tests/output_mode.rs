@@ -43,9 +43,7 @@ fn bank(position: &str, seed: usize) -> LoadedMicBank {
     LoadedMicBank {
         position: position.to_string(),
         setup_key: String::new(),
-        layers: vec![VelocityLayer {
-            round_robins: vec![tone(seed, BLOCK * BLOCKS)],
-        }],
+        layers: vec![VelocityLayer::new(vec![tone(seed, BLOCK * BLOCKS)])],
     }
 }
 

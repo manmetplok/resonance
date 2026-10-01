@@ -31,13 +31,11 @@ fn make_sampler() -> DrumSampler {
 }
 
 fn layer(takes: usize) -> VelocityLayer {
-    VelocityLayer {
-        round_robins: (0..takes)
+    VelocityLayer::new((0..takes)
             // Long enough that a hit is still sounding when the next
             // one lands, so the voice count is what is under test.
             .map(|_| LoadedSample::from_data(vec![0.5; 8192]))
-            .collect(),
-    }
+            .collect())
 }
 
 /// A pad with `layers` velocity layers of `takes` takes each, on a

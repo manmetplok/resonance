@@ -145,9 +145,7 @@ impl Fixture {
         let bank = |name: &str, path: &Path| LoadedMicBank {
             position: name.to_string(),
             setup_key: String::new(),
-            layers: vec![VelocityLayer {
-                round_robins: vec![take(path)],
-            }],
+            layers: vec![VelocityLayer::new(vec![take(path)])],
         };
         PAD_MAPPINGS
             .iter()
@@ -833,9 +831,7 @@ fn single_voice_kit(cache: &SampleCache, path: &Path, preload: u32) -> Vec<Loade
             close_mics: vec![LoadedMicBank {
                 position: "A".to_string(),
                 setup_key: String::new(),
-                layers: vec![VelocityLayer {
-                    round_robins: vec![LoadedSample::from_shared(data.clone())],
-                }],
+                layers: vec![VelocityLayer::new(vec![LoadedSample::from_shared(data.clone())])],
             }],
             overhead: None,
         })

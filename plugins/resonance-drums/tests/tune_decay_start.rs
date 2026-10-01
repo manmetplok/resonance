@@ -91,9 +91,7 @@ fn kick_kit(take: LoadedSample) -> Vec<LoadedPad> {
                 vec![LoadedMicBank {
                     position: "KickIn".to_string(),
                     setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![take.clone()],
-                    }],
+                    layers: vec![VelocityLayer::new(vec![take.clone()])],
                 }]
             } else {
                 Vec::new()
