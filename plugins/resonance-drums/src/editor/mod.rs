@@ -2,8 +2,8 @@
 //!
 //! Layout: a chrome bar (Resonance / Drums brand, the preset bar, and the
 //! "Open kit file…" / "Download kits…" buttons) sits above a second bar
-//! carrying the PADS badge and the KIT preset pill (◀ name ▶). Pads is
-//! the editor's only view, so there is no tab strip to switch it with.
+//! carrying the KIT pill (◀ name ▶). Pads is the editor's only view, so
+//! there is no tab strip to switch it with.
 //! The central body is a fixed-height KIT + GLOBAL card row at the
 //! bottom and, above it, the two-column pad list + pad detail, each
 //! scrolling independently so the window can be resized down to its
@@ -30,6 +30,9 @@ mod theme;
 
 pub use factory::DrumsEditorFactory;
 
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 use plugin_gui_core::egui;
 
 // Re-exported so the per-section modules (`pad_inspector`, `kit_browser`)
@@ -38,23 +41,27 @@ use plugin_gui_core::egui;
 // it in headless builds too.
 pub(crate) use crate::reload::reload_kit;
 
-/// The width a card's body should claim inside `ui`, once `inset` — the
-/// frame's own horizontal margin — is taken off.
+/// The width left in `ui` once `inset` — the fixed gaps of a row about to
+/// be split into columns, or a widget's own chrome — is taken off,
+/// floored at zero.
 ///
-/// Exists to floor the subtraction. Every card in this editor sizes
-/// itself as "whatever is available, less my margins", and a window
-/// narrower than those margins makes that negative. `Ui::set_min_width`
-/// carries a `debug_assert!(0.0 <= width)`, so in a debug build that is a
-/// panic on the editor thread; in release the assert is compiled out and
-/// egui's placer discards any non-positive width anyway. A compositor
-/// that tiles plugin windows can produce the narrow case without the user
-/// doing anything unusual (ba todo #1377).
+/// A window narrower than those gaps makes the plain subtraction
+/// negative, and `Ui::set_min_width` / `set_width` carry a
+/// `debug_assert!(0.0 <= width)`: a panic on the editor thread in a debug
+/// build. A compositor that tiles plugin windows can produce the narrow
+/// case without the user doing anything unusual (ba todo #1377).
 ///
-/// Zero is the honest floor rather than a minimum like 40px: this is an
-/// *expansion* hint — it asks the card to fill its row, and nothing about
-/// the content depends on it. Asking for nothing lets egui lay the
-/// content out and clip it, which degrades far better than forcing a
-/// width the window does not have and pushing the card off its own edge.
+/// A frame that only wants to fill its column does not need this: inside
+/// `Frame::show` the available width already excludes the frame's
+/// margins, so `ui.set_min_width(ui.available_width())` is enough. The
+/// cards here used to subtract their margins a second time, and with the
+/// body's columns accidentally laid out left to right (see
+/// `app::column`) the result could go negative — which is where this
+/// floor came from.
+///
+/// Zero is the honest floor rather than a minimum like 40px: asking for
+/// nothing lets egui lay the content out and clip it, which degrades far
+/// better than forcing a width the window does not have.
 pub(crate) fn body_width(ui: &egui::Ui, inset: f32) -> f32 {
     (ui.available_width() - inset).max(0.0)
 }
@@ -76,20 +83,103 @@ pub fn test_draw_pad_inspector(ui: &mut egui::Ui, bridge: &crate::KitBridge, sel
     );
 }
 
+/// One painted text as it landed on screen: the string, its visual
+/// rect, and the clip rect it was painted under. A label scrolled or
+/// squeezed out of view is still in the shape list — `Painter::text`
+/// emits it whatever the clip — so "the text was drawn" proves nothing;
+/// `rect ∩ clip` is what the user actually sees.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct ProbedText {
+    pub text: String,
+    pub rect: egui::Rect,
+    pub clip: egui::Rect,
+}
+
+/// One widget rect the editor reported through [`probe`], with the clip
+/// rect of the `Ui` it was laid out in.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct ProbedRect {
+    pub name: String,
+    pub rect: egui::Rect,
+    pub clip: egui::Rect,
+}
+
+/// Everything `test_render_editor_frame` read back from a settled frame.
+#[doc(hidden)]
+#[derive(Clone, Debug)]
+pub struct EditorFrameProbe {
+    pub screen: egui::Rect,
+    pub texts: Vec<ProbedText>,
+    pub widgets: Vec<ProbedRect>,
+}
+
+impl EditorFrameProbe {
+    /// Just the strings, for "is it drawn at all" checks.
+    pub fn strings(&self) -> Vec<String> {
+        self.texts.iter().map(|t| t.text.clone()).collect()
+    }
+
+    /// The probed widget called `name`, if the frame reported one.
+    pub fn widget(&self, name: &str) -> Option<&ProbedRect> {
+        self.widgets.iter().find(|w| w.name == name)
+    }
+}
+
+/// Where a test frame's [`probe`] calls land. Only present in a
+/// `Context` the test hooks built, so a live editor pays one map lookup
+/// per probed control and records nothing.
+#[derive(Clone, Default)]
+struct ProbeSink(Arc<Mutex<Vec<ProbedRect>>>);
+
+fn probe_id() -> egui::Id {
+    egui::Id::new("resonance_drums_layout_probe")
+}
+
+/// Report a widget's rect, with the clip it was laid out under, to a test
+/// frame's probe sink. A no-op outside the test hooks.
+pub(crate) fn probe(ui: &egui::Ui, name: impl Into<String>, rect: egui::Rect) {
+    let sink = ui.ctx().data(|d| d.get_temp::<ProbeSink>(probe_id()));
+    if let Some(sink) = sink {
+        sink.0.lock().push(ProbedRect {
+            name: name.into(),
+            rect,
+            clip: ui.clip_rect(),
+        });
+    }
+}
+
+/// Run `add` in its own scope and [`probe`] the rect it took up — for
+/// the `plugin_gui_core` widgets, which hand back a value, not a
+/// `Response`.
+pub(crate) fn probed<R>(
+    ui: &mut egui::Ui,
+    name: &str,
+    add: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let out = ui.scope(add);
+    probe(ui, name, out.response.rect);
+    out.inner
+}
+
 /// Test-only: every text shape a frame painted, walked out of egui's own
-/// shape tree. Shared by the hooks below so a layout test can read back
-/// what actually landed on screen instead of guessing from source.
-fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
-    fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+/// shape tree, with the clip rect each one was painted under.
+fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<ProbedText> {
+    fn walk(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<ProbedText>) {
         match shape {
-            egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
-            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Text(t) => out.push(ProbedText {
+                text: t.galley.text().to_string(),
+                rect: t.visual_bounding_rect(),
+                clip,
+            }),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, clip, out)),
             _ => {}
         }
     }
     let mut out = Vec::new();
     for s in shapes {
-        walk(&s.shape, &mut out);
+        walk(&s.shape, s.clip_rect, &mut out);
     }
     out
 }
@@ -97,11 +187,12 @@ fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
 /// Test-only: build a fresh editor app from `plugin` and run its
 /// `EditorApp::ui` at `size` (width, height), the same call the platform
 /// GUI runtime makes each repaint
-/// (`wayland-plugin-gui/src/window_thread/paint.rs`). Returns the text
-/// every label and button drew, so a test can check what is reachable —
-/// `DrumsEditorApp` and `EditorApp::ui` are both private outside this
-/// crate, which is why this hook exists rather than a test constructing
-/// the app directly (drums-plugin-rework.md §9, K0).
+/// (`wayland-plugin-gui/src/window_thread/paint.rs`). Returns every text
+/// the frame painted and every rect the editor [`probe`]d, each with the
+/// clip rect it was drawn under, so a test can check what is actually
+/// *visible* — `DrumsEditorApp` and `EditorApp::ui` are both private
+/// outside this crate, which is why this hook exists rather than a test
+/// constructing the app directly (drums-plugin-rework.md §9, K0).
 ///
 /// Runs two passes on the same `egui::Context` before reading back the
 /// shapes — the preset bar's combo boxes are popups, which (like
@@ -109,7 +200,10 @@ fn collect_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
 /// final layout from the second pass onward. The real runtime repaints
 /// continuously, so this is what it would actually show once settled.
 #[doc(hidden)]
-pub fn test_render_editor_frame(plugin: &crate::ResonanceDrums, size: (f32, f32)) -> Vec<String> {
+pub fn test_render_editor_frame(
+    plugin: &crate::ResonanceDrums,
+    size: (f32, f32),
+) -> EditorFrameProbe {
     use plugin_gui_core::EditorApp as _;
 
     let mut app = app::DrumsEditorApp::new(
@@ -119,6 +213,8 @@ pub fn test_render_editor_frame(plugin: &crate::ResonanceDrums, size: (f32, f32)
         plugin.presets.clone(),
     );
     let ctx = egui::Context::default();
+    let sink = ProbeSink::default();
+    ctx.data_mut(|d| d.insert_temp(probe_id(), sink.clone()));
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
     let run = |ctx: &egui::Context, app: &mut app::DrumsEditorApp| {
         let input = egui::RawInput {
@@ -128,25 +224,110 @@ pub fn test_render_editor_frame(plugin: &crate::ResonanceDrums, size: (f32, f32)
         ctx.run_ui(input, |ui| app.ui(ui))
     };
     let _settle = run(&ctx, &mut app);
+    sink.0.lock().clear();
     let output = run(&ctx, &mut app);
-    collect_texts(&output.shapes)
+    let widgets = std::mem::take(&mut *sink.0.lock());
+    EditorFrameProbe {
+        screen,
+        texts: collect_texts(&output.shapes),
+        widgets,
+    }
+}
+
+/// Test-only: the Download Kits overlay in isolation, driven frame by
+/// frame on one `egui::Context` — open it, feed it input, close it, open
+/// it again — so a test can check what survives a close and what Esc,
+/// the Close button and a backdrop click each do, without a live window.
+/// `download_panel` is a private module outside this crate
+/// (drums-plugin-rework.md §9, K0).
+///
+/// It drives whatever worker it is handed. Opening the panel can send
+/// that worker a `FetchIndex`, so a test that calls [`Self::open`] should
+/// hand it a worker pointed at a local index
+/// (`download::spawn_with_index`), never the plugin's own, which fetches
+/// from the real server.
+#[doc(hidden)]
+pub struct TestDownloadPanel {
+    panel: download_panel::DownloadPanelState,
+    worker: Arc<crate::download::WorkerHandle>,
+    ctx: egui::Context,
+    screen: egui::Rect,
+}
+
+impl TestDownloadPanel {
+    pub fn new(worker: Arc<crate::download::WorkerHandle>, size: (f32, f32)) -> Self {
+        Self {
+            panel: download_panel::DownloadPanelState::default(),
+            worker,
+            ctx: egui::Context::default(),
+            screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1)),
+        }
+    }
+
+    /// What the header's "Download kits…" button does.
+    pub fn open(&mut self) {
+        download_panel::open(&mut self.panel, &self.worker);
+    }
+
+    /// Open the panel without the open-time index fetch — for tests that
+    /// only care about the modal's mechanics and must not touch a worker.
+    pub fn open_without_fetch(&mut self) {
+        self.panel.open = true;
+        self.panel.did_initial_fetch = true;
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.panel.open
+    }
+
+    /// Whether opening left the index fetch still to do (`false`) or
+    /// skipped it (`true`).
+    pub fn did_initial_fetch(&self) -> bool {
+        self.panel.did_initial_fetch
+    }
+
+    /// Arm a kit's delete, as the first click on its "Delete" does.
+    pub fn arm_delete(&mut self, name: &str) {
+        self.panel.pending_delete = Some(name.to_string());
+    }
+
+    pub fn pending_delete(&self) -> Option<&str> {
+        self.panel.pending_delete.as_deref()
+    }
+
+    /// Run one frame with `events` as its input, drawing the panel if it
+    /// is open, as `DrumsEditorApp::ui` does. Returns what it painted.
+    ///
+    /// `egui::Modal` only knows it is the topmost modal from its second
+    /// frame onward (the first is what registers it in `ctx`'s memory at
+    /// all), so input meant for a settled panel belongs in the second
+    /// frame after opening — the same as the live runtime's first repaint
+    /// after the click that opened it.
+    pub fn frame(&mut self, events: Vec<egui::Event>) -> Vec<egui::epaint::ClippedShape> {
+        let input = egui::RawInput {
+            screen_rect: Some(self.screen),
+            events,
+            ..Default::default()
+        };
+        let (panel, worker) = (&mut self.panel, &self.worker);
+        let output = self.ctx.run_ui(input, |ui| {
+            if panel.open {
+                download_panel::draw(ui, panel, worker);
+            }
+        });
+        output.shapes
+    }
 }
 
 /// Test-only: render the Download Kits overlay in isolation at `size`,
 /// starting `open`, with `events` injected as the settled frame's input.
 /// Returns whether the panel is still open afterwards and every shape
-/// that frame painted, so a test can check both what Esc does and the
-/// backdrop's paint order relative to the panel without a live window —
-/// `download_panel` is a private module outside this crate
-/// (drums-plugin-rework.md §9, K0).
+/// that frame painted. A two-frame [`TestDownloadPanel`] session (see its
+/// `frame` for why two).
 ///
-/// Runs two passes on the same `egui::Context`: `egui::Modal` only knows
-/// it is the topmost modal from the second pass onward (the first pass
-/// is what registers it in `ctx`'s memory at all), so a single pass sees
-/// an unsettled frame — no backdrop click-catching and Esc not yet wired
-/// up — the same way the live runtime's first repaint after opening the
-/// panel would. `events` apply to the settled (second) pass, matching
-/// when a real user's input could first land on it.
+/// Hermetic: the panel opens with its index fetch already marked done, so
+/// nothing is sent to `plugin`'s download worker — which would otherwise
+/// go to the real server on every run of these tests.
 #[doc(hidden)]
 pub fn test_run_download_panel_frame(
     plugin: &crate::ResonanceDrums,
@@ -154,23 +335,24 @@ pub fn test_run_download_panel_frame(
     events: Vec<egui::Event>,
     open: bool,
 ) -> (bool, Vec<egui::epaint::ClippedShape>) {
-    let mut panel = download_panel::DownloadPanelState::default();
-    panel.open = open;
-    let ctx = egui::Context::default();
-    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1));
-    let run = |ctx: &egui::Context, panel: &mut download_panel::DownloadPanelState, events| {
-        let input = egui::RawInput {
-            screen_rect: Some(screen),
-            events,
-            ..Default::default()
-        };
-        ctx.run_ui(input, |ui| {
-            if panel.open {
-                download_panel::draw(ui, panel, &plugin.download_worker);
-            }
-        })
-    };
-    let _settle = run(&ctx, &mut panel, Vec::new());
-    let output = run(&ctx, &mut panel, events);
-    (panel.open, output.shapes)
+    let mut session = TestDownloadPanel::new(plugin.download_worker.clone(), size);
+    if open {
+        session.open_without_fetch();
+    }
+    let _settle = session.frame(Vec::new());
+    let shapes = session.frame(events);
+    (session.is_open(), shapes)
+}
+
+/// Test-only: which kit the KIT pill's ◀/▶ step from, given `bridge` and
+/// the editor's last load request (`(manifest, load generation)`) —
+/// `kit_browser` is private outside this crate.
+#[doc(hidden)]
+pub fn test_kit_path_for_stepping(
+    bridge: &crate::KitBridge,
+    requested: Option<(std::path::PathBuf, u64)>,
+) -> Option<std::path::PathBuf> {
+    let requested =
+        requested.map(|(path, generation)| kit_browser::RequestedKit { path, generation });
+    kit_browser::kit_path_for_stepping(bridge, requested.as_ref())
 }

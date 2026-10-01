@@ -264,6 +264,7 @@ fn draw_pad_row(
         egui::vec2(avail_w, row_h),
         egui::Sense::click(),
     );
+    super::probe(ui, format!("pad_row.{pad_idx}"), rect);
 
     // Background pill.
     let p = ui.painter_at(rect);

@@ -31,7 +31,10 @@ pub use editor::test_draw_pad_inspector;
 /// K0) — same shape as `test_draw_pad_inspector` above.
 #[cfg(feature = "editor")]
 #[doc(hidden)]
-pub use editor::{test_render_editor_frame, test_run_download_panel_frame};
+pub use editor::{
+    test_kit_path_for_stepping, test_render_editor_frame, test_run_download_panel_frame,
+    EditorFrameProbe, ProbedRect, ProbedText, TestDownloadPanel,
+};
 pub mod kit;
 pub mod kit_loader;
 mod mic_catalog;

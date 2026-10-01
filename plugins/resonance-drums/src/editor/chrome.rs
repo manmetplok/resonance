@@ -10,7 +10,6 @@ use plugin_gui_core::egui;
 use resonance_common::registry::InstalledItem;
 
 use crate::kit_loader::KitStatus;
-use crate::rr_display;
 use crate::sample_info;
 
 use super::app::DrumsEditorApp;
@@ -54,168 +53,124 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         // drums-plugin-rework.md §10, K0).
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Open kit file…").clicked() {
-                kit_browser::load_kit_clicked(&app.bridge);
+                if let Some(req) = kit_browser::load_kit_clicked(&app.bridge) {
+                    app.requested_kit = Some(req);
+                }
             }
             ui.add_space(6.0);
             if ui.button("Download kits…").clicked() {
-                download_panel::open(&mut app.download_panel);
+                download_panel::open(&mut app.download_panel, &app.download_worker);
             }
         });
     });
 }
 
-/// Tab bar. The editor has exactly one view (Pads), so there is no tab
-/// strip here to switch it with — the "DRUMS" label plus the PADS badge
-/// and KIT pill are what remains. It used to carry five tabs, four of
-/// which rendered a "not built yet" placeholder, plus a single-option
-/// `Pads` segmented control whose click was discarded because it was the
-/// only option: a control the audit found drawn and interactive while
-/// doing nothing, the exact defect `editor_honesty.rs` guards against
-/// elsewhere (ba todo #1327).
+/// Tab bar: the KIT pill (◀ name ▶). The editor has one view, Pads, so
+/// there is no tab strip to switch it with. It used to carry five tabs,
+/// four of which rendered a "not built yet" placeholder, plus a
+/// single-option `Pads` segmented control whose click was discarded (ba
+/// todo #1327). The `DRUMS` label and the "N lit" PADS badge went too
+/// (drums-plugin-rework.md §6.1): decoration, not information — the
+/// round-robin readouts that matter are on each pad's row and in the
+/// inspector.
 pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
+    let installed = app.installed_kits.clone();
+    // Step from the kit on its way if a load is in flight, not from the
+    // one it is replacing: `kit_path` is only written once a load
+    // succeeds, so two quick ▶ clicks used to land on the same kit.
+    let current_idx =
+        kit_browser::kit_path_for_stepping(&app.bridge, app.requested_kit.as_ref())
+            .and_then(|path| installed_index(&path, &installed));
+    let mut pick: Option<usize> = None;
+
     ui.horizontal_centered(|ui| {
         ui.label(
-            egui::RichText::new("DRUMS")
+            egui::RichText::new("KIT")
                 .color(theme::TEXT_3)
-                .size(10.5)
+                .size(10.0)
                 .strong(),
         );
+        ui.add_space(8.0);
 
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // PADS badge — total pads, how many have fired, and how many
-            // of those actually have takes to cycle. The per-pad "take N
-            // of M" readouts live in the pad list and the inspector.
-            let total = app.bridge.last_rr.len();
-            let fired: Vec<_> = app
-                .bridge
-                .last_rr
-                .iter()
-                .filter_map(|a| rr_display::unpack(a.load(Ordering::Relaxed)))
-                .collect();
-            let cycling = fired.iter().filter(|rr| rr.cycles()).count();
-            let badge_text = format!("{} · {} lit", total, fired.len());
-            draw_pads_badge(ui, &badge_text)
-                .on_hover_text(format!(
-                    "{} of {} pads have played; {} of those cycle through \
-                     multiple round-robin takes.",
-                    fired.len(),
-                    total,
-                    cycling,
-                ));
+        let pill = egui::Frame::default()
+            .fill(theme::BG_2)
+            .stroke(egui::Stroke::new(1.0, theme::LINE))
+            .corner_radius(7.0)
+            .inner_margin(egui::Margin::symmetric(10, 4));
+        pill.show(ui, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if pill_arrow(ui, "◀") {
+                    pick = step(current_idx, installed.len(), false);
+                }
 
-            ui.add_space(8.0);
-
-            // KIT preset pill — driven by installed kits.
-            let pill = egui::Frame::default()
-                .fill(theme::BG_2)
-                .stroke(egui::Stroke::new(1.0, theme::LINE))
-                .corner_radius(7.0)
-                .inner_margin(egui::Margin::symmetric(10, 4));
-            pill.show(ui, |ui| {
-                ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let installed = app.installed_kits.clone();
-                        let current_idx = current_installed_index(&app.bridge, &installed);
-
-                        // Prev arrow.
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("◀")
-                                        .color(theme::TEXT_3)
-                                        .size(9.0),
-                                )
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            if let Some(idx) = current_idx {
-                                if idx > 0 {
-                                    let item = installed[idx - 1].clone();
-                                    kit_browser::load_installed_kit(&app.bridge, &item);
-                                }
-                            } else if let Some(item) = installed.first() {
-                                kit_browser::load_installed_kit(&app.bridge, item);
+                // When the current kit is one of the installed ones, show
+                // the registry's own name for it (§1.4: the loader's
+                // status name is the manifest's parent directory —
+                // "drummica" — not the registry's "Drummica"). Otherwise
+                // fall back to whatever the loader reported, e.g. a kit
+                // opened straight from a file outside the library.
+                let display = match current_idx {
+                    Some(i) => installed[i].name.clone(),
+                    None => {
+                        let name = current_kit_name(app);
+                        if name.is_empty() {
+                            "— no kit —".to_string()
+                        } else {
+                            name
+                        }
+                    }
+                };
+                egui::ComboBox::from_id_salt("drums_kit_combo")
+                    .width(170.0)
+                    .selected_text(
+                        egui::RichText::new(display)
+                            .color(theme::TEXT_1)
+                            .size(12.0),
+                    )
+                    .show_ui(ui, |ui| {
+                        if installed.is_empty() {
+                            ui.label(theme::hint_text("(no kits installed)"));
+                        }
+                        for (idx, item) in installed.iter().enumerate() {
+                            if ui
+                                .selectable_label(Some(idx) == current_idx, &item.name)
+                                .clicked()
+                            {
+                                pick = Some(idx);
                             }
                         }
+                    });
 
-                        // When the loaded kit is one of the installed
-                        // ones, show the registry's own name for it
-                        // (§1.4: the loader's status name is the
-                        // manifest's parent directory — "drummica" — not
-                        // the registry's "Drummica"). Otherwise fall back
-                        // to whatever the loader reported, e.g. a kit
-                        // opened straight from a file outside the library.
-                        let display = match current_idx {
-                            Some(i) => installed[i].name.clone(),
-                            None => {
-                                let name = current_kit_name(app);
-                                if name.is_empty() {
-                                    "— no kit —".to_string()
-                                } else {
-                                    name
-                                }
-                            }
-                        };
-                        egui::ComboBox::from_id_salt("drums_kit_combo")
-                            .width(170.0)
-                            .selected_text(
-                                egui::RichText::new(display)
-                                    .color(theme::TEXT_1)
-                                    .size(12.0),
-                            )
-                            .show_ui(ui, |ui| {
-                                if installed.is_empty() {
-                                    ui.label(theme::hint_text("(no kits installed)"));
-                                }
-                                for (idx, item) in installed.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(
-                                            Some(idx) == current_idx,
-                                            &item.name,
-                                        )
-                                        .clicked()
-                                    {
-                                        kit_browser::load_installed_kit(&app.bridge, item);
-                                    }
-                                }
-                            });
-
-                        // Next arrow.
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("▶")
-                                        .color(theme::TEXT_3)
-                                        .size(9.0),
-                                )
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            if let Some(idx) = current_idx {
-                                if idx + 1 < installed.len() {
-                                    let item = installed[idx + 1].clone();
-                                    kit_browser::load_installed_kit(&app.bridge, &item);
-                                }
-                            } else if let Some(item) = installed.first() {
-                                kit_browser::load_installed_kit(&app.bridge, item);
-                            }
-                        }
-                    },
-                );
+                if pill_arrow(ui, "▶") {
+                    pick = step(current_idx, installed.len(), true);
+                }
             });
-
-            ui.add_space(8.0);
-            ui.label(
-                egui::RichText::new("KIT")
-                    .color(theme::TEXT_3)
-                    .size(10.0)
-                    .strong(),
-            );
         });
     });
+
+    if let Some(item) = pick.and_then(|i| installed.get(i)) {
+        if let Some(req) = kit_browser::load_installed_kit(&app.bridge, item) {
+            app.requested_kit = Some(req);
+        }
+    }
+}
+
+/// One of the pill's frameless ◀ / ▶ buttons. True when clicked.
+fn pill_arrow(ui: &mut egui::Ui, glyph: &str) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new(glyph).color(theme::TEXT_3).size(9.0)).frame(false),
+    )
+    .clicked()
+}
+
+/// The installed kit one step from `current` (forward or back), clamped
+/// at the ends. With no current kit, either arrow picks the first one.
+fn step(current: Option<usize>, len: usize, forward: bool) -> Option<usize> {
+    match current {
+        Some(i) if forward => (i + 1 < len).then_some(i + 1),
+        Some(i) => i.checked_sub(1),
+        None => (len > 0).then_some(0),
+    }
 }
 
 /// Status bar. Every figure here is a measurement published by the audio
@@ -368,78 +323,19 @@ fn current_kit_name(app: &DrumsEditorApp) -> String {
     }
 }
 
-/// Which installed kit, if any, is the one loaded in `bridge`.
+/// Which installed kit, if any, `kit_path` (a manifest) belongs to.
 ///
 /// Matching by name does not work: the loaded name is the manifest's
 /// *parent* directory (`kit_loader/mod.rs` — "drummica"), while the
 /// registry's name is the kit's top directory ("Drummica"), so the combo
 /// never highlighted the loaded kit and ◀/▶ always reloaded the first one
 /// (ba drums-plugin-rework.md §1.4). The registry's `path` is always an
-/// ancestor of the loaded manifest path, though — downloaded or imported,
-/// the manifest lives one or two levels under the top directory — so
+/// ancestor of the manifest path, though — downloaded or imported, the
+/// manifest lives one or two levels under the top directory — so
 /// matching that way is stable regardless of what either side names
 /// things.
-fn current_installed_index(
-    bridge: &crate::KitBridge,
-    installed: &[InstalledItem],
-) -> Option<usize> {
-    let kit_path = bridge.kit_path.lock().clone()?;
+fn installed_index(kit_path: &std::path::Path, installed: &[InstalledItem]) -> Option<usize> {
     installed
         .iter()
         .position(|item| kit_path.starts_with(&item.path))
-}
-
-/// Draw the lavender PADS badge: `PADS  30 · 6 lit`.
-fn draw_pads_badge(ui: &mut egui::Ui, count_text: &str) -> egui::Response {
-    let label = "PADS";
-    let pad_x = 10.0;
-    let gap = 6.0;
-    let label_font = egui::FontId::proportional(10.0);
-    let count_font = egui::FontId::monospace(11.0);
-
-    let label_w = ui
-        .painter()
-        .layout_no_wrap(label.to_owned(), label_font.clone(), theme::ACCENT_SOFT)
-        .size()
-        .x;
-    let count_w = ui
-        .painter()
-        .layout_no_wrap(
-            count_text.to_owned(),
-            count_font.clone(),
-            theme::ACCENT_SOFT,
-        )
-        .size()
-        .x;
-
-    let inner_w = label_w + gap + count_w;
-    let total = egui::vec2(inner_w + pad_x * 2.0, 22.0);
-    let (rect, response) = ui.allocate_exact_size(total, egui::Sense::hover());
-
-    let p = ui.painter_at(rect.expand(2.0));
-    p.rect_filled(rect, 11.0, theme::ACCENT_DIM);
-    p.rect_stroke(
-        rect,
-        11.0,
-        egui::Stroke::new(1.0, theme::ACCENT),
-        egui::StrokeKind::Inside,
-    );
-    let label_x = rect.left() + pad_x;
-    let count_x = rect.right() - pad_x;
-    let cy = rect.center().y;
-    p.text(
-        egui::pos2(label_x, cy),
-        egui::Align2::LEFT_CENTER,
-        label,
-        label_font,
-        theme::ACCENT_SOFT,
-    );
-    p.text(
-        egui::pos2(count_x, cy),
-        egui::Align2::RIGHT_CENTER,
-        count_text,
-        count_font,
-        theme::ACCENT_SOFT,
-    );
-    response
 }

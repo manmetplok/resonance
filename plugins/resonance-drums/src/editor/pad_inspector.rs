@@ -41,7 +41,7 @@ pub fn draw(
         .stroke(egui::Stroke::new(1.0, theme::LINE_2))
         .corner_radius(PANEL_RADIUS)
         .inner_margin(egui::Margin::same(14));
-    frame.show(ui, |ui| {
+    let shown = frame.show(ui, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 10.0);
 
         let mapping = &PAD_MAPPINGS[selected_pad];
@@ -70,6 +70,7 @@ pub fn draw(
 
         draw_mic_and_oh_row(ui, bridge, catalog, pad, mapping, selected_pad);
     });
+    super::probe(ui, "inspector", shown.response.rect);
 }
 
 fn draw_pad_head(
@@ -404,7 +405,7 @@ fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
 fn draw_articulations(ui: &mut egui::Ui, bridge: &KitBridge, pad: &crate::params::PadParams) {
     let frame = inline_group_frame();
     frame.show(ui, |ui| {
-        ui.set_min_width(super::body_width(ui, 28.0));
+        ui.set_min_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("ARTICULATIONS")
@@ -484,7 +485,7 @@ fn draw_close_mics_card(
     pad_idx: usize,
 ) {
     inline_group_frame().show(ui, |ui| {
-        ui.set_min_width(super::body_width(ui, 28.0));
+        ui.set_min_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("CLOSE MICS")
@@ -596,7 +597,7 @@ fn draw_oh_blend_card(
     pad: &crate::params::PadParams,
 ) {
     inline_group_frame().show(ui, |ui| {
-        ui.set_min_width(super::body_width(ui, 28.0));
+        ui.set_min_width(ui.available_width());
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("OVERHEAD BLEND")

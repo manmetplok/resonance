@@ -17,6 +17,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use plugin_gui_core::egui;
 
 use super::theme;
@@ -31,18 +33,47 @@ pub struct DownloadPanelState {
     pub did_initial_fetch: bool,
     /// When set, the kit with this name is awaiting deletion confirmation.
     /// A second click on "Confirm?" will actually delete it.
-    pending_delete: Option<String>,
+    ///
+    /// Cleared whenever the panel opens or closes: a "Confirm?" left
+    /// armed across a close used to come back on reopen, one click away
+    /// from deleting a kit the user had walked away from.
+    pub(super) pending_delete: Option<String>,
+    /// Deletions running on their own threads — `remove_dir_all` on a
+    /// multi-gigabyte kit is far too slow for the UI thread.
+    deletions: Vec<Deletion>,
+    /// Why the last deletion failed, if it did.
+    delete_error: Option<String>,
 }
 
-/// Open the overlay and force a fresh index fetch.
+/// One kit being removed in the background.
+struct Deletion {
+    name: String,
+    /// `None` while running; then `Ok` or the error to show.
+    outcome: Arc<Mutex<Option<Result<(), String>>>>,
+}
+
+/// Open the overlay and, unless the worker is mid-job, force a fresh
+/// index fetch.
 ///
 /// Without resetting `did_initial_fetch`, the index was fetched once per
 /// editor lifetime (ba drums-plugin-rework.md §1.1): a kit installed or
 /// removed elsewhere — by another editor's download, or by hand — never
 /// showed up here until the whole editor was reopened.
-pub(super) fn open(panel: &mut DownloadPanelState) {
+///
+/// A busy worker is left alone, though. The fetch would queue behind the
+/// running download and, the moment it finished, replace its "Download
+/// complete" with "Fetching available kits…" before the user reopening
+/// the panel to check on it ever saw it.
+pub(super) fn open(panel: &mut DownloadPanelState, worker: &WorkerHandle) {
     panel.open = true;
-    panel.did_initial_fetch = false;
+    panel.pending_delete = None;
+    panel.did_initial_fetch = worker.state.lock().status.is_busy();
+}
+
+/// Close the overlay, disarming any half-confirmed delete.
+pub(super) fn close(panel: &mut DownloadPanelState) {
+    panel.open = false;
+    panel.pending_delete = None;
 }
 
 const MARGIN: f32 = 48.0;
@@ -71,8 +102,17 @@ pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<Work
         draw_contents(ui, panel, worker);
     });
 
-    if response.should_close() {
-        panel.open = false;
+    // Esc closes, as does the Close button; a click on the backdrop does
+    // not. `ModalResponse::should_close` counts backdrop clicks too, and a
+    // click that strays outside a panel this size is far likelier to be a
+    // miss than a request to dismiss it.
+    let escape = response.is_top_modal
+        && !response.any_popup_open
+        && ui
+            .ctx()
+            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+    if escape || response.response.should_close() {
+        close(panel);
     }
 }
 
@@ -83,6 +123,7 @@ fn draw_contents(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc
         worker.send(Command::FetchIndex);
     }
 
+    poll_deletions(panel);
     draw_header(ui, panel, worker);
     ui.add_space(6.0);
     ui.separator();
@@ -104,13 +145,62 @@ fn draw_contents(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc
 
     draw_kit_list(ui, panel, worker, index.as_ref(), &status);
 
-    if let Some(err) = error {
+    for err in error.iter().chain(panel.delete_error.iter()) {
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(format!("Error: {err}"))
                 .color(theme::DANGER)
                 .size(11.0),
         );
+    }
+}
+
+/// Retire finished deletions, keeping the last failure to show.
+fn poll_deletions(panel: &mut DownloadPanelState) {
+    let mut failed = None;
+    panel.deletions.retain(|d| match d.outcome.lock().take() {
+        None => true,
+        Some(Ok(())) => false,
+        Some(Err(e)) => {
+            failed = Some(format!("could not delete {}: {e}", d.name));
+            false
+        }
+    });
+    if failed.is_some() {
+        panel.delete_error = failed;
+    }
+}
+
+/// Delete an installed kit on its own thread: its directory first, then —
+/// only once that worked — its registry entry, so a failed delete never
+/// leaves a kit on disk the library no longer knows about.
+fn start_deletion(panel: &mut DownloadPanelState, name: &str, path: std::path::PathBuf) {
+    let outcome = Arc::new(Mutex::new(None));
+    let slot = outcome.clone();
+    let kit = name.to_string();
+    let spawned = std::thread::Builder::new()
+        .name("drums-kit-delete".into())
+        .spawn(move || {
+            let removed = match std::fs::remove_dir_all(&path) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(e.to_string()),
+            };
+            let result = removed.and_then(|()| {
+                registry::remove_installed(&kit, &ContentType::Drumkit)
+                    .map_err(|e| e.to_string())
+            });
+            *slot.lock() = Some(result);
+        });
+    match spawned {
+        Ok(_) => {
+            panel.delete_error = None;
+            panel.deletions.push(Deletion {
+                name: name.to_string(),
+                outcome,
+            });
+        }
+        Err(e) => panel.delete_error = Some(format!("could not delete {name}: {e}")),
     }
 }
 
@@ -126,7 +216,7 @@ fn draw_header(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<W
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button("Close").clicked() {
-                panel.open = false;
+                close(panel);
             }
             ui.add_space(6.0);
             let busy = worker.state.lock().status.is_busy();
@@ -260,7 +350,14 @@ fn draw_kit_row(
             });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if is_installed {
+                let deleting = panel.deletions.iter().any(|d| d.name == kit.name);
+                if deleting {
+                    ui.label(
+                        egui::RichText::new("Deleting…")
+                            .color(theme::TEXT_DIM)
+                            .size(11.0),
+                    );
+                } else if is_installed {
                     let confirming = panel
                         .pending_delete
                         .as_ref()
@@ -276,14 +373,10 @@ fn draw_kit_row(
                             )
                             .clicked()
                         {
-                            // Actually delete: remove directory, then registry entry.
                             if let Some(item) = installed_item {
-                                let path = std::path::Path::new(&item.path);
-                                if path.exists() {
-                                    let _ = std::fs::remove_dir_all(path);
-                                }
+                                let path = std::path::PathBuf::from(&item.path);
+                                start_deletion(panel, &kit.name, path);
                             }
-                            let _ = registry::remove_installed(&kit.name, &ContentType::Drumkit);
                             panel.pending_delete = None;
                         }
                         if ui.button("Cancel").clicked() {
