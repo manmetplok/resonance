@@ -101,8 +101,20 @@ pub struct Voice {
     pub layer_index: usize,
     /// Index into `layers[layer_index].round_robins`.
     pub rr_index: usize,
-    /// Current read position in the sample (in stereo frames).
+    /// Current read position in the sample (in stereo frames): the whole
+    /// part, for a pitched voice (E8).
     pub position: usize,
+    /// Take frames read per output frame (E8, from `pad_N_tune`). Exactly
+    /// `1.0` at pitch, which plays on the integer path, bit for bit.
+    pub rate: f32,
+    /// The fractional part of a pitched voice's position, `0..1`.
+    pub frac: f32,
+    /// Output frames since the hit — the AHD envelope's clock (E8).
+    pub env_pos: u32,
+    /// The AHD envelope (E8), in output frames: the hold, then the decay
+    /// to silence. `decay_frames == 0` is no envelope (the whole sample).
+    pub hold_frames: u32,
+    pub decay_frames: u32,
     pub choke_group: Option<u8>,
     /// True when this voice predates a kit swap and is fading out
     /// against the retired kit's sample data instead of the current
@@ -152,6 +164,11 @@ impl Voice {
             layer_index: 0,
             rr_index: 0,
             position: 0,
+            rate: 1.0,
+            frac: 0.0,
+            env_pos: 0,
+            hold_frames: 0,
+            decay_frames: 0,
             choke_group: None,
             retired: false,
             retired_slot: 0,
@@ -203,6 +220,29 @@ impl Voice {
         if !ends_in_time {
             self.force_fade(left.min(u32::MAX as usize) as u32);
         }
+    }
+
+    /// The AHD envelope's gain now (E8): 1 through the hold, then a
+    /// cubic fall, `(1 − t)³`, that reaches silence with a zero slope at
+    /// the end of the decay (−18 dB half way). Only called with a decay
+    /// set.
+    #[inline]
+    pub fn ahd_gain(&self) -> f32 {
+        let Some(into) = self.env_pos.checked_sub(self.hold_frames) else {
+            return 1.0;
+        };
+        if into >= self.decay_frames {
+            return 0.0;
+        }
+        let left = 1.0 - into as f32 / self.decay_frames as f32;
+        left * left * left
+    }
+
+    /// True once the AHD envelope has decayed to silence.
+    #[inline]
+    pub fn ahd_done(&self) -> bool {
+        self.decay_frames > 0
+            && self.env_pos >= self.hold_frames.saturating_add(self.decay_frames)
     }
 
     /// True once a releasing voice has run its fade to the end.

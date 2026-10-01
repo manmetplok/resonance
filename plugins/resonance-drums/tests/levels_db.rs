@@ -14,7 +14,11 @@ fn levels_display_and_parse_in_db() {
     let p = DrumParams::default();
     let vol = &p.pads[0].volume;
     assert_eq!(vol.default_plain(), 0.0, "pad volume defaults to 0 dB");
-    assert_eq!(p.master_volume.default_plain(), 0.0, "master defaults to 0 dB");
+    assert_eq!(
+        p.master_volume.default_plain(),
+        0.0,
+        "master defaults to 0 dB"
+    );
     assert_eq!(vol.min_plain(), MIN_DB as f64);
     assert_eq!(vol.max_plain(), 6.0);
     assert_eq!(p.master_volume.max_plain(), 6.0);
@@ -92,13 +96,29 @@ fn a_v1_state_converts_linear_levels_to_db_once() {
     assert!(near(db_to_gain(p.master_volume.value()), 0.8));
     assert!(near(db_to_gain(p.pads[0].volume.value()), 0.5));
     assert!(near(db_to_gain(p.pads[5].volume.value()), 0.8));
-    assert_eq!(p.pads[3].volume.value(), MIN_DB, "a silent pad stays silent (-inf)");
+    assert_eq!(
+        p.pads[3].volume.value(),
+        MIN_DB,
+        "a silent pad stays silent (-inf)"
+    );
     // The kick's balance of 0.25: In at 0.75, Out at 0.25.
-    assert!(near(db_to_gain(p.pads[0].trim(MicSlot::Close1).value()), 0.75));
-    assert!(near(db_to_gain(p.pads[0].trim(MicSlot::Close2).value()), 0.25));
+    assert!(near(
+        db_to_gain(p.pads[0].trim(MicSlot::Close1).value()),
+        0.75
+    ));
+    assert!(near(
+        db_to_gain(p.pads[0].trim(MicSlot::Close2).value()),
+        0.25
+    ));
     // The snare's default 0.5 balance: both mics at half, as in v1.
-    assert!(near(db_to_gain(p.pads[1].trim(MicSlot::Close1).value()), 0.5));
-    assert!(near(db_to_gain(p.pads[1].trim(MicSlot::Close2).value()), 0.5));
+    assert!(near(
+        db_to_gain(p.pads[1].trim(MicSlot::Close1).value()),
+        0.5
+    ));
+    assert!(near(
+        db_to_gain(p.pads[1].trim(MicSlot::Close2).value()),
+        0.5
+    ));
     // OH blend 0 -> the OH trim at -inf; 1 -> 0 dB.
     assert_eq!(p.pads[1].trim(MicSlot::Overhead).value(), MIN_DB);
     assert_eq!(p.pads[0].trim(MicSlot::Overhead).value(), 0.0);
@@ -109,9 +129,14 @@ fn a_v1_state_converts_linear_levels_to_db_once() {
     // Saved again, it is v2 (no balance, no oh_blend) and loads unchanged.
     let saved: serde_json::Value = serde_json::from_slice(&drums.save_state()).unwrap();
     let saved_params = saved["params"].as_object().unwrap();
-    assert!(saved_params.keys().all(|k| !k.ends_with("_balance") && !k.ends_with("_oh_blend")));
+    assert!(saved_params
+        .keys()
+        .all(|k| !k.ends_with("_balance") && !k.ends_with("_oh_blend")));
     let mut again = saved.clone();
-    assert!(!upgrade_v1_levels(&mut again), "a v2 state is not converted again");
+    assert!(
+        !upgrade_v1_levels(&mut again),
+        "a v2 state is not converted again"
+    );
     assert_eq!(again, saved);
     let mut reloaded = ResonanceDrums::new();
     assert!(reloaded.load_state(&serde_json::to_vec(&saved).unwrap()));

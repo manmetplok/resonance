@@ -55,7 +55,10 @@ fn chokes(params: &DrumParams, first: u8, second: u8) -> bool {
     s.update_global_settings(params);
     s.note_on(first, 0.9);
     render(&mut s, params, 2);
-    assert!(playing(&s, pad(first)), "note {first} sounds before the second hit");
+    assert!(
+        playing(&s, pad(first)),
+        "note {first} sounds before the second hit"
+    );
     s.note_on(second, 0.9);
     !playing(&s, pad(first))
 }
@@ -64,7 +67,11 @@ fn chokes(params: &DrumParams, first: u8, second: u8) -> bool {
 fn hats_default_to_group_one_and_nothing_else_is_choked() {
     let params = DrumParams::default();
     for (i, mapping) in PAD_MAPPINGS.iter().enumerate() {
-        let want = if mapping.name.contains("Hi-Hat") { 1 } else { 0 };
+        let want = if mapping.name.contains("Hi-Hat") {
+            1
+        } else {
+            0
+        };
         assert_eq!(
             params.pads[i].choke.value(),
             want,
@@ -80,14 +87,22 @@ fn hats_default_to_group_one_and_nothing_else_is_choked() {
 fn an_open_hat_is_choked_by_the_pedal_hat_by_default() {
     let params = DrumParams::default();
     assert!(chokes(&params, drum_map::HIHAT_OPEN, drum_map::HIHAT_PEDAL));
-    assert!(chokes(&params, drum_map::HIHAT_OPEN, drum_map::HIHAT_CLOSED));
+    assert!(chokes(
+        &params,
+        drum_map::HIHAT_OPEN,
+        drum_map::HIHAT_CLOSED
+    ));
 }
 
 #[test]
 fn a_hat_taken_out_of_its_group_rings_on() {
     let params = DrumParams::default();
     params.pads[pad(drum_map::HIHAT_OPEN)].choke.set_value(0);
-    assert!(!chokes(&params, drum_map::HIHAT_OPEN, drum_map::HIHAT_PEDAL));
+    assert!(!chokes(
+        &params,
+        drum_map::HIHAT_OPEN,
+        drum_map::HIHAT_PEDAL
+    ));
 }
 
 #[test]

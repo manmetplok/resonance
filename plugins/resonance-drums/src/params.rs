@@ -20,7 +20,7 @@ use crate::velocity;
 use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
-pub const PARAMS_PER_PAD: usize = 9;
+pub const PARAMS_PER_PAD: usize = 13;
 
 /// Number of global params ahead of the per-pad block, used for param
 /// indexing. The flat index is an enumeration order, not an identity:
@@ -246,6 +246,126 @@ pub struct PadParams {
     /// take always goes to the Overhead port in Multi, and everything to
     /// Main in Stereo. Not automatable: routing, not playing.
     pub output: ChoiceParam,
+    /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the
+    /// cent (0.01 st): one param carries both the coarse and the fine
+    /// tune, so an automation lane moves pitch as one value. Played by
+    /// fractional playback with 4-point Hermite interpolation; at exactly
+    /// 0 the sampler stays on its integer path, bit for bit.
+    pub tune: FloatParam,
+    /// Hold before the decay (E8), 0 … 2000 ms, default 0. Only matters
+    /// with a decay set.
+    pub hold: FloatParam,
+    /// Decay to silence after the hold (E8), 5 … 4000 ms, or **Off** (the
+    /// top of the range, the default): the whole sample plays.
+    pub decay: FloatParam,
+    /// Where in the sample a hit starts (E8), 0 … 100 ms, default 0.
+    pub start: FloatParam,
+}
+
+/// The tune range, either way, in semitones.
+pub const MAX_TUNE_ST: f32 = 24.0;
+/// The hold range's top, in ms.
+pub const MAX_HOLD_MS: f32 = 2_000.0;
+/// The shortest decay, in ms.
+pub const MIN_DECAY_MS: f32 = 5.0;
+/// The decay value that means "Off": the top of its range.
+pub const DECAY_OFF_MS: f32 = 4_000.0;
+/// The sample-start range's top, in ms.
+pub const MAX_START_MS: f32 = 100.0;
+
+/// How a tune reads: `0.00 st`, `+12.00 st`, `-0.50 st`.
+pub fn tune_label(st: f32) -> String {
+    let cents = (st * 100.0).round();
+    if cents == 0.0 {
+        "0.00 st".to_string()
+    } else {
+        format!("{:+.2} st", cents / 100.0)
+    }
+}
+
+/// Parse a tune: semitones (`+12`, `-3.5 st`) or cents (`50 ct`,
+/// `-25 cents`).
+pub fn tune_from_label(text: &str) -> Option<f32> {
+    let t = text.trim().to_ascii_lowercase();
+    let (number, scale) = if let Some(n) = t
+        .strip_suffix("cents")
+        .or_else(|| t.strip_suffix("cent"))
+        .or_else(|| t.strip_suffix("ct"))
+    {
+        (n, 0.01)
+    } else {
+        (t.strip_suffix("st").unwrap_or(&t), 1.0)
+    };
+    let v: f32 = number.trim().trim_start_matches('+').parse().ok()?;
+    v.is_finite()
+        .then(|| (v * scale).clamp(-MAX_TUNE_ST, MAX_TUNE_ST))
+}
+
+/// How a time in ms reads: `0 ms`, `250 ms`, `1.20 s`.
+pub fn ms_label(ms: f32) -> String {
+    if ms >= 1_000.0 {
+        format!("{:.2} s", ms / 1_000.0)
+    } else if ms >= 10.0 {
+        format!("{ms:.0} ms")
+    } else {
+        format!("{ms:.1} ms")
+    }
+}
+
+/// Parse a time: `250 ms`, `1.2 s`, or a bare number of ms.
+pub fn ms_from_label(text: &str) -> Option<f32> {
+    let t = text.trim().to_ascii_lowercase();
+    let (number, scale) = if let Some(n) = t.strip_suffix("ms") {
+        (n, 1.0)
+    } else if let Some(n) = t.strip_suffix('s') {
+        (n, 1_000.0)
+    } else {
+        (t.as_str(), 1.0)
+    };
+    let v: f32 = number.trim().parse().ok()?;
+    v.is_finite().then_some(v * scale)
+}
+
+/// How a decay reads: `Off` at the top of the range, else its time.
+pub fn decay_label(ms: f32) -> String {
+    if ms >= DECAY_OFF_MS {
+        "Off".to_string()
+    } else {
+        ms_label(ms)
+    }
+}
+
+/// Parse a decay: `Off` or a time.
+pub fn decay_from_label(text: &str) -> Option<f32> {
+    if text.trim().eq_ignore_ascii_case("off") {
+        Some(DECAY_OFF_MS)
+    } else {
+        ms_from_label(text)
+    }
+}
+
+/// A time param in ms over `min..max` (its text carries the unit, `ms` or
+/// `s`, so no fixed unit is declared), skewed so the short end — where
+/// drum envelopes live — gets most of the travel.
+fn ms_param(
+    id: &'static str,
+    name: &'static str,
+    default: f32,
+    min: f32,
+    max: f32,
+) -> FloatParam {
+    FloatParam::new(
+        id,
+        name,
+        default,
+        FloatRange::Skewed {
+            min,
+            max,
+            factor: -1.5,
+        },
+    )
+    .with_value_to_string(Arc::new(ms_label))
+    .with_string_to_value(Arc::new(ms_from_label))
 }
 
 /// The highest choke group a pad can be put in.
@@ -364,6 +484,29 @@ impl PadParams {
                 &OUTPUT_PORT_NAMES,
             )
             .not_automatable(),
+            tune: FloatParam::new(
+                id("tune"),
+                name("Tune"),
+                0.0,
+                FloatRange::Linear {
+                    min: -MAX_TUNE_ST,
+                    max: MAX_TUNE_ST,
+                },
+            )
+            .with_unit("st")
+            .with_value_to_string(Arc::new(tune_label))
+            .with_string_to_value(Arc::new(tune_from_label)),
+            hold: ms_param(id("hold"), name("Hold"), 0.0, 0.0, MAX_HOLD_MS),
+            decay: ms_param(
+                id("decay"),
+                name("Decay"),
+                DECAY_OFF_MS,
+                MIN_DECAY_MS,
+                DECAY_OFF_MS,
+            )
+            .with_value_to_string(Arc::new(decay_label))
+            .with_string_to_value(Arc::new(decay_from_label)),
+            start: ms_param(id("start"), name("Sample Start"), 0.0, 0.0, MAX_START_MS),
         }
     }
 
@@ -410,6 +553,10 @@ impl DrumParams {
             6 => &pad.trims[2],
             7 => &pad.choke,
             8 => &pad.output,
+            9 => &pad.tune,
+            10 => &pad.hold,
+            11 => &pad.decay,
+            12 => &pad.start,
             _ => &pad.volume,
         }
     }

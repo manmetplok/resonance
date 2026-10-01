@@ -113,7 +113,11 @@ fn every_pad() -> Vec<u8> {
 #[test]
 fn a_fresh_instance_is_stereo_and_its_ports_default_to_the_drummica_table() {
     let p = DrumParams::default();
-    assert_eq!(p.output_mode.value(), OUTPUT_MODE_STEREO, "D5: Stereo by default");
+    assert_eq!(
+        p.output_mode.value(),
+        OUTPUT_MODE_STEREO,
+        "D5: Stereo by default"
+    );
     assert_eq!(p.output_mode.display(0.0), "Stereo");
     assert_eq!(p.output_mode.display(1.0), "Multi");
     assert!(!p.output_mode.is_automatable());
@@ -122,10 +126,16 @@ fn a_fresh_instance_is_stereo_and_its_ports_default_to_the_drummica_table() {
         assert_eq!(out.id(), format!("pad_{i}_output"));
         assert_eq!(out.value(), m.output_group.index() as i32, "pad {i}");
         assert_eq!(out.max_plain() as usize, NUM_OUTPUT_PORTS - 1);
-        assert_eq!(out.display(out.value() as f64), OUTPUT_PORT_NAMES[m.output_group.index()]);
+        assert_eq!(
+            out.display(out.value() as f64),
+            OUTPUT_PORT_NAMES[m.output_group.index()]
+        );
         assert!(!out.is_automatable());
     }
-    assert_eq!(p.pads[0].output.parse("Overhead"), Some(OVERHEAD_PORT_INDEX as f64));
+    assert_eq!(
+        p.pads[0].output.parse("Overhead"),
+        Some(OVERHEAD_PORT_INDEX as f64)
+    );
 }
 
 #[test]
@@ -158,7 +168,10 @@ fn stereo_puts_the_whole_kit_on_main() {
         "port 0 in Stereo ({main}) is the full kit ({full})"
     );
     for i in 0..frames {
-        assert!((s[0].0[i] - multi_sum.0[i]).abs() < 1e-5, "frame {i} differs");
+        assert!(
+            (s[0].0[i] - multi_sum.0[i]).abs() < 1e-5,
+            "frame {i} differs"
+        );
     }
 }
 
@@ -167,7 +180,10 @@ fn multi_puts_the_cymbals_overheads_on_the_overhead_port() {
     let params = DrumParams::default();
     params.output_mode.set_value(OUTPUT_MODE_MULTI);
     let ports = render(&params, &[drum_map::CRASH_16_EDGE, drum_map::RIDE_TIP]);
-    assert!(rms(&ports[OVERHEAD_PORT_INDEX]) > 0.01, "the cymbal is on Overhead");
+    assert!(
+        rms(&ports[OVERHEAD_PORT_INDEX]) > 0.01,
+        "the cymbal is on Overhead"
+    );
     for (port, data) in ports.iter().enumerate() {
         if port != OVERHEAD_PORT_INDEX {
             assert_eq!(rms(data), 0.0, "the cymbal leaked onto port {port}");
@@ -191,7 +207,10 @@ fn multi_routes_close_mics_by_pad_output_and_overheads_to_overhead() {
     let ports = render(&params, &[drum_map::KICK]);
     assert_eq!(rms(&ports[1]), 0.0, "nothing left on Kick");
     assert!(rms(&ports[3]) > 0.01, "the kick's close mics are on Toms");
-    assert!(rms(&ports[OVERHEAD_PORT_INDEX]) > 0.01, "its overhead stays");
+    assert!(
+        rms(&ports[OVERHEAD_PORT_INDEX]) > 0.01,
+        "its overhead stays"
+    );
 
     // To Main.
     params.pads[kick].output.set_value(0);

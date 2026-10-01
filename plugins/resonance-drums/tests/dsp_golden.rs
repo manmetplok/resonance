@@ -83,7 +83,9 @@ use resonance_drums::drum_map::{
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedPad, NUM_OUTPUT_PORTS};
 use resonance_drums::level::gain_to_db;
-use resonance_drums::params::{DrumParams, MicSlot, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO};
+use resonance_drums::params::{
+    DrumParams, MicSlot, DECAY_OFF_MS, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO,
+};
 use resonance_drums::voice::MAX_VOICES;
 
 const SR: f32 = 48_000.0;
@@ -367,6 +369,11 @@ fn pin(p: &DrumParams) {
         }
         pad.choke.set_value(mapping.choke_group.map_or(0, i32::from));
         pad.output.set_value(mapping.output_group.index() as i32);
+        // At pitch (the integer path), no envelope, from the top.
+        pad.tune.set_value(0.0);
+        pad.hold.set_value(0.0);
+        pad.decay.set_value(DECAY_OFF_MS);
+        pad.start.set_value(0.0);
     }
 }
 

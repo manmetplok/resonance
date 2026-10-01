@@ -15,7 +15,7 @@ use crate::level::db_to_gain;
 use crate::params::{DrumParams, MicSlot, MIC_SLOTS};
 use crate::stream::reader::ReaderPool;
 use crate::stream::{
-    wait_until, AudioStreams, RenderMode, Ring, StreamSet, HOST_RENDER_OFFLINE,
+    wait_until, AudioStreams, Pace, RenderMode, Ring, StreamSet, HOST_RENDER_OFFLINE,
     HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN, NO_RING,
 };
 use crate::voice::{
@@ -96,6 +96,14 @@ pub struct PadSettings {
     /// The port the pad's close mics play on in Multi (E11): a port
     /// index, or [`FROM_KIT`] for the pad's own group.
     pub port: u8,
+    /// Playback rate from `pad_N_tune` (E8): `2^(st/12)`, exactly 1.0 at
+    /// 0 st (the integer path).
+    pub rate: f32,
+    /// Sample start (E8), in take frames at the host rate.
+    pub start_frames: u32,
+    /// Hold and decay (E8), in output frames; `decay_frames == 0` is Off.
+    pub hold_frames: u32,
+    pub decay_frames: u32,
 }
 
 impl Default for PadSettings {
@@ -103,19 +111,40 @@ impl Default for PadSettings {
         Self {
             choke: FROM_KIT,
             port: FROM_KIT,
+            rate: 1.0,
+            start_frames: 0,
+            hold_frames: 0,
+            decay_frames: 0,
         }
     }
 }
 
 impl PadSettings {
-    /// This pad's settings from its params.
-    pub fn from_params(pad: &crate::params::PadParams) -> Self {
+    /// This pad's settings from its params, at `sample_rate`.
+    pub fn from_params(pad: &crate::params::PadParams, sample_rate: f32) -> Self {
+        use crate::params::{DECAY_OFF_MS, MAX_TUNE_ST};
+        let frames = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
+        let tune = pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST);
+        let decay_ms = pad.decay.value();
         Self {
             choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
             port: pad
                 .output
                 .value()
                 .clamp(0, crate::kit::NUM_OUTPUT_PORTS as i32 - 1) as u8,
+            // Exactly 1.0 at 0 st: not `exp2(0.0)`'s word for it.
+            rate: if tune == 0.0 {
+                1.0
+            } else {
+                (tune / 12.0).exp2()
+            },
+            start_frames: frames(pad.start.value()),
+            hold_frames: frames(pad.hold.value()),
+            decay_frames: if decay_ms >= DECAY_OFF_MS {
+                0
+            } else {
+                frames(decay_ms).max(1)
+            },
         }
     }
 
@@ -563,7 +592,7 @@ impl DrumSampler {
             output_mode: OutputMode::from_param(params.output_mode.value()),
         };
         for (settings, pad) in self.pad_settings.iter_mut().zip(params.pads.iter()) {
-            *settings = PadSettings::from_params(pad);
+            *settings = PadSettings::from_params(pad, self.sample_rate);
         }
     }
 
@@ -935,11 +964,23 @@ impl DrumSampler {
         // request, which frees its ring.
         let mut wait = (self.offline && self.offline_holdoff == 0)
             .then_some(&mut self.offline_wait_left);
-        let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> u8 {
+        // Where each destination's voice starts in its take (E8's sample
+        // start). A streamed take starts inside its head: a start past
+        // the head is clamped to its last frame — out of reach of the
+        // shipped preloads (≥ 32 k frames) at any rate up to 192 kHz,
+        // whose 100 ms is 19.2 k frames.
+        let mut starts = [0usize; 3];
+        let start_frames = settings.start_frames as usize;
+        let rate = settings.rate;
+        let mut ring_for = |bank: &LoadedMicBank, (layer, rr): (usize, usize)| -> (u8, usize) {
             let take = bank.layers.get(layer).and_then(|l| l.round_robins.get(rr));
             match take.and_then(|t| t.tail().map(|tail| (tail, t.resident_frames()))) {
-                Some((tail, head)) => streams.claim(tail, head, wait.as_deref_mut()),
-                None => NO_RING,
+                Some((tail, head)) => {
+                    let start = start_frames.min(head.saturating_sub(1));
+                    let pace = Pace::at_rate(head - start, rate);
+                    (streams.claim(tail, head, pace, wait.as_deref_mut()), start)
+                }
+                None => (NO_RING, start_frames),
             }
         };
         let cell_in = |bank: &LoadedMicBank| -> (usize, usize) {
@@ -953,7 +994,8 @@ impl DrumSampler {
         let mut dest_count = 0;
         for bank_index in 0..close_mic_count.min(2) {
             cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
-            rings[dest_count] = ring_for(&pad.close_mics[bank_index], cells[dest_count]);
+            (rings[dest_count], starts[dest_count]) =
+                ring_for(&pad.close_mics[bank_index], cells[dest_count]);
             destinations[dest_count] = Some(VoiceDestination::CloseMic {
                 bank_index,
                 output_port,
@@ -968,7 +1010,7 @@ impl DrumSampler {
             // Stereo has a stereo kit on Main for whoever wants one port.
             if let Some(oh) = &pad.overhead {
                 cells[dest_count] = cell_in(oh);
-                rings[dest_count] = ring_for(oh, cells[dest_count]);
+                (rings[dest_count], starts[dest_count]) = ring_for(oh, cells[dest_count]);
             }
             destinations[dest_count] = Some(VoiceDestination::Overhead {
                 output_port: oh_port,
@@ -982,8 +1024,12 @@ impl DrumSampler {
         // single unit.
         self.voice_counter += 1;
         let shared_age = self.voice_counter;
-        for ((dest_slot, &(bank_layer, bank_rr)), &ring) in
-            destinations.iter().zip(&cells).zip(&rings).take(dest_count)
+        for (((dest_slot, &(bank_layer, bank_rr)), &ring), &start) in destinations
+            .iter()
+            .zip(&cells)
+            .zip(&rings)
+            .zip(&starts)
+            .take(dest_count)
         {
             let Some(dest) = dest_slot else {
                 continue;
@@ -1002,7 +1048,12 @@ impl DrumSampler {
             voice.destination = dest;
             voice.layer_index = bank_layer;
             voice.rr_index = bank_rr;
-            voice.position = 0;
+            voice.position = start;
+            voice.rate = settings.rate;
+            voice.frac = 0.0;
+            voice.env_pos = 0;
+            voice.hold_frames = settings.hold_frames;
+            voice.decay_frames = settings.decay_frames;
             voice.choke_group = choke_group;
             voice.retired = false;
             voice.state = VoiceState::Playing;
@@ -1372,20 +1423,100 @@ impl DrumSampler {
                 .get_mut(port_index)
                 .map(|p| (&mut p.left[..end], &mut p.right[..end]));
 
+            // E8: a voice at pitch plays on the integer path below, exactly
+            // as it always did; a tuned one reads between frames.
+            let unity = voice.rate == 1.0;
+            let rate = voice.rate;
+            let ahd = voice.decay_frames > 0;
+
             for frame in start..end {
                 if voice.position >= end_at {
                     voice.active = false;
                     break;
                 }
-                if voice.release_done() {
+                if voice.release_done() || voice.ahd_done() {
                     voice.active = false;
                     break;
                 }
-                if end_at < total && voice.position + cut_fade >= end_at {
-                    voice.end_within(end_at - voice.position);
+                if end_at < total {
+                    // Output frames until the voice's frames end.
+                    let left_src = end_at - voice.position;
+                    let left = if unity {
+                        left_src
+                    } else {
+                        ((left_src as f32 / rate) as usize).max(1)
+                    };
+                    if left <= cut_fade {
+                        voice.end_within(left);
+                    }
                 }
 
-                let (sample_l, sample_r) = if voice.position < resident {
+                let (sample_l, sample_r) = if !unity {
+                    // Fractional playback, 4-point Hermite over frames
+                    // p−1 … p+2, through the same head / ring path.
+                    let pos = voice.position;
+                    let need = (pos + 2).min(end_at - 1);
+                    if let (Some(ring), true) = (ring, need >= resident) {
+                        let at = (need - resident) as u64;
+                        if at >= written
+                            && offline
+                            && *offline_holdoff == 0
+                            && !offline_wait_left.is_zero()
+                        {
+                            streams.set.waits.fetch_add(1, Ordering::Relaxed);
+                            // Keep frame p−1 from being overwritten while
+                            // the reader catches up.
+                            let keep = (pos.saturating_sub(1).max(resident) - resident) as u64;
+                            let failed;
+                            (written, failed) =
+                                wait_for_frame(ring, at, keep, offline_wait_left);
+                            if failed {
+                                end_at = resident + written as usize;
+                                if !voice.stream_lost {
+                                    voice.stream_lost = true;
+                                    streams.underruns.fetch_add(1, Ordering::Relaxed);
+                                }
+                                if pos >= end_at {
+                                    voice.active = false;
+                                    break;
+                                }
+                            } else if at >= written && offline_wait_left.is_zero() && long_waits {
+                                *offline_holdoff = holdoff_frames;
+                            }
+                        }
+                    }
+                    let fetch = |i: usize| -> Option<(f32, f32)> {
+                        if i >= end_at {
+                            Some((0.0, 0.0))
+                        } else if i < resident {
+                            let idx = i * stride;
+                            Some((data[idx], data[idx + right_offset]))
+                        } else if let Some(ring) = ring {
+                            let at = (i - resident) as u64;
+                            (at < written).then(|| {
+                                (ring.sample(at, stride, 0), ring.sample(at, stride, right_offset))
+                            })
+                        } else {
+                            Some((0.0, 0.0))
+                        }
+                    };
+                    let before = if pos == 0 {
+                        Some((0.0, 0.0))
+                    } else {
+                        fetch(pos - 1)
+                    };
+                    match (before, fetch(pos), fetch(pos + 1), fetch(pos + 2)) {
+                        (Some(a), Some(b), Some(c), Some(d)) => {
+                            let t = voice.frac;
+                            (hermite(a.0, b.0, c.0, d.0, t), hermite(a.1, b.1, c.1, d.1, t))
+                        }
+                        _ => {
+                            // Not delivered yet: silence, and on in time.
+                            missing = true;
+                            (0.0, 0.0)
+                        }
+                    }
+                } else if voice.position < resident {
                     let idx = voice.position * stride;
                     (data[idx], data[idx + right_offset])
                 } else if let Some(ring) = ring {
@@ -1397,7 +1528,7 @@ impl DrumSampler {
                     {
                         streams.set.waits.fetch_add(1, Ordering::Relaxed);
                         let failed;
-                        (written, failed) = wait_for_frame(ring, at, offline_wait_left);
+                        (written, failed) = wait_for_frame(ring, at, at, offline_wait_left);
                         if failed {
                             // Found out at the very frame it is missing:
                             // nothing left to fade over.
@@ -1429,6 +1560,9 @@ impl DrumSampler {
                     break;
                 };
                 let env = voice.current_gain();
+                // The AHD envelope only multiplies in when a decay is set:
+                // Off leaves the gain bit-identical.
+                let env = if ahd { env * voice.ahd_gain() } else { env };
                 let gain = env * vol * dest_gain;
 
                 if let Some((port_l, port_r)) = port.as_mut() {
@@ -1441,23 +1575,39 @@ impl DrumSampler {
                 pan_l += pan_l_step;
                 pan_r += pan_r_step;
 
-                voice.position += 1;
+                if unity {
+                    voice.position += 1;
+                } else {
+                    let advance = voice.frac + rate;
+                    let whole = advance as usize;
+                    voice.frac = advance - whole as f32;
+                    voice.position += whole;
+                }
+                voice.env_pos = voice.env_pos.saturating_add(1);
                 if voice.state == VoiceState::Releasing {
                     voice.release_pos += 1;
                 }
             }
             if let Some(ring) = ring {
                 // Room for the reader: every ring frame before the
-                // voice's position is done with. And its deadline: what
-                // is left of the head.
-                if voice.position > resident {
-                    ring.read
-                        .store((voice.position - resident) as u64, Ordering::Release);
+                // voice's position is done with (a tuned voice still
+                // reads the frame before it). And its deadline: what is
+                // left of the head, in output frames.
+                let done = if unity {
+                    voice.position
+                } else {
+                    voice.position.saturating_sub(1)
+                };
+                if done > resident {
+                    ring.read.store((done - resident) as u64, Ordering::Release);
                 }
-                ring.head_left.store(
-                    resident.saturating_sub(voice.position) as u64,
-                    Ordering::Relaxed,
-                );
+                let head_left = resident.saturating_sub(voice.position);
+                let head_left = if unity {
+                    head_left
+                } else {
+                    (head_left as f32 / rate) as usize
+                };
+                ring.head_left.store(head_left as u64, Ordering::Relaxed);
             }
             if missing {
                 streams.underruns.fetch_add(1, Ordering::Relaxed);
@@ -1572,14 +1722,26 @@ impl DrumSampler {
     }
 }
 
+/// 4-point, 3rd-order Hermite (Catmull-Rom) interpolation at `t` (0..1)
+/// between `x0` and `x1`, with `xm1` before and `x2` after (E8).
+#[inline]
+fn hermite(xm1: f32, x0: f32, x1: f32, x2: f32, t: f32) -> f32 {
+    let c1 = 0.5 * (x1 - xm1);
+    let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
+    let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
+    ((c3 * t + c2) * t + c1) * t + x0
+}
+
 /// Offline only: wait for the reader to deliver ring frame `at`, for at
 /// most what is left of `budget` (which is charged for the wait). Returns
 /// the ring's `write` — past `at` unless the wait ran out or the stream
-/// failed — and whether it failed.
-fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> (u64, bool) {
+/// failed — and whether it failed. Ring frames from `keep` (≤ `at`) on
+/// are still to be read: a tuned voice (E8) interpolates over the frame
+/// before its position as well.
+fn wait_for_frame(ring: &Ring, at: u64, keep: u64, budget: &mut Duration) -> (u64, bool) {
     // The reader only writes where the voice has made room, and serves
     // the neediest ring first: this one, on its tail.
-    ring.read.store(at, Ordering::Release);
+    ring.read.store(keep.min(at), Ordering::Release);
     ring.head_left.store(0, Ordering::Relaxed);
     let mut published = (0, false);
     wait_until(budget, || {
