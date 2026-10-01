@@ -233,6 +233,7 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         PluginMessage::FocusSlot(instance_id) => {
             crate::update::plugin_window::focus(r, instance_id);
         }
+        PluginMessage::ChainUi(m) => return crate::update::chain_ui::update(r, m),
     }
     Task::none()
 }

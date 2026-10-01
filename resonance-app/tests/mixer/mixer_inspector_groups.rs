@@ -571,21 +571,29 @@ fn sub_tracks_do_not_offer_external_hardware() {
 // CHAIN: the Params button
 // ---------------------------------------------------------------------------
 
-/// "Params" on a CHAIN row opens the generic window for that slot — the
-/// route to a GUI plugin's parameters and presets.
+/// "Parameters…" in a CHAIN row's ☰ menu opens the generic window for
+/// that slot — the route to a GUI plugin's parameters and presets. (It
+/// was a "Params" button on the row until the menu took it in,
+/// mixer-cleanup.md §3.2.)
 #[test]
-fn chain_params_button_raises_open_generic_params() {
+fn chain_menu_parameters_opens_the_generic_window() {
     let mut app = app();
     let mut slot = eq_slot();
     slot.has_gui = true;
     app.test_push_track_plugin(AUDIO, slot);
     ui(&mut app, UiMessage::SelectTrack(Some(AUDIO)));
-    let messages = click_in_inspector(&app, "Params");
     assert!(
-        messages.iter().any(|m| matches!(
-            m,
-            Message::Plugin(PluginMessage::OpenGenericParams(id)) if *id == PLUGIN
-        )),
-        "Params raises OpenGenericParams: {messages:?}"
+        simulator(&app).find(in_inspector("Params")).is_err(),
+        "the row no longer carries a Params button"
     );
+    let _ = app.update(Message::Plugin(PluginMessage::ChainUi(
+        resonance_app::message::ChainUiMessage::ToggleSlotMenu(PLUGIN),
+    )));
+    let messages = click_in_inspector(&app, "Parameters\u{2026}");
+    let [pick] = messages.as_slice() else {
+        panic!("one message: {messages:?}");
+    };
+    let _ = app.update(pick.clone());
+    assert_eq!(app.test_plugin_window(), Some(PLUGIN));
+    assert_eq!(app.test_slot_menu(), None);
 }

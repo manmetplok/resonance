@@ -51,6 +51,8 @@ mod mixer_preset_bar;
 mod generic_panel_display;
 #[path = "mixer/mixer_group_clustering.rs"]
 mod mixer_group_clustering;
+#[path = "mixer/inspector_chain_row.rs"]
+mod inspector_chain_row;
 #[path = "mixer/inspector_lazy_fingerprint.rs"]
 mod inspector_lazy_fingerprint;
 #[path = "mixer/mixer_inspector_bus.rs"]

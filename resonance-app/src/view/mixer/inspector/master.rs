@@ -17,7 +17,6 @@ use crate::state::MixerInspectorGroup;
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
 use crate::view::mixer::picks::PluginOwner;
-use crate::view::mixer::reorder;
 
 pub(super) fn view<'a>(r: &'a crate::Resonance) -> Element<'a, Message> {
     let title_row = row![
@@ -77,6 +76,7 @@ pub(crate) fn fingerprint(r: &crate::Resonance) -> u64 {
         p.plugin_name.hash(&mut h);
         p.bypassed.hash(&mut h);
     }
+    super::chain::hash_chain_ui(&mut h, r, &r.master.plugins);
     super::automation::hash_into(&mut h, r, AutoChan::Master, &r.master.plugins, &[]);
     // The MASTER group swaps Bounce for a "Bouncing…" note mid-render.
     r.io.bouncing.hash(&mut h);
@@ -93,21 +93,14 @@ fn chain_group(r: &crate::Resonance, collapsed: bool) -> Element<'static, Messag
     }
     let mut col = column![header].spacing(10);
 
-    if r.master.plugins.is_empty() {
-        col = col.push(super::chain::empty_chain_row());
-    } else {
-        let chain_len = r.master.plugins.len();
-        for (index, plugin) in r.master.plugins.iter().enumerate() {
-            let moves =
-                reorder::chain_moves(r, PluginOwner::Master, plugin.instance_id, index, chain_len);
-            col = col.push(super::chain::chain_row(
-                &plugin.plugin_name,
-                false,
-                &moves,
-                plugin.instance_id,
-                plugin.bypassed,
-            ));
-        }
+    col = col.push(super::chain::chain_rows(
+        r,
+        PluginOwner::Master,
+        &r.master.plugins,
+        false,
+    ));
+    if let Some(replace) = super::chain::replace_picker(r, &r.master.plugins) {
+        return col.push(replace).into();
     }
 
     if !r.ui.view_caches.fx_plugins.is_empty() {

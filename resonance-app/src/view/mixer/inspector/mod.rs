@@ -32,7 +32,7 @@
 
 mod automation;
 mod bus;
-mod chain;
+pub(crate) mod chain;
 mod external_instrument;
 mod io;
 mod master;
@@ -109,10 +109,18 @@ fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a,
             .font(theme::UI_FONT_MEDIUM)
             .color(theme::TEXT_1),
         Space::new().width(8),
-        widgets::type_tag(type_label(track)),
     ]
     .spacing(0)
     .align_y(alignment::Vertical::Center);
+    // The colour swatch (mixer-cleanup.md §3.1, §6). A sub-track has no
+    // colour of its own — it follows its parent — so it gets none.
+    let has_color = track.sub_track.is_none();
+    if has_color {
+        title_row = title_row
+            .push(color_swatch(track))
+            .push(Space::new().width(8));
+    }
+    title_row = title_row.push(widgets::type_tag(type_label(track)));
     if let Some(status) = ext_status {
         title_row = title_row
             .push(Space::new().width(6))
@@ -144,14 +152,18 @@ fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a,
         .into()
     });
 
+    let mut stack = column![widgets::header(title_row)].spacing(0);
+    if has_color && r.ui.mixer.color_palette == Some(track.id) {
+        stack = stack
+            .push(Space::new().height(8))
+            .push(color_palette(track));
+    }
+
     iced::widget::scrollable(
-        column![
-            widgets::header(title_row),
-            Space::new().height(18),
-            lazy_groups,
-        ]
-        .spacing(0)
-        .width(Length::Fill),
+        stack
+            .push(Space::new().height(18))
+            .push(lazy_groups)
+            .width(Length::Fill),
     )
     .height(Length::Fill)
     // Embedded, not floating: the scrollbar takes its own column beside
@@ -159,6 +171,83 @@ fn track_view<'a>(r: &'a crate::Resonance, track: &'a TrackState) -> Element<'a,
     // carets, the sends' dB readouts and trash buttons).
     .spacing(6)
     .into()
+}
+
+/// Widget id of the header's colour swatch (tests click it by id: it
+/// draws no text).
+pub(crate) fn color_swatch_id() -> iced::widget::Id {
+    iced::widget::Id::new("inspector-color-swatch")
+}
+
+/// Widget id of palette entry `index` in the open colour palette.
+pub(crate) fn palette_swatch_id(index: usize) -> iced::widget::Id {
+    iced::widget::Id::from(format!("inspector-palette-{index}"))
+}
+
+/// A square in `color`, ringed when `ring` (the current colour, or the
+/// open palette's swatch).
+fn swatch_square(
+    color: [u8; 3],
+    size: f32,
+    ring: bool,
+) -> iced::widget::Container<'static, Message> {
+    container(Space::new().width(size).height(size)).style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(theme::track_color(color))),
+        border: iced::Border {
+            color: if ring { theme::TEXT_1 } else { theme::LINE },
+            width: if ring { 2.0 } else { 1.0 },
+            radius: theme::RADIUS_SM.into(),
+        },
+        ..Default::default()
+    })
+}
+
+/// The header swatch: the track's colour; a click opens the palette.
+fn color_swatch(track: &TrackState) -> Element<'static, Message> {
+    let open = Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::ToggleColorPalette(
+        track.id,
+    )));
+    container(
+        iced::widget::button(swatch_square(track.color, 12.0, false))
+            .padding(0)
+            .on_press(open)
+            .style(|_theme, status| theme::ghost_button_style(status)),
+    )
+    .id(color_swatch_id())
+    .into()
+}
+
+/// The open palette: one swatch per `theme::TRACK_PALETTE` hue, the
+/// current one ringed. A pick closes it and sends `SetTrackColor` (one
+/// undo entry).
+fn color_palette(track: &TrackState) -> Element<'static, Message> {
+    let mut swatches = row![].spacing(6).align_y(alignment::Vertical::Center);
+    for (index, color) in theme::TRACK_PALETTE.iter().copied().enumerate() {
+        let pick = Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::Pick(Box::new(
+            Message::Track(TrackMessage::SetTrackColor(track.id, color)),
+        ))));
+        swatches = swatches.push(
+            container(
+                iced::widget::button(swatch_square(color, 16.0, color == track.color))
+                    .padding(0)
+                    .on_press(pick)
+                    .style(|_theme, status| theme::ghost_button_style(status)),
+            )
+            .id(palette_swatch_id(index)),
+        );
+    }
+    container(swatches)
+        .padding([8, 10])
+        .style(|_theme| container::Style {
+            background: Some(iced::Background::Color(theme::BG_2)),
+            border: iced::Border {
+                color: theme::LINE_2,
+                width: 1.0,
+                radius: theme::RADIUS_MD.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 /// The header's type tag for a track.
@@ -230,6 +319,10 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
     hash_collapse_state(&mut h, r);
     t.id.hash(&mut h);
     t.name.hash(&mut h);
+    // The header swatch sits outside the lazy body, but the colour is
+    // the track's identity everywhere else; hashed so nothing that
+    // shows it can go stale (mixer-cleanup.md §6).
+    t.color.hash(&mut h);
     t.track_type.hash(&mut h);
     t.sub_track.hash(&mut h);
     t.input_device_name.hash(&mut h);
@@ -291,11 +384,12 @@ pub(crate) fn inspector_fingerprint(r: &crate::Resonance, t: &TrackState) -> u64
     for p in &t.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
-        // The BYP button renders — and builds its press message from —
+        // The bypass dot renders — and builds its press message from —
         // this flag; without it the echo never reaches the retained
         // tree and the button can't un-bypass (review VIEW-08).
         p.bypassed.hash(&mut h);
     }
+    chain::hash_chain_ui(&mut h, r, &t.plugins);
     // The SENDS block (ba todo #1310) renders every send tapped off this
     // track, so each field a slot draws has to be here — otherwise the
     // retained tree survives an `AuxSendChanged` echo and the slider

@@ -129,6 +129,11 @@ impl Reconcile for TransientUi {
         r.ui.interaction.selected_clip = None;
         r.ui.mixer.plugin_window = None;
         r.ui.mixer.focused_slot = None;
+        r.ui.mixer.slot_menu = None;
+        r.ui.mixer.replacing_slot = None;
+        r.ui.mixer.slot_preset_save = None;
+        r.ui.mixer.chain_drag = None;
+        r.ui.mixer.color_palette = None;
         // The master outlives a load, but its selection must not: the new
         // project opens with no channel in the inspector, as it does with
         // no track or bus selected.

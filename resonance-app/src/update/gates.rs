@@ -386,6 +386,9 @@ fn plugin_edit_target(
         | PluginWindowDrag(_)
         | OpenGenericParams(_)
         | FocusSlot(_) => None,
+        // View state; an edit it leads to is re-dispatched as its own
+        // message and gated as that.
+        ChainUi(_) => None,
         // An audition moves the sound as a recall would; the loads that
         // stick are gated as `LoadPluginPreset` / the add they become.
         PresetUi(crate::message::PresetUiMessage::BrowserAudition(_)) => r

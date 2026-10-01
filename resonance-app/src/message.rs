@@ -347,6 +347,51 @@ pub enum PluginMessage {
     /// mixer-cleanup.md §2.1) and select the channel it sits on, without
     /// opening anything. The preset commands then act on it.
     FocusSlot(PluginInstanceId),
+    /// The inspector CHAIN rows' and header's own UI gestures
+    /// (mixer-cleanup.md §3.2, S7): the ☰ slot menu, replace mode, the
+    /// preset-name prompt, drag reorder and the colour palette.
+    ChainUi(ChainUiMessage),
+}
+
+/// View-state gestures of the inspector's CHAIN rows and header
+/// (mixer-cleanup.md §3.2 / §3.1). None of them edits the project on its
+/// own: an edit they lead to (a move, a remove, a colour) is dispatched
+/// as its ordinary message, which takes its own undo entry.
+#[derive(Debug, Clone)]
+pub enum ChainUiMessage {
+    /// ☰ on a CHAIN row: open its slot menu (or close it when it is
+    /// the open one).
+    ToggleSlotMenu(PluginInstanceId),
+    /// A slot-menu entry or palette swatch was picked: close whatever
+    /// inspector popover is open, then dispatch the entry's message.
+    Pick(Box<Message>),
+    /// Close the open slot menu / palette without doing anything.
+    Dismiss,
+    /// "Browse presets…": focus the slot, then open the preset browser
+    /// on it.
+    BrowsePresets(PluginInstanceId),
+    /// "Replace…": the CHAIN group's add picker turns into a replace
+    /// picker for this slot (`PluginMessage::ReplacePlugin`).
+    BeginReplace(PluginInstanceId),
+    CancelReplace,
+    /// "Save preset…": open the name prompt under the row.
+    BeginPresetSave(PluginInstanceId),
+    PresetSaveName(String),
+    /// Save the plugin's sound under the typed name (overwriting a user
+    /// preset of the same name, which the button says beforehand).
+    CommitPresetSave,
+    CancelPresetSave,
+    /// Press on a row's ⠿ handle: arm a drag of that slot.
+    DragStart(PluginInstanceId),
+    /// The pointer entered the row of this slot while a drag is armed.
+    DragOver(PluginInstanceId),
+    /// The button came up: move the dragged slot to the hovered row's
+    /// place, if the chain rules allow it, and disarm.
+    DragDrop,
+    /// Disarm without moving (the window lost focus).
+    DragCancel,
+    /// The header swatch: open (or close) the track-colour palette.
+    ToggleColorPalette(TrackId),
 }
 
 /// A step of the generic plugin window's title-bar drag.
@@ -414,6 +459,9 @@ impl PluginMessage {
             | Self::PluginWindowDrag(_)
             | Self::OpenGenericParams(_)
             | Self::FocusSlot(_)
+            // Menus, prompts and the drag are view state; what they lead
+            // to is dispatched as its own (recorded) message.
+            | Self::ChainUi(_)
             // A rescan changes what the machine offers, not what the
             // project contains — there is nothing to undo (todo #1307).
             | Self::RescanPlugins

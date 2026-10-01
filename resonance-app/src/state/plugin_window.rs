@@ -92,6 +92,7 @@ impl MixerUiState {
     /// engine may hand to the next plugin added.
     pub fn forget_plugin(&mut self, instance_id: PluginInstanceId) {
         self.close_plugin_window_for(instance_id);
+        self.forget_chain_ui(instance_id);
         if self.focused_slot == Some(instance_id) {
             self.focused_slot = None;
         }

@@ -24,7 +24,6 @@ use crate::state::{BusState, MixerInspectorGroup};
 use crate::theme;
 use crate::view::mixer::automation::AutoChan;
 use crate::view::mixer::picks::PluginOwner;
-use crate::view::mixer::reorder;
 
 /// The inspector body for `bus`. The whole body below the title sits in
 /// one lazy region keyed on everything it reads ([`fingerprint`]); none
@@ -102,9 +101,10 @@ pub(crate) fn fingerprint(r: &crate::Resonance, bus: &BusState) -> u64 {
     for p in &bus.plugins {
         p.instance_id.hash(&mut h);
         p.plugin_name.hash(&mut h);
-        // Drives the BYP button and its press message (review VIEW-08).
+        // Drives the bypass dot and its press message (review VIEW-08).
         p.bypassed.hash(&mut h);
     }
+    super::chain::hash_chain_ui(&mut h, r, &bus.plugins);
     super::automation::hash_into(&mut h, r, AutoChan::Bus(bus.id), &bus.plugins, &[]);
     // MEMBERS is derived from every track's routing, so it changes when
     // a track is re-routed, renamed, added or removed.
@@ -285,28 +285,16 @@ fn chain_group(
     )]
     .spacing(10);
 
-    if bus.plugins.is_empty() {
-        col = col.push(super::chain::empty_chain_row());
-    } else {
-        let chain_len = bus.plugins.len();
-        for (index, plugin) in bus.plugins.iter().enumerate() {
-            // Every entry is an effect: a bus has no instrument slot, so
-            // the only limits on the reorder carets are the two ends.
-            let moves = reorder::chain_moves(
-                r,
-                PluginOwner::Bus(bus.id),
-                plugin.instance_id,
-                index,
-                chain_len,
-            );
-            col = col.push(super::chain::chain_row(
-                &plugin.plugin_name,
-                false,
-                &moves,
-                plugin.instance_id,
-                plugin.bypassed,
-            ));
-        }
+    // Every entry is an effect: a bus has no instrument slot, so the
+    // only limits on a move are the two ends.
+    col = col.push(super::chain::chain_rows(
+        r,
+        PluginOwner::Bus(bus.id),
+        &bus.plugins,
+        false,
+    ));
+    if let Some(replace) = super::chain::replace_picker(r, &bus.plugins) {
+        return col.push(replace).into();
     }
 
     if !r.ui.view_caches.fx_plugins.is_empty() {

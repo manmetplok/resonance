@@ -6,7 +6,8 @@
 //! app (between the base view and the modal overlays, like the palette and
 //! preset-browser cards), with the plugin's name and owner in its title
 //! bar, the preset bar under it and the generic parameter list below. A
-//! missing plugin shows its recovery body instead of parameters.
+//! missing plugin shows a one-line pointer to its recovery, which lives
+//! under its row in the inspector CHAIN.
 //!
 //! The body and the preset bar are the former bottom-panel ones
 //! (`view/mixer/plugin_panel.rs`), moved, not rewritten. State lives in
@@ -193,99 +194,19 @@ impl crate::Resonance {
         "Master".to_string()
     }
 
-    /// The window body for a slot the engine could not fill: what is
-    /// missing, why, and the two ways out of it.
-    ///
-    /// This is the GUI half of the replace capability, and it lives here
-    /// rather than on the strip for two reasons. The strip's slot row is
-    /// a 140 px budget already carrying four icon controls, and — more
-    /// to the point — this panel is the ONE plugin surface that serves
-    /// all three chains, so a missing plugin on a bus or on the master
-    /// gets the same recovery affordance a track plugin does. The strip
-    /// pill's warning tint is what leads the user here.
-    ///
-    /// The picker is the whole gesture: choosing the SAME plugin (which
-    /// the catalog only offers once a rescan has found it again)
-    /// relocates the slot and brings its saved settings back; choosing a
-    /// different one swaps it and keeps the chain position. Removal is
-    /// deliberately not repeated here — the strip's × already does it,
-    /// and the consequence is stated rather than made one click easier.
-    fn missing_plugin_body(&self, plugin: &PluginSlotState, reason: &str) -> Element<'_, Message> {
-        let instance_id = plugin.instance_id;
-        let candidates = self.replacement_candidates(instance_id);
-
-        let mut body = column![
-            text(format!(
-                "\u{26a0} {} is not available on this machine",
-                plugin.plugin_name
-            ))
-            .size(12)
-            .color(theme::BAD),
-            text(reason.to_owned()).size(10).color(theme::TEXT_2),
-            text(format!(
-                "{}  \u{2014}  {}",
-                plugin.clap_plugin_id, plugin.clap_file_path
-            ))
-            .size(9)
-            .color(theme::TEXT_3),
-            text(
-                "Its settings are kept with this slot: reinstall the plugin and rescan, \
-                 or pick a replacement below. Removing the slot discards them."
-            )
-            .size(10)
-            .color(theme::TEXT_2),
-        ]
-        .spacing(6);
-
-        if candidates.is_empty() {
-            body = body.push(
-                text("No plugins have been scanned yet.")
-                    .size(10)
-                    .color(theme::TEXT_3),
-            );
-        } else {
-            body = body.push(
-                iced::widget::pick_list(
-                    candidates,
-                    None::<resonance_audio::types::ScannedPlugin>,
-                    move |plugin: resonance_audio::types::ScannedPlugin| {
-                        Message::Plugin(PluginMessage::ReplacePlugin {
-                            instance_id,
-                            plugin,
-                        })
-                    },
-                )
-                .placeholder("Replace with\u{2026}")
-                .text_size(12)
-                .padding([8, 10])
-                .width(Length::Fixed(320.0)),
-            );
-        }
-
-        body.into()
-    }
-
-    /// Which plugins may take over a slot: instruments for a track's
-    /// instrument slot, effects everywhere else.
-    ///
-    /// The distinction is not cosmetic — an instrument in an insert slot
-    /// receives no MIDI and an effect in the instrument slot leaves the
-    /// track with no sound source — and it is the same split the
-    /// `+ Add instrument` / `+ Add to chain` pickers already make.
-    fn replacement_candidates(
-        &self,
-        instance_id: resonance_audio::types::PluginInstanceId,
-    ) -> std::rc::Rc<[resonance_audio::types::ScannedPlugin]> {
-        let is_instrument_slot = self.registry.tracks.iter().any(|t| {
-            crate::plugin_chain::instrument_slot(self, t)
-                .and_then(|i| t.plugins.get(i))
-                .is_some_and(|p| p.instance_id == instance_id)
-        });
-        if is_instrument_slot {
-            self.ui.view_caches.instrument_plugins.clone()
-        } else {
-            self.ui.view_caches.fx_plugins.clone()
-        }
+    /// The window body for a slot the engine could not fill: one line
+    /// that says so and points at the recovery, which lives inline
+    /// under the slot's row in the inspector CHAIN (mixer-cleanup.md
+    /// §3.2, Q16) — the one surface that serves track, bus and master
+    /// chains alike.
+    fn missing_plugin_body(&self, plugin: &PluginSlotState, _reason: &str) -> Element<'_, Message> {
+        text(format!(
+            "\u{26a0} {} is missing \u{2014} see the inspector to replace or remove it",
+            plugin.plugin_name
+        ))
+        .size(12)
+        .color(theme::BAD)
+        .into()
     }
 }
 

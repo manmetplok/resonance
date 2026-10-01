@@ -17,6 +17,7 @@
 //! `impl Resonance` continuation, so the split is invisible to
 //! callers — tests keep calling `app.test_*()` methods unchanged.
 
+mod chain_ui;
 mod mixer_plugins;
 pub use mixer_plugins::SendSlotAffordances;
 mod pool_media;

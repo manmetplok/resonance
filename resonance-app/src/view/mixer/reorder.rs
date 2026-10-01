@@ -17,7 +17,11 @@
 //! here. A greyed ▲ and a refused move have to agree, and the
 //! instrument-floor rule belongs to the chain, not to the view.
 //!
-//! Drag-and-drop is deliberately out of scope (see the todo).
+//! Drag-and-drop came into scope with mixer-cleanup.md slice S7: the
+//! inspector CHAIN rows drag by their ⠿ handle, and the drop asks
+//! [`drop_move`] — the same domain rule, so a drop the carets would
+//! refuse (onto or off the instrument slot, into another owner's chain)
+//! is refused here too. ▲/▼ stay as the ☰ menu's Move up / Move down.
 
 use iced::alignment::Vertical;
 use iced::widget::{button, row};
@@ -158,4 +162,63 @@ fn move_button(
         b = b.on_press(message);
     }
     b.into()
+}
+
+/// The reorder a CHAIN-row drag of `dragged` dropped onto the row of
+/// `onto` asks for: `dragged` takes `onto`'s position in the chain
+/// (slice S7). `None` when the drop is refused or would change nothing:
+///
+/// - either slot is gone, or the two sit in different chains — a drag
+///   only ever reorders its own owner's chain;
+/// - the drop lands on the slot it started from;
+/// - on a track, [`crate::plugin_chain::resolve_effect_move`] refuses it
+///   (the instrument never moves, and no effect goes above it).
+pub(crate) fn drop_move(
+    r: &crate::Resonance,
+    dragged: PluginInstanceId,
+    onto: PluginInstanceId,
+) -> Option<Message> {
+    use crate::state::PluginLocator;
+    let (owner, from) = crate::update::plugin_replace::locate_slot(r, dragged)?;
+    let (onto_owner, to) = crate::update::plugin_replace::locate_slot(r, onto)?;
+    if owner != onto_owner || from == to {
+        return None;
+    }
+    match owner {
+        PluginLocator::Track(track_id) => {
+            let track = r.registry.tracks.iter().find(|t| t.id == track_id)?;
+            let dest =
+                crate::plugin_chain::resolve_effect_move(r, track, from as u32, to as u32).ok()?;
+            (dest as usize != from).then(|| {
+                Message::Plugin(PluginMessage::MovePluginInTrack {
+                    track_id,
+                    instance_id: dragged,
+                    to_index: dest as usize,
+                })
+            })
+        }
+        PluginLocator::Bus(bus_id) => Some(Message::Bus(BusMessage::MovePluginInBus {
+            bus_id,
+            instance_id: dragged,
+            to_index: to,
+        })),
+        PluginLocator::Master => Some(Message::Master(MasterMessage::MovePluginInMaster {
+            instance_id: dragged,
+            to_index: to,
+        })),
+    }
+}
+
+/// The message that removes `instance_id` from `owner`'s chain — the
+/// same one per owner wherever a remove is offered.
+pub(crate) fn remove_message(owner: PluginOwner, instance_id: PluginInstanceId) -> Message {
+    match owner {
+        PluginOwner::Track(track_id) => {
+            Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, instance_id))
+        }
+        PluginOwner::Bus(bus_id) => {
+            Message::Bus(BusMessage::RemovePluginFromBus(bus_id, instance_id))
+        }
+        PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(instance_id)),
+    }
 }

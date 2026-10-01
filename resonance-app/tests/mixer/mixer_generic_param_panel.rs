@@ -629,7 +629,9 @@ fn loading_a_project_closes_the_window() {
 }
 
 /// A missing plugin opens the generic window even though it declares a
-/// GUI, showing its recovery rather than parameters.
+/// GUI. The window says it is missing and points at the recovery, which
+/// lives under the slot's row in the inspector CHAIN (mixer-cleanup.md
+/// §3.2, Q16 — covered by `inspector_chain_row`).
 #[test]
 fn a_missing_plugin_opens_the_window_with_its_recovery() {
     let mut app = app_with_plugin(true);
@@ -647,8 +649,13 @@ fn a_missing_plugin_opens_the_window_with_its_recovery() {
         "a missing plugin has no editor; it gets the generic window"
     );
     let mut ui = simulator(&app);
-    ui.find(format!("\u{26a0} {PLUGIN} is not available on this machine").as_str())
-        .expect("the recovery body is drawn");
+    ui.find(
+        format!(
+            "\u{26a0} {PLUGIN} is missing \u{2014} see the inspector to replace or remove it"
+        )
+        .as_str(),
+    )
+    .expect("the window points at the inspector's recovery");
 }
 
 // ---------------------------------------------------------------------------

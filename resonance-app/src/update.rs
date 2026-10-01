@@ -30,6 +30,7 @@ pub mod midi_clip;
 pub mod midi_editor;
 pub mod mixer;
 pub mod palette;
+pub mod chain_ui;
 pub mod plugin;
 pub mod plugin_preset_ui;
 pub mod plugin_replace;
@@ -282,6 +283,14 @@ impl crate::Resonance {
         if self.ui.mixer.plugin_window.is_some_and(|w| w.drag.is_some()) {
             subs.push(iced::event::listen_with(|event, _status, _window| {
                 crate::update::plugin_window::drag_end_event(&event)
+            }));
+        }
+
+        // A CHAIN-row drag (mixer-cleanup.md S7) drops on any left
+        // release and is disarmed when the window loses focus.
+        if self.ui.mixer.chain_drag.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| {
+                crate::update::chain_ui::drag_end_event(&event)
             }));
         }
 

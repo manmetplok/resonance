@@ -82,4 +82,69 @@ pub struct MixerUiState {
     /// clears both, and `SelectTrack(Some(_))` / `SelectBus(Some(_))`
     /// clear this.
     pub selected_master: bool,
+    /// The CHAIN row whose ☰ slot menu is open (mixer-cleanup.md §3.2).
+    /// One at a time; picking an entry or pressing ☰ again closes it.
+    pub slot_menu: Option<PluginInstanceId>,
+    /// The slot "Replace…" was picked for: its chain's add picker offers
+    /// replacements for it instead of additions until one is picked or
+    /// the replace is cancelled.
+    pub replacing_slot: Option<PluginInstanceId>,
+    /// The "Save preset…" name prompt open under a CHAIN row.
+    pub slot_preset_save: Option<SlotPresetSaveState>,
+    /// A CHAIN row being dragged by its ⠿ handle (slice S7).
+    pub chain_drag: Option<ChainDragState>,
+    /// The track whose inspector colour palette is open (§3.1). Keyed by
+    /// track so selecting another track does not show it open there.
+    pub color_palette: Option<TrackId>,
+}
+
+/// An in-progress "Save preset…" prompt on a CHAIN row.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SlotPresetSaveState {
+    pub instance_id: PluginInstanceId,
+    /// Live edit buffer, seeded with the slot's loaded preset name.
+    pub name: String,
+    /// Whether a user preset of this name already exists for the plugin
+    /// (the button then reads "Overwrite"). Recomputed per keystroke.
+    pub exists: bool,
+}
+
+/// A CHAIN-row drag (slice S7). Only the drop changes the chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ChainDragState {
+    /// The slot being dragged.
+    pub instance_id: PluginInstanceId,
+    /// The slot whose row the pointer is over: the dragged slot takes
+    /// its place on release. `None` until the pointer enters a row.
+    pub over: Option<PluginInstanceId>,
+}
+
+impl MixerUiState {
+    /// Close the inspector's transient popovers: the slot menu and the
+    /// colour palette.
+    pub fn dismiss_inspector_popovers(&mut self) {
+        self.slot_menu = None;
+        self.color_palette = None;
+    }
+
+    /// Drop every CHAIN-row affordance that names `instance_id` (its
+    /// slot is gone).
+    pub fn forget_chain_ui(&mut self, instance_id: PluginInstanceId) {
+        if self.slot_menu == Some(instance_id) {
+            self.slot_menu = None;
+        }
+        if self.replacing_slot == Some(instance_id) {
+            self.replacing_slot = None;
+        }
+        if self
+            .slot_preset_save
+            .as_ref()
+            .is_some_and(|p| p.instance_id == instance_id)
+        {
+            self.slot_preset_save = None;
+        }
+        if self.chain_drag.is_some_and(|d| d.instance_id == instance_id) {
+            self.chain_drag = None;
+        }
+    }
 }
