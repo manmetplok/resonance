@@ -99,12 +99,17 @@ pub const FROM_KIT: u8 = u8::MAX;
 /// One pad's trigger settings, snapshotted once per block from its
 /// params with the [`GlobalSettings`]: they decide how a hit on the pad
 /// is *started*, so block rate is the right granularity.
+///
+/// A choke group or port left at "Kit" (`pad_N_choke` −1, `pad_N_output`
+/// 0, the defaults) is [`FROM_KIT`] here, and resolves at the hit against
+/// the pad the kit loaded (its `_meta.pads` hint, else the Drummica
+/// table); an explicit value overrides the kit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PadSettings {
-    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`].
+    /// Choke group (E12): 0 = none, 1..=8, or [`FROM_KIT`] ("Kit").
     pub choke: u8,
     /// The port the pad's close mics play on in Multi (E11): a port
-    /// index, or [`FROM_KIT`] for the pad's own group.
+    /// index, or [`FROM_KIT`] ("Kit") for the port the kit gives it.
     pub port: u8,
     /// Playback rate from `pad_N_tune` (E8): `2^(st/12)`, exactly 1.0 at
     /// 0 st (the integer path).
@@ -136,12 +141,15 @@ impl PadSettings {
         let frames = |ms: f32| (ms.max(0.0) * sample_rate / 1000.0).round() as u32;
         let tune = pad.tune.value().clamp(-MAX_TUNE_ST, MAX_TUNE_ST);
         let decay_ms = pad.decay.value();
+        let choke = pad.choke.value();
         Self {
-            choke: pad.choke.value().clamp(0, crate::params::MAX_CHOKE_GROUP) as u8,
-            port: pad
-                .output
-                .value()
-                .clamp(0, crate::kit::NUM_OUTPUT_PORTS as i32 - 1) as u8,
+            choke: if choke < 0 {
+                FROM_KIT
+            } else {
+                choke.min(crate::params::MAX_CHOKE_GROUP) as u8
+            },
+            port: crate::params::port_of_output_choice(pad.output.value())
+                .map_or(FROM_KIT, |port| port as u8),
             // Exactly 1.0 at 0 st: not `exp2(0.0)`'s word for it.
             rate: if tune == 0.0 {
                 1.0

@@ -84,7 +84,8 @@ use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedPad, NUM_OUTPUT_PORTS};
 use resonance_drums::level::gain_to_db;
 use resonance_drums::params::{
-    DrumParams, MicSlot, DECAY_OFF_MS, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO,
+    output_choice_for_port, DrumParams, MicSlot, DECAY_OFF_MS, OUTPUT_MODE_MULTI,
+    OUTPUT_MODE_STEREO,
 };
 use resonance_drums::voice::MAX_VOICES;
 
@@ -368,8 +369,11 @@ fn pin(p: &DrumParams) {
         for trim in &pad.trims {
             trim.set_value(0.0);
         }
+        // Explicit, not "Kit": the digests must not hang on what the
+        // kit hints (for the built-in kit, the same table).
         pad.choke.set_value(mapping.choke_group.map_or(0, i32::from));
-        pad.output.set_value(mapping.output_group.index() as i32);
+        pad.output
+            .set_value(output_choice_for_port(mapping.output_group.index()));
         // At pitch (the integer path), no envelope, from the top.
         pad.tune.set_value(0.0);
         pad.hold.set_value(0.0);

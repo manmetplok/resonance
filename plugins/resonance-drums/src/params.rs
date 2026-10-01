@@ -13,7 +13,7 @@ use resonance_plugin::*;
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
-use crate::kit::OUTPUT_PORT_NAMES;
+use crate::kit::NUM_OUTPUT_PORTS;
 use crate::level::{self, MAX_TRIM_DB, MAX_VOLUME_DB, MIN_DB};
 use crate::selection::{KitSelection, MAX_KIT_SLOT, NO_KIT};
 use crate::velocity;
@@ -322,17 +322,30 @@ pub struct PadParams {
     /// routed. The second close mic's trim is hidden on pads that are
     /// never recorded with two.
     pub trims: [FloatParam; MIC_SLOTS],
-    /// Choke group (E12): 0 = none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a
-    /// pad fades out every sounding voice of the same group — the open
-    /// hat cut by the closed or pedal hat. Defaults to the Drummica table
-    /// ([`PAD_MAPPINGS`]): every hi-hat in group 1, nothing else choked.
+    /// Choke group (E12): [`CHOKE_KIT`] (−1, "Kit", the default), 0 =
+    /// none, 1..=[`MAX_CHOKE_GROUP`]. A hit on a pad fades out every
+    /// sounding voice of the same group — the open hat cut by the closed
+    /// or pedal hat.
+    ///
+    /// **Kit** plays the group the loaded kit gives the pad
+    /// (`LoadedPad::choke_group`: its `_meta.pads` choke hint, else the
+    /// Drummica table — every hi-hat in group 1, nothing else choked). An
+    /// explicit value overrides the kit. The hint is never written into
+    /// the param: it changes with the kit, and the param is the user's.
     pub choke: IntParam,
     /// Which output port the pad's close mics play on in Multi output
-    /// mode (E11), one of [`OUTPUT_PORT_NAMES`]. Defaults to the
-    /// Drummica table (kick → Kick, …, Count Stick → Main). Its overhead
-    /// take goes to the Overhead port in Multi — or here, on a pad with no
-    /// close mic — and everything to Main in Stereo. Not automatable: routing, not playing. Not in
-    /// presets either (see `output_mode`).
+    /// mode (E11): [`OUTPUT_KIT`] (0, "Kit", the default), else a port of
+    /// [`OUTPUT_CHOICE_LABELS`] (value = port + 1, see
+    /// [`output_choice_for_port`]).
+    ///
+    /// **Kit** plays the port the loaded kit gives the pad
+    /// (`LoadedPad::output_group`: its `_meta.pads` port hint, else the
+    /// Drummica table — kick → Kick, …, Count Stick → Main); an explicit
+    /// port overrides it, and the hint is never written into the param.
+    /// A close-miked pad's overhead take goes to the Overhead port in
+    /// Multi — or to this port, on a pad with no close mic — and
+    /// everything to Main in Stereo. Not automatable: routing, not
+    /// playing. Not in presets either (see `output_mode`).
     pub output: ChoiceParam,
     /// Pitch in semitones (E8), −24 … +24, default 0, resolved to the
     /// cent (0.01 st): one param carries both the coarse and the fine
@@ -459,9 +472,52 @@ fn ms_param(
 /// The highest choke group a pad can be put in.
 pub const MAX_CHOKE_GROUP: i32 = 8;
 
-/// How a choke group reads: `None`, `Group 1` … `Group 8`.
+/// `pad_N_choke`: the group the loaded kit gives the pad (the default).
+pub const CHOKE_KIT: i32 = -1;
+
+/// `pad_N_output`: the port the loaded kit gives the pad (the default).
+pub const OUTPUT_KIT: i32 = 0;
+
+/// `pad_N_output`'s choices: [`OUTPUT_KIT`], then the output ports in
+/// port order (`kit::OUTPUT_PORT_NAMES`).
+pub const OUTPUT_CHOICE_LABELS: [&str; NUM_OUTPUT_PORTS + 1] = [
+    "Kit", "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
+];
+
+const _: () = {
+    // The port names, one along: checked here so the two lists cannot
+    // drift apart.
+    let mut i = 0;
+    while i < NUM_OUTPUT_PORTS {
+        let (a, b) = (
+            OUTPUT_CHOICE_LABELS[i + 1].as_bytes(),
+            crate::kit::OUTPUT_PORT_NAMES[i].as_bytes(),
+        );
+        assert!(a.len() == b.len());
+        let mut j = 0;
+        while j < a.len() {
+            assert!(a[j] == b[j]);
+            j += 1;
+        }
+        i += 1;
+    }
+};
+
+/// The `pad_N_output` value that names output port `port` explicitly.
+pub const fn output_choice_for_port(port: usize) -> i32 {
+    port as i32 + 1
+}
+
+/// The port a `pad_N_output` value names, or `None` for [`OUTPUT_KIT`].
+pub fn port_of_output_choice(value: i32) -> Option<usize> {
+    (value > OUTPUT_KIT).then(|| (value - 1).min(NUM_OUTPUT_PORTS as i32 - 1) as usize)
+}
+
+/// How a choke group reads: `Kit`, `None`, `Group 1` … `Group 8`.
 pub fn choke_label(group: i32) -> String {
-    if group <= 0 {
+    if group < 0 {
+        "Kit".to_string()
+    } else if group == 0 {
         "None".to_string()
     } else {
         format!("Group {group}")
@@ -471,6 +527,9 @@ pub fn choke_label(group: i32) -> String {
 /// Parse [`choke_label`] (or a bare number) back to a group.
 pub fn choke_from_label(text: &str) -> Option<i32> {
     let t = text.trim();
+    if t.eq_ignore_ascii_case("kit") {
+        return Some(CHOKE_KIT);
+    }
     if t.eq_ignore_ascii_case("none") || t.eq_ignore_ascii_case("off") {
         return Some(0);
     }
@@ -482,7 +541,7 @@ pub fn choke_from_label(text: &str) -> Option<i32> {
     digits
         .parse::<i32>()
         .ok()
-        .map(|g| g.clamp(0, MAX_CHOKE_GROUP))
+        .map(|g| g.clamp(CHOKE_KIT, MAX_CHOKE_GROUP))
 }
 
 /// A static id or name for a per-pad parameter.
@@ -557,9 +616,9 @@ impl PadParams {
             choke: IntParam::new(
                 id("choke"),
                 name("Choke Group"),
-                mapping.choke_group.map_or(0, i32::from),
+                CHOKE_KIT,
                 IntRange::Linear {
-                    min: 0,
+                    min: CHOKE_KIT,
                     max: MAX_CHOKE_GROUP,
                 },
             )
@@ -568,8 +627,8 @@ impl PadParams {
             output: ChoiceParam::new(
                 id("output"),
                 name("Output"),
-                mapping.output_group.index() as i32,
-                &OUTPUT_PORT_NAMES,
+                OUTPUT_KIT,
+                &OUTPUT_CHOICE_LABELS,
             )
             .not_automatable()
             .excluded_from_presets(),

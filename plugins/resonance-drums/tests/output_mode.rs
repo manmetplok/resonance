@@ -15,7 +15,9 @@ use resonance_drums::kit::{
     LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, MAIN_PORT_INDEX, NUM_OUTPUT_PORTS,
     OUTPUT_PORT_NAMES, OVERHEAD_PORT_INDEX,
 };
-use resonance_drums::params::{DrumParams, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO};
+use resonance_drums::params::{
+    output_choice_for_port, DrumParams, OUTPUT_KIT, OUTPUT_MODE_MULTI, OUTPUT_MODE_STEREO,
+};
 use resonance_plugin::Param;
 
 const SR: f32 = 48_000.0;
@@ -71,10 +73,15 @@ fn drummica_shaped_kit() -> Vec<LoadedPad> {
 
 /// Render `notes` (all on frame 0) with `params` applied; every port.
 fn render(params: &DrumParams, notes: &[u8]) -> Vec<(Vec<f32>, Vec<f32>)> {
+    render_kit(params, drummica_shaped_kit(), notes)
+}
+
+/// [`render`] on `kit`.
+fn render_kit(params: &DrumParams, kit: Vec<LoadedPad>, notes: &[u8]) -> Vec<(Vec<f32>, Vec<f32>)> {
     let (_tx, rx) = crossbeam_channel::unbounded::<Vec<LoadedPad>>();
     let mut sampler = DrumSampler::new(rx);
     sampler.set_sample_rate(SR);
-    sampler.pads = drummica_shaped_kit();
+    sampler.pads = kit;
     sampler.update_global_settings(params);
     for &note in notes {
         sampler.note_on(note, 0.9);
@@ -125,21 +132,45 @@ fn a_fresh_instance_is_stereo_and_its_ports_default_to_the_drummica_table() {
     assert_eq!(p.output_mode.display(0.0), "Stereo");
     assert_eq!(p.output_mode.display(1.0), "Multi");
     assert!(!p.output_mode.is_automatable());
-    for (i, m) in PAD_MAPPINGS.iter().enumerate() {
+    for i in 0..PAD_MAPPINGS.len() {
         let out = &p.pads[i].output;
         assert_eq!(out.id(), format!("pad_{i}_output"));
-        assert_eq!(out.value(), m.output_group.index() as i32, "pad {i}");
-        assert_eq!(out.max_plain() as usize, NUM_OUTPUT_PORTS - 1);
-        assert_eq!(
-            out.display(out.value() as f64),
-            OUTPUT_PORT_NAMES[m.output_group.index()]
-        );
+        assert_eq!(out.value(), OUTPUT_KIT, "pad {i}: the kit's port by default");
+        assert_eq!(out.display(OUTPUT_KIT as f64), "Kit");
+        assert_eq!(out.max_plain() as usize, NUM_OUTPUT_PORTS);
+        for (port, name) in OUTPUT_PORT_NAMES.iter().enumerate() {
+            assert_eq!(out.display(output_choice_for_port(port) as f64), *name);
+        }
         assert!(!out.is_automatable());
     }
     assert_eq!(
         p.pads[0].output.parse("Overhead"),
-        Some(OVERHEAD_PORT_INDEX as f64)
+        Some(output_choice_for_port(OVERHEAD_PORT_INDEX) as f64)
     );
+    assert_eq!(p.pads[0].output.parse("Kit"), Some(OUTPUT_KIT as f64));
+}
+
+/// "Kit" plays the port the loaded kit gives the pad (its `_meta.pads`
+/// hint, here a kick routed to Toms); an explicit port overrides it. The
+/// param never takes the hint's value.
+#[test]
+fn kit_follows_the_kits_port_hint_and_an_explicit_port_overrides_it() {
+    let params = DrumParams::default();
+    params.output_mode.set_value(OUTPUT_MODE_MULTI);
+    let kick = drum_map::pad_index_for_note(drum_map::KICK).unwrap();
+    let mut kit = drummica_shaped_kit();
+    kit[kick].output_group = resonance_drums::kit::OutputGroup::Toms;
+    let ports = render_kit(&params, kit.clone(), &[drum_map::KICK]);
+    assert!(rms(&ports[3]) > 0.01, "the kit's hint: Toms");
+    assert_eq!(rms(&ports[1]), 0.0);
+    assert_eq!(params.pads[kick].output.value(), OUTPUT_KIT);
+
+    params.pads[kick]
+        .output
+        .set_value(output_choice_for_port(MAIN_PORT_INDEX));
+    let ports = render_kit(&params, kit, &[drum_map::KICK]);
+    assert!(rms(&ports[MAIN_PORT_INDEX]) > 0.01, "the user's Main wins");
+    assert_eq!(rms(&ports[3]), 0.0);
 }
 
 #[test]
@@ -196,7 +227,9 @@ fn multi_keeps_the_overhead_only_cymbals_on_their_own_port() {
 
     // It follows the pad's `pad_N_output`, like a close mic.
     let crash = drum_map::pad_index_for_note(drum_map::CRASH_16_EDGE).unwrap();
-    params.pads[crash].output.set_value(MAIN_PORT_INDEX as i32);
+    params.pads[crash]
+        .output
+        .set_value(output_choice_for_port(MAIN_PORT_INDEX));
     let ports = render(&params, &[drum_map::CRASH_16_EDGE]);
     assert!(rms(&ports[MAIN_PORT_INDEX]) > 0.01);
     assert_eq!(rms(&ports[CYMBALS_PORT]), 0.0);
@@ -215,7 +248,7 @@ fn multi_routes_close_mics_by_pad_output_and_overheads_to_overhead() {
 
     // Re-routed to the Toms port: the close mics follow, the overhead not.
     let kick = drum_map::pad_index_for_note(drum_map::KICK).unwrap();
-    params.pads[kick].output.set_value(3);
+    params.pads[kick].output.set_value(output_choice_for_port(3));
     let ports = render(&params, &[drum_map::KICK]);
     assert_eq!(rms(&ports[1]), 0.0, "nothing left on Kick");
     assert!(rms(&ports[3]) > 0.01, "the kick's close mics are on Toms");
@@ -225,12 +258,14 @@ fn multi_routes_close_mics_by_pad_output_and_overheads_to_overhead() {
     );
 
     // To Main.
-    params.pads[kick].output.set_value(0);
+    params.pads[kick]
+        .output
+        .set_value(output_choice_for_port(MAIN_PORT_INDEX));
     let ports = render(&params, &[drum_map::KICK]);
     assert!(rms(&ports[MAIN_PORT_INDEX]) > 0.01);
     // pad_N_output does nothing in Stereo: everything is on Main anyway.
     params.output_mode.set_value(OUTPUT_MODE_STEREO);
-    params.pads[kick].output.set_value(5);
+    params.pads[kick].output.set_value(output_choice_for_port(5));
     let ports = render(&params, &[drum_map::KICK]);
     assert_eq!(rms(&ports[5]), 0.0);
     assert!(rms(&ports[MAIN_PORT_INDEX]) > 0.01);
