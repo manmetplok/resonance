@@ -986,6 +986,93 @@ fn the_plok_tab_shows_progress_queued_error_and_load() {
     );
 }
 
+/// The "Fetching…" line and the Refresh button's disabled state come from
+/// `fetching_index`, not `Status::FetchingIndex`: an index fetch runs on
+/// its own thread beside a download, which then owns `status`, so a
+/// status-based check never fired while a download was active (ba
+/// review).
+#[test]
+fn the_plok_tab_shows_fetching_alongside_a_running_download() {
+    let home = Home::new("plok-fetching-alongside-download");
+    let lib = home.library();
+    {
+        let mut s = lib.download().state.lock();
+        s.index = Some(ServerIndex {
+            drumkits: vec![ServerKit::new("Delta Kit", "delta.zip")],
+        });
+        s.index_fetched_at = Some(Instant::now());
+        s.fetching_index = true;
+        s.status = resonance_drums::download::Status::Downloading {
+            name: "Delta Kit".into(),
+            downloaded_bytes: 1_000_000,
+            total_bytes: 4_000_000,
+            bytes_per_sec: 500_000.0,
+            eta_secs: Some(6.0),
+            resumed_from: 0,
+        };
+    }
+    let plugin = ResonanceDrums::new();
+    let mut editor = TestEditor::new(&plugin, lib.clone(), SIZE);
+    opened(&mut editor);
+    editor.show_tab(true);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(
+        frame.shows("Fetching the kit index from plok.org…"),
+        "{:?}",
+        frame.strings()
+    );
+    // The running download's own progress still shows through: the two
+    // are independent.
+    assert_widget_fully_visible(&frame, "plok.Delta Kit.progress", "progress");
+
+    // Refresh is disabled while the fetch it would start is already
+    // running: clicking it starts no second one.
+    let fetches_before = lib.download().fetches_started();
+    let refresh = frame.text_center("Refresh").expect("Refresh is drawn");
+    editor.click(refresh);
+    editor.frame(Vec::new());
+    assert_eq!(
+        lib.download().fetches_started(),
+        fetches_before,
+        "Refresh fired a fetch while one was already running"
+    );
+}
+
+/// `index_error` alone drives "Could not reach plok.org" — not `status`:
+/// an index fetch can fail while a download is running and owns `status`,
+/// and the tab must still say so (ba review: the old check read
+/// `Status::Error(_)`, which a concurrent download's own status hid this
+/// behind).
+#[test]
+fn the_plok_tab_reads_the_index_error_field_not_status() {
+    let home = Home::new("plok-index-error-field");
+    let lib = home.library();
+    {
+        let mut s = lib.download().state.lock();
+        s.index_error = Some("connection refused".into());
+        s.status = resonance_drums::download::Status::Downloading {
+            name: "Echo Kit".into(),
+            downloaded_bytes: 10,
+            total_bytes: 100,
+            bytes_per_sec: 0.0,
+            eta_secs: None,
+            resumed_from: 0,
+        };
+    }
+    let plugin = ResonanceDrums::new();
+    let mut editor = TestEditor::new(&plugin, lib.clone(), SIZE);
+    opened(&mut editor);
+    editor.show_tab(true);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    assert!(
+        frame.shows("Could not reach plok.org. Refresh to try again."),
+        "{:?}",
+        frame.strings()
+    );
+}
+
 /// With no index and the server unreachable, the tab says so.
 #[test]
 fn the_plok_tab_says_when_plok_org_is_unreachable() {

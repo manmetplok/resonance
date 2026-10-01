@@ -910,6 +910,68 @@ fn every_install_is_reported_even_two_between_frames() {
     assert!(s.installs_since(s.installs).is_empty());
 }
 
+/// The running editor itself — not just `State::installs_since` in
+/// isolation — handles two installs that land before its next poll: both
+/// are dropped from `my_downloads`, and both show up in the library view
+/// (ba review: `poll_downloads` used to read `last_installed` alone, so
+/// of two installs finishing between two frames only the second was ever
+/// recognised as "mine").
+#[test]
+fn the_editor_handles_two_installs_landing_between_two_frames() {
+    use resonance_drums::{ResonanceDrums, TestEditor};
+    use resonance_plugin::ResonancePlugin;
+
+    let home = Home::new("editor-two-installs");
+    let (_server, index) = Server::start(vec![
+        ("/a.zip", kit_zip("Kit A", "kita", 1)),
+        ("/b.zip", kit_zip("Kit B", "kitb", 1)),
+    ]);
+    let lib = home.library(config(&index));
+    let plugin = ResonanceDrums::new();
+    let mut editor = TestEditor::new(&plugin, lib.clone(), (960.0, 640.0));
+    editor.finish_jobs();
+
+    // As `plok_panel` does on Download: record both as this editor's own
+    // before asking the worker for them.
+    editor.add_my_download("Kit A");
+    editor.add_my_download("Kit B");
+    let seen = lib.download().state.lock().installs;
+    lib.download()
+        .send(Command::Download(ServerKit::new("Kit A", "a.zip")));
+    lib.download()
+        .send(Command::Download(ServerKit::new("Kit B", "b.zip")));
+
+    // Let both finish before the editor polls even once — the "two
+    // installs between two frames" case.
+    wait_for("both installs", Duration::from_secs(15), || {
+        lib.download().state.lock().installs == seen + 2
+    });
+
+    editor.frame(Vec::new());
+
+    assert!(
+        editor.my_downloads().is_empty(),
+        "both downloads should be consumed, got {:?}",
+        editor.my_downloads()
+    );
+    let names = editor.view_names();
+    assert!(names.contains(&"Kit A".to_string()), "{names:?}");
+    assert!(names.contains(&"Kit B".to_string()), "{names:?}");
+    // The jobs run strictly one at a time (one worker thread), so "Kit A"
+    // always installs first and "Kit B" second: an editor that only reads
+    // `last_installed` sees "Kit B" alone, and — having never dropped "Kit
+    // A" from `my_downloads` there — then has `poll_failed_downloads`
+    // mistake its own already-installed "Kit A" for a stalled download and
+    // report it as "stopped", clobbering the correct notice. Both must be
+    // handled as installs, not one as an install and one as a false
+    // failure.
+    assert_eq!(
+        editor.notice().as_deref(),
+        Some("downloaded \"Kit B\" — Load plays it in this instance"),
+        "the second install's notice should win, not a false report about the first"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests: download, verify, install
 // ---------------------------------------------------------------------------
