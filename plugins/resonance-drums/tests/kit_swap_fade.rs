@@ -1,15 +1,29 @@
 //! Kit swap declick: voices still sounding when a new kit is swapped in
-//! must fade out over `RELEASE_SAMPLES` (reading the retired kit's
-//! sample data) instead of being hard-cut, so the swap never clicks.
+//! must fade out over `SWAP_FADE_MS` (reading the retired kit's sample
+//! data) instead of being hard-cut, so the swap never clicks — and that
+//! holds for the second of two quick swaps too (E2).
 
 use resonance_drums::drum_map::{self, PAD_MAPPINGS};
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer};
 use resonance_drums::params::DrumParams;
-use resonance_drums::voice::RELEASE_SAMPLES;
+use resonance_drums::voice::{fade_frames, SWAP_FADE_MS};
 
 const NUM_PORTS: usize = 7;
 const FRAMES: usize = 256;
+/// `DrumSampler::new` times its fades at this rate until told otherwise.
+const SR: f32 = 48_000.0;
+
+/// The swap fade in frames.
+fn swap_frames() -> usize {
+    fade_frames(SWAP_FADE_MS, SR) as usize
+}
+
+/// The steepest per-sample step of an equal-power fade from `level`
+/// over `n` frames: `level · π / (2n)`, at its end. Plus float slack.
+fn fade_step(level: f32, n: usize) -> f32 {
+    level * std::f32::consts::FRAC_PI_2 / n as f32 + 1e-5
+}
 
 /// A long constant-DC stereo sample, so the rendered output *is* the
 /// effective gain trajectory.
@@ -97,10 +111,10 @@ fn kit_swap_fades_ringing_voices_without_click() {
     tx.send(dc_pads(0.0, FRAMES * 32)).unwrap();
     sampler.try_swap_kit();
 
-    // The fade slope is 1.0 / RELEASE_SAMPLES per sample; no
-    // sample-to-sample jump may exceed it (plus float slack).
-    let tol = 1.0 / RELEASE_SAMPLES as f32 + 1e-5;
-    let fade_blocks = RELEASE_SAMPLES / FRAMES;
+    // The equal-power fade is steepest at its end; no sample-to-sample
+    // jump may exceed that slope (plus float slack).
+    let tol = fade_step(1.0, swap_frames());
+    let fade_blocks = swap_frames().div_ceil(FRAMES);
     for block in 0..fade_blocks {
         let out = render_block(&mut sampler, &params);
         for (i, &v) in out[port].0[..FRAMES].iter().enumerate() {
@@ -111,7 +125,7 @@ fn kit_swap_fades_ringing_voices_without_click() {
             prev = v;
         }
     }
-    // The fade must have reached silence by RELEASE_SAMPLES.
+    // The fade must have reached silence by the end of the swap fade.
     assert!(
         prev.abs() <= tol,
         "fade should end at silence, got {prev}"
@@ -152,7 +166,7 @@ fn note_after_swap_plays_new_kit() {
     sampler.try_swap_kit();
 
     // Let the old voice fade out completely.
-    for _ in 0..=RELEASE_SAMPLES / FRAMES {
+    for _ in 0..=swap_frames() / FRAMES {
         let _ = render_block(&mut sampler, &params);
     }
 
@@ -168,26 +182,38 @@ fn note_after_swap_plays_new_kit() {
 }
 
 #[test]
-fn second_swap_mid_fade_cuts_retired_voices() {
+fn second_swap_mid_fade_fades_both_kits() {
     let (mut sampler, params, tx, port) = swap_setup();
     let _ = render_block(&mut sampler, &params);
 
-    // First swap starts the fade; second swap lands before it ends, so
-    // the retired voices lose their data and must be cut.
+    // Kit 1's tom is fading after the first swap; a tom struck on kit 2
+    // is sounding when the second swap lands, before the first fade has
+    // run at all. Both voices must fade — kit 1's used to be cut here,
+    // because the sampler could hold only one retired kit.
     tx.send(dc_pads(0.5, FRAMES * 32)).unwrap();
     sampler.try_swap_kit();
-    let _ = render_block(&mut sampler, &params);
+    sampler.note_on(drum_map::TOM_LOW, 1.0);
     tx.send(dc_pads(0.25, FRAMES * 32)).unwrap();
     sampler.try_swap_kit();
 
-    // No voice was playing kit 2, so the output is silent — and the
-    // cut voices from kit 1 must not render against kit 3's data.
     let out = render_block(&mut sampler, &params);
+    let first = out[port].0[0];
+    assert!(
+        (first - 1.5).abs() < 1e-3,
+        "both retired voices should still sound (kit 1's 1.0 + kit 2's 0.5), got {first}"
+    );
+    // Two fades of the same length summed: the steepest step is theirs
+    // added.
+    let tol = fade_step(1.5, swap_frames());
+    let mut prev = 1.5f32;
     for (i, &v) in out[port].0.iter().enumerate() {
-        assert!(v.abs() < 1e-6, "expected silence after double swap at {i}: {v}");
+        assert!((v - prev).abs() <= tol, "click at sample {i}: {prev} -> {v}");
+        prev = v;
     }
+    assert!(swap_frames() < FRAMES);
+    assert!(prev.abs() < 1e-6, "both fades should have ended, got {prev}");
 
-    // A fresh hit still works against kit 3.
+    // A fresh hit plays kit 3.
     sampler.note_on(drum_map::TOM_LOW, 1.0);
     let after = render_block(&mut sampler, &params);
     assert!(

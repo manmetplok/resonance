@@ -2,8 +2,35 @@
 
 pub const MAX_VOICES: usize = 64;
 
-/// Fade-out length in samples to avoid clicks when a voice is choked or released.
-pub const RELEASE_SAMPLES: usize = 1024;
+/// Choke / release fade, in milliseconds: what a choke group (the open
+/// hat cut by a closed or pedal hat) and a host choke fade over. Long
+/// enough that a ringing cymbal is cut without a click, short enough
+/// that the cut still reads as a cut.
+pub const RELEASE_FADE_MS: f32 = 25.0;
+
+/// Fade for voices still sounding when a new kit is swapped in, in
+/// milliseconds. Kept short: those voices read the retired kit, which
+/// is held in memory until they end. (CLAP `reset` does not fade: see
+/// `DrumSampler::reset`.)
+pub const SWAP_FADE_MS: f32 = 5.0;
+
+/// A fade length in milliseconds as a whole number of frames at
+/// `sample_rate`, never less than one — so a fade lasts the same time at
+/// every rate rather than the same number of samples.
+pub fn fade_frames(ms: f32, sample_rate: f32) -> u32 {
+    ((ms * sample_rate / 1000.0).round() as u32).max(1)
+}
+
+/// The equal-power fade-out curve: `cos(t · π/2)` for `t` in `0..=1`.
+/// Its slope is zero where the fade starts, so the gain has no corner at
+/// the moment a choke lands, and the power `cos²` falls linearly.
+pub fn fade_out_gain(t: f32) -> f32 {
+    if t >= 1.0 {
+        0.0
+    } else {
+        (t * std::f32::consts::FRAC_PI_2).cos()
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum VoiceState {
@@ -72,11 +99,17 @@ pub struct Voice {
     /// against the retired kit's sample data instead of the current
     /// `pads`.
     pub retired: bool,
+    /// Which retired kit a `retired` voice reads (an index into the
+    /// sampler's retired-kit slots). Meaningless while `retired` is false.
+    pub retired_slot: u8,
     pub state: VoiceState,
     /// The gain at the moment release was triggered (for fade-out).
     pub release_gain: f32,
     /// Number of samples elapsed since release was triggered.
     pub release_pos: usize,
+    /// Length of the release fade in samples, fixed when it starts (from
+    /// a time in ms and the sample rate, see [`fade_frames`]).
+    pub release_len: usize,
     /// Monotonic counter for voice-stealing (oldest first).
     pub age: u64,
 }
@@ -104,20 +137,46 @@ impl Voice {
             position: 0,
             choke_group: None,
             retired: false,
+            retired_slot: 0,
             state: VoiceState::Playing,
             release_gain: 0.0,
             release_pos: 0,
+            release_len: 1,
             age: 0,
         }
     }
 
-    /// Trigger release on this voice (fade-out to avoid clicks).
-    pub fn trigger_release(&mut self) {
+    /// Trigger release on this voice (fade-out to avoid clicks), over
+    /// `len` frames. A voice already releasing keeps its fade.
+    pub fn trigger_release(&mut self, len: u32) {
         if self.state == VoiceState::Playing {
             self.state = VoiceState::Releasing;
             self.release_gain = self.base_gain;
             self.release_pos = 0;
+            self.release_len = len.max(1) as usize;
         }
+    }
+
+    /// Fade this voice out over at most `len` frames, starting from the
+    /// gain it is at now. A voice already releasing restarts its fade
+    /// from where it stands, never lengthening it: a 25 ms choke that a
+    /// 3 ms steal lands on ends within 3 ms, and one with 1 ms left still
+    /// ends in 1 ms.
+    pub fn force_fade(&mut self, len: u32) {
+        let len = len.max(1) as usize;
+        let len = match self.state {
+            VoiceState::Playing => len,
+            VoiceState::Releasing => len.min(self.release_len.saturating_sub(self.release_pos)),
+        };
+        self.release_gain = self.current_gain();
+        self.state = VoiceState::Releasing;
+        self.release_pos = 0;
+        self.release_len = len.max(1);
+    }
+
+    /// True once a releasing voice has run its fade to the end.
+    pub fn release_done(&self) -> bool {
+        self.state == VoiceState::Releasing && self.release_pos >= self.release_len
     }
 
     /// Compute the current gain for this voice, accounting for release envelope.
@@ -126,11 +185,11 @@ impl Voice {
         match self.state {
             VoiceState::Playing => self.base_gain,
             VoiceState::Releasing => {
-                if self.release_pos >= RELEASE_SAMPLES {
+                if self.release_pos >= self.release_len {
                     0.0
                 } else {
-                    let t = self.release_pos as f32 / RELEASE_SAMPLES as f32;
-                    self.release_gain * (1.0 - t)
+                    let t = self.release_pos as f32 / self.release_len as f32;
+                    self.release_gain * fade_out_gain(t)
                 }
             }
         }
