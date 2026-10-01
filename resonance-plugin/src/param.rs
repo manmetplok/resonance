@@ -103,8 +103,12 @@ pub trait Param: Send + Sync {
     /// the current value. For controls that are session/instance state
     /// rather than sound (the amp's `file_select`, a slot into this
     /// machine's library — the model travels by content id instead).
+    ///
+    /// Defaults to [`Param::state_excluded`]: a parameter the state leaves
+    /// out is left out of every preset too, whoever implements the trait
+    /// (a preset is a form of the state). An override must keep that.
     fn preset_excluded(&self) -> bool {
-        false
+        self.state_excluded()
     }
     /// Whether a host may automate this parameter — CLAP's
     /// `IS_AUTOMATABLE`, which the bridge sets for every parameter that
@@ -388,7 +392,9 @@ impl Param for FloatParam {
         self.hidden
     }
     fn preset_excluded(&self) -> bool {
-        self.preset_excluded
+        // A state-excluded param is never in a preset either (see the
+        // trait doc), whichever builder set the flags.
+        self.preset_excluded || self.state_excluded
     }
     fn is_automatable(&self) -> bool {
         self.automatable
@@ -622,7 +628,9 @@ impl Param for IntParam {
         self.hidden
     }
     fn preset_excluded(&self) -> bool {
-        self.preset_excluded
+        // A state-excluded param is never in a preset either (see the
+        // trait doc), whichever builder set the flags.
+        self.preset_excluded || self.state_excluded
     }
     fn is_automatable(&self) -> bool {
         self.automatable

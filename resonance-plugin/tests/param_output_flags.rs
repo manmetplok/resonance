@@ -304,3 +304,79 @@ fn a_load_while_active_keeps_the_value_the_plugin_derived_from_it() {
     instance.deactivate(processor);
     assert_eq!(get_value(&mut instance, "selector"), 5.0);
 }
+
+/// A `Param` implementation that opts out of the state alone still stays
+/// out of presets: the trait's default `preset_excluded` follows
+/// `state_excluded`, so no implementor can leave a state-excluded value
+/// in a preset by forgetting the second override.
+#[test]
+fn state_excluded_implies_preset_excluded_for_any_implementor() {
+    struct OnlyStateExcluded;
+    impl Param for OnlyStateExcluded {
+        fn id(&self) -> &str {
+            "only"
+        }
+        fn name(&self) -> &str {
+            "Only"
+        }
+        fn get_plain(&self) -> f64 {
+            0.0
+        }
+        fn set_plain(&self, _v: f64) {}
+        fn default_plain(&self) -> f64 {
+            0.0
+        }
+        fn min_plain(&self) -> f64 {
+            0.0
+        }
+        fn max_plain(&self) -> f64 {
+            1.0
+        }
+        fn display(&self, value: f64) -> String {
+            value.to_string()
+        }
+        fn parse(&self, text: &str) -> Option<f64> {
+            text.parse().ok()
+        }
+        fn state_excluded(&self) -> bool {
+            true
+        }
+    }
+    assert!(OnlyStateExcluded.preset_excluded());
+
+    // The builders agree, whichever order they are called in.
+    let read_only = FloatParam::new("p", "P", 0.0, FloatRange::Linear { min: 0.0, max: 1.0 })
+        .read_only();
+    assert!(read_only.state_excluded() && read_only.preset_excluded());
+}
+
+/// An active-path `flush` stores the value the param LANDED on — clamped
+/// to its range, rounded for an int — not the raw wire value, so the
+/// host never reads back (or re-saves) a number the plugin did not take.
+#[test]
+fn an_active_flush_mirrors_the_landed_value_not_the_wire_value() {
+    let mut instance = instance();
+    let ext = params_ext(&instance);
+    let mut processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activate");
+    let mut input = EventBuffer::new();
+    for (id, value) in [("gain", 7.5), ("selector", 3.4)] {
+        input.push(&ParamValueEvent::new(
+            0,
+            clap_id(id),
+            Pckn::match_all(),
+            value,
+            Cookie::empty(),
+        ));
+    }
+    let mut output = EventBuffer::new();
+    ext.flush_active(
+        &mut processor.plugin_handle(),
+        &input.as_input(),
+        &mut output.as_output(),
+    );
+    assert_eq!(get_value(&mut instance, "gain"), 1.0, "clamped to max");
+    assert_eq!(get_value(&mut instance, "selector"), 3.0, "rounded");
+    instance.deactivate(processor);
+}

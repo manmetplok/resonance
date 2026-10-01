@@ -162,8 +162,14 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             if self.shared.param_metas[slot].is_read_only {
                                 continue;
                             }
+                            // Store what the param LANDED on (clamped,
+                            // rounded, through f32), not the wire value —
+                            // see the main-thread `flush` above.
+                            let mut landed = e.value();
                             if slot < self.plugin.param_count() {
-                                self.plugin.param(slot).set_plain(e.value());
+                                let param = self.plugin.param(slot);
+                                param.set_plain(e.value());
+                                landed = param.get_plain();
                             }
                             self.shared.note_host_param_change(slot);
                             // Mirror into the shared atomics, exactly as
@@ -176,7 +182,7 @@ impl<P: ResonancePlugin> PluginAudioProcessorParams for ClapAudioProcessor<'_, P
                             // delivers a change via `flush` instead of
                             // `process` would move the DSP but still
                             // report and persist the old value.
-                            self.shared.set_value(slot, e.value());
+                            self.shared.set_value(slot, landed);
                         }
                     }
                 }

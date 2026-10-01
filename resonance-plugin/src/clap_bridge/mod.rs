@@ -193,7 +193,7 @@ impl<P: ResonancePlugin> DefaultPluginFactory for ClapBridge<P> {
                 default: p.default_plain(),
                 is_stepped: p.is_stepped(),
                 is_hidden: p.is_hidden(),
-                preset_excluded: p.preset_excluded(),
+                preset_excluded: p.preset_excluded() || p.state_excluded(),
                 is_automatable: p.is_automatable() && !p.is_read_only(),
                 is_read_only: p.is_read_only(),
                 state_excluded: p.state_excluded(),
