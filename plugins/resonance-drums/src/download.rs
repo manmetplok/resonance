@@ -5,12 +5,19 @@
 //! - The editor pushes [`Command`]s via an `mpsc::Sender`.
 //! - The worker drains them on a dedicated thread.
 //! - Shared [`State`] behind `Arc<Mutex<…>>` is polled by the UI each frame.
+//!
+//! Dropping the [`WorkerHandle`] never waits on the network: it raises a
+//! cancel flag the transfer checks between chunks, and detaches the
+//! thread if a transfer is in flight (it then stops at the next chunk or
+//! the read timeout, and removes its `.part` file on the way out).
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -24,12 +31,15 @@ use resonance_common::registry::{self, ContentType, InstalledItem};
 /// Base URL of the drumkit distribution server.
 const INDEX_URL: &str = "https://resonance.plok.org/index.json";
 
-/// Subdirectory under the user's data dir where extracted kits live.
-const DRUMKITS_SUBDIR: &str = "resonance/drumkits";
+/// How long a read may wait for the next byte before the transfer is
+/// abandoned as stalled. Per read, not per transfer: a 5 GiB kit takes as
+/// long as it takes, but a connection that goes silent fails after this.
+pub const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Resolve the per-user directory where drumkits are stored.
+/// Resolve the per-user directory where drumkits are stored. One
+/// definition, shared with the loader's kit naming.
 pub fn drumkits_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|d| d.join(DRUMKITS_SUBDIR))
+    crate::kit_loader::drumkits_root()
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +133,11 @@ pub struct WorkerHandle {
     tx: Sender<Command>,
     pub state: Arc<Mutex<State>>,
     join: Option<JoinHandle<()>>,
+    /// Raised by `drop`; the worker checks it before each command and
+    /// between body chunks, and abandons what it is doing.
+    cancel: Arc<AtomicBool>,
+    /// True while the worker is on the network (index fetch or download).
+    busy: Arc<AtomicBool>,
 }
 
 impl WorkerHandle {
@@ -132,59 +147,115 @@ impl WorkerHandle {
 }
 
 impl Drop for WorkerHandle {
+    /// Never blocks on the network. Closing a project during a 5 GiB
+    /// download used to wait for the download to finish.
+    ///
+    /// `cancel` is raised before `busy` is read and the worker raises
+    /// `busy` before it reads `cancel` (all `SeqCst`), so either the
+    /// worker sees the cancel and returns at once — the join is then
+    /// short — or we see it busy and detach.
     fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
         let _ = self.tx.send(Command::Shutdown);
         if let Some(j) = self.join.take() {
-            let _ = j.join();
+            if self.busy.load(Ordering::SeqCst) {
+                // Detached: it notices the cancel at its next chunk (or
+                // the read timeout), deletes its `.part` and exits.
+                drop(j);
+            } else {
+                let _ = j.join();
+            }
         }
     }
 }
 
 pub fn spawn() -> WorkerHandle {
+    spawn_with_index(INDEX_URL.to_string())
+}
+
+/// [`spawn`] against another index URL; kit files resolve relative to
+/// it. Test hook: the download tests serve both from a local listener.
+#[doc(hidden)]
+pub fn spawn_with_index(index_url: String) -> WorkerHandle {
     let (tx, rx) = mpsc::channel();
     let state = Arc::new(Mutex::new(State::default()));
-    let state_for_thread = state.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let busy = Arc::new(AtomicBool::new(false));
+    let worker = Worker {
+        index_url,
+        state: state.clone(),
+        cancel: cancel.clone(),
+        busy: busy.clone(),
+    };
 
     let join = std::thread::Builder::new()
         .name("drums-download".into())
-        .spawn(move || worker_loop(rx, state_for_thread))
+        .spawn(move || worker_loop(rx, worker))
         .expect("spawn drums-download worker");
 
     WorkerHandle {
         tx,
         state,
         join: Some(join),
+        cancel,
+        busy,
     }
+}
+
+/// What the worker thread owns.
+struct Worker {
+    index_url: String,
+    state: Arc<Mutex<State>>,
+    cancel: Arc<AtomicBool>,
+    busy: Arc<AtomicBool>,
 }
 
 // ---------------------------------------------------------------------------
 // Worker loop
 // ---------------------------------------------------------------------------
 
-fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>) {
+fn worker_loop(rx: Receiver<Command>, worker: Worker) {
     let config = ureq::Agent::config_builder()
-        .timeout_connect(Some(std::time::Duration::from_secs(10)))
-        // No global read timeout — large downloads need more time.
+        .timeout_connect(Some(Duration::from_secs(10)))
+        .timeout_send_request(Some(READ_TIMEOUT))
+        .timeout_recv_response(Some(READ_TIMEOUT))
+        // No total body budget — large downloads need more time. A
+        // stalled body is caught per read by `ReadTimeout` instead.
         .build();
-    let agent: ureq::Agent = config.into();
+    let agent = ureq::Agent::with_parts(
+        config,
+        read_timeout::ReadTimeout::new(READ_TIMEOUT),
+        ureq::unversioned::resolver::DefaultResolver::default(),
+    );
+    let state = &worker.state;
 
     loop {
         let cmd = match rx.recv() {
             Ok(c) => c,
             Err(_) => return,
         };
+        if matches!(cmd, Command::Shutdown) {
+            return;
+        }
+        // Raise `busy` before looking at `cancel` — the other half of
+        // the ordering `WorkerHandle::drop` relies on.
+        worker.busy.store(true, Ordering::SeqCst);
+        if worker.cancel.load(Ordering::SeqCst) {
+            worker.busy.store(false, Ordering::SeqCst);
+            return;
+        }
         match cmd {
-            Command::Shutdown => return,
+            Command::Shutdown => {}
             Command::FetchIndex => {
                 state.lock().status = Status::FetchingIndex;
-                match fetch_index(&agent) {
+                match fetch_index(&agent, &worker.index_url) {
                     Ok(index) => {
                         let mut s = state.lock();
                         s.index = Some(index);
                         s.status = Status::Idle;
                         s.last_error = None;
                     }
-                    Err(e) => set_error(&state, &e),
+                    Err(e) => set_error(state, &e),
                 }
             }
             Command::Download(kit) => {
@@ -193,7 +264,7 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>) {
                     downloaded_bytes: 0,
                     total_bytes: 0,
                 };
-                match download_and_extract(&agent, &kit, &state) {
+                match download_and_extract(&agent, &kit, &worker) {
                     Ok(dest) => {
                         // Mark in the shared registry.
                         let _ = registry::mark_installed(InstalledItem {
@@ -206,10 +277,11 @@ fn worker_loop(rx: Receiver<Command>, state: Arc<Mutex<State>>) {
                         s.status = Status::Done(kit.name.clone());
                         s.last_error = None;
                     }
-                    Err(e) => set_error(&state, &e),
+                    Err(e) => set_error(state, &e),
                 }
             }
         }
+        worker.busy.store(false, Ordering::SeqCst);
     }
 }
 
@@ -223,9 +295,9 @@ fn set_error(state: &Arc<Mutex<State>>, msg: &str) {
 // Network helpers
 // ---------------------------------------------------------------------------
 
-fn fetch_index(agent: &ureq::Agent) -> Result<ServerIndex, String> {
+fn fetch_index(agent: &ureq::Agent, index_url: &str) -> Result<ServerIndex, String> {
     let mut resp = agent
-        .get(INDEX_URL)
+        .get(index_url)
         .call()
         .map_err(|e| format!("fetch index: {e}"))?;
     let index: ServerIndex = resp
@@ -239,13 +311,14 @@ fn fetch_index(agent: &ureq::Agent) -> Result<ServerIndex, String> {
 fn download_and_extract(
     agent: &ureq::Agent,
     kit: &ServerKit,
-    state: &Arc<Mutex<State>>,
+    worker: &Worker,
 ) -> Result<PathBuf, String> {
     // Build the download URL relative to the index URL base.
-    let base = INDEX_URL
+    let index_url = worker.index_url.as_str();
+    let base = index_url
         .rsplit_once('/')
         .map(|(base, _)| base)
-        .unwrap_or(INDEX_URL);
+        .unwrap_or(index_url);
     let url = format!("{base}/{}", kit.file);
 
     let resp = agent
@@ -265,8 +338,26 @@ fn download_and_extract(
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
 
     let tmp_path = dir.join(format!(".{}.zip.part", sanitize(&kit.name)));
+    // From here on every way out removes the partial file: a cancel, a
+    // network or disk error, a bad zip, and success alike.
+    let result = stream_and_extract(resp, kit, worker, &tmp_path, &dir, total);
+    let _ = std::fs::remove_file(&tmp_path);
+    result
+}
+
+/// Stream the body into `tmp_path` and extract it. The caller removes
+/// `tmp_path` whatever this returns.
+fn stream_and_extract(
+    resp: ureq::http::Response<ureq::Body>,
+    kit: &ServerKit,
+    worker: &Worker,
+    tmp_path: &Path,
+    dir: &Path,
+    total: u64,
+) -> Result<PathBuf, String> {
+    let state = &worker.state;
     let mut tmp_file =
-        std::fs::File::create(&tmp_path).map_err(|e| format!("create temp file: {e}"))?;
+        std::fs::File::create(tmp_path).map_err(|e| format!("create temp file: {e}"))?;
 
     // Read in 256 KiB chunks, updating progress.
     let mut reader = resp.into_body().into_reader();
@@ -274,6 +365,9 @@ fn download_and_extract(
     let mut downloaded: u64 = 0;
 
     loop {
+        if worker.cancel.load(Ordering::SeqCst) {
+            return Err(format!("download of {} cancelled", kit.name));
+        }
         let n = reader
             .read(&mut buf)
             .map_err(|e| format!("read body: {e}"))?;
@@ -297,10 +391,7 @@ fn download_and_extract(
     state.lock().status = Status::Extracting(kit.name.clone());
 
     let dest = dir.join(sanitize(&kit.name));
-    extract_zip(&tmp_path, &dest)?;
-
-    // Clean up the temp file.
-    let _ = std::fs::remove_file(&tmp_path);
+    extract_zip(tmp_path, &dest)?;
 
     Ok(dest)
 }
@@ -351,4 +442,108 @@ fn sanitize(name: &str) -> String {
         out.push_str("kit");
     }
     out
+}
+
+/// A per-read timeout for ureq 3, which only offers a total budget for a
+/// response body (`ConfigBuilder::timeout_recv_body`) — unusable for a
+/// multi-GiB download. This connector wraps ureq's default chain (TCP,
+/// proxies, TLS) and caps every wait on the socket at [`READ_TIMEOUT`],
+/// so a connection that goes silent fails instead of hanging the worker
+/// forever.
+///
+/// Built on `ureq::unversioned`, which is outside ureq's semver promise:
+/// a ureq update that breaks this fails the build here, not at runtime.
+mod read_timeout {
+    use std::fmt;
+    use std::time::Duration;
+
+    use ureq::unversioned::transport::time::Duration as UreqDuration;
+    use ureq::unversioned::transport::{
+        Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+    };
+    use ureq::Error;
+
+    pub struct ReadTimeout {
+        inner: DefaultConnector,
+        limit: Duration,
+    }
+
+    impl ReadTimeout {
+        pub fn new(limit: Duration) -> Self {
+            Self {
+                inner: DefaultConnector::new(),
+                limit,
+            }
+        }
+    }
+
+    impl fmt::Debug for ReadTimeout {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ReadTimeout").field("limit", &self.limit).finish()
+        }
+    }
+
+    impl Connector<()> for ReadTimeout {
+        type Out = Capped;
+
+        fn connect(
+            &self,
+            details: &ConnectionDetails,
+            chained: Option<()>,
+        ) -> Result<Option<Self::Out>, Error> {
+            Ok(self.inner.connect(details, chained)?.map(|inner| Capped {
+                inner,
+                limit: self.limit,
+            }))
+        }
+    }
+
+    pub struct Capped {
+        inner: Box<dyn Transport>,
+        limit: Duration,
+    }
+
+    impl fmt::Debug for Capped {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("Capped").field("inner", &self.inner).finish()
+        }
+    }
+
+    impl Capped {
+        /// The earlier of ureq's own deadline and our per-read limit.
+        fn cap(&self, timeout: NextTimeout) -> NextTimeout {
+            if timeout.after.is_not_happening() || *timeout.after > self.limit {
+                NextTimeout {
+                    after: UreqDuration::Exact(self.limit),
+                    reason: timeout.reason,
+                }
+            } else {
+                timeout
+            }
+        }
+    }
+
+    impl Transport for Capped {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            self.inner.buffers()
+        }
+
+        fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), Error> {
+            let timeout = self.cap(timeout);
+            self.inner.transmit_output(amount, timeout)
+        }
+
+        fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, Error> {
+            let timeout = self.cap(timeout);
+            self.inner.await_input(timeout)
+        }
+
+        fn is_open(&mut self) -> bool {
+            self.inner.is_open()
+        }
+
+        fn is_tls(&self) -> bool {
+            self.inner.is_tls()
+        }
+    }
 }

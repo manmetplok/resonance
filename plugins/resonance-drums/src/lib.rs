@@ -14,7 +14,8 @@ use resonance_plugin::*;
 pub mod articulation;
 pub mod choice;
 #[cfg(feature = "editor")]
-pub(crate) mod download;
+#[doc(hidden)]
+pub mod download;
 pub mod drum_map;
 pub mod dsp;
 #[cfg(feature = "editor")]
