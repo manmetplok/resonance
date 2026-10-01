@@ -238,7 +238,7 @@ fn admin(set: &StreamSet, ring: &Ring, side: &mut ReaderSide) -> bool {
     }
     let file = File::open(&source.path)
         .ok()
-        .filter(|f| f.metadata().is_ok_and(|m| m.len() == source.file_len));
+        .filter(|f| f.metadata().is_ok_and(|m| source.same_file(&m)));
     // The ring's storage, allocated the first time it is served — here,
     // before any frame is published, never on the audio thread.
     if ring.data_or_alloc().1 {

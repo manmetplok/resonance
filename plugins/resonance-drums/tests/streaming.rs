@@ -601,6 +601,42 @@ fn a_stalled_reader_costs_silence_for_the_missing_frames_and_recovers() {
     pool.shutdown();
 }
 
+/// A file rewritten after the kit loaded — same length, other samples, a
+/// later modification time — is another file: its tail is not read, and
+/// the stream fails instead.
+#[test]
+fn a_file_rewritten_at_the_same_length_is_not_streamed() {
+    let fixture = Fixture::new("rewritten", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = fixture.overhead[0].clone();
+    let pads = single_voice_kit(&cache, &path, 8_192);
+    let len = std::fs::metadata(&path).unwrap().len();
+    write_wav(&path, 2, 48_000, 48_000, 99);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), len, "same length");
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(10))
+        .unwrap();
+
+    let pool = ReaderPool::new(1);
+    let (mut s, _t) = sampler(pads, &pool, RenderMode::Realtime);
+    let mut ports = Ports::new(128);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    ports.render(&mut s, 128, &DrumParams::default(), &hit);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while s.stream_set().rings_failed() == 0 {
+        assert!(Instant::now() < deadline, "the stream never failed");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    pool.shutdown();
+}
+
 /// The reader pool is shut down mid-render with voices on their tails:
 /// every block still returns at once, through new hits (whose rings are
 /// never handed back, until none is free), steals, chokes, a kit swap

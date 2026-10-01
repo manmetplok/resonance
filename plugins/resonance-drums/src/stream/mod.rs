@@ -83,6 +83,7 @@ pub mod reader;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::SystemTime;
 
 use parking_lot::Mutex;
 use resonance_common::WavTail;
@@ -186,10 +187,18 @@ pub(crate) const WPOS_FRAMES: u64 = WPOS_FAILED - 1;
 /// how to read any of its frames at the decode rate.
 pub struct TailSource {
     pub path: PathBuf,
-    /// The file's length when it was decoded; a file of another length
-    /// is a different file, and is not read.
+    /// The file's length and modification time when it was decoded; a
+    /// file that differs in either is a different file, and is not read.
     pub file_len: u64,
+    pub modified: Option<SystemTime>,
     pub tail: WavTail,
+}
+
+impl TailSource {
+    /// Whether `meta` describes the file this tail was split from.
+    pub fn same_file(&self, meta: &std::fs::Metadata) -> bool {
+        meta.len() == self.file_len && meta.modified().ok() == self.modified
+    }
 }
 
 /// One voice's stream: see the module docs for the protocol.
@@ -366,6 +375,18 @@ impl StreamSet {
                 r.active_gen.load(Ordering::Acquire) != 0
                     || !r.req.load(Ordering::Acquire).is_null()
                     || r.reader_gen.load(Ordering::Acquire) != 0
+            })
+            .count()
+    }
+
+    /// Rings whose current stream failed (its file gone or changed).
+    pub fn rings_failed(&self) -> usize {
+        self.rings
+            .iter()
+            .filter(|r| {
+                let gen = r.active_gen.load(Ordering::Acquire);
+                let wpos = r.wpos.load(Ordering::Acquire);
+                gen != 0 && (wpos >> 32) as u32 == gen && wpos & WPOS_FAILED != 0
             })
             .count()
     }
