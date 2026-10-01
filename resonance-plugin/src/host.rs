@@ -77,6 +77,13 @@ pub struct HostHandle {
     /// consumed on the main thread (`clap_host_params.rescan` is
     /// `[main-thread]`).
     params_rescan: AtomicBool,
+    /// True while the bridge is inside the plugin's `process()` call. A
+    /// rescan requested then is held back ([`Self::request_params_rescan`])
+    /// until the bridge has published the block's values.
+    in_process: AtomicBool,
+    /// A rescan requested while `in_process`: the bridge posts it after
+    /// the block, once the values it would re-read are in its mirror.
+    rescan_deferred: AtomicBool,
 }
 
 impl HostHandle {
@@ -96,6 +103,8 @@ impl HostHandle {
             gui_closed: AtomicU64::new(0),
             preset_dirty: AtomicBool::new(false),
             params_rescan: AtomicBool::new(false),
+            in_process: AtomicBool::new(false),
+            rescan_deferred: AtomicBool::new(false),
         })
     }
 
@@ -157,11 +166,43 @@ impl HostHandle {
     /// bridge calls `clap_host_params.rescan(VALUES | TEXT)` on its next
     /// main-thread callback, which is when a host re-reads its mirror.
     ///
-    /// Realtime-safe, like [`Self::set_latency_samples`]: one atomic swap,
+    /// Realtime-safe, like [`Self::set_latency_samples`]: a few atomics,
     /// and the host's `[thread-safe]` callback request only when no
     /// rescan is pending already. Callers that change a value often
     /// should still throttle (a progress per percent, not per file).
+    ///
+    /// # Ordering
+    ///
+    /// A host re-reads values as soon as it gets the rescan, and while the
+    /// plugin is active an ordinary param's value reaches what the host
+    /// reads only through the bridge's per-block push-back — which runs
+    /// *before* `process()`. So a rescan requested during `process()`
+    /// (from the audio thread, or any thread while a block is running) is
+    /// held until the bridge has pushed that block's values, right after
+    /// the plugin returns; the host never re-reads ahead of the value the
+    /// rescan announces. Outside a block it is posted at once: a
+    /// read-only or state-excluded param reads live
+    /// ([`crate::plugin::ParamTextSource::live_value`]), and while the
+    /// plugin is inactive the bridge publishes its values before telling
+    /// the host.
     pub fn request_params_rescan(&self) {
+        if self.in_process.load(Ordering::SeqCst) {
+            self.rescan_deferred.store(true, Ordering::SeqCst);
+            // Still inside the block: the bridge's `end_process` takes it.
+            // Otherwise the block ended in between and may have missed the
+            // flag — whoever swaps it out posts it, exactly once.
+            if self.in_process.load(Ordering::SeqCst)
+                || !self.rescan_deferred.swap(false, Ordering::SeqCst)
+            {
+                return;
+            }
+        }
+        self.post_params_rescan();
+    }
+
+    /// Latch the rescan for the main thread and ask for the callback that
+    /// delivers it.
+    fn post_params_rescan(&self) {
         if !self.params_rescan.swap(true, Ordering::AcqRel) {
             self.request_callback();
         }
@@ -224,6 +265,25 @@ impl HostHandle {
         if !self.preset_dirty.swap(true, Ordering::AcqRel) {
             self.request_callback();
         }
+    }
+
+    /// Audio thread: the plugin's `process()` is about to run.
+    pub(crate) fn begin_process(&self) {
+        self.in_process.store(true, Ordering::SeqCst);
+    }
+
+    /// Audio thread: the plugin's `process()` returned. True when a rescan
+    /// was requested during it; the caller publishes the block's values
+    /// and then calls [`Self::post_deferred_rescan`].
+    pub(crate) fn end_process(&self) -> bool {
+        self.in_process.store(false, Ordering::SeqCst);
+        self.rescan_deferred.swap(false, Ordering::SeqCst)
+    }
+
+    /// Audio thread: post a rescan [`Self::end_process`] handed over, now
+    /// that the values it announces are published.
+    pub(crate) fn post_deferred_rescan(&self) {
+        self.post_params_rescan();
     }
 
     /// Take the "parameter values changed under the host" flag.
