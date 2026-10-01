@@ -481,13 +481,34 @@ pub fn articulation_texts_differ(a: &KitPads, b: &KitPads) -> bool {
     texts(a) != texts(b)
 }
 
-/// Publish `pads` on `bridge` ([`KitPadsHandle::set`]) and, when the
-/// articulation parameters read differently with them, have the host
-/// re-read the parameters' text. Call it with the hand-off of the kit the
-/// pads describe, under `KitBridge::kit_handoff` where the caller holds it.
+/// Whether the host-visible report of `a` and `b` differs: what
+/// `com.resonance.kit-info` answers (built-in or kit, each pad's name and
+/// presence). The host re-reads it after a params rescan the plugin asks
+/// for, so a change here must ask for one.
+pub fn reported_pads_differ(a: &KitPads, b: &KitPads) -> bool {
+    a.from_kit != b.from_kit
+        || a.pads.len() != b.pads.len()
+        || a.pads
+            .iter()
+            .zip(&b.pads)
+            .any(|(x, y)| x.name != y.name || x.present != y.present)
+}
+
+/// Publish `pads` on `bridge` ([`KitPadsHandle::set`]) and have the host
+/// re-read what changed with them: the parameters' **text** when the
+/// articulation parameters read differently, else a **values** rescan when
+/// the pads it reports (`com.resonance.kit-info`) differ — a cached kit
+/// loads DONE -> DONE without moving `kit_load_progress`, so nothing else
+/// would make the host re-read the pads. Call it with the hand-off of the
+/// kit the pads describe, under `KitBridge::kit_handoff` where the caller
+/// holds it.
 pub fn publish(bridge: &crate::KitBridge, pads: Arc<KitPads>) {
+    let previous = bridge.kit_pads.current();
+    let report_changed = reported_pads_differ(&previous, &pads);
     if bridge.kit_pads.set(pads) {
         bridge.request_params_text_rescan();
+    } else if report_changed {
+        bridge.request_params_rescan();
     }
 }
 

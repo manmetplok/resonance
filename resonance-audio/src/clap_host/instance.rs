@@ -25,6 +25,10 @@ use crate::types::ParamInfo;
 
 use super::HostData;
 
+/// The most bytes [`ClapInstance::poll_kit_info`] allocates for a
+/// plugin's `com.resonance.kit-info` answer; a longer claim is dropped.
+pub const MAX_KIT_INFO_BYTES: usize = 1024 * 1024;
+
 /// Mutable reference to one stereo output port's buffer. Used by
 /// [`ClapInstance::process_multi`] to drive plugins that declare more than
 /// one output port (e.g. `resonance-drums` with its per-group outputs).
@@ -56,9 +60,11 @@ pub struct ClapInstance {
     /// of ours: which params its state leaves out. Read by
     /// [`ClapInstance::query_params`]; `None` for third-party plugins.
     pub(super) param_flags_ext: Option<*const resonance_common::param_flags::PluginParamFlags>,
-    /// The plugin's `com.resonance.kit-info` extension, when it is one of
-    /// our drum plugins: the pads of the kit it plays. Read by
-    /// [`ClapInstance::poll_kit_info`]; `None` for every other plugin.
+    /// The plugin's `com.resonance.kit-info` extension: the pads of the
+    /// kit it plays. The bridge exposes it only for a first-party plugin
+    /// with a kit to report (Resonance Drums); `None` for every other
+    /// plugin, third-party ones included. Read by
+    /// [`ClapInstance::poll_kit_info`].
     pub(super) kit_info_ext: Option<*const resonance_common::kit_info::PluginKitInfo>,
     /// The kit info last returned by [`ClapInstance::poll_kit_info`], to
     /// report only a change; `None` until the first read.
@@ -594,11 +600,12 @@ impl ClapInstance {
 
     /// The pads of the kit a drum plugin plays (`com.resonance.kit-info`),
     /// when they changed since the last call — the first call reports
-    /// whatever is there. `None` when nothing changed, and always for a
-    /// plugin without the extension. `[main-thread]`: the engine calls it
-    /// once after creating the instance and after every params rescan the
-    /// plugin asks for, which is when the extension's contract says the
-    /// pads may have moved.
+    /// whatever is there. `None` when nothing changed, when the plugin
+    /// reports nothing (or garbage, or more than [`MAX_KIT_INFO_BYTES`]),
+    /// and always for a plugin without the extension. `[main-thread]`: the
+    /// engine calls it once after creating the instance and after every
+    /// params rescan the plugin asks for, which is when the extension's
+    /// contract says the pads may have moved.
     pub fn poll_kit_info(&mut self) -> Option<resonance_common::kit_info::KitInfo> {
         self.kit_info_unread = false;
         let ext = self.kit_info_ext?;
@@ -610,6 +617,11 @@ impl ClapInstance {
         // SAFETY: `buf` holds `buf.len()` writable bytes.
         let mut len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
         if len > buf.len() {
+            // A plugin's claimed length is not trusted with an allocation
+            // of any size: a pad list is a few kilobytes.
+            if len > MAX_KIT_INFO_BYTES {
+                return None;
+            }
             buf.resize(len, 0);
             // SAFETY: as above, with the size the plugin asked for.
             len = unsafe { get(plugin, buf.as_mut_ptr(), buf.len()) };
@@ -623,6 +635,11 @@ impl ClapInstance {
         }
         self.last_kit_info = Some(info.clone());
         Some(info)
+    }
+
+    /// Whether the plugin exposes `com.resonance.kit-info` at all.
+    pub fn has_kit_info(&self) -> bool {
+        self.kit_info_ext.is_some()
     }
 
     /// Whether the engine should read the kit info now even without a

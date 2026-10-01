@@ -384,6 +384,43 @@ fn a_load_that_changes_the_articulation_labels_asks_for_a_text_rescan() {
     assert!(texts() > after_first);
 }
 
+/// Publishing pads the host would report differently (`com.resonance.
+/// kit-info`: built-in or kit, each pad's name and presence) asks for a
+/// values rescan even when no articulation text moved: a cached kit's
+/// hand-off goes DONE -> DONE without moving `kit_load_progress`, and the
+/// rescan is the only thing that has the host re-read the pads.
+#[test]
+fn publishing_other_pads_asks_for_a_rescan_even_with_unchanged_labels() {
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::sync::Arc;
+    let plugin = booted();
+    let bridge = &plugin.bridge;
+    let asks = &bridge.host_asks;
+    let total = || asks.value_rescans.load(Relaxed) + asks.text_rescans.load(Relaxed);
+
+    let kit = Arc::new(loaded("drummica_like").kit_pads.clone());
+    pad_map::publish(bridge, kit.clone());
+    let after_kit = total();
+
+    // Same articulation pairs, one pad renamed and another dropped.
+    let mut renamed = (*kit).clone();
+    renamed.pads[CLAP_PAD].name = "Hand Clap (renamed)".to_string();
+    renamed.pads[HAT_PAD].present = !renamed.pads[HAT_PAD].present;
+    assert!(!pad_map::articulation_texts_differ(&kit, &renamed));
+    let values_before = asks.value_rescans.load(Relaxed);
+    pad_map::publish(bridge, Arc::new(renamed.clone()));
+    assert!(
+        asks.value_rescans.load(Relaxed) > values_before,
+        "the host never re-reads the renamed pads"
+    );
+
+    // The same pads again (a fresh Arc): nothing to re-read.
+    let again = total();
+    pad_map::publish(bridge, Arc::new(renamed));
+    assert_eq!(total(), again, "an unchanged report asked again");
+    assert!(after_kit > 0);
+}
+
 // ---------------------------------------------------------------------------
 // `_meta.pads` and the Drummica table
 // ---------------------------------------------------------------------------

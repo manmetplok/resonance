@@ -632,6 +632,13 @@ format, the handler and the tool together.
   - `agent_plugin_lockstep.rs` must still pass.
   - That skill currently lives in `~/.claude/skills`, not in
     `resonance-agent-plugin/`. Decide in K9 whether it moves.
+  - **Decided (K9):** it stays user-level in `~/.claude/skills` for now. It
+    is a per-session production workflow tied to this user's setup (GUIDE
+    tracks, their instruments, their genre skills), not a per-craft skill,
+    so it does not fit the agent plugin's rule; the craft parts the plugin
+    needs (kit loading, `drum_kits_list`) live in the `drumming` skill and
+    the tool descriptions, which the lockstep test does cover. Revisit if
+    the workflow is generalised for other users.
 
 ## 9. Tests
 

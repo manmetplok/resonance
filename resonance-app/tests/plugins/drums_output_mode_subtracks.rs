@@ -2,10 +2,10 @@
 //! (drums-plugin-rework.md §8, E11/D5).
 //!
 //! In Stereo — the default for a new instance — every pad sums to the
-//! main output and the other seven ports are silent, so sub-tracks would
+//! main output and the other six ports are silent, so sub-tracks would
 //! be dead faders. Switching to Multi creates them in the same undoable
 //! edit; switching back keeps them (they are the user's tracks). A state
-//! load that lands in Multi (a v1 project, the "Drummica Kit" preset)
+//! load that lands in Multi (a v1 project's state, an undo's blob)
 //! creates the missing ones too. Other multi-output plugins keep getting
 //! theirs at once.
 
@@ -18,8 +18,8 @@ use resonance_audio::types::{
 
 const TRACK: u64 = 1;
 const DRUMS: PluginInstanceId = 50;
-const PORTS: [&str; 8] = [
-    "Main", "Kick", "Snare", "Hi-Hat", "Toms", "Cymbals", "Perc", "Overhead",
+const PORTS: [&str; 7] = [
+    "Main", "Kick", "Snare", "Toms", "Hats", "Cymbals", "Overhead",
 ];
 
 fn output_mode_id() -> u32 {
@@ -106,19 +106,19 @@ fn stereo_drums_get_no_sub_tracks_and_multi_creates_them() {
 
     set_output_mode(&mut app, 1.0);
     let subs = sub_tracks(&app);
-    assert_eq!(subs.len(), 7, "one per non-main port: {subs:?}");
+    assert_eq!(subs.len(), 6, "one per non-main port: {subs:?}");
     assert_eq!(subs[0].0, 1);
     assert!(subs[0].1.ends_with("Kick"), "{subs:?}");
 
     // Again: nothing doubles.
     set_output_mode(&mut app, 1.0);
-    assert_eq!(sub_tracks(&app).len(), 7);
+    assert_eq!(sub_tracks(&app).len(), 6);
 
     // Back to Stereo keeps the user's tracks.
     set_output_mode(&mut app, 0.0);
     assert_eq!(
         sub_tracks(&app).len(),
-        7,
+        6,
         "Stereo does not delete sub-tracks"
     );
 }
@@ -133,12 +133,12 @@ fn undoing_the_switch_to_multi_takes_its_sub_tracks_back_and_redo_restores_them(
         vec![output_mode(0.0)],
     );
     set_output_mode(&mut app, 1.0);
-    assert_eq!(sub_tracks(&app).len(), 7);
+    assert_eq!(sub_tracks(&app).len(), 6);
     let _ = app.update(Message::Undo);
     assert!(sub_tracks(&app).is_empty(), "{:?}", sub_tracks(&app));
     assert_eq!(app.test_plugin_param(DRUMS, output_mode_id()), Some(0.0));
     let _ = app.update(Message::Redo);
-    assert_eq!(sub_tracks(&app).len(), 7, "redo brings them back");
+    assert_eq!(sub_tracks(&app).len(), 6, "redo brings them back");
     assert_eq!(app.test_plugin_param(DRUMS, output_mode_id()), Some(1.0));
 }
 
@@ -151,7 +151,7 @@ fn a_state_load_that_lands_in_multi_creates_the_sub_tracks() {
         "com.resonance.drums",
         vec![output_mode(0.0)],
     );
-    // A v1 state (or the "Drummica Kit" preset) recalled Multi; the
+    // A v1 state recalled Multi (presets leave output_mode alone); the
     // plugin's rescan reports it.
     app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
         instance_id: DRUMS,
@@ -161,7 +161,7 @@ fn a_state_load_that_lands_in_multi_creates_the_sub_tracks() {
             text: "Multi".to_owned(),
         }],
     });
-    assert_eq!(sub_tracks(&app).len(), 7);
+    assert_eq!(sub_tracks(&app).len(), 6);
 }
 
 #[test]
@@ -173,13 +173,59 @@ fn drums_added_in_multi_and_other_multi_out_plugins_get_sub_tracks_at_once() {
         "com.resonance.drums",
         vec![output_mode(1.0)],
     );
-    assert_eq!(sub_tracks(&app).len(), 7);
+    assert_eq!(sub_tracks(&app).len(), 6);
 
     let mut other = self::app();
     add(&mut other, 51, "com.example.multiout", Vec::new());
     assert_eq!(
         sub_tracks(&other).len(),
-        7,
+        6,
         "not a drums instance: as before"
     );
+}
+
+#[test]
+fn a_sub_track_deleted_in_multi_stays_deleted_through_rescans() {
+    use resonance_app::message::TrackMessage;
+    let mut app = app();
+    add(
+        &mut app,
+        DRUMS,
+        "com.resonance.drums",
+        vec![output_mode(0.0)],
+    );
+    set_output_mode(&mut app, 1.0);
+    assert_eq!(sub_tracks(&app).len(), 6);
+
+    let kick = app
+        .test_tracks()
+        .iter()
+        .find(|t| {
+            t.sub_track
+                .is_some_and(|l| l.parent_track_id == TRACK && l.output_port_index == 1)
+        })
+        .map(|t| t.id)
+        .expect("the Kick sub-track");
+    let _ = app.update(Message::Track(TrackMessage::RequestRemoveTrack(kick)));
+    assert_eq!(sub_tracks(&app).len(), 5, "{:?}", sub_tracks(&app));
+
+    // A kit load's rescans — values (load progress, kit_select) and a
+    // full refresh — all with the instance still in Multi.
+    for _ in 0..3 {
+        app.test_apply_engine_event(AudioEvent::PluginParamValuesChanged {
+            instance_id: DRUMS,
+            values: vec![ParamValueUpdate {
+                id: output_mode_id(),
+                value: 1.0,
+                text: "Multi".to_owned(),
+            }],
+        });
+        app.test_apply_engine_event(AudioEvent::PluginParamsRefreshed {
+            instance_id: DRUMS,
+            params: vec![output_mode(1.0)],
+        });
+    }
+    let subs = sub_tracks(&app);
+    assert_eq!(subs.len(), 5, "the deleted Kick stays deleted: {subs:?}");
+    assert!(subs.iter().all(|(port, _)| *port != 1), "{subs:?}");
 }

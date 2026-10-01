@@ -119,6 +119,62 @@ fn the_picker_shows_the_kit_the_drums_report() {
     );
 }
 
+/// Two drum tracks: the picker describes the one the details panel
+/// shows, else the first in track order — and a report from the other
+/// instance does not move it.
+#[test]
+fn with_two_drum_tracks_the_picker_follows_the_selected_one() {
+    use resonance_app::compose::SelectedLane;
+    const OTHER: u64 = 71;
+    let mut app = app_with_drums("Garage");
+    app.test_add_track(2, TrackType::Instrument);
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: 2,
+        instance_id: OTHER,
+        plugin_name: "Resonance Drums".to_owned(),
+        clap_plugin_id: "com.resonance.drums".to_owned(),
+        clap_file_path: "/plugins/drums.clap".to_owned(),
+        params: vec![kit_select(0.0, "Drummica")],
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+    app.test_apply_engine_event(AudioEvent::PluginKitInfo {
+        instance_id: INSTANCE,
+        info: garage_info(),
+    });
+    let mut drummica = garage_info();
+    drummica.pads[0].name = "Kick Teppich".into();
+    app.test_apply_engine_event(AudioEvent::PluginKitInfo {
+        instance_id: OTHER,
+        info: drummica,
+    });
+
+    // Nothing selected: the first drum track in track order.
+    open_manager(&mut app);
+    assert_eq!(app.compose_state().kit_name.as_deref(), Some("Garage"));
+    assert_eq!(app.compose_state().kit_pads[0].name, "Bass Drum");
+
+    // The second drum track selected: its kit.
+    let _ = app.update(Message::Compose(ComposeMessage::SelectLane(
+        SelectedLane::Drums(2),
+    )));
+    open_manager(&mut app);
+    assert_eq!(app.compose_state().kit_name.as_deref(), Some("Drummica"));
+    assert_eq!(app.compose_state().kit_pads[0].name, "Kick Teppich");
+
+    // A new report from the first track's drums leaves it alone.
+    let mut changed = garage_info();
+    changed.pads[0].name = "Other Kick".into();
+    app.test_apply_engine_event(AudioEvent::PluginKitInfo {
+        instance_id: INSTANCE,
+        info: changed,
+    });
+    assert_eq!(app.compose_state().kit_name.as_deref(), Some("Drummica"));
+    assert_eq!(app.compose_state().kit_pads[0].name, "Kick Teppich");
+}
+
 #[test]
 fn a_new_kit_on_the_drums_updates_the_picker_without_reopening_it() {
     let mut app = app_with_drums("Garage");

@@ -19,7 +19,7 @@
 //! **When the host reads it:** once after creating the instance, and again
 //! after every parameter rescan the plugin requests
 //! (`clap_host_params.rescan`). A plugin whose pads change requests one —
-//! the drums do with every kit hand-off, through `kit_load_progress`.
+//! the drums do whenever a kit hand-off changes the pads they report.
 //!
 //! There is no host side. The id and layout live here so both ends read
 //! them from one place; pointers are `c_void` so neither end needs the

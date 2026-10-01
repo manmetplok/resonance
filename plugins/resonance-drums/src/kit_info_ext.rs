@@ -7,8 +7,9 @@
 //!
 //! The answer is read from [`crate::pad_map::KitPadsHandle`], which is
 //! published with every kit hand-off. The host re-reads it after each
-//! params rescan the plugin requests, and every hand-off moves
-//! `kit_load_progress`, which requests one.
+//! params rescan the plugin requests, and [`crate::pad_map::publish`]
+//! requests one whenever the pads it reports change — a cached kit's
+//! hand-off does not move `kit_load_progress`, so that alone is not enough.
 
 use std::sync::Arc;
 

@@ -60,7 +60,8 @@ impl ResonanceMcp {
                        and \"com.resonance.drums\" (the kit, for a drums track: pick its kit with \
                        drum_kits_list, then track_set_plugin_param kit_select = the kit's name \
                        and poll track_plugin_params until kit_load_progress reads 1.0 — it \
-                       loads with the transport stopped too; it starts in Stereo output, set \
+                       loads with the transport stopped too; stop polling if it stays 0 with \
+                       text \"empty slot\" or \"failed\"; it starts in Stereo output, set \
                        output_mode to \"Multi\" for per-drum sub-tracks). plugins_catalog \
                        lists the catalog and a wrong id is rejected with the valid ids. An empty \
                        instrument list means the first-party CLAP bundles were never built \
@@ -344,7 +345,10 @@ impl ResonanceMcp {
                        would have worked. Two library selectors with no choice list take a name \
                        as well: Resonance Amp's Model Select (a model from amp_models_list) and \
                        Resonance Drums' kit_select (a kit from drum_kits_list; then poll \
-                       kit_load_progress in track_plugin_params until it reads 1.0). \
+                       kit_load_progress in track_plugin_params until it reads 1.0 — it reads \
+                       0 right after the set; 0 with text \"empty slot\" or \"failed\" means \
+                       nothing will load, so stop polling. -1 is the built-in kit, -2 a parked \
+                       \"<name> (missing)\" / \"<name> (external)\" kit with no library slot). \
                        \
                        The min/max track_plugin_params reports are f64 renderings of f32 plugin \
                        declarations, so a bound often reads with a long tail of digits (a \
