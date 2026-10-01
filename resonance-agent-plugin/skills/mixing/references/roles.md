@@ -12,7 +12,7 @@ and the same word means different parts in different songs.
 
 | Evidence | Where it comes from | Points to |
 |---|---|---|
-| `kind` is `drums`, or `parent_id` points at a drum kit | `song_tracks` | drums. A kit's sub-tracks are its outputs; tell kick from snare from cymbals by their measured `bands` (kick: `low` dominant; snare: `mid`; cymbals and overheads: `high` and `air`). `meter_stems` folds sub-tracks into the kit's entry, so measure each one on its own with `meter_measure {target: {track_id: <sub-track>}}` |
+| `kind` is `drums`, or `parent_id` points at a drum kit | `song_tracks` | drums. A kit's sub-tracks are its outputs — only in Multi output mode: a new Resonance Drums is Stereo, one track with the whole kit on it, so set its output mode to Multi with `mcp__resonance__track_set_plugin_param` before working on single drums. Tell kick from snare from cymbals by their measured `bands` (kick: `low` dominant; snare: `mid`; cymbals and overheads: `high` and `air`). `meter_stems` folds sub-tracks into the kit's entry, so measure each one on its own with `meter_measure {target: {track_id: <sub-track>}}` |
 | `kind` is `vocal` | `song_tracks` | a vocal. With several, the lead is the one singing through most sections (`song_vocal`, `song_sections`); the rest are backing |
 | Notes mostly below about MIDI 52 (E3), one at a time | `song_notes` | bass |
 | Long notes held across chords, several at once | `song_notes` | pad (or sustained keys) |
