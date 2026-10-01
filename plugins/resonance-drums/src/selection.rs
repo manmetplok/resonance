@@ -45,15 +45,16 @@
 //! `kit_select`'s text, and the editor shows a banner (§5.3).
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
 #[cfg(feature = "editor")]
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use parking_lot::Mutex;
 use resonance_common::drumkit_library::{self, Entry, EntryStatus, Library};
 use serde_json::{Map, Value};
 
-use crate::kit_loader::{self, KitStatus};
+use crate::kit_loader::{self, KitLoadProgress, KitStatus, LoadPhase};
 use crate::KitBridge;
 
 /// `kit_select`'s value for "no kit chosen": the built-in kit plays.
@@ -362,6 +363,15 @@ pub struct KitSelection {
     /// sees a write as a change exactly once. Written under `act`; read
     /// lock-free (text, progress).
     acted: AtomicI32,
+    /// Why acting on `acted` loaded nothing: [`ACT_OK`], or an empty slot
+    /// or a kit that cannot load. Written under `act`, before `acted`.
+    act_error: AtomicU8,
+    /// The `kit_load_progress` stage the host was last told of
+    /// ([`note_progress`]).
+    reported_stage: AtomicU8,
+    /// The load generation the host was last asked to process for
+    /// ([`watch`]).
+    process_asked: AtomicU64,
     /// The kit [`PARKED_KIT`] stands for: the last kit with no slot this
     /// instance played or was asked for. Kept when the selection moves on,
     /// so writing [`PARKED_KIT`] returns to it.
@@ -413,6 +423,7 @@ impl KitSelection {
     pub fn new() -> Self {
         Self {
             acted: AtomicI32::new(NO_KIT),
+            reported_stage: AtomicU8::new(STAGE_DONE),
             ..Self::default()
         }
     }
@@ -608,14 +619,22 @@ pub fn apply_pending(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> 
 /// reader that sees `acted` caught up also sees the load it started.
 /// Under `act`.
 fn act(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
+    let sel = &bridge.params.selection;
+    sel.act_error.store(ACT_OK, Ordering::Release);
     let out = select(bridge, value);
-    bridge
-        .params
-        .selection
-        .acted
-        .store(value, Ordering::Release);
+    if out.is_err() && sel.act_error.load(Ordering::Acquire) == ACT_OK {
+        sel.act_error.store(ACT_FAILED, Ordering::Release);
+    }
+    sel.acted.store(value, Ordering::Release);
     out
 }
+
+/// [`KitSelection::act_error`]: the act loaded what it was asked to.
+const ACT_OK: u8 = 0;
+/// The act named an empty slot.
+const ACT_EMPTY_SLOT: u8 = 1;
+/// The act named a kit that cannot load.
+const ACT_FAILED: u8 = 2;
 
 /// Set `kit_select` to `value` and act on it even if it already holds it —
 /// the editor's pick (a pick of the playing kit reloads it, which retries
@@ -658,6 +677,7 @@ fn select(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String>
         // An empty slot loads nothing and unloads nothing: whatever plays
         // keeps playing (nam-model-library.md §5.1).
         let message = format!("no kit in slot {value}");
+        sel.act_error.store(ACT_EMPTY_SLOT, Ordering::Release);
         *bridge.kit_status.lock() = KitStatus::Error {
             message: message.clone(),
         };
@@ -733,6 +753,7 @@ fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
         from,
     });
     bridge.params.kit_select.set_value(PARKED_KIT);
+    sel.act_error.store(ACT_OK, Ordering::Release);
     sel.acted.store(PARKED_KIT, Ordering::Release);
     bridge.request_params_rescan();
 }
@@ -925,29 +946,257 @@ pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit
         (None, _, None) => NO_KIT,
     };
     bridge_params.kit_select.set_value(value);
+    sel.act_error.store(ACT_OK, Ordering::Release);
     sel.acted.store(value, Ordering::Release);
 }
 
-/// Throttle for asking the host to re-read `kit_load_progress`: report a
-/// change of a twentieth or more, and every arrival at 0 or 1.
-pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
-    if last == now {
-        return false;
+// ---------------------------------------------------------------------------
+// kit_load_progress
+// ---------------------------------------------------------------------------
+
+/// What `kit_load_progress` reports (§5.4): 0 while `kit_select` holds a
+/// value the instance has not acted on yet (a host write the watcher has
+/// not picked up — the load it starts has not begun, and the progress
+/// still describes the kit before it), and while the value it acted on
+/// loads nothing (an empty slot, a kit that cannot load); else the load's
+/// own fraction, 1.0 only once the audio thread took the kit.
+///
+/// Atomics only — the audio thread calls it every block, and a host's
+/// `get_value` on the main thread concurrently with it.
+pub fn reported_progress(params: &crate::params::DrumParams, progress: &KitLoadProgress) -> f32 {
+    let sel = &params.selection;
+    if params.kit_select.value() != sel.acted() || sel.act_error.load(Ordering::Acquire) != ACT_OK {
+        return 0.0;
     }
-    (now - last).abs() >= 0.05 || now == 1.0 || now == 0.0
+    progress.fraction()
+}
+
+/// Why `kit_load_progress` reads 0 without a load under way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressFailure {
+    /// `kit_select` names a slot with no kit in it: nothing loads, the
+    /// kit that played keeps playing.
+    EmptySlot,
+    /// The kit cannot load (a manifest error, a duplicate, no parked kit
+    /// to return to), or its load failed.
+    Failed,
+}
+
+/// Why `kit_load_progress` reads 0, when it is not "starting". Atomics only.
+pub fn progress_failure(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+) -> Option<ProgressFailure> {
+    let sel = &params.selection;
+    if params.kit_select.value() != sel.acted() {
+        return None;
+    }
+    match sel.act_error.load(Ordering::Acquire) {
+        ACT_EMPTY_SLOT => Some(ProgressFailure::EmptySlot),
+        ACT_FAILED => Some(ProgressFailure::Failed),
+        _ => (progress.snapshot().phase == LoadPhase::Failed).then_some(ProgressFailure::Failed),
+    }
+}
+
+/// `kit_load_progress`'s text for `value`: a percentage, or — at 0 — why,
+/// when nothing is loading: `"empty slot"`, `"failed"`.
+pub fn progress_text(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+    value: f64,
+) -> String {
+    if value <= 0.0 {
+        match progress_failure(params, progress) {
+            Some(ProgressFailure::EmptySlot) => return "empty slot".to_string(),
+            Some(ProgressFailure::Failed) => return "failed".to_string(),
+            None => {}
+        }
+    }
+    format!("{:.0}%", value * 100.0)
+}
+
+/// The stage a progress report is about: a load starting (below half), past
+/// half, done, or failed. The host is asked to re-read
+/// `kit_load_progress` when the stage changes — at the start of a load, at
+/// 50 %, when it is done (review finding 8) — not per file.
+fn progress_stage(now: f32, failed: bool) -> u8 {
+    if failed {
+        STAGE_FAILED
+    } else if now >= 1.0 {
+        STAGE_DONE
+    } else if now >= 0.5 {
+        STAGE_HALF
+    } else {
+        STAGE_START
+    }
+}
+
+const STAGE_START: u8 = 0;
+const STAGE_HALF: u8 = 1;
+const STAGE_DONE: u8 = 2;
+const STAGE_FAILED: u8 = 3;
+
+/// Whether the move from `last` to `now` is one the host is told about:
+/// the start of a load, its half-way mark, its end.
+pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
+    progress_stage(last, false) != progress_stage(now, false)
+}
+
+/// What the host must re-read after a progress change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressReport {
+    /// The value moved (`rescan(VALUES)`).
+    Values,
+    /// The text of a value that may not have moved changed — into or out
+    /// of `"failed"` / `"empty slot"` (`rescan(VALUES | TEXT)`).
+    Text,
+}
+
+/// Record `now` (and whether it is a failure) as what `kit_load_progress`
+/// reads, and say whether — and how — the host should be asked to re-read
+/// it. Shared by `process` and the watcher thread, which each report a
+/// stage change at most once between them. Atomics only.
+pub fn note_progress(sel: &KitSelection, now: f32, failed: bool) -> Option<ProgressReport> {
+    let stage = progress_stage(now, failed);
+    let last = sel.reported_stage.swap(stage, Ordering::AcqRel);
+    if last == stage {
+        return None;
+    }
+    Some(if last == STAGE_FAILED || stage == STAGE_FAILED {
+        ProgressReport::Text
+    } else {
+        ProgressReport::Values
+    })
+}
+
+/// Ask `host` for what `report` needs.
+pub fn send_progress_report(host: &resonance_plugin::HostHandle, report: ProgressReport) {
+    match report {
+        ProgressReport::Values => host.request_params_rescan(),
+        ProgressReport::Text => host.request_params_text_rescan(),
+    }
+}
+
+/// Mirror the reported progress into `kit_load_progress` and tell `host`
+/// when its stage changed. Atomics only (the audio thread's per-block
+/// call, and the watcher's).
+pub fn publish_progress(
+    params: &crate::params::DrumParams,
+    progress: &KitLoadProgress,
+    host: Option<&resonance_plugin::HostHandle>,
+) -> f32 {
+    let now = reported_progress(params, progress);
+    params.kit_load_progress.set_value(now);
+    let failed = now <= 0.0 && progress_failure(params, progress).is_some();
+    if let (Some(report), Some(host)) = (note_progress(&params.selection, now, failed), host) {
+        send_progress_report(host, report);
+    }
+    now
+}
+
+/// `kit_load_progress` as the host and the editor see it: the parameter,
+/// whose value is [`reported_progress`] (so a host reading it with no
+/// block running reads it right) and whose text says `"failed"` / `"empty
+/// slot"` ([`progress_text`]). Returned by the plugin in the parameter's
+/// place.
+#[derive(Clone)]
+pub struct ProgressParam {
+    params: Arc<crate::params::DrumParams>,
+    progress: Arc<KitLoadProgress>,
+}
+
+impl ProgressParam {
+    pub fn new(params: Arc<crate::params::DrumParams>, progress: Arc<KitLoadProgress>) -> Self {
+        Self { params, progress }
+    }
+
+    /// [`reported_progress`]. Atomics only.
+    pub fn value(&self) -> f32 {
+        reported_progress(&self.params, &self.progress)
+    }
+
+    fn inner(&self) -> &resonance_plugin::FloatParam {
+        &self.params.kit_load_progress
+    }
+}
+
+impl resonance_plugin::Param for ProgressParam {
+    fn id(&self) -> &str {
+        self.inner().id()
+    }
+    fn name(&self) -> &str {
+        self.inner().name()
+    }
+    fn get_plain(&self) -> f64 {
+        self.value() as f64
+    }
+    fn set_plain(&self, v: f64) {
+        self.inner().set_plain(v)
+    }
+    fn default_plain(&self) -> f64 {
+        self.inner().default_plain()
+    }
+    fn min_plain(&self) -> f64 {
+        self.inner().min_plain()
+    }
+    fn max_plain(&self) -> f64 {
+        self.inner().max_plain()
+    }
+    fn display(&self, value: f64) -> String {
+        progress_text(&self.params, &self.progress, value)
+    }
+    fn parse(&self, text: &str) -> Option<f64> {
+        self.inner().parse(text)
+    }
+    fn module(&self) -> &str {
+        self.inner().module()
+    }
+    fn is_hidden(&self) -> bool {
+        self.inner().is_hidden()
+    }
+    fn preset_excluded(&self) -> bool {
+        self.inner().preset_excluded()
+    }
+    fn is_automatable(&self) -> bool {
+        self.inner().is_automatable()
+    }
+    fn is_read_only(&self) -> bool {
+        self.inner().is_read_only()
+    }
+    fn state_excluded(&self) -> bool {
+        self.inner().state_excluded()
+    }
+    fn is_stepped(&self) -> bool {
+        self.inner().is_stepped()
+    }
 }
 
 /// One look by the instance's watcher thread: act on a `kit_select` the
-/// host or the control API moved, and mirror the load progress into
-/// `kit_load_progress` (which `process` also does, every block; this
-/// covers an inactive plugin).
+/// host or the control API moved, and publish the load progress (which
+/// `process` also does, every block; this covers an inactive plugin, and
+/// an active one the host does not process — a stopped transport).
+///
+/// A kit handed off to an active plugin is taken by the audio thread's
+/// next block. While the host runs none, the watcher asks for one
+/// (`clap_host.request_process`), once per load. A host that ignores
+/// that (Resonance's does today) takes the kit — and `kit_load_progress`
+/// reaches 1.0 — at its next block: Play, a monitored track, a note.
 pub fn watch(bridge: &KitBridge) {
     match apply_pending(bridge) {
         Ok(_) => {}
         Err(e) => tracing::warn!("kit_select: {e}"),
     }
-    bridge
-        .params
-        .kit_load_progress
-        .set_value(bridge.load_progress.fraction());
+    let host = bridge.host.lock().clone();
+    publish_progress(&bridge.params, &bridge.load_progress, host.as_deref());
+    let snap = bridge.load_progress.snapshot();
+    let active = bridge.sample_rate.load(Ordering::Acquire) != 0;
+    if snap.phase == LoadPhase::HandedOff && !snap.complete && active {
+        let generation = bridge.load_generation.load(Ordering::Acquire);
+        let sel = &bridge.params.selection;
+        if sel.process_asked.swap(generation, Ordering::AcqRel) != generation {
+            if let Some(host) = &host {
+                host.request_process();
+            }
+        }
+    }
 }

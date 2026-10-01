@@ -1066,3 +1066,149 @@ fn kit_select_parses_numbers_and_numeric_names_sanely() {
         assert_eq!(select.parse(&select.display(v as f64)), Some(v as f64), "{v}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// kit_load_progress as the host reads it
+// ---------------------------------------------------------------------------
+
+/// Right after a pick — before the watcher acts on it, while the progress
+/// still describes the kit before it — `kit_load_progress` reads 0, not
+/// the previous kit's 1.0 (review finding 2). The same through every
+/// path a host reads it: the parameter (inactive `get_value`) and the
+/// text source's `live_value` (active). And `live_value` reads
+/// `kit_select` as written, not the bridge's stale mirror.
+#[test]
+fn kit_load_progress_reads_zero_from_the_pick_until_the_audio_thread_takes_the_kit() {
+    let home = Home::new("progress-pick");
+    let manifest = home.kit("Alpha", "Alpha Kit", 0.25);
+    let lib = home.library();
+    let mut plugin = booted_on(&lib);
+    render(&mut plugin, &[]);
+    let source = plugin.param_text_source().unwrap();
+    let live = |i: usize| source.live_value(i).expect("a live value");
+    assert_eq!(live(KIT_LOAD_PROGRESS), 1.0);
+    assert_eq!(live(KIT_SELECT), NO_KIT as f64);
+
+    let a = slot_of(&lib, "Alpha Kit");
+    {
+        // Hold the watcher off: the write is not acted on yet.
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.param(KIT_SELECT).set_plain(a as f64);
+        assert_eq!(plugin.param(KIT_LOAD_PROGRESS).get_plain(), 0.0);
+        assert_eq!(live(KIT_LOAD_PROGRESS), 0.0);
+        assert_eq!(live(KIT_SELECT), a as f64);
+        assert_eq!(plugin.param(KIT_LOAD_PROGRESS).display(0.0), "0%");
+    }
+    wait_handed_off(&plugin, &manifest);
+    assert!(live(KIT_LOAD_PROGRESS) < 1.0, "handed off, not taken");
+    assert!(plugin.param(KIT_LOAD_PROGRESS).get_plain() < 1.0);
+    render(&mut plugin, &[]);
+    assert_eq!(live(KIT_LOAD_PROGRESS), 1.0);
+    assert_eq!(plugin.param(KIT_LOAD_PROGRESS).get_plain(), 1.0);
+    assert_eq!(plugin.param(KIT_LOAD_PROGRESS).display(1.0), "100%");
+}
+
+/// An empty slot loads nothing (what played keeps playing): the progress
+/// reads 0 and says why, rather than the 1.0 of the kit still playing.
+/// A kit that cannot load reads "failed".
+#[test]
+fn kit_load_progress_says_empty_slot_and_failed() {
+    let home = Home::new("progress-fail");
+    home.kit("Alpha", "Alpha Kit", 0.25);
+    let broken = home.root().join("Broken/kit");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(broken.join("drum_samples.json"), "{ not json").unwrap();
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let source = plugin.param_text_source().unwrap();
+    let progress = plugin.param(KIT_LOAD_PROGRESS);
+
+    let empty = (0..=selection::MAX_KIT_SLOT)
+        .find(|s| lib.read().by_slot(*s as u32).is_none())
+        .unwrap();
+    assert!(host_writes(&plugin, empty).is_err());
+    assert_eq!(progress.get_plain(), 0.0);
+    assert_eq!(progress.display(0.0), "empty slot");
+    assert_eq!(
+        source.display(KIT_LOAD_PROGRESS, 0.0).as_deref(),
+        Some("empty slot")
+    );
+
+    let broken_slot = lib
+        .read()
+        .entries()
+        .iter()
+        .find(|e| e.manifest_path.starts_with(&broken))
+        .and_then(|e| e.slot)
+        .expect("a kit whose manifest does not parse still holds a slot") as i32;
+    assert!(host_writes(&plugin, broken_slot).is_err());
+    assert_eq!(progress.get_plain(), 0.0);
+    assert_eq!(progress.display(0.0), "failed");
+
+    // A kit that loads clears it.
+    host_writes(&plugin, slot_of(&lib, "Alpha Kit")).unwrap();
+    assert_eq!(progress.display(0.0), "0%");
+}
+
+/// `kit_select` as the host reads it while active (`live_value`) follows
+/// a state load (the kit's slot, or -2 for a missing kit) — the bridge's
+/// mirror would not until a block ran (review finding 3).
+#[test]
+fn live_kit_select_follows_a_state_load() {
+    let home = Home::new("live-state");
+    let alpha = home.kit("Alpha", "Alpha Kit", 0.25);
+    let lib = home.library();
+    let plugin = booted_on(&lib);
+    let source = plugin.param_text_source().unwrap();
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&alpha, Some(&home.root())).to_json(),
+    });
+    saver_for(&plugin).load(&state);
+    assert_eq!(
+        source.live_value(KIT_SELECT),
+        Some(slot_of(&lib, "Alpha Kit") as f64)
+    );
+    assert!(source.live_value(KIT_LOAD_PROGRESS).unwrap() < 1.0, "loading");
+    let missing = serde_json::json!({ "params": {}, "kit_ref": missing_ref(&home) });
+    saver_for(&plugin).load(&missing);
+    assert_eq!(source.live_value(KIT_SELECT), Some(PARKED_KIT as f64));
+}
+
+/// The host is asked to re-read the progress at the start of a load, at
+/// half-way and at the end — not per file (review finding 8) — and with
+/// its text when it turns to (or from) "failed".
+#[test]
+fn progress_is_reported_at_start_half_and_done_only() {
+    use selection::{note_progress, progress_worth_reporting, KitSelection, ProgressReport};
+    assert!(progress_worth_reporting(1.0, 0.0), "a load starts");
+    assert!(!progress_worth_reporting(0.0, 0.3));
+    assert!(progress_worth_reporting(0.3, 0.55), "half-way");
+    assert!(!progress_worth_reporting(0.55, 0.999));
+    assert!(progress_worth_reporting(0.999, 1.0), "done");
+    assert!(!progress_worth_reporting(1.0, 1.0));
+
+    let sel = KitSelection::new();
+    let reports: Vec<_> = [0.0, 0.1, 0.2, 0.5, 0.7, 0.999, 1.0, 1.0]
+        .iter()
+        .filter_map(|&v| note_progress(&sel, v, false))
+        .collect();
+    assert_eq!(reports, vec![ProgressReport::Values; 3]);
+    assert_eq!(note_progress(&sel, 0.0, true), Some(ProgressReport::Text));
+    assert_eq!(note_progress(&sel, 0.0, true), None);
+    assert_eq!(note_progress(&sel, 0.0, false), Some(ProgressReport::Text));
+}
+
+/// The host's render mode reaches the streaming sampler: offline (a
+/// bounce) waits for the disk reader, realtime never does.
+#[test]
+fn the_host_render_mode_reaches_the_sampler() {
+    use resonance_drums::stream::{HOST_RENDER_OFFLINE, HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN};
+    let mut plugin = ResonanceDrums::new();
+    let mode = plugin.bridge.host_render_mode.clone();
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_UNKNOWN);
+    plugin.set_render_mode(true);
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_OFFLINE);
+    plugin.set_render_mode(false);
+    assert_eq!(mode.load(Ordering::Relaxed), HOST_RENDER_REALTIME);
+}
