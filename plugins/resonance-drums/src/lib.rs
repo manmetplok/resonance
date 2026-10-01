@@ -46,7 +46,7 @@ use articulation::ArticulationWatcher;
 #[cfg(feature = "editor")]
 use download::WorkerHandle;
 use kit::LoadedPad;
-use kit_loader::{KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
+use kit_loader::{HandedOffKit, KitRequest, KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
 use resonance_plugin::plugin::ExtraStateSaver;
@@ -60,6 +60,20 @@ pub struct KitBridge {
     /// Path to the currently loaded (or last-loaded) kit manifest. Set by
     /// the loader on success; persisted in `save_state`.
     pub kit_path: Arc<Mutex<Option<PathBuf>>>,
+    /// The kit a load is in flight for, with that load's generation stamp.
+    /// Recorded by [`kit_loader::spawn_loader`] when it starts, cleared
+    /// when that load finishes (loaded or failed). While it is set it,
+    /// not `kit_path`, is the kit the user wants — see
+    /// [`KitBridge::wanted_kit_path`].
+    pub pending_kit: Arc<Mutex<Option<(u64, PathBuf)>>>,
+    /// What the last loader hand-off put in the mailbox, and at what rate.
+    /// Lets `initialize` tell whether the kit the sampler holds is still
+    /// the right one. Written under `kit_handoff`.
+    pub handed_off: Arc<Mutex<Option<HandedOffKit>>>,
+    /// Test hook: while set, every loader waits for one message on it
+    /// before decoding, so a test can hold a load "mid-decode".
+    #[doc(hidden)]
+    pub decode_gate: Arc<Mutex<Option<Receiver<()>>>>,
     /// Status reported by the loader, rendered by the editor.
     pub kit_status: Arc<Mutex<KitStatus>>,
     /// Host sample rate, captured in `initialize()`. Stored as `f32::to_bits`.
@@ -187,6 +201,46 @@ impl KitBridge {
     pub fn wake_articulation_watcher(&self) {
         let _ = self.articulation_wake.try_send(());
     }
+
+    /// The kit the user last asked for: the one a load is in flight for,
+    /// else the one last loaded. A reload (re-activation, mic or
+    /// articulation change) reloads this — `kit_path` alone would revert
+    /// a pick still decoding to the kit before it.
+    pub fn wanted_kit_path(&self) -> Option<PathBuf> {
+        let pending = self.pending_kit.lock().as_ref().map(|(_, p)| p.clone());
+        pending.or_else(|| self.kit_path.lock().clone())
+    }
+
+    /// The full request a reload would decode now: the wanted kit with
+    /// the current mic and articulation choices. `None` with no kit.
+    pub fn wanted_request(&self) -> Option<KitRequest> {
+        let path = self.wanted_kit_path()?;
+        Some(KitRequest {
+            path,
+            overhead_setup_key: self.overhead_setup_key.lock().clone(),
+            pad_choices: self.pad_choices.lock().clone(),
+            articulations: self.articulations(),
+        })
+    }
+
+    /// Abandon an in-flight load unless it is for `keep`: a state load
+    /// that names another kit (or none) supersedes it. Bumping the
+    /// generation turns the loader into a no-op when it lands.
+    fn supersede_pending(&self, keep: Option<&std::path::Path>) {
+        let mut pending = self.pending_kit.lock();
+        let Some((_, path)) = pending.as_ref() else {
+            return;
+        };
+        if Some(path.as_path()) == keep {
+            return;
+        }
+        self.load_generation.fetch_add(1, Ordering::AcqRel);
+        *pending = None;
+        let mut status = self.kit_status.lock();
+        if matches!(*status, KitStatus::Loading { .. }) {
+            *status = KitStatus::Empty;
+        }
+    }
 }
 
 pub struct ResonanceDrums {
@@ -209,7 +263,9 @@ pub struct ResonanceDrums {
     /// the sole consumer; drained at the top of every `process()`.
     audition_receiver: Receiver<AuditionHit>,
     /// Download worker for fetching drumkits from the server. Only present
-    /// in editor builds.
+    /// in editor builds, and its thread only starts on the first command
+    /// (the editor's Download Kits panel) — an instance whose editor is
+    /// never opened never starts one.
     #[cfg(feature = "editor")]
     download_worker: Arc<WorkerHandle>,
 }
@@ -249,6 +305,9 @@ impl ResonancePlugin for ResonanceDrums {
         let params = Arc::new(DrumParams::default());
         let bridge = KitBridge {
             kit_path: Arc::new(Mutex::new(None)),
+            pending_kit: Arc::new(Mutex::new(None)),
+            handed_off: Arc::new(Mutex::new(None)),
+            decode_gate: Arc::new(Mutex::new(None)),
             kit_status: Arc::new(Mutex::new(KitStatus::Empty)),
             sample_rate: Arc::new(AtomicU32::new(0)),
             kit_reclaim: kit_receiver.clone(),
@@ -322,31 +381,65 @@ impl ResonancePlugin for ResonanceDrums {
             .collect()
     }
 
+    /// Activation. The kit to load is the one the user last asked for
+    /// ([`KitBridge::wanted_kit_path`]) — including a pick still decoding
+    /// when the host deactivated — decoded at this rate.
+    ///
+    /// Under `kit_handoff`, so no loader hands off in between: the rate
+    /// is published first (a loader still decoding for another rate then
+    /// drops its kit), and a kit a loader handed off that the audio thread
+    /// never took is taken out of the mailbox here — installed if it was
+    /// decoded at this rate, freed (on this thread) if not.
+    ///
+    /// If the sampler then already holds the wanted kit, at this rate and
+    /// with these mic and articulation choices, nothing is decoded again
+    /// (E4's "`initialize` at an unchanged rate reuses the loaded kit").
     fn initialize(&mut self, sample_rate: f32, _max_buffer_size: u32) -> bool {
-        self.bridge
-            .sample_rate
-            .store(sample_rate.to_bits(), Ordering::Release);
+        let wanted = self.bridge.wanted_request();
+        let reuse = {
+            let _handoff = self.bridge.kit_handoff.lock();
+            self.bridge
+                .sample_rate
+                .store(sample_rate.to_bits(), Ordering::Release);
+            let mut handed = self.bridge.handed_off.lock();
+            if let Ok(pads) = self.bridge.kit_reclaim.try_recv() {
+                match handed.as_ref() {
+                    Some(h) if h.sample_rate == sample_rate => self.sampler.install_kit(pads),
+                    _ => {
+                        drop(pads);
+                        *handed = None;
+                    }
+                }
+            }
+            let reuse = matches!(
+                (handed.as_ref(), wanted.as_ref()),
+                (Some(h), Some(w)) if h.sample_rate == sample_rate && h.request == *w
+            );
+            if !reuse {
+                // The sampler goes back to the built-in kit below.
+                *handed = None;
+            }
+            reuse
+        };
+        if reuse {
+            self.sampler.set_sample_rate(sample_rate);
+            return true;
+        }
+
         self.sampler.load_defaults(sample_rate);
         // Publish what the fallback kit actually costs and what it holds,
         // so the status bar and the inspector's SAMPLE stage describe the
         // kit that is really loaded rather than a placeholder.
         self.publish_kit_facts(sample_rate);
 
-        // If a kit path was set (either by a prior session via load_state or
-        // by the editor) re-kick the loader at the current sample rate so the
-        // kit decodes to the host's rate.
-        let path = self.bridge.kit_path.lock().clone();
-        if let Some(path) = path {
-            let overhead_key = self.bridge.overhead_setup_key.lock().clone();
-            let choices = self.bridge.pad_choices.lock().clone();
-            let articulations = self.bridge.articulations();
+        if let Some(request) = wanted {
             kit_loader::spawn_loader(
-                path,
+                request.path,
                 sample_rate,
                 &self.bridge,
-                overhead_key,
-                choices,
-                articulations,
+                request.overhead_setup_key,
+                request.pad_choices,
+                request.articulations,
             );
         }
 
@@ -462,6 +555,13 @@ impl ResonancePlugin for ResonanceDrums {
 }
 
 impl ResonanceDrums {
+    /// Whether this instance has started its download thread. Test hook.
+    #[cfg(feature = "editor")]
+    #[doc(hidden)]
+    pub fn download_worker_running(&self) -> bool {
+        self.download_worker.is_running()
+    }
+
     /// Apply one host note event to the sampler, at the frame the caller
     /// has rendered up to.
     fn apply_event(&mut self, event: NoteEvent) {
@@ -596,8 +696,14 @@ impl ExtraStateSaver for DrumsExtraState {
     }
 
     fn load(&self, state: &serde_json::Value) {
+        // The kit the user wants, not merely the last one that finished:
+        // a pick still decoding counts.
+        let wanted_path = |kit_path: &Arc<Mutex<Option<PathBuf>>>| match &self.reload {
+            Some(bridge) => bridge.wanted_kit_path(),
+            None => kit_path.lock().clone(),
+        };
         let before = (
-            self.kit_path.lock().clone(),
+            wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
         );
@@ -607,7 +713,12 @@ impl ExtraStateSaver for DrumsExtraState {
         // its impulse. Before the plugin is active the loader is spawned
         // from `initialize()`, where the sample rate is known.
         if let Some(v) = state.get("kit_path") {
-            *self.kit_path.lock() = v.as_str().map(PathBuf::from);
+            let path = v.as_str().map(PathBuf::from);
+            // A load in flight for another kit is superseded by this one.
+            if let Some(bridge) = &self.reload {
+                bridge.supersede_pending(path.as_deref());
+            }
+            *self.kit_path.lock() = path;
         }
 
         if let Some(s) = state.get("overhead_setup_key").and_then(|v| v.as_str()) {
@@ -655,7 +766,7 @@ impl ExtraStateSaver for DrumsExtraState {
         // The kit is the sound: a load that changed it (or its mics) while
         // a sample rate is known reloads it now.
         let after = (
-            self.kit_path.lock().clone(),
+            wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
         );

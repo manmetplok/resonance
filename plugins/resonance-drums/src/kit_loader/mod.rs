@@ -117,6 +117,27 @@ pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
 // Status reported by the loader thread, rendered by the editor.
 // ---------------------------------------------------------------------------
 
+/// Everything a kit is decoded from except the sample rate: the manifest
+/// and the mic / articulation choices. Two loads with equal requests at
+/// the same rate decode the same kit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KitRequest {
+    pub path: PathBuf,
+    pub overhead_setup_key: String,
+    pub pad_choices: [PadMicChoices; NUM_PADS],
+    pub articulations: [bool; NUM_PADS],
+}
+
+/// The kit a loader last put in the audio thread's mailbox, and the rate
+/// it was decoded at. Recorded under [`KitBridge::kit_handoff`]; `None`
+/// once nobody can say what the sampler holds (a direct
+/// [`hand_off_kit`], or `initialize` reverting to the built-in kit).
+#[derive(Debug, Clone, PartialEq)]
+pub struct HandedOffKit {
+    pub request: KitRequest,
+    pub sample_rate: f32,
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum KitStatus {
     #[default]
@@ -204,6 +225,13 @@ pub fn load_kit_from_manifest(
 /// the stamp before writing state and become no-ops if a newer load has
 /// started, so last-click-wins status is preserved even under spam.
 /// Loader panics are caught and converted to `KitStatus::Error`.
+///
+/// The requested path is recorded in [`KitBridge::pending_kit`] at once,
+/// not on success, so a re-activation in the middle of the decode reloads
+/// *this* kit rather than the last one that finished. And a decode only
+/// reaches the audio thread if the host is still running at `target_sr`
+/// when it lands: one that straddles a deactivation is dropped, and the
+/// `initialize` that follows reloads the pending kit at the new rate.
 pub fn spawn_loader(
     manifest_path: PathBuf,
     target_sr: f32,
@@ -213,7 +241,14 @@ pub fn spawn_loader(
     articulations: [bool; NUM_PADS],
 ) {
     let bridge = bridge.clone();
-    let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    // Stamp and record under one lock, so the pending entry always
+    // belongs to the newest generation.
+    let stamp = {
+        let mut pending = bridge.pending_kit.lock();
+        let stamp = bridge.load_generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *pending = Some((stamp, manifest_path.clone()));
+        stamp
+    };
     // Record what this load is being built from, in call order, so the
     // articulation watcher compares the params against the kit that is
     // actually (being) decoded rather than re-triggering every poll.
@@ -227,6 +262,12 @@ pub fn spawn_loader(
                 *bridge.kit_status.lock() = KitStatus::Loading {
                     path: manifest_path.clone(),
                 };
+            }
+
+            // Test hook: hold the decode until the test says go.
+            let gate = bridge.decode_gate.lock().clone();
+            if let Some(gate) = gate {
+                let _ = gate.recv();
             }
 
             let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -246,6 +287,18 @@ pub fn spawn_loader(
             if bridge.load_generation.load(Ordering::Acquire) != stamp {
                 return;
             }
+            // Decoded for a rate the host is no longer running at (or for
+            // an activation that has ended): it would play at the wrong
+            // pitch. Leave it pending — `initialize` reloads it.
+            if bridge.sample_rate.load(Ordering::Acquire) != target_sr.to_bits() {
+                return;
+            }
+            let request = KitRequest {
+                path: manifest_path.clone(),
+                overhead_setup_key,
+                pad_choices,
+                articulations,
+            };
 
             match outcome {
                 Ok(Ok(kit)) => {
@@ -257,7 +310,11 @@ pub fn spawn_loader(
                     // both describe the takes this load actually decoded.
                     let bytes = crate::sample_info::total_sample_bytes(&kit.pads) as u64;
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    hand_off_kit(&bridge, kit.pads);
+                    hand_off_kit_locked(&bridge, kit.pads);
+                    *bridge.handed_off.lock() = Some(HandedOffKit {
+                        request,
+                        sample_rate: target_sr,
+                    });
                     bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                     *bridge.pad_samples.lock() = infos;
                     *bridge.kit_path.lock() = Some(manifest_path);
@@ -271,6 +328,12 @@ pub fn spawn_loader(
                         message: "loader panicked".to_string(),
                     };
                 }
+            }
+            // Finished, one way or the other: nothing is pending any
+            // more (unless a newer load has recorded itself meanwhile).
+            let mut pending = bridge.pending_kit.lock();
+            if pending.as_ref().map(|(s, _)| *s) == Some(stamp) {
+                *pending = None;
             }
         })
         .expect("spawn drums kit loader thread");
@@ -327,9 +390,22 @@ pub fn kit_display_name(manifest_path: &Path, drumkits_root: Option<&Path>) -> S
 /// (loader) thread, then send the new one. The audio thread only ever
 /// `try_recv`s, so it sees either the stale kit (taken before we got to
 /// it — then our retry finds the slot empty) or the new one; never
-/// nothing in place of the newest. Callers serialise on
-/// [`KitBridge::kit_handoff`].
+/// nothing in place of the newest.
+///
+/// Takes [`KitBridge::kit_handoff`] itself, so it cannot race a loader's
+/// hand-off. Must not be called with that lock already held (it is not
+/// reentrant) — the loader, which holds it across its generation check,
+/// calls [`hand_off_kit_locked`] instead.
 pub fn hand_off_kit(bridge: &KitBridge, pads: Vec<LoadedPad>) {
+    let _handoff = bridge.kit_handoff.lock();
+    hand_off_kit_locked(bridge, pads);
+    // Not a loader's kit: what the sampler will hold is no longer known.
+    *bridge.handed_off.lock() = None;
+}
+
+/// [`hand_off_kit`] for a caller already holding
+/// [`KitBridge::kit_handoff`].
+fn hand_off_kit_locked(bridge: &KitBridge, pads: Vec<LoadedPad>) {
     let mut pads = pads;
     loop {
         match bridge.kit_sender.try_send(pads) {

@@ -7,10 +7,20 @@
 //! itself and deal with stealing voice slots when all MAX_VOICES are in
 //! use, releasing groups for chokes, and resetting state on host stop.
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 use crate::kit::LoadedPad;
 use crate::voice::{Voice, VoiceState};
+
+/// How many retired kits can wait for the janitor at once. The channel
+/// is `bounded`, so its slots are allocated here, up front: a send from
+/// the audio thread is a copy into a preallocated ring and never
+/// allocates. (An `unbounded` channel allocates a new block every 31
+/// sends — on the sending thread.) The audio thread retires at most one
+/// kit per swap and holds at most `RETIRED_KITS` fading ones, so eight
+/// is more than it can produce while the janitor is draining; a full
+/// channel only means the kit stays parked a block longer.
+pub const JANITOR_DEPTH: usize = 8;
 
 /// Spawn the heap-free janitor thread and return the sender used to ship
 /// retired kits to it. Called once from `DrumSampler::new`. The janitor
@@ -19,7 +29,7 @@ pub fn spawn() -> Sender<Vec<LoadedPad>> {
     let (janitor_sender, janitor_receiver): (
         Sender<Vec<LoadedPad>>,
         Receiver<Vec<LoadedPad>>,
-    ) = unbounded();
+    ) = bounded(JANITOR_DEPTH);
     std::thread::Builder::new()
         .name("resonance-drums-janitor".to_string())
         .spawn(move || {
