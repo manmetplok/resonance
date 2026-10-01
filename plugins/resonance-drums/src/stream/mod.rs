@@ -144,17 +144,60 @@ pub fn preload_from_state(value: Option<&serde_json::Value>) -> Option<u32> {
     (frames == 0 || PRELOAD_CHOICES.contains(&frames)).then_some(frames)
 }
 
+/// The `stream_preload` param's choices, in its value order: Off (every
+/// take whole), then [`PRELOAD_CHOICES`].
+pub const PRELOAD_LABELS: &[&str] = &["Off", "32k", "64k", "128k"];
+
+/// The frames each [`PRELOAD_LABELS`] entry keeps resident.
+pub const PRELOAD_PARAM_FRAMES: [u32; 4] = [0, 32_768, 65_536, 131_072];
+
+/// The `stream_preload` param value for `frames` (one of
+/// [`PRELOAD_PARAM_FRAMES`]; anything else reads as the default).
+pub fn preload_param_value(frames: u32) -> i32 {
+    PRELOAD_PARAM_FRAMES
+        .iter()
+        .position(|&f| f == frames)
+        .or_else(|| PRELOAD_PARAM_FRAMES.iter().position(|&f| f == DEFAULT_PRELOAD))
+        .unwrap_or(0) as i32
+}
+
+/// The frames a `stream_preload` param value keeps resident.
+pub fn preload_frames(value: i32) -> u32 {
+    PRELOAD_PARAM_FRAMES
+        .get(value.max(0) as usize)
+        .copied()
+        .unwrap_or(DEFAULT_PRELOAD)
+}
+
 /// Set the preload (one of [`PRELOAD_CHOICES`], or 0 for none) and, if
 /// it changed, reload the kit so its takes are split at the new size.
-/// Returns whether a reload started. Never call it from the audio thread.
+/// The `stream_preload` param follows, so the watcher does not move it
+/// back. Returns whether a reload started. Never call it from the audio
+/// thread.
 pub fn set_preload(bridge: &crate::KitBridge, frames: u32) -> bool {
     if frames != 0 && !PRELOAD_CHOICES.contains(&frames) {
         return false;
     }
+    bridge
+        .params
+        .stream_preload
+        .set_value(preload_param_value(frames));
     if bridge.stream_preload.swap(frames, Ordering::Relaxed) == frames {
         return false;
     }
     crate::reload::reload_kit(bridge)
+}
+
+/// Act on a `stream_preload` param the host, the control API or the
+/// editor moved: set the preload it names, reloading the kit. Run by the
+/// instance's watcher thread (`selection::watch`); returns whether a
+/// reload started.
+pub fn apply_preload_param(bridge: &crate::KitBridge) -> bool {
+    let frames = preload_frames(bridge.params.stream_preload.value());
+    if bridge.stream_preload.load(Ordering::Relaxed) == frames {
+        return false;
+    }
+    set_preload(bridge, frames)
 }
 
 /// A take is only split when its tail would be at least this long; a

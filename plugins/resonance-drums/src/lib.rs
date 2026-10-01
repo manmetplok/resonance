@@ -1010,6 +1010,11 @@ impl ExtraStateSaver for DrumsExtraState {
             stream::preload_from_state(state.get(stream::PRELOAD_STATE_KEY)),
         ) {
             bridge.stream_preload.store(frames, Ordering::Relaxed);
+            // The param follows (it is not in the params state: the
+            // preload travels under its own key, in frames).
+            self.params
+                .stream_preload
+                .set_value(stream::preload_param_value(frames));
         }
         // An explicit `kit_ref: null` clears the remembered kit (a project
         // saved with none always writes it); a document without the key —

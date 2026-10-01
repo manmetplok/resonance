@@ -1619,6 +1619,78 @@ fn the_plugin_streams_its_kit_and_keeps_the_preload_in_its_state() {
     assert_eq!(built.preload, 65_536);
 }
 
+/// The preload is a param (`stream_preload`: Off / 32k / 64k / 128k, not
+/// automatable): moving it — from a host, the control API or the editor
+/// — reloads the kit at the new size, through the instance's watcher
+/// (`selection::watch`). It is not in the params state; the state keeps
+/// the preload in frames under its own key, which sets the param on load.
+#[test]
+fn the_stream_preload_param_reloads_the_kit() {
+    use resonance_drums::stream::{
+        preload_frames, set_preload, DEFAULT_PRELOAD, PRELOAD_STATE_KEY,
+    };
+    use resonance_drums::ResonanceDrums;
+    use resonance_plugin::plugin::ExtraStateSaver;
+    use resonance_plugin::{Param, ResonancePlugin};
+    use std::sync::atomic::Ordering;
+
+    let fixture = Fixture::new("preload-param", 44_100, 2.0);
+    let manifest = manifest_kit(&fixture);
+    let mut drums = ResonanceDrums::new();
+    {
+        let p = &drums.bridge.params.stream_preload;
+        assert_eq!(p.id(), "stream_preload");
+        assert!(!p.is_automatable());
+        assert!(p.state_excluded());
+        assert_eq!(preload_frames(p.value()), DEFAULT_PRELOAD);
+        assert_eq!(p.display(p.get_plain()), "32k");
+        assert_eq!(p.display(0.0), "Off");
+        assert_eq!(p.parse("128k"), Some(3.0));
+    }
+    saver_for(&drums).load(&serde_json::json!({ "kit_path": manifest }));
+    assert!(drums.initialize(HOST, 256));
+    settle(&mut drums);
+    let built_preload = |d: &ResonanceDrums| d.bridge.built_kit.lock().clone().unwrap().preload;
+    assert_eq!(built_preload(&drums), DEFAULT_PRELOAD);
+
+    // The host moves the param: the watcher reloads at 64k.
+    let generation = drums.bridge.load_generation.load(Ordering::Acquire);
+    drums.bridge.params.stream_preload.set_plain(2.0);
+    resonance_drums::selection::watch(&drums.bridge);
+    settle(&mut drums);
+    assert_eq!(built_preload(&drums), 65_536);
+    assert_eq!(drums.bridge.stream_preload.load(Ordering::Relaxed), 65_536);
+    assert!(drums.bridge.load_generation.load(Ordering::Acquire) > generation);
+
+    // Saved in frames under its key, and not among the params.
+    assert_eq!(
+        saver_for(&drums).save().get(PRELOAD_STATE_KEY),
+        Some(&serde_json::json!(65_536))
+    );
+    let state: serde_json::Value = serde_json::from_slice(&drums.save_state()).unwrap();
+    assert!(state["params"].get("stream_preload").is_none());
+
+    // A state's preload sets the param.
+    let other = ResonanceDrums::new();
+    saver_for(&other).load(&serde_json::json!({ PRELOAD_STATE_KEY: 131_072 }));
+    assert_eq!(other.bridge.params.stream_preload.value(), 3);
+    saver_for(&other).load(&serde_json::json!({ PRELOAD_STATE_KEY: 0 }));
+    assert_eq!(other.bridge.params.stream_preload.value(), 0);
+
+    // `set_preload` moves the param with it, so the watcher leaves it be.
+    assert!(set_preload(&drums.bridge, 0));
+    assert_eq!(drums.bridge.params.stream_preload.value(), 0);
+    settle(&mut drums);
+    let generation = drums.bridge.load_generation.load(Ordering::Acquire);
+    resonance_drums::selection::watch(&drums.bridge);
+    assert_eq!(
+        drums.bridge.load_generation.load(Ordering::Acquire),
+        generation,
+        "no reload for a param that already matches"
+    );
+    assert_eq!(built_preload(&drums), 0);
+}
+
 /// A host that hands `process` fewer ports than the plugin declared gets
 /// silence, not a panic — and the block still runs in full: the hit in
 /// it starts at its frame and plays on in time, so the next full block

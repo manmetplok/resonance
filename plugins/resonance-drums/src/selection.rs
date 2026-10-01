@@ -793,6 +793,8 @@ pub fn watch(bridge: &KitBridge) {
         Ok(_) => {}
         Err(e) => tracing::warn!("kit_select: {e}"),
     }
+    // And on a `stream_preload` moved the same ways (a kit reload).
+    crate::stream::apply_preload_param(bridge);
     bridge
         .params
         .kit_load_progress

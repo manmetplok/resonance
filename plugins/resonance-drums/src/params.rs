@@ -27,7 +27,7 @@ pub const PARAMS_PER_PAD: usize = 13;
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 8;
+pub const GLOBAL_PARAMS: usize = 9;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
@@ -110,6 +110,16 @@ pub struct DrumParams {
     /// the velocity curve, from a fixed-seed generator, so a render is
     /// reproducible.
     pub velocity_humanize: FloatParam,
+    /// Disk streaming's preload (E14): how much of each take stays in
+    /// memory — Off (every take whole), 32k, 64k or 128k frames, default
+    /// 32k ([`crate::stream::DEFAULT_PRELOAD`]). Changing it reloads the
+    /// kit (the instance's watcher thread calls
+    /// [`crate::stream::apply_preload_param`]).
+    ///
+    /// Not automatable: every change is a kit reload. Not in the params
+    /// state either: the state keeps carrying the preload as frames under
+    /// its own key (`stream_preload`), as it did before the param existed.
+    pub stream_preload: ChoiceParam,
     /// What `kit_select` means beyond a slot (a missing kit, a kit with no
     /// slot), and the library handle its text and the loader resolve
     /// against. Shared with the bridge, the saver and the editor.
@@ -191,6 +201,14 @@ impl Default for DrumParams {
             )
             .with_value_to_string(Arc::new(humanize_label))
             .with_string_to_value(Arc::new(humanize_from_label)),
+            stream_preload: ChoiceParam::new(
+                "stream_preload",
+                "Stream Preload",
+                crate::stream::preload_param_value(crate::stream::DEFAULT_PRELOAD),
+                crate::stream::PRELOAD_LABELS,
+            )
+            .not_automatable()
+            .excluded_from_state(),
             selection,
             pads: std::array::from_fn(PadParams::new),
         }
@@ -577,6 +595,7 @@ impl DrumParams {
             5 => return &self.kit_load_progress,
             6 => return &self.output_mode,
             7 => return &self.velocity_humanize,
+            8 => return &self.stream_preload,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;
