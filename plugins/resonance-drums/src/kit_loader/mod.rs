@@ -189,11 +189,27 @@ pub struct BuiltKit {
     pub sample_rate: f32,
     pub pad_requests: Vec<PadRequest>,
     pub pads: Vec<LoadedPad>,
+    /// What building each pad found, in pad order.
+    pub pad_builds: Vec<PadBuild>,
+}
+
+/// What building one pad found, kept with the build so a reload that
+/// reuses the pad still reports it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PadBuild {
+    /// The pad's files that could not be read or decoded.
+    pub unreadable: usize,
+    /// The first few of them.
+    pub unreadable_paths: Vec<PathBuf>,
 }
 
 impl BuiltKit {
     /// Pad `pad` of this build, if a build of `request` at `sample_rate`
     /// would give the same pad.
+    ///
+    /// A pad that lost takes is never reused: the files may be readable
+    /// now (a kit still extracting, a disk remounted), and a reload is
+    /// the moment to try them again.
     fn reusable_pad(
         &self,
         path: &Path,
@@ -201,7 +217,7 @@ impl BuiltKit {
         sample_rate: f32,
         pad: usize,
         request: &PadRequest,
-    ) -> Option<&LoadedPad> {
+    ) -> Option<(&LoadedPad, &PadBuild)> {
         let same_kit = self.path == path
             && manifest.is_some()
             && self.manifest.as_ref() == manifest
@@ -209,7 +225,11 @@ impl BuiltKit {
         if !same_kit || self.pad_requests.get(pad) != Some(request) {
             return None;
         }
-        self.pads.get(pad)
+        let build = self.pad_builds.get(pad)?;
+        if build.unreadable > 0 {
+            return None;
+        }
+        Some((self.pads.get(pad)?, build))
     }
 }
 
@@ -255,7 +275,8 @@ pub struct LoadStats {
     /// Files the shared cache already held (another instance, or this
     /// instance's previous kit).
     pub cached: usize,
-    /// Files that could not be read or decoded, and were left out.
+    /// The kit's files that could not be read or decoded, and were left
+    /// out — every pad's, not only the pads this load rebuilt.
     pub unreadable: usize,
     /// The first few unreadable files.
     pub unreadable_paths: Vec<PathBuf>,
@@ -353,7 +374,7 @@ pub fn load_kit(
 
     // 1. Plan: reuse, built-in fallback, or the piece's banks per pad.
     enum PadPlan {
-        Reuse(LoadedPad),
+        Reuse(LoadedPad, PadBuild),
         Fallback,
         Piece {
             close: Vec<decode::BankPlan>,
@@ -364,7 +385,7 @@ pub fn load_kit(
     let mut jobs = Jobs::default();
     let mut plans = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
-        if let Some(pad) = previous.and_then(|prev| {
+        if let Some((pad, build)) = previous.and_then(|prev| {
             prev.reusable_pad(
                 manifest_path,
                 manifest_stamp.as_ref(),
@@ -373,7 +394,7 @@ pub fn load_kit(
                 &pad_requests[pad_idx],
             )
         }) {
-            plans.push(PadPlan::Reuse(pad.clone()));
+            plans.push(PadPlan::Reuse(pad.clone(), build.clone()));
             continue;
         }
         let piece_name = piece_name_for(pad_idx, request.articulations[pad_idx]);
@@ -425,36 +446,55 @@ pub fn load_kit(
         ..LoadStats::default()
     };
     let mut pads = Vec::with_capacity(NUM_PADS);
+    let mut pad_builds = Vec::with_capacity(NUM_PADS);
     for (plan, mapping) in plans.into_iter().zip(PAD_MAPPINGS.iter()) {
-        let pad = match plan {
-            PadPlan::Reuse(pad) => {
+        let (pad, build) = match plan {
+            PadPlan::Reuse(pad, build) => {
                 stats.reused_pads += 1;
-                pad
+                (pad, build)
             }
             PadPlan::Fallback => {
                 stats.rebuilt_pads += 1;
-                build_fallback_pad(mapping, target_sr)?
+                (build_fallback_pad(mapping, target_sr)?, PadBuild::default())
             }
             PadPlan::Piece { close, overhead } => {
                 stats.rebuilt_pads += 1;
+                let mut pad_tally = Tally::default();
                 let (close_mics, overhead) = assemble_pad(
                     &close,
                     overhead.as_ref(),
                     &results,
                     &jobs.paths,
                     &own,
-                    &mut tally,
+                    &mut pad_tally,
                 );
-                LoadedPad {
+                tally.decoded += pad_tally.decoded;
+                tally.cached += pad_tally.cached;
+                tally.shared_bytes += pad_tally.shared_bytes;
+                let pad = LoadedPad {
                     name: mapping.name.to_string(),
                     choke_group: mapping.choke_group,
                     output_group: mapping.output_group,
                     close_mics,
                     overhead,
-                }
+                };
+                let build = PadBuild {
+                    unreadable: pad_tally.unreadable,
+                    unreadable_paths: pad_tally.unreadable_paths,
+                };
+                (pad, build)
             }
         };
+        // Every pad's unreadable files count, reused or rebuilt: the
+        // kit's figure is the kit's, not this load's.
+        tally.unreadable += build.unreadable;
+        for path in &build.unreadable_paths {
+            if tally.unreadable_paths.len() < decode::UNREADABLE_PATHS_KEPT {
+                tally.unreadable_paths.push(path.clone());
+            }
+        }
         pads.push(pad);
+        pad_builds.push(build);
     }
 
     if tally.unreadable > 0 && tally.decoded + tally.cached == 0 && stats.reused_pads == 0 {
@@ -482,6 +522,7 @@ pub fn load_kit(
         sample_rate: target_sr,
         pad_requests,
         pads: pads.clone(),
+        pad_builds,
     };
     Ok(LoadedKit {
         pads,

@@ -349,6 +349,46 @@ fn changing_one_pads_close_mic_decodes_only_that_pads_files() {
     ));
 }
 
+/// A reload that leaves the snare alone still reports its unreadable
+/// take — and since a partial pad is never reused, it tries the take
+/// again, and picks it up once the file is readable.
+#[test]
+fn a_reload_keeps_reporting_and_retries_a_partial_pad() {
+    let kit = fixture_kit(Damage::OneSnareTake);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    assert_eq!(settle(&plugin).unreadable, 1);
+
+    // A kick mic change, the snare untouched and its file still broken.
+    plugin.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "02_KickIn_alt".to_string());
+    assert!(reload_kit(&plugin.bridge));
+    let second = settle(&plugin);
+    assert_eq!(second.unreadable, 1, "the reload forgot the snare: {second:?}");
+    assert_eq!(second.unreadable_paths, vec![kit.dir.join("sn_2.wav")]);
+    assert_eq!(second.rebuilt_pads, 2, "kick and the partial snare: {second:?}");
+    match &*plugin.bridge.kit_status.lock() {
+        KitStatus::Loaded { unreadable, .. } => assert_eq!(*unreadable, 1),
+        other => panic!("status {other:?}"),
+    }
+
+    // The file comes good; the next reload of anything picks it up.
+    write_wav(&kit.dir.join("sn_2.wav"), 1, 0.4);
+    plugin.bridge.pad_choices.lock()[0]
+        .close_setups
+        .insert("KickIn".to_string(), "01_KickIn_e901".to_string());
+    assert!(reload_kit(&plugin.bridge));
+    let third = settle(&plugin);
+    assert_eq!(third.unreadable, 0, "{third:?}");
+    assert_eq!(built_pad(&plugin, 1).close_mics[0].layers[0].round_robins.len(), 2);
+    let status = plugin.bridge.kit_status.lock().clone();
+    match status {
+        KitStatus::Loaded { unreadable, .. } => assert_eq!(unreadable, 0),
+        other => panic!("status {other:?}"),
+    }
+}
+
 #[test]
 fn an_articulation_change_decodes_only_that_pads_files() {
     let kit = fixture_kit(Damage::None);
