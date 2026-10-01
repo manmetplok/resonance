@@ -7,8 +7,8 @@
 //!
 //! 1. a key a widget already consumed (a focused text field, a canvas that
 //!    owns the keys) is dropped;
-//! 2. Esc resolves to closing the topmost root overlay before it means
-//!    anything else;
+//! 2. Esc resolves to closing the topmost root overlay (or, with none up,
+//!    the generic plugin window) before it means anything else;
 //! 3. while a modal root overlay shows, only ⌘/Ctrl chords dispatch;
 //! 4. the chord is looked up in the active [`BindingMap`] (global scope);
 //! 5. key repeat is dropped unless the command wants it;
@@ -111,6 +111,15 @@ pub(crate) fn handle_key(
     let modal = r.modal_overlay();
     if is_plain_escape(chord) && !repeat && modal.is_some() {
         return dismiss_overlay(r);
+    }
+    // The generic plugin window is non-modal, but Esc closes it before
+    // the key means anything else (mixer-cleanup.md §4).
+    if is_plain_escape(chord)
+        && !repeat
+        && modal.is_none()
+        && crate::update::plugin_window::escape(r)
+    {
+        return Task::none();
     }
     if modal.is_some() && !has_accelerator(chord) {
         return Task::none();

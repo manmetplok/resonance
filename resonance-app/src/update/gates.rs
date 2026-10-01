@@ -377,7 +377,11 @@ fn plugin_edit_target(
         AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
             Some(*track_id)
         }
-        TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
+        OpenPluginEditor(_)
+        | ClosePluginEditor(_)
+        | OpenPluginWindow(_)
+        | ClosePluginWindow(_)
+        | PluginWindowDrag(_) => None,
         // An audition moves the sound as a recall would; the loads that
         // stick are gated as `LoadPluginPreset` / the add they become.
         PresetUi(crate::message::PresetUiMessage::BrowserAudition(_)) => r

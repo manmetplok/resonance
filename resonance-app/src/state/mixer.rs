@@ -16,7 +16,9 @@ pub enum MixerInspectorGroup {
 /// Pure UI state for the mixer view and its menus.
 #[derive(Debug, Default)]
 pub struct MixerUiState {
-    pub selected_plugin: Option<PluginInstanceId>,
+    /// The open host-drawn generic plugin window, if any (see
+    /// [`crate::state::plugin_window`]).
+    pub plugin_window: Option<crate::state::PluginWindowState>,
     /// Bus whose strip is selected, if any — the bus counterpart of
     /// [`ClipInteractionState::selected_track`](crate::state::ClipInteractionState::selected_track),
     /// which the mixer inspector reads to decide what to show. It is a

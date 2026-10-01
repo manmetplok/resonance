@@ -225,13 +225,19 @@ Mono toggle, Bounce (instrument tracks; enabled per
   with the preset bar on top. This is today's generic parameter body and
   preset bar, moved, not rewritten.
 
-> **Open question (implementation, not a product decision):** the app is
-> single-window today (no `iced::window::open` anywhere). There are two ways
-> to build the generic window: (a) a draggable in-app floating panel,
-> layered like the palette/preset overlays, or (b) a real second iced window
-> (a `daemon` migration). This spec assumes **(a)**: it meets "Open always
-> opens a window" without changing the app's window model. Take (b) only if
-> (a) can't keep focus or keyboard behaviour sane. Decide before slice S4.
+> **Decided (S4): option (a), an in-app floating panel.** The app is
+> single-window (no `iced::window::open` anywhere), and a draggable panel
+> layered over the app meets "Open always opens a window" without a
+> `daemon` migration. `PluginMessage::OpenPluginWindow(id)` routes a
+> GUI plugin to `OpenPluginEditor` and anything else (no GUI, missing,
+> or an editor that refused to open) to the generic window
+> (`view/plugin_window.rs`, state `MixerUiState::plugin_window:
+> Option<PluginWindowState>`). It sits between the base view and the
+> modal overlays (non-modal: it gates no keys; Esc closes it), is dragged
+> by its title bar, and one is open at a time (opening another plugin's
+> replaces it in place). Removing its plugin or loading a project closes
+> it. Option (b), a real second OS window, stays available if focus or
+> keyboard behaviour ever needs it.
 
 The `TogglePluginPanel` message is retired. Tests that drive it
 (`tests/mixer/mixer_generic_param_panel.rs`, `mixer_preset_bar.rs`,
@@ -341,5 +347,4 @@ Acceptance (user-visible):
 | — | Sends on strip | Inspector only |
 | — | Phasing | One branch, one landing (slices are review checkpoints only) |
 
-Still open: the in-app panel vs. second OS window for the generic window
-(§4). Decide before S4.
+Decided in S4: the generic window is an in-app floating panel (§4).

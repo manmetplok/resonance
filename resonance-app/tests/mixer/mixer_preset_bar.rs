@@ -87,7 +87,7 @@ fn app_with(app: Resonance) -> Resonance {
         ),
     );
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
-    let _ = app.update(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+    let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
     app
 }
 

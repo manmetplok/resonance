@@ -48,7 +48,7 @@ impl Resonance {
     pub(crate) fn selected_plugin_available(&self) -> bool {
         self.ui
             .mixer
-            .selected_plugin
+            .plugin_window_id()
             .and_then(|id| self.plugin_slot(id))
             .is_some_and(|slot| slot.availability.reason().is_none())
     }
@@ -696,7 +696,7 @@ fn media_load(r: &mut Resonance, index: usize) -> Task<Message> {
         return Task::none();
     };
     r.presets.media_presets.selected = Some(index);
-    let Some(instance_id) = r.ui.mixer.selected_plugin else {
+    let Some(instance_id) = r.ui.mixer.plugin_window_id() else {
         r.banners.error_message = Some(format!(
             "Select a {} slot to load {:?} onto",
             row.plugin_name, row.name

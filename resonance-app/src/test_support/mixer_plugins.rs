@@ -274,7 +274,7 @@ impl Resonance {
     /// (review VIEW-26). A pure function of the slot.
     #[doc(hidden)]
     pub fn test_plugin_params_fingerprint(slot: &state::PluginSlotState) -> u64 {
-        crate::view::mixer::plugin_params_fingerprint(slot)
+        crate::view::plugin_window::plugin_params_fingerprint(slot)
     }
 
     /// Test-only: the bus twin of [`Self::test_push_track_plugin`].
@@ -461,6 +461,29 @@ impl Resonance {
             .collect()
     }
 
+    /// Test-only: which plugin the generic plugin window currently shows,
+    /// if any — the surface a refused editor falls back to (ba todo #1347,
+    /// mixer-cleanup.md §4).
+    #[doc(hidden)]
+    pub fn test_plugin_window(&self) -> Option<resonance_audio::types::PluginInstanceId> {
+        self.ui.mixer.plugin_window_id()
+    }
+
+    /// Test-only: the generic plugin window's whole state (position, drag).
+    #[doc(hidden)]
+    pub fn test_plugin_window_state(&self) -> Option<crate::state::PluginWindowState> {
+        self.ui.mixer.plugin_window
+    }
+
+    /// Test-only: move the open generic plugin window to `position`, so a
+    /// widget test can get it off the controls it drives underneath.
+    #[doc(hidden)]
+    pub fn test_place_plugin_window(&mut self, position: iced::Point) {
+        if let Some(w) = self.ui.mixer.plugin_window.as_mut() {
+            w.position = position;
+        }
+    }
+
     /// Test-only: the channel-strip slot's floating-editor toggle for
     /// `instance_id`, as the mixer would draw it — the message the glyph
     /// carries and the colour it is tinted (ba todo #1306).
@@ -472,13 +495,6 @@ impl Resonance {
     /// for the tint, which the widget tree does not expose — `iced_test`
     /// can read a text candidate's content but never its colour.
     #[doc(hidden)]
-/// Test-only: which plugin the generic parameter panel currently shows,
-    /// if any — the surface a refused editor falls back to (ba todo #1347).
-    #[doc(hidden)]
-    pub fn test_selected_plugin(&self) -> Option<resonance_audio::types::PluginInstanceId> {
-        self.ui.mixer.selected_plugin
-    }
-
     pub fn test_strip_editor_toggle(
         &self,
         instance_id: resonance_audio::types::PluginInstanceId,

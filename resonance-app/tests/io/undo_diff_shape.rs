@@ -1519,10 +1519,10 @@ fn undoing_a_plugin_add_drops_its_selection() {
     let s0 = f.app.test_snapshot_for_undo();
     let _ = edit(&mut f, add_to(chain, scanned("eq")));
     let eq = chain_ids(&f.app, chain)[0];
-    let _ = f.app.update(Message::Plugin(PluginMessage::TogglePluginPanel(eq)));
-    assert_eq!(f.app.test_selected_plugin(), Some(eq), "the panel selected it");
+    let _ = f.app.update(Message::Plugin(PluginMessage::OpenPluginWindow(eq)));
+    assert_eq!(f.app.test_plugin_window(), Some(eq), "the window opened on it");
     let cmds = step_lands_on(&mut f, Message::Undo, &s0, "undo EQ add");
-    assert_eq!(f.app.test_selected_plugin(), None);
+    assert_eq!(f.app.test_plugin_window(), None);
     settle(&mut f, cmds, &s0, "undo EQ add");
 }
 

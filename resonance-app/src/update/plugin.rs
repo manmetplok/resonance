@@ -126,13 +126,6 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
         } => {
             crate::update::plugin_replace::replace_plugin_slot(r, instance_id, plugin);
         }
-        PluginMessage::TogglePluginPanel(instance_id) => {
-            if r.ui.mixer.selected_plugin == Some(instance_id) {
-                r.ui.mixer.selected_plugin = None;
-            } else {
-                r.ui.mixer.selected_plugin = Some(instance_id);
-            }
-        }
         PluginMessage::SetPluginParam(instance_id, param_id, value) => {
             let _ = r.engine.send(AudioCommand::SetPluginParam {
                 instance_id,
@@ -219,6 +212,15 @@ pub fn handle(r: &mut Resonance, m: PluginMessage) -> Task<Message> {
             r.plugin_catalog.plugin_scan_failures.clear();
             r.plugin_catalog.plugin_scan_in_progress = true;
             let _ = r.engine.send(AudioCommand::RescanPlugins);
+        }
+        PluginMessage::OpenPluginWindow(instance_id) => {
+            return crate::update::plugin_window::open(r, instance_id);
+        }
+        PluginMessage::ClosePluginWindow(instance_id) => {
+            r.ui.mixer.close_plugin_window_for(instance_id);
+        }
+        PluginMessage::PluginWindowDrag(step) => {
+            crate::update::plugin_window::drag(r, step);
         }
     }
     Task::none()

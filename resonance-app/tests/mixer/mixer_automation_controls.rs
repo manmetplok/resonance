@@ -160,7 +160,7 @@ fn track_strip_fingerprint_moves_with_every_rendered_facet() {
         }),
         // The selected slot's pill takes the highlight treatment.
         ("plugin-slot selection", |app| {
-            let _ = app.update(Message::Plugin(PluginMessage::TogglePluginPanel(
+            let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(
                 BASS_PLUGIN,
             )));
         }),

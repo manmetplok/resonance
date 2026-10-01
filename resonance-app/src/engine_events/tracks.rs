@@ -138,14 +138,14 @@ pub(crate) fn removed(r: &mut Resonance, track_id: TrackId) {
             r.ui.interaction.selected_clip = None;
         }
     }
-    if let Some(sel_plugin_id) = r.ui.mixer.selected_plugin {
+    if let Some(sel_plugin_id) = r.ui.mixer.plugin_window_id() {
         if r.registry
             .tracks
             .iter()
             .filter(|t| t.id == track_id)
             .any(|t| t.plugins.iter().any(|p| p.instance_id == sel_plugin_id))
         {
-            r.ui.mixer.selected_plugin = None;
+            r.ui.mixer.plugin_window = None;
         }
     }
     // Drop side-index entries for every plugin on the removed track
@@ -428,14 +428,14 @@ pub(crate) fn bus_removed(r: &mut Resonance, bus_id: BusId) {
     // Same for key routes keyed off this bus — see `removed` above.
     r.sidechain
         .drop_routes_from_source(resonance_audio::types::SendSource::Bus(bus_id));
-    if let Some(sel) = r.ui.mixer.selected_plugin {
+    if let Some(sel) = r.ui.mixer.plugin_window_id() {
         if r.registry
             .busses
             .iter()
             .filter(|b| b.id == bus_id)
             .any(|b| b.plugins.iter().any(|p| p.instance_id == sel))
         {
-            r.ui.mixer.selected_plugin = None;
+            r.ui.mixer.plugin_window = None;
         }
     }
     let removed_plugin_ids: Vec<resonance_audio::types::PluginInstanceId> = r

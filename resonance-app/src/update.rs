@@ -33,6 +33,7 @@ pub mod palette;
 pub mod plugin;
 pub mod plugin_preset_ui;
 pub mod plugin_replace;
+pub mod plugin_window;
 pub mod pool;
 pub mod project_io;
 pub mod reference;

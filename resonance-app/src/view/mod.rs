@@ -24,6 +24,7 @@ pub(crate) mod midi_quantize;
 pub(crate) mod mixer;
 pub(crate) mod missing_plugins_dialog;
 pub(crate) mod palette;
+pub(crate) mod plugin_window;
 pub(crate) mod preset_browser;
 pub(crate) mod recovery_prompt;
 pub(crate) mod relink_dialog;
@@ -56,6 +57,16 @@ use iced::{alignment, Element, Length};
 impl crate::Resonance {
     pub fn view(&self) -> Element<'_, Message> {
         let base = self.view_base();
+        // The generic plugin window floats over the base view and under
+        // every root overlay: it is non-modal, and a modal opened from it
+        // (the preset browser) belongs on top (mixer-cleanup.md §4). The
+        // layer is always there so opening or closing the window never
+        // changes the tree's shape (which would reset the strips' scroll
+        // offsets under it).
+        let window: Element<'_, Message> = self
+            .view_plugin_window()
+            .unwrap_or_else(|| Space::new().into());
+        let base: Element<'_, Message> = stack![base, window].into();
         let root: Element<'_, Message> = match self.view_root_overlay() {
             Some(overlay) => stack![base, overlay].into(),
             None => base,
@@ -77,6 +88,14 @@ impl crate::Resonance {
             .on_press(end())
             .on_exit(end())
             .into()
+        } else if self.ui.mixer.plugin_window.is_some_and(|w| w.drag.is_some()) {
+            // A generic plugin window's title-bar drag follows the pointer
+            // in window coordinates until the button comes up.
+            let drag = |step| Message::Plugin(PluginMessage::PluginWindowDrag(step));
+            area.on_move(move |at| drag(PluginWindowDrag::Moved(at)))
+                .on_release(drag(PluginWindowDrag::End))
+                .on_exit(drag(PluginWindowDrag::End))
+                .into()
         } else {
             area.into()
         }

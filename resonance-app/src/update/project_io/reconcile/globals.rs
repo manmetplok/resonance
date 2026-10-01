@@ -126,7 +126,7 @@ impl Reconcile for TransientUi {
             return;
         }
         r.ui.interaction.selected_clip = None;
-        r.ui.mixer.selected_plugin = None;
+        r.ui.mixer.plugin_window = None;
         r.ui.interaction.clip_drag = None;
         r.ui.interaction.clip_trim = None;
         r.modals.confirm_delete_track = None;

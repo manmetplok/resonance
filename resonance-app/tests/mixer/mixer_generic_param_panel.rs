@@ -1,22 +1,16 @@
-//! The generic parameter panel is reachable for every plugin, GUI or
-//! not (ba todo #1306, plugin-audit finding X4, doc #276 item 2.4).
+//! The generic parameter window: "Open always opens a window"
+//! (mixer-cleanup.md §4), retargeted from the former bottom panel's tests
+//! (ba todo #1306, plugin-audit finding X4, doc #276 item 2.4).
 //!
-//! `view_plugin_slot_row` used to route a slot click to
-//! `TogglePluginPanel` only when `has_gui == false`. All eleven bundled
-//! plugins declare a GUI, so that one condition made the generic panel
-//! unreachable for the entire fleet — the only surface that shows a
-//! plugin's parameters as plain numbers, and the only thing left when a
-//! floating editor fails to open. The control API never had the
-//! restriction (`track.plugin_params` / `set_plugin_param` work on any
-//! plugin), so it was another GUI/MCP asymmetry.
-//!
-//! The fix is not to take the editor away: the name button now always
-//! opens the parameter panel and the floating editor moves to a control
-//! of its own, so which surface a click reaches no longer depends on a
-//! property of the plugin the user cannot see.
+//! A slot's name button sends `OpenPluginWindow`. A plugin with its own
+//! GUI opens that editor; one without opens the host-drawn generic
+//! window. A GUI plugin's generic parameters stay reachable as the
+//! fallback when its editor refuses to open (ba todo #1347) — the only
+//! surface that shows a plugin's parameters as plain numbers, and the
+//! only thing left when a floating editor fails.
 //!
 //! These drive the real widget tree through `iced_test`, not a helper —
-//! the bug was in which message the button carried, so a test that
+//! the bug class is in which message a button carries, so a test that
 //! doesn't press the button cannot see it.
 
 use std::sync::{Arc, Mutex};
@@ -24,11 +18,12 @@ use std::sync::{Arc, Mutex};
 use iced::{Point, Rectangle, Size};
 use iced_test::selector::Candidate;
 use iced_test::simulator::Simulator;
-use resonance_app::message::{Message, PluginMessage, UiMessage};
+use resonance_app::commands::{KeyChord, Mods, NamedKey};
+use resonance_app::message::{Message, PluginMessage, PluginWindowDrag, UiMessage};
 use resonance_app::state::{PluginSlotState, ViewMode};
 use resonance_audio::types::AudioEvent;
 use resonance_app::{theme, Resonance};
-use resonance_audio::types::{ParamInfo, TrackType};
+use resonance_audio::types::{AudioCommand, ParamInfo, TrackType};
 
 const TRACK: u64 = 1;
 const INSTANCE: u64 = 77;
@@ -38,7 +33,21 @@ const PLUGIN: &str = "Resonance EQ";
 const PARAM: &str = "Low Gain";
 
 fn app_with_plugin(has_gui: bool) -> Resonance {
-    let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
+    let (app, _task) = Resonance::new_for_test_on(ViewMode::Mixer);
+    with_plugin(app, has_gui)
+}
+
+/// [`app_with_plugin`], keeping the engine's command queue to assert on.
+fn app_with_plugin_capture(
+    has_gui: bool,
+) -> (Resonance, crossbeam_channel::Receiver<AudioCommand>) {
+    let (app, _task, rx) = Resonance::new_for_test_with_capture();
+    let app = with_plugin(app, has_gui);
+    while rx.try_recv().is_ok() {}
+    (app, rx)
+}
+
+fn with_plugin(mut app: Resonance, has_gui: bool) -> Resonance {
     app.test_set_active_project(true);
     app.test_add_track(TRACK, TrackType::Audio);
     app.test_push_track_plugin(
@@ -82,9 +91,8 @@ fn simulator(app: &Resonance) -> Simulator<'_, Message> {
         default_font: theme::UI_FONT,
         ..iced::Settings::default()
     };
-    // Tall enough that the bottom parameter panel is inside the
-    // viewport — `click` refuses a target that is not visible, and at
-    // 900 px the panel header sits just past the bottom edge.
+    // The same tall viewport the old bottom panel needed; the floating
+    // window sits well inside it.
     Simulator::with_size(settings, Size::new(1440.0, 1200.0), app.view())
 }
 
@@ -176,73 +184,142 @@ const EDITOR_TOGGLE: usize = 1;
 
 // ---------------------------------------------------------------------------
 
-/// The finding itself: a plugin that declares a GUI must still be able
-/// to show its parameters.
+/// The slot's name button opens the plugin's window, for every plugin —
+/// which window that is is the update's decision, not the strip's.
 #[test]
-fn clicking_a_gui_plugins_slot_opens_the_generic_param_panel() {
-    let app = app_with_plugin(true);
-    assert!(
-        matches!(
-            click(&app, PLUGIN).as_slice(),
-            [Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE))]
-        ),
-        "the slot must reach the parameter panel even though has_gui is true"
-    );
-}
-
-/// And the same click does the same thing when there is no editor to
-/// compete with — the two kinds of plugin behave alike now.
-#[test]
-fn clicking_a_non_gui_plugins_slot_opens_the_same_panel() {
-    let app = app_with_plugin(false);
-    assert!(matches!(
-        click(&app, PLUGIN).as_slice(),
-        [Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE))]
-    ));
-}
-
-/// Reaching the panel is only half of it — the panel has to actually
-/// draw the parameters for a plugin that declares a GUI.
-#[test]
-fn the_panel_renders_a_gui_plugins_parameters() {
-    let mut app = app_with_plugin(true);
-    {
-        let mut ui = simulator(&app);
+fn clicking_a_slot_sends_open_plugin_window_gui_or_not() {
+    for has_gui in [true, false] {
+        let app = app_with_plugin(has_gui);
         assert!(
-            ui.find(PARAM).is_err(),
-            "no parameter panel before the slot is clicked"
+            matches!(
+                click(&app, PLUGIN).as_slice(),
+                [Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE))]
+            ),
+            "has_gui = {has_gui}: the slot must send OpenPluginWindow"
         );
     }
+}
 
-    app.test_dispatch(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+/// A plugin with its own GUI opens THAT: the existing editor path, and no
+/// generic window on top of it.
+#[test]
+fn opening_a_gui_plugin_routes_to_its_editor() {
+    let (mut app, rx) = app_with_plugin_capture(true);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+
+    let sent: Vec<AudioCommand> = rx.try_iter().collect();
+    assert!(
+        sent.iter().any(|c| matches!(
+            c,
+            AudioCommand::OpenPluginEditor { instance_id } if *instance_id == INSTANCE
+        )),
+        "a GUI plugin's window is its own editor: {sent:?}"
+    );
+    assert_eq!(app.test_plugin_window(), None, "no generic window for it");
+    let mut ui = simulator(&app);
+    assert!(ui.find(PARAM).is_err(), "and no parameter list drawn");
+}
+
+/// A plugin without a GUI opens the host-drawn generic window, which lists
+/// its parameters — and no editor command goes out.
+#[test]
+fn opening_a_non_gui_plugin_shows_the_generic_window() {
+    let (mut app, rx) = app_with_plugin_capture(false);
+    {
+        let mut ui = simulator(&app);
+        assert!(ui.find(PARAM).is_err(), "no window before Open");
+    }
+
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+
+    assert_eq!(app.test_plugin_window(), Some(INSTANCE));
+    let sent: Vec<AudioCommand> = rx.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| matches!(c, AudioCommand::OpenPluginEditor { .. })),
+        "a GUI-less plugin has no editor to open: {sent:?}"
+    );
+    let mut ui = simulator(&app);
+    ui.find(PARAM)
+        .expect("the generic window should list the plugin's parameters");
+}
+
+/// The title bar names the plugin's owner beside the plugin.
+#[test]
+fn the_window_title_names_the_owner() {
+    let mut app = app_with_plugin(false);
+    let owner = app
+        .test_registry()
+        .tracks
+        .iter()
+        .find(|t| t.id == TRACK)
+        .expect("track")
+        .name
+        .clone();
+    let count = |app: &Resonance| {
+        let sink: Arc<Mutex<usize>> = Arc::default();
+        let s2 = Arc::clone(&sink);
+        let owner = owner.clone();
+        let _ = simulator(app).find(move |c: Candidate<'_>| -> Option<()> {
+            if let Candidate::Text { content, .. } = c {
+                if content == owner {
+                    *s2.lock().unwrap() += 1;
+                }
+            }
+            None
+        });
+        let n = *sink.lock().unwrap();
+        n
+    };
+    let before = count(&app);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    assert_eq!(count(&app), before + 1, "the title bar adds the owner's name");
+}
+
+/// A refused editor falls back to the generic window, and that window
+/// draws a GUI plugin's parameters too.
+#[test]
+fn a_refused_editor_falls_back_to_a_window_that_draws_its_parameters() {
+    let mut app = app_with_plugin(true);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: false,
+        failure: Some(resonance_audio::types::PluginEditorFailure::CreateFailed),
+    });
 
     let mut ui = simulator(&app);
     ui.find(PARAM)
-        .expect("the generic panel should list the plugin's parameters");
+        .expect("the fallback window should list the plugin's parameters");
 }
 
-/// The floating editor is not lost to the change: the panel header keeps
-/// offering it, so a GUI plugin has both surfaces rather than one.
+/// The floating editor is not lost in the fallback window: its title bar
+/// offers it again.
 #[test]
 fn a_gui_plugin_still_has_a_route_to_its_floating_editor() {
     let mut app = app_with_plugin(true);
-    app.test_dispatch(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+    app.test_apply_engine_event(AudioEvent::PluginEditorState {
+        instance_id: INSTANCE,
+        open: false,
+        failure: Some(resonance_audio::types::PluginEditorFailure::CreateFailed),
+    });
 
     assert!(
         matches!(
             click(&app, "Open Editor").as_slice(),
             [Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE))]
         ),
-        "the panel header's editor button must open the floating window"
+        "the window's editor button must open the floating window"
     );
 }
 
 /// A plugin with no editor must not be offered one — the button is the
-/// only thing `has_gui` still decides.
+/// only thing `has_gui` decides inside the window.
 #[test]
 fn a_non_gui_plugin_is_offered_no_editor_button() {
     let mut app = app_with_plugin(false);
-    app.test_dispatch(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
 
     let mut ui = simulator(&app);
     assert!(
@@ -253,10 +330,9 @@ fn a_non_gui_plugin_is_offered_no_editor_button() {
 
 // --- the strip's own editor toggle ------------------------------------
 //
-// The control the name button handed the editor over to. The two tests
-// above press the parameter PANEL header's "Open Editor" text button,
-// which is a different widget in a different module — nothing there
-// touches the sliders glyph on the strip.
+// The strip's dedicated editor glyph. The tests above press the generic
+// WINDOW's "Open Editor" text button, which is a different widget in a
+// different module — nothing there touches the sliders glyph on the strip.
 
 /// The glyph appears exactly where a plugin has a window to open.
 #[test]
@@ -384,15 +460,195 @@ fn the_strip_editor_toggle_is_tinted_while_the_editor_is_open() {
     );
 }
 
-/// Toggling closes it again, so the panel is not a one-way door.
-#[test]
-fn clicking_the_slot_again_closes_the_panel() {
-    let mut app = app_with_plugin(true);
-    app.test_dispatch(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
-    app.test_dispatch(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+/// The visible bounds of the text `label` in the open generic window's
+/// title bar (the strips under it draw some of the same labels).
+fn in_window(app: &Resonance, label: &'static str) -> Rectangle {
+    let origin = app.test_plugin_window_state().expect("open").position;
+    let sink: Arc<Mutex<Vec<Rectangle>>> = Arc::default();
+    let s2 = Arc::clone(&sink);
+    let _ = simulator(app).find(move |c: Candidate<'_>| -> Option<()> {
+        if let Candidate::Text {
+            content,
+            visible_bounds: Some(b),
+            ..
+        } = c
+        {
+            if content == label {
+                s2.lock().unwrap().push(b);
+            }
+        }
+        None
+    });
+    let all = sink.lock().unwrap().clone();
+    // The window layer is traversed after the base view, so its copy is
+    // the last one in its title-bar band.
+    all.into_iter()
+        .filter(|b| b.x >= origin.x && b.y >= origin.y && b.y < origin.y + 40.0)
+        .last()
+        .unwrap_or_else(|| panic!("the window draws {label:?}"))
+}
 
+/// The window's × closes it.
+#[test]
+fn the_close_button_closes_the_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+
+    // The strip has a × of its own (remove); the window's is the one
+    // inside the window.
+    let close = in_window(&app, "\u{00d7}");
     let mut ui = simulator(&app);
-    assert!(ui.find(PARAM).is_err(), "the panel closed again");
+    ui.point_at(Point::new(
+        close.x + close.width / 2.0,
+        close.y + close.height / 2.0,
+    ));
+    let _ = ui.simulate(iced_test::simulator::click());
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        matches!(
+            messages.as_slice(),
+            [Message::Plugin(PluginMessage::ClosePluginWindow(INSTANCE))]
+        ),
+        "the title bar's × closes the window: {messages:?}"
+    );
+    for m in messages {
+        app.test_dispatch(m);
+    }
+    assert_eq!(app.test_plugin_window(), None);
+    let mut ui = simulator(&app);
+    assert!(ui.find(PARAM).is_err(), "the window closed");
+}
+
+/// Esc closes the window: it is non-modal, but Esc is its close key.
+#[test]
+fn escape_closes_the_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    assert_eq!(app.test_plugin_window(), Some(INSTANCE));
+
+    let _ = app.update(Message::Ui(UiMessage::ShortcutKey {
+        chord: KeyChord::named(NamedKey::Escape, Mods::NONE),
+        repeat: false,
+        captured: false,
+    }));
+    assert_eq!(app.test_plugin_window(), None, "Esc closed it");
+}
+
+/// Pressing the title bar (not one of its buttons) starts a drag, and the
+/// drag moves the window by the pointer's travel.
+#[test]
+fn dragging_the_title_bar_moves_the_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    let start = app.test_plugin_window_state().expect("open").position;
+    let drag = |step| Message::Plugin(PluginMessage::PluginWindowDrag(step));
+
+    // The strip draws the plugin's name too; the title bar's copy is the
+    // one inside the window.
+    let title_name = in_window(&app, PLUGIN);
+    let mut ui = simulator(&app);
+    ui.point_at(Point::new(title_name.x + 2.0, title_name.y + 2.0));
+    let _ = ui.simulate(iced_test::simulator::click());
+    let pressed: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        pressed.iter().any(|m| matches!(
+            m,
+            Message::Plugin(PluginMessage::PluginWindowDrag(PluginWindowDrag::Begin))
+        )),
+        "pressing the title bar starts a drag: {pressed:?}"
+    );
+
+    app.test_dispatch(drag(PluginWindowDrag::Begin));
+    app.test_dispatch(drag(PluginWindowDrag::Moved(Point::new(
+        start.x + 10.0,
+        start.y + 5.0,
+    ))));
+    app.test_dispatch(drag(PluginWindowDrag::Moved(Point::new(
+        start.x + 110.0,
+        start.y + 55.0,
+    ))));
+    app.test_dispatch(drag(PluginWindowDrag::End));
+
+    let after = app.test_plugin_window_state().expect("still open");
+    assert_eq!(after.position, Point::new(start.x + 100.0, start.y + 50.0));
+    assert!(after.drag.is_none(), "the release ends the drag");
+
+    // A move with no drag in progress does nothing.
+    app.test_dispatch(drag(PluginWindowDrag::Moved(Point::new(5.0, 5.0))));
+    assert_eq!(
+        app.test_plugin_window_state().expect("open").position,
+        after.position
+    );
+}
+
+/// Opening another plugin's window replaces the open one, in place.
+#[test]
+fn opening_another_plugin_replaces_the_window_in_place() {
+    let mut app = app_with_plugin(false);
+    app.test_push_track_plugin(
+        TRACK,
+        PluginSlotState::new(
+            INSTANCE + 1,
+            "Second".to_owned(),
+            "com.example.second".to_owned(),
+            "/plugins/second.clap".to_owned(),
+            vec![],
+            false,
+        ),
+    );
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    app.test_place_plugin_window(Point::new(300.0, 200.0));
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE + 1)));
+
+    let w = app.test_plugin_window_state().expect("open");
+    assert_eq!(w.instance_id, INSTANCE + 1);
+    assert_eq!(w.position, Point::new(300.0, 200.0), "it keeps its place");
+}
+
+/// Removing the plugin closes its window.
+#[test]
+fn removing_the_plugin_closes_its_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    app.test_dispatch(Message::Plugin(PluginMessage::RemovePluginFromTrack(
+        TRACK, INSTANCE,
+    )));
+    assert_eq!(app.test_plugin_window(), None);
+    let mut ui = simulator(&app);
+    assert!(ui.find(PARAM).is_err(), "nothing left drawn");
+}
+
+/// Loading a project closes the window: its plugin may not exist there.
+#[test]
+fn loading_a_project_closes_the_window() {
+    let mut app = app_with_plugin(false);
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    let file = app.test_build_project_file();
+    app.test_replay_loaded_project(file);
+    assert_eq!(app.test_plugin_window(), None);
+}
+
+/// A missing plugin opens the generic window even though it declares a
+/// GUI, showing its recovery rather than parameters.
+#[test]
+fn a_missing_plugin_opens_the_window_with_its_recovery() {
+    let mut app = app_with_plugin(true);
+    app.test_apply_engine_event(AudioEvent::PluginLoadFailed {
+        instance_id: Some(INSTANCE),
+        clap_plugin_id: "com.resonance.eq".to_owned(),
+        clap_file_path: "/plugins/eq.clap".to_owned(),
+        reason: "Failed to load plugin: no such file".to_owned(),
+    });
+    let _ = app.update(Message::Ui(UiMessage::DismissMissingPlugins));
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    assert_eq!(
+        app.test_plugin_window(),
+        Some(INSTANCE),
+        "a missing plugin has no editor; it gets the generic window"
+    );
+    let mut ui = simulator(&app);
+    ui.find(format!("\u{26a0} {PLUGIN} is not available on this machine").as_str())
+        .expect("the recovery body is drawn");
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +664,7 @@ fn clicking_the_slot_again_closes_the_panel() {
 /// Editor" over a window that was never there, and pressing it sent a
 /// close for an editor that did not exist.
 #[test]
-fn a_refused_open_leaves_the_slot_closed_and_offers_the_generic_panel() {
+fn a_refused_open_leaves_the_slot_closed_and_offers_the_generic_window() {
     let mut app = app_with_plugin(true);
 
     app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
@@ -427,9 +683,9 @@ fn a_refused_open_leaves_the_slot_closed_and_offers_the_generic_panel() {
          offer to close a window that is not there"
     );
     assert_eq!(
-        app.test_selected_plugin(),
+        app.test_plugin_window(),
         Some(INSTANCE),
-        "a refused editor must fall back to the generic parameter panel — \
+        "a refused editor must fall back to the generic window — \
          it is the only way left to see this plugin's parameters, and \
          without it the press appears to do nothing at all"
     );
@@ -466,14 +722,14 @@ fn a_titlebar_close_clears_the_flag_without_the_app_asking() {
     );
 }
 
-/// A successful open does NOT select the generic panel.
+/// A successful open does NOT open the generic window.
 ///
 /// The fallback is for failures only; hijacking the panel on every
 /// successful open would fight the user's own selection.
 #[test]
-fn a_successful_open_leaves_the_panel_selection_alone() {
+fn a_successful_open_leaves_the_generic_window_alone() {
     let mut app = app_with_plugin(true);
-    let before = app.test_selected_plugin();
+    let before = app.test_plugin_window();
 
     app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginEditor(INSTANCE)));
     app.test_apply_engine_event(AudioEvent::PluginEditorState {
@@ -483,8 +739,55 @@ fn a_successful_open_leaves_the_panel_selection_alone() {
     });
 
     assert_eq!(
-        app.test_selected_plugin(),
+        app.test_plugin_window(),
         before,
-        "a working editor must not steal the parameter panel"
+        "a working editor must not also open the generic window"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Golden
+// ---------------------------------------------------------------------------
+
+/// The generic window open over the mixer: title bar (plugin, owner, ×),
+/// preset bar, and a parameter list, floating above the strips — which
+/// keep the full height the bottom panel used to take.
+#[test]
+fn generic_window_over_the_mixer_golden() {
+    let mut app = app_with_plugin(false);
+    app.test_push_track_plugin(
+        TRACK,
+        PluginSlotState::new(
+            INSTANCE + 1,
+            "Tape Echo".to_owned(),
+            "com.example.tape-echo".to_owned(),
+            "/plugins/tape-echo.clap".to_owned(),
+            [
+                ("Time", 0.0, 2000.0, 375.0, "375 ms"),
+                ("Feedback", 0.0, 1.0, 0.45, "45 %"),
+                ("Mix", 0.0, 1.0, 0.3, "30 %"),
+                ("Tone", -1.0, 1.0, 0.2, ""),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (name, min, max, value, text))| ParamInfo {
+                id: i as u32 + 1,
+                name: name.to_owned(),
+                min_value: min,
+                max_value: max,
+                default_value: min,
+                current_value: value,
+                text: text.to_owned(),
+                ..Default::default()
+            })
+            .collect(),
+            false,
+        ),
+    );
+    app.test_dispatch(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE + 1)));
+    let mut sim = simulator(&app);
+    let snap = sim
+        .snapshot(&theme::resonance_theme())
+        .expect("snapshot should render");
+    crate::common::assert_golden(&snap, "tests/snapshots/plugin_generic_window.png");
 }

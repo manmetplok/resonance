@@ -1,7 +1,8 @@
 //! Mixer view: top-level layout, the small "+ Bus" strip, and the
 //! shared `view_plugin_slot_row` helper used by every channel strip.
 //! The actual strip rendering lives in submodules — `track_strip.rs`,
-//! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
+//! `bus_strip.rs`, `master_strip.rs`. A plugin's parameters open in the
+//! floating generic window (`view/plugin_window.rs`), not in the mixer.
 
 pub(crate) mod automation;
 mod bus_strip;
@@ -9,8 +10,6 @@ mod group_strip;
 pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
-mod plugin_panel;
-pub(crate) use plugin_panel::plugin_params_fingerprint;
 mod reference_panel;
 pub(crate) mod reorder;
 mod strip_fingerprint;
@@ -114,12 +113,6 @@ impl crate::Resonance {
         mixer_col = mixer_col.push(tracks_area);
         mixer_col = mixer_col.push(h_sep_mid);
         mixer_col = mixer_col.push(busses_area);
-
-        if let Some(panel) = self.view_plugin_panel() {
-            let h_sep = container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg);
-            mixer_col = mixer_col.push(h_sep);
-            mixer_col = mixer_col.push(panel);
-        }
 
         // Inspector sits to the right of the strips; a hairline separates
         // it from the strips column.
@@ -246,24 +239,12 @@ impl crate::Resonance {
         let missing = plugin.availability.is_missing();
         let pname = slot_pill_label(&plugin.plugin_name, missing);
         let pid = plugin.instance_id;
-        // The name opens the generic parameter panel — for every plugin,
-        // GUI or not (ba todo #1306, audit finding X4).
-        //
-        // This used to route to the panel only when `has_gui == false`,
-        // and since all eleven bundled plugins declare a GUI, that made
-        // the generic panel unreachable for the entire fleet: the one
-        // surface that shows a plugin's parameters as plain numbers, and
-        // the only thing left to fall back on when a floating editor
-        // fails to open. The control API never had the restriction, so
-        // an agent could read and set those parameters while a human
-        // could not see them at all.
-        //
-        // The floating editor is not lost — it moves to its own control
-        // below, because "show me the parameters" and "open the plugin's
-        // own window" are two different requests and one button cannot
-        // be both.
-        let click_msg = Message::Plugin(PluginMessage::TogglePluginPanel(pid));
-        let is_selected = self.ui.mixer.selected_plugin == Some(pid);
+        // The name opens the plugin's window (mixer-cleanup.md §4): its
+        // own editor when it has one, the host-drawn generic window
+        // (parameters + preset bar, or the missing-plugin recovery)
+        // otherwise.
+        let click_msg = Message::Plugin(PluginMessage::OpenPluginWindow(pid));
+        let is_selected = self.ui.mixer.plugin_window_id() == Some(pid);
 
         // Instrument slots get the design's lavender pill: ◆ glyph
         // followed by the plugin name on a tinted ACCENT_DIM background

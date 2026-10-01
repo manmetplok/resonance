@@ -243,7 +243,6 @@ pub enum PluginMessage {
         instance_id: PluginInstanceId,
         plugin: ScannedPlugin,
     },
-    TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
     /// Recall a preset onto a plugin: every parameter it names, applied
     /// as **one** edit (ba todo #1333).
@@ -329,6 +328,28 @@ pub enum PluginMessage {
     /// Not undoable — the plugin catalog is a fact about the machine,
     /// not part of the project.
     RescanPlugins,
+    /// "Open" for a plugin slot: always produces a window
+    /// (mixer-cleanup.md §4). A plugin with its own GUI takes the
+    /// `OpenPluginEditor` path; one without — or one that is missing on
+    /// this machine — opens the host-drawn generic window (parameters,
+    /// preset bar, or the missing-plugin recovery). Opening another
+    /// plugin's generic window replaces the open one.
+    OpenPluginWindow(PluginInstanceId),
+    /// Close the generic window if it shows this plugin.
+    ClosePluginWindow(PluginInstanceId),
+    /// Title-bar drag of the generic window.
+    PluginWindowDrag(PluginWindowDrag),
+}
+
+/// A step of the generic plugin window's title-bar drag.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PluginWindowDrag {
+    /// The title bar was pressed.
+    Begin,
+    /// The pointer moved, in window coordinates.
+    Moved(iced::Point),
+    /// The button was released (or the pointer left the window).
+    End,
 }
 
 impl PluginMessage {
@@ -378,8 +399,11 @@ impl PluginMessage {
             // that sticks is re-dispatched as `LoadPluginPreset`, and a
             // "with preset…" add as the add it is.
             Self::PresetUi(_) => UndoAction::Skip,
-            Self::TogglePluginPanel(_)
-            | Self::OpenPluginEditor(_)
+            Self::OpenPluginEditor(_)
+            // Opening, closing and moving a window are view state.
+            | Self::OpenPluginWindow(_)
+            | Self::ClosePluginWindow(_)
+            | Self::PluginWindowDrag(_)
             // A rescan changes what the machine offers, not what the
             // project contains — there is nothing to undo (todo #1307).
             | Self::RescanPlugins

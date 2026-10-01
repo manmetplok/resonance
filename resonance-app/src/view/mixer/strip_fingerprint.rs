@@ -117,7 +117,7 @@ pub(super) fn track_strip_fingerprint(r: &crate::Resonance, track: &TrackState) 
     // enabled directions are a pure function of the chain hashed here).
     track.plugins.len().hash(&mut h);
     for p in &track.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
     }
     // External-instrument head pill, offline flag and summary chips.
     let ext = r.devices.external_instruments.get(&track.id);
@@ -192,7 +192,7 @@ pub(super) fn bus_strip_fingerprint(r: &crate::Resonance, bus: &BusState) -> u64
     bus.fx_bypassed.hash(&mut h);
     bus.plugins.len().hash(&mut h);
     for p in &bus.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
     }
     hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
     hash_auto_header(&mut h, r, AutoChan::Bus(bus.id), &bus.plugins);
@@ -214,7 +214,7 @@ pub(super) fn master_strip_fingerprint(r: &crate::Resonance) -> u64 {
     r.master.fx_bypassed.hash(&mut h);
     r.master.plugins.len().hash(&mut h);
     for p in &r.master.plugins {
-        hash_slot(&mut h, p, r.ui.mixer.selected_plugin == Some(p.instance_id));
+        hash_slot(&mut h, p, r.ui.mixer.plugin_window_id() == Some(p.instance_id));
     }
     hash_scanned(&mut h, &r.ui.view_caches.fx_plugins);
     hash_auto_header(&mut h, r, AutoChan::Master, &r.master.plugins);

@@ -366,7 +366,7 @@ pub(crate) fn media_presets_body(r: &Resonance) -> Element<'_, Message> {
     let target = r
         .ui
         .mixer
-        .selected_plugin
+        .plugin_window_id()
         .and_then(|id| r.plugin_slot(id))
         .map(|slot| format!("Double-click loads onto {}", slot.plugin_name))
         .unwrap_or_else(|| "Select a plugin slot, then double-click a preset".to_string());
