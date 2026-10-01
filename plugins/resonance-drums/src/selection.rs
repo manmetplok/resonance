@@ -21,6 +21,12 @@
 //! back to "missing"), so a host's undo of a pick made from an external
 //! or missing kit restores that kit. Only a newer parked kit replaces it.
 //!
+//! **Known limitation:** one value stands for one parked kit at a time, so
+//! a move from one parked kit to another — external kit X to external kit
+//! Y (a relink, a second import), or missing to external — cannot be
+//! undone by the host: the value is -2 before and after, the host records
+//! no change, and X is no longer remembered. Undoing past it lands on Y.
+//!
 //! The parameter is **not automatable** (a kit swap is a multi-gigabyte
 //! decode) and **not in the state**: a slot is this machine's library
 //! layout. The kit travels as a [`KitRef`] instead, and the slot is derived
@@ -396,6 +402,9 @@ pub struct KitSelection {
     /// The `kit_load_progress` stage the host was last told of
     /// ([`note_progress`]).
     reported_stage: AtomicU8,
+    /// The load (its progress tag) `kit_load_progress` last reported
+    /// ([`note_load_progress`]).
+    reported_load: AtomicU64,
     /// The load generation the host was last asked to process for
     /// ([`watch`]).
     process_asked: AtomicU64,
@@ -1110,12 +1119,6 @@ const STAGE_HALF: u8 = 1;
 const STAGE_DONE: u8 = 2;
 const STAGE_FAILED: u8 = 3;
 
-/// Whether the move from `last` to `now` is one the host is told about:
-/// the start of a load, its half-way mark, its end.
-pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
-    progress_stage(last, false) != progress_stage(now, false)
-}
-
 /// What the host must re-read after a progress change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressReport {
@@ -1143,6 +1146,22 @@ pub fn note_progress(sel: &KitSelection, now: f32, failed: bool) -> Option<Progr
     })
 }
 
+/// [`note_progress`] for load `load` (its
+/// [`KitLoadProgress::generation_tag`]): a newer load superseding one
+/// still under way stays in the same stage (start → start) while its
+/// value drops back, so the host is asked to re-read it then too.
+pub fn note_load_progress(
+    sel: &KitSelection,
+    load: u64,
+    now: f32,
+    failed: bool,
+) -> Option<ProgressReport> {
+    let new_load = sel.reported_load.swap(load, Ordering::AcqRel) != load;
+    let report = note_progress(sel, now, failed);
+    let under_way = matches!(progress_stage(now, failed), STAGE_START | STAGE_HALF);
+    report.or((new_load && under_way).then_some(ProgressReport::Values))
+}
+
 /// Ask `host` for what `report` needs.
 pub fn send_progress_report(host: &resonance_plugin::HostHandle, report: ProgressReport) {
     match report {
@@ -1162,7 +1181,8 @@ pub fn publish_progress(
     let now = reported_progress(params, progress);
     params.kit_load_progress.set_value(now);
     let failed = now <= 0.0 && progress_failure(params, progress).is_some();
-    if let (Some(report), Some(host)) = (note_progress(&params.selection, now, failed), host) {
+    let report = note_load_progress(&params.selection, progress.generation_tag(), now, failed);
+    if let (Some(report), Some(host)) = (report, host) {
         send_progress_report(host, report);
     }
     now

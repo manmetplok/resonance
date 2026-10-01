@@ -72,6 +72,9 @@ impl ProgressSnapshot {
         }
         match self.phase {
             LoadPhase::Failed => 0.0,
+            // Decoded and sent with nothing to read (every pad reused):
+            // as far along as any handed-off kit, not back at the start.
+            LoadPhase::HandedOff if self.files_total == 0 => 0.999,
             _ if self.files_total == 0 => 0.0,
             _ => (self.files_done as f32 / self.files_total as f32).min(0.999),
         }
@@ -264,6 +267,12 @@ impl KitLoadProgress {
                 complete,
             };
         }
+    }
+
+    /// The (tag of the) load the progress reports: changes when a newer
+    /// load begins, or `idle` moves it on. Lock-free.
+    pub fn generation_tag(&self) -> u64 {
+        tag_of(self.state.load(Ordering::Acquire))
     }
 
     /// [`ProgressSnapshot::fraction`] of a fresh snapshot: the value K4's
