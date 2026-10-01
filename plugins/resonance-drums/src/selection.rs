@@ -338,8 +338,16 @@ impl LibraryHandle {
 #[derive(Default)]
 pub struct KitSelection {
     pub library: LibraryHandle,
+    /// Held across every "read `kit_select`, act on it, record `acted`"
+    /// — the watcher's [`apply_pending`], the editor's [`select_now`],
+    /// and a state load's [`adopt_state_kit`] with the load it starts —
+    /// so no two of them interleave: a watcher that read a host write
+    /// cannot act on it after a state load moved past it (and clear the
+    /// state's fallback kit, or start a second load).
+    act: Mutex<()>,
     /// The `kit_select` value this instance last acted on, so the watcher
-    /// sees a write as a change exactly once.
+    /// sees a write as a change exactly once. Written under `act`; read
+    /// lock-free (text, progress).
     acted: AtomicI32,
     /// The reference a state asked for that resolved to nothing: kept
     /// verbatim (a save writes it back), shown as missing.
@@ -370,6 +378,13 @@ impl KitSelection {
     /// The value `kit_select` was last acted on at.
     pub fn acted(&self) -> i32 {
         self.acted.load(Ordering::Acquire)
+    }
+
+    /// Hold off every other act on `kit_select` (see the `act` field):
+    /// a state load takes it around resolving, adopting and loading its
+    /// kit. Never from the audio thread.
+    pub fn acting(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.act.lock()
     }
 
     /// `kit_select`'s text for `value`: the slot's kit name, `"<name>
@@ -478,25 +493,35 @@ pub struct StartedLoad {
 ///
 /// `Ok(None)`: nothing to do, or nothing to load.
 pub fn apply_pending(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
-    let value = bridge.params.kit_select.value();
     let sel = &bridge.params.selection;
-    if sel.acted.swap(value, Ordering::AcqRel) == value {
+    let _acting = sel.act.lock();
+    let value = bridge.params.kit_select.value();
+    if sel.acted.load(Ordering::Acquire) == value {
         return Ok(None);
     }
-    select(bridge, value)
+    act(bridge, value)
+}
+
+/// Act on `value` and record it as acted on — after the act, so a
+/// reader that sees `acted` caught up also sees the load it started.
+/// Under `act`.
+fn act(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
+    let out = select(bridge, value);
+    bridge
+        .params
+        .selection
+        .acted
+        .store(value, Ordering::Release);
+    out
 }
 
 /// Set `kit_select` to `value` and act on it even if it already holds it —
 /// the editor's pick (a pick of the playing kit reloads it, which retries
 /// a kit that failed).
 pub fn select_now(bridge: &KitBridge, value: i32) -> Result<Option<StartedLoad>, String> {
+    let _acting = bridge.params.selection.act.lock();
     bridge.params.kit_select.set_value(value);
-    bridge
-        .params
-        .selection
-        .acted
-        .store(value, Ordering::Release);
-    let out = select(bridge, value);
+    let out = act(bridge, value);
     bridge.request_params_rescan();
     out
 }
@@ -573,10 +598,17 @@ pub fn start_kit(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
     }
 }
 
-/// A kit about to load by its manifest, with no library slot to name it
-/// (an import the index has not slotted, a relinked folder): `kit_select`
+/// Load the kit at `manifest`, which has no library slot to name it (an
+/// import the index has not slotted, a relinked folder): `kit_select`
 /// parks at [`NO_KIT`] and reads as the kit's name.
-pub fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
+pub fn load_unslotted_now(bridge: &KitBridge, manifest: PathBuf) -> StartedLoad {
+    let _acting = bridge.params.selection.act.lock();
+    park_unslotted(bridge, &manifest);
+    start_kit(bridge, manifest)
+}
+
+/// Under `act`.
+fn park_unslotted(bridge: &KitBridge, manifest: &Path) {
     let sel = &bridge.params.selection;
     sel.clear_notes();
     *sel.resolved_from.lock() = None;
@@ -740,7 +772,8 @@ pub fn resolve_state(state: &Value, sel: &KitSelection) -> Option<StateKit> {
 /// Record what a state load resolved: the missing reference, the slot
 /// `kit_select` now reads (the kit's library slot, else [`NO_KIT`]), and
 /// the name it shows when the kit holds no slot. The kit itself is loaded
-/// by the caller.
+/// by the caller — all of it, from resolving the state to starting the
+/// load, under [`KitSelection::acting`].
 pub fn adopt_state_kit(bridge_params: &crate::params::DrumParams, kit: &StateKit) {
     let sel = &bridge_params.selection;
     sel.clear_notes();

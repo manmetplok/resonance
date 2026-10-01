@@ -829,3 +829,89 @@ fn locate_relinks_a_folder_whose_manifest_matches_and_asks_otherwise() {
         "the banner is gone"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Acting on kit_select: one at a time
+// ---------------------------------------------------------------------------
+
+/// A host write the watcher has not acted on yet, then a state load that
+/// names another kit, with the watcher racing the load (review finding
+/// 7): the state wins every time. Its kit is the one wanted, its fallback
+/// is kept (a watcher acting on the stale write in between used to clear
+/// it), `kit_select` reads the state's slot, and the write is not acted
+/// on afterwards either.
+#[test]
+fn a_state_load_racing_the_watcher_is_never_undone_by_a_stale_host_write() {
+    let home = Home::new("race");
+    let alpha = home.kit("Alpha", "Alpha Kit", 0.1);
+    home.kit("Bravo", "Bravo Kit", 0.2);
+    let charlie = home.kit("Charlie", "Charlie Kit", 0.3);
+    let lib = home.library();
+    let (a, b) = (slot_of(&lib, "Alpha Kit"), slot_of(&lib, "Bravo Kit"));
+    let state = serde_json::json!({
+        "params": {},
+        "kit_ref": KitRef::from_manifest_path(&alpha, Some(&home.root())).to_json(),
+        "kit_ref_fallback": KitRef::from_manifest_path(&charlie, Some(&home.root())).to_json(),
+    });
+
+    for round in 0..200 {
+        // Inactive, so nothing decodes: what each side records is all
+        // there is to race on.
+        let plugin = plugin_on(&lib);
+        let bridge = plugin.bridge.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (bridge, stop) = (bridge.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = selection::apply_pending(&bridge);
+                }
+            })
+        };
+        plugin.param(KIT_SELECT).set_plain(b as f64);
+        saver_for(&plugin).load(&state);
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        let _ = selection::apply_pending(&bridge);
+
+        assert_eq!(bridge.wanted_kit_path(), Some(alpha.clone()), "round {round}");
+        assert_eq!(
+            *bridge.kit_fallback.lock(),
+            Some(charlie.clone()),
+            "round {round}: the state's fallback was cleared"
+        );
+        assert_eq!(bridge.params.kit_select.value(), a, "round {round}");
+        assert_eq!(bridge.params.selection.acted(), a, "round {round}");
+    }
+}
+
+/// The editor's pick and the watcher on one value: one load, not two.
+#[test]
+fn an_editor_pick_racing_the_watcher_starts_one_load() {
+    let home = Home::new("race-pick");
+    home.kit("Alpha", "Alpha Kit", 0.1);
+    let lib = home.library();
+    let a = slot_of(&lib, "Alpha Kit");
+    for round in 0..200 {
+        let plugin = plugin_on(&lib);
+        let bridge = plugin.bridge.clone();
+        let before = bridge.load_generation.load(Ordering::Acquire);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watcher = {
+            let (bridge, stop) = (bridge.clone(), stop.clone());
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    let _ = selection::apply_pending(&bridge);
+                }
+            })
+        };
+        selection::select_now(&bridge, a).unwrap();
+        stop.store(true, Ordering::Relaxed);
+        watcher.join().unwrap();
+        assert_eq!(
+            bridge.load_generation.load(Ordering::Acquire),
+            before + 1,
+            "round {round}: the pick was acted on twice"
+        );
+    }
+}

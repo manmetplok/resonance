@@ -983,6 +983,11 @@ impl ExtraStateSaver for DrumsExtraState {
                 .as_ref()
                 .map(|b| b.stream_preload.load(Ordering::Relaxed))
         };
+        // No act on `kit_select` interleaves with this load's: from here
+        // to the load it starts, the watcher waits (it would otherwise act
+        // on a host write the state supersedes, clearing the state's
+        // fallback kit and starting a second load).
+        let _acting = selection.acting();
         let before = (
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),

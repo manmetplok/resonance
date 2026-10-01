@@ -114,8 +114,7 @@ fn requested(started: StartedLoad) -> RequestedKit {
 /// "none", and the kit is loaded now — or, before the host activated the
 /// plugin, at activation.
 fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
-    selection::park_unslotted(bridge, &manifest_path);
-    Ok(requested(selection::start_kit(bridge, manifest_path)))
+    Ok(requested(selection::load_unslotted_now(bridge, manifest_path)))
 }
 
 pub(super) fn format_kit_status(status: &KitStatus) -> String {
