@@ -392,6 +392,26 @@ fn a_reload_keeps_reporting_and_retries_a_partial_pad() {
     }
 }
 
+/// The overhead pick only touches pads that have an overhead to pick:
+/// the built-in pads filling the pieces the kit lacks are kept.
+#[test]
+fn an_overhead_change_rebuilds_only_pads_with_an_overhead() {
+    let kit = fixture_kit(Damage::None);
+    let plugin = booted();
+    pick(&plugin, &kit);
+    settle(&plugin);
+    plugin
+        .bridge
+        .overhead_setup_key
+        .lock()
+        .push_str("-other");
+    assert!(reload_kit(&plugin.bridge));
+    let stats = settle(&plugin);
+    // Kick, snare and hat have an OH setup; nothing else in the fixture does.
+    assert_eq!(stats.rebuilt_pads, 3, "{stats:?}");
+    assert_eq!(stats.reused_pads, NUM_PADS - 3);
+}
+
 #[test]
 fn an_articulation_change_decodes_only_that_pads_files() {
     let kit = fixture_kit(Damage::None);

@@ -122,9 +122,8 @@ const DRUMMICA_ARTICULATION_ALT: [&str; NUM_PADS] = [
 pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
 
 // ---------------------------------------------------------------------------
-// Status reported by the loader thread, rendered by the editor.
+// Requests, builds and the status reported by the loader thread.
 // ---------------------------------------------------------------------------
-
 
 /// Everything a kit is decoded from except the sample rate: the manifest
 /// and the mic / articulation choices. Two loads with equal requests at
@@ -139,11 +138,15 @@ pub struct KitRequest {
 
 impl KitRequest {
     /// What pad `pad` of this request is built from, besides the kit.
-    pub fn pad_request(&self, pad: usize) -> PadRequest {
+    /// `has_overhead`: whether the pad's piece has an overhead to pick
+    /// with the overhead key at all (see [`piece_uses_overhead_key`]);
+    /// if not, the key is no part of the pad, and changing it must not
+    /// rebuild it.
+    pub fn pad_request(&self, pad: usize, has_overhead: bool) -> PadRequest {
         PadRequest {
             articulation: self.articulations[pad],
             close_setups: self.pad_choices[pad].clone(),
-            overhead_setup_key: self.overhead_setup_key.clone(),
+            overhead_setup_key: has_overhead.then(|| self.overhead_setup_key.clone()),
         }
     }
 }
@@ -155,7 +158,19 @@ impl KitRequest {
 pub struct PadRequest {
     pub articulation: bool,
     pub close_setups: PadMicChoices,
-    pub overhead_setup_key: String,
+    /// `None` for a pad the overhead key cannot change: the built-in
+    /// pads, and pieces with no overhead setup.
+    pub overhead_setup_key: Option<String>,
+}
+
+/// Whether the overhead setup key can change what `piece` loads as its
+/// overhead: it holds the key itself, or an OH setup the overhead falls
+/// back to (see `decode::plan_overhead_bank`).
+pub fn piece_uses_overhead_key(
+    piece: &std::collections::BTreeMap<String, MicSetup>,
+    key: &str,
+) -> bool {
+    piece.contains_key(key) || piece.values().any(|setup| setup.position.starts_with("OH"))
 }
 
 /// The manifest file as it was when a kit was built from it, so a reload
@@ -512,7 +527,14 @@ pub fn load_kit(
             overhead: Option<decode::BankPlan>,
         },
     }
-    let pad_requests: Vec<PadRequest> = (0..NUM_PADS).map(|i| request.pad_request(i)).collect();
+    let pad_requests: Vec<PadRequest> = (0..NUM_PADS)
+        .map(|i| {
+            let has_overhead = manifest
+                .get(piece_name_for(i, request.articulations[i]))
+                .is_some_and(|piece| piece_uses_overhead_key(piece, &request.overhead_setup_key));
+            request.pad_request(i, has_overhead)
+        })
+        .collect();
     let mut jobs = Jobs::default();
     let mut plans = Vec::with_capacity(NUM_PADS);
     for (pad_idx, mapping) in PAD_MAPPINGS.iter().enumerate() {
