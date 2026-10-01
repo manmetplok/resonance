@@ -49,7 +49,10 @@ use articulation::ArticulationWatcher;
 #[cfg(feature = "editor")]
 use download::WorkerHandle;
 use kit::LoadedPad;
-use kit_loader::{HandedOffKit, KitRequest, KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
+use kit_loader::{
+    BuiltKit, HandedOffKit, KitLoadProgress, KitRequest, KitStatus, LoadStats, PadMicChoices,
+    DEFAULT_OVERHEAD_SETUP,
+};
 use mic_catalog::ManifestMicCatalog;
 use params::{DrumParams, GLOBAL_PARAMS, PARAMS_PER_PAD};
 use resonance_plugin::plugin::ExtraStateSaver;
@@ -151,6 +154,22 @@ pub struct KitBridge {
     /// from the decoded takes. Published alongside every kit build; read by
     /// the inspector's SAMPLE stage. Empty until the first kit is built.
     pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
+    /// Of `kit_bytes`, the bytes the last load found already decoded by
+    /// another instance (through the shared sample cache, E5) — memory
+    /// this kit costs nothing extra for. The process-wide total is
+    /// `kit_loader::cache::global().stats().resident_bytes`.
+    pub kit_shared_bytes: Arc<AtomicU64>,
+    /// The last kit a loader built, kept so the next load of the same kit
+    /// at the same rate rebuilds only the pads that changed (E4). Shares
+    /// its sample memory with the kit the sampler plays.
+    pub built_kit: Arc<Mutex<Option<BuiltKit>>>,
+    /// What the last successful load did: files decoded vs found in the
+    /// cache, pads reused, unreadable files. Read by tests as the decode
+    /// counter.
+    pub load_stats: Arc<Mutex<LoadStats>>,
+    /// Decode progress, complete only once the audio thread has taken the
+    /// kit (§5.4). Lock-free on every side; the sampler marks the take.
+    pub load_progress: Arc<KitLoadProgress>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -239,6 +258,9 @@ impl KitBridge {
         }
         self.load_generation.fetch_add(1, Ordering::AcqRel);
         *pending = None;
+        // No load is outstanding any more; one the state names is
+        // started by the caller (and restarts the progress).
+        self.load_progress.idle();
         let mut status = self.kit_status.lock();
         if matches!(*status, KitStatus::Loading { .. }) {
             *status = KitStatus::Empty;
@@ -331,8 +353,13 @@ impl ResonancePlugin for ResonanceDrums {
             out_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
             kit_bytes: Arc::new(AtomicU64::new(0)),
             pad_samples: Arc::new(Mutex::new(Vec::new())),
+            kit_shared_bytes: Arc::new(AtomicU64::new(0)),
+            built_kit: Arc::new(Mutex::new(None)),
+            load_stats: Arc::new(Mutex::new(LoadStats::default())),
+            load_progress: Arc::new(KitLoadProgress::new()),
         };
         let mut sampler = DrumSampler::new(kit_receiver);
+        sampler.set_load_progress(bridge.load_progress.clone());
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
@@ -407,13 +434,25 @@ impl ResonancePlugin for ResonanceDrums {
             let mut handed = self.bridge.handed_off.lock();
             if let Ok(pads) = self.bridge.kit_reclaim.try_recv() {
                 match handed.as_ref() {
-                    Some(h) if h.sample_rate == sample_rate => self.sampler.install_kit(pads),
+                    Some(h) if h.sample_rate == sample_rate => {
+                        self.sampler.install_kit(pads);
+                        self.bridge.load_progress.note_taken();
+                    }
                     _ => {
                         drop(pads);
+                        self.bridge.load_progress.note_reclaimed();
                         *handed = None;
                     }
                 }
             }
+            // A build at another rate cannot donate a single pad to the
+            // next load; letting it go now frees its memory before that
+            // load decodes, instead of after.
+            let mut built = self.bridge.built_kit.lock();
+            if built.as_ref().is_some_and(|b| b.sample_rate != sample_rate) {
+                *built = None;
+            }
+            drop(built);
             let reuse = matches!(
                 (handed.as_ref(), wanted.as_ref()),
                 (Some(h), Some(w)) if h.sample_rate == sample_rate && h.request == *w
@@ -435,6 +474,10 @@ impl ResonancePlugin for ResonanceDrums {
         // kit that is really loaded rather than a placeholder.
         self.publish_kit_facts(sample_rate);
 
+        if wanted.is_none() {
+            // The built-in kit is the wanted kit, and it is in place.
+            self.bridge.load_progress.idle();
+        }
         if let Some(request) = wanted {
             kit_loader::spawn_loader(
                 request.path,
@@ -606,6 +649,7 @@ impl ResonanceDrums {
         self.bridge
             .kit_bytes
             .store(self.sampler.total_sample_bytes() as u64, Ordering::Relaxed);
+        self.bridge.kit_shared_bytes.store(0, Ordering::Relaxed);
         *self.bridge.pad_samples.lock() =
             sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
     }
@@ -641,11 +685,15 @@ pub struct DrumsExtraState {
 impl ExtraStateSaver for DrumsExtraState {
     fn save(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut map = serde_json::Map::new();
-        let path = self
-            .kit_path
-            .lock()
-            .as_ref()
-            .map(|p| p.to_string_lossy().into_owned());
+        // The kit the user wants — a pick still decoding counts — not only
+        // the last one that finished: saving mid-decode must not write the
+        // kit the user just moved away from. (A pick that then fails
+        // leaves `kit_path` on the previous kit, which is what plays.)
+        let wanted = match &self.reload {
+            Some(bridge) => bridge.wanted_kit_path(),
+            None => self.kit_path.lock().clone(),
+        };
+        let path = wanted.map(|p| p.to_string_lossy().into_owned());
         map.insert(
             "kit_path".to_string(),
             match path {

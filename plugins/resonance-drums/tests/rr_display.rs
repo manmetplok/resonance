@@ -25,10 +25,7 @@ fn pad_with_takes(mapping_index: usize, layers: usize, takes: usize) -> LoadedPa
             layers: (0..layers)
                 .map(|_| VelocityLayer {
                     round_robins: (0..takes)
-                        .map(|_| LoadedSample {
-                            data: vec![0.5; 2],
-                            frames: 1,
-                        })
+                        .map(|_| LoadedSample::from_data(vec![0.5; 2]))
                         .collect(),
                 })
                 .collect(),

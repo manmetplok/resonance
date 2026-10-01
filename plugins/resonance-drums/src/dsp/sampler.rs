@@ -6,9 +6,8 @@ use std::sync::Arc;
 use crossbeam_channel::{Receiver, Sender};
 
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
-use crate::kit::{
-    self, LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, OVERHEAD_PORT_INDEX,
-};
+use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
+use crate::kit_loader::KitLoadProgress;
 use crate::params::DrumParams;
 use crate::voice::{
     fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
@@ -105,6 +104,10 @@ pub struct DrumSampler {
     /// output port as `f32::to_bits`, `[left, right]`. Written at the end
     /// of `render_block`; `None` when running headless / in tests.
     out_peak: Option<Arc<[AtomicU32; 2]>>,
+    /// Kit load progress, told each time a kit is taken from the mailbox
+    /// (one atomic add) so `kit_load_progress` reaches 1.0 only once the
+    /// kit is really in place. `None` headless / in tests.
+    load_progress: Option<Arc<KitLoadProgress>>,
     /// Receives new kit versions from the loader thread; `try_recv` at the
     /// top of each process block swaps in a freshly loaded kit without
     /// blocking. The audio thread is not the only receiver: a loader
@@ -196,6 +199,7 @@ impl DrumSampler {
             globals: GlobalSettings::default(),
             last_rr: None,
             out_peak: None,
+            load_progress: None,
             kit_receiver,
             janitor_sender,
             retired_pads: std::array::from_fn(|_| None),
@@ -276,6 +280,12 @@ impl DrumSampler {
         self.out_peak = Some(out_peak);
     }
 
+    /// Attach the kit load progress the bridge publishes, so taking a kit
+    /// from the mailbox marks the load complete.
+    pub fn set_load_progress(&mut self, progress: Arc<KitLoadProgress>) {
+        self.load_progress = Some(progress);
+    }
+
     /// Bytes of decoded sample data this kit holds, counting every mic
     /// bank, velocity layer and round-robin take. Used for the status
     /// bar's memory readout, which is a measurement of the kit — not a
@@ -295,8 +305,10 @@ impl DrumSampler {
         self.pads.clear();
 
         for mapping in &PAD_MAPPINGS {
-            let sample = match kit::decode_wav(mapping.default_sample, sample_rate) {
-                Ok(data) => LoadedSample::from_data(data),
+            // The embedded WAVs are mono, and stay mono (E5); the shared
+            // cache gives every instance the same copy.
+            match crate::kit_loader::build_fallback_pad(mapping, sample_rate) {
+                Ok(pad) => self.pads.push(pad),
                 Err(e) => {
                     eprintln!("Failed to load sample for {}: {}", mapping.name, e);
                     self.pads.push(LoadedPad {
@@ -306,22 +318,8 @@ impl DrumSampler {
                         close_mics: Vec::new(),
                         overhead: None,
                     });
-                    continue;
                 }
-            };
-            self.pads.push(LoadedPad {
-                name: mapping.name.to_string(),
-                choke_group: mapping.choke_group,
-                output_group: mapping.output_group,
-                close_mics: vec![LoadedMicBank {
-                    position: "fallback".to_string(),
-                    setup_key: String::new(),
-                    layers: vec![VelocityLayer {
-                        round_robins: vec![sample],
-                    }],
-                }],
-                overhead: None,
-            });
+            }
         }
     }
 
@@ -362,6 +360,9 @@ impl DrumSampler {
             let Ok(new_pads) = self.kit_receiver.try_recv() else {
                 return;
             };
+            if let Some(progress) = &self.load_progress {
+                progress.note_taken();
+            }
             for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
                 // Voices of an earlier retired kit keep their own fade
                 // against their own slot.
@@ -805,7 +806,14 @@ impl DrumSampler {
                 voice.active = false;
                 continue;
             }
-            let sample = &layer.round_robins[voice.rr_index];
+            let sample: &SampleData = &layer.round_robins[voice.rr_index];
+            // Mono takes are read onto both sides: the right channel's
+            // index is the left's for a mono take (E5), which plays the
+            // very floats a duplicated-stereo take held.
+            let data = sample.samples();
+            let stride = sample.channels();
+            let right_offset = stride - 1;
+            let resident = sample.resident_frames();
 
             // Which port does this voice sum into, and what's the
             // destination-specific gain multiplier? Computed at both
@@ -869,7 +877,7 @@ impl DrumSampler {
             let port_r = &mut port.right[..end];
 
             for frame in start..end {
-                if voice.position >= sample.frames {
+                if voice.position >= resident {
                     voice.active = false;
                     break;
                 }
@@ -878,9 +886,9 @@ impl DrumSampler {
                     break;
                 }
 
-                let idx = voice.position * 2;
-                let sample_l = sample.data[idx];
-                let sample_r = sample.data[idx + 1];
+                let idx = voice.position * stride;
+                let sample_l = data[idx];
+                let sample_r = data[idx + right_offset];
                 let env = voice.current_gain();
                 let gain = env * vol * dest_gain;
 

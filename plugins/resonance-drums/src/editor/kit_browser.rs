@@ -147,7 +147,7 @@ pub(super) fn format_kit_status(status: &KitStatus) -> String {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "kit".to_string())
         ),
-        KitStatus::Loaded { name, num_pads } => {
+        KitStatus::Loaded { name, num_pads, .. } => {
             format!("Kit: {name} ({num_pads} pads)")
         }
         KitStatus::Error { message } => {

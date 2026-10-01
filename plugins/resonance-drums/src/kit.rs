@@ -3,15 +3,104 @@
 //! samples for each bank are organised as velocity layers with
 //! per-layer round-robin takes.
 
-/// A single decoded stereo sample ready for playback.
+use std::sync::Arc;
+
+/// The decoded audio of one take, at the host rate. Immutable once built
+/// and shared through `Arc`: the process-wide sample cache
+/// ([`crate::kit_loader::cache`]) hands the same `SampleData` to every
+/// kit — and every plugin instance — that loads the same file at the
+/// same rate.
+///
+/// Mono files stay mono (E5): `channels` is 1 or 2, and a reader plays a
+/// mono take on both sides ([`SampleData::frame`]), which gives exactly
+/// the floats the old duplicate-to-stereo decode did.
+///
+/// The take is `frames` long, of which the first `resident_frames` are in
+/// memory. Today the two are always equal. Disk streaming (E14, K6b)
+/// keeps only a head resident and streams the rest; everything that
+/// reads samples goes through `resident_frames` / [`samples`] so that
+/// split does not reshape the readers.
+///
+/// [`samples`]: SampleData::samples
+pub struct SampleData {
+    /// Interleaved, `channels` per frame, `resident_frames` frames.
+    samples: Box<[f32]>,
+    /// 1 (mono) or 2 (stereo).
+    channels: usize,
+    /// Frames in the whole take.
+    frames: usize,
+}
+
+impl SampleData {
+    /// A take from interleaved samples with `channels` (1 or 2) per frame.
+    /// A trailing partial frame is dropped.
+    pub fn new(mut samples: Vec<f32>, channels: usize) -> Self {
+        let channels = channels.clamp(1, 2);
+        let frames = samples.len() / channels;
+        samples.truncate(frames * channels);
+        Self {
+            samples: samples.into_boxed_slice(),
+            channels,
+            frames,
+        }
+    }
+
+    /// A mono take.
+    pub fn mono(samples: Vec<f32>) -> Self {
+        Self::new(samples, 1)
+    }
+
+    /// A stereo-interleaved take.
+    pub fn stereo(samples: Vec<f32>) -> Self {
+        Self::new(samples, 2)
+    }
+
+    /// 1 for a mono take, 2 for stereo.
+    pub fn channels(&self) -> usize {
+        self.channels
+    }
+
+    /// Length of the whole take, in frames.
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    /// Frames held in memory, from the start of the take. Equal to
+    /// [`frames`](Self::frames) until disk streaming (E14) splits a take
+    /// into a resident head and a streamed tail.
+    pub fn resident_frames(&self) -> usize {
+        self.samples.len() / self.channels
+    }
+
+    /// The resident samples, interleaved `channels()` per frame.
+    pub fn samples(&self) -> &[f32] {
+        &self.samples
+    }
+
+    /// Bytes of sample memory this take holds.
+    pub fn bytes(&self) -> usize {
+        std::mem::size_of_val(&*self.samples)
+    }
+
+    /// Resident frame `i` as (left, right); a mono take gives its one
+    /// channel on both sides. Panics past `resident_frames`.
+    #[inline]
+    pub fn frame(&self, i: usize) -> (f32, f32) {
+        let idx = i * self.channels;
+        (self.samples[idx], self.samples[idx + self.channels - 1])
+    }
+}
+
+/// One round-robin take as a kit holds it: a shared handle on decoded
+/// [`SampleData`]. Cloning it is an `Arc` bump, which is what lets a kit
+/// rebuild reuse the pads it did not change (E4).
+#[derive(Clone)]
 pub struct LoadedSample {
-    /// Stereo interleaved f32 at the host sample rate.
-    pub data: Vec<f32>,
-    /// Number of stereo frames.
-    pub frames: usize,
+    data: Arc<SampleData>,
 }
 
 /// All round-robin takes recorded at a given velocity.
+#[derive(Clone)]
 pub struct VelocityLayer {
     pub round_robins: Vec<LoadedSample>,
 }
@@ -21,6 +110,7 @@ pub struct VelocityLayer {
 /// pad (e.g. `KickIn`, `KickOut`, `OHsAB`), so multiple voices can be
 /// triggered simultaneously on note-on and routed to different output
 /// ports.
+#[derive(Clone)]
 pub struct LoadedMicBank {
     /// Canonical position key from the manifest (e.g. `"KickIn"`, `"OHsAB"`).
     /// Empty for the embedded-fallback bank used by pads with no manifest
@@ -89,6 +179,10 @@ pub fn routing_port_list() -> String {
 /// close banks (in/out and top/btm); toms and hats get one; cymbals get
 /// none. Every pad (except the embedded fallback path) also gets an
 /// overhead bank that accumulates into the shared Overhead port.
+///
+/// `Clone` copies the bank structure and bumps every take's `Arc`; no
+/// sample memory is copied.
+#[derive(Clone)]
 pub struct LoadedPad {
     /// Display name, sourced from `PAD_MAPPINGS`.
     #[allow(dead_code)]
@@ -110,9 +204,33 @@ pub struct LoadedPad {
 }
 
 impl LoadedSample {
+    /// A stereo take from interleaved samples (the historical shape).
     pub fn from_data(data: Vec<f32>) -> Self {
-        let frames = data.len() / 2;
-        Self { data, frames }
+        Self::from_shared(Arc::new(SampleData::stereo(data)))
+    }
+
+    /// A mono take.
+    pub fn mono(data: Vec<f32>) -> Self {
+        Self::from_shared(Arc::new(SampleData::mono(data)))
+    }
+
+    /// A take on already-shared sample data (the cache's).
+    pub fn from_shared(data: Arc<SampleData>) -> Self {
+        Self { data }
+    }
+
+    /// The shared sample data.
+    pub fn shared(&self) -> &Arc<SampleData> {
+        &self.data
+    }
+}
+
+/// Reads go straight to the sample data: `take.frames()`,
+/// `take.frame(i)`, `take.channels()`.
+impl std::ops::Deref for LoadedSample {
+    type Target = SampleData;
+    fn deref(&self) -> &SampleData {
+        &self.data
     }
 }
 
@@ -120,4 +238,12 @@ impl LoadedSample {
 /// resampled to the target sample rate if necessary.
 pub fn decode_wav(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32>, String> {
     resonance_common::decode_wav_stereo(data, target_sample_rate).map_err(|e| e.to_string())
+}
+
+/// Decode a WAV file into a take at the target rate, keeping mono files
+/// mono (E5).
+pub fn decode_sample(data: Vec<u8>, target_sample_rate: f32) -> Result<SampleData, String> {
+    let decoded =
+        resonance_common::decode_wav_native(data, target_sample_rate).map_err(|e| e.to_string())?;
+    Ok(SampleData::new(decoded.samples, decoded.channels))
 }

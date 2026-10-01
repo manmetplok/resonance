@@ -89,6 +89,69 @@ pub fn decode_wav_stereo(data: &[u8], target_sample_rate: f32) -> Result<Vec<f32
     }
 }
 
+/// Decoded audio that keeps its channel layout: one channel for a mono
+/// file, two (interleaved) for anything wider. A mono file is *not*
+/// duplicated to stereo, so it costs half the memory; a reader that wants
+/// stereo plays the one channel on both sides.
+pub struct DecodedAudio {
+    /// Interleaved samples, `channels` per frame, at the target rate.
+    pub samples: Vec<f32>,
+    /// 1 or 2. Files with more than two channels keep their first two.
+    pub channels: usize,
+}
+
+impl DecodedAudio {
+    /// Number of frames held.
+    pub fn frames(&self) -> usize {
+        self.samples.len() / self.channels.max(1)
+    }
+}
+
+/// Decode a WAV file from bytes, resampled to `target_sample_rate`, keeping
+/// mono as mono (see [`DecodedAudio`]).
+///
+/// Each channel comes out bit-identical to the matching channel of
+/// [`decode_wav_stereo`]: the resampler filters every channel on its own,
+/// so a mono file read on both sides equals its duplicated-stereo decode.
+/// Takes the bytes by value so the decoder does not copy them again.
+pub fn decode_wav_native(
+    data: Vec<u8>,
+    target_sample_rate: f32,
+) -> Result<DecodedAudio, WavDecodeError> {
+    let cursor = Cursor::new(data);
+    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("wav");
+    let decoded = decode_source_to_interleaved(mss, hint, "WAV")?;
+    let source_rate = decoded.sample_rate;
+    let resample = (source_rate - target_sample_rate).abs() > 1.0;
+    if decoded.channels == 1 {
+        let samples = if resample {
+            linear_resample_mono(&decoded.samples, source_rate, target_sample_rate)
+        } else {
+            decoded.samples
+        };
+        return Ok(DecodedAudio {
+            samples,
+            channels: 1,
+        });
+    }
+    let stereo = if decoded.channels == 2 {
+        decoded.samples
+    } else {
+        to_stereo_interleaved(&decoded.samples, decoded.channels)
+    };
+    let samples = if resample {
+        linear_resample_stereo(&stereo, source_rate, target_sample_rate)
+    } else {
+        stereo
+    };
+    Ok(DecodedAudio {
+        samples,
+        channels: 2,
+    })
+}
+
 /// Decode a WAV file from bytes into separate left/right channels,
 /// resampled to the target sample rate if necessary.
 pub fn decode_wav_channels(

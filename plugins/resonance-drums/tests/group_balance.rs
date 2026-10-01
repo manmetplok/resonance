@@ -153,10 +153,7 @@ fn pad_param_defaults_are_uniform_across_all_pads() {
 
 fn layer(value: f32) -> VelocityLayer {
     VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![value; 64],
-            frames: 32,
-        }],
+        round_robins: vec![LoadedSample::from_data(vec![value; 64])],
     }
 }
 

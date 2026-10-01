@@ -458,6 +458,7 @@ const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "registry",            // drums: downloadable kit content
     "drum_map",            // drums: the GM pad contract shared with the app
     "decode_wav_stereo",   // drums: sample decode
+    "decode_wav_native",   // drums: sample decode that keeps mono takes mono
     "decode_wav_channels", // ir: impulse-response decode
     "factory_presets",     // resonance-plugin: the factory-preset codec
     "library_marks",       // favourites/tags/recents shared by every library kind

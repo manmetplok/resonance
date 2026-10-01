@@ -139,10 +139,7 @@ fn make_test_pad(
     let layers: Vec<VelocityLayer> = (0..n_layers)
         .map(|_| VelocityLayer {
             round_robins: (0..rr_per_layer)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2], // 1 stereo frame
-                    frames: 1,
-                })
+                .map(|_| LoadedSample::from_data(vec![0.0; 2])) // 1 stereo frame
                 .collect(),
         })
         .collect();
@@ -346,10 +343,7 @@ fn all_voices_from_single_hit_share_rr_index() {
     let layers = || -> Vec<VelocityLayer> {
         vec![VelocityLayer {
             round_robins: (0..4)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2],
-                    frames: 1,
-                })
+                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
                 .collect(),
         }]
     };

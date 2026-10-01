@@ -18,10 +18,7 @@ fn make_pad(
     let layers: Vec<VelocityLayer> = (0..n_layers)
         .map(|_| VelocityLayer {
             round_robins: (0..rr_per_layer)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2],
-                    frames: 1,
-                })
+                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
                 .collect(),
         })
         .collect();
@@ -282,10 +279,7 @@ fn all_voices_from_multi_bank_hit_share_rr() {
     let layers = || -> Vec<VelocityLayer> {
         vec![VelocityLayer {
             round_robins: (0..4)
-                .map(|_| LoadedSample {
-                    data: vec![0.0; 2],
-                    frames: 1,
-                })
+                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
                 .collect(),
         }]
     };
@@ -428,10 +422,7 @@ fn overhead_only_pad_uses_rr() {
                         setup_key: String::new(),
                         layers: vec![VelocityLayer {
                             round_robins: (0..3)
-                                .map(|_| LoadedSample {
-                                    data: vec![0.0; 2],
-                                    frames: 1,
-                                })
+                                .map(|_| LoadedSample::from_data(vec![0.0; 2]))
                                 .collect(),
                         }],
                     }),

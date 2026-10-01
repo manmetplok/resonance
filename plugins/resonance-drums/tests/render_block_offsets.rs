@@ -33,10 +33,7 @@ fn sampler() -> DrumSampler {
                     position: pos.to_string(),
                     setup_key: String::new(),
                     layers: vec![VelocityLayer {
-                        round_robins: vec![LoadedSample {
-                            data: vec![0.5; 64],
-                            frames: 32,
-                        }],
+                        round_robins: vec![LoadedSample::from_data(vec![0.5; 64])],
                     }],
                 })
                 .collect(),

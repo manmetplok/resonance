@@ -20,10 +20,7 @@ fn make_sampler() -> DrumSampler {
 /// effective gain trajectory.
 fn dc_layer(frames: usize) -> VelocityLayer {
     VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![1.0; frames * 2],
-            frames,
-        }],
+        round_robins: vec![LoadedSample::from_data(vec![1.0; frames * 2])],
     }
 }
 

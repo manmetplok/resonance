@@ -41,10 +41,7 @@ fn dc_pads(level: f32, silent_note: Option<u8>) -> Vec<LoadedPad> {
                     position: "test".to_string(),
                     setup_key: String::new(),
                     layers: vec![VelocityLayer {
-                        round_robins: vec![LoadedSample {
-                            data: vec![v; frames * 2],
-                            frames,
-                        }],
+                        round_robins: vec![LoadedSample::from_data(vec![v; frames * 2])],
                     }],
                 }],
                 overhead: None,

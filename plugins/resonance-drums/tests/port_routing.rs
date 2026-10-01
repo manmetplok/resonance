@@ -19,10 +19,7 @@ fn make_sampler() -> DrumSampler {
 
 fn impulse_layer(value: f32) -> VelocityLayer {
     VelocityLayer {
-        round_robins: vec![LoadedSample {
-            data: vec![value; 64],
-            frames: 32,
-        }],
+        round_robins: vec![LoadedSample::from_data(vec![value; 64])],
     }
 }
 
