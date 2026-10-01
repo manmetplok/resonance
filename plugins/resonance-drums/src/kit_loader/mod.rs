@@ -125,15 +125,18 @@ pub const DEFAULT_OVERHEAD_SETUP: &str = "23_OHsAB_e914";
 // Requests, builds and the status reported by the loader thread.
 // ---------------------------------------------------------------------------
 
-/// Everything a kit is decoded from except the sample rate: the manifest
-/// and the mic / articulation choices. Two loads with equal requests at
-/// the same rate decode the same kit.
+/// Everything a kit is decoded from except the sample rate: the manifest,
+/// the mic / articulation choices and the streaming preload. Two loads
+/// with equal requests at the same rate decode the same kit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KitRequest {
     pub path: PathBuf,
     pub overhead_setup_key: String,
     pub pad_choices: [PadMicChoices; NUM_PADS],
     pub articulations: [bool; NUM_PADS],
+    /// Frames of each take kept resident; the rest of a longer take
+    /// streams from disk (E14). 0 keeps every take whole.
+    pub preload: u32,
 }
 
 impl KitRequest {
@@ -202,6 +205,8 @@ pub struct BuiltKit {
     pub path: PathBuf,
     pub manifest: Option<ManifestStamp>,
     pub sample_rate: f32,
+    /// The preload the takes were split at (E14).
+    pub preload: u32,
     pub pad_requests: Vec<PadRequest>,
     pub pads: Vec<LoadedPad>,
     /// What building each pad found, in pad order.
@@ -338,13 +343,15 @@ impl BuiltKit {
         path: &Path,
         manifest: Option<&ManifestStamp>,
         sample_rate: f32,
+        preload: u32,
         pad: usize,
         request: &PadRequest,
     ) -> Option<(&LoadedPad, &PadBuild)> {
         let same_kit = self.path == path
             && manifest.is_some()
             && self.manifest.as_ref() == manifest
-            && self.sample_rate.to_bits() == sample_rate.to_bits();
+            && self.sample_rate.to_bits() == sample_rate.to_bits()
+            && self.preload == preload;
         if !same_kit || self.pad_requests.get(pad) != Some(request) {
             return None;
         }
@@ -445,6 +452,7 @@ pub fn load_kit_from_manifest(
         overhead_setup_key: overhead_setup_key.to_string(),
         pad_choices: pad_choices.clone(),
         articulations: *articulations,
+        preload: crate::stream::DEFAULT_PRELOAD,
     };
     load_kit(
         &request,
@@ -543,6 +551,7 @@ pub fn load_kit(
                 manifest_path,
                 manifest_stamp.as_ref(),
                 target_sr,
+                request.preload,
                 pad_idx,
                 &pad_requests[pad_idx],
             )
@@ -586,7 +595,14 @@ pub fn load_kit(
 
     // 2. Decode.
     set_total(jobs.paths.len());
-    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done, cancelled);
+    let results = decode::decode_all(
+        &jobs.paths,
+        target_sr,
+        request.preload,
+        cache,
+        file_done,
+        cancelled,
+    );
     if cancelled() {
         return Err(LOAD_CANCELLED.to_string());
     }
@@ -699,6 +715,7 @@ pub fn load_kit(
         path: request.path.clone(),
         manifest: manifest_stamp,
         sample_rate: target_sr,
+        preload: request.preload,
         pad_requests,
         pads: pads.clone(),
         pad_builds,
@@ -768,6 +785,7 @@ pub fn spawn_loader(
         overhead_setup_key,
         pad_choices,
         articulations,
+        preload: bridge.stream_preload.load(Ordering::Relaxed),
     };
 
     std::thread::Builder::new()

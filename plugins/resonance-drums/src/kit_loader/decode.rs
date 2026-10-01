@@ -254,7 +254,8 @@ pub fn decode_slot_usage() -> (usize, usize) {
     (slots.capacity, slots.peak.load(Ordering::Relaxed))
 }
 
-/// Fetch every job's file through `cache` at `sample_rate`, on up to
+/// Fetch every job's file through `cache` at `sample_rate` (with
+/// `preload` frames of a longer take resident, E14), on up to
 /// [`decode_workers`] threads (the caller's among them) as the
 /// process-wide [`DecodeSlots`] allow. `on_done` runs once per finished
 /// file, on whichever thread finished it. The result is in job order.
@@ -266,6 +267,7 @@ pub fn decode_slot_usage() -> (usize, usize) {
 pub(super) fn decode_all(
     paths: &[PathBuf],
     sample_rate: f32,
+    preload: u32,
     cache: &SampleCache,
     on_done: &(dyn Fn() + Sync),
     cancelled: &(dyn Fn() -> bool + Sync),
@@ -283,7 +285,7 @@ pub(super) fn decode_all(
         // A panicking decoder (a malformed file tripping a symphonia
         // assertion) costs that take, not the kit.
         let fetched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            cache.get_or_decode(path, sample_rate)
+            cache.get_or_decode_preload(path, sample_rate, preload)
         }))
         .unwrap_or_else(|_| Err(format!("decode {}: decoder panicked", path.display())));
         let _ = slots[i].set(fetched);

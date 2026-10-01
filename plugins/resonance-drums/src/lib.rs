@@ -56,6 +56,7 @@ pub mod params;
 pub mod reload;
 pub mod rr_display;
 pub mod sample_info;
+pub mod stream;
 pub mod velocity;
 pub mod voice;
 
@@ -200,6 +201,18 @@ pub struct KitBridge {
     /// Decode progress, complete only once the audio thread has taken the
     /// kit (§5.4). Lock-free on every side; the sampler marks the take.
     pub load_progress: Arc<KitLoadProgress>,
+
+    // --- Disk streaming (E14, slice K6b) -------------------------------
+    /// Frames of each take kept in memory; the rest of a longer take
+    /// streams from disk. One of [`stream::PRELOAD_CHOICES`] (0 keeps
+    /// every take whole). Read by each load; persisted as plugin state
+    /// (`stream_preload`). Change it with [`stream::set_preload`], which
+    /// reloads the kit.
+    pub stream_preload: Arc<AtomicU32>,
+    /// Stream underruns since the instance started: voice-blocks that
+    /// played silence for tail frames the disk reader had not delivered
+    /// yet. Written by the audio thread.
+    pub stream_underruns: Arc<AtomicU64>,
 }
 
 /// One editor-requested hit on its way to the audio thread. `Copy` and
@@ -272,6 +285,7 @@ impl KitBridge {
             overhead_setup_key: self.overhead_setup_key.lock().clone(),
             pad_choices: self.pad_choices.lock().clone(),
             articulations: self.articulations(),
+            preload: self.stream_preload.load(Ordering::Relaxed),
         })
     }
 
@@ -383,6 +397,8 @@ impl ResonancePlugin for ResonanceDrums {
             builtin_kit: Arc::new(Mutex::new(None)),
             load_stats: Arc::new(Mutex::new(LoadStats::default())),
             load_progress: Arc::new(KitLoadProgress::new()),
+            stream_preload: Arc::new(AtomicU32::new(stream::DEFAULT_PRELOAD)),
+            stream_underruns: Arc::new(AtomicU64::new(0)),
         };
         // Counted in the kit library's "used in N open drum instances".
         // The download worker is not per instance any more: the editor
@@ -393,6 +409,7 @@ impl ResonancePlugin for ResonanceDrums {
         sampler.set_load_progress(bridge.load_progress.clone());
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
+        sampler.set_underrun_counter(bridge.stream_underruns.clone());
         let watcher = articulation::spawn_watcher(&bridge, articulation_wake_rx);
         // The preset identity wraps the kit saver rather than replacing
         // it: chaining is why `with_extra` exists.
@@ -824,6 +841,14 @@ impl ExtraStateSaver for DrumsExtraState {
             "articulations".to_string(),
             serde_json::Value::Array(arts_array),
         );
+        // Disk streaming (E14): the preload. Instance state, not sound,
+        // so not a preset key.
+        if let Some(bridge) = &self.reload {
+            map.insert(
+                stream::PRELOAD_STATE_KEY.to_string(),
+                serde_json::Value::from(bridge.stream_preload.load(Ordering::Relaxed)),
+            );
+        }
         map
     }
 
@@ -841,11 +866,24 @@ impl ExtraStateSaver for DrumsExtraState {
             Some(bridge) => bridge.wanted_kit_path(),
             None => kit_path.lock().clone(),
         };
+        let preload = || {
+            self.reload
+                .as_ref()
+                .map(|b| b.stream_preload.load(Ordering::Relaxed))
+        };
         let before = (
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
+            preload(),
         );
+        // Disk streaming (E14): the preload, when the state has one.
+        if let (Some(bridge), Some(frames)) = (
+            &self.reload,
+            stream::preload_from_state(state.get(stream::PRELOAD_STATE_KEY)),
+        ) {
+            bridge.stream_preload.store(frames, Ordering::Relaxed);
+        }
         // An explicit `kit_path: null` clears the remembered kit (a project
         // saved with none always writes it); a document without the key —
         // a params-only preset — keeps the current kit, as the IR keeps
@@ -914,6 +952,7 @@ impl ExtraStateSaver for DrumsExtraState {
             wanted_path(&self.kit_path),
             self.overhead_setup_key.lock().clone(),
             self.pad_choices.lock().clone(),
+            preload(),
         );
         if let (Some(bridge), Some(path)) = (&self.reload, after.0.clone()) {
             let rate = f32::from_bits(bridge.sample_rate.load(Ordering::Acquire));

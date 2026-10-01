@@ -459,6 +459,9 @@ const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "drum_map",            // drums: the GM pad contract shared with the app
     "decode_wav_stereo",   // drums: sample decode
     "decode_wav_native",   // drums: sample decode that keeps mono takes mono
+    "decode_wav_split",    // drums: a resident head + an on-disk tail (E14 streaming)
+    "WavTail",             // drums: reads a streamed take's tail from its file
+    "TailScratch",         // drums: the tail reader's reusable buffers
     "decode_wav_channels", // ir: impulse-response decode
     "factory_presets",     // resonance-plugin: the factory-preset codec
     "library_marks",       // favourites/tags/recents shared by every library kind

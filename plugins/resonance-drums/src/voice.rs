@@ -137,6 +137,11 @@ pub struct Voice {
     pub release_len: usize,
     /// Monotonic counter for voice-stealing (oldest first).
     pub age: u64,
+    /// The stream ring this voice reads its take's tail from (E14), or
+    /// [`crate::stream::NO_RING`] for a take that is wholly in memory —
+    /// or a streamed one that found no free ring, which then ends with
+    /// its head. Moves with the voice when it is stolen to a tail slot.
+    pub ring: u8,
 }
 
 impl Default for Voice {
@@ -168,6 +173,7 @@ impl Voice {
             release_pos: 0,
             release_len: 1,
             age: 0,
+            ring: crate::stream::NO_RING,
         }
     }
 
