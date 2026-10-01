@@ -102,14 +102,14 @@ pub struct PadRequest {
 }
 
 /// Whether the overhead setup key can change what `piece` loads as its
-/// overhead: it holds the key itself, or an OH setup the overhead falls
-/// back to (see `decode::plan_overhead_bank`).
+/// overhead: it has an overhead setup — the key's, or one the overhead
+/// falls back to ([`banks::resolve_overhead_slot1`]). A piece with none
+/// plays no overhead whatever the key names.
 pub fn piece_uses_overhead_key(
     piece: &std::collections::BTreeMap<String, MicSetup>,
-    key: &str,
     kinds: &banks::MicKinds,
 ) -> bool {
-    piece.contains_key(key) || piece.values().any(|setup| kinds.is_overhead(&setup.position))
+    piece.values().any(|setup| kinds.is_overhead(&setup.position))
 }
 
 /// The manifest file as it was when a kit was built from it, so a reload
@@ -501,7 +501,7 @@ pub fn load_kit(
                 .and_then(|piece| manifest.get(piece));
             let has_overhead = piece
                 .is_some_and(|piece| {
-                    piece_uses_overhead_key(piece, &request.overhead_setup_key, &kinds)
+                    piece_uses_overhead_key(piece, &kinds)
                 });
             let mut pad = request.pad_request(i, has_overhead);
             if let Some(piece) = piece {

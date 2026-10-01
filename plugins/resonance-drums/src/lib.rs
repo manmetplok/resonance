@@ -422,6 +422,11 @@ impl KitBridge {
     /// the newly chosen setup's files decoded (E4). Returns whether a
     /// load started (none without a kit or a sample rate; the choice is
     /// kept for the next load either way). For the editor's Setup tab.
+    ///
+    /// Every slot plays only an overhead setup: a key naming another
+    /// kind (a close mic, a room) leaves slot 1 on the piece's first
+    /// overhead setup and slots 2 and 3 silent
+    /// ([`kit_loader::banks::resolve_extra_banks`]).
     pub fn set_overhead_slot(&self, slot: usize, setup: &str) -> bool {
         match slot {
             0 => *self.overhead_setup_key.lock() = setup.to_string(),

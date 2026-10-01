@@ -206,8 +206,10 @@ pub fn is_bleed_position(pad: usize, position: &str) -> bool {
     MicKinds::default().is_bleed(pad, position)
 }
 
-/// The setup overhead slot 1 plays on `piece`: `key` if the piece has it,
-/// else its first overhead setup (`decode::plan_overhead_bank`'s rule).
+/// The setup overhead slot 1 plays on `piece`: `key` if the piece has it
+/// as an overhead setup, else its first overhead setup. Like slots 2 and
+/// 3, slot 1 never plays a setup of another kind: a close-mic or room key
+/// in `overhead_setup_key` falls back as a missing one does.
 pub fn resolve_overhead_slot1<'a>(
     piece: &'a BTreeMap<String, MicSetup>,
     key: &str,
@@ -215,6 +217,7 @@ pub fn resolve_overhead_slot1<'a>(
 ) -> Option<&'a str> {
     piece
         .get_key_value(key)
+        .filter(|(_, setup)| kinds.is_overhead(&setup.position))
         .map(|(k, _)| k.as_str())
         .or_else(|| {
             piece

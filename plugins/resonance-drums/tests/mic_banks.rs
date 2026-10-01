@@ -960,3 +960,23 @@ fn mic_positions_classify_by_name_and_by_the_kits_word() {
         ]
     );
 }
+
+/// Overhead slot 1 plays only an overhead setup, as slots 2 and 3 do: a
+/// close-mic or room key put there falls back to the piece's first
+/// overhead setup instead of playing that mic as the overhead.
+#[test]
+fn overhead_slot_1_never_plays_a_close_mic_or_room() {
+    let kit = fixture_kit();
+    let mut plugin = booted(OUTPUT_MODE_MULTI);
+    pick(&plugin, &kit);
+    settle(&mut plugin);
+    for key in ["01_KickIn_e901", ROOM] {
+        plugin.bridge.set_overhead_slot(0, key);
+        settle(&mut plugin);
+        for pad in [KICK, SNARE, CRASH] {
+            let built = built_pad(&plugin, pad);
+            let oh = built.overhead.as_ref().expect("an overhead");
+            assert_eq!(oh.setup_key, "23_OHsAB_e914", "slot 1 = {key} on pad {pad}");
+        }
+    }
+}

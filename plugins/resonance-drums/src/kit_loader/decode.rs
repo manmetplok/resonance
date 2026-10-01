@@ -101,15 +101,9 @@ pub(super) fn plan_overhead_bank(
     kinds: &super::banks::MicKinds,
     jobs: &mut Jobs,
 ) -> Result<Option<BankPlan>, String> {
-    let chosen = piece
-        .get(overhead_setup_key)
-        .map(|setup| (overhead_setup_key.to_string(), setup))
-        .or_else(|| {
-            piece
-                .iter()
-                .find(|(_, setup)| kinds.is_overhead(&setup.position))
-                .map(|(k, v)| (k.clone(), v))
-        });
+    let chosen = super::banks::resolve_overhead_slot1(piece, overhead_setup_key, kinds)
+        .and_then(|key| piece.get_key_value(key))
+        .map(|(key, setup)| (key.clone(), setup));
     let Some((setup_key, setup)) = chosen else {
         return Ok(None);
     };
