@@ -272,7 +272,15 @@ pub(crate) fn located(app: &mut DrumsEditorApp, dir: PathBuf, id: Result<String,
 pub(crate) fn relink(app: &mut DrumsEditorApp, dir: PathBuf) {
     app.missing_kit.error = None;
     app.missing_kit.relinking = true;
-    library_panel::start_import(app, dir);
+    if !library_panel::start_import(app, dir) {
+        // No import will report back to clear it: a later import of the
+        // user's own would otherwise be taken for the relink.
+        app.missing_kit.relinking = false;
+        app.missing_kit.error = Some(format!(
+            "could not start the import: {}",
+            library_panel::BUSY_WHY
+        ));
+    }
 }
 
 /// The banner's download landed: load it.

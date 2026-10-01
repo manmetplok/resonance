@@ -213,7 +213,9 @@ impl DrumsEditorApp {
         }
         match action {
             Queued::Delete(key) => library_panel::start_delete(self, &key),
-            Queued::Import(src) => library_panel::start_import(self, src),
+            Queued::Import(src) => {
+                library_panel::start_import(self, src);
+            }
             Queued::Rescan => {
                 self.start_rescan(true);
             }

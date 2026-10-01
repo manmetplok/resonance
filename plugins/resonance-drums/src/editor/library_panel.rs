@@ -792,11 +792,12 @@ fn draw_job_status(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
 
 /// Copy `src` (a kit folder or a `.zip`) into the library, as a job with
 /// progress and Cancel — or, while a job is running, once it finishes. A
-/// cancel leaves nothing behind.
-pub(crate) fn start_import(app: &mut DrumsEditorApp, src: PathBuf) {
+/// cancel leaves nothing behind. `false` when it could not start (the
+/// browser says why), so nothing will report back.
+pub(crate) fn start_import(app: &mut DrumsEditorApp, src: PathBuf) -> bool {
     if app.jobs.busy() {
         app.run_or_queue(Queued::Import(src));
-        return;
+        return true;
     }
     let library = app.library.clone();
     let name = src
@@ -826,6 +827,7 @@ pub(crate) fn start_import(app: &mut DrumsEditorApp, src: PathBuf) {
         app.browser
             .set_error(format!("could not start the import: {BUSY}"));
     }
+    started
 }
 
 fn draw_empty_state(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
