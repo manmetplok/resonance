@@ -20,6 +20,7 @@ use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{
     LoadedMicBank, LoadedPad, LoadedSample, VelocityLayer, NUM_OUTPUT_PORTS,
 };
+use resonance_drums::kit_loader::KitLoadProgress;
 use resonance_drums::params::DrumParams;
 
 struct Counting;
@@ -85,6 +86,34 @@ fn kit(tag: &str) -> Vec<LoadedPad> {
                 }],
             }],
             overhead: None,
+        })
+        .collect()
+}
+
+/// [`kit`] with mono takes, all sharing one `Arc`'d sample — the shape
+/// the shared sample cache produces (E5).
+fn mono_kit(tag: &str) -> Vec<LoadedPad> {
+    let take = LoadedSample::mono(vec![0.1; 48_000]);
+    PAD_MAPPINGS
+        .iter()
+        .map(|m| LoadedPad {
+            name: format!("{tag}:{}", m.name),
+            choke_group: None,
+            output_group: m.output_group,
+            close_mics: vec![LoadedMicBank {
+                position: "test".to_string(),
+                setup_key: String::new(),
+                layers: vec![VelocityLayer {
+                    round_robins: vec![take.clone()],
+                }],
+            }],
+            overhead: Some(LoadedMicBank {
+                position: "OH".to_string(),
+                setup_key: String::new(),
+                layers: vec![VelocityLayer {
+                    round_robins: vec![LoadedSample::from_data(vec![0.05; 2 * 48_000])],
+                }],
+            }),
         })
         .collect()
 }
@@ -229,4 +258,43 @@ fn every_slot_and_the_janitor_full_defers_the_swap() {
 
 fn kit_rx_is_empty(tx: &crossbeam_channel::Sender<Vec<LoadedPad>>) -> bool {
     tx.is_empty()
+}
+
+/// Swapping in kits of shared mono takes, marking each take on the load
+/// progress, and rendering them (mono read onto both sides, next to a
+/// stereo overhead) touches the heap no more than stereo kits do: never.
+#[test]
+fn mono_kit_swaps_and_the_progress_mark_never_touch_the_heap() {
+    let (kit_tx, kit_rx) = bounded(1);
+    let mut sampler = DrumSampler::new(kit_rx);
+    let progress = std::sync::Arc::new(KitLoadProgress::new());
+    sampler.set_load_progress(progress.clone());
+    sampler.set_sample_rate(48_000.0);
+    sampler.pads = mono_kit("boot");
+    let params = DrumParams::default();
+    let mut bufs = Bufs::new();
+    render(&mut sampler, &mut bufs, &params);
+
+    let mut events = 0;
+    for i in 0..100 {
+        let _ = kit_tx.try_send(mono_kit(&format!("m{i}")));
+        events += heap_events(|| {
+            sampler.note_on(drum_map::KICK, 1.0);
+            sampler.note_on(drum_map::SNARE, 0.7);
+            sampler.try_swap_kit();
+            render(&mut sampler, &mut bufs, &params);
+            render(&mut sampler, &mut bufs, &params);
+        });
+    }
+    assert_eq!(
+        events, 0,
+        "the audio thread allocated or freed {events} times across 100 mono kit swaps"
+    );
+    assert_eq!(progress.kits_taken(), 100, "every take is marked");
+    let peak = bufs
+        .0
+        .iter()
+        .flat_map(|(l, r)| l.iter().chain(r))
+        .fold(0.0f32, |m, s| m.max(s.abs()));
+    assert!(peak > 0.0, "the mono kit rendered silence: the test proves nothing");
 }
