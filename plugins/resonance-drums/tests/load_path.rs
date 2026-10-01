@@ -1048,6 +1048,115 @@ fn saving_mid_decode_persists_the_kit_being_loaded() {
     settle(&plugin);
 }
 
+// ---------------------------------------------------------------------------
+// Decode pool: cancellation, process-wide budget
+// ---------------------------------------------------------------------------
+
+/// A kit whose kick has `takes` round robins on one KickIn setup.
+fn many_take_kit(takes: usize) -> Kit {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "resonance-drums-load-path-many-{}-{unique}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    let mut rounds = Vec::new();
+    for i in 0..takes {
+        write_wav(&dir.join(format!("k{i}.wav")), 1, 0.1);
+        rounds.push(format!(r#""RR{i}":{{"Vel01":"k{i}.wav"}}"#));
+    }
+    let manifest = format!(
+        r#"{{"SD Kick mit Teppich":{{"01_KickIn_e901":{{"brand":"t","channel":"1","mic":"m","position":"KickIn","rounds":{{{}}}}}}}}}"#,
+        rounds.join(",")
+    );
+    let manifest_path = dir.join("drum_samples.json");
+    std::fs::write(&manifest_path, manifest).expect("write fixture manifest");
+    Kit {
+        dir,
+        manifest: manifest_path,
+    }
+}
+
+fn request_for(kit: &Kit) -> resonance_drums::kit_loader::KitRequest {
+    resonance_drums::kit_loader::KitRequest {
+        path: kit.manifest.clone(),
+        overhead_setup_key: DEFAULT_OVERHEAD_SETUP.to_string(),
+        pad_choices: std::array::from_fn(|_| PadMicChoices::default()),
+        articulations: [false; NUM_PADS],
+    }
+}
+
+/// A superseded load stops decoding: once it is cancelled no further
+/// file is started, and it fails rather than handing anything off.
+#[test]
+fn a_cancelled_load_stops_decoding() {
+    use resonance_drums::kit_loader::cache::SampleCache;
+    use resonance_drums::kit_loader::{decode, load_kit, LOAD_CANCELLED};
+    use std::sync::atomic::AtomicUsize;
+
+    const FILES: usize = 64;
+    let kit = many_take_kit(FILES);
+    let cache = SampleCache::new();
+    let done = AtomicUsize::new(0);
+    let outcome = load_kit(
+        &request_for(&kit),
+        RATE,
+        None,
+        None,
+        &cache,
+        &|| {
+            done.fetch_add(1, Ordering::SeqCst);
+        },
+        &|_| {},
+        // Cancelled as soon as the first file is in.
+        &|| done.load(Ordering::SeqCst) >= 1,
+    );
+    assert_eq!(outcome.err().as_deref(), Some(LOAD_CANCELLED));
+    // Each decode thread may have started one file before it saw the
+    // cancel; none starts another.
+    let decoded = cache.decode_count() as usize;
+    assert!(
+        decoded <= 1 + decode::decode_workers(FILES),
+        "{decoded} of {FILES} files decoded after the cancel"
+    );
+}
+
+/// Every load in the process draws its decode threads from one budget
+/// of cores/2: several instances loading at once never run more.
+#[test]
+fn concurrent_loads_share_one_decode_thread_budget() {
+    use resonance_drums::kit_loader::cache::SampleCache;
+    use resonance_drums::kit_loader::{decode, load_kit};
+
+    let kits: Vec<Kit> = (0..4).map(|_| many_take_kit(48)).collect();
+    std::thread::scope(|scope| {
+        for kit in &kits {
+            scope.spawn(move || {
+                let cache = SampleCache::new();
+                let kit = load_kit(
+                    &request_for(kit),
+                    RATE,
+                    None,
+                    None,
+                    &cache,
+                    &|| {},
+                    &|_| {},
+                    &|| false,
+                )
+                .expect("load");
+                assert_eq!(kit.stats.decoded, 48);
+            });
+        }
+    });
+    let (capacity, peak) = decode::decode_slot_usage();
+    assert!(peak >= 1);
+    assert!(
+        peak <= capacity,
+        "{peak} decode threads ran at once; the budget is {capacity}"
+    );
+}
+
 #[test]
 fn unused_cache_entries_are_swept_once_no_kit_holds_them() {
     use resonance_drums::kit_loader::cache::{SampleCache, SampleKey};

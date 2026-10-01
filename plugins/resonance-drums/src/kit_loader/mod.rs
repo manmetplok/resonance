@@ -431,8 +431,20 @@ pub fn load_kit_from_manifest(
         pad_choices: pad_choices.clone(),
         articulations: *articulations,
     };
-    load_kit(&request, target_sr, None, None, cache::global(), &|| {}, &|_| {})
+    load_kit(
+        &request,
+        target_sr,
+        None,
+        None,
+        cache::global(),
+        &|| {},
+        &|_| {},
+        &|| false,
+    )
 }
+
+/// The error a [`load_kit`] that was cancelled mid-decode returns.
+pub const LOAD_CANCELLED: &str = "load cancelled";
 
 /// Load `request` at `target_sr`.
 ///
@@ -456,6 +468,9 @@ pub fn load_kit_from_manifest(
 ///
 /// `set_total` is told how many files the load reads once it knows, and
 /// `file_done` runs once per file finished (on a decode worker).
+/// `cancelled` is asked before each file: once it says yes, the decode
+/// stops starting files and the load fails with [`LOAD_CANCELLED`].
+#[allow(clippy::too_many_arguments)]
 pub fn load_kit(
     request: &KitRequest,
     target_sr: f32,
@@ -464,6 +479,7 @@ pub fn load_kit(
     cache: &SampleCache,
     file_done: &(dyn Fn() + Sync),
     set_total: &dyn Fn(usize),
+    cancelled: &(dyn Fn() -> bool + Sync),
 ) -> Result<LoadedKit, String> {
     let manifest_path = request.path.as_path();
     let manifest_stamp = ManifestStamp::of(manifest_path);
@@ -548,7 +564,10 @@ pub fn load_kit(
 
     // 2. Decode.
     set_total(jobs.paths.len());
-    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done);
+    let results = decode::decode_all(&jobs.paths, target_sr, cache, file_done, cancelled);
+    if cancelled() {
+        return Err(LOAD_CANCELLED.to_string());
+    }
 
     // 3. Assemble. Takes this instance already held (its previous build,
     // the built-in kit it plays) are not "shared" with anyone else just
@@ -762,6 +781,9 @@ pub fn spawn_loader(
                     cache::global(),
                     &|| progress.file_done(stamp),
                     &|total| progress.set_total(stamp, total.min(u32::MAX as usize) as u32),
+                    // Superseded: a newer pick (or a state load) wants
+                    // another kit; stop decoding this one.
+                    &|| bridge.load_generation.load(Ordering::Acquire) != stamp,
                 )
             }));
             drop(previous);
