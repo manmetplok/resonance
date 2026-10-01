@@ -1,10 +1,18 @@
 //! Download Kits overlay panel.
 //!
 //! Rendered on top of the normal drum editor when the user clicks the
-//! "Download Kits" button. All network activity is delegated to
-//! [`crate::download`], so this file is purely presentation: it reads the
-//! shared `State` each frame, lays out egui widgets, and posts `Command`s
-//! back.
+//! header's "Download kits…" button (`chrome.rs`). All network activity
+//! is delegated to [`crate::download`], so this file is purely
+//! presentation: it reads the shared `State` each frame, lays out egui
+//! widgets, and posts `Command`s back.
+//!
+//! It is an `egui::Modal`: the backdrop is painted on the modal's own
+//! foreground layer, same as the panel content, so it can never end up
+//! drawn above the panel the way the old backdrop (a layer order above
+//! the panel's) did (ba drums-plugin-rework.md §1.2). The modal also
+//! makes it properly modal — its backdrop senses clicks, so they no
+//! longer fall through to the pads behind it — and closes on Esc for
+//! free.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -26,37 +34,46 @@ pub struct DownloadPanelState {
     pending_delete: Option<String>,
 }
 
+/// Open the overlay and force a fresh index fetch.
+///
+/// Without resetting `did_initial_fetch`, the index was fetched once per
+/// editor lifetime (ba drums-plugin-rework.md §1.1): a kit installed or
+/// removed elsewhere — by another editor's download, or by hand — never
+/// showed up here until the whole editor was reopened.
+pub(super) fn open(panel: &mut DownloadPanelState) {
+    panel.open = true;
+    panel.did_initial_fetch = false;
+}
+
+const MARGIN: f32 = 48.0;
+const FRAME_MARGIN: f32 = 16.0;
 
 pub fn draw(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
-    // Dim the background behind the overlay. Use a Tooltip-order layer so it
-    // sits between the normal UI and the Foreground-order panel, avoiding
-    // darkening the panel itself.
     let screen = ui.ctx().content_rect();
-    let painter = ui.ctx().layer_painter(egui::LayerId::new(
-        egui::Order::Tooltip,
-        egui::Id::new("download_kits_backdrop"),
-    ));
-    painter.rect_filled(screen, 0.0, egui::Color32::from_black_alpha(180));
+    let content_size = egui::vec2(
+        (screen.width() - 2.0 * MARGIN - 2.0 * FRAME_MARGIN).max(0.0),
+        (screen.height() - 2.0 * MARGIN - 2.0 * FRAME_MARGIN).max(0.0),
+    );
 
-    let margin = 48.0;
-    let rect = screen.shrink(margin);
-    let window_id = egui::Id::new("download_kits_panel");
+    let frame = egui::Frame::new()
+        .fill(theme::PANEL)
+        .stroke(egui::Stroke::new(1.0, theme::BORDER))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::same(16));
 
-    egui::Area::new(window_id)
-        .fixed_pos(rect.min)
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            let frame = egui::Frame::new()
-                .fill(theme::PANEL)
-                .stroke(egui::Stroke::new(1.0, theme::BORDER))
-                .corner_radius(6.0)
-                .inner_margin(egui::Margin::same(16));
-            frame.show(ui, |ui| {
-                ui.set_width(rect.width() - 32.0);
-                ui.set_height(rect.height() - 32.0);
-                draw_contents(ui, panel, worker);
-            });
-        });
+    let modal = egui::Modal::new(egui::Id::new("download_kits_panel"))
+        .backdrop_color(egui::Color32::from_black_alpha(180))
+        .frame(frame);
+
+    let response = modal.show(ui.ctx(), |ui| {
+        ui.set_width(content_size.x);
+        ui.set_height(content_size.y);
+        draw_contents(ui, panel, worker);
+    });
+
+    if response.should_close() {
+        panel.open = false;
+    }
 }
 
 fn draw_contents(ui: &mut egui::Ui, panel: &mut DownloadPanelState, worker: &Arc<WorkerHandle>) {
