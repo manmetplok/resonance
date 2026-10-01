@@ -1215,14 +1215,7 @@ fn live_kit_select_follows_a_state_load() {
 /// its text when it turns to (or from) "failed".
 #[test]
 fn progress_is_reported_at_start_half_and_done_only() {
-    use selection::{note_progress, progress_worth_reporting, KitSelection, ProgressReport};
-    assert!(progress_worth_reporting(1.0, 0.0), "a load starts");
-    assert!(!progress_worth_reporting(0.0, 0.3));
-    assert!(progress_worth_reporting(0.3, 0.55), "half-way");
-    assert!(!progress_worth_reporting(0.55, 0.999));
-    assert!(progress_worth_reporting(0.999, 1.0), "done");
-    assert!(!progress_worth_reporting(1.0, 1.0));
-
+    use selection::{note_load_progress, note_progress, KitSelection, ProgressReport};
     let sel = KitSelection::new();
     let reports: Vec<_> = [0.0, 0.1, 0.2, 0.5, 0.7, 0.999, 1.0, 1.0]
         .iter()
@@ -1232,6 +1225,37 @@ fn progress_is_reported_at_start_half_and_done_only() {
     assert_eq!(note_progress(&sel, 0.0, true), Some(ProgressReport::Text));
     assert_eq!(note_progress(&sel, 0.0, true), None);
     assert_eq!(note_progress(&sel, 0.0, false), Some(ProgressReport::Text));
+
+    // A newer load superseding one still under way: the stage stays
+    // "start" but the value drops back, so the host re-reads it.
+    let sel = KitSelection::new();
+    assert_eq!(note_load_progress(&sel, 1, 0.0, false), Some(ProgressReport::Values));
+    assert_eq!(note_load_progress(&sel, 1, 0.3, false), None);
+    assert_eq!(note_load_progress(&sel, 2, 0.0, false), Some(ProgressReport::Values));
+    assert_eq!(note_load_progress(&sel, 2, 0.1, false), None);
+    // A new load that is complete at once (a reload of the kit in place)
+    // is reported by its stage, not twice.
+    assert_eq!(note_load_progress(&sel, 3, 1.0, false), Some(ProgressReport::Values));
+    assert_eq!(note_load_progress(&sel, 4, 1.0, false), None);
+}
+
+/// A handed-off load that read no file (every pad reused) is as far along
+/// as any handed-off kit: just under 1, not 0.
+#[test]
+fn a_handed_off_load_with_no_files_reads_just_under_done() {
+    use resonance_drums::kit_loader::{LoadPhase, ProgressSnapshot};
+    let snap = ProgressSnapshot {
+        phase: LoadPhase::HandedOff,
+        files_done: 0,
+        files_total: 0,
+        complete: false,
+    };
+    assert_eq!(snap.fraction(), 0.999);
+    let decoding = ProgressSnapshot {
+        phase: LoadPhase::Decoding,
+        ..snap
+    };
+    assert_eq!(decoding.fraction(), 0.0);
 }
 
 /// The host's render mode reaches the streaming sampler: offline (a
@@ -1452,4 +1476,20 @@ fn the_status_bar_shows_stream_memory_and_underruns() {
         frame.strings()
     );
     assert!(frame.shows("3 underruns"), "{:?}", frame.strings());
+}
+
+/// `lib.rs` serves `kit_select` and `kit_load_progress` by host index
+/// (`KIT_SELECT_INDEX` = 4, `KIT_LOAD_PROGRESS_INDEX` = 5: the progress
+/// wrapper in `param`, the live values in the text source). A param added
+/// in front of them would make those indices name other params; this
+/// pins them by id, in release builds too (the constructor's guard is a
+/// `debug_assert`).
+#[test]
+fn kit_select_and_kit_load_progress_sit_at_their_host_indices() {
+    let params = resonance_drums::params::DrumParams::default();
+    assert_eq!(params.param_at(4).id(), "kit_select");
+    assert_eq!(params.param_at(5).id(), "kit_load_progress");
+    let plugin = ResonanceDrums::new();
+    assert_eq!(plugin.param(4).id(), "kit_select");
+    assert_eq!(plugin.param(5).id(), "kit_load_progress");
 }

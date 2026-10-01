@@ -10,8 +10,9 @@
 //! 1. **`_meta.pads.<piece>.note`** places that piece on the pad whose
 //!    note it names. A piece placed this way plays only there, not also
 //!    on the slot the Drummica table gives it. When two pieces name one
-//!    note, the first in key order wins it. A note no pad plays is
-//!    ignored (the piece falls back to the table).
+//!    note, the first in key order wins it; the other is not placed, and
+//!    falls back to the table. A note no pad plays is ignored (the piece
+//!    falls back to the table).
 //! 2. **The Drummica table** ([`DRUMMICA_MAPPING`]) fills every slot no
 //!    override took, with the table's piece — if the kit has it.
 //! 3. Anything else is **absent** (D7): the pad is silent, the editor dims
@@ -36,11 +37,14 @@
 //! - A kit with `_meta.articulations` pairs exactly the pieces it lists
 //!   (`{primary, alt, label}`), and only those.
 //! - A kit without it gets the Drummica pairs ([`DRUMMICA_ARTICULATION_ALT`])
-//!   labelled [`DRUMMICA_ARTICULATION_LABEL`].
+//!   labelled [`DRUMMICA_ARTICULATION_LABEL`], by piece: a Drummica piece
+//!   `_meta.pads` moves to another note takes its alternate with it.
 //!
 //! Either way the alternate piece must be in the kit, or the pad has no
 //! articulation and the parameter selects the primary piece whatever its
-//! value. The label is split into the two chip labels at its `/`
+//! value. The parameter still exists on such a pad (every pad has one,
+//! whatever the kit), reads [`NO_ALTERNATE_TEXT`], and moving it reloads
+//! nothing. The label is split into the two chip labels at its `/`
 //! ([`split_label`]): "punch/deep" → "punch" / "deep", and "mit/ohne
 //! Teppich" → "mit Teppich" / "ohne Teppich".
 //!
@@ -48,9 +52,10 @@
 //!
 //! `_meta.pads.<piece>.port` and `.choke` are the kit's suggested output
 //! port and choke group for the pad that plays the piece. They are kept on
-//! [`KitPad::port`] / [`KitPad::choke`] for whoever applies defaults on a
-//! kit load, and the loader also builds the pad with them
-//! ([`KitPad::output_group`], [`KitPad::choke_group`]).
+//! [`KitPad::port`] / [`KitPad::choke`], and the loader builds each
+//! `LoadedPad`'s output group and choke group from them
+//! ([`KitPad::output_group`], [`KitPad::choke_group`]). The pad's `choke`
+//! and `output` *parameters* are not moved by a kit load.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -263,9 +268,12 @@ impl KitPads {
             let Some(slot) = hint.note.and_then(pad_index_for_note) else {
                 continue;
             };
-            placed.insert(piece.as_str());
+            // Only the winner of a note is placed: a piece that loses the
+            // note to another stays free for its table slot, rather than
+            // playing nowhere.
             if slots[slot].is_none() {
                 slots[slot] = Some(piece.clone());
+                placed.insert(piece.as_str());
             }
         }
         // 2. The Drummica table for the rest.
@@ -296,9 +304,15 @@ impl KitPads {
                     None => fallback_name(&piece),
                 };
                 let articulation = if meta.articulations.is_empty() {
-                    let alt = DRUMMICA_ARTICULATION_ALT[slot];
-                    (piece == DRUMMICA_MAPPING[slot] && !alt.is_empty() && has_piece(alt))
-                        .then(|| PadArticulation::new(&piece, alt, DRUMMICA_ARTICULATION_LABEL))
+                    // Keyed by the piece, not the slot: a Drummica piece
+                    // `_meta.pads` moved to another note keeps its
+                    // alternate there.
+                    DRUMMICA_MAPPING
+                        .iter()
+                        .position(|p| *p == piece)
+                        .map(|table_slot| DRUMMICA_ARTICULATION_ALT[table_slot])
+                        .filter(|alt| !alt.is_empty() && has_piece(alt))
+                        .map(|alt| PadArticulation::new(&piece, alt, DRUMMICA_ARTICULATION_LABEL))
                 } else {
                     meta.articulations
                         .iter()
@@ -387,58 +401,112 @@ fn port_index(hint: &PortHint) -> Option<usize> {
     }
 }
 
-/// A loaded kit's manifest path and its pads.
-type LoadedKitPads = (PathBuf, Arc<KitPads>);
-
-/// The pads of the kit an instance plays, shared between the loader (which
-/// sets them), the editor and the parameter text (which read them).
+/// The pads of the kit an instance plays, shared between whoever hands a
+/// kit to the audio thread (which publishes them), the editor and the
+/// parameter text (which read them).
 ///
-/// It holds the bridge's `kit_path` handle, not the bridge: the parameter
-/// text closures hold one of these, and the bridge holds the parameters,
-/// so holding the bridge would be a reference cycle.
+/// The pads are published **with the hand-off** — under
+/// `KitBridge::kit_handoff`, next to the send, by the loader, by
+/// `selection::play_builtin`'s built-in kit and by `initialize`'s built-in
+/// install ([`publish_builtin`]) — so they always describe the kit the
+/// sampler holds (or is about to take from the mailbox). They are not
+/// keyed on `kit_path`: during an A → B switch the editor keeps showing
+/// A's pads until B lands, and keeps showing them if B fails.
 #[derive(Clone)]
 pub struct KitPadsHandle {
-    kit_path: Arc<Mutex<Option<PathBuf>>>,
-    loaded: Arc<Mutex<Option<LoadedKitPads>>>,
+    pads: Arc<Mutex<Arc<KitPads>>>,
+}
+
+impl Default for KitPadsHandle {
+    fn default() -> Self {
+        Self {
+            pads: Arc::new(Mutex::new(builtin())),
+        }
+    }
 }
 
 impl KitPadsHandle {
-    /// A handle that reads `kit_path` (the bridge's) to tell which kit is
-    /// current.
-    pub fn new(kit_path: Arc<Mutex<Option<PathBuf>>>) -> Self {
-        Self {
-            kit_path,
-            loaded: Arc::new(Mutex::new(None)),
-        }
+    /// A handle on the built-in kit's pads.
+    ///
+    /// `_kit_path` is no longer read (the pads are published with the
+    /// hand-off, not matched against the current path); the parameter is
+    /// kept so `ResonanceDrums::new` builds unchanged. Prefer
+    /// [`KitPadsHandle::default`].
+    pub fn new(_kit_path: Arc<Mutex<Option<PathBuf>>>) -> Self {
+        Self::default()
     }
 
-    /// Record the pads of the kit at `path`, as a load built them.
-    pub fn set(&self, path: PathBuf, pads: Arc<KitPads>) {
-        *self.loaded.lock() = Some((path, pads));
+    /// Publish `pads` as the pads of the kit the sampler now holds.
+    /// Returns whether any pad's articulation text changed with them —
+    /// a pad gained or lost its pair, or the pair's chip labels differ —
+    /// in which case the host must re-read the parameters' **text**.
+    pub fn set(&self, pads: Arc<KitPads>) -> bool {
+        let previous = std::mem::replace(&mut *self.pads.lock(), pads.clone());
+        !Arc::ptr_eq(&previous, &pads) && articulation_texts_differ(&previous, &pads)
     }
 
-    /// The pads of the kit the instance plays: the last loaded kit's while
-    /// it is still the current kit, else the built-in kit's.
+    /// Publish the built-in kit's pads; [`set`](Self::set)'s return.
+    pub fn set_builtin(&self) -> bool {
+        self.set(builtin())
+    }
+
+    /// The pads of the kit the instance plays.
     pub fn current(&self) -> Arc<KitPads> {
-        let path = self.kit_path.lock().clone();
-        let loaded = self.loaded.lock();
-        match (&*loaded, path) {
-            (Some((loaded_path, pads)), Some(path)) if *loaded_path == path => pads.clone(),
-            _ => builtin(),
-        }
+        self.pads.lock().clone()
     }
 
-    /// The chip label of articulation value `value` on pad `slot`, when the
-    /// current kit has an articulation for the pad.
+    /// The text of articulation value `value` on pad `slot`: the current
+    /// kit's chip label when it pairs the pad, else
+    /// [`NO_ALTERNATE_TEXT`] — both values play the same piece then.
     pub fn articulation_text(&self, slot: usize, value: i32) -> Option<String> {
-        self.current()
-            .pads
-            .get(slot)?
-            .articulation
-            .as_ref()?
-            .label_of(value)
-            .map(str::to_string)
+        let pads = self.current();
+        let pad = pads.pads.get(slot)?;
+        match &pad.articulation {
+            Some(articulation) => articulation.label_of(value).map(str::to_string),
+            None => (0..=1)
+                .contains(&value)
+                .then(|| NO_ALTERNATE_TEXT.to_string()),
+        }
     }
+}
+
+/// What a pad's articulation parameter reads when the kit has no
+/// alternate for it: the parameter exists on every pad (a host's list of
+/// parameters cannot change with the kit), and on this one it moves
+/// nothing.
+pub const NO_ALTERNATE_TEXT: &str = "— (no alternate in this kit)";
+
+/// Whether any pad's articulation parameter reads differently in `a` and
+/// `b`: paired in one and not the other, or paired under other labels.
+pub fn articulation_texts_differ(a: &KitPads, b: &KitPads) -> bool {
+    let texts = |pads: &KitPads| -> Vec<Option<(String, String)>> {
+        pads.pads
+            .iter()
+            .map(|pad| {
+                pad.articulation
+                    .as_ref()
+                    .map(|a| (a.primary_label.clone(), a.alt_label.clone()))
+            })
+            .collect()
+    };
+    texts(a) != texts(b)
+}
+
+/// Publish `pads` on `bridge` ([`KitPadsHandle::set`]) and, when the
+/// articulation parameters read differently with them, have the host
+/// re-read the parameters' text. Call it with the hand-off of the kit the
+/// pads describe, under `KitBridge::kit_handoff` where the caller holds it.
+pub fn publish(bridge: &crate::KitBridge, pads: Arc<KitPads>) {
+    if bridge.kit_pads.set(pads) {
+        bridge.request_params_text_rescan();
+    }
+}
+
+/// [`publish`] the built-in kit's pads: the sampler is (about to be) on
+/// the built-in kit. `initialize` calls it when it installs the built-in
+/// kit (`DrumSampler::load_defaults_sourced`).
+pub fn publish_builtin(bridge: &crate::KitBridge) {
+    publish(bridge, builtin());
 }
 
 /// The built-in kit's pads, built once.

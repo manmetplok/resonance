@@ -1322,6 +1322,46 @@ fn kit_meta_reads_each_part_on_its_own() {
     );
     assert!(!meta.pads.contains_key("SD Broken"));
 
+    // A float port index is still an index, and a port of the wrong shape
+    // costs the hint its port alone — never the note and choke beside it.
+    let meta = KitMeta::from_manifest_bytes(
+        br#"{
+  "_meta": {
+    "pads": {
+      "SD Tom01 mit Teppich": {"note": 50.0, "port": 3.0, "choke": 2.0},
+      "SD Kick mit Teppich": {"note": 36, "port": 1.5, "choke": 4},
+      "SD Snare Normal": {"note": 38, "port": true}
+    }
+  }
+}"#,
+    );
+    assert_eq!(
+        meta.pads.get("SD Tom01 mit Teppich"),
+        Some(&PadHint {
+            note: Some(50),
+            port: Some(PortHint::Index(3)),
+            choke: Some(2),
+        })
+    );
+    assert_eq!(
+        meta.pads.get("SD Kick mit Teppich"),
+        Some(&PadHint {
+            note: Some(36),
+            port: None,
+            choke: Some(4),
+        })
+    );
+    assert_eq!(
+        meta.pads.get("SD Snare Normal").and_then(|h| h.note),
+        Some(38)
+    );
+    // The type deserializes the same way on its own.
+    assert_eq!(
+        serde_json::from_str::<PortHint>("1.0").ok(),
+        Some(PortHint::Index(1))
+    );
+    assert!(serde_json::from_str::<PortHint>("-1").is_err());
+
     // No `_meta`, or not JSON at all: no metadata, not an error.
     assert_eq!(KitMeta::from_manifest_bytes(b"{}"), KitMeta::default());
     assert_eq!(KitMeta::from_manifest_bytes(b"nope"), KitMeta::default());

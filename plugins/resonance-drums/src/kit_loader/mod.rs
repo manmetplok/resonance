@@ -396,6 +396,10 @@ pub fn load_kit_from_manifest(
     )
 }
 
+/// The error a [`load_kit`] of a kit with no piece on any pad returns.
+pub const NO_MAPPABLE_PADS: &str =
+    "no pads this plugin can map — the kit needs _meta.pads or Drummica piece names";
+
 /// The error a [`load_kit`] that was cancelled mid-decode returns.
 pub const LOAD_CANCELLED: &str = "load cancelled";
 
@@ -452,6 +456,11 @@ pub fn load_kit(
     let manifest: KitManifest =
         serde_json::from_value(raw).map_err(|e| format!("parse manifest pieces: {e}"))?;
     let kit_pads = KitPads::resolve(|piece| manifest.contains_key(piece), &meta);
+    // A kit none of whose pieces lands on a pad would "load" as 30 silent
+    // pads, replacing whatever played with nothing.
+    if !kit_pads.pads.iter().any(|pad| pad.present) {
+        return Err(NO_MAPPABLE_PADS.to_string());
+    }
 
     let kit_dir = manifest_path
         .parent()
@@ -667,6 +676,18 @@ pub fn load_kit(
     })
 }
 
+/// Whether `a` and `b` build the same kit given its pads `pads`: equal but
+/// for the articulation of pads the kit does not pair
+/// ([`crate::articulation::masked`]).
+pub fn same_request_masked(a: &KitRequest, b: &KitRequest, pads: &KitPads) -> bool {
+    a.path == b.path
+        && a.overhead_setup_key == b.overhead_setup_key
+        && a.pad_choices == b.pad_choices
+        && a.preload == b.preload
+        && crate::articulation::masked(a.articulations, pads)
+            == crate::articulation::masked(b.articulations, pads)
+}
+
 /// Spawn a background loader thread. Writes status updates and the kit path
 /// to `bridge`, and publishes the finished pad vec through `bridge.kit_sender`.
 ///
@@ -778,14 +799,31 @@ pub fn spawn_loader(
                     let num_pads = kit.pads.len();
                     let name = kit_display_name(&request.path, drumkits_root().as_deref());
                     *bridge.catalog.lock() = kit.catalog;
-                    bridge
-                        .kit_pads
-                        .set(request.path.clone(), Arc::new(kit.kit_pads));
+                    // The pads go with the hand-off, under `kit_handoff`:
+                    // the editor and the articulation text describe the
+                    // kit the sampler takes, never one still decoding. A
+                    // label change asks the host for a text rescan.
+                    let kit_pads = Arc::new(kit.kit_pads);
+                    crate::pad_map::publish(&bridge, kit_pads.clone());
                     // Measure the kit before handing it over: the status
                     // bar's memory readout and the inspector's SAMPLE stage
                     // both describe the takes this load actually decoded.
                     let infos = crate::sample_info::infos_for_pads(&kit.pads, target_sr);
-                    let ordinal = hand_off_kit_locked(&bridge, kit.pads);
+                    // A reload that rebuilt nothing, of the kit the
+                    // sampler already holds, hands nothing off: a swap
+                    // would fade every voice out and restart the round
+                    // robins to play the same samples. The load completes
+                    // with the kit already sent.
+                    let same_kit = kit.stats.rebuilt_pads == 0
+                        && bridge.handed_off.lock().as_ref().is_some_and(|h| {
+                            h.sample_rate.to_bits() == target_sr.to_bits()
+                                && same_request_masked(&h.request, &request, &kit_pads)
+                        });
+                    let ordinal = if same_kit {
+                        bridge.load_progress.last_sent()
+                    } else {
+                        hand_off_kit_locked(&bridge, kit.pads)
+                    };
                     bridge.load_progress.handed_off(stamp, ordinal);
                     *bridge.handed_off.lock() = Some(HandedOffKit {
                         request: request.clone(),
@@ -810,9 +848,6 @@ pub fn spawn_loader(
                         unreadable_paths: kit.stats.unreadable_paths.clone(),
                     };
                     *bridge.load_stats.lock() = kit.stats;
-                    // The articulation parameters read as this kit's
-                    // labels now (`pad_map::KitPadsHandle`).
-                    bridge.request_params_rescan();
                 }
                 Ok(Err(message)) => {
                     bridge.load_progress.failed(stamp);

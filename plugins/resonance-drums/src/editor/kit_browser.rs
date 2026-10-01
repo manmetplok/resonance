@@ -33,9 +33,11 @@ pub(crate) enum LoadKind {
 /// A kit load the editor asked for: the manifest it is loading, and the
 /// load generation it was given.
 ///
-/// The bridge's `kit_path` is written only when a load *succeeds*, and
-/// `KitStatus::Loading` only once the loader thread gets going, so for a
-/// while after a click neither says which kit is on its way. The header
+/// The bridge's `kit_path` is written when a load *succeeds*, when the
+/// built-in kit is chosen (to none), and by a state load — before that
+/// kit decodes — but never by a click; and `KitStatus::Loading` only once
+/// the loader thread gets going, so for a while after a click neither
+/// says which kit is on its way. The header
 /// steps ◀/▶ from this in that window ([`kit_path_for_stepping`]),
 /// rather than from the kit being replaced.
 #[derive(Clone, Debug)]

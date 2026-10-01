@@ -21,6 +21,12 @@
 //! back to "missing"), so a host's undo of a pick made from an external
 //! or missing kit restores that kit. Only a newer parked kit replaces it.
 //!
+//! **Known limitation:** one value stands for one parked kit at a time, so
+//! a move from one parked kit to another — external kit X to external kit
+//! Y (a relink, a second import), or missing to external — cannot be
+//! undone by the host: the value is -2 before and after, the host records
+//! no change, and X is no longer remembered. Undoing past it lands on Y.
+//!
 //! The parameter is **not automatable** (a kit swap is a multi-gigabyte
 //! decode) and **not in the state**: a slot is this machine's library
 //! layout. The kit travels as a [`KitRef`] instead, and the slot is derived
@@ -396,6 +402,9 @@ pub struct KitSelection {
     /// The `kit_load_progress` stage the host was last told of
     /// ([`note_progress`]).
     reported_stage: AtomicU8,
+    /// The load (its progress tag) `kit_load_progress` last reported
+    /// ([`note_load_progress`]).
+    reported_load: AtomicU64,
     /// The load generation the host was last asked to process for
     /// ([`watch`]).
     process_asked: AtomicU64,
@@ -640,8 +649,13 @@ pub struct StartedLoad {
 ///
 /// `Ok(None)`: nothing to do, or nothing to load.
 pub fn apply_pending(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
+    let _acting = bridge.params.selection.act.lock();
+    apply_pending_locked(bridge)
+}
+
+/// [`apply_pending`] under `act`.
+fn apply_pending_locked(bridge: &KitBridge) -> Result<Option<StartedLoad>, String> {
     let sel = &bridge.params.selection;
-    let _acting = sel.act.lock();
     let value = bridge.params.kit_select.value();
     if sel.acted.load(Ordering::Acquire) == value {
         return Ok(None);
@@ -833,6 +847,11 @@ pub fn play_builtin(bridge: &KitBridge) {
     };
     if sr_bits == 0 || on_builtin {
         bridge.load_progress.idle(generation);
+        // Inactive, the sampler takes the built-in kit at `initialize`
+        // (which publishes its pads too); on it already, they may still
+        // be another kit's only if a hand-off raced this — either way,
+        // the built-in pads are what plays.
+        crate::pad_map::publish_builtin(bridge);
         return;
     }
     bridge.load_progress.begin(generation);
@@ -876,6 +895,7 @@ pub fn play_builtin(bridge: &KitBridge) {
             // A newer pick (or another rate) may have taken over; then
             // the pads are simply dropped here.
             kit_loader::hand_off_kit_if_current(&bridge, pads, generation, rate, || {
+                crate::pad_map::publish_builtin(&bridge);
                 *bridge.builtin_kit.lock() = Some(builtin);
                 bridge.kit_bytes.store(bytes, Ordering::Relaxed);
                 bridge
@@ -1099,12 +1119,6 @@ const STAGE_HALF: u8 = 1;
 const STAGE_DONE: u8 = 2;
 const STAGE_FAILED: u8 = 3;
 
-/// Whether the move from `last` to `now` is one the host is told about:
-/// the start of a load, its half-way mark, its end.
-pub fn progress_worth_reporting(last: f32, now: f32) -> bool {
-    progress_stage(last, false) != progress_stage(now, false)
-}
-
 /// What the host must re-read after a progress change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressReport {
@@ -1132,6 +1146,22 @@ pub fn note_progress(sel: &KitSelection, now: f32, failed: bool) -> Option<Progr
     })
 }
 
+/// [`note_progress`] for load `load` (its
+/// [`KitLoadProgress::generation_tag`]): a newer load superseding one
+/// still under way stays in the same stage (start → start) while its
+/// value drops back, so the host is asked to re-read it then too.
+pub fn note_load_progress(
+    sel: &KitSelection,
+    load: u64,
+    now: f32,
+    failed: bool,
+) -> Option<ProgressReport> {
+    let new_load = sel.reported_load.swap(load, Ordering::AcqRel) != load;
+    let report = note_progress(sel, now, failed);
+    let under_way = matches!(progress_stage(now, failed), STAGE_START | STAGE_HALF);
+    report.or((new_load && under_way).then_some(ProgressReport::Values))
+}
+
 /// Ask `host` for what `report` needs.
 pub fn send_progress_report(host: &resonance_plugin::HostHandle, report: ProgressReport) {
     match report {
@@ -1151,7 +1181,8 @@ pub fn publish_progress(
     let now = reported_progress(params, progress);
     params.kit_load_progress.set_value(now);
     let failed = now <= 0.0 && progress_failure(params, progress).is_some();
-    if let (Some(report), Some(host)) = (note_progress(&params.selection, now, failed), host) {
+    let report = note_load_progress(&params.selection, progress.generation_tag(), now, failed);
+    if let (Some(report), Some(host)) = (report, host) {
         send_progress_report(host, report);
     }
     now
@@ -1244,16 +1275,37 @@ impl resonance_plugin::Param for ProgressParam {
 /// (`clap_host.request_process`), once per load. A host that ignores
 /// that (Resonance's does today) takes the kit — and `kit_load_progress`
 /// reaches 1.0 — at its next block: Play, a monitored track, a note.
+///
+/// One tick starts **at most one load**, all of it under
+/// [`KitSelection::acting`] (so a state load cannot interleave with it):
+///
+/// 1. a moved `stream_preload` is stored, without reloading;
+/// 2. a moved `kit_select` is acted on — its load reads the preload and
+///    the articulations as they are now;
+/// 3. only if that started no load, one reload when the preload moved or
+///    an articulation moved on a pad the kit pairs
+///    ([`crate::articulation::apply_pending_locked`]).
 pub fn watch(bridge: &KitBridge) {
-    match apply_pending(bridge) {
-        Ok(_) => {}
-        Err(e) => tracing::warn!("kit_select: {e}"),
+    {
+        let _acting = bridge.params.selection.act.lock();
+        // Stored the way `stream::set_preload` stores it, which also
+        // keeps the param and the bridge's figure equal.
+        let frames = crate::stream::preload_frames(bridge.params.stream_preload.value());
+        let preload_moved = bridge.stream_preload.swap(frames, Ordering::Relaxed) != frames;
+        let started = match apply_pending_locked(bridge) {
+            Ok(started) => started.is_some(),
+            Err(e) => {
+                tracing::warn!("kit_select: {e}");
+                false
+            }
+        };
+        if !started {
+            crate::articulation::apply_pending_locked(bridge, preload_moved);
+        }
     }
-    // A `stream_preload` moved the same ways reloads the kit.
-    crate::stream::apply_preload_param(bridge);
+    let sel = &bridge.params.selection;
     // The library changed (a rename, a delete, a kit added in a slot):
     // what a value names may have changed with it.
-    let sel = &bridge.params.selection;
     if let Some(revision) = sel.library.revision_if_open() {
         let seen = sel.seen_revision.swap(revision, Ordering::AcqRel);
         if seen != 0 && seen != revision {

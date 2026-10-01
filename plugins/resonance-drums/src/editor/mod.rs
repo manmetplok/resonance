@@ -43,7 +43,17 @@ use plugin_gui_core::egui;
 // can keep their existing `super::reload_kit` import path. The helper
 // itself lives at `crate::reload` because the articulation watcher needs
 // it in headless builds too.
-pub(crate) use crate::reload::reload_kit;
+pub(crate) use crate::reload::reload_kit_acting as reload_kit;
+
+/// Tell the host the editor changed param `id` itself, so the host
+/// records it as one undoable edit (`HostHandle::announce_param_change`).
+/// Call it after the value is set, for a discrete edit (a click). A no-op
+/// before the host handed itself over (and in tests).
+pub(crate) fn announce_param_edit(bridge: &crate::KitBridge, id: &str) {
+    if let Some(host) = bridge.host.lock().as_ref() {
+        host.announce_param_change(id);
+    }
+}
 
 /// The width left in `ui` once `inset` — the fixed gaps of a row about to
 /// be split into columns, or a widget's own chrome — is taken off,

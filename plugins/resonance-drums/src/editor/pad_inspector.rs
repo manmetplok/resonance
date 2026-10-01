@@ -490,6 +490,9 @@ fn draw_articulations(
                 });
                 if clicked && index != current {
                     pad.articulation.set_value(index);
+                    // A user's edit: one undoable change in the host,
+                    // not a value the host only follows.
+                    super::announce_param_edit(bridge, pad.articulation.id());
                     // The parameter is the source of truth; the reload is
                     // the watcher's job. Ping it so the click lands now
                     // instead of at its next poll.

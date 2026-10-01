@@ -91,6 +91,17 @@ fn load(plugin: &ResonanceDrums, kit: &str) {
     settle(plugin);
 }
 
+/// Wait for the built-in kit's pads to be published: `play_builtin` on an
+/// active plugin builds the built-in kit off-thread and publishes its pads
+/// with the hand-off.
+fn wait_for_builtin_pads(plugin: &ResonanceDrums) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while plugin.bridge.kit_pads.current().from_kit {
+        assert!(Instant::now() < deadline, "the built-in pads never came back");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn settle(plugin: &ResonanceDrums) {
     let bridge = &plugin.bridge;
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -195,7 +206,12 @@ fn the_articulation_param_reads_the_kits_labels() {
     let plugin = booted();
     let params = plugin.bridge.params.clone();
     let kick = &params.pads[KICK_PAD].articulation;
-    assert_eq!(kick.display(ARTICULATION_ALT as f64), "Alternate", "no kit yet");
+    // The built-in kit pairs nothing: the parameter says so.
+    assert_eq!(
+        kick.display(ARTICULATION_ALT as f64),
+        pad_map::NO_ALTERNATE_TEXT,
+        "no kit yet"
+    );
 
     load(&plugin, "it_techno");
     assert_eq!(kick.display(ARTICULATION_PRIMARY as f64), "punch");
@@ -213,15 +229,19 @@ fn the_articulation_param_reads_the_kits_labels() {
         .expect("pad_0_articulation");
     assert_eq!(text.display(index, 1.0).as_deref(), Some("deep"));
 
-    // A pad the kit does not pair reads generically.
-    assert_eq!(
-        params.pads[TOM_HIGH_PAD].articulation.display(0.0),
-        "Primary"
-    );
+    // A pad the kit does not pair says it has no alternate, on both
+    // values — and the text still parses back.
+    let tom = &params.pads[TOM_HIGH_PAD].articulation;
+    for value in [0.0, 1.0] {
+        assert_eq!(tom.display(value), pad_map::NO_ALTERNATE_TEXT);
+    }
+    assert_eq!(tom.parse(pad_map::NO_ALTERNATE_TEXT), Some(0.0));
+    assert_eq!(tom.parse("Alternate"), Some(1.0));
 
     // Back on the built-in kit, the kit's words go.
     resonance_drums::selection::play_builtin(&plugin.bridge);
-    assert_eq!(kick.display(ARTICULATION_ALT as f64), "Alternate");
+    wait_for_builtin_pads(&plugin);
+    assert_eq!(kick.display(ARTICULATION_ALT as f64), pad_map::NO_ALTERNATE_TEXT);
 }
 
 #[test]
@@ -303,7 +323,65 @@ fn the_bridge_reports_the_loaded_kits_pads_and_the_built_in_ones_without_a_kit()
     assert!(!pads.is_present(TOM_HIGH_PAD));
 
     resonance_drums::selection::play_builtin(&plugin.bridge);
-    assert!(!plugin.bridge.kit_pads.current().from_kit);
+    wait_for_builtin_pads(&plugin);
+}
+
+/// The pads are published with the hand-off, not looked up by `kit_path`:
+/// a state load points `kit_path` at kit B before B decodes, and the
+/// editor must keep showing the kit that plays — and keep showing it when
+/// B fails.
+#[test]
+fn the_pads_stay_the_playing_kits_while_another_loads_and_when_it_fails() {
+    let plugin = booted();
+    load(&plugin, "it_techno");
+    let bridge = &plugin.bridge;
+    let missing = fixture("it_techno").with_file_name("no_such_manifest.json");
+    // What a preset switch does first.
+    *bridge.kit_path.lock() = Some(missing.clone());
+    let pads = bridge.kit_pads.current();
+    assert!(pads.from_kit, "the editor flipped to the built-in view");
+    assert_eq!(pads.pads[COUNT_STICK_PAD].name, "Perc Conga");
+
+    spawn_loader(
+        missing,
+        RATE,
+        bridge,
+        DEFAULT_OVERHEAD_SETUP.to_string(),
+        no_choices(),
+        bridge.articulations(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !matches!(*bridge.kit_status.lock(), KitStatus::Error { .. })
+        || bridge.pending_kit.lock().is_some()
+    {
+        assert!(Instant::now() < deadline, "the load never failed");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let pads = bridge.kit_pads.current();
+    assert!(pads.from_kit, "a failed load left the built-in view");
+    assert_eq!(pads.pads[COUNT_STICK_PAD].name, "Perc Conga");
+}
+
+/// A load whose articulation labels differ from the kit before it asks the
+/// host for a **text** rescan (the values did not move); one whose labels
+/// match does not.
+#[test]
+fn a_load_that_changes_the_articulation_labels_asks_for_a_text_rescan() {
+    let plugin = booted();
+    let asks = &plugin.bridge.host_asks;
+    let texts = || asks.text_rescans.load(std::sync::atomic::Ordering::Relaxed);
+    let before = texts();
+    load(&plugin, "it_techno");
+    let after_first = texts();
+    assert!(after_first > before, "punch/deep came in without a text rescan");
+
+    // The same kit again: the same labels.
+    load(&plugin, "it_techno");
+    assert_eq!(texts(), after_first, "an unchanged label set asked again");
+
+    // Another kit pairs other pads under other words.
+    load(&plugin, "drummica_like");
+    assert!(texts() > after_first);
 }
 
 // ---------------------------------------------------------------------------
@@ -437,4 +515,269 @@ fn the_editor_shows_the_kits_names_labels_and_absent_pads() {
     assert!(frame.shows("Not in this kit"), "the absent pad is not explained");
     assert!(frame.widget("inspector.not_in_kit").is_some());
     assert!(frame.widget("articulation.0").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// `KitPads::resolve` edge cases (pure: no files)
+// ---------------------------------------------------------------------------
+
+fn meta(json: serde_json::Value) -> KitMeta {
+    KitMeta::from_value(&json)
+}
+
+#[test]
+fn a_piece_that_loses_a_note_collision_still_plays_on_its_table_slot() {
+    // Both name the Tom High note; "SD Count Stick" sorts first and wins
+    // it. The kick loses — and must still play on the kick pad, not
+    // nowhere.
+    let pieces = ["SD Count Stick", "SD Kick mit Teppich"];
+    let meta = meta(serde_json::json!({
+        "pads": {
+            "SD Count Stick": { "note": drum_map::TOM_HIGH },
+            "SD Kick mit Teppich": { "note": drum_map::TOM_HIGH },
+        }
+    }));
+    let pads = KitPads::resolve(|p| pieces.contains(&p), &meta);
+    assert_eq!(pads.pads[TOM_HIGH_PAD].piece.as_deref(), Some("SD Count Stick"));
+    assert_eq!(
+        pads.pads[KICK_PAD].piece.as_deref(),
+        Some("SD Kick mit Teppich"),
+        "the losing piece plays nowhere"
+    );
+    // The winner plays only where it was placed.
+    assert!(!pads.is_present(COUNT_STICK_PAD));
+}
+
+#[test]
+fn a_drummica_piece_moved_by_meta_pads_keeps_its_alternate() {
+    // A kit without `_meta.articulations` that moves Tom01 onto the Tom
+    // Low note: the Drummica pair is the piece's, wherever it plays.
+    let pieces = ["SD Tom01 mit Teppich", "SD Tom01 ohne Teppich"];
+    let meta = meta(serde_json::json!({
+        "pads": { "SD Tom01 mit Teppich": { "note": drum_map::TOM_LOW } }
+    }));
+    let pads = KitPads::resolve(|p| pieces.contains(&p), &meta);
+    let tom_low = &pads.pads[TOM_PADS[2]];
+    assert_eq!(tom_low.piece.as_deref(), Some("SD Tom01 mit Teppich"));
+    let articulation = tom_low.articulation.as_ref().expect("Tom01's alternate");
+    assert_eq!(articulation.alt, "SD Tom01 ohne Teppich");
+    assert_eq!(pads.piece_for(TOM_PADS[2], true), Some("SD Tom01 ohne Teppich"));
+    assert!(!pads.is_present(TOM_HIGH_PAD));
+}
+
+// ---------------------------------------------------------------------------
+// The watcher: masked articulations, one load per tick, `acting()`
+// ---------------------------------------------------------------------------
+
+fn generation(plugin: &ResonanceDrums) -> u64 {
+    plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Load `kit` and let the audio thread take it, so the progress is
+/// complete and the mailbox empty.
+fn load_and_take(plugin: &mut ResonanceDrums, kit: &str) {
+    load(plugin, kit);
+    for _ in 0..4 {
+        render(plugin, &[]);
+    }
+    assert!(plugin.bridge.load_progress.is_complete());
+}
+
+/// Moving the articulation of a pad the kit has no alternate for loads
+/// nothing: a reload would fade every voice, restart the round robins and
+/// drop the progress to 0 to build the same kit.
+#[test]
+fn an_unpaired_pads_articulation_reloads_nothing() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    assert!(plugin.bridge.kit_pads.current().pads[SNARE_PAD].articulation.is_none());
+    let before = generation(&plugin);
+
+    plugin.bridge.params.pads[SNARE_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    assert!(!articulation::apply_pending(&plugin.bridge));
+    resonance_drums::selection::watch(&plugin.bridge);
+    assert_eq!(generation(&plugin), before, "a load started");
+    assert!(plugin.bridge.load_progress.is_complete());
+
+    // A paired pad still reloads.
+    plugin.bridge.params.pads[KICK_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    assert!(articulation::apply_pending(&plugin.bridge));
+    settle(&plugin);
+}
+
+/// A reload that rebuilds no pad of the kit the sampler holds hands
+/// nothing off: the load is complete at once, with no block run.
+#[test]
+fn a_reload_that_rebuilds_nothing_hands_nothing_off() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let taken = plugin.bridge.load_progress.kits_taken();
+    assert!(resonance_drums::reload::reload_kit(&plugin.bridge));
+    settle(&plugin);
+    assert_eq!(plugin.bridge.load_stats.lock().rebuilt_pads, 0);
+    assert!(
+        plugin.bridge.load_progress.is_complete(),
+        "the reload waits for a kit the audio thread is never sent"
+    );
+    for _ in 0..4 {
+        render(&mut plugin, &[]);
+    }
+    assert_eq!(plugin.bridge.load_progress.kits_taken(), taken, "a kit was swapped in");
+}
+
+/// One watcher tick starts at most one load: a moved preload and a moved
+/// articulation are one reload, and a moved `kit_select` takes both with
+/// it.
+#[test]
+fn one_watcher_tick_starts_one_load() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let before = generation(&plugin);
+    {
+        // Held so the instance's own watcher thread cannot act between
+        // the writes.
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.bridge.params.stream_preload.set_value(0);
+        plugin.bridge.params.pads[KICK_PAD]
+            .articulation
+            .set_value(ARTICULATION_ALT);
+    }
+    resonance_drums::selection::watch(&plugin.bridge);
+    settle(&plugin);
+    assert_eq!(generation(&plugin), before + 1, "one tick, one load");
+    assert_eq!(
+        plugin
+            .bridge
+            .stream_preload
+            .load(std::sync::atomic::Ordering::Relaxed),
+        0
+    );
+    assert_eq!(*plugin.bridge.loaded_articulations.lock(), plugin.bridge.articulations());
+
+    // A `kit_select` that loads a kit, with the preload and an
+    // articulation moved in the same tick: its load is the only one, and
+    // it is built with both.
+    use resonance_drums::selection::{self, NO_KIT, PARKED_KIT};
+    selection::load_unslotted_now(&plugin.bridge, fixture("it_techno"));
+    settle(&plugin);
+    plugin.bridge.params.kit_select.set_value(NO_KIT);
+    selection::watch(&plugin.bridge);
+    wait_for_builtin_pads(&plugin);
+    let before = generation(&plugin);
+    {
+        let _acting = plugin.bridge.params.selection.acting();
+        plugin.bridge.params.stream_preload.set_value(1);
+        plugin.bridge.params.pads[KICK_PAD]
+            .articulation
+            .set_value(ARTICULATION_PRIMARY);
+        plugin.bridge.params.kit_select.set_value(PARKED_KIT);
+    }
+    selection::watch(&plugin.bridge);
+    settle(&plugin);
+    assert_eq!(generation(&plugin), before + 1, "one tick, one load");
+    let handed = plugin.bridge.handed_off.lock().clone().expect("it_techno handed off");
+    assert_eq!(handed.request.path, fixture("it_techno"));
+    assert_eq!(handed.request.preload, resonance_drums::stream::DEFAULT_PRELOAD);
+    assert_eq!(handed.request.articulations, plugin.bridge.articulations());
+}
+
+/// The articulation step waits for whoever holds `acting()` — a state
+/// load, a `kit_select` act — rather than reload in the middle of it.
+#[test]
+fn an_articulation_reload_waits_for_acting() {
+    let mut plugin = booted();
+    load_and_take(&mut plugin, "drummica_like");
+    let before = generation(&plugin);
+    let bridge = plugin.bridge.clone();
+    let acting = plugin.bridge.params.selection.acting();
+    plugin.bridge.params.pads[KICK_PAD]
+        .articulation
+        .set_value(ARTICULATION_ALT);
+    let worker = std::thread::spawn(move || articulation::apply_pending(&bridge));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(generation(&plugin), before, "reloaded under another act");
+    drop(acting);
+    // Either this call or the instance's watcher started it.
+    let _ = worker.join().unwrap();
+    assert_eq!(generation(&plugin), before + 1);
+    settle(&plugin);
+}
+
+/// A kit none of whose pieces lands on a pad (no `_meta.pads`, no Drummica
+/// names) fails its load with a reason, rather than "loading" as 30 silent
+/// pads.
+#[test]
+fn a_kit_with_no_mappable_piece_fails_to_load() {
+    let dir = std::env::temp_dir().join(format!("drums-unmappable-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest = dir.join("drum_samples.json");
+    let wav = fixture("it_techno")
+        .parent()
+        .unwrap()
+        .join("../wavs/kick.wav");
+    std::fs::write(
+        &manifest,
+        serde_json::json!({
+            "Mystery Drum": { "01_KickIn_T": {
+                "brand": "Test", "channel": "1", "mic": "M1", "position": "KickIn",
+                "rounds": { "RR01": { "Vel01": wav } }
+            } }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let err = match load_kit_from_manifest(
+        &manifest,
+        RATE,
+        DEFAULT_OVERHEAD_SETUP,
+        &no_choices(),
+        &[false; NUM_PADS],
+    ) {
+        Ok(_) => panic!("a kit with no mappable piece loaded"),
+        Err(e) => e,
+    };
+    assert_eq!(err, resonance_drums::kit_loader::NO_MAPPABLE_PADS);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A chip click writes the pad's articulation param (announced to the host
+/// as one undoable edit) and the watcher reloads the kit from it.
+#[test]
+fn an_articulation_chip_click_moves_the_param_and_reloads() {
+    use resonance_drums::TestEditor;
+
+    let plugin = booted();
+    load(&plugin, "it_techno");
+    let before = plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire);
+    let mut editor = TestEditor::new(&plugin, resonance_drums::library::shared(), (960.0, 640.0));
+    editor.select_pad(KICK_PAD);
+    editor.frame(Vec::new());
+    let frame = editor.frame(Vec::new());
+    let chip = frame.widget("articulation.1").expect("the deep chip").rect;
+    editor.click(chip.center());
+    assert_eq!(
+        plugin.bridge.params.pads[KICK_PAD].articulation.value(),
+        ARTICULATION_ALT
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while plugin
+        .bridge
+        .load_generation
+        .load(std::sync::atomic::Ordering::Acquire)
+        == before
+    {
+        assert!(Instant::now() < deadline, "the click reloaded nothing");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    settle(&plugin);
 }
