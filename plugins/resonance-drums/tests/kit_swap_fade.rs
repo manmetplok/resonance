@@ -86,8 +86,8 @@ fn swap_setup() -> (
     let port = PAD_MAPPINGS[pad_index].output_group.index();
     // Pin master + pad volume to unity so the rendered DC *is* the
     // voice's envelope.
-    params.master_volume.set_value(1.0);
-    params.pads[pad_index].volume.set_value(1.0);
+    params.master_volume.set_value(0.0); // 0 dB: unity
+    params.pads[pad_index].volume.set_value(0.0); // 0 dB: unity
     sampler.note_on(drum_map::TOM_LOW, 1.0);
     (sampler, params, tx, port)
 }

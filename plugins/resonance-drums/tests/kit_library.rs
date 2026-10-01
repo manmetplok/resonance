@@ -192,8 +192,8 @@ fn kick_peak(plugin: &mut ResonanceDrums) -> f32 {
     )
 }
 
-/// Default master and pad volume, between a take and the output.
-const CHAIN_GAIN: f32 = 0.8 * 0.8;
+/// Default master and pad volume (both 0 dB: unity), between a take and the output.
+const CHAIN_GAIN: f32 = 1.0;
 
 /// Whether the kick plays the fixture kit whose take holds `level`.
 fn plays_at(plugin: &mut ResonanceDrums, level: f32) -> bool {

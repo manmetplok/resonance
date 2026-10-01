@@ -817,20 +817,22 @@ fn draw_kit_row_card(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             // Master.
             ui.vertical(|ui| {
                 ui.set_width(master_w);
-                let v = app.params.master_volume.value();
+                // dB, along the param's own travel.
+                let master = &app.params.master_volume;
                 label_value_row(
                     ui,
                     "MASTER",
                     theme::TEXT_3,
                     10.0,
-                    &format!("{v:.2}"),
+                    &crate::level::db_label(master.value()),
                     theme::TEXT_1,
                     11.0,
                 );
+                let v = master.normalized_value();
                 if let Some(nv) =
                     super::probed(ui, "kit.master", |ui| widgets::slider_unipolar(ui, master_w, v))
                 {
-                    app.params.master_volume.set_value(nv);
+                    master.set_normalized(nv);
                 }
             });
             ui.add_space(CARD_COLUMN_GAP);

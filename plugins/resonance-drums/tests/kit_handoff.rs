@@ -23,8 +23,8 @@ const SAMPLE_RATE: f32 = 48_000.0;
 const BLOCK: usize = 128;
 const NUM_PORTS: usize = 7;
 const KICK_PORT: usize = 1;
-/// Pad volume (0.8) × master (0.8) at the defaults.
-const CHAIN_GAIN: f32 = 0.64;
+/// Pad volume (0 dB) × master (0 dB) at the defaults: unity.
+const CHAIN_GAIN: f32 = 1.0;
 
 fn booted_plugin() -> ResonanceDrums {
     let mut plugin = ResonanceDrums::new();

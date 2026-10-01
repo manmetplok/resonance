@@ -1,6 +1,11 @@
 /// Plugin parameters: master volume, the global voice/velocity/round-robin
-/// controls, the kit selector and its load progress, and per-pad volume,
-/// pan, mute, OH blend, balance and articulation choice.
+/// controls, the kit selector and its load progress, and per pad its
+/// volume, pan, mute, articulation and per-mic trims.
+///
+/// Every level is in dB (drums-plugin-rework.md §7 E9, D6): see
+/// [`crate::level`]. A v1 state, which stored them as linear gains (and
+/// a pad's two close mics as one `balance`, its overhead as `oh_blend`),
+/// is converted once on load by [`upgrade_v1_levels`].
 use std::sync::Arc;
 
 use resonance_plugin::*;
@@ -8,12 +13,13 @@ use resonance_plugin::*;
 use crate::articulation::{ARTICULATION_LABELS, ARTICULATION_PRIMARY};
 use crate::choice::ChoiceParam;
 use crate::drum_map::{NUM_PADS, PAD_MAPPINGS};
+use crate::level::{self, MAX_TRIM_DB, MAX_VOLUME_DB, MIN_DB};
 use crate::selection::{KitSelection, MAX_KIT_SLOT, NO_KIT};
 use crate::velocity;
 use crate::voice::MAX_VOICES;
 
 /// Number of param fields per pad, used for param indexing.
-pub const PARAMS_PER_PAD: usize = 6;
+pub const PARAMS_PER_PAD: usize = 7;
 
 /// Number of global params ahead of the per-pad block, used for param
 /// indexing. The flat index is an enumeration order, not an identity:
@@ -30,6 +36,7 @@ pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
 pub const PARAM_COUNT: usize = GLOBAL_PARAMS + crate::drum_map::NUM_PADS * PARAMS_PER_PAD;
 
 pub struct DrumParams {
+    /// Master level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
     pub master_volume: FloatParam,
     /// Ceiling on simultaneously sounding voices. A hit uses one voice
     /// per loaded mic bank (a kick with in/out mics plus overheads uses
@@ -72,13 +79,7 @@ impl Default for DrumParams {
         let text_sel = selection.clone();
         let parse_sel = selection.clone();
         Self {
-            master_volume: FloatParam::new(
-                "master_volume",
-                "Master Volume",
-                0.8,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            master_volume: level_param("master_volume", "Master Volume", MAX_VOLUME_DB),
             polyphony: IntParam::new(
                 "polyphony",
                 "Polyphony",
@@ -146,27 +147,45 @@ impl DrumParams {
     }
 }
 
+/// The mic slots a pad's per-mic trims are indexed by: its first and
+/// second close-mic bank and its overhead. E15 (bleed and room banks)
+/// extends this list; a slot's trim id is `pad_N_<key>_trim` with the
+/// slot's [`MIC_SLOT_KEYS`] entry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MicSlot {
+    /// The pad's first close-mic bank (kick In, snare Top, the tom, …).
+    Close1 = 0,
+    /// The pad's second close-mic bank (kick Out, snare Btm).
+    Close2 = 1,
+    /// The overhead bank.
+    Overhead = 2,
+}
+
+/// How many [`MicSlot`]s a pad has a trim for.
+pub const MIC_SLOTS: usize = 3;
+
+/// Each [`MicSlot`]'s part of its trim's id (`pad_N_<key>_trim`).
+pub const MIC_SLOT_KEYS: [&str; MIC_SLOTS] = ["mic1", "mic2", "oh"];
+
+/// Each [`MicSlot`]'s part of its trim's name.
+const MIC_SLOT_NAMES: [&str; MIC_SLOTS] = ["Close Mic 1", "Close Mic 2", "OH"];
+
+impl MicSlot {
+    /// The slot of close-mic bank `bank_index` (0 or 1).
+    pub fn close(bank_index: usize) -> Self {
+        if bank_index == 0 {
+            Self::Close1
+        } else {
+            Self::Close2
+        }
+    }
+}
+
 pub struct PadParams {
+    /// Pad level in dB, −∞ ([`MIN_DB`]) … +6, default 0 dB.
     pub volume: FloatParam,
     pub pan: FloatParam,
     pub mute: BoolParam,
-    /// Blend amount (0..1) for this pad's overhead contribution when
-    /// summed into the Overhead output port. 1.0 = full level, 0.0 =
-    /// completely muted from the overhead bus. Defaults to 1.0 so the
-    /// plugin sounds the same on first instantiation as it did before
-    /// the multi-output rewrite.
-    ///
-    /// For pads the library records with overheads only (all cymbals in
-    /// Drummica) the overhead take is routed to the pad's own group port
-    /// instead — see `VoiceDestination::Overhead` — and this param scales
-    /// it there, so turning it down still silences the pad.
-    pub oh_blend: FloatParam,
-    /// Balance (0..1) between the pad's two close-mic banks. 0.5 is
-    /// equal — used as the default so the pre-existing single-bank
-    /// sound is preserved. 0.0 favours the "left" side (kick In or
-    /// snare Top), 1.0 favours the "right" side (kick Out or snare
-    /// Btm). Ignored for pads with fewer than two close-mic banks.
-    pub balance: FloatParam,
     /// Articulation choice: which recorded variant of the piece this pad
     /// plays, labelled by [`ARTICULATION_LABELS`] (0 = "mit Teppich",
     /// 1 = "ohne Teppich").
@@ -182,37 +201,65 @@ pub struct PadParams {
     /// one. The id still exists and still persists, so nothing that was
     /// saved against it breaks.
     pub articulation: ChoiceParam,
+    /// Per-mic trims in dB, −∞ … +12, default 0 dB, indexed by
+    /// [`MicSlot`]: `pad_N_mic1_trim`, `pad_N_mic2_trim`, `pad_N_oh_trim`.
+    /// They replace v1's `balance` (between the two close mics) and
+    /// `oh_blend` (the overhead's level), which [`upgrade_v1_levels`]
+    /// converts.
+    ///
+    /// The overhead trim scales the pad's overhead take wherever it is
+    /// routed. The second close mic's trim is hidden on pads that are
+    /// never recorded with two.
+    pub trims: [FloatParam; MIC_SLOTS],
+}
+
+/// A static id or name for a per-pad parameter.
+fn leak(text: String) -> &'static str {
+    Box::leak(text.into_boxed_str())
+}
+
+/// A level in dB from −∞ ([`MIN_DB`]) up to `max_db`, default 0 dB. The
+/// travel is skewed toward the top, where levels are set: 0 dB sits at
+/// about four fifths of a fader.
+fn level_param(id: &'static str, name: &'static str, max_db: f32) -> FloatParam {
+    FloatParam::new(
+        id,
+        name,
+        0.0,
+        FloatRange::Skewed {
+            min: MIN_DB,
+            max: max_db,
+            factor: 1.0,
+        },
+    )
+    .with_unit("dB")
+    .with_value_to_string(Arc::new(level::db_label))
+    .with_string_to_value(Arc::new(level::db_from_label))
 }
 
 impl PadParams {
     fn new(index: usize) -> Self {
-        // Use leaked strings for unique static IDs per pad
-        let vol_id: &'static str = Box::leak(format!("pad_{}_volume", index).into_boxed_str());
-        let vol_name: &'static str = Box::leak(format!("Pad {} Volume", index).into_boxed_str());
-        let pan_id: &'static str = Box::leak(format!("pad_{}_pan", index).into_boxed_str());
-        let pan_name: &'static str = Box::leak(format!("Pad {} Pan", index).into_boxed_str());
-        let mute_id: &'static str = Box::leak(format!("pad_{}_mute", index).into_boxed_str());
-        let mute_name: &'static str = Box::leak(format!("Pad {} Mute", index).into_boxed_str());
-        let oh_id: &'static str = Box::leak(format!("pad_{}_oh_blend", index).into_boxed_str());
-        let oh_name: &'static str = Box::leak(format!("Pad {} OH Blend", index).into_boxed_str());
-        let bal_id: &'static str = Box::leak(format!("pad_{}_balance", index).into_boxed_str());
-        let bal_name: &'static str = Box::leak(format!("Pad {} Balance", index).into_boxed_str());
-        let art_id: &'static str =
-            Box::leak(format!("pad_{}_articulation", index).into_boxed_str());
-        let art_name: &'static str =
-            Box::leak(format!("Pad {} Articulation", index).into_boxed_str());
+        let id = |field: &str| leak(format!("pad_{index}_{field}"));
+        let name = |field: &str| leak(format!("Pad {index} {field}"));
+        let mapping = &PAD_MAPPINGS[index];
+        let trims = std::array::from_fn(|slot| {
+            let param = level_param(
+                id(&format!("{}_trim", MIC_SLOT_KEYS[slot])),
+                name(&format!("{} Trim", MIC_SLOT_NAMES[slot])),
+                MAX_TRIM_DB,
+            );
+            if slot == MicSlot::Close2 as usize && mapping.close_mic_positions.len() < 2 {
+                param.hidden()
+            } else {
+                param
+            }
+        });
 
         Self {
-            volume: FloatParam::new(
-                vol_id,
-                vol_name,
-                0.8,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            volume: level_param(id("volume"), name("Volume"), MAX_VOLUME_DB),
             pan: FloatParam::new(
-                pan_id,
-                pan_name,
+                id("pan"),
+                name("Pan"),
                 0.0,
                 FloatRange::Linear {
                     min: -1.0,
@@ -220,31 +267,27 @@ impl PadParams {
                 },
             )
             .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            mute: BoolParam::new(mute_id, mute_name, false),
-            oh_blend: FloatParam::new(
-                oh_id,
-                oh_name,
-                1.0,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
-            balance: FloatParam::new(
-                bal_id,
-                bal_name,
-                0.5,
-                FloatRange::Linear { min: 0.0, max: 1.0 },
-            )
-            .with_value_to_string(formatters::v2s_f32_rounded(2)),
+            mute: BoolParam::new(id("mute"), name("Mute"), false),
             articulation: {
-                let param =
-                    ChoiceParam::new(art_id, art_name, ARTICULATION_PRIMARY, ARTICULATION_LABELS);
-                if PAD_MAPPINGS[index].has_articulation {
+                let param = ChoiceParam::new(
+                    id("articulation"),
+                    name("Articulation"),
+                    ARTICULATION_PRIMARY,
+                    ARTICULATION_LABELS,
+                );
+                if mapping.has_articulation {
                     param
                 } else {
                     param.hidden()
                 }
             },
+            trims,
         }
+    }
+
+    /// The trim of `slot`.
+    pub fn trim(&self, slot: MicSlot) -> &FloatParam {
+        &self.trims[slot as usize]
     }
 }
 
@@ -255,7 +298,7 @@ impl Default for PadParams {
 }
 
 impl DrumParams {
-    /// The exposed parameters in host order: the six globals, then each
+    /// The exposed parameters in host order: the globals, then each
     /// pad's block of [`PARAMS_PER_PAD`].
     ///
     /// One ordered list, read by both `ResonancePlugin::param` and the
@@ -278,10 +321,64 @@ impl DrumParams {
             0 => &pad.volume,
             1 => &pad.pan,
             2 => &pad.mute,
-            3 => &pad.oh_blend,
-            4 => &pad.balance,
-            5 => &pad.articulation,
+            3 => &pad.articulation,
+            4 => &pad.trims[0],
+            5 => &pad.trims[1],
+            6 => &pad.trims[2],
             _ => &pad.volume,
         }
     }
+}
+
+/// Bring a v1 state's levels up to v2, in place: returns whether it did.
+///
+/// v1 stored `master_volume` and `pad_N_volume` as linear gains (0..1,
+/// default 0.8), a pad's two close mics as one `pad_N_balance` (0..1:
+/// the first mic at `1 − b`, the second at `b`, and only on pads that
+/// had two), and its overhead level as `pad_N_oh_blend` (0..1). v2 has
+/// them all in dB and the mics as separate trims (E9). A state is v1 when
+/// its params carry any `balance` or `oh_blend` — every v1 save wrote
+/// every one, and v2 writes none — so a v2 state is never converted twice.
+///
+/// The conversion keeps the sound: each gain becomes the dB that plays
+/// it ([`level::gain_to_db`], so a silent 0 becomes −∞), and a pad's two
+/// mics keep the gains the balance gave them. A pad with one close mic
+/// ignored the balance in v1, so its trim stays at 0 dB.
+///
+/// Run on the state before its params are read
+/// (`ResonanceDrums::load_state`). A state loaded into an *active*
+/// plugin through the CLAP bridge's shared-atomics path is not seen
+/// here first, so it is not converted; the app always loads plugin state
+/// inactive (`ClapInstance::reload_with_state` cycles the activation).
+pub fn upgrade_v1_levels(state: &mut serde_json::Value) -> bool {
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return false;
+    };
+    let is_v1 = (0..NUM_PADS).any(|i| {
+        params.contains_key(&format!("pad_{i}_balance"))
+            || params.contains_key(&format!("pad_{i}_oh_blend"))
+    });
+    if !is_v1 {
+        return false;
+    }
+    let to_db = |gain: f64| serde_json::Value::from(level::gain_to_db(gain as f32) as f64);
+    if let Some(v) = params.get("master_volume").and_then(|v| v.as_f64()) {
+        params.insert("master_volume".to_string(), to_db(v));
+    }
+    for (i, mapping) in PAD_MAPPINGS.iter().enumerate() {
+        let key = |field: &str| format!("pad_{i}_{field}");
+        if let Some(v) = params.get(&key("volume")).and_then(|v| v.as_f64()) {
+            params.insert(key("volume"), to_db(v));
+        }
+        if let Some(b) = params.remove(&key("balance")).and_then(|v| v.as_f64()) {
+            if mapping.close_mic_positions.len() == 2 {
+                params.insert(key("mic1_trim"), to_db(1.0 - b));
+                params.insert(key("mic2_trim"), to_db(b));
+            }
+        }
+        if let Some(o) = params.remove(&key("oh_blend")).and_then(|v| v.as_f64()) {
+            params.insert(key("oh_trim"), to_db(o));
+        }
+    }
+    true
 }

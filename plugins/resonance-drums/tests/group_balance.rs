@@ -120,7 +120,7 @@ fn bundled_kit_groups_are_within_a_few_db_of_each_other() {
 }
 
 /// Nothing in the param defaults singles a pad out: every pad ships with the
-/// same volume / pan / OH blend / balance. This is the cheap invariant behind
+/// same volume / pan / per-mic trims. This is the cheap invariant behind
 /// the measurement above.
 #[test]
 fn pad_param_defaults_are_uniform_across_all_pads() {
@@ -133,16 +133,13 @@ fn pad_param_defaults_are_uniform_across_all_pads() {
             "pad {i} ships a different default volume"
         );
         assert_eq!(pad.pan.value(), first.pan.value(), "pad {i} pan differs");
-        assert_eq!(
-            pad.oh_blend.value(),
-            first.oh_blend.value(),
-            "pad {i} oh_blend differs"
-        );
-        assert_eq!(
-            pad.balance.value(),
-            first.balance.value(),
-            "pad {i} balance differs"
-        );
+        for (slot, trim) in pad.trims.iter().enumerate() {
+            assert_eq!(
+                trim.value(),
+                first.trims[slot].value(),
+                "pad {i} mic trim {slot} differs"
+            );
+        }
         assert!(!pad.mute.value(), "pad {i} ships muted");
     }
 }

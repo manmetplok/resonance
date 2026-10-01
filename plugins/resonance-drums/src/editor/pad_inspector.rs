@@ -3,12 +3,12 @@
 //! Layout, top-to-bottom:
 //!   • Pad title (Instrument Serif italic) + meta + Audition + Enabled chip
 //!   • Sample stage (waveform of the take this pad plays at full velocity)
-//!   • 4-knob row: Volume / Pan / OH Blend / Balance
+//!   • 4-knob row: Volume / Pan / OH Trim / Mic 2 Trim (levels in dB)
 //!   • Articulations chips (only when the pad supports articulation)
-//!   • Close mics card (mic pickers + balance slider) + Overhead Blend card
+//!   • Close mics card (mic pickers + a dB trim per close mic) + Overhead card
 //!
 //! Wiring follows the existing param surface — no new params are introduced.
-//! For pads without two close mics, the balance knob renders as a dim
+//! For pads without two close mics, the Mic 2 Trim knob renders as a dim
 //! placeholder so the knob grid stays a consistent 4-cell row.
 
 use std::sync::atomic::Ordering;
@@ -19,7 +19,7 @@ use resonance_plugin::param::Param;
 
 use crate::drum_map::PAD_MAPPINGS;
 use crate::mic_catalog::ManifestMicCatalog;
-use crate::params::DrumParams;
+use crate::params::{DrumParams, MicSlot};
 use crate::rr_display;
 use crate::sample_info::PadSampleInfo;
 use crate::KitBridge;
@@ -324,11 +324,9 @@ fn draw_knob_grid(
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(18.0, 0.0);
 
-        // 1: Volume (unipolar).
-        let v = pad.volume.value();
-        let fv = format!("{:.2}", v);
-        if let Some(nv) = widgets::knob_unipolar(ui, "Volume", v, &fv, 0.8) {
-            pad.volume.set_value(nv);
+        // 1: Volume (dB, along the param's own travel).
+        if let Some(nv) = level_knob(ui, "Volume", &pad.volume) {
+            pad.volume.set_normalized(nv);
         }
 
         // 2: Pan (bipolar).
@@ -344,25 +342,41 @@ fn draw_knob_grid(
             pad.pan.set_value(np);
         }
 
-        // 3: OH Blend (unipolar).
-        let oh = pad.oh_blend.value();
-        let oh_fmt = format!("{:.2}", oh);
-        if let Some(no) = widgets::knob_unipolar(ui, "OH Blend", oh, &oh_fmt, 1.0) {
-            pad.oh_blend.set_value(no);
+        // 3: Overhead trim (dB).
+        let oh = pad.trim(MicSlot::Overhead);
+        if let Some(no) = level_knob(ui, "OH Trim", oh) {
+            oh.set_normalized(no);
         }
 
-        // 4: Balance (bipolar, warm). Only enabled when this pad has 2 mics.
+        // 4: Second close mic's trim (dB). Only when this pad has 2 mics;
+        // the first mic's trim is on the MICS card.
         if mapping.close_mic_positions.len() == 2 {
-            let bal_unit = pad.balance.value(); // 0..1
-            let signed = bal_unit * 2.0 - 1.0;
-            let bal_fmt = format!("{:+.2}", signed);
-            if let Some(nb) = widgets::knob_bipolar(ui, "Balance", signed, &bal_fmt, 0.0) {
-                pad.balance.set_value((nb + 1.0) * 0.5);
+            let mic2 = pad.trim(MicSlot::Close2);
+            if let Some(nb) = level_knob(ui, "Mic 2 Trim", mic2) {
+                mic2.set_normalized(nb);
             }
         } else {
-            draw_placeholder_knob(ui, "Balance");
+            draw_placeholder_knob(ui, "Mic 2 Trim");
         }
     });
+}
+
+/// A knob over a dB level param's own travel (its skew), reading in dB.
+/// Returns the new normalized value. (The K5 editor rebuild replaces the
+/// knob grid; this keeps the v2 levels honest until then.)
+fn level_knob(
+    ui: &mut egui::Ui,
+    label: &str,
+    param: &resonance_plugin::FloatParam,
+) -> Option<f32> {
+    let text = crate::level::db_label(param.value());
+    widgets::knob_unipolar(
+        ui,
+        label,
+        param.normalized_value(),
+        &text,
+        param.default_normalized(),
+    )
 }
 
 fn draw_placeholder_knob(ui: &mut egui::Ui, label: &str) {
@@ -561,33 +575,44 @@ fn draw_close_mics_card(
             reload_kit(bridge);
         }
 
-        // Balance slider when we have 2 close mics.
-        if mapping.close_mic_positions.len() == 2 {
-            ui.add_space(6.0);
+        // A dB trim per close mic the pad has (they replace v1's balance).
+        if !mapping.close_mic_positions.is_empty() {
             let (left_label, right_label) = mic_balance_labels(mapping.close_mic_positions);
-            let bal_unit = pad.balance.value();
-            let signed = bal_unit * 2.0 - 1.0;
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{} ◂▸ {}", left_label, right_label))
-                        .color(theme::TEXT_3)
-                        .size(10.0),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{:+.2}", signed))
-                            .color(theme::TEXT_1)
-                            .size(11.0)
-                            .monospace(),
-                    );
-                });
-            });
-            let w = ui.available_width();
-            if let Some(new_signed) = widgets::slider_bipolar_warm(ui, w, signed) {
-                pad.balance.set_value((new_signed + 1.0) * 0.5);
+            let slots: &[(MicSlot, &str)] = if mapping.close_mic_positions.len() == 2 {
+                &[(MicSlot::Close1, left_label), (MicSlot::Close2, right_label)]
+            } else {
+                &[(MicSlot::Close1, "CLOSE")]
+            };
+            for &(slot, label) in slots {
+                ui.add_space(6.0);
+                let trim = pad.trim(slot);
+                trim_slider(ui, &format!("{label} TRIM"), trim);
             }
         }
     });
+}
+
+/// A labelled slider over a dB trim param's own travel.
+fn trim_slider(ui: &mut egui::Ui, label: &str, param: &resonance_plugin::FloatParam) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .color(theme::TEXT_3)
+                .size(10.0),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(crate::level::db_label(param.value()))
+                    .color(theme::TEXT_1)
+                    .size(11.0)
+                    .monospace(),
+            );
+        });
+    });
+    let w = ui.available_width();
+    if let Some(nv) = widgets::slider_unipolar(ui, w, param.normalized_value()) {
+        param.set_normalized(nv);
+    }
 }
 
 fn draw_oh_blend_card(
@@ -663,32 +688,12 @@ fn draw_oh_blend_card(
         }
 
         ui.add_space(6.0);
-        // OH amount slider.
-        let oh = pad.oh_blend.value();
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("OH AMOUNT")
-                    .color(theme::TEXT_3)
-                    .size(10.0),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(format!("{:.2}", oh))
-                        .color(theme::TEXT_1)
-                        .size(11.0)
-                        .monospace(),
-                );
-            });
-        });
-        let w = ui.available_width();
-        if let Some(nv) = widgets::slider_unipolar(ui, w, oh) {
-            pad.oh_blend.set_value(nv);
-        }
+        trim_slider(ui, "OH TRIM", pad.trim(MicSlot::Overhead));
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new(
-                "Scales this pad's contribution to the Overhead bus. Set \
-                 to 0 to keep the hit out of overheads entirely.",
+                "Trims this pad's overhead take. Pull it to -inf to keep \
+                 the hit out of the overheads entirely.",
             )
             .color(theme::TEXT_3)
             .size(10.5),

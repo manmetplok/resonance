@@ -51,6 +51,7 @@ pub mod kit_loader;
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub mod library;
+pub mod level;
 mod mic_catalog;
 pub mod params;
 pub mod reload;
@@ -473,10 +474,24 @@ impl ResonancePlugin for ResonanceDrums {
     }
 
     fn param_count(&self) -> usize {
-        // master_volume + polyphony + velocity_curve + round_robin_mode +
-        // kit_select + kit_load_progress, then (volume, pan, mute,
-        // oh_blend, balance, articulation) per pad
+        // The globals, then one block per pad — see `DrumParams::param_at`.
         GLOBAL_PARAMS + drum_map::NUM_PADS * PARAMS_PER_PAD
+    }
+
+    /// The default load, after converting a v1 state's linear levels to
+    /// dB (E9, [`params::upgrade_v1_levels`]) — before the params are
+    /// read, so they land converted.
+    fn load_state(&mut self, data: &[u8]) -> bool {
+        let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
+            return false;
+        };
+        resonance_plugin::state::migrate(&mut state, self.param_renames());
+        params::upgrade_v1_levels(&mut state);
+        let ok = resonance_plugin::state::load_params_from_json(&self.params(), &state);
+        if let Some(saver) = self.extra_state_saver() {
+            saver.load(&state);
+        }
+        ok
     }
 
     fn param(&self, index: usize) -> &dyn Param {

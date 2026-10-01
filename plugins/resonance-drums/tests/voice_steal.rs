@@ -79,9 +79,9 @@ fn render_pattern() -> (Vec<f32>, usize) {
     sampler.pads = ramp_pads();
     let params = DrumParams::default();
     // Unity everywhere, so the mix is the voices' own signal.
-    params.master_volume.set_value(1.0);
+    params.master_volume.set_value(0.0); // 0 dB: unity
     for pad in &params.pads {
-        pad.volume.set_value(1.0);
+        pad.volume.set_value(0.0); // 0 dB: unity
     }
     sampler.update_global_settings(&params);
 
@@ -261,9 +261,9 @@ fn a_burst_of_steals_on_one_frame_does_not_hard_cut_a_sounding_voice() {
     sampler.set_sample_rate(SR);
     sampler.pads = ramp_pads();
     let params = DrumParams::default();
-    params.master_volume.set_value(1.0);
+    params.master_volume.set_value(0.0); // 0 dB: unity
     for pad in &params.pads {
-        pad.volume.set_value(1.0);
+        pad.volume.set_value(0.0); // 0 dB: unity
     }
     params.polyphony.set_value(POLY as i32);
     sampler.update_global_settings(&params);

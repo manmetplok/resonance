@@ -9,14 +9,15 @@ use crossbeam_channel::{Receiver, Sender};
 use crate::drum_map::{self, NUM_PADS, PAD_MAPPINGS};
 use crate::kit::{LoadedMicBank, LoadedPad, SampleData, VelocityLayer, OVERHEAD_PORT_INDEX};
 use crate::kit_loader::KitLoadProgress;
-use crate::params::DrumParams;
+use crate::level::db_to_gain;
+use crate::params::{DrumParams, MicSlot, MIC_SLOTS};
 use crate::stream::reader::ReaderPool;
 use crate::stream::{
     wait_until, AudioStreams, RenderMode, Ring, StreamSet, HOST_RENDER_OFFLINE,
     HOST_RENDER_REALTIME, HOST_RENDER_UNKNOWN, NO_RING,
 };
 use crate::voice::{
-    fade_frames, BalanceSide, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
+    fade_frames, Voice, VoiceDestination, VoiceState, MAX_VOICES, RELEASE_FADE_MS,
     STEAL_FADE_MS, SWAP_FADE_MS, TAIL_SLOTS,
 };
 
@@ -198,30 +199,29 @@ pub struct DrumSampler {
     swap_frames: u32,
     /// [`STEAL_FADE_MS`] in frames at `sample_rate`: stolen voices.
     steal_frames: u32,
-    /// Last block's master volume snapshot. Used to interpolate from
-    /// the previous block's value to the current one across the block
-    /// so automation tweaks don't click. Initialized to 1.0 so the
-    /// first block starts at unity gain.
+    /// Last block's master gain snapshot (linear, from the dB param).
+    /// Used to interpolate from the previous block's value to the
+    /// current one across the block so automation tweaks don't click.
+    /// Initialized to 1.0 so the first block starts at unity gain.
     prev_master_volume: f32,
     /// Last block's per-pad parameter snapshots, mirroring the master
-    /// volume ramp: each pad's volume / pan / OH blend / balance is
-    /// linearly interpolated from the previous block's value to the
+    /// volume ramp: each pad's volume / pan / per-mic trims is linearly
+    /// interpolated (in gain) from the previous block's value to the
     /// current one across the block so automation jumps don't click.
     /// (`mute` folds into the volume snapshot, so mute toggles ramp
     /// too.) Seeded from the first block's snapshot (`pad_prev_valid`)
     /// so the plugin doesn't ramp from arbitrary defaults on startup.
     prev_pad_volume: [f32; NUM_PADS],
     prev_pad_pan: [f32; NUM_PADS],
-    prev_pad_oh: [f32; NUM_PADS],
-    prev_pad_balance: [f32; NUM_PADS],
+    /// Per-mic trim gains, indexed by [`MicSlot`].
+    prev_pad_trim: [[f32; MIC_SLOTS]; NUM_PADS],
     pad_prev_valid: bool,
     /// This block's per-pad parameter snapshots, taken by
     /// [`DrumSampler::begin_block`] and ramped toward from the `prev_*`
     /// ones by every [`DrumSampler::render_span`] of the block.
     cur_pad_volume: [f32; NUM_PADS],
     cur_pad_pan: [f32; NUM_PADS],
-    cur_pad_oh: [f32; NUM_PADS],
-    cur_pad_balance: [f32; NUM_PADS],
+    cur_pad_trim: [[f32; MIC_SLOTS]; NUM_PADS],
     /// `1 / frames` for the block in progress (0 for an empty block).
     block_inv_frames: f32,
     /// True when `begin_block` found nothing to render: spans are no-ops
@@ -317,13 +317,11 @@ impl DrumSampler {
             prev_master_volume: 1.0,
             prev_pad_volume: [1.0; NUM_PADS],
             prev_pad_pan: [0.0; NUM_PADS],
-            prev_pad_oh: [1.0; NUM_PADS],
-            prev_pad_balance: [0.5; NUM_PADS],
+            prev_pad_trim: [[1.0; MIC_SLOTS]; NUM_PADS],
             pad_prev_valid: false,
             cur_pad_volume: [1.0; NUM_PADS],
             cur_pad_pan: [0.0; NUM_PADS],
-            cur_pad_oh: [1.0; NUM_PADS],
-            cur_pad_balance: [0.5; NUM_PADS],
+            cur_pad_trim: [[1.0; MIC_SLOTS]; NUM_PADS],
             block_inv_frames: 0.0,
             block_idle: true,
             streams: AudioStreams::with_registration(set, Some(registration)),
@@ -814,9 +812,9 @@ impl DrumSampler {
         }
 
         // Build the list of destinations we need to allocate a voice for.
-        // Kick + snare: one CloseMic voice per bank (two, with
-        // BalanceSide::Left/Right). Tom + hat: one CloseMic voice with
-        // BalanceSide::None. Cymbal: no close mic. Plus an Overhead
+        // Kick + snare: one CloseMic voice per bank (two, trimmed by
+        // mic1/mic2). Tom + hat: one CloseMic voice (mic1). Cymbal: no
+        // close mic. Plus an Overhead
         // voice if the pad has one loaded.
         let mut destinations: [Option<VoiceDestination>; 3] = [None, None, None];
         // The (layer, take) each destination's bank plays.
@@ -849,15 +847,9 @@ impl DrumSampler {
         for bank_index in 0..close_mic_count.min(2) {
             cells[dest_count] = cell_in(&pad.close_mics[bank_index]);
             rings[dest_count] = ring_for(&pad.close_mics[bank_index], cells[dest_count]);
-            let balance_side = match (close_mic_count, bank_index) {
-                (2, 0) => BalanceSide::Left,
-                (2, 1) => BalanceSide::Right,
-                _ => BalanceSide::None,
-            };
             destinations[dest_count] = Some(VoiceDestination::CloseMic {
                 bank_index,
                 output_port,
-                balance_side,
             });
             dest_count += 1;
         }
@@ -1100,33 +1092,32 @@ impl DrumSampler {
         // doesn't re-read atomics for every sample. Each param is then
         // linearly ramped from last block's snapshot across this block
         // (same declick scheme as the master volume in `end_block`).
+        // Levels are dB params; the ramps run in gain.
         let mut pad_volume = [0.0f32; NUM_PADS];
         let mut pad_pan = [0.0f32; NUM_PADS];
-        let mut pad_oh = [0.0f32; NUM_PADS];
-        let mut pad_balance = [0.5f32; NUM_PADS];
+        let mut pad_trim = [[1.0f32; MIC_SLOTS]; NUM_PADS];
         for (i, pad) in params.pads.iter().enumerate() {
             pad_volume[i] = if pad.mute.value() {
                 0.0
             } else {
-                pad.volume.value()
+                db_to_gain(pad.volume.value())
             };
             pad_pan[i] = pad.pan.value();
-            pad_oh[i] = pad.oh_blend.value();
-            pad_balance[i] = pad.balance.value();
+            for (slot, trim) in pad.trims.iter().enumerate() {
+                pad_trim[i][slot] = db_to_gain(trim.value());
+            }
         }
         if !self.pad_prev_valid {
             // First block ever: start the ramps at the current values
             // so we don't sweep in from arbitrary defaults.
             self.prev_pad_volume = pad_volume;
             self.prev_pad_pan = pad_pan;
-            self.prev_pad_oh = pad_oh;
-            self.prev_pad_balance = pad_balance;
+            self.prev_pad_trim = pad_trim;
             self.pad_prev_valid = true;
         }
         self.cur_pad_volume = pad_volume;
         self.cur_pad_pan = pad_pan;
-        self.cur_pad_oh = pad_oh;
-        self.cur_pad_balance = pad_balance;
+        self.cur_pad_trim = pad_trim;
         self.block_inv_frames = if frames > 0 {
             1.0 / frames as f32
         } else {
@@ -1153,8 +1144,7 @@ impl DrumSampler {
         let holdoff_frames = (OFFLINE_WAIT_HOLDOFF_SECS * self.sample_rate) as u64;
         let pad_volume = &self.cur_pad_volume;
         let pad_pan = &self.cur_pad_pan;
-        let pad_oh = &self.cur_pad_oh;
-        let pad_balance = &self.cur_pad_balance;
+        let pad_trim = &self.cur_pad_trim;
         // A voice whose tail will not come fades out over this, ending
         // where its frames end.
         let cut_fade = self.release_frames as usize;
@@ -1240,30 +1230,17 @@ impl DrumSampler {
             // destination-specific gain multiplier? Computed at both
             // the previous and current block's param snapshots so the
             // inner loop can ramp between them.
-            let (port_index, dest_gain0, dest_gain1) = match voice.destination {
+            let (port_index, slot) = match voice.destination {
                 VoiceDestination::CloseMic {
                     output_port,
-                    balance_side,
-                    ..
-                } => {
-                    let (g0, g1) = match balance_side {
-                        BalanceSide::None => (1.0, 1.0),
-                        BalanceSide::Left => (
-                            1.0 - self.prev_pad_balance[pad_index],
-                            1.0 - pad_balance[pad_index],
-                        ),
-                        BalanceSide::Right => {
-                            (self.prev_pad_balance[pad_index], pad_balance[pad_index])
-                        }
-                    };
-                    (output_port as usize, g0, g1)
+                    bank_index,
+                } => (output_port as usize, MicSlot::close(bank_index)),
+                VoiceDestination::Overhead { output_port } => {
+                    (output_port as usize, MicSlot::Overhead)
                 }
-                VoiceDestination::Overhead { output_port } => (
-                    output_port as usize,
-                    self.prev_pad_oh[pad_index],
-                    pad_oh[pad_index],
-                ),
             };
+            let dest_gain0 = self.prev_pad_trim[pad_index][slot as usize];
+            let dest_gain1 = pad_trim[pad_index][slot as usize];
             let vol0 = self.prev_pad_volume[pad_index];
             let vol1 = pad_volume[pad_index];
             let (pan_l0, pan_r0) =
@@ -1417,15 +1394,14 @@ impl DrumSampler {
         // Next block ramps from this block's snapshots.
         self.prev_pad_volume = self.cur_pad_volume;
         self.prev_pad_pan = self.cur_pad_pan;
-        self.prev_pad_oh = self.cur_pad_oh;
-        self.prev_pad_balance = self.cur_pad_balance;
+        self.prev_pad_trim = self.cur_pad_trim;
 
         // Apply master volume in-place over every port. Linearly
         // interpolate from the previous block's value to the current
         // one across the block so automation tweaks and user fader
         // moves don't click. With small block sizes (≤512 frames at
         // typical SR) per-sample lerp is essentially free.
-        let master_vol = params.master_volume.value();
+        let master_vol = db_to_gain(params.master_volume.value());
         let prev = self.prev_master_volume;
         if (prev - 1.0).abs() > f32::EPSILON
             || (master_vol - 1.0).abs() > f32::EPSILON

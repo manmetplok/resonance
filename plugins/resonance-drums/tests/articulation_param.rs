@@ -34,8 +34,8 @@ const BLOCK: usize = 128;
 const SAMPLE_FRAMES: usize = 256;
 const KICK_PORT: usize = 1;
 const NUM_PORTS: usize = 7;
-/// Level the loaded piece is rendered at: pad volume (0.8) × master (0.8).
-const CHAIN_GAIN: f32 = 0.64;
+/// Level the loaded piece is rendered at: pad volume (0 dB) × master (0 dB).
+const CHAIN_GAIN: f32 = 1.0;
 
 // ---------------------------------------------------------------------------
 // Synthetic kit

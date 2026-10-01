@@ -23,8 +23,8 @@
 //!
 //! - the multi-mic path. The fallback kit gives every pad a single
 //!   close-mic bank and **no overhead bank**, so the Overhead port is
-//!   silent here and the kick/snare in-vs-out balance control has only
-//!   one bank to balance. `tests/group_balance.rs` documents the same
+//!   silent here and the kick/snare second close-mic trim has no bank
+//!   to scale. `tests/group_balance.rs` documents the same
 //!   limitation.
 //! - multiple velocity layers and multiple round-robin takes. The
 //!   fallback has one layer with one take per pad, so `pick_rr` and
@@ -82,7 +82,8 @@ use resonance_drums::drum_map::{
 };
 use resonance_drums::dsp::{DrumSampler, PortBuffers};
 use resonance_drums::kit::{LoadedPad, NUM_OUTPUT_PORTS};
-use resonance_drums::params::DrumParams;
+use resonance_drums::level::gain_to_db;
+use resonance_drums::params::{DrumParams, MicSlot};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -295,15 +296,18 @@ fn scenarios() -> Vec<Scenario> {
             setup: |_| {},
             edit: Some(|p, block| {
                 let t = block as f32 / BLOCKS as f32;
-                p.master_volume.set_value(0.2 + 0.7 * t);
+                // Levels are dB (E9): the same gain sweeps as before,
+                // given in dB, so the ramps still run between gains.
+                p.master_volume.set_value(gain_to_db(0.2 + 0.7 * t));
                 // Sweep the kick's and snare's pads in opposite
                 // directions so the pan law is exercised across its
                 // whole range in one run.
                 for (pad, dir) in [(0usize, 1.0f32), (1usize, -1.0f32)] {
                     let pp = &p.pads[pad];
-                    pp.volume.set_value(0.3 + 0.7 * t);
+                    pp.volume.set_value(gain_to_db(0.3 + 0.7 * t));
                     pp.pan.set_value(dir * (2.0 * t - 1.0));
-                    pp.balance.set_value(t);
+                    // The fallback kit's one close bank is mic 1.
+                    pp.trim(MicSlot::Close1).set_value(-6.0 + 6.0 * t);
                 }
                 // A pad muting and unmuting mid-run: mute folds into
                 // the volume snapshot, so it ramps rather than cutting.

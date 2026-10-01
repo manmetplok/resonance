@@ -66,16 +66,11 @@ pub enum VoiceState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum VoiceDestination {
     /// One of the pad's close-mic banks. `bank_index` is the index into
-    /// `pad.close_mics`. `output_port` is the plugin output port this
-    /// bank routes to (from `pad.output_group`). `balance_side` determines
-    /// how the kick In/Out or snare Top/Btm balance slider scales this
-    /// voice.
-    CloseMic {
-        bank_index: usize,
-        output_port: u8,
-        balance_side: BalanceSide,
-    },
-    /// Overhead mic bank, scaled by the per-pad `oh_blend` param.
+    /// `pad.close_mics`, and picks the trim that scales the voice
+    /// (`pad_N_mic1_trim` for bank 0, `pad_N_mic2_trim` for bank 1).
+    /// `output_port` is the plugin output port this bank routes to.
+    CloseMic { bank_index: usize, output_port: u8 },
+    /// Overhead mic bank, scaled by the per-pad `pad_N_oh_trim` param.
     ///
     /// `output_port` is normally the shared Overhead port
     /// (`kit::OVERHEAD_PORT_INDEX`). The exception is a pad the library
@@ -86,17 +81,6 @@ pub enum VoiceDestination {
     /// (and the sub-track the host creates for it) would be permanently
     /// silent. See `DrumSampler::note_on`.
     Overhead { output_port: u8 },
-}
-
-/// Which "side" of a balance slider this close-mic voice represents.
-/// For kick: `Left` = KickIn, `Right` = KickOut. For snare: `Left` = SNTop,
-/// `Right` = SNBtm. `None` for pads with only one close mic position
-/// (toms, hats) — the balance slider doesn't apply.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum BalanceSide {
-    None,
-    Left,
-    Right,
 }
 
 /// `Copy`: a voice is plain data, so moving a stolen one into a tail slot
@@ -164,7 +148,6 @@ impl Voice {
             destination: VoiceDestination::CloseMic {
                 bank_index: 0,
                 output_port: 0,
-                balance_side: BalanceSide::None,
             },
             layer_index: 0,
             rr_index: 0,

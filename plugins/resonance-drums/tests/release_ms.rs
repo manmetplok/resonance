@@ -63,9 +63,9 @@ impl Rig {
         sampler.set_sample_rate(rate);
         sampler.pads = dc_pads(1.0, silent_note);
         let params = DrumParams::default();
-        params.master_volume.set_value(1.0);
+        params.master_volume.set_value(0.0); // 0 dB: unity
         for pad in &params.pads {
-            pad.volume.set_value(1.0);
+            pad.volume.set_value(0.0); // 0 dB: unity
         }
         sampler.update_global_settings(&params);
         Self {
