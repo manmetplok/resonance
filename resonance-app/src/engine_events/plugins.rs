@@ -256,12 +256,12 @@ fn ensure_subtracks(
     if output_port_count <= 1 {
         return;
     }
-    let Some(parent_name) = r
+    let Some((parent_name, parent_color)) = r
         .registry
         .tracks
         .iter()
         .find(|t| t.id == parent_track_id)
-        .map(|t| t.name.clone())
+        .map(|t| (t.name.clone(), t.color))
     else {
         debug_assert!(
             false,
@@ -299,13 +299,17 @@ fn ensure_subtracks(
             output_port_index: port_idx as u32,
             name: sub_name.clone(),
         });
-        r.registry.tracks.push(TrackState::new_sub_track(
+        let mut sub = TrackState::new_sub_track(
             sub_id,
             order,
             sub_name,
             parent_track_id,
             port_idx as u32,
-        ));
+        );
+        // A sub-track is one tap of its parent's instrument, so it reads
+        // as the same track: it inherits the parent's colour.
+        sub.color = parent_color;
+        r.registry.tracks.push(sub);
     }
 }
 

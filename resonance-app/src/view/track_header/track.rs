@@ -310,7 +310,9 @@ pub(crate) fn view_track_header(
             top: 10.0,
             right: 24.0,
             bottom: 10.0,
-            left: 24.0 + indent_pixels,
+            // The colour band takes its width out of the left gutter, so
+            // the header's content keeps its place (and its name room).
+            left: 24.0 - theme::TRACK_COLOR_BAND_WIDTH + indent_pixels,
         });
 
     let body_with_bg = container(body)
@@ -336,6 +338,19 @@ pub(crate) fn view_track_header(
                 .into()
         })
         .collect();
+
+    // The track's own colour band (mixer-cleanup.md §6): the same colour
+    // as its mixer strip head, so one track reads as one colour on both
+    // tabs. It sits inside the group rails — a group's colour stays the
+    // outer cluster rail.
+    let track_color = theme::track_color(track.color);
+    let color_band = container(Space::new().height(Length::Fill))
+        .width(theme::TRACK_COLOR_BAND_WIDTH)
+        .height(Length::Fill)
+        .style(move |_theme| container::Style {
+            background: Some(iced::Background::Color(track_color)),
+            ..Default::default()
+        });
 
     let stripe = container(Space::new().height(Length::Fill))
         .width(2)
@@ -374,7 +389,7 @@ pub(crate) fn view_track_header(
     // sum to exactly `TRACK_HEIGHT` — matching the canvas's per-row
     // pitch. Without this trim, every column row was 1 px taller than
     // the canvas row and headers drifted down 1 px per track.
-    let cell = row![row(group_rails).width(Length::Shrink), stripe, body_layer]
+    let cell = row![row(group_rails).width(Length::Shrink), color_band, stripe, body_layer]
         .height(theme::TRACK_HEIGHT - 1.0);
 
     // 1px hairline below each cell so rows separate without a heavy border.

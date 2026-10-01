@@ -128,6 +128,9 @@ pub enum TrackMessage {
     /// MIDI tracks). Grouped under one variant so the top-level
     /// `TrackMessage` doesn't accumulate dialog plumbing.
     Bounce(BounceMessage),
+    /// Set a track's identity colour (mixer-cleanup.md §6; control method
+    /// `track.set_color`). One discrete, undoable edit.
+    SetTrackColor(TrackId, [u8; 3]),
 }
 
 impl TrackMessage {
@@ -196,7 +199,8 @@ impl TrackMessage {
             | Self::SetTrackMidiOutputChannel(..)
             | Self::SetTrackOutput(..)
             | Self::AddTrackFromPreset { .. }
-            | Self::BounceInPlaceOffline(..) => UndoAction::Record,
+            | Self::BounceInPlaceOffline(..)
+            | Self::SetTrackColor(..) => UndoAction::Record,
             Self::Bounce(m) => m.undo_action(),
         }
     }
@@ -537,6 +541,9 @@ pub fn handle(r: &mut Resonance, m: TrackMessage) -> Task<Message> {
         }
         TrackMessage::SetTrackName(track_id, name) => {
             r.with_track_mut(track_id, |t| t.name = name);
+        }
+        TrackMessage::SetTrackColor(track_id, color) => {
+            r.with_track_mut(track_id, |t| t.color = color);
         }
         TrackMessage::ToggleTrackFxBypass(id) => {
             let new_bypass = r.with_track_mut(id, |t| {

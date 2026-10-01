@@ -508,6 +508,21 @@ fn replay_track(r: &mut Resonance, pt: &ProjectTrack, order: usize) {
     track.midi_input_channel = pt.midi_input_channel;
     track.midi_output_device = pt.midi_output_device.clone();
     track.midi_output_channel = pt.midi_output_channel;
+    // A saved colour wins. A legacy track without one keeps the palette
+    // colour its constructor gave it from `order` — except a sub-track,
+    // which takes its parent's (parents replay first: they come earlier
+    // in order) so the parent and its taps read as one track.
+    track.color = pt.color.unwrap_or_else(|| {
+        pt.sub_track
+            .and_then(|link| {
+                r.registry
+                    .tracks
+                    .iter()
+                    .find(|t| t.id == link.parent_track_id)
+                    .map(|t| t.color)
+            })
+            .unwrap_or(track.color)
+    });
     r.registry.tracks.push(track);
     // External-instrument mode is restored after every track, by the
     // `ExternalInstruments` reconcile domain (ARCH-01 A-13b).
@@ -774,6 +789,9 @@ fn apply_track(r: &mut Resonance, a: &ProjectTrack, b: &ProjectTrack) {
         t.midi_input_channel = b.midi_input_channel;
         t.midi_output_device = b.midi_output_device.clone();
         t.midi_output_channel = b.midi_output_channel;
+        if let Some(color) = b.color {
+            t.color = color;
+        }
         // Plugin slot metadata: the human-visible name may change.
         // Matched by id: the chain still holds the old order (and the
         // fresh slots come after this). The per-slot bypass is

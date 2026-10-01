@@ -27,7 +27,7 @@
 //!
 //! | module | methods |
 //! |---|---|
-//! | [`lifecycle`] | `track.add` / `rename` / `delete` / `add_instrument` / `add_effect` |
+//! | [`lifecycle`] | `track.add` / `rename` / `set_color` / `delete` / `add_instrument` / `add_effect` |
 //! | [`output`] | `track.set_output` |
 //! | [`sends`] | `track.add_send` / `set_send` / `remove_send` |
 //! | [`chain`] | `track.remove_effect` / `move_effect` (+ chain addressing) |
@@ -75,6 +75,7 @@ pub(super) fn try_handle(
     let out = match request.method.as_str() {
         track_methods::ADD => lifecycle::add(app, request),
         track_methods::RENAME => lifecycle::rename(app, request),
+        track_methods::SET_COLOR => lifecycle::set_color(app, request),
         track_methods::DELETE => lifecycle::delete(app, request),
         track_methods::ADD_INSTRUMENT => lifecycle::add_instrument(app, request),
         track_methods::ADD_EFFECT => lifecycle::add_effect(app, request),

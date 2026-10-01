@@ -170,6 +170,11 @@ pub struct TrackSummary {
     /// `automation.lanes` with this `track_id` / `bus_id` lists them.
     #[serde(default)]
     pub automation_lanes: usize,
+    /// The track's identity colour as `"#rrggbb"` — the band on its Arrange
+    /// header and mixer strip. Set it with `track.set_color`. Absent on
+    /// busses, which carry no colour of their own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// Routing default for peers that predate the `output` field.

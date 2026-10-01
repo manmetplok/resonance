@@ -100,6 +100,7 @@ fn make_project_with_content() -> ProjectFile {
         midi_output_device: None,
         midi_output_channel: None,
         freeze: resonance_common::TrackFreezeState::unfrozen(),
+        color: None,
         external_instrument: None,
     }];
 

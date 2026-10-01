@@ -357,6 +357,43 @@ pub fn group_identity_colors(
         G::Guitar => (GRP_GTR, GRP_GTR_WASH, GRP_GTR_LINE),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Track colour palette (mixer-cleanup.md §6). Every track carries its own
+// persisted `TrackState::color`; new tracks take the next hue from this
+// palette by their order, and projects saved before the field existed get
+// the same deterministic pick on load. Mid-lightness, moderate-chroma hues
+// so each reads as a distinct band against `BG_1` / `BG_2` without
+// shouting louder than the selection accent. Identity only — never status.
+// ---------------------------------------------------------------------------
+
+/// The fixed per-track colour palette, cycled by track order.
+pub const TRACK_PALETTE: [[u8; 3]; 10] = [
+    [0xd0, 0x7a, 0x6a], // coral
+    [0xd4, 0x9a, 0x5a], // amber
+    [0xc9, 0xb8, 0x5f], // sand
+    [0x9c, 0xbf, 0x6a], // olive
+    [0x5f, 0xb8, 0x8a], // jade
+    [0x5f, 0xb3, 0xc4], // teal
+    [0x6f, 0x95, 0xd6], // cornflower
+    [0x8f, 0x82, 0xd6], // periwinkle
+    [0xb8, 0x7a, 0xc9], // orchid
+    [0xd0, 0x7a, 0xa8], // rose
+];
+
+/// The palette colour for the track at `order` (cycles past the end).
+pub fn track_palette_color(order: usize) -> [u8; 3] {
+    TRACK_PALETTE[order % TRACK_PALETTE.len()]
+}
+
+/// A persisted track colour as an iced [`Color`].
+pub fn track_color(c: [u8; 3]) -> Color {
+    rgb(c[0], c[1], c[2])
+}
+
+/// Width of the track-colour band on the left edge of an Arrange track
+/// header (inside any group identity rails).
+pub const TRACK_COLOR_BAND_WIDTH: f32 = 4.0;
 // ---------------------------------------------------------------------------
 // Legacy aliases — keep the rest of the codebase compiling while the views
 // migrate. New code should use the tokens above directly.
