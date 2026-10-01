@@ -6,12 +6,12 @@
 //! `RuntimeEditorHandle` adapts that runtime editor to the
 //! [`PluginEditor`] trait the plugin host expects.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use resonance_plugin::editor_host::{native_api, EditorOptions, RuntimeEditor, RuntimeEditorHandle};
 use resonance_plugin::gui::{EditorFactory, PluginEditor};
 
-use crate::download::WorkerHandle;
+use crate::library::{self, SharedKitLibrary};
 use crate::params::DrumParams;
 use crate::KitBridge;
 
@@ -32,22 +32,27 @@ const MIN_SIZE: (u32, u32) = (780, 520);
 pub struct DrumsEditorFactory {
     params: Arc<DrumParams>,
     bridge: KitBridge,
-    download_worker: Arc<WorkerHandle>,
     presets: Arc<resonance_plugin::presets::PresetSession>,
+    /// The process-wide kit library (and its download worker), opened on
+    /// the first editor open — an instance that never opens its editor
+    /// never reads the library. Held from then on, so the library and an
+    /// in-flight download outlive a closed editor window; the plugin
+    /// going away drops it (a download it was the last holder of is
+    /// abandoned without blocking).
+    library: OnceLock<Arc<SharedKitLibrary>>,
 }
 
 impl DrumsEditorFactory {
     pub(crate) fn new(
         params: Arc<DrumParams>,
         bridge: KitBridge,
-        download_worker: Arc<WorkerHandle>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         Self {
             params,
             bridge,
-            download_worker,
             presets,
+            library: OnceLock::new(),
         }
     }
 }
@@ -72,7 +77,7 @@ impl EditorFactory for DrumsEditorFactory {
         let app = DrumsEditorApp::new(
             self.params.clone(),
             self.bridge.clone(),
-            self.download_worker.clone(),
+            self.library.get_or_init(library::shared).clone(),
             self.presets.clone(),
         );
         let runtime = RuntimeEditor::new(

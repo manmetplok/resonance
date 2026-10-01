@@ -12,7 +12,12 @@ const APP: &str = include_str!("../src/editor/app.rs");
 const CHROME: &str = include_str!("../src/editor/chrome.rs");
 const PAD_INSPECTOR: &str = include_str!("../src/editor/pad_inspector.rs");
 const PAD_GRID: &str = include_str!("../src/editor/pad_grid.rs");
-const DOWNLOAD_PANEL: &str = include_str!("../src/editor/download_panel.rs");
+const LIBRARY_PANEL: &str = include_str!("../src/editor/library_panel.rs");
+const PLOK_PANEL: &str = include_str!("../src/editor/plok_panel.rs");
+const KIT_BROWSER: &str = include_str!("../src/editor/kit_browser.rs");
+const JOBS: &str = include_str!("../src/editor/jobs.rs");
+const DOWNLOAD: &str = include_str!("../src/download.rs");
+const LIBRARY: &str = include_str!("../src/library.rs");
 
 /// Mics and Articulations ship inside the pad inspector, and Mod / FX do
 /// not exist at all. No tab may claim otherwise.
@@ -22,7 +27,8 @@ fn no_tab_says_coming_soon() {
         ("app.rs", APP),
         ("chrome.rs", CHROME),
         ("pad_grid.rs", PAD_GRID),
-        ("download_panel.rs", DOWNLOAD_PANEL),
+        ("library_panel.rs", LIBRARY_PANEL),
+        ("plok_panel.rs", PLOK_PANEL),
     ] {
         assert!(
             !src.to_lowercase().contains("coming soon"),
@@ -114,7 +120,8 @@ fn no_control_discards_its_interaction() {
         ("chrome.rs", CHROME),
         ("pad_grid.rs", PAD_GRID),
         ("pad_inspector.rs", PAD_INSPECTOR),
-        ("download_panel.rs", DOWNLOAD_PANEL),
+        ("library_panel.rs", LIBRARY_PANEL),
+        ("plok_panel.rs", PLOK_PANEL),
     ] {
         let discarded = discarded_widget_calls(src);
         assert!(
@@ -192,25 +199,27 @@ fn pad_grid_no_longer_hides_the_kit_actions() {
 /// it dims, not above it (ba drums-plugin-rework.md §1.2) — the exact
 /// defect that made opening "Download Kits" show a near-black screen.
 /// `egui::Modal` keeps both on `Order::Foreground`; `Order::Tooltip`,
-/// which drew above it, must not come back.
+/// which drew above it, must not come back. (`library_overlay.rs` checks
+/// the paint order at runtime.)
 #[test]
-fn the_download_overlay_backdrop_cannot_be_drawn_above_the_panel() {
+fn the_library_overlay_backdrop_cannot_be_drawn_above_the_panel() {
     assert!(
-        !DOWNLOAD_PANEL.contains("Order::Tooltip"),
+        !LIBRARY_PANEL.contains("Order::Tooltip"),
         "the backdrop must not go back to painting on a layer above the panel"
     );
     assert!(
-        DOWNLOAD_PANEL.contains("egui::Modal"),
+        LIBRARY_PANEL.contains("egui::Modal"),
         "the overlay should be a Modal — it is also how it stays click-blocking and Esc-closing"
     );
 }
 
-/// The Download Kits overlay has a real, visible entry point: the
-/// header's "Download kits…" button. It used to be a ghost `Browse`
-/// button elsewhere whose overlay you then could not see (§1.2).
+/// The Library overlay has a real, visible entry point: the header's
+/// `Library…` button, which replaced "Download kits…" and "Open kit
+/// file…" (§6.1). The first entry point was a ghost `Browse` button whose
+/// overlay you then could not see (§1.2).
 #[cfg(feature = "editor")]
 #[test]
-fn the_download_overlay_has_a_visible_entry_point() {
+fn the_library_overlay_has_a_visible_entry_point() {
     use resonance_plugin::ResonancePlugin;
     let plugin = resonance_drums::ResonanceDrums::new();
     for size in [(960.0, 640.0), (780.0, 520.0)] {
@@ -218,15 +227,55 @@ fn the_download_overlay_has_a_visible_entry_point() {
         let button = frame
             .texts
             .iter()
-            .find(|t| t.text == "Download kits…")
-            .unwrap_or_else(|| panic!("no Download kits… button at {size:?}"));
+            .find(|t| t.text == "Library…")
+            .unwrap_or_else(|| panic!("no Library… button at {size:?}"));
         assert!(
             button.clip.contains_rect(button.rect) && frame.screen.contains_rect(button.rect),
-            "the Download kits… button is not fully visible at {size:?}: {:?} in {:?}",
+            "the Library… button is not fully visible at {size:?}: {:?} in {:?}",
             button.rect,
             button.clip
         );
+        for gone in ["Download kits…", "Open kit file…"] {
+            assert!(!frame.shows(gone), "{gone} is back in the header at {size:?}");
+        }
     }
+}
+
+/// A file dialog opens a modal run loop: never on the editor thread
+/// (§6.5, E13). Only `jobs.rs`'s picker thread may name `rfd`.
+#[test]
+fn no_file_dialog_runs_on_the_editor_thread() {
+    for (name, src) in [
+        ("app.rs", APP),
+        ("chrome.rs", CHROME),
+        ("kit_browser.rs", KIT_BROWSER),
+        ("library_panel.rs", LIBRARY_PANEL),
+        ("plok_panel.rs", PLOK_PANEL),
+    ] {
+        assert!(!src.contains("rfd::"), "{name} opens a file dialog on the UI thread");
+    }
+    assert!(JOBS.contains("rfd::FileDialog"), "the picker moved; update this guard");
+}
+
+/// D3: drums no longer reads or writes `installed.json` — the kit
+/// library is the one index, and migrates it once.
+#[test]
+fn drums_no_longer_keeps_installed_json() {
+    for (name, src) in [
+        ("download.rs", DOWNLOAD),
+        ("kit_browser.rs", KIT_BROWSER),
+        ("chrome.rs", CHROME),
+        ("app.rs", APP),
+        ("library_panel.rs", LIBRARY_PANEL),
+    ] {
+        for call in ["mark_installed", "remove_installed", "list_installed"] {
+            assert!(!src.contains(call), "{name} still calls registry::{call}");
+        }
+    }
+    assert!(
+        LIBRARY.contains("with_installed_json"),
+        "the library must migrate installed.json"
+    );
 }
 
 /// §6.1: the `DRUMS` label and the "N lit" PADS badge are decoration,

@@ -25,18 +25,22 @@ mod editor;
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub use editor::test_draw_pad_inspector;
-/// Test-only: run one full `EditorApp::ui` frame of the editor, and one
-/// of the Download Kits overlay in isolation. `DrumsEditorApp` and
-/// `download_panel` are otherwise private (drums-plugin-rework.md §9,
-/// K0) — same shape as `test_draw_pad_inspector` above.
+/// Test-only: run one full `EditorApp::ui` frame of the editor, or drive
+/// a whole editor (Library overlay included) frame by frame.
+/// `DrumsEditorApp` is otherwise private (drums-plugin-rework.md §9) —
+/// same shape as `test_draw_pad_inspector` above.
 #[cfg(feature = "editor")]
 #[doc(hidden)]
 pub use editor::{
-    test_kit_path_for_stepping, test_render_editor_frame, test_run_download_panel_frame,
-    EditorFrameProbe, ProbedRect, ProbedText, TestDownloadPanel,
+    test_kit_path_for_stepping, test_render_editor_frame, EditorFrameProbe, ProbedRect,
+    ProbedText, TestEditor,
 };
 pub mod kit;
 pub mod kit_loader;
+/// The process-wide kit library and its download worker.
+#[cfg(feature = "editor")]
+#[doc(hidden)]
+pub mod library;
 mod mic_catalog;
 pub mod params;
 pub mod reload;
@@ -46,8 +50,6 @@ pub mod velocity;
 pub mod voice;
 
 use articulation::ArticulationWatcher;
-#[cfg(feature = "editor")]
-use download::WorkerHandle;
 use kit::LoadedPad;
 use kit_loader::{HandedOffKit, KitRequest, KitStatus, PadMicChoices, DEFAULT_OVERHEAD_SETUP};
 use mic_catalog::ManifestMicCatalog;
@@ -265,12 +267,6 @@ pub struct ResonanceDrums {
     /// Receiving end of the editor's audition queue. The audio thread is
     /// the sole consumer; drained at the top of every `process()`.
     audition_receiver: Receiver<AuditionHit>,
-    /// Download worker for fetching drumkits from the server. Only present
-    /// in editor builds, and its thread only starts on the first command
-    /// (the editor's Download Kits panel) — an instance whose editor is
-    /// never opened never starts one.
-    #[cfg(feature = "editor")]
-    download_worker: Arc<WorkerHandle>,
 }
 
 impl ResonancePlugin for ResonanceDrums {
@@ -332,6 +328,11 @@ impl ResonancePlugin for ResonanceDrums {
             kit_bytes: Arc::new(AtomicU64::new(0)),
             pad_samples: Arc::new(Mutex::new(Vec::new())),
         };
+        // Counted in the kit library's "used in N open drum instances".
+        // The download worker is not per instance any more: the editor
+        // factory opens the process-wide library (`library::shared`).
+        #[cfg(feature = "editor")]
+        library::register_instance(&bridge.kit_path);
         let mut sampler = DrumSampler::new(kit_receiver);
         sampler.set_last_rr(bridge.last_rr.clone());
         sampler.set_out_peak(bridge.out_peak.clone());
@@ -354,8 +355,6 @@ impl ResonancePlugin for ResonanceDrums {
             bridge,
             _articulation_watcher: watcher,
             audition_receiver,
-            #[cfg(feature = "editor")]
-            download_worker: Arc::new(download::spawn()),
         }
     }
 
@@ -551,20 +550,12 @@ impl ResonancePlugin for ResonanceDrums {
         Some(Arc::new(editor::DrumsEditorFactory::new(
             self.params.clone(),
             self.bridge.clone(),
-            self.download_worker.clone(),
             self.presets.clone(),
         )))
     }
 }
 
 impl ResonanceDrums {
-    /// Whether this instance has started its download thread. Test hook.
-    #[cfg(feature = "editor")]
-    #[doc(hidden)]
-    pub fn download_worker_running(&self) -> bool {
-        self.download_worker.is_running()
-    }
-
     /// Apply one host note event to the sampler, at the frame the caller
     /// has rendered up to.
     fn apply_event(&mut self, event: NoteEvent) {

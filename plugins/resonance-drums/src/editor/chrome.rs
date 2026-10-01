@@ -1,4 +1,4 @@
-//! Chrome panels: top brand bar, tab/preset bar, and bottom status bar.
+//! Chrome panels: top brand bar, kit bar, and bottom status bar.
 //!
 //! These functions are called from [`super::app::DrumsEditorApp::ui`] and
 //! paint the non-tab UI furniture surrounding the central body panel.
@@ -6,14 +6,14 @@
 use std::sync::atomic::Ordering;
 
 use plugin_gui_core::egui;
-
-use resonance_common::registry::InstalledItem;
+use resonance_plugin::kit_rows::{step_in_view, view_counter};
 
 use crate::kit_loader::KitStatus;
 use crate::sample_info;
 
 use super::app::DrumsEditorApp;
-use super::{download_panel, kit_browser, theme};
+use super::kit_browser::LoadKind;
+use super::{probe, theme};
 
 pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     ui.horizontal_centered(|ui| {
@@ -45,43 +45,44 @@ pub(super) fn draw_chrome(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             "— preset —",
         );
 
-        // Entry points for getting a kit onto disk. These used to be a
-        // ghost `Browse` button buried in the pad-list kit card (whose
-        // overlay you then couldn't see — §1.2) and a `Load kit` next to
-        // it; both are real, clearly labelled actions, so they live in
-        // the chrome where the rest of the editor's actions are (ba
-        // drums-plugin-rework.md §10, K0).
+        // One entry point for every kit source — installed, plok.org,
+        // import (drums-plugin-rework.md §6.1). It replaced "Download
+        // kits…" and "Open kit file…". The fleet's solid-accent fill; the
+        // label is the darkest surface token because the canonical accent
+        // is a dark violet.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Open kit file…").clicked() {
-                if let Some(req) = kit_browser::load_kit_clicked(&app.bridge) {
-                    app.requested_kit = Some(req);
-                }
-            }
-            ui.add_space(6.0);
-            if ui.button("Download kits…").clicked() {
-                download_panel::open(&mut app.download_panel, &app.download_worker);
+            let library_btn = egui::Button::new(
+                egui::RichText::new("Library…")
+                    .color(theme::BG_0)
+                    .strong()
+                    .size(12.0),
+            )
+            .fill(theme::ACCENT);
+            let b = ui.add(library_btn).on_hover_text(
+                "Installed kits, plok.org downloads, import, favourites and tags",
+            );
+            probe(ui, "header.library", b.rect);
+            if b.clicked() {
+                app.open_library();
             }
         });
     });
 }
 
-/// Tab bar: the KIT pill (◀ name ▶). The editor has one view, Pads, so
-/// there is no tab strip to switch it with. It used to carry five tabs,
-/// four of which rendered a "not built yet" placeholder, plus a
-/// single-option `Pads` segmented control whose click was discarded (ba
-/// todo #1327). The `DRUMS` label and the "N lit" PADS badge went too
-/// (drums-plugin-rework.md §6.1): decoration, not information — the
-/// round-robin readouts that matter are on each pad's row and in the
-/// inspector.
+/// The kit bar: ☆/★ for the loaded kit, and the kit pill (◀ name ▶). The
+/// name is a dropdown of the library view — favourites first, following
+/// the Library's search and filters — and ◀/▶ step through that same view
+/// (drums-plugin-rework.md §6.1). The editor has one view, Pads, so there
+/// is no tab strip to switch it with (ba todo #1327).
 pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
-    let installed = app.installed_kits.clone();
-    // Step from the kit on its way if a load is in flight, not from the
-    // one it is replacing: `kit_path` is only written once a load
-    // succeeds, so two quick ▶ clicks used to land on the same kit.
-    let current_idx =
-        kit_browser::kit_path_for_stepping(&app.bridge, app.requested_kit.as_ref())
-            .and_then(|path| installed_index(&path, &installed));
-    let mut pick: Option<usize> = None;
+    app.refresh_rows();
+    // The kit on its way if a load is in flight, not the one it replaces:
+    // `kit_path` is only written once a load succeeds, so two quick ▶
+    // clicks used to land on the same kit.
+    let loaded = app.loaded_entry();
+    let loaded_id = loaded.as_ref().map(|e| e.id.clone());
+    let mut pick: Option<(usize, LoadKind)> = None;
+    let mut step: Option<i32> = None;
 
     ui.horizontal_centered(|ui| {
         ui.label(
@@ -92,6 +93,18 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         ui.add_space(8.0);
 
+        // ☆/★ favourites the loaded kit (WARM when set).
+        if let Some(id) = loaded_id.as_deref() {
+            let fav = app.library.marks_of(id).favorite;
+            let star = plugin_gui_core::widgets::star_toggle(ui, fav)
+                .on_hover_text("Favourite this kit");
+            probe(ui, "kit.star", star.rect);
+            if star.clicked() {
+                app.toggle_favorite(id);
+            }
+            ui.add_space(4.0);
+        }
+
         let pill = egui::Frame::default()
             .fill(theme::BG_2)
             .stroke(egui::Stroke::new(1.0, theme::LINE))
@@ -99,18 +112,16 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             .inner_margin(egui::Margin::symmetric(10, 4));
         pill.show(ui, |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                if pill_arrow(ui, "◀") {
-                    pick = step(current_idx, installed.len(), false);
+                let can_step = app.browser.view_len() > 0;
+                if pill_arrow(ui, "◀", can_step) {
+                    step = Some(-1);
                 }
 
-                // When the current kit is one of the installed ones, show
-                // the registry's own name for it (§1.4: the loader's
-                // status name is the manifest's parent directory —
-                // "drummica" — not the registry's "Drummica"). Otherwise
-                // fall back to whatever the loader reported, e.g. a kit
-                // opened straight from a file outside the library.
-                let display = match current_idx {
-                    Some(i) => installed[i].name.clone(),
+                // The library's name for the kit ("Drummica", or its
+                // `_meta.name`), not the manifest's directory. A kit loaded
+                // from outside the library falls back to the loader's name.
+                let display = match &loaded {
+                    Some(e) => e.name.clone(),
                     None => {
                         let name = current_kit_name(app);
                         if name.is_empty() {
@@ -120,7 +131,8 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         }
                     }
                 };
-                egui::ComboBox::from_id_salt("drums_kit_combo")
+                let loaded_key = loaded.as_ref().map(|e| e.mark_key());
+                let combo = egui::ComboBox::from_id_salt("drums_kit_combo")
                     .width(170.0)
                     .selected_text(
                         egui::RichText::new(display)
@@ -128,49 +140,70 @@ pub(super) fn draw_tab_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                             .size(12.0),
                     )
                     .show_ui(ui, |ui| {
-                        if installed.is_empty() {
-                            ui.label(theme::hint_text("(no kits installed)"));
+                        let view = app.browser.view().to_vec();
+                        if view.is_empty() {
+                            ui.label(theme::hint_text(if app.rows.rows.is_empty() {
+                                "(no kits installed — open the Library)"
+                            } else {
+                                "(no kit matches the Library's filters)"
+                            }));
                         }
-                        for (idx, item) in installed.iter().enumerate() {
+                        for row in view {
+                            let r = &app.rows.rows[row];
+                            let fav = app.rows.marks_of(row).is_some_and(|m| m.favorite);
+                            let text = format!("{} {}", if fav { "★" } else { "☆" }, r.entry.name);
+                            let selected = loaded_key.as_deref() == Some(r.key.as_str());
                             if ui
-                                .selectable_label(Some(idx) == current_idx, &item.name)
+                                .add_enabled(
+                                    r.entry.is_loadable(),
+                                    egui::Button::selectable(selected, text),
+                                )
                                 .clicked()
                             {
-                                pick = Some(idx);
+                                pick = Some((row, LoadKind::Pick));
                             }
                         }
                     });
+                probe(ui, "kit.combo", combo.response.rect);
 
-                if pill_arrow(ui, "▶") {
-                    pick = step(current_idx, installed.len(), true);
+                if pill_arrow(ui, "▶", can_step) {
+                    step = Some(1);
                 }
             });
         });
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(view_counter(&app.browser, loaded_id.as_deref()))
+                .size(10.5)
+                .color(theme::TEXT_3),
+        );
     });
 
-    if let Some(item) = pick.and_then(|i| installed.get(i)) {
-        if let Some(req) = kit_browser::load_installed_kit(&app.bridge, item) {
-            app.requested_kit = Some(req);
+    if let Some(delta) = step {
+        let slot = step_in_view(&app.browser, &app.rows, loaded_id.as_deref(), delta);
+        if let Some(row) = slot.and_then(|s| {
+            app.rows
+                .rows
+                .iter()
+                .position(|r| r.entry.slot == Some(s))
+        }) {
+            // Browsing, not a pick: no Recent bump.
+            pick = Some((row, LoadKind::Browse));
         }
+    }
+    if let Some((row, kind)) = pick {
+        let entry = app.rows.rows[row].entry.clone();
+        app.load_entry(&entry, kind);
     }
 }
 
 /// One of the pill's frameless ◀ / ▶ buttons. True when clicked.
-fn pill_arrow(ui: &mut egui::Ui, glyph: &str) -> bool {
-    ui.add(
+fn pill_arrow(ui: &mut egui::Ui, glyph: &str, enabled: bool) -> bool {
+    ui.add_enabled(
+        enabled,
         egui::Button::new(egui::RichText::new(glyph).color(theme::TEXT_3).size(9.0)).frame(false),
     )
     .clicked()
-}
-
-/// The installed kit one step from `current` (forward or back), clamped
-/// at the ends. With no current kit, either arrow picks the first one.
-fn step(current: Option<usize>, len: usize, forward: bool) -> Option<usize> {
-    match current {
-        Some(i) if forward => (i + 1 < len).then_some(i + 1),
-        Some(i) => i.checked_sub(1),
-        None => (len > 0).then_some(0),
-    }
 }
 
 /// Status bar. Every figure here is a measurement published by the audio
@@ -323,19 +356,3 @@ fn current_kit_name(app: &DrumsEditorApp) -> String {
     }
 }
 
-/// Which installed kit, if any, `kit_path` (a manifest) belongs to.
-///
-/// Matching by name does not work: the loaded name is the manifest's
-/// *parent* directory (`kit_loader/mod.rs` — "drummica"), while the
-/// registry's name is the kit's top directory ("Drummica"), so the combo
-/// never highlighted the loaded kit and ◀/▶ always reloaded the first one
-/// (ba drums-plugin-rework.md §1.4). The registry's `path` is always an
-/// ancestor of the manifest path, though — downloaded or imported, the
-/// manifest lives one or two levels under the top directory — so
-/// matching that way is stable regardless of what either side names
-/// things.
-fn installed_index(kit_path: &std::path::Path, installed: &[InstalledItem]) -> Option<usize> {
-    installed
-        .iter()
-        .position(|item| kit_path.starts_with(&item.path))
-}

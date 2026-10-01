@@ -3,41 +3,74 @@
 //! `DrumsEditorApp` is the `EditorApp` the runtime drives each frame. It
 //! paints the chrome (header, KIT pill bar, status bar) on the outside and
 //! the Pads body in the middle: the canonical two-column layout (pad list
-//! + per-pad detail) plus a bottom row of KIT and GLOBAL cards.
+//! and per-pad detail) plus a bottom row of KIT and GLOBAL cards. The
+//! Library overlay (`library_panel.rs`) draws over everything when open.
 //!
 //! Pads is the only view. The editor used to offer four more tabs, each
 //! rendering a placeholder that said the feature was not built yet —
 //! including Mics and Articulations, whose pickers already ship inside the
 //! pad inspector, so those two tabs denied features the plugin has. They
 //! were removed rather than left lying (ba todo #1327).
+//!
+//! The kit library state lives here, not in the overlay, because the
+//! header's kit dropdown and ◀/▶ walk the same view with the overlay
+//! closed (drums-plugin-rework.md §6.1).
 
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use resonance_common::registry::InstalledItem;
 use plugin_gui_core::{egui, widgets, EditorApp};
+use resonance_common::drumkit_library::{self, Entry, ImportOutcome};
+use resonance_common::library_marks::{FreshnessPoll, BAR_POLL_INTERVAL, BROWSER_POLL_INTERVAL};
+use resonance_plugin::kit_rows::KitRows;
+use resonance_plugin::library_view::BrowserModel;
 
-use crate::download::WorkerHandle;
 use crate::kit;
+use crate::library::SharedKitLibrary;
 use crate::params::{DrumParams, ROUND_ROBIN_LABELS};
 use crate::velocity;
 use crate::voice::MAX_VOICES;
 use crate::KitBridge;
 
-use super::{chrome, download_panel, kit_browser, pad_grid, pad_inspector, theme};
+use super::jobs::{JobDone, Jobs, Picker};
+use super::kit_browser::{self, LoadKind};
+use super::library_panel::{self, LibraryPanelState};
+use super::{chrome, pad_grid, pad_inspector, theme};
 
 pub(crate) struct DrumsEditorApp {
     pub(crate) params: Arc<DrumParams>,
     pub(crate) bridge: KitBridge,
     pub(crate) selected_pad: usize,
     pub(crate) pad_filter: String,
-    pub(crate) download_worker: Arc<WorkerHandle>,
-    pub(crate) download_panel: download_panel::DownloadPanelState,
-    /// Cached list of installed drum kits from the shared registry.
-    pub(crate) installed_kits: Vec<InstalledItem>,
-    installed_kits_refresh: u32,
-    /// The last kit load this editor started, so the kit pill can step
-    /// ◀/▶ from the kit on its way rather than the one it replaces
+    /// The process-wide kit library and its download worker.
+    pub(crate) library: Arc<SharedKitLibrary>,
+    pub(crate) library_panel: LibraryPanelState,
+    /// The Installed tab's view-state, which the header's dropdown and
+    /// ◀/▶ walk too.
+    pub(crate) browser: BrowserModel,
+    /// The library as browser rows, rebuilt when the library or the marks
+    /// change.
+    pub(crate) rows: KitRows,
+    /// The detail pane's `+ tag` text, and the row it was typed for.
+    pub(crate) tag_draft: String,
+    tag_draft_for: Option<String>,
+    /// Change detection for other processes' marks writes.
+    marks_poll: FreshnessPoll,
+    /// Change detection for the library root and index (kits added or
+    /// removed in a file manager, another process's rescan).
+    library_poll: FreshnessPoll,
+    /// Rescans, imports and deletes, off the editor thread.
+    pub(crate) jobs: Jobs,
+    /// The import's file dialog, on its own thread.
+    pub(crate) picker: Picker,
+    /// The kits THIS editor asked the shared worker to download, so only
+    /// it jumps to the new row when one lands.
+    pub(crate) my_downloads: HashSet<String>,
+    /// The worker's install counter last seen.
+    seen_installs: u64,
+    /// The last kit load this editor started, so ◀/▶ step from the kit on
+    /// its way rather than the one it replaces
     /// (`kit_browser::kit_path_for_stepping`).
     pub(crate) requested_kit: Option<kit_browser::RequestedKit>,
     /// Displayed OUT meter level per channel. Rises instantly to the peak
@@ -58,25 +91,37 @@ impl DrumsEditorApp {
     pub(super) fn new(
         params: Arc<DrumParams>,
         bridge: KitBridge,
-        download_worker: Arc<WorkerHandle>,
+        library: Arc<SharedKitLibrary>,
         presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
-        let installed_kits = kit_browser::refresh_installed_kits();
-        Self {
+        let seen_installs = library.download().state.lock().installs;
+        let mut app = Self {
             params,
             bridge,
             selected_pad: 0,
             pad_filter: String::new(),
-            download_worker,
-            download_panel: download_panel::DownloadPanelState::default(),
-            installed_kits,
-            installed_kits_refresh: 0,
+            library,
+            library_panel: LibraryPanelState::default(),
+            browser: BrowserModel::new(),
+            rows: KitRows::default(),
+            tag_draft: String::new(),
+            tag_draft_for: None,
+            marks_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
+            library_poll: FreshnessPoll::new(Vec::new(), BAR_POLL_INTERVAL),
+            jobs: Jobs::default(),
+            picker: Picker::default(),
+            my_downloads: HashSet::new(),
+            seen_installs,
             requested_kit: None,
             out_meter: [0.0; 2],
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
-        }
+        };
+        // Opening an editor is when the library is brought up to date: on
+        // the job thread, so the first frame is not held up by hashing.
+        app.start_rescan();
+        app
     }
 
     /// Fold the audio thread's latest block peak into the displayed OUT
@@ -106,11 +151,170 @@ impl DrumsEditorApp {
         self.out_meter
     }
 
-    fn maybe_refresh_installed_kits(&mut self) {
-        self.installed_kits_refresh += 1;
-        if self.installed_kits_refresh >= 60 {
-            self.installed_kits_refresh = 0;
-            self.installed_kits = kit_browser::refresh_installed_kits();
+    /// Open the Library overlay.
+    pub(crate) fn open_library(&mut self) {
+        library_panel::open(self);
+    }
+
+    /// Start a background rescan (plus measuring kits of unknown size)
+    /// unless a job is running.
+    pub(crate) fn start_rescan(&mut self) -> bool {
+        let library = self.library.clone();
+        self.jobs.start("scanning…", false, move |ctx| {
+            let result = match library.rescan() {
+                // Another writer (a download installing) rescans when done.
+                None => Ok(()),
+                Some(Ok(_)) => Ok(()),
+                Some(Err(e)) => Err(e.to_string()),
+            };
+            library.measure_unsized(&ctx.cancel);
+            JobDone::Rescanned(result)
+        })
+    }
+
+    /// Rebuild the rows if the library or the marks changed, and refresh
+    /// the view.
+    pub(crate) fn refresh_rows(&mut self) {
+        let revision = self.library.revision();
+        let marks_gen = self.library.marks_generation();
+        if self.rows.built_from != (revision, marks_gen) {
+            let marks = self.library.marks().snapshot();
+            let lib = self.library.read();
+            self.rows = KitRows::build(&lib, Some(&marks), (revision, marks_gen));
+        }
+        self.browser.refresh(&self.rows, (revision, marks_gen));
+        // A draft tag belongs to the row it was typed for.
+        if self.browser.selected() != self.tag_draft_for.as_deref() {
+            self.tag_draft.clear();
+            self.tag_draft_for = self.browser.selected().map(str::to_string);
+        }
+    }
+
+    /// Apply a finished background job, and a closed import dialog.
+    pub(crate) fn poll_jobs(&mut self) {
+        if let Some(Some(src)) = self.picker.poll() {
+            library_panel::start_import(self, src);
+        }
+        if let Some(done) = self.jobs.poll() {
+            self.apply_job(done);
+        }
+    }
+
+    pub(crate) fn apply_job(&mut self, done: JobDone) {
+        match done {
+            JobDone::Rescanned(Ok(())) => {}
+            JobDone::Rescanned(Err(e)) => self.browser.set_error(format!("rescan failed: {e}")),
+            JobDone::Imported(result) => match *result {
+                Ok(outcome) => {
+                    self.refresh_rows();
+                    self.browser.select(outcome.entry().mark_key());
+                    self.library_panel.tab = library_panel::Tab::Installed;
+                    let text = match &outcome {
+                        ImportOutcome::Added(e) => format!("imported \"{}\"", e.name),
+                        ImportOutcome::AlreadyPresent(e) => {
+                            format!("\"{}\" is already in the library", e.name)
+                        }
+                    };
+                    self.browser.set_info(text);
+                }
+                Err(e) => self.browser.set_error(e),
+            },
+            JobDone::Deleted { name, result } => {
+                self.refresh_rows();
+                match result {
+                    Ok(()) => self.browser.set_info(format!("deleted \"{name}\"")),
+                    Err(e) => self.browser.set_error(e),
+                }
+            }
+        }
+    }
+
+    /// Block until the running job is done and apply it. For tests.
+    pub(crate) fn finish_jobs(&mut self) {
+        if let Some(done) = self.jobs.wait() {
+            self.apply_job(done);
+        }
+    }
+
+    /// React to a download the shared worker finished: when it is one this
+    /// editor asked for, select the new row on the Installed tab and offer
+    /// Load (§4.1).
+    fn poll_downloads(&mut self) {
+        let installed = {
+            let s = self.library.download().state.lock();
+            if s.installs == self.seen_installs {
+                return;
+            }
+            self.seen_installs = s.installs;
+            s.last_installed.clone()
+        };
+        let Some(installed) = installed else {
+            return;
+        };
+        if !self.my_downloads.remove(&installed.name) {
+            return;
+        }
+        self.refresh_rows();
+        self.browser
+            .select(drumkit_library::mark_key(&installed.id));
+        self.library_panel.tab = library_panel::Tab::Installed;
+        self.browser.set_info(format!(
+            "downloaded \"{}\" — Load plays it in this instance",
+            installed.name
+        ));
+    }
+
+    /// Poll for other processes' changes: every 500 ms while the Library is
+    /// open, every 2 s otherwise, one `stat` per path each time.
+    fn poll_freshness(&mut self) {
+        let now = std::time::Instant::now();
+        let interval = if self.library_panel.open {
+            BROWSER_POLL_INTERVAL
+        } else {
+            BAR_POLL_INTERVAL
+        };
+        if self.marks_poll.targets().is_empty() {
+            let marks = self.library.marks().path();
+            self.marks_poll = FreshnessPoll::new(vec![marks], interval);
+        }
+        self.marks_poll.set_interval(interval);
+        if self.marks_poll.check(now) {
+            self.library.refresh_marks();
+        }
+
+        if self.library_poll.targets().is_empty() {
+            let paths = self.library.read().watch_paths();
+            self.library_poll = FreshnessPoll::new(paths, interval);
+            self.library_poll.mark_seen(now);
+        }
+        self.library_poll.set_interval(interval);
+        if !self.jobs.busy() && self.library_poll.check(now) {
+            // Off the UI thread. A rescan only re-hashes manifests whose
+            // size or mtime changed and writes nothing when nothing did,
+            // so the poll settles.
+            self.start_rescan();
+        }
+    }
+
+    /// Toggle the favourite of kit `id`, reporting a failed write.
+    pub(crate) fn toggle_favorite(&mut self, id: &str) {
+        if let Err(e) = self.library.toggle_favorite(id) {
+            self.browser
+                .set_error(format!("could not save the favourite: {e}"));
+        }
+    }
+
+    /// The library entry of the kit this instance plays (or is loading).
+    pub(crate) fn loaded_entry(&self) -> Option<Entry> {
+        let path = kit_browser::kit_path_for_stepping(&self.bridge, self.requested_kit.as_ref())?;
+        self.library.entry_for_manifest(&path)
+    }
+
+    /// Load `entry` into this instance through the one load entry point.
+    pub(crate) fn load_entry(&mut self, entry: &Entry, kind: LoadKind) {
+        match kit_browser::load_library_kit(&self.bridge, &self.library, entry, kind) {
+            Ok(req) => self.requested_kit = Some(req),
+            Err(e) => self.browser.set_error(e),
         }
     }
 }
@@ -118,7 +322,10 @@ impl DrumsEditorApp {
 impl EditorApp for DrumsEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
-        self.maybe_refresh_installed_kits();
+        self.poll_jobs();
+        self.poll_downloads();
+        self.poll_freshness();
+        self.refresh_rows();
 
         ui.ctx()
             .request_repaint_after(std::time::Duration::from_millis(100));
@@ -165,12 +372,11 @@ impl EditorApp for DrumsEditorApp {
             )
             .show_inside(ui, |ui| draw_pads_body(ui, self));
 
-        if self.download_panel.open {
-            download_panel::draw(ui, &mut self.download_panel, &self.download_worker);
+        if self.library_panel.open {
+            library_panel::draw(ui, self);
         }
     }
 }
-
 
 /// Height of the fixed bottom row (KIT + GLOBAL cards): the 12px gap from
 /// the region above plus the cards' own 110px.

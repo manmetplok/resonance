@@ -1,42 +1,32 @@
-//! Kit browser / loader helpers.
+//! Loading a kit from the editor.
 //!
-//! Provides the shared "load a kit" code path used by:
-//!   • The header's "Open kit file…" button (`load_kit_clicked`).
-//!   • The KIT pill's ◀ / ▶ and dropdown (`load_installed_kit`).
+//! [`load_library_kit`] is **the** entry point every kit pick in the editor
+//! goes through — the header's kit dropdown and ◀/▶, the Library overlay's
+//! Load and double-click. Today it starts the loader thread on the entry's
+//! manifest; K4 (drums-plugin-rework.md §5.1) swaps its body for a write of
+//! the `kit_select` slot parameter, and nothing else in the editor has to
+//! change.
 //!
-//! Drives the loader thread via [`crate::kit_loader::spawn_loader`]. The
-//! UI for selecting / loading is rendered by `chrome`; this module exposes
-//! the imperative actions and the kit-status formatter so they stay in
-//! one place.
+//! Also here: which kit the editor treats as current while a load is in
+//! flight, and the kit-status formatter.
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
-use resonance_common::registry::{self, ContentType, InstalledItem};
+use resonance_common::drumkit_library::{Entry, EntryStatus};
 
 use crate::kit_loader::{self, KitStatus};
+use crate::library::SharedKitLibrary;
 use crate::KitBridge;
 
-/// Find the `drum_samples.json` manifest inside a kit directory. The
-/// downloaded kits have a nested subdirectory, so we search one level
-/// deep as well as the root.
-fn find_manifest(kit_dir: &std::path::Path) -> Option<std::path::PathBuf> {
-    let direct = kit_dir.join("drum_samples.json");
-    if direct.exists() {
-        return Some(direct);
-    }
-    // Search one level of subdirectories.
-    if let Ok(entries) = std::fs::read_dir(kit_dir) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                let nested = entry.path().join("drum_samples.json");
-                if nested.exists() {
-                    return Some(nested);
-                }
-            }
-        }
-    }
-    None
+/// Whether a load is a user **pick** (a dropdown row, a Library Load) —
+/// which counts as a use for Recent — or **browsing** with ◀/▶, which does
+/// not: recording it would re-sort a "Recently used" view under the
+/// stepping and bounce between two kits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LoadKind {
+    Pick,
+    Browse,
 }
 
 /// A kit load the editor asked for: the manifest it is loading, and the
@@ -44,8 +34,8 @@ fn find_manifest(kit_dir: &std::path::Path) -> Option<std::path::PathBuf> {
 ///
 /// The bridge's `kit_path` is written only when a load *succeeds*, and
 /// `KitStatus::Loading` only once the loader thread gets going, so for a
-/// while after a click neither says which kit is on its way. The kit
-/// pill steps ◀/▶ from this in that window ([`kit_path_for_stepping`]),
+/// while after a click neither says which kit is on its way. The header
+/// steps ◀/▶ from this in that window ([`kit_path_for_stepping`]),
 /// rather than from the kit being replaced.
 #[derive(Clone, Debug)]
 pub(crate) struct RequestedKit {
@@ -53,8 +43,8 @@ pub(crate) struct RequestedKit {
     pub(crate) generation: u64,
 }
 
-/// The kit the editor should treat as current when stepping through the
-/// installed kits: the one being loaded, if any, else the one loaded.
+/// The kit the editor should treat as current: the one being loaded, if
+/// any, else the one loaded.
 ///
 /// In order: the manifest a `Loading` status names; else the editor's own
 /// last request, while it is still the newest load and has not failed;
@@ -83,16 +73,47 @@ pub(crate) fn kit_path_for_stepping(
     bridge.kit_path.lock().clone()
 }
 
+/// Load library kit `entry` into this instance — the one load entry point
+/// (see the module docs). A pick also records a use for Recent.
+pub(crate) fn load_library_kit(
+    bridge: &KitBridge,
+    library: &SharedKitLibrary,
+    entry: &Entry,
+    kind: LoadKind,
+) -> Result<RequestedKit, String> {
+    match &entry.status {
+        EntryStatus::ManifestError(reason) => {
+            return Err(format!("\"{}\" cannot be loaded: {reason}", entry.name))
+        }
+        EntryStatus::DuplicateOf(dir) => {
+            return Err(format!(
+                "\"{}\" is a copy of the kit in {}; load that one",
+                entry.name,
+                dir.display()
+            ))
+        }
+        EntryStatus::Ok | EntryStatus::MissingFiles(_) => {}
+    }
+    let requested = spawn(bridge, entry.manifest_path.clone())?;
+    if kind == LoadKind::Pick {
+        if let Err(e) = library.record_use(&entry.id) {
+            tracing::warn!("could not record the kit pick: {e}");
+        }
+    }
+    Ok(requested)
+}
+
 /// Start the loader on `manifest_path` and say what was asked for.
-fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Option<RequestedKit> {
+fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
     // Refuse to spawn a loader before the host has activated the
     // plugin — without a sample rate we'd decode at the wrong pitch.
     let sr_bits = bridge.sample_rate.load(Ordering::Acquire);
     if sr_bits == 0 {
+        let message = "plugin not yet activated by host".to_string();
         *bridge.kit_status.lock() = KitStatus::Error {
-            message: "plugin not yet activated by host".to_string(),
+            message: message.clone(),
         };
-        return None;
+        return Err(message);
     }
     let target_sr = f32::from_bits(sr_bits);
     let overhead_key = bridge.overhead_setup_key.lock().clone();
@@ -106,36 +127,10 @@ fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Option<RequestedKit> {
         choices,
         articulations,
     );
-    Some(RequestedKit {
+    Ok(RequestedKit {
         path: manifest_path,
         generation: bridge.load_generation.load(Ordering::Acquire),
     })
-}
-
-/// Load a kit from an installed registry entry.
-pub(super) fn load_installed_kit(bridge: &KitBridge, item: &InstalledItem) -> Option<RequestedKit> {
-    let kit_dir = PathBuf::from(&item.path);
-    let Some(manifest_path) = find_manifest(&kit_dir) else {
-        *bridge.kit_status.lock() = KitStatus::Error {
-            message: format!("no drum_samples.json found in {}", kit_dir.display()),
-        };
-        return None;
-    };
-    spawn(bridge, manifest_path)
-}
-
-pub(super) fn load_kit_clicked(bridge: &KitBridge) -> Option<RequestedKit> {
-    // Sync rfd dialog on the UI thread — the Wayland runtime's editor
-    // thread, or the AppKit main thread under the Cocoa runtime, where a
-    // modal panel is the supported path and the runtime's reentrancy
-    // guard skips nested paints (macos-editor-plan.md §3h). Blocks
-    // briefly while the native file picker is up; the loader thread then
-    // does all the heavy work off the UI thread.
-    let picked = rfd::FileDialog::new()
-        .add_filter("Drum kit manifest", &["json"])
-        .pick_file();
-    let path = picked?;
-    spawn(bridge, path)
 }
 
 pub(super) fn format_kit_status(status: &KitStatus) -> String {
@@ -155,9 +150,4 @@ pub(super) fn format_kit_status(status: &KitStatus) -> String {
             format!("Error: {short}")
         }
     }
-}
-
-/// Refresh the installed-kits cache from the registry.
-pub fn refresh_installed_kits() -> Vec<InstalledItem> {
-    registry::list_installed(&ContentType::Drumkit)
 }
