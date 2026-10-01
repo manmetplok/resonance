@@ -5060,6 +5060,9 @@ dependencies = [
 name = "resonance-drums"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
+ "clack-host",
+ "clack-plugin",
  "criterion",
  "crossbeam-channel",
  "parking_lot",

@@ -417,6 +417,16 @@ pub struct ResonanceDrums {
     progress_param: selection::ProgressParam,
 }
 
+/// The drums' state upgrade ([`resonance_plugin::StateUpgrade`], declared
+/// as `STATE_UPGRADE`): a state from an older build, brought up to what
+/// this one reads, in place. Idempotent.
+///
+/// - v1's linear levels become dB under the new ids
+///   ([`params::upgrade_v1_levels`], E9).
+pub fn upgrade_state(state: &mut serde_json::Value) {
+    params::upgrade_v1_levels(state);
+}
+
 /// `kit_select`'s and `kit_load_progress`'s host-order indices in
 /// `DrumParams::param_at` (the globals added after them follow).
 const KIT_SELECT_INDEX: usize = 4;
@@ -546,21 +556,10 @@ impl ResonancePlugin for ResonanceDrums {
         GLOBAL_PARAMS + drum_map::NUM_PADS * PARAMS_PER_PAD
     }
 
-    /// The default load, after converting a v1 state's linear levels to
-    /// dB (E9, [`params::upgrade_v1_levels`]) — before the params are
-    /// read, so they land converted.
-    fn load_state(&mut self, data: &[u8]) -> bool {
-        let Ok(mut state) = serde_json::from_slice::<serde_json::Value>(data) else {
-            return false;
-        };
-        resonance_plugin::state::migrate(&mut state, self.param_renames());
-        params::upgrade_v1_levels(&mut state);
-        let ok = resonance_plugin::state::load_params_from_json(&self.params(), &state);
-        if let Some(saver) = self.extra_state_saver() {
-            saver.load(&state);
-        }
-        ok
-    }
+    /// Every load path — this plugin's `load_state`, the CLAP bridge's
+    /// while active, a preset — runs [`upgrade_state`] before reading a
+    /// param.
+    const STATE_UPGRADE: Option<resonance_plugin::StateUpgrade> = Some(upgrade_state);
 
     fn param(&self, index: usize) -> &dyn Param {
         if index == KIT_LOAD_PROGRESS_INDEX {

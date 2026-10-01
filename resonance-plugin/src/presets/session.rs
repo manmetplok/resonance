@@ -346,12 +346,15 @@ impl PresetSession {
         let Some(json) = bank.json_for(preset) else {
             return false;
         };
-        if !super::apply(&json, params, bank.renames()) {
+        let Ok(mut doc) = serde_json::from_str::<serde_json::Value>(&json) else {
+            return false;
+        };
+        // The extra state is read from the same migrated and upgraded
+        // document the params were.
+        if !super::apply_doc(&mut doc, params, bank.renames(), bank.state_upgrade()) {
             return false;
         }
-        if let Ok(doc) = serde_json::from_str::<serde_json::Value>(&json) {
-            self.apply_extra(&doc);
-        }
+        self.apply_extra(&doc);
         let resolved = bank.resolve(preset).unwrap_or_else(|| preset.clone());
         self.set_current_with_baseline(Some(resolved), params);
         true

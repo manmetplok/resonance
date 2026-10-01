@@ -670,8 +670,8 @@ impl DrumParams {
 /// Either way a value already under a new id is never overwritten, so
 /// the upgrade is idempotent.
 ///
-/// Run on the state before its params are read
-/// (`ResonanceDrums::load_state`).
+/// Run on every load path before the params are read, as part of the
+/// plugin's state upgrade ([`crate::upgrade_state`]).
 pub fn upgrade_v1_levels(state: &mut serde_json::Value) -> bool {
     let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
         return false;

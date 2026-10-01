@@ -1182,3 +1182,188 @@ fn a_flushed_value_is_stored_at_the_precision_the_param_kept() {
         "the atomics must hold the f32-demoted value, matching the plugin"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test plugin #4: declares its own state upgrade (`STATE_UPGRADE`) for a
+// change a rename cannot say — a level that was a linear `gain` and is a
+// dB `level` now. Every load path must run it: the plugin's own
+// `load_state`, the bridge's while active, the bridge's preset load, and
+// the preset bank's.
+// ---------------------------------------------------------------------------
+
+/// `gain` (linear) becomes `level` (dB), unless a `level` is there
+/// already. Idempotent: a document without `gain` is left alone.
+fn upgrade_gain_to_level(state: &mut Value) {
+    let Some(params) = state.get_mut("params").and_then(|p| p.as_object_mut()) else {
+        return;
+    };
+    if let Some(gain) = params.remove("gain").and_then(|g| g.as_f64()) {
+        params
+            .entry("level")
+            .or_insert(json!(20.0 * gain.max(1e-6).log10()));
+    }
+}
+
+/// A pre-upgrade state: half the linear gain, so ≈ -6.02 dB.
+const PRE_UPGRADE_STATE: &[u8] = br#"{"version":1,"params":{"gain":0.5,"taps":5.0}}"#;
+const UPGRADED_LEVEL: f64 = -6.020_599_913_279_624;
+
+const UPGRADED_FACTORY: &[resonance_plugin::presets::FactoryPreset] =
+    &[resonance_plugin::presets::FactoryPreset {
+        id: "old",
+        name: "Old",
+        json: r#"{"params":{"gain":0.5,"taps":5.0}}"#,
+    }];
+
+struct UpgradedBridgePlugin {
+    level: FloatParam,
+    taps: IntParam,
+}
+
+impl ResonancePlugin for UpgradedBridgePlugin {
+    const CLAP_ID: &'static str = "test.bridge-upgraded";
+    const NAME: &'static str = "BridgeUpgraded";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+    const FACTORY_PRESETS: &'static [resonance_plugin::presets::FactoryPreset] = UPGRADED_FACTORY;
+    const STATE_UPGRADE: Option<resonance_plugin::StateUpgrade> = Some(upgrade_gain_to_level);
+
+    fn new() -> Self {
+        Self {
+            level: FloatParam::new(
+                "level",
+                "Level",
+                0.0,
+                FloatRange::Linear {
+                    min: -60.0,
+                    max: 6.0,
+                },
+            ),
+            taps: IntParam::new("taps", "Taps", 3, IntRange::Linear { min: 1, max: 8 }),
+        }
+    }
+    fn param_count(&self) -> usize {
+        2
+    }
+    fn param(&self, index: usize) -> &dyn Param {
+        [&self.level as &dyn Param, &self.taps][index]
+    }
+    fn initialize(&mut self, _sample_rate: f32, _max_buffer_size: u32) -> bool {
+        true
+    }
+    fn reset(&mut self) {}
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+}
+
+fn upgraded_instance() -> PluginInstance<TestHost> {
+    instantiate::<UpgradedBridgePlugin>(
+        c"resonance-test-bridge-upgraded.clap",
+        c"test.bridge-upgraded",
+    )
+}
+
+fn assert_upgraded(level: f64, path: &str) {
+    assert!(
+        (level - UPGRADED_LEVEL).abs() < 1e-4,
+        "{path}: the plugin's state upgrade must run (level {level}, want {UPGRADED_LEVEL})"
+    );
+}
+
+#[test]
+fn the_state_upgrade_runs_on_the_plugins_own_load() {
+    let mut plugin = UpgradedBridgePlugin::new();
+    assert!(plugin.load_state(PRE_UPGRADE_STATE));
+    assert_upgraded(plugin.level.get_plain(), "load_state");
+    assert_eq!(plugin.taps.get_plain(), 5.0);
+}
+
+#[test]
+fn the_state_upgrade_runs_on_both_bridge_load_paths() {
+    let mut inactive = upgraded_instance();
+    assert!(load_state(&mut inactive, PRE_UPGRADE_STATE));
+    assert_upgraded(get_value(&mut inactive, "level"), "bridge, inactive");
+
+    // Active: the plugin object is in the audio processor, so the bridge
+    // loads into the shared atomics itself — and must upgrade first.
+    let mut active = upgraded_instance();
+    let processor = active
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    assert!(load_state(&mut active, PRE_UPGRADE_STATE));
+    assert_upgraded(get_value(&mut active, "level"), "bridge, active");
+    assert_eq!(get_value(&mut active, "taps"), 5.0);
+    active.deactivate(processor);
+    assert_upgraded(get_value(&mut active, "level"), "bridge, after deactivate");
+}
+
+#[test]
+fn the_state_upgrade_runs_on_the_bridges_preset_load() {
+    use clack_extensions::state_context::{PluginStateContext, StateContextType};
+    let mut instance = upgraded_instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let ext = instance
+        .plugin_shared_handle()
+        .get_extension::<PluginStateContext>()
+        .expect("the bridge must expose state-context");
+    ext.load(
+        &mut instance.plugin_handle(),
+        &mut &br#"{"params":{"gain":0.5}}"#[..],
+        StateContextType::ForPreset,
+    )
+    .expect("preset load");
+    assert_upgraded(get_value(&mut instance, "level"), "bridge, FOR_PRESET");
+    instance.deactivate(processor);
+}
+
+#[test]
+fn the_state_upgrade_runs_on_the_preset_banks_loads() {
+    use resonance_plugin::presets::{PresetBank, PresetRef, PresetSession};
+
+    // `presets::apply_with`, what the bank's `apply` runs.
+    let plugin = UpgradedBridgePlugin::new();
+    let params = [&plugin.level as &dyn Param, &plugin.taps];
+    assert!(resonance_plugin::presets::apply_with(
+        r#"{"params":{"gain":0.5}}"#,
+        &params,
+        &[],
+        UpgradedBridgePlugin::STATE_UPGRADE,
+    ));
+    assert_upgraded(plugin.level.get_plain(), "presets::apply_with");
+
+    // The bank for the plugin carries its upgrade, so its factory preset
+    // in the old shape recalls the converted level, through `apply` and
+    // through the session (what the editors' preset bars call).
+    let root = std::env::temp_dir().join(format!(
+        "resonance-bridge-upgrade-presets-{}",
+        std::process::id()
+    ));
+    let bank = PresetBank::for_plugin::<UpgradedBridgePlugin>().with_root(root.clone());
+    assert!(bank.state_upgrade().is_some());
+    let old = PresetRef::factory("old", "Old");
+
+    let plugin = UpgradedBridgePlugin::new();
+    let params = [&plugin.level as &dyn Param, &plugin.taps];
+    assert!(bank.apply(&old, &params));
+    assert_upgraded(plugin.level.get_plain(), "PresetBank::apply");
+
+    let plugin = UpgradedBridgePlugin::new();
+    let params = [&plugin.level as &dyn Param, &plugin.taps];
+    let session = PresetSession::new();
+    assert!(session.load_preset(&bank, &old, &params));
+    assert_upgraded(plugin.level.get_plain(), "PresetSession::load_preset");
+    assert_eq!(plugin.taps.get_plain(), 5.0);
+    let _ = std::fs::remove_dir_all(root);
+}
