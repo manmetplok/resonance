@@ -953,6 +953,149 @@ fn a_reader_panic_fails_one_stream_and_the_reader_carries_on() {
     );
 }
 
+/// One hit on `KICK` at block 0, then `blocks - 1` more blocks of 128
+/// frames, `between` run after each: the left mix. A silent block goes
+/// first, unrecorded, so a fresh sampler's master volume ramp (from
+/// unity to the param's value) is behind it.
+fn one_hit(
+    s: &mut DrumSampler,
+    blocks: usize,
+    mut between: impl FnMut(usize, &mut DrumSampler),
+) -> Vec<f32> {
+    let params = DrumParams::default();
+    let mut ports = Ports::new(128);
+    let hit = [Hit {
+        frame: 0,
+        note: drum_map::KICK,
+        velocity: 1.0,
+    }];
+    let mut out = Vec::new();
+    ports.render(s, 128, &params, &[]);
+    for b in 0..blocks {
+        ports.render(s, 128, &params, if b == 0 { &hit } else { &[] });
+        out.extend(ports.mix_left(128));
+        between(b, s);
+    }
+    out
+}
+
+/// `got` is `reference` up to the fade before `end`, no louder than it
+/// through the fade, nearly silent at its end, and silent from `end` on.
+fn assert_fades_out_at(tag: &str, got: &[f32], reference: &[f32], end: usize) {
+    // RELEASE_FADE_MS (25 ms) at 48 kHz.
+    let fade = 1_200;
+    assert_eq!(&got[..end - fade], &reference[..end - fade], "{tag}: before the fade");
+    let peak = reference[end - fade..end]
+        .iter()
+        .fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(peak > 0.05, "{tag}: the reference is silent there");
+    for i in end - fade..end {
+        assert!(got[i].abs() <= reference[i].abs() + 1e-6, "{tag}: louder at {i}");
+    }
+    let tail = got[end - 24..end]
+        .iter()
+        .fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(tail < 0.05 * peak, "{tag}: not faded out at its end ({tail} of {peak})");
+    assert!(
+        got[end..].iter().all(|&x| x == 0.0),
+        "{tag}: sound past the end"
+    );
+    assert!(
+        reference[end..].iter().any(|&x| x != 0.0),
+        "{tag}: the reference ends there too"
+    );
+}
+
+/// A hit that finds every ring taken plays its head and fades out before
+/// the head ends — not a cut — and counts once.
+#[test]
+fn a_hit_with_no_ring_fades_out_before_its_head_ends() {
+    const PRELOAD: usize = 8_192;
+    let fixture = Fixture::new("no-ring", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::stepped();
+    let (mut a, _ta) = sampler(single_voice_kit(&cache, path, 0), &pool, RenderMode::Realtime);
+    let reference = one_hit(&mut a, 100, |_, _| {});
+    let (mut s, _t) = sampler(
+        single_voice_kit(&cache, path, PRELOAD as u32),
+        &pool,
+        RenderMode::Realtime,
+    );
+    // Every ring holds a request the (never pumped) reader has not taken.
+    for _ in 0..NUM_RINGS {
+        one_hit(&mut s, 1, |_, _| {});
+    }
+    s.reset();
+    assert_eq!(s.stream_ring_misses(), 0);
+    // (Voices of those hits that reached their tails underran.)
+    let before = s.stream_underruns();
+    let got = one_hit(&mut s, 100, |_, _| {});
+    assert_eq!(s.stream_ring_misses(), 1);
+    assert_eq!(s.stream_underruns() - before, 1, "counted once");
+    assert_fades_out_at("no ring", &got, &reference, PRELOAD);
+    assert!(s.voices.iter().all(|v| !v.active));
+}
+
+/// A stream that fails at once (its file is gone) fades its voice out
+/// before the head ends, and counts once — not once a block.
+#[test]
+fn a_failed_stream_fades_out_and_counts_once() {
+    const PRELOAD: usize = 8_192;
+    let fixture = Fixture::new("failed", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::stepped();
+    let (mut a, _ta) = sampler(single_voice_kit(&cache, path, 0), &pool, RenderMode::Realtime);
+    let reference = one_hit(&mut a, 120, |_, _| {});
+    let pads = single_voice_kit(&cache, path, PRELOAD as u32);
+    std::fs::remove_file(path).unwrap();
+    let (mut s, _t) = sampler(pads, &pool, RenderMode::Realtime);
+    let got = one_hit(&mut s, 120, |_, _| {
+        pool.pump();
+    });
+    assert_eq!(s.stream_underruns(), 1, "counted once");
+    assert_fades_out_at("failed at once", &got, &reference, PRELOAD);
+}
+
+/// A stream that fails midway (here, a read panics) fades its voice out
+/// where its delivered frames end.
+#[test]
+fn a_stream_failing_midway_fades_out_where_its_frames_end() {
+    const PRELOAD: usize = 8_192;
+    let fixture = Fixture::new("failed-midway", 48_000, 1.0);
+    let cache = SampleCache::new();
+    let path = &fixture.overhead[0];
+    let pool = ReaderPool::stepped();
+    let (mut a, _ta) = sampler(single_voice_kit(&cache, path, 0), &pool, RenderMode::Realtime);
+    let reference = one_hit(&mut a, 300, |_, _| {});
+    let (mut s, _t) = sampler(
+        single_voice_kit(&cache, path, PRELOAD as u32),
+        &pool,
+        RenderMode::Realtime,
+    );
+    let mut end = None;
+    let got = one_hit(&mut s, 300, |b, s| {
+        if b == 70 {
+            s.stream_set().panic_next_reads(1);
+        }
+        pool.pump();
+        if end.is_none() && s.stream_set().rings_failed() == 1 {
+            let ring = s.voices.iter().find(|v| v.active).unwrap().ring;
+            end = Some(PRELOAD + s.stream_set().published_frames(ring) as usize);
+        }
+    });
+    let end = end.expect("the read panicked");
+    // A whole ring was read before the panicking read; the take is 48 k
+    // frames.
+    assert!(
+        (PRELOAD + 16_384..40_000).contains(&end),
+        "it failed midway: {end}"
+    );
+    assert_eq!(s.stream_underruns(), 1, "counted once");
+    assert_fades_out_at("failed midway", &got, &reference, end);
+}
+
 /// A file rewritten after the kit loaded — same length, other samples, a
 /// later modification time — is another file: its tail is not read, and
 /// the stream fails instead.

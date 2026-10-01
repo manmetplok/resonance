@@ -920,6 +920,7 @@ impl DrumSampler {
             voice.release_pos = 0;
             voice.age = shared_age;
             voice.ring = ring;
+            voice.stream_lost = false;
         }
     }
 
@@ -1158,6 +1159,9 @@ impl DrumSampler {
         let pad_pan = &self.cur_pad_pan;
         let pad_oh = &self.cur_pad_oh;
         let pad_balance = &self.cur_pad_balance;
+        // A voice whose tail will not come fades out over this, ending
+        // where its frames end.
+        let cut_fade = self.release_frames as usize;
 
         for voice in self.voices.iter_mut().chain(self.tails.iter_mut()) {
             if !voice.active {
@@ -1213,8 +1217,28 @@ impl DrumSampler {
             } else {
                 streams.ring(voice.ring)
             };
-            let mut written = ring.map_or(0, |r| r.published().0);
+            let (mut written, failed) = ring.map_or((0, false), |r| r.published());
             let mut missing = false;
+            // Where the voice's frames end: the take's end — or, when its
+            // tail will not come (no ring, a failed stream), the end of
+            // what it has. It fades out to end there rather than cut off
+            // or play silence to the take's end.
+            let mut end_at = if total <= resident {
+                total
+            } else if ring.is_none() {
+                resident
+            } else if failed {
+                resident + written as usize
+            } else {
+                total
+            };
+            if end_at < total && !voice.stream_lost {
+                voice.stream_lost = true;
+                // A hit that found no ring was counted at its claim.
+                if ring.is_some() {
+                    streams.underruns.fetch_add(1, Ordering::Relaxed);
+                }
+            }
 
             // Which port does this voice sum into, and what's the
             // destination-specific gain multiplier? Computed at both
@@ -1276,13 +1300,16 @@ impl DrumSampler {
                 .map(|p| (&mut p.left[..end], &mut p.right[..end]));
 
             for frame in start..end {
-                if voice.position >= total {
+                if voice.position >= end_at {
                     voice.active = false;
                     break;
                 }
                 if voice.release_done() {
                     voice.active = false;
                     break;
+                }
+                if end_at < total && voice.position + cut_fade >= end_at {
+                    voice.end_within(end_at - voice.position);
                 }
 
                 let (sample_l, sample_r) = if voice.position < resident {
@@ -1296,10 +1323,22 @@ impl DrumSampler {
                         && !offline_wait_left.is_zero()
                     {
                         *offline_waits += 1;
-                        written = wait_for_frame(ring, at, offline_wait_left);
-                        // A long budget ran out (not a failed stream,
-                        // which returns at once): stop waiting a while.
-                        if at >= written && offline_wait_left.is_zero() && long_waits {
+                        let failed;
+                        (written, failed) = wait_for_frame(ring, at, offline_wait_left);
+                        if failed {
+                            // Found out at the very frame it is missing:
+                            // nothing left to fade over.
+                            end_at = resident + written as usize;
+                            if !voice.stream_lost {
+                                voice.stream_lost = true;
+                                streams.underruns.fetch_add(1, Ordering::Relaxed);
+                            }
+                            if voice.position >= end_at {
+                                voice.active = false;
+                                break;
+                            }
+                        } else if at >= written && offline_wait_left.is_zero() && long_waits {
+                            // A long budget ran out: stop waiting a while.
                             *offline_holdoff = holdoff_frames;
                         }
                     }
@@ -1312,7 +1351,7 @@ impl DrumSampler {
                     }
                 } else {
                     // A streamed take that found no ring ends with its
-                    // head (counted when the claim failed).
+                    // head (`end_at`); never reached.
                     voice.active = false;
                     break;
                 };
@@ -1464,17 +1503,16 @@ impl DrumSampler {
 /// Offline only: wait for the reader to deliver ring frame `at`, for at
 /// most what is left of `budget` (which is charged for the wait). Returns
 /// the ring's `write` — past `at` unless the wait ran out or the stream
-/// failed.
-fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> u64 {
+/// failed — and whether it failed.
+fn wait_for_frame(ring: &Ring, at: u64, budget: &mut Duration) -> (u64, bool) {
     // The reader only writes where the voice has made room, and serves
     // the neediest ring first: this one, on its tail.
     ring.read.store(at, Ordering::Release);
     ring.head_left.store(0, Ordering::Relaxed);
-    let mut written = 0;
+    let mut published = (0, false);
     wait_until(budget, || {
-        let (frames, failed) = ring.published();
-        written = frames;
-        frames > at || failed
+        published = ring.published();
+        published.0 > at || published.1
     });
-    written
+    published
 }
