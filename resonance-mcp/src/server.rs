@@ -289,13 +289,88 @@ fn normalize_schemas(router: &mut ToolRouter<ResonanceMcp>) {
     for route in router.map.values_mut() {
         let tool = &mut route.attr;
         let mut input = (*tool.input_schema).clone();
+        inline_defs(&mut input);
         strip_nonstandard_formats(&mut input);
         tool.input_schema = Arc::new(input);
         if let Some(output) = tool.output_schema.take() {
             let mut out = (*output).clone();
+            inline_defs(&mut out);
             strip_nonstandard_formats(&mut out);
             tool.output_schema = Some(Arc::new(out));
         }
+    }
+}
+
+/// Replace every local `{"$ref": "#/$defs/X"}` with the body of `X` and
+/// drop `$defs`, so each tool schema is self-contained.
+///
+/// Some MCP clients (the Claude desktop bridge among them) forward a
+/// tool's schema without its `$defs`. A parameter typed only by a
+/// dangling `$ref` then has no known type, and the client sends its
+/// value as a JSON string — `"42"` instead of `42` — which serde
+/// rejects for every id newtype ("invalid type: string, expected u64").
+/// Inlining removes the dependency on the client resolving refs.
+/// Sibling keys next to a `$ref` (e.g. `description`) are kept. A ref
+/// that would recurse into itself is left as-is.
+fn inline_defs(map: &mut serde_json::Map<String, Value>) {
+    let Some(Value::Object(defs)) = map.remove("$defs") else {
+        return;
+    };
+    let mut stack = Vec::new();
+    for value in map.values_mut() {
+        inline_refs_in_value(value, &defs, &mut stack);
+    }
+    if contains_ref(&Value::Object(map.clone())) {
+        // A recursive type kept a `$ref`: restore `$defs` so it resolves.
+        map.insert("$defs".into(), Value::Object(defs));
+    }
+}
+
+fn inline_refs_in_value(
+    value: &mut Value,
+    defs: &serde_json::Map<String, Value>,
+    stack: &mut Vec<String>,
+) {
+    match value {
+        Value::Object(obj) => {
+            let target = obj
+                .get("$ref")
+                .and_then(Value::as_str)
+                .and_then(|r| r.strip_prefix("#/$defs/"))
+                .map(str::to_owned);
+            if let Some(name) = target {
+                if let (Some(Value::Object(def)), false) = (defs.get(&name), stack.contains(&name)) {
+                    obj.remove("$ref");
+                    let mut body = def.clone();
+                    // Keys written next to the `$ref` win over the def's own.
+                    for (k, v) in std::mem::take(obj) {
+                        body.insert(k, v);
+                    }
+                    *obj = body;
+                    stack.push(name);
+                    for child in obj.values_mut() {
+                        inline_refs_in_value(child, defs, stack);
+                    }
+                    stack.pop();
+                    return;
+                }
+            }
+            for child in obj.values_mut() {
+                inline_refs_in_value(child, defs, stack);
+            }
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|v| inline_refs_in_value(v, defs, stack)),
+        _ => {}
+    }
+}
+
+fn contains_ref(value: &Value) -> bool {
+    match value {
+        Value::Object(obj) => obj.contains_key("$ref") || obj.values().any(contains_ref),
+        Value::Array(items) => items.iter().any(contains_ref),
+        _ => false,
     }
 }
 
