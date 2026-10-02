@@ -455,7 +455,6 @@ fn plugins_never_name_a_platform_runtime() {
 /// here — it moved to `resonance-dsp` (ARCH-07 A7-2).
 const PLUGIN_COMMON_ITEMS: &[&str] = &[
     "scan_directory",      // amp, ir; resonance-plugin's loader
-    "registry",            // drums: downloadable kit content
     "drum_map",            // drums: the GM pad contract shared with the app
     "decode_wav_stereo",   // drums: sample decode
     "decode_wav_native",   // drums: sample decode that keeps mono takes mono

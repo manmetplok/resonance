@@ -277,6 +277,17 @@ fn kit_name_comes_from_the_directory_under_the_drumkits_root() {
     assert_eq!(kit_display_name(&flat, Some(root)), "IT_Techno");
 }
 
+/// D3: the loader names kits against the library's own root (the
+/// `RESONANCE_DRUMKIT_DIR` override, a test build's isolated root), not a
+/// directory derived from the retired `installed.json`.
+#[test]
+fn drumkits_root_is_the_library_root() {
+    let root = resonance_drums::kit_loader::drumkits_root().expect("a library root");
+    assert_eq!(Some(root.as_path()), resonance_drums::library::shared().root());
+    let manifest = root.join("Drummica/drummica/drum_samples.json");
+    assert_eq!(kit_display_name(&manifest, Some(&root)), "Drummica");
+}
+
 #[test]
 fn kit_name_outside_the_drumkits_root_is_the_manifest_directory() {
     let root = std::path::Path::new("/data/resonance/drumkits");

@@ -8,7 +8,7 @@
 //!   the same MIDI, at the file's rate and through the resampler, live
 //!   (never waiting, the reader stepped between blocks) and offline (as
 //!   fast as the CPU goes, the host having declared it);
-//! - a 64-voice saturation pattern at 128-frame blocks, paced in real
+//! - a saturation pattern (all 128 voices) at 128-frame blocks, paced in real
 //!   time with every read slowed like a cold page cache, plays with zero
 //!   underruns — at the file rate and through the resampler (ignored by
 //!   default: wall-clock bound, see the tests for how to run them);
@@ -41,6 +41,7 @@ use resonance_drums::kit_loader::cache::SampleCache;
 use resonance_drums::params::DrumParams;
 use resonance_drums::stream::reader::ReaderPool;
 use resonance_drums::stream::{RenderMode, NUM_RINGS};
+use resonance_drums::voice::MAX_VOICES;
 
 const HOST: f32 = 48_000.0;
 
@@ -230,7 +231,7 @@ impl Ports {
 }
 
 /// The hits of `block` in a pattern: every pad struck in turn, `per_block`
-/// hits a block, at spread-out offsets — enough to keep 64 voices busy
+/// hits a block, at spread-out offsets — enough to keep every voice busy
 /// and steal constantly. Hats (a choke group) come round too.
 fn pattern(block: usize, frames: usize, per_block: usize, blocks_until_quiet: usize) -> Vec<Hit> {
     if block >= blocks_until_quiet {
@@ -770,7 +771,7 @@ fn the_host_declared_mode_overrides_the_timing() {
 //   cargo test --release -p resonance-drums --test streaming -- --ignored --nocapture
 // ---------------------------------------------------------------------------
 
-/// 64 voices busy and stealing at 128-frame blocks, paced in real time,
+/// All 128 voices busy and stealing at 128-frame blocks, paced in real time,
 /// files at `file_rate` (44.1 kHz resamples every tail frame), every
 /// read delayed 1 ms (a cold page cache on an SSD is ~0.1–0.2 ms per
 /// random read; 1 ms is a slow one), read by a pool the size of the
@@ -787,8 +788,8 @@ fn saturation(tag: &str, file_rate: u32) {
     let blocks = (3.0 * HOST) as usize / FRAMES;
     let quiet_after = (2.0 * HOST) as usize / FRAMES;
     let (mut a, _ta) = sampler(resident, &pool, RenderMode::Realtime);
-    // Two hits a block, three voices a hit: 64 voices fill within a
-    // dozen blocks and every hit after steals.
+    // Two hits a block, three voices a hit: the 128 voices fill within
+    // two dozen blocks and every hit after steals.
     let reference = render(&mut a, blocks, FRAMES, 2, quiet_after, None);
     let (mut b, _tb) = sampler(streamed, &pool, RenderMode::Realtime);
     b.stream_set().set_read_latency_us(1_000);
@@ -821,7 +822,7 @@ fn saturation(tag: &str, file_rate: u32) {
         b.stream_underruns(),
         b.stream_set().rings_allocated()
     );
-    assert_eq!(peak_voices, 64, "the pattern saturates the voices");
+    assert_eq!(peak_voices, MAX_VOICES, "the pattern saturates the voices");
     assert_eq!(
         b.stream_underruns(),
         0,
@@ -853,7 +854,7 @@ fn saturation_through_the_resampler_has_no_underruns() {
     saturation("saturation-44k1", 44_100);
 }
 
-/// What one reader thread costs at saturation: the 64-voice pattern with
+/// What one reader thread costs at saturation: the 128-voice pattern with
 /// 44.1 kHz files (every tail frame resampled to 48 kHz) and a warm page
 /// cache, rendered with a stepped reader whose passes are timed. The
 /// headroom is how many times real time one reader thread could stream
@@ -1825,9 +1826,21 @@ fn a_block_with_too_few_ports_still_runs_in_time() {
 // ---------------------------------------------------------------------------
 
 /// `RESONANCE_DRUMMICA_PATH`: the kit's `drum_samples.json`, or the
-/// folder holding it. Read only.
-fn drummica_manifest() -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var("RESONANCE_DRUMMICA_PATH").ok()?);
+/// folder holding it. Read only. Unset (or empty), the calling `test` is
+/// skipped — it passes, saying so on stderr directly (not through
+/// `eprintln!`, which libtest captures for a passing test), so a run
+/// shows which real-library checks did not happen.
+fn drummica_manifest(test: &str) -> Option<PathBuf> {
+    let Some(path) = std::env::var_os("RESONANCE_DRUMMICA_PATH").filter(|v| !v.is_empty())
+    else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "{test}: skipped: set RESONANCE_DRUMMICA_PATH (Drummica's drum_samples.json \
+             or its folder) to run it"
+        );
+        return None;
+    };
+    let path = PathBuf::from(path);
     Some(if path.is_dir() {
         path.join("drum_samples.json")
     } else {
@@ -1853,8 +1866,8 @@ fn drummica_request(manifest: &Path, preload: u32) -> resonance_drums::kit_loade
 /// `--nocapture` to see the figures.
 #[test]
 fn drummica_default_setup_memory_and_bit_identity() {
-    let Some(manifest) = drummica_manifest() else {
-        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+    let Some(manifest) = drummica_manifest("drummica_default_setup_memory_and_bit_identity")
+    else {
         return;
     };
     let load = |preload: u32| {
@@ -1950,8 +1963,7 @@ fn drummica_default_setup_memory_and_bit_identity() {
 fn drummica_every_mic_bank_memory() {
     use resonance_drums::kit_loader::{BankRequest, MicBankSetups};
 
-    let Some(manifest) = drummica_manifest() else {
-        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+    let Some(manifest) = drummica_manifest("drummica_every_mic_bank_memory") else {
         return;
     };
     let cache = SampleCache::new();

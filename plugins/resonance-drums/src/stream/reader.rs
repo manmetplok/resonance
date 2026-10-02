@@ -321,7 +321,7 @@ fn run_pass(shared: &PoolShared, pass: &mut Pass, max_reads: usize) -> (bool, bo
     while reads < max_reads && !shared.stop.load(Ordering::Acquire) {
         wanting.clear();
         for (si, set) in sets.iter().enumerate() {
-            if set.paused.load(Ordering::Acquire) {
+            if set.is_paused() {
                 continue;
             }
             for_each_open(set, |ri| {
@@ -399,7 +399,7 @@ fn admin_all(sets: &[Arc<StreamSet>]) -> (bool, bool) {
     let mut worked = false;
     let mut open = false;
     for set in sets {
-        if set.paused.load(Ordering::Acquire) {
+        if set.is_paused() {
             open |= set.rings_open() > 0;
             continue;
         }
@@ -539,17 +539,7 @@ fn fill(
     if n == 0 {
         return false;
     }
-    if set
-        .panic_reads
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
-        .is_ok()
-    {
-        panic!("resonance-drums stream: test hook, a reader fault");
-    }
-    let latency = set.read_latency_us.load(Ordering::Relaxed);
-    if latency > 0 {
-        std::thread::sleep(Duration::from_micros(latency as u64));
-    }
+    set.before_read();
     let stride = source.tail.channels();
     let out = &mut buf[..n * stride];
     if source

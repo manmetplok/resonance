@@ -13,10 +13,10 @@ default = ["model", "decode"]
 #
 # `dirs` and `time` stay plain (non-optional) dependencies rather than
 # gated-optional ones: the plan named them as "optional under model", but
-# `registry` — a utility module, always compiled regardless of features,
-# used by the `drums` plugin — also calls `dirs::data_dir()` and
-# `time::OffsetDateTime` (verified with `grep -rn 'dirs::\|time::'
-# resonance-common/src`). Gating them behind `model` would break a
+# the utility modules — always compiled regardless of features — call
+# them too (`drumkit_library`, `library_marks` and `nam_library` use
+# `dirs`; `drumkit_library` and `library_marks` use `time`; `grep -rn
+# 'dirs::\|time::' resonance-common/src`). Gating them behind `model` would break a
 # `decode`-only or utility-only build that never touches the model modules.
 model = []
 # WAV decode + audio-file probing; the only consumer of `symphonia`.

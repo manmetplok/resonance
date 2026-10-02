@@ -269,20 +269,18 @@ pub fn takeover_value(strategy: Takeover, incoming_norm: f32, current_norm: f32)
 
 // --- Controller-map preset file I/O -------------------------------------------
 //
-// Lives next to the installed-content registry (doc #167 §1), reusing the same
-// config-dir resolution as `registry.rs`. Active *project* mappings persist
+// Lives in `$XDG_DATA_HOME/resonance/` (doc #167 §1), the same data-dir
+// resolution the other per-user stores use. Active *project* mappings persist
 // separately in `project.json`; these presets are project-independent.
 
-/// On-disk JSON shape of the controller-map preset file: a list of named maps,
-/// mirroring [`crate::registry::InstalledRegistry`].
+/// On-disk JSON shape of the controller-map preset file: a list of named maps.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ControllerMapStore {
     #[serde(default)]
     pub maps: Vec<ControllerMap>,
 }
 
-/// Path to the preset file: `$XDG_DATA_HOME/resonance/controller_maps.json`
-/// (alongside `installed.json`).
+/// Path to the preset file: `$XDG_DATA_HOME/resonance/controller_maps.json`.
 pub fn controller_maps_path() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("resonance/controller_maps.json"))
 }

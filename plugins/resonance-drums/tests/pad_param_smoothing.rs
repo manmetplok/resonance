@@ -1,4 +1,4 @@
-//! Per-pad parameter declick: volume / pan / OH blend / balance are
+//! Per-pad parameter declick: level / pan / mute / per-mic trims are
 //! snapshotted per block but must be linearly ramped across the block
 //! (mirroring the master volume ramp), so a param jump between blocks
 //! produces a continuous gain trajectory instead of a step.
