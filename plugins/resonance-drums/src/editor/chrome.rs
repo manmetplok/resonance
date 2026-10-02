@@ -27,7 +27,8 @@ use super::{probe, probed, theme};
 /// The kit name is shown here once: the pad list's kit card and the KIT
 /// card's status line that used to repeat it are gone.
 pub(super) fn draw_header(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
-    app.refresh_rows();
+    // The rows are refreshed once a frame, before the chrome
+    // (`DrumsEditorApp::ui`).
     // The kit on its way if a load is in flight, not the one it replaces:
     // `kit_path` is only written once a load succeeds, so two quick ▶
     // clicks used to land on the same kit.
@@ -38,7 +39,7 @@ pub(super) fn draw_header(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     // A kit deleted from the library keeps playing here until it is
     // reloaded; say so, as the amp's header does, rather than falling
     // back to "— no kit —" for a kit that is plainly still sounding.
-    let deleted = deleted_kit_name(app, loaded.as_ref());
+    let deleted = deleted_kit_name(app, loaded.as_deref());
     // ◀/▶ are live only where there is somewhere to step to: clamped at
     // the view's ends, as `step_in_view` is.
     let can_prev = step_in_view(&app.browser, &app.rows, loaded_id.as_deref(), -1).is_some();
@@ -161,7 +162,7 @@ pub(super) fn draw_header(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
 
         // What is happening to the kit, right-aligned in what is left.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            draw_kit_warnings(ui, app, loaded.as_ref(), deleted.is_some());
+            draw_kit_warnings(ui, app, loaded.as_deref(), deleted.is_some());
             draw_load_progress(ui, app);
         });
     });
@@ -259,7 +260,7 @@ fn deleted_kit_name(
         app.last_loaded_name = Some((path, e.name.clone()));
         return None;
     }
-    if path.exists() {
+    if app.kit_file_exists(&path) {
         return None;
     }
     match &app.last_loaded_name {
@@ -390,7 +391,7 @@ fn draw_kit_warnings(
 /// is estimated: the invented CPU / RAM / "Streamed" readouts this bar
 /// used to carry were removed rather than guessed at (ba todo #1276).
 pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
-    let peak = app.tick_out_meter();
+    let peak = app.tick_out_meter(ui.input(|i| i.time));
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         // Sample rate from bridge; "—" before activation.
@@ -416,27 +417,26 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
         );
         dot(ui);
 
-        // Decoded sample memory held by the live kit, and how much of it
-        // another instance already held (the shared cache, E5).
+        // Decoded sample memory held by the live kit; how much of it
+        // another instance already held (the shared cache, E5) is on
+        // hover — beside it, it pushed the last hit into truncation.
         let bytes = app.bridge.kit_bytes.load(Ordering::Relaxed);
         let shared = app.bridge.kit_shared_bytes.load(Ordering::Relaxed);
-        let mem = match (bytes, shared) {
-            (0, _) => "— samples".to_string(),
-            (b, 0) => format!("{} samples", sample_info::format_bytes(b)),
-            (b, s) => format!(
-                "{} samples ({} shared)",
-                sample_info::format_bytes(b),
-                sample_info::format_bytes(s)
-            ),
+        let mem = if bytes == 0 {
+            "— samples".to_string()
+        } else {
+            format!("{} samples", sample_info::format_bytes(bytes))
         };
-        reading(
-            ui,
-            "status.memory",
-            &mem,
-            theme::TEXT_2,
-            "Decoded sample memory this kit holds; \"shared\" is the part another \
-             open drum instance already held, which costs nothing extra",
-        );
+        let hover = if shared == 0 {
+            "Decoded sample memory this kit holds".to_string()
+        } else {
+            format!(
+                "Decoded sample memory this kit holds — {} of it shared: another \
+                 open drum instance already held it, so it costs nothing extra",
+                sample_info::format_bytes(shared)
+            )
+        };
+        reading(ui, "status.memory", &mem, theme::TEXT_2, &hover);
         // Disk streaming (E14): the ring storage the streams hold, on top
         // of the heads above, and — only once there are any — the stream
         // underruns.
@@ -479,7 +479,7 @@ pub(super) fn draw_status_bar(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
             );
             ui.add_space(10.0);
             // The last hit, as the sampler played it.
-            let text = match app.bridge.last_hits.latest() {
+            let text = match app.latest_hit() {
                 Some(hit) => format!(
                     "{} v{} → {}",
                     kit.pads.get(hit.pad).map_or("", |p| p.name.as_str()),
@@ -538,7 +538,10 @@ fn draw_out_meter(ui: &mut egui::Ui, peak: [f32; 2]) {
             );
         }
     }
-    response.on_hover_text("Peak level summed across all 7 output ports.");
+    response.on_hover_text(
+        "Output peak, left and right: the loudest of the 7 output ports in each block \
+         (not their sum)",
+    );
 }
 
 /// Map a linear peak to bar fill, -60 dBFS .. 0 dBFS.

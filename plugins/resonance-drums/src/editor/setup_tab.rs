@@ -51,7 +51,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, GAP);
                     draw_banks(ui, &app.bridge, &catalog, &mut app.labels);
                     draw_streaming(ui, &app.bridge);
-                    draw_kit_facts(ui, &app.bridge, entry.as_ref());
+                    draw_kit_facts(ui, &app.bridge, entry.as_deref());
                 });
         });
         column(ui, egui::vec2(right_w, avail.y), |ui| draw_pad_table(ui, app));
@@ -169,7 +169,7 @@ fn draw_banks(
                     )
                     .wrap(),
                 );
-                probe(ui, format!("setup.bleed.source.{}", source.position), l.rect);
+                probe(ui, format_args!("setup.bleed.source.{}", source.position), l.rect);
             }
         }
     });
@@ -362,7 +362,7 @@ fn draw_pad_table(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                             app.bridge.announce_param_edit(params.choke.id());
                         }
                     });
-                    probe(ui, format!("setup.row.{pad}"), row.response.rect);
+                    probe(ui, format_args!("setup.row.{pad}"), row.response.rect);
                 }
             });
     });

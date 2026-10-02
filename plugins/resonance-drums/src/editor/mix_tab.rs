@@ -40,7 +40,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let avail = ui.available_size();
     let global_w = GLOBAL_W.min(avail.x * 0.4);
     let left_w = (avail.x - global_w - GAP).max(0.0);
-    let ports = app.tick_port_meters();
+    let ports = app.tick_port_meters(ui.input(|i| i.time));
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(GAP, 0.0);
@@ -93,7 +93,7 @@ fn draw_outputs(ui: &mut egui::Ui, app: &mut DrumsEditorApp, ports: [f32; NUM_OU
             for port in 0..NUM_OUTPUT_PORTS {
                 let live = multi || port == crate::kit::MAIN_PORT_INDEX;
                 let rect = draw_strip(ui, port, strip_w, ports[port], live, counts[port], multi);
-                probe(ui, format!("mix.strip.{port}"), rect);
+                probe(ui, format_args!("mix.strip.{port}"), rect);
             }
             ui.add_space(8.0);
             draw_master(ui, app, master_w);
@@ -247,7 +247,7 @@ fn draw_pad_row(
             app.selected_pad = pad;
         }
         let r = name.rect;
-        probe(ui, format!("mix.row.{pad}.name"), r);
+        probe(ui, format_args!("mix.row.{pad}.name"), r);
 
         let text = app.labels.of(&params.volume);
         let w = cols[1] - 6.0;
@@ -276,7 +276,7 @@ fn draw_pad_row(
             app.bridge.announce_param_edit(params.output.id());
         }
     });
-    probe(ui, format!("mix.row.{pad}"), row.response.rect);
+    probe(ui, format_args!("mix.row.{pad}"), row.response.rect);
 }
 
 /// GLOBAL: how the kit plays.
@@ -333,7 +333,7 @@ fn caption(ui: &mut egui::Ui, label: &str, hint: &str) {
     let r = ui
         .label(egui::RichText::new(label).color(theme::TEXT_2).size(10.5))
         .on_hover_text(hint);
-    probe(ui, format!("caption.{label}"), r.rect);
+    probe(ui, format_args!("caption.{label}"), r.rect);
 }
 
 /// -60 dBFS .. 0 dBFS → 0..1.

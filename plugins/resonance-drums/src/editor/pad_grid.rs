@@ -161,9 +161,9 @@ fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -
         } else {
             "Not in this kit: this pad is silent"
         });
-    probe(ui, format!("pad_cell.{pad}"), rect);
+    probe(ui, format_args!("pad_cell.{pad}"), rect);
     if !cell.present {
-        probe(ui, format!("pad_cell.{pad}.absent"), rect);
+        probe(ui, format_args!("pad_cell.{pad}.absent"), rect);
     }
     if !ui.is_rect_visible(rect) {
         return None;

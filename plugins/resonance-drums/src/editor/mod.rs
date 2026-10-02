@@ -41,8 +41,10 @@ mod theme;
 
 pub use factory::DrumsEditorFactory;
 
+#[cfg(feature = "test-hooks")]
 use std::sync::Arc;
 
+#[cfg(feature = "test-hooks")]
 use parking_lot::Mutex;
 use plugin_gui_core::egui;
 
@@ -95,6 +97,7 @@ pub fn test_draw_pad_inspector(ui: &mut egui::Ui, bridge: &crate::KitBridge, sel
         &mut pad_inspector::InspectorState {
             audition_velocity: &mut velocity,
             labels: &mut labels,
+            hit: bridge.last_hits.pad(selected_pad),
         },
     );
 }
@@ -115,13 +118,9 @@ pub struct ProbedText {
 
 /// One widget rect the editor reported through [`probe`], with the clip
 /// rect of the `Ui` it was laid out in.
-///
-/// `probe()` (production code, always compiled under `editor`) only ever
-/// *writes* these; only [`EditorFrameProbe::widget`] (`test-hooks`) reads
-/// the fields back, so a build without `test-hooks` never reads one.
+#[cfg(feature = "test-hooks")]
 #[doc(hidden)]
 #[derive(Clone, Debug)]
-#[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
 pub struct ProbedRect {
     pub name: String,
     pub rect: egui::Rect,
@@ -138,6 +137,8 @@ pub struct EditorFrameProbe {
     pub widgets: Vec<ProbedRect>,
     /// Every shape the frame painted, in paint order.
     pub shapes: Vec<egui::epaint::ClippedShape>,
+    /// When the frame asked to be repainted next.
+    pub repaint_after: std::time::Duration,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -171,34 +172,68 @@ impl EditorFrameProbe {
 }
 
 /// Where a test frame's [`probe`] calls land. Only present in a
-/// `Context` the test hooks built, so a live editor pays one map lookup
-/// per probed control and records nothing.
+/// `Context` the test hooks built.
+#[cfg(feature = "test-hooks")]
 #[derive(Clone, Default)]
 struct ProbeSink(Arc<Mutex<Vec<ProbedRect>>>);
 
+#[cfg(feature = "test-hooks")]
 fn probe_id() -> egui::Id {
     egui::Id::new("resonance_drums_layout_probe")
 }
 
+/// A probed widget's name: a `&str`, a `String`, or — for a name built
+/// per row — `format_args!(…)`, which formats only when a test frame
+/// actually records it. A live editor never builds a probe name.
+pub(crate) trait ProbeName {
+    #[cfg_attr(not(feature = "test-hooks"), allow(dead_code))]
+    fn into_name(self) -> String;
+}
+
+impl ProbeName for &str {
+    fn into_name(self) -> String {
+        self.to_string()
+    }
+}
+
+impl ProbeName for String {
+    fn into_name(self) -> String {
+        self
+    }
+}
+
+impl ProbeName for std::fmt::Arguments<'_> {
+    fn into_name(self) -> String {
+        self.to_string()
+    }
+}
+
 /// Report a widget's rect, with the clip it was laid out under, to a test
-/// frame's probe sink. A no-op outside the test hooks.
-pub(crate) fn probe(ui: &egui::Ui, name: impl Into<String>, rect: egui::Rect) {
+/// frame's probe sink.
+#[cfg(feature = "test-hooks")]
+pub(crate) fn probe(ui: &egui::Ui, name: impl ProbeName, rect: egui::Rect) {
     let sink = ui.ctx().data(|d| d.get_temp::<ProbeSink>(probe_id()));
     if let Some(sink) = sink {
         sink.0.lock().push(ProbedRect {
-            name: name.into(),
+            name: name.into_name(),
             rect,
             clip: ui.clip_rect(),
         });
     }
 }
 
+/// Production build: probes are compiled out — no context lookup, and
+/// the name is never formatted.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub(crate) fn probe(_ui: &egui::Ui, _name: impl ProbeName, _rect: egui::Rect) {}
+
 /// Run `add` in its own scope and [`probe`] the rect it took up — for
 /// the `plugin_gui_core` widgets, which hand back a value, not a
 /// `Response`.
 pub(crate) fn probed<R>(
     ui: &mut egui::Ui,
-    name: &str,
+    name: impl ProbeName,
     add: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     let out = ui.scope(add);
@@ -272,6 +307,8 @@ pub struct TestEditor {
     sink: ProbeSink,
     screen: egui::Rect,
     time: f64,
+    /// Seconds of egui time per frame: 1/60 unless a test changes it.
+    frame_dt: f64,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -305,6 +342,7 @@ impl TestEditor {
             sink,
             screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1)),
             time: 0.0,
+            frame_dt: 1.0 / 60.0,
         }
     }
 
@@ -317,9 +355,10 @@ impl TestEditor {
     /// first repaint after the click that opened it.
     pub fn frame(&mut self, events: Vec<egui::Event>) -> EditorFrameProbe {
         use plugin_gui_core::EditorApp as _;
-        // A 60 Hz clock, so what animates (a scroll, a cell's hit light)
-        // moves from frame to frame as it does live.
-        self.time += 1.0 / 60.0;
+        // A 60 Hz clock (unless `set_frame_rate` chose another), so what
+        // animates (a scroll, a cell's hit light) moves from frame to
+        // frame as it does live.
+        self.time += self.frame_dt;
         let input = egui::RawInput {
             screen_rect: Some(self.screen),
             time: Some(self.time),
@@ -330,12 +369,22 @@ impl TestEditor {
         let app = &mut self.app;
         let output = self.ctx.run_ui(input, |ui| app.ui(ui));
         let widgets = std::mem::take(&mut *self.sink.0.lock());
+        let repaint_after = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(std::time::Duration::MAX, |v| v.repaint_delay);
         EditorFrameProbe {
             screen: self.screen,
             texts: collect_texts(&output.shapes),
             widgets,
             shapes: output.shapes,
+            repaint_after,
         }
+    }
+
+    /// Run later frames `hz` times a second of egui time.
+    pub fn set_frame_rate(&mut self, hz: f64) {
+        self.frame_dt = 1.0 / hz;
     }
 
     /// Press and release the primary button at `pos`, over two frames.
@@ -460,9 +509,9 @@ impl TestEditor {
         self.click(pos)
     }
 
-    /// Run frames for `secs` of egui time, at 60 Hz.
+    /// Run frames for `secs` of egui time, at the frame rate.
     pub fn idle(&mut self, secs: f64) -> EditorFrameProbe {
-        let frames = (secs * 60.0).ceil().max(1.0) as usize;
+        let frames = (secs / self.frame_dt).round().max(1.0) as usize;
         for _ in 1..frames {
             self.frame(Vec::new());
         }

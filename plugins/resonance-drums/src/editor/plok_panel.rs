@@ -241,7 +241,7 @@ fn draw_row_action(
                 .desired_width(150.0)
                 .text(egui::RichText::new(text).size(10.0)),
         );
-        probe(ui, format!("plok.{name}.progress"), bar.rect);
+        probe(ui, format_args!("plok.{name}.progress"), bar.rect);
         return action;
     }
     if snapshot.queued.iter().any(|q| q == name) {
@@ -253,7 +253,7 @@ fn draw_row_action(
                 .color(theme::TEXT_DIM)
                 .size(11.0),
         );
-        probe(ui, format!("plok.{name}.queued"), l.rect);
+        probe(ui, format_args!("plok.{name}.queued"), l.rect);
         return action;
     }
     match state {
@@ -262,7 +262,7 @@ fn draw_row_action(
             let b = ui
                 .button("Load")
                 .on_hover_text("Load this kit in this instance");
-            probe(ui, format!("plok.{name}.load"), b.rect);
+            probe(ui, format_args!("plok.{name}.load"), b.rect);
             if b.clicked() {
                 action = Some(RowAction::Load(id.clone()));
             }
@@ -271,20 +271,20 @@ fn draw_row_action(
                     .color(theme::ACCENT)
                     .size(12.0),
             );
-            probe(ui, format!("plok.{name}.installed"), l.rect);
+            probe(ui, format_args!("plok.{name}.installed"), l.rect);
         }
         PlokRowState::Update { dir, .. } => {
             let b = ui
                 .button("Update")
                 .on_hover_text("A different version of this kit is installed: replace it");
-            probe(ui, format!("plok.{name}.update"), b.rect);
+            probe(ui, format_args!("plok.{name}.update"), b.rect);
             if b.clicked() {
                 action = Some(RowAction::Update(kit.clone(), dir.clone()));
             }
         }
         PlokRowState::Download => {
             let b = ui.button("Download");
-            probe(ui, format!("plok.{name}.download"), b.rect);
+            probe(ui, format_args!("plok.{name}.download"), b.rect);
             if b.clicked() {
                 action = Some(RowAction::Download(kit.clone()));
             }

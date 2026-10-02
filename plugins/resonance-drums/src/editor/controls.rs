@@ -302,7 +302,7 @@ fn fader_with(
             .default_unit(param.default_normalized());
         let edit = probed(ui, name, |ui| widgets::slider_edit(ui, &slider));
         continuous(ui, bridge, param, edit, |v| param.set_normalized(v));
-        value_text(ui, &format!("{name}.value"), text, value_w);
+        value_text(ui, format_args!("{name}.value"), text, value_w);
     });
 }
 
@@ -327,13 +327,13 @@ pub(crate) fn int_fader(
         continuous(ui, bridge, param, edit, |v| {
             param.set_value(min + (v * span).round() as i32)
         });
-        value_text(ui, &format!("{name}.value"), text, VALUE_W);
+        value_text(ui, format_args!("{name}.value"), text, VALUE_W);
     });
 }
 
 /// A fader's right-hand readout, a fixed width so a column of faders
 /// lines up and a value never pushes its slider about.
-fn value_text(ui: &mut egui::Ui, name: &str, text: &str, width: f32) {
+fn value_text(ui: &mut egui::Ui, name: impl super::ProbeName, text: &str, width: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 16.0), egui::Sense::hover());
     let size = if width < VALUE_W { 9.5 } else { 10.5 };
     let galley = ui.painter().layout_no_wrap(

@@ -41,6 +41,9 @@ pub(crate) struct InspectorState<'a> {
     /// ▶'s velocity, MIDI 1..=127.
     pub audition_velocity: &'a mut u8,
     pub labels: &'a mut Labels,
+    /// The pad's last hit with the kit that plays now
+    /// (`DrumsEditorApp::pad_hit`).
+    pub hit: Option<LastHit>,
 }
 
 /// What the inspector says about a pad whose piece the kit lacks (D7).
@@ -64,7 +67,7 @@ pub(crate) fn draw(
     // list on each load.
     let samples = bridge.pad_samples.lock().clone();
     let info = samples.get(pad).and_then(Option::as_ref);
-    let hit = bridge.last_hits.pad(pad);
+    let hit = state.hit;
 
     let shown = controls::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -357,7 +360,7 @@ fn draw_articulations(
             (crate::articulation::ARTICULATION_ALT, &articulation.alt_label),
         ];
         for (index, label) in chips {
-            let clicked = probed(ui, &format!("articulation.{index}"), |ui| {
+            let clicked = probed(ui, format_args!("articulation.{index}"), |ui| {
                 widgets::chip_button(ui, label, index == current)
             });
             if clicked && index != current {
@@ -428,7 +431,7 @@ fn draw_mics(
                     egui::Label::new(egui::RichText::new(text).color(theme::TEXT_2).size(11.0))
                         .truncate(),
                 );
-                probe(ui, format!("mic.{bank}"), l.rect);
+                probe(ui, format_args!("mic.{bank}"), l.rect);
             }
         });
         trim_row(ui, bridge, &format!("trim.mic{}", bank + 1), "", params.trim(MicSlot::close(bank)), labels);

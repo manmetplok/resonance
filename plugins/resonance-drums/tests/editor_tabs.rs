@@ -943,3 +943,125 @@ fn closing_the_editor_mid_drag_is_still_one_edit() {
     drop(e);
     assert_eq!(edits(&plugin), ["pad_1_level"]);
 }
+
+// ---------------------------------------------------------------------------
+// Hits and meters (fix6)
+// ---------------------------------------------------------------------------
+
+/// The fill of the cell at `rect`.
+fn cell_fill(frame: &EditorFrameProbe, rect: egui::Rect) -> Option<egui::Color32> {
+    frame.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Rect(r) if r.rect == rect => Some(r.fill),
+        _ => None,
+    })
+}
+
+/// Opening the editor does not flash the pads played before it opened:
+/// those hits are history.
+#[test]
+fn opening_the_editor_does_not_flash_old_hits() {
+    let kit = fixture_kit();
+    let mut plugin = with_kit(&kit);
+    hit(&mut plugin, TOM, 1.0);
+    let mut e = TestEditor::new(&plugin, resonance_drums::library::shared(), (960.0, 640.0));
+    let first = e.frame(Vec::new());
+    let cell = first.widget(&format!("pad_cell.{TOM}")).unwrap().rect;
+    let lit = cell_fill(&first, cell).unwrap();
+    let rest = cell_fill(&e.idle(1.0), cell).unwrap();
+    assert_eq!(lit, rest, "the tom flashed for a hit from before the editor opened");
+    // The last hit is still read out.
+    assert!(e.frame(Vec::new()).strings().iter().any(|s| s.contains(" v127 → layer ")));
+}
+
+/// A muted pad's hit plays nothing, so its cell does not light.
+#[test]
+fn a_muted_pad_does_not_flash() {
+    let kit = fixture_kit();
+    let mut plugin = with_kit(&kit);
+    plugin.bridge.params.pads[TOM].mute.set_value(true);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    let frame = settled(&mut e);
+    let cell = frame.widget(&format!("pad_cell.{TOM}")).unwrap().rect;
+    let dark = cell_fill(&frame, cell).unwrap();
+    hit(&mut plugin, TOM, 1.0);
+    assert_eq!(cell_fill(&e.frame(Vec::new()), cell).unwrap(), dark, "a muted pad lit");
+}
+
+/// A hit from the kit before is not this kit's: once another kit plays,
+/// the status bar and the inspector read no hit until a pad is played.
+#[test]
+fn a_kit_switch_forgets_the_old_kits_hits() {
+    let kit = fixture_kit();
+    let other = fixture_kit();
+    let mut plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    e.select_pad(SNARE);
+    hit(&mut plugin, SNARE, 1.0);
+    assert!(settled(&mut e).strings().iter().any(|s| s.starts_with("last hit v127")));
+
+    let choices: [PadMicChoices; NUM_PADS] = std::array::from_fn(|_| PadMicChoices::default());
+    spawn_loader(
+        other.manifest.clone(),
+        RATE,
+        &plugin.bridge,
+        DEFAULT_OVERHEAD_SETUP.to_string(),
+        choices,
+        [false; NUM_PADS],
+    );
+    settle(&mut plugin);
+    let frame = settled(&mut e);
+    assert!(frame.shows("no hit yet"), "{:?}", frame.strings());
+    assert!(
+        frame.strings().iter().any(|s| s.starts_with("not played yet")),
+        "{:?}",
+        frame.strings()
+    );
+    hit(&mut plugin, SNARE, 1.0);
+    assert!(settled(&mut e).strings().iter().any(|s| s.starts_with("last hit v127")));
+}
+
+/// The OUT meter falls by time, not by frame: half a second after the
+/// peak it reads the same at 10 Hz as at 60 Hz.
+#[test]
+fn the_out_meter_falls_at_the_same_speed_at_any_frame_rate() {
+    let reading = |hz: f64| -> String {
+        let plugin = booted();
+        let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+        e.set_frame_rate(hz);
+        for bits in &plugin.bridge.out_peak[..] {
+            bits.store(1.0f32.to_bits(), Ordering::Relaxed);
+        }
+        e.frame(Vec::new());
+        for bits in &plugin.bridge.out_peak[..] {
+            bits.store(0.0f32.to_bits(), Ordering::Relaxed);
+        }
+        e.idle(0.5)
+            .strings()
+            .into_iter()
+            .find(|s| s.ends_with(" dB") && s.starts_with('-'))
+            .unwrap_or_else(|| panic!("no OUT reading at {hz} Hz"))
+    };
+    let (slow, fast) = (reading(10.0), reading(60.0));
+    assert_eq!(slow, fast, "the meter fell at different speeds");
+    // 0.75 (−2.5 dB) per 100 ms, over 0.5 s.
+    assert_eq!(slow, "-12.5 dB");
+}
+
+/// At rest — meters at zero, no load, no job — the editor does not tick
+/// at 10 Hz; a lit cell animates at ~30 Hz, not at the display's rate.
+#[test]
+fn the_editor_repaints_only_as_fast_as_something_moves() {
+    let kit = fixture_kit();
+    let mut plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    let rest = e.idle(1.0).repaint_after;
+    assert!(rest >= Duration::from_millis(200), "at rest it repaints every {rest:?}");
+    hit(&mut plugin, TOM, 1.0);
+    let lit = e.frame(Vec::new()).repaint_after;
+    // egui takes its predicted frame time (1/60 s) off a requested delay:
+    // ~33 ms asked, ~16 ms reported — not 0, the display's own rate.
+    assert!(
+        lit >= Duration::from_millis(10) && lit <= Duration::from_millis(40),
+        "a lit cell repaints every {lit:?}"
+    );
+}
