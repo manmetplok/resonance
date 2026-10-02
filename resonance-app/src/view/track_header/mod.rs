@@ -155,6 +155,16 @@ fn track_headers_fingerprint(r: &Resonance) -> u64 {
         .map(|d| d.chords.len())
         .sum();
     chord_total.hash(&mut h);
+    // ...or, with chord-track regions, their count and pins; a rejected
+    // symbol (`last_error`) replaces the sub-line (UX-02).
+    r.chord_track.regions.len().hash(&mut h);
+    r.chord_track
+        .regions
+        .iter()
+        .filter(|rg| rg.pinned)
+        .count()
+        .hash(&mut h);
+    r.chord_track.last_error.hash(&mut h);
     // The header-cap "Freeze all" button's enabled state (todo #581) folds
     // in freeze statuses beyond the per-track `is_frozen` bit below (e.g.
     // `Freezing` vs `Idle`), so hash the derived bool directly.

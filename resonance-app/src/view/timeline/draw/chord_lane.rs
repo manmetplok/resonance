@@ -129,7 +129,15 @@ impl TimelineCanvas<'_> {
         // fill the remaining vertical space.
         let tab_h = 14.0;
         let blocks_y = chord_y + tab_h;
-        let blocks_h = chord_h - tab_h - 4.0;
+        // With chord-track regions present the bottom of the lane is the
+        // region strip (UX-02); the section chord blocks give it room.
+        // An empty chord track keeps the original layout.
+        let has_regions = !self.chord_track.regions.is_empty();
+        let blocks_h = if has_regions {
+            chord_h - tab_h - 4.0 - CHORD_REGION_STRIP_H - 2.0
+        } else {
+            chord_h - tab_h - 4.0
+        };
 
         for placement in self.section_placements {
             let Some(definition) = self
@@ -200,6 +208,19 @@ impl TimelineCanvas<'_> {
                     continue;
                 }
 
+                // A section chord whose onset sits inside a *pinned*
+                // chord-track region is replaced by that region's chord
+                // when Compose regenerates (`overlay_pinned_chords`), so
+                // it draws dimmed: the pinned strip below is what plays.
+                let section_span = section_end_sample.saturating_sub(section_start_sample);
+                let chord_onset_sample = section_start_sample
+                    + ((chord_start_bars / section_bars) as f64 * section_span as f64) as u64;
+                let overridden = self.chord_track.regions.iter().any(|rg| {
+                    rg.pinned
+                        && rg.start_sample <= chord_onset_sample
+                        && chord_onset_sample < rg.end_sample
+                });
+
                 // Tint by quality — minor uses the lavender accent, dom
                 // uses warm/amber, every other quality reads as neutral.
                 use resonance_music_theory::ChordQuality;
@@ -243,6 +264,22 @@ impl TimelineCanvas<'_> {
                     ),
                 };
 
+                let (body_color, border_color, text_color) = if overridden {
+                    (
+                        Color {
+                            a: body_color.a * 0.4,
+                            ..body_color
+                        },
+                        Color {
+                            a: border_color.a * 0.5,
+                            ..border_color
+                        },
+                        theme::TEXT_3,
+                    )
+                } else {
+                    (body_color, border_color, text_color)
+                };
+
                 let visible_x = block_left.max(0.0);
                 let visible_w = (block_left + block_w).min(width) - visible_x;
                 if visible_w <= 0.0 {
@@ -278,7 +315,8 @@ impl TimelineCanvas<'_> {
                 // Duration label "{N}b" in the bottom-right corner of the
                 // block — mono, dim, so it doesn't compete with the chord
                 // symbol but the user can still scan progression timing.
-                if visible_w > 36.0 {
+                // Dropped when the region strip squeezes the blocks.
+                if visible_w > 36.0 && blocks_h >= 30.0 {
                     let beats_per_bar = self.tempo_map.numerator.max(1) as u32;
                     let dur_bars = chord.duration_beats / beats_per_bar.max(1);
                     let dur_label = if dur_bars > 0
@@ -303,5 +341,102 @@ impl TimelineCanvas<'_> {
                 }
             }
         }
+
+        if has_regions {
+            let strip_y = chord_y + chord_h - 4.0 - CHORD_REGION_STRIP_H;
+            self.draw_chord_track_regions(frame, width, strip_y, CHORD_REGION_STRIP_H);
+        }
+    }
+
+    /// The global chord track's regions (doc #168) as a strip of pills at
+    /// the bottom of the chord lane (UX-02). Pinned regions — the ones that
+    /// override generated chords — fill with the accent and carry a pin
+    /// mark; unpinned ones are outlined only, since they never change what
+    /// Compose generates.
+    fn draw_chord_track_regions(
+        &self,
+        frame: &mut canvas::Frame,
+        width: f32,
+        strip_y: f32,
+        strip_h: f32,
+    ) {
+        for region in &self.chord_track.regions {
+            let left = self.sample_to_x(region.start_sample);
+            let right = self.sample_to_x(region.end_sample);
+            if right < 0.0 || left > width {
+                continue;
+            }
+            let visible_x = left.max(0.0);
+            let visible_w = ((right - 2.0).min(width) - visible_x).max(0.0);
+            if visible_w <= 0.0 {
+                continue;
+            }
+            let (fill, border, text_color) = if region.pinned {
+                (
+                    Color {
+                        a: 0.30,
+                        ..theme::ACCENT
+                    },
+                    Color {
+                        a: 0.85,
+                        ..theme::ACCENT
+                    },
+                    theme::TEXT_1,
+                )
+            } else {
+                (
+                    Color {
+                        a: 0.03,
+                        ..theme::TEXT_1
+                    },
+                    Color {
+                        a: 0.22,
+                        ..theme::TEXT_1
+                    },
+                    theme::TEXT_2,
+                )
+            };
+            let pill = canvas::Path::rounded_rectangle(
+                Point::new(visible_x, strip_y),
+                Size::new(visible_w, strip_h),
+                3.0.into(),
+            );
+            frame.fill(&pill, fill);
+            frame.stroke(
+                &pill,
+                canvas::Stroke::default().with_color(border).with_width(1.0),
+            );
+
+            let mut text_x = visible_x + 5.0;
+            if region.pinned && visible_w > 12.0 {
+                // Pin mark: a head dot on a short needle.
+                let cx = visible_x + 7.0;
+                let head = canvas::Path::circle(Point::new(cx, strip_y + 5.0), 2.5);
+                frame.fill(&head, theme::TEXT_1);
+                frame.fill_rectangle(
+                    Point::new(cx - 0.5, strip_y + 6.5),
+                    Size::new(1.0, strip_h - 9.0),
+                    theme::TEXT_1,
+                );
+                text_x = visible_x + 13.0;
+            }
+            if visible_w > text_x - visible_x + 10.0 {
+                frame.fill_text(canvas::Text {
+                    content: format!(
+                        "{}{}",
+                        region.chord.root.as_str(),
+                        region.chord.quality.suffix()
+                    ),
+                    position: Point::new(text_x, strip_y + 1.0),
+                    color: text_color,
+                    size: 10.0.into(),
+                    font: theme::UI_FONT_MEDIUM,
+                    ..canvas::Text::default()
+                });
+            }
+        }
     }
 }
+
+/// Height of the chord-track region strip at the bottom of the chord lane.
+const CHORD_REGION_STRIP_H: f32 = 14.0;
