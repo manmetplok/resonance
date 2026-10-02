@@ -7,8 +7,9 @@
 //!
 //! - **Pads** (`pads_tab.rs`): the 6×5 pad grid and the selected pad's
 //!   inspector;
-//! - **Mix** (`mix_tab.rs`): a meter strip per output port, master, the
-//!   per-pad level/pan/mute/output table and the global playing settings;
+//! - **Mix** (`mix_tab.rs`): the output mode and a meter strip per output
+//!   port, master, the per-pad level/pan/mute table and the global
+//!   playing settings;
 //! - **Setup** (`setup_tab.rs`): mic banks, streaming, the pad routing /
 //!   choke / note table and the kit's facts.
 //!
@@ -30,6 +31,7 @@ use resonance_plugin::kit_rows::KitRows;
 use resonance_plugin::library_view::BrowserModel;
 
 use crate::download::Status;
+use crate::last_hit::LastHit;
 use crate::library::SharedKitLibrary;
 use crate::drum_map::NUM_PADS;
 use crate::kit::NUM_OUTPUT_PORTS;
@@ -40,7 +42,7 @@ use super::jobs::{JobDone, JobKind, Jobs, Picker};
 use super::kit_browser::{self, LoadKind};
 use super::library_panel::{self, LibraryPanelState};
 use super::missing_kit::{self, MissingKitState};
-use super::controls::Labels;
+use super::controls::{self, Gestures, Labels};
 use super::{chrome, mix_tab, pads_tab, setup_tab, theme};
 
 /// The editor's three views (§6).
@@ -64,6 +66,20 @@ impl Tab {
 /// How long a pad cell stays lit after a hit, seconds.
 pub(crate) const HIT_FLASH_SECS: f64 = 0.25;
 
+/// Repaint interval while a cell's hit light fades: ~30 Hz is smooth for
+/// a quarter-second fade, at half the frames of the display rate.
+const LIT_REPAINT: std::time::Duration = std::time::Duration::from_millis(33);
+/// Repaint interval while something moves — a meter falling, a load or a
+/// library job under way, a gesture open: the readouts' ~10 Hz.
+const LIVE_REPAINT: std::time::Duration = std::time::Duration::from_millis(100);
+/// Repaint interval with nothing moving: only to notice the next hit or
+/// output (the audio thread cannot wake the editor) and the library
+/// polls. The meters at rest and a static view need no 10 Hz tick.
+const IDLE_REPAINT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How often a deleted-looking kit folder is `stat`ed again.
+const KIT_EXISTS_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub(crate) struct DrumsEditorApp {
     pub(crate) params: Arc<DrumParams>,
     pub(crate) bridge: KitBridge,
@@ -78,9 +94,18 @@ pub(crate) struct DrumsEditorApp {
     /// (egui time, seconds).
     pub(crate) hit_seen: [u16; NUM_PADS],
     pub(crate) hit_at: [f64; NUM_PADS],
+    /// What the hit slots held when the playing kit last changed (each
+    /// pad's sequence, and the latest's): a hit from the kit before is
+    /// not this kit's — its layer and take index another kit's takes —
+    /// so it reads as no hit until the pad is played again.
+    hits_before_kit: ([u16; NUM_PADS], u16),
+    /// The kit those hits belong to (its manifest; `None`: built-in).
+    hits_kit: Option<PathBuf>,
     /// Displayed Mix-strip meter levels, one per output port, with the
-    /// same ballistics as the OUT meter.
+    /// same ballistics as the OUT meter, and when they last fell (egui
+    /// time).
     port_meter: [f32; NUM_OUTPUT_PORTS],
+    port_meter_at: Option<f64>,
     /// The process-wide kit library and its download worker.
     pub(crate) library: Arc<SharedKitLibrary>,
     pub(crate) library_panel: LibraryPanelState,
@@ -126,6 +151,14 @@ pub(crate) struct DrumsEditorApp {
     /// the audio thread published and falls back with a fixed decay, so
     /// the bar tracks real output instead of sitting dead.
     out_meter: [f32; 2],
+    out_meter_at: Option<f64>,
+    /// `loaded_entry`'s answer, for the library revision and kit it was
+    /// worked out for — it was a scan and a clone of the entry per frame.
+    loaded_cache: Option<(LoadedKey, Option<Arc<Entry>>)>,
+    /// Whether the playing kit's manifest was there when last `stat`ed,
+    /// and when: the header's "deleted" check, once a second rather than
+    /// every frame.
+    kit_exists: Option<(PathBuf, std::time::Instant, bool)>,
     /// This plugin ships no factory presets, so the bank is the user's
     /// own directory alone (ba todo #1358).
     pub(crate) bank: resonance_plugin::presets::PresetBank,
@@ -136,6 +169,9 @@ pub(crate) struct DrumsEditorApp {
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
     /// The missing-kit banner's state (§5.3).
     pub(crate) missing_kit: MissingKitState,
+    /// Continuous gestures in flight (`controls::Gestures`), lent to the
+    /// controls each frame and flushed when a widget cannot end its own.
+    gestures: Arc<Gestures>,
 }
 
 impl DrumsEditorApp {
@@ -146,6 +182,11 @@ impl DrumsEditorApp {
         presets: Arc<resonance_plugin::presets::PresetSession>,
     ) -> Self {
         let seen_installs = library.download().state.lock().installs;
+        // Hits from before the editor opened are history, not news: seen
+        // already, so opening the editor does not flash every pad played
+        // since the instance started.
+        let hit_seen = std::array::from_fn(|pad| bridge.last_hits.pad(pad).map_or(0, |h| h.seq));
+        let hits_kit = bridge.kit_path.lock().clone();
         let mut app = Self {
             params,
             bridge,
@@ -153,9 +194,12 @@ impl DrumsEditorApp {
             tab: Tab::default(),
             audition_velocity: 100,
             labels: Labels::default(),
-            hit_seen: [0; NUM_PADS],
+            hit_seen,
             hit_at: [f64::NEG_INFINITY; NUM_PADS],
+            hits_before_kit: ([0; NUM_PADS], 0),
+            hits_kit,
             port_meter: [0.0; NUM_OUTPUT_PORTS],
+            port_meter_at: None,
             library,
             library_panel: LibraryPanelState::default(),
             browser: BrowserModel::new(),
@@ -173,10 +217,14 @@ impl DrumsEditorApp {
             requested_kit: None,
             last_loaded_name: None,
             out_meter: [0.0; 2],
+            out_meter_at: None,
+            loaded_cache: None,
+            kit_exists: None,
             bank: resonance_plugin::presets::PresetBank::for_plugin::<crate::ResonanceDrums>(),
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             missing_kit: MissingKitState::default(),
+            gestures: Arc::new(Gestures::default()),
         };
         // Opening an editor is when the library is brought up to date: on
         // the job thread, so the first frame is not held up by hashing.
@@ -185,40 +233,83 @@ impl DrumsEditorApp {
     }
 
     /// Fold the audio thread's latest block peak into the displayed OUT
-    /// meter and return the level to draw. The editor repaints at ~10 Hz
-    /// while the audio thread publishes every block, so the peak is taken
-    /// as an instant rise and a 0.75×-per-frame fall — a real reading with
-    /// readable ballistics, never a value we made up.
-    pub(crate) fn tick_out_meter(&mut self) -> [f32; 2] {
+    /// meter and return the level to draw, at egui time `now`. The audio
+    /// thread publishes every block and the editor reads whenever it
+    /// repaints, so the peak is taken as an instant rise and a fall of
+    /// 0.75× per tenth of a second of *time* — not per frame, which made
+    /// the fall three times faster at 30 Hz than at 10 Hz.
+    pub(crate) fn tick_out_meter(&mut self, now: f64) -> [f32; 2] {
+        let dt = elapsed(&mut self.out_meter_at, now);
         for (channel, level) in self.out_meter.iter_mut().enumerate() {
-            fold_peak(level, self.bridge.out_peak[channel].load(Ordering::Relaxed));
+            fold_peak(level, self.bridge.out_peak[channel].load(Ordering::Relaxed), dt);
         }
         self.out_meter
     }
 
     /// [`Self::tick_out_meter`] for the Mix tab's per-port strips.
-    pub(crate) fn tick_port_meters(&mut self) -> [f32; NUM_OUTPUT_PORTS] {
+    pub(crate) fn tick_port_meters(&mut self, now: f64) -> [f32; NUM_OUTPUT_PORTS] {
+        let dt = elapsed(&mut self.port_meter_at, now);
         for (port, level) in self.port_meter.iter_mut().enumerate() {
-            fold_peak(level, self.bridge.port_peak[port].load(Ordering::Relaxed));
+            fold_peak(level, self.bridge.port_peak[port].load(Ordering::Relaxed), dt);
         }
         self.port_meter
     }
 
+    /// Whether a meter still shows anything (and so has a fall to draw).
+    fn meters_moving(&self) -> bool {
+        self.out_meter.iter().chain(&self.port_meter).any(|&l| l > 0.0)
+    }
+
     /// Note every pad hit the sampler published since the last frame, so
-    /// its cell lights. Returns whether any cell is still lit (the caller
-    /// keeps repainting while one is).
+    /// its cell lights — unless the pad is muted: a muted pad's click
+    /// plays nothing, and a light would say it did. Returns whether any
+    /// cell is still lit (the caller keeps repainting while one is).
     pub(crate) fn tick_hits(&mut self, now: f64) -> bool {
+        self.follow_kit_for_hits();
         let mut lit = false;
         for pad in 0..NUM_PADS {
             if let Some(hit) = self.bridge.last_hits.pad(pad) {
                 if hit.seq != self.hit_seen[pad] {
                     self.hit_seen[pad] = hit.seq;
-                    self.hit_at[pad] = now;
+                    if !self.params.pads[pad].mute.value() {
+                        self.hit_at[pad] = now;
+                    }
                 }
             }
             lit |= now - self.hit_at[pad] < HIT_FLASH_SECS;
         }
         lit
+    }
+
+    /// When the playing kit changed, take the hit slots' current contents
+    /// as the old kit's (see `hits_before_kit`).
+    fn follow_kit_for_hits(&mut self) {
+        let kit = self.bridge.kit_path.lock().clone();
+        if kit == self.hits_kit {
+            return;
+        }
+        self.hits_kit = kit;
+        let hits = &self.bridge.last_hits;
+        self.hits_before_kit = (
+            std::array::from_fn(|pad| hits.pad(pad).map_or(0, |h| h.seq)),
+            hits.latest().map_or(0, |h| h.seq),
+        );
+    }
+
+    /// The last hit on `pad` with the kit that plays now.
+    pub(crate) fn pad_hit(&self, pad: usize) -> Option<LastHit> {
+        self.bridge
+            .last_hits
+            .pad(pad)
+            .filter(|h| h.seq != self.hits_before_kit.0[pad])
+    }
+
+    /// The most recent hit on any pad with the kit that plays now.
+    pub(crate) fn latest_hit(&self) -> Option<LastHit> {
+        self.bridge
+            .last_hits
+            .latest()
+            .filter(|h| h.seq != self.hits_before_kit.1)
     }
 
     /// Open the Library overlay.
@@ -274,31 +365,36 @@ impl DrumsEditorApp {
 
     /// Check the selected kit's (and the loaded kit's) sample files once,
     /// on a job, so a kit with files gone shows it before it is loaded.
+    ///
+    /// Runs on every idle frame, so it clones nothing until it has found
+    /// a kit to check.
     fn check_missing_lazily(&mut self) {
         if self.jobs.busy() {
             return;
         }
-        let mut candidates = Vec::new();
-        if self.library_panel.open {
-            if let Some(row) = self.browser.selected_row() {
-                candidates.push(self.rows.rows[row].entry.clone());
-            }
-        }
-        if let Some(e) = self.loaded_entry() {
-            candidates.push(e);
-        }
-        let Some(entry) = candidates.into_iter().find(|e| {
+        let loaded = self.loaded_entry();
+        let unchecked = |e: &&Entry| {
             !self.missing_checked.contains(&e.id)
                 && matches!(e.status, EntryStatus::Ok | EntryStatus::MissingFiles(_))
-        }) else {
+        };
+        let selected = self
+            .library_panel
+            .open
+            .then(|| self.browser.selected_row())
+            .flatten()
+            .map(|row| &self.rows.rows[row].entry);
+        let Some((id, name)) = selected
+            .filter(unchecked)
+            .or(loaded.as_deref().filter(unchecked))
+            .map(|e| (e.id.clone(), e.name.clone()))
+        else {
             return;
         };
-        self.missing_checked.insert(entry.id.clone());
+        self.missing_checked.insert(id.clone());
         let library = self.library.clone();
-        let id = entry.id.clone();
         self.jobs.start(
             JobKind::Check,
-            format!("checking \"{}\"…", entry.name),
+            format!("checking \"{name}\"…"),
             false,
             move |_| {
                 let result = match library.try_mutate(|lib| lib.check_missing_files(&id)) {
@@ -625,10 +721,37 @@ impl DrumsEditorApp {
         }
     }
 
-    /// The library entry of the kit this instance plays (or is loading).
-    pub(crate) fn loaded_entry(&self) -> Option<Entry> {
-        let path = kit_browser::kit_path_for_stepping(&self.bridge, self.requested_kit.as_ref())?;
-        self.library.entry_for_manifest(&path)
+    /// The library entry of the kit this instance plays (or is loading),
+    /// worked out once per library revision and kit.
+    pub(crate) fn loaded_entry(&mut self) -> Option<Arc<Entry>> {
+        let path = kit_browser::kit_path_for_stepping(&self.bridge, self.requested_kit.as_ref());
+        let key = (self.library.revision(), path);
+        if let Some((cached, entry)) = &self.loaded_cache {
+            if *cached == key {
+                return entry.clone();
+            }
+        }
+        let entry = key
+            .1
+            .as_deref()
+            .and_then(|p| self.library.entry_for_manifest(p))
+            .map(Arc::new);
+        self.loaded_cache = Some((key, entry.clone()));
+        entry
+    }
+
+    /// Whether `path` (the playing kit's manifest) is on disk, `stat`ed at
+    /// most once a second.
+    pub(crate) fn kit_file_exists(&mut self, path: &std::path::Path) -> bool {
+        let now = std::time::Instant::now();
+        match &self.kit_exists {
+            Some((p, at, exists)) if p == path && now.duration_since(*at) < KIT_EXISTS_RECHECK => *exists,
+            _ => {
+                let exists = path.exists();
+                self.kit_exists = Some((path.to_path_buf(), now, exists));
+                exists
+            }
+        }
     }
 
     /// Load `entry` into this instance through the one load entry point.
@@ -651,11 +774,32 @@ pub(crate) enum Queued {
     Rescan,
 }
 
-/// Fold a published block peak (`f32::to_bits`) into a displayed level:
-/// an instant rise and a 0.75×-per-frame fall — a real reading with
-/// readable ballistics, never a value we made up.
-fn fold_peak(level: &mut f32, published_bits: u32) {
-    const DECAY: f32 = 0.75;
+/// Whether a kit load is under way: decoding, or decoded and waiting for
+/// the audio thread (a failed load is not).
+pub(crate) fn kit_loading(bridge: &KitBridge) -> bool {
+    use crate::kit_loader::LoadPhase;
+    let snap = bridge.load_progress.snapshot();
+    !snap.complete && matches!(snap.phase, LoadPhase::Decoding | LoadPhase::HandedOff)
+}
+
+/// What `loaded_entry` is cached by: the library revision and the kit.
+type LoadedKey = (u64, Option<PathBuf>);
+
+/// Seconds since `*last` (then `now` becomes it), capped at half a second
+/// so a meter not drawn for a while (another tab) falls at once rather
+/// than by a huge step; zero on the first tick.
+fn elapsed(last: &mut Option<f64>, now: f64) -> f32 {
+    let dt = last.map_or(0.0, |t| (now - t).clamp(0.0, 0.5));
+    *last = Some(now);
+    dt as f32
+}
+
+/// Fold a published block peak (`f32::to_bits`) into a displayed level,
+/// `dt` seconds after the last fold: an instant rise and a fall of 0.75×
+/// per 100 ms — a real reading with readable ballistics, never a value
+/// we made up, falling at the same speed whatever the repaint rate.
+pub(crate) fn fold_peak(level: &mut f32, published_bits: u32, dt: f32) {
+    const DECAY_PER_TENTH: f32 = 0.75;
     let published = f32::from_bits(published_bits);
     let published = if published.is_finite() && published > 0.0 {
         published
@@ -665,7 +809,7 @@ fn fold_peak(level: &mut f32, published_bits: u32) {
     *level = if published >= *level {
         published
     } else {
-        (*level * DECAY).max(published)
+        (*level * DECAY_PER_TENTH.powf(dt * 10.0)).max(published)
     };
     if *level < 1.0e-5 {
         *level = 0.0;
@@ -682,20 +826,26 @@ pub(crate) const STATUS_H: f32 = 28.0;
 impl EditorApp for DrumsEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
+        controls::lend_gestures(ui.ctx(), &self.gestures);
         self.poll_jobs();
         self.poll_downloads();
         self.poll_freshness();
+        // Once per frame: the header's dropdown and ◀/▶ read the rows
+        // this built.
         self.refresh_rows();
 
         let now = ui.ctx().input(|i| i.time);
-        // A lit cell fades over a quarter second: repaint at frame rate
-        // while one is lit, ~10 Hz otherwise (the meters and readouts).
-        if self.tick_hits(now) {
-            ui.ctx().request_repaint();
+        // A lit cell fades over a quarter second at ~30 Hz; meters falling
+        // and work under way repaint at ~10 Hz; at rest only a slow poll
+        // for the next hit.
+        let lit = self.tick_hits(now);
+        ui.ctx().request_repaint_after(if lit {
+            LIT_REPAINT
+        } else if self.something_moves() {
+            LIVE_REPAINT
         } else {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(100));
-        }
+            IDLE_REPAINT
+        });
 
         let bar = |fill| {
             egui::Frame::default()
@@ -738,6 +888,43 @@ impl EditorApp for DrumsEditorApp {
         if self.library_panel.open {
             library_panel::draw(ui, self);
         }
+        self.close_stale_gestures(ui.ctx());
+    }
+}
+
+impl DrumsEditorApp {
+    /// Whether anything on screen is changing on its own: a meter still
+    /// falling, a kit loading, a library job or download running, the
+    /// Library open (its rows show other instances' downloads), a
+    /// gesture open.
+    fn something_moves(&self) -> bool {
+        self.meters_moving()
+            || kit_loading(&self.bridge)
+            || self.jobs.busy()
+            || !self.my_downloads.is_empty()
+            || self.library_panel.open
+            || self.gestures.any_open()
+    }
+
+    /// Announce the gestures no widget will end: a drag whose control
+    /// was not drawn when the pointer let go (its table row scrolled out
+    /// of view under a wheel), a key run whose control went away.
+    fn close_stale_gestures(&mut self, ctx: &egui::Context) {
+        let (now, down) = ctx.input(|i| (i.time, i.pointer.any_down()));
+        let dragging = down || ctx.dragged_id().is_some();
+        let closed = self.gestures.stale(now, dragging);
+        controls::announce_closed(&self.bridge, &self.params, closed);
+        if self.gestures.any_open() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for DrumsEditorApp {
+    /// An editor closed mid-gesture never draws the frame that ends it:
+    /// what moved is announced now, so it is still one undoable edit.
+    fn drop(&mut self) {
+        controls::announce_closed(&self.bridge, &self.params, self.gestures.drain());
     }
 }
 

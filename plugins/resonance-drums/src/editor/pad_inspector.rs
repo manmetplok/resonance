@@ -41,6 +41,9 @@ pub(crate) struct InspectorState<'a> {
     /// ▶'s velocity, MIDI 1..=127.
     pub audition_velocity: &'a mut u8,
     pub labels: &'a mut Labels,
+    /// The pad's last hit with the kit that plays now
+    /// (`DrumsEditorApp::pad_hit`).
+    pub hit: Option<LastHit>,
 }
 
 /// What the inspector says about a pad whose piece the kit lacks (D7).
@@ -64,14 +67,25 @@ pub(crate) fn draw(
     // list on each load.
     let samples = bridge.pad_samples.lock().clone();
     let info = samples.get(pad).and_then(Option::as_ref);
-    let hit = bridge.last_hits.pad(pad);
+    let hit = state.hit;
+
+    // What the sample stage says when it has nothing to draw.
+    let empty = if !kit_pad.present {
+        "Not in this kit — this pad is silent"
+    } else if super::app::kit_loading(bridge) {
+        "loading…"
+    } else if bridge.kit_path.lock().is_none() && samples.is_empty() {
+        "no sample detail yet — load a kit"
+    } else {
+        "no sample detail for this pad"
+    };
 
     let shown = controls::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
 
         draw_head(ui, bridge, pad, kit_pad, params, state);
-        draw_sample_stage(ui, info, hit, kit_pad.present, catalog);
+        draw_sample_stage(ui, info, hit, empty, catalog);
         draw_knobs(ui, bridge, params, state.labels);
 
         if let Some(articulation) = &kit_pad.articulation {
@@ -176,7 +190,7 @@ fn draw_sample_stage(
     ui: &mut egui::Ui,
     info: Option<&PadSampleInfo>,
     hit: Option<LastHit>,
-    present: bool,
+    empty: &str,
     catalog: &ManifestMicCatalog,
 ) {
     let frame = egui::Frame::default()
@@ -195,40 +209,64 @@ fn draw_sample_stage(
         );
 
         let Some(info) = info else {
-            p.text(
+            let r = p.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                if present {
-                    "no sample detail yet — load a kit"
-                } else {
-                    "Not in this kit — this pad is silent"
-                },
+                empty,
                 egui::FontId::proportional(11.0),
                 theme::TEXT_4,
             );
+            probe(ui, "inspector.sample.empty", r);
             return;
         };
 
         // The take the last hit played, when this kit has it; else the
         // full-velocity one, said to be that.
         let played = hit.and_then(|h| info.take(h.layer, h.take).map(|t| (h, t)));
-        let (envelope, frames, readout) = match played {
+        let (envelope, frames, resident, readout) = match played {
             Some((h, take)) => (
                 &take.envelope,
                 take.frames,
+                take.resident_fraction(),
                 format!("last hit v{} · {}", h.velocity, h.cell_text()),
             ),
             None => (
                 &info.envelope,
                 info.frames,
+                info.resident_fraction(),
                 format!("not played yet — showing the loudest: {}", info.layer_text()),
             ),
         };
 
+        // The envelope covers what is in memory. A streamed take keeps
+        // only its head resident: the head is drawn over its share of the
+        // take's length, and the rest is shaded as streamed — never the
+        // head stretched across the whole width under the take's full
+        // duration.
         let half = h * 0.36;
+        let shown_w = w * resident;
+        if resident < 1.0 {
+            let tail = egui::Rect::from_min_max(
+                egui::pos2(rect.left() + shown_w, rect.top()),
+                rect.right_bottom(),
+            );
+            p.rect_filled(tail, 0.0, theme::BG_2);
+            p.line_segment(
+                [tail.left_top(), tail.left_bottom()],
+                egui::Stroke::new(1.0, theme::LINE_2),
+            );
+            let streamed = p.text(
+                tail.center(),
+                egui::Align2::CENTER_CENTER,
+                "streamed from disk",
+                egui::FontId::proportional(10.0),
+                theme::TEXT_4,
+            );
+            probe(ui, "inspector.streamed", streamed);
+        }
         let buckets = envelope.len();
         if buckets > 0 {
-            let bucket_w = w / buckets as f32;
+            let bucket_w = shown_w / buckets as f32;
             let color = if played.is_some() {
                 theme::ACCENT_SOFT
             } else {
@@ -284,11 +322,14 @@ fn draw_sample_stage(
     probe(ui, "inspector.sample", shown.response.rect);
 }
 
-/// Level, Pan, Tune, Hold, Decay, Start — wrapping onto a second row when
-/// the column is narrow.
+/// Level, Pan, Tune, Hold, Decay, Start in one row: the dials shrink to
+/// fit a narrow column (the minimum window), and only past that does the
+/// row wrap.
 fn draw_knobs(ui: &mut egui::Ui, bridge: &KitBridge, params: &PadParams, labels: &mut Labels) {
+    const GAP: f32 = 8.0;
+    let style = controls::knob_style_to_fit(ui.available_width(), 6, GAP);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
+        ui.spacing_mut().item_spacing = egui::vec2(GAP, 6.0);
         let knobs: [(&str, &str, &resonance_plugin::FloatParam, bool); 6] = [
             ("knob.level", "Level", &params.volume, false),
             ("knob.pan", "Pan", &params.pan, true),
@@ -303,7 +344,7 @@ fn draw_knobs(ui: &mut egui::Ui, bridge: &KitBridge, params: &PadParams, labels:
             } else {
                 labels.of(param)
             };
-            controls::knob(ui, bridge, name, caption, param, text, bipolar);
+            controls::knob_styled(ui, bridge, name, caption, param, text, bipolar, style);
         }
     });
 }
@@ -330,7 +371,7 @@ fn draw_articulations(
             (crate::articulation::ARTICULATION_ALT, &articulation.alt_label),
         ];
         for (index, label) in chips {
-            let clicked = probed(ui, &format!("articulation.{index}"), |ui| {
+            let clicked = probed(ui, format_args!("articulation.{index}"), |ui| {
                 widgets::chip_button(ui, label, index == current)
             });
             if clicked && index != current {
@@ -368,19 +409,22 @@ fn draw_mics(
     let Some(banks) = info.map(|i| &i.banks) else {
         return;
     };
-    controls::heading(ui, "MICS");
+    // The built-in kit has one sample per pad and no mics: its one trim
+    // is a trim, not a mic.
+    let built_in = banks.close.first().is_some_and(|(_, setup)| setup.is_empty());
+    let heading = controls::heading(ui, if built_in { "TRIM" } else { "MICS" });
+    probe(ui, "inspector.mics", heading.rect);
     let mut pick: Option<(String, String)> = None;
     for (bank, (position, setup)) in banks.close.iter().enumerate().take(2) {
-        let built_in = setup.is_empty();
+        if built_in {
+            trim_row(ui, bridge, &format!("trim.mic{}", bank + 1), "Sample", params.trim(MicSlot::close(bank)), labels);
+            continue;
+        }
         ui.horizontal(|ui| {
-            controls::row_label(
-                ui,
-                if built_in { "Sample" } else { position_name(position) },
-                MIC_LABEL_W,
-            );
+            controls::row_label(ui, position_name(position), MIC_LABEL_W);
             let choices = catalog.close_setups(position);
             if choices.len() > 1 {
-                let w = super::body_width(ui, 0.0);
+                let w = super::body_width(ui, 0.0).min(controls::MAX_CONTROL_W);
                 if let Some(key) = controls::combo(
                     ui,
                     &format!("mic.{bank}"),
@@ -392,16 +436,13 @@ fn draw_mics(
                     pick = Some((position.clone(), key.to_string()));
                 }
             } else {
-                let text = if built_in {
-                    "built-in".to_string()
-                } else {
-                    catalog.label(setup)
-                };
                 let l = ui.add(
-                    egui::Label::new(egui::RichText::new(text).color(theme::TEXT_2).size(11.0))
-                        .truncate(),
+                    egui::Label::new(
+                        egui::RichText::new(catalog.label(setup)).color(theme::TEXT_2).size(11.0),
+                    )
+                    .truncate(),
                 );
-                probe(ui, format!("mic.{bank}"), l.rect);
+                probe(ui, format_args!("mic.{bank}"), l.rect);
             }
         });
         trim_row(ui, bridge, &format!("trim.mic{}", bank + 1), "", params.trim(MicSlot::close(bank)), labels);
@@ -410,6 +451,10 @@ fn draw_mics(
         bridge.pad_choices.lock()[pad]
             .close_setups
             .insert(position, key);
+        // The pick is plugin state, not a param: the host records it
+        // through `mic_setup_rev` (one undoable edit that restores the
+        // state from before it).
+        bridge.announce_mic_setup_edit();
         // A mic change reloads that pad only (E4).
         reload_kit(bridge);
     }
@@ -435,7 +480,7 @@ fn trim_row(
 ) {
     ui.horizontal(|ui| {
         controls::row_label(ui, label, MIC_LABEL_W);
-        let w = super::body_width(ui, 0.0);
+        let w = super::body_width(ui, 0.0).min(controls::MAX_CONTROL_W);
         controls::fader(ui, bridge, name, param, labels.of(param), w, false);
     });
 }
@@ -454,25 +499,20 @@ fn draw_routing(
         controls::row_label(ui, "Output", MIC_LABEL_W);
         let current = params.output.value();
         let kit_port = OUTPUT_PORT_NAMES[kit_pad.output_group(pad) as usize];
-        if let Some(v) = controls::combo(
+        // In Stereo the port is kept for Multi but plays nothing: dimmed,
+        // and it says why.
+        let dim = (!multi).then_some(controls::STEREO_OUTPUT_WHY);
+        if let Some(v) = controls::combo_dimmed(
             ui,
             "routing.output",
             140.0,
             &output_text(current, kit_port),
             current,
             (OUTPUT_KIT..=OUTPUT_CHOICE_LABELS.len() as i32 - 1).map(|v| (v, output_text(v, kit_port))),
+            dim,
         ) {
             params.output.set_value(v);
             bridge.announce_param_edit(params.output.id());
-        }
-        if !multi {
-            let l = ui
-                .add(egui::Label::new(theme::hint_text("in Stereo, all on Main")).truncate())
-                .on_hover_text(
-                    "Output Mode is Stereo (Mix tab): every pad plays on Main. The \
-                     pad's port applies in Multi.",
-                );
-            probe(ui, "routing.output.stereo", l.rect);
         }
     });
     ui.horizontal(|ui| {

@@ -33,6 +33,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     let catalog = app.bridge.catalog.lock().clone();
+                    let hit = app.pad_hit(app.selected_pad);
                     pad_inspector::draw(
                         ui,
                         &app.bridge,
@@ -41,6 +42,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         &mut pad_inspector::InspectorState {
                             audition_velocity: &mut app.audition_velocity,
                             labels: &mut app.labels,
+                            hit,
                         },
                     );
                 });

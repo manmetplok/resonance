@@ -31,27 +31,27 @@ use resonance_drums::{EditorFrameProbe, ResonanceDrums, TestEditor};
 use resonance_plugin::ResonancePlugin;
 
 /// §6.1: 960×640 default, 780×520 minimum — the exact pair `factory.rs`
-/// declares.
-const SIZES: [(f32, f32); 2] = [(960.0, 640.0), (780.0, 520.0)];
+/// declares — and 1571×856, what a tiling compositor gives every plugin
+/// editor on this machine (CLAUDE.md).
+const SIZES: [(f32, f32); 3] = [(960.0, 640.0), (780.0, 520.0), (1571.0, 856.0)];
 
 /// The caption of each global control, on the Mix tab's GLOBAL card (the
 /// bottom-of-window KIT/GLOBAL cards are gone, K5).
-const GLOBAL_LABELS: [&str; 5] = [
+const GLOBAL_LABELS: [&str; 4] = [
     "Polyphony",
     "Velocity curve",
     "Velocity humanize",
     "Round robin",
-    "Output mode",
 ];
 
 /// The control widget each of those captions heads, as `mix_tab.rs`
-/// probes it.
+/// probes it — and the output mode switch, which heads the OUTPUTS card.
 const GLOBAL_WIDGETS: [&str; 5] = [
     "global.polyphony",
     "global.velocity_curve",
     "global.velocity_humanize",
     "global.round_robin",
-    "global.output_mode",
+    "mix.output_mode",
 ];
 
 /// The faders among them: a slider with its value readout beside it.

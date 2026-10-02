@@ -112,22 +112,56 @@ fn there_is_no_fake_solo() {
     }
 }
 
-/// Every param a control writes is announced to the host as an edit:
-/// a file that sets a param also announces (the knob/fader/chip helpers
-/// in `controls.rs` do both, and so does every hand-written pick).
-#[test]
-fn every_file_that_writes_a_param_announces_it() {
-    for (name, src) in EDITOR_FILES {
-        let writes = [".set_normalized(", ".set_plain(", "params.output.set_value(", "params.choke.set_value(", "articulation.set_value("]
-            .iter()
-            .any(|w| src.contains(w));
-        if writes {
-            assert!(
-                src.contains("announce_param_edit("),
-                "{name} writes a param without announcing it to the host"
-            );
+/// The ways an editor file writes a param: a float's travel or plain
+/// value, and `set_value` — which is how a bool (Mute), an int
+/// (polyphony, choke) and a choice (output, articulation) are written.
+const PARAM_WRITES: [&str; 3] = [".set_normalized(", ".set_plain(", ".set_value("];
+
+/// The write sites in `src` that are not announced: a write is announced
+/// when `announce_param_edit(` follows it within a few lines (a pick, a
+/// chip), or it is the write closure handed to `continuous(` (a knob or
+/// fader, announced when its gesture ends — `controls.rs`).
+fn unannounced_writes(src: &str) -> Vec<String> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut found = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let code = line.split("//").next().unwrap_or("");
+        if !PARAM_WRITES.iter().any(|w| code.contains(w)) {
+            continue;
+        }
+        let after = lines[i..(i + 6).min(lines.len())].join("\n");
+        let before = lines[i.saturating_sub(2)..=i].join("\n");
+        if !(after.contains("announce_param_edit(") || before.contains("continuous(")) {
+            found.push(format!("line {}: {}", i + 1, line.trim()));
         }
     }
+    found
+}
+
+/// Every param a control writes is announced to the host as an edit —
+/// checked write by write, not file by file: a file that announced one
+/// pick used to cover any other write in it.
+#[test]
+fn every_param_write_announces_it() {
+    for (name, src) in EDITOR_FILES {
+        let missing = unannounced_writes(src);
+        assert!(missing.is_empty(), "{name} writes a param without announcing it: {missing:?}");
+    }
+}
+
+/// The write check sees a bool, an int and a choice write, and lets an
+/// announced one and a `continuous` one through.
+#[test]
+fn the_write_check_sees_every_kind_of_write() {
+    let bare = "fn f() {\n    params.mute.set_value(true);\n}\n";
+    assert_eq!(unannounced_writes(bare).len(), 1);
+    let int = "fn f() {\n    params.polyphony.set_value(8);\n}\n";
+    assert_eq!(unannounced_writes(int).len(), 1);
+    let announced =
+        "fn f() {\n    params.choke.set_value(2);\n    bridge.announce_param_edit(params.choke.id());\n}\n";
+    assert!(unannounced_writes(announced).is_empty());
+    let gesture = "fn f() {\n    continuous(ui, bridge, param, edit, |v| {\n        param.set_value(v as i32)\n    });\n}\n";
+    assert!(unannounced_writes(gesture).is_empty());
 }
 
 /// Every `widgets::…(…)` call in `src` whose result is thrown away:
@@ -316,22 +350,11 @@ fn the_library_overlay_has_a_visible_entry_point() {
 }
 
 /// A file dialog opens a modal run loop: never on the editor thread
-/// (§6.5, E13). Only `jobs.rs`'s picker thread may name `rfd`.
+/// (§6.5, E13). Only `jobs.rs`'s picker thread may name `rfd` — every
+/// other editor file is checked, a new one included.
 #[test]
 fn no_file_dialog_runs_on_the_editor_thread() {
-    for (name, src) in [
-        ("app.rs", APP),
-        ("chrome.rs", CHROME),
-        ("kit_browser.rs", KIT_BROWSER),
-        ("library_panel.rs", LIBRARY_PANEL),
-        ("plok_panel.rs", PLOK_PANEL),
-        ("missing_kit.rs", MISSING_KIT),
-        ("mix_tab.rs", MIX_TAB),
-        ("setup_tab.rs", SETUP_TAB),
-        ("pad_inspector.rs", PAD_INSPECTOR),
-        ("pads_tab.rs", PADS_TAB),
-        ("controls.rs", CONTROLS),
-    ] {
+    for (name, src) in EDITOR_FILES.iter().filter(|(name, _)| *name != "jobs.rs") {
         assert!(!src.contains("rfd::"), "{name} opens a file dialog on the UI thread");
     }
     assert!(JOBS.contains("rfd::FileDialog"), "the picker moved; update this guard");

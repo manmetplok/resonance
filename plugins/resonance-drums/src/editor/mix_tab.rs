@@ -1,31 +1,28 @@
 //! The Mix tab (§6.3): the mixer view of the kit.
 //!
-//! - OUTPUTS: a strip per output port with its meter (the sampler's
-//!   per-port block peak) and the pads that play on it, and the master
-//!   level beside them. In Stereo mode the six ports beside Main are
-//!   silent, and their strips say so.
-//! - PADS: one row per pad — level, pan, mute, output — virtualised
+//! - OUTPUTS: the Stereo / Multi switch in its header, a strip per
+//!   output port with its meter (the sampler's per-port block peak) and
+//!   the pads that play on it, and the master level beside them. In
+//!   Stereo mode the six ports beside Main are silent, and their strips
+//!   say so.
+//! - PADS: one row per pad — level, pan, mute — virtualised
 //!   (`ScrollArea::show_rows`), so only the visible rows are laid out.
-//! - GLOBAL: polyphony, velocity curve, velocity humanize, round robin,
-//!   output mode.
+//!   A pad's output port and choke group live with the routing, on the
+//!   Setup tab's table and in the inspector: one home each.
+//! - GLOBAL: polyphony, velocity curve, velocity humanize, round robin.
 //!
 //! There is no release-time control: the plugin has no such param (the
 //! release fades are fixed, E2), and a control that moved nothing would
 //! be a fake.
 
 use plugin_gui_core::egui;
-use resonance_plugin::param::Param;
 
 use crate::drum_map::NUM_PADS;
 use crate::kit::{NUM_OUTPUT_PORTS, OUTPUT_PORT_NAMES};
-use crate::params::{
-    port_of_output_choice, OUTPUT_CHOICE_LABELS, OUTPUT_KIT, OUTPUT_MODE_LABELS,
-    OUTPUT_MODE_MULTI, ROUND_ROBIN_LABELS,
-};
+use crate::params::{port_of_output_choice, OUTPUT_MODE_LABELS, OUTPUT_MODE_MULTI, ROUND_ROBIN_LABELS};
 
 use super::app::{column, DrumsEditorApp};
 use super::controls::{self, PAN_TAG};
-use super::pad_inspector::output_text;
 use super::{probe, theme};
 
 /// Width of the GLOBAL column.
@@ -40,7 +37,7 @@ pub(super) fn draw(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let avail = ui.available_size();
     let global_w = GLOBAL_W.min(avail.x * 0.4);
     let left_w = (avail.x - global_w - GAP).max(0.0);
-    let ports = app.tick_port_meters();
+    let ports = app.tick_port_meters(ui.input(|i| i.time));
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(GAP, 0.0);
@@ -76,13 +73,38 @@ fn draw_outputs(ui: &mut egui::Ui, app: &mut DrumsEditorApp, ports: [f32; NUM_OU
     }
     let shown = controls::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
+        // The output mode heads the strips it decides.
+        let mut multi = multi;
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
             controls::heading(ui, "OUTPUTS");
-            ui.label(theme::hint_text(if multi {
-                "Multi: each port is its own stereo out"
-            } else {
-                "Stereo: the whole kit plays on Main"
-            }));
+            if controls::segmented(
+                ui,
+                &app.bridge,
+                "mix.output_mode",
+                &app.params.output_mode,
+                OUTPUT_MODE_LABELS,
+            ) {
+                multi = app.params.output_mode.value() == OUTPUT_MODE_MULTI;
+            }
+            let hint = ui
+                .add(
+                    egui::Label::new(theme::hint_text(if multi {
+                        "each port its own stereo out — route them to sub-tracks"
+                    } else {
+                        "the whole kit plays on Main"
+                    }))
+                    .truncate(),
+                )
+                .on_hover_text(if multi {
+                    "Multi: each pad plays on its output port (Setup tab), the \
+                     overheads and ambience on Overhead — route them to sub-tracks \
+                     in the host."
+                } else {
+                    "Stereo: the whole kit plays on Main; the other six ports are \
+                     silent."
+                });
+            probe(ui, "mix.output_mode.explain", hint.rect);
         });
         ui.add_space(4.0);
         let master_w = 74.0;
@@ -93,7 +115,7 @@ fn draw_outputs(ui: &mut egui::Ui, app: &mut DrumsEditorApp, ports: [f32; NUM_OU
             for port in 0..NUM_OUTPUT_PORTS {
                 let live = multi || port == crate::kit::MAIN_PORT_INDEX;
                 let rect = draw_strip(ui, port, strip_w, ports[port], live, counts[port], multi);
-                probe(ui, format!("mix.strip.{port}"), rect);
+                probe(ui, format_args!("mix.strip.{port}"), rect);
             }
             ui.add_space(8.0);
             draw_master(ui, app, master_w);
@@ -181,19 +203,30 @@ fn draw_master(ui: &mut egui::Ui, app: &mut DrumsEditorApp, width: f32) {
     );
 }
 
-/// The per-pad table: name, level, pan, mute, output. Only the rows in
-/// view are laid out (`show_rows`).
+/// Width of the table's mute column.
+const MUTE_W: f32 = 26.0;
+/// The gaps after the level and pan faders.
+const TABLE_GAPS: f32 = 12.0;
+
+/// The per-pad table: name, level, pan, mute. Only the rows in view are
+/// laid out (`show_rows`).
 fn draw_pad_table(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let kit = app.bridge.kit_pads.current();
     let shown = controls::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 2.0);
         let w = ui.available_width();
-        // name | level | pan | mute | output
-        let cols = [w * 0.19, w * 0.34, w * 0.25, 26.0, (w * 0.22 - 26.0).max(40.0)];
+        // name | level | pan | mute
+        let name_w = (w * 0.22).min(180.0);
+        // The two faders share what is left — at most an inspector
+        // control's width each, so a wide window does not stretch a pan
+        // fader across 400 px.
+        let faders = (w - name_w - MUTE_W - TABLE_GAPS - 4.0)
+            .clamp(0.0, 2.0 * controls::MAX_CONTROL_W);
+        let cols = [name_w, faders * 0.55 + 6.0, faders * 0.45 + 6.0, MUTE_W];
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for (title, cw) in ["PAD", "LEVEL", "PAN", "", "OUTPUT"].iter().zip(cols) {
+            for (title, cw) in ["PAD", "LEVEL", "PAN", ""].iter().zip(cols) {
                 let (r, _) = ui.allocate_exact_size(egui::vec2(cw, 14.0), egui::Sense::hover());
                 ui.painter_at(r).text(
                     r.left_center(),
@@ -221,7 +254,7 @@ fn draw_pad_row(
     app: &mut DrumsEditorApp,
     kit: &crate::pad_map::KitPads,
     pad: usize,
-    cols: [f32; 5],
+    cols: [f32; 4],
 ) {
     let params = &app.params.pads[pad];
     let present = kit.pads[pad].present;
@@ -247,7 +280,7 @@ fn draw_pad_row(
             app.selected_pad = pad;
         }
         let r = name.rect;
-        probe(ui, format!("mix.row.{pad}.name"), r);
+        probe(ui, format_args!("mix.row.{pad}.name"), r);
 
         let text = app.labels.of(&params.volume);
         let w = cols[1] - 6.0;
@@ -262,21 +295,8 @@ fn draw_pad_row(
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| controls::toggle(ui, &app.bridge, &format!("mix.row.{pad}.mute"), "M", &params.mute),
         );
-        let current = params.output.value();
-        let kit_port = OUTPUT_PORT_NAMES[kit.pads[pad].output_group(pad) as usize];
-        if let Some(v) = controls::combo(
-            ui,
-            &format!("mix.row.{pad}.output"),
-            cols[4] - 8.0,
-            &output_text(current, kit_port),
-            current,
-            (OUTPUT_KIT..=OUTPUT_CHOICE_LABELS.len() as i32 - 1).map(|v| (v, output_text(v, kit_port))),
-        ) {
-            params.output.set_value(v);
-            app.bridge.announce_param_edit(params.output.id());
-        }
     });
-    probe(ui, format!("mix.row.{pad}"), row.response.rect);
+    probe(ui, format_args!("mix.row.{pad}"), row.response.rect);
 }
 
 /// GLOBAL: how the kit plays.
@@ -310,30 +330,35 @@ fn draw_global(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
 
         caption(ui, "Round robin", "how a layer's takes are walked");
         controls::segmented(ui, bridge, "global.round_robin", &params.round_robin_mode, ROUND_ROBIN_LABELS);
-
-        caption(ui, "Output mode", "");
-        controls::segmented(ui, bridge, "global.output_mode", &params.output_mode, OUTPUT_MODE_LABELS);
-        let explain = if params.output_mode.value() == OUTPUT_MODE_MULTI {
-            "Multi: each pad plays on its output port, the overheads and \
-             ambience on Overhead — route them to sub-tracks in the host."
-        } else {
-            "Stereo: the whole kit plays on Main; the other six ports are silent."
-        };
-        let l = ui.add(
-            egui::Label::new(egui::RichText::new(explain).color(theme::TEXT_3).size(10.0)).wrap(),
-        );
-        probe(ui, "global.output_mode.explain", l.rect);
     });
     probe(ui, "mix.global", shown.response.rect);
 }
 
-/// A control's caption, with its hint on hover and (when it fits) beside.
+/// A control's caption, with its hint on hover and — when it fits —
+/// beside it, quieter.
 fn caption(ui: &mut egui::Ui, label: &str, hint: &str) {
     ui.add_space(2.0);
-    let r = ui
-        .label(egui::RichText::new(label).color(theme::TEXT_2).size(10.5))
-        .on_hover_text(hint);
-    probe(ui, format!("caption.{label}"), r.rect);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let r = ui
+            .label(egui::RichText::new(label).color(theme::TEXT_2).size(10.5))
+            .on_hover_text(hint);
+        probe(ui, format_args!("caption.{label}"), r.rect);
+        if hint.is_empty() {
+            return;
+        }
+        let galley = ui.painter().layout_no_wrap(
+            hint.to_string(),
+            egui::FontId::proportional(9.5),
+            theme::TEXT_4,
+        );
+        let spare = ui.available_width();
+        if galley.size().x <= spare {
+            let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+            ui.painter().galley(rect.min, galley, theme::TEXT_4);
+            probe(ui, format_args!("caption.{label}.hint"), rect);
+        }
+    });
 }
 
 /// -60 dBFS .. 0 dBFS → 0..1.
