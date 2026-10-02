@@ -1,9 +1,13 @@
 # Drums plugin rework: kit library, plok.org downloads, editor, sampler
 
-Status: **spec, decisions answered, not started** (2026-10-01, verified
-against master @ 83bc1321). D1–D10 are decided (§11). D2 (copy on import),
-D8 (disk streaming now) and D9 (bleed/room/overhead banks now) override the
-first draft's recommendations.
+Status: **implemented on `feat/drums-rework`** (2026-10-02; branched from
+master @ 83bc1321, merged master @ 60de2598). Slices K0–K9 are built,
+including K6b (disk streaming; default preload 32k frames — 64k measured
+1,074 MiB for the default Drummica setup) and K7b (mic banks; 128 voices +
+32 tail slots). K10 is deferred. D1–D10 are decided (§11); D3 is done — the
+`registry` module is deleted. Where the build differs from this spec, §12
+("As built") says so. D2 (copy on import), D8 (disk streaming now) and D9
+(bleed/room/overhead banks now) override the first draft's recommendations.
 Touches `plugins/resonance-drums` (download, kit loader, sampler, params,
 state, editor), `resonance-common` (a new `drumkit_library`, retiring the drums
 use of `registry`), `resonance-plugin` (a `kit_rows` adapter beside
@@ -487,7 +491,7 @@ the audio thread.
 
 ```
 ┌ pad grid (6×5, scroll if narrow) ─────────────┐┌ inspector (scrolls) ──────────────────────┐
-│ ┌Kick──┐┌Snare─┐┌Rim───┐┌Side──┐┌Clap──┐┌Stick┐││ Snare  · D2 (38) · Snare port   [▶ ▾v100] │
+│ ┌Kick──┐┌Snare─┐┌Rim───┐┌Side──┐┌Stick─┐┌Tom H┐││ Snare  · D2 (38) · Snare port   [▶ ▾v100] │
 │ │ C1 36││ D1 38││ …    ││      ││      ││     │││ [Mute] [Solo]                             │
 │ └──────┘└──────┘└──────┘└──────┘└──────┘└─────┘││ ~~~~ waveform of LAST played take ~~~~    │
 │ ┌HH cl─┐┌HH op─┐ …                             ││ layer 5/7 · take 2/3 · v98               │
@@ -495,7 +499,7 @@ the audio thread.
 │ dim cell = piece not in this kit (D7)          ││ ARTICULATION  [snap] [body]  ← kit labels │
 └────────────────────────────────────────────────┘│ MICS   Top: [Shure SM57 · SN Top ▾] 0.0dB │
                                                   │        Btm: [AKG C451 · SN Btm ▾] −6.0dB │
-                                                  │        OH blend ─────○──── 0.80           │
+                                                  │        OH trim  ─────○──── 0.0 dB         │
                                                   │ OUTPUT [Snare ▾]   CHOKE [none ▾]         │
                                                   └───────────────────────────────────────────┘
 ```
@@ -589,7 +593,7 @@ Each item names the test that proves it.
 
 | # | Fix | Test |
 |---|---|---|
-| E1 | **Click-free steal.** The victim goes to a 3 ms fade in one of 16 extra "tail" slots, and the new hit takes a clean slot. | Max inter-sample delta at the steal point stays below a bound. 64-voice saturation pattern. |
+| E1 | **Click-free steal.** The victim goes to a 3 ms fade in one of 32 extra "tail" slots, and the new hit takes a clean slot. | Max inter-sample delta at the steal point stays below a bound. 64-voice saturation pattern. |
 | E2 | **Release and choke in ms** (default 25 ms hat choke, 5 ms reset/swap) with an equal-power curve, sample-rate independent. The second quick kit swap no longer hard-cuts. CLAP `reset()` stays an instant cut on purpose: bounce calls `reset_plugins` before rendering and a fade would leak into the export (`release_ms.rs::reset_is_immediate`). | The same fade length in ms at 44.1, 48 and 96 kHz. |
 | E3 | **Latest-wins kit hand-off.** A one-slot mailbox. When the slot is occupied, the loader takes the stale kit back and sends it to the janitor. `kit_load_progress` reaches 1.0 only once the audio thread has taken the kit. | Two back-to-back loads: the second kit is the one that plays. |
 | E4 | **Incremental reload.** A mic, overhead or articulation change decodes only the affected pads. `initialize` at an unchanged rate reuses the loaded kit. | A decode counter (test hook): changing one pad's mic decodes that pad's files only. |
@@ -601,8 +605,8 @@ Each item names the test that proves it.
 | E10 | **Kit-driven pads.** Piece names and articulation labels come from `_meta`. An optional `_meta.pads: {piece: {note, port, choke}}` overrides the Drummica table, which remains the fallback. Pads the kit lacks are **dimmed and silent**, not filled from the built-in kit (D7). The built-in kit plays only when no kit is selected. | IT Techno shows "Perc Conga" / "punch/deep". A kit without toms has silent, dimmed tom pads. |
 | E11 | **Output.** `output_mode` is Stereo or Multi (D5). In Stereo everything sums to Main. In Multi, `pad_N_output` (a choice of the 7 ports) applies, and the overhead takes of close-miked pads go to the Overhead port. Pads with no close mic (the cymbals, whose overhead take *is* the sound) keep their overhead on their own port, so the Cymbals sub-track is not silent (ba #1232). | Stereo: port 0 RMS ≈ the full kit. Multi: the cymbals' OH lands on Overhead. |
 | E12 | **Choke groups as params.** `pad_N_choke` (0 = none, 1–8), defaulting to the hats in group 1. | An open hat choked by a pedal hat, with a configured group on toms. |
-| E14 | **Disk streaming (D8).** At load, only a **head** of each sample stays in RAM: the first 64 k frames, which covers about 1.3 s at 48 kHz. These heads are what the E5 cache shares. A voice starts on its head, then reads the **tail** from a per-voice ring buffer that a disk-reader pool fills ahead of it. Files are memory-mapped or `pread`. Decode is WAV-only, so tails need no decoder state. Samples with no head/tail split (mono, short) are fully cached. Rules: the audio thread never blocks or allocates. An underrun outputs silence for that voice and bumps a counter shown in the status bar and readable as a param. The reader runs ahead by at least 4 host blocks plus the ring size. Choke, steal and release all work on whatever the ring holds. Preload size is a global setting (32 k / 64 k / 128 k frames). | Memory for the default Drummica setup drops below 1 GB, measured. A 64-voice saturation test over a cold page cache plays with zero underruns at 128-frame buffers. A streamed render is **bit-identical** to a fully-cached render of the same MIDI (golden). The reader thread is killed mid-render and the audio thread does not block. |
-| E15 | **More mic banks (D9).** Each pad gains optional **bleed** banks: kit setups whose position belongs to another piece, such as SN Btm on toms and kick. It also gains **room** banks (positions `Room*`) and up to **3 overhead setups at once** (for example OH AB + OH XY + Room). The mic list comes from the kit. Each bank kind has a global level and on/off param (`bleed_level`, `room_level`, `oh_N_level`), and each pad has a per-mic trim. Bleed and room are routed to the Overhead/room port in Multi mode and to Main in Stereo. Banks share the hit's layer and take. Voices per hit rise from 3 to as many as 8, so the voice cap becomes 128 + 16 tail slots. Banks are off by default, and turning one on loads only that bank, incrementally (E4), streamed (E14). Every bank adds its heads to memory: on Drummica, three overhead setups plus bleed take an instance past 1 GB, against the default setup's < 1 GB (E14). | A fixture kit with bleed and room setups: turning bleed off removes exactly that bank's energy. Each OH setup's level scales its bank only. 128-voice saturation stays click-free (E1). |
+| E14 | **Disk streaming (D8).** At load, only a **head** of each sample stays in RAM: the first 32 k frames by default, which covers about 0.7 s at 48 kHz (64 k measured 1,074 MiB for the default Drummica setup, over the 1 GB goal). These heads are what the E5 cache shares. A voice starts on its head, then reads the **tail** from a per-voice ring buffer that a disk-reader pool fills ahead of it. Files are memory-mapped or `pread`. Decode is WAV-only, so tails need no decoder state. Samples with no head/tail split (mono, short) are fully cached. Rules: the audio thread never blocks or allocates. An underrun outputs silence for that voice and bumps a counter shown in the status bar and readable as a param. The reader runs ahead by at least 4 host blocks plus the ring size. Choke, steal and release all work on whatever the ring holds. Preload size is a global setting (32 k / 64 k / 128 k frames, default 32 k). | Memory for the default Drummica setup drops below 1 GB, measured. A 64-voice saturation test over a cold page cache plays with zero underruns at 128-frame buffers. A streamed render is **bit-identical** to a fully-cached render of the same MIDI (golden). The reader thread is killed mid-render and the audio thread does not block. |
+| E15 | **More mic banks (D9).** Each pad gains optional **bleed** banks: kit setups whose position belongs to another piece, such as SN Btm on toms and kick. It also gains **room** banks (positions `Room*`) and up to **3 overhead setups at once** (for example OH AB + OH XY + Room). The mic list comes from the kit. Each bank kind has a global level and on/off param (`bleed_level`, `room_level`, `oh_N_level`), and each pad has a per-mic trim. Bleed and room are routed to the Overhead/room port in Multi mode and to Main in Stereo. Banks share the hit's layer and take. Voices per hit rise from 3 to as many as 8, so the voice cap becomes 128 + 32 tail slots. Banks are off by default, and turning one on loads only that bank, incrementally (E4), streamed (E14). Every bank adds its heads to memory: on Drummica, three overhead setups plus bleed take an instance past 1 GB, against the default setup's < 1 GB (E14). | A fixture kit with bleed and room setups: turning bleed off removes exactly that bank's energy. Each OH setup's level scales its bank only. 128-voice saturation stays click-free (E1). |
 | E13 | **Cleanup.** Remove `samples/clap.wav` and `cowbell.wav`, the stale Clap/Cowbell docs, the `#[allow(dead_code)]` fields that are now used, and the per-param `Box::leak`. Move the rfd dialog off the UI thread. | — |
 
 **Goldens.** E1, E2, E7, E11 and E15 change sound on purpose. Each re-blesses
@@ -710,9 +714,62 @@ downloads back the same day.
 | D2 | Import | **Copy into the library root**, the same as the NAM library. The copy runs on a background job with progress, cancel and a disk check, through `.staging/` (§6.5). This differs from the first draft, which registered folders in place. |
 | D3 | `installed.json` | **Retire it.** A one-time migration into `library.json` and the sidecars, then delete `registry`. |
 | D4 | How a kit is chosen | **A slot param that is not automatable** (`kit_select`), as on the amp. |
-| D5 | Default output | **Stereo** for a fresh instance. The Drummica track preset sets Multi. |
+| D5 | Default output | **Stereo** for a fresh instance. The Drummica track preset sets Multi — **it must be re-saved from an instance set to Multi** (see the note below the table). |
 | D6 | Volume scale | **dB**, with a one-shot conversion of v1 linear values. |
 | D7 | A piece the kit lacks | **Dim and silence.** The built-in kit plays only when no kit is selected. |
 | D8 | Disk streaming | **Now, in this rework** (E14, slice K6b). This differs from the first draft, which deferred it. |
 | D9 | Bleed / room / layered OH | **In this rework** (E15, slice K7b, after streaming). This differs from the first draft, which deferred it. |
 | D10 | Index hosting | **Keep the single `index.json`** and add the optional fields of §4.2. |
+
+**D5 and the track preset (verified 2026-10-02).** A track preset *does*
+carry `output_mode`. "Save track as preset" sends `SaveAllPluginStates`,
+which calls the plugin's plain `clap.state.save` (`ClapInstance::save_state`,
+not `clap.state-context` `FOR_PRESET`), and applying the preset sends
+`LoadPluginState` → plain `clap.state.load`
+(`resonance-app/src/engine_events/{presets,plugins}.rs`). The full state
+writes every param that is not `state_excluded`; `output_mode` is only
+`excluded_from_presets()`, which applies to **plugin** presets
+(`*.save_plugin_preset`, the preset bar), not to the full state. So a
+track preset saved from a Multi instance restores Multi.
+
+The user's existing "Drummica Kit" track preset predates the `params` map:
+its drums state holds only `articulations`, `kit_path` (absolute),
+`overhead_setup_key` and `pad_mic_choices`. `upgrade_output_mode` gives
+Multi only to a state that *has* params but no `output_mode`, so this
+preset loads as **Stereo**, and its `kit_path` becomes a `kit_ref` with no
+`rel_path` until re-saved. Re-save it once from an instance with the
+Drummica kit selected and Output Mode = Multi.
+
+## 12. As built
+
+Where `feat/drums-rework` differs from the spec above:
+
+- **Tail slots: 32**, not 16 (E1/E15). Saturation at 128 voices needs the
+  extra fades.
+- **Polyphony: 128** (`polyphony` max and default). A pre-E15 state at 64
+  (that build's maximum) is upgraded to 128 (`upgrade_polyphony`).
+- **Streaming preload default: 32k frames** (E14). 64k measured 1,074 MiB
+  for the default Drummica setup.
+- **No Solo and no release-time params.** The inspector has Mute only; the
+  Mix tab has no release-time control (E2's release and choke fades are
+  fixed in ms).
+- **E2: `reset()` stays an instant cut**, as the spec says: bounce resets
+  before rendering, and a fade would leak into the export.
+- **E11: cymbals keep their overhead on their own port** in Multi (they
+  have no close mic), so the Cymbals sub-track is not silent.
+- **Library overlay is an `egui::Modal`** (backdrop, modal input and Esc
+  from egui), not a hand-painted overlay on the parent painter.
+- **Header load progress is text only** (a percentage), no progress bar.
+- **Mic labels read `position · brand mic`** (e.g. `OHsAB · Sennheiser
+  e914`), not `brand · mic · position`; an unknown key shows raw.
+- **`kit_select` -2 is "parked"**: a kit with no slot (outside the
+  library, not yet slotted, or missing on this machine). Writing -2 returns
+  to it; its text is `"<name> (external)"` / `"<name> (missing)"`.
+- **D2: import copies** into the library root through `.staging/`, as
+  decided; nothing is registered in place.
+- **D3: `installed.json` is read once** by the migration's own read-only
+  deserialiser (`drumkit_library`); `resonance_common::registry` is
+  deleted, and `drumkits_root()` is the library's root (honouring
+  `RESONANCE_DRUMKIT_DIR`).
+- **K10 deferred**: no kit `Preview ▶`, no folder-of-WAVs import, the note
+  map is read-only.
