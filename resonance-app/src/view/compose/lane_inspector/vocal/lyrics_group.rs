@@ -22,7 +22,7 @@ use super::toggle_row;
 pub(super) fn lyrics_group<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let key = crate::compose::RailPanelKey::VocalLyrics(track_id);

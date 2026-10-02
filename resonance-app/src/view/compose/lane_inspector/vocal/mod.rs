@@ -132,7 +132,7 @@ fn tempo_warning_card<'a>(w: crate::update::compose::VocalTempoMismatch) -> Elem
 pub(in crate::view::compose::lane_inspector) fn vocal_controls<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     seed: u64,
     bulk_content: Option<&'a text_editor::Content>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,

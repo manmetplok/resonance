@@ -19,10 +19,10 @@ use super::{register_high_options, register_low_options, NotePick, NoteValuePick
 pub(super) fn melody_controls<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a resonance_music_theory::MelodyParams,
+    params: &resonance_music_theory::MelodyParams,
 ) -> Element<'a, Message> {
     let style_picker = pick_list(
-        MelodyStyle::ALL.to_vec(),
+        MelodyStyle::ALL,
         Some(params.style),
         move |style| {
             Message::Compose(ComposeMessage::LaneInspector {
@@ -67,7 +67,7 @@ pub(super) fn melody_controls<'a>(
     .width(Length::Fill);
 
     // Note value as a user-friendly pick list
-    let note_values = vec![
+    let note_values = [
         NoteValuePick(480, "Quarter"),
         NoteValuePick(240, "Eighth"),
         NoteValuePick(120, "Sixteenth"),
@@ -176,7 +176,7 @@ pub(super) fn melody_controls<'a>(
         .width(Length::Fill);
 
         let contour_picker = pick_list(
-            ContourPreference::ALL.to_vec(),
+            ContourPreference::ALL,
             Some(params.contour),
             move |c| {
                 Message::Compose(ComposeMessage::LaneInspector {
@@ -190,7 +190,7 @@ pub(super) fn melody_controls<'a>(
         .padding([4, 6])
         .width(Length::Fill);
 
-        let phrase_len_options = vec![
+        let phrase_len_options = [
             PhraseLenPick(2),
             PhraseLenPick(4),
             PhraseLenPick(8),

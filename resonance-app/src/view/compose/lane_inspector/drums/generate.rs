@@ -12,7 +12,7 @@ use crate::theme;
 
 use super::common::{rail_card, u8_color};
 
-pub(super) fn generate_panel<'a>(group: &'a DrumGroup) -> Element<'a, Message> {
+pub(super) fn generate_panel<'a>(group: &DrumGroup) -> Element<'a, Message> {
     let color = u8_color(group.color);
     let id = group.id;
 

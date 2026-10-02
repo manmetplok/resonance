@@ -13,7 +13,7 @@ use crate::theme;
 use super::common::{rail_card, rail_dot, u8_color};
 
 pub(super) fn articulation_mix_panel<'a>(
-    group: &'a DrumGroup,
+    group: &DrumGroup,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let color = u8_color(group.color);

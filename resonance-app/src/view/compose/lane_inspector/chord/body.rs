@@ -19,8 +19,8 @@ use super::{
 };
 
 pub(in crate::view::compose::lane_inspector) fn chord_body<'a>(
-    definition: &'a SectionDefinitionState,
-    table_registry: &'a TableRegistry,
+    definition: &SectionDefinitionState,
+    table_registry: &TableRegistry,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
     use crate::compose::RailPanelKey;

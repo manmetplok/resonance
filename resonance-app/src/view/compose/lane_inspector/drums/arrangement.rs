@@ -73,8 +73,8 @@ fn arr(msg: ArrangementMessage) -> Message {
 /// The project-wide pattern bank rendered as draggable "add to arrangement"
 /// sources. `definition` is the focused section the drag/click targets.
 pub(super) fn pattern_bank_card<'a>(
-    definition: &'a SectionDefinitionState,
-    patterns: &'a [DrumPattern],
+    definition: &SectionDefinitionState,
+    patterns: &[DrumPattern],
 ) -> Element<'a, Message> {
     let title = row![
         rail_dot(theme::ACCENT_SOFT),
@@ -126,7 +126,7 @@ pub(super) fn pattern_bank_card<'a>(
 /// One draggable bank source: grab handle + colour dot + name, with a
 /// `length · groups` meta line. Clicking (the drag fallback) appends the
 /// pattern as a fresh entry.
-fn bank_row<'a>(definition_id: u64, pattern: &'a DrumPattern) -> Element<'a, Message> {
+fn bank_row<'a>(definition_id: u64, pattern: &DrumPattern) -> Element<'a, Message> {
     let color = u8_color(pattern.color);
     let handle = theme::icon(theme::fa::BARS).size(10).color(theme::TEXT_4);
     let name = text(pattern.name.clone()).size(12).color(theme::TEXT_1);
@@ -233,8 +233,8 @@ pub(super) fn resolved_entry_index(
 /// Entry inspector for the selected arrangement entry (or an empty-state
 /// prompt when the arrangement has no entries).
 pub(super) fn entry_inspector_card<'a>(
-    definition: &'a SectionDefinitionState,
-    patterns: &'a [DrumPattern],
+    definition: &SectionDefinitionState,
+    patterns: &[DrumPattern],
     selected: Option<usize>,
 ) -> Element<'a, Message> {
     let Some(index) = resolved_entry_index(definition, selected) else {

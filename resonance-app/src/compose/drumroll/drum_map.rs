@@ -12,14 +12,14 @@
 use resonance_common::drum_map as gm;
 
 /// One pad in the drumroll grid.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrumPad {
     /// General MIDI drum note number (36 = kick, 38 = snare, …).
     pub note: u8,
 }
 
 /// Ordered list of pads shown top-to-bottom in each drum track row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrumPadMap {
     pub pads: Vec<DrumPad>,
 }

@@ -27,11 +27,11 @@ use rhythm::rhythm_panel;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drum_body<'a>(
-    definition: &'a SectionDefinitionState,
-    _track: &'a TrackState,
-    drumroll_state: &'a DrumrollViewState,
-    drum_groups: &'a [DrumGroup],
-    drum_patterns: &'a [DrumPattern],
+    definition: &SectionDefinitionState,
+    _track: &TrackState,
+    drumroll_state: &DrumrollViewState,
+    drum_groups: &[DrumGroup],
+    drum_patterns: &[DrumPattern],
     _clip_id: Option<u64>,
     collapsed_panels: &std::collections::HashSet<crate::compose::RailPanelKey>,
 ) -> Element<'a, Message> {
@@ -110,7 +110,7 @@ pub(super) fn drum_body<'a>(
 // ===========================================================================
 
 fn group_selector<'a>(
-    groups: &'a [DrumGroup],
+    groups: &[DrumGroup],
     selected: Option<u64>,
 ) -> Element<'a, Message> {
     let title = row![

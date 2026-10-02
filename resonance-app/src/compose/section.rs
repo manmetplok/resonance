@@ -24,7 +24,7 @@ pub enum SelectedLane {
 /// Runtime mirror of `ProjectSectionDefinition`. Kept separate so future
 /// runtime-only fields (e.g. editor UI state) can be added without touching
 /// the persisted shape.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SectionDefinitionState {
     pub id: u64,
     pub name: String,
@@ -338,7 +338,7 @@ pub struct SectionPlacementState {
     pub start_bar: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChordState {
     pub id: u64,
     pub start_beat: u32,

@@ -16,7 +16,7 @@ use super::common::{dim_label, group_card, rail_dot_warm, warm_chip_inactive};
 pub(super) fn draft_group<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     bulk_content: Option<&'a text_editor::Content>,
     collapsed: bool,
 ) -> Element<'a, Message> {
@@ -97,7 +97,7 @@ pub(super) fn draft_group<'a>(
 fn bulk_lyrics_block<'a>(
     definition_id: u64,
     track_id: TrackId,
-    params: &'a VocalParams,
+    params: &VocalParams,
     bulk_content: Option<&'a text_editor::Content>,
 ) -> Element<'a, Message> {
     let height = Length::Fixed(((params.lines.max(4) as f32) * 22.0).min(220.0));
@@ -131,7 +131,7 @@ fn bulk_lyrics_block<'a>(
 fn lyric_line_row<'a>(
     definition_id: u64,
     track_id: TrackId,
-    line: &'a resonance_music_theory::LyricLine,
+    line: &resonance_music_theory::LyricLine,
 ) -> Element<'a, Message> {
     let n = text(format!("{}.", line.n))
         .size(10)

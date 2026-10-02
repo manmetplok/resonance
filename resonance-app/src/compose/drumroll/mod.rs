@@ -16,7 +16,7 @@ pub use pattern::{default_drum_patterns, legacy_groups_to_pattern, DrumPattern};
 
 /// Transient UI state for the Compose drumroll view. Lives on
 /// `ComposeState::drumroll` (not serialized — this is purely editor state).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrumrollViewState {
     /// Velocity used for new hits.
     pub default_velocity: f32,

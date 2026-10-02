@@ -17,7 +17,7 @@ use super::{field_label, section_header, MotifLenPick};
 /// Section motif block — Source select + Complexity slider + a small
 /// preview card. Matches the design's "Section motif" panel.
 pub(super) fn motif_section_block<'a>(
-    definition: &'a SectionDefinitionState,
+    definition: &SectionDefinitionState,
     collapsed: bool,
 ) -> Element<'a, Message> {
     let definition_id = definition.id;
@@ -37,7 +37,7 @@ pub(super) fn motif_section_block<'a>(
         MotifSourceKind::Generated
     };
     let source_picker = pick_list(
-        vec![MotifSourceKind::Generated, MotifSourceKind::Manual],
+        [MotifSourceKind::Generated, MotifSourceKind::Manual],
         Some(source_kind),
         move |kind| {
             Message::Compose(ComposeMessage::ChordInspector {
@@ -87,7 +87,7 @@ pub(super) fn motif_section_block<'a>(
             .step(0.01)
             .width(Length::Fill);
 
-            let motif_len_options: Vec<MotifLenPick> = vec![
+            let motif_len_options = [
                 MotifLenPick(0),
                 MotifLenPick(2),
                 MotifLenPick(3),
@@ -176,7 +176,7 @@ pub(super) fn motif_section_block<'a>(
 
 fn manual_motif_canvas<'a>(
     definition_id: u64,
-    notes: &'a [ManualMotifNote],
+    notes: &[ManualMotifNote],
     scale: Option<Scale>,
 ) -> Element<'a, Message> {
     use crate::view::compose::manual_motif_canvas::{CELL_H, CELL_W, GRID_COLS, TOTAL_ROWS};
@@ -185,7 +185,7 @@ fn manual_motif_canvas<'a>(
     canvas(
         crate::view::compose::manual_motif_canvas::ManualMotifCanvas {
             definition_id,
-            notes,
+            notes: notes.to_vec().into(),
             scale,
         },
     )

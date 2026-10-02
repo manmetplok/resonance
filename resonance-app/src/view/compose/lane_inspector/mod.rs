@@ -6,9 +6,6 @@
 use iced::widget::{column, container, row, scrollable, text, tooltip, Space};
 use iced::{alignment, Element, Length};
 
-use std::collections::HashMap;
-
-use resonance_audio::types::TrackId;
 use resonance_music_theory::TableRegistry;
 
 use std::collections::HashSet;
@@ -26,9 +23,9 @@ use crate::theme;
 /// the EDITING context header can render `EDITING SECTION · Intro` or
 /// `EDITING TRACK · Drums` regardless of which lane is focused.
 fn editing_context<'a>(
-    selected: &'a SelectedLane,
-    definition: &'a SectionDefinitionState,
-    tracks: &'a [TrackState],
+    selected: &SelectedLane,
+    definition: &SectionDefinitionState,
+    tracks: &[TrackState],
 ) -> (&'static str, String, bool) {
     match selected {
         SelectedLane::Chords => ("SECTION", definition.name.clone(), true),
@@ -49,9 +46,9 @@ fn editing_context<'a>(
 /// track. Matches the "EDITING SECTION · {name}" treatment in the bundled
 /// design and reinforces the GLOBAL / PER-TRACK scope chip on the right.
 fn editing_header<'a>(
-    selected: &'a SelectedLane,
-    definition: &'a SectionDefinitionState,
-    tracks: &'a [TrackState],
+    selected: &SelectedLane,
+    definition: &SectionDefinitionState,
+    tracks: &[TrackState],
 ) -> Element<'a, Message> {
     let (scope_label, name, is_section) = editing_context(selected, definition, tracks);
     let accent = if is_section {
@@ -124,16 +121,20 @@ pub const PANEL_WIDTH: f32 = theme::COMPOSE_RAIL_WIDTH as f32;
 
 #[allow(clippy::too_many_arguments)]
 pub fn view<'a>(
-    definition: &'a SectionDefinitionState,
-    selected_lane: &'a SelectedLane,
-    tracks: &'a [TrackState],
-    drumroll_state: &'a DrumrollViewState,
-    drum_groups: &'a [DrumGroup],
-    drum_patterns: &'a [DrumPattern],
+    definition: &SectionDefinitionState,
+    selected_lane: &SelectedLane,
+    tracks: &[TrackState],
+    drumroll_state: &DrumrollViewState,
+    drum_groups: &[DrumGroup],
+    drum_patterns: &[DrumPattern],
     clip_id_for_drum: Option<u64>,
-    table_registry: &'a TableRegistry,
-    vocal_bulk_lyrics: &'a HashMap<(u64, TrackId), iced::widget::text_editor::Content>,
-    collapsed_panels: &'a HashSet<RailPanelKey>,
+    table_registry: &TableRegistry,
+    // The selected vocal lane's bulk-lyrics editor content, if one is
+    // open. The only input the rail *borrows* into its widgets (a
+    // `text_editor` holds `&Content`), so the caller builds the rail
+    // eagerly while it is `Some` and lazily otherwise (UX-10).
+    bulk_content: Option<&'a iced::widget::text_editor::Content>,
+    collapsed_panels: &HashSet<RailPanelKey>,
     vocal_tempo_warning: Option<crate::update::compose::VocalTempoMismatch>,
 ) -> Element<'a, Message> {
     // EDITING context header — large, unmistakable. Tells the user whether
@@ -164,7 +165,7 @@ pub fn view<'a>(
                 Some(t) => instrument::instrument_body(
                     definition,
                     t,
-                    vocal_bulk_lyrics,
+                    bulk_content,
                     collapsed_panels,
                     vocal_tempo_warning,
                 ),

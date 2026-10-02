@@ -18,11 +18,9 @@ pub fn view<'a>(definition: &'a SectionDefinitionState, chord_id: u64) -> Elemen
     let current = chord_state.chord;
     let definition_id = definition.id;
 
-    let roots: Vec<PitchClass> = PitchClass::ALL.to_vec();
-    let qualities: Vec<ChordQuality> = ChordQuality::ALL.to_vec();
-    let basses: Vec<BassOption> = std::iter::once(BassOption::None)
-        .chain(PitchClass::ALL.iter().copied().map(BassOption::Some))
-        .collect();
+    let roots = PitchClass::ALL;
+    let qualities = ChordQuality::ALL;
+    let basses = bass_options();
 
     let root_picker = pick_list(roots, Some(current.root), move |root| {
         Message::Compose(ComposeMessage::EditChord {
@@ -140,4 +138,15 @@ impl std::fmt::Display for BassOption {
             BassOption::Some(pc) => write!(f, "{}", pc),
         }
     }
+}
+
+/// "No bass" plus every pitch class — the slash-bass picker's options,
+/// built once (UX-10: no per-frame option `Vec`s).
+fn bass_options() -> &'static [BassOption] {
+    static V: std::sync::OnceLock<Vec<BassOption>> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        std::iter::once(BassOption::None)
+            .chain(PitchClass::ALL.iter().copied().map(BassOption::Some))
+            .collect()
+    })
 }
