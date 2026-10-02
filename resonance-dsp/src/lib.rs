@@ -32,7 +32,7 @@ pub mod tempo;
 pub mod transformer;
 mod window;
 
-pub use biquad::Biquad;
+pub use biquad::{Biquad, BiquadCoeffs};
 pub use convolver::FftConvolver;
 pub use db::{db_to_linear, linear_to_db, MIN_DB};
 pub use dc_blocker::DcBlocker;

@@ -32,7 +32,7 @@
 //! the same order, so `A` is bit-for-bit the plain cascade and `B` is
 //! exactly zero.
 
-use resonance_dsp::Biquad;
+use resonance_dsp::BiquadCoeffs;
 use rustfft::num_complex::Complex;
 use rustfft::{Fft, FftPlanner};
 
@@ -66,7 +66,7 @@ pub struct FirDesigner {
     /// Reusable per-band biquad buffer (with each band's M/S mode) so
     /// each band is designed once per redesign instead of once per
     /// frequency bin.
-    biquads: Vec<(Biquad, MsMode)>,
+    biquads: Vec<(BiquadCoeffs, MsMode)>,
     part: FirPart,
 }
 
@@ -108,7 +108,6 @@ impl FirDesigner {
         let fft_size = self.geometry.fft_size;
         let fir_len = self.geometry.fir_len;
         let half = fft_size / 2;
-        let bin_hz = sample_rate / fft_size as f32;
 
         // Design each enabled band's biquad once up front; the per-bin
         // loop below only evaluates magnitudes.
@@ -117,19 +116,23 @@ impl FirDesigner {
             bands
                 .iter()
                 .filter(|b| b.enabled)
-                .map(|b| (b.to_biquad(sample_rate), b.ms)),
+                .map(|b| (b.to_coeffs(sample_rate), b.ms)),
         );
 
         // Compute composite magnitude response at each positive-frequency
         // bin. The biquad chain is cascaded by multiplying magnitudes,
         // once for the mid and once for the side (a stereo band is in
         // both), then combined into this designer's part.
+        //
+        // Evaluated in f64 from f64 designs: the f32 form loses up to
+        // ~7 dB in a 20 Hz high-pass stopband at 192 kHz (DSP2-07).
         for k in 0..=half {
-            let f = k as f32 * bin_hz;
-            let mut mid = 1.0_f32;
-            let mut side = 1.0_f32;
+            let half_w = std::f64::consts::PI * k as f64 / fft_size as f64;
+            let phi = half_w.sin().powi(2);
+            let mut mid = 1.0_f64;
+            let mut side = 1.0_f64;
             for (bq, ms) in &self.biquads {
-                let m = bq.magnitude(f, sample_rate);
+                let m = bq.magnitude_at_sin2(phi);
                 match ms {
                     MsMode::Stereo => {
                         mid *= m;
@@ -142,7 +145,7 @@ impl FirDesigner {
             let mag = match self.part {
                 FirPart::Direct => (mid + side) * 0.5,
                 FirPart::Cross => (mid - side) * 0.5,
-            };
+            } as f32;
             self.scratch[k] = Complex::new(mag, 0.0);
             // Mirror to the negative-frequency half (Hermitian symmetry).
             if k > 0 && k < half {

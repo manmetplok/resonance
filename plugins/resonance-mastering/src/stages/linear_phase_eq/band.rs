@@ -5,7 +5,7 @@
 //! enabled bands and produces the composite magnitude response of the
 //! cascaded chain.
 
-use resonance_dsp::Biquad;
+use resonance_dsp::{Biquad, BiquadCoeffs};
 
 pub use resonance_dsp::BandType;
 
@@ -79,5 +79,24 @@ impl BandConfig {
     pub fn to_biquad(&self, sample_rate: f32) -> Biquad {
         self.band_type
             .to_biquad(sample_rate, self.freq_hz, self.q, self.gain_db)
+    }
+
+    /// This band's design in f64, for the FIR designer: its magnitude is
+    /// that of the RBJ prototype, free of the f32 coefficient rounding
+    /// that skews low-frequency bands at high sample rates.
+    pub fn to_coeffs(&self, sample_rate: f32) -> BiquadCoeffs {
+        let (sr, f, q, g) = (
+            sample_rate as f64,
+            self.freq_hz as f64,
+            self.q as f64,
+            self.gain_db as f64,
+        );
+        match self.band_type {
+            BandType::Bell => BiquadCoeffs::bell(sr, f, q, g),
+            BandType::LowShelf => BiquadCoeffs::low_shelf(sr, f, q, g),
+            BandType::HighShelf => BiquadCoeffs::high_shelf(sr, f, q, g),
+            BandType::HighPass => BiquadCoeffs::high_pass(sr, f, q),
+            BandType::LowPass => BiquadCoeffs::low_pass(sr, f, q),
+        }
     }
 }
