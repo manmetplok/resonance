@@ -26,7 +26,15 @@ const MARKER_PALETTE: [[u8; 3]; 6] = [
 ];
 
 /// Render a single preset row in the add-track menu.
-fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
+///
+/// A user preset's row carries a delete button beside (not inside) the
+/// add button, 22 px square so it is hit on purpose. It only arms an inline
+/// "Delete?" confirm in place of the row: deleting removes the preset file
+/// and has no undo, so one mis-click must never do it (code review UX-14).
+fn preset_button(preset: &TrackPreset, is_user: bool, armed: bool) -> Element<'_, Message> {
+    if armed {
+        return preset_delete_confirm(preset);
+    }
     let icon_char = preset.instrument_icon.glyph();
     let icon_color = if preset.track_type == "instrument" {
         Color::from_rgb(0.3, 0.75, 0.8)
@@ -34,25 +42,15 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
         theme::TEXT
     };
 
-    let mut btn_row = row![
+    let btn_row = row![
         theme::icon(icon_char).size(12).color(icon_color),
         Space::new().width(6),
         text(&preset.name).size(12).color(theme::TEXT),
     ]
     .align_y(alignment::Vertical::Center);
 
-    if is_user {
-        // Show a small delete button for user presets.
-        let name = preset.name.clone();
-        let del = button(text("\u{00d7}").size(10).color(theme::TEXT_DIM))
-            .on_press(Message::Track(TrackMessage::DeleteUserPreset(name)))
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding([0, 3]);
-        btn_row = btn_row.push(Space::new().width(Length::Fill)).push(del);
-    }
-
     let preset_clone = preset.clone();
-    button(btn_row)
+    let add = button(btn_row)
         .on_press(Message::Track(TrackMessage::AddTrackFromPreset {
             preset: Box::new(preset_clone),
             id_hint: None,
@@ -60,8 +58,53 @@ fn preset_button(preset: &TrackPreset, is_user: bool) -> Element<'_, Message> {
         }))
         .width(Length::Fill)
         .padding([4, 10])
-        .style(|_theme, status| theme::transport_button_style(status))
+        .style(|_theme, status| theme::transport_button_style(status));
+
+    if !is_user {
+        return add.into();
+    }
+    let del = button(
+        container(theme::icon(fa::TRASH).size(10).color(theme::TEXT_3))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .on_press(Message::Ui(UiMessage::ArmPresetDelete(Some(preset.name.clone()))))
+    .width(22)
+    .height(22)
+    .padding(0)
+    .style(|_theme, status| theme::small_button_style(status));
+    row![add, del]
+        .spacing(2)
+        .align_y(alignment::Vertical::Center)
         .into()
+}
+
+/// The inline confirm a user preset's delete button arms: names the
+/// preset, offers Keep (the default, and what closing the menu means) and
+/// a destructive Delete.
+fn preset_delete_confirm(preset: &TrackPreset) -> Element<'_, Message> {
+    let keep = button(text("Keep").size(11).color(theme::TEXT_1))
+        .on_press(Message::Ui(UiMessage::ArmPresetDelete(None)))
+        .padding([3, 8])
+        .style(|_theme, status| theme::ghost_button_style(status));
+    let delete = button(text("Delete").size(11).color(theme::TEXT_1))
+        .on_press(Message::Track(TrackMessage::DeleteUserPreset(preset.name.clone())))
+        .padding([3, 8])
+        .style(|_theme, status| theme::destructive_button_style(status));
+    container(
+        row![
+            text(format!("Delete \u{201c}{}\u{201d}?", preset.name))
+                .size(12)
+                .color(theme::TEXT_1)
+                .width(Length::Fill),
+            keep,
+            delete,
+        ]
+        .spacing(4)
+        .align_y(alignment::Vertical::Center),
+    )
+    .padding([3, 6])
+    .into()
 }
 
 pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
@@ -158,7 +201,7 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
             .push(Space::new().height(4))
             .push(text("Presets").size(10).color(theme::TEXT_DIM));
         for preset in &r.presets.default_presets {
-            menu = menu.push(preset_button(preset, false));
+            menu = menu.push(preset_button(preset, false, false));
         }
     }
 
@@ -169,8 +212,9 @@ pub(crate) fn view_add_track_menu(r: &Resonance) -> Element<'_, Message> {
             .push(container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg))
             .push(Space::new().height(4))
             .push(text("User Presets").size(10).color(theme::TEXT_DIM));
+        let armed = r.ui.mixer.preset_delete_armed.as_deref();
         for preset in &r.presets.user_presets {
-            menu = menu.push(preset_button(preset, true));
+            menu = menu.push(preset_button(preset, true, armed == Some(preset.name.as_str())));
         }
     }
 

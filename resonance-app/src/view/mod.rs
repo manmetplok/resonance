@@ -200,6 +200,10 @@ impl crate::Resonance {
             Overlay::FreezeProgress => bounce_progress::view_freeze_progress_overlay(self),
             Overlay::Palette => palette::view_palette_overlay(self),
             Overlay::ConfirmQuit => confirm_quit::view_confirm_quit_overlay(self),
+            Overlay::ConfirmProjectSwitch => {
+                let switch = self.modals.confirm_switch.as_ref()?;
+                confirm_quit::view_confirm_switch_overlay(self, switch)
+            }
             Overlay::ConfirmDeleteTrack => {
                 let track_id = self.modals.confirm_delete_track?;
                 confirm_delete_track::view_confirm_delete_track_overlay(self, track_id)

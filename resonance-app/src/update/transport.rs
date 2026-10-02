@@ -210,8 +210,10 @@ pub fn handle(r: &mut Resonance, m: TransportMessage) -> Task<Message> {
         }
         TransportMessage::SetBpmText(s) => {
             r.transport.bpm_input = s;
+            r.transport.bpm_editing = true;
         }
         TransportMessage::CommitBpm => {
+            r.transport.bpm_editing = false;
             // `"nan".parse()` is `Ok(NaN)`, and NaN survives `clamp` —
             // it must be rejected here, before it reaches the bar table
             // and re-anchors every clip to sample 0 (review VIEW-06).

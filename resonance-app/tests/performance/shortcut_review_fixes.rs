@@ -48,12 +48,15 @@ fn new_project_replaces_the_open_project_instead_of_saving_it_elsewhere() {
 }
 
 #[test]
-fn new_project_is_unavailable_with_unsaved_changes() {
+fn new_project_over_unsaved_changes_asks_before_replacing() {
+    // Code review UX-01: New is offered over unsaved changes, and asks
+    // Save / Don't save / Cancel instead of dead-ending in a banner.
     let mut app = app();
     app.test_set_project_path(std::env::temp_dir().join("resonance_review_dirty.rproj"));
     app.test_set_dirty(true);
-    assert!(!CommandId::NewProject.availability(&app).is_yes());
+    assert!(CommandId::NewProject.availability(&app).is_yes());
     app.test_run_shortcut(CommandId::NewProject);
+    assert_eq!(app.root_overlay(), Some(Overlay::ConfirmProjectSwitch));
     assert!(app.test_project_path().is_some(), "the dirty project stays open");
 }
 

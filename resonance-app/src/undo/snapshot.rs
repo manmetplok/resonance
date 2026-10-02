@@ -273,7 +273,10 @@ impl crate::Resonance {
         UndoSnapshot {
             project: LoadedProject {
                 file,
-                project_dir: self.io.project_path.clone().unwrap_or_default(),
+                project_dir: self
+                    .undo_anchor_dir()
+                    .map(std::path::Path::to_path_buf)
+                    .unwrap_or_default(),
                 midi_notes,
                 plugin_states,
             },
@@ -312,14 +315,27 @@ impl crate::Resonance {
         file
     }
 
+    /// The directory an undo snapshot's clip WAVs resolve against: the
+    /// project's own folder, or — for an untitled project — the session's
+    /// autosave scratch dir the engine was pointed at when it landed
+    /// (`io.untitled_anchor`, code review UX-03 / STATE2-04).
+    pub(crate) fn undo_anchor_dir(&self) -> Option<&std::path::Path> {
+        self.io
+            .project_path
+            .as_deref()
+            .or(self.io.untitled_anchor.as_deref())
+    }
+
     /// True when the app is in a state where recording a new undo
-    /// snapshot would be meaningful. Unsaved projects don't have a
-    /// `project_dir` to anchor audio clip paths against, so their
-    /// snapshots could never be replayed — there's no point recording
-    /// them. Also false during an in-flight restore so intermediate
-    /// states mid-replay don't end up in the history.
+    /// snapshot would be meaningful. A snapshot names a clip's audio only
+    /// by its `audio/clip_<id>.wav`, so it needs a directory to anchor
+    /// those paths against ([`Self::undo_anchor_dir`]): the project folder,
+    /// or an untitled project's scratch dir. Without one (a platform with
+    /// no data dir) a snapshot could never be replayed. Also false during
+    /// an in-flight restore so intermediate states mid-replay don't end up
+    /// in the history.
     pub(crate) fn can_record_undo(&self) -> bool {
-        self.io.has_active_project && self.io.project_path.is_some() && !self.io.loading
+        self.io.has_active_project && self.undo_anchor_dir().is_some() && !self.io.loading
     }
 
     /// True when an undo or redo would be safe to start right now. The
@@ -416,7 +432,7 @@ impl crate::Resonance {
                 target.plugin_states.insert(instance_id, blob);
             }
         }
-        let project_path = self.io.project_path.clone();
+        let project_path = self.undo_anchor_dir().map(std::path::Path::to_path_buf);
         let ctx = ReconcileCtx {
             origin: Origin::Undo,
             project_dir: project_path.as_deref(),
@@ -682,6 +698,9 @@ impl crate::Resonance {
         // The action just undone is what a redo would re-apply, so its
         // label travels with the state pushed onto the redo stack.
         self.session.undo.push_redo(current, label.clone());
+        // Say what changed (code review UX-12): an undo can stop the
+        // transport and change a tab the user is not looking at.
+        self.banners.note_history(format!("Undid {label}"));
         // An undo changes the song like any committed edit — remote
         // control clients detect it through the revision counter
         // (doc #265, todo #1147).
@@ -700,6 +719,7 @@ impl crate::Resonance {
         let current = self.snapshot_for_undo();
         self.restore_from_snapshot_against(&current.project.file, snapshot);
         self.session.undo.push_undo(current, label.clone());
+        self.banners.note_history(format!("Redid {label}"));
         // Symmetric to `try_undo`: a redo is a committed edit for remote
         // revision-tracking purposes.
         self.bump_revision();

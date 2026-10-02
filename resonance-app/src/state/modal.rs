@@ -42,4 +42,25 @@ pub struct ModalState {
     /// When set, the app should quit after the current save completes.
     /// Set by the "Save & Quit" flow in the unsaved-changes dialog.
     pub quit_after_save: Option<iced::window::Id>,
+    /// When set, the "Save / Don't save / Cancel" dialog is up for a
+    /// project switch (Open, New) asked for over unsaved changes (code
+    /// review UX-01). Holds what to do once the user answers.
+    pub confirm_switch: Option<ProjectSwitch>,
+    /// The switch to carry out once the save the user chose in that
+    /// dialog completes (the "Save" answer; through Save As for an
+    /// untitled project). Dropped when that save fails or its dialog is
+    /// cancelled.
+    pub switch_after_save: Option<ProjectSwitch>,
+}
+
+/// A GUI request to replace the open project, parked behind the
+/// unsaved-changes dialog (code review UX-01). The control API's
+/// `project.open` / `project.new` never come here: a client can't answer a
+/// modal, so they answer `needs_confirmation` instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectSwitch {
+    /// Open this project (the Open dialog's pick, a recent entry).
+    Open(std::path::PathBuf),
+    /// Replace the project with a fresh untitled empty one (New Project).
+    NewEmpty,
 }

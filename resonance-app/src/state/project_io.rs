@@ -125,6 +125,15 @@ pub struct ProjectIoState {
     /// from. Its files stay until the next successful save or a clean
     /// quit.
     pub recovered_scratch_dir: Option<std::path::PathBuf>,
+    /// Where an untitled project's clip WAVs live: this session's
+    /// autosave scratch dir, created and handed to the engine as its
+    /// project dir when the untitled project lands
+    /// (`project_io::anchor_untitled_project`). Undo snapshots of an
+    /// untitled project resolve their audio against it, which is what lets
+    /// an untitled project record undo at all (code review UX-03,
+    /// STATE2-04). `None` until then, or when the platform has no data
+    /// directory. `project_path`, when set, always wins.
+    pub untitled_anchor: Option<std::path::PathBuf>,
 }
 
 /// Structural echoes a diff restore is still owed by the engine (ARCH-01

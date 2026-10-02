@@ -64,6 +64,10 @@ pub struct MixerUiState {
     pub selected_bus: Option<BusId>,
     pub expanded_sub_track_parents: std::collections::HashSet<TrackId>,
     pub add_track_menu_open: bool,
+    /// The user track preset whose "Delete?" confirm is showing in the
+    /// add-track menu (code review UX-14). Cleared whenever the menu opens
+    /// or closes, so a confirm never survives its menu.
+    pub preset_delete_armed: Option<String>,
     pub settings_open: bool,
     /// Whether the 360px Reference & A/B right-rail is open in the Mix
     /// view. Runtime UI state — toggled by the chrome "REF" button, never

@@ -34,12 +34,42 @@ pub struct TransportState {
     pub loop_out: u64,
     pub loop_range_set: bool,
     pub dragging_loop: Option<LoopDragTarget>,
+    /// The BPM field holds typed text not yet committed with Enter (code
+    /// review UX-15). Set by `SetBpmText`; cleared by the commit and by
+    /// [`Self::revert_bpm_text`]. While set, a press off the field reverts
+    /// it, so the field never shows a tempo the song is not playing at.
+    pub bpm_editing: bool,
+    /// The pointer is over the BPM field (see [`Self::bpm_editing`]).
+    pub bpm_hovered: bool,
+    /// The mixer's DSP load, polled from the engine every tick for the
+    /// transport's CPU readout (code review UX-11). `None` until the
+    /// engine has published a measurement (no audio callback has run).
+    pub cpu_load: Option<CpuLoad>,
+}
+
+/// One reading of the realtime mix callback's load, as fractions of the
+/// cycle budget (1.0 = the whole budget — an xrun).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CpuLoad {
+    /// Smoothed load (≈⅓ s EMA).
+    pub smoothed: f32,
+    /// Highest single cycle in the engine's current report window.
+    pub peak: f32,
 }
 
 impl TransportState {
     /// Recording, or counting in to record.
     pub fn is_recording(&self) -> bool {
         self.recording || self.record_pending
+    }
+
+    /// Drop the BPM field's uncommitted text: show the song tempo again
+    /// (code review UX-15).
+    pub fn revert_bpm_text(&mut self) {
+        if self.bpm_editing {
+            self.bpm_input = format!("{:.1}", self.bpm);
+            self.bpm_editing = false;
+        }
     }
 }
 
@@ -63,6 +93,9 @@ impl Default for TransportState {
             loop_out: 0,
             loop_range_set: false,
             dragging_loop: None,
+            bpm_editing: false,
+            bpm_hovered: false,
+            cpu_load: None,
         }
     }
 }

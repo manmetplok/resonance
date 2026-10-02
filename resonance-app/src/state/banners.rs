@@ -61,6 +61,22 @@ pub struct Banners {
     pub autosave_failures: u32,
     /// The latest autosave failure's reason.
     pub autosave_failure: Option<String>,
+    /// What the last undo / redo did ("Undid delete bus"), shown briefly
+    /// beside the project title so a history step is never silent — it
+    /// can stop the transport and change a tab the user isn't looking at
+    /// (code review UX-12). Expired by the tick after
+    /// [`HISTORY_NOTICE_DURATION`].
+    pub history_notice: Option<HistoryNotice>,
+}
+
+/// How long the undo / redo notice stays up.
+pub const HISTORY_NOTICE_DURATION: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// A short-lived undo / redo notice (see [`Banners::history_notice`]).
+#[derive(Debug, Clone)]
+pub struct HistoryNotice {
+    pub text: String,
+    pub shown_at: std::time::Instant,
 }
 
 impl Banners {
@@ -74,6 +90,25 @@ impl Banners {
     pub fn clear_autosave_failures(&mut self) {
         self.autosave_failures = 0;
         self.autosave_failure = None;
+    }
+
+    /// Show `text` as the undo / redo notice, replacing any earlier one.
+    pub fn note_history(&mut self, text: String) {
+        self.history_notice = Some(HistoryNotice {
+            text,
+            shown_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Drop the undo / redo notice once it has been up long enough.
+    pub fn expire_history_notice(&mut self, now: std::time::Instant) {
+        if self
+            .history_notice
+            .as_ref()
+            .is_some_and(|n| now.saturating_duration_since(n.shown_at) >= HISTORY_NOTICE_DURATION)
+        {
+            self.history_notice = None;
+        }
     }
 
     /// The persistent "autosave failing" line, once enough misses ran in

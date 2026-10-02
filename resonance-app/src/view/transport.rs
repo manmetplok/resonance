@@ -21,6 +21,9 @@ pub(crate) const CHROME_HEIGHT: f32 = 62.0;
 pub(crate) const TRANSPORT_HEIGHT: f32 = 74.0;
 /// Horizontal lead-in/lead-out padding of both shell rows.
 const SHELL_HPAD: f32 = 30.0;
+/// The chrome's reserved slot for the undo / redo notice (code review
+/// UX-12), wide enough for "Undid remove master effect".
+const HISTORY_NOTICE_WIDTH: f32 = 200.0;
 
 pub(crate) fn view_transport(r: &Resonance) -> Element<'_, Message> {
     column![view_chrome(r), view_playback_bar(r)]
@@ -64,7 +67,15 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
         .color(theme::TEXT_1)
         .line_height(LineHeight::Relative(1.0));
 
-    let dirty = if r.session.dirty { "· unsaved" } else { "· saved" };
+    // An untitled project has never been written anywhere: "saved" would
+    // claim its work is safe (code review UX-03).
+    let dirty = if r.io.project_path.is_none() {
+        "· not saved"
+    } else if r.session.dirty {
+        "· unsaved"
+    } else {
+        "· saved"
+    };
     let dirty_label = text(dirty)
         .size(12)
         .color(theme::TEXT_3)
@@ -72,9 +83,31 @@ fn view_chrome(r: &Resonance) -> Element<'_, Message> {
 
     // 14px between every element of the title cluster — brand / "/" /
     // project title / dirty label stay on one line.
-    let left = row![brand, separator, title, dirty_label]
+    let mut left = row![brand, separator, title, dirty_label]
         .spacing(14)
         .align_y(alignment::Vertical::Center);
+    // The brief "Undid delete bus" notice after an undo / redo (code
+    // review UX-12): quiet secondary text in the chrome, in a fixed-width
+    // slot that is always there, so showing or expiring it never moves the
+    // view tabs or anything else, and there is nothing to dismiss.
+    let notice: Element<'_, Message> = match &r.banners.history_notice {
+        Some(notice) => row![
+            theme::icon(fa::ARROW_ROTATE_LEFT)
+                .size(10)
+                .color(theme::ACCENT_SOFT)
+                .line_height(LineHeight::Relative(1.0)),
+            text(notice.text.as_str())
+                .size(12)
+                .color(theme::TEXT_2)
+                .wrapping(iced::widget::text::Wrapping::None)
+                .line_height(LineHeight::Relative(1.0)),
+        ]
+        .spacing(6)
+        .align_y(alignment::Vertical::Center)
+        .into(),
+        None => Space::new().into(),
+    };
+    left = left.push(container(notice).width(HISTORY_NOTICE_WIDTH).clip(true));
 
     let tabs = container(
         row![
@@ -342,16 +375,30 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
         .align_x(alignment::Horizontal::Center)
         .padding(0)
         .style(theme::borderless_text_input_style);
+    // Hover is tracked so a press off the field can revert typed text
+    // that was never committed with Enter (code review UX-15).
+    let bpm_input = mouse_area(bpm_input)
+        .on_enter(Message::Ui(UiMessage::BpmFieldHovered(true)))
+        .on_exit(Message::Ui(UiMessage::BpmFieldHovered(false)));
     let bpm_block = stat_block("BPM", bpm_input, 84);
 
-    let sig_value = mouse_area(
-        text(labels.sig.as_str())
-            .size(13)
-            .font(theme::MONO_FONT)
-            .color(theme::TEXT_1)
-            .line_height(LineHeight::Relative(1.0)),
-    )
-    .on_press(Message::Transport(TransportMessage::CycleTimeSignature));
+    // SIG is a control, not a readout: a click cycles the song's meter.
+    // It looks like one — a hover fill, the pointer cursor, and a hint
+    // naming the command (code review UX-16).
+    let sig_value = hint(
+        r,
+        button(
+            text(labels.sig.as_str())
+                .size(13)
+                .font(theme::MONO_FONT)
+                .color(theme::TEXT_1)
+                .line_height(LineHeight::Relative(1.0)),
+        )
+        .on_press(Message::Transport(TransportMessage::CycleTimeSignature))
+        .padding([2, 4])
+        .style(|_theme, status| theme::small_button_style(status)),
+        CommandId::TransportCycleTimeSignature,
+    );
     let sig_block = stat_block("SIG", sig_value, 76);
 
     let key_value = text(labels.key.as_str())
@@ -394,10 +441,11 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
     .width(90)
     .height(10);
 
-    let cpu_text = text("CPU —")
+    let (cpu_label, cpu_color) = cpu_readout(r.transport.cpu_load);
+    let cpu_text = text(cpu_label)
         .size(11)
         .font(theme::MONO_FONT)
-        .color(theme::TEXT_3)
+        .color(cpu_color)
         .line_height(LineHeight::Relative(1.0));
 
     let right = row![meter, Space::new().width(20), cpu_text]
@@ -429,6 +477,30 @@ fn view_playback_bar(r: &Resonance) -> Element<'_, Message> {
             ..Default::default()
         })
         .into()
+}
+
+/// Smoothed load at or above which the CPU readout turns WARM: the same
+/// line the engine's own load report treats as "any hiccup xruns"
+/// (`cycle_load::QUIET_PEAK_THRESHOLD`).
+const CPU_WARM_AT: f32 = 0.75;
+
+/// The transport's CPU readout (code review UX-11): the mix callback's
+/// smoothed share of its realtime budget, `CPU —` before the engine has
+/// measured a cycle. WARM near the budget, BAD once a cycle in the
+/// engine's report window outran it (each such cycle is an xrun).
+pub(crate) fn cpu_readout(load: Option<crate::state::CpuLoad>) -> (String, iced::Color) {
+    let Some(load) = load else {
+        return ("CPU \u{2014}".to_string(), theme::TEXT_3);
+    };
+    let pct = (load.smoothed * 100.0).round().clamp(0.0, 999.0);
+    let color = if load.peak >= 1.0 || load.smoothed >= 1.0 {
+        theme::BAD
+    } else if load.smoothed >= CPU_WARM_AT {
+        theme::WARM
+    } else {
+        theme::TEXT_3
+    };
+    (format!("CPU {pct:.0}%"), color)
 }
 
 /// Wrap an icon glyph in a fixed-square centered container so the

@@ -509,4 +509,51 @@ impl Resonance {
             },
         )
     }
+
+    /// Test-only: the untitled project's clip/undo anchor dir, if one was
+    /// set up when it landed (code review UX-03).
+    #[doc(hidden)]
+    pub fn test_untitled_anchor(&self) -> Option<&std::path::Path> {
+        self.io.untitled_anchor.as_deref()
+    }
+
+    /// Test-only: the brief undo / redo notice beside the project title
+    /// (code review UX-12).
+    #[doc(hidden)]
+    pub fn test_history_notice(&self) -> Option<&str> {
+        self.banners.history_notice.as_ref().map(|n| n.text.as_str())
+    }
+
+    /// Test-only: age the undo / redo notice as the tick would at `now`.
+    #[doc(hidden)]
+    pub fn test_expire_history_notice(&mut self, now: std::time::Instant) {
+        self.banners.expire_history_notice(now);
+    }
+
+    /// Test-only: the switch parked behind the unsaved-changes dialog
+    /// (code review UX-01).
+    #[doc(hidden)]
+    pub fn test_confirm_switch(&self) -> Option<&state::ProjectSwitch> {
+        self.modals.confirm_switch.as_ref()
+    }
+
+    /// Test-only: the switch waiting on the dialog's "Save".
+    #[doc(hidden)]
+    pub fn test_switch_after_save(&self) -> Option<&state::ProjectSwitch> {
+        self.modals.switch_after_save.as_ref()
+    }
+
+    /// Test-only: the user preset whose inline delete confirm is showing
+    /// (code review UX-14).
+    #[doc(hidden)]
+    pub fn test_preset_delete_armed(&self) -> Option<&str> {
+        self.ui.mixer.preset_delete_armed.as_deref()
+    }
+
+    /// Test-only: replace the user track presets the add-track menu lists
+    /// (no disk read), for the UX-14 confirm snapshot.
+    #[doc(hidden)]
+    pub fn test_set_user_presets(&mut self, presets: Vec<crate::presets::TrackPreset>) {
+        self.presets.user_presets = presets;
+    }
 }

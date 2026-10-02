@@ -40,7 +40,8 @@ placement_id, chord_id) come from those views and stay valid until the entity is
 Every mutating result carries a `revision` counter that the app bumps exactly once per \
 mutating call, however many internal edits the call fans out into; if it jumps by more than \
 your own calls, the user edited concurrently — re-read before continuing. One edit_undo takes \
-back one whole call.\n\
+back one whole call. That holds on an untitled project (fresh from project_new) too: its history \
+works before the first project_save; project_open / project_new clear it.\n\
 \n\
 Long-running operations (project_*, vocal_render, render_mixdown) run as jobs: \
 the tool waits a bounded time and returns the final job status; if it reports still-running, \

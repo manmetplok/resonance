@@ -20,7 +20,9 @@ impl ResonanceMcp {
     #[tool(
         description = "Start a fresh project (optional template name). If the current project \
                        has unsaved changes this is refused with a summary — pass confirm: true \
-                       to discard them. Save first with project_save if in doubt.",
+                       to discard them. Save first with project_save if in doubt. The new \
+                       project is untitled; its edits are undoable (edit_undo) before it is \
+                       ever saved.",
         annotations(destructive_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<JobStatus>()
     )]

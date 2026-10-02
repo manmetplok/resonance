@@ -31,9 +31,12 @@ pub fn describe(message: &Message) -> String {
             TrackMessage::SetTrackOutput(..) => "track routing",
             TrackMessage::BounceInPlaceOffline(_)
             | TrackMessage::Bounce(BounceMessage::Confirm) => "bounce in place",
-            TrackMessage::AddControlTrack { .. } | TrackMessage::AddTrackFromPreset { .. } => {
-                "add track"
-            }
+            TrackMessage::AddTrack
+            | TrackMessage::AddInstrumentTrack
+            | TrackMessage::AddExternalInstrumentTrack
+            | TrackMessage::AddVocalTrack
+            | TrackMessage::AddControlTrack { .. }
+            | TrackMessage::AddTrackFromPreset { .. } => "add track",
             TrackMessage::RequestRemoveTrack(_) | TrackMessage::ConfirmRemoveTrack => {
                 "delete track"
             }
@@ -81,7 +84,19 @@ pub fn describe(message: &Message) -> String {
             _ => "arrangement edit",
         },
         Message::ChordTrack(_) => "chord edit",
-        Message::Transport(_) => "transport",
+        Message::Transport(t) => match t {
+            TransportMessage::CommitBpm => "tempo",
+            TransportMessage::CycleTimeSignature | TransportMessage::SetTimeSignature { .. } => {
+                "time signature"
+            }
+            TransportMessage::ToggleLoop
+            | TransportMessage::SetLoopRange { .. }
+            | TransportMessage::SetLoopPoint { .. }
+            | TransportMessage::StartLoopDrag(_)
+            | TransportMessage::EndLoopDrag => "loop",
+            TransportMessage::ToggleMetronome => "metronome",
+            _ => "transport",
+        },
         Message::VocalTuning(_) => "vocal edit",
         Message::Automation(_) => "automation edit",
         Message::Take(t) => match t {

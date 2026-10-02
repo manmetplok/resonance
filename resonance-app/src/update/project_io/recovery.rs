@@ -244,10 +244,49 @@ pub(crate) fn after_save(r: &mut Resonance, autosave: bool) {
     }
     if !autosave && r.io.project_path.is_some() {
         if let Some(scratch) = super::autosave_scratch_dir(r) {
+            // The untitled history's snapshots name clips the save did not
+            // write (ones deleted before it): bring their WAVs along, or
+            // undoing past the save would bring those clips back silent.
+            if let Some(dir) = &r.io.project_path {
+                carry_scratch_clip_wavs(&scratch, dir);
+            }
             remove_scratch_dir(&scratch);
         }
+        r.io.untitled_anchor = None;
         if let Some(recovered) = r.io.recovered_scratch_dir.take() {
             remove_scratch_dir(&recovered);
+        }
+    }
+}
+
+/// Copy every `audio/clip_<id>.wav` in `scratch` that `project` lacks into
+/// `project/audio/` — the clips an untitled project's undo history still
+/// names when its first Save As gives it a folder (code review UX-03).
+/// Ids are never reused (STATE-08), so an existing file is always the same
+/// clip and is left alone. Best effort: a failed copy only costs that
+/// clip's audio on an undo past the save. Unreferenced ones are reaped by
+/// a later save's clip GC, which keeps whatever the history names.
+fn carry_scratch_clip_wavs(scratch: &std::path::Path, project: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(scratch.join("audio")) else {
+        return;
+    };
+    let target_dir = project.join("audio");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !(name_str.starts_with("clip_") && name_str.ends_with(".wav")) {
+            continue;
+        }
+        let target = target_dir.join(&name);
+        if target.exists() {
+            continue;
+        }
+        let copied = std::fs::create_dir_all(&target_dir)
+            .and_then(|()| std::fs::copy(entry.path(), &target).map(drop));
+        if let Err(e) = copied {
+            tracing::warn!("carry {} into {}: {e}", name_str, target_dir.display());
         }
     }
 }
