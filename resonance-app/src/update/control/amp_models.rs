@@ -12,10 +12,11 @@
 //!
 //! The roots come from the app ([`AmpLibraryRoots`]): the user's data dir
 //! in the real app, a private temporary one in every `new_for_test*` app.
-//! The library is opened once and kept; a request re-reads the index only
-//! when it changed on disk (one `stat`), and rescans only when a file
-//! moved — an unchanged library is answered without hashing, locking or
-//! writing anything.
+//! The library is opened (and scanned) once and kept; a request re-reads
+//! the index only when it changed on disk (one `stat`) and answers from
+//! it, while the rescan that notices a moved file runs off the update
+//! loop ([`OffThreadRescan`]) — so a model added since shows up in a later
+//! answer, and a name lookup that misses rescans before refusing.
 
 use std::path::PathBuf;
 
@@ -39,34 +40,100 @@ pub struct AmpLibraryRoots {
     pub marks: Option<PathBuf>,
 }
 
+/// A library rescan kept off the update loop (code review STATE2-08), as
+/// `plugins.rescan` is: a rescan walks every file under the root and
+/// hashes the new ones, which must not stall the GUI. At most one runs at
+/// a time; it writes the library's index (`library.json`, under the
+/// library's own file lock), and the next request's `reload_if_changed`
+/// — one `stat` — picks the result up. Shared by `drum_kits.*`.
+#[derive(Default)]
+pub(crate) struct OffThreadRescan {
+    running: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl OffThreadRescan {
+    /// Run `rescan` on a thread unless one is still running.
+    pub(crate) fn start(&self, name: &str, rescan: impl FnOnce() + Send + 'static) {
+        use std::sync::atomic::Ordering;
+        if self.running.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        /// Clears the flag however the rescan ends, a panic included.
+        struct Done(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Done {
+            fn drop(&mut self) {
+                self.0.store(false, std::sync::atomic::Ordering::Release);
+            }
+        }
+        let done = Done(self.running.clone());
+        let spawned = std::thread::Builder::new()
+            .name(format!("{name}-rescan"))
+            .spawn(move || {
+                let _done = done;
+                rescan();
+            });
+        if let Err(e) = spawned {
+            tracing::warn!("{name}: could not start a library rescan: {e}");
+            self.running.store(false, Ordering::Release);
+        }
+    }
+}
+
 /// The opened library and marks, cached across requests.
 #[derive(Default)]
 pub struct AmpLibraryCache {
     pub roots: AmpLibraryRoots,
     library: Option<Library>,
     marks: Option<SharedMarks>,
+    rescan: OffThreadRescan,
 }
 
 impl AmpLibraryCache {
     pub fn new(roots: AmpLibraryRoots) -> Self {
         Self {
             roots,
-            library: None,
-            marks: None,
+            ..Self::default()
         }
     }
 
-    /// The library, brought up to date: opened on first use, re-read when
-    /// `library.json` changed, rescanned (hashing only new files) when a
-    /// model file moved. Touches nothing on disk when nothing changed.
+    /// The library as last indexed. Opened and scanned on first use, so
+    /// the first answer sees what is installed; after that a request
+    /// re-reads `library.json` when it changed (one `stat`) and starts a
+    /// rescan off the update loop ([`OffThreadRescan`]), so a model file
+    /// added since shows up in a later answer.
     pub fn library(&mut self) -> &Library {
         let roots = &self.roots;
+        let first = self.library.is_none();
         let lib = self.library.get_or_insert_with(|| match &roots.models {
             Some(r) => Library::open(r),
             None => Library::empty(),
         });
+        if let Some(root) = lib.root().map(std::path::Path::to_path_buf) {
+            if first {
+                if let Err(e) = lib.rescan() {
+                    tracing::warn!("amp_models: library rescan failed: {e}");
+                }
+            } else {
+                lib.reload_if_changed();
+                self.rescan.start("amp-models", move || {
+                    if let Err(e) = Library::open(root).rescan() {
+                        tracing::warn!("amp_models: library rescan failed: {e}");
+                    }
+                });
+            }
+        }
+        lib
+    }
+
+    /// The library rescanned here and now, for a lookup that missed the
+    /// last index (a model added a moment ago): the rare path that waits.
+    pub fn library_rescanned(&mut self) -> &Library {
+        if self.library.is_none() {
+            // The first open scans already.
+            return self.library();
+        }
+        let lib = self.library.as_mut().expect("checked above");
         if lib.root().is_some() {
-            lib.reload_if_changed();
             if let Err(e) = lib.rescan() {
                 tracing::warn!("amp_models: library rescan failed: {e}");
             }
@@ -242,8 +309,12 @@ fn set_marks(app: &mut Resonance, request: &Request) -> Response {
 /// label sent to Resonance Amp's selector: answered app-side from the
 /// library, with no round trip through the plugin. `Err` names why.
 pub(crate) fn slot_for_label(app: &mut Resonance, text: &str) -> Result<u32, String> {
-    let lib = app.control.amp_library.library();
-    match lib.find(text).and_then(|e| e.slot) {
+    let cache = &mut app.control.amp_library;
+    let found = cache.library().find(text).and_then(|e| e.slot);
+    // A miss may be a model added since the last index: look again,
+    // rescanned now, before refusing.
+    let found = found.or_else(|| cache.library_rescanned().find(text).and_then(|e| e.slot));
+    match found {
         Some(slot) => Ok(slot),
         None => Err(format!(
             "no single installed amp model is named {text:?} (an exact name shared by two \

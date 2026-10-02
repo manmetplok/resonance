@@ -174,10 +174,12 @@ fn an_empty_compound_group_records_nothing() {
     assert!(!h.absorb_into_compound(), "no group is open anymore");
 }
 
-/// Opening a group breaks an in-progress coalesce run, so a control
+/// A group that edits breaks an in-progress coalesce run, so a control
 /// call landing mid-fader-drag records its own entry instead of merging
 /// into the user's gesture — and the drag cannot merge into the group's
-/// entry afterwards either.
+/// entry afterwards either. The run breaks when the group arms (its
+/// opening edit), not when it opens: a group that records nothing leaves
+/// the run alone (code review STATE2-06).
 #[test]
 fn begin_compound_breaks_a_coalesce_run_in_both_directions() {
     let mut h = UndoHistory::new();
@@ -186,6 +188,7 @@ fn begin_compound_breaks_a_coalesce_run_in_both_directions() {
     assert!(h.try_extend_coalesced(&key), "the run is live");
 
     h.begin_compound();
+    assert!(!h.absorb_into_compound(), "the opening edit records");
     assert!(
         !h.try_extend_coalesced(&key),
         "the group's opening edit starts fresh"
@@ -197,6 +200,19 @@ fn begin_compound_breaks_a_coalesce_run_in_both_directions() {
     // extend into it.
     assert!(!h.try_extend_coalesced(&key));
     assert_eq!(h.test_undo_entries().len(), 2);
+}
+
+/// A group that records nothing — a gated read-only control call —
+/// leaves the user's coalesce run intact (code review STATE2-06).
+#[test]
+fn a_group_that_records_nothing_keeps_the_coalesce_run() {
+    let mut h = UndoHistory::new();
+    let key = CoalesceKey::TrackVolume(7);
+    h.record_coalesced(dummy_snapshot(1.0), key.clone(), label(1.0));
+    h.begin_compound();
+    h.end_compound();
+    assert!(h.try_extend_coalesced(&key), "the run survived the empty group");
+    assert_eq!(h.test_undo_entries().len(), 1);
 }
 
 #[test]

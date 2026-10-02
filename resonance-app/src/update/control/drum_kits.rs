@@ -11,8 +11,10 @@
 //! query means the same here as in the drums' Library overlay.
 //!
 //! The app never migrates `installed.json`, imports, deletes or downloads:
-//! those stay the plugin's (D6). It opens the index, and rescans it — which
-//! hashes only a kit whose manifest moved — before each answer.
+//! those stay the plugin's (D6). It opens and scans the index on first
+//! use, then answers from the last index and rescans off the update loop
+//! (hashing only a kit whose manifest moved), so a kit added since shows
+//! up in a later answer.
 
 use std::path::PathBuf;
 
@@ -43,30 +45,42 @@ pub struct DrumKitLibraryCache {
     pub roots: DrumKitLibraryRoots,
     library: Option<Library>,
     marks: Option<SharedMarks>,
+    rescan: super::amp_models::OffThreadRescan,
 }
 
 impl DrumKitLibraryCache {
     pub fn new(roots: DrumKitLibraryRoots) -> Self {
         Self {
             roots,
-            library: None,
-            marks: None,
+            ..Self::default()
         }
     }
 
-    /// The library, brought up to date: opened on first use, re-read when
-    /// `library.json` changed, rescanned (hashing only kits whose manifest
-    /// moved). Touches nothing on disk when nothing changed.
+    /// The library as last indexed. Opened and scanned on first use, so
+    /// the first answer sees what is installed; after that a request
+    /// re-reads `library.json` when it changed (one `stat`) and starts a
+    /// rescan off the update loop (code review STATE2-08; see
+    /// `amp_models::OffThreadRescan`), so a kit added since shows up in a
+    /// later answer.
     pub fn library(&mut self) -> &Library {
         let roots = &self.roots;
+        let first = self.library.is_none();
         let lib = self.library.get_or_insert_with(|| match &roots.kits {
             Some(r) => Library::open(r),
             None => Library::empty(),
         });
-        if lib.root().is_some() {
-            lib.reload_if_changed();
-            if let Err(e) = lib.rescan() {
-                tracing::warn!("drum_kits: library rescan failed: {e}");
+        if let Some(root) = lib.root().map(std::path::Path::to_path_buf) {
+            if first {
+                if let Err(e) = lib.rescan() {
+                    tracing::warn!("drum_kits: library rescan failed: {e}");
+                }
+            } else {
+                lib.reload_if_changed();
+                self.rescan.start("drum-kits", move || {
+                    if let Err(e) = Library::open(root).rescan() {
+                        tracing::warn!("drum_kits: library rescan failed: {e}");
+                    }
+                });
             }
         }
         lib
