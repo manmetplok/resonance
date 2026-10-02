@@ -63,7 +63,7 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 | 1 | S1 control-surface safety | STATE2-01, STATE2-10 (mixdown ext), ARCH2-06, STATE2-05, STATE2-06, STATE2-08, STATE2-09 | opus | merged | a591626c |
 | 1 | S2 save robustness + error surface | STATE2-02, UX-13, UX-04, UX-05 | opus | merged | 50140dcd |
 | 1 | P1 plugin live values (host/bridge side) | HOST-01, PUX-01 (host side: refresh before serialise), STATE2-03, STATE2-07, STATE2-10 (read-only param undo) | opus | running | |
-| 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | running | |
+| 1 | R1 recording alignment | RT-01, RT-02, RT-08, RT-13, RT-17 | opus | merged | b398afbe |
 | 1 | D1a DSP: mastering/compressor/shared | DSP2-04, -05, -06, -07, -08, -11 (mastering/eq/stereo), -15, -16 | opus | running | |
 | 1 | D1b DSP: instruments/effects | DSP2-01, -02, -03, -09, -10, -12, -13, -14 | opus | running | |
 | 2 | P2 editor widgets + announce | PUX-01 (widget announce), PUX-02, -03, -05, -06, -08, -11 | opus | after P1 | |
@@ -85,6 +85,14 @@ Batches are grouped into waves by **file ownership**, so batches running at the 
 - **FU-S1b:** the MCP `call_tool` override has no end-to-end test, because that needs rmcp's `client` feature. Also, `combined_router()` is rebuilt on every call; cache it.
 - **FU-S1c:** the first open of `presets.vocabulary`/`search` with no plugin id still scans on the update loop. Warm the PresetLibrary off-thread.
 - **FU-S1d:** some nested leaf specs, such as `AmountSpec`, still accept unknown fields.
+- **FU-R1 (live-device checks pending):** on a real interface, check four things: count-in into record has no gap at the downbeat; an overdub with a latent master plugin sits on the grid; cycle-record comps have no flams; behaviour holds when cpal opens more channels than requested.
+- **FU-R1a:** frames dropped on ring overflow shift every later sample-count cycle cut.
+- **FU-R1b:** moving the loop range or seeking during a cycle-record run is not handled.
+- **FU-R1c:** the tail of the count-in's last block, after the downbeat, is silent (≤1 quantum). It needs a sub-block render.
+- **FU-R1d:** reuse the monitor stream by attaching the recording producer, instead of rebuilding the stream (the rebuild now happens before the count-in).
+- **FU-R1e:** size the recording ring from the negotiated channel count and device rate.
+- **FU-R1f:** MIDI cycle passes still roll on the engine tick (~16 ms jitter).
+- *Behaviour change (R1):* the count-in no longer forces the metronome on for the first playing blocks.
 - **FU-S2a:** `AudioEngine::is_disconnected` reads a process-wide static, so a test that trips it leaks the engine-death status into other apps in the same test binary. Make the latch per engine.
 - **FU-S2b:** the `SaveClipsToProjectDir` doc in `types/commands.rs` should also name `ClipsSaveFailed`.
 - **FU-S2c:** engine save replies are untagged, so a late reply after the watchdog fires can land in a newer collector. Add a round-trip id.
