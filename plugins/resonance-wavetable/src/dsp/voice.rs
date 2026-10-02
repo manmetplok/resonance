@@ -214,6 +214,13 @@ pub struct Voice {
     pub last_osc1_pos: f32,
     pub last_osc2_pos: f32,
     pub last_lfo_phases: [f32; 3],
+
+    /// The first unison sub-voice whose oscillator phases the next
+    /// [`Self::seed_analog`] sets. `trigger()` writes it: 0 for a voice
+    /// that was idle, the previous unison count for a sounding voice that
+    /// was retriggered or stolen, whose running phases must carry on
+    /// (DSP2-03).
+    fresh_phases_from: usize,
 }
 
 impl Voice {
@@ -256,6 +263,7 @@ impl Voice {
             last_osc1_pos: 0.0,
             last_osc2_pos: 0.0,
             last_lfo_phases: [0.0; 3],
+            fresh_phases_from: 0,
         }
     }
 
@@ -280,6 +288,16 @@ impl Voice {
         alternate_value: f32,
     ) {
         let was_idle = self.state == VoiceState::Idle;
+        // A sounding voice (a retrigger, or a steal) carries on from where
+        // its output is (DSP2-03): the amp envelope keeps its level, so the
+        // oscillators, filters, sub and noise must keep their state too —
+        // resetting them under a non-zero envelope was a click, worst
+        // through a resonant low-pass. The level is rescaled by the
+        // velocity ratio so `envelope × velocity` does not step either
+        // (capped at full scale: a much softer note can still dip).
+        if !was_idle && velocity > 1.0e-6 {
+            self.amp_env.level = (self.amp_env.level * self.velocity / velocity).min(1.0);
+        }
         self.state = VoiceState::Playing;
         self.note = note;
         self.velocity = velocity;
@@ -305,18 +323,29 @@ impl Voice {
             self.lfo3.reset_phase();
         }
 
-        self.clear_filters();
-        self.sub = SubOsc::default();
-        self.noise = NoiseGen::default();
+        let old_count = self.unison_count;
+        self.unison_count = unison_count.clamp(1, MAX_UNISON);
+        if was_idle {
+            self.clear_filters();
+            self.sub = SubOsc::default();
+            self.noise = NoiseGen::default();
+            for u in self.unison.iter_mut() {
+                u.reset();
+            }
+            self.fresh_phases_from = 0;
+        } else {
+            // Sounding: keep everything that shapes the waveform. Only
+            // sub-voices the stack just grew by start afresh.
+            for u in self.unison.iter_mut().skip(old_count) {
+                u.reset();
+            }
+            self.fresh_phases_from = old_count;
+        }
         self.filter_dirty = true;
         self.mod_dirty = true;
         self.osc_setup_dirty = true;
 
         // Distribute unison voices
-        self.unison_count = unison_count.clamp(1, MAX_UNISON);
-        for u in 0..MAX_UNISON {
-            self.unison[u].reset();
-        }
         distribute_unison(&mut self.unison, self.unison_count, spread);
     }
 
@@ -345,11 +374,17 @@ impl Voice {
         self.analog_cutoff = rng.bipolar();
         self.analog_level = rng.bipolar();
         let phase_random = phase_random as f64;
-        for sub in self.unison.iter_mut() {
+        for (i, sub) in self.unison.iter_mut().enumerate() {
             sub.osc1_drift.start(rng, coeffs);
             sub.osc2_drift.start(rng, coeffs);
-            sub.osc1_phase = rng.unit() as f64 * phase_random;
-            sub.osc2_phase = rng.unit() as f64 * phase_random;
+            // Drawn either way, so the stream is the same for every voice.
+            let (p1, p2) = (rng.unit() as f64, rng.unit() as f64);
+            // A retriggered sounding voice keeps its running phases
+            // (DSP2-03); see `fresh_phases_from`.
+            if i >= self.fresh_phases_from {
+                sub.osc1_phase = p1 * phase_random;
+                sub.osc2_phase = p2 * phase_random;
+            }
         }
     }
 

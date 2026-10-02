@@ -284,6 +284,12 @@ fn output_matches_golden() {
     // (envelopes, phases, filter and LFOs carry on). Only `glide_u3`, the
     // mono scenario, moved (24306 samples).
     //
+    // And for DSP2-03: retriggering or stealing a *sounding* voice keeps
+    // its oscillator phases, filter, sub and noise state, and rescales
+    // the envelope by the velocity ratio, instead of resetting them under
+    // a non-zero envelope (a click). Only `voice_stealing_u7`, the one
+    // scenario that steals, moved.
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:
