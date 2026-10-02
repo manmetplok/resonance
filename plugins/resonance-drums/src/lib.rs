@@ -134,8 +134,9 @@ pub struct KitBridge {
     pub load_generation: Arc<AtomicU64>,
     /// Index of mic setups available in the currently-loaded manifest.
     /// Rebuilt on each successful load and read by the editor to populate
-    /// per-pad mic pickers.
-    pub catalog: Arc<Mutex<ManifestMicCatalog>>,
+    /// per-pad mic pickers. Swapped whole (an `Arc`), so a reader takes a
+    /// snapshot for the price of a refcount.
+    pub catalog: Arc<Mutex<Arc<ManifestMicCatalog>>>,
     /// User-chosen setup keys per pad (key = position, value = setup_key).
     /// Wrapped in a Mutex so the editor can edit from the UI thread while
     /// the loader thread reads a snapshot when building a new kit.
@@ -201,7 +202,7 @@ pub struct KitBridge {
     /// Per-pad identity of the sample a full-velocity hit plays, measured
     /// from the decoded takes. Published alongside every kit build; read by
     /// the inspector's SAMPLE stage. Empty until the first kit is built.
-    pub pad_samples: Arc<Mutex<Vec<Option<sample_info::PadSampleInfo>>>>,
+    pub pad_samples: Arc<Mutex<Arc<Vec<Option<sample_info::PadSampleInfo>>>>>,
     /// Of `kit_bytes`, the bytes another instance already held when this
     /// one got them (through the shared sample cache, E5) — memory this
     /// kit costs nothing extra for. Over the whole kit, the built-in one
@@ -593,7 +594,7 @@ impl ResonancePlugin for ResonanceDrums {
             kit_handoff: Arc::new(Mutex::new(())),
             kit_sender,
             load_generation: Arc::new(AtomicU64::new(0)),
-            catalog: Arc::new(Mutex::new(ManifestMicCatalog::default())),
+            catalog: Arc::new(Mutex::new(Arc::new(ManifestMicCatalog::default()))),
             pad_choices: Arc::new(Mutex::new(std::array::from_fn(|_| {
                 PadMicChoices::default()
             }))),
@@ -610,7 +611,7 @@ impl ResonancePlugin for ResonanceDrums {
             port_peak: Arc::new(std::array::from_fn(|_| AtomicU32::new(0))),
             last_hits: Arc::new(last_hit::LastHits::default()),
             kit_bytes: Arc::new(AtomicU64::new(0)),
-            pad_samples: Arc::new(Mutex::new(Vec::new())),
+            pad_samples: Arc::new(Mutex::new(Arc::new(Vec::new()))),
             kit_shared_bytes: Arc::new(AtomicU64::new(0)),
             built_kit: Arc::new(Mutex::new(None)),
             builtin_kit: Arc::new(Mutex::new(None)),
@@ -1086,7 +1087,7 @@ impl ResonanceDrums {
             .kit_shared_bytes
             .store(shared_bytes, Ordering::Relaxed);
         *self.bridge.pad_samples.lock() =
-            sample_info::infos_for_pads(&self.sampler.pads, sample_rate);
+            Arc::new(sample_info::infos_for_pads(&self.sampler.pads, sample_rate));
     }
 }
 
