@@ -219,12 +219,10 @@ fn layer_level_db(takes: &[LoadedSample]) -> f32 {
 pub struct LoadedMicBank {
     /// Canonical position key from the manifest (e.g. `"KickIn"`, `"OHsAB"`).
     /// `"fallback"` for the one bank of a built-in-kit pad.
-    #[allow(dead_code)]
     pub position: String,
     /// The manifest setup key that produced this bank (e.g.
     /// `"01_KickIn_e901"`). Persists through plugin state so loading the
     /// same kit restores the exact mic brand/model the user chose.
-    #[allow(dead_code)]
     pub setup_key: String,
     /// Velocity layers sorted soft → loud.
     pub layers: Vec<VelocityLayer>,

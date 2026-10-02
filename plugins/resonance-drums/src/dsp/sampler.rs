@@ -773,8 +773,9 @@ impl DrumSampler {
     /// Called once from `initialize()` so the plugin always boots with
     /// audible sound — even before a real Drummica kit is loaded from
     /// disk. The embedded fallback has no overhead bank, so it renders
-    /// into the pad's assigned close-mic output port (or Main for Clap /
-    /// Cowbell) with nothing on the Overhead port.
+    /// into the pad's assigned close-mic output port (Main for a pad with
+    /// no close-mic group, e.g. Count Stick) with nothing on the Overhead
+    /// port.
     pub fn load_defaults(&mut self, sample_rate: f32) {
         self.load_defaults_sourced(sample_rate);
     }
