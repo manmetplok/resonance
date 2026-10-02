@@ -1826,9 +1826,21 @@ fn a_block_with_too_few_ports_still_runs_in_time() {
 // ---------------------------------------------------------------------------
 
 /// `RESONANCE_DRUMMICA_PATH`: the kit's `drum_samples.json`, or the
-/// folder holding it. Read only.
-fn drummica_manifest() -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var("RESONANCE_DRUMMICA_PATH").ok()?);
+/// folder holding it. Read only. Unset (or empty), the calling `test` is
+/// skipped — it passes, saying so on stderr directly (not through
+/// `eprintln!`, which libtest captures for a passing test), so a run
+/// shows which real-library checks did not happen.
+fn drummica_manifest(test: &str) -> Option<PathBuf> {
+    let Some(path) = std::env::var_os("RESONANCE_DRUMMICA_PATH").filter(|v| !v.is_empty())
+    else {
+        let _ = writeln!(
+            std::io::stderr(),
+            "{test}: skipped: set RESONANCE_DRUMMICA_PATH (Drummica's drum_samples.json \
+             or its folder) to run it"
+        );
+        return None;
+    };
+    let path = PathBuf::from(path);
     Some(if path.is_dir() {
         path.join("drum_samples.json")
     } else {
@@ -1854,8 +1866,8 @@ fn drummica_request(manifest: &Path, preload: u32) -> resonance_drums::kit_loade
 /// `--nocapture` to see the figures.
 #[test]
 fn drummica_default_setup_memory_and_bit_identity() {
-    let Some(manifest) = drummica_manifest() else {
-        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+    let Some(manifest) = drummica_manifest("drummica_default_setup_memory_and_bit_identity")
+    else {
         return;
     };
     let load = |preload: u32| {
@@ -1951,8 +1963,7 @@ fn drummica_default_setup_memory_and_bit_identity() {
 fn drummica_every_mic_bank_memory() {
     use resonance_drums::kit_loader::{BankRequest, MicBankSetups};
 
-    let Some(manifest) = drummica_manifest() else {
-        eprintln!("RESONANCE_DRUMMICA_PATH not set; skipping the real-library test");
+    let Some(manifest) = drummica_manifest("drummica_every_mic_bank_memory") else {
         return;
     };
     let cache = SampleCache::new();
