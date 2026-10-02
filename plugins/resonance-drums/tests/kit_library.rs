@@ -1461,7 +1461,10 @@ fn the_status_bar_shows_stream_memory_and_underruns() {
     let mut editor = TestEditor::new(&plugin, lib, (960.0, 640.0));
     editor.frame(Vec::new());
     let frame = editor.frame(Vec::new());
-    assert!(!frame.shows("STREAM"), "no rings in use, no readout");
+    assert!(
+        !frame.strings().iter().any(|s| s.contains("rings")),
+        "no rings in use, no readout"
+    );
     assert!(!frame.strings().iter().any(|s| s.contains("underrun")));
 
     plugin
@@ -1470,9 +1473,8 @@ fn the_status_bar_shows_stream_memory_and_underruns() {
         .store(3 * 1024 * 1024, Ordering::Relaxed);
     plugin.bridge.stream_underruns.store(3, Ordering::Relaxed);
     let frame = editor.frame(Vec::new());
-    assert!(frame.shows("STREAM"), "{:?}", frame.strings());
     assert!(
-        frame.strings().iter().any(|s| s.contains("MB")),
+        frame.strings().iter().any(|s| s == "+ 3.0 MB rings"),
         "{:?}",
         frame.strings()
     );

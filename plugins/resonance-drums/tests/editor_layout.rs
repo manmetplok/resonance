@@ -17,6 +17,9 @@
 //! 960 px window under an inverted clip, the pad rows under a 0 px clip —
 //! and that test passed throughout.
 //!
+//! The K5 tabs are checked control by control, scrolled into view where
+//! needed, in `editor_tabs.rs`; this file keeps the original regressions.
+//!
 //! So every check here is on what the user can actually *see*: a rect
 //! intersected with the clip it was painted under, and with the window.
 #![cfg(feature = "editor")]
@@ -31,16 +34,31 @@ use resonance_plugin::ResonancePlugin;
 /// declares.
 const SIZES: [(f32, f32); 2] = [(960.0, 640.0), (780.0, 520.0)];
 
-/// The label of each always-visible control: MASTER on the KIT card,
-/// POLYPHONY, VELOCITY CURVE and ROUND ROBIN on the GLOBAL card.
-const GLOBAL_LABELS: [&str; 4] = ["MASTER", "POLYPHONY", "VELOCITY CURVE", "ROUND ROBIN"];
+/// The caption of each global control, on the Mix tab's GLOBAL card (the
+/// bottom-of-window KIT/GLOBAL cards are gone, K5).
+const GLOBAL_LABELS: [&str; 5] = [
+    "Polyphony",
+    "Velocity curve",
+    "Velocity humanize",
+    "Round robin",
+    "Output mode",
+];
 
-/// The control widget each of those labels heads, as `app.rs` probes it.
-const GLOBAL_WIDGETS: [&str; 4] = [
-    "kit.master",
+/// The control widget each of those captions heads, as `mix_tab.rs`
+/// probes it.
+const GLOBAL_WIDGETS: [&str; 5] = [
     "global.polyphony",
     "global.velocity_curve",
+    "global.velocity_humanize",
     "global.round_robin",
+    "global.output_mode",
+];
+
+/// The faders among them: a slider with its value readout beside it.
+const GLOBAL_FADERS: [&str; 3] = [
+    "global.polyphony",
+    "global.velocity_curve",
+    "global.velocity_humanize",
 ];
 
 /// Antialiasing and glyph bounds can poke a fraction of a pixel past a
@@ -65,11 +83,27 @@ fn fully_visible(rect: egui::Rect, clip: egui::Rect, screen: egui::Rect) -> Resu
     Ok(())
 }
 
+/// The default tab (Pads) at both sizes.
 fn frames() -> Vec<((f32, f32), EditorFrameProbe)> {
     let plugin = ResonanceDrums::new();
     SIZES
         .iter()
         .map(|&size| (size, resonance_drums::test_render_editor_frame(&plugin, size)))
+        .collect()
+}
+
+/// The Mix tab, where the global controls live, at both sizes.
+fn mix_frames() -> Vec<((f32, f32), EditorFrameProbe)> {
+    let plugin = ResonanceDrums::new();
+    SIZES
+        .iter()
+        .map(|&size| {
+            library::isolate_for_tests();
+            let mut editor = TestEditor::new(&plugin, library::shared(), size);
+            editor.show_view("Mix");
+            editor.frame(Vec::new());
+            (size, editor.frame(Vec::new()))
+        })
         .collect()
 }
 
@@ -89,13 +123,16 @@ fn assert_text_visible(frame: &EditorFrameProbe, size: (f32, f32), needle: &str)
 
 #[test]
 fn every_global_label_is_visible_at_both_window_sizes() {
-    for (size, frame) in frames() {
+    for (size, frame) in mix_frames() {
         for label in GLOBAL_LABELS {
             assert_text_visible(&frame, size, label);
         }
-        // The round-robin control's own segments, not just its heading:
-        // "Random" was the one clipped off the GLOBAL card's right edge.
-        for segment in resonance_drums::params::ROUND_ROBIN_LABELS {
+        // The segmented controls' own segments, not just their captions:
+        // "Random" was once clipped off the old GLOBAL card's right edge.
+        for segment in resonance_drums::params::ROUND_ROBIN_LABELS
+            .iter()
+            .chain(resonance_drums::params::OUTPUT_MODE_LABELS)
+        {
             assert_text_visible(&frame, size, segment);
         }
     }
@@ -103,7 +140,7 @@ fn every_global_label_is_visible_at_both_window_sizes() {
 
 #[test]
 fn every_global_control_widget_is_visible_at_both_window_sizes() {
-    for (size, frame) in frames() {
+    for (size, frame) in mix_frames() {
         for name in GLOBAL_WIDGETS {
             let w = frame
                 .widget(name)
@@ -115,59 +152,55 @@ fn every_global_control_widget_is_visible_at_both_window_sizes() {
     }
 }
 
-/// Each control's heading is a label on the left and its current value on
-/// the right. Both must be visible and must not overlap — at the minimum
-/// width VELOCITY CURVE's value used to be drawn over its own label.
+/// Each fader's value reads to the right of its slider: both visible, no
+/// overlap — at the minimum width VELOCITY CURVE's value used to be
+/// drawn over its own label.
 #[test]
-fn global_headings_show_label_and_value_side_by_side() {
-    for (size, frame) in frames() {
-        for label in GLOBAL_LABELS {
-            let l = frame
-                .widget(&format!("{label}.label"))
-                .unwrap_or_else(|| panic!("{label}'s label was not probed at {size:?}"));
+fn global_faders_show_slider_and_value_side_by_side() {
+    for (size, frame) in mix_frames() {
+        for name in GLOBAL_FADERS {
+            let s = frame.widget(name).unwrap();
             let v = frame
-                .widget(&format!("{label}.value"))
-                .unwrap_or_else(|| panic!("{label}'s value was not probed at {size:?}"));
-            for (what, r) in [("label", l), ("value", v)] {
+                .widget(&format!("{name}.value"))
+                .unwrap_or_else(|| panic!("{name}'s value was not probed at {size:?}"));
+            for (what, r) in [("slider", s), ("value", v)] {
                 if let Err(e) = fully_visible(r.rect, r.clip, frame.screen) {
-                    panic!("{label}'s {what} is not visible at {size:?}: {e}");
+                    panic!("{name}'s {what} is not visible at {size:?}: {e}");
                 }
             }
             assert!(
-                l.rect.right() <= v.rect.left() + TOLERANCE,
-                "{label}'s value overlaps its label at {size:?}: label {:?}, value {:?}",
-                l.rect,
+                s.rect.right() <= v.rect.left() + TOLERANCE,
+                "{name}'s value overlaps its slider at {size:?}: {:?}, {:?}",
+                s.rect,
                 v.rect
             );
         }
     }
 }
 
-/// A heading's value is elided with "…" when its column is too narrow
-/// for it. On the GLOBAL card that should never be needed at a size the
-/// editor declares: each value is as wide at the minimum as at the
-/// default, i.e. shown in full at both.
+/// A value readout is never squeezed: each is as wide at the minimum as
+/// at the default, i.e. shown in full at both.
 #[test]
 fn global_values_are_not_elided_at_the_minimum_size() {
-    let all = frames();
+    let all = mix_frames();
     let (_, default) = &all[0];
     let (min_size, minimum) = &all[1];
-    for label in ["POLYPHONY", "VELOCITY CURVE", "ROUND ROBIN"] {
-        let name = format!("{label}.value");
+    for name in GLOBAL_FADERS {
+        let name = format!("{name}.value");
         let full = default.widget(&name).unwrap().rect.width();
         let small = minimum.widget(&name).unwrap().rect.width();
         assert!(
             (full - small).abs() < 0.5,
-            "{label}'s value is elided at {min_size:?}: {small} px wide against {full} px"
+            "{name} is elided at {min_size:?}: {small} px wide against {full} px"
         );
     }
 }
 
-/// A kit-load error is the longest thing the KIT heading ever shows
-/// ("Error: " plus up to 80 characters, ~550 px). It is elided to fit
-/// beside its label, never painted over it.
+/// A kit-load error is shown in the header, beside the kit, elided to
+/// fit — never painted over the `Library…` button (the KIT card it used
+/// to sit in is gone).
 #[test]
-fn a_long_kit_error_does_not_overrun_its_label() {
+fn a_long_kit_error_does_not_overrun_the_header() {
     let plugin = ResonanceDrums::new();
     *plugin.bridge.kit_status.lock() = resonance_drums::kit_loader::KitStatus::Error {
         message: "no drum_samples.json found in /a/very/long/path/to/a/kit/that/goes/on/and/on"
@@ -175,52 +208,45 @@ fn a_long_kit_error_does_not_overrun_its_label() {
     };
     for size in SIZES {
         let frame = resonance_drums::test_render_editor_frame(&plugin, size);
-        let l = frame.widget("KIT.label").expect("KIT label");
-        let v = frame.widget("KIT.value").expect("KIT value");
-        for (what, r) in [("label", l), ("value", v)] {
-            if let Err(e) = fully_visible(r.rect, r.clip, frame.screen) {
-                panic!("the KIT {what} is not visible at {size:?}: {e}");
-            }
+        let warning = frame.widget("kit.error").expect("the load error is shown");
+        if let Err(e) = fully_visible(warning.rect, warning.clip, frame.screen) {
+            panic!("the kit error is not visible at {size:?}: {e}");
         }
+        let library = frame.widget("header.library").unwrap();
         assert!(
-            l.rect.right() <= v.rect.left() + TOLERANCE,
-            "the error overlaps the KIT label at {size:?}: label {:?}, value {:?}",
-            l.rect,
-            v.rect
-        );
-        let card = frame.widget("card.kit").expect("KIT card");
-        assert!(
-            v.rect.right() <= card.rect.right() + TOLERANCE,
-            "the error runs out of the KIT card at {size:?}: {:?} vs {:?}",
-            v.rect,
-            card.rect
+            library.rect.right() <= warning.rect.left() + TOLERANCE,
+            "the error overlaps Library… at {size:?}: {:?} vs {:?}",
+            warning.rect,
+            library.rect
         );
     }
 }
 
-/// The pad list's rows have real width on screen — they were laid out
-/// under a 0 px clip while the body ran sideways.
+/// The pad grid's cells have real width on screen — the old pad list's
+/// rows were once laid out under a 0 px clip while the body ran sideways.
 #[test]
-fn pad_list_rows_have_visible_width() {
+fn pad_cells_have_visible_width() {
     for (size, frame) in frames() {
-        let rows: Vec<_> = frame
+        let cells: Vec<_> = frame
             .widgets
             .iter()
-            .filter(|w| w.name.starts_with("pad_row."))
+            .filter(|w| w.name.starts_with("pad_cell.") && !w.name.ends_with(".absent"))
             .collect();
-        assert!(!rows.is_empty(), "no pad rows were laid out at {size:?}");
-        let first = rows[0];
-        let visible = first.rect.intersect(first.clip).intersect(frame.screen);
-        assert!(
-            visible.width() > 100.0 && visible.height() > 0.0,
-            "the first pad row is not visible at {size:?}: rect {:?}, clip {:?}",
-            first.rect,
-            first.clip
-        );
+        assert_eq!(cells.len(), resonance_drums::drum_map::NUM_PADS, "at {size:?}");
+        for cell in cells {
+            let visible = cell.rect.intersect(cell.clip).intersect(frame.screen);
+            assert!(
+                visible.width() > 40.0 && visible.height() > 40.0,
+                "{} is not visible at {size:?}: rect {:?}, clip {:?}",
+                cell.name,
+                cell.rect,
+                cell.clip
+            );
+        }
     }
 }
 
-/// The inspector fits beside the pad list — it used to be laid out
+/// The inspector fits beside the pad grid — it used to be laid out
 /// 1878 px wide in a 960 px window.
 #[test]
 fn the_inspector_fits_the_window() {
