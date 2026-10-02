@@ -5,11 +5,19 @@
 //! sampler's [`crate::last_hit`]), is outlined when selected, and is
 //! dimmed when the kit has no recording for the pad (D7: silent).
 //!
-//! Clicking a cell selects it and plays it. Where in the cell you click
-//! is how hard: the bottom edge is the softest hit, the top the hardest.
+//! The cells grow with the window, keeping their shape: the grid takes
+//! [`GRID_SHARE`] of the body, less whatever the inspector needs, and
+//! the cells fill it as far as the height allows.
 //!
-//! Mute is the inspector's control; a muted pad's cell only *shows* it
-//! (an `M` in the corner), so there is one mute switch, not two.
+//! Clicking a cell selects it and plays it. Where in the cell you click
+//! is how hard: the bottom edge is the softest hit, the top the hardest —
+//! hovering shows the velocity a click there plays (`v87`) over a faint
+//! gradient.
+//!
+//! Mute is a switch in the inspector and in the Mix table (both bound to
+//! the one `pad_N_mute`); the grid only *shows* it — a muted cell's name
+//! is dimmed with a small `M`, and it never lights, since it plays
+//! nothing. It is not a control here.
 //!
 //! Cheap per frame: the names are the kit's `Arc`'d strings, the note
 //! labels are built once ([`note_labels`]), and the text goes through
@@ -29,17 +37,40 @@ pub(crate) const COLS: usize = 6;
 pub(crate) const ROWS: usize = NUM_PADS.div_ceil(COLS);
 /// Gap between cells.
 const CELL_GAP: f32 = 6.0;
-/// A cell's size bounds.
+/// A cell's smallest size; below it the grid scrolls.
 const CELL_MIN: egui::Vec2 = egui::vec2(46.0, 46.0);
-const CELL_MAX: egui::Vec2 = egui::vec2(92.0, 76.0);
+/// A cell's width over its height: cells grow with the window in this
+/// shape (the 92×76 cell the grid was designed at).
+const CELL_ASPECT: f32 = 92.0 / 76.0;
 /// The softest velocity a click plays (at the cell's bottom edge).
 const MIN_CLICK_VELOCITY: f32 = 0.05;
 
+/// The share of the body the grid takes when the inspector can spare it.
+pub(crate) const GRID_SHARE: f32 = 0.58;
+/// The width the inspector keeps, whatever the grid would like.
+pub(crate) const INSPECTOR_MIN_W: f32 = 440.0;
+/// The narrowest grid column: six of the smallest cells.
+const GRID_MIN_W: f32 = COLS as f32 * CELL_MIN.x + (COLS - 1) as f32 * CELL_GAP + 2.0 * PAD_MARGIN;
+
 /// The grid column's width for `avail` (grid + inspector, gaps excluded):
-/// as wide as the largest cells, but never more than half.
+/// [`GRID_SHARE`] of it, less what the inspector needs
+/// ([`INSPECTOR_MIN_W`]), but never under six of the smallest cells.
 pub(crate) fn preferred_width(avail: f32) -> f32 {
-    let full = COLS as f32 * CELL_MAX.x + (COLS - 1) as f32 * CELL_GAP + 2.0 * PAD_MARGIN;
-    full.min(avail * 0.5).max(0.0)
+    (avail * GRID_SHARE)
+        .min(avail - INSPECTOR_MIN_W)
+        .max(GRID_MIN_W)
+        .min(avail)
+        .max(0.0)
+}
+
+/// The cell size that fills `avail` (the grid's scroll area): as wide as
+/// six fit, no taller than five fit, in the cells' own shape — and no
+/// smaller than [`CELL_MIN`], where the grid scrolls instead.
+fn cell_size(avail: egui::Vec2) -> egui::Vec2 {
+    let w_fit = (avail.x - (COLS - 1) as f32 * CELL_GAP) / COLS as f32;
+    let h_fit = (avail.y - (ROWS - 1) as f32 * CELL_GAP) / ROWS as f32;
+    let w = w_fit.min(h_fit * CELL_ASPECT).max(CELL_MIN.x);
+    egui::vec2(w, (w / CELL_ASPECT).max(CELL_MIN.y))
 }
 
 /// The card's inner margin.
@@ -106,13 +137,7 @@ pub(crate) fn draw(ui: &mut egui::Ui, app: &DrumsEditorApp, now: f64) -> Option<
             .id_salt("pad_grid_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let avail = ui.available_size();
-                let cell = egui::vec2(
-                    ((avail.x - (COLS - 1) as f32 * CELL_GAP) / COLS as f32)
-                        .clamp(CELL_MIN.x, CELL_MAX.x),
-                    ((avail.y - (ROWS - 1) as f32 * CELL_GAP) / ROWS as f32)
-                        .clamp(CELL_MIN.y, CELL_MAX.y),
-                );
+                let cell = cell_size(ui.available_size());
                 let size = egui::vec2(
                     COLS as f32 * cell.x + (COLS - 1) as f32 * CELL_GAP,
                     ROWS as f32 * cell.y + (ROWS - 1) as f32 * CELL_GAP,
@@ -156,10 +181,13 @@ struct Cell<'a> {
 fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -> Option<CellClick> {
     let response = ui
         .interact(rect, ui.id().with(("pad_cell", pad)), egui::Sense::click())
-        .on_hover_text(if cell.present {
-            "Click to select and play — higher in the cell plays harder"
-        } else {
+        .on_hover_text(if !cell.present {
             "Not in this kit: this pad is silent"
+        } else if cell.muted {
+            "Muted — a click selects it but plays nothing. Unmute it in the \
+             inspector or the Mix table."
+        } else {
+            "Click to select and play — higher in the cell plays harder"
         });
     probe(ui, format_args!("pad_cell.{pad}"), rect);
     if !cell.present {
@@ -186,9 +214,31 @@ fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -
     };
     p.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Inside);
 
+    // Velocity by height, made visible: on a playable cell under the
+    // pointer, a faint gradient (harder at the top) and the velocity a
+    // click right there would play.
+    let hover_y = response
+        .hover_pos()
+        .filter(|_| cell.present && !cell.muted && cell.flash <= 0.0)
+        .map(|pos| pos.y);
+    if let Some(y) = hover_y {
+        paint_velocity_gradient(&p, rect);
+        let v = crate::last_hit::midi_velocity(click_velocity(rect, y));
+        let at = egui::pos2(rect.right() - 7.0, y.clamp(rect.top() + 8.0, rect.bottom() - 8.0));
+        let shown = p.text(
+            at,
+            egui::Align2::RIGHT_CENTER,
+            format!("v{v}"),
+            egui::FontId::monospace(9.5),
+            theme::TEXT_1,
+        );
+        probe(ui, "pad_cell.velocity", shown);
+    }
+
     let inner = rect.shrink2(egui::vec2(7.0, 6.0));
     let name_color = match (cell.present, cell.selected) {
         (false, _) => theme::TEXT_4,
+        _ if cell.muted => theme::TEXT_3,
         (true, true) => theme::TEXT_1,
         (true, false) => theme::TEXT_2,
     };
@@ -214,12 +264,14 @@ fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -
         if cell.present { theme::TEXT_3 } else { theme::TEXT_4 },
     );
     if cell.muted {
+        // An indicator, not a control: the mute switches are the
+        // inspector's and the Mix table's.
         p.text(
             inner.right_top(),
             egui::Align2::RIGHT_TOP,
             "M",
-            egui::FontId::proportional(9.5),
-            theme::BAD,
+            egui::FontId::proportional(9.0),
+            theme::WARM,
         );
     }
 
@@ -231,6 +283,21 @@ fn draw_cell(ui: &mut egui::Ui, rect: egui::Rect, pad: usize, cell: &Cell<'_>) -
         });
     }
     None
+}
+
+/// A faint vertical wash over `rect`: accent at the top (hard), nothing
+/// at the bottom (soft).
+fn paint_velocity_gradient(p: &egui::Painter, rect: egui::Rect) {
+    let top = theme::ACCENT.gamma_multiply(0.22);
+    let bottom = egui::Color32::TRANSPARENT;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), top);
+    mesh.colored_vertex(rect.right_top(), top);
+    mesh.colored_vertex(rect.right_bottom(), bottom);
+    mesh.colored_vertex(rect.left_bottom(), bottom);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    p.add(egui::Shape::mesh(mesh));
 }
 
 fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {

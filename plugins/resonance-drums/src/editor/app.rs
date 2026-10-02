@@ -7,8 +7,9 @@
 //!
 //! - **Pads** (`pads_tab.rs`): the 6×5 pad grid and the selected pad's
 //!   inspector;
-//! - **Mix** (`mix_tab.rs`): a meter strip per output port, master, the
-//!   per-pad level/pan/mute/output table and the global playing settings;
+//! - **Mix** (`mix_tab.rs`): the output mode and a meter strip per output
+//!   port, master, the per-pad level/pan/mute table and the global
+//!   playing settings;
 //! - **Setup** (`setup_tab.rs`): mic banks, streaming, the pad routing /
 //!   choke / note table and the kit's facts.
 //!
@@ -773,6 +774,14 @@ pub(crate) enum Queued {
     Rescan,
 }
 
+/// Whether a kit load is under way: decoding, or decoded and waiting for
+/// the audio thread (a failed load is not).
+pub(crate) fn kit_loading(bridge: &KitBridge) -> bool {
+    use crate::kit_loader::LoadPhase;
+    let snap = bridge.load_progress.snapshot();
+    !snap.complete && matches!(snap.phase, LoadPhase::Decoding | LoadPhase::HandedOff)
+}
+
 /// What `loaded_entry` is cached by: the library revision and the kit.
 type LoadedKey = (u64, Option<PathBuf>);
 
@@ -890,7 +899,7 @@ impl DrumsEditorApp {
     /// gesture open.
     fn something_moves(&self) -> bool {
         self.meters_moving()
-            || !self.bridge.load_progress.snapshot().complete
+            || kit_loading(&self.bridge)
             || self.jobs.busy()
             || !self.my_downloads.is_empty()
             || self.library_panel.open

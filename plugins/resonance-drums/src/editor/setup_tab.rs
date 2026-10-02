@@ -4,8 +4,10 @@
 //!   kit's catalog, and `oh_N_level`), the room bank (on/off, setup,
 //!   level) and the bleed banks (on/off, level, and what they add);
 //! - STREAMING (E14): the preload, and what it costs and how it is doing;
-//! - THE KIT: the library entry's facts;
-//! - PADS: per pad its note (read-only), output port and choke group.
+//! - THE KIT: the library entry's facts — not its name, which the header
+//!   shows (once);
+//! - PADS: per pad its note (read-only), output port and choke group —
+//!   the ports dimmed in Stereo, where they play nothing.
 //!
 //! A bank's setup is plugin state, not a param (a host cannot automate a
 //! reload); picking one is still one undoable host edit, announced
@@ -20,7 +22,9 @@ use resonance_plugin::param::Param;
 use crate::drum_map::NUM_PADS;
 use crate::kit::{MAX_OVERHEAD_SLOTS, OUTPUT_PORT_NAMES};
 use crate::mic_catalog::ManifestMicCatalog;
-use crate::params::{BANK_ON_LABELS, CHOKE_KIT, MAX_CHOKE_GROUP, OUTPUT_CHOICE_LABELS, OUTPUT_KIT};
+use crate::params::{
+    BANK_ON_LABELS, CHOKE_KIT, MAX_CHOKE_GROUP, OUTPUT_CHOICE_LABELS, OUTPUT_KIT, OUTPUT_MODE_MULTI,
+};
 use crate::sample_info::format_bytes;
 use crate::KitBridge;
 
@@ -80,16 +84,17 @@ fn draw_banks(
             for (slot, current) in slots.iter().enumerate().take(MAX_OVERHEAD_SLOTS) {
                 ui.horizontal(|ui| {
                     controls::row_label(ui, &format!("Slot {}", slot + 1), LABEL_W);
-                    let off = slot > 0;
+                    // Empty is "Off" for slots 2 and 3, and the kit's
+                    // default setup for slot 1 — an option there too, so
+                    // a pick can be taken back.
+                    let empty = if slot > 0 { "Off" } else { "Kit default" };
                     let shown = if current.is_empty() {
-                        if off { "Off".to_string() } else { "Kit default".to_string() }
+                        empty.to_string()
                     } else {
                         catalog.label(current)
                     };
                     let w = super::body_width(ui, 0.0);
-                    let options = off
-                        .then(|| ("", "Off".to_string()))
-                        .into_iter()
+                    let options = std::iter::once(("", empty.to_string()))
                         .chain(overheads.iter().map(|k| (k.as_str(), catalog.label(k))));
                     if let Some(key) =
                         controls::combo(ui, &format!("setup.oh.{slot}"), w, &shown, current.as_str(), options)
@@ -126,13 +131,17 @@ fn draw_banks(
                     catalog.label(&current)
                 };
                 let w = super::body_width(ui, 0.0);
-                if let Some(key) = controls::combo(
+                // Kept while the room is off, for when it is on.
+                let dim = (!params.room_enabled())
+                    .then_some("The room is off: this setup plays once it is on");
+                if let Some(key) = controls::combo_dimmed(
                     ui,
                     "setup.room.setup",
                     w,
                     &shown,
                     current.as_str(),
                     rooms.iter().map(|k| (k.as_str(), catalog.label(k))),
+                    dim,
                 ) {
                     bridge.set_room_setup(key);
                     bridge.announce_mic_setup_edit();
@@ -261,11 +270,11 @@ fn draw_kit_facts(ui: &mut egui::Ui, bridge: &KitBridge, entry: Option<&Entry>) 
                 _ => None,
             };
             match (bridge.kit_path.lock().clone(), loaded) {
-                (Some(path), Some((name, pads))) => {
-                    fact(ui, "kit.fact.name", "Name", &name);
+                (Some(path), Some((_, pads))) => {
                     fact(ui, "kit.fact.source", "Source", "not in the library");
                     fact(ui, "kit.fact.pieces", "Pads", &pads.to_string());
-                    fact(ui, "kit.fact.path", "Manifest", &path.display().to_string());
+                    let folder = path.parent().unwrap_or(&path);
+                    location(ui, folder);
                 }
                 _ => {
                     ui.label(theme::hint_text(
@@ -276,7 +285,6 @@ fn draw_kit_facts(ui: &mut egui::Ui, bridge: &KitBridge, entry: Option<&Entry>) 
             }
             return;
         };
-        fact(ui, "kit.fact.name", "Name", &e.name);
         fact(ui, "kit.fact.source", "Source", super::library_panel::source_text(e.source));
         let pieces: Vec<&str> = e.pieces.iter().map(|p| p.name.as_str()).collect();
         fact(ui, "kit.fact.pieces", "Pieces", &format!("{} ({})", pieces.len(), pieces.join(", ")));
@@ -294,14 +302,32 @@ fn draw_kit_facts(ui: &mut egui::Ui, bridge: &KitBridge, entry: Option<&Entry>) 
             "Size",
             &e.size_bytes.map(format_bytes).unwrap_or_else(|| "not measured yet".into()),
         );
-        fact(ui, "kit.fact.path", "Folder", &e.dir.display().to_string());
+        location(ui, &e.dir);
     });
     probe(ui, "setup.kit", shown.response.rect);
+}
+
+/// Where the kit's folder is: the directory holding it, with the full
+/// path on hover. The folder's own name is (usually) the kit's, which the
+/// header already shows.
+fn location(ui: &mut egui::Ui, folder: &std::path::Path) {
+    let parent = folder
+        .parent()
+        .map_or_else(|| folder.display().to_string(), |p| p.display().to_string());
+    ui.horizontal(|ui| {
+        controls::row_label(ui, "Location", 92.0);
+        let l = ui
+            .add(egui::Label::new(egui::RichText::new(parent).color(theme::TEXT_2).size(10.5)).wrap())
+            .on_hover_text(folder.display().to_string());
+        probe(ui, "kit.fact.path", l.rect);
+    });
 }
 
 /// Per pad: note (read-only — editable later, K10), output, choke.
 fn draw_pad_table(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
     let kit = app.bridge.kit_pads.current();
+    let dim_ports = (app.params.output_mode.value() != OUTPUT_MODE_MULTI)
+        .then_some(controls::STEREO_OUTPUT_WHY);
     let shown = controls::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         ui.set_min_height(ui.available_height());
@@ -335,7 +361,7 @@ fn draw_pad_table(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                         cell_text(ui, cols[1], pad_grid::note_label(pad), theme::TEXT_3);
                         let current = params.output.value();
                         let kit_port = OUTPUT_PORT_NAMES[kit_pad.output_group(pad) as usize];
-                        if let Some(v) = controls::combo(
+                        if let Some(v) = controls::combo_dimmed(
                             ui,
                             &format!("setup.row.{pad}.output"),
                             cols[2] - 8.0,
@@ -343,6 +369,7 @@ fn draw_pad_table(ui: &mut egui::Ui, app: &mut DrumsEditorApp) {
                             current,
                             (OUTPUT_KIT..=OUTPUT_CHOICE_LABELS.len() as i32 - 1)
                                 .map(|v| (v, output_text(v, kit_port))),
+                            dim_ports,
                         ) {
                             params.output.set_value(v);
                             app.bridge.announce_param_edit(params.output.id());

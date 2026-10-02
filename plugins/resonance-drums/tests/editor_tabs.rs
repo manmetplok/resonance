@@ -19,8 +19,9 @@ use resonance_drums::params::OUTPUT_MODE_MULTI;
 use resonance_drums::{EditorFrameProbe, ProbedRect, ResonanceDrums, TestEditor};
 use resonance_plugin::{EventIterator, NoteEvent, OutputBuffer, ResonancePlugin};
 
-/// §6.1: 960×640 default, 780×520 minimum.
-const SIZES: [(f32, f32); 2] = [(960.0, 640.0), (780.0, 520.0)];
+/// §6.1: 960×640 default, 780×520 minimum; 1571×856 is what this
+/// machine's tiling compositor maps every plugin editor at (CLAUDE.md).
+const SIZES: [(f32, f32); 3] = [(960.0, 640.0), (780.0, 520.0), (1571.0, 856.0)];
 const TABS: [&str; 3] = ["Pads", "Mix", "Setup"];
 const TOLERANCE: f32 = 1.0;
 const RATE: f32 = 48_000.0;
@@ -112,6 +113,21 @@ impl Drop for Kit {
 }
 
 fn fixture_kit() -> Kit {
+    fixture_kit_of(&PIECES)
+}
+
+/// The fixture kit plus the kick's "ohne Teppich" alternate, so the kick
+/// pad offers articulation chips.
+fn fixture_kit_with_articulation() -> Kit {
+    let mut pieces = PIECES.to_vec();
+    pieces.push((
+        "SD Kick ohne Teppich",
+        &[("01_KickIn_e901", "KickIn", "ko_in", 1), ("23_OHsAB_e914", "OHsAB", "ko_ohab", 2)],
+    ));
+    fixture_kit_of(&pieces)
+}
+
+fn fixture_kit_of(pieces_spec: &[(&str, &[Setup])]) -> Kit {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let dir = std::env::temp_dir().join(format!(
         "resonance-drums-editor-tabs-{}-{}",
@@ -120,7 +136,7 @@ fn fixture_kit() -> Kit {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let mut pieces = serde_json::Map::new();
-    for (piece, setups) in PIECES {
+    for &(piece, setups) in pieces_spec {
         let mut map = serde_json::Map::new();
         for &(key, position, file, channels) in setups {
             // Three velocity layers, two takes each.
@@ -438,13 +454,15 @@ fn the_tab_bar_switches_the_view() {
     }
 }
 
-/// The kit is named once, in the header — not again in a pad-list card
-/// and a KIT card (§1.3). The old KIT/GLOBAL bottom cards are gone.
+/// The kit is named once, in the header — not again in a pad-list card,
+/// a KIT card (§1.3) or the Setup tab's kit facts (whose location shows
+/// the folder the kit is in, the kit's own folder name on hover). The old
+/// KIT/GLOBAL bottom cards are gone.
 #[test]
 fn the_kit_is_named_once_and_the_old_cards_are_gone() {
     let kit = fixture_kit();
     let plugin = with_kit(&kit);
-    for tab in ["Pads", "Mix"] {
+    for tab in TABS {
         let mut e = editor(&plugin, (960.0, 640.0), tab);
         let frame = settled(&mut e);
         let name = match plugin.bridge.kit_status.lock().clone() {
@@ -592,7 +610,8 @@ fn the_inspector_shows_exactly_the_controls_the_pad_has() {
         v.push("inspector.mute".into());
         v.push("routing.choke".into());
         v.push("routing.output".into());
-        v.push("routing.output.stereo".into());
+        // Stereo (the default): the port picker is dimmed, and says why.
+        v.push("routing.output.dimmed".into());
         v.sort();
         v
     };
@@ -706,7 +725,7 @@ fn the_mix_table_reaches_every_pad() {
             }
             frame = e.wheel(table.center(), egui::vec2(0.0, -120.0));
         }
-        let last = frame.widget("mix.row.29.output").expect("the last row's output");
+        let last = frame.widget("mix.row.29.mute").expect("the last row's mute");
         assert!(fully_visible(last, frame.screen), "{size:?}: {:?} in {:?}", last.rect, last.clip);
     }
 }
@@ -1063,5 +1082,352 @@ fn the_editor_repaints_only_as_fast_as_something_moves() {
     assert!(
         lit >= Duration::from_millis(10) && lit <= Duration::from_millis(40),
         "a lit cell repaints every {lit:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Layout and UX (fix6)
+// ---------------------------------------------------------------------------
+
+/// Probed names that are containers or duplicates of another probe, not
+/// controls: a card, a table row, a sample stage, a marker drawn over a
+/// cell or a combo.
+fn is_container(name: &str) -> bool {
+    let row = |prefix: &str| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+    };
+    CARDS.contains(&name)
+        || name == "inspector.sample"
+        || name == "pad_cell.velocity"
+        || name.ends_with(".dimmed")
+        || name.ends_with(".absent")
+        || row("mix.row.")
+        || row("setup.row.")
+}
+
+/// No two body controls overlap on screen, on any tab at any size.
+#[test]
+fn no_two_body_controls_overlap() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    for size in SIZES {
+        for tab in TABS {
+            for pad in [KICK, TOM] {
+                let mut e = editor(&plugin, size, tab);
+                e.select_pad(pad);
+                let frame = settled(&mut e);
+                let shown: Vec<(&str, egui::Rect)> = frame
+                    .widgets
+                    .iter()
+                    .filter(|w| !is_container(&w.name))
+                    .map(|w| (w.name.as_str(), w.rect.intersect(w.clip).intersect(frame.screen)))
+                    .filter(|(_, v)| v.width() > 0.0 && v.height() > 0.0)
+                    .collect();
+                assert!(shown.len() > 20, "{tab} {size:?}: almost nothing laid out");
+                for (i, (a, ra)) in shown.iter().enumerate() {
+                    for (b, rb) in &shown[i + 1..] {
+                        let o = ra.intersect(*rb);
+                        assert!(
+                            !(o.width() > 1.5 && o.height() > 1.5),
+                            "{tab} {size:?} pad {pad}: {a} {ra:?} overlaps {b} {rb:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The six inspector knobs sit in one row at every size — at the
+/// minimum the dials shrink rather than leave Start alone on a row.
+#[test]
+fn the_six_knobs_fit_one_row_at_every_size() {
+    let plugin = booted();
+    for size in SIZES {
+        let mut e = editor(&plugin, size, "Pads");
+        let frame = settled(&mut e);
+        let tops: Vec<f32> = ["level", "pan", "tune", "hold", "decay", "start"]
+            .iter()
+            .map(|k| frame.widget(&format!("knob.{k}")).unwrap().rect.top())
+            .collect();
+        assert!(
+            tops.iter().all(|t| (t - tops[0]).abs() < 0.5),
+            "{size:?}: the knobs wrapped: {tops:?}"
+        );
+    }
+}
+
+/// The grid grows with the window, keeping its cells' shape, and the
+/// inspector's controls stop growing at a readable width.
+#[test]
+fn the_grid_grows_and_the_inspector_controls_are_capped() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let cell = |size| {
+        let mut e = editor(&plugin, size, "Pads");
+        let frame = settled(&mut e);
+        (frame.widget("pad_cell.0").unwrap().rect, frame)
+    };
+    let (small, _) = cell((960.0, 640.0));
+    let (big, frame) = cell((1571.0, 856.0));
+    assert!(big.width() > small.width() * 1.6, "{small:?} → {big:?}");
+    let aspect = |r: egui::Rect| r.width() / r.height();
+    assert!((aspect(big) - aspect(small)).abs() < 0.05, "{small:?} → {big:?}");
+    let grid = frame.widget("pad_grid").unwrap().rect;
+    let share = grid.width() / frame.screen.width();
+    assert!((0.5..=0.62).contains(&share), "the grid takes {share} of the window");
+    for name in ["trim.mic1", "trim.oh", "mic.0"] {
+        let w = frame.widget(name).unwrap_or_else(|| panic!("{name}")).rect.width();
+        assert!(w <= 361.0, "{name} is {w} px wide");
+    }
+}
+
+/// Hovering a playable cell shows the velocity a click there plays.
+#[test]
+fn hovering_a_cell_shows_the_velocity_it_plays() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    let frame = settled(&mut e);
+    let cell = frame.widget(&format!("pad_cell.{SNARE}")).unwrap().rect;
+    e.frame(vec![egui::Event::PointerMoved(egui::pos2(cell.center().x, cell.top() + 2.0))]);
+    let frame = e.frame(Vec::new());
+    assert!(frame.widget("pad_cell.velocity").is_some(), "no velocity readout");
+    let v: u32 = frame
+        .strings()
+        .iter()
+        .find_map(|s| s.strip_prefix('v').and_then(|n| n.parse().ok()))
+        .expect("a vNN readout");
+    assert!(v >= 120, "the top of the cell reads v{v}");
+    // Off the grid: no readout.
+    e.frame(vec![egui::Event::PointerMoved(egui::pos2(5.0, 5.0))]);
+    assert!(e.frame(Vec::new()).widget("pad_cell.velocity").is_none());
+}
+
+/// In Stereo a pad's Output picker is dimmed (it plays nothing) in the
+/// inspector and on the Setup table; in Multi it is not. The room setup
+/// picker is dimmed while the room is off.
+#[test]
+fn settings_that_play_nothing_now_are_dimmed() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    assert!(settled(&mut e).widget("routing.output.dimmed").is_some());
+    e.show_view("Setup");
+    let frame = settled(&mut e);
+    assert!(frame.widget("setup.row.0.output.dimmed").is_some());
+    assert!(frame.widget("setup.row.0.choke.dimmed").is_none(), "choke applies in Stereo");
+    assert!(frame.widget("setup.room.setup.dimmed").is_some(), "the room is off");
+
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
+    plugin.bridge.params.room_on.set_value(resonance_drums::params::BANK_ON);
+    let frame = settled(&mut e);
+    assert!(frame.widget("setup.row.0.output.dimmed").is_none());
+    assert!(frame.widget("setup.room.setup.dimmed").is_none());
+    e.show_view("Pads");
+    assert!(settled(&mut e).widget("routing.output.dimmed").is_none());
+}
+
+/// The Stereo / Multi switch heads the OUTPUTS card it decides; the Mix
+/// table is level, pan and mute only (output and choke are routing, on
+/// the Setup table and in the inspector).
+#[test]
+fn the_mix_tab_has_one_home_per_control() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Mix");
+    let frame = settled(&mut e);
+    let switch = frame.widget("mix.output_mode").expect("the output mode switch").rect;
+    let outputs = frame.widget("mix.outputs").unwrap().rect;
+    assert!(outputs.contains_rect(switch), "{switch:?} is not in OUTPUTS {outputs:?}");
+    assert!(frame.widget("global.output_mode").is_none());
+    for gone in ["mix.row.0.output", "mix.row.0.choke"] {
+        assert!(frame.widget(gone).is_none(), "{gone} is back in the Mix table");
+    }
+    for kept in ["mix.row.0.level", "mix.row.0.pan", "mix.row.0.mute"] {
+        assert!(frame.widget(kept).is_some(), "{kept} is missing");
+    }
+}
+
+/// A caption's hint is drawn beside it where it fits.
+#[test]
+fn caption_hints_are_drawn_where_they_fit() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Mix");
+    let frame = settled(&mut e);
+    assert!(frame.shows("harder ← linear → softer"), "{:?}", frame.strings());
+    let label = frame.widget("caption.Velocity curve").unwrap().rect;
+    let hint = frame.widget("caption.Velocity curve.hint").unwrap().rect;
+    assert!(hint.left() >= label.right() && (hint.center().y - label.center().y).abs() < 2.0);
+}
+
+/// The built-in kit has no mics: its inspector says TRIM, with no picker.
+/// A kit's says MICS.
+#[test]
+fn the_built_in_kit_has_a_trim_not_mics() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    let frame = settled(&mut e);
+    assert!(frame.shows("TRIM") && !frame.shows("MICS"), "{:?}", frame.strings());
+    assert!(frame.widget("mic.0").is_none() && frame.widget("trim.mic1").is_some());
+    assert!(!frame.shows("built-in"), "the old placeholder picker is back");
+
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    assert!(settled(&mut e).shows("MICS"));
+}
+
+/// Overhead slot 1 offers "Kit default" (the kit's first overhead setup),
+/// so a pick there can be taken back.
+#[test]
+fn overhead_slot_1_offers_the_kit_default() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Setup");
+    let frame = settled(&mut e);
+    e.click(frame.widget("setup.oh.0").unwrap().rect.center());
+    let frame = settled(&mut e);
+    let item = frame.text_center("Kit default").expect("slot 1 lists the kit default");
+    e.click(item);
+    assert_eq!(plugin.bridge.overhead_slots()[0], "");
+    assert_eq!(edits(&plugin), ["mic_setup_rev"]);
+}
+
+/// The sample stage says what is going on when it has nothing to draw:
+/// "loading…" while a kit loads.
+#[test]
+fn the_sample_stage_says_loading_while_a_kit_loads() {
+    let kit = fixture_kit();
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    e.select_pad(SNARE);
+    let choices: [PadMicChoices; NUM_PADS] = std::array::from_fn(|_| PadMicChoices::default());
+    // Swap the pads' infos out, so the stage has nothing to show, and
+    // start a load: until it lands the stage says it is loading.
+    *plugin.bridge.pad_samples.lock() = std::sync::Arc::new(Vec::new());
+    spawn_loader(
+        kit.manifest.clone(),
+        RATE,
+        &plugin.bridge,
+        DEFAULT_OVERHEAD_SETUP.to_string(),
+        choices,
+        [false; NUM_PADS],
+    );
+    let frame = e.frame(Vec::new());
+    let loading = frame.strings().iter().any(|s| s == "loading…");
+    let landed = !plugin.bridge.pad_samples.lock().is_empty();
+    assert!(loading || landed, "{:?}", frame.strings());
+}
+
+// ---------------------------------------------------------------------------
+// Every write announces (fix6): one runtime check per kind of control
+// ---------------------------------------------------------------------------
+
+/// Pick `item` from the combo probed as `combo`.
+fn pick(e: &mut TestEditor, combo: &str, item: &str) {
+    let frame = settled(e);
+    let frame = reveal(e, frame, combo).unwrap();
+    e.click(frame.widget(combo).unwrap().rect.center());
+    let frame = settled(e);
+    let at = frame
+        .text_center(item)
+        .unwrap_or_else(|| panic!("{combo} does not list {item:?}: {:?}", frame.strings()));
+    e.click(at);
+}
+
+/// Drag the slider probed as `name` 30 px to the left.
+fn nudge(e: &mut TestEditor, name: &str) {
+    let frame = settled(e);
+    let frame = reveal(e, frame, name).unwrap();
+    let r = frame.widget(name).unwrap().rect;
+    e.drag(r.center(), r.center() + egui::vec2(-30.0, 0.0));
+}
+
+#[test]
+fn every_inspector_write_announces_once() {
+    let kit = fixture_kit_with_articulation();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    e.select_pad(KICK);
+
+    pick(&mut e, "routing.output", "Overhead");
+    pick(&mut e, "routing.choke", "Group 3");
+    nudge(&mut e, "trim.mic1");
+    nudge(&mut e, "trim.oh");
+    let frame = settled(&mut e);
+    let frame = reveal(&mut e, frame, "articulation.1").expect("the kick has an alternate");
+    e.click(frame.widget("articulation.1").unwrap().rect.center());
+    let frame = settled(&mut e);
+    e.click(frame.widget("inspector.mute").unwrap().rect.center());
+
+    assert_eq!(
+        edits(&plugin),
+        [
+            "pad_0_output",
+            "pad_0_choke",
+            "pad_0_mic1_trim",
+            "pad_0_oh_trim",
+            "pad_0_articulation",
+            "pad_0_mute"
+        ]
+    );
+}
+
+#[test]
+fn every_setup_and_global_write_announces_once() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Setup");
+
+    // The table first, each pick in a fresh editor: in a headless
+    // context egui scrolls the virtual table to its end on the click
+    // after a popup pick or a wheel turned over another column, and the
+    // row is gone before its popup opens.
+    pick(&mut e, "setup.row.1.choke", "Group 2");
+    plugin.bridge.params.output_mode.set_value(OUTPUT_MODE_MULTI);
+    let mut e = editor(&plugin, (960.0, 640.0), "Setup");
+    pick(&mut e, "setup.row.1.output", "Toms");
+    let mut e = editor(&plugin, (960.0, 640.0), "Setup");
+    nudge(&mut e, "setup.oh.0.level");
+    let frame = settled(&mut e);
+    e.click(frame.widget("setup.room.on").unwrap().rect.right_center() - egui::vec2(8.0, 0.0));
+    nudge(&mut e, "setup.room.level");
+    let frame = settled(&mut e);
+    e.click(frame.widget("setup.bleed.on").unwrap().rect.right_center() - egui::vec2(8.0, 0.0));
+    nudge(&mut e, "setup.bleed.level");
+    let frame = settled(&mut e);
+    let frame = reveal(&mut e, frame, "setup.preload").unwrap();
+    e.click(frame.widget("setup.preload").unwrap().rect.left_center() + egui::vec2(8.0, 0.0));
+
+    e.show_view("Mix");
+    nudge(&mut e, "global.polyphony");
+    // Humanize rests at 0, the left end: a drag left changes nothing (and
+    // tells nothing); one to the right is an edit.
+    nudge(&mut e, "global.velocity_humanize");
+    let frame = settled(&mut e);
+    let r = frame.widget("global.velocity_humanize").unwrap().rect;
+    e.drag(r.left_center() + egui::vec2(4.0, 0.0), r.left_center() + egui::vec2(40.0, 0.0));
+    let frame = settled(&mut e);
+    let cycle = frame.widget("global.round_robin").unwrap().rect;
+    e.click(cycle.right_center() - egui::vec2(8.0, 0.0));
+    nudge(&mut e, "mix.row.1.level");
+
+    assert_eq!(
+        edits(&plugin),
+        [
+            "pad_1_choke",
+            "pad_1_output",
+            "oh_1_level",
+            "room_on",
+            "room_level",
+            "bleed_on",
+            "bleed_level",
+            "stream_preload",
+            "polyphony",
+            "velocity_humanize",
+            "round_robin_mode",
+            "pad_1_level",
+        ]
     );
 }

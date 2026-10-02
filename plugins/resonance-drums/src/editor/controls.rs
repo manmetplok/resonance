@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 use plugin_gui_core::egui;
-use plugin_gui_core::widgets::{self, HSlider, ThemedKnob};
+use plugin_gui_core::widgets::{self, HSlider, KnobStyle, ThemedKnob};
 use resonance_plugin::param::Param;
 use resonance_plugin::{BoolParam, FloatParam, IntParam};
 
@@ -240,8 +240,44 @@ pub(crate) fn knob(
     text: &str,
     bipolar: bool,
 ) {
+    knob_styled(ui, bridge, name, caption, param, text, bipolar, KnobStyle::LAVENDER);
+}
+
+/// The knob style whose cells fit `count` of them, `gap` apart, in
+/// `width`: the standard cell when it fits, else a smaller dial (down to
+/// 40 px cells; below that the row wraps).
+pub(crate) fn knob_style_to_fit(width: f32, count: usize, gap: f32) -> KnobStyle {
+    let standard = KnobStyle::LAVENDER;
+    let n = count.max(1) as f32;
+    let cell_w = ((width - (n - 1.0) * gap) / n).clamp(40.0, standard.cell().x);
+    let pad_x = standard.pad_x.min(cell_w - 34.0).max(4.0);
+    // The readout and caption shrink with the cell, so `+12.00 st` is not
+    // clipped by a narrower one.
+    let scale = cell_w / standard.cell().x;
+    KnobStyle {
+        diameter: cell_w - pad_x,
+        pad_x,
+        value_font: (standard.value_font * scale).max(8.5),
+        label_font: (standard.label_font * scale).max(8.0),
+        ..standard
+    }
+}
+
+/// [`knob`] in a given cell style.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn knob_styled(
+    ui: &mut egui::Ui,
+    bridge: &KitBridge,
+    name: &str,
+    caption: &str,
+    param: &FloatParam,
+    text: &str,
+    bipolar: bool,
+    style: KnobStyle,
+) {
     let knob = ThemedKnob::new(caption, param.normalized_value(), text, param.default_normalized())
-        .bipolar(bipolar);
+        .bipolar(bipolar)
+        .style(style);
     // `allocate_ui`, not a scope: it takes its place through the layout's
     // placer, so a row of knobs in `horizontal_wrapped` wraps.
     let shown = ui.allocate_ui(knob.style.cell(), |ui| widgets::knob_themed_edit(ui, &knob));
@@ -392,6 +428,22 @@ pub(crate) fn combo<T: Copy + PartialEq>(
     current: T,
     options: impl IntoIterator<Item = (T, String)>,
 ) -> Option<T> {
+    combo_dimmed(ui, name, width, selected_text, current, options, None)
+}
+
+/// [`combo`], dimmed with `why` on hover when `dim` is given: a setting
+/// that is kept but does nothing right now (a pad's port in Stereo, the
+/// room setup with the room off). It stays usable — the choice is kept
+/// for when it applies.
+pub(crate) fn combo_dimmed<T: Copy + PartialEq>(
+    ui: &mut egui::Ui,
+    name: &str,
+    width: f32,
+    selected_text: &str,
+    current: T,
+    options: impl IntoIterator<Item = (T, String)>,
+    dim: Option<&str>,
+) -> Option<T> {
     let mut picked = None;
     // In a box of exactly `width`: a combo grows to fit its text
     // otherwise, and a long kit-port name pushed a table row out of its
@@ -402,6 +454,9 @@ pub(crate) fn combo<T: Copy + PartialEq>(
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
             ui.set_max_width(width);
+            if dim.is_some() {
+                ui.multiply_opacity(0.45);
+            }
             egui::ComboBox::from_id_salt(name)
                 .width(width - ui.spacing().icon_width - ui.spacing().button_padding.x * 2.0)
                 .truncate()
@@ -416,8 +471,20 @@ pub(crate) fn combo<T: Copy + PartialEq>(
         },
     );
     probe(ui, name, boxed.inner.response.rect);
+    if let Some(why) = dim {
+        probe(ui, format_args!("{name}.dimmed"), boxed.inner.response.rect);
+        boxed.inner.response.on_hover_text(why);
+    }
     picked
 }
+
+/// The widest an inspector control (a fader, a picker) is drawn: past
+/// this a 1571 px window stretched a trim fader across 600 px.
+pub(crate) const MAX_CONTROL_W: f32 = 360.0;
+
+/// What a pad's Output picker says in Stereo, dimmed.
+pub(crate) const STEREO_OUTPUT_WHY: &str =
+    "Stereo: everything plays on Main — switch Output Mode to Multi (Mix tab) for per-pad ports";
 
 /// A small caps section heading.
 pub(crate) fn heading(ui: &mut egui::Ui, text: &str) -> egui::Response {
