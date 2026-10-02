@@ -54,30 +54,103 @@ pub(crate) fn handle_play(ctx: &HandlerCtx, state: &mut HandlerState) {
     }
 }
 
+/// The capture stream a record session opens: given the source device
+/// (if any armed track names one), the channel count it needs and the
+/// recording ring's producer, it returns the stream handle (`None` for a
+/// test's fake input), the device rate and the negotiated channel count.
+/// [`platform_input`] is the real one; a test passes its own so a whole
+/// record run is hermetic.
+pub(crate) type InputOpenResult = Result<
+    (Option<crate::input_handle::InputHandle>, u32, u16),
+    platform::InputStreamError,
+>;
+
+/// The real capture-stream opener: the platform backend (native PipeWire
+/// or cpal), with the session's recording producer attached.
+pub(crate) fn platform_input<'a>(
+    ctx: &'a HandlerCtx<'a>,
+) -> impl FnOnce(Option<&str>, u16, ringbuf::HeapProd<f32>) -> InputOpenResult + 'a {
+    move |source_name, desired_channels, prod| {
+        platform::build_input_stream(
+            source_name,
+            Arc::clone(ctx.shared),
+            Some(prod),
+            Arc::clone(ctx.monitor_prod),
+            ctx.buf_frames,
+            ctx.quantum,
+            ctx.sample_rate,
+            desired_channels,
+            None,
+        )
+        .map(|(handle, sr, ch)| (Some(handle), sr, ch))
+    }
+}
+
+/// What opening a record session came to.
+pub(crate) enum SessionOpen {
+    /// The input stream is up, every capturing track has its take file
+    /// and the cycle-record cut is set up. Nothing is rolling or
+    /// capturing yet: the caller starts the take.
+    Opened,
+    /// Nothing will be captured. `roll` says whether Record still starts
+    /// the transport (Record degrades to Play), as it always has for
+    /// every failure but a take file that will not open.
+    Degraded { roll: bool },
+}
+
 pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount_bars: u8) {
+    handle_record_with(ctx, state, precount_bars, platform_input(ctx));
+}
+
+/// [`handle_record`] over a given capture-stream opener (a test's fake
+/// input, or [`platform_input`]).
+pub(crate) fn handle_record_with(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    precount_bars: u8,
+    open_input: impl FnOnce(Option<&str>, u16, ringbuf::HeapProd<f32>) -> InputOpenResult,
+) {
     if refuse_while_offline_render(ctx, "start recording") {
         let _ = ctx.event_tx.send(AudioEvent::TransportRefused);
         return;
     }
+    let start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
+    // The session — input stream, take files, cycle-record cut — opens
+    // before anything rolls. A count-in then has nothing left to build
+    // when it ends: the audio thread starts the take at the count-in's
+    // last frame (code review RT-08), where it used to wait for this
+    // thread's next tick and an input-stream rebuild of up to 500 ms
+    // while the performer was already playing.
+    let opened = open_recording_session(ctx, state, start_sample, open_input);
     if precount_bars == 0 {
-        let start_sample = ctx.shared.playhead.load(Ordering::SeqCst);
-        begin_recording_stream(ctx, state, start_sample);
+        match opened {
+            SessionOpen::Opened => start_recording_now(ctx, state),
+            SessionOpen::Degraded { roll } => {
+                if roll {
+                    ctx.shared.playing.store(true, Ordering::SeqCst);
+                }
+            }
+        }
         return;
     }
 
-    // Count-in: leave the playhead exactly where the user pressed
-    // Record and arm the mixer's count-in branch. The mixer holds
-    // the playhead stationary, renders metronome ticks from its own
-    // elapsed counter, and the engine control thread opens the
-    // recording stream the moment `count_in_remaining` reaches zero.
-    let (precount_samples, was_metronome) = {
+    // Count-in: leave the playhead exactly where the user pressed Record
+    // and arm the mixer's count-in branch. The mixer holds the playhead
+    // stationary and renders metronome ticks from its own elapsed counter
+    // (it does not read the metronome toggle, so the toggle is left
+    // alone). With a session open it also starts the take itself.
+    let precount_samples = {
         let tm = ctx.tempo_map.load();
         let samples_per_bar = tm.samples_per_bar(ctx.sample_rate);
-        let samples = (samples_per_bar * precount_bars as f64) as u64;
-        (samples, tm.metronome_enabled)
+        (samples_per_bar * precount_bars as f64) as u64
     };
-
-    let orig_playhead = ctx.shared.playhead.load(Ordering::SeqCst);
+    let armed = matches!(opened, SessionOpen::Opened);
+    if armed {
+        arm_start_latch(ctx, start_sample);
+        ctx.shared
+            .count_in_record_arm
+            .store(crate::engine::count_in_arm::ARMED, Ordering::Release);
+    }
     ctx.shared
         .count_in_total
         .store(precount_samples, Ordering::SeqCst);
@@ -85,75 +158,191 @@ pub(crate) fn handle_record(ctx: &HandlerCtx, state: &mut HandlerState, precount
         .count_in_remaining
         .store(precount_samples, Ordering::SeqCst);
     ctx.shared.count_in_active.store(true, Ordering::SeqCst);
-    super::rcu_tempo(ctx, |tm| tm.metronome_enabled = true);
     ctx.shared.playing.store(true, Ordering::SeqCst);
 
     state.rec.precount = Some(crate::recording::PrecountState {
-        target_sample: orig_playhead,
-        restore_metronome: was_metronome,
+        target_sample: start_sample,
+        armed,
     });
 }
 
-/// Clear any pending count-in and restore the metronome toggle to
-/// whatever it was before `Record` was pressed. Called by Pause/Stop
-/// so cancelling a record-with-precount doesn't leave the metronome
-/// stuck on or the mixer stuck in its count-in branch.
+/// How [`settle_count_in_arm`] found the count-in → record hand-off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArmSettle {
+    /// No record was waiting on a count-in.
+    Idle,
+    /// The take had not started; it now never will.
+    Disarmed,
+    /// The audio thread started the take; `recording` is set.
+    Fired,
+}
+
+/// Settle the audio thread's count-in → record flip (code review RT-08)
+/// so the caller sees a take that has either fully started or never
+/// will. The audio thread's flip is a handful of stores between `FIRING`
+/// and `FIRED`; this spins only across that window.
+pub(crate) fn settle_count_in_arm(shared: &crate::engine::SharedState) -> ArmSettle {
+    use crate::engine::count_in_arm::{ARMED, FIRED, IDLE};
+    loop {
+        match shared.count_in_record_arm.compare_exchange(
+            ARMED,
+            IDLE,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return ArmSettle::Disarmed,
+            Err(IDLE) => return ArmSettle::Idle,
+            Err(FIRED) => {
+                shared.count_in_record_arm.store(IDLE, Ordering::Release);
+                return ArmSettle::Fired;
+            }
+            Err(_) => std::hint::spin_loop(),
+        }
+    }
+}
+
+/// Stop / Pause, before they read `recording`: resolve a record count-in
+/// still in flight. A take the audio thread already started is reported
+/// started and then finalized like any other; one it had not started is
+/// thrown away with its (empty) take files.
+fn settle_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
+    let Some(pc) = state.rec.precount else {
+        return;
+    };
+    if !pc.armed {
+        return;
+    }
+    match settle_count_in_arm(ctx.shared) {
+        ArmSettle::Fired => {
+            let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
+                start_sample: pc.target_sample,
+            });
+        }
+        ArmSettle::Disarmed => abort_armed_session(ctx, state),
+        ArmSettle::Idle => {}
+    }
+    // Armed or not, the hand-off is over; `cancel_precount` clears the
+    // count-in flags.
+    state.rec.precount = Some(crate::recording::PrecountState {
+        armed: false,
+        ..pc
+    });
+}
+
+/// Tear down a session opened for a count-in that ended before its
+/// downbeat: nothing was captured.
+fn abort_armed_session(ctx: &HandlerCtx, state: &mut HandlerState) {
+    ctx.shared
+        .recording_start_pending
+        .store(false, Ordering::Release);
+    state.rec.abort_session();
+    state.rec.input_stream = None;
+    state.loop_record_session = None;
+}
+
+/// Clear any pending count-in so the mixer leaves its count-in branch.
+/// Called by Pause/Stop (after [`settle_precount`]).
 pub(crate) fn cancel_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
-    if let Some(pc) = state.rec.precount.take() {
-        super::rcu_tempo(ctx, |tm| {
-            tm.metronome_enabled = pc.restore_metronome
-        });
+    if state.rec.precount.take().is_some() {
         ctx.shared.count_in_active.store(false, Ordering::SeqCst);
         ctx.shared.count_in_remaining.store(0, Ordering::SeqCst);
         ctx.shared.count_in_total.store(0, Ordering::SeqCst);
     }
 }
 
-/// Poll hook: if a count-in is in flight and the mixer has drained
-/// `count_in_remaining` to zero, restore the metronome toggle and
-/// open the actual recording stream. Runs on the engine control
-/// thread's ~60 Hz loop, so the worst-case start jitter is one
-/// engine tick (≈16 ms) on top of the one-buffer tail the mixer
-/// holds after the counter hits zero.
+/// Poll hook for a count-in in flight. A record count-in's take was
+/// started by the audio thread at the count-in's last frame; this only
+/// does the bookkeeping once it has (`RecordingStarted`). A count-in with
+/// nothing to record hands over to playback here, once the mixer has
+/// drained `count_in_remaining` to zero.
 pub(crate) fn poll_precount(ctx: &HandlerCtx, state: &mut HandlerState) {
     let Some(pc) = state.rec.precount else {
         return;
     };
-    // Pause/Stop clears `playing` — if that happened while counting
-    // in, drop the precount without starting the stream.
+    // The transport stopped under the count-in without a Stop / Pause
+    // (those settle it themselves): drop the precount.
     if !ctx.shared.playing.load(Ordering::Relaxed) {
+        settle_precount(ctx, state);
+        cancel_precount(ctx, state);
+        return;
+    }
+    if pc.armed {
+        if ctx.shared.count_in_record_arm.load(Ordering::Acquire)
+            != crate::engine::count_in_arm::FIRED
+        {
+            return;
+        }
+        ctx.shared
+            .count_in_record_arm
+            .store(crate::engine::count_in_arm::IDLE, Ordering::Release);
         state.rec.precount = None;
-        super::rcu_tempo(ctx, |tm| {
-            tm.metronome_enabled = pc.restore_metronome
-        });
-        ctx.shared.count_in_active.store(false, Ordering::SeqCst);
-        ctx.shared.count_in_remaining.store(0, Ordering::SeqCst);
         ctx.shared.count_in_total.store(0, Ordering::SeqCst);
+        let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
+            start_sample: pc.target_sample,
+        });
         return;
     }
     if ctx.shared.count_in_remaining.load(Ordering::Relaxed) > 0 {
         return;
     }
     state.rec.precount = None;
-    super::rcu_tempo(ctx, |tm| {
-        tm.metronome_enabled = pc.restore_metronome
-    });
     ctx.shared.count_in_total.store(0, Ordering::SeqCst);
-    // The mixer held the playhead stationary through the count-in,
-    // so it still points at the punch-in line. Open the recording
-    // stream first, then clear `count_in_active` — the mixer keeps
-    // holding the playhead until this flag flips, which is what
-    // makes the count-in → record transition race-free even if
-    // CPAL's `build_input_stream` takes real wall-clock time.
-    begin_recording_stream(ctx, state, pc.target_sample);
     ctx.shared.count_in_active.store(false, Ordering::SeqCst);
 }
 
+/// Open a record session and start it at once — the realtime bounce's
+/// entry point (a plain Record goes through [`handle_record`]).
 pub(crate) fn begin_recording_stream(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
     start_sample: SamplePos,
 ) {
+    match open_recording_session(ctx, state, start_sample, platform_input(ctx)) {
+        SessionOpen::Opened => start_recording_now(ctx, state),
+        SessionOpen::Degraded { roll } => {
+            if roll {
+                ctx.shared.playing.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+}
+
+/// Arm the input callbacks' start latch: the first frames pushed once
+/// `recording` is set latch the raw playhead the take is placed from
+/// (`SharedState::latch_recording_start`, doc #260 finding #2).
+fn arm_start_latch(ctx: &HandlerCtx, start_sample: SamplePos) {
+    ctx.shared
+        .recording_start_latch
+        .store(start_sample, Ordering::Relaxed);
+    ctx.shared
+        .recording_start_pending
+        .store(true, Ordering::Release);
+}
+
+/// Start an opened session now: transport and capture together.
+fn start_recording_now(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // Transport + capture start together, *after* the stream is up: the
+    // first pushed frames latch the aligned take start, which the engine
+    // loop applies before the first drain (doc #260 finding #2).
+    arm_start_latch(ctx, state.rec.start_sample);
+    ctx.shared.playing.store(true, Ordering::SeqCst);
+    ctx.shared.recording.store(true, Ordering::SeqCst);
+    let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
+        start_sample: state.rec.start_sample,
+    });
+}
+
+/// Open a record session without starting it: the input stream with the
+/// recording producer attached, a take file per capturing armed track,
+/// the cycle-record session and cut. `playing` / `recording` are left to
+/// the caller — a plain Record starts at once, a count-in leaves it to
+/// the audio thread.
+pub(crate) fn open_recording_session(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+    start_sample: SamplePos,
+    open_input: impl FnOnce(Option<&str>, u16, ringbuf::HeapProd<f32>) -> InputOpenResult,
+) -> SessionOpen {
     // Fresh session: no take shift unless the realtime bounce sets one
     // after this returns (external-instrument round-trip compensation).
     state.rec.take_shift_samples = 0;
@@ -167,16 +356,15 @@ pub(crate) fn begin_recording_stream(
             let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
                 "Cannot record: no project directory set. Open or create a project first.",
             )));
-            return;
+            return SessionOpen::Degraded { roll: false };
         }
     };
 
-    // NOTE: `playing` is deliberately NOT set yet. It used to flip here
-    // — before the input stream was even built (an up-to-500 ms open) —
-    // so the playhead ran ahead while no frames could be captured and
-    // that variable gap landed inside every take (doc #260 finding #2).
-    // The transport now starts after the stream is up; the paths that
-    // bail out early below still start playback for behavioural parity.
+    // NOTE: `playing` is deliberately NOT set here. It used to flip
+    // before the input stream was even built (an up-to-500 ms open), so
+    // the playhead ran ahead while no frames could be captured and that
+    // variable gap landed inside every take (doc #260 finding #2). The
+    // caller starts the transport once the session is open.
 
     // Snapshot port + mono per armed track so the drain loop on the
     // engine thread doesn't need to re-lock the tracks map for every
@@ -210,8 +398,7 @@ pub(crate) fn begin_recording_stream(
 
     if armed_tracks.is_empty() {
         // Nothing to record: Record degrades to Play, as before.
-        ctx.shared.playing.store(true, Ordering::SeqCst);
-        return;
+        return SessionOpen::Degraded { roll: true };
     }
 
     // Every capturing track needs a clip id from the app's grant (ARCH-04
@@ -223,12 +410,11 @@ pub(crate) fn begin_recording_stream(
     // `IdGrantLow` (or never granted anything).
     let capturing = armed_tracks.iter().filter(|i| i.captures_audio).count() as u64;
     if state.clip_grant.len() < capturing {
-        ctx.shared.playing.store(true, Ordering::SeqCst);
         state.report_clip_grant_low(ctx.event_tx);
         let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(
             "Failed to start recording: no clip ids available — try again",
         )));
-        return;
+        return SessionOpen::Degraded { roll: true };
     }
 
     let source_name: Option<String> = armed_tracks.iter().find_map(|info| info.device.clone());
@@ -250,40 +436,50 @@ pub(crate) fn begin_recording_stream(
     // monitor stream and end up with the old channel count.
     state.rec.input_stream = None;
 
-    let ring_size = super::RECORDING_RING_SIZE;
-    let ring = ringbuf::HeapRb::<f32>::new(ring_size);
+    // Sized in frames of the stream's width, not a fixed sample count
+    // (code review RT-17). The stream can negotiate more channels than
+    // asked for (the cpal fallback opens the device default); the ring
+    // then holds proportionally less time, still whole frames.
+    let ring = ringbuf::HeapRb::<f32>::new(super::recording_ring_len(
+        ctx.sample_rate,
+        desired_channels,
+    ));
     use ringbuf::traits::Split;
     let (prod, cons) = ring.split();
 
     // Build the input stream first so we know the device's actual
     // sample rate; the streaming resamplers need it at track-buf
     // creation time.
-    let (stream, in_sr, in_ch) = match platform::build_input_stream(
-        source_name.as_deref(),
-        Arc::clone(ctx.shared),
-        Some(prod),
-        Arc::clone(ctx.monitor_prod),
-        ctx.buf_frames,
-        ctx.quantum,
-        ctx.sample_rate,
-        desired_channels,
-        None,
-    ) {
+    let (stream, in_sr, in_ch) = match open_input(source_name.as_deref(), desired_channels, prod) {
         Ok(triple) => triple,
         Err(e) => {
             // Keep the legacy behaviour: the transport rolls even when
             // the recording stream could not be opened.
-            ctx.shared.playing.store(true, Ordering::SeqCst);
             let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::new(
                 e.kind(),
                 format!("Failed to start recording: {}", e),
             )));
-            return;
+            return SessionOpen::Degraded { roll: true };
         }
     };
 
-    state.rec.start_sample = start_sample;
-    state.rec.start_latch_applied = false;
+    // Open a cycle-record session when loop-record mode is armed and a
+    // real loop range is active. Each pass then becomes a distinct take,
+    // its audio cut by sample count (`poll_recording_capture`, code
+    // review RT-02) and its MIDI at the playhead's wrap
+    // (`poll_loop_record_seam`); without it a looped recording keeps the
+    // legacy single-clip behaviour.
+    let cycle_slot = (state.rec.loop_record
+        && state.rec.loop_enabled
+        && state.rec.loop_out > state.rec.loop_in)
+        .then_some((state.rec.loop_in, state.rec.loop_out));
+
+    // The audio cut only matters when there is audio to cut.
+    state.rec.begin_session(start_sample, cycle_slot.filter(|_| capturing > 0));
+    // The PDC the performer will hear the mix behind, latched now so a
+    // latency change mid-take cannot move the take (code review RT-01).
+    state.rec.record_pdc_samples = ctx.latency_comp.load().max_latency()
+        + ctx.shared.master_latency_samples.load(Ordering::Relaxed);
     // A new record take starts with a clean dropped-frame count and a
     // re-armed `RecordingOverflow` report.
     state
@@ -314,13 +510,11 @@ pub(crate) fn begin_recording_stream(
         let drawn = state.clip_grant.take_unused_wav(&audio_dir);
         state.report_clip_grant_low(ctx.event_tx);
         let Some(clip_id) = drawn else {
-            state.rec.buffers.clear();
-            state.rec.ring_consumer = None;
-            ctx.shared.playing.store(true, Ordering::SeqCst);
+            state.rec.abort_session();
             let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::busy(
                 "Failed to start recording: no clip ids available — try again",
             )));
-            return;
+            return SessionOpen::Degraded { roll: true };
         };
         match crate::recording::RecordingState::create_track_buf(
             &project_dir,
@@ -335,54 +529,53 @@ pub(crate) fn begin_recording_stream(
                 state.rec.buffers.insert(info.track_id, buf);
             }
             Err(e) => {
-                state.rec.buffers.clear();
-                state.rec.ring_consumer = None;
+                state.rec.abort_session();
                 let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
                     "Failed to open recording file: {e}"
                 ))));
-                return;
+                return SessionOpen::Degraded { roll: false };
             }
         }
     }
 
-    state.rec.input_stream = Some(stream);
+    state.rec.input_stream = stream;
     ctx.shared.input_channels.store(in_ch, Ordering::Release);
-    // Transport + capture start together, *after* the stream is up:
-    // the first pushed frames latch the aligned take start (playhead −
-    // measured capture+playback latency) via
-    // `SharedState::latch_recording_start`; the engine loop applies it
-    // to this session before the first drain (doc #260 finding #2).
-    ctx.shared
-        .recording_start_latch
-        .store(start_sample, Ordering::Relaxed);
-    ctx.shared
-        .recording_start_pending
-        .store(true, Ordering::Release);
-    ctx.shared.playing.store(true, Ordering::SeqCst);
-    ctx.shared.recording.store(true, Ordering::SeqCst);
 
-    let _ = ctx.event_tx.send(AudioEvent::RecordingStarted {
-        start_sample: state.rec.start_sample,
+    state.loop_record_session = cycle_slot.map(|(loop_in, loop_out)| LoopRecordSession {
+        slot: TimelineRange::from_bounds(loop_in, loop_out),
+        pass_index: 0,
     });
+    SessionOpen::Opened
+}
 
-    // Open a cycle-record session when loop-record mode is armed and a
-    // real loop range is active. Each loop seam then rolls the in-progress
-    // capture into a distinct take (see `poll_loop_record_seam`); without
-    // it a looped recording keeps the legacy single-clip behaviour.
-    state.loop_record_session = if state.rec.loop_record
-        && state.rec.loop_enabled
-        && state.rec.loop_out > state.rec.loop_in
-    {
-        Some(LoopRecordSession {
-            slot: TimelineRange::from_bounds(state.rec.loop_in, state.rec.loop_out),
-            pass_index: 0,
-        })
+/// Close the take a Stop / Pause ends: its placement latch, the trailing
+/// cycle-record pass(es) or the single trimmed clip, then the stream.
+fn finish_recording_session(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // A take stopped within a tick of its first push has not had its
+    // latch applied by the engine loop yet.
+    apply_recording_start_latch(ctx, state);
+    // Last chance to report an overflow the periodic drain poll has
+    // not seen yet (latched — a no-op when it already fired).
+    state
+        .rec
+        .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
+    if state.loop_record_session.is_some() {
+        // Cycle-record: emit the trailing pass as its own take instead
+        // of the legacy single trimmed clip.
+        finalize_loop_record_pass(ctx, state, false);
     } else {
-        None
-    };
+        // The takes join the render graph's clip list in one publish.
+        let rec = &mut state.rec;
+        ctx.shared
+            .edit_clips(|clips| rec.finalize_recording(ctx.sample_rate, clips, ctx.event_tx));
+    }
+    state.rec.input_stream = None;
 }
 
 pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // Before `recording` is read: a record count-in's take has either
+    // been started by the audio thread or never will be (RT-08).
+    settle_precount(ctx, state);
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     ctx.shared.playing.store(false, Ordering::SeqCst);
@@ -390,22 +583,7 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        // Last chance to report an overflow the periodic drain poll has
-        // not seen yet (latched — a no-op when it already fired).
-        state
-            .rec
-            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
-        if state.loop_record_session.is_some() {
-            // Cycle-record: emit the trailing pass as its own take instead
-            // of the legacy single trimmed clip.
-            finalize_loop_record_pass(ctx, state, false);
-        } else {
-            // The takes join the render graph's clip list in one publish.
-            let rec = &mut state.rec;
-            ctx.shared
-                .edit_clips(|clips| rec.finalize_recording(ctx.sample_rate, clips, ctx.event_tx));
-        }
-        state.rec.input_stream = None;
+        finish_recording_session(ctx, state);
     }
     panic_all_instrument_plugins(ctx);
     let pause_sample = ctx.shared.playhead.load(Ordering::SeqCst);
@@ -422,6 +600,9 @@ pub(crate) fn handle_pause(ctx: &HandlerCtx, state: &mut HandlerState) {
 }
 
 pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
+    // Before `recording` is read: a record count-in's take has either
+    // been started by the audio thread or never will be (RT-08).
+    settle_precount(ctx, state);
     let was_recording = ctx.shared.recording.load(Ordering::SeqCst);
     let was_playing = ctx.shared.playing.load(Ordering::Relaxed);
     // Where the transport stopped: held recorded notes close here, not
@@ -433,22 +614,7 @@ pub(crate) fn handle_stop(ctx: &HandlerCtx, state: &mut HandlerState) {
     cancel_precount(ctx, state);
 
     if was_recording {
-        // Last chance to report an overflow the periodic drain poll has
-        // not seen yet (latched — a no-op when it already fired).
-        state
-            .rec
-            .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
-        if state.loop_record_session.is_some() {
-            // Cycle-record: emit the trailing pass as its own take instead
-            // of the legacy single trimmed clip.
-            finalize_loop_record_pass(ctx, state, false);
-        } else {
-            // The takes join the render graph's clip list in one publish.
-            let rec = &mut state.rec;
-            ctx.shared
-                .edit_clips(|clips| rec.finalize_recording(ctx.sample_rate, clips, ctx.event_tx));
-        }
-        state.rec.input_stream = None;
+        finish_recording_session(ctx, state);
     }
 
     panic_all_instrument_plugins(ctx);
@@ -563,9 +729,9 @@ pub(crate) fn handle_set_loop_range(
     state.rec.loop_enabled = enabled;
     state.rec.loop_in = loop_in;
     state.rec.loop_out = loop_out;
-    ctx.shared.loop_enabled.store(enabled, Ordering::Relaxed);
-    ctx.shared.loop_in.store(loop_in, Ordering::Relaxed);
-    ctx.shared.loop_out.store(loop_out, Ordering::Relaxed);
+    // One publish for the whole range (code review RT-13).
+    ctx.shared
+        .set_loop_range(crate::engine::LoopRange::new(enabled, loop_in, loop_out));
 }
 
 /// Toggle cycle-record (loop-record) mode. Stored on the recording state
@@ -575,14 +741,66 @@ pub(crate) fn handle_set_loop_record_mode(state: &mut HandlerState, on: bool) {
     state.rec.loop_record = on;
 }
 
-/// Detect a loop wrap during a cycle-record run and roll the finished pass.
+/// Place the take from the start the input callback latched at its first
+/// push (doc #260 finding #2), once that push has happened. A performer
+/// take lands where the performer heard the mix: the latch minus the
+/// measured capture + playback latency and the PDC latched when the
+/// session opened (code review RT-01). A realtime bounce keeps the raw
+/// latch — its take is aligned by the external round-trip shift instead
+/// (see `bounce_realtime` + `apply_take_shift`), which already covers the
+/// input side.
+pub(crate) fn apply_recording_start_latch(ctx: &HandlerCtx, state: &mut HandlerState) {
+    if state.rec.start_latch_applied
+        || ctx.shared.recording_start_pending.load(Ordering::Acquire)
+    {
+        return;
+    }
+    let latched = ctx.shared.recording_start_latch.load(Ordering::Acquire);
+    let compensation = if state.pending_bounce.is_some() {
+        0
+    } else {
+        ctx.shared.capture_latency_samples.load(Ordering::Relaxed)
+            + ctx.shared.playback_latency_samples.load(Ordering::Relaxed)
+            + state.rec.record_pdc_samples
+    };
+    state.rec.apply_start_latch(latched, compensation);
+}
+
+/// The engine loop's recording step: apply the start latch, stream the
+/// captured input into the take files, and roll every cycle-record pass
+/// that is complete — at its exact cut, counted in input frames (code
+/// review RT-02), however late this tick runs. The frames past a cut go
+/// to the next pass's writer.
+pub(crate) fn poll_recording_capture(ctx: &HandlerCtx, state: &mut HandlerState) {
+    apply_recording_start_latch(ctx, state);
+    if !ctx.shared.recording.load(Ordering::Relaxed) {
+        return;
+    }
+    loop {
+        state.rec.drain_ring_to_buffers();
+        if state.loop_record_session.is_none() || !state.rec.pass_complete() {
+            break;
+        }
+        roll_loop_record_audio_pass(ctx, state, true);
+    }
+    // One-shot per take: report frames the capture callbacks had to
+    // discard (ring overflow) so a damaged take is flagged while it is
+    // still being recorded.
+    state
+        .rec
+        .poll_overflow(&ctx.shared.recording_overflow, ctx.event_tx);
+}
+
+/// Detect a loop wrap during a cycle-record run and roll the finished
+/// MIDI pass.
 ///
 /// Runs on the engine control thread every iteration. `last_playhead`
 /// carries the previous-iteration position across calls; when the playhead
 /// has moved backwards (the audio thread wrapped `loop_out` → `loop_in`)
 /// while recording with an open [`LoopRecordSession`], the just-completed
-/// pass is finalized into one take per armed track and a fresh capture is
-/// started for the next pass.
+/// pass's notes become one take per armed instrument track. Audio passes
+/// are not cut here: they are cut by sample count in
+/// [`poll_recording_capture`] (code review RT-02).
 pub(crate) fn poll_loop_record_seam(
     ctx: &HandlerCtx,
     state: &mut HandlerState,
@@ -597,32 +815,51 @@ pub(crate) fn poll_loop_record_seam(
     {
         return;
     }
-    finalize_loop_record_pass(ctx, state, true);
+    roll_loop_record_midi_pass(ctx, state, true);
 }
 
-/// Finalize the current cycle-record pass into one take per armed track
-/// (an audio clip or a MIDI note set) and emit `AudioEvent::TakeCaptured`
-/// for each. With `reopen` a fresh capture is started for the next pass
-/// and `pass_index` is advanced; without it (transport stop) the session
-/// is torn down after this trailing pass.
+/// Finalize a cycle-record run at transport stop: every audio pass still
+/// in the ring at its exact cut, then the trailing audio and MIDI passes,
+/// and tear the session down. (`reopen = true` rolls one seam of both,
+/// for a caller that drives the seam by hand.)
 pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerState, reopen: bool) {
-    let Some(project_dir) = state.project_dir.clone() else {
+    if state.project_dir.is_none() || state.loop_record_session.is_none() {
+        return;
+    }
+    if reopen {
+        roll_loop_record_audio_pass(ctx, state, true);
+        roll_loop_record_midi_pass(ctx, state, true);
+        return;
+    }
+    // Complete passes first, each cut where its frames end; the frames the
+    // input pushed before it stopped then make the trailing pass.
+    loop {
+        state.rec.drain_ring_to_buffers();
+        if !(state.rec.pass_complete() && state.rec.has_pending_input()) {
+            break;
+        }
+        roll_loop_record_audio_pass(ctx, state, true);
+    }
+    roll_loop_record_audio_pass(ctx, state, false);
+    roll_loop_record_midi_pass(ctx, state, false);
+    state.loop_record_session = None;
+}
+
+/// Roll the current cycle-record audio pass into one take per capturing
+/// track and emit `AudioEvent::TakeCaptured` for each. With `reopen` a
+/// fresh writer takes the next pass.
+///
+/// The punch-in pass is placed where the take started — the latched,
+/// compensated start (RT-01); every later pass at the loop start, since
+/// its cut already sits where the performer heard the loop wrap (RT-02).
+fn roll_loop_record_audio_pass(ctx: &HandlerCtx, state: &mut HandlerState, reopen: bool) {
+    let Some(audio_dir) = state.project_dir.as_ref().map(|d| d.join("audio")) else {
         return;
     };
-    // `pass_index` here is the *run's* pass counter, which restarts at 0 at
-    // every record press. It is used only to tell the punch-in pass from
-    // the rest, which is exactly what it means. The ordinal a take is
-    // filed and labelled under comes from its group instead, since a group
-    // now spans runs (todo #1392) — see `takes::push_take`.
-    let (slot, pass_index) = match state.loop_record_session.as_ref() {
-        Some(s) => (s.slot, s.pass_index),
-        None => return,
+    let Some(slot) = state.loop_record_session.as_ref().map(|s| s.slot) else {
+        return;
     };
-    let audio_dir = project_dir.join("audio");
-
-    // Pass 0's audio writer started where the user punched in; later passes
-    // start at the loop boundary the seam wrapped to.
-    let clip_start = if pass_index == 0 {
+    let clip_start = if state.rec.audio_passes_rolled == 0 {
         state.rec.start_sample
     } else {
         slot.start
@@ -640,7 +877,6 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
             .begin_overflow_episode(&ctx.shared.recording_overflow);
     }
 
-    // -- Audio takes --
     // The pass's takes join the render graph's clip list in one publish.
     // The next pass's clip ids come from the app's grant (ARCH-04 D-7d);
     // a track that finds it empty keeps this pass and records no further
@@ -667,9 +903,22 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
             .send(capture_take(state, take.track_id, slot, extent, content));
         captured_any = true;
     }
+    // Republish the comp playback table so the pass just captured is
+    // immediately audible — with no comp and no active take yet, the
+    // default cover is the most recent take.
+    if captured_any {
+        super::takes::publish_take_comp(ctx, state);
+    }
+}
 
-    // -- MIDI takes (instrument tracks) --
+/// Roll the current cycle-record MIDI pass (instrument tracks) into one
+/// take per track and emit `AudioEvent::TakeCaptured` for each.
+fn roll_loop_record_midi_pass(ctx: &HandlerCtx, state: &mut HandlerState, reopen: bool) {
+    let Some(slot) = state.loop_record_session.as_ref().map(|s| s.slot) else {
+        return;
+    };
     let midi_takes = super::midi::capture_loop_record_midi_pass(ctx, state, slot.end());
+    let mut captured_any = false;
     for (track_id, notes) in midi_takes {
         let content = TakeContent::Midi { notes };
         // A MIDI take's extent is the whole region the run cycled over:
@@ -681,22 +930,16 @@ pub(crate) fn finalize_loop_record_pass(ctx: &HandlerCtx, state: &mut HandlerSta
             .send(capture_take(state, track_id, slot, slot, content));
         captured_any = true;
     }
-
-    // Republish the comp playback table so the pass just captured is
-    // immediately audible — with no comp and no active take yet, the
-    // default cover is the most recent take.
     if captured_any {
         super::takes::publish_take_comp(ctx, state);
     }
-
     if reopen {
         if let Some(s) = state.loop_record_session.as_mut() {
             s.pass_index += 1;
         }
-    } else {
-        state.loop_record_session = None;
     }
 }
+
 
 /// File one captured take against the lane it belongs to and return the
 /// `TakeCaptured` event to send. A thin `HandlerState` adapter over

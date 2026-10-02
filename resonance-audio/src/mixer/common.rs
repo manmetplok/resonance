@@ -126,9 +126,9 @@ pub(super) fn advance_playhead_silent(
     frames: u64,
 ) -> u64 {
     let mut new_playhead = playhead + frames;
-    if shared.loop_enabled.load(Ordering::Relaxed) {
-        let lo = shared.loop_in.load(Ordering::Relaxed);
-        let hi = shared.loop_out.load(Ordering::Relaxed);
+    let range = shared.loop_range();
+    if range.enabled {
+        let (lo, hi) = (range.loop_in, range.loop_out);
         // `>=` matches the main path: when `new_playhead == hi` exactly, we
         // still need to snap back, or the next buffer lands past the loop
         // and never catches up.

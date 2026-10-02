@@ -122,7 +122,7 @@ pub(crate) fn mix_audio(inputs: CallbackInputs<'_>, scratch: &mut CallbackScratc
         // audition overlay below reads no plugin either, so a sample
         // preview stays audible during an export.
     } else if inputs.shared.count_in_active.load(Ordering::Relaxed) {
-        count_in::render_count_in_block(&inputs, scratch, &timing, monitor, frames);
+        count_in::render_count_in_block(&inputs, scratch, &timing, monitor, playhead_now, frames);
     } else if !inputs.shared.playing.load(Ordering::Relaxed) {
         stopped::render_stopped_block(&inputs, scratch, &timing, monitor, frames);
     } else {

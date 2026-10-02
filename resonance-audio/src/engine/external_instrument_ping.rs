@@ -289,7 +289,10 @@ pub(crate) fn handle_detect_latency(ctx: &HandlerCtx, state: &mut HandlerState, 
 
     // Dedicated capture ring — never the recording session's. Sized like a
     // record ring so a slow drain can't drop the return.
-    let ring = ringbuf::HeapRb::<f32>::new(super::RECORDING_RING_SIZE);
+    let ring = ringbuf::HeapRb::<f32>::new(super::recording_ring_len(
+        ctx.sample_rate,
+        desired_channels,
+    ));
     let (prod, cons) = ring.split();
 
     // Per-stream capture enable: the ping records with the global

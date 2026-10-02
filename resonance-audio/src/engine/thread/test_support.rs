@@ -56,6 +56,9 @@ pub struct EngineHandlerHarness {
     /// so the engine's own `HandlerState` has nowhere left to keep one).
     /// Never reset, so repeated calls on one harness never reissue an id.
     next_test_asset_id: AssetId,
+    /// The engine loop's previous-iteration playhead, for
+    /// [`Self::recording_tick`]'s loop-seam poll.
+    last_playhead: SamplePos,
 }
 
 impl Default for EngineHandlerHarness {
@@ -101,6 +104,7 @@ impl EngineHandlerHarness {
             cmd_rx_retry,
             state: HandlerState::new(48_000, live_midi_tx, live_control_tx, clock_tx),
             next_test_asset_id: 1,
+            last_playhead: 0,
         };
         // The app grants the engine clip ids at startup (ARCH-04 D-7d);
         // the harness does the same, so recording and live-MIDI tests keep
@@ -1274,5 +1278,73 @@ impl EngineHandlerHarness {
             false,
         );
         out.chunks(2).map(|frame| frame[0]).collect()
+    }
+
+    // ---- Recording over a fake input (code review RT-01/02/08) ----------
+
+    /// Run the real `Record { precount_bars }` handler with a fake capture
+    /// stream of `input_channels` channels at 48 kHz in place of the
+    /// platform's, and return the recording ring's producer — what the
+    /// input callback pushes into. `None` when the handler never opened a
+    /// stream (nothing armed, no project dir, out of ids).
+    ///
+    /// To play the input callback: `shared().latch_recording_start()`
+    /// once `recording` is set, then push interleaved frames.
+    pub fn record_with_fake_input(
+        &mut self,
+        precount_bars: u8,
+        input_channels: u16,
+    ) -> Option<ringbuf::HeapProd<f32>> {
+        let mut producer = None;
+        self.with_ctx(|ctx, state| {
+            transport::handle_record_with(ctx, state, precount_bars, |_, _, prod| {
+                producer = Some(prod);
+                Ok((None, 48_000, input_channels))
+            })
+        });
+        producer
+    }
+
+    /// The engine loop's per-tick recording steps, in its order: the
+    /// count-in poll, then the latch / drain / cycle-record cut
+    /// (`poll_recording_capture`), then the MIDI loop-seam poll.
+    pub fn recording_tick(&mut self) {
+        let mut last = self.last_playhead;
+        self.with_ctx(|ctx, state| {
+            transport::poll_precount(ctx, state);
+            transport::poll_recording_capture(ctx, state);
+            transport::poll_loop_record_seam(ctx, state, &mut last);
+        });
+        self.last_playhead = last;
+    }
+
+    /// Publish a plugin-delay-compensation table, as the engine's comp
+    /// refresh does after a latent plugin is inserted.
+    pub fn set_latency_comp(&self, comp: crate::latency::LatencyComp) {
+        self.latency_comp.store(Arc::new(comp));
+    }
+
+    /// Run the real `SetLoopRange` handler.
+    pub fn set_loop_range(&mut self, enabled: bool, loop_in: u64, loop_out: u64) {
+        self.dispatch(AudioCommand::SetLoopRange {
+            enabled,
+            loop_in,
+            loop_out,
+        });
+    }
+
+    /// Run the real `SetLoopRecordMode` handler.
+    pub fn set_loop_record_mode(&mut self, on: bool) {
+        self.dispatch(AudioCommand::SetLoopRecordMode(on));
+    }
+
+    /// Run the real `Pause` handler.
+    pub fn pause(&mut self) {
+        self.with_ctx(|ctx, state| transport::handle_pause(ctx, state));
+    }
+
+    /// Whether a record session currently holds take files.
+    pub fn recording_buffers_open(&self) -> usize {
+        self.state.rec.buffers.len()
     }
 }

@@ -417,7 +417,10 @@ fn sync_input_stream(ctx: &HandlerCtx, state: &mut HandlerState) {
     ctx.shared
         .monitoring
         .store(any_monitoring, Ordering::SeqCst);
-    let recording = ctx.shared.recording.load(Ordering::SeqCst);
+    // A record count-in already holds its recording stream (code review
+    // RT-08): the take starts on it at the count-in's last frame.
+    let recording = ctx.shared.recording.load(Ordering::SeqCst)
+        || state.rec.precount.is_some_and(|p| p.armed);
 
     if !any_monitoring && !recording {
         if state.rec.input_stream.is_some() {

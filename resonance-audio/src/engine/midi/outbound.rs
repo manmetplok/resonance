@@ -365,9 +365,8 @@ pub(crate) fn poll_timeline_to_midi_output(ctx: &HandlerCtx, state: &mut Handler
 
     let curr = ctx.shared.playhead.load(Ordering::Relaxed);
     let last_raw = state.midi_hw.midi_outbound_last_playhead;
-    let looping = ctx.shared.loop_enabled.load(Ordering::Relaxed);
-    let lo = ctx.shared.loop_in.load(Ordering::Relaxed);
-    let hi = ctx.shared.loop_out.load(Ordering::Relaxed);
+    let range = ctx.shared.loop_range();
+    let (looping, lo, hi) = (range.enabled, range.loop_in, range.loop_out);
     let last = match outbound_step_start(
         last_raw,
         curr,

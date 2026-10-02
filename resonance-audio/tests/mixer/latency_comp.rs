@@ -453,9 +453,7 @@ fn looping_playback_keeps_compensated_tracks_continuous_across_the_seam() {
         h.set_latency_comp(LatencyComp::new(64, &[(1, 64), (2, 0)], 0, &[]));
         let shared = h.shared();
         shared.master_volume_bits.store(1.0f32.to_bits(), Ordering::Relaxed);
-        shared.loop_enabled.store(true, Ordering::Relaxed);
-        shared.loop_in.store(LOOP_IN, Ordering::Relaxed);
-        shared.loop_out.store(LOOP_IN + loop_len, Ordering::Relaxed);
+        shared.set_loop_range(resonance_audio::test_support::LoopRange::new(true, LOOP_IN, LOOP_IN + loop_len));
         shared.playhead.store(LOOP_IN, Ordering::Relaxed);
         shared.playing.store(true, Ordering::Relaxed);
 

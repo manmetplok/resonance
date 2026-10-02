@@ -4,7 +4,6 @@
 //! MIDI extent — keeping the logic in one place so a tail/start tweak
 //! lands on both flows.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use super::SharedState;
@@ -50,9 +49,9 @@ pub fn midi_render_range(
 ) -> Result<(SamplePos, SamplePos), &'static str> {
     // Loop wins. The loop end is taken as authoritative — no extra
     // tail — since the user explicitly drew that boundary.
-    if shared.loop_enabled.load(Ordering::Relaxed) {
-        let lo = shared.loop_in.load(Ordering::Relaxed);
-        let hi = shared.loop_out.load(Ordering::Relaxed);
+    let range = shared.loop_range();
+    if range.enabled {
+        let (lo, hi) = (range.loop_in, range.loop_out);
         if hi > lo {
             return Ok((lo, hi));
         }

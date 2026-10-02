@@ -142,9 +142,8 @@ pub struct RecordingState {
     pub loop_record: bool,
     /// Set when a `Record` with `precount_bars > 0` is in its count-in
     /// phase. `target_sample` is the playhead position the user hit
-    /// record at — once the playhead catches up to it, the input stream
-    /// opens and recording begins. `restore_metronome` holds the
-    /// metronome's pre-count-in state so it can be put back afterwards.
+    /// record at; with `armed`, the session is already open and the audio
+    /// thread starts the take when the count-in ends (code review RT-08).
     pub precount: Option<PrecountState>,
     /// Timeline shift applied to the takes of this session when they
     /// are finalized, in samples (positive = content arrived that late
@@ -158,6 +157,30 @@ pub struct RecordingState {
     /// finding #2). Reset when a session opens; applied once the input
     /// callback clears `SharedState::recording_start_pending`.
     pub start_latch_applied: bool,
+    /// The engine rate takes are written at; the cycle-record cut and the
+    /// pre-zero skip are counted in input frames converted from it.
+    engine_sample_rate: u32,
+    /// Plugin-delay compensation latched when the session opened (code
+    /// review RT-01): the engine's track + bus PDC
+    /// (`LatencyComp::max_latency`) plus the master chain's latency. The
+    /// performer hears the mix that much behind the raw playhead, so a
+    /// performer take is placed that much earlier. Latched once per
+    /// session so a PDC change mid-take cannot move the take; the
+    /// realtime bounce ignores it (its take is aligned by
+    /// `take_shift_samples` instead).
+    pub record_pdc_samples: u64,
+    /// Input frames still to discard before the take's first kept frame:
+    /// set when the compensated start would fall before sample 0, so the
+    /// take is pinned at 0 with its alignment intact.
+    skip_input_frames: u64,
+    /// Where the current cycle-record pass ends (code review RT-02).
+    cycle: CycleCut,
+    /// Input frames kept (past the pre-zero skip) since the session's
+    /// first captured frame — the clock the cycle-record cut counts on.
+    input_frames_kept: u64,
+    /// Cycle-record audio passes rolled at a seam so far this session:
+    /// 0 while the punch-in pass is being captured.
+    pub audio_passes_rolled: u32,
     /// Reusable per-track deinterleave scratch. Lives here rather than
     /// being a stack local in `drain_ring_to_buffers` so the engine
     /// thread doesn't allocate a fresh `Vec` 60× per second while
@@ -202,7 +225,29 @@ pub fn apply_take_shift(
 #[derive(Debug, Clone, Copy)]
 pub struct PrecountState {
     pub target_sample: SamplePos,
-    pub restore_metronome: bool,
+    /// The recording session was opened when the count-in started and
+    /// the audio thread is armed to start capturing at the count-in's
+    /// last frame (code review RT-08). `false` when there was nothing to
+    /// record (or it could not be opened): the count-in only rolls into
+    /// playback.
+    pub armed: bool,
+}
+
+/// Where a cycle-record session cuts its audio passes (code review
+/// RT-02). The cut is counted in captured input frames from the take's
+/// first kept frame — the clock the frames are on — never in when the
+/// engine thread happens to notice the loop wrap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CycleCut {
+    /// No cutting: a plain take, or a cycle-record run that started past
+    /// the loop end (the playhead never wraps).
+    Off,
+    /// A cycle-record session whose start latch has not been applied
+    /// yet: the cut depends on it, so nothing is drained until then.
+    AwaitingLatch { loop_out: SamplePos, loop_len: u64 },
+    /// `next_cut` is the end of the current pass in engine frames from
+    /// the take's first kept frame; each later pass is `loop_len` more.
+    Cutting { next_cut: u64, loop_len: u64 },
 }
 
 impl RecordingState {
@@ -221,10 +266,116 @@ impl RecordingState {
             precount: None,
             take_shift_samples: 0,
             start_latch_applied: true,
+            engine_sample_rate: sample_rate,
+            record_pdc_samples: 0,
+            skip_input_frames: 0,
+            cycle: CycleCut::Off,
+            input_frames_kept: 0,
+            audio_passes_rolled: 0,
             deint_scratch: Vec::with_capacity(DRAIN_SCRATCH_LEN),
             overflow_reported: false,
             write_errors: Vec::new(),
         }
+    }
+
+    /// Reset the per-session placement state when a record session opens:
+    /// the take starts at `start_sample` until the input callback's first
+    /// push latches the real start ([`Self::apply_start_latch`]).
+    /// `cycle_slot` is the `(loop_in, loop_out)` of a cycle-record run, so
+    /// the drain cuts its audio passes by sample count (code review
+    /// RT-02).
+    pub fn begin_session(
+        &mut self,
+        start_sample: SamplePos,
+        cycle_slot: Option<(SamplePos, SamplePos)>,
+    ) {
+        self.start_sample = start_sample;
+        self.start_latch_applied = false;
+        self.skip_input_frames = 0;
+        self.input_frames_kept = 0;
+        self.audio_passes_rolled = 0;
+        self.cycle = match cycle_slot {
+            Some((loop_in, loop_out)) if loop_out > loop_in => CycleCut::AwaitingLatch {
+                loop_out,
+                loop_len: loop_out - loop_in,
+            },
+            _ => CycleCut::Off,
+        };
+    }
+
+    /// Place the take from the raw playhead the input callback latched at
+    /// its first push, `compensation` samples earlier: the measured I/O
+    /// latency plus, for a performer, the latched PDC (code review RT-01).
+    /// A start that would fall before 0 is pinned at 0 and the input
+    /// frames before it are discarded, so alignment survives.
+    ///
+    /// A cycle-record run learns where its first pass ends here. The
+    /// performer hears the loop end `compensation` samples after the raw
+    /// playhead wraps (the PDC lines carry the pre-seam tail across the
+    /// wrap), so the punch-in pass runs to timeline `loop_out` and every
+    /// later pass covers exactly `[loop_in, loop_out)`.
+    pub fn apply_start_latch(&mut self, latched: SamplePos, compensation: u64) {
+        let start = latched as i128 - compensation as i128;
+        self.start_sample = start.max(0) as SamplePos;
+        let before_zero = (-start).max(0) as u64;
+        self.skip_input_frames = self.engine_to_input_frames(before_zero);
+        if let CycleCut::AwaitingLatch { loop_out, loop_len } = self.cycle {
+            self.cycle = if latched < loop_out {
+                CycleCut::Cutting {
+                    next_cut: loop_out - self.start_sample,
+                    loop_len,
+                }
+            } else {
+                CycleCut::Off
+            };
+        }
+        self.start_latch_applied = true;
+    }
+
+    /// Whether the current cycle-record pass has all its frames: the
+    /// drain stops at the cut, so the pass is ready to roll.
+    pub fn pass_complete(&self) -> bool {
+        match self.cycle {
+            CycleCut::Cutting { next_cut, .. } => {
+                self.input_frames_kept >= self.engine_to_input_frames(next_cut)
+            }
+            _ => false,
+        }
+    }
+
+    /// Throw away a session that opened but never captured — a count-in
+    /// cancelled before its downbeat (code review RT-08): close and delete
+    /// every take file, drop the ring.
+    pub fn abort_session(&mut self) {
+        for (_, mut track_buf) in self.buffers.drain() {
+            if let Some(writer) = track_buf.writer.take() {
+                let _ = writer.finalize();
+            }
+            let _ = std::fs::remove_file(&track_buf.path);
+        }
+        self.ring_consumer = None;
+        self.cycle = CycleCut::Off;
+        self.start_latch_applied = true;
+    }
+
+    /// Whether at least one captured input frame is waiting in the ring.
+    pub fn has_pending_input(&self) -> bool {
+        use ringbuf::traits::Observer;
+        self.ring_consumer
+            .as_ref()
+            .is_some_and(|c| c.occupied_len() >= self.input_channels.max(1) as usize)
+    }
+
+    /// Engine frames → input frames at the capture device's rate.
+    fn engine_to_input_frames(&self, frames: u64) -> u64 {
+        let (inp, eng) = (
+            self.input_sample_rate as u128,
+            self.engine_sample_rate as u128,
+        );
+        if inp == eng || eng == 0 {
+            return frames;
+        }
+        ((frames as u128 * inp + eng / 2) / eng) as u64
     }
 
     /// Emit an [`AudioEvent::Error`] for every take-file write failure
@@ -324,7 +475,22 @@ impl RecordingState {
     /// control thread, so blocking file I/O through `BufWriter` is
     /// safe — the cpal input callback only pushes into the lock-free
     /// ring buffer.
+    ///
+    /// A cycle-record session drains only up to the current pass's cut
+    /// (code review RT-02): the frames past it stay in the ring and go to
+    /// the next pass's writer once this one rolls ([`Self::pass_complete`]).
+    /// Before its start latch is applied it drains nothing, since the cut
+    /// depends on the latch.
     pub fn drain_ring_to_buffers(&mut self) {
+        // Input frames the current cycle-record pass may still take.
+        let mut pass_left: Option<u64> = match self.cycle {
+            CycleCut::Off => None,
+            CycleCut::AwaitingLatch { .. } => return,
+            CycleCut::Cutting { next_cut, .. } => Some(
+                self.engine_to_input_frames(next_cut)
+                    .saturating_sub(self.input_frames_kept),
+            ),
+        };
         let Some(ref mut consumer) = self.ring_consumer else {
             return;
         };
@@ -337,18 +503,34 @@ impl RecordingState {
         // Pop whole frames only: a partial frame left in the scratch
         // tail would be consumed but never written, rotating channel
         // alignment for the rest of the take.
-        let scratch_len = (DRAIN_SCRATCH_LEN / channels) * channels;
+        let scratch_frames = DRAIN_SCRATCH_LEN / channels;
         let deint_scratch = &mut self.deint_scratch;
 
         loop {
-            let count = consumer.pop_slice(&mut ring_scratch[..scratch_len]);
+            let mut want = scratch_frames as u64;
+            if let Some(left) = pass_left {
+                want = want.min(self.skip_input_frames + left);
+            }
+            if want == 0 {
+                break;
+            }
+            let count = consumer.pop_slice(&mut ring_scratch[..want as usize * channels]);
             if count == 0 {
                 break;
             }
-            let chunk = &ring_scratch[..count];
-            let frames = chunk.len() / channels;
+            let popped = count / channels;
+            // Frames from before timeline 0 are dropped (see
+            // `apply_start_latch`).
+            let skip = self.skip_input_frames.min(popped as u64) as usize;
+            self.skip_input_frames -= skip as u64;
+            let chunk = &ring_scratch[skip * channels..popped * channels];
+            let frames = popped - skip;
             if frames == 0 {
                 continue;
+            }
+            self.input_frames_kept += frames as u64;
+            if let Some(left) = pass_left.as_mut() {
+                *left -= frames as u64;
             }
 
             for track_buf in self.buffers.values_mut() {
@@ -522,6 +704,7 @@ impl RecordingState {
         }
 
         self.ring_consumer = None;
+        self.cycle = CycleCut::Off;
         clips_emitted
     }
 
@@ -667,9 +850,16 @@ impl RecordingState {
         for track_id in stopped {
             self.buffers.remove(&track_id);
         }
-        if !reopen {
+        if reopen {
+            // The next pass is one loop long, on the same input clock.
+            if let CycleCut::Cutting { next_cut, loop_len } = &mut self.cycle {
+                *next_cut += *loop_len;
+            }
+            self.audio_passes_rolled += 1;
+        } else {
             self.buffers.clear();
             self.ring_consumer = None;
+            self.cycle = CycleCut::Off;
         }
         rolled
     }
