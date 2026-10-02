@@ -98,7 +98,9 @@
 pub mod reader;
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
+#[cfg(feature = "test-hooks")]
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -459,8 +461,10 @@ impl Drop for Ring {
     }
 }
 
-/// One sampler's rings, shared with the reader pool, plus the test hooks
-/// that slow, stop or break the reader for it.
+/// One sampler's rings, shared with the reader pool, plus (feature
+/// `test-hooks` only) the test hooks that slow, stop or break the reader
+/// for it. A build without the feature carries none of them: the reader's
+/// and the sampler's hook checks compile to nothing.
 pub struct StreamSet {
     pub(crate) rings: Box<[Ring]>,
     /// Rings the readers must look at: set by the audio thread when it
@@ -472,18 +476,22 @@ pub struct StreamSet {
     allocated: AtomicU32,
     /// Test hook: while set, the reader leaves this set alone entirely —
     /// a stalled disk, or a reader that never comes back.
-    pub(crate) paused: AtomicBool,
+    #[cfg(feature = "test-hooks")]
+    paused: AtomicBool,
     /// Test hook: extra latency before each read, in microseconds — a
     /// cold page cache.
-    pub(crate) read_latency_us: AtomicU32,
+    #[cfg(feature = "test-hooks")]
+    read_latency_us: AtomicU32,
     /// Test hook: this many of the next reads panic.
-    pub(crate) panic_reads: AtomicU32,
+    #[cfg(feature = "test-hooks")]
+    panic_reads: AtomicU32,
     /// Times the audio thread waited for a tail frame (offline only).
     pub(crate) waits: AtomicU64,
     /// Test hook: run by the audio thread each time a voice publishes its
     /// progress inside a block ([`crate::dsp::sampler::MID_BLOCK_PUBLISH_FRAMES`])
     /// — a stepped reader pumped there stands in for a reader thread that
     /// runs while the block renders. Unset (one atomic load) otherwise.
+    #[cfg(feature = "test-hooks")]
     mid_block_hook: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
@@ -493,10 +501,14 @@ impl StreamSet {
             rings: (0..NUM_RINGS).map(|_| Ring::new()).collect(),
             open: std::array::from_fn(|_| AtomicU64::new(0)),
             allocated: AtomicU32::new(0),
+            #[cfg(feature = "test-hooks")]
             paused: AtomicBool::new(false),
+            #[cfg(feature = "test-hooks")]
             read_latency_us: AtomicU32::new(0),
+            #[cfg(feature = "test-hooks")]
             panic_reads: AtomicU32::new(0),
             waits: AtomicU64::new(0),
+            #[cfg(feature = "test-hooks")]
             mid_block_hook: OnceLock::new(),
         })
     }
@@ -505,33 +517,80 @@ impl StreamSet {
     /// publishes its progress inside a block (see
     /// [`crate::dsp::sampler::MID_BLOCK_PUBLISH_FRAMES`]). Set once; a
     /// second call is ignored.
+    #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn set_mid_block_hook(&self, hook: Box<dyn Fn() + Send + Sync>) {
         let _ = self.mid_block_hook.set(hook);
     }
 
-    /// The mid-block test hook, if one is set: one atomic load.
+    /// The mid-block test hook, if one is set: one atomic load. Always
+    /// `None` without `test-hooks`.
     #[inline]
     pub(crate) fn mid_block_hook(&self) -> Option<&(dyn Fn() + Send + Sync)> {
-        self.mid_block_hook.get().map(|h| &**h)
+        #[cfg(feature = "test-hooks")]
+        {
+            self.mid_block_hook.get().map(|h| &**h)
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        {
+            None
+        }
     }
 
     /// Test hook: stall (true) or resume the reader for this set.
+    #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn set_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::Release);
     }
 
+    /// Whether the reader is stalled for this set ([`Self::set_paused`]).
+    /// Always `false` without `test-hooks`.
+    #[inline]
+    pub(crate) fn is_paused(&self) -> bool {
+        #[cfg(feature = "test-hooks")]
+        {
+            self.paused.load(Ordering::Acquire)
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        {
+            false
+        }
+    }
+
     /// Test hook: delay every read by `us` microseconds.
+    #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn set_read_latency_us(&self, us: u32) {
         self.read_latency_us.store(us, Ordering::Relaxed);
     }
 
     /// Test hook: make the next `n` reads panic (a reader bug).
+    #[cfg(feature = "test-hooks")]
     #[doc(hidden)]
     pub fn panic_next_reads(&self, n: u32) {
         self.panic_reads.store(n, Ordering::Release);
+    }
+
+    /// Run before each read on the reader thread: a fault queued by
+    /// [`Self::panic_next_reads`] panics here, and the latency of
+    /// [`Self::set_read_latency_us`] is slept. Nothing without `test-hooks`.
+    #[inline]
+    pub(crate) fn before_read(&self) {
+        #[cfg(feature = "test-hooks")]
+        {
+            if self
+                .panic_reads
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                panic!("resonance-drums stream: test hook, a reader fault");
+            }
+            let latency = self.read_latency_us.load(Ordering::Relaxed);
+            if latency > 0 {
+                std::thread::sleep(Duration::from_micros(latency as u64));
+            }
+        }
     }
 
     /// Times the sampler has waited for a tail frame (offline only).
