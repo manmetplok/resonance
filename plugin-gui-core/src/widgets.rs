@@ -64,7 +64,7 @@ pub use library::{star_toggle, star_toggle_sized, tag_pill, TagPillResponse};
 pub use segmented::{segmented, segmented_styled, SegmentedStyle};
 pub use slider::{
     slider, slider_bipolar, slider_bipolar_warm, slider_edit, slider_unipolar, HSlider,
-    SliderPalette, SliderStyle, SliderTone,
+    SliderPalette, SliderStyle, SliderTone, KEY_GESTURE_IDLE_SECS, SLIDER_FINE,
 };
 
 /// One frame of a continuous control (a knob, a slider), gesture-aware.
@@ -76,14 +76,21 @@ pub use slider::{
 ///
 /// - a drag: `began` on the frame it starts, `value` on every frame it
 ///   moves, `ended` on the frame the pointer lets go;
-/// - a click on a slider's track, a double-click reset on a knob, an
-///   arrow-key step on a focused slider: one frame with `value` set and
-///   `ended` true — a discrete edit, begun and finished at once.
+/// - a double-click reset: one frame with `value` set and `ended` true —
+///   a discrete edit, begun and finished at once;
+/// - a run of arrow-key steps on a focused slider: `began` with the
+///   first, `value` on each, `ended` once the run goes idle or the
+///   slider loses focus (see `slider::KEY_GESTURE_IDLE_SECS`).
+///
+/// `ended` closes the gesture `began` opened, whether or not it changed
+/// anything: a drag that ends where it started, or a reset of a value
+/// already at its default, still ends. A caller that records undo steps
+/// compares the value at `ended` with the one it held at `began`.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GestureEdit {
     /// The new unit value, when the control moved this frame.
     pub value: Option<f32>,
-    /// A drag gesture started this frame.
+    /// A gesture (a drag, a reset, a run of key steps) started this frame.
     pub began: bool,
     /// The user's edit finished this frame: commit it (e.g. announce it to
     /// the host as one undoable change).
@@ -648,7 +655,7 @@ pub fn knob_themed_edit(ui: &mut egui::Ui, knob: &ThemedKnob<'_>) -> GestureEdit
 fn themed_knob_gesture(response: &Response, unit: f32, default_unit: f32) -> GestureEdit {
     GestureEdit {
         value: themed_knob_input(response, unit, default_unit),
-        began: response.drag_started(),
+        began: response.drag_started() || response.double_clicked(),
         ended: response.drag_stopped() || response.double_clicked(),
     }
 }

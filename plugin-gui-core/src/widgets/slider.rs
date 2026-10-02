@@ -18,10 +18,23 @@
 //!   re-derived a third time.
 //!
 //! Values are in unit (`0..1`) space at the drawing layer; the bipolar
-//! entry points map `-1..1` on and off it. A click or a drag anywhere on
-//! the track positions the value — the widget has no separate "grab the
-//! thumb" mode, and never had one in either fork. Arrow keys nudge it
-//! while it has keyboard focus, the way `egui::Slider` does.
+//! entry points map `-1..1` on and off it.
+//!
+//! **Input is the fleet's knob gesture, turned on its side**
+//! (ux-guidelines.md: "drag-to-adjust, shift-for-fine", "double-click
+//! reset"):
+//!
+//! - a drag anywhere on the row moves the value *relative* to where it
+//!   was — one track width of travel is the full range, a fifth of that
+//!   with Shift held ([`SLIDER_FINE`]); a click alone changes nothing.
+//!   The forks positioned the value absolutely on a click, so a click
+//!   meant to grab the thumb jumped the parameter, and there was no fine
+//!   mode at all;
+//! - a double-click resets to [`HSlider::default_unit`], when the caller
+//!   gave one;
+//! - arrow keys nudge it while it has keyboard focus, the way
+//!   `egui::Slider` does, and a run of presses is **one** gesture
+//!   ([`KEY_GESTURE_IDLE_SECS`]).
 //!
 //! The EQ moved onto this slider from a raw `egui::Slider` (ba todo
 //! #1335) while it was still on the retired blue `classic` palette, so
@@ -125,6 +138,17 @@ impl Default for SliderStyle {
     }
 }
 
+/// How much finer a Shift-drag moves a slider than a plain one: a fifth,
+/// the same ratio as the knobs' [`super::KNOB_DRAG_SPEED_FINE`] to
+/// [`super::KNOB_DRAG_SPEED`].
+pub const SLIDER_FINE: f32 = 0.2;
+
+/// Arrow-key presses on a focused slider closer together than this are
+/// one gesture: it begins with the first press and ends this long after
+/// the last one (with no arrow held), or when the slider loses focus.
+/// One undoable edit per run of presses, not one per press.
+pub const KEY_GESTURE_IDLE_SECS: f64 = 0.5;
+
 /// One horizontal slider, in unit (`0..1`) value space.
 #[derive(Debug, Clone, Copy)]
 pub struct HSlider {
@@ -139,6 +163,9 @@ pub struct HSlider {
     pub tone: SliderTone,
     /// Row geometry.
     pub style: SliderStyle,
+    /// The value a double-click resets to, `0..1`; `None` (the default)
+    /// leaves a double-click doing nothing.
+    pub default_unit: Option<f32>,
 }
 
 impl HSlider {
@@ -150,7 +177,14 @@ impl HSlider {
             bipolar: false,
             tone: SliderTone::Accent,
             style: SliderStyle::LAVENDER,
+            default_unit: None,
         }
+    }
+
+    /// Reset to `default_unit` (`0..1`) on a double-click.
+    pub fn default_unit(mut self, default_unit: f32) -> Self {
+        self.default_unit = Some(default_unit.clamp(0.0, 1.0));
+        self
     }
 
     /// Fill outward from the centre.
@@ -173,13 +207,13 @@ impl HSlider {
 }
 
 /// Unipolar slider: `value_unit` is `0..1`. Returns the new value while
-/// dragged or clicked.
+/// dragged or nudged.
 pub fn slider_unipolar(ui: &mut egui::Ui, width: f32, value_unit: f32) -> Option<f32> {
     slider(ui, &HSlider::new(width, value_unit))
 }
 
 /// Bipolar slider: `value_signed` is `-1..1`. Returns the new signed
-/// value while dragged or clicked.
+/// value while dragged or nudged.
 pub fn slider_bipolar(ui: &mut egui::Ui, width: f32, value_signed: f32) -> Option<f32> {
     bipolar_with_tone(ui, width, value_signed, SliderTone::Accent)
 }
@@ -236,14 +270,20 @@ pub fn fill_span(value_unit: f32, bipolar: bool) -> (f32, f32, bool) {
 }
 
 /// Draw a configured slider and handle its input. Returns the new unit
-/// value while the pointer or the keyboard is positioning it.
+/// value while a drag, a double-click reset or the keyboard moves it.
 pub fn slider(ui: &mut egui::Ui, s: &HSlider) -> Option<f32> {
     slider_edit(ui, s).value
 }
 
-/// [`slider`], reporting the gesture too ([`super::GestureEdit`]): a drag
-/// begins and ends; a click on the track and an arrow-key step are each
-/// one finished edit.
+/// [`slider`], reporting the gesture too ([`super::GestureEdit`]):
+///
+/// - a drag begins on the frame it starts and ends on release;
+/// - a double-click reset is one finished edit, begun and ended at once;
+/// - a run of arrow-key presses begins with the first and ends
+///   [`KEY_GESTURE_IDLE_SECS`] after the last, or on focus loss — the
+///   frame that ends it carries no value.
+///
+/// A click, or Space/Enter on a focused slider, changes nothing.
 pub fn slider_edit(ui: &mut egui::Ui, s: &HSlider) -> super::GestureEdit {
     let style = s.style;
     let size = egui::vec2(s.width, style.height);
@@ -253,22 +293,45 @@ pub fn slider_edit(ui: &mut egui::Ui, s: &HSlider) -> super::GestureEdit {
         draw(ui, rect, s, response.hovered());
     }
 
-    let mut new_unit = None;
-    if response.dragged() || response.clicked() {
-        if let Some(p) = response.interact_pointer_pos() {
-            new_unit = Some(((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0));
+    let mut edit = super::GestureEdit::default();
+    let width = rect.width().max(1.0);
+
+    // Relative drag: the value the drag started from plus the pointer's
+    // travel since, kept in memory (not re-read from `s.value_unit`
+    // each frame), so a caller that quantizes — an integer param —
+    // still moves once the travel adds up to a step, and switching Shift
+    // mid-drag never jumps.
+    let drag_id = response.id.with("hslider_drag");
+    if response.drag_started() {
+        ui.data_mut(|d| d.insert_temp(drag_id, (s.value_unit.clamp(0.0, 1.0), 0.0f32)));
+        edit.began = true;
+    }
+    if response.dragged() {
+        let dx = response.drag_delta().x;
+        let fine = ui.input(|i| i.modifiers.shift);
+        let (start, mut travel) = ui
+            .data(|d| d.get_temp::<(f32, f32)>(drag_id))
+            .unwrap_or((s.value_unit.clamp(0.0, 1.0), 0.0));
+        travel += dx * if fine { SLIDER_FINE } else { 1.0 };
+        ui.data_mut(|d| d.insert_temp(drag_id, (start, travel)));
+        if dx != 0.0 {
+            edit.value = Some((start + travel / width).clamp(0.0, 1.0));
         }
     }
-    let steps = arrow_key_steps(ui, &response);
-    if steps != 0.0 {
-        // One pixel of travel per press, which is `egui::Slider`'s own
-        // `ui_point_per_step`. What we cannot reproduce is its
-        // "smart aim" — the pass that rounds a drag towards a round
-        // number — because that needs the plain range, and this widget
-        // only ever sees unit travel.
-        let from = new_unit.unwrap_or(s.value_unit);
-        new_unit = Some((from + steps / rect.width().max(1.0)).clamp(0.0, 1.0));
+    if response.drag_stopped() {
+        ui.data_mut(|d| d.remove::<(f32, f32)>(drag_id));
+        edit.ended = true;
     }
+
+    if response.double_clicked() {
+        if let Some(default) = s.default_unit {
+            edit.value = Some(default);
+            edit.began = true;
+            edit.ended = true;
+        }
+    }
+
+    key_gesture(ui, &response, s, width, &mut edit);
 
     // Same reasoning as the chip's: `egui::Slider` reported itself to
     // AccessKit and the editors that migrated onto this one would
@@ -276,15 +339,55 @@ pub fn slider_edit(ui: &mut egui::Ui, s: &HSlider) -> super::GestureEdit {
     response.widget_info(|| {
         egui::WidgetInfo::slider(
             ui.is_enabled(),
-            f64::from(new_unit.unwrap_or(s.value_unit)),
+            f64::from(edit.value.unwrap_or(s.value_unit)),
             "",
         )
     });
 
-    super::GestureEdit {
-        value: new_unit,
-        began: response.drag_started(),
-        ended: response.drag_stopped() || response.clicked() || steps != 0.0,
+    edit
+}
+
+/// Arrow-key nudges of a focused slider, folded into `edit`: a run of
+/// presses is one gesture (see [`KEY_GESTURE_IDLE_SECS`]).
+fn key_gesture(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    s: &HSlider,
+    width: f32,
+    edit: &mut super::GestureEdit,
+) {
+    // When the run's last press landed (egui time), while one is open.
+    let run_id = response.id.with("hslider_keys");
+    let now = ui.input(|i| i.time);
+    let open = ui.data(|d| d.get_temp::<f64>(run_id));
+    let steps = arrow_key_steps(ui, response);
+    if steps != 0.0 {
+        // One pixel of travel per press, which is `egui::Slider`'s own
+        // `ui_point_per_step`. What we cannot reproduce is its
+        // "smart aim" — the pass that rounds a drag towards a round
+        // number — because that needs the plain range, and this widget
+        // only ever sees unit travel.
+        let from = edit.value.unwrap_or(s.value_unit);
+        edit.value = Some((from + steps / width).clamp(0.0, 1.0));
+        edit.began |= open.is_none();
+        ui.data_mut(|d| d.insert_temp(run_id, now));
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(KEY_GESTURE_IDLE_SECS));
+        return;
+    }
+    let Some(last) = open else {
+        return;
+    };
+    let held = ui.input(|i| i.key_down(egui::Key::ArrowLeft) || i.key_down(egui::Key::ArrowRight));
+    let idle = now - last;
+    if !response.has_focus() || (!held && idle >= KEY_GESTURE_IDLE_SECS) {
+        ui.data_mut(|d| d.remove::<f64>(run_id));
+        edit.ended = true;
+    } else {
+        // Come back when the run would end, so it ends without input.
+        let left = (KEY_GESTURE_IDLE_SECS - idle).max(0.01);
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(left));
     }
 }
 

@@ -186,27 +186,17 @@ fn clicking_a_segment_reports_its_index() {
     assert_eq!(none, None);
 }
 
+/// A click on the track changes nothing: the slider moves by dragging
+/// (relative to where it was), never by jumping to the pointer — the
+/// forks positioned the value on a click, so a click meant to grab the
+/// thumb moved the parameter (ux-guidelines.md: drag-to-adjust).
 #[test]
-fn clicking_a_slider_positions_the_value() {
+fn clicking_a_slider_does_not_move_it() {
     let width = 100.0;
-    let unit = click_at(egui::pos2(75.0, 9.0), |ui| {
-        slider_unipolar(ui, width, 0.0)
-    })
-    .expect("a click on the track sets the value");
-    assert!((unit - 0.75).abs() < 1e-3, "expected ~0.75, got {unit}");
-
-    // The bipolar entry point reports the same click in -1..1 space.
-    let signed = click_at(egui::pos2(75.0, 9.0), |ui| {
-        slider_bipolar(ui, width, 0.0)
-    })
-    .expect("a click on the track sets the value");
-    assert!((signed - 0.5).abs() < 1e-3, "expected ~0.5, got {signed}");
-
-    // No pointer anywhere near it: no value change.
-    let idle = click_at(egui::pos2(560.0, 360.0), |ui| {
-        slider_unipolar(ui, width, 0.25)
-    });
-    assert_eq!(idle, None);
+    let unit = click_at(egui::pos2(75.0, 9.0), |ui| slider_unipolar(ui, width, 0.0));
+    assert_eq!(unit, None, "a click positioned the value");
+    let signed = click_at(egui::pos2(75.0, 9.0), |ui| slider_bipolar(ui, width, 0.0));
+    assert_eq!(signed, None, "a click positioned the bipolar value");
 }
 
 // ---------------------------------------------------------------------------

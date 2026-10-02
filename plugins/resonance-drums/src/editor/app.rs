@@ -40,7 +40,7 @@ use super::jobs::{JobDone, JobKind, Jobs, Picker};
 use super::kit_browser::{self, LoadKind};
 use super::library_panel::{self, LibraryPanelState};
 use super::missing_kit::{self, MissingKitState};
-use super::controls::Labels;
+use super::controls::{self, Gestures, Labels};
 use super::{chrome, mix_tab, pads_tab, setup_tab, theme};
 
 /// The editor's three views (§6).
@@ -136,6 +136,9 @@ pub(crate) struct DrumsEditorApp {
     pub(crate) preset_editor: resonance_plugin::presets::PresetEditor,
     /// The missing-kit banner's state (§5.3).
     pub(crate) missing_kit: MissingKitState,
+    /// Continuous gestures in flight (`controls::Gestures`), lent to the
+    /// controls each frame and flushed when a widget cannot end its own.
+    gestures: Arc<Gestures>,
 }
 
 impl DrumsEditorApp {
@@ -177,6 +180,7 @@ impl DrumsEditorApp {
             presets,
             preset_editor: resonance_plugin::presets::PresetEditor::default(),
             missing_kit: MissingKitState::default(),
+            gestures: Arc::new(Gestures::default()),
         };
         // Opening an editor is when the library is brought up to date: on
         // the job thread, so the first frame is not held up by hashing.
@@ -682,6 +686,7 @@ pub(crate) const STATUS_H: f32 = 28.0;
 impl EditorApp for DrumsEditorApp {
     fn ui(&mut self, ui: &mut egui::Ui) {
         theme::apply(ui.ctx());
+        controls::lend_gestures(ui.ctx(), &self.gestures);
         self.poll_jobs();
         self.poll_downloads();
         self.poll_freshness();
@@ -738,6 +743,30 @@ impl EditorApp for DrumsEditorApp {
         if self.library_panel.open {
             library_panel::draw(ui, self);
         }
+        self.close_stale_gestures(ui.ctx());
+    }
+}
+
+impl DrumsEditorApp {
+    /// Announce the gestures no widget will end: a drag whose control
+    /// was not drawn when the pointer let go (its table row scrolled out
+    /// of view under a wheel), a key run whose control went away.
+    fn close_stale_gestures(&mut self, ctx: &egui::Context) {
+        let (now, down) = ctx.input(|i| (i.time, i.pointer.any_down()));
+        let dragging = down || ctx.dragged_id().is_some();
+        let closed = self.gestures.stale(now, dragging);
+        controls::announce_closed(&self.bridge, &self.params, closed);
+        if self.gestures.any_open() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+impl Drop for DrumsEditorApp {
+    /// An editor closed mid-gesture never draws the frame that ends it:
+    /// what moved is announced now, so it is still one undoable edit.
+    fn drop(&mut self) {
+        controls::announce_closed(&self.bridge, &self.params, self.gestures.drain());
     }
 }
 

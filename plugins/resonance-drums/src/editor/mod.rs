@@ -422,6 +422,53 @@ impl TestEditor {
         self.frame(Vec::new())
     }
 
+    /// Press the primary button at `from` and move to `to` in steps, but
+    /// do not let go — a drag still in progress. Returns the last frame.
+    pub fn drag_without_release(&mut self, from: egui::Pos2, to: egui::Pos2) -> EditorFrameProbe {
+        self.frame(vec![
+            egui::Event::PointerMoved(from),
+            egui::Event::PointerButton {
+                pos: from,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let mut last = None;
+        for i in 1..=6 {
+            let p = from + (to - from) * (i as f32 / 6.0);
+            last = Some(self.frame(vec![egui::Event::PointerMoved(p)]));
+        }
+        last.expect("six frames ran")
+    }
+
+    /// Let go of the primary button at `at`.
+    pub fn release(&mut self, at: egui::Pos2) -> EditorFrameProbe {
+        self.frame(vec![egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }])
+    }
+
+    /// Two clicks at `pos` in quick succession — after a pause, so a click
+    /// just before cannot make it a triple-click.
+    pub fn double_click(&mut self, pos: egui::Pos2) -> EditorFrameProbe {
+        self.idle(0.7);
+        self.click(pos);
+        self.click(pos)
+    }
+
+    /// Run frames for `secs` of egui time, at 60 Hz.
+    pub fn idle(&mut self, secs: f64) -> EditorFrameProbe {
+        let frames = (secs * 60.0).ceil().max(1.0) as usize;
+        for _ in 1..frames {
+            self.frame(Vec::new());
+        }
+        self.frame(Vec::new())
+    }
+
     /// What the header's `Library…` button does.
     pub fn open_library(&mut self) {
         self.app.open_library();

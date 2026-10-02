@@ -2,25 +2,31 @@
 //! through here, so every edit is **one undoable host edit**.
 //!
 //! A continuous control (knob, fader) writes its param on every frame of
-//! a drag — the sound follows the pointer — and tells the host once, when
-//! the drag ends (`GestureEdit::ended`). A discrete control (a chip, a
-//! segment, a combo pick) writes and tells the host on the click. Both
-//! go through [`KitBridge::announce_param_edit`], which is
-//! `HostHandle::announce_param_change`: the host records the param's new
-//! value as one edit it can undo.
+//! a gesture — the sound follows the pointer — and tells the host once,
+//! when the gesture ends (`GestureEdit::ended`), and only if the value
+//! moved ([`Gestures`]): a drag back to where it started, a reset of a
+//! value already at its default, or a click tell the host nothing, and a
+//! run of arrow keys is one edit. A discrete control (a chip, a segment,
+//! a combo pick) writes and tells the host on the click, when it picked
+//! something new. Both go through [`KitBridge::announce_param_edit`],
+//! which is `HostHandle::announce_param_change`: the host records the
+//! param's new value as one edit it can undo.
 //!
 //! The readouts are cached ([`Labels`]): a param's display text is
 //! rebuilt only when its value moves, not every frame for every row of
 //! the Mix tab's table.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use parking_lot::Mutex;
 use plugin_gui_core::egui;
 use plugin_gui_core::widgets::{self, HSlider, ThemedKnob};
 use resonance_plugin::param::Param;
 use resonance_plugin::{BoolParam, FloatParam, IntParam};
 
 use crate::choice::ChoiceParam;
+use crate::params::DrumParams;
 use crate::KitBridge;
 
 use super::{probe, probed, theme};
@@ -60,6 +66,156 @@ impl Labels {
     }
 }
 
+/// The continuous gestures in flight, by param id: the value each param
+/// held when its gesture began, so the gesture's end announces **one**
+/// undoable edit — and only when the value really moved.
+///
+/// A drag that ends where it started, a double-click reset of a value
+/// already at its default, a click with no drag: each used to announce
+/// an edit that changed nothing, an empty undo entry. And a run of arrow
+/// keys announced one edit per press.
+///
+/// It is also what catches the ends a widget never reports
+/// ([`Self::stale`]): a table row scrolled out of view mid-drag (the
+/// Mix table under a wheel) stops being drawn, so its slider never sees
+/// the release; and an editor closed mid-drag never draws again at all
+/// (the app flushes what is open when it is dropped).
+///
+/// Owned by the app and lent to the controls through the egui context
+/// ([`gestures`]), so the helpers keep their signatures.
+#[derive(Default)]
+pub(crate) struct Gestures {
+    open: Mutex<HashMap<String, OpenGesture>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct OpenGesture {
+    /// The param's plain value when the gesture began.
+    start: f64,
+    /// When the gesture last moved the value (egui time, seconds).
+    touched: f64,
+    /// Driven by the pointer (a drag) rather than the keyboard.
+    pointer: bool,
+}
+
+/// How long after its last step a keyboard gesture whose widget stopped
+/// reporting (scrolled away, tab switched) is closed for it — just past
+/// the widget's own idle end, so the widget gets to close it first.
+const STALE_KEY_SECS: f64 = widgets::KEY_GESTURE_IDLE_SECS + 0.1;
+
+impl Gestures {
+    /// Note that `id` is being moved now, from `value` if this is the
+    /// gesture's first frame.
+    fn touch(&self, id: &str, value: f64, now: f64, pointer: bool) {
+        let mut open = self.open.lock();
+        let g = open.entry(id.to_string()).or_insert(OpenGesture {
+            start: value,
+            touched: now,
+            pointer,
+        });
+        g.touched = now;
+        g.pointer |= pointer;
+    }
+
+    /// Close `id`'s gesture at `value`: whether it moved the param, i.e.
+    /// whether there is an edit to announce. `false` for a gesture this
+    /// ledger never saw open (or already closed).
+    fn finish(&self, id: &str, value: f64) -> bool {
+        self.open
+            .lock()
+            .remove(id)
+            .is_some_and(|g| g.start.to_bits() != value.to_bits())
+    }
+
+    /// Whether any gesture is open.
+    pub(crate) fn any_open(&self) -> bool {
+        !self.open.lock().is_empty()
+    }
+
+    /// Close the gestures whose widget will not end them: a pointer
+    /// gesture once no drag is in progress, a keyboard one once it has
+    /// been idle past [`STALE_KEY_SECS`]. Returns their ids and starts.
+    pub(crate) fn stale(&self, now: f64, dragging: bool) -> Vec<(String, f64)> {
+        let mut open = self.open.lock();
+        let ids: Vec<String> = open
+            .iter()
+            .filter(|(_, g)| {
+                if g.pointer {
+                    !dragging
+                } else {
+                    now - g.touched >= STALE_KEY_SECS
+                }
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| open.remove(&id).map(|g| (id, g.start)))
+            .collect()
+    }
+
+    /// Close every open gesture (the editor is going away).
+    pub(crate) fn drain(&self) -> Vec<(String, f64)> {
+        self.open
+            .lock()
+            .drain()
+            .map(|(id, g)| (id, g.start))
+            .collect()
+    }
+}
+
+/// Announce each closed gesture of `closed` whose param moved since it
+/// began. For [`Gestures::stale`] and [`Gestures::drain`].
+pub(crate) fn announce_closed(bridge: &KitBridge, params: &DrumParams, closed: Vec<(String, f64)>) {
+    for (id, start) in closed {
+        let moved = (0..crate::params::PARAM_COUNT)
+            .map(|i| params.param_at(i))
+            .find(|p| p.id() == id)
+            .is_some_and(|p| p.get_plain().to_bits() != start.to_bits());
+        if moved {
+            bridge.announce_param_edit(&id);
+        }
+    }
+}
+
+fn gestures_id() -> egui::Id {
+    egui::Id::new("resonance_drums_gestures")
+}
+
+/// The ledger the app lent this frame's context — or, for a control
+/// drawn without the app (a test drawing the inspector alone), one the
+/// context keeps for itself.
+pub(crate) fn gestures(ctx: &egui::Context) -> Arc<Gestures> {
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Arc<Gestures>>(gestures_id()).clone())
+}
+
+/// Lend `gestures` to `ctx` for this frame's controls.
+pub(crate) fn lend_gestures(ctx: &egui::Context, gestures: &Arc<Gestures>) {
+    ctx.data_mut(|d| d.insert_temp(gestures_id(), gestures.clone()));
+}
+
+/// Apply one frame of a continuous control to `param`: note the gesture
+/// before the first write (its start value), `write` the new value, and
+/// announce one edit when the gesture ends having moved the param.
+fn continuous(
+    ui: &egui::Ui,
+    bridge: &KitBridge,
+    param: &dyn Param,
+    edit: widgets::GestureEdit,
+    write: impl FnOnce(f32),
+) {
+    let ledger = gestures(ui.ctx());
+    if edit.began || edit.value.is_some() {
+        let (now, pointer) = ui.input(|i| (i.time, i.pointer.any_down() || i.pointer.any_released()));
+        ledger.touch(param.id(), param.get_plain(), now, pointer);
+    }
+    if let Some(v) = edit.value {
+        write(v);
+    }
+    if edit.ended && ledger.finish(param.id(), param.get_plain()) {
+        bridge.announce_param_edit(param.id());
+    }
+}
+
 /// Pan as the inspector and the Mix table read it: `C`, `L 25`, `R 40`.
 pub(crate) fn pan_text(pan: f64) -> String {
     if pan.abs() < 0.005 {
@@ -90,13 +246,7 @@ pub(crate) fn knob(
     // placer, so a row of knobs in `horizontal_wrapped` wraps.
     let shown = ui.allocate_ui(knob.style.cell(), |ui| widgets::knob_themed_edit(ui, &knob));
     probe(ui, name, shown.response.rect);
-    let edit = shown.inner;
-    if let Some(v) = edit.value {
-        param.set_normalized(v);
-    }
-    if edit.ended {
-        bridge.announce_param_edit(param.id());
-    }
+    continuous(ui, bridge, param, shown.inner, |v| param.set_normalized(v));
 }
 
 /// Width kept for a fader's value readout.
@@ -147,14 +297,11 @@ fn fader_with(
     let track = (width - value_w - 6.0).max(24.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let slider = HSlider::new(track, param.normalized_value()).bipolar(bipolar);
+        let slider = HSlider::new(track, param.normalized_value())
+            .bipolar(bipolar)
+            .default_unit(param.default_normalized());
         let edit = probed(ui, name, |ui| widgets::slider_edit(ui, &slider));
-        if let Some(v) = edit.value {
-            param.set_normalized(v);
-        }
-        if edit.ended {
-            bridge.announce_param_edit(param.id());
-        }
+        continuous(ui, bridge, param, edit, |v| param.set_normalized(v));
         value_text(ui, &format!("{name}.value"), text, value_w);
     });
 }
@@ -174,15 +321,12 @@ pub(crate) fn int_fader(
     let track = (width - VALUE_W - 6.0).max(24.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let edit = probed(ui, name, |ui| {
-            widgets::slider_edit(ui, &HSlider::new(track, unit))
+        let default = (param.default_plain() as f32 - min as f32) / span;
+        let slider = HSlider::new(track, unit).default_unit(default);
+        let edit = probed(ui, name, |ui| widgets::slider_edit(ui, &slider));
+        continuous(ui, bridge, param, edit, |v| {
+            param.set_value(min + (v * span).round() as i32)
         });
-        if let Some(v) = edit.value {
-            param.set_value(min + (v * span).round() as i32);
-        }
-        if edit.ended {
-            bridge.announce_param_edit(param.id());
-        }
         value_text(ui, &format!("{name}.value"), text, VALUE_W);
     });
 }

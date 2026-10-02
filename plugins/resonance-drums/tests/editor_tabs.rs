@@ -854,3 +854,92 @@ fn every_edit_kind_announces_once() {
     e.click(frame.text_center("Multi").unwrap());
     assert_eq!(edits(&plugin).len(), 3);
 }
+
+/// A gesture that changes nothing tells the host nothing: a drag that
+/// comes back to where it started, a double-click reset of a value already
+/// at its default. A reset of a moved value is one edit.
+#[test]
+fn a_gesture_that_changes_nothing_is_no_edit() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    let frame = settled(&mut e);
+    let knob = frame.widget("knob.tune").unwrap().rect;
+    let at = egui::pos2(knob.center().x, knob.top() + 20.0);
+    // Down 30 px, then back up by what moved the knob, in one drag. The
+    // first 5 px step is inside egui's click slop and moves nothing, so
+    // the knob is back where it was 5 px below the press.
+    e.drag_without_release(at, at + egui::vec2(0.0, 30.0));
+    for i in 1..=5 {
+        let p = at + egui::vec2(0.0, 30.0 - 5.0 * i as f32);
+        e.frame(vec![egui::Event::PointerMoved(p)]);
+    }
+    e.release(at + egui::vec2(0.0, 5.0));
+    settled(&mut e);
+    assert_eq!(plugin.bridge.params.pads[KICK].tune.value(), 0.0);
+    assert!(edits(&plugin).is_empty(), "{:?}", edits(&plugin));
+
+    // Tune is at its default: a double-click reset changes nothing.
+    e.double_click(at);
+    settled(&mut e);
+    assert!(edits(&plugin).is_empty(), "{:?}", edits(&plugin));
+
+    // Moved, then reset: two edits.
+    e.drag(at, at + egui::vec2(0.0, -30.0));
+    assert!(plugin.bridge.params.pads[KICK].tune.value() > 0.0);
+    e.double_click(at);
+    settled(&mut e);
+    assert_eq!(plugin.bridge.params.pads[KICK].tune.value(), 0.0);
+    assert_eq!(edits(&plugin), ["pad_0_tune", "pad_0_tune"]);
+}
+
+/// A fader click (no drag) moves nothing and tells nothing; a double-click
+/// resets it to its default as one edit.
+#[test]
+fn a_fader_click_is_no_edit_and_a_double_click_resets() {
+    let plugin = booted();
+    plugin.bridge.params.pads[SNARE].pan.set_value(0.5);
+    let mut e = editor(&plugin, (960.0, 640.0), "Mix");
+    let frame = settled(&mut e);
+    let fader = frame.widget("mix.row.1.pan").unwrap().rect;
+    e.click(egui::pos2(fader.left() + 4.0, fader.center().y));
+    settled(&mut e);
+    assert_eq!(plugin.bridge.params.pads[SNARE].pan.value(), 0.5, "a click moved the fader");
+    assert!(edits(&plugin).is_empty());
+    e.double_click(fader.center());
+    settled(&mut e);
+    assert_eq!(plugin.bridge.params.pads[SNARE].pan.value(), 0.0);
+    assert_eq!(edits(&plugin), ["pad_1_pan"]);
+}
+
+/// A drag whose control stops being drawn before the release (its row
+/// scrolled away, another tab shown) still ends as one edit, once the
+/// pointer lets go.
+#[test]
+fn a_drag_whose_control_went_away_is_still_one_edit() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Mix");
+    let frame = settled(&mut e);
+    let fader = frame.widget("mix.row.1.level").unwrap().rect;
+    e.drag_without_release(fader.center(), fader.center() + egui::vec2(-30.0, 0.0));
+    assert!(plugin.bridge.params.pads[SNARE].volume.value() < 0.0);
+    // The control is no longer drawn when the button comes up.
+    e.show_view("Setup");
+    e.frame(Vec::new());
+    assert!(edits(&plugin).is_empty(), "announced mid-drag");
+    e.release(fader.center());
+    settled(&mut e);
+    assert_eq!(edits(&plugin), ["pad_1_level"]);
+}
+
+/// An editor closed mid-drag announces what the drag moved.
+#[test]
+fn closing_the_editor_mid_drag_is_still_one_edit() {
+    let plugin = booted();
+    let mut e = editor(&plugin, (960.0, 640.0), "Mix");
+    let frame = settled(&mut e);
+    let fader = frame.widget("mix.row.1.level").unwrap().rect;
+    e.drag_without_release(fader.center(), fader.center() + egui::vec2(-30.0, 0.0));
+    assert!(edits(&plugin).is_empty());
+    drop(e);
+    assert_eq!(edits(&plugin), ["pad_1_level"]);
+}
