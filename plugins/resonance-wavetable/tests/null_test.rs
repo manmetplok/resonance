@@ -295,6 +295,11 @@ fn output_matches_golden() {
     // scenario with unison > 1 moved; `init_single` (sub-voice 0 only,
     // still at phase 0) did not.
     //
+    // And for DSP2-12: envelope times are times to target (attack to the
+    // peak, decay to sustain, release to -60 dB) instead of one-pole time
+    // constants, the curve shapes without lengthening, and sustain
+    // glides. Every scenario moved.
+    //
     // Every transform applied to the DSP itself is a caching or hoisting
     // change that re-uses the identical expression, so all of those are
     // bit-exact against the golden — with exactly one deliberate exception:
