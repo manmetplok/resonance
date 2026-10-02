@@ -46,6 +46,12 @@
 //! that cannot be ramped per sample at any sane cost, so a new layout is
 //! crossfaded in over [`DIFFUSE_XFADE_MS`] instead (`Diffuser`).
 //!
+//! A `widen_mode` change crossfades over [`MODE_XFADE_MS`] (DSP2-11):
+//! every mode owns its own state, so the outgoing one keeps running on its
+//! last settings while the incoming one starts clean and fades in. A mode
+//! asked for during a fade waits for it to end (the param is re-read every
+//! block), so each switch is one whole crossfade.
+//!
 //! # Transparent defaults
 //!
 //! Every stage is skipped at its neutral value — width 1, mono-maker
@@ -252,6 +258,9 @@ fn ramp(sr: f32, ms: f32, v: f32) -> Smoother {
 
 /// Crossfade between two Diffuse all-pass layouts.
 pub const DIFFUSE_XFADE_MS: f32 = 30.0;
+
+/// Crossfade between two widening modes.
+pub const MODE_XFADE_MS: f32 = 20.0;
 
 /// Diffuse's all-pass cascade, re-laid-out without a step.
 ///
@@ -461,6 +470,10 @@ pub struct StereoDsp {
     rotation_at: f32,
 
     mode: WidenMode,
+    /// The mode being faded out after a `widen_mode` change, and the
+    /// fade's position (weight of `mode`, 0 → 1); `None` when not fading.
+    fade_from: Option<(WidenMode, f32)>,
+    fade_step: f32,
     /// Last configured (focus_low, focus_high, amount) per mode, so the
     /// expensive re-layouts only run on a change.
     configured: Option<(f32, f32, f32)>,
@@ -510,6 +523,8 @@ impl StereoDsp {
             rotation: StereoRotation::new(params.rotation.value().to_radians()),
             rotation_at: params.rotation.value(),
             mode: params.widen_mode(),
+            fade_from: None,
+            fade_step: 1.0 / (MODE_XFADE_MS * 0.001 * sr).max(1.0),
             configured: None,
             velvet: VelvetDecorrelator::new(sr, VELVET_SEED),
             decor_amount: smoother(20.0, amount),
@@ -548,6 +563,7 @@ impl StereoDsp {
         self.haas_line.clear();
         self.reset_haas_split();
         self.mono.reset();
+        self.fade_from = None;
         self.correlation.reset();
         self.gonio_count = 0;
         self.corr_count = 0;
@@ -571,25 +587,37 @@ impl StereoDsp {
                 .configure(self.sr, p.mono_slope(), mono_hz.min(0.45 * self.sr));
         }
 
-        // Widening.
+        // Widening. A switch waits for a running crossfade to end.
         let mode = p.widen_mode();
-        if mode != self.mode {
+        let amount = p.widen_amount.value();
+        if mode != self.mode && self.fade_from.is_none() {
+            self.fade_from = Some((self.mode, 0.0));
             self.mode = mode;
             self.configured = None;
             // The incoming mode starts from silence rather than from
-            // whatever it held the last time it ran.
-            self.velvet.reset();
-            self.diffuse.reset();
-            // The incoming mode starts at its amount, not ramping from
-            // wherever it was left.
-            self.decor_amount.reset(p.widen_amount.value());
-            self.micro_focus.reset();
-            self.micro_l.reset();
-            self.micro_r.reset();
-            self.haas_line.clear();
-            self.reset_haas_split();
+            // whatever it held the last time it ran, and at its amount,
+            // not ramping from wherever it was left. The outgoing mode's
+            // state is left alone: it keeps running through the fade.
+            match mode {
+                WidenMode::Off => {}
+                WidenMode::Decorrelate => {
+                    self.velvet.reset();
+                    self.decor_amount.reset(amount);
+                }
+                WidenMode::Diffuse => self.diffuse.reset(),
+                WidenMode::MicroShift => {
+                    self.micro_focus.reset();
+                    self.micro_l.reset();
+                    self.micro_r.reset();
+                    self.micro_amount.reset(amount);
+                }
+                WidenMode::Haas => {
+                    self.haas_line.clear();
+                    self.reset_haas_split();
+                    self.haas_delay.reset(haas_delay_ms(amount) * 0.001 * self.sr);
+                }
+            }
         }
-        let amount = p.widen_amount.value();
         let low = p.focus_low.value().min(0.45 * self.sr);
         let high_raw = p.focus_high.value();
         let high = (high_raw < FOCUS_HIGH_OPEN_HZ).then(|| high_raw.min(0.45 * self.sr));
@@ -639,9 +667,23 @@ impl StereoDsp {
         }
     }
 
+    /// The widening stage: the current mode, crossfaded from the previous
+    /// one while a mode switch fades.
     #[inline]
     fn widen(&mut self, l: f32, r: f32) -> (f32, f32) {
-        match self.mode {
+        let Some((from, t)) = self.fade_from else {
+            return self.widen_with(self.mode, l, r);
+        };
+        let (ol, or) = self.widen_with(from, l, r);
+        let (nl, nr) = self.widen_with(self.mode, l, r);
+        let t = (t + self.fade_step).min(1.0);
+        self.fade_from = if t >= 1.0 { None } else { Some((from, t)) };
+        (ol + t * (nl - ol), or + t * (nr - or))
+    }
+
+    #[inline]
+    fn widen_with(&mut self, mode: WidenMode, l: f32, r: f32) -> (f32, f32) {
+        match mode {
             WidenMode::Off => (l, r),
             WidenMode::Decorrelate => {
                 let a = self.decor_amount.next();

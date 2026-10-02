@@ -686,6 +686,49 @@ fn a_diffuse_amount_change_crossfades_the_new_layout() {
     assert!(sweep < -85.0, "the Diffuse amount sweep zippered: {sweep:.1} dB above 4 kHz");
 }
 
+/// DSP2-11: a `widen_mode` switch used to reset every mode and cut over
+/// in one sample — into Haas, the right channel's delayed part restarted
+/// from silence, a step of most of the signal. It now crossfades.
+#[test]
+fn a_widen_mode_switch_crossfades() {
+    let n = 48_000;
+    let x = sine(300.0, 0.5, n);
+    let seq = [
+        (0, WidenMode::Decorrelate),
+        (40, WidenMode::Haas),
+        (80, WidenMode::MicroShift),
+        (120, WidenMode::Off),
+    ];
+    let mut plugin = ResonanceStereo::new();
+    plugin.params.widen_mode.set_value(seq[0].1.index());
+    plugin.params.widen_amount.set_value(1.0);
+    plugin.initialize(SR, MAX_BLOCK as u32);
+    plugin.reset();
+    let (mut l, mut r) = (x.clone(), x.clone());
+    for (k, (cl, cr)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+        if let Some((_, m)) = seq.iter().find(|(at, _)| *at == k) {
+            plugin.params.widen_mode.set_value(m.index());
+        }
+        let frames = cl.len();
+        let mut outs = [resonance_plugin::OutputBuffer { left: cl, right: cr }];
+        plugin.process(&mut outs, frames, &mut resonance_plugin::EventIterator::empty(), None);
+    }
+    let max_step = |x: &[f32]| x.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    // The dry sine's own largest step, with headroom for the widened
+    // channels' extra content.
+    let steady = 0.5 * std::f32::consts::TAU * 300.0 / SR;
+    for &(at, mode) in &seq[1..] {
+        let seam = at * 256 - 1..at * 256 + 2_400;
+        for (name, ch) in [("left", &l), ("right", &r)] {
+            let step = max_step(&ch[seam.clone()]);
+            assert!(
+                step < 3.0 * steady,
+                "switch to {mode:?}: the {name} channel stepped {step:.4} (sine's own {steady:.4})"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Latency
 // ---------------------------------------------------------------------------
