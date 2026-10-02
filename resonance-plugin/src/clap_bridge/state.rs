@@ -26,8 +26,11 @@ pub(super) struct TempParamOwned {
 }
 
 impl TempParamOwned {
-    /// Every param as the shared atomics hold it.
-    pub(super) fn all_from(shared: &super::shared::ClapShared<'_>) -> Vec<Self> {
+    /// Every param, with the value `value(slot)` gives it.
+    pub(super) fn all_from(
+        shared: &super::shared::ClapShared<'_>,
+        value: impl Fn(usize) -> f64,
+    ) -> Vec<Self> {
         shared
             .param_metas
             .iter()
@@ -35,7 +38,7 @@ impl TempParamOwned {
             .map(|(i, meta)| TempParamOwned {
                 id: meta.str_id.clone(),
                 name: meta.name.clone(),
-                value: shared.get_value(i),
+                value: value(i),
                 min: meta.min,
                 max: meta.max,
                 clap_id: meta.clap_id,
@@ -102,6 +105,51 @@ impl<'a, P: ResonancePlugin> PluginStateImpl for ClapMainThread<'a, P> {
 }
 
 impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
+    /// A param's current value as the host should see it — what
+    /// `params.get_value` answers and what `state.save` and the
+    /// preset-modified comparison serialise (HOST-01). `[main-thread]`.
+    ///
+    /// * Inactive: the plugin object is here, and it is the newer side
+    ///   (an editor writes only the plugin's own params).
+    /// * Active, a load published and not yet applied (`params_dirty`, or
+    ///   a publication window open): the mirror. It holds the load; the
+    ///   plugin still holds what the load replaces.
+    /// * Active otherwise: the plugin's **live** value when it hands the
+    ///   bridge one ([`ParamTextSource::live_value`]), else the mirror. The
+    ///   mirror catches up with editor writes only when the audio thread
+    ///   pushes them back — every `process()` and every `params.flush` —
+    ///   so with the transport stopped and no flush, a plugin that gives
+    ///   no live value reads its last pushed-back value.
+    ///
+    /// A read-only or state-excluded param is not part of any load, so it
+    /// reads live even while one is pending.
+    ///
+    /// [`ParamTextSource::live_value`]: crate::plugin::ParamTextSource::live_value
+    pub(super) fn current_value(&self, slot: usize) -> f64 {
+        if let Some(plugin) = &self.plugin {
+            if slot < plugin.param_count() {
+                return plugin.param(slot).get_plain();
+            }
+        }
+        let meta = &self.shared.param_metas[slot];
+        let loaded_not_applied = self.shared.params_dirty.load(Ordering::Acquire)
+            || self.shared.param_publish_gen() & 1 == 1;
+        if loaded_not_applied && !meta.is_read_only && !meta.state_excluded {
+            return self.shared.get_value(slot);
+        }
+        self.param_text_source
+            .as_ref()
+            .and_then(|s| s.live_value(slot))
+            .filter(|v| v.is_finite())
+            .unwrap_or_else(|| self.shared.get_value(slot))
+    }
+
+    /// Every param at [`Self::current_value`], for a serialisation made
+    /// while the plugin object is in the audio processor.
+    pub(super) fn current_params(&self) -> Vec<TempParamOwned> {
+        TempParamOwned::all_from(self.shared, |slot| self.current_value(slot))
+    }
+
     /// The full state document, whether the plugin object is here or in
     /// the audio processor. Shared by `clap.state` and the preset form.
     pub(super) fn save_bytes(&self) -> Vec<u8> {
@@ -112,10 +160,12 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
         } else {
             // Audio-processor path: the owned plugin is currently inside
             // `ClapAudioProcessor`, so we can't call `save_state` directly.
-            // Serialize params from the shared atomics and merge any
-            // extra-state saver's output using the same `"extra" ->
-            // top-level` shape the plugin would produce.
-            let temp_params = TempParamOwned::all_from(&self.shared);
+            // Serialize params at their current values (live where the
+            // plugin hands them over, else the shared mirror — see
+            // `current_value`) and merge any extra-state saver's output
+            // using the same `"extra" -> top-level` shape the plugin would
+            // produce.
+            let temp_params = self.current_params();
             let refs: Vec<&dyn Param> = temp_params.iter().map(|p| p as &dyn Param).collect();
             let mut json = crate::state::params_to_json(&refs);
             if let Some(saver) = &self.extra_state_saver {

@@ -48,6 +48,8 @@ mod plugin_bypass;
 mod plugin_editor_state;
 #[path = "clap_host/plugin_id_duplicate_rejected.rs"]
 mod plugin_id_duplicate_rejected;
+#[path = "clap_host/plugin_live_values.rs"]
+mod plugin_live_values;
 #[path = "clap_host/plugin_load_failure.rs"]
 mod plugin_load_failure;
 #[path = "clap_host/plugin_output_scrub.rs"]

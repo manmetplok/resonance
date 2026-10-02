@@ -107,7 +107,7 @@ impl<'a, P: ResonancePlugin> ClapMainThread<'a, P> {
                 (0..plugin.param_count()).map(|i| plugin.param(i)).collect();
             saver.compare_preset_modified(&refs);
         } else {
-            let temp = super::state::TempParamOwned::all_from(&self.shared);
+            let temp = self.current_params();
             let refs: Vec<&dyn crate::param::Param> =
                 temp.iter().map(|p| p as &dyn crate::param::Param).collect();
             saver.compare_preset_modified(&refs);

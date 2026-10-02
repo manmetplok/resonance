@@ -493,3 +493,79 @@ fn setting_kit_select_resets_the_mirrored_load_progress() {
     });
     assert_eq!(progress(&mut app).0, 1.0, "a late edit echo keeps the loaded kit's 1.0");
 }
+
+/// `track.set_plugin_param kit_select` — the path the agent is told to use
+/// to change kits — then `edit.undo`: the old kit comes back (code review
+/// STATE2-03). The undo entry used to restore nothing: the snapshot's blob
+/// is the cached one (a host write refreshes no blob, so the restore skips
+/// it as unchanged), and the slot, being state-excluded, was not in the
+/// snapshot's params either. The snapshot carries it now, and the restore
+/// drives it back.
+#[test]
+fn edit_undo_of_a_kit_select_set_puts_the_old_kit_back() {
+    use resonance_audio::types::{AudioCommand, AudioEvent, ParamInfo, TrackType};
+
+    const DRUMS: u64 = 61;
+    let kit_id = resonance_plugin::stable_hash("kit_select");
+    let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
+    app.test_set_view_mode(ViewMode::Arrange);
+    app.test_set_active_project(true);
+    app.test_set_project_path(PathBuf::from("/tmp/control-drum-kits-undo.rprj"));
+    app.test_add_track(1, TrackType::Instrument);
+    app.test_apply_engine_event(AudioEvent::PluginAdded {
+        track_id: 1,
+        instance_id: DRUMS,
+        plugin_name: "Resonance Drums".to_owned(),
+        clap_plugin_id: "com.resonance.drums".to_owned(),
+        clap_file_path: "/plugins/drums.clap".to_owned(),
+        params: vec![ParamInfo {
+            id: kit_id,
+            name: "kit_select".to_owned(),
+            min_value: -2.0,
+            max_value: 999.0,
+            current_value: 1.0,
+            stepped: true,
+            automatable: false,
+            state_excluded: true,
+            ..Default::default()
+        }],
+        has_gui: false,
+        has_sidechain_input: false,
+        output_port_count: 1,
+        output_port_names: vec!["Main".to_owned()],
+    });
+    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+        instance_id: DRUMS,
+        data: vec![0x01],
+    });
+
+    call(
+        &mut app,
+        "track.set_plugin_param",
+        serde_json::json!({ "track_id": 1, "param": "kit_select", "value": 4.0 }),
+    )
+    .result::<serde_json::Value>()
+    .expect("kit_select is settable");
+    while rx.try_recv().is_ok() {}
+
+    let undone: resonance_control::methods::edit::UndoResult =
+        call(&mut app, "edit.undo", serde_json::json!({}))
+            .result()
+            .expect("edit.undo succeeds");
+    assert!(undone.undone.is_some());
+
+    let mut kit_sets = Vec::new();
+    while let Ok(cmd) = rx.try_recv() {
+        if let AudioCommand::SetPluginParam {
+            instance_id: DRUMS,
+            param_id,
+            value,
+        } = cmd
+        {
+            if param_id == kit_id {
+                kit_sets.push(value);
+            }
+        }
+    }
+    assert_eq!(kit_sets, vec![1.0], "the engine is told the old kit");
+}

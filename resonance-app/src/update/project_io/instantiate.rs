@@ -75,6 +75,7 @@ pub fn begin_instantiate(r: &mut Resonance, loaded: Box<LoadedProject>) {
     r.io.pending_load = Some(loaded);
     r.session.undo.clear();
     r.plugin_mirror.state_cache.clear();
+    r.plugin_mirror.owed_blobs.clear();
     r.plugin_mirror.kit_info.clear();
     r.plugin_mirror.output_ports.clear();
     // Re-seeded from the template's own file by the `PluginState`

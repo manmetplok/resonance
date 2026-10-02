@@ -59,6 +59,8 @@ mod missing_plugin_slot;
 mod missing_plugin_state_preserved;
 #[path = "plugins/plugin_edited_by_plugin.rs"]
 mod plugin_edited_by_plugin;
+#[path = "plugins/plugin_live_values.rs"]
+mod plugin_live_values;
 #[path = "plugins/plugin_param_undo.rs"]
 mod plugin_param_undo;
 #[path = "plugins/plugin_state_excluded_params.rs"]

@@ -194,6 +194,23 @@ impl ClapInstance {
         }
     }
 
+    /// Bring what the plugin reports in step with what it plays, before
+    /// the host reads it back — `state.save`, `get_value` (code review
+    /// HOST-01).
+    ///
+    /// A plugin's editor writes its params directly, and a plugin that
+    /// mirrors its values for the main thread (every Resonance plugin
+    /// does, while active) refreshes that mirror only at a `process()` or
+    /// a `params.flush`. With the transport stopped no `process()` runs,
+    /// so this calls `params.flush` — carrying any queued host changes,
+    /// and collecting what the plugin announces for the next
+    /// [`Self::take_param_edits`]. A no-op for a plugin without one.
+    ///
+    /// Engine thread, under the instance lock (see the module doc).
+    pub fn sync_plugin_values(&mut self) {
+        self.flush_params_now();
+    }
+
     /// Fold the output parameter events the plugin pushed since the last
     /// call into edits: a gesture is reported once, when it ends, with the
     /// last value it carried; a value outside any gesture is reported as

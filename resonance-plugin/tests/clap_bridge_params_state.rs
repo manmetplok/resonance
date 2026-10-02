@@ -1367,3 +1367,243 @@ fn the_state_upgrade_runs_on_the_preset_banks_loads() {
     assert_eq!(plugin.taps.get_plain(), 5.0);
     let _ = std::fs::remove_dir_all(root);
 }
+
+// ---------------------------------------------------------------------------
+// Editor edits while active (code review HOST-01)
+//
+// An editor writes straight into the params it shares with the DSP. While
+// the plugin is active its object lives in the audio processor, and the
+// mirror the main thread serves `get_value` and `state.save` from only
+// caught up with such a write in `process()`. A host whose transport is
+// stopped runs no block, so a save there wrote the value from before the
+// edit, and the edit was gone on reopen.
+//
+// `EditorPlugin<LIVE>` keeps its params behind an `Arc`, as every shipping
+// plugin does, and leaves a handle to them in a thread-local the test reads
+// back (`new` runs on the test thread: the instance is in-process). With
+// `LIVE` it hands the bridge a `ParamTextSource` whose `live_value` answers
+// for every param.
+// ---------------------------------------------------------------------------
+
+struct EditorParams {
+    mix: FloatParam,
+    taps: IntParam,
+}
+
+impl EditorParams {
+    fn at(&self, index: usize) -> &dyn Param {
+        match index {
+            0 => &self.mix,
+            _ => &self.taps,
+        }
+    }
+}
+
+thread_local! {
+    static EDITOR_PARAMS: std::cell::RefCell<Option<Arc<EditorParams>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The params of the `EditorPlugin` this thread instantiated last: what
+/// its editor would hold.
+fn editor_params() -> Arc<EditorParams> {
+    EDITOR_PARAMS.with(|p| p.borrow().clone().expect("an EditorPlugin was instantiated"))
+}
+
+struct EditorPlugin<const LIVE: bool> {
+    params: Arc<EditorParams>,
+}
+
+struct EditorLive(Arc<EditorParams>);
+
+impl resonance_plugin::ParamTextSource for EditorLive {
+    fn display(&self, index: usize, value: f64) -> Option<String> {
+        (index < 2).then(|| self.0.at(index).display(value))
+    }
+    fn parse(&self, index: usize, text: &str) -> Option<f64> {
+        (index < 2).then(|| self.0.at(index).parse(text)).flatten()
+    }
+    fn live_value(&self, index: usize) -> Option<f64> {
+        (index < 2).then(|| self.0.at(index).get_plain())
+    }
+}
+
+impl<const LIVE: bool> ResonancePlugin for EditorPlugin<LIVE> {
+    const CLAP_ID: &'static str = if LIVE {
+        "test.bridge-editor-live"
+    } else {
+        "test.bridge-editor"
+    };
+    const NAME: &'static str = "BridgeEditor";
+    const VENDOR: &'static str = "test";
+    const VERSION: &'static str = "0.0.0";
+    const DESCRIPTION: &'static str = "";
+    const FEATURES: &'static [&'static std::ffi::CStr] =
+        &[resonance_plugin::features::AUDIO_EFFECT];
+    const INPUT_CHANNELS: Option<u32> = Some(2);
+
+    fn new() -> Self {
+        let params = Arc::new(EditorParams {
+            mix: FloatParam::new(
+                "mix",
+                "Mix",
+                MIX_DEFAULT as f32,
+                FloatRange::Linear { min: 0.0, max: 1.0 },
+            ),
+            taps: IntParam::new(
+                "taps",
+                "Taps",
+                TAPS_DEFAULT as i32,
+                IntRange::Linear { min: 1, max: 8 },
+            ),
+        });
+        EDITOR_PARAMS.with(|p| *p.borrow_mut() = Some(params.clone()));
+        Self { params }
+    }
+    fn param_count(&self) -> usize {
+        2
+    }
+    fn param(&self, index: usize) -> &dyn Param {
+        self.params.at(index)
+    }
+    fn initialize(&mut self, _sample_rate: f32, _max_buffer_size: u32) -> bool {
+        true
+    }
+    fn reset(&mut self) {}
+    fn process(
+        &mut self,
+        _outputs: &mut [OutputBuffer<'_>],
+        _frames: usize,
+        _events: &mut EventIterator<'_>,
+        _tempo: Option<TempoInfo>,
+    ) {
+    }
+    fn param_text_source(&self) -> Option<Arc<dyn resonance_plugin::ParamTextSource>> {
+        LIVE.then(|| Arc::new(EditorLive(self.params.clone())) as Arc<_>)
+    }
+}
+
+fn editor_instance() -> PluginInstance<TestHost> {
+    instantiate::<EditorPlugin<false>>(c"resonance-test-bridge-editor.clap", c"test.bridge-editor")
+}
+
+fn live_editor_instance() -> PluginInstance<TestHost> {
+    instantiate::<EditorPlugin<true>>(
+        c"resonance-test-bridge-editor-live.clap",
+        c"test.bridge-editor-live",
+    )
+}
+
+/// `params.flush` on the audio processor with nothing to deliver: what a
+/// host with its transport stopped runs before it saves or reads back.
+fn flush_active_empty(
+    instance: &PluginInstance<TestHost>,
+    processor: &mut StoppedPluginAudioProcessor<TestHost>,
+) {
+    let ext = params_ext(instance);
+    let mut output = EventBuffer::new();
+    ext.flush_active(
+        &mut processor.plugin_handle(),
+        &EventBuffer::new().as_input(),
+        &mut output.as_output(),
+    );
+}
+
+fn saved_param(bytes: &[u8], id: &str) -> f64 {
+    state_json(bytes)["params"][id]
+        .as_f64()
+        .unwrap_or_else(|| panic!("the state carries `{id}`"))
+}
+
+#[test]
+fn an_editor_edit_while_active_reaches_save_and_get_value_after_an_active_flush() {
+    let mut instance = editor_instance();
+    let mut processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let editor = editor_params();
+    editor.mix.set_plain(0.8);
+    editor.taps.set_plain(6.0);
+
+    // No `process()`: the transport is stopped. The host flushes.
+    flush_active_empty(&instance, &mut processor);
+
+    assert_eq!(get_value(&mut instance, "mix"), editor.mix.get_plain());
+    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+    let bytes = save_state(&mut instance);
+    assert_eq!(saved_param(&bytes, "mix"), editor.mix.get_plain());
+    assert_eq!(saved_param(&bytes, "taps"), 6.0);
+    instance.deactivate(processor);
+}
+
+#[test]
+fn a_plugin_with_live_values_saves_an_editor_edit_with_no_block_and_no_flush() {
+    let mut instance = live_editor_instance();
+    let processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let editor = editor_params();
+    editor.mix.set_plain(0.8);
+    editor.taps.set_plain(6.0);
+
+    assert_eq!(get_value(&mut instance, "mix"), editor.mix.get_plain());
+    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+    let bytes = save_state(&mut instance);
+    assert_eq!(saved_param(&bytes, "mix"), editor.mix.get_plain());
+    assert_eq!(saved_param(&bytes, "taps"), 6.0);
+    instance.deactivate(processor);
+}
+
+/// A load published while active has not reached the plugin until a block
+/// (or a flush) applies it, so the plugin's live values are the *old*
+/// ones: until then the mirror, which holds the load, answers.
+#[test]
+fn a_load_while_active_wins_over_live_values_until_it_is_applied() {
+    let mut instance = live_editor_instance();
+    let mut processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let bytes = serde_json::to_vec(&json!({ "params": { "mix": 0.125, "taps": 7.0 } })).unwrap();
+    assert!(load_state(&mut instance, &bytes));
+
+    assert_eq!(get_value(&mut instance, "mix"), 0.125);
+    assert_eq!(saved_param(&save_state(&mut instance), "taps"), 7.0);
+
+    // A flush applies the load to the plugin; the live values agree now.
+    flush_active_empty(&instance, &mut processor);
+    let editor = editor_params();
+    assert_eq!(editor.mix.get_plain(), 0.125);
+    assert_eq!(editor.taps.get_plain(), 7.0);
+    assert_eq!(get_value(&mut instance, "taps"), 7.0);
+    instance.deactivate(processor);
+}
+
+/// The audio-processor flush applies a pending load before it pushes the
+/// plugin's values back, so it cannot put the pre-load values over it.
+#[test]
+fn an_active_flush_applies_a_pending_load_instead_of_reverting_it() {
+    let mut instance = editor_instance();
+    let mut processor = instance
+        .activate(|_, _| (), audio_config())
+        .expect("activation");
+    let bytes = serde_json::to_vec(&json!({ "params": { "mix": 0.125, "taps": 7.0 } })).unwrap();
+    assert!(load_state(&mut instance, &bytes));
+
+    flush_active_empty(&instance, &mut processor);
+
+    let editor = editor_params();
+    assert_eq!(editor.mix.get_plain(), 0.125, "the plugin took the load");
+    assert_eq!(get_value(&mut instance, "mix"), 0.125);
+    assert_eq!(saved_param(&save_state(&mut instance), "taps"), 7.0);
+    instance.deactivate(processor);
+}
+
+/// Inactive, the plugin object is on the main thread and is the newer
+/// side: an editor edit made there is what `get_value` reports.
+#[test]
+fn an_editor_edit_while_inactive_is_what_get_value_reports() {
+    let mut instance = editor_instance();
+    editor_params().taps.set_plain(6.0);
+    assert_eq!(get_value(&mut instance, "taps"), 6.0);
+    assert_eq!(saved_param(&save_state(&mut instance), "taps"), 6.0);
+}
