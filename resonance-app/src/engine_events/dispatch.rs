@@ -646,6 +646,7 @@ fn route_engine_event(r: &mut Resonance, event: AudioEvent) -> Task<Message> {
         E::ClipsSavedToProjectDir { clip_files } => {
             return project_io::clips_saved(r, clip_files)
         }
+        E::ClipsSaveFailed { error } => return project_io::clips_save_failed(r, error),
         E::AllPluginStatesSaved { states } => {
             return project_io::all_plugin_states_saved(r, states)
         }

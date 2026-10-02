@@ -25,6 +25,8 @@ mod autosave_settings_ui;
 mod autosave_trigger;
 #[path = "io/autosave_write.rs"]
 mod autosave_write;
+#[path = "io/save_failure_recovery.rs"]
+mod save_failure_recovery;
 #[path = "io/browser_handlers.rs"]
 mod browser_handlers;
 #[path = "io/chord_sheet_header.rs"]

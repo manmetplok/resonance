@@ -268,6 +268,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
         ProjectIoMessage::ProjectSaved(Ok(()), autosave) => {
             finish_save_write(r);
             recovery::after_save(r, autosave);
+            // Any completed write proves the location takes writes again:
+            // a manual save of a titled project lands in the very bundle
+            // the autosave targets (code review UX-13).
+            r.banners.clear_autosave_failures();
             // Resolve a control-initiated save job (doc #265, todo
             // #1149) — manual saves only: an autosave completing must
             // never satisfy a client's project.save. No-op when no
@@ -326,8 +330,10 @@ pub fn handle(r: &mut Resonance, m: ProjectIoMessage) -> Task<Message> {
             }
             if autosave {
                 // A failed autosave must never interrupt the user with a
-                // modal — the timer will try again. Log and move on.
-                tracing::warn!("Autosave failed: {e}");
+                // modal — the timer will try again. One miss is only
+                // logged; a run of them raises the persistent indicator
+                // (code review UX-13).
+                note_autosave_failure(r, e);
             } else {
                 r.modals.quit_after_save = None;
                 r.banners.error_message = Some(format!("Save failed: {e}"));
@@ -488,7 +494,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         (None, true) => match autosave_scratch_dir(r) {
             Some(p) => p,
             None => {
-                tracing::warn!("Autosave skipped: no app-data directory available.");
+                note_autosave_failure(r, "no app-data directory available".to_owned());
                 return Task::none();
             }
         },
@@ -502,7 +508,7 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
     // first time the directory is created.
     if let Err(e) = std::fs::create_dir_all(&path) {
         if autosave {
-            tracing::warn!("Autosave skipped: create dir {}: {e}", path.display());
+            note_autosave_failure(r, format!("create dir {}: {e}", path.display()));
         } else {
             r.banners.error_message = Some(format!("Create project directory: {e}"));
         }
@@ -518,10 +524,70 @@ fn begin_save(r: &mut Resonance, autosave: bool) -> Task<Message> {
         clips_done: false,
         plugins_done: false,
         autosave,
+        clips_error: None,
+        started: std::time::Instant::now(),
     });
     let _ = r.engine.send(AudioCommand::SaveClipsToProjectDir);
     let _ = r.engine.send(AudioCommand::SaveAllPluginStates);
     Task::none()
+}
+
+/// Fail a save whose engine round-trip did not produce what the write
+/// needs: the engine could not write a clip (`AudioEvent::ClipsSaveFailed`)
+/// or never answered at all (the tick watchdog). The collector is already
+/// taken; this routes through the same completion as a failed write —
+/// `saving` cleared, the `ProjectSave` control job failed, the banner (or,
+/// for an autosave, the failure count) — and then runs any manual save
+/// queued behind it (code review STATE2-02).
+pub(crate) fn fail_collected_save(
+    r: &mut Resonance,
+    save: SaveCollector,
+    reason: String,
+) -> Task<Message> {
+    tracing::warn!(
+        autosave = save.autosave,
+        "[save] {} not collected: {reason}",
+        save.path.display()
+    );
+    let task = handle(r, ProjectIoMessage::ProjectSaved(Err(reason), save.autosave));
+    start_queued_save(r);
+    task
+}
+
+/// How long a save may wait on its engine round-trip before the tick
+/// watchdog abandons it (STATE2-02). Generous: a Save As copies or
+/// transcodes every clip WAV on the engine thread, which can take a while
+/// for a long session on a slow disk — the watchdog only has to beat
+/// "forever".
+pub(crate) const SAVE_COLLECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+/// Tick-driven safety net for STATE2-02: a collector the engine never
+/// answered (a reply lost to a dead engine, or a failure path that raised
+/// only `AudioEvent::Error`) is failed instead of wedging every later
+/// save, open and new.
+pub(crate) fn check_save_watchdog(r: &mut Resonance) -> Option<Task<Message>> {
+    let stale = r
+        .io
+        .save_state
+        .as_ref()
+        .is_some_and(|s| s.started.elapsed() >= SAVE_COLLECT_TIMEOUT);
+    if !stale {
+        return None;
+    }
+    let save = r.io.save_state.take().expect("checked above");
+    let reason = format!(
+        "the audio engine did not answer within {} s",
+        SAVE_COLLECT_TIMEOUT.as_secs()
+    );
+    Some(fail_collected_save(r, save, reason))
+}
+
+/// One more autosave miss: logged every time, shown once
+/// [`crate::state::AUTOSAVE_FAILURES_BEFORE_INDICATOR`] land in a row
+/// (code review UX-13).
+fn note_autosave_failure(r: &mut Resonance, reason: String) {
+    tracing::warn!("Autosave failed: {reason}");
+    r.banners.note_autosave_failure(reason);
 }
 
 /// Start the manual save that [`begin_save`] queued behind an in-flight

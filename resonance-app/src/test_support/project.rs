@@ -51,6 +51,38 @@ impl Resonance {
         self.io.save_state.as_ref().map(|s| (s.path.clone(), s.autosave))
     }
 
+    /// Test-only: pretend the collecting save started `age` ago, for the
+    /// save watchdog (code review STATE2-02).
+    #[doc(hidden)]
+    pub fn test_age_save_in_flight(&mut self, age: std::time::Duration) {
+        if let Some(save) = self.io.save_state.as_mut() {
+            save.started = std::time::Instant::now()
+                .checked_sub(age)
+                .expect("age fits the monotonic clock");
+        }
+    }
+
+    /// Test-only: the persistent "Autosave failing" line, when shown
+    /// (code review UX-13).
+    #[doc(hidden)]
+    pub fn test_autosave_failing(&self) -> Option<String> {
+        self.banners.autosave_failing()
+    }
+
+    /// Test-only: the persistent engine-health status line, when the
+    /// engine is unhealthy (code review UX-04).
+    #[doc(hidden)]
+    pub fn test_engine_status(&self) -> Option<&'static str> {
+        self.banners.engine_health.message()
+    }
+
+    /// Test-only: set the engine health the tick would poll, without
+    /// reading the process-wide disconnect latch (for golden images).
+    #[doc(hidden)]
+    pub fn test_set_engine_health(&mut self, health: state::EngineHealth) {
+        self.banners.engine_health = health;
+    }
+
     /// Test-only: the open autosave-recovery prompt, if any (FU-M12a).
     #[doc(hidden)]
     pub fn test_recovery_prompt(&self) -> Option<&state::RecoveryPrompt> {

@@ -145,6 +145,8 @@ mod editor_key_focus;
 mod load_scroll_reset;
 #[path = "timeline/timeline_key_grant.rs"]
 mod timeline_key_grant;
+#[path = "timeline/status_area_keeps_widget_state.rs"]
+mod status_area_keeps_widget_state;
 #[path = "timeline/vertical_scrollbar_visible.rs"]
 mod vertical_scrollbar_visible;
 #[path = "timeline/vertical_scroll_clamp.rs"]

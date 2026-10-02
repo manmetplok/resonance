@@ -258,21 +258,27 @@ fn engine_latch_guard() -> std::sync::MutexGuard<'static, ()> {
     guard
 }
 
+/// The status line as the view renders it: the status must be on screen,
+/// not just in state.
+fn rendered(app: &Resonance, status: &str) -> bool {
+    iced_test::simulator(app.view()).find(status).is_ok()
+}
+
 /// Once the engine's command channel disconnects, every `let _ =
 /// r.engine.send(...)` call site in the app (there are dozens) silently
 /// drops its command — including MCP-driven edits that still ack success
-/// back to the caller. The tick handler must surface that once, as the
-/// standard persistent error banner, and never clear it again on its own.
+/// back to the caller. The tick handler must surface that as a persistent
+/// status that never clears on its own.
 #[test]
-fn disconnected_engine_sets_banner_on_next_tick_and_it_persists() {
+fn disconnected_engine_sets_status_on_next_tick_and_it_persists() {
     // Serialize against the stream-lost tests and reset the process-wide
     // latch so this test doesn't depend on prior test ordering.
     let _guard = engine_latch_guard();
 
     let (mut app, _task) = Resonance::new_for_test_disconnected();
     assert!(
-        app.test_error_message().is_none(),
-        "no banner before any send has ever failed"
+        app.test_engine_status().is_none(),
+        "no status before any send has ever failed"
     );
 
     // Trip the latch the way a real dead engine would: any send fails
@@ -280,112 +286,130 @@ fn disconnected_engine_sets_banner_on_next_tick_and_it_persists() {
     let _ = app.engine.send(AudioCommand::Play);
 
     app.test_update(Message::Tick);
-    let banner = app
-        .test_error_message()
-        .expect("Tick must surface the engine-disconnected banner")
-        .to_string();
+    let status = app
+        .test_engine_status()
+        .expect("Tick must surface the engine-disconnected status");
     assert!(
-        banner.contains("engine stopped responding"),
-        "banner should name the failure, got {banner:?}"
+        status.contains("engine stopped responding"),
+        "status should name the failure, got {status:?}"
     );
+    assert!(app.test_error_message().is_none(), "a status, not the error banner");
 
     // Persists: further idle ticks must not clear or overwrite it.
     for _ in 0..5 {
         app.test_update(Message::Tick);
     }
-    assert_eq!(
-        app.test_error_message(),
-        Some(banner.as_str()),
-        "the banner must persist across subsequent ticks"
-    );
+    assert_eq!(app.test_engine_status(), Some(status));
 }
 
-// -- Output-stream-lost banner ----------------------------------------------
+/// Code review UX-04: the engine dies, then a transient error (a bounce
+/// failure) lands on the error banner and the user dismisses it. The
+/// engine status must still be rendered throughout — before, the error
+/// overwrote the single banner slot and a once-only latch kept the
+/// engine-death text from ever coming back.
+#[test]
+fn engine_death_stays_rendered_through_a_later_error() {
+    let _guard = engine_latch_guard();
+
+    let (mut app, _task) = Resonance::new_for_test_disconnected();
+    let _ = app.engine.send(AudioCommand::Play);
+    app.test_update(Message::Tick);
+    let status = app.test_engine_status().expect("engine death surfaced");
+    assert!(rendered(&app, status));
+
+    app.test_handle_engine_event(AudioEvent::Error(EngineError::internal(
+        "Bounce failed: render error",
+    )));
+    app.test_update(Message::Tick);
+    assert_eq!(app.test_error_message(), Some("Bounce failed: render error"));
+    assert!(rendered(&app, status), "the error must not displace the status");
+    assert!(rendered(&app, "Bounce failed: render error"), "both are shown");
+
+    app.test_update(Message::Ui(resonance_app::message::UiMessage::DismissError));
+    app.test_update(Message::Tick);
+    assert!(app.test_error_message().is_none());
+    assert!(rendered(&app, status), "dismissing the error leaves the status");
+}
+
+// -- Output-stream-lost status -----------------------------------------------
 
 /// When the output *stream* dies (USB interface unplugged, PipeWire
 /// restarted) the engine thread stays alive, so the engine-death check
 /// never fires — the transport appears to run and edits still ack while
 /// nothing is audible. The tick handler must poll the backends'
-/// stream-lost flag into the same persistent banner, and — unlike engine
+/// stream-lost flag into the persistent status, and — unlike engine
 /// death — clear it again when the backend reports the stream back.
 #[test]
-fn lost_output_stream_raises_banner_and_recovery_clears_it() {
+fn lost_output_stream_raises_status_and_recovery_clears_it() {
     // The engine-death check runs before the stream check and reads a
     // process-wide latch; hold the lock so the test that trips it can't
-    // bleed a death banner into this app mid-test.
+    // bleed a death status into this app mid-test.
     let _guard = engine_latch_guard();
 
     let (mut app, _task) = Resonance::new_for_test();
     app.test_update(Message::Tick);
     assert!(
-        app.test_error_message().is_none(),
-        "no banner while the stream is healthy"
+        app.test_engine_status().is_none(),
+        "no status while the stream is healthy"
     );
 
     // The backend callback's job, done by hand: flag the stream lost.
     app.engine.__set_output_stream_lost_for_test(true);
     app.test_update(Message::Tick);
-    let banner = app
-        .test_error_message()
-        .expect("Tick must surface the stream-lost banner")
-        .to_string();
+    let status = app
+        .test_engine_status()
+        .expect("Tick must surface the stream-lost status");
     assert!(
-        banner.contains("output stream lost"),
-        "banner should name the failure, got {banner:?}"
+        status.contains("output stream lost"),
+        "status should name the failure, got {status:?}"
     );
     assert!(
-        !banner.contains("engine stopped responding"),
-        "stream loss must be worded distinctly from engine death, got {banner:?}"
+        !status.contains("engine stopped responding"),
+        "stream loss must be worded distinctly from engine death, got {status:?}"
     );
+    assert!(rendered(&app, status));
 
     // Persists while the stream stays lost.
     for _ in 0..5 {
         app.test_update(Message::Tick);
     }
-    assert_eq!(
-        app.test_error_message(),
-        Some(banner.as_str()),
-        "the banner must persist while the stream is still lost"
-    );
+    assert_eq!(app.test_engine_status(), Some(status));
 
-    // PipeWire revived the stream (Streaming after Error): banner clears.
+    // PipeWire revived the stream (Streaming after Error): status clears.
     app.engine.__set_output_stream_lost_for_test(false);
     app.test_update(Message::Tick);
     assert!(
-        app.test_error_message().is_none(),
-        "recovery must clear the stream-lost banner"
+        app.test_engine_status().is_none(),
+        "recovery must clear the stream-lost status"
     );
 
-    // A second loss re-raises: the app-side flag is a raise tracker, not
-    // a one-shot latch like the engine-death one.
+    // A second loss re-raises it.
     app.engine.__set_output_stream_lost_for_test(true);
     app.test_update(Message::Tick);
-    assert_eq!(
-        app.test_error_message(),
-        Some(banner.as_str()),
-        "a later loss must raise the banner again"
-    );
+    assert_eq!(app.test_engine_status(), Some(status), "a later loss raises it again");
 }
 
-/// Recovery must clear only the banner this check raised: an unrelated
-/// error that landed on `error_message` while the stream was down (the
-/// app has one error surface) must be left standing.
+/// The status and the error banner are separate slots: an unrelated
+/// error that lands while the stream is down survives the recovery, and
+/// the status survives the error.
 #[test]
-fn stream_recovery_leaves_an_unrelated_error_banner_standing() {
+fn stream_status_and_an_unrelated_error_are_independent() {
     let _guard = engine_latch_guard();
 
     let (mut app, _task) = Resonance::new_for_test();
 
     app.engine.__set_output_stream_lost_for_test(true);
     app.test_update(Message::Tick);
-    assert!(app.test_error_message().is_some(), "loss raises the banner");
+    assert!(app.test_engine_status().is_some(), "loss raises the status");
 
-    // An unrelated engine error overwrites the single error surface.
     app.test_handle_engine_event(AudioEvent::Error(EngineError::internal("disk full")));
     assert_eq!(app.test_error_message(), Some("disk full"));
+    app.test_update(Message::Tick);
+    assert!(app.test_engine_status().is_some(), "the error does not displace the status");
 
     app.engine.__set_output_stream_lost_for_test(false);
     app.test_update(Message::Tick);
+    assert!(app.test_engine_status().is_none());
     assert_eq!(
         app.test_error_message(),
         Some("disk full"),

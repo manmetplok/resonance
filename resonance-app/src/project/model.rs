@@ -1021,6 +1021,14 @@ pub struct SaveCollector {
     /// [`AUTOSAVE_JSON`], leave `dirty` set, skip the recents list and
     /// versioned backups, and update `last_autosave_at` on completion.
     pub autosave: bool,
+    /// Why the engine could not write the clips (`AudioEvent::
+    /// ClipsSaveFailed`): set together with `clips_done`, and the save
+    /// then fails instead of writing `project.json` (code review
+    /// STATE2-02).
+    pub clips_error: Option<String>,
+    /// When the engine round-trip started: the tick's watchdog abandons a
+    /// collector the engine never answers (STATE2-02).
+    pub started: std::time::Instant,
 }
 
 /// Persisted form of [`crate::chord_track::ChordTrack`]: the chord regions

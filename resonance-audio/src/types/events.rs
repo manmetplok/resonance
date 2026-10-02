@@ -835,6 +835,15 @@ pub enum AudioEvent {
     ClipsSavedToProjectDir {
         clip_files: Vec<(ClipId, String)>,
     },
+    /// Response to `SaveClipsToProjectDir` when a clip could not be
+    /// written (no project directory, a failed copy or transcode — e.g. a
+    /// full disk). Sent *instead of* [`Self::ClipsSavedToProjectDir`], so
+    /// the command is always answered exactly once and the app's save
+    /// collector can fail the save rather than wait forever (code review
+    /// STATE2-02). `error` is the user-facing reason.
+    ClipsSaveFailed {
+        error: String,
+    },
     /// All plugin states saved in batch.
     AllPluginStatesSaved {
         states: Vec<(PluginInstanceId, Vec<u8>)>,

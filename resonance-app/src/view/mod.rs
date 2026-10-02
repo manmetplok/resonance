@@ -130,38 +130,39 @@ impl crate::Resonance {
             ViewMode::Performance => self.view_performance_shell(),
         };
 
-        let content: Element<'_, Message> = if let Some(ref err) = self.banners.error_message {
-            let error_bar = container(
-                row![
-                    text(err).size(13).color(iced::Color::WHITE),
-                    Space::new().width(Length::Fill),
-                    button(text("\u{00d7}").size(14).color(iced::Color::WHITE))
-                        .on_press(Message::Ui(UiMessage::DismissError))
-                        .style(|_theme, _status| iced::widget::button::Style {
-                            background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
-                            text_color: iced::Color::WHITE,
-                            ..Default::default()
-                        })
-                ]
-                .spacing(8)
-                .align_y(alignment::Vertical::Center)
-                .padding(8),
-            )
-            .width(Length::Fill)
-            .style(|_theme| container::Style {
-                background: Some(iced::Background::Color(theme::RECORD_RED)),
-                ..Default::default()
-            });
-            column![transport, error_bar, main_area].spacing(0).into()
-        } else {
-            column![transport, main_area].spacing(0).into()
-        };
+        // The status area is always a child, empty or not: a slot that
+        // came and went moved `main_area` between child indices, and iced
+        // then rebuilt its whole widget tree — every scroll offset, canvas
+        // key focus and in-progress drag lost to a failed preset star
+        // (code review UX-05).
+        let content: Element<'_, Message> =
+            column![transport, self.view_status_area(), main_area].spacing(0).into();
 
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
             .style(theme::base_bg)
             .into()
+    }
+
+    /// The status lines between the transport and the main area, worst
+    /// first: the engine's health (UX-04), a run of autosave failures
+    /// (UX-13), then the transient error banner. The first two are
+    /// statuses — derived from state, cleared when the condition clears,
+    /// never overwritten by an error — so only the banner has a dismiss
+    /// button. Renders as a zero-height column when all is well.
+    fn view_status_area(&self) -> Element<'_, Message> {
+        let mut lines = column![].spacing(0).width(Length::Fill);
+        if let Some(status) = self.banners.engine_health.message() {
+            lines = lines.push(status_line("AUDIO", status, theme::BAD, theme::BAD_DIM));
+        }
+        if let Some(status) = self.banners.autosave_failing() {
+            lines = lines.push(status_line("AUTOSAVE", status, theme::WARM, theme::WARM_DIM));
+        }
+        if let Some(ref err) = self.banners.error_message {
+            lines = lines.push(error_bar(err));
+        }
+        lines.into()
     }
 
     /// The one window-root overlay, chosen by [`Resonance::root_overlay`] —
@@ -292,4 +293,62 @@ impl crate::Resonance {
             base
         }
     }
+}
+
+/// One persistent status line: a tag chip and the status text, on a
+/// tinted band. No dismiss button — it clears when the condition does.
+fn status_line<'a>(
+    tag: &'static str,
+    status: impl text::IntoFragment<'a>,
+    tone: iced::Color,
+    wash: iced::Color,
+) -> Element<'a, Message> {
+    let chip = container(text(tag).size(11).color(tone))
+        .padding([1, 6])
+        .style(move |_theme| container::Style {
+            border: iced::Border {
+                color: tone,
+                width: 1.0,
+                radius: 3.0.into(),
+            },
+            ..Default::default()
+        });
+    container(
+        row![chip, text(status).size(13).color(theme::TEXT)]
+            .spacing(8)
+            .align_y(alignment::Vertical::Center)
+            .padding([6, 8]),
+    )
+    .width(Length::Fill)
+    .style(move |_theme| container::Style {
+        background: Some(iced::Background::Color(wash)),
+        ..Default::default()
+    })
+    .into()
+}
+
+/// The transient, dismissable error banner.
+fn error_bar(err: &str) -> Element<'_, Message> {
+    container(
+        row![
+            text(err).size(13).color(iced::Color::WHITE),
+            Space::new().width(Length::Fill),
+            button(text("\u{00d7}").size(14).color(iced::Color::WHITE))
+                .on_press(Message::Ui(UiMessage::DismissError))
+                .style(|_theme, _status| iced::widget::button::Style {
+                    background: Some(iced::Background::Color(iced::Color::TRANSPARENT)),
+                    text_color: iced::Color::WHITE,
+                    ..Default::default()
+                })
+        ]
+        .spacing(8)
+        .align_y(alignment::Vertical::Center)
+        .padding(8),
+    )
+    .width(Length::Fill)
+    .style(|_theme| container::Style {
+        background: Some(iced::Background::Color(theme::RECORD_RED)),
+        ..Default::default()
+    })
+    .into()
 }
