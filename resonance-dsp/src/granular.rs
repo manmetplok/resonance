@@ -32,7 +32,7 @@
 //! smoothing).
 
 use crate::interp::{
-    read_bspline6_wrapped, read_hermite_wrapped, read_linear_wrapped, BandlimitedReader,
+    read_hermite_wrapped, read_lagrange6_wrapped, read_linear_wrapped, BandlimitedReader,
 };
 use crate::pan::constant_power_pan;
 use crate::rng::SimpleRng;
@@ -105,10 +105,11 @@ pub enum InterpQuality {
     /// compromise; the Normal tier.
     #[default]
     Hermite4,
-    /// 6-point, 5th-order B-spline: best-in-class image rejection of
-    /// the polynomial family (Niemitalo deip.pdf); the HQ tier. See
-    /// [`crate::interp::bspline6`] for the full justification.
-    Bspline6,
+    /// 6-point, 5th-order Lagrange: interpolating, flatter than
+    /// Hermite in the passband and with lower images; the HQ tier. It
+    /// replaced the quintic B-spline, which dulled HQ (DSP2-02) — see
+    /// [`crate::interp::read_lagrange6_wrapped`].
+    Lagrange6,
 }
 
 /// Grain-onset scheduling mode (doc #252 §2).
@@ -589,7 +590,7 @@ impl GrainEngine {
                     match grain.interp {
                         InterpQuality::Linear => read_linear_wrapped(source, grain.read_pos),
                         InterpQuality::Hermite4 => read_hermite_wrapped(source, grain.read_pos),
-                        InterpQuality::Bspline6 => read_bspline6_wrapped(source, grain.read_pos),
+                        InterpQuality::Lagrange6 => read_lagrange6_wrapped(source, grain.read_pos),
                     }
                 };
                 if grain.lofi {

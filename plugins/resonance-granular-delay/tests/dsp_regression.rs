@@ -402,7 +402,7 @@ fn scenarios() -> Vec<Scenario> {
             edit: None,
         },
         // 12. Quality tiers cycled: linear/µ-law/reduced pool, Hermite,
-        //     and the B-spline + anti-alias tier, all with a transpose so
+        //     and the Lagrange + anti-alias tier, all with a transpose so
         //     the resampling kernels actually differ.
         Scenario {
             name: "quality_tiers",

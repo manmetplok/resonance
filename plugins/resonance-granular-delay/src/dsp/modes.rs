@@ -36,8 +36,8 @@ pub enum QualityTier {
     /// behaviour, bit-identical.
     #[default]
     Normal,
-    /// 6-point B-spline reads (best polynomial image rejection, see
-    /// `resonance_dsp::bspline6`) plus the rate-tracked per-grain
+    /// 6-point Lagrange reads (interpolating, flatter and cleaner than
+    /// Hermite, see `resonance_dsp::read_lagrange6_wrapped`) plus the rate-tracked per-grain
     /// anti-alias lowpass forced on for upward transposition.
     Hq,
 }

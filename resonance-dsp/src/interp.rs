@@ -6,8 +6,12 @@
 //! interpolation — the standard sampler compromise between cost and image
 //! rejection (research doc #252 §3). The quality tiers (ba todo #1083)
 //! add the two ends of the trade-off: 2-point linear for the Lo-fi tier
-//! and a 6-point, 5th-order B-spline for HQ. All functions are pure,
-//! allocation-free and lock-free, safe for per-sample audio-thread use.
+//! and a 6-point, 5th-order Lagrange for HQ. (HQ was a quintic B-spline
+//! until DSP2-02: an approximating kernel, it lost 3.8 dB at 10 kHz and
+//! 10 dB at 16 kHz at 48 kHz, and the loss compounded on every
+//! recirculation. [`bspline6`] stays for callers that prefilter.) All
+//! functions are pure, allocation-free and lock-free, safe for
+//! per-sample audio-thread use.
 
 /// 4-point cubic Hermite (Catmull-Rom) interpolation.
 ///
@@ -61,20 +65,26 @@ pub fn lagrange6(xm2: f32, xm1: f32, x0: f32, x1: f32, x2: f32, x3: f32, frac: f
 ///
 /// Evaluates the quintic uniform B-spline through the six neighbours
 /// `xm2..x3` at `frac` (`0` = at `x0`, `1` = at `x1`). Chosen for the
-/// HQ tier over 2× oversampled Hermite reads because it needs no extra
-/// buffer or resampling pass and, per Niemitalo's "Polynomial
+/// HQ tier (until DSP2-02, see below) over 2× oversampled Hermite reads
+/// because it needs no extra buffer or resampling pass and, per Niemitalo's "Polynomial
 /// Interpolators for High-Quality Resampling of Oversampled Audio"
 /// (deip.pdf; doc #252 §3), the B-spline family has by far the best
 /// stopband (image rejection) of the equal-cost polynomial
 /// interpolators — exactly what transposed grain reads need, since the
 /// audible artifact of resampling is the folded image energy. The
-/// trade-off is mild passband droop (it is an approximating, not an
-/// interpolating, kernel), inaudible on grain clouds and much cheaper
-/// than the windowed-sinc alternative.
+/// trade-off is passband droop: it is an approximating, not an
+/// interpolating, kernel.
 ///
 /// The kernel is a partition of unity and reproduces constants and
 /// linear ramps exactly (quintic B-splines reproduce degree-1
 /// polynomials); both properties are locked in by tests.
+///
+/// **Not for unprefiltered reads.** The "mild" droop is not mild at
+/// audio rates: at `frac = 0` the kernel is the FIR `[1,26,66,26,1]/120`,
+/// −0.9 dB at 5 kHz, −3.8 dB at 10 kHz and −10 dB at 16 kHz at 48 kHz
+/// (DSP2-02). The granular HQ tier therefore reads with
+/// [`read_lagrange6_wrapped`]; use this kernel only on a signal run
+/// through the B-spline prefilter first.
 #[inline]
 pub fn bspline6(xm2: f32, xm1: f32, x0: f32, x1: f32, x2: f32, x3: f32, frac: f32) -> f32 {
     // Blending functions of the uniform quintic B-spline in Horner
@@ -140,6 +150,39 @@ pub fn read_bspline6_wrapped(buffer: &[f32], index: f64) -> f32 {
     let x2 = buffer[((i0 + 2) & mask) as usize];
     let x3 = buffer[((i0 + 3) & mask) as usize];
     bspline6(xm2, xm1, x0, x1, x2, x3, frac)
+}
+
+/// Read a power-of-two circular buffer at a fractional `index` using
+/// [`lagrange6`] — the granular HQ tier's read (DSP2-02).
+///
+/// An interpolating kernel: exact at integer positions, and flatter
+/// than [`hermite4`] across the band (at 48 kHz, worst case `frac = ½`:
+/// −0.16 dB at 10 kHz and −2.0 dB at 16 kHz, against Hermite's −0.5 and
+/// −3.3 dB), with images 10-20 dB lower on dense content.
+///
+/// Same wrapping contract as [`read_hermite_wrapped`].
+///
+/// # Panics
+/// Panics if `buffer.len()` is not a power of two or is smaller than 8
+/// (the kernel spans six samples).
+#[inline]
+pub fn read_lagrange6_wrapped(buffer: &[f32], index: f64) -> f32 {
+    let len = buffer.len();
+    assert!(
+        len >= 8 && len.is_power_of_two(),
+        "buffer length must be a power of two >= 8, got {len}"
+    );
+    let mask = (len - 1) as i64;
+    let i0 = index.floor();
+    let frac = (index - i0) as f32;
+    let i0 = i0 as i64;
+    let xm2 = buffer[((i0 - 2) & mask) as usize];
+    let xm1 = buffer[((i0 - 1) & mask) as usize];
+    let x0 = buffer[(i0 & mask) as usize];
+    let x1 = buffer[((i0 + 1) & mask) as usize];
+    let x2 = buffer[((i0 + 2) & mask) as usize];
+    let x3 = buffer[((i0 + 3) & mask) as usize];
+    lagrange6(xm2, xm1, x0, x1, x2, x3, frac)
 }
 
 /// Read a power-of-two circular buffer at a fractional `index` using
