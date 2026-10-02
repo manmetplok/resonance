@@ -154,6 +154,7 @@ pub const METHODS: &[&str] = &[
 /// usually the only address a single kit piece has.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetSidechainParams {
     /// The track hosting the plugin whose key is being routed.
     pub track_id: TrackId,
@@ -184,6 +185,7 @@ fn default_true() -> bool {
 /// Params for `track.clear_sidechain`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ClearSidechainParams {
     pub track_id: TrackId,
     /// Omitted targets the same plugin `track.set_sidechain` would: the
@@ -197,6 +199,7 @@ pub struct ClearSidechainParams {
 /// Params for `track.add`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddParams {
     pub kind: TrackKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,6 +217,7 @@ pub struct AddResult {
 /// Params for `track.rename`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RenameParams {
     pub track_id: TrackId,
     pub name: String,
@@ -222,6 +226,7 @@ pub struct RenameParams {
 /// Params for `track.set_color`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetColorParams {
     pub track_id: TrackId,
     /// `"#rrggbb"` (the `#` is optional; hex digits in either case).
@@ -248,6 +253,7 @@ pub fn format_hex_color(c: [u8; 3]) -> String {
 /// Params for `track.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeleteParams {
     pub track_id: TrackId,
     /// Required (`true`); the error otherwise summarizes what would be lost.
@@ -258,6 +264,7 @@ pub struct DeleteParams {
 /// Params for `track.add_instrument` / `track.add_effect`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddPluginParams {
     pub track_id: TrackId,
     /// Stable plugin id from `plugins.catalog`, e.g.
@@ -327,6 +334,7 @@ pub enum PluginKind {
 /// same plugin twice disambiguates with `occurrence`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PluginParamsParams {
     pub track_id: TrackId,
     /// CLAP id of the plugin on this track, e.g.
@@ -425,6 +433,7 @@ pub enum PluginSlotStatus {
 /// same [`TrackOutput`] shape, so a read and a write use one vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetOutputParams {
     pub track_id: TrackId,
     /// `"master"` to sum directly into the master output, or
@@ -450,6 +459,7 @@ pub const SEND_LEVEL_DB_MAX: f32 = 24.0;
 /// different building and costs far more CPU.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddSendParams {
     pub track_id: TrackId,
     /// The destination bus (from `bus.create`, or a `kind: "bus"` entry
@@ -480,6 +490,7 @@ pub struct AddSendResult {
 /// existing send. Omitted fields keep their current value.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetSendParams {
     pub send_id: SendId,
     /// New send gain in dB.
@@ -499,6 +510,7 @@ pub struct SetSendParams {
 /// Params for `track.remove_send`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveSendParams {
     pub send_id: SendId,
 }
@@ -513,6 +525,7 @@ pub struct RemoveSendParams {
 /// `track.add_instrument` instead.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveEffectParams {
     pub track_id: TrackId,
     /// 0-based chain position, as reported by
@@ -540,6 +553,7 @@ pub struct RemoveEffectParams {
 /// it was there to hold.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MoveEffectParams {
     pub track_id: TrackId,
     /// 0-based chain position of the effect to move, as reported by
@@ -581,6 +595,7 @@ pub struct MoveEffectParams {
 /// with a sound source instead of none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ReplaceEffectParams {
     pub track_id: TrackId,
     /// 0-based chain position of the plugin to replace, as reported by
@@ -834,6 +849,7 @@ impl std::fmt::Display for ParamValueError {
 /// Params for `track.set_plugin_param`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPluginParamParams {
     pub track_id: TrackId,
     /// CLAP id of the plugin to address; omitted targets the track's
@@ -881,6 +897,7 @@ pub struct SetPluginParamParams {
 /// The plugin is addressed exactly as `track.plugin_params` addresses it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PluginPresetsParams {
     pub track_id: TrackId,
     /// CLAP id of the plugin on this track; omitted targets the track's
@@ -900,6 +917,7 @@ pub struct PluginPresetsParams {
 /// Params for `track.load_plugin_preset`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LoadPluginPresetParams {
     pub track_id: TrackId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -926,6 +944,7 @@ pub struct LoadPluginPresetParams {
 /// Params for `track.save_plugin_preset`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SavePluginPresetParams {
     pub track_id: TrackId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -969,6 +988,7 @@ pub struct SavePluginPresetParams {
 /// Params for `track.save_preset`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SavePresetParams {
     /// The track to capture, exactly as it stands.
     pub track_id: TrackId,
@@ -1018,6 +1038,7 @@ pub struct PresetView {
 /// back in [`AddResult`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ApplyPresetParams {
     /// A name from `track.presets`, matched case-insensitively.
     pub preset: String,
@@ -1032,6 +1053,7 @@ pub struct ApplyPresetParams {
 /// flip the track's processing back on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetFxBypassParams {
     pub track_id: TrackId,
     /// `true` bypasses every insert on this track (it passes through
@@ -1053,6 +1075,7 @@ pub struct SetFxBypassParams {
 /// request cannot flip a slot back on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPluginBypassParams {
     pub track_id: TrackId,
     /// CLAP id of the plugin in this chain; omitted targets the track's instrument.

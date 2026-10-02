@@ -27,6 +27,7 @@ pub const VOLUME_DB_MAX: f32 = 6.0;
 /// Params for `mixer.set_volume`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetVolumeParams {
     pub track_id: TrackId,
     /// Linear fader gain (1.0 = unity, 0.0 = silence).
@@ -43,6 +44,7 @@ pub struct SetVolumeParams {
 /// fader in dB anyway, so this form converts nothing at all.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetVolumeDbParams {
     pub track_id: TrackId,
     /// Fader level in decibels: `0` is unity (no change), negative
@@ -56,6 +58,7 @@ pub struct SetVolumeDbParams {
 /// Params for `mixer.set_pan`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPanParams {
     pub track_id: TrackId,
     /// Stereo pan in `-1.0..=1.0` (0 = center).
@@ -65,6 +68,7 @@ pub struct SetPanParams {
 /// Params for `mixer.set_mute`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMuteParams {
     pub track_id: TrackId,
     pub muted: bool,
@@ -73,6 +77,7 @@ pub struct SetMuteParams {
 /// Params for `mixer.set_solo`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetSoloParams {
     pub track_id: TrackId,
     pub soloed: bool,

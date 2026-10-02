@@ -595,7 +595,47 @@ pub(crate) fn mutation_gate_error(app: &Resonance, method: &str) -> Option<RpcEr
             "an offline render is in progress; retry when it finishes",
         ));
     }
+    // A GUI drag is open (code review STATE2-05): its pending snapshot
+    // is the pre-drag state, so an edit recorded now would be taken back
+    // by the user's next undo of the drag, and even a click that moved
+    // nothing would commit. Refuse edits until the gesture ends — it is a
+    // pointer drag, over in moments. Calls that only read the open
+    // project stay answerable, so an agent polling meters while the user
+    // drags is not turned away.
+    if app.session.undo.has_pending() && !reads_open_project_only(method) {
+        return Some(RpcError::busy(
+            "an edit gesture is still in progress in the app; retry once it finishes",
+        ));
+    }
     offline_render_busy_error(app)
+}
+
+/// Gated methods that need an open project but change nothing in it:
+/// they stay answerable while a GUI drag is open ([`mutation_gate_error`]).
+/// Anything not listed is treated as an edit, the safe default.
+fn reads_open_project_only(method: &str) -> bool {
+    use resonance_control::methods::{
+        automation, bus, edit, external, global, master, meter, pool, track,
+    };
+    meter::METHODS.contains(&method)
+        || [
+            automation::LANES,
+            bus::PLUGIN_PARAMS,
+            bus::PLUGIN_PRESETS,
+            edit::STATUS,
+            external::DEVICES,
+            external::STATUS,
+            global::LIST_EVENTS,
+            master::ASSIST,
+            master::PLUGIN_PARAMS,
+            master::PLUGIN_PRESETS,
+            master::SUMMARY,
+            pool::LIST,
+            track::PLUGIN_PARAMS,
+            track::PLUGIN_PRESETS,
+            track::PRESETS,
+        ]
+        .contains(&method)
 }
 
 /// `busy` while an offline bounce or a track freeze holds the offline

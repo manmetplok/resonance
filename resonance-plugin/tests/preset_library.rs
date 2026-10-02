@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use resonance_plugin::presets::migrate::{convert_legacy_dir, LEGACY_RETENTION, LEGACY_SUFFIX};
 use resonance_plugin::presets::{
     mark_key, FactoryEntry, FactoryPreset, MarksSource, PresetBank, PresetFile, PresetLibrary,
-    PresetMeta, PresetRef, PresetSource, Query, SaveOptions, Sort, TRASH_RETENTION,
+    PresetMeta, PresetRef, PresetSource, Query, SaveOptions, SaveRequest, Sort, TRASH_RETENTION,
 };
 use resonance_plugin::library_marks::{Marks, SharedMarks};
 use resonance_plugin::{FloatParam, FloatRange, Param};
@@ -831,4 +831,94 @@ fn an_opaque_state_round_trips_as_a_clap_state_preset() {
         .expect("export");
     let (imported, _) = bank.library().import(PLUGIN, &out, &[]).expect("import");
     assert_eq!(bank.blob_for(&imported.preset).as_deref(), Some(OPAQUE));
+}
+
+// ---------------------------------------------------------------------------
+// Plugin ids are names, never paths (code review STATE2-01)
+// ---------------------------------------------------------------------------
+
+/// A folder beside the library root, holding files that look like what
+/// the converter and the trash purge act on.
+fn outside_fixture(root: &TempRoot) -> PathBuf {
+    let name = root.0.file_name().unwrap().to_string_lossy().into_owned();
+    let outside = root.0.with_file_name(format!("{name}-outside"));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("01-a.flac"), b"audio").unwrap();
+    std::fs::write(outside.join("2024-08-invoice.pdf"), b"pdf").unwrap();
+    std::fs::write(outside.join("bad.json"), b"{not json").unwrap();
+    std::fs::write(outside.join("doc.json"), br#"{"params":{"mix":0.5}}"#).unwrap();
+    outside
+}
+
+#[test]
+fn a_plugin_id_that_is_a_path_never_touches_the_disk() {
+    let root = TempRoot::new("path-id");
+    std::fs::create_dir_all(&root.0).unwrap();
+    let outside = outside_fixture(&root);
+    let before = files_in(&outside);
+    // Far past any trash retention, so a purge that ran would delete.
+    let (_now, clock) = clock_at(4_000_000_000);
+    let library = Arc::new(
+        PresetLibrary::new()
+            .with_root(root.0.clone())
+            .with_clock(clock),
+    );
+    let sibling = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+    for id in [
+        outside.to_string_lossy().into_owned(),
+        sibling,
+        "..".to_string(),
+        ".".to_string(),
+        ".trash".to_string(),
+        "a/b".to_string(),
+        "a\\b".to_string(),
+        String::new(),
+    ] {
+        assert!(library.plugin_dir(&id).is_none(), "{id:?} has no directory");
+        assert!(library.trash_dir(&id).is_none(), "{id:?} has no trash");
+        assert!(library.records(&id, Duration::ZERO).is_empty(), "{id:?}");
+        assert_eq!(library.purge_trash(&id), 0, "{id:?}");
+        let request = SaveRequest {
+            name: "Evil".into(),
+            doc: serde_json::json!({}),
+            ..Default::default()
+        };
+        assert!(library.save(&id, request).is_err(), "{id:?} cannot be saved to");
+    }
+    library.wait_housekeeping();
+    assert_eq!(files_in(&outside), before, "nothing outside the root changed");
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn the_trash_purge_only_deletes_files_it_named() {
+    let root = TempRoot::new("purge-strict");
+    let (_now, clock) = clock_at(4_000_000_000);
+    let library = PresetLibrary::new()
+        .with_root(root.0.clone())
+        .with_clock(clock);
+    let trash = library.trash_dir(PLUGIN).unwrap();
+    std::fs::create_dir_all(&trash).unwrap();
+    for name in [
+        "01-Intro.flac",
+        "2024-08-invoice.pdf",
+        "1700000000-notes.txt",
+        "1700000000-.json",
+        "17000000000x-a.json",
+        "1700000000-Old Pad.json",
+    ] {
+        std::fs::write(trash.join(name), b"{}").unwrap();
+    }
+    assert_eq!(library.purge_trash(PLUGIN), 1);
+    assert_eq!(
+        files_in(&trash),
+        vec![
+            "01-Intro.flac",
+            "1700000000-.json",
+            "1700000000-notes.txt",
+            "17000000000x-a.json",
+            "2024-08-invoice.pdf",
+        ]
+    );
 }

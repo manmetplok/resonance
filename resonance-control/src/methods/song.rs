@@ -29,6 +29,7 @@ pub const METHODS: &[&str] = &[SUMMARY, SECTIONS, TRACKS, NOTES, VOCAL];
 /// Params for `song.tracks`; omit `track_id` for all tracks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct TracksParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,
@@ -37,6 +38,7 @@ pub struct TracksParams {
 /// Params for `song.notes`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct NotesParams {
     pub clip_id: ClipId,
     /// Restrict to notes overlapping this clip-relative beat range.
@@ -47,6 +49,7 @@ pub struct NotesParams {
 /// Params for `song.vocal`; omit `track_id` for the first vocal track.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct VocalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track_id: Option<TrackId>,

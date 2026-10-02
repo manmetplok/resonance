@@ -50,6 +50,7 @@ pub struct SongPosition {
 /// next bar and is refused.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PositionSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar: Option<u32>,
@@ -87,6 +88,7 @@ impl PositionSpec {
 /// note queries.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct BeatRange {
     pub start_beat: f64,
     pub end_beat: f64,

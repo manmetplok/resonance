@@ -84,6 +84,7 @@ pub struct PoolAssetView {
 /// Params for `pool.import`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ImportParams {
     /// Absolute paths to audio files on the machine running the app, at
     /// most [`MAX_IMPORT_FILES`]. A file already in the pool (same

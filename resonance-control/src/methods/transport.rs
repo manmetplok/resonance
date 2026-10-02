@@ -53,6 +53,7 @@ pub const METHODS: &[&str] = &[
 /// position, flattened into the params object.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SeekParams {
     #[serde(flatten)]
     pub position: PositionSpec,
@@ -61,6 +62,7 @@ pub struct SeekParams {
 /// Params for `transport.loop_set`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LoopSetParams {
     pub start: PositionSpec,
     pub end: PositionSpec,
@@ -72,6 +74,7 @@ pub struct LoopSetParams {
 /// Params for `transport.set_tempo`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetTempoParams {
     pub bpm: f64,
 }
@@ -79,6 +82,7 @@ pub struct SetTempoParams {
 /// Params for `transport.set_time_signature`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetTimeSignatureParams {
     pub numerator: u8,
     pub denominator: u8,
@@ -87,6 +91,7 @@ pub struct SetTimeSignatureParams {
 /// Params for `transport.set_key`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetKeyParams {
     /// Pitch name, e.g. `"A"`, `"F#"`.
     pub tonic: String,

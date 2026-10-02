@@ -951,17 +951,18 @@ fn a_midi_clip_is_refused_with_a_pointer_to_notes() {
         trim_end_ticks: 0,
     });
 
-    for method in ["clip.move", "clip.trim", "clip.delete", "clip.set_gain"] {
-        let response = call(
-            &mut app,
-            method,
-            serde_json::json!({
-                "clip_id": 500,
-                "start": { "bar": 2 },
-                "start_offset": { "samples": 10 },
-                "gain_db": 0.0,
-            }),
-        );
+    // Params refuse fields they do not take (ARCH2-06), so each method
+    // gets exactly its own.
+    for (method, params) in [
+        ("clip.move", serde_json::json!({ "clip_id": 500, "start": { "bar": 2 } })),
+        (
+            "clip.trim",
+            serde_json::json!({ "clip_id": 500, "start_offset": { "samples": 10 } }),
+        ),
+        ("clip.delete", serde_json::json!({ "clip_id": 500 })),
+        ("clip.set_gain", serde_json::json!({ "clip_id": 500, "gain_db": 0.0 })),
+    ] {
+        let response = call(&mut app, method, params);
         let message = expect_error(response, ErrorKind::NotFound);
         assert!(message.contains("MIDI clip"), "{method}: {message}");
         assert!(message.contains("notes"), "{method}: {message}");

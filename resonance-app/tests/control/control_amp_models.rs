@@ -137,7 +137,17 @@ fn a_model_added_after_the_first_list_shows_up_in_the_next() {
         roots.models.unwrap().join("tone3000/d_new.nam"),
     )
     .unwrap();
-    let again = list(&mut app, serde_json::json!({}));
+    // The rescan that notices it runs off the update loop (code review
+    // STATE2-08): a list answers from the last index, so the new model
+    // shows up in a later one, not necessarily the very next.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let again = loop {
+        let again = list(&mut app, serde_json::json!({}));
+        if again.total == 4 || std::time::Instant::now() > deadline {
+            break again;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
     assert_eq!(again.total, 4);
     assert_eq!(again.models.last().unwrap().slot, Some(3), "appended, nothing else moved");
 }

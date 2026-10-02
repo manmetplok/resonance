@@ -72,6 +72,7 @@ pub const MAX_BEATS: f64 = 1_000_000.0;
 /// creates a clip long enough to hold the imported part.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ImportMidiParams {
     /// Absolute path to a `.mid` file on the machine running the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +131,7 @@ fn default_velocity() -> u8 {
 /// Params for `notes.insert`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct InsertParams {
     pub clip_id: ClipId,
     /// MIDI note number (60 = C4).
@@ -178,6 +180,7 @@ pub struct NoteSpec {
 /// one of each.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct InsertManyParams {
     pub clip_id: ClipId,
     /// At most [`MAX_BATCH_NOTES`] notes.
@@ -194,6 +197,7 @@ pub struct InsertManyParams {
 /// delete loop.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ReplaceAllParams {
     pub clip_id: ClipId,
     /// At most [`MAX_BATCH_NOTES`] notes.
@@ -218,6 +222,7 @@ pub struct InsertManyResult {
 /// Params for `notes.edit`; omitted fields stay unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct EditParams {
     pub clip_id: ClipId,
     pub index: usize,
@@ -234,6 +239,7 @@ pub struct EditParams {
 /// Params for `notes.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeleteParams {
     pub clip_id: ClipId,
     pub index: usize,
@@ -243,6 +249,7 @@ pub struct DeleteParams {
 /// section placement (`placement_id`) or at an explicit `start_bar`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct CreateClipParams {
     pub track_id: TrackId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,6 +281,7 @@ pub struct CreateClipResult {
 /// notes are unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MoveClipParams {
     pub clip_id: ClipId,
     /// 1-based target bar.

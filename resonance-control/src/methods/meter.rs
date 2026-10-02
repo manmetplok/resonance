@@ -150,6 +150,7 @@ pub enum MeasureDetail {
 /// the whole song's master mix, rendered offline.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MeasureParams {
     /// Defaults to `"master"`. `{"reference": N}` measures a loaded
     /// reference track.
@@ -527,6 +528,7 @@ pub struct MeasureResult {
 /// Params for `meter.stems`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct StemsParams {
     /// Defaults to the whole song. Every entry is measured over this ONE
     /// range, which is what makes the numbers directly comparable.
@@ -605,6 +607,7 @@ pub struct StemsResult {
 /// compared against another.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SnapshotParams {
     /// Defaults to `"master"`.
     #[serde(default)]
@@ -683,6 +686,7 @@ pub enum MatchMode {
 /// Params for `meter.compare`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct CompareParams {
     /// Only needed when both sides are `"current"`; a snapshot side
     /// carries its own target, and a `"current"` side renders that same
@@ -876,6 +880,7 @@ fn default_probe_level_dbfs() -> f64 {
 /// Params for `meter.probe`: which insert chain, and the stimulus.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ProbeParams {
     /// Whose insert chain: `"master"` (default), `{track_id}` or
     /// `{bus_id}`. A track's instrument is not part of it.

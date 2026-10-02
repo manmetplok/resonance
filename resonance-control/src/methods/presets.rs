@@ -47,6 +47,7 @@ pub const METHODS: &[&str] = &[SET_MARKS, UPDATE_META, VOCABULARY, SEARCH, RENAM
 /// Params for `presets.search`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SearchParams {
     /// Only this plugin's presets (its CLAP id); omitted searches every
     /// plugin the app knows.
@@ -80,6 +81,7 @@ pub struct SearchResult {
 /// Params for `presets.rename`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RenameParams {
     pub plugin_id: String,
     pub preset_id: String,
@@ -89,6 +91,7 @@ pub struct RenameParams {
 /// Params for `presets.delete`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeleteParams {
     pub plugin_id: String,
     pub preset_id: String,
@@ -108,6 +111,7 @@ pub struct DeleteResult {
 /// Params for `presets.set_marks`. At least one of `favorite` / `tags`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMarksParams {
     /// CLAP id of the plugin the preset belongs to.
     pub plugin_id: String,
@@ -124,6 +128,7 @@ pub struct SetMarksParams {
 /// Params for `presets.update_meta`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct UpdateMetaParams {
     pub plugin_id: String,
     pub preset_id: String,
@@ -149,6 +154,7 @@ pub struct EntryResult {
 /// Params for `presets.vocabulary` (none).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct VocabularyParams {}
 
 /// The metadata vocabulary: seeded values first, then values in use.

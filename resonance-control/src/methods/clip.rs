@@ -158,6 +158,7 @@ pub enum FadeShape {
 /// importing the file a second time.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PlaceParams {
     /// The track to place on. Audio tracks and EXTERNAL-INSTRUMENT
     /// tracks both take audio clips — an external track's sound is
@@ -200,6 +201,7 @@ pub struct PlaceResult {
 /// Params for `clip.move`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MoveParams {
     pub clip_id: ClipId,
     /// The clip's new start.
@@ -221,6 +223,7 @@ pub struct MoveParams {
 /// "end_offset": {"seconds": 2.0}}` shortens the tail and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct TrimParams {
     pub clip_id: ClipId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -252,6 +255,7 @@ pub struct TrimResult {
 /// Params for `clip.split`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SplitParams {
     pub clip_id: ClipId,
     /// Where to cut, as a timeline position (not an offset into the
@@ -278,6 +282,7 @@ pub struct SplitResult {
 /// Params for `clip.delete`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct DeleteParams {
     pub clip_id: ClipId,
     /// Required (`true`); the error otherwise summarizes what would be lost.
@@ -288,6 +293,7 @@ pub struct DeleteParams {
 /// Params for `clip.set_gain`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetGainParams {
     pub clip_id: ClipId,
     /// Per-clip gain in decibels; `0.0` is unity. Clamped to at most
@@ -300,6 +306,7 @@ pub struct SetGainParams {
 /// `invalid_params`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetFadeParams {
     pub clip_id: ClipId,
     /// Fade-in length. Clamped to the clip's audible length.

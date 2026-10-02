@@ -131,6 +131,7 @@ pub struct MasterPluginEntry {
 /// master fader ends up 20 dB off.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetMasterVolumeParams {
     /// Linear gain (1.0 = unity, 0.0 = silence).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,6 +147,7 @@ pub struct SetMasterVolumeParams {
 /// instances on the master.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddEffectParams {
     /// The effect's stable CLAP id, e.g. `"com.resonance.mastering"`.
     /// Instrument plugins are refused — the master chain processes an
@@ -166,6 +168,7 @@ pub struct AddEffectParams {
 /// whole mix.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveEffectParams {
     /// 0-based chain position, as reported by `master.summary`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,6 +193,7 @@ pub struct RemoveEffectParams {
 /// order is valid.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct MoveEffectParams {
     /// 0-based chain position of the effect to move.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -212,6 +216,7 @@ pub struct MoveEffectParams {
 /// with the same addressing and the same relocate-vs-swap rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ReplaceEffectParams {
     /// 0-based chain position of the plugin to replace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -232,6 +237,7 @@ pub struct ReplaceEffectParams {
 /// value cannot flip it the wrong way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetFxBypassParams {
     /// `true` bypasses every plugin on the master chain (the mix passes
     /// through unprocessed); `false` re-engages them.
@@ -253,6 +259,7 @@ pub struct SetFxBypassParams {
 /// `bus.plugin_params` reads a bus's.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PluginParamsParams {
     /// CLAP id of a plugin on the master. Omitted returns every plugin
     /// on it.
@@ -285,6 +292,7 @@ pub struct PluginParamsView {
 /// into one that actually holds a ceiling.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPluginParamParams {
     /// CLAP id of the plugin on the master. Omitted targets the FIRST
     /// plugin on the chain, which is unambiguous only on a one-effect
@@ -319,6 +327,7 @@ pub struct SetPluginParamParams {
 /// Params for `master.plugin_presets`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct PluginPresetsParams {
     /// CLAP id of the plugin on the master. Omitted targets the first
     /// plugin on the chain.
@@ -337,6 +346,7 @@ pub struct PluginPresetsParams {
 /// Params for `master.load_plugin_preset`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LoadPluginPresetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
@@ -361,6 +371,7 @@ pub struct LoadPluginPresetParams {
 /// Params for `master.save_plugin_preset`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SavePluginPresetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
@@ -405,6 +416,7 @@ pub struct SavePluginPresetParams {
 /// where it could never be delivered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetSidechainParams {
     /// CLAP id of the plugin on the master to address; omitted targets
     /// the first plugin on the chain that declares a key port.
@@ -428,6 +440,7 @@ pub struct SetSidechainParams {
 /// Params for `master.clear_sidechain`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ClearSidechainParams {
     /// Omitted targets the same plugin `master.set_sidechain` would: the
     /// first on the master with a key port.
@@ -454,6 +467,7 @@ fn default_true() -> bool {
 /// request cannot flip a slot back on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SetPluginBypassParams {
     /// CLAP id of the plugin in this chain; omitted targets the first slot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -502,6 +516,7 @@ pub enum AssistGenre {
 /// Params for `master.assist`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AssistParams {
     /// `"genre"` or `"reference"`.
     pub mode: AssistMode,

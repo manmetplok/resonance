@@ -165,6 +165,7 @@ pub const METHODS: &[&str] = &[
 /// Params for [`ADD_TEMPO_EVENT`].
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddTempoEventParams {
     /// 1-based bar the new tempo takes effect at. An existing tempo
     /// event at this bar is overwritten, not duplicated. Bar 0 is
@@ -180,6 +181,7 @@ pub struct AddTempoEventParams {
 /// Params for [`ADD_SIGNATURE_EVENT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AddSignatureEventParams {
     /// 1-based bar the new meter takes effect at. An existing meter
     /// event at this bar is overwritten, not duplicated. Bar 0 is
@@ -201,6 +203,7 @@ pub struct AddSignatureEventParams {
 /// unchanged track and wondering.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct EditTempoEventParams {
     /// 1-based bar of the tempo event to change. There must already be
     /// one exactly there — an empty bar is rejected, not filled in
@@ -229,6 +232,7 @@ pub struct EditTempoEventParams {
 /// `new_bar`: see [`EDIT_SIGNATURE_EVENT`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct EditSignatureEventParams {
     /// 1-based bar of the meter event to change. There must already be
     /// one exactly there — an empty bar is rejected, not filled in
@@ -248,6 +252,7 @@ pub struct EditSignatureEventParams {
 /// Params for [`REMOVE_TEMPO_EVENT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveTempoEventParams {
     /// 1-based bar of the tempo event to remove. There must already be
     /// one exactly there — an empty bar is rejected rather than treated
@@ -264,6 +269,7 @@ pub struct RemoveTempoEventParams {
 /// Params for [`REMOVE_SIGNATURE_EVENT`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoveSignatureEventParams {
     /// 1-based bar of the meter event to remove, on exactly the same two
     /// rules as [`RemoveTempoEventParams::bar`]: an empty bar is

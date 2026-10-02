@@ -100,6 +100,24 @@ fn mixdown(app: &mut Resonance, conn: ConnId, request: &Request) -> (Response, T
             Task::none(),
         );
     }
+    // The renderer writes WAV (the bounce and the normalized export
+    // both), so the target must be a `.wav`: with `overwrite` this path
+    // is otherwise any file the user can write (code review STATE2-10).
+    if !path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+    {
+        return (
+            super::failure(
+                request,
+                RpcError::invalid_params(format!(
+                    "path must end in .wav (the mixdown is a WAV file), got {:?}",
+                    params.path
+                )),
+            ),
+            Task::none(),
+        );
+    }
     if !path.parent().is_some_and(Path::is_dir) {
         return (
             super::failure(
