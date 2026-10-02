@@ -160,4 +160,3 @@ fn band_enable_toggle_crossfades_instead_of_clicking() {
         }
     }
 }
-

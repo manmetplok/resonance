@@ -289,7 +289,7 @@ fn the_deharsh_panel_fits_and_its_readouts_carry_units() {
 /// step more than the signal's own slope.
 #[test]
 fn a_mode_switch_under_a_deep_cut_does_not_click() {
-    use resonance_dsp::{SuppressorMode, SuppressorConfig};
+    use resonance_dsp::{SuppressorConfig, SuppressorMode};
     use resonance_mastering::stages::deharsh::DeharshStage;
     let n = 120 * 256;
     let tone: Vec<f32> = (0..n)
@@ -315,7 +315,11 @@ fn a_mode_switch_under_a_deep_cut_does_not_click() {
         if let Some((_, m)) = seq.iter().find(|(at, _)| *at == k) {
             mode = *m;
         }
-        stage.process_stereo(&mut l[start..start + 256], &mut r[start..start + 256], &cfg(mode));
+        stage.process_stereo(
+            &mut l[start..start + 256],
+            &mut r[start..start + 256],
+            &cfg(mode),
+        );
     }
     // The same input through a stage that ran one mode throughout.
     let steady = |m| {

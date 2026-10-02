@@ -205,7 +205,9 @@ fn disable_under_gain_reduction_releases_without_click() {
 
 /// Largest sample-to-sample step of `x[range]`.
 fn max_delta(x: &[f32]) -> f32 {
-    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+    x.windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max)
 }
 
 /// Render a 60 Hz, 0.8-amplitude sine in 128-frame blocks, picking each

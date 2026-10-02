@@ -277,7 +277,9 @@ fn run_blocks(
 }
 
 fn max_step(x: &[f32]) -> f32 {
-    x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+    x.windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0, f32::max)
 }
 
 fn rms_db(x: &[f32]) -> f32 {
@@ -311,7 +313,10 @@ fn enabling_does_not_route_the_whole_mix_through_the_top_band() {
     let n = (toggle_block + 800) * block;
     let mut mb = Multiband::new(sr, block);
     let on = top_band_boost();
-    let off = MultibandConfig { enabled: false, ..on };
+    let off = MultibandConfig {
+        enabled: false,
+        ..on
+    };
     let out = run_blocks(&mut mb, sr, 1_000.0, n, block, |k| {
         if k < toggle_block {
             off
@@ -344,7 +349,10 @@ fn enabling_and_disabling_a_boosted_band_ramps() {
     let n = 1_600 * block;
     let mut mb = Multiband::new(sr, block);
     let on = top_band_boost();
-    let off = MultibandConfig { enabled: false, ..on };
+    let off = MultibandConfig {
+        enabled: false,
+        ..on
+    };
     let out = run_blocks(&mut mb, sr, 8_000.0, n, block, |k| {
         if (on_at..off_at).contains(&k) {
             on

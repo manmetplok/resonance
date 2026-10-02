@@ -461,7 +461,14 @@ impl BiquadCoeffs {
     /// and the prewarp point decides where in the audible band the digital
     /// curve tracks the analog one. With `a0 / a1 > 0` (a left-half-plane
     /// pole) the result is stable for any sample rate.
-    pub fn first_order_analog(sr: f64, b1: f64, b0: f64, a1: f64, a0: f64, prewarp_hz: f64) -> Self {
+    pub fn first_order_analog(
+        sr: f64,
+        b1: f64,
+        b0: f64,
+        a1: f64,
+        a0: f64,
+        prewarp_hz: f64,
+    ) -> Self {
         let nyquist = (sr * 0.5).max(20.0);
         let fw = prewarp_hz.clamp(1.0, nyquist * 0.95);
         let w = 2.0 * PI_F64 * fw;
@@ -523,7 +530,6 @@ fn clamp_params(sr: f32, freq: f32, q: f32) -> (f32, f32) {
     let q = q.max(0.05);
     (f, q)
 }
-
 
 /// f64 twin of [`clamp_params`].
 fn clamp_params_f64(sr: f64, freq: f64, q: f64) -> (f64, f64) {
