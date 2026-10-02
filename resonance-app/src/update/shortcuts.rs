@@ -6,9 +6,12 @@
 //! rest, in this order:
 //!
 //! 1. a key a widget already consumed (a focused text field, a canvas that
-//!    owns the keys) is dropped;
-//! 2. Esc resolves to closing the topmost root overlay before it means
-//!    anything else;
+//!    owns the keys) is dropped — except Esc, which first cancels an open
+//!    mixer inline rename, then closes one layer of the inspector CHAIN's
+//!    transient state (drag, preset prompt, replace mode, popovers),
+//!    whose fields may have captured it;
+//! 2. Esc resolves to closing the topmost root overlay (or, with none up,
+//!    the generic plugin window) before it means anything else;
 //! 3. while a modal root overlay shows, only ⌘/Ctrl chords dispatch;
 //! 4. the chord is looked up in the active [`BindingMap`] (global scope);
 //! 5. key repeat is dropped unless the command wants it;
@@ -104,6 +107,26 @@ pub(crate) fn handle_key(
             return task;
         }
     }
+    // Esc cancels an open inline rename. Its field captured the key (a
+    // focused `text_input` takes Esc and unfocuses itself), so this sits
+    // before the drop below. An Esc the field did not capture closes a
+    // rename left open too, but goes on to mean what Esc means.
+    if is_plain_escape(chord) && !repeat && crate::update::inline_rename::escape(r, captured) {
+        return Task::none();
+    }
+    // Esc closes the inspector CHAIN's transient state, one layer per
+    // press: a drag, the preset-name prompt (whose field captured the
+    // key), replace mode, then a slot menu / colour palette. Not under a
+    // modal overlay, which Esc closes first, and — the prompt aside —
+    // not when a widget captured the key (a pick_list closing its
+    // dropdown spent it).
+    if is_plain_escape(chord)
+        && !repeat
+        && r.modal_overlay().is_none()
+        && crate::update::chain_ui::escape(r, captured)
+    {
+        return Task::none();
+    }
     // A focused text field or a key-owning canvas already acted on it.
     if captured {
         return Task::none();
@@ -111,6 +134,15 @@ pub(crate) fn handle_key(
     let modal = r.modal_overlay();
     if is_plain_escape(chord) && !repeat && modal.is_some() {
         return dismiss_overlay(r);
+    }
+    // The generic plugin window is non-modal, but Esc closes it before
+    // the key means anything else (mixer-cleanup.md §4).
+    if is_plain_escape(chord)
+        && !repeat
+        && modal.is_none()
+        && crate::update::plugin_window::escape(r)
+    {
+        return Task::none();
     }
     if modal.is_some() && !has_accelerator(chord) {
         return Task::none();

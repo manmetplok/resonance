@@ -6,9 +6,9 @@
 use resonance_audio::MidiDeviceInfo;
 use resonance_audio::types::*;
 
-/// Which container a plugin slot belongs to. Used so `view_plugin_slot_row`
-/// can emit the right remove message regardless of whether it's rendering
-/// a track's plugin or a bus's plugin.
+/// Which container a plugin slot belongs to. Used so the inspector's
+/// CHAIN rows and add pickers emit the right message whether they are
+/// rendering a track's, a bus's or the master's chain.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum PluginOwner {
     Track(TrackId),

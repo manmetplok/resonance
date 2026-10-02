@@ -6,6 +6,9 @@ use crate::state::ViewMode;
 use crate::update::project_io;
 use crate::Resonance;
 
+/// Handle a [`UiMessage`]. An inspector owner change (a selection) drops
+/// the old owner's transient CHAIN state in the post-update settle
+/// (`chain_ui::settle`), whichever message caused it.
 pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
     match m {
         UiMessage::SwitchView(mode) => {
@@ -18,15 +21,16 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
                 (from, ViewMode::Performance) => r.ui.pre_performance_view = Some(from),
                 _ => r.ui.pre_performance_view = None,
             }
-            r.ui.view_mode = mode;
+            return set_view(r, mode);
         }
         UiMessage::TogglePerformanceMode => {
-            toggle_performance_mode(r);
+            return toggle_performance_mode(r);
         }
         UiMessage::ExitPerformanceMode => {
             // Leaves Performance mode only; a no-op elsewhere.
             if r.ui.view_mode == ViewMode::Performance {
-                r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+                let back = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+                return set_view(r, back);
             }
         }
         UiMessage::OpenSettings => {
@@ -85,20 +89,18 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
         }
         UiMessage::SelectTrack(id) => {
             // A track and a bus can't both be selected — the inspector
-            // describes one channel.
-            if id.is_some() {
-                r.ui.mixer.selected_bus = None;
-            }
+            // describes one channel. Both helpers below take the bus /
+            // master selection off when they select a track.
             match id {
                 // An additive (Cmd/Shift) click on a track toggles it in the
                 // multi-selection and leaves any clip selection alone.
                 Some(track_id) if r.ui.interaction.select_additive => {
-                    r.ui.interaction.toggle_track_selection(track_id);
+                    r.ui.toggle_track_selection(track_id);
                 }
                 // A plain click (or an explicit deselect-all) replaces the
                 // selection and drops the clip selection, as before.
                 _ => {
-                    r.ui.interaction.select_single_track(id);
+                    r.ui.select_track(id);
                     r.ui.interaction.selected_clip = None;
                     r.ui.interaction.selected_midi_clip = None;
                 }
@@ -110,21 +112,52 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
             // it, so the mixer never shows two selected strips while the
             // inspector describes one of them.
             if id.is_some() {
-                r.ui.interaction.select_single_track(None);
+                r.ui.mixer.selected_master = false;
+                r.ui.select_track(None);
                 r.ui.interaction.selected_clip = None;
                 r.ui.interaction.selected_midi_clip = None;
             }
+        }
+        UiMessage::SelectMaster => {
+            // The master counterpart of `SelectBus`: one channel at a
+            // time, so the track and bus highlights go.
+            r.ui.mixer.selected_master = true;
+            r.ui.mixer.selected_bus = None;
+            r.ui.select_track(None);
+            r.ui.interaction.selected_clip = None;
+            r.ui.interaction.selected_midi_clip = None;
         }
         UiMessage::OpenTrackMenu { id, x, y } => {
             // Right-click selects the track (so the menu's "Freeze selected
             // tracks" entry targets what was clicked) and opens the context
             // menu anchored at the row (design doc #181, todo #581).
-            r.ui.interaction.select_single_track(Some(id));
+            r.ui.select_track(Some(id));
             r.ui.interaction.track_menu = Some(crate::state::TrackMenuState {
                 track_id: id,
                 x,
                 y,
             });
+        }
+        UiMessage::BeginRename(target, surface) => {
+            return crate::update::inline_rename::begin(r, target, surface);
+        }
+        UiMessage::RenameInput(text) => {
+            crate::update::inline_rename::input(r, text);
+        }
+        UiMessage::CommitRename => {
+            return crate::update::inline_rename::commit(r);
+        }
+        UiMessage::CancelRename => {
+            crate::update::inline_rename::cancel(r);
+        }
+        UiMessage::RenamePointer => {
+            return crate::update::inline_rename::pointer(r);
+        }
+        UiMessage::RenameHovered(hovered) => {
+            crate::update::inline_rename::hovered(r, hovered);
+        }
+        UiMessage::WindowResized(size) => {
+            crate::update::plugin_window::viewport_resized(r, size);
         }
         UiMessage::CloseTrackMenu => {
             r.ui.interaction.track_menu = None;
@@ -280,11 +313,33 @@ pub fn handle(r: &mut Resonance, m: UiMessage) -> Task<Message> {
 /// auto-opens on record-arm and never disturbs transport. If already in
 /// Performance, return to the remembered view; otherwise enter Performance
 /// from the current view (remembering it for the return trip).
-fn toggle_performance_mode(r: &mut Resonance) {
+fn toggle_performance_mode(r: &mut Resonance) -> Task<Message> {
     if r.ui.view_mode == ViewMode::Performance {
-        r.ui.view_mode = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+        let back = r.ui.pre_performance_view.take().unwrap_or(ViewMode::Arrange);
+        set_view(r, back)
     } else {
         r.ui.pre_performance_view = Some(r.ui.view_mode);
-        r.ui.view_mode = ViewMode::Performance;
+        set_view(r, ViewMode::Performance)
     }
+}
+
+/// Show `mode`. Every view change goes through here, so leaving a view
+/// always runs [`leave_view`].
+fn set_view(r: &mut Resonance, mode: ViewMode) -> Task<Message> {
+    let leaving = r.ui.view_mode != mode;
+    r.ui.view_mode = mode;
+    if leaving {
+        leave_view(r)
+    } else {
+        Task::none()
+    }
+}
+
+/// The view just changed. Nothing of the mixer's transient editing state
+/// survives that: an inline rename commits (leaving the field is a blur),
+/// and the CHAIN rows' drag, prompt, replace mode, popovers and picker
+/// cue close.
+fn leave_view(r: &mut Resonance) -> Task<Message> {
+    r.ui.mixer.reset_chain_ui();
+    crate::update::inline_rename::commit(r)
 }

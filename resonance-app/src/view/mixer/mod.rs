@@ -1,7 +1,8 @@
-//! Mixer view: top-level layout, the small "+ Bus" strip, and the
-//! shared `view_plugin_slot_row` helper used by every channel strip.
-//! The actual strip rendering lives in submodules — `track_strip.rs`,
-//! `bus_strip.rs`, `master_strip.rs`, `plugin_panel.rs`.
+//! Mixer view: top-level layout and the small "+ Bus" strip. The strips
+//! live in submodules — `track_strip.rs`, `bus_strip.rs`,
+//! `master_strip.rs` — built from the shared pieces in `strip_parts.rs`
+//! (slot lines, FX switch, centred pan). A plugin's parameters open in the
+//! floating generic window (`view/plugin_window.rs`), not in the mixer.
 
 pub(crate) mod automation;
 mod bus_strip;
@@ -9,31 +10,27 @@ mod group_strip;
 pub(crate) mod inspector;
 mod master_strip;
 pub(crate) mod picks;
-mod plugin_panel;
-pub(crate) use plugin_panel::plugin_params_fingerprint;
 mod reference_panel;
 pub(crate) mod reorder;
 mod strip_fingerprint;
+mod strip_parts;
 mod track_strip;
 
 use iced::widget::{button, column, container, row, scrollable, text, Space};
-use iced::{alignment, Color, Element, Length};
+use iced::{Color, Element, Length};
 
-use resonance_audio::types::ScannedPlugin;
 
 use crate::message::*;
 use crate::state::*;
 use crate::theme;
 
-use picks::PluginOwner;
-
 pub(crate) use group_strip::MixerTopItem;
+pub(crate) use strip_parts::slot_line_label;
 
 impl crate::Resonance {
     pub(crate) fn view_mixer(&self) -> Element<'_, Message> {
         let sorted_tracks = self.sorted_tracks();
         let sorted_busses = self.sorted_busses();
-        let available_plugins = &self.plugin_catalog.available_plugins;
 
         // -- Top row: track strips + master strip on the right. --
         // The lane is built in two clustering layers so related strips
@@ -57,20 +54,14 @@ impl crate::Resonance {
             match item {
                 group_strip::MixerTopItem::Track(track_id) => {
                     if let Some(track) = sorted_tracks.iter().find(|t| t.id == track_id) {
-                        track_strip_row = track_strip_row.push(self.view_track_cluster(
-                            track,
-                            sorted_tracks,
-                            available_plugins,
-                        ));
+                        track_strip_row =
+                            track_strip_row.push(self.view_track_cluster(track, sorted_tracks));
                     }
                 }
                 group_strip::MixerTopItem::Group(group_id) => {
                     if let Some(group) = self.track_groups.get_group(group_id) {
-                        track_strip_row = track_strip_row.push(self.view_mixer_group_cluster(
-                            group,
-                            sorted_tracks,
-                            available_plugins,
-                        ));
+                        track_strip_row = track_strip_row
+                            .push(self.view_mixer_group_cluster(group, sorted_tracks));
                     }
                 }
             }
@@ -86,7 +77,7 @@ impl crate::Resonance {
             scrollable::Direction::Horizontal(scrollable::Scrollbar::default()),
         )
         .width(Length::Fill);
-        let master_strip = self.view_master_strip(available_plugins);
+        let master_strip = self.view_master_strip();
         let v_separator_tracks = container(Space::new().width(1).height(Length::Fill)).style(theme::separator_bg);
         let tracks_area = row![scrollable_tracks, v_separator_tracks, master_strip]
             .height(Length::Fixed(theme::MIXER_STRIP_HEIGHT as f32));
@@ -96,7 +87,7 @@ impl crate::Resonance {
             .spacing(theme::MIXER_STRIP_GAP)
             .padding([0.0, theme::MIXER_LANE_HPAD]);
         for bus in sorted_busses {
-            bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus, available_plugins));
+            bus_strip_row = bus_strip_row.push(self.view_bus_strip(bus));
         }
         let scrollable_busses = iced::widget::Scrollable::with_direction(
             bus_strip_row,
@@ -114,12 +105,6 @@ impl crate::Resonance {
         mixer_col = mixer_col.push(tracks_area);
         mixer_col = mixer_col.push(h_sep_mid);
         mixer_col = mixer_col.push(busses_area);
-
-        if let Some(panel) = self.view_plugin_panel() {
-            let h_sep = container(Space::new().width(Length::Fill).height(1)).style(theme::separator_bg);
-            mixer_col = mixer_col.push(h_sep);
-            mixer_col = mixer_col.push(panel);
-        }
 
         // Inspector sits to the right of the strips; a hairline separates
         // it from the strips column.
@@ -163,9 +148,8 @@ impl crate::Resonance {
         &'a self,
         track: &'a TrackState,
         sorted_tracks: &'a [TrackState],
-        available_plugins: &'a [ScannedPlugin],
     ) -> Element<'a, Message> {
-        let parent_strip = self.view_channel_strip(track, available_plugins);
+        let parent_strip = self.view_channel_strip(track);
 
         let parent_expanded = self.ui.mixer.expanded_sub_track_parents.contains(&track.id);
         if !parent_expanded {
@@ -184,7 +168,7 @@ impl crate::Resonance {
         // sub-strip backgrounds visually butt up against the parent strip.
         let mut cluster = row![parent_strip].spacing(0);
         for sub in subs {
-            cluster = cluster.push(self.view_sub_channel_strip(sub, available_plugins));
+            cluster = cluster.push(self.view_sub_channel_strip(sub));
         }
         cluster.into()
     }
@@ -219,343 +203,18 @@ impl crate::Resonance {
             .style(theme::panel_dark_outlined)
             .into()
     }
-
-    /// Render a single plugin slot row (name button + ▲/▼ reorder pair +
-    /// remove button). If `is_instrument_slot` is true, the name is
-    /// tinted to distinguish it.
-    ///
-    /// `index` is the slot's position in `owner`'s chain and `len` the
-    /// chain's length — the two the reorder controls need to know which
-    /// direction is still available (ba todo #1302). They are the
-    /// position in the FULL chain, not in the section being drawn: the
-    /// track strip renders the instrument and the effects as two
-    /// sections, and the instrument-floor rule is stated in chain
-    /// indices.
-    /// Returns an owned (`'static`) element so the strip bodies can be
-    /// built inside their `lazy` closures and cached across frames.
-    fn view_plugin_slot_row(
-        &self,
-        owner: PluginOwner,
-        plugin: &PluginSlotState,
-        is_instrument_slot: bool,
-        index: usize,
-        len: usize,
-    ) -> Element<'static, Message> {
-        // ASCII ".." suffix (not '…') — this pill's width was tuned
-        // around the narrower two-dot tail.
-        let missing = plugin.availability.is_missing();
-        let pname = slot_pill_label(&plugin.plugin_name, missing);
-        let pid = plugin.instance_id;
-        // The name opens the generic parameter panel — for every plugin,
-        // GUI or not (ba todo #1306, audit finding X4).
-        //
-        // This used to route to the panel only when `has_gui == false`,
-        // and since all eleven bundled plugins declare a GUI, that made
-        // the generic panel unreachable for the entire fleet: the one
-        // surface that shows a plugin's parameters as plain numbers, and
-        // the only thing left to fall back on when a floating editor
-        // fails to open. The control API never had the restriction, so
-        // an agent could read and set those parameters while a human
-        // could not see them at all.
-        //
-        // The floating editor is not lost — it moves to its own control
-        // below, because "show me the parameters" and "open the plugin's
-        // own window" are two different requests and one button cannot
-        // be both.
-        let click_msg = Message::Plugin(PluginMessage::TogglePluginPanel(pid));
-        let is_selected = self.ui.mixer.selected_plugin == Some(pid);
-
-        // Instrument slots get the design's lavender pill: ◆ glyph
-        // followed by the plugin name on a tinted ACCENT_DIM background
-        // with an ACCENT_LINE border. FX slots stay as a plainer hairline
-        // pill so the eye picks up the instrument as the dominant slot.
-        let name_btn = if missing {
-            // A slot with no plugin behind it reads as an error state,
-            // not as a quieter version of a working slot: the pill takes
-            // the BAD tint the relink modal uses for a missing file, and
-            // the glyph in `slot_pill_label` says so without relying on
-            // colour alone. It stays clickable — the parameter panel is
-            // where the reason and the replace picker live.
-            button(text(pname).size(10).color(theme::BAD))
-                .on_press(click_msg)
-                .width(Length::Fill)
-                .style(move |_theme, status| {
-                    let bg = match status {
-                        iced::widget::button::Status::Hovered
-                        | iced::widget::button::Status::Pressed => Color {
-                            a: 0.22,
-                            ..theme::BAD
-                        },
-                        _ => theme::BAD_DIM,
-                    };
-                    iced::widget::button::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        text_color: theme::BAD,
-                        border: iced::Border {
-                            color: theme::BAD_LINE,
-                            width: 1.0,
-                            radius: theme::RADIUS_SM.into(),
-                        },
-                        ..Default::default()
-                    }
-                })
-                .padding([5, 9])
-        } else if is_instrument_slot {
-            let label_color = if is_selected {
-                theme::TEXT_1
-            } else {
-                theme::ACCENT_SOFT
-            };
-            let pill = row![
-                text("\u{25C6}").size(8).color(theme::ACCENT_SOFT),
-                Space::new().width(6),
-                text(pname).size(10).color(label_color),
-            ]
-            .align_y(alignment::Vertical::Center);
-            button(pill)
-                .on_press(click_msg)
-                .width(Length::Fill)
-                .style(move |_theme, status| {
-                    let bg = match status {
-                        iced::widget::button::Status::Hovered => Color {
-                            a: 0.22,
-                            ..theme::ACCENT
-                        },
-                        iced::widget::button::Status::Pressed => Color {
-                            a: 0.30,
-                            ..theme::ACCENT
-                        },
-                        _ => theme::ACCENT_DIM,
-                    };
-                    iced::widget::button::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        text_color: theme::ACCENT_SOFT,
-                        border: iced::Border {
-                            color: theme::ACCENT_LINE,
-                            width: 1.0,
-                            radius: theme::RADIUS_SM.into(),
-                        },
-                        ..Default::default()
-                    }
-                })
-                .padding([7, 9])
-        } else {
-            let label_color = if is_selected {
-                theme::TEXT_1
-            } else {
-                theme::TEXT_2
-            };
-            button(text(pname).size(10).color(label_color))
-                .on_press(click_msg)
-                .width(Length::Fill)
-                .style(move |_theme, status| {
-                    let bg = match status {
-                        iced::widget::button::Status::Hovered => theme::BG_3,
-                        iced::widget::button::Status::Pressed => theme::LINE_2,
-                        _ => theme::BG_1,
-                    };
-                    let border_color = if is_selected {
-                        theme::ACCENT_LINE
-                    } else {
-                        theme::LINE_2
-                    };
-                    iced::widget::button::Style {
-                        background: Some(iced::Background::Color(bg)),
-                        text_color: label_color,
-                        border: iced::Border {
-                            color: border_color,
-                            width: 1.0,
-                            radius: theme::RADIUS_SM.into(),
-                        },
-                        ..Default::default()
-                    }
-                })
-                .padding([5, 9])
-        };
-
-        let remove_msg = match owner {
-            PluginOwner::Track(track_id) => {
-                Message::Plugin(PluginMessage::RemovePluginFromTrack(track_id, pid))
-            }
-            PluginOwner::Bus(bus_id) => Message::Bus(BusMessage::RemovePluginFromBus(bus_id, pid)),
-            PluginOwner::Master => Message::Master(MasterMessage::RemovePluginFromMaster(pid)),
-        };
-        let plugin_del = button(text("\u{00d7}").size(SLOT_ICON_SIZE).color(theme::TEXT_DIM))
-            .on_press(remove_msg)
-            .style(|_theme, status| theme::small_button_style(status))
-            .padding([1, SLOT_ICON_PAD_X]);
-
-        // Chain reorder (ba todo #1302). The strip is 140 px wide, so
-        // the carets share the slot-row icon metrics with the editor
-        // toggle and the delete glyph, and sit between the two: order
-        // first, then removal.
-        let moves = reorder::chain_moves(self, owner, pid, index, len);
-
-        // The icon cluster is one group so the gap *inside* it can be
-        // tighter than the gap that separates it from the name.
-        let mut icons = row![].spacing(SLOT_ICON_GAP);
-        if let Some(editor) = editor_toggle(plugin) {
-            icons = icons.push(editor);
-        }
-        // Bypass sits after the carets and before delete, mirroring the
-        // inspector chain row (name - carets - BYP) and leaving the
-        // editor toggle immediately after the name, which
-        // `the_strip_offers_an_editor_toggle_only_for_a_gui_plugin` pins
-        // as a layout contract.
-        let icons = icons
-            .push(reorder::move_buttons(
-                &moves,
-                SLOT_ICON_SIZE,
-                SLOT_ICON_PAD_X,
-            ))
-            .push(bypass_toggle(plugin))
-            .push(plugin_del)
-            .align_y(alignment::Vertical::Center);
-
-        // The name takes Length::Fill so it stretches to the strip
-        // width; the icon cluster hugs the right edge.
-        row![name_btn, icons]
-            .spacing(SLOT_ICON_GAP + 1.0)
-            .align_y(alignment::Vertical::Center)
-            .into()
-    }
 }
 
-/// The text on a mixer strip's plugin pill.
+/// What a slot's floating-editor toggle carries and how it is tinted:
+/// the message a press raises, and the glyph colour (ba todo #1306).
 ///
-/// A missing plugin is prefixed with a warning glyph and gets two fewer
-/// characters of name to pay for it — the pill's width budget is fixed
-/// (see [`SLOT_ICON_PAD_X`]), and the marker has to survive the strip
-/// being narrow. It is a glyph rather than only a colour so the state is
-/// legible without relying on hue, and it is in the *text* rather than a
-/// separate widget so a widget-tree test can read it back.
-///
-/// Split out so the mixer strip and any other slot surface answer this
-/// the same way, and so `test_strip_plugin_label` can assert it directly.
-pub(crate) fn slot_pill_label(plugin_name: &str, missing: bool) -> String {
-    if missing {
-        format!("\u{26a0} {}", crate::util::short_with(plugin_name, 12, ".."))
-    } else {
-        crate::util::short_with(plugin_name, 14, "..")
-    }
-}
-
-/// Glyph size for the plugin slot row's icon controls.
-const SLOT_ICON_SIZE: f32 = 9.0;
-
-/// Horizontal padding around each of those glyphs.
-///
-/// One pixel, not the three a roomier surface would use, because the
-/// slot row has to fit **four** icon controls — the editor toggle (ba
-/// todo #1306), the ▲/▼ reorder pair (#1302) and the delete × — beside
-/// the plugin's name inside a 140 px strip.
-///
-/// The budget is genuinely that tight: measured off
-/// `mixer_sub_tracks_expanded`, an icon at the old 3 px padding cost 17
-/// px of row, and the instrument pill had **half a pixel** of slack
-/// left over at three icons. Adding a fourth without tightening the
-/// cluster pushed the pill 17 px narrower than its own text, so the
-/// name overflowed its border and ran under the new glyph. Trimming the
-/// padding and the gaps hands those 17 px back to the name, which is
-/// why the pill in that golden is the same width as it was before the
-/// toggle existed.
-///
-/// The inspector's CHAIN rows are not on this budget and keep 3 px.
-const SLOT_ICON_PAD_X: u16 = 1;
-
-/// Gap between the slot row's icon controls.
-const SLOT_ICON_GAP: f32 = 1.0;
-
-/// The strip slot's floating-editor toggle — the sliders glyph, tinted
-/// while the editor is open (ba todo #1306).
-///
-/// `None` for a plugin that declares no GUI: there is no window to open,
-/// and the generic parameter panel behind the name button is the whole
-/// surface such a plugin has.
-///
-/// It is a control of its own rather than a second meaning for the name
-/// button. Before, the name meant "toggle the editor" on GUI plugins and
-/// "toggle the parameter panel" on the rest, so which surface a click
-/// reached depended on a property of the plugin the user cannot see —
-/// and the parameter panel had no route at all on the eleven bundled
-/// plugins, every one of which declares a GUI.
-/// The strip's per-slot bypass control (ba doc #275 finding X3, todo
-/// #1305).
-///
-/// The strip is the ONLY surface that draws the master chain — the mixer
-/// inspector handles a selected bus and a selected track and has no
-/// master branch — so without this control a master plugin could be
-/// bypassed over MCP and not by a human. That is the inversion ba doc
-/// #276's dual-surface rule exists to prevent, and the todo names the
-/// master chain explicitly.
-///
-/// Drawn for every slot, unlike the editor toggle: bypass needs no
-/// capability from the plugin.
-fn bypass_toggle(plugin: &PluginSlotState) -> Element<'static, Message> {
-    let (message, color) = bypass_toggle_spec(plugin);
-    button(
-        theme::icon(theme::fa::POWER_OFF)
-            .size(SLOT_ICON_SIZE)
-            .color(color),
-    )
-    .on_press(message)
-    .style(|_theme, status| theme::small_button_style(status))
-    .padding([1, SLOT_ICON_PAD_X])
-    .into()
-}
-
-/// What the strip's bypass control carries and how it is tinted.
-///
-/// Split out for the same reason as [`editor_toggle_spec`]: `iced_test`
-/// reads a text candidate's content but never its colour, so the tint —
-/// which is the whole feedback that a slot is bypassed — is only
-/// assertable through this.
-///
-/// Sends a SET, never a toggle, so the strip, the inspector row and the
-/// control API all raise the identical message and cannot drift.
-pub(crate) fn bypass_toggle_spec(plugin: &PluginSlotState) -> (Message, Color) {
-    let color = if plugin.bypassed {
-        theme::WARM
-    } else {
-        theme::TEXT_3
-    };
-    (
-        Message::Plugin(PluginMessage::SetPluginBypass {
-            instance_id: plugin.instance_id,
-            bypassed: !plugin.bypassed,
-        }),
-        color,
-    )
-}
-
-fn editor_toggle(plugin: &PluginSlotState) -> Option<Element<'static, Message>> {
-    let (message, color) = editor_toggle_spec(plugin)?;
-    Some(
-        button(
-            theme::icon(theme::fa::SLIDERS)
-                .size(SLOT_ICON_SIZE)
-                .color(color),
-        )
-        .on_press(message)
-        .style(|_theme, status| theme::small_button_style(status))
-        .padding([1, SLOT_ICON_PAD_X])
-        .into(),
-    )
-}
-
-/// What the strip's editor toggle carries and how it is tinted: the
-/// message a press raises, and the glyph colour.
-///
-/// `None` is the "draw no control at all" answer, for a plugin that
-/// declares no GUI.
-///
-/// Split out from [`editor_toggle`] so the decision has exactly one
-/// home and a test can read it back (`test_strip_editor_toggle`). The
-/// tint is not observable through the widget tree — `iced_test` sees a
-/// text candidate's content, never its colour — and "the glyph lights
-/// up while the window is open" is the only feedback the user gets that
-/// the press did anything, since the engine reports neither success nor
-/// failure per instance (split out as ba todo #1347).
+/// `None` for a plugin that declares no GUI: it has no editor to toggle
+/// (its `↗` follows the generic window instead). Drawn by the inspector
+/// CHAIN row's `↗` (`inspector::chain::open_toggle_spec`), and readable
+/// by a test (`test_chain_open_toggle`) — the tint is not observable
+/// through the widget tree, and "the glyph lights up while the window is
+/// open" is the only feedback a press gives, since the engine reports
+/// neither success nor failure per instance (ba todo #1347).
 pub(crate) fn editor_toggle_spec(plugin: &PluginSlotState) -> Option<(Message, Color)> {
     if !plugin.has_gui {
         return None;

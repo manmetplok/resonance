@@ -189,11 +189,12 @@ fn swap(
             .engine
             .send(AudioCommand::ClearSidechainRoute { plugin: old_id });
     }
-    if r.ui.mixer.selected_plugin == Some(old_id) {
-        // The parameter panel was showing the outgoing plugin's
-        // parameters. The replacement has its own, and none of them have
-        // arrived yet.
-        r.ui.mixer.selected_plugin = None;
+    // The replacement takes the outgoing slot's focus (it sits in the
+    // same place); the window closes, as it shows the old instance.
+    let was_focused = r.ui.mixer.focused_slot == Some(old_id);
+    r.ui.mixer.forget_plugin(old_id);
+    if was_focused {
+        r.ui.mixer.focused_slot = Some(new_id);
     }
 
     let replacement = PluginSlotState::new(
@@ -223,7 +224,10 @@ fn swap(
 }
 
 /// Which chain holds `instance_id`, and at which index.
-fn locate_slot(r: &Resonance, instance_id: PluginInstanceId) -> Option<(PluginLocator, usize)> {
+pub(crate) fn locate_slot(
+    r: &Resonance,
+    instance_id: PluginInstanceId,
+) -> Option<(PluginLocator, usize)> {
     let position =
         |chain: &[PluginSlotState]| chain.iter().position(|p| p.instance_id == instance_id);
     for track in &r.registry.tracks {

@@ -1,31 +1,29 @@
-//! Bus channel strip rendering. Trimmer than a track strip: no
-//! mono/monitor/arm, no instrument slot, no input device picker, no
-//! output selector (busses always go to master).
+//! Bus channel strip rendering: the track strip's anatomy
+//! (mixer-cleanup.md §5) minus the per-track parts — no solo, arm or
+//! monitor, no instrument slot, no input or output picker (busses always
+//! go to master).
 //!
 //! Like the track strip, the bus strip splits into a live fader/meter
 //! block (rebuilt every frame) and a lazy body cached behind
 //! `iced::widget::lazy`, keyed on
 //! [`super::strip_fingerprint::bus_strip_fingerprint`].
 
-use iced::widget::{column, container, pick_list, row, scrollable, text, Space};
-use iced::{alignment, Element, Font, Length};
-use resonance_audio::types::*;
+use iced::widget::{column, container, row, text};
+use iced::{alignment, Element, Length};
 
 use crate::message::*;
 use crate::state::*;
 use crate::theme;
-use crate::util::format_pan;
-use crate::view::controls::{bus_remove_button, fader_section, fx_bypass_button, mute_button};
+use crate::view::controls::{fader_section, mute_button};
 
-use super::picks::PluginOwner;
+use super::strip_parts::InstrumentSlot;
+
+/// Characters of a bus name the strip head shows before it ellipsises
+/// (size-12 text between the band and the mute button).
+const BUS_NAME_CHARS: usize = 16;
 
 impl crate::Resonance {
-    pub(super) fn view_bus_strip<'a>(
-        &'a self,
-        bus: &'a BusState,
-        available_plugins: &'a [ScannedPlugin],
-    ) -> Element<'a, Message> {
-        let _ = available_plugins;
+    pub(super) fn view_bus_strip<'a>(&'a self, bus: &'a BusState) -> Element<'a, Message> {
         let bus_id = bus.id;
 
         // Live fader + meter block — the per-tick levels (and the live
@@ -94,81 +92,79 @@ impl crate::Resonance {
     /// fader/meter block. Built inside the strip's `lazy` region, so it
     /// returns an owned (`'static`) tree and must only read state that
     /// [`super::strip_fingerprint::bus_strip_fingerprint`] hashes.
+    ///
+    /// The track anatomy (mixer-cleanup.md §5): head (with mute), the FX
+    /// switch, slot lines, the centred pan. Adding effects and deleting
+    /// the bus live in the bus inspector. A double-click on the name
+    /// renames the bus in place, as on a track strip.
     fn bus_strip_body(&self, bus: &BusState) -> Element<'static, Message> {
         let bus_id = bus.id;
 
-        // Bus strips show their name in the warm/amber accent — matches
-        // the design's "audio-or-aggregate" semantic split.
-        let bus_name = container(text(bus.name.clone()).size(13).color(theme::WARM))
-            .width(Length::Fill)
-            .center_x(Length::Fill)
-            .padding([6, 4]);
-
-        // Mute + FX bypass + Remove buttons — same icons as the track header.
-        // Fixed-height container so the row doesn't collapse inside a
-        // Length::Fill strip column (same quirk as the track strip).
-        let inner_row = row![
-            mute_button(
-                bus.muted,
-                Message::Bus(BusMessage::ToggleBusMute(bus_id)),
-                12
-            ),
-            fx_bypass_button(
-                bus.fx_bypassed,
-                Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
-                12,
-            ),
-            Space::new().width(Length::Fill),
-            bus_remove_button(bus_id, 12),
-        ]
-        .spacing(2)
-        .align_y(alignment::Vertical::Center);
-        let button_row = container(inner_row)
-            .width(Length::Fill)
-            .height(Length::Fixed(24.0))
-            .padding([2, 4]);
-
-        // Plugin chain (all effects — no instrument slot on busses).
-        let mut plugin_section = column![].spacing(4).width(Length::Fill);
-        let chain_len = bus.plugins.len();
-        for (index, plugin) in bus.plugins.iter().enumerate() {
-            plugin_section = plugin_section.push(self.view_plugin_slot_row(
-                PluginOwner::Bus(bus_id),
-                plugin,
-                false,
-                index,
-                chain_len,
-            ));
-        }
-
-        // Extract the +FX picker so it can dock above the pan knob (same
-        // treatment as track strips). Options come from the cached FX
-        // filter on `view_caches` — cloning that Rc is a refcount bump.
-        let fx_picker_element: Option<Element<'static, Message>> =
-            if self.ui.view_caches.fx_plugins.is_empty() {
-                None
-            } else {
-                Some(
-                    pick_list(
-                        self.ui.view_caches.fx_plugins.clone(),
-                        None::<ScannedPlugin>,
-                        move |plugin: ScannedPlugin| {
-                            Message::Bus(BusMessage::AddPluginToBus(bus_id, plugin))
-                        },
+        // Head: a warm band (busses carry the audio-domain amber, not a
+        // per-track colour) and the one-line name — or, while a rename
+        // is open on this strip, the rename field (mixer-cleanup.md §2.3).
+        let target = RenameTarget::Bus(bus_id);
+        let name: Element<'static, Message> =
+            match self.ui.mixer.rename_buffer(target, RenameSurface::Strip) {
+                Some(buffer) => super::strip_parts::rename_field("Bus name", buffer, 12.0),
+                None => {
+                    let name = container(
+                        text(crate::util::short(&bus.name, BUS_NAME_CHARS))
+                            .size(12)
+                            .font(theme::UI_FONT_MEDIUM)
+                            .color(theme::WARM)
+                            .wrapping(iced::widget::text::Wrapping::None),
                     )
-                    .placeholder("+ FX")
-                    .text_size(10)
                     .width(Length::Fill)
-                    .into(),
-                )
+                    .clip(true);
+                    // The name's own mouse area takes the press (it has
+                    // to, to see a double-click), so it selects the bus
+                    // itself, as the strip around it would.
+                    iced::widget::mouse_area(name)
+                        .on_press(Message::Ui(UiMessage::SelectBus(Some(bus_id))))
+                        .on_double_click(Message::Ui(UiMessage::BeginRename(
+                            target,
+                            RenameSurface::Strip,
+                        )))
+                        .into()
+                }
             };
+        // A bus has one live button (mute: no solo, arm or monitor), so
+        // it rides at the right of the head instead of taking a row of
+        // its own — the bus lane is 120 px shorter than the track lane,
+        // and that row is what lets the slot lines breathe.
+        let head = container(
+            row![
+                super::strip_parts::color_band(theme::WARM),
+                name,
+                // `icon_button` cells claim Fill width; pin this one so
+                // the name keeps the rest of the head.
+                container(mute_button(
+                    bus.muted,
+                    Message::Bus(BusMessage::ToggleBusMute(bus_id)),
+                    12,
+                ))
+                .width(22),
+            ]
+            .spacing(4)
+            .align_y(alignment::Vertical::Center)
+            .height(28),
+        )
+        .width(Length::Fill)
+        .height(super::track_strip::STRIP_HEAD_HEIGHT)
+        .padding([4, 0]);
 
-        // Per-channel automation lane header (todo #383).
-        let auto_chan = super::automation::AutoChan::Bus(bus.id);
-        // Busses have no external-instrument device preset, so no device
-        // params ever appear in their automation picker.
-        let auto_header =
-            super::automation::automation_header(&self.automation, auto_chan, &bus.plugins, &[]);
+        let fx_header = super::strip_parts::fx_header(
+            bus.fx_bypassed,
+            Message::Bus(BusMessage::ToggleBusFxBypass(bus_id)),
+        );
+        let slots = super::strip_parts::slot_list(
+            InstrumentSlot::None,
+            &bus.plugins,
+            bus.fx_bypassed,
+            self.ui.mixer.focused_slot,
+            theme::MIXER_SLOT_LINE_CHARS,
+        );
 
         // Pan knob — vertical drag to change, double-click to reset. The
         // live automated-pan tint is hashed into the strip fingerprint,
@@ -184,42 +180,9 @@ impl crate::Resonance {
         let pan_ctrl = crate::view::knob::pan_knob_automated(bus.pan, pan_live, move |v| {
             Message::Bus(BusMessage::SetBusPan(bus_id, v))
         });
-        let pan_label = format_pan(bus.pan);
-        let pan_row = row![
-            text("Pan").size(9).color(theme::TEXT_DIM),
-            Space::new().width(Length::Fill),
-            pan_ctrl,
-            Space::new().width(Length::Fill),
-            text(pan_label)
-                .size(9)
-                .font(Font::MONOSPACE)
-                .color(theme::TEXT_DIM),
-        ]
-        .spacing(2)
-        .align_y(alignment::Vertical::Center);
+        let pan = super::strip_parts::pan_block(pan_ctrl, bus.pan);
 
-        let fx_pan_block = {
-            let mut col = iced::widget::Column::new().spacing(0).width(Length::Fill);
-            if let Some(fx) = fx_picker_element {
-                col = col.push(fx);
-            }
-            col = col.push(auto_header);
-            col.push(pan_row)
-        };
-
-        // FX list scrolls inside its own area between the buttons and
-        // the pan/fader block so adding plugins never pushes the fader
-        // off the strip.
-        let plugin_fill = iced::widget::Scrollable::with_direction(
-            plugin_section,
-            scrollable::Direction::Vertical(
-                scrollable::Scrollbar::default().width(4).scroller_width(4),
-            ),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill);
-
-        column![bus_name, button_row, plugin_fill, fx_pan_block]
+        column![head, fx_header, slots, pan]
             .spacing(6)
             .width(Length::Fill)
             .height(Length::Fill)

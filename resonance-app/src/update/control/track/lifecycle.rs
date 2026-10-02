@@ -9,7 +9,7 @@ use crate::update::plugin_replace::{self, ReplaceKind};
 use crate::Resonance;
 use iced::Task;
 use resonance_control::methods::track::{
-    self, AddParams, AddPluginParams, AddResult, DeleteParams, RenameParams,
+    self, AddParams, AddPluginParams, AddResult, DeleteParams, RenameParams, SetColorParams,
 };
 use resonance_control::{Request, Response, RpcError, TrackKind};
 
@@ -64,7 +64,7 @@ pub(super) fn add(app: &mut Resonance, request: &Request) -> (Response, Task<Mes
 }
 
 // ---------------------------------------------------------------------------
-// track.rename / track.delete
+// track.rename / track.set_color / track.delete
 // ---------------------------------------------------------------------------
 
 pub(super) fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
@@ -72,15 +72,51 @@ pub(super) fn rename(app: &mut Resonance, request: &Request) -> (Response, Task<
         Ok(p) => p,
         Err(e) => return reject(request, e),
     };
-    if find_track(app, params.track_id.0).is_none() {
+    let Some(current) = find_track(app, params.track_id.0).map(|t| t.name.clone()) else {
         return not_found_track(request, params.track_id.0);
-    }
-    if params.name.trim().is_empty() {
+    };
+    // Trimmed, and a rename to the current name is acknowledged without
+    // an edit (no undo step, no dirty) — as `bus.rename`.
+    let name = params.name.trim();
+    if name.is_empty() {
         return reject(request, RpcError::invalid_params("track name must not be empty"));
+    }
+    if name == current {
+        return (ack(app, request), Task::none());
     }
     let task = run_via_update(
         app,
-        Message::Track(TrackMessage::SetTrackName(params.track_id.0, params.name)),
+        Message::Track(TrackMessage::SetTrackName(params.track_id.0, name.to_owned())),
+    );
+    (ack(app, request), task)
+}
+
+pub(super) fn set_color(app: &mut Resonance, request: &Request) -> (Response, Task<Message>) {
+    let params: SetColorParams = match request.params() {
+        Ok(p) => p,
+        Err(e) => return reject(request, e),
+    };
+    let Some(target) = find_track(app, params.track_id.0) else {
+        return not_found_track(request, params.track_id.0);
+    };
+    if target.sub_track.is_some() {
+        return reject(
+            request,
+            RpcError::invalid_params("sub-tracks follow their parent's colour"),
+        );
+    }
+    let Some(color) = track::parse_hex_color(&params.color) else {
+        return reject(
+            request,
+            RpcError::invalid_params(format!(
+                "color {:?} is not a \"#rrggbb\" hex colour",
+                params.color
+            )),
+        );
+    };
+    let task = run_via_update(
+        app,
+        Message::Track(TrackMessage::SetTrackColor(params.track_id.0, color)),
     );
     (ack(app, request), task)
 }

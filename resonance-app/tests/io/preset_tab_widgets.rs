@@ -55,7 +55,7 @@ fn scanned() -> ScannedPlugin {
 }
 
 /// Arrange view, media browser open on Presets, one audio track with the
-/// EQ selected in the plugin panel.
+/// EQ as the focused slot.
 fn app() -> Resonance {
     let (mut app, _task) = Resonance::new_for_test_on(ViewMode::Arrange);
     app.test_set_active_project(true);
@@ -76,7 +76,11 @@ fn app() -> Resonance {
         ),
     );
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Arrange)));
-    let _ = app.update(Message::Plugin(PluginMessage::TogglePluginPanel(INSTANCE)));
+    let _ = app.update(Message::Plugin(PluginMessage::OpenPluginWindow(INSTANCE)));
+    // The plugin's generic window is what makes it the load target; park
+    // it in the bottom-right corner, off the browser rows and the track
+    // headers this file presses.
+    app.test_place_plugin_window(Point::new(960.0, 640.0));
     let _ = app.update(Message::Browser(BrowserMessage::ToggleVisible));
     let _ = app.update(Message::Browser(BrowserMessage::SelectTab(BrowserTab::Presets)));
     app

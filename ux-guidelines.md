@@ -60,6 +60,10 @@ All colors are defined in `resonance-app/src/theme.rs` as canonical tokens. Do n
 - `BAD` (soft pink) is the unified record/mute/peak/error color — combined with a border or icon shape so it never relies on color alone.
 - Introduce new semantic colors only through `theme.rs`, never inline.
 
+### Track colours
+
+Every track carries its own persisted identity colour (`TrackState::color`), shown as a band on the left edge of its mixer strip head and its Arrange header, and as the inspector header's swatch. New tracks take the next hue of `TRACK_PALETTE` (ten mid-lightness hues — coral, amber, sand, olive, jade, teal, cornflower, periwinkle, orchid, rose) by their order; the inspector's palette picks another. Sub-tracks wear their parent's colour. Busses and the master carry no per-channel colour (warm and neutral bands). Track colour is **identity only — never status**: it never signals mute, arm, selection or errors.
+
 ## Typography
 
 - **UI text**: System default sans-serif via Iced's default font.
@@ -93,8 +97,10 @@ A legacy alias `GLOBAL_TRACK_ROW_HEIGHT` resolves to the tempo-lane height for o
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `MIXER_STRIP_WIDTH` | 140px | Track channel strip |
-| `MASTER_STRIP_WIDTH` | 156px | Master bus strip |
+| `MIXER_STRIP_WIDTH` | 160px | Track and bus channel strip |
+| `MIXER_SUB_STRIP_WIDTH` | 104px | Expanded sub-track strip (sits flush right of its parent) |
+| `TRACK_COLOR_BAND_WIDTH` | 4px | Track-colour band on a strip head / Arrange track header |
+| `MASTER_STRIP_WIDTH` | 160px | Master bus strip |
 | `INSPECTOR_WIDTH` | 320px | Right-side inspector column |
 | `MIXER_STRIP_HEIGHT` | 440px | Fixed track-strip height — pins the fader, scrolls FX list inside |
 | `BUS_STRIP_HEIGHT` | 320px | Fixed bus-strip height (no instrument slot); sized with `MIXER_STRIP_HEIGHT` so both lanes fit the 1440×900 minimum window |
@@ -165,7 +171,7 @@ Dense sections fold away behind the **same caret pattern as the global-tracks sh
 Collapsible surfaces and their state homes:
 
 - **Arrange — global-tracks shelf** (`viewport.global_tracks_expanded`, `UiMessage::ToggleGlobalTracks`).
-- **Mixer inspector groups** SIGNAL / ROUTING / CHAIN (`MixerUiState::collapsed_inspector_groups`, `UiMessage::ToggleMixerInspectorGroup`). Header row: uppercase title left, caret right, hairline below; the hairline stays when collapsed.
+- **Mixer inspector groups** CHAIN / SENDS / ROUTING / AUTOMATION, then the owner's own group TRACK, BUS or MASTER (`MixerUiState::collapsed_inspector_groups`, `UiMessage::ToggleMixerInspectorGroup`). Header row: uppercase title left, caret right, hairline below; the hairline stays when collapsed.
 - **Compose workspace group banners** SECTION / TRACKS (`ComposeState::{section,track}_lanes_collapsed`, `ComposeMessage::ToggleWorkspaceGroup`). The banner itself always stays visible; collapsing hides every lane under it.
 - **Compose right-rail panel cards** (`ComposeState::collapsed_rail_panels`, `ComposeMessage::ToggleRailPanel`, keyed by `RailPanelKey`). When collapsed, only the header row of the card remains; any right-side meta (e.g. "ABAB · 4 LINES" on Lyric draft) stays visible so context isn't lost.
 
@@ -177,7 +183,7 @@ Collapsible surfaces and their state homes:
 - The whole header row is the click target (not just the caret) and gets a hover state (`small_button_style` or equivalent).
 - Action rows (Generate buttons, group-selector tabs, the editing-context header) are navigation, not content — they don't collapse.
 - The collapsed branch should skip *building* the body, not merely hide it.
-- Performance: a live (audio-tick) readout must never sit inside an `iced::widget::lazy` region whose fingerprint omits it — the mixer inspector keeps SIGNAL outside the lazy ROUTING/CHAIN block, and collapse flags are hashed into the lazy fingerprint.
+- Performance: a live (audio-tick) readout must never sit inside an `iced::widget::lazy` region whose fingerprint omits it — every mixer strip builds its fader/meter block outside the strip's lazy body, and collapse flags are hashed into the lazy fingerprint.
 
 ## Controls
 

@@ -52,6 +52,18 @@ impl ResonanceMcp {
     }
 
     #[tool(
+        description = "Rename a bus (bus_id from bus_create, or a kind: \"bus\" entry in \
+                       song_summary/song_tracks). The name must not be empty. Undoable.",
+        annotations(destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn bus_rename(
+        &self,
+        Parameters(params): Parameters<bus::RenameParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.invoke(bus::RENAME, &params).await
+    }
+
+    #[tool(
         description = "Set a bus's fader, in decibels (0 = unity, range -60..=+6). This is the \
                        lever for moving a whole group against the rest of the mix — pull the \
                        drum bus down 2 dB and every drum track keeps its internal balance \

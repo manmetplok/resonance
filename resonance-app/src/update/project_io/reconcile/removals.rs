@@ -310,9 +310,7 @@ fn prune_plugin(r: &mut Resonance, owner: PluginLocator, instance_id: PluginInst
     if let Some(chain) = chain {
         chain.retain(|p| p.instance_id != instance_id);
     }
-    if r.ui.mixer.selected_plugin == Some(instance_id) {
-        r.ui.mixer.selected_plugin = None;
-    }
+    r.ui.mixer.forget_plugin(instance_id);
     r.plugin_mirror.state_cache.remove(&instance_id);
     r.plugin_mirror.kit_info.remove(&instance_id);
     r.plugin_mirror.output_ports.remove(&instance_id);

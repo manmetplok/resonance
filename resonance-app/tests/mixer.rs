@@ -45,14 +45,20 @@ mod mixer_automation_controls;
 mod mixer_chain_reorder;
 #[path = "mixer/mixer_generic_param_panel.rs"]
 mod mixer_generic_param_panel;
+#[path = "mixer/mixer_strip_anatomy.rs"]
+mod mixer_strip_anatomy;
 #[path = "mixer/mixer_preset_bar.rs"]
 mod mixer_preset_bar;
 #[path = "mixer/generic_panel_display.rs"]
 mod generic_panel_display;
 #[path = "mixer/mixer_group_clustering.rs"]
 mod mixer_group_clustering;
+#[path = "mixer/inspector_chain_row.rs"]
+mod inspector_chain_row;
 #[path = "mixer/inspector_lazy_fingerprint.rs"]
 mod inspector_lazy_fingerprint;
+#[path = "mixer/mixer_inline_rename.rs"]
+mod mixer_inline_rename;
 #[path = "mixer/mixer_inspector_bus.rs"]
 mod mixer_inspector_bus;
 #[path = "mixer/mixer_inspector_bus_snapshot.rs"]
@@ -61,6 +67,8 @@ mod mixer_inspector_bus_snapshot;
 mod mixer_inspector_collapse;
 #[path = "mixer/mixer_inspector_empty_project.rs"]
 mod mixer_inspector_empty_project;
+#[path = "mixer/mixer_inspector_groups.rs"]
+mod mixer_inspector_groups;
 #[path = "mixer/mixer_inspector_external_instrument.rs"]
 mod mixer_inspector_external_instrument;
 #[path = "mixer/mixer_inspector_external_status.rs"]
@@ -75,6 +83,10 @@ mod mixer_inspector_sends_snapshot;
 mod mixer_strip_external_instrument;
 #[path = "mixer/mixer_sub_track_grouping.rs"]
 mod mixer_sub_track_grouping;
+#[path = "mixer/mixer_selection_exclusivity.rs"]
+mod mixer_selection_exclusivity;
+#[path = "mixer/plugin_focus_window.rs"]
+mod plugin_focus_window;
 #[path = "mixer/plugin_bypass_persistence.rs"]
 mod plugin_bypass_persistence;
 #[path = "mixer/plugin_removal_prunes_lanes.rs"]
@@ -91,5 +103,7 @@ mod tick_gating;
 mod track_group_registry;
 #[path = "mixer/pan_knob_drag.rs"]
 mod pan_knob_drag;
-#[path = "mixer/plugin_panel_fingerprint.rs"]
-mod plugin_panel_fingerprint;
+#[path = "mixer/plugin_window_fingerprint.rs"]
+mod plugin_window_fingerprint;
+#[path = "mixer/mixer_transient_settle.rs"]
+mod mixer_transient_settle;

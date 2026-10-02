@@ -52,6 +52,12 @@ pub enum BusMessage {
         instance_id: PluginInstanceId,
         to_index: usize,
     },
+    /// Rename a bus (the strip head / inspector header inline rename,
+    /// mixer-cleanup.md §2.3 / §3.1; control method `bus.rename`). One
+    /// discrete, undoable edit: callers send the finished name, never a
+    /// per-keystroke stream. Mirrors the name now and tells the engine
+    /// (`AudioCommand::SetBusName`), which sends no echo.
+    RenameBus(BusId, String),
 }
 
 impl BusMessage {
@@ -73,7 +79,8 @@ impl BusMessage {
             | Self::AddPluginToBus(..)
             | Self::AddPluginToBusWithId { .. }
             | Self::RemovePluginFromBus(..)
-            | Self::MovePluginInBus { .. } => UndoAction::Record,
+            | Self::MovePluginInBus { .. }
+            | Self::RenameBus(..) => UndoAction::Record,
         }
     }
 }
@@ -219,6 +226,23 @@ pub fn handle(r: &mut Resonance, m: BusMessage) -> Task<Message> {
             });
             r.io.restore_echoes.expect_plugin_removed(instance_id);
             crate::engine_events::plugins::bus_removed(r, bus_id, instance_id);
+        }
+        BusMessage::RenameBus(bus_id, name) => {
+            // Trimmed; an empty or unchanged name never gets here (gated
+            // in `gates_message`, before it can record an undo step).
+            let name = name.trim().to_owned();
+            let renamed = r.with_bus_mut(bus_id, |b| {
+                if b.name == name {
+                    return false;
+                }
+                b.name = name.clone();
+                true
+            });
+            if renamed == Some(true) {
+                let _ = r.engine.send(AudioCommand::SetBusName { bus_id, name });
+                // The track output pickers list busses by name.
+                r.ui.view_caches.rebuild_output(&r.registry.busses);
+            }
         }
     }
     Task::none()

@@ -171,9 +171,10 @@ fn adding_a_device_param_lane_creates_a_deviceparam_target() {
 }
 
 /// End-to-end render guard: a `DeviceParam` lane on an external-instrument
-/// track surfaces the strip's automation lane header (Read toggle) through the
-/// existing `automation_header` path — proving device-param lanes reuse the
-/// mixer's automation controls unchanged. Mirrors the epic-#14 picker's
+/// track surfaces in the mixer inspector's AUTOMATION group (Read toggle) —
+/// proving device-param lanes reuse the mixer's automation controls
+/// unchanged. (The strips' own lane header moved there with
+/// mixer-cleanup.md §2.2.) Mirrors the epic-#14 picker's
 /// simulator render check (golden PNGs diverge in this environment, so this is
 /// the deterministic stand-in).
 #[test]
@@ -181,8 +182,9 @@ fn mixer_renders_device_param_lane_header() {
     let mut app = external_app();
     select_muse(&mut app);
     let _ = app.update(Message::Ui(UiMessage::SwitchView(ViewMode::Mixer)));
+    let _ = app.update(Message::Ui(UiMessage::SelectTrack(Some(TRACK))));
 
-    // No lane yet ⇒ no Read toggle on any strip.
+    // No lane yet ⇒ no Read toggle in the inspector.
     {
         let mut ui = simulator(&app);
         assert!(
@@ -201,7 +203,7 @@ fn mixer_renders_device_param_lane_header() {
 
     let mut ui = simulator(&app);
     ui.find("READ")
-        .expect("the device-param lane's header (Read toggle) should render on the track strip");
+        .expect("the device-param lane's Read toggle should render in the track's inspector");
 }
 
 fn simulator(app: &Resonance) -> Simulator<'_, Message> {

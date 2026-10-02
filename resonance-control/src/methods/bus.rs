@@ -20,6 +20,9 @@ pub const CREATE: &str = "bus.create";
 /// `bus.delete` — remove a bus; destructive, requires `"confirm": true`
 /// ([`DeleteParams`] -> `MutationAck`).
 pub const DELETE: &str = "bus.delete";
+/// `bus.rename` — rename a bus ([`RenameParams`] -> `MutationAck`).
+/// Undoable. The bus twin of `track.rename`.
+pub const RENAME: &str = "bus.rename";
 /// `bus.set_volume` — set a bus fader in dB ([`SetVolumeParams`]).
 pub const SET_VOLUME: &str = "bus.set_volume";
 /// `bus.add_effect` — append an effect to a bus's insert chain
@@ -69,6 +72,7 @@ pub const CLEAR_SIDECHAIN: &str = "bus.clear_sidechain";
 pub const METHODS: &[&str] = &[
     CREATE,
     DELETE,
+    RENAME,
     SET_VOLUME,
     ADD_EFFECT,
     REMOVE_EFFECT,
@@ -116,6 +120,15 @@ pub struct DeleteParams {
     /// are lost, which changes how the group sounds.
     #[serde(default)]
     pub confirm: bool,
+}
+
+/// Params for `bus.rename`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RenameParams {
+    pub bus_id: TrackId,
+    /// The new display name. Must not be empty or whitespace only.
+    pub name: String,
 }
 
 /// Params for `bus.set_volume`.

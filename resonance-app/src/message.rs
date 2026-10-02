@@ -118,7 +118,7 @@ pub enum Message {
 }
 
 /// The host's preset surfaces (plugin-preset-library.md §6.6, slice P6):
-/// the plugin panel's bar, the browser it opens, and the media browser's
+/// the generic plugin window's bar, the browser it opens, and the media browser's
 /// Presets tab. None records undo by itself; a load that sticks goes
 /// through [`PluginMessage::LoadPluginPreset`], which does.
 #[derive(Debug, Clone)]
@@ -243,7 +243,6 @@ pub enum PluginMessage {
         instance_id: PluginInstanceId,
         plugin: ScannedPlugin,
     },
-    TogglePluginPanel(PluginInstanceId),
     SetPluginParam(PluginInstanceId, u32, f64),
     /// The plugin changed a parameter itself — its own editor, its own
     /// browser — and reported it (`AudioEvent::PluginParamEdited`): the
@@ -343,6 +342,93 @@ pub enum PluginMessage {
     /// Not undoable — the plugin catalog is a fact about the machine,
     /// not part of the project.
     RescanPlugins,
+    /// "Open" for a plugin slot: always produces a window
+    /// (mixer-cleanup.md §4). A plugin with its own GUI takes the
+    /// `OpenPluginEditor` path; one without — or one that is missing on
+    /// this machine — opens the host-drawn generic window (parameters,
+    /// preset bar, or the missing-plugin recovery). Opening another
+    /// plugin's generic window replaces the open one.
+    OpenPluginWindow(PluginInstanceId),
+    /// Close the generic window if it shows this plugin.
+    ClosePluginWindow(PluginInstanceId),
+    /// Title-bar drag of the generic window.
+    PluginWindowDrag(PluginWindowDrag),
+    /// Open the host-drawn generic parameter window for a slot even when
+    /// the plugin has its own GUI — the way to its parameter list and
+    /// preset bar for a plugin whose editor hides them. Focuses the slot.
+    OpenGenericParams(PluginInstanceId),
+    /// Make a slot the focused one (`MixerUiState::focused_slot`,
+    /// mixer-cleanup.md §2.1) and select the channel it sits on, without
+    /// opening anything. The preset commands then act on it.
+    FocusSlot(PluginInstanceId),
+    /// The inspector CHAIN rows' and header's own UI gestures
+    /// (mixer-cleanup.md §3.2, S7): the ☰ slot menu, replace mode, the
+    /// preset-name prompt, drag reorder and the colour palette.
+    ChainUi(ChainUiMessage),
+}
+
+/// View-state gestures of the inspector's CHAIN rows and header
+/// (mixer-cleanup.md §3.2 / §3.1). None of them edits the project on its
+/// own: an edit they lead to (a move, a remove, a colour) is dispatched
+/// as its ordinary message, which takes its own undo entry.
+#[derive(Debug, Clone)]
+pub enum ChainUiMessage {
+    /// ☰ on a CHAIN row: open its slot menu (or close it when it is
+    /// the open one).
+    ToggleSlotMenu(PluginInstanceId),
+    /// A slot-menu entry or palette swatch was picked: close whatever
+    /// inspector popover is open, then dispatch the entry's message.
+    Pick(Box<Message>),
+    /// Click-away: a press landed somewhere while a slot menu or the
+    /// colour palette was open (`chain_ui::popover_press_event`). Closes
+    /// it, unless that same press just opened it.
+    Dismiss,
+    /// "Browse presets…": focus the slot, then open the preset browser
+    /// on it.
+    BrowsePresets(PluginInstanceId),
+    /// "Replace…": the CHAIN group's add picker turns into a replace
+    /// picker for this slot (`PluginMessage::ReplacePlugin`).
+    BeginReplace(PluginInstanceId),
+    CancelReplace,
+    /// "Save preset…": open the name prompt under the row.
+    BeginPresetSave(PluginInstanceId),
+    PresetSaveName(String),
+    /// Save the plugin's sound under the typed name (overwriting a user
+    /// preset of the same name, which the button says beforehand).
+    CommitPresetSave,
+    CancelPresetSave,
+    /// Press on a row's ⠿ handle: arm a drag of that slot.
+    DragStart(PluginInstanceId),
+    /// The pointer entered the row of this slot while a drag is armed.
+    DragOver(PluginInstanceId),
+    /// The pointer left the row of this slot while a drag is armed: it
+    /// is no longer the drop target.
+    DragLeave(PluginInstanceId),
+    /// A press while a drag is armed means its release was lost (it came
+    /// in the same event batch as the press, or outside the window):
+    /// disarm, unless this press is the one that just re-armed it.
+    DragPointerPressed,
+    /// The button came up: move the dragged slot to the hovered row's
+    /// place, if the chain rules allow it, and disarm.
+    DragDrop,
+    /// Disarm without moving (the window lost focus).
+    DragCancel,
+    /// The header swatch: open (or close) the track-colour palette.
+    ToggleColorPalette(TrackId),
+    /// The strip's "No instrument" line: select the track and cue its
+    /// CHAIN group's `+ Add instrument` picker.
+    CueInstrumentPicker(TrackId),
+}
+
+/// A step of the generic plugin window's title-bar drag.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PluginWindowDrag {
+    /// The title bar was pressed.
+    Begin,
+    /// The pointer moved, in window coordinates.
+    Moved(iced::Point),
+    /// The button was released (or the pointer left the window).
+    End,
 }
 
 impl PluginMessage {
@@ -405,8 +491,16 @@ impl PluginMessage {
             // that sticks is re-dispatched as `LoadPluginPreset`, and a
             // "with preset…" add as the add it is.
             Self::PresetUi(_) => UndoAction::Skip,
-            Self::TogglePluginPanel(_)
-            | Self::OpenPluginEditor(_)
+            Self::OpenPluginEditor(_)
+            // Opening, closing and moving a window are view state.
+            | Self::OpenPluginWindow(_)
+            | Self::ClosePluginWindow(_)
+            | Self::PluginWindowDrag(_)
+            | Self::OpenGenericParams(_)
+            | Self::FocusSlot(_)
+            // Menus, prompts and the drag are view state; what they lead
+            // to is dispatched as its own (recorded) message.
+            | Self::ChainUi(_)
             // A rescan changes what the machine offers, not what the
             // project contains — there is nothing to undo (todo #1307).
             | Self::RescanPlugins
@@ -474,8 +568,8 @@ pub enum UiMessage {
     CancelQuit,
     /// Toggle the global tracks area (tempo, time signature) in the arrange view.
     ToggleGlobalTracks,
-    /// Fold / unfold one of the mixer-inspector groups (SIGNAL /
-    /// ROUTING / CHAIN). Runtime UI state only.
+    /// Fold / unfold one of the mixer-inspector groups (CHAIN / SENDS /
+    /// ROUTING / AUTOMATION / TRACK). Runtime UI state only.
     ToggleMixerInspectorGroup(MixerInspectorGroup),
     /// Fold / unfold a track's take lane — the stack of cycle-recorded
     /// takes shown beneath it (epic #15, doc #165). Runtime UI state only:
@@ -583,6 +677,36 @@ pub enum UiMessage {
     Palette(crate::palette::PaletteMsg),
     /// Preferences › Keyboard: the settings tab, preset and rebinding.
     Keymap(crate::update::keymap::KeymapMsg),
+    /// Select the MASTER strip, so the inspector describes the master
+    /// (mixer-cleanup.md §3.3). Clears the track and bus selections: the
+    /// inspector shows exactly one channel.
+    SelectMaster,
+    /// The app window was opened or resized (`window::Event::Opened` /
+    /// `Resized`). Kept as `UiTransientState::window_size`, which the
+    /// floating generic plugin window clamps its position to.
+    WindowResized(iced::Size),
+    /// Open the inline rename of a track or bus name on a strip head or
+    /// the inspector header — a double-click on the name
+    /// (mixer-cleanup.md §2.3, §3.1). Seeds the edit buffer with the
+    /// current name and focuses the field; an open rename elsewhere
+    /// commits first (`update::inline_rename`).
+    BeginRename(crate::state::RenameTarget, crate::state::RenameSurface),
+    /// The rename field's text changed.
+    RenameInput(String),
+    /// Commit the rename (Enter, or the field losing focus): sends
+    /// `TrackMessage::SetTrackName` / `BusMessage::RenameBus` when the
+    /// trimmed name is non-empty and different, then closes the field.
+    CommitRename,
+    /// Drop the rename without renaming (Esc).
+    CancelRename,
+    /// A mouse press landed while a rename is open. Unless the pointer
+    /// is over the field, the press was elsewhere and the rename commits
+    /// (iced's `text_input` has no blur callback, and a press on a layer
+    /// above the strips never reaches the field at all).
+    RenamePointer,
+    /// The pointer entered (`true`) or left (`false`) the open rename
+    /// field.
+    RenameHovered(bool),
 }
 
 impl UiMessage {
@@ -608,6 +732,7 @@ impl UiMessage {
             | Self::NewEmptyProject
             | Self::SelectTrack(..)
             | Self::SelectBus(..)
+            | Self::WindowResized(..)
             | Self::ModifiersChanged(..)
             | Self::ConfirmSaveAndQuit
             | Self::ConfirmDiscardAndQuit
@@ -644,7 +769,17 @@ impl UiMessage {
             | Self::ClosePalette
             | Self::Palette(..)
             // Keymap edits are user settings, not project state.
-            | Self::Keymap(..) => UndoAction::Skip,
+            | Self::Keymap(..)
+            | Self::SelectMaster => UndoAction::Skip,
+            // The inline rename's edit buffer is UI state; the commit
+            // re-enters `update()` as `SetTrackName` / `RenameBus`, which
+            // records the one undo step.
+            Self::BeginRename(..)
+            | Self::RenameInput(..)
+            | Self::CommitRename
+            | Self::CancelRename
+            | Self::RenamePointer
+            | Self::RenameHovered(..) => UndoAction::Skip,
         }
     }
 }

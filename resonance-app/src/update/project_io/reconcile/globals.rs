@@ -111,8 +111,9 @@ impl Reconcile for Transport {
 }
 
 /// Transient UI state a replay after `ClearAll` resets so the project
-/// starts clean: the selected clip and plugin, an in-flight clip drag or
-/// trim, and the delete-track / quit confirmations. An undo keeps them —
+/// starts clean: the selected clip, the plugin window and focused slot,
+/// the master selection, an in-flight clip drag or trim, and the
+/// delete-track / quit confirmations. An undo keeps them —
 /// what names an entity it removes is pruned by the removal domains
 /// (A-13h/i). The scroll position is not reset here: an undo must not move
 /// the view, and a disk load scrolls in `all_cleared` (FU-V3a).
@@ -126,7 +127,9 @@ impl Reconcile for TransientUi {
             return;
         }
         r.ui.interaction.selected_clip = None;
-        r.ui.mixer.selected_plugin = None;
+        // The plugin window, focused slot, CHAIN affordances, master
+        // selection and inline rename all name the old project.
+        r.ui.mixer.reset_for_project();
         r.ui.interaction.clip_drag = None;
         r.ui.interaction.clip_trim = None;
         r.modals.confirm_delete_track = None;

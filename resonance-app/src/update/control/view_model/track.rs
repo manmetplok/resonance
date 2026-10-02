@@ -52,6 +52,8 @@ pub(in crate::update::control) fn track_summary(app: &Resonance, t: &TrackState)
         output: track_output(t.output),
         clip_count: clip_count(app, t.id),
         automation_lanes: lane_count(app, ChainOwner::Track(t.id)),
+        // A sub-track reports its parent's colour, as its strip draws it.
+        color: Some(track::format_hex_color(app.registry.display_color(t))),
     }
 }
 
@@ -73,6 +75,7 @@ fn bus_summary(app: &Resonance, b: &BusState) -> TrackSummary {
         output: WireTrackOutput::Master,
         clip_count: 0,
         automation_lanes: lane_count(app, ChainOwner::Bus(b.id)),
+        color: None,
     }
 }
 

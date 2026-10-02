@@ -80,4 +80,44 @@ pub struct UiTransientState {
     pub recent_dirty_since: Option<std::time::Instant>,
     /// The Settings overlay's tab and the Keyboard panel's state.
     pub keymap_editor: crate::update::keymap::KeymapEditorState,
+    /// The app window's last-known inner size, from the window's
+    /// `Opened` / `Resized` events. Starts at [`DEFAULT_WINDOW_SIZE`] (the
+    /// window's own minimum, so never larger than the real window). The
+    /// floating generic plugin window clamps its position to it so its
+    /// title bar stays reachable.
+    pub window_size: iced::Size,
+}
+
+/// The app window's opening size, which is also its minimum
+/// (`main.rs`).
+pub const DEFAULT_WINDOW_SIZE: iced::Size = iced::Size::new(1440.0, 900.0);
+
+impl UiTransientState {
+    /// Select a single track (or clear the selection with `None`) — the
+    /// one entry point every track selection goes through. Beyond
+    /// [`ClipInteractionState::select_single_track`] it takes the mixer's
+    /// bus / master selection off when a track is selected: the inspector
+    /// shows a selected bus first, then the master, then a track, so a
+    /// track selected from anywhere (a clip drag or trim, the Arrange
+    /// context menu) would otherwise leave the inspector describing a
+    /// stale bus or the master.
+    pub fn select_track(&mut self, id: Option<resonance_audio::types::TrackId>) {
+        if id.is_some() {
+            self.clear_channel_selection();
+        }
+        self.interaction.select_single_track(id);
+    }
+
+    /// Toggle a track in the multi-selection (an additive click), with
+    /// the same bus / master exclusivity as [`Self::select_track`].
+    pub fn toggle_track_selection(&mut self, id: resonance_audio::types::TrackId) {
+        self.clear_channel_selection();
+        self.interaction.toggle_track_selection(id);
+    }
+
+    /// Drop the mixer's bus and master selection.
+    pub fn clear_channel_selection(&mut self) {
+        self.mixer.selected_bus = None;
+        self.mixer.selected_master = false;
+    }
 }

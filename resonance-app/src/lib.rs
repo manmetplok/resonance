@@ -68,7 +68,6 @@ pub struct PendingPresetSave {
 /// A plugin-preset capture waiting on the engine's state echo.
 #[derive(Debug, Clone)]
 pub(crate) struct PendingPluginPresetSave {
-    pub(crate) instance_id: resonance_audio::types::PluginInstanceId,
     /// CLAP id, which is what names the preset directory.
     pub(crate) clap_id: String,
     /// Display name to write.
@@ -615,6 +614,7 @@ impl Resonance {
                 keymap_editor: crate::update::keymap::KeymapEditorState::for_settings(
                     &settings.keymap,
                 ),
+                window_size: state::DEFAULT_WINDOW_SIZE,
             },
             banners: state::Banners::default(),
             master: state::MasterState {

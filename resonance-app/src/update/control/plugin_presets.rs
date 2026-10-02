@@ -548,15 +548,17 @@ pub(crate) fn arm_save(
     args: SaveArgs,
 ) -> Result<String, RpcError> {
     let id = check_save(app, &clap_id, &args)?;
-    app.presets.pending_plugin_preset_save = Some(crate::PendingPluginPresetSave {
+    app.presets.pending_plugin_preset_saves.insert(
         instance_id,
-        clap_id,
-        name: args.name.trim().to_string(),
-        id: id.clone(),
-        meta: args.meta,
-        favorite: args.favorite,
-        target: args.overwrite_id,
-    });
+        crate::PendingPluginPresetSave {
+            clap_id,
+            name: args.name.trim().to_string(),
+            id: id.clone(),
+            meta: args.meta,
+            favorite: args.favorite,
+            target: args.overwrite_id,
+        },
+    );
     let _ = app
         .engine
         .send(resonance_audio::types::AudioCommand::SavePluginPresetState { instance_id });

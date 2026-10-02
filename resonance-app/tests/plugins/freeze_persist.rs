@@ -70,6 +70,7 @@ fn project_track(id: u64, freeze: TrackFreezeState) -> resonance_app::project::P
         midi_output_channel: None,
         external_instrument: None,
         freeze,
+        color: None,
     }
 }
 

@@ -153,6 +153,113 @@ fn rename_is_undoable_and_validates() {
     assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
 }
 
+// ---------------- track.set_color ----------------
+
+#[test]
+fn set_color_is_reported_undoable_and_validates() {
+    let mut app = app();
+    let id = add_track(&mut app, "instrument", Some("Keys"));
+    // A new track already carries a palette colour on the wire.
+    let initial = tracks_view(&mut app).tracks[0].summary.color.clone();
+    let initial = initial.expect("a track reports its colour");
+    assert!(
+        initial.len() == 7 && initial.starts_with('#'),
+        "\"#rrggbb\": {initial}"
+    );
+
+    let before = app.revision();
+    let ack: MutationAck = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": id, "color": "#1A2B3C" }),
+    )
+    .result()
+    .expect("set_color succeeds");
+    assert_eq!(ack.revision, before + 1);
+    // Normalised to lowercase on the way back out.
+    assert_eq!(
+        tracks_view(&mut app).tracks[0].summary.color.as_deref(),
+        Some("#1a2b3c")
+    );
+
+    // One undo step, labelled, back to the palette colour.
+    let undone: resonance_control::methods::edit::UndoResult =
+        roundtrip(&mut app, Request::without_params(98, "edit.undo"))
+            .result()
+            .expect("edit.undo succeeds");
+    assert_eq!(undone.undone.as_deref(), Some("track colour"));
+    assert_eq!(
+        tracks_view(&mut app).tracks[0].summary.color.as_deref(),
+        Some(initial.as_str())
+    );
+
+    // Malformed colours and unknown ids are rejected precisely.
+    for bad in ["red", "#12345", "#1234567", "#12345g", ""] {
+        let response = call(
+            &mut app,
+            "track.set_color",
+            serde_json::json!({ "track_id": id, "color": bad }),
+        );
+        assert_eq!(
+            response.error.expect("rejected").kind(),
+            ErrorKind::InvalidParams,
+            "{bad:?}"
+        );
+    }
+    let response = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": 9999, "color": "#000000" }),
+    );
+    assert_eq!(response.error.unwrap().kind(), ErrorKind::NotFound);
+}
+
+/// A sub-track wears its parent's colour: recolouring the parent carries
+/// to its sub-tracks in one undo step, and a sub-track id is refused over
+/// the wire and ignored by the reducer.
+#[test]
+fn set_color_follows_parent_to_sub_tracks_and_refuses_sub_tracks() {
+    use resonance_app::message::{Message, TrackMessage};
+    use resonance_app::state::{SubTrackLink, TrackState};
+    let mut app = app();
+    let parent = add_track(&mut app, "instrument", Some("Kit"));
+    let mut sub = TrackState::new_instrument(900, 1);
+    sub.sub_track = Some(SubTrackLink {
+        parent_track_id: parent,
+        output_port_index: 1,
+    });
+    app.test_push_track(sub);
+    let color_of = |app: &Resonance, id: u64| {
+        app.test_registry().tracks.iter().find(|t| t.id == id).unwrap().color
+    };
+    let before = color_of(&app, 900);
+
+    let _: MutationAck = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": parent, "color": "#102030" }),
+    )
+    .result()
+    .expect("set_color on the parent succeeds");
+    assert_eq!(color_of(&app, parent), [0x10, 0x20, 0x30]);
+    assert_eq!(color_of(&app, 900), [0x10, 0x20, 0x30], "the sub-track follows");
+
+    let _ = roundtrip(&mut app, Request::without_params(97, "edit.undo"));
+    assert_eq!(color_of(&app, 900), before, "one undo step restores both");
+
+    let response = call(
+        &mut app,
+        "track.set_color",
+        serde_json::json!({ "track_id": 900, "color": "#ffffff" }),
+    );
+    let error = response.error.expect("a sub-track is refused");
+    assert_eq!(error.kind(), ErrorKind::InvalidParams);
+    assert!(error.message.contains("parent"), "{}", error.message);
+
+    let _ = app.update(Message::Track(TrackMessage::SetTrackColor(900, [1, 2, 3])));
+    assert_eq!(color_of(&app, 900), before, "the reducer ignores a sub-track id");
+}
+
 // ---------------- track.delete ----------------
 
 #[test]

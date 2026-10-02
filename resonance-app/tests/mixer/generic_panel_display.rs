@@ -1,4 +1,4 @@
-//! What the host's generic parameter panel prints (ba todo #1290,
+//! What the host's generic parameter window prints (ba todo #1290,
 //! finding X8's GUI half).
 //!
 //! The panel used to render every parameter as `{:.2}`, so a filter type

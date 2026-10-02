@@ -1,6 +1,8 @@
-//! Chain reorder from the GUI — the ▲/▼ pair on the mixer inspector's
-//! CHAIN rows and on every channel strip's plugin slot (ba todo #1302,
-//! doc #276 item 2.1).
+//! Chain reorder from the GUI (ba todo #1302, doc #276 item 2.1): the
+//! ☰ slot menu's Move up / Move down on the inspector CHAIN rows
+//! (mixer-cleanup.md §3.2) and drag reorder by a CHAIN row's ⠿ handle
+//! (slice S7), which obeys the same rules. The strips' own carets left
+//! with §2.2: a strip shows its chain, the inspector edits it.
 //!
 //! Reordering has been complete in the backend since ba doc #273 and
 //! reachable over MCP as `track/bus/master.move_effect` — but the view
@@ -14,7 +16,7 @@
 //! that pressing the affordance the GUI hands out lands the same
 //! reorder — one undo step — that the control API reads back.
 
-use resonance_app::message::Message;
+use resonance_app::message::{ChainUiMessage, Message, PluginMessage, UiMessage};
 use resonance_app::state::ViewMode;
 use resonance_app::{Resonance, TestChain};
 use resonance_audio::types::{AudioCommand, AudioEvent, ScannedPlugin, TrackType};
@@ -35,7 +37,13 @@ fn app() -> Resonance {
             scanned("reverb", "Resonance Reverb", false),
         ],
     });
+    // The CHAIN rows are the selected channel's inspector rows.
+    select(&mut app, UiMessage::SelectTrack(Some(TRACK)));
     app
+}
+
+fn select(app: &mut Resonance, m: UiMessage) {
+    let _ = app.update(Message::Ui(m));
 }
 
 fn scanned(short: &str, name: &str, is_instrument: bool) -> ScannedPlugin {
@@ -360,4 +368,175 @@ fn the_engine_echo_after_a_gui_reorder_is_a_no_op() {
         to_index: 0,
     });
     assert_eq!(track_order(&mut app), vec!["compressor", "eq"]);
+}
+
+// ---------------------------------------------------------------------------
+// The ☰ menu's Move up / Move down (mixer-cleanup.md §3.2): the carets'
+// non-drag home on the CHAIN row, built from the same `chain_moves`.
+// ---------------------------------------------------------------------------
+
+fn ids(app: &Resonance, chain: TestChain) -> Vec<u64> {
+    app.test_chain_slots(chain).into_iter().map(|(id, _, _)| id).collect()
+}
+
+/// The menu entry `label` of `instance`'s row: `Some(message)` when it is
+/// enabled.
+fn menu_entry(app: &Resonance, instance: u64, label: &str) -> Option<Message> {
+    app.test_slot_menu_entries(instance)
+        .into_iter()
+        .find(|(l, _)| l == label)
+        .unwrap_or_else(|| panic!("the slot menu offers {label}"))
+        .1
+}
+
+#[test]
+fn the_slot_menu_moves_agree_with_the_instrument_floor() {
+    let mut app = app();
+    add_instrument(&mut app);
+    add_track_effect(&mut app, "eq");
+    add_track_effect(&mut app, "compressor");
+    let chain = ids(&app, TestChain::Track(TRACK));
+
+    // The instrument moves in neither direction; the effect under it
+    // cannot move up onto it; the last cannot move down.
+    assert!(menu_entry(&app, chain[0], "Move up").is_none());
+    assert!(menu_entry(&app, chain[0], "Move down").is_none());
+    assert!(menu_entry(&app, chain[1], "Move up").is_none());
+    assert!(menu_entry(&app, chain[2], "Move down").is_none());
+
+    // Picking an enabled one lands the reorder (and closes the menu).
+    chain_ui(&mut app, ChainUiMessage::ToggleSlotMenu(chain[2]));
+    assert_eq!(app.test_slot_menu(), Some(chain[2]));
+    let up = menu_entry(&app, chain[2], "Move up").expect("compressor can move up");
+    let _ = app.update(up);
+    assert_eq!(track_order(&mut app), vec!["wavetable", "compressor", "eq"]);
+    assert_eq!(app.test_slot_menu(), None, "a pick closes the menu");
+}
+
+// ---------------------------------------------------------------------------
+// Drag reorder (slice S7)
+// ---------------------------------------------------------------------------
+
+fn chain_ui(app: &mut Resonance, m: ChainUiMessage) {
+    let _ = app.update(Message::Plugin(PluginMessage::ChainUi(m)));
+}
+
+/// Grab `dragged` by its handle, pass over `onto`'s row, release.
+fn drag(app: &mut Resonance, dragged: u64, onto: u64) {
+    chain_ui(app, ChainUiMessage::DragStart(dragged));
+    chain_ui(app, ChainUiMessage::DragOver(onto));
+    chain_ui(app, ChainUiMessage::DragDrop);
+}
+
+#[test]
+fn dragging_a_row_onto_another_moves_it_to_that_place() {
+    let mut app = app();
+    for fx in ["eq", "compressor", "reverb"] {
+        add_track_effect(&mut app, fx);
+    }
+    let chain = ids(&app, TestChain::Track(TRACK));
+    let entries_before = app.test_undo_history().test_undo_entries().len();
+
+    // Down: eq onto reverb's row takes the last place.
+    drag(&mut app, chain[0], chain[2]);
+    assert_eq!(track_order(&mut app), vec!["compressor", "reverb", "eq"]);
+    assert_eq!(app.test_chain_drag(), None, "the drop disarms the drag");
+    assert_eq!(
+        app.test_undo_history().test_undo_entries().len(),
+        entries_before + 1,
+        "a drop is one undo step, like the caret it replaces"
+    );
+
+    // Up: eq back onto compressor's row takes the first place.
+    drag(&mut app, chain[0], chain[1]);
+    assert_eq!(track_order(&mut app), vec!["eq", "compressor", "reverb"]);
+}
+
+#[test]
+fn a_drop_the_instrument_floor_forbids_changes_nothing() {
+    let mut app = app();
+    add_instrument(&mut app);
+    add_track_effect(&mut app, "eq");
+    add_track_effect(&mut app, "compressor");
+    let chain = ids(&app, TestChain::Track(TRACK));
+    let revision = app.revision();
+
+    // An effect dropped onto the instrument's row would displace it.
+    drag(&mut app, chain[2], chain[0]);
+    // The instrument itself does not move.
+    drag(&mut app, chain[0], chain[2]);
+    assert_eq!(track_order(&mut app), vec!["wavetable", "eq", "compressor"]);
+    assert_eq!(app.revision(), revision, "a refused drop is not an edit");
+    assert_eq!(app.test_chain_drag(), None);
+
+    // The effects still reorder among themselves, above the floor.
+    drag(&mut app, chain[2], chain[1]);
+    assert_eq!(track_order(&mut app), vec!["wavetable", "compressor", "eq"]);
+}
+
+#[test]
+fn bus_and_master_chains_reorder_by_drag_but_never_across_owners() {
+    let mut app = app();
+    let bus_id = create_bus(&mut app);
+    add_bus_effect(&mut app, bus_id, "eq");
+    add_bus_effect(&mut app, bus_id, "compressor");
+    add_master_effect(&mut app, "eq");
+    add_master_effect(&mut app, "reverb");
+    let bus = ids(&app, TestChain::Bus(bus_id));
+    let master = ids(&app, TestChain::Master);
+
+    select(&mut app, UiMessage::SelectBus(Some(bus_id)));
+    drag(&mut app, bus[1], bus[0]);
+    assert_eq!(bus_order(&mut app, bus_id), vec!["compressor", "eq"]);
+    select(&mut app, UiMessage::SelectMaster);
+    drag(&mut app, master[0], master[1]);
+    assert_eq!(master_order(&mut app), vec!["reverb", "eq"]);
+
+    // A drag only reorders its own owner's chain.
+    let revision = app.revision();
+    select(&mut app, UiMessage::SelectBus(Some(bus_id)));
+    drag(&mut app, bus[0], master[0]);
+    assert_eq!(bus_order(&mut app, bus_id), vec!["compressor", "eq"]);
+    assert_eq!(master_order(&mut app), vec!["reverb", "eq"]);
+    assert_eq!(app.revision(), revision);
+}
+
+/// A release with no row hovered, or a cancelled drag, leaves the chain
+/// alone and disarms.
+#[test]
+fn a_drag_without_a_target_or_cancelled_changes_nothing() {
+    let mut app = app();
+    add_track_effect(&mut app, "eq");
+    add_track_effect(&mut app, "compressor");
+    let chain = ids(&app, TestChain::Track(TRACK));
+
+    chain_ui(&mut app, ChainUiMessage::DragStart(chain[0]));
+    assert_eq!(app.test_chain_drag().map(|d| d.instance_id), Some(chain[0]));
+    chain_ui(&mut app, ChainUiMessage::DragDrop);
+    assert_eq!(app.test_chain_drag(), None);
+
+    chain_ui(&mut app, ChainUiMessage::DragStart(chain[0]));
+    chain_ui(&mut app, ChainUiMessage::DragOver(chain[1]));
+    chain_ui(&mut app, ChainUiMessage::DragCancel);
+    assert_eq!(app.test_chain_drag(), None);
+    assert_eq!(track_order(&mut app), vec!["eq", "compressor"]);
+}
+
+/// The window-level release ends a drag wherever it lands, and losing
+/// focus cancels it.
+#[test]
+fn the_window_release_drops_and_unfocus_cancels() {
+    use resonance_app::update::chain_ui::drag_end_event;
+    let release = iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+        iced::mouse::Button::Left,
+    ));
+    assert!(matches!(
+        drag_end_event(&release),
+        Some(Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragDrop)))
+    ));
+    let unfocus = iced::Event::Window(iced::window::Event::Unfocused);
+    assert!(matches!(
+        drag_end_event(&unfocus),
+        Some(Message::Plugin(PluginMessage::ChainUi(ChainUiMessage::DragCancel)))
+    ));
 }

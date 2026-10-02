@@ -34,6 +34,7 @@ fn track_summary() -> TrackSummary {
         output: TrackOutput::Master,
         clip_count: 2,
         automation_lanes: 0,
+        color: Some("#5fb88a".to_owned()),
     }
 }
 
@@ -63,6 +64,11 @@ fn track_summary_reports_parentage_and_routing() {
     let wire = serde_json::to_value(track_summary()).unwrap();
     assert!(wire.get("parent_id").is_none(), "{wire}");
     assert_eq!(wire["output"], json!("master"));
+    assert_eq!(wire["color"], json!("#5fb88a"));
+    // A bus has no colour of its own: the field is elided, not `null`.
+    let bus = TrackSummary { color: None, ..track_summary() };
+    let wire = serde_json::to_value(bus).unwrap();
+    assert!(wire.get("color").is_none(), "{wire}");
 
     let back: TrackSummary = serde_json::from_value(
         serde_json::to_value(sub_track_summary()).unwrap(),
@@ -156,7 +162,8 @@ fn song_summary_matches_documented_shape() {
                 "instrument": "resonance-wavetable",
                 "muted": false, "soloed": true,
                 "volume": 0.5, "volume_db": -6.0, "pan": -0.25,
-                "output": "master", "clip_count": 2, "automation_lanes": 0
+                "output": "master", "clip_count": 2, "automation_lanes": 0,
+                "color": "#5fb88a"
             }],
             "revision": 12
         })
@@ -376,4 +383,19 @@ fn views_tolerate_unknown_fields() {
     .unwrap();
     assert_eq!(back.pitch_name, "E4");
     assert_eq!(back.id, None);
+}
+
+#[test]
+fn track_colors_parse_and_format_as_hex() {
+    use resonance_control::methods::track::{format_hex_color, parse_hex_color};
+    assert_eq!(parse_hex_color("#5fb88a"), Some([0x5f, 0xb8, 0x8a]));
+    assert_eq!(parse_hex_color("5FB88A"), Some([0x5f, 0xb8, 0x8a]));
+    assert_eq!(parse_hex_color(" #000000 "), Some([0, 0, 0]));
+    for bad in ["", "#", "#fff", "#5fb88a0", "#5fb88g", "red", "#\u{e9}\u{e9}\u{e9}"] {
+        assert_eq!(parse_hex_color(bad), None, "{bad:?}");
+    }
+    assert_eq!(format_hex_color([0x5f, 0xb8, 0x8a]), "#5fb88a");
+    assert_eq!(format_hex_color([0, 10, 255]), "#000aff");
+    let c = [0x12, 0xab, 0xef];
+    assert_eq!(parse_hex_color(&format_hex_color(c)), Some(c));
 }

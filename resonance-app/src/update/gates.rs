@@ -84,6 +84,17 @@ fn is_gated_message(message: &crate::message::Message) -> bool {
         | Message::Ui(UiMessage::NewEmptyProject)
         | Message::Ui(UiMessage::SelectTrack(_))
         | Message::Ui(UiMessage::SelectBus(_))
+        | Message::Ui(UiMessage::SelectMaster)
+        | Message::Ui(UiMessage::WindowResized(_))
+        // The inline rename's buffer is UI state; its commit re-enters
+        // `update()` as `SetTrackName` / `RenameBus` and meets the gate
+        // then.
+        | Message::Ui(UiMessage::BeginRename(..))
+        | Message::Ui(UiMessage::RenameInput(_))
+        | Message::Ui(UiMessage::CommitRename)
+        | Message::Ui(UiMessage::CancelRename)
+        | Message::Ui(UiMessage::RenamePointer)
+        | Message::Ui(UiMessage::RenameHovered(_))
         | Message::Ui(UiMessage::ModifiersChanged(_))
         | Message::Ui(UiMessage::ConfirmSaveAndQuit)
         | Message::Ui(UiMessage::ConfirmDiscardAndQuit)
@@ -381,7 +392,16 @@ fn plugin_edit_target(
         AddPluginToTrackWithId { track_id, .. } | MovePluginInTrack { track_id, .. } => {
             Some(*track_id)
         }
-        TogglePluginPanel(_) | OpenPluginEditor(_) | ClosePluginEditor(_) => None,
+        OpenPluginEditor(_)
+        | ClosePluginEditor(_)
+        | OpenPluginWindow(_)
+        | ClosePluginWindow(_)
+        | PluginWindowDrag(_)
+        | OpenGenericParams(_)
+        | FocusSlot(_) => None,
+        // View state; an edit it leads to is re-dispatched as its own
+        // message and gated as that.
+        ChainUi(_) => None,
         // An audition moves the sound as a recall would; the loads that
         // stick are gated as `LoadPluginPreset` / the add they become.
         PresetUi(crate::message::PresetUiMessage::BrowserAudition(_)) => r
@@ -552,7 +572,30 @@ impl crate::Resonance {
         if self.import_confirm_is_refused(message) {
             return true;
         }
+        if self.bus_rename_is_noop(message) {
+            return true;
+        }
         false
+    }
+
+    /// A `RenameBus` that would change nothing: the trimmed name is empty
+    /// or the bus already has it (or the bus is gone). Gated rather than
+    /// ignored in the handler because the message records its undo entry
+    /// (and marks the project dirty) before dispatch.
+    fn bus_rename_is_noop(&self, message: &crate::message::Message) -> bool {
+        let crate::message::Message::Bus(crate::message::BusMessage::RenameBus(id, name)) =
+            message
+        else {
+            return false;
+        };
+        let name = name.trim();
+        name.is_empty()
+            || self
+                .registry
+                .busses
+                .iter()
+                .find(|b| b.id == *id)
+                .is_none_or(|b| b.name == name)
     }
 
     /// A MIDI Import Confirm that cannot import (code review FU-V2a): no
