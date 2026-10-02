@@ -112,6 +112,7 @@ impl SynthEngine {
         }
 
         self.finish_block(&snap, frames);
+        self.control_clock = self.control_clock.wrapping_add(frames as u32);
     }
 
     /// Retarget the per-sample de-zippers once per block, so host automation
@@ -190,8 +191,10 @@ impl SynthEngine {
         sample_id: usize,
         triggered_here: bool,
     ) -> SampleCtx {
-        let coeff_tick = (sample_id as u32 & (FILTER_COEFF_INTERVAL - 1)) == 0;
-        let drift_tick = (sample_id as u32 & (DRIFT_INTERVAL - 1)) == 0;
+        // Ticks run off the cross-block clock, not the in-block index.
+        let clock = self.control_clock.wrapping_add(sample_id as u32);
+        let coeff_tick = (clock & (FILTER_COEFF_INTERVAL - 1)) == 0;
+        let drift_tick = (clock & (DRIFT_INTERVAL - 1)) == 0;
         let lfo_vals_needed = coeff_tick || triggered_here;
 
         let global_lfo = if lfo_vals_needed {

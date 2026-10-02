@@ -51,11 +51,11 @@ pub struct WarpParams {
 
 impl WarpParams {
     pub(super) fn new(num: usize) -> Self {
-        let mode_id: &'static str = Box::leak(format!("osc{}_warp_mode", num).into_boxed_str());
+        let mode_id: &'static str = super::intern(format!("osc{}_warp_mode", num));
         let mode_name: &'static str =
-            Box::leak(format!("Osc {} Warp Mode", num).into_boxed_str());
-        let amt_id: &'static str = Box::leak(format!("osc{}_warp_amount", num).into_boxed_str());
-        let amt_name: &'static str = Box::leak(format!("Osc {} Warp", num).into_boxed_str());
+            super::intern(format!("Osc {} Warp Mode", num));
+        let amt_id: &'static str = super::intern(format!("osc{}_warp_amount", num));
+        let amt_name: &'static str = super::intern(format!("Osc {} Warp", num));
 
         Self {
             mode: IntParam::new(

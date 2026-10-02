@@ -10,14 +10,14 @@ pub struct ModSlotParams {
 
 impl ModSlotParams {
     pub(super) fn new(index: usize) -> Self {
-        let src_id: &'static str = Box::leak(format!("mod_{}_src", index + 1).into_boxed_str());
+        let src_id: &'static str = super::intern(format!("mod_{}_src", index + 1));
         let src_name: &'static str =
-            Box::leak(format!("Mod {} Source", index + 1).into_boxed_str());
-        let dst_id: &'static str = Box::leak(format!("mod_{}_dst", index + 1).into_boxed_str());
-        let dst_name: &'static str = Box::leak(format!("Mod {} Dest", index + 1).into_boxed_str());
-        let amt_id: &'static str = Box::leak(format!("mod_{}_amt", index + 1).into_boxed_str());
+            super::intern(format!("Mod {} Source", index + 1));
+        let dst_id: &'static str = super::intern(format!("mod_{}_dst", index + 1));
+        let dst_name: &'static str = super::intern(format!("Mod {} Dest", index + 1));
+        let amt_id: &'static str = super::intern(format!("mod_{}_amt", index + 1));
         let amt_name: &'static str =
-            Box::leak(format!("Mod {} Amount", index + 1).into_boxed_str());
+            super::intern(format!("Mod {} Amount", index + 1));
 
         Self {
             source: IntParam::new(
