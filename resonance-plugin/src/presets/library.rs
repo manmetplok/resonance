@@ -43,6 +43,23 @@ pub const TRASH_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// Name of the trash directory under the preset root.
 pub const TRASH_DIR: &str = ".trash";
 
+/// Whether `plugin_id` can name a directory under the preset root: one
+/// plain path component, with no separator, no `.`/`..`, no leading dot
+/// (that space is the library's own, [`TRASH_DIR`]) and no NUL. Plugin ids
+/// are reverse-DNS names (`com.resonance.wavetable`), so every real one
+/// passes; anything else is refused rather than joined onto the root,
+/// where an absolute path would replace the root and `..` would escape it
+/// (code review STATE2-01).
+pub fn is_valid_plugin_id(plugin_id: &str) -> bool {
+    !plugin_id.is_empty()
+        && !plugin_id.starts_with('.')
+        && !plugin_id.contains(['/', '\\', '\0', ':'])
+        && matches!(
+            Path::new(plugin_id).components().collect::<Vec<_>>().as_slice(),
+            [std::path::Component::Normal(c)] if *c == std::ffi::OsStr::new(plugin_id)
+        )
+}
+
 /// The clock the library stamps and purges with. Injected in tests.
 pub type Clock = Arc<dyn Fn() -> SystemTime + Send + Sync>;
 
@@ -292,14 +309,33 @@ impl PresetLibrary {
         self.root.clone().or_else(user_preset_root)
     }
 
-    /// The directory holding `plugin_id`'s user presets.
+    /// The directory holding `plugin_id`'s user presets. `None` when
+    /// there is no root, or when `plugin_id` is not a valid directory name
+    /// ([`is_valid_plugin_id`]): such an id has factory presets at most
+    /// and never touches the disk.
     pub fn plugin_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        if !is_valid_plugin_id(plugin_id) {
+            return None;
+        }
         self.root().map(|r| r.join(plugin_id))
     }
 
-    /// Where trashed presets of `plugin_id` go.
+    /// Where trashed presets of `plugin_id` go (`None` as for
+    /// [`plugin_dir`](Self::plugin_dir)).
     pub fn trash_dir(&self, plugin_id: &str) -> Option<PathBuf> {
+        if !is_valid_plugin_id(plugin_id) {
+            return None;
+        }
         self.root().map(|r| r.join(TRASH_DIR).join(plugin_id))
+    }
+
+    /// [`plugin_dir`](Self::plugin_dir), or why there is none.
+    fn user_dir(&self, plugin_id: &str) -> Result<PathBuf, String> {
+        if !is_valid_plugin_id(plugin_id) {
+            return Err(format!("'{plugin_id}' is not a valid plugin id"));
+        }
+        self.plugin_dir(plugin_id)
+            .ok_or_else(|| "No user data directory available".to_string())
     }
 
     fn now(&self) -> SystemTime {
@@ -564,9 +600,7 @@ impl PresetLibrary {
     /// fresh UUID.
     pub fn save(&self, plugin_id: &str, request: SaveRequest) -> Result<PresetRecord, String> {
         let name = validate_name(&request.name)?;
-        let dir = self
-            .plugin_dir(plugin_id)
-            .ok_or_else(|| "No user data directory available".to_string())?;
+        let dir = self.user_dir(plugin_id)?;
         std::fs::create_dir_all(&dir).map_err(|e| format!("Create preset directory: {e}"))?;
 
         let mut doc = request.doc;
@@ -914,6 +948,7 @@ impl PresetLibrary {
         if preset.source != PresetSource::User {
             return Err("Factory presets cannot be deleted".to_string());
         }
+        self.user_dir(plugin_id)?;
         let trash = self
             .trash_dir(plugin_id)
             .ok_or_else(|| "No user data directory available".to_string())?;
@@ -1052,6 +1087,18 @@ impl PresetLibrary {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// The stamp of a file [`PresetLibrary::trash`] named: exactly
+/// `<10+ digit Unix seconds>-<non-empty name>.json`. Anything else in a
+/// trash directory is not ours and is never purged.
+fn trash_stamp(name: &str) -> Option<u64> {
+    let (stamp, rest) = name.split_once('-')?;
+    let stem = rest.strip_suffix(".json")?;
+    if stamp.len() < 10 || !stamp.bytes().all(|b| b.is_ascii_digit()) || stem.is_empty() {
+        return None;
+    }
+    stamp.parse().ok()
+}
+
 /// Delete trashed presets older than [`TRASH_RETENTION`] at `now` (Unix
 /// seconds). Returns how many went.
 fn purge_trash_dir(trash: &Path, now: u64) -> usize {
@@ -1060,8 +1107,11 @@ fn purge_trash_dir(trash: &Path, now: u64) -> usize {
     };
     let mut purged = 0;
     for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().into_owned();
-        let Some(stamp) = name.split('-').next().and_then(|s| s.parse::<u64>().ok()) else {
+        let Some(stamp) = trash_stamp(&name) else {
             continue;
         };
         if now.saturating_sub(stamp) > TRASH_RETENTION.as_secs()

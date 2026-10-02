@@ -40,8 +40,38 @@ pub(crate) fn entry_for(
         .map(entry_from_hit)
 }
 
+/// Refuse a `plugin_id` the app does not know (code review STATE2-01).
+/// The id is a free-form wire string the library would otherwise index
+/// as a directory; only a scanned plugin, a plugin with a registered
+/// factory bank, or one whose preset directory already exists is
+/// accepted, and never one that is not a plain directory name.
+pub(crate) fn known_plugin(app: &Resonance, plugin_id: &str) -> Result<(), RpcError> {
+    let not_found = || {
+        RpcError::not_found(format!(
+            "no plugin with id {plugin_id:?}; plugin ids are CLAP ids such as \
+             \"com.resonance.wavetable\" (plugins_list reports them)"
+        ))
+    };
+    if !resonance_plugin::presets::is_valid_plugin_id(plugin_id) {
+        return Err(not_found());
+    }
+    let scanned = app
+        .plugin_catalog
+        .available_plugins
+        .iter()
+        .any(|p| p.clap_plugin_id == plugin_id);
+    let lib = crate::plugin_preset_library::library(app);
+    let has_dir = || lib.plugin_dir(plugin_id).is_some_and(|d| d.is_dir());
+    if scanned || lib.factory_len(plugin_id) > 0 || has_dir() {
+        Ok(())
+    } else {
+        Err(not_found())
+    }
+}
+
 /// The preset `preset_id` names, as a reference the library resolves.
 fn resolve(app: &Resonance, plugin_id: &str, preset_id: &str) -> Result<PresetRef, RpcError> {
+    known_plugin(app, plugin_id)?;
     bank_for(app, plugin_id)
         .list()
         .into_iter()
@@ -153,7 +183,12 @@ fn search(app: &mut Resonance, request: &Request) -> Response {
     };
     let lib = crate::plugin_preset_library::library(app);
     let plugins: Vec<String> = match &params.plugin_id {
-        Some(id) => vec![id.clone()],
+        Some(id) => {
+            if let Err(e) = known_plugin(app, id) {
+                return failure(request, e);
+            }
+            vec![id.clone()]
+        }
         None => app
             .plugin_catalog
             .available_plugins

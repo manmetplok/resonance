@@ -212,6 +212,44 @@ fn mixdown_validates_the_path() {
     );
 }
 
+/// The renderer writes WAV, so the target must say so: an agent cannot
+/// point a mixdown at `~/.bashrc`, even with `overwrite` (code review
+/// STATE2-10).
+#[test]
+fn mixdown_requires_a_wav_extension() {
+    let mut app = app();
+    let dir = tempfile::tempdir().expect("temp dir");
+    let rc = dir.path().join(".bashrc");
+    std::fs::write(&rc, b"export PATH").unwrap();
+    for (i, target) in [
+        rc.clone(),
+        dir.path().join("mix"),
+        dir.path().join("mix.flac"),
+        dir.path().join("mix.wav.txt"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let response = roundtrip(
+            &mut app,
+            request(
+                i as i64,
+                "render.mixdown",
+                json!({ "path": target.display().to_string(), "overwrite": true }),
+            ),
+        );
+        let err = response.error.expect("refused");
+        assert_eq!(err.kind(), ErrorKind::InvalidParams, "{target:?}");
+        assert!(err.message.contains(".wav"), "{}", err.message);
+    }
+    assert!(!app.test_is_bouncing(), "no bounce started");
+    assert_eq!(std::fs::read(&rc).unwrap(), b"export PATH");
+    // Case does not matter.
+    let upper = dir.path().join("MIX.WAV").display().to_string();
+    let response = roundtrip(&mut app, request(9, "render.mixdown", json!({ "path": upper })));
+    assert!(response.error.is_none(), "{:?}", response.error);
+}
+
 #[test]
 fn mixdown_rejects_a_partial_range_as_unsupported() {
     let dir = tempfile::tempdir().expect("temp dir");

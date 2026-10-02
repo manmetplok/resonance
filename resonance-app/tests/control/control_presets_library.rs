@@ -959,6 +959,70 @@ fn presets_delete_removes_the_entry_from_the_add_pickers() {
     assert!(!picks(&app).contains(&id), "and goes with the delete");
 }
 
+/// A plugin id is a name the app knows, never a path (code review
+/// STATE2-01): a search, mark or delete naming a folder answers
+/// `not_found` and leaves that folder's files alone.
+#[test]
+fn a_plugin_id_that_is_a_path_or_unknown_is_not_found_and_touches_nothing() {
+    let mut app = app();
+    let outside = std::env::temp_dir().join(format!(
+        "resonance-presets-outside-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("01-a.flac"), b"audio").unwrap();
+    std::fs::write(outside.join("bad.json"), b"{not json").unwrap();
+    let listing = |dir: &std::path::Path| {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let before = listing(&outside);
+    let abs = outside.to_string_lossy().into_owned();
+    for id in [abs.clone(), "../x".to_owned(), "com.example.not-installed".to_owned()] {
+        let r = call(
+            &mut app,
+            presets::SEARCH,
+            &presets::SearchParams {
+                plugin_id: Some(id.clone()),
+                filter: PresetFilter::default(),
+            },
+        );
+        assert_eq!(r.error.map(|e| e.kind()), Some(ErrorKind::NotFound), "{id:?}");
+        let r = call(
+            &mut app,
+            presets::SET_MARKS,
+            &presets::SetMarksParams {
+                plugin_id: id.clone(),
+                preset_id: "x".to_owned(),
+                favorite: Some(true),
+                tags: None,
+            },
+        );
+        assert_eq!(r.error.map(|e| e.kind()), Some(ErrorKind::NotFound), "{id:?}");
+        let r = call(
+            &mut app,
+            presets::DELETE,
+            &presets::DeleteParams {
+                plugin_id: id.clone(),
+                preset_id: "x".to_owned(),
+                confirm: true,
+            },
+        );
+        assert_eq!(r.error.map(|e| e.kind()), Some(ErrorKind::NotFound), "{id:?}");
+    }
+    // A later search over every plugin does not pick the path up either.
+    let r = call(&mut app, presets::SEARCH, &presets::SearchParams::default());
+    assert!(r.error.is_none(), "{:?}", r.error);
+    assert_eq!(listing(&outside), before, "nothing outside the root changed");
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
 /// A rename's validation failure is `invalid_params`, typed.
 #[test]
 fn a_rename_onto_a_taken_or_empty_name_is_invalid_params() {

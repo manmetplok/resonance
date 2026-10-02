@@ -46,7 +46,7 @@ pub struct RangeSpec {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct MixdownParams {
-    /// Absolute path of the WAV file to write.
+    /// Absolute path of the WAV file to write; must end in `.wav`.
     pub path: String,
     /// Defaults to the whole song.
     #[serde(default, skip_serializing_if = "Option::is_none")]
