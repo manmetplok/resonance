@@ -941,14 +941,25 @@ pub(crate) fn apply_clip_load_failed(
 /// clips are already `ClipSource::Mapped` and just need their path
 /// returned; any remaining `ClipSource::Memory` clips get transcoded.
 pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut HandlerState) {
-    let project_dir = match state.project_dir.clone() {
-        Some(dir) => dir,
-        None => {
-            let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::internal(
-                "Cannot save clips: no project directory set.",
-            )));
-            return;
-        }
+    // Always answer: the app's save collector waits on exactly one reply
+    // to this command, and a failure that only raised `AudioEvent::Error`
+    // used to wedge every later save, open and new for the rest of the
+    // session (code review STATE2-02).
+    let event = match save_clips_to_project_dir(ctx, state) {
+        Ok(clip_files) => AudioEvent::ClipsSavedToProjectDir { clip_files },
+        Err(error) => AudioEvent::ClipsSaveFailed { error },
+    };
+    let _ = ctx.event_tx.send(event);
+}
+
+/// The work behind [`handle_save_clips_to_project_dir`]: the clip id →
+/// project-relative WAV path map, or why a clip could not be written.
+fn save_clips_to_project_dir(
+    ctx: &HandlerCtx,
+    state: &mut HandlerState,
+) -> Result<Vec<(ClipId, String)>, String> {
+    let Some(project_dir) = state.project_dir.clone() else {
+        return Err("Cannot save clips: no project directory set.".to_owned());
     };
 
     // Collect the per-clip work list while holding only a read
@@ -987,44 +998,38 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
 
     let sr = ctx.sample_rate;
     let mut needs_remap: Vec<ClipId> = Vec::new();
+    let mut failure: Option<String> = None;
     for (clip_id, _rel, action) in &entries {
         let target = project_dir
             .join("audio")
             .join(format!("clip_{clip_id}.wav"));
-        match action {
-            Action::Ready => {}
-            Action::Copy(src_path) => {
-                if let Some(parent) = target.parent() {
-                    if let Err(e) = std::fs::create_dir_all(parent) {
-                        let _ = ctx
-                            .event_tx
-                            .send(AudioEvent::Error(EngineError::io(format!("Create audio dir: {e}"))));
-                        return;
-                    }
-                }
-                if let Err(e) = std::fs::copy(src_path, &target) {
-                    let _ = ctx
-                        .event_tx
-                        .send(AudioEvent::Error(EngineError::io(format!("Copy clip {clip_id} WAV: {e}"))));
-                    return;
-                }
-                needs_remap.push(*clip_id);
-            }
-            Action::Encode(samples) => {
-                if let Err(e) = transcode_to_wav(&target, samples, sr) {
-                    let _ = ctx.event_tx.send(AudioEvent::Error(EngineError::io(format!(
-                        "Transcode clip {clip_id} to WAV: {e}"
-                    ))));
-                    return;
-                }
-                needs_remap.push(*clip_id);
+        let written = match action {
+            Action::Ready => continue,
+            Action::Copy(src_path) => target
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .map_err(|e| format!("Create audio dir: {e}"))
+                .and_then(|()| {
+                    std::fs::copy(src_path, &target)
+                        .map(drop)
+                        .map_err(|e| format!("Copy clip {clip_id} WAV: {e}"))
+                }),
+            Action::Encode(samples) => transcode_to_wav(&target, samples, sr)
+                .map_err(|e| format!("Transcode clip {clip_id} to WAV: {e}")),
+        };
+        match written {
+            Ok(()) => needs_remap.push(*clip_id),
+            Err(e) => {
+                failure = Some(e);
+                break;
             }
         }
     }
 
     // Re-open the mmap for each clip whose backing file we just
     // wrote, so playback reads from the file inside the new project
-    // dir and future saves are no-ops.
+    // dir and future saves are no-ops. Done for the clips written
+    // before a failure too: their files are complete.
     for clip_id in needs_remap {
         let target = project_dir
             .join("audio")
@@ -1036,11 +1041,10 @@ pub(crate) fn handle_save_clips_to_project_dir(ctx: &HandlerCtx, state: &mut Han
         }
     }
 
-    let clip_files: Vec<(ClipId, String)> =
-        entries.into_iter().map(|(id, rel, _)| (id, rel)).collect();
-    let _ = ctx
-        .event_tx
-        .send(AudioEvent::ClipsSavedToProjectDir { clip_files });
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(entries.into_iter().map(|(id, rel, _)| (id, rel)).collect()),
+    }
 }
 
 /// Give every in-engine audio clip its `{project_dir}/audio/clip_{id}.wav`

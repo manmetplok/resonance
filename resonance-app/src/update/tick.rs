@@ -133,8 +133,12 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     refresh_midi_devices_if_stale(r);
     crate::update::plugin_preset_ui::poll_visible_lists(r);
     crate::update::plugin::flush_step_state(r, false);
-    check_engine_disconnected(r);
-    check_output_stream_lost(r);
+    poll_engine_health(r);
+    // A save the engine never answered must not wedge every later one
+    // (code review STATE2-02).
+    if let Some(task) = crate::update::project_io::check_save_watchdog(r) {
+        tasks.push(task);
+    }
     // Change-gated periodic autosave (todo #465, code review UPD-07).
     crate::update::project_io::tick_autosave(r);
     crate::palette::flush_recent(r, false);
@@ -146,70 +150,35 @@ pub fn handle_tick(r: &mut Resonance) -> Task<Message> {
     }
 }
 
-/// Surface the engine's death to the user. `AudioEngine::is_disconnected`
-/// latches true forever the first time any `send` finds the command
-/// channel gone (the engine thread exited or panicked) — from that
-/// moment every `let _ = r.engine.send(...)` call site in the app
-/// (there are dozens) silently drops its command, including MCP-driven
-/// edits that still ack success back to the caller. Checked once here
-/// (every tick already drains engine events, so nothing is missed) and
-/// latched app-side via `engine_disconnected_banner_shown` so the
-/// standard error banner is set exactly once instead of being forced
-/// back onto `error_message` on every subsequent tick.
-fn check_engine_disconnected(r: &mut Resonance) {
-    if r.banners.engine_disconnected_banner_shown {
-        return;
-    }
-    if r.engine.is_disconnected() {
-        r.banners.engine_disconnected_banner_shown = true;
-        r.banners.error_message = Some(
-            "Audio engine stopped responding — restart the app; edits are no longer reaching audio"
-                .to_string(),
-        );
-    }
-}
-
-/// User-facing banner for a lost output stream. A named constant so the
-/// recovery branch of [`check_output_stream_lost`] can clear exactly the
-/// banner this module raised and never an unrelated error that landed on
-/// `error_message` in the meantime.
-const STREAM_LOST_BANNER: &str = "Audio output stream lost (device unplugged or audio server \
-     restarted) — playback and recording are silent until it reconnects";
-
-/// Surface output-*stream* death to the user. Distinct from
-/// [`check_engine_disconnected`]: when the USB interface is unplugged or
-/// PipeWire restarts, the engine thread stays alive — the transport
-/// appears to run and edits still ack — so `is_disconnected` never
-/// fires, while no audio plays and recording captures nothing. The
-/// output backends publish that state as a per-engine flag
-/// (`AudioEngine::output_stream_lost`), polled here into the same
-/// persistent error banner engine death uses.
+/// Poll the engine's health into the persistent status line (code review
+/// UX-04). Two conditions, worst first:
 ///
-/// Unlike engine death this state can recover: PipeWire reconnecting
-/// the stream to a new sink clears the flag, and this check then clears
-/// the banner it raised — but only if `error_message` still holds
-/// exactly [`STREAM_LOST_BANNER`], so a different error that arrived in
-/// the meantime is left standing. On the cpal fallback backend recovery
-/// is not observable and the banner stays until restart.
-/// `stream_lost_banner_shown` tracks the raise so a banner the user
-/// dismissed isn't forced back every tick while the flag stays set.
-fn check_output_stream_lost(r: &mut Resonance) {
-    // Engine death outranks stream loss: once the engine thread is gone
-    // the stream banner would understate the failure (nothing recovers a
-    // dead engine thread), so never raise over that banner.
-    if r.banners.engine_disconnected_banner_shown {
-        return;
-    }
-    let lost = r.engine.output_stream_lost();
-    if lost && !r.banners.stream_lost_banner_shown {
-        r.banners.stream_lost_banner_shown = true;
-        r.banners.error_message = Some(STREAM_LOST_BANNER.to_string());
-    } else if !lost && r.banners.stream_lost_banner_shown {
-        r.banners.stream_lost_banner_shown = false;
-        if r.banners.error_message.as_deref() == Some(STREAM_LOST_BANNER) {
-            r.banners.error_message = None;
-        }
-    }
+/// - **Engine death.** `AudioEngine::is_disconnected` latches true
+///   forever the first time any `send` finds the command channel gone
+///   (the engine thread exited or panicked) — from that moment every
+///   `let _ = r.engine.send(...)` call site in the app silently drops its
+///   command, including MCP-driven edits that still ack success.
+/// - **Output-stream loss.** When the USB interface is unplugged or
+///   PipeWire restarts, the engine thread stays alive — the transport
+///   appears to run and edits still ack — so `is_disconnected` never
+///   fires, while no audio plays and recording captures nothing. The
+///   output backends publish that as `AudioEngine::output_stream_lost`,
+///   which clears again when the stream reconnects (on the cpal fallback
+///   backend recovery is not observable).
+///
+/// Re-derived every tick rather than latched onto the error banner: the
+/// status has its own slot, so a later transient error can neither
+/// overwrite it nor be cleared by its recovery, and there is nothing for
+/// the user to dismiss.
+fn poll_engine_health(r: &mut Resonance) {
+    use crate::state::EngineHealth;
+    r.banners.engine_health = if r.engine.is_disconnected() {
+        EngineHealth::Disconnected
+    } else if r.engine.output_stream_lost() {
+        EngineHealth::StreamLost
+    } else {
+        EngineHealth::Ok
+    };
 }
 
 /// Re-enumerate hardware MIDI ports periodically so a freshly

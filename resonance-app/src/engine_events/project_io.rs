@@ -19,6 +19,21 @@ pub(super) fn clips_saved(
     try_finish_save(r)
 }
 
+/// The engine could not write the clips (`AudioEvent::ClipsSaveFailed`).
+/// It still answers `SaveAllPluginStates` after this, so the collector
+/// waits for that reply too — tearing it down now would hand that stale
+/// reply to whatever save starts next — and [`try_finish_save`] then fails
+/// the save (code review STATE2-02).
+pub(super) fn clips_save_failed(r: &mut Resonance, error: String) -> Task<Message> {
+    if let Some(ref mut save) = r.io.save_state {
+        save.clips_error = Some(error);
+        save.clips_done = true;
+    } else {
+        tracing::warn!("[save] clip save failed with no save collecting: {error}");
+    }
+    try_finish_save(r)
+}
+
 pub(super) fn all_plugin_states_saved(
     r: &mut Resonance,
     states: Vec<(PluginInstanceId, Vec<u8>)>,
@@ -63,6 +78,9 @@ pub(super) fn try_finish_save(r: &mut Resonance) -> Task<Message> {
         .save_state
         .take()
         .expect("save_state present when both_done");
+    if let Some(error) = save.clips_error.clone() {
+        return crate::update::project_io::fail_collected_save(r, save, error);
+    }
     report_clips_without_audio(r, &save);
     let project_file = crate::update::build_project_file(r);
     let path = save.path.clone();

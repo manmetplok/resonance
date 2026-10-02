@@ -1,32 +1,88 @@
-//! The transient error/notification banner shown at the top of the
-//! window, plus the latches that decide when the tick handler may
-//! (re-)raise it (ARCH-06 A6-2).
+//! What the window's status area at the top shows (ARCH-06 A6-2): the
+//! transient, dismissable error banner, and two persistent statuses that
+//! no error may overwrite — the audio engine's health and a run of
+//! autosave failures (code review UX-04, UX-13).
 //!
 //! Held as a sub-struct on [`Resonance`](crate::Resonance) so handlers
 //! that only care about the banner can take `&Banners` / `&mut Banners`
 //! instead of the whole app.
 
-/// The user-facing error/notification banner (`view::mod::view`) and the
-/// two latches that stop the tick handler from re-raising a dismissed
-/// one every frame.
+/// How many autosaves in a row must fail before the indicator shows. One
+/// miss is often transient (a file briefly locked); a run of them (a full
+/// disk, a revoked permission) means nothing is being snapshotted.
+pub const AUTOSAVE_FAILURES_BEFORE_INDICATOR: u32 = 3;
+
+/// The audio engine's health as the tick handler last polled it
+/// (`update::tick::poll_engine_health`). A *status*, not a message: it is
+/// derived from the engine every tick, cannot be dismissed, and clears by
+/// itself when the condition does.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum EngineHealth {
+    #[default]
+    Ok,
+    /// The output stream is gone (device unplugged, audio server
+    /// restarted) while the engine thread lives on. Recovers when the
+    /// backend reconnects.
+    StreamLost,
+    /// The engine thread is gone: every command is silently dropped.
+    /// Never recovers.
+    Disconnected,
+}
+
+impl EngineHealth {
+    /// The status line shown while the engine is unhealthy.
+    pub fn message(self) -> Option<&'static str> {
+        match self {
+            Self::Ok => None,
+            Self::StreamLost => Some(
+                "Audio output stream lost (device unplugged or audio server restarted) — \
+                 playback and recording are silent until it reconnects",
+            ),
+            Self::Disconnected => Some(
+                "Audio engine stopped responding — restart the app; edits are no longer \
+                 reaching audio",
+            ),
+        }
+    }
+}
+
+/// The window's status area (`view::mod::view_status_area`).
 #[derive(Debug, Clone, Default)]
 pub struct Banners {
-    /// The banner text, if any is showing. Anything in this crate that
-    /// wants to surface a message to the user sets this directly.
+    /// The transient error banner, if any is showing. Anything in this
+    /// crate that wants to surface a message to the user sets this
+    /// directly; a later message replaces it, and the user dismisses it.
+    /// Never used for the persistent statuses below.
     pub error_message: Option<String>,
-    /// Set once the tick handler has surfaced the "engine stopped
-    /// responding" banner for [`resonance_audio::AudioEngine::is_disconnected`]
-    /// (see `update::tick::check_engine_disconnected`). Latches the check
-    /// app-side so a dismissed (or superseded) banner isn't forced back
-    /// onto `error_message` every subsequent tick — the underlying engine
-    /// latch never resets, so without this the message would be
-    /// unclearable.
-    pub engine_disconnected_banner_shown: bool,
-    /// Set while the tick handler is showing the "audio stream lost"
-    /// banner for [`resonance_audio::AudioEngine::output_stream_lost`]
-    /// (see `update::tick::check_output_stream_lost`). Unlike the
-    /// engine-death latch above, this one clears again: the PipeWire
-    /// backend reports the stream coming back, and the tick handler
-    /// then removes the banner it raised (and only that banner).
-    pub stream_lost_banner_shown: bool,
+    /// Persistent engine/stream health, shown on its own line above the
+    /// error banner (code review UX-04).
+    pub engine_health: EngineHealth,
+    /// Autosaves failed in a row since the last successful save.
+    pub autosave_failures: u32,
+    /// The latest autosave failure's reason.
+    pub autosave_failure: Option<String>,
+}
+
+impl Banners {
+    /// Count one more failed autosave (code review UX-13).
+    pub fn note_autosave_failure(&mut self, reason: String) {
+        self.autosave_failures = self.autosave_failures.saturating_add(1);
+        self.autosave_failure = Some(reason);
+    }
+
+    /// A save landed: the location takes writes again.
+    pub fn clear_autosave_failures(&mut self) {
+        self.autosave_failures = 0;
+        self.autosave_failure = None;
+    }
+
+    /// The persistent "autosave failing" line, once enough misses ran in
+    /// a row.
+    pub fn autosave_failing(&self) -> Option<String> {
+        if self.autosave_failures < AUTOSAVE_FAILURES_BEFORE_INDICATOR {
+            return None;
+        }
+        let reason = self.autosave_failure.as_deref().unwrap_or("unknown error");
+        Some(format!("Autosave failing: {reason}"))
+    }
 }
