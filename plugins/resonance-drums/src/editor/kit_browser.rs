@@ -118,22 +118,3 @@ fn requested(started: StartedLoad) -> RequestedKit {
 fn spawn(bridge: &KitBridge, manifest_path: PathBuf) -> Result<RequestedKit, String> {
     Ok(requested(selection::load_unslotted_now(bridge, manifest_path)))
 }
-
-pub(super) fn format_kit_status(status: &KitStatus) -> String {
-    match status {
-        KitStatus::Empty => "Defaults (no kit loaded)".to_string(),
-        KitStatus::Loading { path } => format!(
-            "Loading {}...",
-            path.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "kit".to_string())
-        ),
-        KitStatus::Loaded { name, num_pads, .. } => {
-            format!("Kit: {name} ({num_pads} pads)")
-        }
-        KitStatus::Error { message } => {
-            let short: String = message.chars().take(80).collect();
-            format!("Error: {short}")
-        }
-    }
-}

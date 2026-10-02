@@ -1,17 +1,20 @@
 //! Drums plugin editor: an egui UI hosted by the platform GUI runtime.
 //!
-//! Layout: a chrome bar (Resonance / Drums brand, the preset bar, and the
-//! `Library…` button) sits above a second bar carrying ☆/★ and the KIT
-//! pill (◀ name ▶), whose name is a dropdown of the kit library. Pads is
-//! the editor's only view, so there is no tab strip to switch it with.
-//! The central body is a fixed-height KIT + GLOBAL card row at the
-//! bottom and, above it, the two-column pad list + pad detail, each
-//! scrolling independently so the window can be resized down to its
-//! declared minimum without losing either (`factory.rs`,
-//! drums-plugin-rework.md §6.1). A status bar (sample rate, buffer size,
-//! OUT meter) sits along the bottom edge, and the Library overlay
-//! (`library_panel.rs`, with its `plok.org` tab in `plok_panel.rs`) draws
-//! over everything else when open.
+//! Layout (drums-plugin-rework.md §6, slice K5):
+//!
+//! - the header: brand, the kit (☆/★, ◀ dropdown ▶), `Library…`, and the
+//!   kit's load progress and warnings (`chrome.rs`);
+//! - the tab bar: `[Pads | Mix | Setup]` and the labelled preset bar;
+//! - the body: the Pads tab (6×5 grid + inspector, `pads_tab.rs`), the
+//!   Mix tab (port strips, the per-pad table, globals, `mix_tab.rs`) or
+//!   the Setup tab (mic banks, streaming, kit facts, routing, `setup_tab.rs`),
+//!   every region scrolling where its content can outgrow the window;
+//! - the status bar: only real readings — sample rate, pads, memory,
+//!   underruns, the last hit and the OUT meter;
+//! - the Library overlay (`library_panel.rs`, with its `plok.org` tab in
+//!   `plok_panel.rs`) over everything when open.
+//!
+//! Every edit of a param is one undoable host edit (`controls.rs`).
 //!
 //! Every control comes from `plugin_gui_core::widgets` — the knobs
 //! always did, and ba todo #1335 retired the local `editor/widgets/`
@@ -22,14 +25,18 @@
 
 mod app;
 mod chrome;
+mod controls;
 mod factory;
 mod jobs;
 mod kit_browser;
 mod library_panel;
 mod missing_kit;
+mod mix_tab;
 mod pad_grid;
 mod pad_inspector;
+mod pads_tab;
 mod plok_panel;
+mod setup_tab;
 mod theme;
 
 pub use factory::DrumsEditorFactory;
@@ -44,16 +51,6 @@ use plugin_gui_core::egui;
 // itself lives at `crate::reload` because the articulation watcher needs
 // it in headless builds too.
 pub(crate) use crate::reload::reload_kit_acting as reload_kit;
-
-/// Tell the host the editor changed param `id` itself, so the host
-/// records it as one undoable edit (`HostHandle::announce_param_change`).
-/// Call it after the value is set, for a discrete edit (a click). A no-op
-/// before the host handed itself over (and in tests).
-pub(crate) fn announce_param_edit(bridge: &crate::KitBridge, id: &str) {
-    if let Some(host) = bridge.host.lock().as_ref() {
-        host.announce_param_change(id);
-    }
-}
 
 /// The width left in `ui` once `inset` — the fixed gaps of a row about to
 /// be split into columns, or a widget's own chrome — is taken off,
@@ -88,12 +85,17 @@ pub(crate) fn body_width(ui: &egui::Ui, inset: f32) -> f32 {
 /// calling `pad_inspector::draw` itself.
 #[doc(hidden)]
 pub fn test_draw_pad_inspector(ui: &mut egui::Ui, bridge: &crate::KitBridge, selected_pad: usize) {
+    let mut velocity = 100;
+    let mut labels = controls::Labels::default();
     pad_inspector::draw(
         ui,
-        &bridge.params,
         bridge,
         &crate::mic_catalog::ManifestMicCatalog::default(),
         selected_pad,
+        &mut pad_inspector::InspectorState {
+            audition_velocity: &mut velocity,
+            labels: &mut labels,
+        },
     );
 }
 
@@ -269,6 +271,7 @@ pub struct TestEditor {
     ctx: egui::Context,
     sink: ProbeSink,
     screen: egui::Rect,
+    time: f64,
 }
 
 #[cfg(feature = "test-hooks")]
@@ -301,6 +304,7 @@ impl TestEditor {
             ctx,
             sink,
             screen: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(size.0, size.1)),
+            time: 0.0,
         }
     }
 
@@ -313,8 +317,12 @@ impl TestEditor {
     /// first repaint after the click that opened it.
     pub fn frame(&mut self, events: Vec<egui::Event>) -> EditorFrameProbe {
         use plugin_gui_core::EditorApp as _;
+        // A 60 Hz clock, so what animates (a scroll, a cell's hit light)
+        // moves from frame to frame as it does live.
+        self.time += 1.0 / 60.0;
         let input = egui::RawInput {
             screen_rect: Some(self.screen),
+            time: Some(self.time),
             events,
             ..Default::default()
         };
@@ -347,14 +355,71 @@ impl TestEditor {
         self.frame(events(false))
     }
 
-    /// Select pad `pad`, as clicking its row does.
+    /// Select pad `pad`, as clicking its cell does.
     pub fn select_pad(&mut self, pad: usize) {
         self.app.selected_pad = pad;
     }
 
-    /// Type `text` into the pad list's filter.
-    pub fn filter_pads(&mut self, text: &str) {
-        self.app.pad_filter = text.to_string();
+    /// The selected pad.
+    pub fn selected_pad(&self) -> usize {
+        self.app.selected_pad
+    }
+
+    /// Show the tab called `name` (`"Pads"`, `"Mix"`, `"Setup"`), as the
+    /// tab bar does. Panics on another name.
+    pub fn show_view(&mut self, name: &str) {
+        let i = app::Tab::LABELS
+            .iter()
+            .position(|l| *l == name)
+            .unwrap_or_else(|| panic!("no tab called {name:?}"));
+        self.app.tab = app::Tab::ALL[i];
+    }
+
+    /// The tab shown: `"Pads"`, `"Mix"` or `"Setup"`.
+    pub fn view(&self) -> &'static str {
+        app::Tab::LABELS[self.app.tab.index()]
+    }
+
+    /// Turn the mouse wheel by `delta` points (negative y scrolls the
+    /// content up, revealing what is below) with the pointer at `at`.
+    pub fn wheel(&mut self, at: egui::Pos2, delta: egui::Vec2) -> EditorFrameProbe {
+        self.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta,
+                phase: egui::TouchPhase::Move,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        // Let a smoothed scroll finish.
+        for _ in 0..20 {
+            self.frame(Vec::new());
+        }
+        self.frame(Vec::new())
+    }
+
+    /// Press at `from`, drag to `to` in steps, release — over several
+    /// frames, as a pointer drag does. Returns the last frame.
+    pub fn drag(&mut self, from: egui::Pos2, to: egui::Pos2) -> EditorFrameProbe {
+        let button = |pos, pressed| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        self.frame(button(from, true));
+        for i in 1..=6 {
+            let p = from + (to - from) * (i as f32 / 6.0);
+            self.frame(vec![egui::Event::PointerMoved(p)]);
+        }
+        self.frame(button(to, false));
+        self.frame(Vec::new())
     }
 
     /// What the header's `Library…` button does.

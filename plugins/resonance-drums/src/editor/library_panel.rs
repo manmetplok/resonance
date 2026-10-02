@@ -325,7 +325,7 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// The source as the detail pane names it.
-fn source_text(source: Source) -> &'static str {
+pub(crate) fn source_text(source: Source) -> &'static str {
     match source {
         Source::Plok => "plok.org",
         Source::Imported => "imported",

@@ -170,7 +170,7 @@ fn draw_row(
             // The right-hand side first, at its natural width, so a long
             // description wraps beside it instead of pushing it away.
             let right_w = 230.0_f32.min(ui.available_width() * 0.45);
-            let text_w = (ui.available_width() - right_w - 8.0).max(0.0);
+            let text_w = super::body_width(ui, right_w + 8.0);
             ui.vertical(|ui| {
                 ui.set_width(text_w);
                 ui.label(
