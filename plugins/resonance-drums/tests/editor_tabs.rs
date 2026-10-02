@@ -752,6 +752,55 @@ fn an_overhead_slot_pick_reaches_the_bridge() {
     let item = frame.text_center("OHsXY · Sennheiser M-k_ohxy").expect("the popup lists OHsXY");
     e.click(item);
     assert_eq!(plugin.bridge.overhead_slots()[1], "25_OHsXY_USM69i");
+    // The pick is state, not a param: it is announced through
+    // `mic_setup_rev`, one undoable edit.
+    assert_eq!(edits(&plugin), ["mic_setup_rev"]);
+}
+
+/// The mic-setup handle is what a host needs to undo a pick through the
+/// state blob: state-excluded (so the host refreshes its cached blob on
+/// the edit), never automated, and visible to the host — a hidden param
+/// is not exposed by the CLAP bridge, so its announce would reach nothing.
+#[test]
+fn the_mic_setup_handle_is_a_state_excluded_host_param() {
+    let plugin = booted();
+    let handle = (0..plugin.param_count())
+        .map(|i| plugin.param(i))
+        .find(|p| p.id() == "mic_setup_rev")
+        .expect("mic_setup_rev is a param");
+    assert!(handle.state_excluded() && handle.preset_excluded());
+    assert!(!handle.is_automatable() && !handle.is_hidden() && !handle.is_read_only());
+}
+
+/// A pad's close-mic pick and the room setup pick are one announced edit
+/// each, and each moves the handle.
+#[test]
+fn every_mic_setup_pick_is_one_announced_edit() {
+    let kit = fixture_kit();
+    let plugin = with_kit(&kit);
+    let mut e = editor(&plugin, (960.0, 640.0), "Pads");
+    e.select_pad(KICK);
+    let frame = settled(&mut e);
+    let frame = reveal(&mut e, frame, "mic.0").unwrap();
+    e.click(frame.widget("mic.0").unwrap().rect.center());
+    let frame = settled(&mut e);
+    let item = frame.text_center("KickIn · Sennheiser M-k_in2").expect("the popup lists the B91");
+    e.click(item);
+    assert_eq!(
+        plugin.bridge.pad_choices.lock()[KICK].close_setups.get("KickIn").map(String::as_str),
+        Some("02_KickIn_B91")
+    );
+    assert_eq!(edits(&plugin), ["mic_setup_rev"]);
+    assert_eq!(plugin.bridge.params.mic_setup_rev.value(), 1);
+
+    e.show_view("Setup");
+    let frame = settled(&mut e);
+    e.click(frame.widget("setup.room.setup").unwrap().rect.center());
+    let frame = settled(&mut e);
+    let item = frame.text_center("Room · Sennheiser M-k_room").expect("the popup lists the room");
+    e.click(item);
+    assert_eq!(edits(&plugin), ["mic_setup_rev", "mic_setup_rev"]);
+    assert_eq!(plugin.bridge.params.mic_setup_rev.value(), 2);
 }
 
 // ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ pub const PARAMS_PER_PAD: usize = 15;
 /// hosts and the control API address a param by its string id (which the
 /// CLAP bridge hashes into a stable numeric id), so adding a global
 /// param moves the pad block along without disturbing anything saved.
-pub const GLOBAL_PARAMS: usize = 16;
+pub const GLOBAL_PARAMS: usize = 17;
 
 /// Labels for the round-robin mode choice, indexed by parameter value.
 pub const ROUND_ROBIN_LABELS: &[&str] = &["Cycle", "Random"];
@@ -43,6 +43,11 @@ pub const OUTPUT_MODE_ID: &str = "output_mode";
 
 /// `polyphony`'s id.
 pub const POLYPHONY_ID: &str = "polyphony";
+
+/// `mic_setup_rev`'s id.
+pub const MIC_SETUP_REV_ID: &str = "mic_setup_rev";
+/// `mic_setup_rev` wraps back to 0 past this.
+pub const MIC_SETUP_REV_MAX: i32 = 1_000_000;
 
 /// How the velocity humanize reads: `Off`, or `±5` (MIDI steps).
 pub fn humanize_label(steps: f32) -> String {
@@ -174,6 +179,26 @@ pub struct DrumParams {
     /// The room bank's kit-wide level, dB, −∞ … +6, default 0 dB. On top
     /// of each pad's `pad_N_room_trim`.
     pub room_level: FloatParam,
+    /// A counter the editor bumps on every mic **setup** pick — a close
+    /// mic of a pad, an overhead slot's setup, the room setup — so the
+    /// host records the pick as one undoable edit
+    /// ([`crate::KitBridge::announce_mic_setup_edit`]).
+    ///
+    /// The picks themselves are plugin state, not params (`pad_choices`,
+    /// `overhead_setup_key`, `mic_banks`: a host cannot automate a
+    /// reload), so there was nothing to announce and a pick could not be
+    /// undone. This param is the handle: it is **excluded from the
+    /// state**, and a host that sees an edit of a state-excluded param
+    /// refreshes its cached state blob — the undo entry it just recorded
+    /// holds the blob from before the pick, and undoing it loads that
+    /// back, mic choices and all (the app's `ParamEditedByPlugin`, the
+    /// same path `kit_select` takes).
+    ///
+    /// Not automatable, and not `hidden()`: the CLAP bridge does not
+    /// expose a hidden param to the host at all, and a host drops an
+    /// edit of a param it does not know — the announce would reach
+    /// nothing. Its value means nothing beyond "moved".
+    pub mic_setup_rev: IntParam,
     /// What `kit_select` means beyond a slot (a missing kit, a kit with no
     /// slot), and the library handle its text and the loader resolve
     /// against. Shared with the bridge, the saver and the editor.
@@ -273,6 +298,17 @@ impl Default for DrumParams {
             room_on: ChoiceParam::new(ROOM_ON_ID, "Room", BANK_OFF, BANK_ON_LABELS)
                 .not_automatable(),
             room_level: level_param(ROOM_LEVEL_ID, "Room Level", MAX_VOLUME_DB),
+            mic_setup_rev: IntParam::new(
+                MIC_SETUP_REV_ID,
+                "Mic Setup",
+                0,
+                IntRange::Linear {
+                    min: 0,
+                    max: MIC_SETUP_REV_MAX,
+                },
+            )
+            .not_automatable()
+            .excluded_from_state(),
             selection,
             pads: std::array::from_fn(PadParams::new),
         }
@@ -632,9 +668,29 @@ pub fn choke_from_label(text: &str) -> Option<i32> {
         .map(|g| g.clamp(CHOKE_KIT, MAX_CHOKE_GROUP))
 }
 
-/// A static id or name for a per-pad parameter.
-fn leak(text: String) -> &'static str {
-    Box::leak(text.into_boxed_str())
+/// A static id or name for a per-pad parameter, interned once per
+/// process.
+///
+/// `Param` ids and names are `&'static str`, and a per-pad one is built
+/// at run time (`pad_7_level`). Leaking a fresh copy per `PadParams`
+/// leaked ~900 strings per plugin *instance* — every drum track a host
+/// opened, and every `DrumParams::default()` a test built, added another
+/// set. The table hands back the one copy each distinct string ever
+/// needs, so the process holds one set, whatever the instance count.
+fn intern(text: String) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static TABLE: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let mut table = TABLE
+        .get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(&interned) = table.get(text.as_str()) {
+        return interned;
+    }
+    let interned: &'static str = Box::leak(text.into_boxed_str());
+    table.insert(interned);
+    interned
 }
 
 /// A level in dB from −∞ ([`MIN_DB`]) up to `max_db`, default 0 dB. The
@@ -658,8 +714,8 @@ fn level_param(id: &'static str, name: &'static str, max_db: f32) -> FloatParam 
 
 impl PadParams {
     fn new(index: usize) -> Self {
-        let id = |field: &str| leak(format!("pad_{index}_{field}"));
-        let name = |field: &str| leak(format!("Pad {index} {field}"));
+        let id = |field: &str| intern(format!("pad_{index}_{field}"));
+        let name = |field: &str| intern(format!("Pad {index} {field}"));
         let mapping = &PAD_MAPPINGS[index];
         let trims = std::array::from_fn(|slot| {
             let param = level_param(
@@ -778,6 +834,7 @@ impl DrumParams {
             13 => return &self.bleed_level,
             14 => return &self.room_on,
             15 => return &self.room_level,
+            16 => return &self.mic_setup_rev,
             _ => {}
         }
         let pad_idx = (index - GLOBAL_PARAMS) / PARAMS_PER_PAD;

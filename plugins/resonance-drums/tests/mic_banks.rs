@@ -798,7 +798,7 @@ fn bank_choices_round_trip_and_older_states_load_without_them() {
 fn the_bank_params_are_where_hosts_find_them() {
     use resonance_drums::params::{GLOBAL_PARAMS, PARAMS_PER_PAD};
     let plugin = ResonanceDrums::new();
-    let ids: Vec<&str> = (9..GLOBAL_PARAMS).map(|i| plugin.param(i).id()).collect();
+    let ids: Vec<&str> = (9..16).map(|i| plugin.param(i).id()).collect();
     assert_eq!(
         ids,
         [

@@ -17,6 +17,9 @@ const DRUMS: PluginInstanceId = 33;
 const GAIN: u32 = 1;
 const KIT: u32 = 2;
 const PROGRESS: u32 = 3;
+/// The drums' `mic_setup_rev`: a counter the editor bumps on a mic setup
+/// pick, which is plugin state rather than a param.
+const MIC_SETUP: u32 = 4;
 
 fn app() -> (Resonance, Receiver<AudioCommand>) {
     let (mut app, _task, rx) = Resonance::new_for_test_with_capture();
@@ -47,6 +50,14 @@ fn app() -> (Resonance, Receiver<AudioCommand>) {
                     max_value: 999.0,
                     default_value: -1.0,
                     current_value: -1.0,
+                    automatable: false,
+                    state_excluded: true,
+                    ..Default::default()
+                },
+                ParamInfo {
+                    id: MIC_SETUP,
+                    name: "Mic Setup".to_owned(),
+                    max_value: 1_000_000.0,
                     automatable: false,
                     state_excluded: true,
                     ..Default::default()
@@ -155,4 +166,35 @@ fn a_read_only_output_moves_the_mirror_without_an_undo_entry() {
     plugin_edits(&mut app, PROGRESS, 0.5);
     assert_eq!(app.test_plugin_param(DRUMS, PROGRESS), Some(0.5));
     assert!(!app.test_can_undo());
+}
+
+/// A mic setup pick in the drums' editor is plugin state (`pad_choices`,
+/// `mic_banks`), announced through a state-excluded counter: the edit
+/// refreshes the cached blob, and undoing it loads the blob from before
+/// the pick — which carries the old mic choices.
+#[test]
+fn undoing_a_mic_setup_pick_restores_the_state_from_before_it() {
+    let (mut app, rx) = app();
+    plugin_edits(&mut app, MIC_SETUP, 1.0);
+    assert!(app.test_can_undo(), "a pick is one undoable edit");
+    assert!(
+        drain(&rx).iter().any(
+            |c| matches!(c, AudioCommand::SavePluginState { instance_id } if *instance_id == DRUMS)
+        ),
+        "the cached blob is refreshed after the pick"
+    );
+    app.test_apply_engine_event(AudioEvent::PluginStateSaved {
+        instance_id: DRUMS,
+        data: vec![0xB1],
+    });
+
+    let _ = app.update(Message::Undo);
+    let cmds = drain(&rx);
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            AudioCommand::LoadPluginState { instance_id, data } if *instance_id == DRUMS && data == &vec![0xA0]
+        )),
+        "the state from before the pick goes back: {cmds:?}"
+    );
 }

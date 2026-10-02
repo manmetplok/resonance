@@ -410,6 +410,10 @@ fn draw_mics(
         bridge.pad_choices.lock()[pad]
             .close_setups
             .insert(position, key);
+        // The pick is plugin state, not a param: the host records it
+        // through `mic_setup_rev` (one undoable edit that restores the
+        // state from before it).
+        bridge.announce_mic_setup_edit();
         // A mic change reloads that pad only (E4).
         reload_kit(bridge);
     }

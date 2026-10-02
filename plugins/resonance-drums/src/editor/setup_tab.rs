@@ -8,8 +8,10 @@
 //! - PADS: per pad its note (read-only), output port and choke group.
 //!
 //! A bank's setup is plugin state, not a param (a host cannot automate a
-//! reload), so picking one is not a host edit; its on/off and level are
-//! params and are.
+//! reload); picking one is still one undoable host edit, announced
+//! through the state-excluded `mic_setup_rev`
+//! ([`crate::KitBridge::announce_mic_setup_edit`]). Its on/off and level
+//! are params, announced as themselves.
 
 use plugin_gui_core::egui;
 use resonance_common::drumkit_library::Entry;
@@ -93,6 +95,7 @@ fn draw_banks(
                         controls::combo(ui, &format!("setup.oh.{slot}"), w, &shown, current.as_str(), options)
                     {
                         bridge.set_overhead_slot(slot, key);
+                        bridge.announce_mic_setup_edit();
                     }
                 });
                 if slot == 0 || !current.is_empty() {
@@ -132,6 +135,7 @@ fn draw_banks(
                     rooms.iter().map(|k| (k.as_str(), catalog.label(k))),
                 ) {
                     bridge.set_room_setup(key);
+                    bridge.announce_mic_setup_edit();
                 }
             });
             level_row(ui, bridge, "setup.room.level", &params.room_level, labels);

@@ -278,8 +278,13 @@ pub struct HostAsks {
     /// `request_params_text_rescan` (values and text).
     pub text_rescans: AtomicU64,
     /// `announce_param_change` for an editor edit of any param other than
-    /// `kit_select` ([`KitBridge::announce_param_edit`]), by id, in order:
-    /// one entry per undoable edit the host is told about.
+    /// `kit_select` ([`KitBridge::announce_param_edit`]): one per undoable
+    /// edit the host is told about.
+    pub param_edit_count: AtomicU64,
+    /// The same edits by id, in order — test builds only: a production
+    /// editor would grow this by a `String` per edit for as long as the
+    /// instance lives.
+    #[cfg(feature = "test-hooks")]
     pub param_edits: Mutex<Vec<String>>,
 }
 
@@ -374,13 +379,33 @@ impl KitBridge {
     /// The user changed param `id` from the editor (a knob drag that just
     /// ended, a click, a pick): the host records it as one undoable edit
     /// (`HostHandle::announce_param_change`). Call it after the value is
-    /// set, once per gesture. Counted in [`HostAsks::param_edits`] whether
+    /// set, once per gesture. Counted in [`HostAsks::param_edit_count`] whether
     /// or not a host is attached.
     pub fn announce_param_edit(&self, id: &str) {
+        self.host_asks
+            .param_edit_count
+            .fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "test-hooks")]
         self.host_asks.param_edits.lock().push(id.to_string());
         if let Some(host) = self.host.lock().as_ref() {
             host.announce_param_change(id);
         }
+    }
+
+    /// The user picked a mic setup in the editor (a pad's close mic, an
+    /// overhead slot, the room setup): bump `mic_setup_rev` and announce
+    /// it, so the host records the pick as one undoable edit. Call it
+    /// after the pick is written to the bridge's state (the host saves
+    /// the state in answer, and the undo entry holds the one before).
+    pub fn announce_mic_setup_edit(&self) {
+        let rev = &self.params.mic_setup_rev;
+        let next = if rev.value() >= params::MIC_SETUP_REV_MAX {
+            0
+        } else {
+            rev.value() + 1
+        };
+        rev.set_value(next);
+        self.announce_param_edit(params::MIC_SETUP_REV_ID);
     }
 
     /// The kit the user last asked for: the one a load is in flight for,
