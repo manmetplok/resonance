@@ -461,3 +461,52 @@ fn re_enabling_mid_fade_out_does_not_step() {
         );
     }
 }
+
+#[test]
+fn mode_switch_mid_signal_does_not_click() {
+    // DSP2-11: a sat_mode change restarted the stage state and jumped from
+    // one voicing's output to the other's in one sample. It now fades the
+    // old wet share out, swaps, and fades the new one in.
+    use resonance_mastering::stages::saturator::SatMode;
+    let sr = 48_000.0_f32;
+    let base = SaturatorConfig {
+        enabled: true,
+        drive_db: 12.0,
+        character: 0.5,
+        mix: 1.0,
+        shaper: Shaper::Smooth,
+        mode: SatMode::Blend,
+        curve: 0.0,
+    };
+    let seq = [
+        (0, SatMode::Blend),
+        (100, SatMode::Transformer),
+        (200, SatMode::Tape),
+        (300, SatMode::Blend),
+    ];
+    let n = 400 * 128;
+    let mut l: Vec<f32> = (0..n)
+        .map(|i| 0.8 * (i as f32 / sr * 80.0 * std::f32::consts::TAU).sin())
+        .collect();
+    let mut r = l.clone();
+    let mut s = Saturator::new(sr);
+    let mut mode = SatMode::Blend;
+    for (k, start) in (0..n).step_by(128).enumerate() {
+        if let Some((_, m)) = seq.iter().find(|(at, _)| *at == k) {
+            mode = *m;
+        }
+        let cfg = SaturatorConfig { mode, ..base };
+        s.process_stereo(&mut l[start..start + 128], &mut r[start..start + 128], &cfg);
+    }
+    let max_step = |x: &[f32]| x.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    // Each voicing's own steady step, before and well after the switch.
+    for &(at, m) in &seq[1..] {
+        let t = at * 128;
+        let steady = max_step(&l[t - 1_200..t]).max(max_step(&l[t + 4_800..t + 6_000]));
+        let seam = max_step(&l[t - 1..t + 2_400]);
+        assert!(
+            seam < 1.5 * steady,
+            "switch to {m:?} stepped {seam} vs {steady} steady"
+        );
+    }
+}

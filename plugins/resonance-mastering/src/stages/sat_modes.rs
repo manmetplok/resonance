@@ -46,8 +46,23 @@
 //! fade start and end on a step between the delayed and the raw signal
 //! instead, which clicks. See the chain's module docs.
 //!
-//! Switching modes restarts the mode's filters; like switching the Blend
-//! mode's shaper it is not crossfaded.
+//! Switching modes restarts the mode's filters, so the saturator fades
+//! the old mode's wet share out over 10 ms, swaps, and fades the new one
+//! in (DSP2-11). Switching the Blend mode's shaper is not crossfaded.
+//!
+//! # `sat_mix` in the sub band
+//!
+//! The linear filters of a voicing (the 5 Hz DC blocker of Tube, Tape and
+//! Warm, Tape's head bump, Transformer's sub-sonic high-pass) run on the
+//! wet path only, so at a partial `sat_mix` their phase shift meets the
+//! unshifted dry signal and the blend dips in the sub band. Measured at
+//! mix 0.5 against the average of mix 0 and mix 1 (small signal): Blend,
+//! Tube and Tape stay within 0.15 dB down to 15 Hz; Transformer dips
+//! −0.7 dB at 30 Hz, −2.3 dB at 20 Hz and −4.7 dB at 15 Hz. This is kept
+//! for now: running the dry share through the same filters would make
+//! `sat_mix` 0 no longer the dry signal, and these filters are part of
+//! the voicing (DSP2-16, documented rather than changed; a phase-matched
+//! dry path for Transformer is a follow-up).
 
 use resonance_dsp::tape::hf_loss_corner_hz;
 use resonance_dsp::{

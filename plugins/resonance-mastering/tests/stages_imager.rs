@@ -306,3 +306,41 @@ fn cutoff_moved_while_disabled_applies_cleanly_on_reenable() {
          while disabled is not in force"
     );
 }
+
+#[test]
+fn side_hpf_toggle_mid_signal_does_not_click() {
+    // DSP2-11: 40 Hz side-only content through a 120 Hz side HPF. Turning
+    // the filter on used to cut the side from the raw signal to a freshly
+    // restarted filter's output in one sample, and off back in one.
+    let sr = 48_000.0_f32;
+    let on = ImagerConfig {
+        enabled: true,
+        width: 1.0,
+        side_hpf_on: true,
+        side_hpf_hz: 120.0,
+    };
+    let off = ImagerConfig {
+        side_hpf_on: false,
+        ..on
+    };
+    let block = 100;
+    // 40 Hz -> 1200-sample period; 9900 and 20700 are a quarter period
+    // past a cycle start, i.e. on a peak.
+    let (hpf_on_at, hpf_off_at) = (9_900, 20_700);
+    let input = side_only_input(sr, 40.0, 0.8, 30_000);
+    let out = render_blocks(&mut Imager::new(sr), &input, block, |start| {
+        if (hpf_on_at..hpf_off_at).contains(&start) {
+            on
+        } else {
+            off
+        }
+    });
+    let sine_step = 0.8 * std::f32::consts::TAU * 40.0 / sr;
+    for (name, at) in [("on", hpf_on_at), ("off", hpf_off_at)] {
+        let step = max_delta(&out, at - 1, at + 2_400);
+        assert!(
+            step < 2.0 * sine_step,
+            "switching the side HPF {name} stepped {step} vs the sine's {sine_step}"
+        );
+    }
+}

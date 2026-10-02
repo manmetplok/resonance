@@ -279,3 +279,66 @@ fn the_deharsh_panel_fits_and_its_readouts_carry_units() {
     }
     assert_eq!(d.mode.display(3.0), "Mid+Side");
 }
+
+/// DSP2-11 (checked, no change needed): a mode switch resets the detector
+/// that stops being used, so its cut starts over, but every frame's gains
+/// are applied in the STFT domain and overlap-added under the synthesis
+/// window, so a change of cut is spread over a frame instead of landing on
+/// one sample. Switching modes under a deep cut of a centred resonance
+/// (Stereo → Side drops the cut entirely, → Mid brings it back) must not
+/// step more than the signal's own slope.
+#[test]
+fn a_mode_switch_under_a_deep_cut_does_not_click() {
+    use resonance_dsp::{SuppressorMode, SuppressorConfig};
+    use resonance_mastering::stages::deharsh::DeharshStage;
+    let n = 120 * 256;
+    let tone: Vec<f32> = (0..n)
+        .map(|i| 0.5 * (i as f32 / SR * 3_200.0 * std::f32::consts::TAU).sin())
+        .collect();
+    let bed = pink(9, n, -30.0);
+    let x: Vec<f32> = tone.iter().zip(&bed).map(|(a, b)| a + b).collect();
+    let (mut l, mut r) = (x.clone(), x.clone());
+    let mut stage = DeharshStage::new(SR);
+    let seq = [
+        (0, SuppressorMode::Stereo),
+        (40, SuppressorMode::Side),
+        (80, SuppressorMode::Mid),
+    ];
+    let cfg = |mode| SuppressorConfig {
+        enabled: true,
+        depth_db: 12.0,
+        mode,
+        ..SuppressorConfig::default()
+    };
+    let mut mode = SuppressorMode::Stereo;
+    for (k, start) in (0..n).step_by(256).enumerate() {
+        if let Some((_, m)) = seq.iter().find(|(at, _)| *at == k) {
+            mode = *m;
+        }
+        stage.process_stereo(&mut l[start..start + 256], &mut r[start..start + 256], &cfg(mode));
+    }
+    // The same input through a stage that ran one mode throughout.
+    let steady = |m| {
+        let (mut sl, mut sr) = (x.clone(), x.clone());
+        let mut st = DeharshStage::new(SR);
+        for start in (0..n).step_by(256) {
+            st.process_stereo(&mut sl[start..start + 256], &mut sr[start..start + 256], &cfg(m));
+        }
+        sl
+    };
+    let max_step = |x: &[f32]| x.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+    let tone_step = 0.5 * std::f32::consts::TAU * 3_200.0 / SR;
+    let cut = max_step(&l[30 * 256..40 * 256]);
+    assert!(cut < 0.6 * tone_step, "the resonance is not being cut ({cut} vs {tone_step})");
+    for &(at, m) in &seq[1..] {
+        let window = at * 256..(at + 20) * 256;
+        let seam = max_step(&l[window.clone()]);
+        // Whichever of the two modes' steady outputs moves more.
+        let prev = seq.iter().rev().find(|(a, _)| *a < at).unwrap().1;
+        let bound = max_step(&steady(m)[window.clone()]).max(max_step(&steady(prev)[window]));
+        assert!(
+            seam < 1.1 * bound,
+            "switch to {m:?} stepped {seam} vs {bound} for a steady run"
+        );
+    }
+}
